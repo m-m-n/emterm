@@ -60,6 +60,11 @@ impl PtySession {
         #[cfg(unix)]
         cmd.arg("-l");
 
+        // Set TERM environment variable for proper terminal emulation
+        // This is essential for applications like SSH, vim, htop, etc.
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+
         let child = pair.slave.spawn_command(cmd)?;
         let writer = Arc::new(StdMutex::new(pair.master.take_writer()?));
 
@@ -134,6 +139,13 @@ impl PtySession {
     pub fn kill(&mut self) -> Result<(), PtyError> {
         self.child.kill().map_err(|e| PtyError::Pty(e.to_string()))
     }
+
+    /// Gets the raw file descriptor of the PTY master.
+    /// This is used to set non-blocking mode on Unix systems.
+    #[cfg(unix)]
+    pub fn master_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        self.pair.master.as_raw_fd()
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +207,76 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
         let status = session.try_wait();
         assert!(status.is_ok());
+    }
+
+    #[test]
+    fn test_session_exit_detection() {
+        use std::io::Read;
+
+        let id = generate_session_id();
+        let shell = detect_default_shell();
+        let mut session = PtySession::new(id, &shell, 80, 24).unwrap();
+
+        // Get a reader to drain output
+        let mut reader = session.take_reader().unwrap();
+
+        // Set non-blocking mode on reader
+        #[cfg(unix)]
+        if let Some(fd) = session.master_fd() {
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+
+        // Write exit command, then send EOF (Ctrl+D)
+        session.write(b"exit\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Send Ctrl+D (EOF) - this forces shell to exit on systems where exit alone doesn't work
+        session.write(&[0x04]).unwrap();
+
+        // Wait for shell to exit and drain output
+        let mut buf = [0u8; 1024];
+        let mut last_read_time = std::time::Instant::now();
+        for i in 0..50 {
+            // Drain any output (non-blocking)
+            match reader.read(&mut buf) {
+                Ok(n) if n > 0 => {
+                    eprintln!("Read {} bytes: {:?}", n, String::from_utf8_lossy(&buf[..n.min(100)]));
+                    last_read_time = std::time::Instant::now();
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // No data available
+                }
+                Err(e) => {
+                    eprintln!("Read error: {}", e);
+                }
+                _ => {}
+            }
+
+            match session.try_wait() {
+                Ok(Some(status)) => {
+                    eprintln!("Shell exited with code: {}", status.exit_code());
+                    return; // Test passed
+                }
+                Ok(None) => {
+                    // If no data for 500ms after exit command, shell might be done
+                    if i >= 5 && last_read_time.elapsed() > std::time::Duration::from_millis(500) {
+                        eprintln!("No new data for 500ms, checking if shell exited...");
+                    }
+                    if i % 10 == 0 {
+                        eprintln!("Shell still running (attempt {})...", i);
+                    }
+                }
+                Err(e) => {
+                    panic!("try_wait error: {}", e);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        // If we get here, try_wait didn't detect exit - this is the bug
+        eprintln!("try_wait() didn't detect exit - this is a portable_pty issue");
+        panic!("Shell did not exit within timeout (try_wait bug)");
     }
 
     #[test]

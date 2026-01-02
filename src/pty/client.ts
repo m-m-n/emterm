@@ -17,6 +17,7 @@ import type {
   PtyExitCallback,
   PtyErrorCallback,
 } from "../types/pty";
+import type { TerminalActionsPayload } from "../types/terminal";
 
 /**
  * Client for managing PTY (Pseudo Terminal) sessions.
@@ -168,9 +169,16 @@ export class PtyClient {
    */
   async onExit(callback: PtyExitCallback): Promise<void> {
     const unlisten = await listen<PtyExitPayload>("pty_exit", (event) => {
-      if (event.payload.session_id === this.sessionId) {
+      // Debug: log all pty_exit events received by this listener
+      console.log(`[PtyClient.onExit] Received pty_exit event: event_session=${event.payload.session_id}, this_session=${this.sessionId}, match=${event.payload.session_id === this.sessionId}`);
+
+      // Check sessionId at event time, not registration time
+      if (this.sessionId !== null && event.payload.session_id === this.sessionId) {
+        console.log(`[PtyClient.onExit] Session match! Calling callback with code ${event.payload.code}`);
         callback(event.payload.code);
         this.sessionId = null;
+      } else {
+        console.log(`[PtyClient.onExit] Session mismatch or null, skipping callback`);
       }
     });
     this.unlisteners.push(unlisten);
@@ -187,6 +195,30 @@ export class PtyClient {
         callback(event.payload.message);
       }
     });
+    this.unlisteners.push(unlisten);
+  }
+
+  /**
+   * Registers a callback for terminal actions events.
+   * This will be used when the ANSI parser is integrated (Phase 1).
+   *
+   * @param callback - Function called with parsed terminal actions
+   */
+  async onTerminalActions(
+    callback: (payload: TerminalActionsPayload) => void
+  ): Promise<void> {
+    const unlisten = await listen<TerminalActionsPayload>(
+      "terminal_actions",
+      (event) => {
+        // Debug: log the comparison
+        console.log(`[onTerminalActions] this.sessionId=${this.sessionId}, event.session_id=${event.payload.session_id}, match=${this.sessionId === event.payload.session_id}`);
+
+        // Check sessionId at event time, not registration time
+        if (this.sessionId !== null && event.payload.session_id === this.sessionId) {
+          callback(event.payload);
+        }
+      }
+    );
     this.unlisteners.push(unlisten);
   }
 
