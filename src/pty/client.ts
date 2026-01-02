@@ -198,6 +198,12 @@ export class PtyClient {
     this.unlisteners.push(unlisten);
   }
 
+  /** Pending terminal action events that arrived before sessionId was set. */
+  private pendingTerminalActions: TerminalActionsPayload[] = [];
+
+  /** Callback for terminal actions (stored for replay). */
+  private terminalActionsCallback: ((payload: TerminalActionsPayload) => void) | null = null;
+
   /**
    * Registers a callback for terminal actions events.
    * This will be used when the ANSI parser is integrated (Phase 1).
@@ -207,19 +213,39 @@ export class PtyClient {
   async onTerminalActions(
     callback: (payload: TerminalActionsPayload) => void
   ): Promise<void> {
+    this.terminalActionsCallback = callback;
+
     const unlisten = await listen<TerminalActionsPayload>(
       "terminal_actions",
       (event) => {
-        // Debug: log the comparison
-        console.log(`[onTerminalActions] this.sessionId=${this.sessionId}, event.session_id=${event.payload.session_id}, match=${this.sessionId === event.payload.session_id}`);
-
-        // Check sessionId at event time, not registration time
-        if (this.sessionId !== null && event.payload.session_id === this.sessionId) {
-          callback(event.payload);
+        if (this.sessionId !== null) {
+          if (event.payload.session_id === this.sessionId) {
+            callback(event.payload);
+          }
+        } else {
+          // sessionId not yet set, buffer the event
+          this.pendingTerminalActions.push(event.payload);
         }
       }
     );
     this.unlisteners.push(unlisten);
+  }
+
+  /**
+   * Flush any pending terminal actions that were buffered before sessionId was set.
+   * Should be called after spawn() completes.
+   */
+  flushPendingTerminalActions(): void {
+    if (this.sessionId === null || this.terminalActionsCallback === null) {
+      return;
+    }
+
+    for (const pending of this.pendingTerminalActions) {
+      if (pending.session_id === this.sessionId) {
+        this.terminalActionsCallback(pending);
+      }
+    }
+    this.pendingTerminalActions = [];
   }
 
   /**
