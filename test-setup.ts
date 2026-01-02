@@ -14,3 +14,11 @@ globalThis.KeyboardEvent = window.KeyboardEvent as unknown as typeof KeyboardEve
 globalThis.HTMLElement = window.HTMLElement as unknown as typeof HTMLElement;
 globalThis.getComputedStyle = window.getComputedStyle.bind(window) as typeof getComputedStyle;
 globalThis.ResizeObserver = window.ResizeObserver as unknown as typeof ResizeObserver;
+
+// Polyfill requestAnimationFrame for tests
+globalThis.requestAnimationFrame = (callback: FrameRequestCallback): number => {
+  return setTimeout(() => callback(Date.now()), 0) as unknown as number;
+};
+globalThis.cancelAnimationFrame = (id: number): void => {
+  clearTimeout(id);
+};
