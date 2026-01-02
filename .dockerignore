@@ -1,0 +1,21 @@
+# Build artifacts
+src-tauri/target/
+dist/
+node_modules/
+e2e-tests/node_modules/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Screenshots (will be mounted as volume)
+e2e-tests/screenshots/
+
+# Temporary files
+*.log
+*.tmp
+tmp/

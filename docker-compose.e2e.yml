@@ -1,0 +1,26 @@
+# Docker Compose for E2E Testing
+# Usage: docker compose -f docker-compose.e2e.yml up --build
+
+services:
+  e2e-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+    # Share screenshots with host
+    volumes:
+      - ./e2e-tests/screenshots:/app/e2e-tests/screenshots
+    # Required for GUI applications and disable proxy for localhost
+    environment:
+      - DISPLAY=:99
+      - http_proxy=
+      - https_proxy=
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - no_proxy=localhost,127.0.0.1
+      - NO_PROXY=localhost,127.0.0.1
+    # Security options for running GUI apps
+    security_opt:
+      - seccomp:unconfined
+    # Needed for PTY operations
+    tty: true
+    stdin_open: true

@@ -1,0 +1,73 @@
+# E2E Test Environment for Tauri Application
+# Based on Debian Bookworm with all necessary dependencies
+
+FROM debian:bookworm-slim
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies for Tauri and WebDriver
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build essentials
+    build-essential \
+    pkg-config \
+    curl \
+    ca-certificates \
+    git \
+    # Tauri dependencies (GTK, WebKitGTK)
+    libgtk-3-dev \
+    libwebkit2gtk-4.1-dev \
+    libappindicator3-dev \
+    librsvg2-dev \
+    # Display and WebDriver
+    xvfb \
+    webkit2gtk-driver \
+    # Additional libraries
+    libssl-dev \
+    libsoup-3.0-dev \
+    # Japanese fonts (for IME testing later)
+    fonts-noto-cjk \
+    # For Bun installation
+    unzip \
+    # Cleanup
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install Node.js (for running tests - better compatibility with WebdriverIO)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Bun (for building the app)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+# Install tauri-cli and tauri-driver
+RUN cargo install tauri-cli tauri-driver
+
+# Set display for Xvfb
+ENV DISPLAY=:99
+
+# Working directory
+WORKDIR /app
+
+# Copy project files
+COPY . .
+
+# Install project dependencies (for tauri-cli)
+RUN bun install
+
+# Install E2E test dependencies (using npm for better WebdriverIO compatibility)
+RUN cd e2e-tests && npm install
+
+# Create screenshots directory
+RUN mkdir -p e2e-tests/screenshots
+
+# Ensure cargo binaries are in PATH for all shells
+ENV PATH="/root/.cargo/bin:/root/.bun/bin:${PATH}"
+
+# Default command: run E2E tests with Xvfb using Docker-specific config
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x720x24 & sleep 2 && cd e2e-tests && npx wdio run wdio.docker.conf.js"]
