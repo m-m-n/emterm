@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "postinstall": "./scripts/generate-icons.sh",
     "dev": "bun run --hot serve.ts",
     "icons": "./scripts/generate-icons.sh",
     "prebuild": "./scripts/generate-icons.sh",
