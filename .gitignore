@@ -4,6 +4,8 @@ node_modules/
 # Build outputs
 dist/
 src-tauri/target/
+src-tauri/icons/*
+!src-tauri/icons/.gitkeep
 
 # Temporary files
 /tmp

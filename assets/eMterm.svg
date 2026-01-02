@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="210mm"
+   height="297mm"
+   viewBox="0 0 210 297"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.4.2 (ebf0e940d0, 2025-05-08)"
+   sodipodi:docname="eMterm.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#505050"
+     bordercolor="#eeeeee"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     showgrid="true"
+     inkscape:zoom="1.4142136"
+     inkscape:cx="207.88939"
+     inkscape:cy="-68.589358"
+     inkscape:window-width="1920"
+     inkscape:window-height="1043"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1">
+    <inkscape:grid
+       id="grid1"
+       units="px"
+       originx="0"
+       originy="0"
+       spacingx="0.26458333"
+       spacingy="0.26458334"
+       empcolor="#0000ff"
+       empopacity="0.25098039"
+       color="#0000ff"
+       opacity="0.1254902"
+       empspacing="5"
+       enabled="true"
+       visible="true"
+       dotted="false"
+       snapvisiblegridlinesonly="false" />
+  </sodipodi:namedview>
+  <defs
+     id="defs1">
+    <linearGradient
+       id="linearGradient6"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#1b1f23;stop-opacity:1;"
+         offset="0"
+         id="stop6" />
+      <stop
+         style="stop-color:#1b1f23;stop-opacity:0;"
+         offset="0.99999982"
+         id="stop7" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient6"
+       id="linearGradient7"
+       x1="10.583333"
+       y1="8.4666643"
+       x2="10.583333"
+       y2="45.243752"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="translate(-1.3229168,-1.5875002)" />
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <rect
+       style="fill:#008fde;fill-opacity:1;stroke-width:3.70401;stroke-linecap:round;stroke-linejoin:round"
+       id="rect2"
+       width="1.3229166"
+       height="26.458332"
+       x="5.2916665"
+       y="2.6458333"
+       rx="1.0583333"
+       ry="1.0583333" />
+    <rect
+       style="fill:#008fde;fill-opacity:1;stroke-width:3.70401;stroke-linecap:round;stroke-linejoin:round"
+       id="rect3"
+       width="26.458332"
+       height="1.3229166"
+       x="2.6458333"
+       y="5.2916665"
+       rx="1.0583333"
+       ry="1.0583333" />
+    <rect
+       style="fill:#008fde;fill-opacity:1;stroke-width:3.70401;stroke-linecap:round;stroke-linejoin:round"
+       id="rect4"
+       width="1.2908585"
+       height="26.45833"
+       x="25.135416"
+       y="2.6458333"
+       rx="1.0583333"
+       ry="1.0583333" />
+    <rect
+       style="fill:#008fde;fill-opacity:1;stroke-width:3.70401;stroke-linecap:round;stroke-linejoin:round"
+       id="rect5"
+       width="26.458332"
+       height="1.3229165"
+       x="2.6458333"
+       y="25.135418"
+       rx="1.0583333"
+       ry="0.60803795" />
+    <rect
+       style="fill:url(#linearGradient7);stroke-width:3.70401;stroke-linecap:round;stroke-linejoin:round"
+       id="rect6"
+       width="18.520832"
+       height="18.520834"
+       x="6.614583"
+       y="6.6145835" />
+    <path
+       style="fill:#40ff40;fill-opacity:1;fill-rule:evenodd;stroke:#40ff40;stroke-width:1.05833333;stroke-linecap:round;stroke-linejoin:bevel;stroke-opacity:1;stroke-dasharray:none;stroke-miterlimit:4"
+       d="M 7.9375094,7.9374904 14.55192,13.229167 7.9375094,18.520843 14.55192,13.229167 Z"
+       id="path7" />
+    <rect
+       style="fill:#40ff40;fill-opacity:1;stroke:#40ff40;stroke-width:1.05833;stroke-linecap:round;stroke-linejoin:bevel;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect9"
+       width="5.291666"
+       height="0.26458403"
+       x="15.875"
+       y="17.727083" />
+  </g>
+</svg>
