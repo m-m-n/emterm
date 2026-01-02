@@ -70,11 +70,7 @@ async function initTerminal(): Promise<void> {
     console.log("Spawning PTY session...");
     const sessionId = await ptyClient.spawn({ cols, rows });
     console.log("PTY session started:", sessionId);
-
-    // Flush any terminal actions that arrived during spawn
-    if (USE_NEW_TERMINAL) {
-      ptyClient.flushPendingTerminalActions();
-    }
+    console.log("Current sessionId in client:", ptyClient.getSessionId());
   } catch (error) {
     console.error("Failed to spawn PTY:", error);
     terminal.textContent = `Failed to start terminal: ${error}`;
