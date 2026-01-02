@@ -1,0 +1,33 @@
+[package]
+name = "emterm"
+version = "0.1.0"
+description = "A cross-platform terminal emulator with rich rendering capabilities"
+authors = ["m-m-n"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.85"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.3" }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.9.5" }
+tauri-plugin-log = "2"
+
+# PTY dependencies
+portable-pty = "0.8"
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+futures = "0.3"
+anyhow = "1"

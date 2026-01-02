@@ -1,0 +1,22 @@
+{
+  "name": "emterm",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --hot serve.ts",
+    "build": "bun build src/main.ts --outdir dist --minify",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/cli": "^2.9.6",
+    "@types/bun": "latest",
+    "happy-dom": "^20.0.11",
+    "typescript": "^5.0.0"
+  }
+}
