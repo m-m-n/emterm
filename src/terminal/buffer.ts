@@ -14,6 +14,9 @@ export interface ScrollRegion {
   bottom: number;
 }
 
+// Debug: buffer ID counter
+let bufferIdCounter = 0;
+
 /**
  * Screen buffer containing the terminal grid.
  */
@@ -30,6 +33,9 @@ export class ScreenBuffer {
   /** Scroll region (null means full screen). */
   private scrollRegion: ScrollRegion | null = null;
 
+  /** Debug: unique buffer ID */
+  readonly bufferId: number;
+
   /**
    * Create a new screen buffer.
    *
@@ -37,6 +43,7 @@ export class ScreenBuffer {
    * @param rows - Number of rows
    */
   constructor(cols: number, rows: number) {
+    this.bufferId = ++bufferIdCounter;
     this._cols = cols;
     this._rows = rows;
     this.lines = [];

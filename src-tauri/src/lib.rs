@@ -149,6 +149,12 @@ async fn pty_kill(state: State<'_, PtyManager>, session_id: String) -> Result<()
     Ok(())
 }
 
+/// Debug log command - prints message to stderr.
+#[tauri::command]
+fn debug_log(message: String) {
+    eprintln!("[Frontend] {}", message);
+}
+
 // ============================================================================
 // Reader Thread
 // ============================================================================
@@ -387,13 +393,16 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PtyManager::new())
         .invoke_handler(tauri::generate_handler![
-            pty_spawn, pty_write, pty_resize, pty_kill,
+            pty_spawn, pty_write, pty_resize, pty_kill, debug_log,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)
+                        .target(tauri_plugin_log::Target::new(
+                            tauri_plugin_log::TargetKind::Stdout,
+                        ))
                         .build(),
                 )?;
             }

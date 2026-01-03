@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Swap files
+*.swp
+
 # Build outputs
 dist/
 src-tauri/target/
@@ -21,7 +24,5 @@ Thumbs.db
 # Bun
 bun.lock
 
-# Generated icons (use 'bun tauri icon' to generate)
-src-tauri/icons/*.png
-src-tauri/icons/*.ico
-src-tauri/icons/*.icns
+# E2E test screenshots (binary files)
+e2e-tests/screenshots/

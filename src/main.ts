@@ -6,9 +6,7 @@
 import { PtyClient, keyEventToBytes, shouldHandleKey, measureCharacterSize, observeContainerResize } from "./pty";
 import { TerminalState, TerminalRenderer, encodeMouseEvent, domEventToMouseEvent, isMouseTrackingEnabled } from "./terminal";
 import type { TerminalActionsPayload } from "./types/terminal.ts";
-import type { PtyExitPayload } from "./types/pty.ts";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { listen } from "@tauri-apps/api/event";
 
 // Terminal configuration
 const FONT_FAMILY = "monospace";
@@ -67,10 +65,16 @@ async function initTerminal(): Promise<void> {
 
   // Spawn PTY session
   try {
-    console.log("Spawning PTY session...");
-    const sessionId = await ptyClient.spawn({ cols, rows });
-    console.log("PTY session started:", sessionId);
-    console.log("Current sessionId in client:", ptyClient.getSessionId());
+    await ptyClient.spawn({ cols, rows });
+
+    // Flush any terminal actions that arrived before spawn returned
+    // This fixes the race condition where the shell prompt arrives
+    // before sessionId is set
+    if (USE_NEW_TERMINAL && terminalState && terminalRenderer) {
+      ptyClient.flushPendingTerminalActions();
+      // Force re-render after flush to ensure flushed content is displayed
+      terminalRenderer.forceRender(terminalState);
+    }
   } catch (error) {
     console.error("Failed to spawn PTY:", error);
     terminal.textContent = `Failed to start terminal: ${error}`;
@@ -94,12 +98,13 @@ async function initTerminal(): Promise<void> {
       if (ptyClient) {
         try {
           await ptyClient.resize(newCols, newRows);
-          console.log(`Resized to ${newCols}x${newRows}`);
 
           // Resize terminal state if using new system
           if (terminalState && terminalRenderer) {
             terminalState.resize(newCols, newRows);
             terminalRenderer.resize(newCols, newRows);
+            // Force re-render after resize to recreate line elements
+            terminalRenderer.forceRender(terminalState);
           }
         } catch (error) {
           console.error("Failed to resize PTY:", error);
@@ -135,8 +140,6 @@ function initNewTerminal(container: HTMLElement, cols: number, rows: number): vo
 
   // Initial render
   terminalRenderer.forceRender(terminalState);
-
-  console.log(`New terminal initialized: ${cols}x${rows}`);
 }
 
 /**
@@ -168,17 +171,10 @@ async function setupNewTerminalHandlers(): Promise<void> {
   await ptyClient.onTerminalActions(async (payload: TerminalActionsPayload) => {
     if (!terminalState || !terminalRenderer || !ptyClient) return;
 
-    // Debug: log received actions
-    console.log(`Received ${payload.actions.length} actions:`, payload.actions.slice(0, 5));
-
     // Process each action
     for (const action of payload.actions) {
       terminalState.processAction(action);
     }
-
-    // Debug: check dirty rows
-    const dirtyRows = terminalState.getDirtyRows();
-    console.log(`[Render] ${payload.actions.length} actions processed, ${dirtyRows.length} dirty rows`);
 
     // Handle DSR responses - write back to PTY
     const response = terminalState.takePendingResponse();
@@ -206,25 +202,8 @@ async function setupNewTerminalHandlers(): Promise<void> {
     terminalRenderer.scheduleRender(terminalState);
   });
 
-  // Debug: also listen to raw output
-  await ptyClient.onOutput((data) => {
-    const text = new TextDecoder().decode(data);
-    console.log(`Raw PTY output (${data.length} bytes), sessionId=${ptyClient?.getSessionId()}:`, text.slice(0, 100));
-  });
-
-  // Debug: listen to ALL terminal_actions events (bypass session filtering)
-  await listen<TerminalActionsPayload>("terminal_actions", (event) => {
-    console.log(`[DEBUG] terminal_actions event: session=${event.payload.session_id}, actions=${event.payload.actions.length}`);
-  });
-
-  // Debug: listen to ALL pty_exit events (bypass session filtering)
-  await listen<PtyExitPayload>("pty_exit", (event) => {
-    console.log(`[DEBUG] pty_exit event: session=${event.payload.session_id}, code=${event.payload.code}`);
-  });
-
   // Handle exit and error events
   await ptyClient.onExit(async (code) => {
-    console.log("[onExit callback] PTY exited with code:", code);
     // Close the window when shell exits
     try {
       const appWindow = getCurrentWebviewWindow();
@@ -254,7 +233,6 @@ async function setupLegacyHandlers(terminal: HTMLElement): Promise<void> {
 
   await ptyClient.onExit((code) => {
     terminal.textContent += `\n[Process exited with code ${code}]\n`;
-    console.log("PTY exited with code:", code);
   });
 
   await ptyClient.onError((message) => {
@@ -405,4 +383,3 @@ declare global {
   }
 }
 
-console.log("eMterm initialized");

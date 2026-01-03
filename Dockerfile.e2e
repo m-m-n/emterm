@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libwebkit2gtk-4.1-dev \
     libappindicator3-dev \
     librsvg2-dev \
+    librsvg2-bin \
     # Display and WebDriver
     xvfb \
     webkit2gtk-driver \

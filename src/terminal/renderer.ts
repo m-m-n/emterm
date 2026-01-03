@@ -204,7 +204,9 @@ export class TerminalRenderer {
    * Perform the actual render.
    */
   private render(): void {
-    if (!this.pendingState) return;
+    if (!this.pendingState) {
+      return;
+    }
 
     this.renderTimer.start();
 
@@ -224,6 +226,7 @@ export class TerminalRenderer {
     this.ensureLineElements(state.rows);
 
     // Update only dirty rows
+    let renderedCount = 0;
     for (const rowIndex of dirtyRows) {
       const line = buffer.getLine(rowIndex);
       if (this.useOptimizedRendering) {
@@ -231,6 +234,7 @@ export class TerminalRenderer {
       } else {
         this.renderLine(rowIndex, line);
       }
+      renderedCount++;
     }
 
     // Flush pending CSS rules to stylesheet
@@ -410,7 +414,9 @@ export class TerminalRenderer {
    */
   private renderLineOptimized(rowIndex: number, line: Line): void {
     const div = this.lineElements[rowIndex];
-    if (!div) return;
+    if (!div) {
+      return;
+    }
 
     // Compute content hash for skip optimization
     const contentHash = this.computeLineHash(line);
@@ -604,7 +610,7 @@ export class TerminalRenderer {
     // Clear span pool (dimensions may have changed)
     this.spanPool = [];
 
-    // Force re-render on next frame
+    // Clear line elements - will be recreated by forceRender
     this.lineElements = [];
     this.container.innerHTML = "";
 
@@ -620,6 +626,8 @@ export class TerminalRenderer {
   forceRender(state: TerminalState): void {
     this.pendingState = state;
 
+    const buffer = state.getActiveBuffer();
+
     // Clear all caches
     this.lastRowHash.clear();
 
@@ -631,7 +639,6 @@ export class TerminalRenderer {
     this.createCursorElement();
 
     // Re-render everything
-    const buffer = state.getActiveBuffer();
     this.ensureLineElements(state.rows);
 
     for (let row = 0; row < state.rows; row++) {

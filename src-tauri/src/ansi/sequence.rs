@@ -170,7 +170,7 @@ impl From<u16> for EraseMode {
 ///
 /// These are simple escape sequences that don't use CSI or OSC format.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "action")]
+#[serde(tag = "action", content = "data")]
 pub enum EscAction {
     /// ESC 7 - Save cursor position and attributes.
     SaveCursor,
@@ -229,7 +229,7 @@ impl From<u8> for CharSet {
 ///
 /// OSC sequences start with ESC ] and are terminated by BEL or ST (ESC \).
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "action")]
+#[serde(tag = "action", content = "data")]
 pub enum OscAction {
     /// OSC 0 - Set icon name and window title.
     SetTitleAndIcon(String),
