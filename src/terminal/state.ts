@@ -5,7 +5,7 @@
  */
 import { ScreenBuffer } from "./buffer.ts";
 import { CursorState } from "./cursor.ts";
-import { createCell } from "./grid.ts";
+import { createCell, createAsciiCell } from "./grid.ts";
 import { charWidth } from "./unicode.ts";
 import { C0 } from "../types/terminal.ts";
 import type { TerminalAction, CsiAction, EscAction, OscAction, CharSet } from "../types/terminal.ts";
@@ -319,13 +319,14 @@ export class TerminalState {
       const newCol = this.cursor.col + 1;
       if (newCol < this.cols) {
         // Simple case: ASCII char, not at end of line
-        const cell = createCell(char, this.cursor.attrs);
+        // Use createAsciiCell for optimized cell creation (skips charWidth)
+        const cell = createAsciiCell(char, this.cursor.attrs);
         buffer.setCell(this.cursor.col, this.cursor.row, cell);
         this.cursor.col = newCol;
         return;
       } else if (this.modes.autoWrap) {
         // At end of line with autoWrap
-        const cell = createCell(char, this.cursor.attrs);
+        const cell = createAsciiCell(char, this.cursor.attrs);
         buffer.setCell(this.cursor.col, this.cursor.row, cell);
         this.cursor.col = this.cols - 1;
         this.wrapPending = true;
