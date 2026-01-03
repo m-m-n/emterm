@@ -26,3 +26,6 @@ bun.lock
 
 # E2E test screenshots (binary files)
 e2e-tests/screenshots/
+
+# Claude Code local settings
+.claude/settings.local.json
