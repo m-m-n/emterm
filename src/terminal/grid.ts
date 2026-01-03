@@ -51,6 +51,37 @@ export function createCell(char: string, attrs?: CellAttributes): Cell {
 }
 
 /**
+ * Create a cell for an ASCII character (fast path).
+ * Skips charWidth calculation since ASCII is always width 1.
+ *
+ * @param char - ASCII character (0x20-0x7E)
+ * @param attrs - Styling attributes
+ * @returns New cell with width 1
+ */
+export function createAsciiCell(char: string, attrs: CellAttributes): Cell {
+  return {
+    char,
+    width: 1,
+    attrs: cloneAttributesFast(attrs),
+    dirty: true,
+  };
+}
+
+/**
+ * Fast attribute cloning for common cases.
+ * Optimized for attributes with null fg/bg (most common case).
+ */
+function cloneAttributesFast(attrs: CellAttributes): CellAttributes {
+  // Fast path: when fg and bg are null, use object spread
+  // This is safe because all fields are primitives or null
+  if (attrs.fg === null && attrs.bg === null) {
+    return { ...attrs };
+  }
+  // Fall back to full clone for colored attributes
+  return cloneAttributes(attrs);
+}
+
+/**
  * Clone a cell.
  *
  * @param cell - Cell to clone
