@@ -6,6 +6,7 @@ node_modules/
 
 # Build outputs
 dist/
+build/
 src-tauri/target/
 src-tauri/icons/*
 !src-tauri/icons/.gitkeep
