@@ -203,14 +203,19 @@ async function setupNewTerminalHandlers(): Promise<void> {
   });
 
   // Handle exit and error events
-  await ptyClient.onExit(async (code) => {
-    // Close the window when shell exits
-    try {
-      const appWindow = getCurrentWebviewWindow();
-      await appWindow.close();
-    } catch (error) {
-      console.error("Failed to close window:", error);
+  await ptyClient.onExit(async (code, remainingSessions) => {
+    // Use remaining_sessions from the event (already removed from backend)
+    // This ensures accurate count as the session is removed before event emission
+    if (remainingSessions === 0) {
+      // Only close window if no other sessions exist
+      try {
+        const appWindow = getCurrentWebviewWindow();
+        await appWindow.close();
+      } catch (error) {
+        console.error("Failed to close window:", error);
+      }
     }
+    // If remainingSessions > 0, other sessions exist (future multi-tab support)
   });
 
   await ptyClient.onError((message) => {
