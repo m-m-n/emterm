@@ -4,6 +4,7 @@
 //! and IPC commands for the frontend.
 
 pub mod ansi;
+pub mod image;
 pub mod pty;
 
 use std::io::Read;

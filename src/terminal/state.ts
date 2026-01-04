@@ -8,7 +8,7 @@ import { CursorState } from "./cursor.ts";
 import { createCell, createAsciiCell } from "./grid.ts";
 import { charWidth } from "./unicode.ts";
 import { C0 } from "../types/terminal.ts";
-import type { TerminalAction, CsiAction, EscAction, OscAction, CharSet } from "../types/terminal.ts";
+import type { TerminalAction, CsiAction, EscAction, OscAction, ApcAction, DcsAction, CharSet } from "../types/terminal.ts";
 import { type SgrAttr, applySgrAttr } from "./attributes.ts";
 import { parseSgrParams } from "./sgr.ts";
 import {
@@ -313,6 +313,12 @@ export class TerminalState {
         break;
       case "Osc":
         this.handleOsc(action.value);
+        break;
+      case "Apc":
+        this.handleApc(action.value);
+        break;
+      case "Dcs":
+        this.handleDcs(action.value);
         break;
     }
   }
@@ -1046,6 +1052,43 @@ export class TerminalState {
    */
   getMarkdownManager(): MarkdownSessionManager {
     return this.markdownManager;
+  }
+
+  /**
+   * Handle APC (Application Program Command) action.
+   * Used for Kitty Graphics Protocol.
+   */
+  private handleApc(action: ApcAction): void {
+    switch (action.action) {
+      case "KittyGraphics":
+        // Store image action for frontend processing
+        // The ImageProcessor on the backend will handle actual decoding
+        // Frontend receives this for display coordination
+        // console.debug("Kitty Graphics command:", action.data.action);
+        break;
+
+      case "Unknown":
+        // Unknown APC sequences are ignored
+        break;
+    }
+  }
+
+  /**
+   * Handle DCS (Device Control String) action.
+   * Used for SIXEL graphics.
+   */
+  private handleDcs(action: DcsAction): void {
+    switch (action.action) {
+      case "Sixel":
+        // Store SIXEL action for frontend processing
+        // The backend decodes SIXEL to RGBA and sends via image event
+        // console.debug("SIXEL data received");
+        break;
+
+      case "Unknown":
+        // Unknown DCS sequences are ignored
+        break;
+    }
   }
 
   /**

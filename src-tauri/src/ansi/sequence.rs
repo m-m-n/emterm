@@ -6,6 +6,9 @@
 
 use serde::Serialize;
 
+use super::apc::ApcAction;
+use super::dcs::DcsAction;
+
 /// A terminal action emitted by the ANSI parser.
 ///
 /// Each variant represents a different type of terminal operation that
@@ -28,6 +31,14 @@ pub enum TerminalAction {
 
     /// An OSC (Operating System Command) sequence.
     Osc(OscAction),
+
+    /// An APC (Application Program Command) sequence.
+    /// Used for Kitty Graphics Protocol.
+    Apc(ApcAction),
+
+    /// A DCS (Device Control String) sequence.
+    /// Used for SIXEL graphics.
+    Dcs(DcsAction),
 }
 
 /// CSI (Control Sequence Introducer) actions.

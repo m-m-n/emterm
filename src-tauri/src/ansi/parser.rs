@@ -30,6 +30,8 @@
 //! });
 //! ```
 
+use crate::ansi::apc::{self, ApcAction, MAX_APC_LEN};
+use crate::ansi::dcs::{self, DcsAction, MAX_DCS_LEN};
 use crate::ansi::params::ParamParser;
 use crate::ansi::sequence::{CharSet, CsiAction, EraseMode, EscAction, OscAction, TerminalAction};
 
@@ -53,6 +55,16 @@ enum State {
     OscString,
     /// After ESC in OSC string, waiting for backslash to complete ST.
     OscEscape,
+    /// After ESC _, collecting APC (Application Program Command) string.
+    /// Used for Kitty Graphics Protocol.
+    ApcString,
+    /// After ESC in APC string, waiting for backslash to complete ST.
+    ApcEscape,
+    /// After ESC P, collecting DCS (Device Control String).
+    /// Used for SIXEL graphics.
+    DcsString,
+    /// After ESC in DCS string, waiting for backslash to complete ST.
+    DcsEscape,
 }
 
 /// ANSI escape sequence parser.
@@ -74,6 +86,10 @@ pub struct Parser {
     osc_param_done: bool,
     /// UTF-8 multibyte sequence accumulator.
     utf8_buffer: Vec<u8>,
+    /// APC string accumulator (for Kitty Graphics Protocol).
+    apc_buffer: Vec<u8>,
+    /// DCS string accumulator (for SIXEL graphics).
+    dcs_buffer: Vec<u8>,
 }
 
 impl Default for Parser {
@@ -92,6 +108,8 @@ impl Parser {
             osc_param: 0,
             osc_param_done: false,
             utf8_buffer: Vec::new(),
+            apc_buffer: Vec::with_capacity(1024),
+            dcs_buffer: Vec::with_capacity(4096),
         }
     }
 
@@ -105,6 +123,8 @@ impl Parser {
         self.osc_param = 0;
         self.osc_param_done = false;
         self.utf8_buffer.clear();
+        self.apc_buffer.clear();
+        self.dcs_buffer.clear();
     }
 
     /// Parses input bytes and calls the emit function for each action.
@@ -146,6 +166,10 @@ impl Parser {
             State::CsiParam => self.csi_param(byte, emit),
             State::OscString => self.osc_string(byte, emit),
             State::OscEscape => self.osc_escape(byte, emit),
+            State::ApcString => self.apc_string(byte, emit),
+            State::ApcEscape => self.apc_escape(byte, emit),
+            State::DcsString => self.dcs_string(byte, emit),
+            State::DcsEscape => self.dcs_escape(byte, emit),
         }
     }
 
@@ -317,6 +341,18 @@ impl Parser {
             // ESC ) - G1 charset selector
             b')' => {
                 self.state = State::EscapeCharset(b')');
+            }
+            // ESC _ - APC (Application Program Command) introducer
+            // Used for Kitty Graphics Protocol
+            b'_' => {
+                self.apc_buffer.clear();
+                self.state = State::ApcString;
+            }
+            // ESC P - DCS (Device Control String) introducer
+            // Used for SIXEL graphics
+            b'P' => {
+                self.dcs_buffer.clear();
+                self.state = State::DcsString;
             }
             // ESC ESC - emit ESC and stay in escape state
             0x1B => {
@@ -663,6 +699,118 @@ impl Parser {
         self.osc_buffer.clear();
         self.osc_param = 0;
         self.osc_param_done = false;
+    }
+
+    /// APC string state: collecting APC data (for Kitty Graphics).
+    fn apc_string<F>(&mut self, byte: u8, _emit: &mut F)
+    where
+        F: FnMut(TerminalAction),
+    {
+        match byte {
+            // ESC might be start of ST (ESC \)
+            0x1B => {
+                self.state = State::ApcEscape;
+            }
+            // Accumulate data bytes
+            _ => {
+                if self.apc_buffer.len() < MAX_APC_LEN {
+                    self.apc_buffer.push(byte);
+                }
+            }
+        }
+    }
+
+    /// APC escape state: after ESC in APC, waiting for backslash.
+    fn apc_escape<F>(&mut self, byte: u8, emit: &mut F)
+    where
+        F: FnMut(TerminalAction),
+    {
+        match byte {
+            // Backslash completes ST (String Terminator)
+            b'\\' => {
+                self.dispatch_apc(emit);
+                self.state = State::Ground;
+            }
+            // Any other byte after ESC in APC - treat ESC as abort, process this byte as new escape
+            _ => {
+                // Dispatch current APC
+                self.dispatch_apc(emit);
+                // Process the byte in escape state
+                self.state = State::Escape;
+                self.escape(byte, emit);
+            }
+        }
+    }
+
+    /// Dispatch a complete APC sequence.
+    fn dispatch_apc<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(TerminalAction),
+    {
+        let action = if let Some(cmd) = apc::parse_kitty_command(&self.apc_buffer) {
+            ApcAction::KittyGraphics(cmd)
+        } else {
+            ApcAction::Unknown(String::from_utf8_lossy(&self.apc_buffer).to_string())
+        };
+
+        emit(TerminalAction::Apc(action));
+        self.apc_buffer.clear();
+    }
+
+    /// DCS string state: collecting DCS data (for SIXEL).
+    fn dcs_string<F>(&mut self, byte: u8, _emit: &mut F)
+    where
+        F: FnMut(TerminalAction),
+    {
+        match byte {
+            // ESC might be start of ST (ESC \)
+            0x1B => {
+                self.state = State::DcsEscape;
+            }
+            // Accumulate data bytes
+            _ => {
+                if self.dcs_buffer.len() < MAX_DCS_LEN {
+                    self.dcs_buffer.push(byte);
+                }
+            }
+        }
+    }
+
+    /// DCS escape state: after ESC in DCS, waiting for backslash.
+    fn dcs_escape<F>(&mut self, byte: u8, emit: &mut F)
+    where
+        F: FnMut(TerminalAction),
+    {
+        match byte {
+            // Backslash completes ST (String Terminator)
+            b'\\' => {
+                self.dispatch_dcs(emit);
+                self.state = State::Ground;
+            }
+            // Any other byte after ESC in DCS - treat ESC as abort, process this byte as new escape
+            _ => {
+                // Dispatch current DCS
+                self.dispatch_dcs(emit);
+                // Process the byte in escape state
+                self.state = State::Escape;
+                self.escape(byte, emit);
+            }
+        }
+    }
+
+    /// Dispatch a complete DCS sequence.
+    fn dispatch_dcs<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(TerminalAction),
+    {
+        let action = if let Some(sixel) = dcs::parse_sixel_sequence(&self.dcs_buffer) {
+            DcsAction::Sixel(sixel)
+        } else {
+            DcsAction::Unknown(String::from_utf8_lossy(&self.dcs_buffer).to_string())
+        };
+
+        emit(TerminalAction::Dcs(action));
+        self.dcs_buffer.clear();
     }
 }
 
@@ -1907,5 +2055,233 @@ mod tests {
         // Send a new ASCII character - should not affect incomplete sequence
         parser.parse(b"A", |action| actions.push(action));
         assert_eq!(actions, vec![TerminalAction::Print('A')]);
+    }
+
+    // =========================================================================
+    // APC (Kitty Graphics Protocol) Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_apc_kitty_basic() {
+        // ESC _ G a=T,f=100;base64data ESC \
+        let actions = parse_all(b"\x1B_Ga=T,f=100;iVBORw0KGgo=\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Apc(ApcAction::KittyGraphics(cmd)) => {
+                assert_eq!(cmd.action, apc::KittyAction::TransmitAndDisplay);
+                assert_eq!(cmd.format, Some(apc::KittyFormat::Png));
+                assert_eq!(cmd.payload, "iVBORw0KGgo=");
+            }
+            _ => panic!("Expected Kitty Graphics action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_apc_kitty_transmit() {
+        let actions = parse_all(b"\x1B_Ga=t,i=1,f=32,s=100,v=50;AAAA\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Apc(ApcAction::KittyGraphics(cmd)) => {
+                assert_eq!(cmd.action, apc::KittyAction::Transmit);
+                assert_eq!(cmd.image_id, Some(1));
+                assert_eq!(cmd.format, Some(apc::KittyFormat::Rgba));
+                assert_eq!(cmd.width, Some(100));
+                assert_eq!(cmd.height, Some(50));
+            }
+            _ => panic!("Expected Kitty Graphics action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_apc_kitty_put() {
+        let actions = parse_all(b"\x1B_Ga=p,i=1,p=2,c=10,r=5;\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Apc(ApcAction::KittyGraphics(cmd)) => {
+                assert_eq!(cmd.action, apc::KittyAction::Put);
+                assert_eq!(cmd.image_id, Some(1));
+                assert_eq!(cmd.placement_id, Some(2));
+                assert_eq!(cmd.columns, Some(10));
+                assert_eq!(cmd.rows, Some(5));
+            }
+            _ => panic!("Expected Kitty Graphics action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_apc_kitty_delete() {
+        let actions = parse_all(b"\x1B_Ga=d,d=a;\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Apc(ApcAction::KittyGraphics(cmd)) => {
+                assert_eq!(cmd.action, apc::KittyAction::Delete);
+                assert_eq!(cmd.delete_target, Some(apc::KittyDeleteTarget::All));
+            }
+            _ => panic!("Expected Kitty Graphics action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_apc_kitty_query() {
+        let actions = parse_all(b"\x1B_Ga=q;\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Apc(ApcAction::KittyGraphics(cmd)) => {
+                assert_eq!(cmd.action, apc::KittyAction::Query);
+            }
+            _ => panic!("Expected Kitty Graphics action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_apc_split_across_buffers() {
+        let mut parser = Parser::new();
+        let mut actions = Vec::new();
+
+        // Split across two parse calls
+        parser.parse(b"\x1B_Ga=T,f=100;iVBO", |action| actions.push(action));
+        assert!(actions.is_empty());
+
+        parser.parse(b"Rw0KGgo=\x1B\\", |action| actions.push(action));
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Apc(ApcAction::KittyGraphics(cmd)) => {
+                assert_eq!(cmd.payload, "iVBORw0KGgo=");
+            }
+            _ => panic!("Expected Kitty Graphics action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_apc_unknown() {
+        // Non-Kitty APC (doesn't start with G)
+        let actions = parse_all(b"\x1B_Xsome data\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Apc(ApcAction::Unknown(data)) => {
+                assert_eq!(data, "Xsome data");
+            }
+            _ => panic!("Expected Unknown APC action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_apc_followed_by_text() {
+        let actions = parse_all(b"\x1B_Ga=q;\x1B\\Hello");
+        assert_eq!(actions.len(), 6); // 1 APC + 5 chars
+        assert!(matches!(
+            &actions[0],
+            TerminalAction::Apc(ApcAction::KittyGraphics(_))
+        ));
+        assert_eq!(actions[1], TerminalAction::Print('H'));
+    }
+
+    // =========================================================================
+    // DCS (SIXEL) Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_dcs_sixel_basic() {
+        // ESC P 0;1;0 q #0;2;100;0;0 ~ ESC \
+        let actions = parse_all(b"\x1BP0;1;0q#0;2;100;0;0~\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Dcs(DcsAction::Sixel(sixel)) => {
+                assert_eq!(sixel.aspect_ratio, dcs::SixelAspectRatio::TwoToOne);
+                assert_eq!(
+                    sixel.background_mode,
+                    dcs::SixelBackgroundMode::UseColorZero
+                );
+                assert_eq!(sixel.colors.len(), 1);
+            }
+            _ => panic!("Expected SIXEL action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dcs_sixel_minimal() {
+        let actions = parse_all(b"\x1BPq~\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Dcs(DcsAction::Sixel(sixel)) => {
+                assert_eq!(sixel.aspect_ratio, dcs::SixelAspectRatio::TwoToOne);
+                assert_eq!(sixel.background_mode, dcs::SixelBackgroundMode::Transparent);
+            }
+            _ => panic!("Expected SIXEL action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dcs_sixel_colors() {
+        let actions = parse_all(b"\x1BPq#0;2;100;0;0#1;2;0;100;0~\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Dcs(DcsAction::Sixel(sixel)) => {
+                assert_eq!(sixel.colors.len(), 2);
+                // Color 0: Red
+                assert_eq!(sixel.colors[0].rgba, [255, 0, 0, 255]);
+                // Color 1: Green
+                assert_eq!(sixel.colors[1].rgba, [0, 255, 0, 255]);
+            }
+            _ => panic!("Expected SIXEL action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dcs_split_across_buffers() {
+        let mut parser = Parser::new();
+        let mut actions = Vec::new();
+
+        // Split across two parse calls
+        parser.parse(b"\x1BP0;1;0q#0;2;", |action| actions.push(action));
+        assert!(actions.is_empty());
+
+        parser.parse(b"100;0;0~\x1B\\", |action| actions.push(action));
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Dcs(DcsAction::Sixel(sixel)) => {
+                assert_eq!(sixel.colors.len(), 1);
+            }
+            _ => panic!("Expected SIXEL action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dcs_unknown() {
+        // DCS without 'q' introducer for SIXEL (no 'q' character at all)
+        let actions = parse_all(b"\x1BPsome data here\x1B\\");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TerminalAction::Dcs(DcsAction::Unknown(data)) => {
+                assert_eq!(data, "some data here");
+            }
+            _ => panic!("Expected Unknown DCS action"),
+        }
+    }
+
+    #[test]
+    fn test_parse_dcs_followed_by_text() {
+        let actions = parse_all(b"\x1BPq~\x1B\\Hello");
+        assert_eq!(actions.len(), 6); // 1 DCS + 5 chars
+        assert!(matches!(
+            &actions[0],
+            TerminalAction::Dcs(DcsAction::Sixel(_))
+        ));
+        assert_eq!(actions[1], TerminalAction::Print('H'));
+    }
+
+    #[test]
+    fn test_parse_mixed_apc_and_dcs() {
+        // Both Kitty and SIXEL in same stream
+        let actions = parse_all(b"\x1B_Ga=q;\x1B\\\x1BPq~\x1B\\");
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(
+            &actions[0],
+            TerminalAction::Apc(ApcAction::KittyGraphics(_))
+        ));
+        assert!(matches!(
+            &actions[1],
+            TerminalAction::Dcs(DcsAction::Sixel(_))
+        ));
     }
 }
