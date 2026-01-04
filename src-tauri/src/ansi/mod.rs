@@ -1,9 +1,9 @@
 //! ANSI escape sequence parser module.
 //!
 //! This module provides functionality for parsing ANSI escape sequences from
-//! terminal output. It implements a state machine that handles CSI, ESC, and OSC
-//! sequences, emitting structured `TerminalAction` values for each recognized
-//! sequence.
+//! terminal output. It implements a state machine that handles CSI, ESC, OSC,
+//! APC, and DCS sequences, emitting structured `TerminalAction` values for each
+//! recognized sequence.
 //!
 //! # Architecture
 //!
@@ -35,13 +35,19 @@
 //! - `sequence`: Action type definitions (exports [`TerminalAction`], [`CsiAction`], etc.)
 //! - `params`: CSI parameter parsing utilities (exports [`ParamParser`])
 //! - [`sgr`]: SGR (Select Graphic Rendition) attribute parsing
+//! - `apc`: APC sequence parsing for Kitty Graphics Protocol
+//! - `dcs`: DCS sequence parsing for SIXEL graphics
 
+pub mod apc;
+pub mod dcs;
 mod params;
 mod parser;
 mod sequence;
 pub mod sgr;
 
 // Re-export public types
+pub use apc::{ApcAction, KittyAction, KittyCommand, KittyFormat};
+pub use dcs::{DcsAction, SixelData};
 pub use params::ParamParser;
 pub use parser::Parser;
 pub use sequence::{CharSet, CsiAction, EraseMode, EscAction, OscAction, TerminalAction};

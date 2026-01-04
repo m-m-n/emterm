@@ -32,5 +32,11 @@ thiserror = "2"
 futures = "0.3"
 anyhow = "1"
 
+# Image processing dependencies
+png = "0.17"
+gif = "0.13"
+base64 = "0.22"
+flate2 = "1"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

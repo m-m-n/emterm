@@ -81,6 +81,97 @@ export type OscAction =
   | { action: "Unknown"; ps: number; data: string };
 
 /**
+ * Kitty Graphics Protocol action types.
+ */
+export type KittyAction =
+  | "Transmit"
+  | "TransmitAndDisplay"
+  | "Put"
+  | "Delete"
+  | "Query"
+  | "Frame"
+  | "Animate"
+  | "Compose";
+
+/**
+ * Kitty image format.
+ */
+export type KittyFormat = "Rgb" | "Rgba" | "Png";
+
+/**
+ * Kitty delete target.
+ */
+export type KittyDeleteTarget =
+  | "All"
+  | "AllIncludingHidden"
+  | "ById"
+  | "ByPlacement"
+  | "AtCursor"
+  | "AtCursorByColumns"
+  | "AtPosition"
+  | "AtCell"
+  | "ByZIndex";
+
+/**
+ * Kitty Graphics Protocol command.
+ */
+export interface KittyCommand {
+  action: KittyAction;
+  image_id?: number;
+  placement_id?: number;
+  transmission?: "Direct" | "File" | "TempFile" | "SharedMemory";
+  format?: KittyFormat;
+  compression?: "Zlib";
+  width?: number;
+  height?: number;
+  more: boolean;
+  columns?: number;
+  rows?: number;
+  x_offset?: number;
+  y_offset?: number;
+  z_index?: number;
+  cursor_movement?: number;
+  delete_target?: KittyDeleteTarget;
+  quiet?: number;
+  payload: string;
+}
+
+/**
+ * APC (Application Program Command) actions.
+ * Used for Kitty Graphics Protocol.
+ */
+export type ApcAction =
+  | { action: "KittyGraphics"; data: KittyCommand }
+  | { action: "Unknown"; data: string };
+
+/**
+ * SIXEL aspect ratio.
+ */
+export type SixelAspectRatio = "TwoToOne" | "FiveToOne" | "ThreeToOne" | "OneToOne";
+
+/**
+ * SIXEL background mode.
+ */
+export type SixelBackgroundMode = "Transparent" | "UseColorZero";
+
+/**
+ * SIXEL image data.
+ */
+export interface SixelData {
+  aspect_ratio: SixelAspectRatio;
+  background_mode: SixelBackgroundMode;
+  horizontal_grid: number;
+}
+
+/**
+ * DCS (Device Control String) actions.
+ * Used for SIXEL graphics.
+ */
+export type DcsAction =
+  | { action: "Sixel"; data: SixelData }
+  | { action: "Unknown"; data: string };
+
+/**
  * A terminal action emitted by the ANSI parser.
  */
 export type TerminalAction =
@@ -88,7 +179,9 @@ export type TerminalAction =
   | { type: "Execute"; value: number }
   | { type: "Csi"; value: CsiAction }
   | { type: "Esc"; value: EscAction }
-  | { type: "Osc"; value: OscAction };
+  | { type: "Osc"; value: OscAction }
+  | { type: "Apc"; value: ApcAction }
+  | { type: "Dcs"; value: DcsAction };
 
 /**
  * Payload for the terminal_actions event.
