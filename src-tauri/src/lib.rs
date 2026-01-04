@@ -7,8 +7,8 @@ pub mod ansi;
 pub mod pty;
 
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -181,8 +181,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
         loop {
             std::thread::sleep(Duration::from_millis(100));
 
-            let session =
-                futures::executor::block_on(manager_clone.get_session(&session_id_clone));
+            let session = futures::executor::block_on(manager_clone.get_session(&session_id_clone));
             let Some(session) = session else {
                 // Session removed, exit monitoring
                 break;
@@ -339,10 +338,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                         }
                     }
                     Err(e) => {
-                        eprintln!(
-                            "PTY reader: session {} - try_wait error: {}",
-                            session_id, e
-                        );
+                        eprintln!("PTY reader: session {} - try_wait error: {}", session_id, e);
                         break;
                     }
                 }

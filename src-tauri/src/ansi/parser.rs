@@ -1203,6 +1203,98 @@ mod tests {
         );
     }
 
+    // =========================================================================
+    // OSC 777 Markdown Extension Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_osc_emterm_markdown_begin() {
+        // Test begin verb with full parameters
+        let actions =
+            parse_all(b"\x1B]777;emterm;markdown;begin;id=550e8400-e29b-41d4-a716-446655440000;format=gfm\x1B\\");
+        assert_eq!(
+            actions,
+            vec![TerminalAction::Osc(OscAction::EmtermExtension {
+                verb: "emterm".to_string(),
+                params: vec![
+                    "markdown".to_string(),
+                    "begin".to_string(),
+                    "id=550e8400-e29b-41d4-a716-446655440000".to_string(),
+                    "format=gfm".to_string(),
+                ],
+            })]
+        );
+    }
+
+    #[test]
+    fn test_parse_osc_emterm_markdown_chunk() {
+        // Test chunk verb with Base64 data
+        let actions =
+            parse_all(b"\x1B]777;emterm;markdown;chunk;id=550e8400-e29b-41d4-a716-446655440000;seq=0;data=IyBIZWxsbw==\x07");
+        assert_eq!(
+            actions,
+            vec![TerminalAction::Osc(OscAction::EmtermExtension {
+                verb: "emterm".to_string(),
+                params: vec![
+                    "markdown".to_string(),
+                    "chunk".to_string(),
+                    "id=550e8400-e29b-41d4-a716-446655440000".to_string(),
+                    "seq=0".to_string(),
+                    "data=IyBIZWxsbw==".to_string(),
+                ],
+            })]
+        );
+    }
+
+    #[test]
+    fn test_parse_osc_emterm_markdown_end() {
+        // Test end verb
+        let actions = parse_all(
+            b"\x1B]777;emterm;markdown;end;id=550e8400-e29b-41d4-a716-446655440000\x1B\\",
+        );
+        assert_eq!(
+            actions,
+            vec![TerminalAction::Osc(OscAction::EmtermExtension {
+                verb: "emterm".to_string(),
+                params: vec![
+                    "markdown".to_string(),
+                    "end".to_string(),
+                    "id=550e8400-e29b-41d4-a716-446655440000".to_string(),
+                ],
+            })]
+        );
+    }
+
+    #[test]
+    fn test_parse_osc_emterm_markdown_begin_minimal() {
+        // Test begin verb with minimal parameters (only required id)
+        let actions = parse_all(b"\x1B]777;emterm;markdown;begin;id=test-id\x07");
+        assert_eq!(
+            actions,
+            vec![TerminalAction::Osc(OscAction::EmtermExtension {
+                verb: "emterm".to_string(),
+                params: vec![
+                    "markdown".to_string(),
+                    "begin".to_string(),
+                    "id=test-id".to_string(),
+                ],
+            })]
+        );
+    }
+
+    #[test]
+    fn test_parse_osc_777_empty_data() {
+        // Empty OSC 777 should emit Unknown
+        let actions = parse_all(b"\x1B]777;\x07");
+        assert_eq!(
+            actions,
+            vec![TerminalAction::Osc(OscAction::EmtermExtension {
+                verb: "".to_string(),
+                params: vec![],
+            })]
+        );
+    }
+
     #[test]
     fn test_parse_osc_st_terminator() {
         // Test OSC with ESC \ (ST) terminator

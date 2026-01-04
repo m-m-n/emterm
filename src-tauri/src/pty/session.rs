@@ -242,7 +242,11 @@ mod tests {
             // Drain any output (non-blocking)
             match reader.read(&mut buf) {
                 Ok(n) if n > 0 => {
-                    eprintln!("Read {} bytes: {:?}", n, String::from_utf8_lossy(&buf[..n.min(100)]));
+                    eprintln!(
+                        "Read {} bytes: {:?}",
+                        n,
+                        String::from_utf8_lossy(&buf[..n.min(100)])
+                    );
                     last_read_time = std::time::Instant::now();
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {

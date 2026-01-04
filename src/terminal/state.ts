@@ -17,6 +17,8 @@ import {
   cloneModes,
   setDecPrivateMode,
 } from "./modes.ts";
+import { MarkdownSessionManager } from "../markdown/session.ts";
+import type { MarkdownBlock } from "../markdown/types.ts";
 
 /**
  * Active character set (G0 or G1).
@@ -83,6 +85,12 @@ export class TerminalState {
   /** Active hyperlink (from OSC 8). */
   private _activeHyperlink: { params: string; uri: string } | null = null;
 
+  /** Markdown session manager. */
+  private markdownManager: MarkdownSessionManager;
+
+  /** Pending markdown blocks to be rendered. */
+  private _pendingMarkdownBlocks: MarkdownBlock[] = [];
+
   /**
    * Create a new terminal state.
    *
@@ -95,6 +103,7 @@ export class TerminalState {
     this.cursor = this.primaryCursor;
     this.modes = createDefaultModes();
     this.tabStops = this.createDefaultTabStops(cols);
+    this.markdownManager = new MarkdownSessionManager();
   }
 
   /**
@@ -908,8 +917,7 @@ export class TerminalState {
         break;
 
       case "EmtermExtension":
-        // eMterm-specific extensions (placeholder for future features)
-        // console.debug(`eMterm extension: ${action.verb}`, action.params);
+        this.handleEmtermExtension(action.verb, action.params);
         break;
 
       case "Unknown":
@@ -1001,6 +1009,46 @@ export class TerminalState {
   }
 
   /**
+   * Handle eMterm extension commands.
+   *
+   * @param verb - The command verb (e.g., "emterm")
+   * @param params - Command parameters
+   */
+  private handleEmtermExtension(verb: string, params: string[]): void {
+    // Route to markdown manager
+    const block = this.markdownManager.handleCommand(verb, params);
+
+    if (block) {
+      // Set block position based on current cursor
+      block.startRow = this.cursor.row;
+      this._pendingMarkdownBlocks.push(block);
+    }
+  }
+
+  /**
+   * Get pending Markdown blocks for rendering.
+   *
+   * Call this after processing actions to get blocks that should be rendered.
+   * The returned blocks are removed from the pending queue.
+   *
+   * @returns Array of pending Markdown blocks
+   */
+  takePendingMarkdownBlocks(): MarkdownBlock[] {
+    const blocks = this._pendingMarkdownBlocks;
+    this._pendingMarkdownBlocks = [];
+    return blocks;
+  }
+
+  /**
+   * Get the markdown session manager.
+   *
+   * @returns The markdown session manager instance
+   */
+  getMarkdownManager(): MarkdownSessionManager {
+    return this.markdownManager;
+  }
+
+  /**
    * Reset terminal to initial state.
    */
   reset(): void {
@@ -1034,5 +1082,10 @@ export class TerminalState {
     this._workingDirectory = "";
     this._pendingResponses = [];
     this._activeHyperlink = null;
+
+    // Reset markdown state
+    this.markdownManager.dispose();
+    this.markdownManager = new MarkdownSessionManager();
+    this._pendingMarkdownBlocks = [];
   }
 }
