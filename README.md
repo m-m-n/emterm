@@ -7,7 +7,7 @@ A cross-platform terminal emulator built with Tauri, featuring rich rendering ca
 - [ ] Full ANSI control sequence support
 - [ ] Kitty Graphics Protocol support
 - [ ] SIXEL graphics support
-- [ ] Inline Markdown rendering (custom OSC extension)
+- [x] Inline Markdown rendering (custom OSC extension)
 - [ ] Low-latency typing performance
 - [ ] Cross-platform (Linux, macOS, Windows)
 
@@ -73,11 +73,63 @@ emterm markdown <file.md>
 emterm image <image.png>
 ```
 
+## Markdown Display
+
+eMterm supports inline Markdown rendering via a custom OSC 777 extension protocol.
+
+### Supported Features
+
+- **CommonMark** and **GitHub Flavored Markdown (GFM)** formats
+- Syntax highlighting with highlight.js (180+ languages)
+- Mermaid diagram rendering (flowcharts, sequence diagrams, etc.)
+- XSS protection via DOMPurify sanitization
+- Theme synchronization with terminal colors (dark/light mode)
+- Virtual scrolling for large documents
+
+### Limitations
+
+| Limit | Value |
+|-------|-------|
+| Maximum document size | 2 MB per session |
+| Session timeout | 30 seconds |
+| Maximum concurrent sessions | 10 |
+
+### Protocol
+
+Markdown content is transferred using OSC 777 control sequences:
+
+```
+ESC ] 777 ; emterm ; markdown ; <verb> ; <params...> ST
+```
+
+**Verbs:**
+- `begin` - Start a new session (`id=<uuid>`, `format=commonmark|gfm`)
+- `chunk` - Send Base64-encoded content (`id=<uuid>`, `seq=<n>`, `data=<base64>`)
+- `end` - Complete and render (`id=<uuid>`)
+
+### Usage Examples
+
+**From command line:**
+```bash
+emterm markdown document.md
+```
+
+**Programmatic (works over SSH):**
+```bash
+#!/bin/bash
+ID=$(uuidgen)
+echo -ne "\e]777;emterm;markdown;begin;id=$ID;format=gfm\e\\"
+echo -ne "\e]777;emterm;markdown;chunk;id=$ID;seq=0;data=$(base64 -w0 < doc.md)\e\\"
+echo -ne "\e]777;emterm;markdown;end;id=$ID\e\\"
+```
+
 ## Project Structure
 
 ```
 emterm/
 ├── src/                    # Frontend (TypeScript)
+│   ├── terminal/           # Terminal emulator core
+│   ├── markdown/           # Markdown rendering module
 │   ├── index.html
 │   ├── main.ts
 │   └── styles.css

@@ -8,10 +8,12 @@ import type { TerminalState } from "./state.ts";
 import type { Cell, Line } from "./grid.ts";
 import type { CellAttributes } from "./attributes.ts";
 import type { CursorStyle } from "./cursor.ts";
+import type { MarkdownBlock } from "../markdown/types.ts";
 import { getEffectiveForeground, getEffectiveBackground, attributesEqual } from "./attributes.ts";
 import { rgbToCSS, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND } from "./colors.ts";
 import { StyleCache, getStyleCache } from "./style-cache.ts";
 import { RenderTimer, getPerformanceMonitor, checkFrameBudget } from "./performance.ts";
+import { MarkdownRenderer } from "../markdown/renderer.ts";
 
 /**
  * Terminal renderer that outputs to DOM.
@@ -77,6 +79,12 @@ export class TerminalRenderer {
   /** Track which buffer was last rendered (to detect buffer switches). */
   private lastRenderedAlternateBuffer: boolean = false;
 
+  /** Markdown renderer instance. */
+  private markdownRenderer: MarkdownRenderer;
+
+  /** Markdown container element (overlay for rich content). */
+  private markdownContainer: HTMLDivElement | null = null;
+
   /**
    * Create a new terminal renderer.
    *
@@ -112,6 +120,11 @@ export class TerminalRenderer {
 
     // Add CSS for cursor blink animation
     this.addCursorStyles();
+
+    // Initialize Markdown renderer and container
+    this.markdownRenderer = new MarkdownRenderer();
+    this.createMarkdownContainer();
+    this.addMarkdownStyles();
   }
 
   /**
@@ -177,6 +190,161 @@ export class TerminalRenderer {
         background-color: transparent;
         border-left: 2px solid #c0c0c0;
         width: 2px !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  /**
+   * Create the Markdown container element.
+   */
+  private createMarkdownContainer(): void {
+    this.markdownContainer = document.createElement("div");
+    this.markdownContainer.className = "markdown-overlay";
+    this.markdownContainer.style.position = "absolute";
+    this.markdownContainer.style.top = "0";
+    this.markdownContainer.style.left = "0";
+    this.markdownContainer.style.right = "0";
+    this.markdownContainer.style.pointerEvents = "auto";
+    this.markdownContainer.style.overflow = "visible";
+    this.container.appendChild(this.markdownContainer);
+  }
+
+  /**
+   * Add CSS styles for Markdown rendering.
+   */
+  private addMarkdownStyles(): void {
+    if (document.getElementById("markdown-styles")) {
+      return;
+    }
+
+    const style = document.createElement("style");
+    style.id = "markdown-styles";
+    style.textContent = `
+      .markdown-overlay {
+        z-index: 10;
+      }
+      .markdown-block {
+        position: relative;
+        background-color: var(--markdown-bg, #1e1e1e);
+        border-radius: 6px;
+        padding: 16px;
+        margin: 8px 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        color: var(--markdown-fg, #e0e0e0);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .markdown-content {
+        overflow-wrap: break-word;
+        word-wrap: break-word;
+      }
+      .markdown-content h1,
+      .markdown-content h2,
+      .markdown-content h3,
+      .markdown-content h4,
+      .markdown-content h5,
+      .markdown-content h6 {
+        margin-top: 24px;
+        margin-bottom: 16px;
+        font-weight: 600;
+        line-height: 1.25;
+        color: var(--markdown-heading, #ffffff);
+      }
+      .markdown-content h1 { font-size: 2em; margin-top: 0; border-bottom: 1px solid var(--markdown-border, #30363d); padding-bottom: 0.3em; }
+      .markdown-content h2 { font-size: 1.5em; border-bottom: 1px solid var(--markdown-border, #30363d); padding-bottom: 0.3em; }
+      .markdown-content h3 { font-size: 1.25em; }
+      .markdown-content h4 { font-size: 1em; }
+      .markdown-content h5 { font-size: 0.875em; }
+      .markdown-content h6 { font-size: 0.85em; color: var(--markdown-muted, #8b949e); }
+      .markdown-content p { margin-top: 0; margin-bottom: 16px; }
+      .markdown-content a { color: var(--markdown-link, #58a6ff); text-decoration: none; }
+      .markdown-content a:hover { text-decoration: underline; }
+      .markdown-content code {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        padding: 0.2em 0.4em;
+        margin: 0;
+        font-size: 85%;
+        background-color: var(--markdown-code-bg, rgba(110, 118, 129, 0.4));
+        border-radius: 6px;
+      }
+      .markdown-content pre {
+        margin-top: 0;
+        margin-bottom: 16px;
+        padding: 16px;
+        overflow: auto;
+        font-size: 85%;
+        line-height: 1.45;
+        background-color: var(--markdown-pre-bg, #161b22);
+        border-radius: 6px;
+      }
+      .markdown-content pre code {
+        padding: 0;
+        margin: 0;
+        background-color: transparent;
+        border-radius: 0;
+        font-size: 100%;
+      }
+      .markdown-content blockquote {
+        margin: 0;
+        padding: 0 1em;
+        color: var(--markdown-muted, #8b949e);
+        border-left: 0.25em solid var(--markdown-border, #30363d);
+        margin-bottom: 16px;
+      }
+      .markdown-content ul,
+      .markdown-content ol {
+        margin-top: 0;
+        margin-bottom: 16px;
+        padding-left: 2em;
+      }
+      .markdown-content li + li {
+        margin-top: 0.25em;
+      }
+      .markdown-content table {
+        border-collapse: collapse;
+        margin-bottom: 16px;
+        width: 100%;
+        overflow: auto;
+      }
+      .markdown-content table th,
+      .markdown-content table td {
+        padding: 6px 13px;
+        border: 1px solid var(--markdown-border, #30363d);
+      }
+      .markdown-content table tr {
+        background-color: var(--markdown-table-bg, transparent);
+        border-top: 1px solid var(--markdown-border, #30363d);
+      }
+      .markdown-content table tr:nth-child(2n) {
+        background-color: var(--markdown-table-stripe, rgba(110, 118, 129, 0.1));
+      }
+      .markdown-content hr {
+        height: 0.25em;
+        padding: 0;
+        margin: 24px 0;
+        background-color: var(--markdown-border, #30363d);
+        border: 0;
+      }
+      .markdown-content img {
+        max-width: 100%;
+        box-sizing: content-box;
+        background-color: var(--markdown-bg, #1e1e1e);
+      }
+      /* Highlight.js theme integration */
+      .markdown-content .hljs {
+        color: var(--markdown-code-fg, #e0e0e0);
+        background: transparent;
+      }
+      /* Mermaid diagrams */
+      .mermaid-diagram {
+        text-align: center;
+        margin: 16px 0;
+      }
+      .mermaid-diagram svg {
+        max-width: 100%;
+        height: auto;
       }
     `;
     document.head.appendChild(style);
@@ -251,6 +419,9 @@ export class TerminalRenderer {
       state.cursorStyle,
       state.cursorBlink
     );
+
+    // Render pending Markdown blocks
+    this.renderPendingMarkdownBlocks(state);
 
     // Record performance metrics
     const duration = this.renderTimer.end();
@@ -722,5 +893,103 @@ export class TerminalRenderer {
   resetStyleCache(): void {
     this.styleCache.reset();
     this.lastRowHash.clear();
+  }
+
+  /**
+   * Render pending Markdown blocks from terminal state.
+   *
+   * @param state - Terminal state to get pending blocks from
+   */
+  private renderPendingMarkdownBlocks(state: TerminalState): void {
+    const blocks = state.takePendingMarkdownBlocks();
+    if (blocks.length === 0 || !this.markdownContainer) {
+      return;
+    }
+
+    for (const block of blocks) {
+      // Position block based on terminal row
+      const topOffset = block.startRow * this.charHeight + this.paddingOffset;
+
+      // Insert block into DOM
+      const element = this.markdownRenderer.insertBlock(block, this.markdownContainer);
+
+      // Position the block
+      element.style.marginTop = `${topOffset}px`;
+
+      // Calculate row count after insertion (based on actual height)
+      const rect = element.getBoundingClientRect();
+      block.rowCount = Math.ceil(rect.height / this.charHeight);
+    }
+  }
+
+  /**
+   * Insert a Markdown block at the specified position.
+   *
+   * @param block - Markdown block to insert
+   * @returns The created DOM element
+   */
+  insertMarkdownBlock(block: MarkdownBlock): HTMLElement | null {
+    if (!this.markdownContainer) {
+      return null;
+    }
+
+    const topOffset = block.startRow * this.charHeight + this.paddingOffset;
+    const element = this.markdownRenderer.insertBlock(block, this.markdownContainer);
+    element.style.marginTop = `${topOffset}px`;
+
+    // Calculate row count after insertion
+    const rect = element.getBoundingClientRect();
+    block.rowCount = Math.ceil(rect.height / this.charHeight);
+
+    return element;
+  }
+
+  /**
+   * Remove a Markdown block by ID.
+   *
+   * @param id - Block identifier
+   */
+  removeMarkdownBlock(id: string): void {
+    this.markdownRenderer.removeBlock(id);
+  }
+
+  /**
+   * Get a Markdown block element by ID.
+   *
+   * @param id - Block identifier
+   * @returns Block element or undefined
+   */
+  getMarkdownBlock(id: string): HTMLElement | undefined {
+    return this.markdownRenderer.getBlock(id);
+  }
+
+  /**
+   * Update Markdown block visibility based on scroll position.
+   * Implements virtual scrolling for performance.
+   *
+   * @param visibleRange - Currently visible row range
+   */
+  updateMarkdownVisibility(visibleRange: { start: number; end: number }): void {
+    this.markdownRenderer.updateVisibility(visibleRange);
+  }
+
+  /**
+   * Get the Markdown renderer instance.
+   *
+   * @returns The Markdown renderer
+   */
+  getMarkdownRenderer(): MarkdownRenderer {
+    return this.markdownRenderer;
+  }
+
+  /**
+   * Clear all Markdown blocks.
+   */
+  clearMarkdownBlocks(): void {
+    this.markdownRenderer.dispose();
+    // Recreate the container
+    if (this.markdownContainer) {
+      this.markdownContainer.innerHTML = "";
+    }
   }
 }
