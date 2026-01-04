@@ -467,6 +467,10 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
         );
 
         // Emit pty_exit with remaining_sessions count (session already removed)
+        eprintln!(
+            "PTY reader: emitting pty_exit event for session {}",
+            session_id
+        );
         let payload = PtyExitPayload {
             session_id: session_id.clone(),
             code: exit_code,

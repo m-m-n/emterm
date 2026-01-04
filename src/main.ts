@@ -204,15 +204,35 @@ async function setupNewTerminalHandlers(): Promise<void> {
 
   // Handle exit and error events
   await ptyClient.onExit(async (code, remainingSessions) => {
+    if (import.meta.env?.DEV) {
+      console.log(`[Main] onExit callback: code=${code}, remainingSessions=${remainingSessions}`);
+    }
+
     // Use remaining_sessions from the event (already removed from backend)
     // This ensures accurate count as the session is removed before event emission
     if (remainingSessions === 0) {
+      if (import.meta.env?.DEV) {
+        console.log('[Main] Last session exited, closing window...');
+      }
+
       // Only close window if no other sessions exist
       try {
         const appWindow = getCurrentWebviewWindow();
         await appWindow.close();
+
+        if (import.meta.env?.DEV) {
+          console.log('[Main] Window closed successfully');
+        }
       } catch (error) {
-        console.error("Failed to close window:", error);
+        if (import.meta.env?.DEV) {
+          console.error('[Main] Failed to close window:', error);
+        } else {
+          console.error("Failed to close window:", error);
+        }
+      }
+    } else {
+      if (import.meta.env?.DEV) {
+        console.log(`[Main] ${remainingSessions} session(s) remaining, keeping window open`);
       }
     }
     // If remainingSessions > 0, other sessions exist (future multi-tab support)
