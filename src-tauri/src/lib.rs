@@ -7,6 +7,13 @@ pub mod ansi;
 pub mod image;
 pub mod pty;
 
+// CLI command modules
+pub mod commands;
+pub mod encoding;
+pub mod error;
+pub mod protocols;
+pub mod validation;
+
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -491,6 +498,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
 // ============================================================================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(not(test))]
 pub fn run() {
     tauri::Builder::default()
         .manage(PtyManager::new())
