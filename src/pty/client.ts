@@ -55,6 +55,9 @@ export class PtyClient {
   /** List of event unsubscribe functions */
   private unlisteners: UnlistenFn[] = [];
 
+  /** Flag to prevent duplicate exit event processing */
+  private exitHandled = false;
+
   /** Pending terminal action events that arrived before sessionId was set */
   private pendingTerminalActions: TerminalActionsPayload[] = [];
 
@@ -80,14 +83,18 @@ export class PtyClient {
       throw new Error("PTY session already active. Call kill() first.");
     }
 
+    // Reset exitHandled flag for new session
+    this.exitHandled = false;
+
     const result = await invoke<SpawnResult>("pty_spawn", {
       shell: options.shell,
       cols: options.cols ?? 80,
       rows: options.rows ?? 24,
     });
 
-    this.sessionId = result.session_id;
-    return this.sessionId;
+    const sessionId = result.session_id;
+    this.sessionId = sessionId;
+    return sessionId;
   }
 
   /**
@@ -144,6 +151,7 @@ export class PtyClient {
     });
 
     this.sessionId = null;
+    this.exitHandled = false;
   }
 
   /**
@@ -153,7 +161,7 @@ export class PtyClient {
    */
   async onOutput(callback: PtyOutputCallback): Promise<void> {
     const currentSessionId = this.sessionId;
-    const unlisten = await listen<PtyOutputPayload>("pty_output", (event) => {
+    const unlisten = await listen<PtyOutputPayload>("pty_output", (event: { payload: PtyOutputPayload }) => {
       // Only process events for the current session
       if (
         currentSessionId !== null &&
@@ -174,11 +182,39 @@ export class PtyClient {
    * @param callback - Function called with the exit code and remaining session count
    */
   async onExit(callback: PtyExitCallback): Promise<void> {
-    const unlisten = await listen<PtyExitPayload>("pty_exit", (event) => {
-      // Check sessionId at event time, not registration time
-      if (this.sessionId !== null && event.payload.session_id === this.sessionId) {
-        callback(event.payload.code, event.payload.remaining_sessions);
-        this.sessionId = null;
+    const unlisten = await listen<PtyExitPayload>("pty_exit", (event: { payload: PtyExitPayload }) => {
+      // Prevent duplicate processing
+      if (this.exitHandled) {
+        if (import.meta.env?.DEV) {
+          console.log('[PtyClient] pty_exit already handled, ignoring duplicate event');
+        }
+        return;
+      }
+
+      // NOTE: This implementation assumes single-session model (one PTY per window).
+      // The condition `sessionId === null` handles the race where shell exits before
+      // spawn() returns, but this will NOT work correctly in multi-tab scenarios.
+      // FUTURE: When implementing multi-tab support, replace this with event buffering
+      // to avoid processing events from unrelated sessions. See SPEC.md NFR4.
+      if (this.sessionId === null || event.payload.session_id === this.sessionId) {
+        if (import.meta.env?.DEV) {
+          console.log(`[PtyClient] pty_exit received: code=${event.payload.code}, remaining=${event.payload.remaining_sessions}`);
+        }
+
+        this.exitHandled = true;  // Mark as handled
+
+        // Ensure listener cleanup even if callback throws
+        try {
+          callback(event.payload.code, event.payload.remaining_sessions);
+        } finally {
+          // Remove from unlisteners array and cleanup listener
+          const index = this.unlisteners.indexOf(unlisten);
+          if (index > -1) {
+            this.unlisteners.splice(index, 1);
+          }
+          unlisten();  // Cleanup listener
+          this.sessionId = null;
+        }
       }
     });
     this.unlisteners.push(unlisten);
@@ -190,7 +226,7 @@ export class PtyClient {
    * @param callback - Function called with the error message
    */
   async onError(callback: PtyErrorCallback): Promise<void> {
-    const unlisten = await listen<PtyErrorPayload>("pty_error", (event) => {
+    const unlisten = await listen<PtyErrorPayload>("pty_error", (event: { payload: PtyErrorPayload }) => {
       if (event.payload.session_id === this.sessionId) {
         callback(event.payload.message);
       }
@@ -211,7 +247,7 @@ export class PtyClient {
 
     const unlisten = await listen<TerminalActionsPayload>(
       "terminal_actions",
-      (event) => {
+      (event: { payload: TerminalActionsPayload }) => {
         if (this.sessionId === null) {
           // sessionId not yet set (spawn hasn't returned yet), buffer the event
           this.pendingTerminalActions.push(event.payload);
