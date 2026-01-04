@@ -37,6 +37,30 @@ png = "0.17"
 gif = "0.13"
 base64 = "0.22"
 flate2 = "1"
+clap = { version = "4.5.54", features = ["derive"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.24.0"
+assert_cmd = "2"
+predicates = "3"
+criterion = "0.5"
+
+[[test]]
+name = "markdown_tests"
+path = "tests/integration/markdown_tests.rs"
+
+[[test]]
+name = "image_tests"
+path = "tests/integration/image_tests.rs"
+
+[[test]]
+name = "sixel_tests"
+path = "tests/integration/sixel_tests.rs"
+
+[[bench]]
+name = "command_benchmarks"
+harness = false

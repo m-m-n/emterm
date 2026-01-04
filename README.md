@@ -151,6 +151,7 @@ emterm/
 | `bun run dev` | Start frontend development server |
 | `bun run tauri:dev` | Start Tauri app in development mode |
 | `bun run tauri:build` | Build for production |
+| `bun run icons` | Generate Tauri icon assets |
 | `bun run typecheck` | Run TypeScript type checking |
 | `bun test` | Run tests |
 
