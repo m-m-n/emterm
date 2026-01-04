@@ -13,7 +13,9 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dpkg": "./scripts/build-dpkg.sh",
+    "clean": "rm -rf build dist"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.0.0",
