@@ -171,13 +171,13 @@ export class PtyClient {
   /**
    * Registers a callback for PTY exit events.
    *
-   * @param callback - Function called with the exit code
+   * @param callback - Function called with the exit code and remaining session count
    */
   async onExit(callback: PtyExitCallback): Promise<void> {
     const unlisten = await listen<PtyExitPayload>("pty_exit", (event) => {
       // Check sessionId at event time, not registration time
       if (this.sessionId !== null && event.payload.session_id === this.sessionId) {
-        callback(event.payload.code);
+        callback(event.payload.code, event.payload.remaining_sessions);
         this.sessionId = null;
       }
     });

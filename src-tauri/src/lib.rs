@@ -38,6 +38,9 @@ pub struct PtyOutputPayload {
 pub struct PtyExitPayload {
     session_id: String,
     code: i32,
+    /// Number of remaining sessions after this session is removed.
+    /// Used by frontend to determine if window should close.
+    remaining_sessions: usize,
 }
 
 /// Payload for pty_error event.
@@ -52,6 +55,25 @@ pub struct PtyErrorPayload {
 pub struct TerminalActionsPayload {
     session_id: String,
     actions: Vec<ansi::TerminalAction>,
+}
+
+/// Payload for tab_created event.
+#[derive(Serialize, Clone)]
+pub struct TabCreatedPayload {
+    session_id: String,
+}
+
+/// Payload for tab_closed event.
+#[derive(Serialize, Clone)]
+pub struct TabClosedPayload {
+    session_id: String,
+    exit_code: i32,
+}
+
+/// Payload for tab_count_changed event.
+#[derive(Serialize, Clone)]
+pub struct TabCountChangedPayload {
+    count: usize,
 }
 
 // ============================================================================
@@ -80,10 +102,23 @@ async fn pty_spawn(
     let cols = cols.unwrap_or(80);
     let rows = rows.unwrap_or(24);
 
-    let session_id = state
-        .create_session(shell, cols, rows)
+    // Use atomic method to get session_id and count in one lock (NFR2 compliance)
+    let result = state
+        .create_session_atomic(shell, cols, rows)
         .await
         .map_err(|e| e.to_string())?;
+
+    let session_id = result.session_id;
+    let count = result.count;
+
+    // Emit tab lifecycle events (count was captured inside the lock)
+    let _ = app.emit(
+        "tab_created",
+        TabCreatedPayload {
+            session_id: session_id.clone(),
+        },
+    );
+    let _ = app.emit("tab_count_changed", TabCountChangedPayload { count });
 
     // Start output reader thread
     spawn_reader_thread(app, state.inner().clone(), session_id.clone());
@@ -141,10 +176,29 @@ async fn pty_resize(
 ///
 /// * `session_id` - The session ID to kill
 #[tauri::command]
-async fn pty_kill(state: State<'_, PtyManager>, session_id: String) -> Result<(), String> {
-    if let Some(session) = state.remove_session(&session_id).await {
+async fn pty_kill(
+    app: AppHandle,
+    state: State<'_, PtyManager>,
+    session_id: String,
+) -> Result<(), String> {
+    if let Some((session, result)) = state.remove_session_atomic(&session_id).await {
         let mut session = session.lock().await;
         session.kill().map_err(|e| e.to_string())?;
+
+        // Emit tab lifecycle events (NFR2 compliance)
+        let _ = app.emit(
+            "tab_closed",
+            TabClosedPayload {
+                session_id: session_id.clone(),
+                exit_code: -1, // Killed
+            },
+        );
+        let _ = app.emit(
+            "tab_count_changed",
+            TabCountChangedPayload {
+                count: result.count,
+            },
+        );
     }
     Ok(())
 }
@@ -153,6 +207,41 @@ async fn pty_kill(state: State<'_, PtyManager>, session_id: String) -> Result<()
 #[tauri::command]
 fn debug_log(message: String) {
     eprintln!("[Frontend] {}", message);
+}
+
+/// Returns the number of active PTY sessions.
+///
+/// This command exposes the existing `PtyManager::session_count()` method
+/// to the frontend, enabling tab-aware window close logic.
+#[tauri::command]
+async fn session_count(state: State<'_, PtyManager>) -> Result<usize, String> {
+    Ok(state.session_count().await)
+}
+
+/// Gracefully closes a PTY session using a 3-stage shutdown sequence.
+///
+/// # Stages
+///
+/// 1. Send "exit\n" command and wait (configurable timeout)
+/// 2. Send EOF (0x04) and wait (configurable timeout)
+/// 3. Force kill the process
+///
+/// # Arguments
+///
+/// * `session_id` - The session ID to close gracefully
+/// * `timeout_ms` - Optional total timeout in milliseconds (default: 7000ms)
+///                  The timeout is distributed proportionally between stages.
+#[tauri::command]
+async fn tab_close_graceful(
+    state: State<'_, PtyManager>,
+    session_id: String,
+    timeout_ms: Option<u64>,
+) -> Result<(), String> {
+    let config = match timeout_ms {
+        Some(ms) => pty::graceful_shutdown::ShutdownConfig::from_total_ms(ms),
+        None => pty::graceful_shutdown::ShutdownConfig::default(),
+    };
+    pty::graceful_shutdown::shutdown_with_config(&state, &session_id, config).await
 }
 
 // ============================================================================
@@ -316,25 +405,34 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
             }
         }
 
-        // Check exit status
+        // CRITICAL FIX: Remove session FIRST, then emit events
+        // This ensures remaining_sessions is accurate when frontend receives pty_exit
         eprintln!(
-            "PTY reader: checking exit status for session {}",
+            "PTY reader: removing session and checking exit status for {}",
             session_id
         );
-        if let Some(session) = futures::executor::block_on(manager.get_session(&session_id)) {
-            let mut session = futures::executor::block_on(session.lock());
+
+        // Use atomic method to remove session and get remaining count (NFR2 compliance)
+        let (exit_code, remaining_sessions) = if let Some((session, result)) =
+            futures::executor::block_on(manager.remove_session_atomic(&session_id))
+        {
+            // Session is now removed from HashMap, but we still have ownership via Arc
+            let mut session_guard = futures::executor::block_on(session.lock());
 
             // Retry up to 10 times with 50ms delay (total 500ms max wait)
             let mut exit_code: Option<i32> = None;
             for attempt in 0..10 {
-                match session.try_wait() {
+                match session_guard.try_wait() {
                     Ok(Some(status)) => {
                         exit_code = Some(status.exit_code() as i32);
                         break;
                     }
                     Ok(None) => {
                         if attempt < 9 {
+                            // Release lock during sleep, but we keep the Arc
+                            drop(session_guard);
                             std::thread::sleep(Duration::from_millis(50));
+                            session_guard = futures::executor::block_on(session.lock());
                         }
                     }
                     Err(e) => {
@@ -344,39 +442,46 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                 }
             }
 
-            if let Some(code) = exit_code {
-                eprintln!(
-                    "PTY reader: session {} exited with code {}",
-                    session_id, code
-                );
-                let payload = PtyExitPayload {
-                    session_id: session_id.clone(),
-                    code,
-                };
-                if let Err(e) = app.emit("pty_exit", payload) {
-                    eprintln!("PTY reader: failed to emit pty_exit: {}", e);
-                }
-            } else {
-                // Process didn't exit within timeout, emit with code -1
-                eprintln!(
-                    "PTY reader: session {} - process did not exit within timeout",
-                    session_id
-                );
-                let payload = PtyExitPayload {
-                    session_id: session_id.clone(),
-                    code: -1,
-                };
-                let _ = app.emit("pty_exit", payload);
-            }
+            (exit_code.unwrap_or(-1), result.count)
         } else {
             eprintln!(
-                "PTY reader: session {} not found when checking exit status",
+                "PTY reader: session {} not found (already removed)",
                 session_id
             );
+            // Session already removed (e.g., by pty_kill), get current count
+            let current_count = futures::executor::block_on(manager.session_count());
+            (-1, current_count)
+        };
+
+        eprintln!(
+            "PTY reader: session {} exited with code {}, {} sessions remaining",
+            session_id, exit_code, remaining_sessions
+        );
+
+        // Emit pty_exit with remaining_sessions count (session already removed)
+        let payload = PtyExitPayload {
+            session_id: session_id.clone(),
+            code: exit_code,
+            remaining_sessions,
+        };
+        if let Err(e) = app.emit("pty_exit", payload) {
+            eprintln!("PTY reader: failed to emit pty_exit: {}", e);
         }
 
-        // Cleanup
-        futures::executor::block_on(manager.remove_session(&session_id));
+        // Emit tab_closed and tab_count_changed events
+        let _ = app.emit(
+            "tab_closed",
+            TabClosedPayload {
+                session_id: session_id.clone(),
+                exit_code,
+            },
+        );
+        let _ = app.emit(
+            "tab_count_changed",
+            TabCountChangedPayload {
+                count: remaining_sessions,
+            },
+        );
     });
 }
 
@@ -389,7 +494,13 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PtyManager::new())
         .invoke_handler(tauri::generate_handler![
-            pty_spawn, pty_write, pty_resize, pty_kill, debug_log,
+            pty_spawn,
+            pty_write,
+            pty_resize,
+            pty_kill,
+            debug_log,
+            session_count,
+            tab_close_graceful,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -406,4 +517,43 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_session_count_command() {
+        let manager = PtyManager::new();
+
+        // Initially, session count should be 0
+        assert_eq!(manager.session_count().await, 0);
+
+        // Create a session
+        let session_id = manager.create_session(None, 80, 24).await.unwrap();
+        assert_eq!(manager.session_count().await, 1);
+
+        // Create another session
+        let session_id2 = manager.create_session(None, 80, 24).await.unwrap();
+        assert_eq!(manager.session_count().await, 2);
+
+        // Remove one session
+        if let Some(session) = manager.remove_session(&session_id).await {
+            let mut s = session.lock().await;
+            let _ = s.kill();
+        }
+        assert_eq!(manager.session_count().await, 1);
+
+        // Remove the other session
+        if let Some(session) = manager.remove_session(&session_id2).await {
+            let mut s = session.lock().await;
+            let _ = s.kill();
+        }
+        assert_eq!(manager.session_count().await, 0);
+    }
 }

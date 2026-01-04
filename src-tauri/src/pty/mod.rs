@@ -10,6 +10,7 @@
 //! - `session`: Individual PTY session management
 //! - `manager`: Multi-session PTY manager
 
+pub mod graceful_shutdown;
 pub mod manager;
 pub mod session;
 pub mod shell;

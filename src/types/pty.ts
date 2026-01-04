@@ -30,6 +30,8 @@ export interface PtyExitPayload {
   session_id: string;
   /** Exit code of the process (0 = success) */
   code: number;
+  /** Number of remaining sessions after this session was removed */
+  remaining_sessions: number;
 }
 
 /**
@@ -72,8 +74,10 @@ export type PtyOutputCallback = (data: Uint8Array) => void;
 
 /**
  * Callback type for PTY exit events.
+ * @param code - Exit code of the process
+ * @param remainingSessions - Number of remaining sessions after this one exited
  */
-export type PtyExitCallback = (code: number) => void;
+export type PtyExitCallback = (code: number, remainingSessions: number) => void;
 
 /**
  * Callback type for PTY error events.
