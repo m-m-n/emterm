@@ -106,8 +106,8 @@ export class ImageLayer {
   private rows: number = 24;
 
   /** Pixel offset for terminal padding. */
-  private paddingX: number = 8;
-  private paddingY: number = 8;
+  private paddingX: number = 0;
+  private paddingY: number = 0;
 
   /** Current canvas dimensions. */
   private canvasWidth: number = 0;
@@ -169,11 +169,17 @@ export class ImageLayer {
       console.debug(`Animation ${imageId} completed`);
     });
 
-    // Ensure container has relative positioning
+    // Get container computed style once for all style reads
     const containerStyle = getComputedStyle(container);
+
+    // Ensure container has relative positioning
     if (containerStyle.position === "static") {
       container.style.position = "relative";
     }
+
+    // Dynamically retrieve container padding
+    this.paddingX = parseFloat(containerStyle.paddingLeft) || 0;
+    this.paddingY = parseFloat(containerStyle.paddingTop) || 0;
 
     this.updateCanvasSize();
   }
@@ -220,7 +226,10 @@ export class ImageLayer {
         this.initCanvas2DBackend();
       }
     } catch (e) {
-      console.warn("WebGL initialization failed, falling back to Canvas 2D:", e);
+      console.warn(
+        "WebGL initialization failed, falling back to Canvas 2D:",
+        e,
+      );
       this.activeBackend = "canvas2d";
       this.initCanvas2DBackend();
     }
@@ -373,7 +382,12 @@ export class ImageLayer {
 
       // Upload to WebGL if active
       if (this.activeBackend === "webgl" && this.webglLayer) {
-        this.webglLayer.uploadTexture(image.id, bytes, image.width, image.height);
+        this.webglLayer.uploadTexture(
+          image.id,
+          bytes,
+          image.width,
+          image.height,
+        );
       }
     }
 
@@ -386,7 +400,7 @@ export class ImageLayer {
   private async handleProgressiveLoading(
     image: DecodedImage,
     fullImageData: ImageData,
-    dataSize: number
+    dataSize: number,
   ): Promise<void> {
     // Create low-resolution preview (1/4 size)
     const previewWidth = Math.max(1, Math.floor(image.width / 4));
@@ -442,7 +456,10 @@ export class ImageLayer {
       });
 
       // Close low-res preview if we have full resolution
-      if (progressive.lowResPreview && progressive.lowResPreview !== fullBitmap) {
+      if (
+        progressive.lowResPreview &&
+        progressive.lowResPreview !== fullBitmap
+      ) {
         progressive.lowResPreview.close();
         progressive.lowResPreview = null;
       }
@@ -454,7 +471,12 @@ export class ImageLayer {
         for (let i = 0; i < binaryString.length; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
-        this.webglLayer.uploadTexture(image.id, bytes, image.width, image.height);
+        this.webglLayer.uploadTexture(
+          image.id,
+          bytes,
+          image.width,
+          image.height,
+        );
       }
 
       // Trigger final render
@@ -478,8 +500,10 @@ export class ImageLayer {
     }
 
     // Calculate pixel position
-    const x = this.paddingX + placement.col * this.charWidth + placement.x_offset;
-    const y = this.paddingY + placement.row * this.charHeight + placement.y_offset;
+    const x =
+      this.paddingX + placement.col * this.charWidth + placement.x_offset;
+    const y =
+      this.paddingY + placement.row * this.charHeight + placement.y_offset;
 
     // Calculate display size
     let displayWidth: number;
@@ -659,16 +683,11 @@ export class ImageLayer {
 
     // Clear canvas
     const dpr = window.devicePixelRatio || 1;
-    this.ctx.clearRect(
-      0,
-      0,
-      this.canvas.width / dpr,
-      this.canvas.height / dpr
-    );
+    this.ctx.clearRect(0, 0, this.canvas.width / dpr, this.canvas.height / dpr);
 
     // Sort placements by z-index
     const sorted = Array.from(this.placements.values()).sort(
-      (a, b) => a.placement.z_index - b.placement.z_index
+      (a, b) => a.placement.z_index - b.placement.z_index,
     );
 
     // Draw each placement
@@ -683,7 +702,7 @@ export class ImageLayer {
           active.x,
           active.y,
           active.displayWidth,
-          active.displayHeight
+          active.displayHeight,
         );
         continue;
       }
@@ -696,7 +715,7 @@ export class ImageLayer {
       const cachedBitmap = this.getCachedBitmap(
         imageId,
         active.displayWidth,
-        active.displayHeight
+        active.displayHeight,
       );
 
       if (cachedBitmap) {
@@ -707,10 +726,15 @@ export class ImageLayer {
           active.x,
           active.y,
           active.displayWidth,
-          active.displayHeight
+          active.displayHeight,
         );
         // Cache the scaled version
-        this.cacheScaledBitmap(imageId, stored.bitmap, active.displayWidth, active.displayHeight);
+        this.cacheScaledBitmap(
+          imageId,
+          stored.bitmap,
+          active.displayWidth,
+          active.displayHeight,
+        );
       } else {
         this.drawImageData(stored.data, active);
       }
@@ -723,11 +747,15 @@ export class ImageLayer {
   private getCachedBitmap(
     imageId: number,
     width: number,
-    height: number
+    height: number,
   ): ImageBitmap | undefined {
     if (!this.cache) return undefined;
 
-    const key = this.cache.generateKey(imageId, Math.round(width), Math.round(height));
+    const key = this.cache.generateKey(
+      imageId,
+      Math.round(width),
+      Math.round(height),
+    );
     return this.cache.get(key);
   }
 
@@ -738,7 +766,7 @@ export class ImageLayer {
     imageId: number,
     source: ImageBitmap,
     width: number,
-    height: number
+    height: number,
   ): Promise<void> {
     if (!this.cache) return;
 
@@ -770,10 +798,7 @@ export class ImageLayer {
   /**
    * Fallback rendering using ImageData.
    */
-  private drawImageData(
-    image: DecodedImage,
-    active: ActivePlacement
-  ): void {
+  private drawImageData(image: DecodedImage, active: ActivePlacement): void {
     if (!this.ctx) return;
 
     const tempCanvas = document.createElement("canvas");
@@ -796,7 +821,7 @@ export class ImageLayer {
       active.x,
       active.y,
       active.displayWidth,
-      active.displayHeight
+      active.displayHeight,
     );
   }
 
@@ -828,7 +853,8 @@ export class ImageLayer {
         keysToDelete.push(key);
       } else {
         active.placement.row = newRow;
-        active.y = this.paddingY + newRow * this.charHeight + active.placement.y_offset;
+        active.y =
+          this.paddingY + newRow * this.charHeight + active.placement.y_offset;
       }
     }
 
@@ -982,7 +1008,9 @@ export class ImageLayer {
       lastFrameTime: frameMetrics.last,
       memoryUsage: cacheStats?.memoryBytes ?? 0,
       webglAvailable: this.webglAvailable,
-      webglActive: this.activeBackend === "webgl" && this.webglLayer?.isWebGLActive() === true,
+      webglActive:
+        this.activeBackend === "webgl" &&
+        this.webglLayer?.isWebGLActive() === true,
     };
   }
 

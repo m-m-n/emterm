@@ -67,25 +67,29 @@ export function calculateTerminalSize(
 }
 
 /**
- * Measures the dimensions of a single character for a given font.
+ * Measures the dimensions of a single character based on container's computed styles.
  *
  * Uses the canvas API to measure the width of a character and
- * calculates height based on font size with typical line height ratio.
+ * reads line-height from CSS via getComputedStyle for accurate height.
  *
- * @param fontFamily - CSS font-family string (e.g., "monospace", "Consolas")
- * @param fontSize - Font size in pixels
+ * @param container - The HTML element that contains the terminal
  * @returns The measured character dimensions
  *
  * @example
  * ```typescript
- * const charSize = measureCharacterSize('Consolas, monospace', 14);
+ * const container = document.getElementById('terminal');
+ * const charSize = measureCharacterSize(container);
  * console.log(`Character size: ${charSize.width}x${charSize.height}px`);
  * ```
  */
 export function measureCharacterSize(
-  fontFamily: string,
-  fontSize: number
+  container: HTMLElement
 ): CharacterSize {
+  const computedStyle = getComputedStyle(container);
+  const fontFamily = computedStyle.fontFamily || "monospace";
+  const fontSize = parseFloat(computedStyle.fontSize) || 14;
+  const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.2;
+
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
 
@@ -93,7 +97,7 @@ export function measureCharacterSize(
     // Fallback values if canvas is not available
     return {
       width: fontSize * 0.6,
-      height: fontSize * 1.2,
+      height: lineHeight,
     };
   }
 
@@ -104,8 +108,7 @@ export function measureCharacterSize(
 
   return {
     width: metrics.width,
-    // Approximate line height (typically 1.2x font size)
-    height: fontSize * 1.2,
+    height: lineHeight,
   };
 }
 

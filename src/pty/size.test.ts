@@ -10,12 +10,12 @@ const originalGetComputedStyle = globalThis.getComputedStyle;
 
 describe("calculateTerminalSize", () => {
   beforeEach(() => {
-    // Mock getComputedStyle to return padding values
+    // Mock getComputedStyle to return zero padding (default terminal style)
     globalThis.getComputedStyle = mock(() => ({
-      paddingLeft: "10px",
-      paddingRight: "10px",
-      paddingTop: "5px",
-      paddingBottom: "5px",
+      paddingLeft: "0px",
+      paddingRight: "0px",
+      paddingTop: "0px",
+      paddingBottom: "0px",
     })) as unknown as typeof getComputedStyle;
   });
 
@@ -25,21 +25,21 @@ describe("calculateTerminalSize", () => {
 
   it("should calculate correct columns and rows", () => {
     const container = {
-      clientWidth: 820, // 820 - 20 (padding) = 800 available
-      clientHeight: 510, // 510 - 10 (padding) = 500 available
+      clientWidth: 800, // Full width available (no padding)
+      clientHeight: 400, // Full height available (no padding)
     } as HTMLElement;
 
     const result = calculateTerminalSize(container, 10, 20);
 
-    // 800 / 10 = 80 cols, 500 / 20 = 25 rows
+    // 800 / 10 = 80 cols, 400 / 20 = 20 rows
     expect(result.cols).toBe(80);
-    expect(result.rows).toBe(25);
+    expect(result.rows).toBe(20);
   });
 
   it("should return at least 1 column and 1 row", () => {
     const container = {
-      clientWidth: 15, // Less than padding + one char
-      clientHeight: 8,
+      clientWidth: 5, // Less than one character width
+      clientHeight: 8, // Less than one character height
     } as HTMLElement;
 
     const result = calculateTerminalSize(container, 10, 20);
@@ -50,8 +50,8 @@ describe("calculateTerminalSize", () => {
 
   it("should floor fractional values", () => {
     const container = {
-      clientWidth: 135, // 135 - 20 = 115 -> 115 / 10 = 11.5 -> 11
-      clientHeight: 77, // 77 - 10 = 67 -> 67 / 20 = 3.35 -> 3
+      clientWidth: 115, // 115 / 10 = 11.5 -> 11
+      clientHeight: 67, // 67 / 20 = 3.35 -> 3
     } as HTMLElement;
 
     const result = calculateTerminalSize(container, 10, 20);
@@ -78,30 +78,112 @@ describe("calculateTerminalSize", () => {
     expect(result.cols).toBe(100); // 800 / 8
     expect(result.rows).toBe(25); // 400 / 16
   });
+
+  it("should account for non-zero padding if CSS changes", () => {
+    globalThis.getComputedStyle = mock(() => ({
+      paddingLeft: "10px",
+      paddingRight: "10px",
+      paddingTop: "5px",
+      paddingBottom: "5px",
+    })) as unknown as typeof getComputedStyle;
+
+    const container = {
+      clientWidth: 820, // 820 - 20 (padding) = 800 available
+      clientHeight: 410, // 410 - 10 (padding) = 400 available
+    } as HTMLElement;
+
+    const result = calculateTerminalSize(container, 10, 20);
+
+    // 800 / 10 = 80 cols, 400 / 20 = 20 rows
+    expect(result.cols).toBe(80);
+    expect(result.rows).toBe(20);
+  });
 });
 
 describe("measureCharacterSize", () => {
-  it("should return width and height", () => {
-    const result = measureCharacterSize("monospace", 14);
+  const originalCreateElement = document.createElement.bind(document);
+
+  beforeEach(() => {
+    // Mock getComputedStyle for measureCharacterSize tests
+    globalThis.getComputedStyle = mock((el: Element) => {
+      const htmlEl = el as HTMLElement;
+      return {
+        fontFamily: htmlEl.style.fontFamily || "monospace",
+        fontSize: htmlEl.style.fontSize || "14px",
+        lineHeight: htmlEl.style.lineHeight || "16px",
+        paddingLeft: "0px",
+        paddingRight: "0px",
+        paddingTop: "0px",
+        paddingBottom: "0px",
+      };
+    }) as unknown as typeof getComputedStyle;
+
+    // Mock canvas for text measurement
+    const mockCanvas = {
+      getContext: mock(() => ({
+        measureText: mock(() => ({ width: 8.4 })),
+        font: "",
+      })),
+    };
+    globalThis.document.createElement = mock((tagName: string) => {
+      if (tagName === "canvas") {
+        return mockCanvas as unknown as HTMLCanvasElement;
+      }
+      return originalCreateElement.call(document, tagName);
+    }) as typeof document.createElement;
+  });
+
+  afterEach(() => {
+    globalThis.getComputedStyle = originalGetComputedStyle;
+    globalThis.document.createElement = originalCreateElement;
+  });
+
+  it("should return width and height from container styles", () => {
+    // Create a mock container element
+    const container = originalCreateElement("div");
+    container.id = "terminal";
+    container.style.fontFamily = "monospace";
+    container.style.fontSize = "14px";
+    container.style.lineHeight = "16px";
+
+    const result = measureCharacterSize(container);
 
     // Check that we get reasonable values
     expect(result.width).toBeGreaterThan(0);
-    expect(result.height).toBeGreaterThan(0);
+    expect(result.height).toBe(16); // Should match lineHeight
   });
 
-  it("should calculate height as 1.2x font size", () => {
-    const result = measureCharacterSize("monospace", 20);
+  it("should read lineHeight from computed styles", () => {
+    const container = originalCreateElement("div");
+    container.style.fontFamily = "monospace";
+    container.style.fontSize = "14px";
+    container.style.lineHeight = "20px";
 
-    // Height should be fontSize * 1.2 = 24
-    expect(result.height).toBe(24);
+    const result = measureCharacterSize(container);
+
+    // Height should be based on lineHeight from CSS
+    expect(result.height).toBe(20);
+    expect(result.width).toBeGreaterThan(0);
   });
 
-  it("should work with different font families", () => {
-    const mono = measureCharacterSize("monospace", 14);
-    const consolas = measureCharacterSize("Consolas, monospace", 14);
+  it("should use fallback when canvas unavailable", () => {
+    // Override createElement to return canvas without getContext
+    globalThis.document.createElement = mock((tagName: string) => {
+      if (tagName === "canvas") {
+        return { getContext: () => null } as unknown as HTMLCanvasElement;
+      }
+      return originalCreateElement.call(document, tagName);
+    }) as typeof document.createElement;
 
-    // Both should return valid dimensions
-    expect(mono.width).toBeGreaterThan(0);
-    expect(consolas.width).toBeGreaterThan(0);
+    const container = originalCreateElement("div");
+    container.style.fontFamily = "monospace";
+    container.style.fontSize = "14px";
+    container.style.lineHeight = "18px";
+
+    const result = measureCharacterSize(container);
+
+    // Should return valid fallback dimensions
+    expect(result.width).toBeGreaterThan(0);
+    expect(result.height).toBe(18);
   });
 });

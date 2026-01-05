@@ -3,14 +3,22 @@
  * Main entry point
  */
 
-import { PtyClient, keyEventToBytes, shouldHandleKey, measureCharacterSize, observeContainerResize } from "./pty";
-import { TerminalState, TerminalRenderer, encodeMouseEvent, domEventToMouseEvent, isMouseTrackingEnabled } from "./terminal";
+import {
+  PtyClient,
+  keyEventToBytes,
+  shouldHandleKey,
+  measureCharacterSize,
+  observeContainerResize,
+} from "./pty";
+import {
+  TerminalState,
+  TerminalRenderer,
+  encodeMouseEvent,
+  domEventToMouseEvent,
+  isMouseTrackingEnabled,
+} from "./terminal";
 import type { TerminalActionsPayload } from "./types/terminal.ts";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-
-// Terminal configuration
-const FONT_FAMILY = "monospace";
-const FONT_SIZE = 14;
 
 // Feature flag for new terminal rendering
 const USE_NEW_TERMINAL = true;
@@ -33,17 +41,35 @@ async function initTerminal(): Promise<void> {
     return;
   }
 
-  // Measure character size
-  charSize = measureCharacterSize(FONT_FAMILY, FONT_SIZE);
+  // Measure character size from container's computed styles
+  charSize = measureCharacterSize(terminal);
 
   // Calculate initial terminal size
   const initialSize = {
-    cols: Math.floor((terminal.clientWidth - 16) / charSize.width),
-    rows: Math.floor((terminal.clientHeight - 16) / charSize.height),
+    cols: Math.floor(terminal.clientWidth / charSize.width),
+    rows: Math.floor(terminal.clientHeight / charSize.height),
   };
 
   const cols = Math.max(1, initialSize.cols);
   const rows = Math.max(1, initialSize.rows);
+
+  // Debug logging for size calculation
+  if (import.meta.env?.DEV) {
+    console.log("[Size Debug] Container dimensions:", {
+      clientWidth: terminal.clientWidth,
+      clientHeight: terminal.clientHeight,
+      offsetWidth: terminal.offsetWidth,
+      offsetHeight: terminal.offsetHeight,
+    });
+    console.log("[Size Debug] Character size:", charSize);
+    console.log("[Size Debug] Calculated terminal size:", { cols, rows });
+    console.log("[Size Debug] Expected pixel usage:", {
+      usedWidth: cols * charSize.width,
+      usedHeight: rows * charSize.height,
+      remainderWidth: terminal.clientWidth - cols * charSize.width,
+      remainderHeight: terminal.clientHeight - rows * charSize.height,
+    });
+  }
 
   if (USE_NEW_TERMINAL) {
     // New terminal rendering system
@@ -95,6 +121,17 @@ async function initTerminal(): Promise<void> {
     charSize.width,
     charSize.height,
     async (newCols, newRows) => {
+      if (import.meta.env?.DEV) {
+        console.log("[Size Debug] ResizeObserver callback:", {
+          newCols,
+          newRows,
+          containerClientWidth: terminal.clientWidth,
+          containerClientHeight: terminal.clientHeight,
+          charWidth: charSize.width,
+          charHeight: charSize.height,
+        });
+      }
+
       if (ptyClient) {
         try {
           await ptyClient.resize(newCols, newRows);
@@ -110,7 +147,7 @@ async function initTerminal(): Promise<void> {
           console.error("Failed to resize PTY:", error);
         }
       }
-    }
+    },
   );
 
   // Focus handling - make terminal focusable
@@ -126,17 +163,25 @@ async function initTerminal(): Promise<void> {
 /**
  * Initialize new terminal rendering system.
  */
-function initNewTerminal(container: HTMLElement, cols: number, rows: number): void {
+function initNewTerminal(
+  container: HTMLElement,
+  cols: number,
+  rows: number,
+): void {
   // Apply terminal styles
   container.style.backgroundColor = "#1e1e1e";
   container.style.color = "#d4d4d4";
   container.style.height = "100%";
   container.style.boxSizing = "border-box";
-  container.style.padding = "8px";
+
+  // Get font family and size from computed styles
+  const computedStyle = getComputedStyle(container);
+  const fontFamily = computedStyle.fontFamily || "monospace";
+  const fontSize = parseFloat(computedStyle.fontSize) || 14;
 
   // Create terminal state and renderer
   terminalState = new TerminalState(cols, rows);
-  terminalRenderer = new TerminalRenderer(container, FONT_FAMILY, FONT_SIZE);
+  terminalRenderer = new TerminalRenderer(container, fontFamily, fontSize);
 
   // Initial render
   terminalRenderer.forceRender(terminalState);
@@ -146,11 +191,15 @@ function initNewTerminal(container: HTMLElement, cols: number, rows: number): vo
  * Initialize legacy terminal rendering.
  */
 function initLegacyTerminal(container: HTMLElement): void {
-  container.style.fontFamily = FONT_FAMILY;
-  container.style.fontSize = `${FONT_SIZE}px`;
+  // Get font family and size from computed styles
+  const computedStyle = getComputedStyle(container);
+  const fontFamily = computedStyle.fontFamily || "monospace";
+  const fontSize = computedStyle.fontSize || "14px";
+
+  container.style.fontFamily = fontFamily;
+  container.style.fontSize = fontSize;
   container.style.whiteSpace = "pre-wrap";
   container.style.overflow = "auto";
-  container.style.padding = "8px";
   container.style.backgroundColor = "#1e1e1e";
   container.style.color = "#d4d4d4";
   container.style.height = "100%";
@@ -205,14 +254,16 @@ async function setupNewTerminalHandlers(): Promise<void> {
   // Handle exit and error events
   await ptyClient.onExit(async (code, remainingSessions) => {
     if (import.meta.env?.DEV) {
-      console.log(`[Main] onExit callback: code=${code}, remainingSessions=${remainingSessions}`);
+      console.log(
+        `[Main] onExit callback: code=${code}, remainingSessions=${remainingSessions}`,
+      );
     }
 
     // Use remaining_sessions from the event (already removed from backend)
     // This ensures accurate count as the session is removed before event emission
     if (remainingSessions === 0) {
       if (import.meta.env?.DEV) {
-        console.log('[Main] Last session exited, closing window...');
+        console.log("[Main] Last session exited, closing window...");
       }
 
       // Only close window if no other sessions exist
@@ -221,18 +272,20 @@ async function setupNewTerminalHandlers(): Promise<void> {
         await appWindow.close();
 
         if (import.meta.env?.DEV) {
-          console.log('[Main] Window closed successfully');
+          console.log("[Main] Window closed successfully");
         }
       } catch (error) {
         if (import.meta.env?.DEV) {
-          console.error('[Main] Failed to close window:', error);
+          console.error("[Main] Failed to close window:", error);
         } else {
           console.error("Failed to close window:", error);
         }
       }
     } else {
       if (import.meta.env?.DEV) {
-        console.log(`[Main] ${remainingSessions} session(s) remaining, keeping window open`);
+        console.log(
+          `[Main] ${remainingSessions} session(s) remaining, keeping window open`,
+        );
       }
     }
     // If remainingSessions > 0, other sessions exist (future multi-tab support)
@@ -303,7 +356,7 @@ async function handleKeyDown(event: KeyboardEvent): Promise<void> {
 function setupMouseHandlers(container: HTMLElement): void {
   const handleMouseEvent = async (
     event: MouseEvent | WheelEvent,
-    type: "down" | "up" | "move" | "wheel"
+    type: "down" | "up" | "move" | "wheel",
   ) => {
     if (!terminalState || !ptyClient) return;
 
@@ -311,11 +364,21 @@ function setupMouseHandlers(container: HTMLElement): void {
     if (!isMouseTrackingEnabled(modes.mouseTracking)) return;
 
     const rect = container.getBoundingClientRect();
-    const mouseEvent = domEventToMouseEvent(event, charSize.width, charSize.height, rect, type);
+    const mouseEvent = domEventToMouseEvent(
+      event,
+      charSize.width,
+      charSize.height,
+      rect,
+      type,
+    );
 
     if (!mouseEvent) return;
 
-    const encoded = encodeMouseEvent(mouseEvent, modes.mouseTracking, modes.mouseEncoding);
+    const encoded = encodeMouseEvent(
+      mouseEvent,
+      modes.mouseTracking,
+      modes.mouseEncoding,
+    );
     if (encoded) {
       event.preventDefault();
       try {
@@ -341,7 +404,10 @@ function setupMouseHandlers(container: HTMLElement): void {
 
   // Prevent context menu when mouse tracking is enabled
   const onContextMenu = (e: MouseEvent) => {
-    if (terminalState && isMouseTrackingEnabled(terminalState.getModes().mouseTracking)) {
+    if (
+      terminalState &&
+      isMouseTrackingEnabled(terminalState.getModes().mouseTracking)
+    ) {
       e.preventDefault();
     }
   };
@@ -358,7 +424,7 @@ function setupMouseHandlers(container: HTMLElement): void {
     () => container.removeEventListener("mouseup", onMouseUp),
     () => container.removeEventListener("mousemove", onMouseMove),
     () => container.removeEventListener("wheel", onWheel),
-    () => container.removeEventListener("contextmenu", onContextMenu)
+    () => container.removeEventListener("contextmenu", onContextMenu),
   );
 }
 
