@@ -9,10 +9,18 @@ import type { Cell, Line } from "./grid.ts";
 import type { CellAttributes } from "./attributes.ts";
 import type { CursorStyle } from "./cursor.ts";
 import type { MarkdownBlock } from "../markdown/types.ts";
-import { getEffectiveForeground, getEffectiveBackground, attributesEqual } from "./attributes.ts";
+import {
+  getEffectiveForeground,
+  getEffectiveBackground,
+  attributesEqual,
+} from "./attributes.ts";
 import { rgbToCSS, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND } from "./colors.ts";
 import { StyleCache, getStyleCache } from "./style-cache.ts";
-import { RenderTimer, getPerformanceMonitor, checkFrameBudget } from "./performance.ts";
+import {
+  RenderTimer,
+  getPerformanceMonitor,
+  checkFrameBudget,
+} from "./performance.ts";
 import { MarkdownRenderer } from "../markdown/renderer.ts";
 
 /**
@@ -100,7 +108,10 @@ export class TerminalRenderer {
     // Apply styles to container
     this.container.style.fontFamily = fontFamily;
     this.container.style.fontSize = `${fontSize}px`;
-    this.container.style.lineHeight = "1.2";
+    // Read lineHeight from CSS (CSS variables as single source of truth)
+    const containerStyle = window.getComputedStyle(container);
+    const lineHeight = containerStyle.lineHeight || "1.2";
+    this.container.style.lineHeight = lineHeight;
     this.container.style.whiteSpace = "pre";
     this.container.style.overflow = "hidden";
     this.container.style.position = "relative";
@@ -109,8 +120,7 @@ export class TerminalRenderer {
     this.styleCache = getStyleCache();
 
     // Get padding offset for cursor positioning
-    const computedStyle = window.getComputedStyle(container);
-    this.paddingOffset = parseFloat(computedStyle.paddingLeft) || 0;
+    this.paddingOffset = parseFloat(containerStyle.paddingLeft) || 0;
 
     // Measure character dimensions
     this.measureCharacterSize();
@@ -131,10 +141,14 @@ export class TerminalRenderer {
    * Measure the size of a single character.
    */
   private measureCharacterSize(): void {
+    // Read lineHeight from container's computed style
+    const computedStyle = window.getComputedStyle(this.container);
+    const lineHeight = computedStyle.lineHeight || "1.2";
+
     const measureSpan = document.createElement("span");
     measureSpan.style.fontFamily = this.fontFamily;
     measureSpan.style.fontSize = `${this.fontSize}px`;
-    measureSpan.style.lineHeight = "1.2";
+    measureSpan.style.lineHeight = lineHeight;
     measureSpan.style.visibility = "hidden";
     measureSpan.style.position = "absolute";
     measureSpan.textContent = "W";
@@ -417,7 +431,7 @@ export class TerminalRenderer {
       state.cursorRow,
       state.cursorVisible,
       state.cursorStyle,
-      state.cursorBlink
+      state.cursorBlink,
     );
 
     // Render pending Markdown blocks
@@ -438,6 +452,8 @@ export class TerminalRenderer {
    * Ensure we have the correct number of line elements.
    */
   private ensureLineElements(rows: number): void {
+    const prevCount = this.lineElements.length;
+
     // Add missing line elements
     while (this.lineElements.length < rows) {
       const div = document.createElement("div");
@@ -452,6 +468,19 @@ export class TerminalRenderer {
       if (div) {
         this.container.removeChild(div);
       }
+    }
+
+    // Debug logging
+    if (import.meta.env?.DEV && prevCount !== rows) {
+      console.log("[Renderer Debug] ensureLineElements:", {
+        requestedRows: rows,
+        previousLineCount: prevCount,
+        newLineCount: this.lineElements.length,
+        containerHeight: this.container.clientHeight,
+        charHeight: this.charHeight,
+        expectedHeight: rows * this.charHeight,
+        actualLineElements: this.container.querySelectorAll(".terminal-line").length,
+      });
     }
   }
 
@@ -479,7 +508,9 @@ export class TerminalRenderer {
   /**
    * Group consecutive cells with the same attributes into spans.
    */
-  private groupCellsIntoSpans(line: Line): Array<{ text: string; attrs: CellAttributes }> {
+  private groupCellsIntoSpans(
+    line: Line,
+  ): Array<{ text: string; attrs: CellAttributes }> {
     const spans: Array<{ text: string; attrs: CellAttributes }> = [];
     let currentText = "";
     let currentAttrs: CellAttributes | null = null;
@@ -663,8 +694,16 @@ export class TerminalRenderer {
       // Include color info if set
       const fg = attrs.fg;
       const bg = attrs.bg;
-      const fgKey = fg ? (fg.type === "rgb" ? `${fg.r},${fg.g},${fg.b}` : fg.type) : "";
-      const bgKey = bg ? (bg.type === "rgb" ? `${bg.r},${bg.g},${bg.b}` : bg.type) : "";
+      const fgKey = fg
+        ? fg.type === "rgb"
+          ? `${fg.r},${fg.g},${fg.b}`
+          : fg.type
+        : "";
+      const bgKey = bg
+        ? bg.type === "rgb"
+          ? `${bg.r},${bg.g},${bg.b}`
+          : bg.type
+        : "";
 
       parts.push(`${cell.char}:${flags}:${fgKey}:${bgKey}`);
     }
@@ -675,7 +714,10 @@ export class TerminalRenderer {
   /**
    * Apply styles using CSS classes (optimized method).
    */
-  private applyStylesOptimized(element: HTMLSpanElement, attrs: CellAttributes): void {
+  private applyStylesOptimized(
+    element: HTMLSpanElement,
+    attrs: CellAttributes,
+  ): void {
     // Get color class from cache
     const colorClass = this.styleCache.getClass(attrs);
 
@@ -728,7 +770,7 @@ export class TerminalRenderer {
     row: number,
     visible: boolean,
     style: CursorStyle,
-    blink: boolean
+    blink: boolean,
   ): void {
     if (!this.cursorElement) return;
 
@@ -772,8 +814,23 @@ export class TerminalRenderer {
    * @param rows - New number of rows
    */
   resize(cols: number, rows: number): void {
+    if (import.meta.env?.DEV) {
+      console.log("[Renderer Debug] resize() called:", {
+        newCols: cols,
+        newRows: rows,
+        oldCols: this.cols,
+        oldRows: this.rows,
+        containerHeight: this.container.clientHeight,
+        charHeight: this.charHeight,
+      });
+    }
+
     this.cols = cols;
     this.rows = rows;
+
+    // Recalculate padding offset in case CSS changed
+    const computedStyle = window.getComputedStyle(this.container);
+    this.paddingOffset = parseFloat(computedStyle.paddingLeft) || 0;
 
     // Clear row hash cache
     this.lastRowHash.clear();
@@ -795,6 +852,17 @@ export class TerminalRenderer {
    * @param state - Terminal state to render
    */
   forceRender(state: TerminalState): void {
+    if (import.meta.env?.DEV) {
+      console.log("[Renderer Debug] forceRender() called:", {
+        stateRows: state.rows,
+        stateCols: state.cols,
+        rendererRows: this.rows,
+        rendererCols: this.cols,
+        containerClientHeight: this.container.clientHeight,
+        charHeight: this.charHeight,
+      });
+    }
+
     this.pendingState = state;
 
     const buffer = state.getActiveBuffer();
@@ -830,7 +898,7 @@ export class TerminalRenderer {
       state.cursorRow,
       state.cursorVisible,
       state.cursorStyle,
-      state.cursorBlink
+      state.cursorBlink,
     );
   }
 
@@ -883,7 +951,12 @@ export class TerminalRenderer {
   /**
    * Get style cache metrics for debugging.
    */
-  getStyleCacheMetrics(): { cachedClasses: number; hits: number; misses: number; hitRate: number } {
+  getStyleCacheMetrics(): {
+    cachedClasses: number;
+    hits: number;
+    misses: number;
+    hitRate: number;
+  } {
     return this.styleCache.getMetrics();
   }
 
@@ -911,7 +984,10 @@ export class TerminalRenderer {
       const topOffset = block.startRow * this.charHeight + this.paddingOffset;
 
       // Insert block into DOM
-      const element = this.markdownRenderer.insertBlock(block, this.markdownContainer);
+      const element = this.markdownRenderer.insertBlock(
+        block,
+        this.markdownContainer,
+      );
 
       // Position the block
       element.style.marginTop = `${topOffset}px`;
@@ -934,7 +1010,10 @@ export class TerminalRenderer {
     }
 
     const topOffset = block.startRow * this.charHeight + this.paddingOffset;
-    const element = this.markdownRenderer.insertBlock(block, this.markdownContainer);
+    const element = this.markdownRenderer.insertBlock(
+      block,
+      this.markdownContainer,
+    );
     element.style.marginTop = `${topOffset}px`;
 
     // Calculate row count after insertion
