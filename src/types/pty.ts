@@ -9,7 +9,7 @@
  * Result returned from the pty_spawn command.
  */
 export interface SpawnResult {
-  session_id: string;
+	session_id: string;
 }
 
 /**
@@ -17,9 +17,9 @@ export interface SpawnResult {
  * Contains raw bytes from the shell process output.
  */
 export interface PtyOutputPayload {
-  session_id: string;
-  /** Raw bytes as number array (0-255) */
-  data: number[];
+	session_id: string;
+	/** Raw bytes as number array (0-255) */
+	data: number[];
 }
 
 /**
@@ -27,11 +27,11 @@ export interface PtyOutputPayload {
  * Emitted when the shell process terminates.
  */
 export interface PtyExitPayload {
-  session_id: string;
-  /** Exit code of the process (0 = success) */
-  code: number;
-  /** Number of remaining sessions after this session was removed */
-  remaining_sessions: number;
+	session_id: string;
+	/** Exit code of the process (0 = success) */
+	code: number;
+	/** Number of remaining sessions after this session was removed */
+	remaining_sessions: number;
 }
 
 /**
@@ -39,32 +39,32 @@ export interface PtyExitPayload {
  * Emitted when an error occurs in the PTY session.
  */
 export interface PtyErrorPayload {
-  session_id: string;
-  /** Human-readable error message */
-  message: string;
+	session_id: string;
+	/** Human-readable error message */
+	message: string;
 }
 
 /**
  * Options for spawning a new PTY session.
  */
 export interface PtySpawnOptions {
-  /**
-   * Path to the shell executable.
-   * If not specified, the default shell for the platform is used.
-   */
-  shell?: string;
+	/**
+	 * Path to the shell executable.
+	 * If not specified, the default shell for the platform is used.
+	 */
+	shell?: string;
 
-  /**
-   * Number of terminal columns.
-   * @default 80
-   */
-  cols?: number;
+	/**
+	 * Number of terminal columns.
+	 * @default 80
+	 */
+	cols?: number;
 
-  /**
-   * Number of terminal rows.
-   * @default 24
-   */
-  rows?: number;
+	/**
+	 * Number of terminal rows.
+	 * @default 24
+	 */
+	rows?: number;
 }
 
 /**

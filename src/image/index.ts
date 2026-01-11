@@ -13,35 +13,41 @@
  * @module image
  */
 
-// Core types
-export type {
-  DecodedImage,
-  ImagePlacement,
-  ImageDeleteTarget,
-  ImageEvent,
-  StoredImage,
-  ActivePlacement,
-  AnimationState,
-  AnimationEvent,
-  AnimationFrameData,
-  ActiveAnimation,
-  // Phase 4 types
-  RenderBackend,
-  ImageLayerOptions,
-  ProgressiveLoadingState,
-  ProgressiveImage,
-  RenderStats,
-} from "./types.ts";
-
+export { AnimationController } from "./animation.ts";
+export type { CacheKey, CacheOptions, CacheStats } from "./cache.ts";
+export { BitmapCache } from "./cache.ts";
 // Core components
 export { ImageLayer } from "./layer.ts";
-export { AnimationController } from "./animation.ts";
-
-// Phase 4 components
-export { WebGLLayer, isWebGLSupported } from "./webgl-layer.ts";
-export { BitmapCache } from "./cache.ts";
-export type { CacheKey, CacheOptions, CacheStats } from "./cache.ts";
-export { ResizeHandler } from "./resize-handler.ts";
-export type { ResizeEvent, ResizeCallback, ResizeHandlerOptions } from "./resize-handler.ts";
+export type {
+	MetricType,
+	PerformanceMetrics,
+	PerformanceMonitorOptions,
+} from "./performance.ts";
 export { PerformanceMonitor } from "./performance.ts";
-export type { MetricType, PerformanceMetrics, PerformanceMonitorOptions } from "./performance.ts";
+export type {
+	ResizeCallback,
+	ResizeEvent,
+	ResizeHandlerOptions,
+} from "./resize-handler.ts";
+export { ResizeHandler } from "./resize-handler.ts";
+// Core types
+export type {
+	ActiveAnimation,
+	ActivePlacement,
+	AnimationEvent,
+	AnimationFrameData,
+	AnimationState,
+	DecodedImage,
+	ImageDeleteTarget,
+	ImageEvent,
+	ImageLayerOptions,
+	ImagePlacement,
+	ProgressiveImage,
+	ProgressiveLoadingState,
+	// Phase 4 types
+	RenderBackend,
+	RenderStats,
+	StoredImage,
+} from "./types.ts";
+// Phase 4 components
+export { isWebGLSupported, WebGLLayer } from "./webgl-layer.ts";
