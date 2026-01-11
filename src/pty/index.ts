@@ -6,11 +6,11 @@
  */
 
 export { PtyClient } from "./client";
-export { keyEventToBytes, shouldHandleKey, type KeyMapping } from "./keyboard";
+export { type KeyMapping, keyEventToBytes, shouldHandleKey } from "./keyboard";
 export {
-  calculateTerminalSize,
-  measureCharacterSize,
-  observeContainerResize,
-  type TerminalSize,
-  type CharacterSize,
+	type CharacterSize,
+	calculateTerminalSize,
+	measureCharacterSize,
+	observeContainerResize,
+	type TerminalSize,
 } from "./size";

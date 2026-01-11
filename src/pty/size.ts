@@ -9,20 +9,20 @@
  * Terminal size in columns and rows.
  */
 export interface TerminalSize {
-  /** Number of character columns */
-  cols: number;
-  /** Number of character rows */
-  rows: number;
+	/** Number of character columns */
+	cols: number;
+	/** Number of character rows */
+	rows: number;
 }
 
 /**
  * Character dimensions in pixels.
  */
 export interface CharacterSize {
-  /** Width of a single character in pixels */
-  width: number;
-  /** Height of a single character (line height) in pixels */
-  height: number;
+	/** Width of a single character in pixels */
+	width: number;
+	/** Height of a single character (line height) in pixels */
+	height: number;
 }
 
 /**
@@ -43,27 +43,27 @@ export interface CharacterSize {
  * ```
  */
 export function calculateTerminalSize(
-  container: HTMLElement,
-  charWidth: number,
-  charHeight: number
+	container: HTMLElement,
+	charWidth: number,
+	charHeight: number,
 ): TerminalSize {
-  const { clientWidth, clientHeight } = container;
+	const { clientWidth, clientHeight } = container;
 
-  // Account for padding/margins
-  const style = getComputedStyle(container);
-  const paddingX =
-    parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
-  const paddingY =
-    parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+	// Account for padding/margins
+	const style = getComputedStyle(container);
+	const paddingX =
+		parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+	const paddingY =
+		parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
 
-  const availableWidth = clientWidth - paddingX;
-  const availableHeight = clientHeight - paddingY;
+	const availableWidth = clientWidth - paddingX;
+	const availableHeight = clientHeight - paddingY;
 
-  // Calculate columns and rows, ensuring at least 1 of each
-  const cols = Math.max(1, Math.floor(availableWidth / charWidth));
-  const rows = Math.max(1, Math.floor(availableHeight / charHeight));
+	// Calculate columns and rows, ensuring at least 1 of each
+	const cols = Math.max(1, Math.floor(availableWidth / charWidth));
+	const rows = Math.max(1, Math.floor(availableHeight / charHeight));
 
-  return { cols, rows };
+	return { cols, rows };
 }
 
 /**
@@ -82,34 +82,32 @@ export function calculateTerminalSize(
  * console.log(`Character size: ${charSize.width}x${charSize.height}px`);
  * ```
  */
-export function measureCharacterSize(
-  container: HTMLElement
-): CharacterSize {
-  const computedStyle = getComputedStyle(container);
-  const fontFamily = computedStyle.fontFamily || "monospace";
-  const fontSize = parseFloat(computedStyle.fontSize) || 14;
-  const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.2;
+export function measureCharacterSize(container: HTMLElement): CharacterSize {
+	const computedStyle = getComputedStyle(container);
+	const fontFamily = computedStyle.fontFamily || "monospace";
+	const fontSize = parseFloat(computedStyle.fontSize) || 14;
+	const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.2;
 
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
+	const canvas = document.createElement("canvas");
+	const ctx = canvas.getContext("2d");
 
-  if (!ctx) {
-    // Fallback values if canvas is not available
-    return {
-      width: fontSize * 0.6,
-      height: lineHeight,
-    };
-  }
+	if (!ctx) {
+		// Fallback values if canvas is not available
+		return {
+			width: fontSize * 0.6,
+			height: lineHeight,
+		};
+	}
 
-  ctx.font = `${fontSize}px ${fontFamily}`;
+	ctx.font = `${fontSize}px ${fontFamily}`;
 
-  // Measure 'M' as a representative character for monospace fonts
-  const metrics = ctx.measureText("M");
+	// Measure 'M' as a representative character for monospace fonts
+	const metrics = ctx.measureText("M");
 
-  return {
-    width: metrics.width,
-    height: lineHeight,
-  };
+	return {
+		width: metrics.width,
+		height: lineHeight,
+	};
 }
 
 /**
@@ -138,31 +136,31 @@ export function measureCharacterSize(
  * ```
  */
 export function observeContainerResize(
-  container: HTMLElement,
-  charWidth: number,
-  charHeight: number,
-  onResize: (cols: number, rows: number) => void
+	container: HTMLElement,
+	charWidth: number,
+	charHeight: number,
+	onResize: (cols: number, rows: number) => void,
 ): () => void {
-  let lastCols = 0;
-  let lastRows = 0;
+	let lastCols = 0;
+	let lastRows = 0;
 
-  const observer = new ResizeObserver(() => {
-    const { cols, rows } = calculateTerminalSize(
-      container,
-      charWidth,
-      charHeight
-    );
+	const observer = new ResizeObserver(() => {
+		const { cols, rows } = calculateTerminalSize(
+			container,
+			charWidth,
+			charHeight,
+		);
 
-    // Only call callback if dimensions actually changed
-    if (cols !== lastCols || rows !== lastRows) {
-      lastCols = cols;
-      lastRows = rows;
-      onResize(cols, rows);
-    }
-  });
+		// Only call callback if dimensions actually changed
+		if (cols !== lastCols || rows !== lastRows) {
+			lastCols = cols;
+			lastRows = rows;
+			onResize(cols, rows);
+		}
+	});
 
-  observer.observe(container);
+	observer.observe(container);
 
-  // Return disconnect function
-  return () => observer.disconnect();
+	// Return disconnect function
+	return () => observer.disconnect();
 }

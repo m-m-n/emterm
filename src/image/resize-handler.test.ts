@@ -4,306 +4,311 @@
  * @module image/resize-handler.test
  */
 
-import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 // Mock timers
-let timeoutCallbacks: Map<number, { fn: () => void; delay: number }> = new Map();
+const timeoutCallbacks: Map<number, { fn: () => void; delay: number }> =
+	new Map();
 let nextTimeoutId = 1;
 
 globalThis.window = {
-  setTimeout: mock((fn: () => void, delay: number) => {
-    const id = nextTimeoutId++;
-    timeoutCallbacks.set(id, { fn, delay });
-    return id;
-  }),
-  clearTimeout: mock((id: number) => {
-    timeoutCallbacks.delete(id);
-  }),
-  requestAnimationFrame: mock((fn: () => void) => {
-    fn();
-    return 1;
-  }),
+	setTimeout: mock((fn: () => void, delay: number) => {
+		const id = nextTimeoutId++;
+		timeoutCallbacks.set(id, { fn, delay });
+		return id;
+	}),
+	clearTimeout: mock((id: number) => {
+		timeoutCallbacks.delete(id);
+	}),
+	requestAnimationFrame: mock((fn: () => void) => {
+		fn();
+		return 1;
+	}),
 } as unknown as Window & typeof globalThis;
 
 // Helper to advance time and trigger callbacks
 function advanceTimers(ms: number): void {
-  for (const [id, { fn, delay }] of timeoutCallbacks) {
-    if (delay <= ms) {
-      timeoutCallbacks.delete(id);
-      fn();
-    }
-  }
+	for (const [id, { fn, delay }] of timeoutCallbacks) {
+		if (delay <= ms) {
+			timeoutCallbacks.delete(id);
+			fn();
+		}
+	}
 }
 
 // Import after mocks
-import { ResizeHandler, ResizeEvent, ResizeCallback } from "./resize-handler.ts";
+import {
+	ResizeCallback,
+	ResizeEvent,
+	ResizeHandler,
+} from "./resize-handler.ts";
 
 describe("ResizeHandler", () => {
-  beforeEach(() => {
-    timeoutCallbacks.clear();
-    nextTimeoutId = 1;
-  });
+	beforeEach(() => {
+		timeoutCallbacks.clear();
+		nextTimeoutId = 1;
+	});
 
-  describe("constructor", () => {
-    test("creates handler with default debounce time", () => {
-      const handler = new ResizeHandler();
-      expect(handler.getDebounceTime()).toBe(100);
-      handler.dispose();
-    });
+	describe("constructor", () => {
+		test("creates handler with default debounce time", () => {
+			const handler = new ResizeHandler();
+			expect(handler.getDebounceTime()).toBe(100);
+			handler.dispose();
+		});
 
-    test("creates handler with custom debounce time", () => {
-      const handler = new ResizeHandler({ debounceMs: 200 });
-      expect(handler.getDebounceTime()).toBe(200);
-      handler.dispose();
-    });
-  });
+		test("creates handler with custom debounce time", () => {
+			const handler = new ResizeHandler({ debounceMs: 200 });
+			expect(handler.getDebounceTime()).toBe(200);
+			handler.dispose();
+		});
+	});
 
-  describe("onResize", () => {
-    test("registers callback", () => {
-      const handler = new ResizeHandler();
-      const callback = mock(() => {});
+	describe("onResize", () => {
+		test("registers callback", () => {
+			const handler = new ResizeHandler();
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
-      // Callback should be registered
+			handler.onResize(callback);
+			// Callback should be registered
 
-      handler.dispose();
-    });
+			handler.dispose();
+		});
 
-    test("returns unsubscribe function", () => {
-      const handler = new ResizeHandler();
-      const callback = mock(() => {});
+		test("returns unsubscribe function", () => {
+			const handler = new ResizeHandler();
+			const callback = mock(() => {});
 
-      const unsubscribe = handler.onResize(callback);
-      expect(typeof unsubscribe).toBe("function");
+			const unsubscribe = handler.onResize(callback);
+			expect(typeof unsubscribe).toBe("function");
 
-      handler.dispose();
-    });
-  });
+			handler.dispose();
+		});
+	});
 
-  describe("handleResize", () => {
-    test("debounces rapid resize events", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+	describe("handleResize", () => {
+		test("debounces rapid resize events", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
+			handler.onResize(callback);
 
-      // Rapid resize events
-      handler.handleResize({ width: 100, height: 100 });
-      handler.handleResize({ width: 110, height: 110 });
-      handler.handleResize({ width: 120, height: 120 });
+			// Rapid resize events
+			handler.handleResize({ width: 100, height: 100 });
+			handler.handleResize({ width: 110, height: 110 });
+			handler.handleResize({ width: 120, height: 120 });
 
-      // Should not have called callback yet
-      expect(callback).not.toHaveBeenCalled();
+			// Should not have called callback yet
+			expect(callback).not.toHaveBeenCalled();
 
-      // Advance time
-      advanceTimers(100);
+			// Advance time
+			advanceTimers(100);
 
-      // Should have called callback once with final dimensions
-      expect(callback).toHaveBeenCalledTimes(1);
-      expect(callback).toHaveBeenCalledWith({ width: 120, height: 120 });
+			// Should have called callback once with final dimensions
+			expect(callback).toHaveBeenCalledTimes(1);
+			expect(callback).toHaveBeenCalledWith({ width: 120, height: 120 });
 
-      handler.dispose();
-    });
+			handler.dispose();
+		});
 
-    test("does not trigger callback if dimensions unchanged", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+		test("does not trigger callback if dimensions unchanged", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
+			handler.onResize(callback);
 
-      handler.handleResize({ width: 100, height: 100 });
-      advanceTimers(100);
+			handler.handleResize({ width: 100, height: 100 });
+			advanceTimers(100);
 
-      expect(callback).toHaveBeenCalledTimes(1);
+			expect(callback).toHaveBeenCalledTimes(1);
 
-      // Same dimensions
-      handler.handleResize({ width: 100, height: 100 });
-      advanceTimers(100);
+			// Same dimensions
+			handler.handleResize({ width: 100, height: 100 });
+			advanceTimers(100);
 
-      // Should not trigger again
-      expect(callback).toHaveBeenCalledTimes(1);
+			// Should not trigger again
+			expect(callback).toHaveBeenCalledTimes(1);
 
-      handler.dispose();
-    });
+			handler.dispose();
+		});
 
-    test("triggers callback on dimension change", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+		test("triggers callback on dimension change", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
+			handler.onResize(callback);
 
-      handler.handleResize({ width: 100, height: 100 });
-      advanceTimers(100);
+			handler.handleResize({ width: 100, height: 100 });
+			advanceTimers(100);
 
-      handler.handleResize({ width: 200, height: 200 });
-      advanceTimers(100);
+			handler.handleResize({ width: 200, height: 200 });
+			advanceTimers(100);
 
-      expect(callback).toHaveBeenCalledTimes(2);
+			expect(callback).toHaveBeenCalledTimes(2);
 
-      handler.dispose();
-    });
-  });
+			handler.dispose();
+		});
+	});
 
-  describe("multiple callbacks", () => {
-    test("notifies all registered callbacks", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback1 = mock(() => {});
-      const callback2 = mock(() => {});
+	describe("multiple callbacks", () => {
+		test("notifies all registered callbacks", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback1 = mock(() => {});
+			const callback2 = mock(() => {});
 
-      handler.onResize(callback1);
-      handler.onResize(callback2);
+			handler.onResize(callback1);
+			handler.onResize(callback2);
 
-      handler.handleResize({ width: 100, height: 100 });
-      advanceTimers(100);
+			handler.handleResize({ width: 100, height: 100 });
+			advanceTimers(100);
 
-      expect(callback1).toHaveBeenCalledTimes(1);
-      expect(callback2).toHaveBeenCalledTimes(1);
+			expect(callback1).toHaveBeenCalledTimes(1);
+			expect(callback2).toHaveBeenCalledTimes(1);
 
-      handler.dispose();
-    });
+			handler.dispose();
+		});
 
-    test("unsubscribe removes only specific callback", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback1 = mock(() => {});
-      const callback2 = mock(() => {});
+		test("unsubscribe removes only specific callback", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback1 = mock(() => {});
+			const callback2 = mock(() => {});
 
-      const unsubscribe1 = handler.onResize(callback1);
-      handler.onResize(callback2);
+			const unsubscribe1 = handler.onResize(callback1);
+			handler.onResize(callback2);
 
-      unsubscribe1();
+			unsubscribe1();
 
-      handler.handleResize({ width: 100, height: 100 });
-      advanceTimers(100);
+			handler.handleResize({ width: 100, height: 100 });
+			advanceTimers(100);
 
-      expect(callback1).not.toHaveBeenCalled();
-      expect(callback2).toHaveBeenCalledTimes(1);
+			expect(callback1).not.toHaveBeenCalled();
+			expect(callback2).toHaveBeenCalledTimes(1);
 
-      handler.dispose();
-    });
-  });
+			handler.dispose();
+		});
+	});
 
-  describe("setDebounceTime", () => {
-    test("updates debounce time", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
+	describe("setDebounceTime", () => {
+		test("updates debounce time", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
 
-      handler.setDebounceTime(200);
-      expect(handler.getDebounceTime()).toBe(200);
+			handler.setDebounceTime(200);
+			expect(handler.getDebounceTime()).toBe(200);
 
-      handler.dispose();
-    });
+			handler.dispose();
+		});
 
-    test("applies new debounce time to next resize", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+		test("applies new debounce time to next resize", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
-      handler.setDebounceTime(50);
+			handler.onResize(callback);
+			handler.setDebounceTime(50);
 
-      handler.handleResize({ width: 100, height: 100 });
-      advanceTimers(50);
+			handler.handleResize({ width: 100, height: 100 });
+			advanceTimers(50);
 
-      expect(callback).toHaveBeenCalledTimes(1);
+			expect(callback).toHaveBeenCalledTimes(1);
 
-      handler.dispose();
-    });
-  });
+			handler.dispose();
+		});
+	});
 
-  describe("cancel", () => {
-    test("cancels pending resize callback", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+	describe("cancel", () => {
+		test("cancels pending resize callback", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
+			handler.onResize(callback);
 
-      handler.handleResize({ width: 100, height: 100 });
-      handler.cancel();
+			handler.handleResize({ width: 100, height: 100 });
+			handler.cancel();
 
-      advanceTimers(100);
+			advanceTimers(100);
 
-      expect(callback).not.toHaveBeenCalled();
+			expect(callback).not.toHaveBeenCalled();
 
-      handler.dispose();
-    });
-  });
+			handler.dispose();
+		});
+	});
 
-  describe("flush", () => {
-    test("immediately triggers pending callback", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+	describe("flush", () => {
+		test("immediately triggers pending callback", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
+			handler.onResize(callback);
 
-      handler.handleResize({ width: 100, height: 100 });
-      handler.flush();
+			handler.handleResize({ width: 100, height: 100 });
+			handler.flush();
 
-      expect(callback).toHaveBeenCalledTimes(1);
+			expect(callback).toHaveBeenCalledTimes(1);
 
-      handler.dispose();
-    });
+			handler.dispose();
+		});
 
-    test("does nothing if no pending resize", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+		test("does nothing if no pending resize", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
+			handler.onResize(callback);
 
-      handler.flush();
+			handler.flush();
 
-      expect(callback).not.toHaveBeenCalled();
+			expect(callback).not.toHaveBeenCalled();
 
-      handler.dispose();
-    });
-  });
+			handler.dispose();
+		});
+	});
 
-  describe("getLastDimensions", () => {
-    test("returns null initially", () => {
-      const handler = new ResizeHandler();
-      expect(handler.getLastDimensions()).toBeNull();
-      handler.dispose();
-    });
+	describe("getLastDimensions", () => {
+		test("returns null initially", () => {
+			const handler = new ResizeHandler();
+			expect(handler.getLastDimensions()).toBeNull();
+			handler.dispose();
+		});
 
-    test("returns last processed dimensions", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+		test("returns last processed dimensions", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
+			handler.onResize(callback);
 
-      handler.handleResize({ width: 100, height: 100 });
-      advanceTimers(100);
+			handler.handleResize({ width: 100, height: 100 });
+			advanceTimers(100);
 
-      expect(handler.getLastDimensions()).toEqual({ width: 100, height: 100 });
+			expect(handler.getLastDimensions()).toEqual({ width: 100, height: 100 });
 
-      handler.dispose();
-    });
-  });
+			handler.dispose();
+		});
+	});
 
-  describe("dispose", () => {
-    test("cancels pending callbacks", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+	describe("dispose", () => {
+		test("cancels pending callbacks", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
-      handler.handleResize({ width: 100, height: 100 });
+			handler.onResize(callback);
+			handler.handleResize({ width: 100, height: 100 });
 
-      handler.dispose();
+			handler.dispose();
 
-      advanceTimers(100);
+			advanceTimers(100);
 
-      expect(callback).not.toHaveBeenCalled();
-    });
+			expect(callback).not.toHaveBeenCalled();
+		});
 
-    test("removes all registered callbacks", () => {
-      const handler = new ResizeHandler({ debounceMs: 100 });
-      const callback = mock(() => {});
+		test("removes all registered callbacks", () => {
+			const handler = new ResizeHandler({ debounceMs: 100 });
+			const callback = mock(() => {});
 
-      handler.onResize(callback);
-      handler.dispose();
+			handler.onResize(callback);
+			handler.dispose();
 
-      // Should not throw when trying to handle resize after dispose
-      handler.handleResize({ width: 100, height: 100 });
-      advanceTimers(100);
+			// Should not throw when trying to handle resize after dispose
+			handler.handleResize({ width: 100, height: 100 });
+			advanceTimers(100);
 
-      expect(callback).not.toHaveBeenCalled();
-    });
-  });
+			expect(callback).not.toHaveBeenCalled();
+		});
+	});
 });

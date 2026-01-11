@@ -8,14 +8,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-  SpawnResult,
-  PtyOutputPayload,
-  PtyExitPayload,
-  PtyErrorPayload,
-  PtySpawnOptions,
-  PtyOutputCallback,
-  PtyExitCallback,
-  PtyErrorCallback,
+	PtyErrorCallback,
+	PtyErrorPayload,
+	PtyExitCallback,
+	PtyExitPayload,
+	PtyOutputCallback,
+	PtyOutputPayload,
+	PtySpawnOptions,
+	SpawnResult,
 } from "../types/pty";
 import type { TerminalActionsPayload } from "../types/terminal";
 
@@ -49,244 +49,265 @@ import type { TerminalActionsPayload } from "../types/terminal";
  * ```
  */
 export class PtyClient {
-  /** Current session ID, null if no session is active */
-  private sessionId: string | null = null;
+	/** Current session ID, null if no session is active */
+	private sessionId: string | null = null;
 
-  /** List of event unsubscribe functions */
-  private unlisteners: UnlistenFn[] = [];
+	/** List of event unsubscribe functions */
+	private unlisteners: UnlistenFn[] = [];
 
-  /** Flag to prevent duplicate exit event processing */
-  private exitHandled = false;
+	/** Flag to prevent duplicate exit event processing */
+	private exitHandled = false;
 
-  /** Pending terminal action events that arrived before sessionId was set */
-  private pendingTerminalActions: TerminalActionsPayload[] = [];
+	/** Pending terminal action events that arrived before sessionId was set */
+	private pendingTerminalActions: TerminalActionsPayload[] = [];
 
-  /** Callback for terminal actions (stored for replay) */
-  private terminalActionsCallback: ((payload: TerminalActionsPayload) => void) | null = null;
+	/** Callback for terminal actions (stored for replay) */
+	private terminalActionsCallback:
+		| ((payload: TerminalActionsPayload) => void)
+		| null = null;
 
-  /**
-   * Returns the current session ID, or null if no session is active.
-   */
-  getSessionId(): string | null {
-    return this.sessionId;
-  }
+	/**
+	 * Returns the current session ID, or null if no session is active.
+	 */
+	getSessionId(): string | null {
+		return this.sessionId;
+	}
 
-  /**
-   * Spawns a new PTY session with the specified options.
-   *
-   * @param options - Configuration options for the session
-   * @returns The session ID of the spawned session
-   * @throws Error if a session is already active or spawn fails
-   */
-  async spawn(options: PtySpawnOptions = {}): Promise<string> {
-    if (this.sessionId !== null) {
-      throw new Error("PTY session already active. Call kill() first.");
-    }
+	/**
+	 * Spawns a new PTY session with the specified options.
+	 *
+	 * @param options - Configuration options for the session
+	 * @returns The session ID of the spawned session
+	 * @throws Error if a session is already active or spawn fails
+	 */
+	async spawn(options: PtySpawnOptions = {}): Promise<string> {
+		if (this.sessionId !== null) {
+			throw new Error("PTY session already active. Call kill() first.");
+		}
 
-    // Reset exitHandled flag for new session
-    this.exitHandled = false;
+		// Reset exitHandled flag for new session
+		this.exitHandled = false;
 
-    const result = await invoke<SpawnResult>("pty_spawn", {
-      shell: options.shell,
-      cols: options.cols ?? 80,
-      rows: options.rows ?? 24,
-    });
+		const result = await invoke<SpawnResult>("pty_spawn", {
+			shell: options.shell,
+			cols: options.cols ?? 80,
+			rows: options.rows ?? 24,
+		});
 
-    const sessionId = result.session_id;
-    this.sessionId = sessionId;
-    return sessionId;
-  }
+		const sessionId = result.session_id;
+		this.sessionId = sessionId;
+		return sessionId;
+	}
 
-  /**
-   * Writes data to the PTY session.
-   *
-   * @param data - String or byte array to send to the shell
-   * @throws Error if no session is active
-   */
-  async write(data: Uint8Array | string): Promise<void> {
-    if (!this.sessionId) {
-      throw new Error("PTY session not started");
-    }
+	/**
+	 * Writes data to the PTY session.
+	 *
+	 * @param data - String or byte array to send to the shell
+	 * @throws Error if no session is active
+	 */
+	async write(data: Uint8Array | string): Promise<void> {
+		if (!this.sessionId) {
+			throw new Error("PTY session not started");
+		}
 
-    const bytes =
-      typeof data === "string" ? new TextEncoder().encode(data) : data;
+		const bytes =
+			typeof data === "string" ? new TextEncoder().encode(data) : data;
 
-    await invoke("pty_write", {
-      sessionId: this.sessionId,
-      data: Array.from(bytes),
-    });
-  }
+		await invoke("pty_write", {
+			sessionId: this.sessionId,
+			data: Array.from(bytes),
+		});
+	}
 
-  /**
-   * Resizes the PTY session to the specified dimensions.
-   *
-   * @param cols - New number of columns
-   * @param rows - New number of rows
-   * @throws Error if no session is active
-   */
-  async resize(cols: number, rows: number): Promise<void> {
-    if (!this.sessionId) {
-      throw new Error("PTY session not started");
-    }
+	/**
+	 * Resizes the PTY session to the specified dimensions.
+	 *
+	 * @param cols - New number of columns
+	 * @param rows - New number of rows
+	 * @throws Error if no session is active
+	 */
+	async resize(cols: number, rows: number): Promise<void> {
+		if (!this.sessionId) {
+			throw new Error("PTY session not started");
+		}
 
-    await invoke("pty_resize", {
-      sessionId: this.sessionId,
-      cols,
-      rows,
-    });
-  }
+		await invoke("pty_resize", {
+			sessionId: this.sessionId,
+			cols,
+			rows,
+		});
+	}
 
-  /**
-   * Terminates the current PTY session.
-   *
-   * Safe to call even if no session is active.
-   */
-  async kill(): Promise<void> {
-    if (!this.sessionId) {
-      return;
-    }
+	/**
+	 * Terminates the current PTY session.
+	 *
+	 * Safe to call even if no session is active.
+	 */
+	async kill(): Promise<void> {
+		if (!this.sessionId) {
+			return;
+		}
 
-    await invoke("pty_kill", {
-      sessionId: this.sessionId,
-    });
+		await invoke("pty_kill", {
+			sessionId: this.sessionId,
+		});
 
-    this.sessionId = null;
-    this.exitHandled = false;
-  }
+		this.sessionId = null;
+		this.exitHandled = false;
+	}
 
-  /**
-   * Registers a callback for PTY output data.
-   *
-   * @param callback - Function called with output data as Uint8Array
-   */
-  async onOutput(callback: PtyOutputCallback): Promise<void> {
-    const currentSessionId = this.sessionId;
-    const unlisten = await listen<PtyOutputPayload>("pty_output", (event: { payload: PtyOutputPayload }) => {
-      // Only process events for the current session
-      if (
-        currentSessionId !== null &&
-        event.payload.session_id === currentSessionId
-      ) {
-        callback(new Uint8Array(event.payload.data));
-      } else if (this.sessionId !== null && event.payload.session_id === this.sessionId) {
-        // Handle case where session was spawned after listener registration
-        callback(new Uint8Array(event.payload.data));
-      }
-    });
-    this.unlisteners.push(unlisten);
-  }
+	/**
+	 * Registers a callback for PTY output data.
+	 *
+	 * @param callback - Function called with output data as Uint8Array
+	 */
+	async onOutput(callback: PtyOutputCallback): Promise<void> {
+		const currentSessionId = this.sessionId;
+		const unlisten = await listen<PtyOutputPayload>(
+			"pty_output",
+			(event: { payload: PtyOutputPayload }) => {
+				// Only process events for the current session
+				if (
+					currentSessionId !== null &&
+					event.payload.session_id === currentSessionId
+				) {
+					callback(new Uint8Array(event.payload.data));
+				} else if (
+					this.sessionId !== null &&
+					event.payload.session_id === this.sessionId
+				) {
+					// Handle case where session was spawned after listener registration
+					callback(new Uint8Array(event.payload.data));
+				}
+			},
+		);
+		this.unlisteners.push(unlisten);
+	}
 
-  /**
-   * Registers a callback for PTY exit events.
-   *
-   * @param callback - Function called with the exit code and remaining session count
-   */
-  async onExit(callback: PtyExitCallback): Promise<void> {
-    const unlisten = await listen<PtyExitPayload>("pty_exit", (event: { payload: PtyExitPayload }) => {
-      // Prevent duplicate processing
-      if (this.exitHandled) {
-        if (import.meta.env?.DEV) {
-          console.log('[PtyClient] pty_exit already handled, ignoring duplicate event');
-        }
-        return;
-      }
+	/**
+	 * Registers a callback for PTY exit events.
+	 *
+	 * @param callback - Function called with the exit code and remaining session count
+	 */
+	async onExit(callback: PtyExitCallback): Promise<void> {
+		const unlisten = await listen<PtyExitPayload>(
+			"pty_exit",
+			(event: { payload: PtyExitPayload }) => {
+				// Prevent duplicate processing
+				if (this.exitHandled) {
+					if (import.meta.env?.DEV) {
+						console.log(
+							"[PtyClient] pty_exit already handled, ignoring duplicate event",
+						);
+					}
+					return;
+				}
 
-      // NOTE: This implementation assumes single-session model (one PTY per window).
-      // The condition `sessionId === null` handles the race where shell exits before
-      // spawn() returns, but this will NOT work correctly in multi-tab scenarios.
-      // FUTURE: When implementing multi-tab support, replace this with event buffering
-      // to avoid processing events from unrelated sessions. See SPEC.md NFR4.
-      if (this.sessionId === null || event.payload.session_id === this.sessionId) {
-        if (import.meta.env?.DEV) {
-          console.log(`[PtyClient] pty_exit received: code=${event.payload.code}, remaining=${event.payload.remaining_sessions}`);
-        }
+				// NOTE: This implementation assumes single-session model (one PTY per window).
+				// The condition `sessionId === null` handles the race where shell exits before
+				// spawn() returns, but this will NOT work correctly in multi-tab scenarios.
+				// FUTURE: When implementing multi-tab support, replace this with event buffering
+				// to avoid processing events from unrelated sessions. See SPEC.md NFR4.
+				if (
+					this.sessionId === null ||
+					event.payload.session_id === this.sessionId
+				) {
+					if (import.meta.env?.DEV) {
+						console.log(
+							`[PtyClient] pty_exit received: code=${event.payload.code}, remaining=${event.payload.remaining_sessions}`,
+						);
+					}
 
-        this.exitHandled = true;  // Mark as handled
+					this.exitHandled = true; // Mark as handled
 
-        // Ensure listener cleanup even if callback throws
-        try {
-          callback(event.payload.code, event.payload.remaining_sessions);
-        } finally {
-          // Remove from unlisteners array and cleanup listener
-          const index = this.unlisteners.indexOf(unlisten);
-          if (index > -1) {
-            this.unlisteners.splice(index, 1);
-          }
-          unlisten();  // Cleanup listener
-          this.sessionId = null;
-        }
-      }
-    });
-    this.unlisteners.push(unlisten);
-  }
+					// Ensure listener cleanup even if callback throws
+					try {
+						callback(event.payload.code, event.payload.remaining_sessions);
+					} finally {
+						// Remove from unlisteners array and cleanup listener
+						const index = this.unlisteners.indexOf(unlisten);
+						if (index > -1) {
+							this.unlisteners.splice(index, 1);
+						}
+						unlisten(); // Cleanup listener
+						this.sessionId = null;
+					}
+				}
+			},
+		);
+		this.unlisteners.push(unlisten);
+	}
 
-  /**
-   * Registers a callback for PTY error events.
-   *
-   * @param callback - Function called with the error message
-   */
-  async onError(callback: PtyErrorCallback): Promise<void> {
-    const unlisten = await listen<PtyErrorPayload>("pty_error", (event: { payload: PtyErrorPayload }) => {
-      if (event.payload.session_id === this.sessionId) {
-        callback(event.payload.message);
-      }
-    });
-    this.unlisteners.push(unlisten);
-  }
+	/**
+	 * Registers a callback for PTY error events.
+	 *
+	 * @param callback - Function called with the error message
+	 */
+	async onError(callback: PtyErrorCallback): Promise<void> {
+		const unlisten = await listen<PtyErrorPayload>(
+			"pty_error",
+			(event: { payload: PtyErrorPayload }) => {
+				if (event.payload.session_id === this.sessionId) {
+					callback(event.payload.message);
+				}
+			},
+		);
+		this.unlisteners.push(unlisten);
+	}
 
-  /**
-   * Registers a callback for terminal actions events.
-   * This will be used when the ANSI parser is integrated (Phase 1).
-   *
-   * @param callback - Function called with parsed terminal actions
-   */
-  async onTerminalActions(
-    callback: (payload: TerminalActionsPayload) => void
-  ): Promise<void> {
-    this.terminalActionsCallback = callback;
+	/**
+	 * Registers a callback for terminal actions events.
+	 * This will be used when the ANSI parser is integrated (Phase 1).
+	 *
+	 * @param callback - Function called with parsed terminal actions
+	 */
+	async onTerminalActions(
+		callback: (payload: TerminalActionsPayload) => void,
+	): Promise<void> {
+		this.terminalActionsCallback = callback;
 
-    const unlisten = await listen<TerminalActionsPayload>(
-      "terminal_actions",
-      (event: { payload: TerminalActionsPayload }) => {
-        if (this.sessionId === null) {
-          // sessionId not yet set (spawn hasn't returned yet), buffer the event
-          this.pendingTerminalActions.push(event.payload);
-        } else if (event.payload.session_id === this.sessionId) {
-          callback(event.payload);
-        }
-      }
-    );
-    this.unlisteners.push(unlisten);
-  }
+		const unlisten = await listen<TerminalActionsPayload>(
+			"terminal_actions",
+			(event: { payload: TerminalActionsPayload }) => {
+				if (this.sessionId === null) {
+					// sessionId not yet set (spawn hasn't returned yet), buffer the event
+					this.pendingTerminalActions.push(event.payload);
+				} else if (event.payload.session_id === this.sessionId) {
+					callback(event.payload);
+				}
+			},
+		);
+		this.unlisteners.push(unlisten);
+	}
 
-  /**
-   * Flushes pending terminal action events that arrived before sessionId was set.
-   * Should be called immediately after spawn() returns.
-   */
-  flushPendingTerminalActions(): void {
-    if (this.sessionId === null || this.terminalActionsCallback === null) {
-      return;
-    }
+	/**
+	 * Flushes pending terminal action events that arrived before sessionId was set.
+	 * Should be called immediately after spawn() returns.
+	 */
+	flushPendingTerminalActions(): void {
+		if (this.sessionId === null || this.terminalActionsCallback === null) {
+			return;
+		}
 
-    for (const pending of this.pendingTerminalActions) {
-      if (pending.session_id === this.sessionId) {
-        this.terminalActionsCallback(pending);
-      }
-    }
+		for (const pending of this.pendingTerminalActions) {
+			if (pending.session_id === this.sessionId) {
+				this.terminalActionsCallback(pending);
+			}
+		}
 
-    this.pendingTerminalActions = [];
-  }
+		this.pendingTerminalActions = [];
+	}
 
-  /**
-   * Cleans up all event listeners.
-   *
-   * Should be called when the client is no longer needed to prevent
-   * memory leaks.
-   */
-  dispose(): void {
-    for (const unlisten of this.unlisteners) {
-      unlisten();
-    }
-    this.unlisteners = [];
-  }
+	/**
+	 * Cleans up all event listeners.
+	 *
+	 * Should be called when the client is no longer needed to prevent
+	 * memory leaks.
+	 */
+	dispose(): void {
+		for (const unlisten of this.unlisteners) {
+			unlisten();
+		}
+		this.unlisteners = [];
+	}
 }
