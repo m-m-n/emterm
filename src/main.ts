@@ -57,11 +57,11 @@ let terminalState: TerminalState | null = null;
 let terminalRenderer: TerminalRenderer | null = null;
 let charSize: { width: number; height: number } = { width: 8, height: 16 };
 let mouseEventListeners: (() => void)[] = [];
-let imeInput: HTMLTextAreaElement | null = null;
+let imeInput: HTMLInputElement | null = null;
 let compositionView: HTMLDivElement | null = null;
 let editContext: EditContext | null = null; // EditContext API (Chromium only)
 let editContextCleanup: (() => void) | null = null; // Cleanup for EditContext event listeners
-let terminalClickHandler: ((e: MouseEvent) => void) | null = null; // Terminal click handler for textarea focus
+let terminalClickHandler: ((e: MouseEvent) => void) | null = null; // Terminal click handler for input focus
 
 /**
  * Initialize the terminal
@@ -103,9 +103,9 @@ async function initTerminal(): Promise<void> {
     if (IME_DEBUG) console.log("[IME] EditContext API available, using it");
     setupEditContextIME(terminal, compositionView);
   } else {
-    if (IME_DEBUG) console.log("[IME] EditContext API not available, using textarea fallback");
-    // Create hidden textarea for IME (fallback for WebKit)
-    imeInput = document.createElement("textarea");
+    if (IME_DEBUG) console.log("[IME] EditContext API not available, using input fallback");
+    // Create hidden input for IME (fallback for WebKit)
+    imeInput = document.createElement("input");
     imeInput.autocomplete = "off";
     imeInput.setAttribute("autocapitalize", "off");
     imeInput.setAttribute("spellcheck", "false");
@@ -122,8 +122,6 @@ async function initTerminal(): Promise<void> {
       padding: 0;
       margin: 0;
       outline: none;
-      overflow: hidden;
-      resize: none;
     `;
     document.body.appendChild(imeInput);
 
@@ -239,17 +237,17 @@ async function initTerminal(): Promise<void> {
     },
   );
 
-  // Focus handling - make terminal focusable and focus hidden textarea for IME
+  // Focus handling - make terminal focusable and focus hidden input for IME
   terminal.tabIndex = 0;
-  // Only register click handler for textarea fallback mode
+  // Only register click handler for input fallback mode
   if (imeInput) {
     terminalClickHandler = (e) => {
       // Prevent default to avoid terminal DIV getting focus
-      // But allow the textarea to receive focus
+      // But allow the input to receive focus
       if (e.target !== imeInput) {
         e.preventDefault();
       }
-      if (IME_DEBUG) console.log("[IME Debug] terminal mousedown, focusing textarea");
+      if (IME_DEBUG) console.log("[IME Debug] terminal mousedown, focusing input");
       if (imeInput) {
         imeInput.focus();
         // Use setTimeout to ensure focus happens after event processing
@@ -261,7 +259,7 @@ async function initTerminal(): Promise<void> {
     terminal.addEventListener("mousedown", terminalClickHandler);
   }
 
-  // Initial focus on hidden textarea (with delay to ensure DOM is ready)
+  // Initial focus on hidden input (with delay to ensure DOM is ready)
   if (imeInput) {
     setTimeout(() => {
       if (imeInput) {
@@ -517,17 +515,17 @@ async function handleKeyDown(event: KeyboardEvent): Promise<void> {
     // Special keys (Ctrl+C, arrows, etc.) fall through to be processed
   }
 
-  // Skip if hidden textarea has focus (IME is active) - fallback mode
+  // Skip if hidden input has focus (IME is active) - fallback mode
   if (imeInput && document.activeElement === imeInput) {
-    // Only allow certain special keys to pass through
-    // Enter should be handled by IME for confirmation
-    if (event.key === "Enter") {
-      return; // Let IME handler process Enter
+    // If composing (IME active), let input handler deal with it
+    if (event.key === "Enter" && imeInput.value) {
+      return; // Let IME handler process Enter during composition
     }
-    if (!isSpecialKey(event)) {
-      return; // Let IME handler process regular keys
+    // If not composing, let Enter fall through to be sent to PTY
+    if (!isSpecialKey(event) && event.key !== "Enter") {
+      return; // Let IME handler process regular keys (but not Enter)
     }
-    // Navigation and function keys fall through
+    // Enter (when not composing) and other special keys fall through
   }
 
   const bytes = keyEventToBytes(event);
@@ -822,7 +820,7 @@ function updateCompositionView(view: HTMLDivElement, text: string): void {
 /**
  * Set up IME event handlers.
  */
-function setupIMEHandlers(input: HTMLTextAreaElement, view: HTMLDivElement): void {
+function setupIMEHandlers(input: HTMLInputElement, view: HTMLDivElement): void {
   // Duplicate detection
   let lastSentValue = "";
   let lastSentTimestamp = 0;
@@ -831,10 +829,10 @@ function setupIMEHandlers(input: HTMLTextAreaElement, view: HTMLDivElement): voi
 
   // Focus debugging
   input.addEventListener("focus", () => {
-    if (IME_DEBUG) console.log("[IME Debug] textarea focus gained");
+    if (IME_DEBUG) console.log("[IME Debug] input focus gained");
   });
   input.addEventListener("blur", () => {
-    if (IME_DEBUG) console.log("[IME Debug] textarea focus lost, activeElement:", document.activeElement?.tagName);
+    if (IME_DEBUG) console.log("[IME Debug] input focus lost, activeElement:", document.activeElement?.tagName);
   });
 
   // Handle compositionstart to reset flags
@@ -882,6 +880,47 @@ function setupIMEHandlers(input: HTMLTextAreaElement, view: HTMLDivElement): voi
     isComposing = false;
     input.value = "";
     updateCompositionView(view, "");
+  });
+
+  // Handle Enter key to confirm IME composition
+  input.addEventListener("keydown", async (event) => {
+    if (IME_DEBUG) {
+      console.log("[IME Debug] keydown:", {
+        key: event.key,
+        isComposing: isComposing,
+        inputValue: input.value,
+      });
+    }
+
+    if (event.key === "Enter" && isComposing) {
+      event.preventDefault();
+      const value = input.value;
+      if (IME_DEBUG) console.log("[IME Debug] Enter pressed during composition, value:", value);
+
+      if (value && !hasSKKMarker(value)) {
+        // Duplicate detection
+        const now = Date.now();
+        if (value !== lastSentValue || now - lastSentTimestamp >= 100) {
+          try {
+            if (IME_DEBUG) console.log("[IME Debug] Enter: sending value:", value);
+            const bytes = new TextEncoder().encode(value);
+            if (ptyClient) {
+              await ptyClient.write(bytes);
+              lastSentValue = value;
+              lastSentTimestamp = now;
+              if (IME_DEBUG) console.log("[IME Debug] Enter: sent successfully");
+            }
+          } catch (error) {
+            console.error("Failed to write IME input to PTY:", error);
+          }
+        }
+      }
+
+      // Clear state
+      isComposing = false;
+      input.value = "";
+      updateCompositionView(view, "");
+    }
   });
 
   // Handle input event (primary handler)
