@@ -21,22 +21,22 @@ export type RenderMode = "inline" | "block";
  * until the `end` verb is received.
  */
 export interface MarkdownSession {
-  /** Unique session identifier (UUID v4) */
-  id: string;
-  /** Markdown format (commonmark, gfm) */
-  format: MarkdownFormat;
-  /** Protocol version */
-  version: number;
-  /** Render mode */
-  render: RenderMode;
-  /** Accumulated chunks indexed by sequence number */
-  chunks: Map<number, string>;
-  /** Expected next sequence number */
-  nextSeq: number;
-  /** Session creation timestamp (milliseconds) */
-  createdAt: number;
-  /** Total accumulated data size in bytes */
-  dataSize: number;
+	/** Unique session identifier (UUID v4) */
+	id: string;
+	/** Markdown format (commonmark, gfm) */
+	format: MarkdownFormat;
+	/** Protocol version */
+	version: number;
+	/** Render mode */
+	render: RenderMode;
+	/** Accumulated chunks indexed by sequence number */
+	chunks: Map<number, string>;
+	/** Expected next sequence number */
+	nextSeq: number;
+	/** Session creation timestamp (milliseconds) */
+	createdAt: number;
+	/** Total accumulated data size in bytes */
+	dataSize: number;
 }
 
 /**
@@ -50,10 +50,10 @@ export type MarkdownVerb = "begin" | "chunk" | "end";
  * Represents a parsed command extracted from the EmtermExtension action.
  */
 export interface MarkdownCommand {
-  /** Command verb */
-  verb: MarkdownVerb;
-  /** Key-value parameters */
-  params: Record<string, string>;
+	/** Command verb */
+	verb: MarkdownVerb;
+	/** Key-value parameters */
+	params: Record<string, string>;
 }
 
 /**
@@ -63,56 +63,56 @@ export interface MarkdownCommand {
  * inserted into the DOM.
  */
 export interface MarkdownBlock {
-  /** Block identifier (matches session id) */
-  id: string;
-  /** Sanitized HTML content */
-  html: string;
-  /** Terminal row where block starts */
-  startRow: number;
-  /** Number of rows occupied */
-  rowCount: number;
-  /** Whether block is currently visible */
-  visible: boolean;
+	/** Block identifier (matches session id) */
+	id: string;
+	/** Sanitized HTML content */
+	html: string;
+	/** Terminal row where block starts */
+	startRow: number;
+	/** Number of rows occupied */
+	rowCount: number;
+	/** Whether block is currently visible */
+	visible: boolean;
 }
 
 /**
  * Begin command parameters.
  */
 export interface BeginParams {
-  /** Session ID (required) */
-  id: string;
-  /** Markdown format */
-  format?: MarkdownFormat;
-  /** Protocol version */
-  version?: number;
-  /** Render mode */
-  render?: RenderMode;
+	/** Session ID (required) */
+	id: string;
+	/** Markdown format */
+	format?: MarkdownFormat;
+	/** Protocol version */
+	version?: number;
+	/** Render mode */
+	render?: RenderMode;
 }
 
 /**
  * Chunk command parameters.
  */
 export interface ChunkParams {
-  /** Session ID (required) */
-  id: string;
-  /** Sequence number (required) */
-  seq: number;
-  /** Base64-encoded data (required) */
-  data: string;
+	/** Session ID (required) */
+	id: string;
+	/** Sequence number (required) */
+	seq: number;
+	/** Base64-encoded data (required) */
+	data: string;
 }
 
 /**
  * End command parameters.
  */
 export interface EndParams {
-  /** Session ID (required) */
-  id: string;
+	/** Session ID (required) */
+	id: string;
 }
 
 /**
  * Result of processing a markdown command.
  */
 export type MarkdownCommandResult =
-  | { type: "pending" }
-  | { type: "complete"; block: MarkdownBlock }
-  | { type: "error"; message: string };
+	| { type: "pending" }
+	| { type: "complete"; block: MarkdownBlock }
+	| { type: "error"; message: string };

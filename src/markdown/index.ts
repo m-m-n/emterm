@@ -7,31 +7,29 @@
  * @module markdown
  */
 
-// Types
-export type {
-  MarkdownFormat,
-  RenderMode,
-  MarkdownSession,
-  MarkdownVerb,
-  MarkdownCommand,
-  MarkdownBlock,
-  BeginParams,
-  ChunkParams,
-  EndParams,
-  MarkdownCommandResult,
-} from "./types.ts";
-
-// Session Manager
-export { MarkdownSessionManager } from "./session.ts";
-
 // Renderer
 export { MarkdownRenderer } from "./renderer.ts";
 
+// Session Manager
+export { MarkdownSessionManager } from "./session.ts";
 // Theme
 export type { MarkdownTheme } from "./theme.ts";
 export {
-  generateMarkdownTheme,
-  applyMarkdownTheme,
-  getDarkTheme,
-  getLightTheme,
+	applyMarkdownTheme,
+	generateMarkdownTheme,
+	getDarkTheme,
+	getLightTheme,
 } from "./theme.ts";
+// Types
+export type {
+	BeginParams,
+	ChunkParams,
+	EndParams,
+	MarkdownBlock,
+	MarkdownCommand,
+	MarkdownCommandResult,
+	MarkdownFormat,
+	MarkdownSession,
+	MarkdownVerb,
+	RenderMode,
+} from "./types.ts";
