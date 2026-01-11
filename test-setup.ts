@@ -10,15 +10,19 @@ const window = new Window();
 // Register global DOM objects
 globalThis.document = window.document as unknown as Document;
 globalThis.window = window as unknown as Window & typeof globalThis;
-globalThis.KeyboardEvent = window.KeyboardEvent as unknown as typeof KeyboardEvent;
+globalThis.KeyboardEvent =
+	window.KeyboardEvent as unknown as typeof KeyboardEvent;
 globalThis.HTMLElement = window.HTMLElement as unknown as typeof HTMLElement;
-globalThis.getComputedStyle = window.getComputedStyle.bind(window) as typeof getComputedStyle;
-globalThis.ResizeObserver = window.ResizeObserver as unknown as typeof ResizeObserver;
+globalThis.getComputedStyle = window.getComputedStyle.bind(
+	window,
+) as typeof getComputedStyle;
+globalThis.ResizeObserver =
+	window.ResizeObserver as unknown as typeof ResizeObserver;
 
 // Polyfill requestAnimationFrame for tests
 globalThis.requestAnimationFrame = (callback: FrameRequestCallback): number => {
-  return setTimeout(() => callback(Date.now()), 0) as unknown as number;
+	return setTimeout(() => callback(Date.now()), 0) as unknown as number;
 };
 globalThis.cancelAnimationFrame = (id: number): void => {
-  clearTimeout(id);
+	clearTimeout(id);
 };

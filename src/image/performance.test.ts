@@ -4,323 +4,330 @@
  * @module image/performance.test
  */
 
-import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
 // Mock performance.now()
 let mockTime = 0;
 globalThis.performance = {
-  now: mock(() => mockTime),
+	now: mock(() => mockTime),
 } as unknown as Performance;
 
 // Helper to advance mock time
 function advanceTime(ms: number): void {
-  mockTime += ms;
+	mockTime += ms;
 }
 
 // Import after mocks
-import { PerformanceMonitor, PerformanceMetrics, MetricType } from "./performance.ts";
+import {
+	MetricType,
+	PerformanceMetrics,
+	PerformanceMonitor,
+} from "./performance.ts";
 
 describe("PerformanceMonitor", () => {
-  beforeEach(() => {
-    mockTime = 0;
-  });
+	beforeEach(() => {
+		mockTime = 0;
+	});
+
+	describe("constructor", () => {
+		test("creates monitor with default settings", () => {
+			const monitor = new PerformanceMonitor();
+			expect(monitor.isEnabled()).toBe(true);
+			monitor.dispose();
+		});
+
+		test("creates monitor with custom settings", () => {
+			const monitor = new PerformanceMonitor({
+				enabled: false,
+				historySize: 50,
+			});
+			expect(monitor.isEnabled()).toBe(false);
+			monitor.dispose();
+		});
+	});
 
-  describe("constructor", () => {
-    test("creates monitor with default settings", () => {
-      const monitor = new PerformanceMonitor();
-      expect(monitor.isEnabled()).toBe(true);
-      monitor.dispose();
-    });
+	describe("startMeasure/endMeasure", () => {
+		test("measures duration between start and end", () => {
+			const monitor = new PerformanceMonitor();
 
-    test("creates monitor with custom settings", () => {
-      const monitor = new PerformanceMonitor({ enabled: false, historySize: 50 });
-      expect(monitor.isEnabled()).toBe(false);
-      monitor.dispose();
-    });
-  });
+			monitor.startMeasure("render");
+			advanceTime(10);
+			const duration = monitor.endMeasure("render");
 
-  describe("startMeasure/endMeasure", () => {
-    test("measures duration between start and end", () => {
-      const monitor = new PerformanceMonitor();
+			expect(duration).toBe(10);
+			monitor.dispose();
+		});
 
-      monitor.startMeasure("render");
-      advanceTime(10);
-      const duration = monitor.endMeasure("render");
+		test("returns 0 for unstarted measurement", () => {
+			const monitor = new PerformanceMonitor();
 
-      expect(duration).toBe(10);
-      monitor.dispose();
-    });
+			const duration = monitor.endMeasure("nonexistent");
 
-    test("returns 0 for unstarted measurement", () => {
-      const monitor = new PerformanceMonitor();
+			expect(duration).toBe(0);
+			monitor.dispose();
+		});
 
-      const duration = monitor.endMeasure("nonexistent");
+		test("records measurement in history", () => {
+			const monitor = new PerformanceMonitor();
 
-      expect(duration).toBe(0);
-      monitor.dispose();
-    });
+			monitor.startMeasure("render");
+			advanceTime(10);
+			monitor.endMeasure("render");
 
-    test("records measurement in history", () => {
-      const monitor = new PerformanceMonitor();
+			const metrics = monitor.getMetrics("render");
+			expect(metrics.count).toBe(1);
+			expect(metrics.last).toBe(10);
 
-      monitor.startMeasure("render");
-      advanceTime(10);
-      monitor.endMeasure("render");
+			monitor.dispose();
+		});
+	});
 
-      const metrics = monitor.getMetrics("render");
-      expect(metrics.count).toBe(1);
-      expect(metrics.last).toBe(10);
+	describe("recordMetric", () => {
+		test("records a single metric value", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
-  });
+			monitor.recordMetric("frameTime", 16.5);
 
-  describe("recordMetric", () => {
-    test("records a single metric value", () => {
-      const monitor = new PerformanceMonitor();
+			const metrics = monitor.getMetrics("frameTime");
+			expect(metrics.last).toBe(16.5);
+			expect(metrics.count).toBe(1);
 
-      monitor.recordMetric("frameTime", 16.5);
+			monitor.dispose();
+		});
 
-      const metrics = monitor.getMetrics("frameTime");
-      expect(metrics.last).toBe(16.5);
-      expect(metrics.count).toBe(1);
+		test("updates statistics with multiple values", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
+			monitor.recordMetric("frameTime", 10);
+			monitor.recordMetric("frameTime", 20);
+			monitor.recordMetric("frameTime", 30);
 
-    test("updates statistics with multiple values", () => {
-      const monitor = new PerformanceMonitor();
+			const metrics = monitor.getMetrics("frameTime");
+			expect(metrics.count).toBe(3);
+			expect(metrics.average).toBe(20);
+			expect(metrics.min).toBe(10);
+			expect(metrics.max).toBe(30);
 
-      monitor.recordMetric("frameTime", 10);
-      monitor.recordMetric("frameTime", 20);
-      monitor.recordMetric("frameTime", 30);
+			monitor.dispose();
+		});
+	});
 
-      const metrics = monitor.getMetrics("frameTime");
-      expect(metrics.count).toBe(3);
-      expect(metrics.average).toBe(20);
-      expect(metrics.min).toBe(10);
-      expect(metrics.max).toBe(30);
+	describe("getMetrics", () => {
+		test("returns zero metrics for unknown type", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
-  });
+			const metrics = monitor.getMetrics("unknown");
 
-  describe("getMetrics", () => {
-    test("returns zero metrics for unknown type", () => {
-      const monitor = new PerformanceMonitor();
+			expect(metrics.count).toBe(0);
+			expect(metrics.average).toBe(0);
+			expect(metrics.min).toBe(0);
+			expect(metrics.max).toBe(0);
 
-      const metrics = monitor.getMetrics("unknown");
+			monitor.dispose();
+		});
 
-      expect(metrics.count).toBe(0);
-      expect(metrics.average).toBe(0);
-      expect(metrics.min).toBe(0);
-      expect(metrics.max).toBe(0);
+		test("calculates percentiles correctly", () => {
+			const monitor = new PerformanceMonitor({ historySize: 100 });
 
-      monitor.dispose();
-    });
+			// Add 100 values: 1, 2, 3, ..., 100
+			for (let i = 1; i <= 100; i++) {
+				monitor.recordMetric("test", i);
+			}
 
-    test("calculates percentiles correctly", () => {
-      const monitor = new PerformanceMonitor({ historySize: 100 });
+			const metrics = monitor.getMetrics("test");
 
-      // Add 100 values: 1, 2, 3, ..., 100
-      for (let i = 1; i <= 100; i++) {
-        monitor.recordMetric("test", i);
-      }
+			expect(metrics.p50).toBe(50);
+			expect(metrics.p95).toBe(95);
+			expect(metrics.p99).toBe(99);
 
-      const metrics = monitor.getMetrics("test");
+			monitor.dispose();
+		});
+	});
 
-      expect(metrics.p50).toBe(50);
-      expect(metrics.p95).toBe(95);
-      expect(metrics.p99).toBe(99);
+	describe("getAllMetrics", () => {
+		test("returns metrics for all types", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
-  });
+			monitor.recordMetric("render", 10);
+			monitor.recordMetric("decode", 50);
+			monitor.recordMetric("upload", 5);
 
-  describe("getAllMetrics", () => {
-    test("returns metrics for all types", () => {
-      const monitor = new PerformanceMonitor();
+			const all = monitor.getAllMetrics();
 
-      monitor.recordMetric("render", 10);
-      monitor.recordMetric("decode", 50);
-      monitor.recordMetric("upload", 5);
+			expect(all.render).toBeDefined();
+			expect(all.decode).toBeDefined();
+			expect(all.upload).toBeDefined();
 
-      const all = monitor.getAllMetrics();
+			monitor.dispose();
+		});
+	});
 
-      expect(all.render).toBeDefined();
-      expect(all.decode).toBeDefined();
-      expect(all.upload).toBeDefined();
+	describe("isPerformanceGood", () => {
+		test("returns true when frame time is under 16ms", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
-  });
+			monitor.recordMetric("frameTime", 10);
+			monitor.recordMetric("frameTime", 12);
+			monitor.recordMetric("frameTime", 14);
 
-  describe("isPerformanceGood", () => {
-    test("returns true when frame time is under 16ms", () => {
-      const monitor = new PerformanceMonitor();
+			expect(monitor.isPerformanceGood()).toBe(true);
 
-      monitor.recordMetric("frameTime", 10);
-      monitor.recordMetric("frameTime", 12);
-      monitor.recordMetric("frameTime", 14);
+			monitor.dispose();
+		});
 
-      expect(monitor.isPerformanceGood()).toBe(true);
+		test("returns false when frame time exceeds 16ms", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
+			monitor.recordMetric("frameTime", 20);
+			monitor.recordMetric("frameTime", 25);
+			monitor.recordMetric("frameTime", 30);
 
-    test("returns false when frame time exceeds 16ms", () => {
-      const monitor = new PerformanceMonitor();
+			expect(monitor.isPerformanceGood()).toBe(false);
 
-      monitor.recordMetric("frameTime", 20);
-      monitor.recordMetric("frameTime", 25);
-      monitor.recordMetric("frameTime", 30);
+			monitor.dispose();
+		});
 
-      expect(monitor.isPerformanceGood()).toBe(false);
+		test("returns true when no frame time data", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
+			expect(monitor.isPerformanceGood()).toBe(true);
 
-    test("returns true when no frame time data", () => {
-      const monitor = new PerformanceMonitor();
+			monitor.dispose();
+		});
+	});
 
-      expect(monitor.isPerformanceGood()).toBe(true);
+	describe("reset", () => {
+		test("clears all metrics", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
-  });
+			monitor.recordMetric("render", 10);
+			monitor.recordMetric("decode", 50);
 
-  describe("reset", () => {
-    test("clears all metrics", () => {
-      const monitor = new PerformanceMonitor();
+			monitor.reset();
 
-      monitor.recordMetric("render", 10);
-      monitor.recordMetric("decode", 50);
+			const metrics = monitor.getMetrics("render");
+			expect(metrics.count).toBe(0);
 
-      monitor.reset();
+			monitor.dispose();
+		});
 
-      const metrics = monitor.getMetrics("render");
-      expect(metrics.count).toBe(0);
+		test("clears specific metric type", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
+			monitor.recordMetric("render", 10);
+			monitor.recordMetric("decode", 50);
 
-    test("clears specific metric type", () => {
-      const monitor = new PerformanceMonitor();
+			monitor.reset("render");
 
-      monitor.recordMetric("render", 10);
-      monitor.recordMetric("decode", 50);
+			expect(monitor.getMetrics("render").count).toBe(0);
+			expect(monitor.getMetrics("decode").count).toBe(1);
 
-      monitor.reset("render");
+			monitor.dispose();
+		});
+	});
 
-      expect(monitor.getMetrics("render").count).toBe(0);
-      expect(monitor.getMetrics("decode").count).toBe(1);
+	describe("enable/disable", () => {
+		test("disabling prevents metric recording", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
-  });
+			monitor.disable();
 
-  describe("enable/disable", () => {
-    test("disabling prevents metric recording", () => {
-      const monitor = new PerformanceMonitor();
+			monitor.recordMetric("render", 10);
+			monitor.startMeasure("test");
+			advanceTime(10);
+			monitor.endMeasure("test");
 
-      monitor.disable();
+			expect(monitor.getMetrics("render").count).toBe(0);
+			expect(monitor.getMetrics("test").count).toBe(0);
 
-      monitor.recordMetric("render", 10);
-      monitor.startMeasure("test");
-      advanceTime(10);
-      monitor.endMeasure("test");
+			monitor.dispose();
+		});
 
-      expect(monitor.getMetrics("render").count).toBe(0);
-      expect(monitor.getMetrics("test").count).toBe(0);
+		test("enabling resumes metric recording", () => {
+			const monitor = new PerformanceMonitor({ enabled: false });
 
-      monitor.dispose();
-    });
+			monitor.enable();
 
-    test("enabling resumes metric recording", () => {
-      const monitor = new PerformanceMonitor({ enabled: false });
+			monitor.recordMetric("render", 10);
 
-      monitor.enable();
+			expect(monitor.getMetrics("render").count).toBe(1);
 
-      monitor.recordMetric("render", 10);
+			monitor.dispose();
+		});
+	});
 
-      expect(monitor.getMetrics("render").count).toBe(1);
+	describe("onThresholdExceeded", () => {
+		test("notifies when threshold is exceeded", () => {
+			const monitor = new PerformanceMonitor();
+			const callback = mock(() => {});
 
-      monitor.dispose();
-    });
-  });
+			monitor.setThreshold("frameTime", 16);
+			monitor.onThresholdExceeded(callback);
 
-  describe("onThresholdExceeded", () => {
-    test("notifies when threshold is exceeded", () => {
-      const monitor = new PerformanceMonitor();
-      const callback = mock(() => {});
+			monitor.recordMetric("frameTime", 20);
 
-      monitor.setThreshold("frameTime", 16);
-      monitor.onThresholdExceeded(callback);
+			expect(callback).toHaveBeenCalledWith("frameTime", 20, 16);
 
-      monitor.recordMetric("frameTime", 20);
+			monitor.dispose();
+		});
 
-      expect(callback).toHaveBeenCalledWith("frameTime", 20, 16);
+		test("does not notify when under threshold", () => {
+			const monitor = new PerformanceMonitor();
+			const callback = mock(() => {});
 
-      monitor.dispose();
-    });
+			monitor.setThreshold("frameTime", 16);
+			monitor.onThresholdExceeded(callback);
 
-    test("does not notify when under threshold", () => {
-      const monitor = new PerformanceMonitor();
-      const callback = mock(() => {});
+			monitor.recordMetric("frameTime", 10);
 
-      monitor.setThreshold("frameTime", 16);
-      monitor.onThresholdExceeded(callback);
+			expect(callback).not.toHaveBeenCalled();
 
-      monitor.recordMetric("frameTime", 10);
+			monitor.dispose();
+		});
+	});
 
-      expect(callback).not.toHaveBeenCalled();
+	describe("history limiting", () => {
+		test("limits history to configured size", () => {
+			const monitor = new PerformanceMonitor({ historySize: 10 });
 
-      monitor.dispose();
-    });
-  });
+			for (let i = 0; i < 20; i++) {
+				monitor.recordMetric("test", i);
+			}
 
-  describe("history limiting", () => {
-    test("limits history to configured size", () => {
-      const monitor = new PerformanceMonitor({ historySize: 10 });
+			// Should only keep last 10 values (10-19)
+			const metrics = monitor.getMetrics("test");
+			expect(metrics.count).toBe(10);
+			expect(metrics.min).toBe(10);
+			expect(metrics.max).toBe(19);
 
-      for (let i = 0; i < 20; i++) {
-        monitor.recordMetric("test", i);
-      }
+			monitor.dispose();
+		});
+	});
 
-      // Should only keep last 10 values (10-19)
-      const metrics = monitor.getMetrics("test");
-      expect(metrics.count).toBe(10);
-      expect(metrics.min).toBe(10);
-      expect(metrics.max).toBe(19);
+	describe("getDebugInfo", () => {
+		test("returns formatted debug string", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
-  });
+			monitor.recordMetric("frameTime", 10);
+			monitor.recordMetric("render", 5);
 
-  describe("getDebugInfo", () => {
-    test("returns formatted debug string", () => {
-      const monitor = new PerformanceMonitor();
+			const debug = monitor.getDebugInfo();
 
-      monitor.recordMetric("frameTime", 10);
-      monitor.recordMetric("render", 5);
+			expect(typeof debug).toBe("string");
+			expect(debug.length).toBeGreaterThan(0);
 
-      const debug = monitor.getDebugInfo();
+			monitor.dispose();
+		});
+	});
 
-      expect(typeof debug).toBe("string");
-      expect(debug.length).toBeGreaterThan(0);
+	describe("dispose", () => {
+		test("clears all data", () => {
+			const monitor = new PerformanceMonitor();
 
-      monitor.dispose();
-    });
-  });
+			monitor.recordMetric("test", 10);
+			monitor.dispose();
 
-  describe("dispose", () => {
-    test("clears all data", () => {
-      const monitor = new PerformanceMonitor();
-
-      monitor.recordMetric("test", 10);
-      monitor.dispose();
-
-      expect(monitor.getMetrics("test").count).toBe(0);
-    });
-  });
+			expect(monitor.getMetrics("test").count).toBe(0);
+		});
+	});
 });

@@ -1,24 +1,22 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(bun:*)",
-      "Bash(git:*)",
-      "Bash(mkdir:*)",
-      "Bash(cargo:*)",
-      "Bash(echo:*)",
-      "Bash(cat:*)",
-      "Bash(wc:*)",
-      "Bash(grep:*)",
-      "Bash(test:*)",
-      "Bash(xvfb-run:*)",
-      "Bash(tauri-driver:*)",
-      "Bash(docker:*)",
-      "Bash(ls:*)",
-      "WebSearch",
-      "WebFetch"
-    ],
-    "deny": [
-      "Bash(rm:*)"
-    ]
-  }
+	"permissions": {
+		"allow": [
+			"Bash(bun:*)",
+			"Bash(git:*)",
+			"Bash(mkdir:*)",
+			"Bash(cargo:*)",
+			"Bash(echo:*)",
+			"Bash(cat:*)",
+			"Bash(wc:*)",
+			"Bash(grep:*)",
+			"Bash(test:*)",
+			"Bash(xvfb-run:*)",
+			"Bash(tauri-driver:*)",
+			"Bash(docker:*)",
+			"Bash(ls:*)",
+			"WebSearch",
+			"WebFetch"
+		],
+		"deny": ["Bash(rm:*)"]
+	}
 }

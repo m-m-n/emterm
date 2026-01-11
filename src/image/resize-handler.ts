@@ -11,11 +11,11 @@
  * Resize event data.
  */
 export interface ResizeEvent {
-  /** Width in pixels. */
-  width: number;
+	/** Width in pixels. */
+	width: number;
 
-  /** Height in pixels. */
-  height: number;
+	/** Height in pixels. */
+	height: number;
 }
 
 /**
@@ -27,8 +27,8 @@ export type ResizeCallback = (event: ResizeEvent) => void;
  * Resize handler configuration.
  */
 export interface ResizeHandlerOptions {
-  /** Debounce time in milliseconds. */
-  debounceMs?: number;
+	/** Debounce time in milliseconds. */
+	debounceMs?: number;
 }
 
 /**
@@ -43,161 +43,161 @@ const DEFAULT_DEBOUNCE_MS = 100;
  * Ensures resize operations complete within target time.
  */
 export class ResizeHandler {
-  /** Registered callbacks. */
-  private callbacks: Set<ResizeCallback> = new Set();
+	/** Registered callbacks. */
+	private callbacks: Set<ResizeCallback> = new Set();
 
-  /** Debounce time in milliseconds. */
-  private debounceMs: number;
+	/** Debounce time in milliseconds. */
+	private debounceMs: number;
 
-  /** Pending timeout ID. */
-  private timeoutId: number | null = null;
+	/** Pending timeout ID. */
+	private timeoutId: number | null = null;
 
-  /** Pending resize event. */
-  private pendingEvent: ResizeEvent | null = null;
+	/** Pending resize event. */
+	private pendingEvent: ResizeEvent | null = null;
 
-  /** Last processed dimensions. */
-  private lastDimensions: ResizeEvent | null = null;
+	/** Last processed dimensions. */
+	private lastDimensions: ResizeEvent | null = null;
 
-  /** Whether the handler is disposed. */
-  private disposed: boolean = false;
+	/** Whether the handler is disposed. */
+	private disposed: boolean = false;
 
-  /**
-   * Create a new resize handler.
-   *
-   * @param options - Handler configuration
-   */
-  constructor(options: ResizeHandlerOptions = {}) {
-    this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
-  }
+	/**
+	 * Create a new resize handler.
+	 *
+	 * @param options - Handler configuration
+	 */
+	constructor(options: ResizeHandlerOptions = {}) {
+		this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+	}
 
-  /**
-   * Register a resize callback.
-   *
-   * @param callback - Callback function
-   * @returns Unsubscribe function
-   */
-  onResize(callback: ResizeCallback): () => void {
-    this.callbacks.add(callback);
-    return () => {
-      this.callbacks.delete(callback);
-    };
-  }
+	/**
+	 * Register a resize callback.
+	 *
+	 * @param callback - Callback function
+	 * @returns Unsubscribe function
+	 */
+	onResize(callback: ResizeCallback): () => void {
+		this.callbacks.add(callback);
+		return () => {
+			this.callbacks.delete(callback);
+		};
+	}
 
-  /**
-   * Handle a resize event (debounced).
-   *
-   * @param event - Resize event data
-   */
-  handleResize(event: ResizeEvent): void {
-    if (this.disposed) return;
+	/**
+	 * Handle a resize event (debounced).
+	 *
+	 * @param event - Resize event data
+	 */
+	handleResize(event: ResizeEvent): void {
+		if (this.disposed) return;
 
-    // Store pending event
-    this.pendingEvent = event;
+		// Store pending event
+		this.pendingEvent = event;
 
-    // Clear existing timeout
-    if (this.timeoutId !== null) {
-      window.clearTimeout(this.timeoutId);
-    }
+		// Clear existing timeout
+		if (this.timeoutId !== null) {
+			window.clearTimeout(this.timeoutId);
+		}
 
-    // Set new timeout
-    this.timeoutId = window.setTimeout(() => {
-      this.processPendingResize();
-    }, this.debounceMs);
-  }
+		// Set new timeout
+		this.timeoutId = window.setTimeout(() => {
+			this.processPendingResize();
+		}, this.debounceMs);
+	}
 
-  /**
-   * Process the pending resize event.
-   */
-  private processPendingResize(): void {
-    this.timeoutId = null;
+	/**
+	 * Process the pending resize event.
+	 */
+	private processPendingResize(): void {
+		this.timeoutId = null;
 
-    if (!this.pendingEvent) return;
+		if (!this.pendingEvent) return;
 
-    // Check if dimensions actually changed
-    if (
-      this.lastDimensions &&
-      this.lastDimensions.width === this.pendingEvent.width &&
-      this.lastDimensions.height === this.pendingEvent.height
-    ) {
-      this.pendingEvent = null;
-      return;
-    }
+		// Check if dimensions actually changed
+		if (
+			this.lastDimensions &&
+			this.lastDimensions.width === this.pendingEvent.width &&
+			this.lastDimensions.height === this.pendingEvent.height
+		) {
+			this.pendingEvent = null;
+			return;
+		}
 
-    // Update last dimensions
-    this.lastDimensions = { ...this.pendingEvent };
+		// Update last dimensions
+		this.lastDimensions = { ...this.pendingEvent };
 
-    // Notify callbacks
-    const event = this.pendingEvent;
-    this.pendingEvent = null;
+		// Notify callbacks
+		const event = this.pendingEvent;
+		this.pendingEvent = null;
 
-    for (const callback of this.callbacks) {
-      try {
-        callback(event);
-      } catch (error) {
-        console.error("Resize callback error:", error);
-      }
-    }
-  }
+		for (const callback of this.callbacks) {
+			try {
+				callback(event);
+			} catch (error) {
+				console.error("Resize callback error:", error);
+			}
+		}
+	}
 
-  /**
-   * Get the debounce time.
-   *
-   * @returns Debounce time in milliseconds
-   */
-  getDebounceTime(): number {
-    return this.debounceMs;
-  }
+	/**
+	 * Get the debounce time.
+	 *
+	 * @returns Debounce time in milliseconds
+	 */
+	getDebounceTime(): number {
+		return this.debounceMs;
+	}
 
-  /**
-   * Set the debounce time.
-   *
-   * @param ms - Debounce time in milliseconds
-   */
-  setDebounceTime(ms: number): void {
-    this.debounceMs = ms;
-  }
+	/**
+	 * Set the debounce time.
+	 *
+	 * @param ms - Debounce time in milliseconds
+	 */
+	setDebounceTime(ms: number): void {
+		this.debounceMs = ms;
+	}
 
-  /**
-   * Cancel any pending resize callback.
-   */
-  cancel(): void {
-    if (this.timeoutId !== null) {
-      window.clearTimeout(this.timeoutId);
-      this.timeoutId = null;
-    }
-    this.pendingEvent = null;
-  }
+	/**
+	 * Cancel any pending resize callback.
+	 */
+	cancel(): void {
+		if (this.timeoutId !== null) {
+			window.clearTimeout(this.timeoutId);
+			this.timeoutId = null;
+		}
+		this.pendingEvent = null;
+	}
 
-  /**
-   * Immediately process any pending resize.
-   */
-  flush(): void {
-    if (this.timeoutId !== null) {
-      window.clearTimeout(this.timeoutId);
-      this.timeoutId = null;
-    }
+	/**
+	 * Immediately process any pending resize.
+	 */
+	flush(): void {
+		if (this.timeoutId !== null) {
+			window.clearTimeout(this.timeoutId);
+			this.timeoutId = null;
+		}
 
-    if (this.pendingEvent) {
-      this.processPendingResize();
-    }
-  }
+		if (this.pendingEvent) {
+			this.processPendingResize();
+		}
+	}
 
-  /**
-   * Get the last processed dimensions.
-   *
-   * @returns Last dimensions or null
-   */
-  getLastDimensions(): ResizeEvent | null {
-    return this.lastDimensions ? { ...this.lastDimensions } : null;
-  }
+	/**
+	 * Get the last processed dimensions.
+	 *
+	 * @returns Last dimensions or null
+	 */
+	getLastDimensions(): ResizeEvent | null {
+		return this.lastDimensions ? { ...this.lastDimensions } : null;
+	}
 
-  /**
-   * Dispose of the handler.
-   */
-  dispose(): void {
-    this.disposed = true;
-    this.cancel();
-    this.callbacks.clear();
-    this.lastDimensions = null;
-  }
+	/**
+	 * Dispose of the handler.
+	 */
+	dispose(): void {
+		this.disposed = true;
+		this.cancel();
+		this.callbacks.clear();
+		this.lastDimensions = null;
+	}
 }
