@@ -1,24 +1,24 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { ClipboardManager } from "./manager";
 
+// Mock the Tauri plugin
+const mockWriteText = mock(() => Promise.resolve());
+const mockReadText = mock(() => Promise.resolve(""));
+
+mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
+	writeText: mockWriteText,
+	readText: mockReadText,
+}));
+
 describe("ClipboardManager", () => {
 	let manager: ClipboardManager;
-	let mockClipboard: {
-		writeText: ReturnType<typeof mock>;
-		readText: ReturnType<typeof mock>;
-	};
 
 	beforeEach(() => {
-		// Mock navigator.clipboard
-		mockClipboard = {
-			writeText: mock(() => Promise.resolve()),
-			readText: mock(() => Promise.resolve("")),
-		};
-
-		// @ts-expect-error - Mock global navigator.clipboard
-		globalThis.navigator = {
-			clipboard: mockClipboard,
-		};
+		// Reset mocks
+		mockWriteText.mockClear();
+		mockReadText.mockClear();
+		mockWriteText.mockImplementation(() => Promise.resolve());
+		mockReadText.mockImplementation(() => Promise.resolve(""));
 
 		manager = new ClipboardManager();
 	});
@@ -28,28 +28,28 @@ describe("ClipboardManager", () => {
 			const text = "Hello, World!";
 			await manager.copyToClipboard(text);
 
-			expect(mockClipboard.writeText).toHaveBeenCalledTimes(1);
-			expect(mockClipboard.writeText).toHaveBeenCalledWith(text);
+			expect(mockWriteText).toHaveBeenCalledTimes(1);
+			expect(mockWriteText).toHaveBeenCalledWith(text);
 		});
 
 		test("handles empty string", async () => {
 			await manager.copyToClipboard("");
 
-			expect(mockClipboard.writeText).toHaveBeenCalledWith("");
+			expect(mockWriteText).toHaveBeenCalledWith("");
 		});
 
 		test("handles multi-line text", async () => {
 			const text = "Line 1\nLine 2\nLine 3";
 			await manager.copyToClipboard(text);
 
-			expect(mockClipboard.writeText).toHaveBeenCalledWith(text);
+			expect(mockWriteText).toHaveBeenCalledWith(text);
 		});
 
 		test("handles Unicode characters", async () => {
 			const text = "日本語 🎉";
 			await manager.copyToClipboard(text);
 
-			expect(mockClipboard.writeText).toHaveBeenCalledWith(text);
+			expect(mockWriteText).toHaveBeenCalledWith(text);
 		});
 
 		test("returns true on success", async () => {
@@ -58,7 +58,7 @@ describe("ClipboardManager", () => {
 		});
 
 		test("returns false on failure", async () => {
-			mockClipboard.writeText = mock(() =>
+			mockWriteText.mockImplementation(() =>
 				Promise.reject(new Error("Permission denied")),
 			);
 
@@ -71,7 +71,7 @@ describe("ClipboardManager", () => {
 			const originalError = console.error;
 			console.error = consoleError;
 
-			mockClipboard.writeText = mock(() =>
+			mockWriteText.mockImplementation(() =>
 				Promise.reject(new Error("Permission denied")),
 			);
 
@@ -85,16 +85,16 @@ describe("ClipboardManager", () => {
 
 	describe("pasteFromClipboard", () => {
 		test("reads text from clipboard", async () => {
-			mockClipboard.readText = mock(() => Promise.resolve("Clipboard content"));
+			mockReadText.mockImplementation(() => Promise.resolve("Clipboard content"));
 
 			const text = await manager.pasteFromClipboard();
 
-			expect(mockClipboard.readText).toHaveBeenCalledTimes(1);
+			expect(mockReadText).toHaveBeenCalledTimes(1);
 			expect(text).toBe("Clipboard content");
 		});
 
 		test("handles empty clipboard", async () => {
-			mockClipboard.readText = mock(() => Promise.resolve(""));
+			mockReadText.mockImplementation(() => Promise.resolve(""));
 
 			const text = await manager.pasteFromClipboard();
 
@@ -103,7 +103,7 @@ describe("ClipboardManager", () => {
 
 		test("handles multi-line clipboard content", async () => {
 			const content = "Line 1\nLine 2\nLine 3";
-			mockClipboard.readText = mock(() => Promise.resolve(content));
+			mockReadText.mockImplementation(() => Promise.resolve(content));
 
 			const text = await manager.pasteFromClipboard();
 
@@ -111,7 +111,7 @@ describe("ClipboardManager", () => {
 		});
 
 		test("returns empty string on failure", async () => {
-			mockClipboard.readText = mock(() =>
+			mockReadText.mockImplementation(() =>
 				Promise.reject(new Error("Permission denied")),
 			);
 
@@ -125,7 +125,7 @@ describe("ClipboardManager", () => {
 			const originalError = console.error;
 			console.error = consoleError;
 
-			mockClipboard.readText = mock(() =>
+			mockReadText.mockImplementation(() =>
 				Promise.reject(new Error("Permission denied")),
 			);
 

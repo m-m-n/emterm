@@ -7,10 +7,11 @@
 use log::{Level, Log, Metadata, Record};
 
 /// ANSI color codes for backend logging (dimmer/normal colors).
+/// Note: Backend uses Rust's `log` crate levels (Debug, Info, Warn, Error, Trace).
+/// There is no "LOG" level in Rust - frontend's console.log() maps to INFO on backend.
 mod backend_colors {
     pub const DEBUG: &str = "\x1b[2;90m"; // dim gray
     pub const INFO: &str = "\x1b[36m"; // cyan
-    pub const LOG: &str = "\x1b[32m"; // green (mapped from Info in some contexts)
     pub const WARN: &str = "\x1b[33m"; // yellow
     pub const ERROR: &str = "\x1b[31m"; // red
     pub const RESET: &str = "\x1b[0m";

@@ -4,6 +4,11 @@
  * Handles copying to and pasting from the system clipboard.
  */
 
+import {
+	readText,
+	writeText,
+} from "@tauri-apps/plugin-clipboard-manager";
+
 /**
  * Clipboard bridge.
  *
@@ -34,7 +39,7 @@ export class ClipboardBridge {
 	 */
 	async write(text: string): Promise<boolean> {
 		try {
-			await navigator.clipboard.writeText(text);
+			await writeText(text);
 			return true;
 		} catch (error) {
 			console.error("Failed to write to clipboard:", error);
@@ -49,7 +54,7 @@ export class ClipboardBridge {
 	 */
 	async read(): Promise<string> {
 		try {
-			return await navigator.clipboard.readText();
+			return await readText();
 		} catch (error) {
 			console.error("Failed to read from clipboard:", error);
 			return "";
