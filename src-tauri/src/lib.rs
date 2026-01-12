@@ -217,6 +217,36 @@ fn debug_log(message: String) {
     eprintln!("[Frontend] {}", message);
 }
 
+/// Console log command - prints message to stdout with green [LOG] prefix.
+#[tauri::command]
+fn console_log(message: String) {
+    println!("\x1b[32m[LOG]\x1b[0m {}", message);
+}
+
+/// Console warn command - prints message to stderr with yellow [WARN] prefix.
+#[tauri::command]
+fn console_warn(message: String) {
+    eprintln!("\x1b[33m[WARN]\x1b[0m {}", message);
+}
+
+/// Console error command - prints message to stderr with red [ERROR] prefix.
+#[tauri::command]
+fn console_error(message: String) {
+    eprintln!("\x1b[31m[ERROR]\x1b[0m {}", message);
+}
+
+/// Console info command - prints message to stdout with cyan [INFO] prefix.
+#[tauri::command]
+fn console_info(message: String) {
+    println!("\x1b[36m[INFO]\x1b[0m {}", message);
+}
+
+/// Console debug command - prints message to stdout with gray [DEBUG] prefix.
+#[tauri::command]
+fn console_debug(message: String) {
+    println!("\x1b[90m[DEBUG]\x1b[0m {}", message);
+}
+
 /// Returns the number of active PTY sessions.
 ///
 /// This command exposes the existing `PtyManager::session_count()` method
@@ -512,6 +542,11 @@ pub fn run() {
             pty_resize,
             pty_kill,
             debug_log,
+            console_log,
+            console_warn,
+            console_error,
+            console_info,
+            console_debug,
             session_count,
             tab_close_graceful,
         ])
