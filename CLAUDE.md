@@ -71,6 +71,15 @@ src/               - TypeScript frontend (terminal UI, rendering)
 tmp/               - Temporary files and drafts
 ```
 
+### Logging
+
+Use standard console methods for debugging - they output to terminal:
+- `console.debug()` → stdout (gray [DEBUG])
+- `console.log()` → stdout (green [LOG])
+- `console.info()` → stdout (cyan [INFO])
+- `console.warn()` → stderr (yellow [WARN])
+- `console.error()` → stderr (red [ERROR])
+
 ## CLI Commands
 
 The application provides helper CLI commands:
