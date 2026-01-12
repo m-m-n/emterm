@@ -88,7 +88,7 @@ export class KeyboardHandler {
     target.addEventListener(
       "keydown",
       this.boundHandleClipboardShortcut as EventListener,
-      { capture: true }
+      { capture: true },
     );
 
     // Bubble phase listener for regular key handling
@@ -97,7 +97,7 @@ export class KeyboardHandler {
     };
     target.addEventListener(
       "keydown",
-      this.boundHandleKeyDown as EventListener
+      this.boundHandleKeyDown as EventListener,
     );
   }
 
@@ -111,7 +111,7 @@ export class KeyboardHandler {
         this.target.removeEventListener(
           "keydown",
           this.boundHandleClipboardShortcut as EventListener,
-          { capture: true }
+          { capture: true },
         );
       }
 
@@ -119,7 +119,7 @@ export class KeyboardHandler {
       if (this.boundHandleKeyDown) {
         this.target.removeEventListener(
           "keydown",
-          this.boundHandleKeyDown as EventListener
+          this.boundHandleKeyDown as EventListener,
         );
       }
     }
@@ -279,7 +279,9 @@ export class KeyboardHandler {
         const result = await showPasteDialog({ text, lineCount });
         if (result.confirmed) {
           // Send text in chunks
-          await sendTextInChunks(text, (data: Uint8Array) => this.ptyClient.write(data));
+          await sendTextInChunks(text, (data: Uint8Array) =>
+            this.ptyClient.write(data),
+          );
         }
       } else {
         // Single line - paste directly

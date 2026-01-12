@@ -18,10 +18,15 @@ function createKeyEvent(
     altKey?: boolean;
     shiftKey?: boolean;
     metaKey?: boolean;
-  } = {}
-): KeyboardEvent & { preventDefault: ReturnType<typeof mock>; stopPropagation: ReturnType<typeof mock> } {
+    code?: string;
+  } = {},
+): KeyboardEvent & {
+  preventDefault: ReturnType<typeof mock>;
+  stopPropagation: ReturnType<typeof mock>;
+} {
   const event = {
     key,
+    code: options.code ?? "",
     ctrlKey: options.ctrlKey ?? false,
     altKey: options.altKey ?? false,
     shiftKey: options.shiftKey ?? false,
@@ -29,7 +34,10 @@ function createKeyEvent(
     isComposing: false,
     preventDefault: mock(() => {}),
     stopPropagation: mock(() => {}),
-  } as unknown as KeyboardEvent & { preventDefault: ReturnType<typeof mock>; stopPropagation: ReturnType<typeof mock> };
+  } as unknown as KeyboardEvent & {
+    preventDefault: ReturnType<typeof mock>;
+    stopPropagation: ReturnType<typeof mock>;
+  };
   return event;
 }
 
@@ -71,7 +79,7 @@ function createMockState(): TerminalState {
  * Creates a KeyboardHandlerContext for testing
  */
 function createTestContext(
-  overrides: Partial<KeyboardHandlerContext> = {}
+  overrides: Partial<KeyboardHandlerContext> = {},
 ): KeyboardHandlerContext {
   return {
     ptyClient: createMockPtyClient(),
@@ -95,7 +103,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("c", { shiftKey: true });
 
         // Call the method directly via type assertion
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         // Should not be handled
         expect(event.preventDefault).not.toHaveBeenCalled();
@@ -110,7 +122,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("c", { ctrlKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         // Should not be handled by clipboard shortcut handler
         expect(event.preventDefault).not.toHaveBeenCalled();
@@ -121,7 +137,9 @@ describe("KeyboardHandler", () => {
     describe("Ctrl+Shift+C handling", () => {
       it("should call handleCopy for Ctrl+Shift+C", async () => {
         const selectionController = createMockSelectionController();
-        (selectionController.hasSelection as ReturnType<typeof mock>).mockReturnValue(true);
+        (
+          selectionController.hasSelection as ReturnType<typeof mock>
+        ).mockReturnValue(true);
 
         const context = createTestContext({ selectionController });
         const handler = new KeyboardHandler(context);
@@ -129,7 +147,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("c", { ctrlKey: true, shiftKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         // Wait for async operations
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -139,7 +161,9 @@ describe("KeyboardHandler", () => {
 
       it("should call handleCopy for Ctrl+Shift+C with uppercase C", async () => {
         const selectionController = createMockSelectionController();
-        (selectionController.hasSelection as ReturnType<typeof mock>).mockReturnValue(true);
+        (
+          selectionController.hasSelection as ReturnType<typeof mock>
+        ).mockReturnValue(true);
 
         const context = createTestContext({ selectionController });
         const handler = new KeyboardHandler(context);
@@ -147,7 +171,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("C", { ctrlKey: true, shiftKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         // Wait for async operations
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -162,7 +190,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("c", { ctrlKey: true, shiftKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         expect(event.preventDefault).toHaveBeenCalled();
         expect(event.stopPropagation).toHaveBeenCalled();
@@ -172,7 +204,9 @@ describe("KeyboardHandler", () => {
     describe("Ctrl+Shift+V handling", () => {
       it("should call handlePaste for Ctrl+Shift+V", async () => {
         const selectionController = createMockSelectionController();
-        (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue("test text");
+        (
+          selectionController.paste as ReturnType<typeof mock>
+        ).mockResolvedValue("test text");
 
         const context = createTestContext({ selectionController });
         const handler = new KeyboardHandler(context);
@@ -180,7 +214,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("v", { ctrlKey: true, shiftKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         // Wait for async operations
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -190,7 +228,9 @@ describe("KeyboardHandler", () => {
 
       it("should call handlePaste for Ctrl+Shift+V with uppercase V", async () => {
         const selectionController = createMockSelectionController();
-        (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue("test text");
+        (
+          selectionController.paste as ReturnType<typeof mock>
+        ).mockResolvedValue("test text");
 
         const context = createTestContext({ selectionController });
         const handler = new KeyboardHandler(context);
@@ -198,7 +238,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("V", { ctrlKey: true, shiftKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         // Wait for async operations
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -213,7 +257,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("v", { ctrlKey: true, shiftKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         expect(event.preventDefault).toHaveBeenCalled();
         expect(event.stopPropagation).toHaveBeenCalled();
@@ -228,7 +276,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("x", { ctrlKey: true, shiftKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         // Should not handle this key
         expect(event.preventDefault).not.toHaveBeenCalled();
@@ -242,7 +294,11 @@ describe("KeyboardHandler", () => {
         const event = createKeyEvent("a", { ctrlKey: true, shiftKey: true });
 
         // Call the method directly
-        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+        (
+          handler as unknown as {
+            handleClipboardShortcut: (e: KeyboardEvent) => void;
+          }
+        ).handleClipboardShortcut(event);
 
         // Should not handle this key
         expect(event.preventDefault).not.toHaveBeenCalled();
@@ -266,7 +322,10 @@ describe("KeyboardHandler", () => {
 
       // Check capture listener was added with { capture: true }
       const captureCall = addEventListenerSpy.mock.calls.find(
-        (call) => call[2] && typeof call[2] === "object" && (call[2] as AddEventListenerOptions).capture === true
+        (call) =>
+          call[2] &&
+          typeof call[2] === "object" &&
+          (call[2] as AddEventListenerOptions).capture === true,
       );
       expect(captureCall).toBeDefined();
       expect(captureCall?.[0]).toBe("keydown");
@@ -290,7 +349,10 @@ describe("KeyboardHandler", () => {
 
       // Check capture listener was removed with { capture: true }
       const captureCall = removeEventListenerSpy.mock.calls.find(
-        (call) => call[2] && typeof call[2] === "object" && (call[2] as AddEventListenerOptions).capture === true
+        (call) =>
+          call[2] &&
+          typeof call[2] === "object" &&
+          (call[2] as AddEventListenerOptions).capture === true,
       );
       expect(captureCall).toBeDefined();
       expect(captureCall?.[0]).toBe("keydown");
@@ -313,7 +375,11 @@ describe("KeyboardHandler", () => {
       handler.attach(target);
 
       // Verify capture listener is registered
-      const captureHandler = (handler as unknown as { boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null }).boundHandleClipboardShortcut;
+      const captureHandler = (
+        handler as unknown as {
+          boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null;
+        }
+      ).boundHandleClipboardShortcut;
       expect(captureHandler).not.toBeNull();
 
       handler.detach();
@@ -343,7 +409,9 @@ describe("KeyboardHandler", () => {
     it("should handle Ctrl+Shift+C with empty selection gracefully", async () => {
       const selectionController = createMockSelectionController();
       // Empty selection - hasSelection returns false
-      (selectionController.hasSelection as ReturnType<typeof mock>).mockReturnValue(false);
+      (
+        selectionController.hasSelection as ReturnType<typeof mock>
+      ).mockReturnValue(false);
 
       const context = createTestContext({ selectionController });
       const handler = new KeyboardHandler(context);
@@ -351,7 +419,11 @@ describe("KeyboardHandler", () => {
       const event = createKeyEvent("c", { ctrlKey: true, shiftKey: true });
 
       // Call the method directly
-      (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+      (
+        handler as unknown as {
+          handleClipboardShortcut: (e: KeyboardEvent) => void;
+        }
+      ).handleClipboardShortcut(event);
 
       // Wait for async operations
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -366,7 +438,9 @@ describe("KeyboardHandler", () => {
     it("should handle Ctrl+Shift+V with empty clipboard gracefully", async () => {
       const selectionController = createMockSelectionController();
       // Empty clipboard
-      (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue("");
+      (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue(
+        "",
+      );
 
       const context = createTestContext({ selectionController });
       const handler = new KeyboardHandler(context);
@@ -374,7 +448,11 @@ describe("KeyboardHandler", () => {
       const event = createKeyEvent("v", { ctrlKey: true, shiftKey: true });
 
       // Call the method directly
-      (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+      (
+        handler as unknown as {
+          handleClipboardShortcut: (e: KeyboardEvent) => void;
+        }
+      ).handleClipboardShortcut(event);
 
       // Wait for async operations
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -397,11 +475,133 @@ describe("KeyboardHandler", () => {
       Object.defineProperty(event, "isComposing", { value: true });
 
       // Call the method directly
-      (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+      (
+        handler as unknown as {
+          handleClipboardShortcut: (e: KeyboardEvent) => void;
+        }
+      ).handleClipboardShortcut(event);
 
       // Should still handle the event (capture phase ignores isComposing)
       expect(event.preventDefault).toHaveBeenCalled();
       expect(event.stopPropagation).toHaveBeenCalled();
+    });
+  });
+
+  // NOTE: IME ON (event.key='Process') tests removed.
+  // Investigation revealed that when IME is active, the browser/OS intercepts
+  // Ctrl+Shift+C/V before the keydown event reaches JavaScript with correct
+  // modifier key states. This is a known limitation shared by other terminals
+  // like Tabby. Users should turn off IME before using clipboard shortcuts.
+
+  describe("handleClipboardShortcut (normal operation)", () => {
+    it("should use event.key for copy when IME is not blocking", async () => {
+      const selectionController = createMockSelectionController();
+      (
+        selectionController.hasSelection as ReturnType<typeof mock>
+      ).mockReturnValue(true);
+
+      const context = createTestContext({ selectionController });
+      const handler = new KeyboardHandler(context);
+
+      // Normal: key is "c" and code is "KeyC"
+      const event = createKeyEvent("c", {
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyC",
+      });
+
+      (
+        handler as unknown as {
+          handleClipboardShortcut: (e: KeyboardEvent) => void;
+        }
+      ).handleClipboardShortcut(event);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(selectionController.copy).toHaveBeenCalled();
+    });
+
+    it("should use event.key for paste when IME is not blocking", async () => {
+      const selectionController = createMockSelectionController();
+      (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue(
+        "test text",
+      );
+
+      const context = createTestContext({ selectionController });
+      const handler = new KeyboardHandler(context);
+
+      // Normal: key is "v" and code is "KeyV"
+      const event = createKeyEvent("v", {
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyV",
+      });
+
+      (
+        handler as unknown as {
+          handleClipboardShortcut: (e: KeyboardEvent) => void;
+        }
+      ).handleClipboardShortcut(event);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(selectionController.paste).toHaveBeenCalled();
+    });
+
+    it("should work with non-QWERTY layout (Dvorak) where code differs from key - copy", async () => {
+      const selectionController = createMockSelectionController();
+      (
+        selectionController.hasSelection as ReturnType<typeof mock>
+      ).mockReturnValue(true);
+
+      const context = createTestContext({ selectionController });
+      const handler = new KeyboardHandler(context);
+
+      // Dvorak: physical 'i' key produces 'c', code is "KeyI" but key is "c"
+      // IME OFF, so we use event.key which is "c"
+      const event = createKeyEvent("c", {
+        ctrlKey: true,
+        shiftKey: true,
+        code: "KeyI",
+      });
+
+      (
+        handler as unknown as {
+          handleClipboardShortcut: (e: KeyboardEvent) => void;
+        }
+      ).handleClipboardShortcut(event);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(selectionController.copy).toHaveBeenCalled();
+    });
+
+    it("should work with non-QWERTY layout (Dvorak) where code differs from key - paste", async () => {
+      const selectionController = createMockSelectionController();
+      (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue(
+        "test text",
+      );
+
+      const context = createTestContext({ selectionController });
+      const handler = new KeyboardHandler(context);
+
+      // Dvorak: physical '.' key produces 'v', code is "Period" but key is "v"
+      // IME OFF, so we use event.key which is "v"
+      const event = createKeyEvent("v", {
+        ctrlKey: true,
+        shiftKey: true,
+        code: "Period",
+      });
+
+      (
+        handler as unknown as {
+          handleClipboardShortcut: (e: KeyboardEvent) => void;
+        }
+      ).handleClipboardShortcut(event);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(selectionController.paste).toHaveBeenCalled();
     });
   });
 
