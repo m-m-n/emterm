@@ -1,0 +1,469 @@
+/**
+ * Tests for KeyboardHandler class - capture phase clipboard shortcut handling
+ */
+
+import { describe, expect, it, mock, spyOn } from "bun:test";
+import { KeyboardHandler, type KeyboardHandlerContext } from "./keyboard";
+import type { PtyClient } from "../../pty/client";
+import type { TerminalState } from "../../terminal/state";
+import type { SelectionController } from "../../selection-v2";
+
+/**
+ * Helper to create a mock KeyboardEvent with spies
+ */
+function createKeyEvent(
+  key: string,
+  options: {
+    ctrlKey?: boolean;
+    altKey?: boolean;
+    shiftKey?: boolean;
+    metaKey?: boolean;
+  } = {}
+): KeyboardEvent & { preventDefault: ReturnType<typeof mock>; stopPropagation: ReturnType<typeof mock> } {
+  const event = {
+    key,
+    ctrlKey: options.ctrlKey ?? false,
+    altKey: options.altKey ?? false,
+    shiftKey: options.shiftKey ?? false,
+    metaKey: options.metaKey ?? false,
+    isComposing: false,
+    preventDefault: mock(() => {}),
+    stopPropagation: mock(() => {}),
+  } as unknown as KeyboardEvent & { preventDefault: ReturnType<typeof mock>; stopPropagation: ReturnType<typeof mock> };
+  return event;
+}
+
+/**
+ * Creates a mock PtyClient
+ */
+function createMockPtyClient(): PtyClient {
+  return {
+    write: mock(() => Promise.resolve()),
+    resize: mock(() => Promise.resolve()),
+    onData: mock(() => {}),
+    spawn: mock(() => Promise.resolve()),
+    kill: mock(() => Promise.resolve()),
+  } as unknown as PtyClient;
+}
+
+/**
+ * Creates a mock SelectionController
+ */
+function createMockSelectionController(): SelectionController {
+  return {
+    hasSelection: mock(() => false),
+    copy: mock(() => Promise.resolve(true)),
+    paste: mock(() => Promise.resolve("")),
+    clearSelection: mock(() => {}),
+    isMultiLinePaste: mock(() => false),
+    countPasteLines: mock(() => 1),
+  } as unknown as SelectionController;
+}
+
+/**
+ * Creates a mock TerminalState
+ */
+function createMockState(): TerminalState {
+  return {} as TerminalState;
+}
+
+/**
+ * Creates a KeyboardHandlerContext for testing
+ */
+function createTestContext(
+  overrides: Partial<KeyboardHandlerContext> = {}
+): KeyboardHandlerContext {
+  return {
+    ptyClient: createMockPtyClient(),
+    getState: () => createMockState(),
+    getRenderer: () => null,
+    selectionController: createMockSelectionController(),
+    isEditContextActive: () => false,
+    isImeInputFocused: () => false,
+    ...overrides,
+  };
+}
+
+describe("KeyboardHandler", () => {
+  describe("handleClipboardShortcut", () => {
+    describe("modifier key checks", () => {
+      it("should not handle events without Ctrl key", () => {
+        const context = createTestContext();
+        const handler = new KeyboardHandler(context);
+
+        // Create event with only Shift (no Ctrl)
+        const event = createKeyEvent("c", { shiftKey: true });
+
+        // Call the method directly via type assertion
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        // Should not be handled
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(event.stopPropagation).not.toHaveBeenCalled();
+      });
+
+      it("should not handle events without Shift key", () => {
+        const context = createTestContext();
+        const handler = new KeyboardHandler(context);
+
+        // Create event with only Ctrl (no Shift)
+        const event = createKeyEvent("c", { ctrlKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        // Should not be handled by clipboard shortcut handler
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(event.stopPropagation).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("Ctrl+Shift+C handling", () => {
+      it("should call handleCopy for Ctrl+Shift+C", async () => {
+        const selectionController = createMockSelectionController();
+        (selectionController.hasSelection as ReturnType<typeof mock>).mockReturnValue(true);
+
+        const context = createTestContext({ selectionController });
+        const handler = new KeyboardHandler(context);
+
+        const event = createKeyEvent("c", { ctrlKey: true, shiftKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        // Wait for async operations
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(selectionController.copy).toHaveBeenCalled();
+      });
+
+      it("should call handleCopy for Ctrl+Shift+C with uppercase C", async () => {
+        const selectionController = createMockSelectionController();
+        (selectionController.hasSelection as ReturnType<typeof mock>).mockReturnValue(true);
+
+        const context = createTestContext({ selectionController });
+        const handler = new KeyboardHandler(context);
+
+        const event = createKeyEvent("C", { ctrlKey: true, shiftKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        // Wait for async operations
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(selectionController.copy).toHaveBeenCalled();
+      });
+
+      it("should call preventDefault and stopPropagation for Ctrl+Shift+C", () => {
+        const context = createTestContext();
+        const handler = new KeyboardHandler(context);
+
+        const event = createKeyEvent("c", { ctrlKey: true, shiftKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        expect(event.preventDefault).toHaveBeenCalled();
+        expect(event.stopPropagation).toHaveBeenCalled();
+      });
+    });
+
+    describe("Ctrl+Shift+V handling", () => {
+      it("should call handlePaste for Ctrl+Shift+V", async () => {
+        const selectionController = createMockSelectionController();
+        (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue("test text");
+
+        const context = createTestContext({ selectionController });
+        const handler = new KeyboardHandler(context);
+
+        const event = createKeyEvent("v", { ctrlKey: true, shiftKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        // Wait for async operations
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(selectionController.paste).toHaveBeenCalled();
+      });
+
+      it("should call handlePaste for Ctrl+Shift+V with uppercase V", async () => {
+        const selectionController = createMockSelectionController();
+        (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue("test text");
+
+        const context = createTestContext({ selectionController });
+        const handler = new KeyboardHandler(context);
+
+        const event = createKeyEvent("V", { ctrlKey: true, shiftKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        // Wait for async operations
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        expect(selectionController.paste).toHaveBeenCalled();
+      });
+
+      it("should call preventDefault and stopPropagation for Ctrl+Shift+V", () => {
+        const context = createTestContext();
+        const handler = new KeyboardHandler(context);
+
+        const event = createKeyEvent("v", { ctrlKey: true, shiftKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        expect(event.preventDefault).toHaveBeenCalled();
+        expect(event.stopPropagation).toHaveBeenCalled();
+      });
+    });
+
+    describe("other Ctrl+Shift combinations", () => {
+      it("should not handle Ctrl+Shift+X", () => {
+        const context = createTestContext();
+        const handler = new KeyboardHandler(context);
+
+        const event = createKeyEvent("x", { ctrlKey: true, shiftKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        // Should not handle this key
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(event.stopPropagation).not.toHaveBeenCalled();
+      });
+
+      it("should not handle Ctrl+Shift+A", () => {
+        const context = createTestContext();
+        const handler = new KeyboardHandler(context);
+
+        const event = createKeyEvent("a", { ctrlKey: true, shiftKey: true });
+
+        // Call the method directly
+        (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+        // Should not handle this key
+        expect(event.preventDefault).not.toHaveBeenCalled();
+        expect(event.stopPropagation).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("attach/detach", () => {
+    it("should register capture phase listener on attach", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+      const target = new EventTarget();
+
+      const addEventListenerSpy = spyOn(target, "addEventListener");
+
+      handler.attach(target);
+
+      // Should be called twice: once for capture, once for bubble
+      expect(addEventListenerSpy).toHaveBeenCalledTimes(2);
+
+      // Check capture listener was added with { capture: true }
+      const captureCall = addEventListenerSpy.mock.calls.find(
+        (call) => call[2] && typeof call[2] === "object" && (call[2] as AddEventListenerOptions).capture === true
+      );
+      expect(captureCall).toBeDefined();
+      expect(captureCall?.[0]).toBe("keydown");
+
+      handler.detach();
+    });
+
+    it("should remove capture phase listener on detach", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+      const target = new EventTarget();
+
+      handler.attach(target);
+
+      const removeEventListenerSpy = spyOn(target, "removeEventListener");
+
+      handler.detach();
+
+      // Should be called twice: once for capture, once for bubble
+      expect(removeEventListenerSpy).toHaveBeenCalledTimes(2);
+
+      // Check capture listener was removed with { capture: true }
+      const captureCall = removeEventListenerSpy.mock.calls.find(
+        (call) => call[2] && typeof call[2] === "object" && (call[2] as AddEventListenerOptions).capture === true
+      );
+      expect(captureCall).toBeDefined();
+      expect(captureCall?.[0]).toBe("keydown");
+    });
+
+    it("should handle multiple attach/detach cycles correctly", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+      const target = new EventTarget();
+
+      // First cycle
+      handler.attach(target);
+      handler.detach();
+
+      // Second cycle
+      handler.attach(target);
+      handler.detach();
+
+      // Third cycle - should work without errors
+      handler.attach(target);
+
+      // Verify capture listener is registered
+      const captureHandler = (handler as unknown as { boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null }).boundHandleClipboardShortcut;
+      expect(captureHandler).not.toBeNull();
+
+      handler.detach();
+    });
+
+    it("should automatically detach before re-attaching", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+      const target = new EventTarget();
+
+      const removeEventListenerSpy = spyOn(target, "removeEventListener");
+
+      // First attach
+      handler.attach(target);
+
+      // Second attach without explicit detach - should auto-detach first
+      handler.attach(target);
+
+      // removeEventListener should have been called for cleanup
+      expect(removeEventListenerSpy).toHaveBeenCalled();
+
+      handler.detach();
+    });
+  });
+
+  describe("handleClipboardShortcut edge cases", () => {
+    it("should handle Ctrl+Shift+C with empty selection gracefully", async () => {
+      const selectionController = createMockSelectionController();
+      // Empty selection - hasSelection returns false
+      (selectionController.hasSelection as ReturnType<typeof mock>).mockReturnValue(false);
+
+      const context = createTestContext({ selectionController });
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("c", { ctrlKey: true, shiftKey: true });
+
+      // Call the method directly
+      (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+      // Wait for async operations
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // copy should not be called when there's no selection
+      expect(selectionController.copy).not.toHaveBeenCalled();
+      // But preventDefault/stopPropagation should still be called
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(event.stopPropagation).toHaveBeenCalled();
+    });
+
+    it("should handle Ctrl+Shift+V with empty clipboard gracefully", async () => {
+      const selectionController = createMockSelectionController();
+      // Empty clipboard
+      (selectionController.paste as ReturnType<typeof mock>).mockResolvedValue("");
+
+      const context = createTestContext({ selectionController });
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("v", { ctrlKey: true, shiftKey: true });
+
+      // Call the method directly
+      (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+      // Wait for async operations
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // paste should be called
+      expect(selectionController.paste).toHaveBeenCalled();
+      // preventDefault/stopPropagation should be called
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(event.stopPropagation).toHaveBeenCalled();
+    });
+
+    it("should handle Ctrl+Shift+C during IME composition", () => {
+      const context = createTestContext({
+        isImeInputFocused: () => true,
+      });
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("c", { ctrlKey: true, shiftKey: true });
+      // Simulate IME composition
+      Object.defineProperty(event, "isComposing", { value: true });
+
+      // Call the method directly
+      (handler as unknown as { handleClipboardShortcut: (e: KeyboardEvent) => void }).handleClipboardShortcut(event);
+
+      // Should still handle the event (capture phase ignores isComposing)
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(event.stopPropagation).toHaveBeenCalled();
+    });
+  });
+
+  describe("isSpecialKey", () => {
+    it("should return true for Ctrl combinations", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("a", { ctrlKey: true });
+      expect(handler.isSpecialKey(event)).toBe(true);
+    });
+
+    it("should return true for Alt combinations", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("a", { altKey: true });
+      expect(handler.isSpecialKey(event)).toBe(true);
+    });
+
+    it("should return true for Meta combinations", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("a", { metaKey: true });
+      expect(handler.isSpecialKey(event)).toBe(true);
+    });
+
+    it("should return true for arrow keys", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+
+      expect(handler.isSpecialKey(createKeyEvent("ArrowUp"))).toBe(true);
+      expect(handler.isSpecialKey(createKeyEvent("ArrowDown"))).toBe(true);
+      expect(handler.isSpecialKey(createKeyEvent("ArrowLeft"))).toBe(true);
+      expect(handler.isSpecialKey(createKeyEvent("ArrowRight"))).toBe(true);
+    });
+
+    it("should return true for navigation keys", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+
+      expect(handler.isSpecialKey(createKeyEvent("Home"))).toBe(true);
+      expect(handler.isSpecialKey(createKeyEvent("End"))).toBe(true);
+      expect(handler.isSpecialKey(createKeyEvent("PageUp"))).toBe(true);
+      expect(handler.isSpecialKey(createKeyEvent("PageDown"))).toBe(true);
+    });
+
+    it("should return true for function keys", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+
+      expect(handler.isSpecialKey(createKeyEvent("F1"))).toBe(true);
+      expect(handler.isSpecialKey(createKeyEvent("F12"))).toBe(true);
+    });
+
+    it("should return false for regular characters without modifiers", () => {
+      const context = createTestContext();
+      const handler = new KeyboardHandler(context);
+
+      expect(handler.isSpecialKey(createKeyEvent("a"))).toBe(false);
+      expect(handler.isSpecialKey(createKeyEvent("1"))).toBe(false);
+    });
+  });
+});

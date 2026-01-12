@@ -3,6 +3,11 @@
  * Handles copying to and pasting from the system clipboard.
  */
 
+import {
+	readText,
+	writeText,
+} from "@tauri-apps/plugin-clipboard-manager";
+
 /**
  * Manages clipboard operations using the Clipboard API.
  *
@@ -36,7 +41,7 @@ export class ClipboardManager {
 	 */
 	async copyToClipboard(text: string): Promise<boolean> {
 		try {
-			await navigator.clipboard.writeText(text);
+			await writeText(text);
 			return true;
 		} catch (error) {
 			console.error("Failed to copy to clipboard:", error);
@@ -57,7 +62,7 @@ export class ClipboardManager {
 	 */
 	async pasteFromClipboard(): Promise<string> {
 		try {
-			return await navigator.clipboard.readText();
+			return await readText();
 		} catch (error) {
 			console.error("Failed to read from clipboard:", error);
 			return "";

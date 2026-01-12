@@ -44,6 +44,8 @@ export class KeyboardHandler {
   private isImeInputFocused: () => boolean;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
+  private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
+    null;
 
   /**
    * Creates a new KeyboardHandler instance
@@ -71,23 +73,57 @@ export class KeyboardHandler {
    * @param target - Event target to attach listeners to
    */
   attach(target: EventTarget): void {
+    // Auto-detach if already attached to prevent duplicate listeners
+    if (this.boundHandleClipboardShortcut || this.boundHandleKeyDown) {
+      this.detach();
+    }
+
     this.target = target;
+
+    // Capture phase listener for clipboard shortcuts (Ctrl+Shift+C/V)
+    // This runs before IME can consume the event
+    this.boundHandleClipboardShortcut = (e: KeyboardEvent) => {
+      this.handleClipboardShortcut(e);
+    };
+    target.addEventListener(
+      "keydown",
+      this.boundHandleClipboardShortcut as EventListener,
+      { capture: true }
+    );
+
+    // Bubble phase listener for regular key handling
     this.boundHandleKeyDown = (e: KeyboardEvent) => {
       this.handleKeyDown(e);
     };
-    target.addEventListener("keydown", this.boundHandleKeyDown as EventListener);
+    target.addEventListener(
+      "keydown",
+      this.boundHandleKeyDown as EventListener
+    );
   }
 
   /**
    * Detaches keyboard event listeners
    */
   detach(): void {
-    if (this.target && this.boundHandleKeyDown) {
-      this.target.removeEventListener(
-        "keydown",
-        this.boundHandleKeyDown as EventListener
-      );
+    if (this.target) {
+      // Remove capture phase listener
+      if (this.boundHandleClipboardShortcut) {
+        this.target.removeEventListener(
+          "keydown",
+          this.boundHandleClipboardShortcut as EventListener,
+          { capture: true }
+        );
+      }
+
+      // Remove bubble phase listener
+      if (this.boundHandleKeyDown) {
+        this.target.removeEventListener(
+          "keydown",
+          this.boundHandleKeyDown as EventListener
+        );
+      }
     }
+    this.boundHandleClipboardShortcut = null;
     this.boundHandleKeyDown = null;
     this.target = null;
   }
@@ -107,12 +143,16 @@ export class KeyboardHandler {
     }
 
     // Handle Shift+Ctrl+C - copy selection
+    // Note: This is a fallback for non-IME scenarios. When IME is active,
+    // handleClipboardShortcut (capture phase) handles this before reaching here.
     if (event.key.toLowerCase() === "c" && event.shiftKey && event.ctrlKey) {
       await this.handleCopy(event);
       return;
     }
 
     // Handle Shift+Ctrl+V - paste from clipboard
+    // Note: This is a fallback for non-IME scenarios. When IME is active,
+    // handleClipboardShortcut (capture phase) handles this before reaching here.
     if (event.key.toLowerCase() === "v" && event.shiftKey && event.ctrlKey) {
       await this.handlePaste(event);
       return;
@@ -168,6 +208,38 @@ export class KeyboardHandler {
       } catch (error) {
         console.error("Failed to write to PTY:", error);
       }
+    }
+  }
+
+  /**
+   * Handles clipboard shortcuts in capture phase (Ctrl+Shift+C/V)
+   * This runs before IME can consume the event
+   * @param event - Keyboard event to handle
+   */
+  private handleClipboardShortcut(event: KeyboardEvent): void {
+    // Only handle Ctrl+Shift combinations
+    if (!event.ctrlKey || !event.shiftKey) {
+      return;
+    }
+
+    const key = event.key.toLowerCase();
+
+    if (key === "c") {
+      // CRITICAL: preventDefault/stopPropagation must be called synchronously
+      // before any async operation to prevent IME from consuming the event
+      event.preventDefault();
+      event.stopPropagation();
+      this.handleCopy(event);
+      return;
+    }
+
+    if (key === "v") {
+      // CRITICAL: preventDefault/stopPropagation must be called synchronously
+      // before any async operation to prevent IME from consuming the event
+      event.preventDefault();
+      event.stopPropagation();
+      this.handlePaste(event);
+      return;
     }
   }
 
