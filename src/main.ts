@@ -4,6 +4,7 @@
  */
 
 import { TerminalApp } from "./terminal-app";
+import { initConsoleBridge } from "./utils/console-bridge";
 
 let app: TerminalApp | null = null;
 
@@ -11,6 +12,9 @@ let app: TerminalApp | null = null;
  * Initialize the terminal application
  */
 async function main(): Promise<void> {
+  // Initialize console bridge to forward logs to stdout/stderr
+  initConsoleBridge();
+
   const container = document.getElementById("terminal");
   if (!container) {
     console.error("Terminal element not found");
