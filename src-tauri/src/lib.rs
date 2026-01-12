@@ -211,12 +211,6 @@ async fn pty_kill(
     Ok(())
 }
 
-/// Debug log command - prints message to stderr.
-#[tauri::command]
-fn debug_log(message: String) {
-    eprintln!("[Frontend] {}", message);
-}
-
 /// Console log command - prints message to stdout with green [LOG] prefix.
 #[tauri::command]
 fn console_log(message: String) {
@@ -541,7 +535,6 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_kill,
-            debug_log,
             console_log,
             console_warn,
             console_error,
