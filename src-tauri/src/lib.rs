@@ -5,6 +5,7 @@
 
 pub mod ansi;
 pub mod image;
+pub mod logging;
 pub mod pty;
 
 // CLI command modules
@@ -211,34 +212,34 @@ async fn pty_kill(
     Ok(())
 }
 
-/// Console log command - prints message to stdout with green [LOG] prefix.
+/// Console log command - prints message to stdout with [LOG][FRONTEND] prefix.
 #[tauri::command]
 fn console_log(message: String) {
-    println!("\x1b[32m[LOG]\x1b[0m {}", message);
+    println!("{}", logging::format_frontend_log("log", &message));
 }
 
-/// Console warn command - prints message to stderr with yellow [WARN] prefix.
+/// Console warn command - prints message to stderr with [WARN][FRONTEND] prefix.
 #[tauri::command]
 fn console_warn(message: String) {
-    eprintln!("\x1b[33m[WARN]\x1b[0m {}", message);
+    eprintln!("{}", logging::format_frontend_log("warn", &message));
 }
 
-/// Console error command - prints message to stderr with red [ERROR] prefix.
+/// Console error command - prints message to stderr with [ERROR][FRONTEND] prefix.
 #[tauri::command]
 fn console_error(message: String) {
-    eprintln!("\x1b[31m[ERROR]\x1b[0m {}", message);
+    eprintln!("{}", logging::format_frontend_log("error", &message));
 }
 
-/// Console info command - prints message to stdout with cyan [INFO] prefix.
+/// Console info command - prints message to stdout with [INFO][FRONTEND] prefix.
 #[tauri::command]
 fn console_info(message: String) {
-    println!("\x1b[36m[INFO]\x1b[0m {}", message);
+    println!("{}", logging::format_frontend_log("info", &message));
 }
 
-/// Console debug command - prints message to stdout with gray [DEBUG] prefix.
+/// Console debug command - prints message to stdout with [DEBUG][FRONTEND] prefix.
 #[tauri::command]
 fn console_debug(message: String) {
-    println!("\x1b[90m[DEBUG]\x1b[0m {}", message);
+    println!("{}", logging::format_frontend_log("debug", &message));
 }
 
 /// Returns the number of active PTY sessions.
@@ -543,17 +544,15 @@ pub fn run() {
             session_count,
             tab_close_graceful,
         ])
-        .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .target(tauri_plugin_log::Target::new(
-                            tauri_plugin_log::TargetKind::Stdout,
-                        ))
-                        .build(),
-                )?;
-            }
+        .setup(|_app| {
+            // Initialize custom logger for backend
+            // Use Debug level in debug builds, Info level in release builds
+            let level = if cfg!(debug_assertions) {
+                log::Level::Debug
+            } else {
+                log::Level::Info
+            };
+            logging::BackendLogger::init(level);
             Ok(())
         })
         .run(tauri::generate_context!())

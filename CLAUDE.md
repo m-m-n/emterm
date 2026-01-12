@@ -73,12 +73,20 @@ tmp/               - Temporary files and drafts
 
 ### Logging
 
-Use standard console methods for debugging - they output to terminal:
-- `console.debug()` → stdout (gray [DEBUG])
-- `console.log()` → stdout (green [LOG])
-- `console.info()` → stdout (cyan [INFO])
-- `console.warn()` → stderr (yellow [WARN])
-- `console.error()` → stderr (red [ERROR])
+Unified logging format with origin labels (`[LEVEL][ORIGIN]`):
+
+**Frontend (TypeScript)** - brighter colors:
+- `console.debug()` → `[DEBUG][FRONTEND]` (bright gray)
+- `console.log()` → `[LOG][FRONTEND]` (bright green)
+- `console.info()` → `[INFO][FRONTEND]` (bright cyan)
+- `console.warn()` → `[WARN][FRONTEND]` (bright yellow, stderr)
+- `console.error()` → `[ERROR][FRONTEND]` (bright red, stderr)
+
+**Backend (Rust)** - dimmer colors:
+- `log::debug!()` → `[DEBUG][BACKEND]` (dim gray)
+- `log::info!()` → `[INFO][BACKEND]` (cyan)
+- `log::warn!()` → `[WARN][BACKEND]` (yellow, stderr)
+- `log::error!()` → `[ERROR][BACKEND]` (red, stderr)
 
 ## CLI Commands
 
