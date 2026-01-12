@@ -312,7 +312,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
             match session.try_wait() {
                 Ok(Some(_status)) => {
                     // Process has exited
-                    eprintln!(
+                    log::debug!(
                         "PTY monitor: detected process exit for session {}",
                         session_id_clone
                     );
@@ -323,7 +323,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                     // Process still running, continue monitoring
                 }
                 Err(e) => {
-                    eprintln!(
+                    log::warn!(
                         "PTY monitor: try_wait error for session {}: {}",
                         session_id_clone, e
                     );
@@ -369,12 +369,12 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
         let mut buf = [0u8; 4096];
         let mut parser = ansi::Parser::new();
 
-        eprintln!("PTY reader: starting read loop for session {}", session_id);
+        log::debug!("PTY reader: starting read loop for session {}", session_id);
 
         loop {
             // Check if process has exited (signaled by monitoring thread)
             if process_exited.load(Ordering::SeqCst) {
-                eprintln!(
+                log::debug!(
                     "PTY reader: process exit detected for session {}",
                     session_id
                 );
@@ -383,7 +383,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
 
             match reader.read(&mut buf) {
                 Ok(0) => {
-                    eprintln!("PTY reader: EOF received for session {}", session_id);
+                    log::debug!("PTY reader: EOF received for session {}", session_id);
                     break;
                 }
                 Ok(n) => {
@@ -412,7 +412,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // No data available, check if process exited then sleep briefly
                     if process_exited.load(Ordering::SeqCst) {
-                        eprintln!(
+                        log::debug!(
                             "PTY reader: process exit detected (no data) for session {}",
                             session_id
                         );
@@ -422,11 +422,11 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                 }
                 Err(e) if e.raw_os_error() == Some(libc::EIO) => {
                     // EIO typically means the PTY slave was closed (shell exited)
-                    eprintln!("PTY reader: EIO (slave closed) for session {}", session_id);
+                    log::debug!("PTY reader: EIO (slave closed) for session {}", session_id);
                     break;
                 }
                 Err(e) => {
-                    eprintln!("PTY reader: read error for session {}: {}", session_id, e);
+                    log::warn!("PTY reader: read error for session {}: {}", session_id, e);
                     let payload = PtyErrorPayload {
                         session_id: session_id.clone(),
                         message: e.to_string(),
@@ -439,7 +439,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
 
         // CRITICAL FIX: Remove session FIRST, then emit events
         // This ensures remaining_sessions is accurate when frontend receives pty_exit
-        eprintln!(
+        log::debug!(
             "PTY reader: removing session and checking exit status for {}",
             session_id
         );
@@ -468,7 +468,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                         }
                     }
                     Err(e) => {
-                        eprintln!("PTY reader: session {} - try_wait error: {}", session_id, e);
+                        log::warn!("PTY reader: session {} - try_wait error: {}", session_id, e);
                         break;
                     }
                 }
@@ -476,7 +476,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
 
             (exit_code.unwrap_or(-1), result.count)
         } else {
-            eprintln!(
+            log::debug!(
                 "PTY reader: session {} not found (already removed)",
                 session_id
             );
@@ -485,13 +485,13 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
             (-1, current_count)
         };
 
-        eprintln!(
+        log::debug!(
             "PTY reader: session {} exited with code {}, {} sessions remaining",
             session_id, exit_code, remaining_sessions
         );
 
         // Emit pty_exit with remaining_sessions count (session already removed)
-        eprintln!(
+        log::debug!(
             "PTY reader: emitting pty_exit event for session {}",
             session_id
         );
@@ -501,7 +501,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
             remaining_sessions,
         };
         if let Err(e) = app.emit("pty_exit", payload) {
-            eprintln!("PTY reader: failed to emit pty_exit: {}", e);
+            log::error!("PTY reader: failed to emit pty_exit: {}", e);
         }
 
         // Emit tab_closed and tab_count_changed events

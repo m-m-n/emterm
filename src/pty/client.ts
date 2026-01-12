@@ -124,11 +124,12 @@ export class PtyClient {
 	 *
 	 * @param cols - New number of columns
 	 * @param rows - New number of rows
-	 * @throws Error if no session is active
+	 * @returns true if resize was performed, false if no session is active
 	 */
-	async resize(cols: number, rows: number): Promise<void> {
+	async resize(cols: number, rows: number): Promise<boolean> {
 		if (!this.sessionId) {
-			throw new Error("PTY session not started");
+			// No session active yet - silently skip (initial size is set on spawn)
+			return false;
 		}
 
 		await invoke("pty_resize", {
@@ -136,6 +137,7 @@ export class PtyClient {
 			cols,
 			rows,
 		});
+		return true;
 	}
 
 	/**
