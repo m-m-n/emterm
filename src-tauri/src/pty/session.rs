@@ -42,8 +42,8 @@ impl PtySession {
     ///
     /// # Platform Notes
     ///
-    /// - On Unix systems, the shell is spawned as a login shell (`-l` flag)
-    /// - On Windows, PowerShell is used without additional flags
+    /// - Shells are spawned as non-login shells for faster startup
+    /// - TERM and COLORTERM environment variables are set for compatibility
     pub fn new(id: SessionId, shell: &str, cols: u16, rows: u16) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
@@ -55,10 +55,6 @@ impl PtySession {
         })?;
 
         let mut cmd = CommandBuilder::new(shell);
-
-        // Set login shell for Unix systems
-        #[cfg(unix)]
-        cmd.arg("-l");
 
         // Set TERM environment variable for proper terminal emulation
         // This is essential for applications like SSH, vim, htop, etc.

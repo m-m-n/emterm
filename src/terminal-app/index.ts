@@ -120,7 +120,17 @@ export class TerminalApp {
     // Attach selection controller
     this.selectionController.attach();
 
-    // Spawn PTY session
+    // Make terminal focusable and set up resize observer before PTY spawn
+    this.container.tabIndex = 0;
+    this.setupResizeObserver();
+
+    // Initial render to show empty terminal immediately
+    this.renderer.forceRender(this.state);
+
+    // Focus terminal UI early for better UX
+    this.imeHandler.focus();
+
+    // Spawn PTY session (non-blocking UI)
     try {
       await this.ptyClient.spawn({ cols, rows });
 
@@ -134,15 +144,6 @@ export class TerminalApp {
       this.container.textContent = `Failed to start terminal: ${error}`;
       return;
     }
-
-    // Set up resize observer
-    this.setupResizeObserver();
-
-    // Make terminal focusable
-    this.container.tabIndex = 0;
-
-    // Initial focus
-    this.imeHandler.focus();
   }
 
   /**
@@ -213,30 +214,31 @@ export class TerminalApp {
       this.charSize.width,
       this.charSize.height,
       async (newCols, newRows) => {
+        // Always update local terminal state/renderer (even if PTY not ready)
+        if (this.state && this.renderer) {
+          this.state.resize(newCols, newRows);
+          this.renderer.resize(newCols, newRows);
+          this.renderer.forceRender(this.state);
+          this.imeHandler?.updatePosition();
+          this.mouseHandler?.updateCharSize(
+            this.charSize.width,
+            this.charSize.height
+          );
+
+          // Update selection controller dimensions (clears selection)
+          this.selectionController?.resize(
+            newCols,
+            newRows,
+            this.charSize.width,
+            this.charSize.height
+          );
+        }
+
+        // Resize PTY if session is active (returns false if not ready)
         if (this.ptyClient) {
-          try {
-            await this.ptyClient.resize(newCols, newRows);
-
-            if (this.state && this.renderer) {
-              this.state.resize(newCols, newRows);
-              this.renderer.resize(newCols, newRows);
-              this.renderer.forceRender(this.state);
-              this.imeHandler?.updatePosition();
-              this.mouseHandler?.updateCharSize(
-                this.charSize.width,
-                this.charSize.height
-              );
-
-              // Update selection controller dimensions (clears selection)
-              this.selectionController?.resize(
-                newCols,
-                newRows,
-                this.charSize.width,
-                this.charSize.height
-              );
-            }
-          } catch (error) {
-            console.error("Failed to resize PTY:", error);
+          const resized = await this.ptyClient.resize(newCols, newRows);
+          if (!resized && import.meta.env?.DEV) {
+            console.debug("PTY resize skipped - session not yet started");
           }
         }
       }
