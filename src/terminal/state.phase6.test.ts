@@ -300,8 +300,7 @@ describe("TerminalState Phase 6", () => {
 				type: "Osc",
 				value: {
 					action: "EmtermExtension",
-					verb: "markdown",
-					params: ["title", "body"],
+					data: { verb: "markdown", params: ["title", "body"] },
 				},
 			});
 

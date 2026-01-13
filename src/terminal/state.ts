@@ -956,7 +956,7 @@ export class TerminalState {
 				break;
 
 			case "EmtermExtension":
-				this.handleEmtermExtension(action.verb, action.params);
+				this.handleEmtermExtension(action.data.verb, action.data.params);
 				break;
 
 			case "Unknown":

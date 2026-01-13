@@ -226,6 +226,7 @@ export class TerminalRenderer {
 		this.markdownContainer.style.top = "0";
 		this.markdownContainer.style.left = "0";
 		this.markdownContainer.style.right = "0";
+		this.markdownContainer.style.zIndex = "100";
 		this.markdownContainer.style.pointerEvents = "auto";
 		this.markdownContainer.style.overflow = "visible";
 		this.container.appendChild(this.markdownContainer);
@@ -850,8 +851,9 @@ export class TerminalRenderer {
 		this.lineElements = [];
 		this.container.innerHTML = "";
 
-		// Re-create cursor element
+		// Re-create cursor element and markdown container
 		this.createCursorElement();
+		this.createMarkdownContainer();
 	}
 
 	/**
@@ -882,8 +884,9 @@ export class TerminalRenderer {
 		this.lineElements = [];
 		this.container.innerHTML = "";
 
-		// Re-create cursor element
+		// Re-create cursor element and markdown container
 		this.createCursorElement();
+		this.createMarkdownContainer();
 
 		// Re-render everything
 		this.ensureLineElements(state.rows);
