@@ -10,12 +10,6 @@
 export type MarkdownFormat = "commonmark" | "gfm";
 
 /**
- * Render mode for Markdown blocks.
- * Extended to include fullscreen mode.
- */
-export type RenderMode = "inline" | "block" | "fullscreen";
-
-/**
  * Fullscreen view configuration.
  * Note: These settings are managed by the viewer (eMterm application),
  * not controlled via OSC protocol from the sender.
@@ -58,8 +52,6 @@ export interface MarkdownSession {
 	format: MarkdownFormat;
 	/** Protocol version */
 	version: number;
-	/** Render mode */
-	render: RenderMode;
 	/** Accumulated chunks indexed by sequence number */
 	chunks: Map<number, string>;
 	/** Expected next sequence number */
@@ -116,8 +108,6 @@ export interface BeginParams {
 	format?: MarkdownFormat;
 	/** Protocol version */
 	version?: number;
-	/** Render mode */
-	render?: RenderMode;
 }
 
 /**

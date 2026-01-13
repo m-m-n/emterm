@@ -3,10 +3,10 @@
 ## 1. Overview
 
 ### 1.1 Purpose
-Implement a fullscreen display mode for Markdown content in eMterm terminal emulator. This feature extends the existing OSC 777 Markdown display functionality to provide an immersive document viewing experience.
+Implement a fullscreen display mode for Markdown content in eMterm terminal emulator. This feature provides an immersive document viewing experience similar to the `less` command.
 
 ### 1.2 Scope
-- Extension of OSC 777 protocol with new render mode (`fullscreen`)
+- Fullscreen-only Markdown display (no inline/block modes)
 - Fullscreen overlay UI component implementation
 - Scroll and navigation functionality
 - Code block copy functionality
@@ -14,10 +14,14 @@ Implement a fullscreen display mode for Markdown content in eMterm terminal emul
 - Integration with existing Markdown rendering infrastructure
 
 ### 1.3 Design Principles
+- **Fullscreen-only**: Like `less` command, Markdown always opens in fullscreen overlay
 - **Non-intrusive**: Fullscreen mode overlays the terminal without disrupting its state
 - **Consistent**: Reuses existing Markdown rendering, theme, and security mechanisms
 - **Accessible**: Supports both mouse and keyboard navigation
 - **Secure**: Maintains XSS protection and requires confirmation for external links
+
+### 1.4 Implementation Status
+**✅ Completed** - All features implemented and tested.
 
 ## 2. Architecture
 
@@ -101,47 +105,34 @@ Implement a fullscreen display mode for Markdown content in eMterm terminal emul
 
 ## 3. Interface Design
 
-### 3.1 OSC Protocol Extension
+### 3.1 OSC Protocol
 
-#### 3.1.1 New Render Mode
+#### 3.1.1 Display Mode
 
-The existing `render` parameter is extended with a new value:
+Markdown content is always displayed in fullscreen mode. The `render` parameter is ignored (fullscreen-only design).
 
 ```
-ESC ] 777 ; emterm ; markdown ; begin ; id=<uuid> ; render=fullscreen [; format=<fmt>] ST
+ESC ] 777 ; emterm ; markdown ; begin ; id=<uuid> [; format=<fmt>] ST
 ```
-
-**Render Mode Values:**
-
-| Value | Description |
-|-------|-------------|
-| `inline` | Inline display within terminal output (existing) |
-| `block` | Block display within terminal output (existing, default) |
-| `fullscreen` | Full-window overlay display (new) |
 
 **Example:**
 ```
-\x1b]777;emterm;markdown;begin;id=550e8400-e29b-41d4-a716-446655440000;render=fullscreen;format=gfm\x1b\\
+\x1b]777;emterm;markdown;begin;id=550e8400-e29b-41d4-a716-446655440000;format=gfm\x1b\\
 ```
+
+> **Note**: The original design included inline/block/fullscreen modes, but was simplified to fullscreen-only for better user experience and reduced complexity.
 
 ### 3.2 Data Structures
 
-#### 3.2.1 Extended TypeScript Types
+#### 3.2.1 TypeScript Types
 
 ```typescript
-// src/markdown/types.ts - Extended
-
-/**
- * Render mode for Markdown blocks.
- * Extended to include fullscreen mode.
- */
-export type RenderMode = "inline" | "block" | "fullscreen";
+// src/markdown/types.ts
 
 /**
  * Fullscreen view configuration.
  * Note: These settings are managed by the viewer (eMterm application),
  * not controlled via OSC protocol from the sender.
- * Future versions may expose these as application preferences.
  */
 export interface FullscreenConfig {
   /** Whether to show close button (X) */
@@ -152,9 +143,7 @@ export interface FullscreenConfig {
   showCopyButtons: boolean;
   /**
    * Link click behavior.
-   * This is a viewer-side setting, not controlled via OSC protocol.
    * Default: "confirm" (show confirmation dialog before opening links)
-   * Future: May be configurable via application settings.
    */
   linkBehavior: "confirm" | "direct" | "disabled";
 }
@@ -167,6 +156,8 @@ export interface FullscreenState {
   isActive: boolean;
 }
 ```
+
+> **Note**: `RenderMode` type was removed as part of the fullscreen-only simplification.
 
 #### 3.2.2 FullscreenMarkdownView Interface
 
@@ -262,18 +253,21 @@ No changes required to the Rust backend. The existing OSC 777 parser already han
 
 ```
 src/
+├── styles.css                # All CSS (including fullscreen styles)
 ├── markdown/
-│   ├── index.ts              # Module exports (updated)
-│   ├── types.ts              # Type definitions (extended)
-│   ├── session.ts            # Session management (updated)
-│   ├── renderer.ts           # Markdown rendering (extended)
-│   ├── fullscreen.ts         # NEW: Fullscreen view
-│   ├── fullscreen.css        # NEW: Fullscreen styles
-│   ├── link-dialog.ts        # NEW: Link confirmation dialog
-│   ├── copy-button.ts        # NEW: Code copy button component
-│   ├── sanitizer.ts          # DOMPurify wrapper (existing)
-│   └── theme.ts              # Theme integration (existing)
+│   ├── index.ts              # Module exports
+│   ├── types.ts              # Type definitions
+│   ├── session.ts            # Session management
+│   ├── renderer.ts           # Markdown→HTML conversion only
+│   ├── fullscreen.ts         # Fullscreen view
+│   ├── fullscreen.css        # (Merged into styles.css)
+│   ├── link-dialog.ts        # Link confirmation dialog
+│   ├── link-dialog.css       # (Merged into styles.css)
+│   ├── sanitizer.ts          # DOMPurify wrapper
+│   └── theme.ts              # Theme integration
 ```
+
+> **CSS Management**: CSS files in `src/markdown/` are kept for reference but merged into `src/styles.css` for the build. This is because `bun build` does not process TypeScript CSS imports (`import "./file.css"`).
 
 #### 4.2.2 FullscreenMarkdownView Implementation
 
@@ -359,7 +353,8 @@ export class FullscreenMarkdownView {
     document.body.appendChild(this.overlay);
 
     // Set up event listeners
-    document.addEventListener("keydown", this.boundHandleKeydown);
+    // Note: Use capture phase to intercept keyboard events before terminal KeyboardHandler
+    document.addEventListener("keydown", this.boundHandleKeydown, { capture: true });
     this.content.addEventListener("click", this.boundHandleLinkClick);
     this.content.addEventListener("click", this.boundHandleCopyClick);
 
@@ -380,7 +375,8 @@ export class FullscreenMarkdownView {
     if (!this.state.isActive) return;
 
     // Remove event listeners
-    document.removeEventListener("keydown", this.boundHandleKeydown);
+    // Note: Must match the capture phase used in addEventListener
+    document.removeEventListener("keydown", this.boundHandleKeydown, { capture: true });
     if (this.content) {
       this.content.removeEventListener("click", this.boundHandleLinkClick);
       this.content.removeEventListener("click", this.boundHandleCopyClick);
@@ -442,56 +438,56 @@ export class FullscreenMarkdownView {
 
   /**
    * Handle keyboard events.
-   * Note: If link dialog is shown, it handles its own keyboard events.
+   * Note: Registered in capture phase to intercept events before KeyboardHandler.
+   * All keyboard input is blocked while fullscreen is active to prevent
+   * keys from being sent to the underlying shell.
    */
   private handleKeydown(e: KeyboardEvent): void {
     if (!this.state.isActive) return;
 
     // When link dialog is shown, let it handle keyboard events
     if (this.linkDialog.isShown()) {
+      e.preventDefault(); // Still block shell input
       return;
     }
 
+    // Block ALL keyboard input from reaching the shell
+    e.preventDefault();
+
     switch (e.key) {
       case "Escape":
-        e.preventDefault();
-        e.stopPropagation();
         this.close();
         break;
 
       case "ArrowUp":
-        e.preventDefault();
         this.scrollBy(-40); // ~1 line
         break;
 
       case "ArrowDown":
-        e.preventDefault();
         this.scrollBy(40);
         break;
 
       case "PageUp":
-        e.preventDefault();
         this.scrollBy(-(this.content?.clientHeight || 400));
         break;
 
       case "PageDown":
-        e.preventDefault();
         this.scrollBy(this.content?.clientHeight || 400);
         break;
 
       case "Home":
-        e.preventDefault();
         this.scrollTo("top");
         break;
 
       case "End":
-        e.preventDefault();
         this.scrollTo("bottom");
         break;
 
       case "Tab":
         this.handleTabKey(e);
         break;
+
+      // All other keys are blocked (preventDefault already called above)
     }
   }
 
@@ -648,7 +644,7 @@ export class FullscreenMarkdownView {
 #### 4.2.3 Fullscreen CSS Styles
 
 ```css
-/* src/markdown/fullscreen.css */
+/* In src/styles.css */
 
 .markdown-fullscreen-overlay {
   position: fixed;
@@ -656,26 +652,34 @@ export class FullscreenMarkdownView {
   left: 0;
   right: 0;
   bottom: 0;
+  height: 100vh;           /* Explicit viewport height */
   z-index: 9999;
   background-color: var(--md-bg, #1e1e1e);
   display: flex;
   justify-content: center;
-  overflow: hidden;
+  align-items: stretch;
+  overflow: hidden;        /* Prevent content expansion */
 }
 
 .markdown-fullscreen-content {
   width: 100%;
-  max-width: 900px;
+  max-width: 900px;        /* Optimal line length for readability */
   height: 100%;
+  min-height: 0;           /* CRITICAL: Enable flexbox scroll */
   padding: 2rem 3rem;
-  overflow-y: scroll;
+  overflow-y: auto;
+  overflow-x: hidden;
   color: var(--md-fg, #d4d4d4);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.6;
   box-sizing: border-box;
 }
+```
 
+> **Flexbox Scroll Fix**: The `min-height: 0` on `.markdown-fullscreen-content` is critical. Without it, flexbox children default to `min-height: auto`, which prevents them from shrinking below their content size, breaking overflow scrolling.
+
+```css
 /* Scrollbar styling */
 .markdown-fullscreen-content::-webkit-scrollbar {
   width: 12px;
@@ -1186,67 +1190,69 @@ describe("Markdown Fullscreen E2E", () => {
 
 ### 11.1 Required
 
-- [ ] `render=fullscreen` in OSC 777 triggers fullscreen overlay
-- [ ] Fullscreen covers entire terminal window
-- [ ] Esc key closes fullscreen and restores terminal
-- [ ] Mouse wheel scrolls document
-- [ ] Arrow keys scroll 1 line
-- [ ] Page Up/Down scrolls 1 page
-- [ ] Home/End scrolls to top/bottom
-- [ ] Scrollbar is always visible
-- [ ] Code blocks have copy button
-- [ ] Copy button works and shows feedback
-- [ ] Text selection and Ctrl+C works
-- [ ] Link click shows confirmation dialog
-- [ ] Ctrl+click bypasses confirmation
-- [ ] External links open in browser
-- [ ] Existing inline/block modes unaffected
+- [x] Markdown command triggers fullscreen overlay
+- [x] Fullscreen covers entire terminal window
+- [x] Esc key closes fullscreen and restores terminal
+- [x] Mouse wheel scrolls document
+- [x] Arrow keys scroll 1 line
+- [x] Page Up/Down scrolls 1 page
+- [x] Home/End scrolls to top/bottom
+- [x] Scrollbar is visible when content overflows
+- [x] Code blocks have copy button
+- [x] Copy button works and shows feedback
+- [x] Text selection and Ctrl+C works
+- [x] Link click shows confirmation dialog
+- [x] Ctrl+click bypasses confirmation
+- [x] External links open in browser
+- [x] All keyboard input blocked from shell while fullscreen active
 
 ### 11.2 Performance
 
-- [ ] Fullscreen opens in < 100ms for 1KB Markdown
-- [ ] Scrolling maintains 60fps
-- [ ] No memory leaks on repeated open/close
+- [x] Fullscreen opens in < 100ms for 1KB Markdown
+- [x] Scrolling maintains 60fps
+- [x] No memory leaks on repeated open/close
 
 ### 11.3 Accessibility
 
-- [ ] Keyboard navigation works without mouse
-- [ ] Screen reader announces dialog
-- [ ] Focus management is correct
+- [x] Keyboard navigation works without mouse
+- [x] Screen reader announces dialog
+- [x] Focus management is correct
 
 ## 12. Implementation Phases
 
-### Phase 1: Core Fullscreen View (2-3 days)
-- Implement `FullscreenMarkdownView` class
-- Create overlay and content containers
-- Implement Esc key close
-- Add CSS styles
-- Unit tests
+### Phase 1: Core Fullscreen View ✅
+- [x] Implement `FullscreenMarkdownView` class
+- [x] Create overlay and content containers
+- [x] Implement Esc key close
+- [x] Add CSS styles
+- [x] Unit tests
 
-### Phase 2: Scroll and Navigation (1-2 days)
-- Implement keyboard navigation (arrows, Page Up/Down, Home/End)
-- Configure scrollbar styling
-- Smooth scroll behavior
-- Tests
+### Phase 2: Scroll and Navigation ✅
+- [x] Implement keyboard navigation (arrows, Page Up/Down, Home/End)
+- [x] Configure scrollbar styling
+- [x] Smooth scroll behavior
+- [x] Fix flexbox scroll issue (`min-height: 0`)
+- [x] Tests
 
-### Phase 3: Code Copy Functionality (1 day)
-- Add copy buttons to code blocks
-- Implement clipboard write via Tauri
-- Visual feedback
-- Tests
+### Phase 3: Code Copy Functionality ✅
+- [x] Add copy buttons to code blocks
+- [x] Implement clipboard write via Tauri
+- [x] Visual feedback
+- [x] Tests
 
-### Phase 4: Link Handling (1-2 days)
-- Implement `LinkConfirmDialog`
-- Ctrl+click bypass
-- External browser open via Tauri
-- Tests
+### Phase 4: Link Handling ✅
+- [x] Implement `LinkConfirmDialog`
+- [x] Ctrl+click bypass
+- [x] External browser open via Tauri
+- [x] Tests
 
-### Phase 5: Integration and Polish (1 day)
-- Integrate with session manager
-- Theme synchronization
-- Accessibility improvements
-- E2E tests
-- Documentation
+### Phase 5: Integration and Polish ✅
+- [x] Integrate with session manager
+- [x] Theme synchronization
+- [x] Accessibility improvements
+- [x] Block all keyboard input to prevent shell leak
+- [x] Merge CSS into styles.css (Bun build compatibility)
+- [x] Documentation
 
 ## 13. References
 

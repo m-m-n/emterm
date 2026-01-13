@@ -145,7 +145,7 @@ emterm markdown <FILE>
 
 **Output Format (OSC 777 Sequence):**
 ```
-ESC ] 777 ; emterm ; markdown ; begin ; id={uuid} ; format=gfm ; render=block ; version=1.0 ESC \
+ESC ] 777 ; emterm ; markdown ; begin ; id={uuid} ; format=gfm ; render=fullscreen ; version=1.0 ESC \
 ESC ] 777 ; emterm ; markdown ; chunk ; id={uuid} ; seq=0 ; data={base64} ESC \
 ESC ] 777 ; emterm ; markdown ; chunk ; id={uuid} ; seq=1 ; data={base64} ESC \
 ...
@@ -155,7 +155,7 @@ ESC ] 777 ; emterm ; markdown ; end ; id={uuid} ESC \
 **Parameter Details:**
 - `id`: UUID v4 (randomly generated session identifier)
 - `format`: Always "gfm" (GitHub Flavored Markdown)
-- `render`: Always "block" (block-level rendering)
+- `render`: Always "fullscreen" (fullscreen overlay display)
 - `version`: Always "1.0" (protocol version)
 - `seq`: Zero-based chunk sequence number
 - `data`: Base64-encoded Markdown content (max 64KB per chunk)
@@ -396,7 +396,7 @@ pub fn execute_markdown_command(file_path: &Path) -> Result<(), CommandError>
 
        // Begin sequence
        output.push_str(&format!(
-           "\x1b]777;emterm;markdown;begin;id={};format=gfm;render=block;version=1.0\x1b\\",
+           "\x1b]777;emterm;markdown;begin;id={};format=gfm;render=fullscreen;version=1.0\x1b\\",
            session_id
        ));
 

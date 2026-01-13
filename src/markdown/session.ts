@@ -13,11 +13,13 @@ import type {
 	MarkdownBlock,
 	MarkdownFormat,
 	MarkdownSession,
-	RenderMode,
 } from "./types.ts";
 
 /**
  * Manages Markdown rendering sessions.
+ *
+ * Always displays Markdown in fullscreen mode (like `less` command).
+ * Use Escape or 'q' to close the fullscreen view.
  *
  * @example
  * ```typescript
@@ -26,7 +28,8 @@ import type {
  * // Handle OSC 777 emterm;markdown commands
  * manager.handleCommand("emterm", ["markdown", "begin", "id=xxx", "format=gfm"]);
  * manager.handleCommand("emterm", ["markdown", "chunk", "id=xxx", "seq=0", "data=..."]);
- * const block = manager.handleCommand("emterm", ["markdown", "end", "id=xxx"]);
+ * manager.handleCommand("emterm", ["markdown", "end", "id=xxx"]);
+ * // Fullscreen view is automatically shown on "end"
  *
  * // Clean up
  * manager.dispose();
@@ -69,22 +72,24 @@ export class MarkdownSessionManager {
 	/**
 	 * Handle an EmtermExtension OSC action for markdown.
 	 *
+	 * Markdown is always displayed in fullscreen mode (like `less` command).
+	 * The fullscreen view is shown automatically when the end command is received.
+	 *
 	 * @param verb - The command verb from OSC 777 (should be "emterm")
 	 * @param params - Command parameters as strings
 	 *   - params[0]: command type (should be "markdown")
 	 *   - params[1]: markdown verb (begin, chunk, end)
 	 *   - params[2...]: key=value parameters
-	 * @returns Rendered MarkdownBlock if end verb completes successfully, null otherwise
 	 */
-	handleCommand(verb: string, params: string[]): MarkdownBlock | null {
+	handleCommand(verb: string, params: string[]): void {
 		// Validate emterm namespace
 		if (verb !== "emterm") {
-			return null;
+			return;
 		}
 
 		// Validate markdown command
 		if (params.length < 2 || params[0] !== "markdown") {
-			return null;
+			return;
 		}
 
 		const markdownVerb = params[1];
@@ -93,30 +98,32 @@ export class MarkdownSessionManager {
 
 		switch (markdownVerb) {
 			case "begin":
-				return this.handleBegin(parsed);
+				this.handleBegin(parsed);
+				break;
 			case "chunk":
-				return this.handleChunk(parsed);
+				this.handleChunk(parsed);
+				break;
 			case "end":
-				return this.handleEnd(parsed);
+				this.handleEnd(parsed);
+				break;
 			default:
 				console.warn(`Unknown markdown verb: ${markdownVerb}`);
-				return null;
 		}
 	}
 
 	/**
 	 * Handle begin command - create new session.
 	 */
-	private handleBegin(params: Record<string, string>): null {
+	private handleBegin(params: Record<string, string>): void {
 		const id = params.id;
 		if (!id) {
 			console.warn("Markdown begin: missing id");
-			return null;
+			return;
 		}
 
 		if (this.sessions.size >= MarkdownSessionManager.MAX_SESSIONS) {
 			console.warn("Markdown begin: max sessions reached");
-			return null;
+			return;
 		}
 
 		// Validate format
@@ -125,21 +132,10 @@ export class MarkdownSessionManager {
 			format = params.format;
 		}
 
-		// Validate render mode
-		let render: RenderMode = "block";
-		if (
-			params.render === "inline" ||
-			params.render === "block" ||
-			params.render === "fullscreen"
-		) {
-			render = params.render;
-		}
-
 		const session: MarkdownSession = {
 			id,
 			format,
 			version: parseInt(params.version || "1", 10) || 1,
-			render,
 			chunks: new Map(),
 			nextSeq: 0,
 			createdAt: Date.now(),
@@ -147,42 +143,41 @@ export class MarkdownSessionManager {
 		};
 
 		this.sessions.set(id, session);
-		return null;
 	}
 
 	/**
 	 * Handle chunk command - append data to session.
 	 */
-	private handleChunk(params: Record<string, string>): null {
+	private handleChunk(params: Record<string, string>): void {
 		const id = params.id;
 		const seq = params.seq;
 		const data = params.data;
 
 		if (!id) {
 			console.warn("Markdown chunk: missing id");
-			return null;
+			return;
 		}
 
 		const session = this.sessions.get(id);
 		if (!session) {
 			console.warn(`Markdown chunk: unknown session ${id}`);
-			return null;
+			return;
 		}
 
 		if (!seq) {
 			console.warn("Markdown chunk: missing seq");
-			return null;
+			return;
 		}
 
 		const seqNum = parseInt(seq, 10);
 		if (isNaN(seqNum)) {
 			console.warn("Markdown chunk: invalid seq");
-			return null;
+			return;
 		}
 
 		if (!data) {
 			console.warn("Markdown chunk: missing data");
-			return null;
+			return;
 		}
 
 		// Decode Base64 with UTF-8 support
@@ -191,7 +186,7 @@ export class MarkdownSessionManager {
 			decoded = this.decodeBase64Utf8(data);
 		} catch {
 			console.warn("Markdown chunk: invalid base64 or UTF-8");
-			return null;
+			return;
 		}
 
 		// Check size limit
@@ -201,62 +196,48 @@ export class MarkdownSessionManager {
 		) {
 			console.warn("Markdown chunk: session size limit exceeded");
 			this.sessions.delete(id);
-			return null;
+			return;
 		}
 
 		session.chunks.set(seqNum, decoded);
 		session.dataSize += decoded.length;
-
-		return null;
 	}
 
 	/**
-	 * Handle end command - assemble chunks and render.
+	 * Handle end command - assemble chunks and render in fullscreen.
 	 */
-	private handleEnd(params: Record<string, string>): MarkdownBlock | null {
+	private handleEnd(params: Record<string, string>): void {
 		const id = params.id;
 
 		if (!id) {
 			console.warn("Markdown end: missing id");
-			return null;
+			return;
 		}
 
 		const session = this.sessions.get(id);
 		if (!session) {
 			console.warn(`Markdown end: unknown session ${id}`);
-			return null;
+			return;
 		}
 
 		// Assemble chunks in order
 		const markdown = this.assembleChunks(session);
 
-		// Render
+		// Render markdown to HTML
 		const html = this.renderer.render(markdown, session.format);
 
 		// Cleanup session
 		this.sessions.delete(id);
 
-		// Handle fullscreen mode
-		if (session.render === "fullscreen") {
-			const block: MarkdownBlock = {
-				id,
-				html,
-				startRow: 0,
-				rowCount: 0,
-				visible: true,
-			};
-			this.fullscreenView.show(block);
-			return null; // Fullscreen handles its own display
-		}
-
-		// Inline and block modes return the block for caller to handle
-		return {
+		// Always display in fullscreen mode
+		const block: MarkdownBlock = {
 			id,
 			html,
-			startRow: 0, // To be set by caller
-			rowCount: 0, // To be calculated after insertion
+			startRow: 0,
+			rowCount: 0,
 			visible: true,
 		};
+		this.fullscreenView.show(block);
 	}
 
 	/**
@@ -279,6 +260,12 @@ export class MarkdownSessionManager {
 	 * @throws Error if data is not valid Base64 or UTF-8
 	 */
 	private decodeBase64Utf8(data: string): string {
+		// Validate Base64 format before decoding
+		// Standard Base64 only allows A-Z, a-z, 0-9, +, /, and = for padding
+		if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data)) {
+			throw new Error("Invalid Base64 format");
+		}
+
 		const binary = atob(data);
 		const bytes = new Uint8Array(binary.length);
 		for (let i = 0; i < binary.length; i++) {

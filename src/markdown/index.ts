@@ -39,5 +39,4 @@ export type {
 	MarkdownFormat,
 	MarkdownSession,
 	MarkdownVerb,
-	RenderMode,
 } from "./types.ts";

@@ -4,7 +4,7 @@ use uuid::Uuid;
 ///
 /// # Format
 /// ```text
-/// ESC ] 777 ; emterm ; markdown ; begin ; id={uuid} ; format=gfm ; render=block ; version=1.0 ESC \
+/// ESC ] 777 ; emterm ; markdown ; begin ; id={uuid} ; format=gfm ; render=fullscreen ; version=1.0 ESC \
 /// ESC ] 777 ; emterm ; markdown ; chunk ; id={uuid} ; seq=N ; data={base64} ESC \
 /// ESC ] 777 ; emterm ; markdown ; end ; id={uuid} ESC \
 /// ```
@@ -13,7 +13,7 @@ pub fn generate_markdown_osc(session_id: &Uuid, chunks: Vec<String>) -> String {
 
     // Begin sequence
     output.push_str(&format!(
-        "\x1b]777;emterm;markdown;begin;id={};format=gfm;render=block;version=1.0\x1b\\",
+        "\x1b]777;emterm;markdown;begin;id={};format=gfm;render=fullscreen;version=1.0\x1b\\",
         session_id
     ));
 
@@ -49,7 +49,7 @@ mod tests {
         assert!(result.contains("\x1b]777;emterm;markdown;begin"));
         assert!(result.contains(&format!("id={}", session_id)));
         assert!(result.contains("format=gfm"));
-        assert!(result.contains("render=block"));
+        assert!(result.contains("render=fullscreen"));
         assert!(result.contains("version=1.0"));
         assert!(result.contains("\x1b]777;emterm;markdown;chunk"));
         assert!(result.contains("seq=0"));

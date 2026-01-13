@@ -10,7 +10,6 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { LinkConfirmDialog } from "./link-dialog.ts";
 import type { FullscreenConfig, FullscreenState, MarkdownBlock } from "./types.ts";
-import "./fullscreen.css";
 
 /**
  * Default fullscreen configuration.
@@ -95,17 +94,16 @@ export class FullscreenMarkdownView {
 			this.addCopyButtons();
 		}
 
-		// Configure scrollbar
-		if (this.config.alwaysShowScrollbar) {
-			this.content.style.overflowY = "scroll";
-		}
+		// Configure scrollbar - auto shows when content overflows
+		this.content.style.overflowY = this.config.alwaysShowScrollbar ? "scroll" : "auto";
 
 		// Assemble and insert
 		this.overlay.appendChild(this.content);
 		document.body.appendChild(this.overlay);
 
 		// Set up event listeners
-		document.addEventListener("keydown", this.boundHandleKeydown);
+		// Note: Use capture phase to intercept keyboard events before terminal KeyboardHandler
+		document.addEventListener("keydown", this.boundHandleKeydown, { capture: true });
 		this.content.addEventListener("click", this.boundHandleCopyClick);
 		this.content.addEventListener("click", this.boundHandleLinkClick);
 
@@ -126,8 +124,9 @@ export class FullscreenMarkdownView {
 		if (!this.state.isActive) return;
 
 		// Remove event listeners (with guard for test environment)
+		// Note: Must match the capture phase used in addEventListener
 		if (typeof document !== "undefined" && document.removeEventListener) {
-			document.removeEventListener("keydown", this.boundHandleKeydown);
+			document.removeEventListener("keydown", this.boundHandleKeydown, { capture: true });
 		}
 		if (this.content) {
 			this.content.removeEventListener("click", this.boundHandleCopyClick);
@@ -202,55 +201,56 @@ export class FullscreenMarkdownView {
 	/**
 	 * Handle keyboard events.
 	 * Note: If link dialog is shown, it handles its own keyboard events.
+	 * All keyboard input is blocked while fullscreen is active to prevent
+	 * keys from being sent to the underlying shell.
 	 */
 	private handleKeydown(e: KeyboardEvent): void {
 		if (!this.state.isActive) return;
 
 		// When link dialog is shown, let it handle keyboard events
 		if (this.linkDialog.isShown()) {
+			// Still prevent default to block shell input
+			e.preventDefault();
 			return;
 		}
 
+		// Block all keyboard input from reaching the shell while fullscreen is active
+		e.preventDefault();
+
 		switch (e.key) {
 			case "Escape":
-				e.preventDefault();
-				e.stopPropagation();
 				this.close();
 				break;
 
 			case "ArrowUp":
-				e.preventDefault();
 				this.scrollBy(-40); // ~1 line
 				break;
 
 			case "ArrowDown":
-				e.preventDefault();
 				this.scrollBy(40);
 				break;
 
 			case "PageUp":
-				e.preventDefault();
 				this.scrollBy(-(this.content?.clientHeight || 400));
 				break;
 
 			case "PageDown":
-				e.preventDefault();
 				this.scrollBy(this.content?.clientHeight || 400);
 				break;
 
 			case "Home":
-				e.preventDefault();
 				this.scrollTo("top");
 				break;
 
 			case "End":
-				e.preventDefault();
 				this.scrollTo("bottom");
 				break;
 
 			case "Tab":
 				this.handleTabKey(e);
 				break;
+
+			// All other keys are blocked (preventDefault already called above)
 		}
 	}
 
