@@ -77,7 +77,7 @@ export type OscAction =
 	| { action: "Hyperlink"; params: string; uri: string }
 	| { action: "SetForegroundColor"; data: string }
 	| { action: "SetBackgroundColor"; data: string }
-	| { action: "EmtermExtension"; verb: string; params: string[] }
+	| { action: "EmtermExtension"; data: { verb: string; params: string[] } }
 	| { action: "Unknown"; ps: number; data: string };
 
 /**

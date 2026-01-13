@@ -24,8 +24,7 @@ describe("Markdown Display Integration", () => {
 			type: "Osc",
 			value: {
 				action: "EmtermExtension",
-				verb,
-				params,
+				data: { verb, params },
 			},
 		};
 	}
