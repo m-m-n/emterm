@@ -11,8 +11,39 @@ export type MarkdownFormat = "commonmark" | "gfm";
 
 /**
  * Render mode for Markdown blocks.
+ * Extended to include fullscreen mode.
  */
-export type RenderMode = "inline" | "block";
+export type RenderMode = "inline" | "block" | "fullscreen";
+
+/**
+ * Fullscreen view configuration.
+ * Note: These settings are managed by the viewer (eMterm application),
+ * not controlled via OSC protocol from the sender.
+ * Future versions may expose these as application preferences.
+ */
+export interface FullscreenConfig {
+	/** Whether to show close button (X) */
+	showCloseButton: boolean;
+	/** Whether to show scrollbar always */
+	alwaysShowScrollbar: boolean;
+	/** Whether to show copy buttons on code blocks */
+	showCopyButtons: boolean;
+	/**
+	 * Link click behavior.
+	 * This is a viewer-side setting, not controlled via OSC protocol.
+	 * Default: "confirm" (show confirmation dialog before opening links)
+	 * Future: May be configurable via application settings.
+	 */
+	linkBehavior: "confirm" | "direct" | "disabled";
+}
+
+/**
+ * Fullscreen view state.
+ */
+export interface FullscreenState {
+	/** Whether fullscreen is currently active */
+	isActive: boolean;
+}
 
 /**
  * Markdown session state.

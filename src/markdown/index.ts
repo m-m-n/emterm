@@ -10,6 +10,12 @@
 // Renderer
 export { MarkdownRenderer } from "./renderer.ts";
 
+// Fullscreen View
+export { FullscreenMarkdownView } from "./fullscreen.ts";
+
+// Link Dialog
+export { LinkConfirmDialog } from "./link-dialog.ts";
+
 // Session Manager
 export { MarkdownSessionManager } from "./session.ts";
 // Theme
@@ -25,6 +31,8 @@ export type {
 	BeginParams,
 	ChunkParams,
 	EndParams,
+	FullscreenConfig,
+	FullscreenState,
 	MarkdownBlock,
 	MarkdownCommand,
 	MarkdownCommandResult,

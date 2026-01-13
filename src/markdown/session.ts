@@ -7,6 +7,7 @@
  * @module markdown/session
  */
 
+import { FullscreenMarkdownView } from "./fullscreen.ts";
 import { MarkdownRenderer } from "./renderer.ts";
 import type {
 	MarkdownBlock,
@@ -50,6 +51,9 @@ export class MarkdownSessionManager {
 	/** Markdown renderer instance */
 	private renderer: MarkdownRenderer;
 
+	/** Fullscreen view instance */
+	private fullscreenView: FullscreenMarkdownView;
+
 	/** Cleanup timer handle */
 	private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -58,6 +62,7 @@ export class MarkdownSessionManager {
 	 */
 	constructor() {
 		this.renderer = new MarkdownRenderer();
+		this.fullscreenView = new FullscreenMarkdownView();
 		this.startCleanupTimer();
 	}
 
@@ -122,7 +127,11 @@ export class MarkdownSessionManager {
 
 		// Validate render mode
 		let render: RenderMode = "block";
-		if (params.render === "inline" || params.render === "block") {
+		if (
+			params.render === "inline" ||
+			params.render === "block" ||
+			params.render === "fullscreen"
+		) {
 			render = params.render;
 		}
 
@@ -227,6 +236,20 @@ export class MarkdownSessionManager {
 		// Cleanup session
 		this.sessions.delete(id);
 
+		// Handle fullscreen mode
+		if (session.render === "fullscreen") {
+			const block: MarkdownBlock = {
+				id,
+				html,
+				startRow: 0,
+				rowCount: 0,
+				visible: true,
+			};
+			this.fullscreenView.show(block);
+			return null; // Fullscreen handles its own display
+		}
+
+		// Inline and block modes return the block for caller to handle
 		return {
 			id,
 			html,
@@ -324,6 +347,13 @@ export class MarkdownSessionManager {
 	}
 
 	/**
+	 * Get the fullscreen view instance.
+	 */
+	getFullscreenView(): FullscreenMarkdownView {
+		return this.fullscreenView;
+	}
+
+	/**
 	 * Dispose the session manager and clean up resources.
 	 */
 	dispose(): void {
@@ -333,5 +363,6 @@ export class MarkdownSessionManager {
 		}
 		this.sessions.clear();
 		this.renderer.dispose();
+		this.fullscreenView.dispose();
 	}
 }

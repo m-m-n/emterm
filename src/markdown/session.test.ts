@@ -348,4 +348,122 @@ describe("MarkdownSessionManager", () => {
 			expect(manager.sessionCount).toBe(0);
 		});
 	});
+
+	describe("fullscreen mode", () => {
+		test("should accept render=fullscreen in handleBegin", () => {
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=fullscreen-test",
+				"render=fullscreen",
+			]);
+
+			const session = manager.getSession("fullscreen-test");
+			expect(session).toBeDefined();
+			expect(session?.render).toBe("fullscreen");
+		});
+
+		test("should return null for fullscreen mode in handleEnd", () => {
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=fullscreen-test",
+				"render=fullscreen",
+			]);
+			manager.handleCommand("emterm", [
+				"markdown",
+				"chunk",
+				"id=fullscreen-test",
+				"seq=0",
+				"data=IyBUZXN0", // "# Test" in Base64
+			]);
+
+			const result = manager.handleCommand("emterm", [
+				"markdown",
+				"end",
+				"id=fullscreen-test",
+			]);
+
+			// For fullscreen, handleEnd returns null (fullscreen handles its own display)
+			expect(result).toBeNull();
+		});
+
+		test("should show fullscreen overlay for render=fullscreen", () => {
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=fullscreen-show-test",
+				"render=fullscreen",
+			]);
+			manager.handleCommand("emterm", [
+				"markdown",
+				"chunk",
+				"id=fullscreen-show-test",
+				"seq=0",
+				"data=IyBIZWxsbw==", // "# Hello" in Base64
+			]);
+			manager.handleCommand("emterm", [
+				"markdown",
+				"end",
+				"id=fullscreen-show-test",
+			]);
+
+			// Check if fullscreen overlay is shown
+			const overlay = document.querySelector(".markdown-fullscreen-overlay");
+			expect(overlay).not.toBeNull();
+
+			// Clean up overlay
+			overlay?.remove();
+		});
+
+		test("should not affect existing inline/block modes", () => {
+			// Block mode
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=block-test",
+				"render=block",
+			]);
+			manager.handleCommand("emterm", [
+				"markdown",
+				"chunk",
+				"id=block-test",
+				"seq=0",
+				"data=IyBCbG9jaw==", // "# Block" in Base64
+			]);
+			const blockResult = manager.handleCommand("emterm", [
+				"markdown",
+				"end",
+				"id=block-test",
+			]);
+
+			// Block mode returns MarkdownBlock
+			expect(blockResult).not.toBeNull();
+			expect(blockResult?.id).toBe("block-test");
+
+			// Inline mode
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=inline-test",
+				"render=inline",
+			]);
+			manager.handleCommand("emterm", [
+				"markdown",
+				"chunk",
+				"id=inline-test",
+				"seq=0",
+				"data=SW5saW5l", // "Inline" in Base64
+			]);
+			const inlineResult = manager.handleCommand("emterm", [
+				"markdown",
+				"end",
+				"id=inline-test",
+			]);
+
+			// Inline mode returns MarkdownBlock
+			expect(inlineResult).not.toBeNull();
+			expect(inlineResult?.id).toBe("inline-test");
+		});
+	});
 });
