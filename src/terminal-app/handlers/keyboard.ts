@@ -133,6 +133,12 @@ export class KeyboardHandler {
    * @param event - Keyboard event to handle
    */
   async handleKeyDown(event: KeyboardEvent): Promise<void> {
+    // Skip if event was already handled by another component (e.g., fullscreen markdown view)
+    // This is a cooperative pattern - components call preventDefault() when they handle an event
+    if (event.defaultPrevented) {
+      return;
+    }
+
     // Handle Escape key - clear selection
     if (event.key === "Escape" && this.selectionController) {
       if (this.selectionController.hasSelection()) {

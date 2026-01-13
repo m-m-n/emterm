@@ -1,5 +1,7 @@
 /**
  * Integration tests for Markdown display with TerminalState.
+ *
+ * Note: Markdown is always displayed in fullscreen mode (like `less` command).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { TerminalState } from "../terminal/state.ts";
@@ -14,6 +16,10 @@ describe("Markdown Display Integration", () => {
 
 	afterEach(() => {
 		state.reset();
+		// Clean up any fullscreen overlays
+		document.querySelectorAll(".markdown-fullscreen-overlay").forEach((el) => {
+			el.remove();
+		});
 	});
 
 	/**
@@ -29,7 +35,7 @@ describe("Markdown Display Integration", () => {
 		};
 	}
 
-	test("should render markdown from OSC sequence", () => {
+	test("should render markdown in fullscreen from OSC sequence", () => {
 		// Begin session
 		state.processAction(
 			createEmtermAction("emterm", [
@@ -52,17 +58,18 @@ describe("Markdown Display Integration", () => {
 			]),
 		);
 
-		// End session
+		// End session - this should show fullscreen overlay
 		state.processAction(
 			createEmtermAction("emterm", ["markdown", "end", "id=test-1"]),
 		);
 
-		// Check pending blocks
-		const blocks = state.takePendingMarkdownBlocks();
-		expect(blocks.length).toBe(1);
-		expect(blocks[0].id).toBe("test-1");
-		expect(blocks[0].html).toContain("<h1");
-		expect(blocks[0].html).toContain("Hello World");
+		// Check fullscreen overlay is shown
+		const overlay = document.querySelector(".markdown-fullscreen-overlay");
+		expect(overlay).not.toBeNull();
+
+		const content_el = overlay?.querySelector(".markdown-fullscreen-content");
+		expect(content_el).not.toBeNull();
+		expect(content_el?.innerHTML).toContain("Hello World");
 	});
 
 	test("should handle chunked transfer", () => {
@@ -108,23 +115,19 @@ describe("Markdown Display Integration", () => {
 			createEmtermAction("emterm", ["markdown", "end", "id=chunked-test"]),
 		);
 
-		const blocks = state.takePendingMarkdownBlocks();
-		expect(blocks.length).toBe(1);
-		expect(blocks[0].html).toContain("<h1");
-		expect(blocks[0].html).toContain("<strong>");
-		expect(blocks[0].html).toContain("bold");
+		// Check fullscreen content
+		const content = document.querySelector(".markdown-fullscreen-content");
+		expect(content).not.toBeNull();
+		expect(content?.innerHTML).toContain("<h1");
+		expect(content?.innerHTML).toContain("<strong>");
+		expect(content?.innerHTML).toContain("bold");
 	});
 
-	test("should handle multiple concurrent sessions", () => {
-		// Start two sessions
+	test("should handle multiple sequential sessions", () => {
+		// First session
 		state.processAction(
 			createEmtermAction("emterm", ["markdown", "begin", "id=session-a"]),
 		);
-		state.processAction(
-			createEmtermAction("emterm", ["markdown", "begin", "id=session-b"]),
-		);
-
-		// Send chunks to both
 		state.processAction(
 			createEmtermAction("emterm", [
 				"markdown",
@@ -135,6 +138,21 @@ describe("Markdown Display Integration", () => {
 			]),
 		);
 		state.processAction(
+			createEmtermAction("emterm", ["markdown", "end", "id=session-a"]),
+		);
+
+		// Verify first session shown
+		let content = document.querySelector(".markdown-fullscreen-content");
+		expect(content?.innerHTML).toContain("Session A");
+
+		// Close first overlay
+		document.querySelector(".markdown-fullscreen-overlay")?.remove();
+
+		// Second session
+		state.processAction(
+			createEmtermAction("emterm", ["markdown", "begin", "id=session-b"]),
+		);
+		state.processAction(
 			createEmtermAction("emterm", [
 				"markdown",
 				"chunk",
@@ -143,54 +161,13 @@ describe("Markdown Display Integration", () => {
 				`data=${btoa("# Session B")}`,
 			]),
 		);
-
-		// End session A first
-		state.processAction(
-			createEmtermAction("emterm", ["markdown", "end", "id=session-a"]),
-		);
-
-		let blocks = state.takePendingMarkdownBlocks();
-		expect(blocks.length).toBe(1);
-		expect(blocks[0].id).toBe("session-a");
-		expect(blocks[0].html).toContain("Session A");
-
-		// End session B
 		state.processAction(
 			createEmtermAction("emterm", ["markdown", "end", "id=session-b"]),
 		);
 
-		blocks = state.takePendingMarkdownBlocks();
-		expect(blocks.length).toBe(1);
-		expect(blocks[0].id).toBe("session-b");
-		expect(blocks[0].html).toContain("Session B");
-	});
-
-	test("should set block startRow from cursor position", () => {
-		// Move cursor down
-		state.processAction({
-			type: "Csi",
-			value: { action: "CursorPosition", data: { row: 10, col: 1 } },
-		});
-
-		// Begin and complete a markdown session
-		state.processAction(
-			createEmtermAction("emterm", ["markdown", "begin", "id=pos-test"]),
-		);
-		state.processAction(
-			createEmtermAction("emterm", [
-				"markdown",
-				"chunk",
-				"id=pos-test",
-				"seq=0",
-				`data=${btoa("Test")}`,
-			]),
-		);
-		state.processAction(
-			createEmtermAction("emterm", ["markdown", "end", "id=pos-test"]),
-		);
-
-		const blocks = state.takePendingMarkdownBlocks();
-		expect(blocks[0].startRow).toBe(9); // 0-indexed, so row 10 becomes 9
+		// Verify second session shown
+		content = document.querySelector(".markdown-fullscreen-content");
+		expect(content?.innerHTML).toContain("Session B");
 	});
 
 	test("should ignore non-emterm commands", () => {
@@ -246,8 +223,8 @@ describe("Markdown Display Integration", () => {
 			createEmtermAction("emterm", ["markdown", "end", "id=xss-test"]),
 		);
 
-		const blocks = state.takePendingMarkdownBlocks();
-		expect(blocks[0].html).not.toContain("<script>");
-		expect(blocks[0].html).not.toContain("alert");
+		const content = document.querySelector(".markdown-fullscreen-content");
+		expect(content?.innerHTML).not.toContain("<script>");
+		expect(content?.innerHTML).not.toContain("alert");
 	});
 });

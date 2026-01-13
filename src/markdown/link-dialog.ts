@@ -6,8 +6,6 @@
  * @module markdown/link-dialog
  */
 
-import "./link-dialog.css";
-
 /**
  * Confirmation dialog for external links.
  */

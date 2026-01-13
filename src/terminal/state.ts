@@ -5,7 +5,6 @@
  */
 
 import { MarkdownSessionManager } from "../markdown/session.ts";
-import type { MarkdownBlock } from "../markdown/types.ts";
 import type {
 	ApcAction,
 	CharSet,
@@ -96,9 +95,6 @@ export class TerminalState {
 
 	/** Markdown session manager. */
 	private markdownManager: MarkdownSessionManager;
-
-	/** Pending markdown blocks to be rendered. */
-	private _pendingMarkdownBlocks: MarkdownBlock[] = [];
 
 	/**
 	 * Create a new terminal state.
@@ -1050,32 +1046,14 @@ export class TerminalState {
 	/**
 	 * Handle eMterm extension commands.
 	 *
+	 * Markdown is automatically displayed in fullscreen mode.
+	 *
 	 * @param verb - The command verb (e.g., "emterm")
 	 * @param params - Command parameters
 	 */
 	private handleEmtermExtension(verb: string, params: string[]): void {
-		// Route to markdown manager
-		const block = this.markdownManager.handleCommand(verb, params);
-
-		if (block) {
-			// Set block position based on current cursor
-			block.startRow = this.cursor.row;
-			this._pendingMarkdownBlocks.push(block);
-		}
-	}
-
-	/**
-	 * Get pending Markdown blocks for rendering.
-	 *
-	 * Call this after processing actions to get blocks that should be rendered.
-	 * The returned blocks are removed from the pending queue.
-	 *
-	 * @returns Array of pending Markdown blocks
-	 */
-	takePendingMarkdownBlocks(): MarkdownBlock[] {
-		const blocks = this._pendingMarkdownBlocks;
-		this._pendingMarkdownBlocks = [];
-		return blocks;
+		// Route to markdown manager - fullscreen display is handled internally
+		this.markdownManager.handleCommand(verb, params);
 	}
 
 	/**
@@ -1162,7 +1140,6 @@ export class TerminalState {
 		// Reset markdown state
 		this.markdownManager.dispose();
 		this.markdownManager = new MarkdownSessionManager();
-		this._pendingMarkdownBlocks = [];
 	}
 
 	/**
