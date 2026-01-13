@@ -142,6 +142,8 @@ struct ImageTransfer {
     width: Option<u32>,
     /// Height in pixels.
     height: Option<u32>,
+    /// Quiet mode from first chunk (preserved for final chunk response).
+    quiet: Option<u8>,
 }
 
 /// Kitty Graphics Protocol handler.
@@ -231,12 +233,13 @@ impl KittyHandler {
                     compression: cmd.compression,
                     width: cmd.width,
                     height: cmd.height,
+                    quiet: cmd.quiet,
                 });
             transfer.data.push_str(&cmd.payload);
             vec![]
         } else {
             // Final chunk or single transfer
-            let (data, format, compression, width, height) =
+            let (data, format, compression, width, height, quiet) =
                 if let Some(mut transfer) = self.transfers.remove(&image_id) {
                     transfer.data.push_str(&cmd.payload);
                     (
@@ -245,6 +248,7 @@ impl KittyHandler {
                         transfer.compression.or(cmd.compression),
                         transfer.width.or(cmd.width),
                         transfer.height.or(cmd.height),
+                        transfer.quiet.or(cmd.quiet),
                     )
                 } else {
                     (
@@ -253,6 +257,7 @@ impl KittyHandler {
                         cmd.compression,
                         cmd.width,
                         cmd.height,
+                        cmd.quiet,
                     )
                 };
 
@@ -262,9 +267,9 @@ impl KittyHandler {
                     self.images.insert(image_id, image.clone());
                     let mut events = vec![ImageEvent::ImageReady { image }];
 
-                    // Add response if not suppressed
+                    // Add response if not suppressed (use quiet from first chunk)
                     let response = KittyResponse::ok(Some(image_id), None);
-                    if !response.should_suppress(cmd.quiet) {
+                    if !response.should_suppress(quiet) {
                         events.push(ImageEvent::Response {
                             data: response.to_escape_sequence(),
                         });
@@ -275,7 +280,7 @@ impl KittyHandler {
                 Err(e) => {
                     log::warn!("Kitty image decode failed: {}", e);
                     let response = KittyResponse::error(Some(image_id), KittyErrorCode::EINVAL, e);
-                    if response.should_suppress(cmd.quiet) {
+                    if response.should_suppress(quiet) {
                         vec![]
                     } else {
                         vec![ImageEvent::Response {
@@ -319,12 +324,13 @@ impl KittyHandler {
                     compression: cmd.compression,
                     width: cmd.width,
                     height: cmd.height,
+                    quiet: cmd.quiet,
                 });
             transfer.data.push_str(&cmd.payload);
             vec![]
         } else {
             // Final chunk or single transfer
-            let (data, format, compression, width, height) =
+            let (data, format, compression, width, height, quiet) =
                 if let Some(mut transfer) = self.transfers.remove(&image_id) {
                     transfer.data.push_str(&cmd.payload);
                     (
@@ -333,6 +339,7 @@ impl KittyHandler {
                         transfer.compression.or(cmd.compression),
                         transfer.width.or(cmd.width),
                         transfer.height.or(cmd.height),
+                        transfer.quiet.or(cmd.quiet),
                     )
                 } else {
                     (
@@ -341,6 +348,7 @@ impl KittyHandler {
                         cmd.compression,
                         cmd.width,
                         cmd.height,
+                        cmd.quiet,
                     )
                 };
 
@@ -366,9 +374,9 @@ impl KittyHandler {
                         ImageEvent::Place { placement },
                     ];
 
-                    // Add response if not suppressed
+                    // Add response if not suppressed (use quiet from first chunk)
                     let response = KittyResponse::ok(Some(image_id), Some(placement_id));
-                    if !response.should_suppress(cmd.quiet) {
+                    if !response.should_suppress(quiet) {
                         events.push(ImageEvent::Response {
                             data: response.to_escape_sequence(),
                         });
@@ -379,7 +387,7 @@ impl KittyHandler {
                 Err(e) => {
                     log::warn!("Kitty image decode failed: {}", e);
                     let response = KittyResponse::error(Some(image_id), KittyErrorCode::EINVAL, e);
-                    if response.should_suppress(cmd.quiet) {
+                    if response.should_suppress(quiet) {
                         vec![]
                     } else {
                         vec![ImageEvent::Response {
@@ -590,13 +598,14 @@ impl KittyHandler {
                     compression: cmd.compression,
                     width: cmd.width,
                     height: cmd.height,
+                    quiet: cmd.quiet,
                 });
             transfer.data.push_str(&cmd.payload);
             return vec![];
         }
 
         // Final chunk or single transfer
-        let (data, format, compression, width, height) =
+        let (data, format, compression, width, height, quiet) =
             if let Some(mut transfer) = self.transfers.remove(&image_id) {
                 transfer.data.push_str(&cmd.payload);
                 (
@@ -605,6 +614,7 @@ impl KittyHandler {
                     transfer.compression.or(cmd.compression),
                     transfer.width.or(cmd.width),
                     transfer.height.or(cmd.height),
+                    transfer.quiet.or(cmd.quiet),
                 )
             } else {
                 (
@@ -613,6 +623,7 @@ impl KittyHandler {
                     cmd.compression,
                     cmd.width,
                     cmd.height,
+                    cmd.quiet,
                 )
             };
 
@@ -623,7 +634,7 @@ impl KittyHandler {
                 Err(e) => {
                     log::warn!("Kitty frame decode failed: {}", e);
                     let response = KittyResponse::error(Some(image_id), KittyErrorCode::EINVAL, e);
-                    if response.should_suppress(cmd.quiet) {
+                    if response.should_suppress(quiet) {
                         return vec![];
                     }
                     return vec![ImageEvent::Response {
@@ -676,9 +687,9 @@ impl KittyHandler {
         let mut image_events: Vec<ImageEvent> =
             events.into_iter().map(ImageEvent::Animation).collect();
 
-        // Add response if not suppressed
+        // Add response if not suppressed (use quiet from first chunk)
         let response = KittyResponse::ok(Some(image_id), None);
-        if !response.should_suppress(cmd.quiet) {
+        if !response.should_suppress(quiet) {
             image_events.push(ImageEvent::Response {
                 data: response.to_escape_sequence(),
             });
@@ -999,6 +1010,7 @@ mod tests {
                 compression: None,
                 width: None,
                 height: None,
+                quiet: None,
             },
         );
 
