@@ -85,6 +85,20 @@ pub struct TabCountChangedPayload {
     count: usize,
 }
 
+/// Payload for image_event IPC channel.
+///
+/// Wraps an `ImageEvent` with the associated session ID for routing
+/// events to the correct terminal session in the frontend.
+#[derive(Serialize, Clone)]
+pub struct ImageEventPayload {
+    /// Session ID for event routing.
+    pub session_id: String,
+
+    /// The image event.
+    #[serde(flatten)]
+    pub event: image::ImageEvent,
+}
+
 // ============================================================================
 // Tauri Commands
 // ============================================================================
@@ -326,7 +340,8 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                 Err(e) => {
                     log::warn!(
                         "PTY monitor: try_wait error for session {}: {}",
-                        session_id_clone, e
+                        session_id_clone,
+                        e
                     );
                     break;
                 }
@@ -369,6 +384,13 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
 
         let mut buf = [0u8; 4096];
         let mut parser = ansi::Parser::new();
+        let mut image_processor = image::ImageProcessor::new();
+
+        // Track cursor position for image placement
+        // Note: This is a simplified approach - actual cursor tracking
+        // should ideally be synchronized with frontend state
+        let mut cursor_row: u32 = 0;
+        let mut cursor_col: u32 = 0;
 
         log::debug!("PTY reader: starting read loop for session {}", session_id);
 
@@ -393,6 +415,57 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                     parser.parse(&buf[..n], |action| {
                         actions.push(action);
                     });
+
+                    // Process image-related actions (APC for Kitty, DCS for SIXEL)
+                    for action in &actions {
+                        match action {
+                            ansi::TerminalAction::Apc(ansi::ApcAction::KittyGraphics(cmd)) => {
+                                // Process Kitty Graphics Protocol command
+                                let image_events = image_processor
+                                    .process_kitty_command(cmd, cursor_row, cursor_col);
+                                for event in image_events {
+                                    let payload = ImageEventPayload {
+                                        session_id: session_id.clone(),
+                                        event,
+                                    };
+                                    if let Err(e) = app.emit("image_event", payload) {
+                                        log::warn!("PTY reader: failed to emit image_event: {}", e);
+                                    }
+                                }
+                            }
+                            ansi::TerminalAction::Dcs(ansi::DcsAction::Sixel(sixel)) => {
+                                // Process SIXEL graphics
+                                let image_events =
+                                    image_processor.process_sixel(sixel, cursor_row, cursor_col);
+                                for event in image_events {
+                                    let payload = ImageEventPayload {
+                                        session_id: session_id.clone(),
+                                        event,
+                                    };
+                                    if let Err(e) = app.emit("image_event", payload) {
+                                        log::warn!("PTY reader: failed to emit image_event: {}", e);
+                                    }
+                                }
+                            }
+                            // Track cursor position for image placement
+                            ansi::TerminalAction::Csi(ansi::CsiAction::CursorPosition {
+                                row,
+                                col,
+                            }) => {
+                                cursor_row = (*row).saturating_sub(1) as u32;
+                                cursor_col = (*col).saturating_sub(1) as u32;
+                            }
+                            ansi::TerminalAction::Execute(0x0D) => {
+                                // Carriage return
+                                cursor_col = 0;
+                            }
+                            ansi::TerminalAction::Execute(0x0A) => {
+                                // Line feed
+                                cursor_row = cursor_row.saturating_add(1);
+                            }
+                            _ => {}
+                        }
+                    }
 
                     // Always emit if we have actions
                     if !actions.is_empty() {
@@ -488,7 +561,9 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
 
         log::debug!(
             "PTY reader: session {} exited with code {}, {} sessions remaining",
-            session_id, exit_code, remaining_sessions
+            session_id,
+            exit_code,
+            remaining_sessions
         );
 
         // Emit pty_exit with remaining_sessions count (session already removed)
@@ -596,5 +671,84 @@ mod tests {
             let _ = s.kill();
         }
         assert_eq!(manager.session_count().await, 0);
+    }
+
+    #[test]
+    fn test_image_event_payload_serialization() {
+        let payload = ImageEventPayload {
+            session_id: "test-session-123".to_string(),
+            event: image::ImageEvent::QueryResponse { supported: true },
+        };
+
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("test-session-123"));
+        assert!(json.contains("QueryResponse"));
+        assert!(json.contains("supported"));
+    }
+
+    #[test]
+    fn test_image_event_payload_image_ready() {
+        let decoded_image = image::DecodedImage {
+            id: 42,
+            width: 100,
+            height: 50,
+            rgba_data: vec![0; 20000],
+            rgba_base64: "AAAA".to_string(),
+        };
+
+        let payload = ImageEventPayload {
+            session_id: "session-456".to_string(),
+            event: image::ImageEvent::ImageReady {
+                image: decoded_image,
+            },
+        };
+
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("session-456"));
+        assert!(json.contains("ImageReady"));
+        assert!(json.contains("\"id\":42"));
+        assert!(json.contains("\"width\":100"));
+        assert!(json.contains("\"height\":50"));
+    }
+
+    #[test]
+    fn test_image_event_payload_place() {
+        let placement = image::ImagePlacement {
+            image_id: 1,
+            placement_id: 2,
+            row: 10,
+            col: 20,
+            columns: 80,
+            rows: 24,
+            x_offset: 0,
+            y_offset: 0,
+            z_index: -1,
+        };
+
+        let payload = ImageEventPayload {
+            session_id: "session-789".to_string(),
+            event: image::ImageEvent::Place { placement },
+        };
+
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("session-789"));
+        assert!(json.contains("Place"));
+        assert!(json.contains("\"image_id\":1"));
+        assert!(json.contains("\"placement_id\":2"));
+    }
+
+    #[test]
+    fn test_image_event_payload_delete() {
+        let payload = ImageEventPayload {
+            session_id: "session-delete".to_string(),
+            event: image::ImageEvent::Delete {
+                target: image::ImageDelete::All,
+            },
+        };
+
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("session-delete"));
+        assert!(json.contains("Delete"));
+        assert!(json.contains("All"));
     }
 }

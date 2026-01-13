@@ -3,14 +3,24 @@
  */
 
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { measureCharacterSize, observeContainerResize, PtyClient } from "../pty";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  measureCharacterSize,
+  observeContainerResize,
+  PtyClient,
+} from "../pty";
 import { TerminalState } from "../terminal/state";
 import { TerminalRenderer } from "../terminal/renderer";
 import { SelectionController } from "../selection-v2";
+import { ImageViewer } from "../image-viewer";
 import type { TerminalAppOptions, CharSize } from "./types";
 import { KeyboardHandler, MouseHandler, ImeHandler } from "./handlers";
 import type { KeyboardHandlerContext } from "./handlers/keyboard";
-import type { TerminalActionsPayload } from "../types/terminal";
+import type {
+  TerminalActionsPayload,
+  ImageEventPayload,
+} from "../types/terminal";
+import type { DecodedImage, ImageEvent } from "../image/types";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -25,6 +35,9 @@ export class TerminalApp {
   private state: TerminalState | null = null;
   private renderer: TerminalRenderer | null = null;
   private selectionController: SelectionController | null = null;
+  private imageViewer: ImageViewer | null = null;
+  private imageEventUnlisten: UnlistenFn | null = null;
+  private pendingImages: Map<number, DecodedImage> = new Map();
   private charSize: CharSize = { width: 8, height: 16 };
   private disconnectResizeObserver: (() => void) | null = null;
   private lastWindowTitle = "";
@@ -52,11 +65,11 @@ export class TerminalApp {
     // Calculate initial terminal size
     const cols = Math.max(
       1,
-      Math.floor(this.container.clientWidth / this.charSize.width)
+      Math.floor(this.container.clientWidth / this.charSize.width),
     );
     const rows = Math.max(
       1,
-      Math.floor(this.container.clientHeight / this.charSize.height)
+      Math.floor(this.container.clientHeight / this.charSize.height),
     );
 
     // Get font configuration from computed styles
@@ -99,7 +112,8 @@ export class TerminalApp {
       getState: () => this.state!,
       getRenderer: () => this.renderer,
       selectionController: this.selectionController,
-      isEditContextActive: () => this.imeHandler?.isEditContextActive() ?? false,
+      isEditContextActive: () =>
+        this.imeHandler?.isEditContextActive() ?? false,
       isImeInputFocused: () => this.imeHandler?.isImeInputFocused() ?? false,
     };
     this.keyboardHandler = new KeyboardHandler(keyboardContext);
@@ -113,12 +127,18 @@ export class TerminalApp {
       this.charSize,
       {
         // No selection callbacks - SelectionController handles selection
-      }
+      },
     );
     this.mouseHandler.attach();
 
     // Attach selection controller
     this.selectionController.attach();
+
+    // Initialize ImageViewer
+    this.imageViewer = new ImageViewer(this.container);
+
+    // Set up image event listener
+    await this.setupImageEventListener();
 
     // Make terminal focusable and set up resize observer before PTY spawn
     this.container.tabIndex = 0;
@@ -189,7 +209,7 @@ export class TerminalApp {
 
         // Update IME position after terminal state changes
         this.imeHandler?.updatePosition();
-      }
+      },
     );
 
     // Handle exit event
@@ -203,6 +223,118 @@ export class TerminalApp {
         }
       }
     });
+  }
+
+  /**
+   * Sets up image event listener for Kitty Graphics and SIXEL support
+   */
+  private async setupImageEventListener(): Promise<void> {
+    this.imageEventUnlisten = await listen<ImageEventPayload>(
+      "image_event",
+      (event: { payload: ImageEventPayload }) => {
+        // Only process events for the current session
+        if (
+          this.ptyClient &&
+          event.payload.session_id === this.ptyClient.getSessionId()
+        ) {
+          this.handleImageEvent(event.payload);
+        }
+      },
+    );
+  }
+
+  /**
+   * Handles image events from the backend
+   */
+  private handleImageEvent(payload: ImageEventPayload): void {
+    const eventType = payload.type;
+
+    switch (eventType) {
+      case "ImageReady": {
+        // Store the decoded image for later display
+        const image = payload.image as DecodedImage;
+        this.pendingImages.set(image.id, image);
+        console.info(
+          `[INFO][FRONTEND] Image ready: id=${image.id}, ${image.width}x${image.height}`,
+        );
+        break;
+      }
+
+      case "Place": {
+        // Display the image at the specified position
+        const placement = payload.placement;
+        if (!placement) {
+          console.warn("[WARN][FRONTEND] Place event without placement data");
+          break;
+        }
+        const image = this.pendingImages.get(placement.image_id);
+        if (image && this.imageViewer) {
+          // For fullscreen display mode
+          this.imageViewer.show(image);
+          console.info(
+            `[INFO][FRONTEND] Image placed: id=${placement.image_id}`,
+          );
+        } else {
+          console.warn(
+            `[WARN][FRONTEND] Image not found for placement: ${placement.image_id}`,
+          );
+        }
+        break;
+      }
+
+      case "Delete": {
+        // Handle image deletion
+        const target = payload.target;
+        if (!target) {
+          console.warn("[WARN][FRONTEND] Delete event without target data");
+          break;
+        }
+        if (target.type === "All" || target.type === "AllIncludingHidden") {
+          this.pendingImages.clear();
+          this.imageViewer?.hide();
+        } else if (target.type === "ById" && target.id !== undefined) {
+          this.pendingImages.delete(target.id);
+        }
+        console.info(
+          `[INFO][FRONTEND] Image deleted: ${JSON.stringify(target)}`,
+        );
+        break;
+      }
+
+      case "QueryResponse": {
+        // Handle query response (graphics protocol supported)
+        console.info(
+          `[INFO][FRONTEND] Graphics supported: ${payload.supported}`,
+        );
+        break;
+      }
+
+      case "Animation": {
+        // Handle animation events
+        if (this.imageViewer && payload.data) {
+          this.imageViewer.handleAnimationEvent(
+            payload.data as import("../image/types").AnimationEvent,
+          );
+        }
+        break;
+      }
+
+      case "Response": {
+        // Handle protocol response - send back to PTY
+        // This is used by Kitty protocol for OK/ERROR responses
+        const responseData = payload.data as string | undefined;
+        if (responseData && this.ptyClient) {
+          // Write response back to PTY
+          this.ptyClient.write(responseData);
+        }
+        break;
+      }
+
+      default:
+        console.debug(
+          `[DEBUG][FRONTEND] Unknown image event type: ${eventType}`,
+        );
+    }
   }
 
   /**
@@ -222,7 +354,7 @@ export class TerminalApp {
           this.imeHandler?.updatePosition();
           this.mouseHandler?.updateCharSize(
             this.charSize.width,
-            this.charSize.height
+            this.charSize.height,
           );
 
           // Update selection controller dimensions (clears selection)
@@ -230,7 +362,7 @@ export class TerminalApp {
             newCols,
             newRows,
             this.charSize.width,
-            this.charSize.height
+            this.charSize.height,
           );
         }
 
@@ -241,7 +373,7 @@ export class TerminalApp {
             console.debug("PTY resize skipped - session not yet started");
           }
         }
-      }
+      },
     );
   }
 
@@ -273,6 +405,15 @@ export class TerminalApp {
     this.mouseHandler?.detach();
     this.imeHandler?.dispose();
     this.selectionController?.dispose();
+
+    // Clean up image viewer and listener
+    if (this.imageEventUnlisten) {
+      this.imageEventUnlisten();
+      this.imageEventUnlisten = null;
+    }
+    this.imageViewer?.dispose();
+    this.imageViewer = null;
+    this.pendingImages.clear();
 
     // Clean up PTY
     if (this.ptyClient) {
