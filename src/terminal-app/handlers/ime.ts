@@ -230,6 +230,18 @@ export class ImeHandler {
 				});
 			}
 
+			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
+			if (this.isModalOverlayVisible()) {
+				if (IME_DEBUG) console.log("[EditContext] textupdate: blocked by modal overlay");
+				// Reset EditContext text
+				if (this.editContext) {
+					this.editContext.updateText(0, this.editContext.text.length, "");
+					this.editContext.updateSelection(0, 0);
+				}
+				this.updateCompositionView("");
+				return;
+			}
+
 			const text = event.text;
 
 			if (isComposing) {
@@ -263,6 +275,18 @@ export class ImeHandler {
 		const onCompositionEnd = (event: any) => {
 			if (IME_DEBUG) console.log("[EditContext] compositionend");
 			isComposing = false;
+
+			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
+			if (this.isModalOverlayVisible()) {
+				if (IME_DEBUG) console.log("[EditContext] compositionend: blocked by modal overlay");
+				compositionText = "";
+				this.updateCompositionView("");
+				if (this.editContext) {
+					this.editContext.updateText(0, this.editContext.text.length, "");
+					this.editContext.updateSelection(0, 0);
+				}
+				return;
+			}
 
 			// Send the final composition text to PTY
 			if (compositionText) {
@@ -420,6 +444,22 @@ export class ImeHandler {
 	}
 
 	/**
+	 * Check if a modal overlay (image viewer or markdown fullscreen) is currently visible.
+	 * Input should be blocked while these overlays are active.
+	 */
+	private isModalOverlayVisible(): boolean {
+		// Check image viewer overlay
+		const imageOverlay = document.querySelector(".image-viewer-overlay.visible");
+		if (imageOverlay) return true;
+
+		// Check markdown fullscreen overlay
+		const markdownOverlay = document.querySelector(".markdown-fullscreen-overlay.visible");
+		if (markdownOverlay) return true;
+
+		return false;
+	}
+
+	/**
 	 * Update composition view position and content
 	 */
 	private updateCompositionView(text: string): void {
@@ -554,6 +594,15 @@ export class ImeHandler {
 		input.addEventListener("input", async (event: Event) => {
 			const inputEvent = event as InputEvent;
 			const value = input.value;
+
+			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
+			if (this.isModalOverlayVisible()) {
+				if (IME_DEBUG) console.log("[IME Debug] input: blocked by modal overlay");
+				input.value = "";
+				this.updateCompositionView("");
+				return;
+			}
+
 			if (IME_DEBUG) {
 				console.log("[IME Debug] input event:", {
 					value,
@@ -621,6 +670,14 @@ export class ImeHandler {
 
 			// Mark composition as ended
 			isComposing = false;
+
+			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
+			if (this.isModalOverlayVisible()) {
+				if (IME_DEBUG) console.log("[IME Debug] compositionend: blocked by modal overlay");
+				input.value = "";
+				this.updateCompositionView("");
+				return;
+			}
 
 			const value = input.value;
 			if (!value) {

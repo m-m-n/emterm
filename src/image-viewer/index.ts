@@ -240,7 +240,11 @@ export class ImageViewer {
     if (!this.isVisible()) return;
 
     // Block all keyboard input from reaching the shell while viewer is active
+    // Both preventDefault() and stopPropagation() are needed:
+    // - preventDefault() prevents default browser behavior
+    // - stopPropagation() prevents other listeners from receiving the event
     e.preventDefault();
+    e.stopPropagation();
 
     switch (e.key) {
       case "Escape":
