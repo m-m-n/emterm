@@ -8,8 +8,9 @@
  */
 
 describe("eMterm Image Display", () => {
-	// Use absolute path for emterm command
-	const imagePath = "/home/sakura/src/my_projects/tauri/emterm/src-tauri/icons/128x128.png";
+	// Use short path for Docker environment (symlinked in Dockerfile)
+	// This avoids WebDriver key input issues with long paths
+	const imagePath = "/tmp/test.png";
 
 	it("should display the terminal and wait for shell prompt", async () => {
 		const terminal = await $("#terminal");
@@ -24,18 +25,60 @@ describe("eMterm Image Display", () => {
 		const terminal = await $("#terminal");
 		await terminal.click();
 
-		// Type the emterm image command
+		// Type the emterm image command with delay between keys
 		const command = `emterm image ${imagePath}`;
 		for (const char of command) {
 			await browser.keys([char]);
+			await browser.pause(20); // Small delay to prevent key loss
 		}
 		await browser.pause(500);
 		await browser.saveScreenshot("./screenshots/image-02-before-enter.png");
 
 		// Execute the command
 		await browser.keys(["Enter"]);
-		await browser.pause(3000); // Wait for image to render
 
+		// Wait and take multiple screenshots to catch the viewer state
+		await browser.pause(500);
+		await browser.saveScreenshot("./screenshots/image-03a-500ms.png");
+
+		await browser.pause(500);
+		await browser.saveScreenshot("./screenshots/image-03b-1000ms.png");
+
+		await browser.pause(500);
+		await browser.saveScreenshot("./screenshots/image-03c-1500ms.png");
+
+		// Check overlay state via JavaScript
+		const overlayInfo = await browser.execute(() => {
+			const overlay = document.querySelector(".image-viewer-overlay");
+			if (!overlay) return { exists: false };
+			const style = getComputedStyle(overlay);
+			return {
+				exists: true,
+				hasVisible: overlay.classList.contains("visible"),
+				opacity: style.opacity,
+				visibility: style.visibility,
+				zIndex: style.zIndex,
+				width: style.width,
+				height: style.height,
+			};
+		});
+		console.log("Overlay info:", JSON.stringify(overlayInfo, null, 2));
+
+		// Check canvas state
+		const canvasInfo = await browser.execute(() => {
+			const canvas = document.querySelector(".image-viewer-canvas");
+			if (!canvas) return { exists: false };
+			return {
+				exists: true,
+				width: canvas.width,
+				height: canvas.height,
+				cssWidth: getComputedStyle(canvas).width,
+				cssHeight: getComputedStyle(canvas).height,
+			};
+		});
+		console.log("Canvas info:", JSON.stringify(canvasInfo, null, 2));
+
+		await browser.pause(1500);
 		await browser.saveScreenshot("./screenshots/image-03-after-image.png");
 	});
 

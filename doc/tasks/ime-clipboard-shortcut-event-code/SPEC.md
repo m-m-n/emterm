@@ -9,7 +9,7 @@ target_files:
   - src/terminal-app/handlers/keyboard.ts
 related_tickets: []
 tags: [bugfix, ime, keyboard, clipboard]
-status: draft
+status: wontfix
 ---
 
 # IME ON状態でのクリップボードショートカット修正 - 仕様書
@@ -310,3 +310,18 @@ sequenceDiagram
 - Edge: 完全サポート
 
 Tauriが使用するWebViewは上記ブラウザのエンジンを使用するため、`event.code`は問題なく利用可能。
+
+## 10. クローズ判定
+
+**ステータス**: wontfix（対応不要）
+
+**判定日**: 2026-01-14
+
+**理由**:
+- IME ON状態でのCtrl+Shift+C/Vの挙動は、他のアプリケーションでも同様に期待通りに動作しない
+- ターミナルエミュレータとして特別な対応を行う必要性が低い
+- 非QWERTYレイアウト + IME ONの組み合わせでの制限事項もあり、完全な解決は困難
+
+**回避策（ユーザー向け）**:
+- IME OFF時にCtrl+Shift+C/Vを使用する
+- 右クリックメニューからコピー/ペーストを実行する

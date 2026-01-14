@@ -90,7 +90,7 @@ export class ImageViewer {
   /**
    * Creates a new ImageViewer instance.
    *
-   * @param container - Parent element to attach the viewer to
+   * @param container - Parent element (stored for reference, but overlay is appended to body)
    */
   constructor(container: HTMLElement) {
     this.container = container;
@@ -121,8 +121,9 @@ export class ImageViewer {
     this.infoElement.className = "image-viewer-info";
     this.overlay.appendChild(this.infoElement);
 
-    // Append to container
-    this.container.appendChild(this.overlay);
+    // Append to document.body (not container) to avoid being destroyed by terminal re-render
+    // The terminal's forceRender() clears container.innerHTML, which would destroy the overlay
+    document.body.appendChild(this.overlay);
 
     // Bind event handlers
     this.boundHandleKeydown = this.handleKeydown.bind(this);
