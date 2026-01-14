@@ -67,8 +67,15 @@ RUN cd e2e-tests && npm install
 # Create screenshots directory
 RUN mkdir -p e2e-tests/screenshots
 
+# Copy test image to short path for E2E tests (avoids WebDriver key input issues)
+RUN cp src-tauri/icons/128x128.png /tmp/test.png
+
 # Ensure cargo binaries are in PATH for all shells
 ENV PATH="/root/.cargo/bin:/root/.bun/bin:${PATH}"
+
+# Add emterm binary to PATH after build (created during test run)
+# The binary is built at /app/src-tauri/target/debug/emterm
+ENV PATH="/app/src-tauri/target/debug:${PATH}"
 
 # Default command: run E2E tests with Xvfb using Docker-specific config
 CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x720x24 & sleep 2 && cd e2e-tests && npx wdio run wdio.docker.conf.js"]
