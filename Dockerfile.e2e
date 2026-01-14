@@ -62,7 +62,7 @@ COPY . .
 RUN bun install
 
 # Install E2E test dependencies (using npm for better WebdriverIO compatibility)
-RUN cd e2e-tests && npm install
+RUN cd e2e-tests && npm install --legacy-peer-deps
 
 # Create screenshots directory
 RUN mkdir -p e2e-tests/screenshots
