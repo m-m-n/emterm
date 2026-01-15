@@ -9,6 +9,7 @@
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { LinkConfirmDialog } from "./link-dialog.ts";
+import { ZoomController } from "../shared/zoom-controller.ts";
 import type { FullscreenConfig, FullscreenState, MarkdownBlock } from "./types.ts";
 
 /**
@@ -49,6 +50,9 @@ export class FullscreenMarkdownView {
 
 	/** Link confirmation dialog */
 	private linkDialog: LinkConfirmDialog;
+
+	/** Zoom controller */
+	private zoomController: ZoomController | null = null;
 
 	/**
 	 * Create a new fullscreen view.
@@ -114,6 +118,13 @@ export class FullscreenMarkdownView {
 		this.content.setAttribute("tabindex", "-1");
 		this.content.focus();
 
+		// Initialize zoom controller
+		this.zoomController = new ZoomController({
+			container: this.content,
+			overlay: this.overlay,
+			onClose: () => this.close(),
+		});
+
 		console.log(`[LOG][FRONTEND] Fullscreen markdown view opened: ${block.id}`);
 	}
 
@@ -122,6 +133,12 @@ export class FullscreenMarkdownView {
 	 */
 	close(): void {
 		if (!this.state.isActive) return;
+
+		// Dispose zoom controller
+		if (this.zoomController) {
+			this.zoomController.dispose();
+			this.zoomController = null;
+		}
 
 		// Remove event listeners (with guard for test environment)
 		// Note: Must match the capture phase used in addEventListener

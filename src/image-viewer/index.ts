@@ -11,6 +11,7 @@ import type {
   AnimationEvent,
   AnimationState,
 } from "../image/types.ts";
+import { ZoomController } from "../shared/zoom-controller.ts";
 
 /**
  * CSS styles for the image viewer overlay.
@@ -86,6 +87,9 @@ export class ImageViewer {
 
   // Bound event handlers for cleanup
   private boundHandleKeydown: (e: KeyboardEvent) => void;
+
+  // Zoom controller
+  private zoomController: ZoomController | null = null;
 
   /**
    * Creates a new ImageViewer instance.
@@ -168,6 +172,13 @@ export class ImageViewer {
     // Show overlay
     this.overlay.classList.add("visible");
 
+    // Initialize zoom controller
+    this.zoomController = new ZoomController({
+      container: this.canvas,
+      overlay: this.overlay,
+      onClose: () => this.hide(),
+    });
+
     console.log(
       `[LOG][FRONTEND] Image viewer opened: id=${image.id}, ${image.width}x${image.height}`,
     );
@@ -219,6 +230,12 @@ export class ImageViewer {
    * Hides the viewer.
    */
   hide(): void {
+    // Dispose zoom controller
+    if (this.zoomController) {
+      this.zoomController.dispose();
+      this.zoomController = null;
+    }
+
     this.overlay.classList.remove("visible");
     this.stopAnimation();
     this.currentImage = null;
@@ -401,6 +418,12 @@ export class ImageViewer {
    * Disposes the viewer and releases resources.
    */
   dispose(): void {
+    // Dispose zoom controller
+    if (this.zoomController) {
+      this.zoomController.dispose();
+      this.zoomController = null;
+    }
+
     // Stop animation
     this.stopAnimation();
 
