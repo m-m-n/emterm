@@ -356,6 +356,139 @@ describe("ZoomController", () => {
     });
   });
 
+  describe("Callback Options", () => {
+    test("should call onZoomChange callback when zoom changes", () => {
+      const onZoomChangeMock = mock(() => {});
+
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        onZoomChange: onZoomChangeMock,
+      });
+
+      controller.zoomIn();
+      expect(onZoomChangeMock).toHaveBeenCalledWith(110);
+
+      controller.zoomOut();
+      expect(onZoomChangeMock).toHaveBeenCalledWith(100);
+
+      controller.zoomTo(150);
+      expect(onZoomChangeMock).toHaveBeenCalledWith(150);
+    });
+
+    test("should NOT apply default transform when onZoomChange is provided", () => {
+      const onZoomChangeMock = mock(() => {});
+
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        onZoomChange: onZoomChangeMock,
+      });
+
+      controller.zoomTo(200);
+
+      // Transform should not be applied when callback handles zoom
+      expect(env.container.style.transform).toBe("");
+    });
+
+    test("should initialize with custom initialLevel", () => {
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        initialLevel: 50,
+      });
+
+      expect(controller.getZoomLevel()).toBe(50);
+    });
+
+    test("should display custom initialLevel in zoom bar", () => {
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        initialLevel: 75,
+      });
+
+      const zoomLevel = env.overlay.querySelector(
+        ".viewer-zoom-level",
+      ) as HTMLSpanElement;
+      expect(zoomLevel?.textContent).toBe("75%");
+    });
+
+    test("should call onZoomChange with initialLevel on construction", () => {
+      const onZoomChangeMock = mock(() => {});
+
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        initialLevel: 50,
+        onZoomChange: onZoomChangeMock,
+      });
+
+      // Should be called once on initialization
+      expect(onZoomChangeMock).toHaveBeenCalledWith(50);
+    });
+
+    test("resetZoom should return to initialLevel when set", () => {
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        initialLevel: 50,
+      });
+
+      controller.zoomTo(200);
+      expect(controller.getZoomLevel()).toBe(200);
+
+      controller.resetZoom();
+      expect(controller.getZoomLevel()).toBe(50);
+    });
+
+    test("resetZoom should return to 100% when initialLevel is not set", () => {
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+      });
+
+      controller.zoomTo(200);
+      controller.resetZoom();
+      expect(controller.getZoomLevel()).toBe(100);
+    });
+
+    test("should call onReset callback when resetZoom is called", () => {
+      const onResetMock = mock(() => {});
+
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        onReset: onResetMock,
+      });
+
+      controller.zoomTo(200);
+      controller.resetZoom();
+
+      expect(onResetMock).toHaveBeenCalled();
+    });
+
+    test("initialLevel should be clamped to valid range", () => {
+      // Below min
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        initialLevel: 10, // Below 25%
+      });
+      expect(controller.getZoomLevel()).toBe(25);
+
+      controller.dispose();
+
+      // Above max
+      controller = new ZoomController({
+        container: env.container,
+        overlay: env.overlay,
+        initialLevel: 500, // Above 400%
+      });
+      expect(controller.getZoomLevel()).toBe(400);
+    });
+  });
+
   describe("Event Handling", () => {
     /**
      * Helper to create and dispatch keyboard events.

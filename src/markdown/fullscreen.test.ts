@@ -489,6 +489,60 @@ describe("FullscreenMarkdownView", () => {
 		});
 	});
 
+	describe("font-size zoom", () => {
+		test("should apply font-size instead of transform on zoom", () => {
+			const block = createMockBlock("<p>Test content</p>");
+			view.show(block);
+
+			const content = document.querySelector(
+				".markdown-fullscreen-content",
+			) as HTMLElement;
+
+			// Get zoom controller and change zoom
+			// Zoom to 150%
+			const event = new KeyboardEvent("keydown", {
+				key: "+",
+				bubbles: true,
+			});
+			document.dispatchEvent(event);
+
+			// Font-size should be set, not transform
+			// 150% of 16px = 24px
+			expect(content.style.fontSize).toBe("17.6px"); // 110% of 16px
+		});
+
+		test("should have 16px font-size at 100% zoom", () => {
+			const block = createMockBlock("<p>Test content</p>");
+			view.show(block);
+
+			const content = document.querySelector(
+				".markdown-fullscreen-content",
+			) as HTMLElement;
+
+			// At 100%, font-size should be 16px
+			expect(content.style.fontSize).toBe("16px");
+		});
+
+		test("should not use transform for zoom", () => {
+			const block = createMockBlock("<p>Test content</p>");
+			view.show(block);
+
+			const content = document.querySelector(
+				".markdown-fullscreen-content",
+			) as HTMLElement;
+
+			// Zoom in
+			const event = new KeyboardEvent("keydown", {
+				key: "+",
+				bubbles: true,
+			});
+			document.dispatchEvent(event);
+
+			// Transform should not include scale
+			expect(content.style.transform).not.toContain("scale");
+		});
+	});
+
 	describe("link handling", () => {
 		test("should show confirmation dialog on link click", async () => {
 			const blockWithLink = createMockBlock(

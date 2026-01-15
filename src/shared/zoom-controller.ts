@@ -42,6 +42,16 @@ export interface ZoomControllerOptions {
   zoomStep?: number;
   /** Callback when close button is clicked */
   onClose?: () => void;
+  /**
+   * Callback when zoom level changes.
+   * When provided, the controller will NOT apply default transform.
+   * The callback is responsible for handling the zoom display.
+   */
+  onZoomChange?: (level: number) => void;
+  /** Callback when reset is triggered (clicking zoom percentage) */
+  onReset?: () => void;
+  /** Initial zoom level (default: 100). Will be clamped to min/max range. */
+  initialLevel?: number;
 }
 
 /**
@@ -60,9 +70,19 @@ const DEFAULT_OPTIONS = {
  */
 export class ZoomController {
   private state: ZoomState;
-  private options: Required<Omit<ZoomControllerOptions, "onClose">> & {
+  private options: Required<
+    Omit<
+      ZoomControllerOptions,
+      "onClose" | "onZoomChange" | "onReset" | "initialLevel"
+    >
+  > & {
     onClose?: () => void;
+    onZoomChange?: (level: number) => void;
+    onReset?: () => void;
   };
+
+  /** The initial zoom level to reset to */
+  private initialLevel: number;
 
   private closeButton: HTMLElement | null = null;
   private zoomBar: HTMLElement | null = null;
@@ -92,9 +112,16 @@ export class ZoomController {
       ...options,
     };
 
-    // Initialize state at 100% zoom, centered origin
+    // Determine initial level, clamped to valid range
+    const requestedInitial = options.initialLevel ?? 100;
+    this.initialLevel = Math.max(
+      this.options.minZoom,
+      Math.min(requestedInitial, this.options.maxZoom),
+    );
+
+    // Initialize state at initial level, centered origin
     this.state = {
-      level: 100,
+      level: this.initialLevel,
       originX: 50,
       originY: 50,
     };
@@ -110,6 +137,7 @@ export class ZoomController {
     // Initialize
     this.injectStyles();
     this.createUI();
+    this.updateZoomDisplay(); // Update display with initial level
     this.setupEventListeners();
     this.applyZoom();
   }
@@ -156,14 +184,17 @@ export class ZoomController {
   }
 
   /**
-   * Resets zoom level to 100%.
+   * Resets zoom level to initial level (or 100% if not set).
    */
   resetZoom(): void {
-    this.state.level = 100;
+    this.state.level = this.initialLevel;
     this.state.originX = 50;
     this.state.originY = 50;
     this.applyZoom();
     this.updateZoomDisplay();
+
+    // Call onReset callback if provided
+    this.options.onReset?.();
   }
 
   /**
@@ -171,6 +202,21 @@ export class ZoomController {
    */
   getZoomLevel(): number {
     return this.state.level;
+  }
+
+  /**
+   * Sets the zoom level programmatically.
+   *
+   * @param level - New zoom level percentage
+   */
+  setZoomLevel(level: number): void {
+    const clampedLevel = Math.max(
+      this.options.minZoom,
+      Math.min(level, this.options.maxZoom),
+    );
+    this.state.level = clampedLevel;
+    this.applyZoom();
+    this.updateZoomDisplay();
   }
 
   /**
@@ -295,8 +341,16 @@ export class ZoomController {
 
   /**
    * Applies the current zoom level to the container.
+   * If onZoomChange callback is provided, calls it instead of applying transform.
    */
   private applyZoom(): void {
+    // If callback is provided, delegate zoom handling to the consumer
+    if (this.options.onZoomChange) {
+      this.options.onZoomChange(this.state.level);
+      return;
+    }
+
+    // Default behavior: apply CSS transform
     const scale = this.state.level / 100;
     this.options.container.style.transformOrigin = `${this.state.originX}% ${this.state.originY}%`;
     this.options.container.style.transform = `scale(${scale})`;
