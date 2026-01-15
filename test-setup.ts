@@ -18,6 +18,12 @@ globalThis.getComputedStyle = window.getComputedStyle.bind(
 ) as typeof getComputedStyle;
 globalThis.ResizeObserver =
 	window.ResizeObserver as unknown as typeof ResizeObserver;
+globalThis.Event = window.Event as unknown as typeof Event;
+// WheelEvent may not be available in happy-dom, use Event as fallback
+globalThis.WheelEvent = (window.WheelEvent ??
+	window.Event) as unknown as typeof WheelEvent;
+// Performance API
+globalThis.performance = window.performance as unknown as Performance;
 
 // Polyfill requestAnimationFrame for tests
 globalThis.requestAnimationFrame = (callback: FrameRequestCallback): number => {
