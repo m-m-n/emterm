@@ -13,6 +13,21 @@ import { ZoomController } from "../shared/zoom-controller.ts";
 import type { FullscreenConfig, FullscreenState, MarkdownBlock } from "./types.ts";
 
 /**
+ * Base font size for 100% zoom.
+ */
+const BASE_FONT_SIZE = 16;
+
+/**
+ * Minimum font size (prevents text from becoming unreadable).
+ */
+const MIN_FONT_SIZE = 4;
+
+/**
+ * Maximum font size (prevents excessive memory usage).
+ */
+const MAX_FONT_SIZE = 64;
+
+/**
  * Default fullscreen configuration.
  */
 const DEFAULT_CONFIG: FullscreenConfig = {
@@ -118,11 +133,15 @@ export class FullscreenMarkdownView {
 		this.content.setAttribute("tabindex", "-1");
 		this.content.focus();
 
-		// Initialize zoom controller
+		// Apply initial font-size (100% zoom)
+		this.applyFontSizeZoom(100);
+
+		// Initialize zoom controller with font-size callback
 		this.zoomController = new ZoomController({
 			container: this.content,
 			overlay: this.overlay,
 			onClose: () => this.close(),
+			onZoomChange: (level) => this.applyFontSizeZoom(level),
 		});
 
 		console.log(`[LOG][FRONTEND] Fullscreen markdown view opened: ${block.id}`);
@@ -186,6 +205,24 @@ export class FullscreenMarkdownView {
 	 */
 	isActive(): boolean {
 		return this.state.isActive;
+	}
+
+	/**
+	 * Applies font-size based zoom to the content container.
+	 *
+	 * @param level - Zoom level as percentage (100 = 16px)
+	 */
+	private applyFontSizeZoom(level: number): void {
+		if (!this.content) return;
+
+		// Calculate font-size from zoom level
+		let fontSize = (BASE_FONT_SIZE * level) / 100;
+
+		// Clamp to safe range
+		fontSize = Math.max(MIN_FONT_SIZE, Math.min(fontSize, MAX_FONT_SIZE));
+
+		// Apply font-size
+		this.content.style.fontSize = `${fontSize}px`;
 	}
 
 	/**
