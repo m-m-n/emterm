@@ -445,6 +445,15 @@ export class ZoomController {
         this.resetZoom();
         break;
 
+      case "1":
+        e.preventDefault();
+        e.stopPropagation();
+        // Jump to 100% (pixel-perfect)
+        this.state.originX = 50;
+        this.state.originY = 50;
+        this.zoomTo(100);
+        break;
+
       // Let other keys pass through (Escape, arrows, etc.)
     }
   }

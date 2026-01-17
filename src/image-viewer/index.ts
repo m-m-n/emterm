@@ -109,11 +109,11 @@ const STYLES = `
 }
 
 .image-viewer-canvas {
-  /* Remove max-width/height to allow size-based zoom */
-  /* Size is controlled via width/height style attributes */
   image-rendering: pixelated;
-  /* Transition for smooth zoom changes */
-  transition: width 0.1s ease, height 0.1s ease;
+  /* Use transform for zoom - smoother and better cross-browser support */
+  transition: transform 0.1s ease;
+  /* Prevent flexbox from shrinking canvas when larger than viewport */
+  flex-shrink: 0;
 }
 
 .image-viewer-info {
@@ -156,6 +156,20 @@ export class ImageViewer {
 
   // Current fit level (initial zoom to fit in viewport)
   private fitLevel = 100;
+
+  // Current zoom scale (for transform-based zoom)
+  // Using separate X/Y scales to correct aspect ratio distortion from flexbox
+  private currentScaleX = 1;
+  private currentScaleY = 1;
+
+  // Current pan offset (for combined transform)
+  private panOffsetX = 0;
+  private panOffsetY = 0;
+
+  // Constrained base size (actual rendered size before transform)
+  // This may differ from originalWidth/Height due to flexbox constraints
+  private constrainedBaseWidth = 0;
+  private constrainedBaseHeight = 0;
 
   // Animation state
   private animationFrames: Map<number, AnimationFrame> = new Map();
@@ -260,6 +274,10 @@ export class ImageViewer {
     // Show overlay first so we can get viewport dimensions
     this.overlay.classList.add("visible");
 
+    // Measure constrained base size (actual rendered size before transform)
+    // This captures any flexbox constraints applied by the browser
+    this.measureConstrainedBaseSize();
+
     // Calculate fit level based on viewport
     this.fitLevel = calculateFitLevel(
       image.width,
@@ -279,7 +297,9 @@ export class ImageViewer {
       canvas: this.canvas,
       overlay: this.overlay,
       onOffsetChange: (x, y) => {
-        this.canvas.style.transform = `translate(${x}px, ${y}px)`;
+        this.panOffsetX = x;
+        this.panOffsetY = y;
+        this.applyTransform();
       },
     });
 
@@ -311,9 +331,11 @@ export class ImageViewer {
     this.updateInfoDisplay(level);
 
     // Reset pan offset when zoom changes
+    this.panOffsetX = 0;
+    this.panOffsetY = 0;
     this.panController?.reset();
 
-    // Update pan controller with new canvas size
+    // Update pan controller with new canvas size (visual size after transform)
     const displayWidth = Math.round((this.originalWidth * level) / 100);
     const displayHeight = Math.round((this.originalHeight * level) / 100);
     this.panController?.updateCanvasSize(displayWidth, displayHeight);
@@ -384,8 +406,12 @@ export class ImageViewer {
     // Update pan controller bounds with current canvas size
     if (this.panController) {
       const currentLevel = this.zoomController?.getZoomLevel() ?? this.fitLevel;
-      const displayWidth = Math.round((this.originalWidth * currentLevel) / 100);
-      const displayHeight = Math.round((this.originalHeight * currentLevel) / 100);
+      const displayWidth = Math.round(
+        (this.originalWidth * currentLevel) / 100,
+      );
+      const displayHeight = Math.round(
+        (this.originalHeight * currentLevel) / 100,
+      );
       this.panController.updateCanvasSize(displayWidth, displayHeight);
     }
   }
@@ -412,7 +438,41 @@ export class ImageViewer {
   }
 
   /**
-   * Applies zoom level by setting canvas display dimensions.
+   * Measures the constrained base size of the canvas.
+   * This captures the actual rendered size after flexbox constraints are applied.
+   * Must be called when canvas is visible but before any transform is applied.
+   */
+  private measureConstrainedBaseSize(): void {
+    // Temporarily remove any transform to get the base size
+    const savedTransform = this.canvas.style.transform;
+    this.canvas.style.transform = "";
+
+    const rect = this.canvas.getBoundingClientRect();
+    this.constrainedBaseWidth = rect.width;
+    this.constrainedBaseHeight = rect.height;
+
+    // Restore transform
+    this.canvas.style.transform = savedTransform;
+
+    console.log(
+      `[DEBUG][FRONTEND] measureConstrainedBaseSize: original=${this.originalWidth}x${this.originalHeight}, ` +
+        `constrained=${this.constrainedBaseWidth}x${this.constrainedBaseHeight}`,
+    );
+  }
+
+  /**
+   * Applies the combined transform (translate + scale) to the canvas.
+   * Uses separate X/Y scale factors to correct aspect ratio distortion.
+   */
+  private applyTransform(): void {
+    this.canvas.style.transform =
+      `translate(${this.panOffsetX}px, ${this.panOffsetY}px) ` +
+      `scale(${this.currentScaleX}, ${this.currentScaleY})`;
+  }
+
+  /**
+   * Applies zoom level using CSS transform scale.
+   * Uses separate X/Y correction factors to fix aspect ratio distortion from flexbox.
    *
    * @param level - Zoom level percentage (100 = original size)
    */
@@ -422,30 +482,41 @@ export class ImageViewer {
       return;
     }
 
-    // Calculate display dimensions based on original size
-    let displayWidth = Math.round((this.originalWidth * level) / 100);
-    let displayHeight = Math.round((this.originalHeight * level) / 100);
-
-    // Guard against invalid dimensions (e.g., if originalWidth/Height is 0)
-    if (displayWidth <= 0 || displayHeight <= 0) {
+    // Guard against invalid base size
+    if (
+      this.constrainedBaseWidth <= 0 ||
+      this.constrainedBaseHeight <= 0 ||
+      this.originalWidth <= 0 ||
+      this.originalHeight <= 0
+    ) {
+      const uniformScale = level / 100;
+      this.currentScaleX = uniformScale;
+      this.currentScaleY = uniformScale;
+      this.applyTransform();
       return;
     }
 
-    // Clamp to safe canvas dimensions
-    if (displayWidth > MAX_CANVAS_DIMENSION) {
-      const ratio = MAX_CANVAS_DIMENSION / displayWidth;
-      displayWidth = MAX_CANVAS_DIMENSION;
-      displayHeight = Math.round(displayHeight * ratio);
-    }
-    if (displayHeight > MAX_CANVAS_DIMENSION) {
-      const ratio = MAX_CANVAS_DIMENSION / displayHeight;
-      displayHeight = MAX_CANVAS_DIMENSION;
-      displayWidth = Math.round(displayWidth * ratio);
-    }
+    // Calculate separate correction factors for X and Y
+    // This fixes aspect ratio distortion caused by flexbox constraints
+    const correctionX = this.originalWidth / this.constrainedBaseWidth;
+    const correctionY = this.originalHeight / this.constrainedBaseHeight;
 
-    // Set display size via CSS (keeps canvas internal resolution)
-    this.canvas.style.width = `${displayWidth}px`;
-    this.canvas.style.height = `${displayHeight}px`;
+    // Use uniform correction to maintain aspect ratio
+    const correction = Math.max(correctionX, correctionY);
+
+    // Apply correction with zoom level
+    // At 100% zoom, display should match original image dimensions
+    const zoomFactor = level / 100;
+    this.currentScaleX = correction * zoomFactor;
+    this.currentScaleY = correction * zoomFactor;
+
+    console.log(
+      `[DEBUG][FRONTEND] applyImageZoom: level=${level}%, ` +
+        `scaleX=${this.currentScaleX.toFixed(3)}, scaleY=${this.currentScaleY.toFixed(3)}`,
+    );
+
+    // Apply combined transform (scale + any existing pan offset)
+    this.applyTransform();
   }
 
   /**
@@ -464,8 +535,30 @@ export class ImageViewer {
    */
   private async decodeAndRender(image: DecodedImage): Promise<void> {
     try {
+      // Log received data info for debugging
+      const expectedSize = image.width * image.height * 4;
+      const base64Length = image.rgba_base64?.length ?? 0;
+      console.log(
+        `[DEBUG][FRONTEND] decodeAndRender: dimensions=${image.width}x${image.height}, expectedBytes=${expectedSize}, base64Length=${base64Length}`,
+      );
+
+      // Validate base64 data
+      if (!image.rgba_base64 || base64Length === 0) {
+        throw new Error("No rgba_base64 data received");
+      }
+
       // Decode base64 to binary
       const binaryString = atob(image.rgba_base64);
+      console.log(
+        `[DEBUG][FRONTEND] base64 decoded to ${binaryString.length} bytes (expected ${expectedSize})`,
+      );
+
+      if (binaryString.length !== expectedSize) {
+        throw new Error(
+          `Size mismatch: decoded ${binaryString.length} bytes, expected ${expectedSize}`,
+        );
+      }
+
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
@@ -481,13 +574,25 @@ export class ImageViewer {
       // Create ImageBitmap for efficient rendering
       this.currentBitmap = await createImageBitmap(imageData);
 
-      // Set canvas size to match image
+      // Set canvas internal size to match image
       this.canvas.width = image.width;
       this.canvas.height = image.height;
+
+      // Set canvas CSS size to match internal dimensions
+      // This is the base size that transform: scale() will operate on
+      this.canvas.style.width = `${image.width}px`;
+      this.canvas.style.height = `${image.height}px`;
+
+      console.log(
+        `[DEBUG][FRONTEND] Canvas dimensions set: internal=${this.canvas.width}x${this.canvas.height}, ` +
+          `style=${this.canvas.style.width}x${this.canvas.style.height}`,
+      );
 
       // Draw the image
       this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
       this.ctx.drawImage(this.currentBitmap, 0, 0);
+
+      console.log("[DEBUG][FRONTEND] Image decoded and rendered successfully");
     } catch (error) {
       console.error("[ERROR][FRONTEND] Failed to decode image:", error);
       // Show error state
@@ -524,10 +629,16 @@ export class ImageViewer {
       this.panController = null;
     }
 
+    // Reset transform state
+    this.currentScaleX = 1;
+    this.currentScaleY = 1;
+    this.panOffsetX = 0;
+    this.panOffsetY = 0;
+    this.constrainedBaseWidth = 0;
+    this.constrainedBaseHeight = 0;
+
     // Reset canvas transform
     this.canvas.style.transform = "";
-    this.canvas.style.width = "";
-    this.canvas.style.height = "";
 
     this.overlay.classList.remove("visible");
     this.stopAnimation();
