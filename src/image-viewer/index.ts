@@ -1,7 +1,9 @@
 /**
  * Fullscreen Image Viewer.
  *
- * Displays images in a fullscreen overlay, similar to the MarkdownViewer pattern.
+ * Displays images in a fullscreen overlay with two display modes:
+ * - Pixel Perfect (100%): Shows image at original size
+ * - Fit to Window: Scales image to fit within viewport
  *
  * @module image-viewer/index
  */
@@ -11,27 +13,25 @@ import type {
   AnimationEvent,
   AnimationState,
 } from "../image/types.ts";
-import { ZoomController } from "../shared/zoom-controller.ts";
+import { DisplayModeController } from "./display-mode.ts";
+import type { DisplayModeState } from "./display-mode.ts";
 import { PanController } from "./pan-controller.ts";
 
 /**
  * Viewport padding factor (95% of viewport).
+ * Exported for backward compatibility with existing tests.
  */
 const VIEWPORT_PADDING = 0.95;
 
 /**
  * Default zoom constraints.
+ * Kept for backward compatibility.
  */
 const DEFAULT_MIN_ZOOM = 25;
-const DEFAULT_MAX_ZOOM = 400;
-
-/**
- * Maximum safe canvas dimension (to avoid browser limits).
- */
-const MAX_CANVAS_DIMENSION = 16384;
 
 /**
  * Calculates the fit level to display an image within a viewport.
+ * Exported for backward compatibility with existing tests.
  *
  * @param imageWidth - Original image width
  * @param imageHeight - Original image height
@@ -138,6 +138,12 @@ interface AnimationFrame {
 
 /**
  * Fullscreen image viewer component.
+ *
+ * Features:
+ * - Two display modes: Pixel Perfect (100%) and Fit to Window
+ * - Keyboard shortcuts: 'f' toggle, '1' pixel mode, '0' fit mode, Escape close
+ * - Drag pan for large images in pixel mode
+ * - Animated image support (GIF/APNG)
  */
 export class ImageViewer {
   private container: HTMLElement;
@@ -150,14 +156,11 @@ export class ImageViewer {
   private currentImage: DecodedImage | null = null;
   private currentBitmap: ImageBitmap | null = null;
 
-  // Original image dimensions (for zoom calculations)
+  // Original image dimensions
   private originalWidth = 0;
   private originalHeight = 0;
 
-  // Current fit level (initial zoom to fit in viewport)
-  private fitLevel = 100;
-
-  // Current zoom scale (for transform-based zoom)
+  // Current scale (for transform-based display)
   // Using separate X/Y scales to correct aspect ratio distortion from flexbox
   private currentScaleX = 1;
   private currentScaleY = 1;
@@ -178,15 +181,14 @@ export class ImageViewer {
   private animationState: AnimationState = "Stopped";
 
   // Bound event handlers for cleanup
-  private boundHandleKeydown: (e: KeyboardEvent) => void;
   private boundHandleResize: () => void;
 
   // Resize throttling
   private resizeThrottleTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly RESIZE_THROTTLE_MS = 100;
 
-  // Zoom controller
-  private zoomController: ZoomController | null = null;
+  // Display mode controller (replaces ZoomController for ImageViewer)
+  private displayModeController: DisplayModeController | null = null;
 
   // Pan controller
   private panController: PanController | null = null;
@@ -230,11 +232,7 @@ export class ImageViewer {
     document.body.appendChild(this.overlay);
 
     // Bind event handlers
-    this.boundHandleKeydown = this.handleKeydown.bind(this);
     this.boundHandleResize = this.handleResize.bind(this);
-    document.addEventListener("keydown", this.boundHandleKeydown, {
-      capture: true,
-    });
   }
 
   /**
@@ -278,19 +276,21 @@ export class ImageViewer {
     // This captures any flexbox constraints applied by the browser
     this.measureConstrainedBaseSize();
 
-    // Calculate fit level based on viewport
-    this.fitLevel = calculateFitLevel(
-      image.width,
-      image.height,
-      this.overlay.clientWidth,
-      this.overlay.clientHeight,
-    );
+    // Initialize display mode controller with pixel mode (100%)
+    this.displayModeController = new DisplayModeController({
+      imageWidth: image.width,
+      imageHeight: image.height,
+      viewportWidth: this.overlay.clientWidth,
+      viewportHeight: this.overlay.clientHeight,
+      overlay: this.overlay,
+      initialMode: "pixel",
+      onModeChange: (state) => this.handleModeChange(state),
+      onClose: () => this.hide(),
+    });
 
-    // Apply initial fit zoom
-    this.applyImageZoom(this.fitLevel);
-
-    // Update info display with fit percentage
-    this.updateInfoDisplay(this.fitLevel);
+    // Apply initial pixel mode (100%)
+    this.applyScale(1.0);
+    this.updateInfoDisplay("pixel");
 
     // Initialize pan controller
     this.panController = new PanController({
@@ -303,42 +303,57 @@ export class ImageViewer {
       },
     });
 
-    // Initialize zoom controller with custom callbacks
-    this.zoomController = new ZoomController({
-      container: this.canvas,
-      overlay: this.overlay,
-      initialLevel: this.fitLevel,
-      onClose: () => this.hide(),
-      onZoomChange: (level) => this.handleZoomChange(level),
-      onReset: () => this.handleZoomReset(),
-    });
+    // Update pan state based on initial mode
+    this.updatePanState();
 
-    // Setup resize handler to recalculate fit level on window resize
+    // Setup resize handler to recalculate fit scale on window resize
     this.setupResizeHandler();
 
     console.log(
-      `[LOG][FRONTEND] Image viewer opened: id=${image.id}, ${image.width}x${image.height}, fit=${this.fitLevel}%`,
+      `[LOG][FRONTEND] Image viewer opened: id=${image.id}, ${image.width}x${image.height}, mode=pixel (100%)`,
     );
   }
 
   /**
-   * Handles zoom level changes from ZoomController.
+   * Handles mode changes from DisplayModeController.
    *
-   * @param level - New zoom level percentage
+   * @param state - New display mode state
    */
-  private handleZoomChange(level: number): void {
-    this.applyImageZoom(level);
-    this.updateInfoDisplay(level);
+  private handleModeChange(state: DisplayModeState): void {
+    // Apply the new scale
+    this.applyScale(state.scale);
 
-    // Reset pan offset when zoom changes
+    // Update info display
+    this.updateInfoDisplay(state.mode);
+
+    // Reset pan offset when mode changes
     this.panOffsetX = 0;
     this.panOffsetY = 0;
     this.panController?.reset();
 
-    // Update pan controller with new canvas size (visual size after transform)
-    const displayWidth = Math.round((this.originalWidth * level) / 100);
-    const displayHeight = Math.round((this.originalHeight * level) / 100);
-    this.panController?.updateCanvasSize(displayWidth, displayHeight);
+    // Update pan state based on new mode
+    this.updatePanState();
+
+    console.log(
+      `[DEBUG][FRONTEND] Mode changed: mode=${state.mode}, scale=${(state.scale * 100).toFixed(0)}%`,
+    );
+  }
+
+  /**
+   * Updates the pan controller state based on current mode.
+   * Pan is enabled only in pixel mode when image exceeds viewport.
+   */
+  private updatePanState(): void {
+    if (!this.panController || !this.displayModeController) return;
+
+    const state = this.displayModeController.getState();
+
+    // Calculate display size
+    const displayWidth = Math.round(this.originalWidth * state.scale);
+    const displayHeight = Math.round(this.originalHeight * state.scale);
+
+    // Update pan controller with current display size
+    this.panController.updateCanvasSize(displayWidth, displayHeight);
   }
 
   /**
@@ -380,61 +395,16 @@ export class ImageViewer {
   private performResizeUpdate(): void {
     if (!this.isVisible() || !this.currentImage) return;
 
-    // Recalculate fit level based on new viewport size
-    const newFitLevel = calculateFitLevel(
-      this.originalWidth,
-      this.originalHeight,
-      this.overlay.clientWidth,
-      this.overlay.clientHeight,
-    );
-
-    // Update fit level
-    this.fitLevel = newFitLevel;
-
-    // Update zoom controller's initial level for reset behavior
-    if (this.zoomController) {
-      // Get current zoom level from zoom controller
-      const currentLevel = this.zoomController.getZoomLevel();
-
-      // If current zoom is at or below the old fit level, adjust to new fit level
-      // This ensures the image still fits after resize
-      if (currentLevel <= newFitLevel) {
-        this.zoomController.setZoomLevel(newFitLevel);
-      }
-    }
-
-    // Update pan controller bounds with current canvas size
-    if (this.panController) {
-      const currentLevel = this.zoomController?.getZoomLevel() ?? this.fitLevel;
-      const displayWidth = Math.round(
-        (this.originalWidth * currentLevel) / 100,
+    // Update display mode controller with new viewport dimensions
+    if (this.displayModeController) {
+      this.displayModeController.updateViewport(
+        this.overlay.clientWidth,
+        this.overlay.clientHeight,
       );
-      const displayHeight = Math.round(
-        (this.originalHeight * currentLevel) / 100,
-      );
-      this.panController.updateCanvasSize(displayWidth, displayHeight);
-    }
-  }
-
-  /**
-   * Handles zoom reset from ZoomController.
-   * Called after ZoomController has already applied its initialLevel.
-   * We override with current fitLevel to handle window resize correctly.
-   */
-  private handleZoomReset(): void {
-    // Update ZoomController's level to current fitLevel if different
-    // This handles the case where fitLevel changed due to window resize
-    if (this.zoomController) {
-      const currentLevel = this.zoomController.getZoomLevel();
-      if (currentLevel !== this.fitLevel) {
-        // Note: setZoomLevel will trigger onZoomChange which handles display
-        this.zoomController.setZoomLevel(this.fitLevel);
-        return; // onZoomChange already handled the display update
-      }
     }
 
-    // If already at fitLevel, just ensure pan is reset
-    this.panController?.reset();
+    // Update pan bounds
+    this.updatePanState();
   }
 
   /**
@@ -471,14 +441,14 @@ export class ImageViewer {
   }
 
   /**
-   * Applies zoom level using CSS transform scale.
+   * Applies scale using CSS transform.
    * Uses separate X/Y correction factors to fix aspect ratio distortion from flexbox.
    *
-   * @param level - Zoom level percentage (100 = original size)
+   * @param scale - Scale value (1.0 = 100%)
    */
-  private applyImageZoom(level: number): void {
-    // Guard against invalid zoom level
-    if (level <= 0 || !Number.isFinite(level)) {
+  private applyScale(scale: number): void {
+    // Guard against invalid scale
+    if (scale <= 0 || !Number.isFinite(scale)) {
       return;
     }
 
@@ -489,9 +459,8 @@ export class ImageViewer {
       this.originalWidth <= 0 ||
       this.originalHeight <= 0
     ) {
-      const uniformScale = level / 100;
-      this.currentScaleX = uniformScale;
-      this.currentScaleY = uniformScale;
+      this.currentScaleX = scale;
+      this.currentScaleY = scale;
       this.applyTransform();
       return;
     }
@@ -504,14 +473,12 @@ export class ImageViewer {
     // Use uniform correction to maintain aspect ratio
     const correction = Math.max(correctionX, correctionY);
 
-    // Apply correction with zoom level
-    // At 100% zoom, display should match original image dimensions
-    const zoomFactor = level / 100;
-    this.currentScaleX = correction * zoomFactor;
-    this.currentScaleY = correction * zoomFactor;
+    // Apply correction with scale
+    this.currentScaleX = correction * scale;
+    this.currentScaleY = correction * scale;
 
     console.log(
-      `[DEBUG][FRONTEND] applyImageZoom: level=${level}%, ` +
+      `[DEBUG][FRONTEND] applyScale: scale=${(scale * 100).toFixed(0)}%, ` +
         `scaleX=${this.currentScaleX.toFixed(3)}, scaleY=${this.currentScaleY.toFixed(3)}`,
     );
 
@@ -520,12 +487,14 @@ export class ImageViewer {
   }
 
   /**
-   * Updates the info display with current zoom level.
+   * Updates the info display with current mode.
    *
-   * @param level - Current zoom level percentage
+   * @param mode - Current display mode ('pixel' or 'fit')
    */
-  private updateInfoDisplay(level: number): void {
-    this.infoElement.textContent = `${this.originalWidth} x ${this.originalHeight} | ${level}% | Press Escape to close`;
+  private updateInfoDisplay(mode: string): void {
+    const modeText = mode === "pixel" ? "100%" : "Fit";
+    const helpText = "f:toggle 1:100% 0:fit Esc:close";
+    this.infoElement.textContent = `${this.originalWidth} x ${this.originalHeight} | ${modeText} | ${helpText}`;
   }
 
   /**
@@ -617,10 +586,10 @@ export class ImageViewer {
       this.resizeThrottleTimer = null;
     }
 
-    // Dispose zoom controller
-    if (this.zoomController) {
-      this.zoomController.dispose();
-      this.zoomController = null;
+    // Dispose display mode controller
+    if (this.displayModeController) {
+      this.displayModeController.dispose();
+      this.displayModeController = null;
     }
 
     // Dispose pan controller
@@ -652,27 +621,6 @@ export class ImageViewer {
    */
   isVisible(): boolean {
     return this.overlay.classList.contains("visible");
-  }
-
-  /**
-   * Handles keyboard events.
-   */
-  private handleKeydown(e: KeyboardEvent): void {
-    if (!this.isVisible()) return;
-
-    // Block all keyboard input from reaching the shell while viewer is active
-    // Both preventDefault() and stopPropagation() are needed:
-    // - preventDefault() prevents default browser behavior
-    // - stopPropagation() prevents other listeners from receiving the event
-    e.preventDefault();
-    e.stopPropagation();
-
-    switch (e.key) {
-      case "Escape":
-        this.hide();
-        break;
-      // Add more keys if needed (e.g., arrow keys for navigation)
-    }
   }
 
   /**
@@ -831,10 +779,10 @@ export class ImageViewer {
       this.resizeThrottleTimer = null;
     }
 
-    // Dispose zoom controller
-    if (this.zoomController) {
-      this.zoomController.dispose();
-      this.zoomController = null;
+    // Dispose display mode controller
+    if (this.displayModeController) {
+      this.displayModeController.dispose();
+      this.displayModeController = null;
     }
 
     // Dispose pan controller
@@ -845,11 +793,6 @@ export class ImageViewer {
 
     // Stop animation
     this.stopAnimation();
-
-    // Remove event listeners
-    document.removeEventListener("keydown", this.boundHandleKeydown, {
-      capture: true,
-    });
 
     // Clean up ImageBitmaps
     if (this.currentBitmap) {
