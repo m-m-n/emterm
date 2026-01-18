@@ -13,19 +13,14 @@ import { ZoomController } from "../shared/zoom-controller.ts";
 import type { FullscreenConfig, FullscreenState, MarkdownBlock } from "./types.ts";
 
 /**
- * Base font size for 100% zoom.
+ * Default minimum zoom level.
  */
-const BASE_FONT_SIZE = 16;
+const MIN_ZOOM = 25;
 
 /**
- * Minimum font size (prevents text from becoming unreadable).
+ * Default maximum zoom level.
  */
-const MIN_FONT_SIZE = 4;
-
-/**
- * Maximum font size (prevents excessive memory usage).
- */
-const MAX_FONT_SIZE = 64;
+const MAX_ZOOM = 400;
 
 /**
  * Default fullscreen configuration.
@@ -133,15 +128,15 @@ export class FullscreenMarkdownView {
 		this.content.setAttribute("tabindex", "-1");
 		this.content.focus();
 
-		// Apply initial font-size (100% zoom)
-		this.applyFontSizeZoom(100);
+		// Apply initial zoom (100%)
+		this.applyZoom(100);
 
-		// Initialize zoom controller with font-size callback
+		// Initialize zoom controller with transform-based zoom callback
 		this.zoomController = new ZoomController({
 			container: this.content,
 			overlay: this.overlay,
 			onClose: () => this.close(),
-			onZoomChange: (level) => this.applyFontSizeZoom(level),
+			onZoomChange: (level) => this.applyZoom(level),
 		});
 
 		console.log(`[LOG][FRONTEND] Fullscreen markdown view opened: ${block.id}`);
@@ -208,21 +203,24 @@ export class FullscreenMarkdownView {
 	}
 
 	/**
-	 * Applies font-size based zoom to the content container.
+	 * Applies CSS zoom to the content container.
+	 * Uses the CSS zoom property which is well-supported in WebKit (used by Wry)
+	 * and correctly interacts with scrolling.
 	 *
-	 * @param level - Zoom level as percentage (100 = 16px)
+	 * @param level - Zoom level as percentage (100 = original size)
 	 */
-	private applyFontSizeZoom(level: number): void {
+	private applyZoom(level: number): void {
 		if (!this.content) return;
 
-		// Calculate font-size from zoom level
-		let fontSize = (BASE_FONT_SIZE * level) / 100;
-
 		// Clamp to safe range
-		fontSize = Math.max(MIN_FONT_SIZE, Math.min(fontSize, MAX_FONT_SIZE));
+		const clampedLevel = Math.max(MIN_ZOOM, Math.min(level, MAX_ZOOM));
 
-		// Apply font-size
-		this.content.style.fontSize = `${fontSize}px`;
+		// Apply CSS zoom property (zoom: 2 = 200%)
+		// Note: zoom is non-standard but well-supported in WebKit/Blink
+		const zoomValue = clampedLevel / 100;
+		this.content.style.zoom = String(zoomValue);
+
+		console.log(`[DEBUG][FRONTEND] applyZoom: level=${level}%, zoom=${zoomValue}`);
 	}
 
 	/**

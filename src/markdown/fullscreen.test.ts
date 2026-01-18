@@ -489,8 +489,8 @@ describe("FullscreenMarkdownView", () => {
 		});
 	});
 
-	describe("font-size zoom", () => {
-		test("should apply font-size instead of transform on zoom", () => {
+	describe("CSS zoom", () => {
+		test("should apply CSS zoom on zoom change", () => {
 			const block = createMockBlock("<p>Test content</p>");
 			view.show(block);
 
@@ -499,19 +499,18 @@ describe("FullscreenMarkdownView", () => {
 			) as HTMLElement;
 
 			// Get zoom controller and change zoom
-			// Zoom to 150%
+			// Zoom in (+10%)
 			const event = new KeyboardEvent("keydown", {
 				key: "+",
 				bubbles: true,
 			});
 			document.dispatchEvent(event);
 
-			// Font-size should be set, not transform
-			// 150% of 16px = 24px
-			expect(content.style.fontSize).toBe("17.6px"); // 110% of 16px
+			// CSS zoom should be set (110% = 1.1)
+			expect(content.style.zoom).toBe("1.1");
 		});
 
-		test("should have 16px font-size at 100% zoom", () => {
+		test("should have zoom=1 at 100%", () => {
 			const block = createMockBlock("<p>Test content</p>");
 			view.show(block);
 
@@ -519,8 +518,8 @@ describe("FullscreenMarkdownView", () => {
 				".markdown-fullscreen-content",
 			) as HTMLElement;
 
-			// At 100%, font-size should be 16px
-			expect(content.style.fontSize).toBe("16px");
+			// At 100%, zoom should be 1
+			expect(content.style.zoom).toBe("1");
 		});
 
 		test("should not use transform for zoom", () => {
