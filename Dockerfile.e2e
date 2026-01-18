@@ -30,6 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk \
     # For Bun installation
     unzip \
+    # ImageMagick for creating test images
+    imagemagick \
     # Cleanup
     && rm -rf /var/lib/apt/lists/*
 
@@ -69,6 +71,9 @@ RUN mkdir -p e2e-tests/screenshots
 
 # Copy test image to short path for E2E tests (avoids WebDriver key input issues)
 RUN cp src-tauri/icons/128x128.png /tmp/test.png
+
+# Create large test image (1080x1920) for zoom testing (8-bit depth to ensure RGBA not RGBA16)
+RUN convert -size 1080x1920 -depth 8 xc:blue -fill white -draw "rectangle 100,100 980,1820" -fill red -draw "circle 540,960 540,500" /tmp/large-test.png
 
 # Ensure cargo binaries are in PATH for all shells
 ENV PATH="/root/.cargo/bin:/root/.bun/bin:${PATH}"
