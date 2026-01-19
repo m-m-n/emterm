@@ -66,7 +66,7 @@ export const ZOOM_CONTROLLER_STYLES = `
   min-width: 50px;
   text-align: center;
   color: white;
-  font-family: monospace;
+  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
   font-size: 12px;
   cursor: pointer;
   padding: 4px 8px;
