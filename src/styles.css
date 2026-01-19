@@ -8,12 +8,12 @@ html,
 body {
   height: 100%;
   overflow: hidden;
-  background-color: #1e1e1e;
+  background-color: #000000;
 }
 
 body {
   font-family: "Menlo", "Monaco", "Courier New", monospace;
-  color: #d4d4d4;
+  color: #40ff40;
 }
 
 :root {
@@ -27,7 +27,7 @@ body {
   padding: 0;
   font-size: var(--terminal-font-size);
   line-height: var(--terminal-line-height);
-  background-color: #1e1e1e;
+  background-color: #000000;
   position: relative;
 }
 
@@ -242,8 +242,8 @@ body {
 .ime-composition {
   position: fixed;
   z-index: 99999;
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: #000000;
+  color: #40ff40;
   font-family: inherit;
   font-size: inherit;
   white-space: pre;

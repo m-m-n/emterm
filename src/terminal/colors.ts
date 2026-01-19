@@ -16,30 +16,31 @@ export interface Rgb {
 
 /**
  * Standard 16 terminal colors (indices 0-15).
+ * WezTerm color scheme.
  *
  * Colors 0-7 are the standard colors.
  * Colors 8-15 are the bright variants.
  */
 export const PALETTE_16: readonly Rgb[] = Object.freeze([
-	// Standard colors (0-7)
-	{ r: 0, g: 0, b: 0 }, // 0: Black
-	{ r: 205, g: 49, b: 49 }, // 1: Red
-	{ r: 13, g: 188, b: 121 }, // 2: Green
-	{ r: 229, g: 229, b: 16 }, // 3: Yellow
-	{ r: 36, g: 114, b: 200 }, // 4: Blue
-	{ r: 188, g: 63, b: 188 }, // 5: Magenta
-	{ r: 17, g: 168, b: 205 }, // 6: Cyan
-	{ r: 229, g: 229, b: 229 }, // 7: White
+	// Standard colors (0-7) - WezTerm scheme
+	{ r: 0x00, g: 0x00, b: 0x00 }, // 0: Black (#000000)
+	{ r: 0xff, g: 0x00, b: 0x00 }, // 1: Red (#ff0000)
+	{ r: 0x00, g: 0xdd, b: 0x00 }, // 2: Green (#00dd00)
+	{ r: 0xee, g: 0xee, b: 0x00 }, // 3: Yellow (#eeee00)
+	{ r: 0x40, g: 0x40, b: 0xff }, // 4: Blue (#4040ff)
+	{ r: 0xff, g: 0x00, b: 0xff }, // 5: Magenta (#ff00ff)
+	{ r: 0x00, g: 0xdd, b: 0xdd }, // 6: Cyan (#00dddd)
+	{ r: 0xde, g: 0xda, b: 0xcf }, // 7: White (#dedacf)
 
-	// Bright colors (8-15)
-	{ r: 102, g: 102, b: 102 }, // 8: Bright Black (Gray)
-	{ r: 241, g: 76, b: 76 }, // 9: Bright Red
-	{ r: 35, g: 209, b: 139 }, // 10: Bright Green
-	{ r: 245, g: 245, b: 67 }, // 11: Bright Yellow
-	{ r: 59, g: 142, b: 234 }, // 12: Bright Blue
-	{ r: 214, g: 112, b: 214 }, // 13: Bright Magenta
-	{ r: 41, g: 184, b: 219 }, // 14: Bright Cyan
-	{ r: 255, g: 255, b: 255 }, // 15: Bright White
+	// Bright colors (8-15) - WezTerm scheme
+	{ r: 0x55, g: 0x55, b: 0x55 }, // 8: Bright Black (#555555)
+	{ r: 0xff, g: 0x60, b: 0x60 }, // 9: Bright Red (#ff6060)
+	{ r: 0x60, g: 0xff, b: 0x60 }, // 10: Bright Green (#60ff60)
+	{ r: 0xff, g: 0xff, b: 0x60 }, // 11: Bright Yellow (#ffff60)
+	{ r: 0x60, g: 0x60, b: 0xff }, // 12: Bright Blue (#6060ff)
+	{ r: 0xff, g: 0x60, b: 0xff }, // 13: Bright Magenta (#ff60ff)
+	{ r: 0x60, g: 0xff, b: 0xff }, // 14: Bright Cyan (#60ffff)
+	{ r: 0xff, g: 0xff, b: 0xff }, // 15: Bright White (#ffffff)
 ]);
 
 /**
@@ -147,9 +148,9 @@ export function indexToCSS(index: number): string {
 }
 
 /**
- * Default foreground color.
+ * Default foreground color (WezTerm: bright green #40ff40).
  */
-export const DEFAULT_FOREGROUND: Rgb = { r: 229, g: 229, b: 229 };
+export const DEFAULT_FOREGROUND: Rgb = { r: 0x40, g: 0xff, b: 0x40 };
 
 /**
  * Default background color.

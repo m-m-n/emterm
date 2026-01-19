@@ -188,15 +188,15 @@ export class TerminalRenderer {
         animation: cursor-blink 1s step-end infinite;
       }
       .terminal-cursor.block {
-        background-color: #c0c0c0;
+        background-color: #008000;
       }
       .terminal-cursor.underline {
         background-color: transparent;
-        border-bottom: 2px solid #c0c0c0;
+        border-bottom: 2px solid #008000;
       }
       .terminal-cursor.bar {
         background-color: transparent;
-        border-left: 2px solid #c0c0c0;
+        border-left: 2px solid #008000;
         width: 2px !important;
       }
     `;
