@@ -26,12 +26,78 @@ describe("PALETTE_16", () => {
 		expect(PALETTE_16[0]).toEqual({ r: 0, g: 0, b: 0 });
 	});
 
-	it("should have white as last standard color", () => {
-		expect(PALETTE_16[7]).toEqual({ r: 229, g: 229, b: 229 });
+	it("should have WezTerm white as last standard color", () => {
+		// WezTerm white: #dedacf
+		expect(PALETTE_16[7]).toEqual({ r: 0xde, g: 0xda, b: 0xcf });
 	});
 
 	it("should have bright white as last color", () => {
 		expect(PALETTE_16[15]).toEqual({ r: 255, g: 255, b: 255 });
+	});
+
+	it("should have WezTerm red color", () => {
+		// WezTerm red: #ff0000
+		expect(PALETTE_16[1]).toEqual({ r: 0xff, g: 0x00, b: 0x00 });
+	});
+
+	it("should have WezTerm green color", () => {
+		// WezTerm green: #00dd00
+		expect(PALETTE_16[2]).toEqual({ r: 0x00, g: 0xdd, b: 0x00 });
+	});
+
+	it("should have WezTerm yellow color", () => {
+		// WezTerm yellow: #eeee00
+		expect(PALETTE_16[3]).toEqual({ r: 0xee, g: 0xee, b: 0x00 });
+	});
+
+	it("should have WezTerm blue color", () => {
+		// WezTerm blue: #4040ff
+		expect(PALETTE_16[4]).toEqual({ r: 0x40, g: 0x40, b: 0xff });
+	});
+
+	it("should have WezTerm magenta color", () => {
+		// WezTerm magenta: #ff00ff
+		expect(PALETTE_16[5]).toEqual({ r: 0xff, g: 0x00, b: 0xff });
+	});
+
+	it("should have WezTerm cyan color", () => {
+		// WezTerm cyan: #00dddd
+		expect(PALETTE_16[6]).toEqual({ r: 0x00, g: 0xdd, b: 0xdd });
+	});
+
+	it("should have WezTerm bright black color", () => {
+		// WezTerm bright black: #555555
+		expect(PALETTE_16[8]).toEqual({ r: 0x55, g: 0x55, b: 0x55 });
+	});
+
+	it("should have WezTerm bright red color", () => {
+		// WezTerm bright red: #ff6060
+		expect(PALETTE_16[9]).toEqual({ r: 0xff, g: 0x60, b: 0x60 });
+	});
+
+	it("should have WezTerm bright green color", () => {
+		// WezTerm bright green: #60ff60
+		expect(PALETTE_16[10]).toEqual({ r: 0x60, g: 0xff, b: 0x60 });
+	});
+
+	it("should have WezTerm bright yellow color", () => {
+		// WezTerm bright yellow: #ffff60
+		expect(PALETTE_16[11]).toEqual({ r: 0xff, g: 0xff, b: 0x60 });
+	});
+
+	it("should have WezTerm bright blue color", () => {
+		// WezTerm bright blue: #6060ff
+		expect(PALETTE_16[12]).toEqual({ r: 0x60, g: 0x60, b: 0xff });
+	});
+
+	it("should have WezTerm bright magenta color", () => {
+		// WezTerm bright magenta: #ff60ff
+		expect(PALETTE_16[13]).toEqual({ r: 0xff, g: 0x60, b: 0xff });
+	});
+
+	it("should have WezTerm bright cyan color", () => {
+		// WezTerm bright cyan: #60ffff
+		expect(PALETTE_16[14]).toEqual({ r: 0x60, g: 0xff, b: 0xff });
 	});
 });
 
@@ -150,8 +216,9 @@ describe("sgrColorToRgb", () => {
 });
 
 describe("DEFAULT_FOREGROUND", () => {
-	it("should be light gray", () => {
-		expect(DEFAULT_FOREGROUND).toEqual({ r: 229, g: 229, b: 229 });
+	it("should be WezTerm bright green", () => {
+		// WezTerm foreground: #40ff40
+		expect(DEFAULT_FOREGROUND).toEqual({ r: 0x40, g: 0xff, b: 0x40 });
 	});
 });
 
