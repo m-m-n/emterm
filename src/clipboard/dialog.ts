@@ -111,7 +111,7 @@ export function showPasteDialog(
       padding: 12px;
       border-radius: 4px;
       font-size: 13px;
-      font-family: "Menlo", "Monaco", "Courier New", monospace;
+      font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
       overflow-x: auto;
       max-height: 200px;
       margin: 0 0 20px 0;

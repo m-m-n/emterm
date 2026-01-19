@@ -12,13 +12,13 @@ body {
 }
 
 body {
-  font-family: "Menlo", "Monaco", "Courier New", monospace;
+  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
   color: #40ff40;
 }
 
 :root {
-  --terminal-font-size: 14px;
-  --terminal-line-height: 16px;
+  --terminal-font-size: 13pt;
+  --terminal-line-height: 15pt;
 }
 
 #terminal {
@@ -152,7 +152,7 @@ body {
   padding: 0.2em 0.4em;
   margin: 0;
   font-size: 85%;
-  font-family: "Menlo", "Monaco", "Courier New", monospace;
+  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
   border-radius: 3px;
 }
 
@@ -464,7 +464,7 @@ body {
 .link-confirm-url {
   margin: 0 0 1.5rem 0;
   color: var(--md-link, #569cd6);
-  font-family: monospace;
+  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
   font-size: 0.9rem;
   word-break: break-all;
   padding: 0.5rem;
@@ -550,7 +550,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.7);
-  font-family: monospace;
+  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
   font-size: 12px;
   user-select: none;
 }
