@@ -45,7 +45,9 @@ export class SelectionRenderer {
 	 * Creates the container lazily on first render.
 	 */
 	private ensureOverlayContainer(): HTMLDivElement {
-		if (!this.overlayContainer) {
+		// Check if overlayContainer exists AND is still connected to DOM
+		// (container.innerHTML = "" during resize removes overlayContainer from DOM)
+		if (!this.overlayContainer || !this.overlayContainer.isConnected) {
 			this.overlayContainer = document.createElement("div");
 			this.overlayContainer.className = "selection-overlay-container";
 			this.overlayContainer.style.cssText = `
