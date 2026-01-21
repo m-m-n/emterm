@@ -147,12 +147,17 @@ export class SelectionModel {
 	 *
 	 * @param range - Selection range
 	 * @param mode - Selection mode
+	 * @param isSelecting - If true, keep selection active for drag extension (default: false)
 	 */
-	setSelection(range: SelectionRange, mode: SelectionMode = "char"): void {
+	setSelection(
+		range: SelectionRange,
+		mode: SelectionMode = "char",
+		isSelecting = false,
+	): void {
 		this.state = {
 			range: { ...range },
 			mode,
-			isSelecting: false,
+			isSelecting,
 		};
 
 		this.emit({
@@ -161,8 +166,32 @@ export class SelectionModel {
 			mode: this.state.mode,
 		});
 
+		if (!isSelecting) {
+			this.emit({
+				type: "end",
+				range: this.state.range,
+				mode: this.state.mode,
+			});
+		}
+	}
+
+	/**
+	 * Update the selection range during drag.
+	 *
+	 * Preserves mode and isSelecting state.
+	 * Emits "update" event (not "start").
+	 *
+	 * @param range - New selection range
+	 */
+	updateSelectionRange(range: SelectionRange): void {
+		if (!this.state.isSelecting) {
+			return;
+		}
+
+		this.state.range = { ...range };
+
 		this.emit({
-			type: "end",
+			type: "update",
 			range: this.state.range,
 			mode: this.state.mode,
 		});

@@ -186,6 +186,112 @@ describe("SelectionModel", () => {
 			expect(model.isActivelySelecting()).toBe(false);
 			expect(model.getState().mode).toBe("word");
 		});
+
+		test("should set isSelecting=false by default (backward compatible)", () => {
+			const listener = mock<(event: SelectionEvent) => void>(() => {});
+			model.subscribe(listener);
+
+			model.setSelection(
+				{ start: { col: 5, row: 10 }, end: { col: 20, row: 12 } },
+				"word"
+			);
+
+			expect(model.isActivelySelecting()).toBe(false);
+			// Should emit both start and end events
+			expect(listener).toHaveBeenCalledTimes(2);
+			expect(listener.mock.calls[0][0].type).toBe("start");
+			expect(listener.mock.calls[1][0].type).toBe("end");
+		});
+
+		test("should set isSelecting=true when specified", () => {
+			const listener = mock<(event: SelectionEvent) => void>(() => {});
+			model.subscribe(listener);
+
+			model.setSelection(
+				{ start: { col: 5, row: 10 }, end: { col: 20, row: 12 } },
+				"word",
+				true
+			);
+
+			expect(model.isActivelySelecting()).toBe(true);
+			// Should emit only start event (no end event)
+			expect(listener).toHaveBeenCalledTimes(1);
+			expect(listener.mock.calls[0][0].type).toBe("start");
+		});
+
+		test("should allow drag extension after setSelection with isSelecting=true", () => {
+			model.setSelection(
+				{ start: { col: 5, row: 10 }, end: { col: 10, row: 10 } },
+				"word",
+				true
+			);
+
+			expect(model.isActivelySelecting()).toBe(true);
+
+			// Should be able to call endSelection later
+			model.endSelection();
+			expect(model.isActivelySelecting()).toBe(false);
+			expect(model.hasSelection()).toBe(true);
+		});
+	});
+
+	describe("updateSelectionRange", () => {
+		test("should update range and emit update event", () => {
+			model.setSelection(
+				{ start: { col: 5, row: 10 }, end: { col: 10, row: 10 } },
+				"word",
+				true
+			);
+
+			const listener = mock<(event: SelectionEvent) => void>(() => {});
+			model.subscribe(listener);
+
+			model.updateSelectionRange({
+				start: { col: 5, row: 10 },
+				end: { col: 20, row: 12 },
+			});
+
+			expect(listener).toHaveBeenCalledTimes(1);
+			expect(listener.mock.calls[0][0].type).toBe("update");
+			expect(listener.mock.calls[0][0].range).toEqual({
+				start: { col: 5, row: 10 },
+				end: { col: 20, row: 12 },
+			});
+		});
+
+		test("should preserve mode and isSelecting state", () => {
+			model.setSelection(
+				{ start: { col: 5, row: 10 }, end: { col: 10, row: 10 } },
+				"word",
+				true
+			);
+
+			model.updateSelectionRange({
+				start: { col: 5, row: 10 },
+				end: { col: 20, row: 12 },
+			});
+
+			expect(model.getState().mode).toBe("word");
+			expect(model.isActivelySelecting()).toBe(true);
+		});
+
+		test("should do nothing if not actively selecting", () => {
+			model.setSelection(
+				{ start: { col: 5, row: 10 }, end: { col: 10, row: 10 } },
+				"word",
+				false // isSelecting=false
+			);
+
+			const listener = mock<(event: SelectionEvent) => void>(() => {});
+			model.subscribe(listener);
+
+			model.updateSelectionRange({
+				start: { col: 5, row: 10 },
+				end: { col: 20, row: 12 },
+			});
+
+			expect(listener).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("subscribe/unsubscribe", () => {

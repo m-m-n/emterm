@@ -85,6 +85,9 @@ export class SelectionController {
 	private anchorWord: SelectionRange | null = null;
 	private anchorRow: number | null = null;
 
+	// Pending selection start for drag detection
+	private pendingSelectionStart: GridPosition | null = null;
+
 	// Event listener cleanup
 	private cleanupFunctions: (() => void)[] = [];
 
@@ -254,24 +257,26 @@ export class SelectionController {
 		let mode: SelectionMode = "char";
 
 		if (this.clickCount === 2) {
-			// Double click - word selection
+			// Double click - word selection with drag enabled
 			mode = "word";
 			const wordRange = this.wordBoundary.getWordAt(pos.col, pos.row);
 			this.anchorWord = wordRange;
-			this.model.setSelection(wordRange, mode);
+			this.model.setSelection(wordRange, mode, true);
 		} else if (this.clickCount >= 3) {
-			// Triple click - line selection
+			// Triple click - line selection with drag enabled
 			mode = "line";
 			this.anchorRow = pos.row;
 			const lineRange = this.wordBoundary.getLineAt(pos.row);
-			this.model.setSelection(lineRange, mode);
+			this.model.setSelection(lineRange, mode, true);
 			this.clickCount = 3; // Cap at 3
 		} else {
-			// Single click - character selection
+			// Single click - clear existing selection and prepare for potential drag
+			// Don't start selection immediately; wait for drag (mousemove)
 			mode = "char";
 			this.anchorWord = null;
 			this.anchorRow = null;
-			this.model.startSelection(pos, mode);
+			this.clearSelection();
+			this.pendingSelectionStart = pos;
 		}
 
 		event.preventDefault();
@@ -281,24 +286,38 @@ export class SelectionController {
 	 * Handle mouse move events.
 	 */
 	private onMouseMove(event: MouseEvent): void {
-		if (!this.model.isActivelySelecting()) {
+		const pos = this.pixelToGrid(event.clientX, event.clientY);
+
+		// Handle pending selection start (drag detection for single click)
+		if (this.pendingSelectionStart && !this.model.isActivelySelecting()) {
+			// Only start selection if mouse has actually moved to a different cell
+			if (
+				pos.col !== this.pendingSelectionStart.col ||
+				pos.row !== this.pendingSelectionStart.row
+			) {
+				this.model.startSelection(this.pendingSelectionStart, "char");
+				this.model.updateSelection(pos);
+				event.preventDefault();
+			}
 			return;
 		}
 
-		const pos = this.pixelToGrid(event.clientX, event.clientY);
+		if (!this.model.isActivelySelecting()) {
+			return;
+		}
 		const state = this.model.getState();
 
 		if (state.mode === "word" && this.anchorWord) {
 			// Expand word selection
 			const expanded = this.wordBoundary.expandWordSelection(this.anchorWord, pos);
-			this.model.setSelection(expanded, "word");
+			this.model.updateSelectionRange(expanded);
 		} else if (state.mode === "line" && this.anchorRow !== null) {
 			// Expand line selection
 			const expanded = this.wordBoundary.expandLineSelection(
 				this.anchorRow,
 				pos.row,
 			);
-			this.model.setSelection(expanded, "line");
+			this.model.updateSelectionRange(expanded);
 		} else {
 			// Character selection
 			this.model.updateSelection(pos);
@@ -312,6 +331,9 @@ export class SelectionController {
 	 */
 	private onMouseUp(event: MouseEvent): void {
 		if (event.button !== 0) return;
+
+		// Clear pending selection (click without drag)
+		this.pendingSelectionStart = null;
 
 		if (this.model.isActivelySelecting()) {
 			this.model.endSelection();
