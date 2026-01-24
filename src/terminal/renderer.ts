@@ -920,4 +920,42 @@ export class TerminalRenderer {
 	clearSelectionHighlight(): void {
 		this.clearSelectionOverlays();
 	}
+
+	/**
+	 * Dispose of the renderer and clean up resources.
+	 */
+	dispose(): void {
+		// Stop blink animation if running
+		if (this.blinkInterval !== null) {
+			clearInterval(this.blinkInterval);
+			this.blinkInterval = null;
+		}
+
+		// Clear selection overlays
+		this.clearSelectionOverlays();
+
+		// Remove selection container
+		if (this.selectionContainer?.parentNode) {
+			this.selectionContainer.parentNode.removeChild(this.selectionContainer);
+		}
+
+		// Remove cursor element
+		if (this.cursorElement?.parentNode) {
+			this.cursorElement.parentNode.removeChild(this.cursorElement);
+		}
+
+		// Clear line elements
+		for (const lineElement of this.lineElements) {
+			if (lineElement.parentNode) {
+				lineElement.parentNode.removeChild(lineElement);
+			}
+		}
+		this.lineElements = [];
+
+		// Clear span pool
+		this.spanPool = [];
+
+		// Clear hash cache
+		this.lastRowHash.clear();
+	}
 }

@@ -55,7 +55,7 @@ declare global {
   interface Window {
     terminalApp: TerminalApp | null;
     terminalState: import("./terminal/state").TerminalState | null;
-    terminalRenderer: import("./terminal/renderer").TerminalRenderer | null;
+    terminalRenderer: import("./terminal").ITerminalRenderer | null;
     ptyClient: import("./pty/client").PtyClient | null;
   }
 }
