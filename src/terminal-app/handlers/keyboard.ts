@@ -4,7 +4,7 @@
 
 import type { PtyClient } from "../../pty/client";
 import type { TerminalState } from "../../terminal/state";
-import type { TerminalRenderer } from "../../terminal/renderer";
+import type { ITerminalRenderer } from "../../terminal";
 import type { KeyboardHandlerOptions } from "../types";
 import { IME_DEBUG } from "../config";
 import { keyEventToBytes, shouldHandleKey } from "../../pty/keyboard";
@@ -20,7 +20,7 @@ export interface KeyboardHandlerContext {
   /** Function to get current terminal state */
   getState: () => TerminalState;
   /** Function to get terminal renderer */
-  getRenderer: () => TerminalRenderer | null;
+  getRenderer: () => ITerminalRenderer | null;
   /** Optional keyboard handler configuration */
   options?: KeyboardHandlerOptions;
   /** Selection controller instance */
@@ -37,7 +37,7 @@ export interface KeyboardHandlerContext {
 export class KeyboardHandler {
   private ptyClient: PtyClient;
   private getState: () => TerminalState;
-  private getRenderer: () => TerminalRenderer | null;
+  private getRenderer: () => ITerminalRenderer | null;
   private options: KeyboardHandlerOptions;
   private selectionController: SelectionController | null = null;
   private isEditContextActive: () => boolean;

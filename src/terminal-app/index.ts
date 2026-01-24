@@ -10,7 +10,7 @@ import {
   PtyClient,
 } from "../pty";
 import { TerminalState } from "../terminal/state";
-import { TerminalRenderer } from "../terminal/renderer";
+import { createRendererAsync, type ITerminalRenderer } from "../terminal";
 import { SelectionController } from "../selection-v2";
 import { ImageViewer } from "../image-viewer";
 import type { TerminalAppOptions, CharSize } from "./types";
@@ -33,7 +33,7 @@ export class TerminalApp {
   private mouseHandler: MouseHandler | null = null;
   private imeHandler: ImeHandler | null = null;
   private state: TerminalState | null = null;
-  private renderer: TerminalRenderer | null = null;
+  private renderer: ITerminalRenderer | null = null;
   private selectionController: SelectionController | null = null;
   private imageViewer: ImageViewer | null = null;
   private imageEventUnlisten: UnlistenFn | null = null;
@@ -79,7 +79,7 @@ export class TerminalApp {
 
     // Initialize terminal state and renderer
     this.state = new TerminalState(cols, rows);
-    this.renderer = new TerminalRenderer(this.container, fontFamily, fontSize);
+    this.renderer = await createRendererAsync(this.container, fontFamily, fontSize);
 
     // Initialize selection controller (new v2 system)
     this.selectionController = new SelectionController({
@@ -451,7 +451,7 @@ export class TerminalApp {
    * Gets the terminal renderer
    * @returns Terminal renderer instance
    */
-  get terminalRenderer(): TerminalRenderer {
+  get terminalRenderer(): ITerminalRenderer {
     if (!this.renderer) {
       throw new Error("Terminal not initialized");
     }
