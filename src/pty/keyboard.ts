@@ -5,6 +5,8 @@
  * sending to a PTY (pseudo-terminal).
  */
 
+import type { CursorKeysMode } from "../terminal/modes";
+
 /**
  * Mapping definition for special key sequences.
  */
@@ -15,6 +17,21 @@ export interface KeyMapping {
 	shift?: boolean;
 	sequence: number[];
 }
+
+/**
+ * Application cursor key sequences (when DECCKM mode is set).
+ *
+ * In Application mode, arrow keys send SS3 (ESC O) instead of CSI (ESC [).
+ * This is used by applications like less, vim, htop, etc.
+ *
+ * VT100 Reference: https://vt100.net/docs/vt510-rm/DECCKM.html
+ */
+const APPLICATION_CURSOR_KEYS: Record<string, number[]> = {
+	ArrowUp: [0x1b, 0x4f, 0x41], // ESC O A
+	ArrowDown: [0x1b, 0x4f, 0x42], // ESC O B
+	ArrowRight: [0x1b, 0x4f, 0x43], // ESC O C
+	ArrowLeft: [0x1b, 0x4f, 0x44], // ESC O D
+};
 
 /**
  * Special key mappings for terminal emulation.
@@ -76,14 +93,17 @@ const SPECIAL_KEYS: KeyMapping[] = [
  * - Control character combinations (Ctrl+C, Ctrl+D, etc.)
  * - Alt key combinations (sends ESC prefix)
  * - Regular printable characters
+ * - DECCKM mode (Application Cursor Keys) for arrow keys
  *
  * @param event - The DOM KeyboardEvent to convert
+ * @param cursorKeysMode - Cursor keys mode (normal or application)
  * @returns Byte array for the key, or null if the key should be ignored
  *
  * @example
  * ```typescript
  * document.addEventListener('keydown', (event) => {
- *   const bytes = keyEventToBytes(event);
+ *   const cursorMode = terminalState.getModes().cursorKeys;
+ *   const bytes = keyEventToBytes(event, cursorMode);
  *   if (bytes) {
  *     event.preventDefault();
  *     ptyClient.write(bytes);
@@ -91,7 +111,24 @@ const SPECIAL_KEYS: KeyMapping[] = [
  * });
  * ```
  */
-export function keyEventToBytes(event: KeyboardEvent): Uint8Array | null {
+export function keyEventToBytes(
+	event: KeyboardEvent,
+	cursorKeysMode: CursorKeysMode = "normal",
+): Uint8Array | null {
+	// Handle Application Cursor Keys mode (DECCKM)
+	// Arrow keys send ESC O instead of ESC [ when DECCKM is set
+	if (
+		cursorKeysMode === "application" &&
+		!event.ctrlKey &&
+		!event.altKey &&
+		!event.shiftKey
+	) {
+		const appCursorSequence = APPLICATION_CURSOR_KEYS[event.key];
+		if (appCursorSequence) {
+			return new Uint8Array(appCursorSequence);
+		}
+	}
+
 	// Check for special key mappings first
 	for (const mapping of SPECIAL_KEYS) {
 		if (

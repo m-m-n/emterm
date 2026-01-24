@@ -84,7 +84,7 @@ describe("keyEventToBytes", () => {
 		});
 	});
 
-	describe("arrow keys", () => {
+	describe("arrow keys (normal mode)", () => {
 		it("should convert ArrowUp to ESC [ A", () => {
 			const event = createKeyEvent("ArrowUp");
 			const result = keyEventToBytes(event);
@@ -107,6 +107,62 @@ describe("keyEventToBytes", () => {
 			const event = createKeyEvent("ArrowLeft");
 			const result = keyEventToBytes(event);
 			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x44]));
+		});
+
+		it("should use normal mode by default", () => {
+			const event = createKeyEvent("ArrowUp");
+			// Without second argument, should default to normal mode
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x41])); // ESC [ A
+		});
+	});
+
+	describe("arrow keys (application mode - DECCKM)", () => {
+		it("should convert ArrowUp to ESC O A in application mode", () => {
+			const event = createKeyEvent("ArrowUp");
+			const result = keyEventToBytes(event, "application");
+			expect(result).toEqual(new Uint8Array([0x1b, 0x4f, 0x41])); // ESC O A
+		});
+
+		it("should convert ArrowDown to ESC O B in application mode", () => {
+			const event = createKeyEvent("ArrowDown");
+			const result = keyEventToBytes(event, "application");
+			expect(result).toEqual(new Uint8Array([0x1b, 0x4f, 0x42])); // ESC O B
+		});
+
+		it("should convert ArrowRight to ESC O C in application mode", () => {
+			const event = createKeyEvent("ArrowRight");
+			const result = keyEventToBytes(event, "application");
+			expect(result).toEqual(new Uint8Array([0x1b, 0x4f, 0x43])); // ESC O C
+		});
+
+		it("should convert ArrowLeft to ESC O D in application mode", () => {
+			const event = createKeyEvent("ArrowLeft");
+			const result = keyEventToBytes(event, "application");
+			expect(result).toEqual(new Uint8Array([0x1b, 0x4f, 0x44])); // ESC O D
+		});
+
+		it("should skip application mode for arrow keys with Ctrl modifier", () => {
+			const event = createKeyEvent("ArrowUp", { ctrlKey: true });
+			const result = keyEventToBytes(event, "application");
+			// Ctrl+Arrow is not in SPECIAL_KEYS (no Ctrl variant defined)
+			// Falls through and returns null as unhandled
+			expect(result).toBeNull();
+		});
+
+		it("should skip application mode for arrow keys with Alt modifier", () => {
+			const event = createKeyEvent("ArrowUp", { altKey: true });
+			const result = keyEventToBytes(event, "application");
+			// Alt+Arrow is not in SPECIAL_KEYS (no Alt variant defined)
+			// Falls through and returns null as unhandled
+			expect(result).toBeNull();
+		});
+
+		it("should use normal sequence for non-arrow keys in application mode", () => {
+			const event = createKeyEvent("Home");
+			const result = keyEventToBytes(event, "application");
+			// Home key is not affected by cursor keys mode
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x48])); // ESC [ H
 		});
 	});
 

@@ -206,7 +206,10 @@ export class KeyboardHandler {
       // Navigation and function keys fall through
     }
 
-    const bytes = keyEventToBytes(event);
+    // Get cursor keys mode from terminal state for DECCKM support
+    const state = this.getState();
+    const cursorKeysMode = state.getModes().cursorKeys;
+    const bytes = keyEventToBytes(event, cursorKeysMode);
     if (bytes) {
       event.preventDefault();
       try {
