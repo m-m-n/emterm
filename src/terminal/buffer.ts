@@ -1,7 +1,7 @@
 /**
  * Screen buffer for terminal display.
  */
-import { type Cell, createEmptyCell, Line } from "./grid.ts";
+import { type Cell, cloneCell, createEmptyCell, Line } from "./grid.ts";
 
 /**
  * Scroll region definition.
@@ -453,14 +453,26 @@ export class ScreenBuffer {
 
 	/**
 	 * Resize the buffer to new dimensions.
+	 * Performs reflow to reconstruct logical lines when width changes.
 	 *
 	 * @param cols - New number of columns
 	 * @param rows - New number of rows
 	 */
 	resize(cols: number, rows: number): void {
-		// Resize existing lines
-		for (const line of this.lines) {
-			line.resize(cols);
+		const oldCols = this._cols;
+
+		// Reflow if column count changed
+		if (cols !== oldCols) {
+			if (cols > oldCols) {
+				this.reflowLarger(cols);
+			} else {
+				this.reflowSmaller(cols);
+			}
+		} else {
+			// Just resize existing lines without reflow
+			for (const line of this.lines) {
+				line.resize(cols);
+			}
 		}
 
 		// Add or remove rows
@@ -479,6 +491,125 @@ export class ScreenBuffer {
 		for (const line of this.lines) {
 			line.dirty = true;
 		}
+	}
+
+	/**
+	 * Reflow buffer when width increases.
+	 * Pulls cells from wrapped lines back to previous lines.
+	 *
+	 * @param newCols - New column count
+	 */
+	private reflowLarger(newCols: number): void {
+		const newLines: Line[] = [];
+
+		let i = 0;
+		while (i < this.lines.length) {
+			// Collect all cells from a logical line (consecutive wrapped lines)
+			const allCells: Cell[] = [];
+			allCells.push(...this.lines[i]!.getCells());
+			i++;
+
+			while (i < this.lines.length && this.lines[i]!.wrapped) {
+				allCells.push(...this.lines[i]!.getCells());
+				i++;
+			}
+
+			// Trim trailing empty cells
+			let endIndex = allCells.length;
+			while (endIndex > 0) {
+				const cell = allCells[endIndex - 1]!;
+				if (cell.char !== " " || cell.width !== 1) break;
+				endIndex--;
+			}
+			const trimmedCells = allCells.slice(0, endIndex);
+
+			// Distribute cells into new lines
+			if (trimmedCells.length === 0) {
+				// Empty logical line
+				newLines.push(new Line(newCols));
+			} else {
+				let offset = 0;
+				while (offset < trimmedCells.length) {
+					const newLine = new Line(newCols);
+					const lineLength = Math.min(newCols, trimmedCells.length - offset);
+
+					// Copy cells to new line
+					for (let j = 0; j < lineLength; j++) {
+						newLine.setCell(j, cloneCell(trimmedCells[offset + j]!));
+					}
+
+					// Mark as wrapped if there are more cells to come
+					if (offset + lineLength < trimmedCells.length) {
+						// This line continues to next
+					}
+					if (offset > 0) {
+						newLine.wrapped = true;
+					}
+
+					newLines.push(newLine);
+					offset += lineLength;
+				}
+			}
+		}
+
+		this.lines = newLines;
+	}
+
+	/**
+	 * Reflow buffer when width decreases.
+	 * Pushes overflow cells to new wrapped lines.
+	 *
+	 * @param newCols - New column count
+	 */
+	private reflowSmaller(newCols: number): void {
+		const newLines: Line[] = [];
+
+		let i = 0;
+		while (i < this.lines.length) {
+			// Collect all cells from a logical line
+			const allCells: Cell[] = [];
+			allCells.push(...this.lines[i]!.getCells());
+			i++;
+
+			while (i < this.lines.length && this.lines[i]!.wrapped) {
+				allCells.push(...this.lines[i]!.getCells());
+				i++;
+			}
+
+			// Trim trailing empty cells
+			let endIndex = allCells.length;
+			while (endIndex > 0) {
+				const cell = allCells[endIndex - 1]!;
+				if (cell.char !== " " || cell.width !== 1) break;
+				endIndex--;
+			}
+			const trimmedCells = allCells.slice(0, endIndex);
+
+			// Distribute cells into new lines
+			if (trimmedCells.length === 0) {
+				newLines.push(new Line(newCols));
+			} else {
+				let offset = 0;
+				while (offset < trimmedCells.length) {
+					const newLine = new Line(newCols);
+					const lineLength = Math.min(newCols, trimmedCells.length - offset);
+
+					// Copy cells to new line
+					for (let j = 0; j < lineLength; j++) {
+						newLine.setCell(j, cloneCell(trimmedCells[offset + j]!));
+					}
+
+					if (offset > 0) {
+						newLine.wrapped = true;
+					}
+
+					newLines.push(newLine);
+					offset += lineLength;
+				}
+			}
+		}
+
+		this.lines = newLines;
 	}
 
 	/**

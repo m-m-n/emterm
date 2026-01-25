@@ -442,4 +442,106 @@ describe("ScreenBuffer", () => {
 			expect(buffer.getCell(5, 0).char).toBe("F");
 		});
 	});
+
+	describe("reflow", () => {
+		test("reflowLarger: unwraps lines when width increases", () => {
+			// Simulate a 10-char line wrapped into two 5-char lines
+			const buffer = new ScreenBuffer(5, 3);
+			// First line: "ABCDE"
+			for (let i = 0; i < 5; i++) {
+				buffer.setCell(i, 0, createCell(String.fromCharCode(65 + i)));
+			}
+			// Second line: "FGHIJ" (marked as wrapped)
+			for (let i = 0; i < 5; i++) {
+				buffer.setCell(i, 1, createCell(String.fromCharCode(70 + i)));
+			}
+			buffer.getLine(1).wrapped = true;
+
+			// Resize to wider width
+			buffer.resize(10, 3);
+
+			// Should unwrap into single line
+			expect(buffer.cols).toBe(10);
+			expect(buffer.getLine(0).wrapped).toBe(false);
+			expect(buffer.getCell(0, 0).char).toBe("A");
+			expect(buffer.getCell(4, 0).char).toBe("E");
+			expect(buffer.getCell(5, 0).char).toBe("F");
+			expect(buffer.getCell(9, 0).char).toBe("J");
+		});
+
+		test("reflowSmaller: wraps lines when width decreases", () => {
+			// Start with a 10-char line
+			const buffer = new ScreenBuffer(10, 3);
+			for (let i = 0; i < 10; i++) {
+				buffer.setCell(i, 0, createCell(String.fromCharCode(65 + i)));
+			}
+
+			// Resize to narrower width
+			buffer.resize(5, 3);
+
+			// Should wrap into two lines
+			expect(buffer.cols).toBe(5);
+			expect(buffer.getLine(0).wrapped).toBe(false);
+			expect(buffer.getLine(1).wrapped).toBe(true);
+			expect(buffer.getCell(0, 0).char).toBe("A");
+			expect(buffer.getCell(4, 0).char).toBe("E");
+			expect(buffer.getCell(0, 1).char).toBe("F");
+			expect(buffer.getCell(4, 1).char).toBe("J");
+		});
+
+		test("preserves hard line breaks", () => {
+			const buffer = new ScreenBuffer(10, 3);
+			// Line 0: "ABCDE" (not wrapped)
+			for (let i = 0; i < 5; i++) {
+				buffer.setCell(i, 0, createCell(String.fromCharCode(65 + i)));
+			}
+			// Line 1: "FGHIJ" (not wrapped - hard line break)
+			for (let i = 0; i < 5; i++) {
+				buffer.setCell(i, 1, createCell(String.fromCharCode(70 + i)));
+			}
+
+			// Resize to wider width
+			buffer.resize(20, 3);
+
+			// Should remain as two separate lines
+			expect(buffer.getLine(0).wrapped).toBe(false);
+			expect(buffer.getLine(1).wrapped).toBe(false);
+			expect(buffer.getCell(0, 0).char).toBe("A");
+			expect(buffer.getCell(0, 1).char).toBe("F");
+		});
+
+		test("handles multiple wrapped lines in sequence", () => {
+			const buffer = new ScreenBuffer(3, 5);
+			// Logical line: "ABCDEFGHI" wrapped into 3 rows
+			for (let i = 0; i < 3; i++) {
+				buffer.setCell(i, 0, createCell(String.fromCharCode(65 + i))); // ABC
+			}
+			for (let i = 0; i < 3; i++) {
+				buffer.setCell(i, 1, createCell(String.fromCharCode(68 + i))); // DEF
+			}
+			buffer.getLine(1).wrapped = true;
+			for (let i = 0; i < 3; i++) {
+				buffer.setCell(i, 2, createCell(String.fromCharCode(71 + i))); // GHI
+			}
+			buffer.getLine(2).wrapped = true;
+
+			// Resize to width 9 (should fit in one line)
+			buffer.resize(9, 5);
+
+			expect(buffer.getLine(0).wrapped).toBe(false);
+			expect(buffer.getCell(0, 0).char).toBe("A");
+			expect(buffer.getCell(8, 0).char).toBe("I");
+		});
+
+		test("handles empty lines during reflow", () => {
+			const buffer = new ScreenBuffer(5, 3);
+			// Leave all lines empty
+
+			buffer.resize(10, 3);
+
+			expect(buffer.cols).toBe(10);
+			expect(buffer.rows).toBe(3);
+			expect(buffer.getCell(0, 0).char).toBe(" ");
+		});
+	});
 });
