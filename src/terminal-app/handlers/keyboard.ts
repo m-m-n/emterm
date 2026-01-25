@@ -132,7 +132,7 @@ export class KeyboardHandler {
    * Handles keydown events
    * @param event - Keyboard event to handle
    */
-  async handleKeyDown(event: KeyboardEvent): Promise<void> {
+  handleKeyDown(event: KeyboardEvent): void {
     // Skip if event was already handled by another component (e.g., fullscreen markdown view)
     // This is a cooperative pattern - components call preventDefault() when they handle an event
     if (event.defaultPrevented) {
@@ -152,7 +152,7 @@ export class KeyboardHandler {
     // Note: This is a fallback for non-IME scenarios. When IME is active,
     // handleClipboardShortcut (capture phase) handles this before reaching here.
     if (event.key.toLowerCase() === "c" && event.shiftKey && event.ctrlKey) {
-      await this.handleCopy(event);
+      this.handleCopy(event);
       return;
     }
 
@@ -160,7 +160,7 @@ export class KeyboardHandler {
     // Note: This is a fallback for non-IME scenarios. When IME is active,
     // handleClipboardShortcut (capture phase) handles this before reaching here.
     if (event.key.toLowerCase() === "v" && event.shiftKey && event.ctrlKey) {
-      await this.handlePaste(event);
+      this.handlePaste(event);
       return;
     }
 
@@ -186,24 +186,22 @@ export class KeyboardHandler {
       if (!this.isSpecialKey(event)) {
         return; // Let EditContext handle regular input
       }
-      // Enter should be handled by EditContext for IME confirmation
-      if (event.key === "Enter" && !event.ctrlKey && !event.altKey) {
-        return;
-      }
-      // Special keys (Ctrl+C, arrows, etc.) fall through to be processed
+      // Note: Enter key is NOT handled by EditContext's textupdate event
+      // (see: https://developer.mozilla.org/en-US/docs/Web/API/EditContext_API/Guide)
+      // So we must process Enter here, not return
+      // Special keys (Ctrl+C, arrows, Enter, etc.) fall through to be processed
     }
 
     // Skip if hidden textarea has focus (IME is active) - fallback mode
     if (this.isImeInputFocused()) {
-      // Only allow certain special keys to pass through
-      // Enter should be handled by IME for confirmation
-      if (event.key === "Enter") {
-        return; // Let IME handler process Enter
-      }
-      if (!this.isSpecialKey(event)) {
+      // Only allow special keys to pass through
+      // Note: event.isComposing is already checked above (line 173),
+      // so if we reach here, IME composition is not in progress.
+      // Enter key must be processed here since IME textarea doesn't handle it.
+      if (!this.isSpecialKey(event) && event.key !== "Enter") {
         return; // Let IME handler process regular keys
       }
-      // Navigation and function keys fall through
+      // Navigation, function keys, and Enter fall through
     }
 
     // Get cursor keys mode from terminal state for DECCKM support
@@ -212,11 +210,11 @@ export class KeyboardHandler {
     const bytes = keyEventToBytes(event, cursorKeysMode);
     if (bytes) {
       event.preventDefault();
-      try {
-        await this.ptyClient.write(bytes);
-      } catch (error) {
+      // Fire-and-forget: don't await to avoid blocking key repeat
+      // This significantly improves key repeat throughput by not waiting for IPC completion
+      this.ptyClient.write(bytes).catch((error) => {
         console.error("Failed to write to PTY:", error);
-      }
+      });
     }
   }
 
