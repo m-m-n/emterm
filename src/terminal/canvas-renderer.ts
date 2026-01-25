@@ -11,7 +11,7 @@ import {
 	getEffectiveBackground,
 	getEffectiveForeground,
 } from "./attributes.ts";
-import { DEFAULT_BACKGROUND, rgbToCSS } from "./colors.ts";
+import { DEFAULT_BACKGROUND, DEFAULT_FOREGROUND, rgbToCSS } from "./colors.ts";
 import type { CursorStyle } from "./cursor.ts";
 import type { Line } from "./grid.ts";
 import {
@@ -300,6 +300,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Blink text visible state. */
 	private blinkTextVisible: boolean = true;
 
+	/** Previous cursor position for clearing. */
+	private prevCursorCol: number = -1;
+
+	/** Previous cursor row for clearing. */
+	private prevCursorRow: number = -1;
+
 	/**
 	 * Create a new canvas renderer.
 	 *
@@ -332,6 +338,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 		// Watch for DPR changes
 		this.watchDPRChanges();
+
+		// Start cursor blink timer
+		this.startCursorBlink();
 	}
 
 	/**
@@ -467,6 +476,24 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Clear dirty flags
 		state.clearDirty();
 
+		// Clear previous cursor position if it moved
+		// Need to re-render the previous row if:
+		// 1. Cursor moved to a different row AND that row wasn't already dirty
+		// 2. Cursor moved within the same row AND that row wasn't already dirty
+		const cursorMoved =
+			this.prevCursorCol !== state.cursorCol ||
+			this.prevCursorRow !== state.cursorRow;
+		const prevRowNeedsRedraw =
+			this.prevCursorRow >= 0 &&
+			cursorMoved &&
+			!dirtyRows.includes(this.prevCursorRow);
+
+		if (prevRowNeedsRedraw) {
+			// Re-render the previous cursor row to clear the old cursor
+			const prevLine = buffer.getLine(this.prevCursorRow);
+			this.renderLine(this.prevCursorRow, prevLine);
+		}
+
 		// Update cursor
 		this.renderCursor(
 			state.cursorCol,
@@ -475,6 +502,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 			state.cursorStyle,
 			state.cursorBlink,
 		);
+
+		// Save current cursor position for next render
+		this.prevCursorCol = state.cursorCol;
+		this.prevCursorRow = state.cursorRow;
 
 		// Record performance metrics
 		const duration = this.renderTimer.end();
@@ -663,9 +694,47 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.cursorBlinkVisible = !this.cursorBlinkVisible;
 			// Re-render cursor area
 			if (this.pendingState) {
-				this.scheduleRender(this.pendingState);
+				// Force cursor row to be re-rendered for blink
+				this.renderCursorArea(this.pendingState);
 			}
 		}, 500);
+	}
+
+	/**
+	 * Re-render cursor area for blink effect.
+	 * This clears the cursor cell and redraws it based on blink state.
+	 */
+	private renderCursorArea(state: TerminalState): void {
+		const buffer = state.getActiveBuffer();
+		const row = state.cursorRow;
+		const col = state.cursorCol;
+
+		// Re-render the cursor cell to clear previous cursor
+		const line = buffer.getLine(row);
+		const y = row * this.charHeight;
+		const x = col * this.charWidth;
+
+		// Clear just the cursor cell with background
+		this.ctx.fillStyle = rgbToCSS(DEFAULT_BACKGROUND);
+		this.ctx.fillRect(x, y, this.charWidth, this.charHeight);
+
+		// Re-draw the character at cursor position if any
+		const cell = line.getCell(col);
+		if (cell.char !== " " && cell.char !== "") {
+			const fg = getEffectiveForeground(cell.attrs);
+			this.ctx.fillStyle = rgbToCSS(fg);
+			const textY = y + (this.charHeight - this.fontDescent);
+			this.ctx.fillText(cell.char, x, textY);
+		}
+
+		// Draw cursor if blink state is visible
+		this.renderCursor(
+			col,
+			row,
+			state.cursorVisible,
+			state.cursorStyle,
+			state.cursorBlink,
+		);
 	}
 
 	/**
@@ -715,6 +784,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 			state.cursorStyle,
 			state.cursorBlink,
 		);
+
+		// Save current cursor position for next render
+		this.prevCursorCol = state.cursorCol;
+		this.prevCursorRow = state.cursorRow;
 	}
 
 	/**
