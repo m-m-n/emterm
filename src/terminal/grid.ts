@@ -106,6 +106,9 @@ export class Line {
 	/** Whether this line needs re-rendering. */
 	dirty: boolean = true;
 
+	/** Whether this line is a continuation of the previous line (soft wrap). */
+	wrapped: boolean = false;
+
 	/**
 	 * Create a new line with the specified width.
 	 *
@@ -226,7 +229,27 @@ export class Line {
 		const newLine = new Line(0);
 		newLine.cells = this.cells.map(cloneCell);
 		newLine.dirty = this.dirty;
+		newLine.wrapped = this.wrapped;
 		return newLine;
+	}
+
+	/**
+	 * Get the cells array (for reflow operations).
+	 *
+	 * @returns Cells in this line
+	 */
+	getCells(): Cell[] {
+		return this.cells;
+	}
+
+	/**
+	 * Set the cells array (for reflow operations).
+	 *
+	 * @param cells - New cells array
+	 */
+	setCells(cells: Cell[]): void {
+		this.cells = cells;
+		this.dirty = true;
 	}
 
 	/**

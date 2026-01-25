@@ -42,14 +42,29 @@ cargo tarpaulin --manifest-path src-tauri/Cargo.toml --out Html
 
 ### E2E Tests
 
-E2E tests require the eMterm application to be running. Use the chrome-devtools MCP skill for browser-based E2E testing.
+E2E tests use tauri-driver and WebdriverIO. **Run tests in Docker environment** for consistency.
 
 ```bash
-# Start eMterm in dev mode
-bun tauri dev
+# Run all E2E tests in Docker (recommended)
+docker compose -f docker-compose.e2e.yml up --build
 
-# Run E2E tests (in another terminal)
-# Use /e2e-testing skill
+# Run specific test file
+docker compose -f docker-compose.e2e.yml run --rm e2e-test \
+  sh -c "Xvfb :99 -screen 0 1280x720x24 & sleep 2 && cd e2e-tests && npx wdio run wdio.docker.conf.js --spec specs/terminal.e2e.js"
+```
+
+**Note:** Tauri uses native WebViews, not Chrome/Chromium. The `chrome-devtools MCP` skill does NOT work with Tauri apps. Use the `tauri-e2e-testing` skill instead.
+
+**Local testing (not recommended):**
+```bash
+# Install tauri-driver
+cargo install tauri-driver
+
+# Build the app
+bun tauri build --debug --no-bundle
+
+# Run tests with xvfb (Linux)
+cd e2e-tests && xvfb-run npm test
 ```
 
 ### Type Checking
@@ -224,19 +239,37 @@ describe('OscParser', () => {
 
 For E2E tests of the terminal emulator:
 
-1. **Use the e2e-testing skill** - This provides chrome-devtools integration
-2. **Test rendering** - Verify that Markdown and images appear correctly
-3. **Test interactions** - Verify user interactions work as expected
-4. **Cleanup** - Close test windows/pages after tests complete
+1. **Use Docker environment** - Consistent, isolated test environment
+2. **Use tauri-e2e-testing skill** - For guidance on Tauri-specific WebDriver testing
+3. **Test rendering** - Verify that Markdown and images appear correctly
+4. **Test interactions** - Verify user interactions work as expected
+5. **Cleanup** - Close test windows/pages after tests complete
+
+**E2E Test Files:**
+- Location: `e2e-tests/specs/*.e2e.js`
+- Config: `e2e-tests/wdio.docker.conf.js` (Docker), `e2e-tests/wdio.conf.js` (local)
+- Screenshots: `e2e-tests/screenshots/`
 
 **Example E2E test workflow:**
 ```
-1. Start eMterm in dev mode
-2. Use /e2e-testing skill
-3. Navigate to terminal
-4. Execute test commands (emterm markdown, emterm image)
-5. Verify rendering via screenshots or DOM inspection
-6. Cleanup and close
+1. Write test in e2e-tests/specs/feature.e2e.js
+2. Run: docker compose -f docker-compose.e2e.yml up --build
+3. Check screenshots in e2e-tests/screenshots/
+4. Verify test results in terminal output
+```
+
+**Writing E2E tests:**
+```javascript
+describe('Feature Test', () => {
+  it('should do something', async () => {
+    const terminal = await $('#terminal');
+    await terminal.click();
+    await browser.keys(['e', 'c', 'h', 'o']);
+    await browser.keys(['Enter']);
+    await browser.pause(1000);
+    await browser.saveScreenshot('./screenshots/test.png');
+  });
+});
 ```
 
 ## Common Patterns

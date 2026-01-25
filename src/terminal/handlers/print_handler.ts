@@ -72,6 +72,8 @@ function handlePrintSlow(state: TerminalStateAccessor, char: string): void {
     if (state.cursor.lineFeed()) {
       buffer.scrollUp();
     }
+    // Mark the new line as a continuation (soft wrap)
+    buffer.getLine(state.cursor.row).wrapped = true;
   }
 
   // Check if we need to wrap before printing wide character
@@ -81,6 +83,8 @@ function handlePrintSlow(state: TerminalStateAccessor, char: string): void {
       if (state.cursor.lineFeed()) {
         buffer.scrollUp();
       }
+      // Mark the new line as a continuation (soft wrap)
+      buffer.getLine(state.cursor.row).wrapped = true;
     }
   }
 
