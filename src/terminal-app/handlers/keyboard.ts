@@ -29,6 +29,8 @@ export interface KeyboardHandlerContext {
   isEditContextActive?: () => boolean;
   /** Function to check if IME input has focus */
   isImeInputFocused?: () => boolean;
+  /** Function to check if this tab is active (visible) - for multi-tab support */
+  isActiveTab?: () => boolean;
 }
 
 /**
@@ -42,6 +44,7 @@ export class KeyboardHandler {
   private selectionController: SelectionController | null = null;
   private isEditContextActive: () => boolean;
   private isImeInputFocused: () => boolean;
+  private isActiveTab: () => boolean;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -59,6 +62,7 @@ export class KeyboardHandler {
     this.selectionController = context.selectionController || null;
     this.isEditContextActive = context.isEditContextActive || (() => false);
     this.isImeInputFocused = context.isImeInputFocused || (() => false);
+    this.isActiveTab = context.isActiveTab || (() => true);
   }
 
   /**
@@ -133,6 +137,13 @@ export class KeyboardHandler {
    * @param event - Keyboard event to handle
    */
   handleKeyDown(event: KeyboardEvent): void {
+    // Skip if this tab is not active (for multi-tab support)
+    // This allows multiple KeyboardHandlers to be attached to document
+    // but only the active tab processes input
+    if (!this.isActiveTab()) {
+      return;
+    }
+
     // Skip if event was already handled by another component (e.g., fullscreen markdown view)
     // This is a cooperative pattern - components call preventDefault() when they handle an event
     if (event.defaultPrevented) {
@@ -224,6 +235,11 @@ export class KeyboardHandler {
    * @param event - Keyboard event to handle
    */
   private handleClipboardShortcut(event: KeyboardEvent): void {
+    // Skip if this tab is not active (for multi-tab support)
+    if (!this.isActiveTab()) {
+      return;
+    }
+
     // Only handle Ctrl+Shift combinations
     if (!event.ctrlKey || !event.shiftKey) {
       return;
