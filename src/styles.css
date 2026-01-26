@@ -1,3 +1,6 @@
+/* Tab Bar Styles */
+@import "./styles/tab-bar.css";
+
 * {
   margin: 0;
   padding: 0;
@@ -21,6 +24,23 @@ body {
   --terminal-line-height: 15pt;
 }
 
+/* App Container */
+#app {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+/* Tab Content Area */
+#tab-content-area {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Legacy terminal support (direct child of body) */
 #terminal {
   width: 100%;
   height: 100%;
@@ -29,6 +49,19 @@ body {
   line-height: var(--terminal-line-height);
   background-color: #000000;
   position: relative;
+}
+
+/* Tab content terminals */
+.tab-content {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  font-size: var(--terminal-font-size);
+  line-height: var(--terminal-line-height);
+  background-color: #000000;
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 
 /* Markdown Block Styles */
@@ -284,7 +317,8 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   color: var(--md-fg, #d4d4d4);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.6;
   box-sizing: border-box;
@@ -528,7 +562,9 @@ body {
   justify-content: center;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.15s ease, visibility 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    visibility 0.15s ease;
   z-index: 100000;
 }
 
