@@ -99,11 +99,16 @@ export class TerminalApp {
     await this.setupPtyHandlers();
 
     // Initialize IME handler
+    // Use container id or generate unique id for debugging
+    const imeDebugId = this.container.id || `ime-${Date.now()}`;
     this.imeHandler = new ImeHandler({
       container: this.container,
       ptyClient: this.ptyClient,
       getState: () => this.state!,
       charSize: this.charSize,
+      // Check if this tab's container is visible (for multi-tab support)
+      isActiveTab: () => this.container.style.display !== "none",
+      debugId: imeDebugId,
     });
     this.imeHandler.init();
 
@@ -349,6 +354,13 @@ export class TerminalApp {
       this.charSize.width,
       this.charSize.height,
       async (newCols, newRows) => {
+        // Skip resize if container is hidden (tab not active)
+        // This prevents buffer content from being lost when a tab becomes hidden
+        // and ResizeObserver reports 0x0 dimensions (leading to 1x1 resize)
+        if (this.container.style.display === "none") {
+          return;
+        }
+
         // Always update local terminal state/renderer (even if PTY not ready)
         if (this.state && this.renderer) {
           this.state.resize(newCols, newRows);
@@ -391,6 +403,13 @@ export class TerminalApp {
       this.renderer.resize(cols, rows);
       this.renderer.forceRender(this.state);
     }
+  }
+
+  /**
+   * Focus the terminal for keyboard input
+   */
+  focus(): void {
+    this.imeHandler?.focus();
   }
 
   /**

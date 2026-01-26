@@ -42,6 +42,10 @@ export interface ImeHandlerOptions {
 	ptyClient: PtyClient;
 	getState: () => TerminalState;
 	charSize: CharSize;
+	/** Check if this terminal tab is active (for multi-tab support) */
+	isActiveTab?: () => boolean;
+	/** Unique identifier for debugging */
+	debugId?: string;
 }
 
 /**
@@ -60,11 +64,18 @@ export class ImeHandler {
 	private editContextCleanup: (() => void) | null = null;
 	private terminalClickHandler: ((e: MouseEvent) => void) | null = null;
 
+	/** Check if this terminal tab is active */
+	private isActiveTab: () => boolean;
+	/** Unique identifier for debugging */
+	private debugId: string;
+
 	constructor(options: ImeHandlerOptions) {
 		this.container = options.container;
 		this.ptyClient = options.ptyClient;
 		this.getState = options.getState;
 		this.charSize = options.charSize;
+		this.isActiveTab = options.isActiveTab || (() => true);
+		this.debugId = options.debugId || `ime-${Date.now()}`;
 
 		// Check if EditContext API is available
 		this.useEditContext = typeof (window as any).EditContext !== "undefined";
@@ -356,9 +367,10 @@ export class ImeHandler {
 	 * Set up IME using textarea fallback (for non-Chromium browsers)
 	 */
 	private setupTextareaFallback(): void {
-		// Create IME input element
+		// Create IME input element with unique ID per instance
+		const uniqueId = `ime-input-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 		this.imeInput = document.createElement("textarea");
-		this.imeInput.id = "ime-input";
+		this.imeInput.id = uniqueId;
 		this.imeInput.className = "ime-input";
 		this.imeInput.style.position = "fixed";
 		this.imeInput.style.opacity = "0";
@@ -594,6 +606,18 @@ export class ImeHandler {
 		input.addEventListener("input", async (event: Event) => {
 			const inputEvent = event as InputEvent;
 			const value = input.value;
+			const isActive = this.isActiveTab();
+
+			// Debug log for multi-tab input routing
+			console.log(`[ImeHandler:${this.debugId}] input: value="${value}", isActive=${isActive}`);
+
+			// Skip if this tab is not active (for multi-tab support)
+			if (!isActive) {
+				console.log(`[ImeHandler:${this.debugId}] input: blocked by inactive tab`);
+				input.value = "";
+				this.updateCompositionView("");
+				return;
+			}
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
 			if (this.isModalOverlayVisible()) {

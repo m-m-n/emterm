@@ -123,11 +123,8 @@ describe("Multi-Tab Tests", () => {
 		const activeTabOutput = await browser.execute(() => {
 			const state = window.terminalState;
 			if (!state) return "";
-			const lines = [];
-			for (let i = 0; i < state.totalLines; i++) {
-				lines.push(state.getLineText(i));
-			}
-			return lines.join("\n");
+			// Use extractText to get all terminal content
+			return state.extractText(0, 0, state.cols - 1, state.rows - 1);
 		});
 		console.log("Active tab output contains marker:", activeTabOutput.includes(marker));
 
@@ -146,11 +143,8 @@ describe("Multi-Tab Tests", () => {
 				if (!app) return "NO_APP";
 				const state = app.terminalState;
 				if (!state) return "NO_STATE";
-				const lines = [];
-				for (let i = 0; i < state.totalLines; i++) {
-					lines.push(state.getLineText(i));
-				}
-				return lines.join("\n");
+				// Use extractText to get all terminal content
+				return state.extractText(0, 0, state.cols - 1, state.rows - 1);
 			}, tabs[0].id);
 
 			console.log("First tab output contains marker:", firstTabOutput.includes(marker));
@@ -230,5 +224,87 @@ describe("Multi-Tab Tests", () => {
 		// Should have switched to a different tab
 		expect(afterSwitch).not.toBe(beforeSwitch);
 		await browser.saveScreenshot("./screenshots/multi-tab-06-after-switch.png");
+	});
+
+	it("should preserve tab content after switching away and back", async () => {
+		// Ensure we have 2 tabs
+		let tabCount = await browser.execute(() => window.tabManager?.getTabs().length || 0);
+		if (tabCount < 2) {
+			const terminal = await $(".tab-content");
+			await terminal.click();
+			await browser.pause(500);
+			await browser.keys(["Control", "t"]);
+			await browser.pause(2000);
+		}
+
+		// Get tabs
+		const tabs = await browser.execute(() => window.tabManager?.getTabs() || []);
+		expect(tabs.length).toBeGreaterThanOrEqual(2);
+		const firstTabId = tabs[0].id;
+		const secondTabId = tabs[1].id;
+
+		// Switch to first tab
+		await browser.execute((tabId) => {
+			window.tabManager?.switchTab(tabId);
+		}, firstTabId);
+		await browser.pause(500);
+
+		// Wait for shell prompt
+		await waitForShellPrompt();
+
+		// Type a unique marker in first tab
+		const marker = `CONTENT_TEST_${Date.now()}`;
+		console.log(`Typing marker in first tab: ${marker}`);
+		await typeSlowly(`echo ${marker}`, 80);
+		await browser.keys("Enter");
+		await browser.pause(1000);
+
+		// Verify marker is in first tab
+		const beforeSwitchOutput = await browser.execute((tabId) => {
+			const app = window.tabManager?.getTerminalApp(tabId);
+			if (!app) return "NO_APP";
+			const state = app.terminalState;
+			if (!state) return "NO_STATE";
+			// Use extractText to get all terminal content
+			return state.extractText(0, 0, state.cols - 1, state.rows - 1);
+		}, firstTabId);
+		console.log("First tab output before switch contains marker:", beforeSwitchOutput.includes(marker));
+		expect(beforeSwitchOutput.includes(marker)).toBe(true);
+
+		await browser.saveScreenshot("./screenshots/multi-tab-07-before-content-test.png");
+
+		// Switch to second tab (this hides first tab and triggers ResizeObserver)
+		console.log("Switching to second tab...");
+		await browser.execute((tabId) => {
+			window.tabManager?.switchTab(tabId);
+		}, secondTabId);
+		await browser.pause(1000);
+
+		await browser.saveScreenshot("./screenshots/multi-tab-08-second-tab.png");
+
+		// Switch back to first tab
+		console.log("Switching back to first tab...");
+		await browser.execute((tabId) => {
+			window.tabManager?.switchTab(tabId);
+		}, firstTabId);
+		await browser.pause(1000);
+
+		await browser.saveScreenshot("./screenshots/multi-tab-09-back-to-first.png");
+
+		// Verify marker is STILL in first tab (content was preserved)
+		const afterSwitchOutput = await browser.execute((tabId) => {
+			const app = window.tabManager?.getTerminalApp(tabId);
+			if (!app) return "NO_APP";
+			const state = app.terminalState;
+			if (!state) return "NO_STATE";
+			// Use extractText to get all terminal content
+			return state.extractText(0, 0, state.cols - 1, state.rows - 1);
+		}, firstTabId);
+		console.log("First tab output after switch contains marker:", afterSwitchOutput.includes(marker));
+
+		// CRITICAL: Content should be preserved after switching tabs
+		expect(afterSwitchOutput.includes(marker)).toBe(true);
+
+		await browser.saveScreenshot("./screenshots/multi-tab-10-content-preserved.png");
 	});
 });
