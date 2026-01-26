@@ -29,14 +29,25 @@ async function main(): Promise<void> {
   }
 
   // Create TabManager
-  tabManager = new TabManager({
+  // Use a temporary variable to allow callback closure to reference it
+  const manager = new TabManager({
     container: contentContainer,
     createTerminalApp: async (tabContainer) => {
       const app = new TerminalApp(tabContainer);
       await app.init();
+
+      // Connect PTY exit event to TabManager
+      const sessionId = app.pty?.getSessionId();
+      if (sessionId) {
+        app.onSessionExit((exitedSessionId) => {
+          manager.handleSessionExit(exitedSessionId);
+        });
+      }
+
       return app;
     },
   });
+  tabManager = manager;
 
   // Handle last tab closed - exit application
   tabManager.onLastTabClosed(async () => {

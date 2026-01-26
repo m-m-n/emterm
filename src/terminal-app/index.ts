@@ -41,6 +41,7 @@ export class TerminalApp {
   private charSize: CharSize = { width: 8, height: 16 };
   private disconnectResizeObserver: (() => void) | null = null;
   private lastWindowTitle = "";
+  private sessionExitCallback: ((sessionId: string) => void) | null = null;
 
   /**
    * Creates a new TerminalApp instance
@@ -115,8 +116,12 @@ export class TerminalApp {
       isEditContextActive: () =>
         this.imeHandler?.isEditContextActive() ?? false,
       isImeInputFocused: () => this.imeHandler?.isImeInputFocused() ?? false,
+      // Check if this tab's container is visible (for multi-tab support)
+      isActiveTab: () => this.container.style.display !== "none",
     };
     this.keyboardHandler = new KeyboardHandler(keyboardContext);
+    // Attach to document but check if this tab's container is visible
+    // This allows keyboard input to work even when focus is elsewhere in the window
     this.keyboardHandler.attach(document);
 
     // Initialize mouse handler (for PTY mouse tracking only - selection handled by SelectionController)
@@ -213,15 +218,13 @@ export class TerminalApp {
     );
 
     // Handle exit event
-    await this.ptyClient.onExit(async (code, remainingSessions) => {
-      if (remainingSessions === 0) {
-        try {
-          const appWindow = getCurrentWebviewWindow();
-          await appWindow.close();
-        } catch (error) {
-          console.error("Failed to close window:", error);
-        }
+    await this.ptyClient.onExit(async (_code, _remainingSessions) => {
+      // Notify session exit callback (for TabManager integration)
+      const sessionId = this.ptyClient?.getSessionId();
+      if (sessionId && this.sessionExitCallback) {
+        this.sessionExitCallback(sessionId);
       }
+      // Note: Window close is now handled by TabManager.onLastTabClosed()
     });
   }
 
@@ -456,6 +459,14 @@ export class TerminalApp {
       throw new Error("Terminal not initialized");
     }
     return this.renderer;
+  }
+
+  /**
+   * Sets callback for when PTY session exits
+   * Used by TabManager to close the tab when shell exits
+   */
+  onSessionExit(callback: (sessionId: string) => void): void {
+    this.sessionExitCallback = callback;
   }
 }
 
