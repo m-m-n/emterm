@@ -140,9 +140,7 @@ export class KeyboardHandler {
     // Skip if this tab is not active (for multi-tab support)
     // This allows multiple KeyboardHandlers to be attached to document
     // but only the active tab processes input
-    const isActive = this.isActiveTab();
-    console.debug(`[KeyboardHandler] handleKeyDown: key=${event.key}, isActive=${isActive}`);
-    if (!isActive) {
+    if (!this.isActiveTab()) {
       return;
     }
 

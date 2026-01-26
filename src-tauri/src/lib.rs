@@ -392,7 +392,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
         let mut cursor_row: u32 = 0;
         let mut cursor_col: u32 = 0;
 
-        log::debug!("PTY reader: starting read loop for session {}", session_id);
+        log::trace!("PTY reader: starting read loop for session {}", session_id);
 
         loop {
             // Check if process has exited (signaled by monitoring thread)

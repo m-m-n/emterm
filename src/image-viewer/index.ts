@@ -315,10 +315,6 @@ export class ImageViewer {
 
     // Setup resize handler to recalculate fit scale on window resize
     this.setupResizeHandler();
-
-    console.log(
-      `[LOG][FRONTEND] Image viewer opened: id=${image.id}, ${image.width}x${image.height}, mode=pixel (100%)`,
-    );
   }
 
   /**
@@ -340,10 +336,6 @@ export class ImageViewer {
 
     // Update pan state based on new mode
     this.updatePanState();
-
-    console.log(
-      `[DEBUG][FRONTEND] Mode changed: mode=${state.mode}, scale=${(state.scale * 100).toFixed(0)}%`,
-    );
   }
 
   /**
@@ -430,11 +422,6 @@ export class ImageViewer {
 
     // Restore transform
     this.canvas.style.transform = savedTransform;
-
-    console.log(
-      `[DEBUG][FRONTEND] measureConstrainedBaseSize: original=${this.originalWidth}x${this.originalHeight}, ` +
-        `constrained=${this.constrainedBaseWidth}x${this.constrainedBaseHeight}`,
-    );
   }
 
   /**
@@ -484,11 +471,6 @@ export class ImageViewer {
     this.currentScaleX = correction * scale;
     this.currentScaleY = correction * scale;
 
-    console.log(
-      `[DEBUG][FRONTEND] applyScale: scale=${(scale * 100).toFixed(0)}%, ` +
-        `scaleX=${this.currentScaleX.toFixed(3)}, scaleY=${this.currentScaleY.toFixed(3)}`,
-    );
-
     // Apply combined transform (scale + any existing pan offset)
     this.applyTransform();
   }
@@ -511,23 +493,15 @@ export class ImageViewer {
    */
   private async decodeAndRender(image: DecodedImage): Promise<void> {
     try {
-      // Log received data info for debugging
       const expectedSize = image.width * image.height * 4;
-      const base64Length = image.rgba_base64?.length ?? 0;
-      console.log(
-        `[DEBUG][FRONTEND] decodeAndRender: dimensions=${image.width}x${image.height}, expectedBytes=${expectedSize}, base64Length=${base64Length}`,
-      );
 
       // Validate base64 data
-      if (!image.rgba_base64 || base64Length === 0) {
+      if (!image.rgba_base64 || image.rgba_base64.length === 0) {
         throw new Error("No rgba_base64 data received");
       }
 
       // Decode base64 to binary
       const binaryString = atob(image.rgba_base64);
-      console.log(
-        `[DEBUG][FRONTEND] base64 decoded to ${binaryString.length} bytes (expected ${expectedSize})`,
-      );
 
       if (binaryString.length !== expectedSize) {
         throw new Error(
@@ -559,16 +533,9 @@ export class ImageViewer {
       this.canvas.style.width = `${image.width}px`;
       this.canvas.style.height = `${image.height}px`;
 
-      console.log(
-        `[DEBUG][FRONTEND] Canvas dimensions set: internal=${this.canvas.width}x${this.canvas.height}, ` +
-          `style=${this.canvas.style.width}x${this.canvas.style.height}`,
-      );
-
       // Draw the image
       this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
       this.ctx.drawImage(this.currentBitmap, 0, 0);
-
-      console.log("[DEBUG][FRONTEND] Image decoded and rendered successfully");
     } catch (error) {
       console.error("[ERROR][FRONTEND] Failed to decode image:", error);
       // Show error state
@@ -619,8 +586,6 @@ export class ImageViewer {
     this.overlay.classList.remove("visible");
     this.stopAnimation();
     this.currentImage = null;
-
-    console.log("[LOG][FRONTEND] Image viewer closed");
   }
 
   /**
@@ -822,7 +787,5 @@ export class ImageViewer {
       this.styleElement.remove();
       this.styleElement = null;
     }
-
-    console.log("[LOG][FRONTEND] Image viewer disposed");
   }
 }

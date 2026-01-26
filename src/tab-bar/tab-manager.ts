@@ -109,7 +109,7 @@ export class TabManager {
     // Check state machine - block if not idle
     if (this.operationState.status !== "idle") {
       console.warn(
-        `[WARN][FRONTEND] Tab creation blocked: operation in progress (${this.operationState.status})`,
+        `Tab creation blocked: operation in progress (${this.operationState.status})`,
       );
       return null;
     }

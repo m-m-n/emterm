@@ -371,10 +371,6 @@ export class TerminalApp {
         break;
       }
 
-      default:
-        console.debug(
-          `[DEBUG][FRONTEND] Unknown image event type: ${eventType}`,
-        );
     }
   }
 
