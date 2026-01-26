@@ -608,12 +608,8 @@ export class ImeHandler {
 			const value = input.value;
 			const isActive = this.isActiveTab();
 
-			// Debug log for multi-tab input routing
-			console.log(`[ImeHandler:${this.debugId}] input: value="${value}", isActive=${isActive}`);
-
-			// Skip if this tab is not active (for multi-tab support)
+				// Skip if this tab is not active (for multi-tab support)
 			if (!isActive) {
-				console.log(`[ImeHandler:${this.debugId}] input: blocked by inactive tab`);
 				input.value = "";
 				this.updateCompositionView("");
 				return;

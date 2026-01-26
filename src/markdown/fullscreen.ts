@@ -154,8 +154,6 @@ export class FullscreenMarkdownView {
 
 		// Update link dialog to use the same container
 		this.linkDialog.setContainer(this.container);
-
-		console.log(`[LOG][FRONTEND] Fullscreen markdown view opened: ${block.id}`);
 	}
 
 	/**
@@ -210,8 +208,6 @@ export class FullscreenMarkdownView {
 		this.state = {
 			isActive: false,
 		};
-
-		console.log("[LOG][FRONTEND] Fullscreen markdown view closed");
 	}
 
 	/**
@@ -238,8 +234,6 @@ export class FullscreenMarkdownView {
 		// Note: zoom is non-standard but well-supported in WebKit/Blink
 		const zoomValue = clampedLevel / 100;
 		this.content.style.zoom = String(zoomValue);
-
-		console.log(`[DEBUG][FRONTEND] applyZoom: level=${level}%, zoom=${zoomValue}`);
 	}
 
 	/**
