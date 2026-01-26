@@ -9,7 +9,7 @@
  */
 export const ZOOM_CONTROLLER_STYLES = `
 .viewer-close-button {
-  position: fixed;
+  position: absolute;
   top: 16px;
   right: 16px;
   width: 32px;
@@ -32,7 +32,7 @@ export const ZOOM_CONTROLLER_STYLES = `
 }
 
 .viewer-zoom-bar {
-  position: fixed;
+  position: absolute;
   bottom: 16px;
   right: 16px;
   display: flex;

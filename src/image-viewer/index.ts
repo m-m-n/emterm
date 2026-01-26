@@ -84,10 +84,13 @@ export function calculateFitLevel(
 
 /**
  * CSS styles for the image viewer overlay.
+ * Note: position: absolute is used to render within the container (overlay-root)
+ * instead of covering the entire viewport. This allows the tab bar to remain
+ * accessible during viewer display.
  */
 const STYLES = `
 .image-viewer-overlay {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   width: 100%;
@@ -100,7 +103,7 @@ const STYLES = `
   opacity: 0;
   visibility: hidden;
   transition: opacity 0.15s ease, visibility 0.15s ease;
-  z-index: 10000;
+  z-index: 1000;
 }
 
 .image-viewer-overlay.visible {
@@ -196,7 +199,10 @@ export class ImageViewer {
   /**
    * Creates a new ImageViewer instance.
    *
-   * @param container - Parent element (stored for reference, but overlay is appended to body)
+   * @param container - Parent element (overlay-root) to append the overlay to.
+   *                    This should be the overlay-root container within each tab,
+   *                    which is separate from terminal-root to prevent viewer
+   *                    operations from affecting terminal content.
    */
   constructor(container: HTMLElement) {
     this.container = container;
@@ -227,9 +233,10 @@ export class ImageViewer {
     this.infoElement.className = "image-viewer-info";
     this.overlay.appendChild(this.infoElement);
 
-    // Append to document.body (not container) to avoid being destroyed by terminal re-render
-    // The terminal's forceRender() clears container.innerHTML, which would destroy the overlay
-    document.body.appendChild(this.overlay);
+    // Append to container (overlay-root) instead of document.body
+    // The container separation (terminal-root vs overlay-root) prevents viewer
+    // operations from destroying terminal content during forceRender()
+    this.container.appendChild(this.overlay);
 
     // Bind event handlers
     this.boundHandleResize = this.handleResize.bind(this);

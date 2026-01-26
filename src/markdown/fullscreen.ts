@@ -42,6 +42,9 @@ export class FullscreenMarkdownView {
 	/** Content container element */
 	private content: HTMLElement | null = null;
 
+	/** Container element (overlay-root) for rendering */
+	private container: HTMLElement | null = null;
+
 	/** Current state */
 	private state: FullscreenState = {
 		isActive: false,
@@ -78,13 +81,23 @@ export class FullscreenMarkdownView {
 	 * Show Markdown content in fullscreen mode.
 	 *
 	 * @param block - Rendered Markdown block
+	 * @param container - Container element (overlay-root) to append the overlay to.
+	 *                    This allows the viewer to render within the tab content area
+	 *                    instead of covering the entire viewport.
 	 * @param config - Display configuration
 	 */
-	show(block: MarkdownBlock, config?: Partial<FullscreenConfig>): void {
+	show(
+		block: MarkdownBlock,
+		container: HTMLElement,
+		config?: Partial<FullscreenConfig>,
+	): void {
 		// Close existing if any
 		if (this.state.isActive) {
 			this.close();
 		}
+
+		// Store container reference
+		this.container = container;
 
 		// Save currently focused element for restoration on close
 		this.previouslyFocusedElement = document.activeElement as HTMLElement | null;
@@ -111,9 +124,9 @@ export class FullscreenMarkdownView {
 		// Configure scrollbar - auto shows when content overflows
 		this.content.style.overflowY = this.config.alwaysShowScrollbar ? "scroll" : "auto";
 
-		// Assemble and insert
+		// Assemble and insert into container (not document.body)
 		this.overlay.appendChild(this.content);
-		document.body.appendChild(this.overlay);
+		this.container.appendChild(this.overlay);
 
 		// Set up event listeners
 		// Note: Use capture phase to intercept keyboard events before terminal KeyboardHandler
@@ -138,6 +151,9 @@ export class FullscreenMarkdownView {
 			onClose: () => this.close(),
 			onZoomChange: (level) => this.applyZoom(level),
 		});
+
+		// Update link dialog to use the same container
+		this.linkDialog.setContainer(this.container);
 
 		console.log(`[LOG][FRONTEND] Fullscreen markdown view opened: ${block.id}`);
 	}
@@ -177,6 +193,9 @@ export class FullscreenMarkdownView {
 			this.overlay = null;
 			this.content = null;
 		}
+
+		// Clear container reference
+		this.container = null;
 
 		// Restore focus to previously focused element
 		if (

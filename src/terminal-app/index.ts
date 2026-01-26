@@ -27,6 +27,8 @@ import type { DecodedImage, ImageEvent } from "../image/types";
  */
 export class TerminalApp {
   private container: HTMLElement;
+  private terminalRoot: HTMLElement | null = null;
+  private overlayRoot: HTMLElement | null = null;
   private options: TerminalAppOptions;
   private ptyClient: PtyClient | null = null;
   private keyboardHandler: KeyboardHandler | null = null;
@@ -45,7 +47,7 @@ export class TerminalApp {
 
   /**
    * Creates a new TerminalApp instance
-   * @param container - HTML element to render the terminal into
+   * @param container - HTML element to render the terminal into (tab-content)
    * @param options - Optional terminal configuration
    */
   constructor(container: HTMLElement, options: TerminalAppOptions = {}) {
@@ -57,9 +59,37 @@ export class TerminalApp {
   }
 
   /**
+   * Creates the container structure for terminal and overlay separation.
+   * This allows viewers (ImageViewer, FullscreenMarkdownView) to render
+   * within the tab content area without affecting terminal content.
+   *
+   * Structure:
+   * - container (tab-content)
+   *   - terminal-root: Terminal renderer target (canvas, etc.)
+   *   - overlay-root: Overlay container (ImageViewer, MarkdownView, dialogs)
+   */
+  private createContainerStructure(): void {
+    // Create terminal-root for terminal renderer
+    this.terminalRoot = document.createElement("div");
+    this.terminalRoot.className = "terminal-root";
+    this.container.appendChild(this.terminalRoot);
+
+    // Create overlay-root for viewers and dialogs
+    this.overlayRoot = document.createElement("div");
+    this.overlayRoot.className = "overlay-root";
+    this.container.appendChild(this.overlayRoot);
+  }
+
+  /**
    * Initializes the terminal application
    */
   async init(): Promise<void> {
+    // Create container structure for terminal/overlay separation
+    this.createContainerStructure();
+
+    // Use terminalRoot for terminal-related operations
+    const terminalContainer = this.terminalRoot!;
+
     // Measure character size from container's computed styles
     this.charSize = measureCharacterSize(this.container);
 
@@ -80,11 +110,11 @@ export class TerminalApp {
 
     // Initialize terminal state and renderer
     this.state = new TerminalState(cols, rows);
-    this.renderer = await createRendererAsync(this.container, fontFamily, fontSize);
+    this.renderer = await createRendererAsync(terminalContainer, fontFamily, fontSize);
 
     // Initialize selection controller (new v2 system)
     this.selectionController = new SelectionController({
-      container: this.container,
+      container: terminalContainer,
       charWidth: this.charSize.width,
       charHeight: this.charSize.height,
       cols,
@@ -102,7 +132,7 @@ export class TerminalApp {
     // Use container id or generate unique id for debugging
     const imeDebugId = this.container.id || `ime-${Date.now()}`;
     this.imeHandler = new ImeHandler({
-      container: this.container,
+      container: terminalContainer,
       ptyClient: this.ptyClient,
       getState: () => this.state!,
       charSize: this.charSize,
@@ -131,7 +161,7 @@ export class TerminalApp {
 
     // Initialize mouse handler (for PTY mouse tracking only - selection handled by SelectionController)
     this.mouseHandler = new MouseHandler(
-      this.container,
+      terminalContainer,
       this.ptyClient,
       () => this.state!,
       this.charSize,
@@ -144,14 +174,17 @@ export class TerminalApp {
     // Attach selection controller
     this.selectionController.attach();
 
-    // Initialize ImageViewer
-    this.imageViewer = new ImageViewer(this.container);
+    // Initialize ImageViewer with overlay-root container
+    this.imageViewer = new ImageViewer(this.overlayRoot!);
+
+    // Set markdown session manager's container for fullscreen view
+    this.state.getMarkdownManager().setContainer(this.overlayRoot!);
 
     // Set up image event listener
     await this.setupImageEventListener();
 
     // Make terminal focusable and set up resize observer before PTY spawn
-    this.container.tabIndex = 0;
+    terminalContainer.tabIndex = 0;
     this.setupResizeObserver();
 
     // Initial render to show empty terminal immediately
@@ -171,7 +204,7 @@ export class TerminalApp {
       }
     } catch (error) {
       console.error("Failed to spawn PTY:", error);
-      this.container.textContent = `Failed to start terminal: ${error}`;
+      terminalContainer.textContent = `Failed to start terminal: ${error}`;
       return;
     }
   }
@@ -448,6 +481,16 @@ export class TerminalApp {
     this.state = null;
     this.renderer = null;
     this.selectionController = null;
+
+    // Remove container structure elements
+    if (this.terminalRoot) {
+      this.terminalRoot.remove();
+      this.terminalRoot = null;
+    }
+    if (this.overlayRoot) {
+      this.overlayRoot.remove();
+      this.overlayRoot = null;
+    }
   }
 
   /**
