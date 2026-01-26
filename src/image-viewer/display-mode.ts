@@ -370,6 +370,19 @@ export class DisplayModeController {
    * Handles keyboard events for mode switching.
    */
   private handleKeydown(e: KeyboardEvent): void {
+    // Only handle keys when the viewer is visible
+    if (!this.overlay?.classList.contains("visible")) {
+      return;
+    }
+
+    // Additional check: is the overlay actually visible in the DOM?
+    // When tab is switched, the tab container becomes display:none
+    // but the visible class remains on the overlay.
+    // Check if any ancestor has display:none by walking up the DOM tree.
+    if (this.isAncestorHidden(this.overlay)) {
+      return;
+    }
+
     switch (e.key) {
       case "f":
         e.preventDefault();
@@ -401,5 +414,24 @@ export class DisplayModeController {
         e.stopPropagation();
         break;
     }
+  }
+
+  /**
+   * Checks if any ancestor element has display:none.
+   * This is used to detect when the tab container is hidden during tab switch.
+   *
+   * @param element - Element to check
+   * @returns True if any ancestor has display:none
+   */
+  private isAncestorHidden(element: HTMLElement): boolean {
+    let current: HTMLElement | null = element.parentElement;
+    while (current) {
+      // Use inline style check first (faster than getComputedStyle)
+      if (current.style.display === "none") {
+        return true;
+      }
+      current = current.parentElement;
+    }
+    return false;
   }
 }

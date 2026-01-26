@@ -272,6 +272,13 @@ export class FullscreenMarkdownView {
 	private handleKeydown(e: KeyboardEvent): void {
 		if (!this.state.isActive) return;
 
+		// Additional check: is the overlay actually visible in the DOM?
+		// When tab is switched, the tab container becomes display:none
+		// but the isActive state remains true.
+		if (this.overlay && this.isAncestorHidden(this.overlay)) {
+			return;
+		}
+
 		// When link dialog is shown, let it handle keyboard events
 		if (this.linkDialog.isShown()) {
 			// Still prevent default to block shell input
@@ -473,5 +480,24 @@ export class FullscreenMarkdownView {
 	dispose(): void {
 		this.close();
 		this.linkDialog.dispose();
+	}
+
+	/**
+	 * Checks if any ancestor element has display:none.
+	 * This is used to detect when the tab container is hidden during tab switch.
+	 *
+	 * @param element - Element to check
+	 * @returns True if any ancestor has display:none
+	 */
+	private isAncestorHidden(element: HTMLElement): boolean {
+		let current: HTMLElement | null = element.parentElement;
+		while (current) {
+			// Use inline style check first (faster than getComputedStyle)
+			if (current.style.display === "none") {
+				return true;
+			}
+			current = current.parentElement;
+		}
+		return false;
 	}
 }

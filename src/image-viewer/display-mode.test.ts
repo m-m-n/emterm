@@ -455,6 +455,8 @@ describe("DisplayModeController - UI Creation", () => {
 describe("DisplayModeController - Keyboard Handling", () => {
   test("should toggle mode on 'f' key", () => {
     const overlay = document.createElement("div");
+    // Add visible class to simulate active viewer state
+    overlay.classList.add("visible");
     let modeChangedTo: DisplayMode | null = null;
 
     const controller = new DisplayModeController({
@@ -479,6 +481,8 @@ describe("DisplayModeController - Keyboard Handling", () => {
 
   test("should switch to pixel mode on '1' key", () => {
     const overlay = document.createElement("div");
+    // Add visible class to simulate active viewer state
+    overlay.classList.add("visible");
     let lastMode: DisplayMode | null = null;
 
     const controller = new DisplayModeController({
@@ -504,6 +508,8 @@ describe("DisplayModeController - Keyboard Handling", () => {
 
   test("should switch to fit mode on '0' key", () => {
     const overlay = document.createElement("div");
+    // Add visible class to simulate active viewer state
+    overlay.classList.add("visible");
     let lastMode: DisplayMode | null = null;
 
     const controller = new DisplayModeController({
@@ -528,6 +534,8 @@ describe("DisplayModeController - Keyboard Handling", () => {
 
   test("should call onClose on Escape key", () => {
     const overlay = document.createElement("div");
+    // Add visible class to simulate active viewer state
+    overlay.classList.add("visible");
     let closeCalled = false;
 
     const controller = new DisplayModeController({
