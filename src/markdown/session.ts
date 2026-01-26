@@ -57,6 +57,9 @@ export class MarkdownSessionManager {
 	/** Fullscreen view instance */
 	private fullscreenView: FullscreenMarkdownView;
 
+	/** Container element (overlay-root) for rendering */
+	private container: HTMLElement | null = null;
+
 	/** Cleanup timer handle */
 	private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -67,6 +70,14 @@ export class MarkdownSessionManager {
 		this.renderer = new MarkdownRenderer();
 		this.fullscreenView = new FullscreenMarkdownView();
 		this.startCleanupTimer();
+	}
+
+	/**
+	 * Set container for fullscreen view rendering.
+	 * @param container - Container element (overlay-root) to append fullscreen view to
+	 */
+	setContainer(container: HTMLElement): void {
+		this.container = container;
 	}
 
 	/**
@@ -237,7 +248,16 @@ export class MarkdownSessionManager {
 			rowCount: 0,
 			visible: true,
 		};
-		this.fullscreenView.show(block);
+
+		// Require container to be set
+		if (!this.container) {
+			console.error(
+				"[ERROR][FRONTEND] MarkdownSessionManager: container not set, cannot show fullscreen view",
+			);
+			return;
+		}
+
+		this.fullscreenView.show(block, this.container);
 	}
 
 	/**

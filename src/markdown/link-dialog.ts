@@ -13,6 +13,9 @@ export class LinkConfirmDialog {
 	/** Dialog element */
 	private dialog: HTMLElement | null = null;
 
+	/** Container element (overlay-root) for rendering */
+	private container: HTMLElement | null = null;
+
 	/** Promise resolver */
 	private resolvePromise: ((value: boolean) => void) | null = null;
 
@@ -24,6 +27,14 @@ export class LinkConfirmDialog {
 	 */
 	constructor() {
 		this.boundHandleKeydown = this.handleKeydown.bind(this);
+	}
+
+	/**
+	 * Set container for dialog rendering.
+	 * @param container - Container element (overlay-root) to append dialog to
+	 */
+	setContainer(container: HTMLElement): void {
+		this.container = container;
 	}
 
 	/**
@@ -63,7 +74,13 @@ export class LinkConfirmDialog {
 			});
 
 			document.addEventListener("keydown", this.boundHandleKeydown);
-			document.body.appendChild(this.dialog);
+
+			// Append to container if set, otherwise fall back to document.body
+			if (this.container) {
+				this.container.appendChild(this.dialog);
+			} else {
+				document.body.appendChild(this.dialog);
+			}
 
 			// Focus open button
 			(openBtn as HTMLElement)?.focus();

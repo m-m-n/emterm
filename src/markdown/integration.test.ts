@@ -9,9 +9,16 @@ import type { TerminalAction } from "../types/terminal.ts";
 
 describe("Markdown Display Integration", () => {
 	let state: TerminalState;
+	let container: HTMLElement;
 
 	beforeEach(() => {
 		state = new TerminalState(80, 24);
+		// Create container for fullscreen view
+		container = document.createElement("div");
+		container.className = "overlay-root";
+		document.body.appendChild(container);
+		// Set container on markdown manager
+		state.getMarkdownManager().setContainer(container);
 	});
 
 	afterEach(() => {
@@ -20,6 +27,7 @@ describe("Markdown Display Integration", () => {
 		document.querySelectorAll(".markdown-fullscreen-overlay").forEach((el) => {
 			el.remove();
 		});
+		container.remove();
 	});
 
 	/**
@@ -63,8 +71,8 @@ describe("Markdown Display Integration", () => {
 			createEmtermAction("emterm", ["markdown", "end", "id=test-1"]),
 		);
 
-		// Check fullscreen overlay is shown
-		const overlay = document.querySelector(".markdown-fullscreen-overlay");
+		// Check fullscreen overlay is shown (inside container)
+		const overlay = container.querySelector(".markdown-fullscreen-overlay");
 		expect(overlay).not.toBeNull();
 
 		const content_el = overlay?.querySelector(".markdown-fullscreen-content");
@@ -115,8 +123,8 @@ describe("Markdown Display Integration", () => {
 			createEmtermAction("emterm", ["markdown", "end", "id=chunked-test"]),
 		);
 
-		// Check fullscreen content
-		const content = document.querySelector(".markdown-fullscreen-content");
+		// Check fullscreen content (inside container)
+		const content = container.querySelector(".markdown-fullscreen-content");
 		expect(content).not.toBeNull();
 		expect(content?.innerHTML).toContain("<h1");
 		expect(content?.innerHTML).toContain("<strong>");
@@ -141,12 +149,12 @@ describe("Markdown Display Integration", () => {
 			createEmtermAction("emterm", ["markdown", "end", "id=session-a"]),
 		);
 
-		// Verify first session shown
-		let content = document.querySelector(".markdown-fullscreen-content");
+		// Verify first session shown (inside container)
+		let content = container.querySelector(".markdown-fullscreen-content");
 		expect(content?.innerHTML).toContain("Session A");
 
 		// Close first overlay
-		document.querySelector(".markdown-fullscreen-overlay")?.remove();
+		container.querySelector(".markdown-fullscreen-overlay")?.remove();
 
 		// Second session
 		state.processAction(
@@ -165,8 +173,8 @@ describe("Markdown Display Integration", () => {
 			createEmtermAction("emterm", ["markdown", "end", "id=session-b"]),
 		);
 
-		// Verify second session shown
-		content = document.querySelector(".markdown-fullscreen-content");
+		// Verify second session shown (inside container)
+		content = container.querySelector(".markdown-fullscreen-content");
 		expect(content?.innerHTML).toContain("Session B");
 	});
 
@@ -223,7 +231,8 @@ describe("Markdown Display Integration", () => {
 			createEmtermAction("emterm", ["markdown", "end", "id=xss-test"]),
 		);
 
-		const content = document.querySelector(".markdown-fullscreen-content");
+		// Check fullscreen content (inside container)
+		const content = container.querySelector(".markdown-fullscreen-content");
 		expect(content?.innerHTML).not.toContain("<script>");
 		expect(content?.innerHTML).not.toContain("alert");
 	});

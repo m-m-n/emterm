@@ -111,6 +111,56 @@ describe("calculateFitLevel", () => {
   });
 });
 
+describe("ImageViewer - Container-Based Rendering (CSS verification)", () => {
+  // Note: Full DOM tests with canvas context require browser environment.
+  // These tests verify the CSS styles that will be injected.
+
+  test("STYLES constant should use position: absolute", async () => {
+    // Read the module source to verify STYLES contains position: absolute
+    const fs = require("fs");
+    const path = require("path");
+    const sourceFile = path.join(__dirname, "index.ts");
+    const source = fs.readFileSync(sourceFile, "utf-8");
+
+    // Extract STYLES constant
+    const stylesMatch = source.match(/const STYLES = `([^`]+)`/);
+    expect(stylesMatch).not.toBeNull();
+
+    const styles = stylesMatch![1];
+
+    // Verify position: absolute (not fixed)
+    expect(styles).toContain("position: absolute");
+    expect(styles).not.toContain("position: fixed");
+  });
+
+  test("STYLES constant should use z-index: 1000 (not 10000)", async () => {
+    const fs = require("fs");
+    const path = require("path");
+    const sourceFile = path.join(__dirname, "index.ts");
+    const source = fs.readFileSync(sourceFile, "utf-8");
+
+    const stylesMatch = source.match(/const STYLES = `([^`]+)`/);
+    expect(stylesMatch).not.toBeNull();
+
+    const styles = stylesMatch![1];
+
+    // Verify z-index is 1000 (scoped to container, not covering entire viewport)
+    expect(styles).toContain("z-index: 1000");
+    expect(styles).not.toContain("z-index: 10000");
+  });
+
+  test("constructor should append overlay to container (not document.body)", async () => {
+    const fs = require("fs");
+    const path = require("path");
+    const sourceFile = path.join(__dirname, "index.ts");
+    const source = fs.readFileSync(sourceFile, "utf-8");
+
+    // Verify that the constructor appends to this.container, not document.body
+    expect(source).toContain("this.container.appendChild(this.overlay)");
+    expect(source).not.toContain("document.body.appendChild(this.overlay)");
+  });
+});
+
 describe("ImageViewer - Base64 Decoding Logic", () => {
   test("should decode base64 string to Uint8Array correctly", () => {
     // Test the base64 decoding logic that will be used in the viewer

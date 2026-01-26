@@ -9,7 +9,7 @@
  */
 export const DISPLAY_MODE_STYLES = `
 .viewer-close-button {
-  position: fixed;
+  position: absolute;
   top: 16px;
   right: 16px;
   width: 32px;
@@ -32,7 +32,7 @@ export const DISPLAY_MODE_STYLES = `
 }
 
 .viewer-mode-bar {
-  position: fixed;
+  position: absolute;
   bottom: 16px;
   right: 16px;
   display: flex;
