@@ -1,0 +1,159 @@
+/**
+ * Tab Bar Styles
+ *
+ * Styles for the tab bar component.
+ */
+
+/* Tab Bar Container */
+.tab-bar {
+  display: flex;
+  height: 32px;
+  background: var(--tab-bar-bg, #1e1e1e);
+  border-bottom: 1px solid var(--tab-bar-border, #333);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+/* Tab Scroll Area */
+.tab-scroll-area {
+  flex: 1;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+  position: relative; /* Required for absolute positioning of drop indicator */
+}
+
+.tab-scroll-area::-webkit-scrollbar {
+  display: none; /* Chrome, Safari */
+}
+
+/* Individual Tab */
+.tab {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  min-width: 120px;
+  max-width: 180px;
+  height: 100%;
+  background: var(--tab-bg, #2d2d2d);
+  border-right: 1px solid var(--tab-border, #333);
+  cursor: pointer;
+  color: var(--tab-fg, #cccccc);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  transition: background-color 0.1s ease;
+}
+
+.tab:hover:not(.active) {
+  background: var(--tab-hover-bg, #353535);
+}
+
+.tab.active {
+  background: var(--tab-active-bg, #3c3c3c);
+  color: var(--tab-active-fg, #ffffff);
+  border-bottom: 2px solid var(--tab-active-indicator, #007acc);
+}
+
+/* Tab Icon */
+.tab-icon {
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
+  color: var(--tab-icon-fg, #888888);
+}
+
+.tab.active .tab-icon {
+  color: var(--tab-active-icon-fg, #007acc);
+}
+
+/* Tab Title */
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* Fixed Button Area */
+.tab-fixed-area {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 4px;
+  background: var(--tab-bar-bg, #1e1e1e);
+  border-left: 1px solid var(--tab-border, #333);
+}
+
+/* Tab Buttons */
+.tab-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  color: var(--tab-button-fg, #cccccc);
+  transition: background-color 0.1s ease;
+}
+
+.tab-button:hover {
+  background: var(--tab-button-hover-bg, #3c3c3c);
+}
+
+.tab-button:active {
+  background: var(--tab-button-active-bg, #4c4c4c);
+}
+
+.tab-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Drag and Drop (Phase 2) */
+.tab.dragging {
+  opacity: 0.5;
+}
+
+.tab-drop-indicator {
+  position: absolute;
+  width: 2px;
+  height: 100%;
+  background: var(--drop-indicator, #007acc);
+  pointer-events: none;
+}
+
+/* Settings Tab Content Placeholder */
+.settings-tab-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--settings-bg, #1e1e1e);
+  color: var(--settings-fg, #cccccc);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.settings-placeholder {
+  font-size: 16px;
+  color: var(--settings-placeholder-fg, #888888);
+}
+
+/* Tab Content Container */
+.tab-content {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* Tab Content Area (main container layout) */
+#tab-content-area {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}

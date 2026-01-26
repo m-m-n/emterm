@@ -3,28 +3,91 @@
  * Entry point
  */
 
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TerminalApp } from "./terminal-app";
+import { TabManager, TabBarUI, TabKeyboardHandler } from "./tab-bar";
 import { initConsoleBridge } from "./utils/console-bridge";
 
-let app: TerminalApp | null = null;
+let tabManager: TabManager | null = null;
+let tabBarUI: TabBarUI | null = null;
+let keyboardHandler: TabKeyboardHandler | null = null;
 
 /**
- * Initialize the terminal application
+ * Initialize the terminal application with tab support
  */
 async function main(): Promise<void> {
   // Initialize console bridge to forward logs to stdout/stderr
   initConsoleBridge();
 
+  const tabBarContainer = document.getElementById("tab-bar");
+  const contentContainer = document.getElementById("tab-content-area");
+
+  if (!tabBarContainer || !contentContainer) {
+    console.error("Tab bar or content container not found");
+    // Fallback to legacy single terminal mode
+    return initLegacyMode();
+  }
+
+  // Create TabManager
+  tabManager = new TabManager({
+    container: contentContainer,
+    createTerminalApp: async (tabContainer) => {
+      const app = new TerminalApp(tabContainer);
+      await app.init();
+      return app;
+    },
+  });
+
+  // Handle last tab closed - exit application
+  tabManager.onLastTabClosed(async () => {
+    try {
+      const appWindow = getCurrentWebviewWindow();
+      await appWindow.close();
+    } catch (error) {
+      console.error("Failed to close window:", error);
+    }
+  });
+
+  // Create TabBarUI
+  tabBarUI = new TabBarUI({
+    container: tabBarContainer,
+    tabManager,
+  });
+  tabBarUI.init();
+
+  // Create keyboard handler and attach to document
+  keyboardHandler = new TabKeyboardHandler(tabManager);
+  keyboardHandler.attach(document);
+
+  // Create initial tab
+  await tabManager.createTab();
+
+  // Expose for E2E testing
+  window.tabManager = tabManager;
+  const activeTab = tabManager.getActiveTab();
+  if (activeTab) {
+    const app = tabManager.getTerminalApp(activeTab.id);
+    if (app) {
+      window.terminalApp = app;
+      window.terminalState = app.terminalState;
+      window.terminalRenderer = app.terminalRenderer;
+    }
+  }
+}
+
+/**
+ * Legacy single-terminal mode (fallback)
+ */
+async function initLegacyMode(): Promise<void> {
   const container = document.getElementById("terminal");
   if (!container) {
     console.error("Terminal element not found");
     return;
   }
 
-  app = new TerminalApp(container);
+  const app = new TerminalApp(container);
   await app.init();
 
-  // Expose for E2E testing
   window.terminalApp = app;
   window.terminalState = app.terminalState;
   window.terminalRenderer = app.terminalRenderer;
@@ -34,10 +97,13 @@ async function main(): Promise<void> {
  * Cleanup resources before unload
  */
 function cleanup(): void {
-  if (app) {
-    app.dispose();
-    app = null;
-  }
+  keyboardHandler?.detach();
+  tabBarUI?.dispose();
+  tabManager?.dispose();
+
+  tabManager = null;
+  tabBarUI = null;
+  keyboardHandler = null;
 }
 
 // Initialize when DOM is ready
@@ -53,6 +119,7 @@ window.addEventListener("beforeunload", cleanup);
 // Type declarations for E2E testing globals
 declare global {
   interface Window {
+    tabManager: TabManager | null;
     terminalApp: TerminalApp | null;
     terminalState: import("./terminal/state").TerminalState | null;
     terminalRenderer: import("./terminal").ITerminalRenderer | null;
