@@ -145,6 +145,13 @@ export function observeContainerResize(
 	let lastRows = 0;
 
 	const observer = new ResizeObserver(() => {
+		// Skip resize when container is hidden (e.g., inactive tab)
+		// ResizeObserver reports 0x0 dimensions for hidden elements,
+		// which would calculate cols=1, rows=1 and corrupt last values
+		if (container.style.display === "none") {
+			return;
+		}
+
 		const { cols, rows } = calculateTerminalSize(
 			container,
 			charWidth,

@@ -140,7 +140,9 @@ export class KeyboardHandler {
     // Skip if this tab is not active (for multi-tab support)
     // This allows multiple KeyboardHandlers to be attached to document
     // but only the active tab processes input
-    if (!this.isActiveTab()) {
+    const isActive = this.isActiveTab();
+    console.debug(`[KeyboardHandler] handleKeyDown: key=${event.key}, isActive=${isActive}`);
+    if (!isActive) {
       return;
     }
 
@@ -194,12 +196,12 @@ export class KeyboardHandler {
     // If using EditContext API, let it handle most input
     if (this.isEditContextActive()) {
       // Only process special keys that EditContext doesn't handle
-      if (!this.isSpecialKey(event)) {
-        return; // Let EditContext handle regular input
-      }
       // Note: Enter key is NOT handled by EditContext's textupdate event
       // (see: https://developer.mozilla.org/en-US/docs/Web/API/EditContext_API/Guide)
-      // So we must process Enter here, not return
+      // So we must process Enter here explicitly
+      if (!this.isSpecialKey(event) && event.key !== "Enter") {
+        return; // Let EditContext handle regular input
+      }
       // Special keys (Ctrl+C, arrows, Enter, etc.) fall through to be processed
     }
 

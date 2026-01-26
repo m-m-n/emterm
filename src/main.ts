@@ -70,6 +70,20 @@ async function main(): Promise<void> {
   keyboardHandler = new TabKeyboardHandler(tabManager);
   keyboardHandler.attach(document);
 
+  // Focus the terminal when a tab is activated and update global references
+  manager.on("tab:activated", ({ tab }) => {
+    const app = manager.getTerminalApp(tab.id);
+    if (app) {
+      // Focus the IME handler for the active tab
+      app.focus();
+
+      // Update global references for E2E testing
+      window.terminalApp = app;
+      window.terminalState = app.terminalState;
+      window.terminalRenderer = app.terminalRenderer;
+    }
+  });
+
   // Create initial tab
   await tabManager.createTab();
 
