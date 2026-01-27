@@ -21,6 +21,7 @@ import {
 } from "./performance.ts";
 import type { TerminalState } from "./state.ts";
 import { getStyleCache, type StyleCache } from "./style-cache.ts";
+import type { RendererSettings } from "../settings/settings-applier";
 
 /**
  * Terminal renderer that outputs to DOM.
@@ -747,10 +748,45 @@ export class TerminalRenderer {
 	}
 
 	/**
-	 * Get the font size.
+	 * Get the font size in points.
 	 */
 	getFontSize(): number {
 		return this.fontSize;
+	}
+
+	/**
+	 * Set the font size dynamically.
+	 * @param fontSize - New font size in points
+	 */
+	setFontSize(fontSize: number): void {
+		this.fontSize = fontSize;
+		this.container.style.fontSize = `${fontSize}pt`;
+		// Re-measure character size with new font size
+		this.measureCharacterSize();
+		// Re-render if we have pending state
+		if (this.pendingState) {
+			this.forceRender(this.pendingState);
+		}
+	}
+
+	/**
+	 * Apply a setting change to the renderer.
+	 * @param setting - The setting key
+	 * @param value - The new value
+	 */
+	applySetting<K extends keyof RendererSettings>(
+		setting: K,
+		value: RendererSettings[K],
+	): void {
+		switch (setting) {
+			case "fontSize":
+				this.setFontSize(value as number);
+				break;
+			// Future cases:
+			// case "colorScheme":
+			//   this.setColorScheme(value as ColorScheme);
+			//   break;
+		}
 	}
 
 	/**

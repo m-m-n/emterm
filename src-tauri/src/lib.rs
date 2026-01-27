@@ -620,6 +620,8 @@ pub fn run() {
             session_count,
             tab_close_graceful,
             commands::config::get_renderer_type,
+            commands::config::load_settings,
+            commands::config::save_settings,
         ])
         .setup(|_app| {
             // Initialize custom logger for backend

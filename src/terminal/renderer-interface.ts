@@ -5,6 +5,7 @@
  * allowing them to be used interchangeably.
  */
 
+import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
 
 /**
@@ -70,6 +71,23 @@ export interface ITerminalRenderer {
 	 * Get the font size.
 	 */
 	getFontSize(): number;
+
+	/**
+	 * Set the font size dynamically.
+	 * @param fontSize - New font size in points
+	 */
+	setFontSize(fontSize: number): void;
+
+	/**
+	 * Apply a setting change to the renderer.
+	 * Generic method for handling various settings.
+	 * @param setting - The setting key
+	 * @param value - The new value
+	 */
+	applySetting<K extends keyof RendererSettings>(
+		setting: K,
+		value: RendererSettings[K],
+	): void;
 
 	/**
 	 * Dispose of the renderer and clean up resources.

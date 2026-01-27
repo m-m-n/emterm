@@ -7,6 +7,8 @@
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { TerminalApp } from "../terminal-app";
+import { SettingsPanel } from "../settings";
+import type { RendererSettings } from "../settings/settings-applier";
 import type {
   Tab,
   TerminalTab,
@@ -88,6 +90,7 @@ export class TabManager {
   private activeTabId: string | null = null;
   private operationState: TabOperationState = { status: "idle" };
   private terminalApps: Map<string, TerminalApp> = new Map();
+  private settingsPanels: Map<string, SettingsPanel> = new Map();
   private tabContainers: Map<string, HTMLElement> = new Map();
   private eventUnlistens: Map<string, UnlistenFn> = new Map();
   private eventEmitter: TypedEventEmitter = new TypedEventEmitter();
@@ -122,7 +125,7 @@ export class TabManager {
       const tabId = generateTabId();
 
       if (tabType === "settings") {
-        return this.createSettingsTab(tabId, options.title);
+        return await this.createSettingsTab(tabId, options.title);
       }
 
       return await this.createTerminalTabInternal(tabId, options.title);
@@ -207,16 +210,22 @@ export class TabManager {
   /**
    * Creates a settings tab
    */
-  private createSettingsTab(tabId: string, title?: string): SettingsTab {
+  private async createSettingsTab(
+    tabId: string,
+    title?: string,
+  ): Promise<SettingsTab> {
     // Create container for settings
     const tabContainer = document.createElement("div");
     tabContainer.id = `tab-content-${tabId}`;
     tabContainer.className = "tab-content settings-tab-content";
     tabContainer.style.display = "none";
-    tabContainer.innerHTML =
-      "<div class='settings-placeholder'>Settings (placeholder)</div>";
     this.container.appendChild(tabContainer);
     this.tabContainers.set(tabId, tabContainer);
+
+    // Create and initialize SettingsPanel
+    const settingsPanel = new SettingsPanel({ container: tabContainer });
+    await settingsPanel.init();
+    this.settingsPanels.set(tabId, settingsPanel);
 
     // Create tab data
     const tab: SettingsTab = {
@@ -337,6 +346,13 @@ export class TabManager {
         console.error("[ERROR][FRONTEND] Failed to kill PTY:", error);
       }
       this.terminalApps.delete(tabId);
+    }
+
+    // Dispose SettingsPanel
+    const settingsPanel = this.settingsPanels.get(tabId);
+    if (settingsPanel) {
+      settingsPanel.dispose();
+      this.settingsPanels.delete(tabId);
     }
 
     // Call event unlisten
@@ -601,5 +617,28 @@ export class TabManager {
     for (const tab of [...this.tabs]) {
       await this.closeTab(tab.id);
     }
+  }
+
+  /**
+   * Update a setting for all terminal tabs.
+   * @param setting - The setting key
+   * @param value - The new value
+   */
+  updateAllTerminalsSetting<K extends keyof RendererSettings>(
+    setting: K,
+    value: RendererSettings[K],
+  ): void {
+    for (const [_, terminal] of this.terminalApps) {
+      terminal.applySetting(setting, value);
+    }
+  }
+
+  /**
+   * Update font size for all terminal tabs.
+   * @param fontSize - New font size in points
+   * @deprecated Use updateAllTerminalsSetting("fontSize", fontSize) instead
+   */
+  updateAllTerminalsFontSize(fontSize: number): void {
+    this.updateAllTerminalsSetting("fontSize", fontSize);
   }
 }
