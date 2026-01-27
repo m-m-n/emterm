@@ -20,6 +20,7 @@ import type {
   TerminalActionsPayload,
   ImageEventPayload,
 } from "../types/terminal";
+import type { RendererSettings } from "../settings/settings-applier";
 import type { DecodedImage, ImageEvent } from "../image/types";
 
 /**
@@ -525,6 +526,26 @@ export class TerminalApp {
    */
   onSessionExit(callback: (sessionId: string) => void): void {
     this.sessionExitCallback = callback;
+  }
+
+  /**
+   * Update the font size of the terminal.
+   * @param fontSize - New font size in points
+   */
+  setFontSize(fontSize: number): void {
+    this.renderer?.setFontSize(fontSize);
+  }
+
+  /**
+   * Apply a setting change to the terminal.
+   * @param setting - The setting key
+   * @param value - The new value
+   */
+  applySetting<K extends keyof RendererSettings>(
+    setting: K,
+    value: RendererSettings[K],
+  ): void {
+    this.renderer?.applySetting(setting, value);
   }
 }
 

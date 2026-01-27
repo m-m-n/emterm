@@ -1,0 +1,151 @@
+/* ============================================
+ * Settings Panel Styles
+ * ============================================ */
+
+/* Panel layout: category nav (160px) + content area */
+.settings-panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  font-size: 14px;
+}
+
+/* Category Navigation (left side) */
+.settings-nav {
+  width: 160px;
+  min-width: 160px;
+  background-color: #252526;
+  border-right: 1px solid #3c3c3c;
+  padding: 16px 0;
+}
+
+.settings-nav-item {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  color: #d4d4d4;
+  text-align: left;
+  cursor: pointer;
+  font-size: 14px;
+  font-family: inherit;
+  transition: background-color 0.15s ease;
+}
+
+.settings-nav-item:hover:not(.disabled) {
+  background-color: #2a2d2e;
+}
+
+.settings-nav-item.active {
+  background-color: #37373d;
+  color: #ffffff;
+}
+
+.settings-nav-item.disabled {
+  color: #6e6e6e;
+  cursor: not-allowed;
+}
+
+/* Content Area (right side) */
+.settings-content {
+  flex: 1;
+  padding: 24px 32px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Section Header */
+.settings-section-header {
+  font-size: 18px;
+  font-weight: 600;
+  color: #ffffff;
+  margin: 0 0 24px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #3c3c3c;
+}
+
+/* Settings Row */
+.settings-row {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.settings-label-group {
+  flex: 1;
+}
+
+.settings-label {
+  display: block;
+  font-size: 14px;
+  color: #d4d4d4;
+  margin-bottom: 4px;
+}
+
+.settings-hint {
+  font-size: 12px;
+  color: #8b8b8b;
+}
+
+/* Font Size Input */
+.settings-input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-number-input {
+  width: 70px;
+  padding: 6px 10px;
+  background-color: #3c3c3c;
+  border: 1px solid #5a5a5a;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 14px;
+  font-family: inherit;
+  text-align: center;
+}
+
+.settings-number-input:focus {
+  outline: none;
+  border-color: #007acc;
+  box-shadow: 0 0 0 1px #007acc;
+}
+
+.settings-number-input::-webkit-inner-spin-button,
+.settings-number-input::-webkit-outer-spin-button {
+  opacity: 1;
+}
+
+.settings-unit {
+  font-size: 14px;
+  color: #8b8b8b;
+}
+
+/* Scrollbar styling */
+.settings-content::-webkit-scrollbar {
+  width: 10px;
+}
+
+.settings-content::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+.settings-content::-webkit-scrollbar-thumb {
+  background-color: #424242;
+  border-radius: 5px;
+  border: 2px solid #1e1e1e;
+}
+
+.settings-content::-webkit-scrollbar-thumb:hover {
+  background-color: #4f4f4f;
+}

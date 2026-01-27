@@ -7,6 +7,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TerminalApp } from "./terminal-app";
 import { TabManager, TabBarUI, TabKeyboardHandler } from "./tab-bar";
 import { initConsoleBridge } from "./utils/console-bridge";
+import { SettingsService, applySettingsToCSS } from "./settings";
 
 let tabManager: TabManager | null = null;
 let tabBarUI: TabBarUI | null = null;
@@ -18,6 +19,15 @@ let keyboardHandler: TabKeyboardHandler | null = null;
 async function main(): Promise<void> {
   // Initialize console bridge to forward logs to stdout/stderr
   initConsoleBridge();
+
+  // Load and apply settings at startup
+  try {
+    const settings = await SettingsService.load();
+    applySettingsToCSS(settings);
+  } catch (error) {
+    console.error("Failed to load settings at startup:", error);
+    // Continue with defaults - applySettingsToCSS uses CSS defaults if not called
+  }
 
   const tabBarContainer = document.getElementById("tab-bar");
   const contentContainer = document.getElementById("tab-content-area");

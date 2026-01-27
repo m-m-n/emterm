@@ -1,6 +1,9 @@
 /* Tab Bar Styles */
 @import "./styles/tab-bar.css";
 
+/* Settings Panel Styles */
+@import "./styles/settings-panel.css";
+
 * {
   margin: 0;
   padding: 0;

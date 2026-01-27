@@ -20,6 +20,7 @@ import {
 	RenderTimer,
 } from "./performance.ts";
 import type { ITerminalRenderer } from "./renderer-interface.ts";
+import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
 
 /**
@@ -817,10 +818,45 @@ export class CanvasRenderer implements ITerminalRenderer {
 	}
 
 	/**
-	 * Get the font size.
+	 * Get the font size in points.
 	 */
 	getFontSize(): number {
-		return this.fontSize;
+		// Convert px to pt (1pt = 1.333px at 96dpi)
+		return this.fontSize * (72 / 96);
+	}
+
+	/**
+	 * Set the font size dynamically.
+	 * @param fontSize - New font size in points (will be converted to pixels)
+	 */
+	setFontSize(fontSize: number): void {
+		// Convert pt to px (1pt = 1.333px at 96dpi)
+		const fontSizePx = fontSize * (96 / 72);
+		this.fontSize = fontSizePx;
+		this.measureCharacterSize();
+		if (this.pendingState) {
+			this.forceRender(this.pendingState);
+		}
+	}
+
+	/**
+	 * Apply a setting change to the renderer.
+	 * @param setting - The setting key
+	 * @param value - The new value
+	 */
+	applySetting<K extends keyof RendererSettings>(
+		setting: K,
+		value: RendererSettings[K],
+	): void {
+		switch (setting) {
+			case "fontSize":
+				this.setFontSize(value as number);
+				break;
+			// Future cases:
+			// case "colorScheme":
+			//   this.setColorScheme(value as ColorScheme);
+			//   break;
+		}
 	}
 
 	/**
