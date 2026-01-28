@@ -2,51 +2,75 @@
  * Settings Panel Styles
  * ============================================ */
 
-/* Panel layout: category nav (160px) + content area */
+/* Panel layout: CSS Grid 2-column (nav 160px + content flex) */
 .settings-panel {
-  display: flex;
+  container-type: inline-size;
+  container-name: settings;
+  display: grid;
+  grid-template-columns: 160px 1fr;
   width: 100%;
   height: 100%;
+  min-height: 0;
   background-color: #1e1e1e;
   color: #d4d4d4;
   font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 14px;
 }
 
 /* Category Navigation (left side) */
 .settings-nav {
-  width: 160px;
-  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   background-color: #252526;
   border-right: 1px solid #3c3c3c;
-  padding: 16px 0;
+  padding: 24px 12px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .settings-nav-item {
-  display: block;
-  width: 100%;
-  padding: 8px 16px;
-  background: none;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  background: transparent;
   border: none;
+  border-left: 3px solid transparent;
+  border-radius: 0 4px 4px 0;
   color: #d4d4d4;
   text-align: left;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 500;
   font-family: inherit;
-  transition: background-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+  position: relative;
 }
 
 .settings-nav-item:hover:not(.disabled) {
-  background-color: #2a2d2e;
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
-.settings-nav-item.active {
+/* Focus visible for keyboard navigation */
+.settings-nav-item:focus-visible {
+  outline: 2px solid #007acc;
+  outline-offset: 2px;
+}
+
+/* Remove focus ring for mouse users */
+.settings-nav-item:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Active/Selected state: background + left border */
+.settings-nav-item.active,
+.settings-nav-item[aria-selected="true"] {
   background-color: #37373d;
+  border-left-color: #007acc;
   color: #ffffff;
 }
 
@@ -57,10 +81,20 @@
 
 /* Content Area (right side) */
 .settings-content {
-  flex: 1;
-  padding: 24px 32px;
+  padding: 24px;
   overflow-y: auto;
   min-height: 0;
+}
+
+/* Panel focus indicator */
+.settings-content-panel:focus-visible {
+  outline: 2px solid #007acc;
+  outline-offset: -2px;
+}
+
+/* Hidden panel */
+.settings-content-panel[hidden] {
+  display: none;
 }
 
 /* Section Header */
@@ -73,27 +107,24 @@
   border-bottom: 1px solid #3c3c3c;
 }
 
-/* Settings Row */
+/* Settings Row - vertical layout per spec */
 .settings-row {
   display: flex;
-  align-items: flex-start;
-  margin-bottom: 20px;
-}
-
-.settings-label-group {
-  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 24px;
 }
 
 .settings-label {
   display: block;
   font-size: 14px;
   color: #d4d4d4;
-  margin-bottom: 4px;
 }
 
 .settings-hint {
   font-size: 12px;
   color: #8b8b8b;
+  margin-top: 4px;
 }
 
 /* Font Size Input */
@@ -104,7 +135,7 @@
 }
 
 .settings-number-input {
-  width: 70px;
+  width: 80px;
   padding: 6px 10px;
   background-color: #3c3c3c;
   border: 1px solid #5a5a5a;
