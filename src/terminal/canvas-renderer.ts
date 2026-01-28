@@ -385,16 +385,14 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const descent = metrics.fontBoundingBoxDescent ?? this.fontSize * 0.2;
 		this.fontDescent = descent;
 
-		// Read lineHeight from CSS if available
-		const computedStyle = window.getComputedStyle(this.container);
-		const lineHeight = parseFloat(computedStyle.lineHeight);
+		// Calculate lineHeight from fontSize directly to avoid CSS computed style timing issues
+		// Formula matches settings-applier.ts: lineHeight (pt) = fontSize (pt) + 2
+		// this.fontSize is in px, so convert: px -> pt -> add 2 -> back to px
+		const fontSizePt = this.fontSize * (72 / 96);
+		const lineHeightPt = fontSizePt + 2;
+		const lineHeightPx = lineHeightPt * (96 / 72);
 
-		if (!Number.isNaN(lineHeight)) {
-			this.charHeight = lineHeight;
-		} else {
-			// Fallback: use font metrics with a small padding
-			this.charHeight = ascent + descent;
-		}
+		this.charHeight = lineHeightPx;
 	}
 
 	/**
