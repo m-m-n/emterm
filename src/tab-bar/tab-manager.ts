@@ -181,7 +181,7 @@ export class TabManager {
           prevContainer.style.display = "none";
         }
       }
-      tabContainer.style.display = "block";
+      tabContainer.style.display = "";
 
       // Emit events
       this.eventEmitter.emit("tab:created", { tab });
@@ -249,7 +249,7 @@ export class TabManager {
         prevContainer.style.display = "none";
       }
     }
-    tabContainer.style.display = "block";
+    tabContainer.style.display = "";
 
     // Emit events
     this.eventEmitter.emit("tab:created", { tab });
@@ -305,7 +305,7 @@ export class TabManager {
           // Show new active tab container
           const newContainer = this.tabContainers.get(newActiveTab.id);
           if (newContainer) {
-            newContainer.style.display = "block";
+            newContainer.style.display = "";
           }
 
           this.eventEmitter.emit("tab:activated", {
@@ -409,7 +409,7 @@ export class TabManager {
     // Show new container
     const newContainer = this.tabContainers.get(tabId);
     if (newContainer) {
-      newContainer.style.display = "block";
+      newContainer.style.display = "";
     }
 
     // Update active tab
