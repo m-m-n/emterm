@@ -72,9 +72,12 @@ export class SettingsPanel {
     this.container.innerHTML = "";
     this.container.className = "settings-panel";
 
-    // Create navigation
+    // Create navigation with ARIA tablist
     this.navElement = document.createElement("nav");
     this.navElement.className = "settings-nav";
+    this.navElement.setAttribute("role", "tablist");
+    this.navElement.setAttribute("aria-orientation", "vertical");
+    this.navElement.setAttribute("aria-label", "Settings categories");
     this.renderNavigation();
     this.container.appendChild(this.navElement);
 
@@ -86,7 +89,7 @@ export class SettingsPanel {
   }
 
   /**
-   * Renders the category navigation
+   * Renders the category navigation with ARIA tab pattern
    */
   private renderNavigation(): void {
     if (!this.navElement) return;
@@ -99,13 +102,23 @@ export class SettingsPanel {
       button.textContent = category.label;
       button.dataset.categoryId = category.id;
 
-      if (category.id === this.activeCategory) {
+      // ARIA tab attributes
+      button.setAttribute("role", "tab");
+      button.id = `tab-${category.id}`;
+      button.setAttribute("aria-controls", `panel-${category.id}`);
+
+      const isActive = category.id === this.activeCategory;
+      button.setAttribute("aria-selected", String(isActive));
+      button.setAttribute("tabindex", isActive ? "0" : "-1");
+
+      if (isActive) {
         button.classList.add("active");
       }
 
       if (!category.enabled) {
         button.classList.add("disabled");
         button.disabled = true;
+        button.setAttribute("aria-disabled", "true");
       }
 
       this.navElement.appendChild(button);
@@ -113,16 +126,26 @@ export class SettingsPanel {
   }
 
   /**
-   * Renders the content area for the active category
+   * Renders the content area for the active category with ARIA tabpanel
    */
   private renderContent(): void {
     if (!this.contentElement) return;
 
     this.contentElement.innerHTML = "";
 
+    // Create tabpanel wrapper
+    const panel = document.createElement("section");
+    panel.className = "settings-content-panel";
+    panel.setAttribute("role", "tabpanel");
+    panel.id = `panel-${this.activeCategory}`;
+    panel.setAttribute("aria-labelledby", `tab-${this.activeCategory}`);
+    panel.setAttribute("tabindex", "0");
+
+    this.contentElement.appendChild(panel);
+
     switch (this.activeCategory) {
       case "appearance":
-        this.renderAppearanceSection();
+        this.renderAppearanceSection(panel);
         break;
       default:
         // Future categories
@@ -133,37 +156,27 @@ export class SettingsPanel {
   /**
    * Renders the Appearance settings section
    */
-  private renderAppearanceSection(): void {
-    if (!this.contentElement || !this.currentSettings) return;
+  private renderAppearanceSection(panel: HTMLElement): void {
+    if (!this.currentSettings) return;
 
     // Section header
     const header = document.createElement("h2");
     header.className = "settings-section-header";
     header.textContent = "Appearance";
-    this.contentElement.appendChild(header);
+    panel.appendChild(header);
 
-    // Font size setting
+    // Font size setting - vertical layout: Label → Input + pt → Hint
     const row = document.createElement("div");
     row.className = "settings-row";
 
-    // Label group
-    const labelGroup = document.createElement("div");
-    labelGroup.className = "settings-label-group";
-
+    // Label
     const label = document.createElement("label");
     label.className = "settings-label";
     label.htmlFor = "settings-font-size";
     label.textContent = "Font Size";
-    labelGroup.appendChild(label);
+    row.appendChild(label);
 
-    const hint = document.createElement("span");
-    hint.className = "settings-hint";
-    hint.textContent = `Range: ${MIN_FONT_SIZE}-${MAX_FONT_SIZE}pt`;
-    labelGroup.appendChild(hint);
-
-    row.appendChild(labelGroup);
-
-    // Input group
+    // Input group (input + pt unit)
     const inputGroup = document.createElement("div");
     inputGroup.className = "settings-input-group";
 
@@ -182,7 +195,14 @@ export class SettingsPanel {
     inputGroup.appendChild(unit);
 
     row.appendChild(inputGroup);
-    this.contentElement.appendChild(row);
+
+    // Hint text
+    const hint = document.createElement("span");
+    hint.className = "settings-hint";
+    hint.textContent = `Range: ${MIN_FONT_SIZE}-${MAX_FONT_SIZE}pt`;
+    row.appendChild(hint);
+
+    panel.appendChild(row);
   }
 
   /**
@@ -208,6 +228,17 @@ export class SettingsPanel {
         element: this.navElement,
         type: "click",
         handler: navClickHandler,
+      });
+
+      // Keyboard navigation handler for ARIA tab pattern
+      const navKeydownHandler = (e: Event) => {
+        this.handleNavKeydown(e as KeyboardEvent);
+      };
+      this.navElement.addEventListener("keydown", navKeydownHandler);
+      this.eventListeners.push({
+        element: this.navElement,
+        type: "keydown",
+        handler: navKeydownHandler,
       });
     }
 
@@ -247,6 +278,72 @@ export class SettingsPanel {
         type: "keydown",
         handler: keydownHandler,
       });
+    }
+  }
+
+  /**
+   * Handles keyboard navigation for tabs (Arrow keys, Home, End, Enter, Space)
+   */
+  private handleNavKeydown(e: KeyboardEvent): void {
+    const target = e.target as HTMLElement;
+    if (!target.classList.contains("settings-nav-item")) return;
+
+    const enabledCategories = this.categories.filter((c) => c.enabled);
+    const currentIndex = enabledCategories.findIndex(
+      (c) => c.id === target.dataset.categoryId,
+    );
+
+    if (currentIndex === -1) return;
+
+    let newIndex = currentIndex;
+
+    switch (e.key) {
+      case "ArrowDown":
+      case "ArrowRight":
+        e.preventDefault();
+        newIndex = (currentIndex + 1) % enabledCategories.length;
+        break;
+      case "ArrowUp":
+      case "ArrowLeft":
+        e.preventDefault();
+        newIndex =
+          (currentIndex - 1 + enabledCategories.length) %
+          enabledCategories.length;
+        break;
+      case "Home":
+        e.preventDefault();
+        newIndex = 0;
+        break;
+      case "End":
+        e.preventDefault();
+        newIndex = enabledCategories.length - 1;
+        break;
+      case "Enter":
+      case " ":
+        e.preventDefault();
+        if (
+          target.dataset.categoryId &&
+          target.dataset.categoryId !== this.activeCategory
+        ) {
+          this.switchCategory(target.dataset.categoryId);
+        }
+        return;
+      default:
+        return;
+    }
+
+    // Focus the new tab
+    const newCategory = enabledCategories[newIndex];
+    if (!newCategory) return;
+
+    const newTab = this.navElement?.querySelector(
+      `[data-category-id="${newCategory.id}"]`,
+    ) as HTMLElement | null;
+    if (newTab) {
+      // Update tabindex for roving focus
+      target.setAttribute("tabindex", "-1");
+      newTab.setAttribute("tabindex", "0");
+      newTab.focus();
     }
   }
 
