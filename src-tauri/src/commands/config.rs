@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -41,15 +40,6 @@ fn default_font_size() -> u32 {
 struct AppSettingsFile {
     #[serde(default)]
     font_size: Option<u32>,
-}
-
-/// Get the renderer type from environment variable at runtime.
-///
-/// This allows the frontend to check `EMTERM_RENDERER` environment variable
-/// at runtime, enabling E2E tests to verify renderer switching.
-#[tauri::command]
-pub fn get_renderer_type() -> String {
-    env::var("EMTERM_RENDERER").unwrap_or_else(|_| "dom".to_string())
 }
 
 /// Get the config directory path for settings
