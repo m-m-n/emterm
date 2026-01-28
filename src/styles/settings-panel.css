@@ -1,64 +1,79 @@
 /* ============================================
- * Settings Panel Styles
+ * Settings Panel Styles - Material Design 3
  * ============================================ */
 
-/* Panel layout: CSS Grid 2-column (nav 160px + content flex) */
+/* Panel layout: CSS Grid 2-column (nav 200px + content flex) */
 .settings-panel {
   container-type: inline-size;
   container-name: settings;
   display: grid;
-  grid-template-columns: 160px 1fr;
+  grid-template-columns: 200px 1fr;
   width: 100%;
   height: 100%;
   min-height: 0;
-  background-color: #1e1e1e;
-  color: #d4d4d4;
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-family: 'Roboto', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
 }
 
-/* Category Navigation (left side) */
+/* Category Navigation (left side) - MD3 Navigation Drawer style */
 .settings-nav {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background-color: #252526;
-  border-right: 1px solid #3c3c3c;
-  padding: 24px 12px;
+  background-color: var(--md-sys-color-surface-container-low);
+  border-right: 1px solid var(--md-sys-color-outline-variant);
+  padding: 12px;
   overflow-y: auto;
   min-height: 0;
 }
 
+/* Navigation Item - MD3 Navigation Drawer Item */
 .settings-nav-item {
   display: flex;
   align-items: center;
-  padding: 12px 16px;
+  height: 56px;
+  padding: 0 24px 0 16px;
   background: transparent;
   border: none;
-  border-left: 3px solid transparent;
-  border-radius: 0 4px 4px 0;
-  color: #d4d4d4;
+  border-radius: var(--md-sys-shape-corner-full);
+  color: var(--md-sys-color-on-surface-variant);
   text-align: left;
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.1px;
+  line-height: 20px;
   font-family: inherit;
-  transition:
-    background-color 0.15s ease,
-    border-color 0.15s ease,
-    color 0.15s ease;
   position: relative;
+  transition:
+    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
 }
 
-.settings-nav-item:hover:not(.disabled) {
-  background-color: rgba(255, 255, 255, 0.08);
+/* State Layer for nav items */
+.settings-nav-item::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--md-sys-shape-corner-full);
+  background-color: currentColor;
+  opacity: 0;
+  transition: opacity var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-nav-item:hover:not(.disabled)::before {
+  opacity: 0.08;
 }
 
 /* Focus visible for keyboard navigation */
 .settings-nav-item:focus-visible {
-  outline: 2px solid #007acc;
-  outline-offset: 2px;
+  outline: none;
+}
+
+.settings-nav-item:focus-visible::before {
+  opacity: 0.12;
 }
 
 /* Remove focus ring for mouse users */
@@ -66,29 +81,30 @@
   outline: none;
 }
 
-/* Active/Selected state: background + left border */
+/* Active/Selected state: MD3 secondary-container background */
 .settings-nav-item.active,
 .settings-nav-item[aria-selected="true"] {
-  background-color: #37373d;
-  border-left-color: #007acc;
-  color: #ffffff;
+  background-color: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
 }
 
 .settings-nav-item.disabled {
-  color: #6e6e6e;
+  color: var(--md-sys-color-on-surface);
+  opacity: 0.38;
   cursor: not-allowed;
 }
 
-/* Content Area (right side) */
+/* Content Area (right side) - MD3 Surface */
 .settings-content {
   padding: 24px;
   overflow-y: auto;
   min-height: 0;
+  background-color: var(--md-sys-color-surface);
 }
 
 /* Panel focus indicator */
 .settings-content-panel:focus-visible {
-  outline: 2px solid #007acc;
+  outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
 }
 
@@ -97,17 +113,18 @@
   display: none;
 }
 
-/* Section Header */
+/* Section Header - MD3 Title Large */
 .settings-section-header {
-  font-size: 18px;
-  font-weight: 600;
-  color: #ffffff;
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 28px;
+  color: var(--md-sys-color-on-surface);
   margin: 0 0 24px 0;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #3c3c3c;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
-/* Settings Row - vertical layout per spec */
+/* Settings Row - vertical layout */
 .settings-row {
   display: flex;
   flex-direction: column;
@@ -115,15 +132,21 @@
   margin-bottom: 24px;
 }
 
+/* Label - MD3 Body Large */
 .settings-label {
   display: block;
-  font-size: 14px;
-  color: #d4d4d4;
+  font-size: 16px;
+  line-height: 24px;
+  letter-spacing: 0.5px;
+  color: var(--md-sys-color-on-surface);
 }
 
+/* Hint - MD3 Body Small */
 .settings-hint {
   font-size: 12px;
-  color: #8b8b8b;
+  line-height: 16px;
+  letter-spacing: 0.4px;
+  color: var(--md-sys-color-on-surface-variant);
   margin-top: 4px;
 }
 
@@ -134,22 +157,30 @@
   gap: 8px;
 }
 
+/* Number Input - MD3 Outlined Text Field style */
 .settings-number-input {
   width: 80px;
-  padding: 6px 10px;
-  background-color: #3c3c3c;
-  border: 1px solid #5a5a5a;
-  border-radius: 4px;
-  color: #d4d4d4;
-  font-size: 14px;
+  padding: 12px 16px;
+  background-color: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  color: var(--md-sys-color-on-surface);
+  font-size: 16px;
+  line-height: 24px;
   font-family: inherit;
   text-align: center;
+  transition: border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-number-input:hover {
+  border-color: var(--md-sys-color-on-surface);
 }
 
 .settings-number-input:focus {
   outline: none;
-  border-color: #007acc;
-  box-shadow: 0 0 0 1px #007acc;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  padding: 11px 15px;
 }
 
 .settings-number-input::-webkit-inner-spin-button,
@@ -157,26 +188,29 @@
   opacity: 1;
 }
 
+/* Unit label - MD3 Body Medium */
 .settings-unit {
   font-size: 14px;
-  color: #8b8b8b;
+  line-height: 20px;
+  letter-spacing: 0.25px;
+  color: var(--md-sys-color-on-surface-variant);
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling - subtle, MD3 surface tones */
 .settings-content::-webkit-scrollbar {
   width: 10px;
 }
 
 .settings-content::-webkit-scrollbar-track {
-  background: #1e1e1e;
+  background: var(--md-sys-color-surface);
 }
 
 .settings-content::-webkit-scrollbar-thumb {
-  background-color: #424242;
+  background-color: var(--md-sys-color-outline-variant);
   border-radius: 5px;
-  border: 2px solid #1e1e1e;
+  border: 2px solid var(--md-sys-color-surface);
 }
 
 .settings-content::-webkit-scrollbar-thumb:hover {
-  background-color: #4f4f4f;
+  background-color: var(--md-sys-color-outline);
 }
