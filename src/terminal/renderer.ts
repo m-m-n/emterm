@@ -136,14 +136,17 @@ export class TerminalRenderer {
 	 * Measure the size of a single character.
 	 */
 	private measureCharacterSize(): void {
-		// Read lineHeight from container's computed style
-		const computedStyle = window.getComputedStyle(this.container);
-		const lineHeight = computedStyle.lineHeight || "1.2";
+		// Calculate lineHeight from fontSize directly to avoid CSS computed style timing issues
+		// Formula matches settings-applier.ts: lineHeight (pt) = fontSize (pt) + 2
+		// this.fontSize is in px, so convert: px -> pt -> add 2 -> back to px
+		const fontSizePt = this.fontSize * (72 / 96);
+		const lineHeightPt = fontSizePt + 2;
+		const lineHeightPx = lineHeightPt * (96 / 72);
 
 		const measureSpan = document.createElement("span");
 		measureSpan.style.fontFamily = this.fontFamily;
 		measureSpan.style.fontSize = `${this.fontSize}px`;
-		measureSpan.style.lineHeight = lineHeight;
+		measureSpan.style.lineHeight = `${lineHeightPx}px`;
 		measureSpan.style.visibility = "hidden";
 		measureSpan.style.position = "absolute";
 		measureSpan.textContent = "W";
@@ -759,7 +762,10 @@ export class TerminalRenderer {
 	 * @param fontSize - New font size in points
 	 */
 	setFontSize(fontSize: number): void {
-		this.fontSize = fontSize;
+		// Convert pt to px (1pt = 1.333px at 96dpi)
+		// measureCharacterSize() uses this.fontSize as px, so we must convert
+		const fontSizePx = fontSize * (96 / 72);
+		this.fontSize = fontSizePx;
 		this.container.style.fontSize = `${fontSize}pt`;
 		// Re-measure character size with new font size
 		this.measureCharacterSize();
