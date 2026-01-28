@@ -98,4 +98,4 @@ export interface ITerminalRenderer {
 /**
  * Renderer type enumeration.
  */
-export type RendererType = "dom" | "canvas";
+export type RendererType = "canvas";

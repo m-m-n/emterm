@@ -65,16 +65,10 @@ export {
 	RenderTimer,
 	ThroughputMeter,
 } from "./performance.ts";
-export { TerminalRenderer } from "./renderer.ts";
 // Canvas renderer and factory
 export { CanvasRenderer } from "./canvas-renderer.ts";
 export type { ITerminalRenderer, RendererType } from "./renderer-interface.ts";
-export {
-	createRenderer,
-	createRendererAsync,
-	getRendererType,
-	getRendererTypeAsync,
-} from "./renderer-factory.ts";
+export { createRenderer, createRendererAsync } from "./renderer-factory.ts";
 // SGR parsing
 export { parseSgrParams } from "./sgr.ts";
 // Core types and state
