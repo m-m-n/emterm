@@ -5,9 +5,31 @@
  */
 
 import { SettingsService } from "./settings-service";
-import { applySettingsToCSS } from "./settings-applier";
-import type { AppSettings } from "./types";
-import { MIN_FONT_SIZE, MAX_FONT_SIZE } from "./types";
+import {
+  applySettings,
+  applyFontSize,
+  applyFontFamily,
+  applyLineHeight,
+  applyUiTheme,
+  applyTerminalColorScheme,
+  applyPadding,
+  applyScrollbar,
+  applyOpacity,
+  applyCursorStyle,
+  applyCursorBlink,
+} from "./settings-applier";
+import type {
+  AppSettings, UiTheme, CursorStyle, BellAction, ScrollbarMode,
+  KeybindSettings,
+} from "./types";
+import {
+  MIN_FONT_SIZE, MAX_FONT_SIZE,
+  MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, LINE_HEIGHT_STEP,
+  MIN_OPACITY, MAX_OPACITY, OPACITY_STEP,
+  MIN_PADDING, MAX_PADDING,
+  MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES,
+  MIN_SCROLL_SPEED, MAX_SCROLL_SPEED,
+} from "./types";
 
 /**
  * Options for creating SettingsPanel
@@ -33,20 +55,22 @@ export class SettingsPanel {
   private container: HTMLElement;
   private navElement: HTMLElement | null = null;
   private contentElement: HTMLElement | null = null;
-  private fontSizeInput: HTMLInputElement | null = null;
   private activeCategory = "appearance";
   private currentSettings: AppSettings | null = null;
-  private lastSavedValue: number = 0;
   private eventListeners: Array<{
     element: EventTarget;
     type: string;
     handler: EventListener;
   }> = [];
+  /** Keybind button currently in capture mode */
+  private capturingKeybindButton: HTMLButtonElement | null = null;
+  private capturingKeybindKey: string | null = null;
+  private capturingOriginalValue: string | null = null;
 
   private readonly categories: Category[] = [
     { id: "appearance", label: "Appearance", enabled: true },
-    { id: "terminal", label: "Terminal", enabled: false },
-    { id: "keybinds", label: "Keybinds", enabled: false },
+    { id: "terminal", label: "Terminal", enabled: true },
+    { id: "keybinds", label: "Keybinds", enabled: true },
   ];
 
   constructor(options: SettingsPanelOptions) {
@@ -57,10 +81,7 @@ export class SettingsPanel {
    * Initializes the settings panel
    */
   async init(): Promise<void> {
-    // Load current settings
     this.currentSettings = await SettingsService.load();
-    this.lastSavedValue = this.currentSettings.font_size;
-
     this.render();
     this.attachEventListeners();
   }
@@ -72,7 +93,7 @@ export class SettingsPanel {
     this.container.innerHTML = "";
     this.container.className = "settings-panel";
 
-    // Create navigation with ARIA tablist
+    // Navigation
     this.navElement = document.createElement("nav");
     this.navElement.className = "settings-nav";
     this.navElement.setAttribute("role", "tablist");
@@ -81,7 +102,7 @@ export class SettingsPanel {
     this.renderNavigation();
     this.container.appendChild(this.navElement);
 
-    // Create content area
+    // Content
     this.contentElement = document.createElement("main");
     this.contentElement.className = "settings-content";
     this.renderContent();
@@ -93,7 +114,6 @@ export class SettingsPanel {
    */
   private renderNavigation(): void {
     if (!this.navElement) return;
-
     this.navElement.innerHTML = "";
 
     for (const category of this.categories) {
@@ -102,7 +122,6 @@ export class SettingsPanel {
       button.textContent = category.label;
       button.dataset.categoryId = category.id;
 
-      // ARIA tab attributes
       button.setAttribute("role", "tab");
       button.id = `tab-${category.id}`;
       button.setAttribute("aria-controls", `panel-${category.id}`);
@@ -126,14 +145,12 @@ export class SettingsPanel {
   }
 
   /**
-   * Renders the content area for the active category with ARIA tabpanel
+   * Renders the content area for the active category
    */
   private renderContent(): void {
     if (!this.contentElement) return;
-
     this.contentElement.innerHTML = "";
 
-    // Create tabpanel wrapper
     const panel = document.createElement("section");
     panel.className = "settings-content-panel";
     panel.setAttribute("role", "tabpanel");
@@ -147,69 +164,789 @@ export class SettingsPanel {
       case "appearance":
         this.renderAppearanceSection(panel);
         break;
-      default:
-        // Future categories
+      case "terminal":
+        this.renderTerminalSection(panel);
+        break;
+      case "keybinds":
+        this.renderKeybindsSection(panel);
         break;
     }
   }
 
-  /**
-   * Renders the Appearance settings section
-   */
+  // ============================================================
+  // Appearance Category
+  // ============================================================
+
   private renderAppearanceSection(panel: HTMLElement): void {
     if (!this.currentSettings) return;
 
-    // Section header
     const header = document.createElement("h2");
     header.className = "settings-section-header";
     header.textContent = "Appearance";
     panel.appendChild(header);
 
-    // Font size setting - vertical layout: Label → Input + pt → Hint
+    // -- Font subsection --
+    this.renderSubsectionHeader(panel, "Font");
+
+    // Font Size (number input)
+    this.renderNumberInput(panel, {
+      key: "font-size",
+      label: "Font Size",
+      value: this.currentSettings.font_size,
+      min: MIN_FONT_SIZE,
+      max: MAX_FONT_SIZE,
+      step: 1,
+      unit: "pt",
+      hint: `Range: ${MIN_FONT_SIZE}-${MAX_FONT_SIZE}pt`,
+      onInput: (v) => applyFontSize(v),
+      onSave: (v) => this.saveSetting("font_size", v),
+    });
+
+    // Font Family (text input)
+    this.renderTextInput(panel, {
+      key: "font-family",
+      label: "Font Family",
+      value: this.currentSettings.font_family,
+      placeholder: "monospace (default)",
+      hint: "CSS font-family value",
+      onSave: (v) => {
+        applyFontFamily(v);
+        this.saveSetting("font_family", v);
+      },
+    });
+
+    // Line Height (number input)
+    this.renderNumberInput(panel, {
+      key: "line-height",
+      label: "Line Height",
+      value: this.currentSettings.line_height,
+      min: MIN_LINE_HEIGHT,
+      max: MAX_LINE_HEIGHT,
+      step: LINE_HEIGHT_STEP,
+      unit: "",
+      hint: `Range: ${MIN_LINE_HEIGHT}-${MAX_LINE_HEIGHT}`,
+      onInput: (v) => applyLineHeight(v),
+      onSave: (v) => this.saveSetting("line_height", v),
+    });
+
+    // -- Theme & Color subsection --
+    this.renderSubsectionHeader(panel, "Theme & Color");
+
+    // UI Theme (select)
+    this.renderSelect(panel, {
+      key: "ui-theme",
+      label: "UI Theme",
+      value: this.currentSettings.ui_theme,
+      options: [
+        { value: "system", label: "System" },
+        { value: "light", label: "Light" },
+        { value: "dark", label: "Dark" },
+      ],
+      onSave: (v) => {
+        applyUiTheme(v as UiTheme);
+        this.saveSetting("ui_theme", v as UiTheme);
+      },
+    });
+
+    // Terminal Color Scheme (select)
+    this.renderSelect(panel, {
+      key: "terminal-color-scheme",
+      label: "Terminal Color Scheme",
+      value: this.currentSettings.terminal_color_scheme || "default",
+      options: [
+        { value: "default", label: "Default" },
+      ],
+      onSave: (v) => {
+        const scheme = v === "default" ? "" : v;
+        applyTerminalColorScheme(scheme);
+        this.saveSetting("terminal_color_scheme", scheme);
+      },
+    });
+
+    // Opacity (slider)
+    this.renderSlider(panel, {
+      key: "opacity",
+      label: "Opacity",
+      value: this.currentSettings.opacity,
+      min: MIN_OPACITY,
+      max: MAX_OPACITY,
+      step: OPACITY_STEP,
+      hint: `Range: ${MIN_OPACITY}-${MAX_OPACITY}`,
+      onInput: (v) => applyOpacity(v),
+      onSave: (v) => this.saveSetting("opacity", v),
+    });
+
+    // -- Layout subsection --
+    this.renderSubsectionHeader(panel, "Layout");
+
+    // Padding (number input)
+    this.renderNumberInput(panel, {
+      key: "padding",
+      label: "Padding",
+      value: this.currentSettings.padding,
+      min: MIN_PADDING,
+      max: MAX_PADDING,
+      step: 1,
+      unit: "px",
+      hint: `Range: ${MIN_PADDING}-${MAX_PADDING}px`,
+      onInput: (v) => applyPadding(v),
+      onSave: (v) => this.saveSetting("padding", v),
+    });
+
+    // Scrollback Lines (number input)
+    this.renderNumberInput(panel, {
+      key: "scrollback-lines",
+      label: "Scrollback Lines",
+      value: this.currentSettings.scrollback_lines,
+      min: MIN_SCROLLBACK_LINES,
+      max: MAX_SCROLLBACK_LINES,
+      step: 1000,
+      unit: "",
+      hint: `Range: ${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}`,
+      onInput: () => {},
+      onSave: (v) => this.saveSetting("scrollback_lines", v),
+    });
+
+    // Show Scrollbar (select)
+    this.renderSelect(panel, {
+      key: "show-scrollbar",
+      label: "Show Scrollbar",
+      value: this.currentSettings.show_scrollbar,
+      options: [
+        { value: "auto", label: "Auto" },
+        { value: "always", label: "Always" },
+        { value: "never", label: "Never" },
+      ],
+      onSave: (v) => {
+        applyScrollbar(v as ScrollbarMode);
+        this.saveSetting("show_scrollbar", v as ScrollbarMode);
+      },
+    });
+
+    // -- Rich Content subsection --
+    this.renderSubsectionHeader(panel, "Rich Content");
+
+    // Inline Images (toggle)
+    this.renderToggle(panel, {
+      key: "inline-images",
+      label: "Inline Images",
+      value: this.currentSettings.inline_images_enabled,
+      onSave: (v) => this.saveSetting("inline_images_enabled", v),
+    });
+
+    // Markdown Rendering (toggle)
+    this.renderToggle(panel, {
+      key: "markdown-rendering",
+      label: "Markdown Rendering",
+      value: this.currentSettings.markdown_rendering,
+      onSave: (v) => this.saveSetting("markdown_rendering", v),
+    });
+  }
+
+  // ============================================================
+  // Terminal Category
+  // ============================================================
+
+  private renderTerminalSection(panel: HTMLElement): void {
+    if (!this.currentSettings) return;
+
+    const header = document.createElement("h2");
+    header.className = "settings-section-header";
+    header.textContent = "Terminal";
+    panel.appendChild(header);
+
+    // -- Cursor subsection --
+    this.renderSubsectionHeader(panel, "Cursor");
+
+    // Cursor Style (select)
+    this.renderSelect(panel, {
+      key: "cursor-style",
+      label: "Cursor Style",
+      value: this.currentSettings.cursor_style,
+      options: [
+        { value: "block", label: "Block" },
+        { value: "underline", label: "Underline" },
+        { value: "bar", label: "Bar" },
+      ],
+      onSave: (v) => {
+        applyCursorStyle(v as CursorStyle);
+        this.saveSetting("cursor_style", v as CursorStyle);
+      },
+    });
+
+    // Cursor Blink (toggle)
+    this.renderToggle(panel, {
+      key: "cursor-blink",
+      label: "Cursor Blink",
+      value: this.currentSettings.cursor_blink,
+      onSave: (v) => {
+        applyCursorBlink(v);
+        this.saveSetting("cursor_blink", v);
+      },
+    });
+
+    // -- Shell subsection --
+    this.renderSubsectionHeader(panel, "Shell");
+
+    // Shell Path (text input)
+    this.renderTextInput(panel, {
+      key: "shell-path",
+      label: "Shell Path",
+      value: this.currentSettings.shell_path,
+      placeholder: "System default",
+      hint: "Applies to new tabs only",
+      onSave: (v) => this.saveSetting("shell_path", v),
+    });
+
+    // Shell Arguments (text input, comma-separated)
+    this.renderTextInput(panel, {
+      key: "shell-args",
+      label: "Shell Arguments",
+      value: this.currentSettings.shell_args.join(", "),
+      placeholder: "e.g. --login, -i",
+      hint: "Comma-separated. Applies to new tabs only",
+      onSave: (v) => {
+        const args = v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
+        this.saveSetting("shell_args", args);
+      },
+    });
+
+    // -- Behavior subsection --
+    this.renderSubsectionHeader(panel, "Behavior");
+
+    // Scroll Speed (slider)
+    this.renderSlider(panel, {
+      key: "scroll-speed",
+      label: "Scroll Speed",
+      value: this.currentSettings.scroll_speed,
+      min: MIN_SCROLL_SPEED,
+      max: MAX_SCROLL_SPEED,
+      step: 1,
+      hint: `Range: ${MIN_SCROLL_SPEED}-${MAX_SCROLL_SPEED}`,
+      onInput: () => {},
+      onSave: (v) => this.saveSetting("scroll_speed", v),
+    });
+
+    // Bell Action (select)
+    this.renderSelect(panel, {
+      key: "bell-action",
+      label: "Bell Action",
+      value: this.currentSettings.bell_action,
+      options: [
+        { value: "visual", label: "Visual" },
+        { value: "sound", label: "Sound" },
+        { value: "none", label: "None" },
+      ],
+      onSave: (v) => this.saveSetting("bell_action", v as BellAction),
+    });
+
+    // URL Detection (toggle)
+    this.renderToggle(panel, {
+      key: "url-detection",
+      label: "URL Detection",
+      value: this.currentSettings.url_detection,
+      onSave: (v) => this.saveSetting("url_detection", v),
+    });
+
+    // Copy on Select (toggle)
+    this.renderToggle(panel, {
+      key: "copy-on-select",
+      label: "Copy on Select",
+      value: this.currentSettings.copy_on_select,
+      onSave: (v) => this.saveSetting("copy_on_select", v),
+    });
+  }
+
+  // ============================================================
+  // Keybinds Category
+  // ============================================================
+
+  private renderKeybindsSection(panel: HTMLElement): void {
+    if (!this.currentSettings) return;
+    const kb = this.currentSettings.keybinds;
+
+    const header = document.createElement("h2");
+    header.className = "settings-section-header";
+    header.textContent = "Keybinds";
+    panel.appendChild(header);
+
+    // -- Basic subsection --
+    this.renderSubsectionHeader(panel, "Basic");
+    this.renderKeybindInput(panel, "copy", "Copy", kb.copy);
+    this.renderKeybindInput(panel, "paste", "Paste", kb.paste);
+    this.renderKeybindInput(panel, "select_all", "Select All", kb.select_all);
+    this.renderKeybindInput(panel, "search", "Search", kb.search);
+
+    // -- Tab Management subsection --
+    this.renderSubsectionHeader(panel, "Tab Management");
+    this.renderKeybindInput(panel, "new_tab", "New Tab", kb.new_tab);
+    this.renderKeybindInput(panel, "close_tab", "Close Tab", kb.close_tab);
+    this.renderKeybindInput(panel, "next_tab", "Next Tab", kb.next_tab);
+    this.renderKeybindInput(panel, "prev_tab", "Previous Tab", kb.prev_tab);
+
+    // -- Display subsection --
+    this.renderSubsectionHeader(panel, "Display");
+    this.renderKeybindInput(panel, "zoom_in", "Zoom In", kb.zoom_in);
+    this.renderKeybindInput(panel, "zoom_out", "Zoom Out", kb.zoom_out);
+    this.renderKeybindInput(panel, "zoom_reset", "Zoom Reset", kb.zoom_reset);
+    this.renderKeybindInput(panel, "toggle_fullscreen", "Toggle Fullscreen", kb.toggle_fullscreen);
+
+    // -- Settings subsection --
+    this.renderSubsectionHeader(panel, "Settings");
+    this.renderKeybindInput(panel, "open_settings", "Open Settings", kb.open_settings);
+  }
+
+  // ============================================================
+  // UI Control Renderers
+  // ============================================================
+
+  private renderSubsectionHeader(panel: HTMLElement, text: string): void {
+    const h3 = document.createElement("h3");
+    h3.className = "settings-subsection-header";
+    h3.textContent = text;
+    panel.appendChild(h3);
+  }
+
+  private renderNumberInput(panel: HTMLElement, opts: {
+    key: string;
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    step: number;
+    unit: string;
+    hint: string;
+    onInput: (value: number) => void;
+    onSave: (value: number) => void;
+  }): void {
     const row = document.createElement("div");
     row.className = "settings-row";
 
-    // Label
     const label = document.createElement("label");
     label.className = "settings-label";
-    label.htmlFor = "settings-font-size";
-    label.textContent = "Font Size";
+    label.htmlFor = `settings-${opts.key}`;
+    label.textContent = opts.label;
     row.appendChild(label);
 
-    // Input group (input + pt unit)
     const inputGroup = document.createElement("div");
     inputGroup.className = "settings-input-group";
 
-    this.fontSizeInput = document.createElement("input");
-    this.fontSizeInput.type = "number";
-    this.fontSizeInput.id = "settings-font-size";
-    this.fontSizeInput.className = "settings-number-input";
-    this.fontSizeInput.min = String(MIN_FONT_SIZE);
-    this.fontSizeInput.max = String(MAX_FONT_SIZE);
-    this.fontSizeInput.value = String(this.currentSettings.font_size);
-    inputGroup.appendChild(this.fontSizeInput);
+    const input = document.createElement("input");
+    input.type = "number";
+    input.id = `settings-${opts.key}`;
+    input.className = "settings-number-input";
+    input.min = String(opts.min);
+    input.max = String(opts.max);
+    input.step = String(opts.step);
+    input.value = String(opts.value);
+    inputGroup.appendChild(input);
 
-    const unit = document.createElement("span");
-    unit.className = "settings-unit";
-    unit.textContent = "pt";
-    inputGroup.appendChild(unit);
+    if (opts.unit) {
+      const unit = document.createElement("span");
+      unit.className = "settings-unit";
+      unit.textContent = opts.unit;
+      inputGroup.appendChild(unit);
+    }
 
     row.appendChild(inputGroup);
 
-    // Hint text
     const hint = document.createElement("span");
     hint.className = "settings-hint";
-    hint.textContent = `Range: ${MIN_FONT_SIZE}-${MAX_FONT_SIZE}pt`;
+    hint.textContent = opts.hint;
     row.appendChild(hint);
 
     panel.appendChild(row);
+
+    // Event listeners
+    let lastSavedValue = opts.value;
+
+    const inputHandler = () => {
+      const v = Number(input.value);
+      if (v >= opts.min && v <= opts.max) {
+        opts.onInput(v);
+      }
+    };
+    this.addContentListener(input, "input", inputHandler);
+
+    const saveHandler = () => {
+      let v = Number(input.value);
+      if (isNaN(v)) {
+        v = lastSavedValue;
+      }
+      v = Math.max(opts.min, Math.min(opts.max, v));
+      input.value = String(v);
+      if (v !== lastSavedValue) {
+        lastSavedValue = v;
+        opts.onSave(v);
+      }
+    };
+    this.addContentListener(input, "blur", saveHandler);
+    this.addContentListener(input, "keydown", (e: Event) => {
+      if ((e as KeyboardEvent).key === "Enter") saveHandler();
+    });
   }
 
-  /**
-   * Attaches event listeners
-   */
+  private renderTextInput(panel: HTMLElement, opts: {
+    key: string;
+    label: string;
+    value: string;
+    placeholder: string;
+    hint: string;
+    onSave: (value: string) => void;
+  }): void {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+
+    const label = document.createElement("label");
+    label.className = "settings-label";
+    label.htmlFor = `settings-${opts.key}`;
+    label.textContent = opts.label;
+    row.appendChild(label);
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = `settings-${opts.key}`;
+    input.className = "settings-text-input";
+    input.value = opts.value;
+    input.placeholder = opts.placeholder;
+    row.appendChild(input);
+
+    const hint = document.createElement("span");
+    hint.className = "settings-hint";
+    hint.textContent = opts.hint;
+    row.appendChild(hint);
+
+    panel.appendChild(row);
+
+    // Save on blur/Enter
+    let lastSaved = opts.value;
+    const saveHandler = () => {
+      const v = input.value;
+      if (v !== lastSaved) {
+        lastSaved = v;
+        opts.onSave(v);
+      }
+    };
+    this.addContentListener(input, "blur", saveHandler);
+    this.addContentListener(input, "keydown", (e: Event) => {
+      if ((e as KeyboardEvent).key === "Enter") saveHandler();
+    });
+  }
+
+  private renderSelect(panel: HTMLElement, opts: {
+    key: string;
+    label: string;
+    value: string;
+    options: Array<{ value: string; label: string }>;
+    onSave: (value: string) => void;
+  }): void {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+
+    const label = document.createElement("label");
+    label.className = "settings-label";
+    label.htmlFor = `settings-${opts.key}`;
+    label.textContent = opts.label;
+    row.appendChild(label);
+
+    const select = document.createElement("select");
+    select.id = `settings-${opts.key}`;
+    select.className = "settings-select";
+
+    for (const opt of opts.options) {
+      const option = document.createElement("option");
+      option.value = opt.value;
+      option.textContent = opt.label;
+      if (opt.value === opts.value) option.selected = true;
+      select.appendChild(option);
+    }
+    row.appendChild(select);
+
+    panel.appendChild(row);
+
+    // Save on change
+    this.addContentListener(select, "change", () => {
+      opts.onSave(select.value);
+    });
+  }
+
+  private renderToggle(panel: HTMLElement, opts: {
+    key: string;
+    label: string;
+    value: boolean;
+    onSave: (value: boolean) => void;
+  }): void {
+    const row = document.createElement("div");
+    row.className = "settings-row settings-row-toggle";
+
+    const label = document.createElement("label");
+    label.className = "settings-label";
+    label.htmlFor = `settings-${opts.key}`;
+    label.textContent = opts.label;
+    row.appendChild(label);
+
+    const button = document.createElement("button");
+    button.id = `settings-${opts.key}`;
+    button.className = "settings-toggle";
+    button.setAttribute("role", "switch");
+    button.setAttribute("aria-checked", String(opts.value));
+    if (opts.value) button.classList.add("on");
+
+    const track = document.createElement("span");
+    track.className = "settings-toggle-track";
+    const thumb = document.createElement("span");
+    thumb.className = "settings-toggle-thumb";
+    track.appendChild(thumb);
+    button.appendChild(track);
+
+    row.appendChild(button);
+    panel.appendChild(row);
+
+    // Toggle on click
+    let currentValue = opts.value;
+    this.addContentListener(button, "click", () => {
+      currentValue = !currentValue;
+      button.setAttribute("aria-checked", String(currentValue));
+      button.classList.toggle("on", currentValue);
+      opts.onSave(currentValue);
+    });
+  }
+
+  private renderSlider(panel: HTMLElement, opts: {
+    key: string;
+    label: string;
+    value: number;
+    min: number;
+    max: number;
+    step: number;
+    hint: string;
+    onInput: (value: number) => void;
+    onSave: (value: number) => void;
+  }): void {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+
+    const label = document.createElement("label");
+    label.className = "settings-label";
+    label.htmlFor = `settings-${opts.key}`;
+    label.textContent = opts.label;
+    row.appendChild(label);
+
+    const sliderGroup = document.createElement("div");
+    sliderGroup.className = "settings-slider-group";
+
+    const input = document.createElement("input");
+    input.type = "range";
+    input.id = `settings-${opts.key}`;
+    input.className = "settings-slider";
+    input.min = String(opts.min);
+    input.max = String(opts.max);
+    input.step = String(opts.step);
+    input.value = String(opts.value);
+    sliderGroup.appendChild(input);
+
+    const valueDisplay = document.createElement("span");
+    valueDisplay.className = "settings-slider-value";
+    valueDisplay.textContent = String(opts.value);
+    sliderGroup.appendChild(valueDisplay);
+
+    row.appendChild(sliderGroup);
+
+    const hint = document.createElement("span");
+    hint.className = "settings-hint";
+    hint.textContent = opts.hint;
+    row.appendChild(hint);
+
+    panel.appendChild(row);
+
+    // Event listeners
+    this.addContentListener(input, "input", () => {
+      const v = Number(input.value);
+      valueDisplay.textContent = String(v);
+      opts.onInput(v);
+    });
+    this.addContentListener(input, "change", () => {
+      const v = Number(input.value);
+      opts.onSave(v);
+    });
+  }
+
+  private renderKeybindInput(
+    panel: HTMLElement,
+    keybindKey: string,
+    label: string,
+    currentValue: string,
+  ): void {
+    const row = document.createElement("div");
+    row.className = "settings-row settings-row-keybind";
+
+    const labelEl = document.createElement("label");
+    labelEl.className = "settings-label";
+    labelEl.textContent = label;
+    row.appendChild(labelEl);
+
+    const button = document.createElement("button");
+    button.className = "settings-keybind-input";
+    button.dataset.key = keybindKey;
+    button.textContent = currentValue;
+    row.appendChild(button);
+
+    panel.appendChild(row);
+
+    // Click to enter capture mode
+    this.addContentListener(button, "click", () => {
+      this.enterKeybindCapture(button, keybindKey, currentValue);
+    });
+  }
+
+  // ============================================================
+  // Keybind Capture
+  // ============================================================
+
+  private enterKeybindCapture(button: HTMLButtonElement, key: string, originalValue: string): void {
+    // Cancel any existing capture
+    if (this.capturingKeybindButton) {
+      this.exitKeybindCapture(true);
+    }
+
+    this.capturingKeybindButton = button;
+    this.capturingKeybindKey = key;
+    this.capturingOriginalValue = originalValue;
+
+    button.classList.add("capturing");
+    button.textContent = "Press a key...";
+    button.focus();
+
+    // Capture keydown
+    const keydownHandler = (e: Event) => {
+      const ke = e as KeyboardEvent;
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Escape cancels
+      if (ke.key === "Escape") {
+        this.exitKeybindCapture(true);
+        return;
+      }
+
+      // Ignore bare modifier keys
+      if (["Control", "Shift", "Alt", "Meta"].includes(ke.key)) {
+        return;
+      }
+
+      // Build key combination string
+      const parts: string[] = [];
+      if (ke.ctrlKey) parts.push("Ctrl");
+      if (ke.shiftKey) parts.push("Shift");
+      if (ke.altKey) parts.push("Alt");
+      if (ke.metaKey) parts.push("Meta");
+
+      // Normalize key name
+      let keyName = ke.key;
+      if (keyName === " ") keyName = "Space";
+      else if (keyName === "+") keyName = "Plus";
+      else if (keyName === "-") keyName = "Minus";
+      else if (keyName.length === 1) keyName = keyName.toUpperCase();
+
+      parts.push(keyName);
+      const combo = parts.join("+");
+
+      // Update button and save
+      button.textContent = combo;
+      this.saveKeybind(key, combo);
+      this.exitKeybindCapture(false);
+    };
+
+    // Use capture phase to intercept before other handlers
+    document.addEventListener("keydown", keydownHandler, true);
+
+    // Store cleanup
+    this.eventListeners.push({
+      element: document,
+      type: "keydown",
+      handler: keydownHandler,
+    });
+  }
+
+  private exitKeybindCapture(cancelled: boolean): void {
+    if (!this.capturingKeybindButton) return;
+
+    if (cancelled && this.capturingOriginalValue !== null) {
+      this.capturingKeybindButton.textContent = this.capturingOriginalValue;
+    }
+
+    this.capturingKeybindButton.classList.remove("capturing");
+    this.capturingKeybindButton = null;
+    this.capturingKeybindKey = null;
+    this.capturingOriginalValue = null;
+
+    // Remove the capture keydown listener
+    this.eventListeners = this.eventListeners.filter((listener) => {
+      if (listener.element === document && listener.type === "keydown") {
+        listener.element.removeEventListener(listener.type, listener.handler, true);
+        return false;
+      }
+      return true;
+    });
+  }
+
+  private async saveKeybind(key: string, value: string): Promise<void> {
+    if (!this.currentSettings) return;
+    (this.currentSettings.keybinds as any)[key] = value;
+    try {
+      await SettingsService.save(this.currentSettings);
+    } catch (error) {
+      console.error("Failed to save keybind:", error);
+    }
+  }
+
+  // ============================================================
+  // Settings Save Helper
+  // ============================================================
+
+  private async saveSetting<K extends keyof AppSettings>(
+    key: K,
+    value: AppSettings[K],
+  ): Promise<void> {
+    if (!this.currentSettings) return;
+    this.currentSettings[key] = value;
+    try {
+      await SettingsService.save(this.currentSettings);
+    } catch (error) {
+      console.error("Failed to save setting:", error);
+    }
+  }
+
+  // ============================================================
+  // Event Listener Management
+  // ============================================================
+
+  private contentListeners: Array<{
+    element: EventTarget;
+    type: string;
+    handler: EventListener;
+    capture?: boolean;
+  }> = [];
+
+  private addContentListener(
+    element: EventTarget,
+    type: string,
+    handler: EventListener,
+    capture?: boolean,
+  ): void {
+    element.addEventListener(type, handler, capture);
+    this.contentListeners.push({ element, type, handler, capture });
+  }
+
+  private detachContentListeners(): void {
+    for (const l of this.contentListeners) {
+      l.element.removeEventListener(l.type, l.handler, l.capture);
+    }
+    this.contentListeners = [];
+  }
+
   private attachEventListeners(): void {
-    // Navigation click handler
+    // Navigation click
     if (this.navElement) {
       const navClickHandler = (e: Event) => {
         const target = e.target as HTMLElement;
@@ -230,7 +967,7 @@ export class SettingsPanel {
         handler: navClickHandler,
       });
 
-      // Keyboard navigation handler for ARIA tab pattern
+      // Keyboard navigation
       const navKeydownHandler = (e: Event) => {
         this.handleNavKeydown(e as KeyboardEvent);
       };
@@ -241,49 +978,8 @@ export class SettingsPanel {
         handler: navKeydownHandler,
       });
     }
-
-    // Font size input handlers
-    if (this.fontSizeInput) {
-      // Real-time preview on input
-      const inputHandler = () => {
-        this.handleFontSizeInput();
-      };
-      this.fontSizeInput.addEventListener("input", inputHandler);
-      this.eventListeners.push({
-        element: this.fontSizeInput,
-        type: "input",
-        handler: inputHandler,
-      });
-
-      // Save on blur
-      const blurHandler = () => {
-        this.handleFontSizeSave();
-      };
-      this.fontSizeInput.addEventListener("blur", blurHandler);
-      this.eventListeners.push({
-        element: this.fontSizeInput,
-        type: "blur",
-        handler: blurHandler,
-      });
-
-      // Save on Enter key
-      const keydownHandler = (e: Event) => {
-        if ((e as KeyboardEvent).key === "Enter") {
-          this.handleFontSizeSave();
-        }
-      };
-      this.fontSizeInput.addEventListener("keydown", keydownHandler);
-      this.eventListeners.push({
-        element: this.fontSizeInput,
-        type: "keydown",
-        handler: keydownHandler,
-      });
-    }
   }
 
-  /**
-   * Handles keyboard navigation for tabs (Arrow keys, Home, End, Enter, Space)
-   */
   private handleNavKeydown(e: KeyboardEvent): void {
     const target = e.target as HTMLElement;
     if (!target.classList.contains("settings-nav-item")) return;
@@ -292,7 +988,6 @@ export class SettingsPanel {
     const currentIndex = enabledCategories.findIndex(
       (c) => c.id === target.dataset.categoryId,
     );
-
     if (currentIndex === -1) return;
 
     let newIndex = currentIndex;
@@ -332,7 +1027,6 @@ export class SettingsPanel {
         return;
     }
 
-    // Focus the new tab
     const newCategory = enabledCategories[newIndex];
     if (!newCategory) return;
 
@@ -340,151 +1034,46 @@ export class SettingsPanel {
       `[data-category-id="${newCategory.id}"]`,
     ) as HTMLElement | null;
     if (newTab) {
-      // Update tabindex for roving focus
       target.setAttribute("tabindex", "-1");
       newTab.setAttribute("tabindex", "0");
       newTab.focus();
     }
   }
 
-  /**
-   * Handles font size input change (real-time preview)
-   */
-  private handleFontSizeInput(): void {
-    if (!this.fontSizeInput) return;
-
-    const value = Number(this.fontSizeInput.value);
-
-    // Validate range
-    if (value >= MIN_FONT_SIZE && value <= MAX_FONT_SIZE) {
-      // Apply immediately for preview
-      applySettingsToCSS({ font_size: value });
-    }
-  }
-
-  /**
-   * Handles font size save (on blur or Enter)
-   */
-  private async handleFontSizeSave(): Promise<void> {
-    if (!this.fontSizeInput || !this.currentSettings) return;
-
-    let value = Number(this.fontSizeInput.value);
-
-    // Clamp to valid range
-    value = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, value));
-
-    // Update input if clamped
-    this.fontSizeInput.value = String(value);
-
-    // Skip if unchanged
-    if (value === this.lastSavedValue) {
-      return;
-    }
-
-    // Update current settings
-    this.currentSettings.font_size = value;
-
-    // Apply to CSS
-    applySettingsToCSS(this.currentSettings);
-
-    // Save to backend
-    try {
-      await SettingsService.save(this.currentSettings);
-      this.lastSavedValue = value;
-    } catch (error) {
-      console.error("Failed to save settings:", error);
-    }
-  }
-
-  /**
-   * Switches to a different category
-   */
   private switchCategory(categoryId: string): void {
-    // Detach old content event listeners before re-rendering
-    this.detachContentEventListeners();
+    // Cancel any keybind capture
+    if (this.capturingKeybindButton) {
+      this.exitKeybindCapture(true);
+    }
 
+    this.detachContentListeners();
     this.activeCategory = categoryId;
     this.renderNavigation();
     this.renderContent();
-
-    // Attach new content event listeners after re-render
-    this.attachContentEventListeners();
   }
 
-  /**
-   * Attaches event listeners for content area only
-   */
-  private attachContentEventListeners(): void {
-    if (this.fontSizeInput) {
-      const inputHandler = () => this.handleFontSizeInput();
-      this.fontSizeInput.addEventListener("input", inputHandler);
-      this.eventListeners.push({
-        element: this.fontSizeInput,
-        type: "input",
-        handler: inputHandler,
-      });
+  // ============================================================
+  // Public API
+  // ============================================================
 
-      const blurHandler = () => this.handleFontSizeSave();
-      this.fontSizeInput.addEventListener("blur", blurHandler);
-      this.eventListeners.push({
-        element: this.fontSizeInput,
-        type: "blur",
-        handler: blurHandler,
-      });
-
-      const keydownHandler = (e: Event) => {
-        if ((e as KeyboardEvent).key === "Enter") {
-          this.handleFontSizeSave();
-        }
-      };
-      this.fontSizeInput.addEventListener("keydown", keydownHandler);
-      this.eventListeners.push({
-        element: this.fontSizeInput,
-        type: "keydown",
-        handler: keydownHandler,
-      });
-    }
-  }
-
-  /**
-   * Detaches content-related event listeners (font size input)
-   */
-  private detachContentEventListeners(): void {
-    // We need to filter out listeners that are attached to the current fontSizeInput
-    // and remove them from the DOM before the element is replaced
-    const currentFontSizeInput = this.fontSizeInput;
-    if (!currentFontSizeInput) return;
-
-    this.eventListeners = this.eventListeners.filter((listener) => {
-      if (listener.element === currentFontSizeInput) {
-        listener.element.removeEventListener(listener.type, listener.handler);
-        return false;
-      }
-      return true;
-    });
-  }
-
-  /**
-   * Gets the panel element (for testing)
-   */
   getPanelElement(): HTMLElement {
     return this.container;
   }
 
-  /**
-   * Disposes the settings panel
-   */
   dispose(): void {
-    // Remove all event listeners
+    if (this.capturingKeybindButton) {
+      this.exitKeybindCapture(true);
+    }
+
+    this.detachContentListeners();
+
     for (const listener of this.eventListeners) {
       listener.element.removeEventListener(listener.type, listener.handler);
     }
     this.eventListeners = [];
 
-    // Clear DOM
     this.container.innerHTML = "";
     this.navElement = null;
     this.contentElement = null;
-    this.fontSizeInput = null;
   }
 }

@@ -13,6 +13,9 @@ import type { AppSettings } from "./types";
  * All methods are static for simplicity.
  */
 export class SettingsService {
+  /** Cached settings from the last load/save operation */
+  private static cachedSettings: AppSettings | null = null;
+
   /**
    * Loads settings from the backend.
    *
@@ -23,6 +26,7 @@ export class SettingsService {
    */
   static async load(): Promise<AppSettings> {
     const settings = await invoke<AppSettings>("load_settings");
+    SettingsService.cachedSettings = structuredClone(settings);
     return settings;
   }
 
@@ -34,5 +38,14 @@ export class SettingsService {
    */
   static async save(settings: AppSettings): Promise<void> {
     await invoke("save_settings", { settings });
+    SettingsService.cachedSettings = structuredClone(settings);
+  }
+
+  /**
+   * Returns the cached settings from the last load/save.
+   * Returns null if settings have not been loaded yet.
+   */
+  static getCached(): AppSettings | null {
+    return SettingsService.cachedSettings;
   }
 }
