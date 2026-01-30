@@ -9,6 +9,7 @@
 
 import { FullscreenMarkdownView } from "./fullscreen.ts";
 import { MarkdownRenderer } from "./renderer.ts";
+import { SettingsService } from "../settings/settings-service.ts";
 import type {
 	MarkdownBlock,
 	MarkdownFormat,
@@ -228,6 +229,16 @@ export class MarkdownSessionManager {
 		const session = this.sessions.get(id);
 		if (!session) {
 			console.warn(`Markdown end: unknown session ${id}`);
+			return;
+		}
+
+		// Check if markdown rendering is enabled
+		const settings = SettingsService.getCached();
+		if (settings && !settings.markdown_rendering) {
+			console.debug(
+				"[DEBUG][FRONTEND] Markdown rendering skipped: markdown_rendering=false",
+			);
+			this.sessions.delete(id);
 			return;
 		}
 

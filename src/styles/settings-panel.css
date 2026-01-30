@@ -214,3 +214,293 @@
 .settings-content::-webkit-scrollbar-thumb:hover {
   background-color: var(--md-sys-color-outline);
 }
+
+/* ============================================
+ * Subsection Header - MD3 Title Medium
+ * ============================================ */
+
+.settings-subsection-header {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  letter-spacing: 0.15px;
+  color: var(--md-sys-color-on-surface-variant);
+  margin: 8px 0 16px 0;
+  padding: 0;
+}
+
+.settings-subsection-header:first-of-type {
+  margin-top: 0;
+}
+
+/* ============================================
+ * Text Input - MD3 Outlined Text Field
+ * ============================================ */
+
+.settings-text-input {
+  width: 100%;
+  max-width: 320px;
+  padding: 12px 16px;
+  background-color: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  color: var(--md-sys-color-on-surface);
+  font-size: 16px;
+  line-height: 24px;
+  font-family: inherit;
+  transition: border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-text-input::placeholder {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.settings-text-input:hover {
+  border-color: var(--md-sys-color-on-surface);
+}
+
+.settings-text-input:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  padding: 11px 15px;
+}
+
+/* ============================================
+ * Select Dropdown - MD3 Outlined style
+ * ============================================ */
+
+.settings-select {
+  width: 100%;
+  max-width: 320px;
+  padding: 12px 16px;
+  padding-right: 36px;
+  background-color: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  color: var(--md-sys-color-on-surface);
+  font-size: 16px;
+  line-height: 24px;
+  font-family: inherit;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%2349454F' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  cursor: pointer;
+  transition: border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-select:hover {
+  border-color: var(--md-sys-color-on-surface);
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  padding: 11px 15px;
+  padding-right: 35px;
+}
+
+/* ============================================
+ * Toggle Switch - MD3 Switch
+ * ============================================ */
+
+.settings-row-toggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 52px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.settings-toggle-track {
+  position: relative;
+  display: block;
+  width: 52px;
+  height: 32px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background-color: var(--md-sys-color-surface-variant);
+  border: 2px solid var(--md-sys-color-outline);
+  transition:
+    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-toggle-thumb {
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: var(--md-sys-color-outline);
+  transform: translateY(-50%);
+  transition:
+    left var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    width var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    height var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+/* Toggle ON state */
+.settings-toggle.on .settings-toggle-track {
+  background-color: var(--md-sys-color-primary);
+  border-color: var(--md-sys-color-primary);
+}
+
+.settings-toggle.on .settings-toggle-thumb {
+  left: 28px;
+  width: 24px;
+  height: 24px;
+  background-color: var(--md-sys-color-on-primary);
+}
+
+/* Toggle hover */
+.settings-toggle:hover .settings-toggle-thumb {
+  width: 20px;
+  height: 20px;
+  left: 4px;
+}
+
+.settings-toggle.on:hover .settings-toggle-thumb {
+  width: 28px;
+  height: 28px;
+  left: 24px;
+}
+
+/* Toggle focus */
+.settings-toggle:focus-visible {
+  outline: none;
+}
+
+.settings-toggle:focus-visible .settings-toggle-track {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+/* ============================================
+ * Keybind Capture Input
+ * ============================================ */
+
+.settings-row-keybind {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-keybind-input {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 120px;
+  padding: 8px 16px;
+  background-color: var(--md-sys-color-surface-variant);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-small);
+  color: var(--md-sys-color-on-surface);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-keybind-input:hover {
+  background-color: var(--md-sys-color-surface-container-highest);
+  border-color: var(--md-sys-color-outline);
+}
+
+.settings-keybind-input:focus-visible {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  padding: 7px 15px;
+}
+
+/* Capture mode */
+.settings-keybind-input.capturing {
+  background-color: var(--md-sys-color-primary-container);
+  border-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary-container);
+  border-width: 2px;
+  padding: 7px 15px;
+  animation: keybind-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes keybind-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ============================================
+ * Slider - MD3 Slider
+ * ============================================ */
+
+.settings-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 320px;
+}
+
+.settings-slider {
+  flex: 1;
+  height: 4px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background-color: var(--md-sys-color-primary-container);
+}
+
+.settings-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background-color: var(--md-sys-color-primary);
+  margin-top: -8px;
+  border: none;
+  transition:
+    box-shadow var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-slider::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+.settings-slider:focus-visible {
+  outline: none;
+}
+
+.settings-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent);
+}
+
+.settings-slider-value {
+  min-width: 36px;
+  text-align: right;
+  font-size: 14px;
+  line-height: 20px;
+  letter-spacing: 0.25px;
+  color: var(--md-sys-color-on-surface-variant);
+}
