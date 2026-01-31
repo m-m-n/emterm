@@ -16,6 +16,7 @@ import type {
 import { DisplayModeController } from "./display-mode.ts";
 import type { DisplayModeState } from "./display-mode.ts";
 import { PanController } from "./pan-controller.ts";
+import { t } from "../i18n/index.ts";
 
 /**
  * Viewport padding factor (95% of viewport).
@@ -215,7 +216,7 @@ export class ImageViewer {
     this.overlay.className = "image-viewer-overlay";
     this.overlay.setAttribute("role", "dialog");
     this.overlay.setAttribute("aria-modal", "true");
-    this.overlay.setAttribute("aria-label", "Image Viewer");
+    this.overlay.setAttribute("aria-label", t("imageViewer.label"));
 
     // Create canvas
     this.canvas = document.createElement("canvas");
@@ -481,9 +482,14 @@ export class ImageViewer {
    * @param mode - Current display mode ('pixel' or 'fit')
    */
   private updateInfoDisplay(mode: string): void {
-    const modeText = mode === "pixel" ? "100%" : "Fit";
-    const helpText = "f:toggle 1:100% 0:fit Esc:close";
-    this.infoElement.textContent = `${this.originalWidth} x ${this.originalHeight} | ${modeText} | ${helpText}`;
+    const modeText = mode === "pixel" ? "100%" : t("imageViewer.modeFit");
+    const helpText = t("imageViewer.helpText");
+    this.infoElement.textContent = t("imageViewer.info", {
+      width: this.originalWidth,
+      height: this.originalHeight,
+      mode: modeText,
+      help: helpText,
+    });
   }
 
   /**
@@ -543,7 +549,7 @@ export class ImageViewer {
       this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       this.ctx.fillStyle = "#ffffff";
       this.ctx.font = "14px monospace";
-      this.ctx.fillText("Failed to decode image", 10, 30);
+      this.ctx.fillText(t("imageViewer.decodeError"), 10, 30);
     }
   }
 

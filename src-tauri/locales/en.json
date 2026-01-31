@@ -1,0 +1,28 @@
+{
+  "cli": {
+    "about": "eMterm - Modern terminal emulator with rich rendering",
+    "markdownAbout": "Display Markdown file in eMterm",
+    "markdownFile": "Path to Markdown file",
+    "imageAbout": "Display image file in eMterm",
+    "imageFile": "Path to image file",
+    "imageProtocol": "Image protocol to use"
+  },
+  "error": {
+    "fileNotFound": "File not found: %{path}",
+    "notAFile": "Path is not a file: %{path}",
+    "fileReadError": "Failed to read file: %{error}",
+    "fileTooLarge": "File size (%{size} bytes) exceeds %{maxSize} bytes limit",
+    "unsupportedImageFormat": "Unsupported image format: %{format}",
+    "imageDecodeError": "Failed to decode image: %{error}",
+    "invalidProtocol": "Invalid protocol: %{protocol}",
+    "encodingError": "Encoding error: %{error}"
+  },
+  "validation": {
+    "fontSize": "font_size must be between %{min} and %{max}",
+    "lineHeight": "line_height must be between %{min} and %{max}",
+    "opacity": "opacity must be between %{min} and %{max}",
+    "padding": "padding must be between %{min} and %{max}",
+    "scrollbackLines": "scrollback_lines must be between %{min} and %{max}",
+    "scrollSpeed": "scroll_speed must be between %{min} and %{max}"
+  }
+}

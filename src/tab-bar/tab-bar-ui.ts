@@ -6,6 +6,7 @@
 
 import type { TabManager } from "./tab-manager";
 import type { Tab } from "./types";
+import { t } from "../i18n/index.ts";
 
 /**
  * Options for creating TabBarUI
@@ -68,7 +69,7 @@ export class TabBarUI {
     this.container.innerHTML = "";
     this.container.className = "tab-bar";
     this.container.setAttribute("role", "tablist");
-    this.container.setAttribute("aria-label", "Terminal tabs");
+    this.container.setAttribute("aria-label", t("tabBar.terminalTabs"));
 
     // Create scroll area for tabs
     this.scrollArea = document.createElement("div");
@@ -84,8 +85,8 @@ export class TabBarUI {
     const newTabButton = document.createElement("button");
     newTabButton.className = "tab-button tab-button-new";
     newTabButton.innerHTML = ICONS.plus;
-    newTabButton.title = "New Tab (Ctrl+T)";
-    newTabButton.setAttribute("aria-label", "Create new tab");
+    newTabButton.title = t("tabBar.newTabShortcut");
+    newTabButton.setAttribute("aria-label", t("tabBar.createNewTab"));
     newTabButton.addEventListener("click", () => this.handleNewTabClick());
     this.fixedArea.appendChild(newTabButton);
 
@@ -93,8 +94,8 @@ export class TabBarUI {
     const settingsButton = document.createElement("button");
     settingsButton.className = "tab-button tab-button-settings";
     settingsButton.innerHTML = ICONS.settings;
-    settingsButton.title = "Settings";
-    settingsButton.setAttribute("aria-label", "Open settings");
+    settingsButton.title = t("tabBar.settings");
+    settingsButton.setAttribute("aria-label", t("tabBar.openSettings"));
     settingsButton.addEventListener("click", () => this.handleSettingsClick());
     this.fixedArea.appendChild(settingsButton);
   }

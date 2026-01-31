@@ -6,6 +6,8 @@
  * @module markdown/link-dialog
  */
 
+import { t } from "../i18n/index.ts";
+
 /**
  * Confirmation dialog for external links.
  */
@@ -52,11 +54,11 @@ export class LinkConfirmDialog {
 			this.dialog.className = "link-confirm-dialog-overlay";
 			this.dialog.innerHTML = `
 				<div class="link-confirm-dialog" role="alertdialog" aria-modal="true">
-					<h3 class="link-confirm-title">外部リンクを開きますか?</h3>
+					<h3 class="link-confirm-title">${this.escapeHtml(t("link.title"))}</h3>
 					<p class="link-confirm-url">${this.escapeHtml(url)}</p>
 					<div class="link-confirm-buttons">
-						<button class="link-confirm-cancel" type="button">キャンセル</button>
-						<button class="link-confirm-open" type="button">開く</button>
+						<button class="link-confirm-cancel" type="button">${this.escapeHtml(t("link.cancel"))}</button>
+						<button class="link-confirm-open" type="button">${this.escapeHtml(t("link.open"))}</button>
 					</div>
 				</div>
 			`;

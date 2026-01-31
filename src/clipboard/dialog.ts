@@ -4,6 +4,8 @@
  * Shows a dialog to confirm pasting multi-line text into the terminal.
  */
 
+import { t } from "../i18n/index.ts";
+
 /**
  * Options for the paste confirmation dialog.
  */
@@ -77,7 +79,7 @@ export function showPasteDialog(
 
 		// Create dialog title
 		const title = document.createElement("h3");
-		title.textContent = "Confirm Paste";
+		title.textContent = t("paste.title");
 		title.style.cssText = `
       margin: 0 0 16px 0;
       font-size: 18px;
@@ -87,7 +89,7 @@ export function showPasteDialog(
 
 		// Create dialog message
 		const message = document.createElement("p");
-		message.textContent = `You are about to paste ${options.lineCount} line${options.lineCount === 1 ? "" : "s"} of text into the terminal.`;
+		message.textContent = t("paste.message", { count: options.lineCount });
 		message.style.cssText = `
       margin: 0 0 20px 0;
       font-size: 14px;
@@ -102,7 +104,7 @@ export function showPasteDialog(
 		const previewText = previewLines.join("\n");
 		const moreLines =
 			lines.length > 5
-				? `\n... and ${lines.length - 5} more line${lines.length - 5 === 1 ? "" : "s"}`
+				? `\n${t("paste.moreLines", { count: lines.length - 5 })}`
 				: "";
 		preview.textContent = previewText + moreLines;
 		preview.style.cssText = `
@@ -128,7 +130,7 @@ export function showPasteDialog(
 
 		// Create Cancel button
 		const cancelButton = document.createElement("button");
-		cancelButton.textContent = "Cancel";
+		cancelButton.textContent = t("paste.cancel");
 		cancelButton.style.cssText = `
       padding: 8px 16px;
       background: #3a3a3a;
@@ -148,7 +150,7 @@ export function showPasteDialog(
 
 		// Create Paste button
 		const pasteButton = document.createElement("button");
-		pasteButton.textContent = "Paste";
+		pasteButton.textContent = t("paste.paste");
 		pasteButton.style.cssText = `
       padding: 8px 16px;
       background: #0e639c;

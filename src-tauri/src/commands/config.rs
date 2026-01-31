@@ -1,3 +1,4 @@
+use rust_i18n::t;
 use std::fs;
 use std::path::PathBuf;
 
@@ -173,6 +174,7 @@ deserialize_null_with!(
     String,
     default_keybind_open_settings
 );
+deserialize_null_with!(deserialize_null_language, String, default_language);
 
 // ============================================================
 // Default Value Functions
@@ -238,6 +240,9 @@ fn default_keybind_toggle_fullscreen() -> String {
 }
 fn default_keybind_open_settings() -> String {
     "Ctrl+Comma".to_string()
+}
+fn default_language() -> String {
+    "auto".to_string()
 }
 
 // ============================================================
@@ -317,6 +322,13 @@ pub struct AppSettings {
     // Keybinds
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub keybinds: KeybindSettings,
+
+    // Language
+    #[serde(
+        default = "default_language",
+        deserialize_with = "deserialize_null_language"
+    )]
+    pub language: String,
 }
 
 impl Default for AppSettings {
@@ -342,6 +354,7 @@ impl Default for AppSettings {
             url_detection: default_true(),
             copy_on_select: false,
             keybinds: KeybindSettings::default(),
+            language: default_language(),
         }
     }
 }
@@ -444,45 +457,47 @@ impl Default for KeybindSettings {
 /// Validates settings values and returns an error message if invalid.
 fn validate_settings(settings: &AppSettings) -> Result<(), String> {
     if settings.font_size < MIN_FONT_SIZE || settings.font_size > MAX_FONT_SIZE {
-        return Err(format!(
-            "font_size must be between {} and {}",
-            MIN_FONT_SIZE, MAX_FONT_SIZE
-        ));
+        return Err(t!(
+            "validation.fontSize",
+            min = MIN_FONT_SIZE,
+            max = MAX_FONT_SIZE
+        )
+        .to_string());
     }
 
     if settings.line_height < MIN_LINE_HEIGHT || settings.line_height > MAX_LINE_HEIGHT {
-        return Err(format!(
-            "line_height must be between {} and {}",
-            MIN_LINE_HEIGHT, MAX_LINE_HEIGHT
-        ));
+        return Err(t!(
+            "validation.lineHeight",
+            min = MIN_LINE_HEIGHT,
+            max = MAX_LINE_HEIGHT
+        )
+        .to_string());
     }
 
     if settings.opacity < MIN_OPACITY || settings.opacity > MAX_OPACITY {
-        return Err(format!(
-            "opacity must be between {} and {}",
-            MIN_OPACITY, MAX_OPACITY
-        ));
+        return Err(t!("validation.opacity", min = MIN_OPACITY, max = MAX_OPACITY).to_string());
     }
 
     if settings.padding > MAX_PADDING {
-        return Err(format!(
-            "padding must be between {} and {}",
-            MIN_PADDING, MAX_PADDING
-        ));
+        return Err(t!("validation.padding", min = MIN_PADDING, max = MAX_PADDING).to_string());
     }
 
     if settings.scrollback_lines > MAX_SCROLLBACK_LINES {
-        return Err(format!(
-            "scrollback_lines must be between {} and {}",
-            MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES
-        ));
+        return Err(t!(
+            "validation.scrollbackLines",
+            min = MIN_SCROLLBACK_LINES,
+            max = MAX_SCROLLBACK_LINES
+        )
+        .to_string());
     }
 
     if settings.scroll_speed < MIN_SCROLL_SPEED || settings.scroll_speed > MAX_SCROLL_SPEED {
-        return Err(format!(
-            "scroll_speed must be between {} and {}",
-            MIN_SCROLL_SPEED, MAX_SCROLL_SPEED
-        ));
+        return Err(t!(
+            "validation.scrollSpeed",
+            min = MIN_SCROLL_SPEED,
+            max = MAX_SCROLL_SPEED
+        )
+        .to_string());
     }
 
     Ok(())
@@ -598,6 +613,7 @@ mod tests {
         assert_eq!(settings.bell_action, BellAction::Visual);
         assert!(settings.url_detection);
         assert!(!settings.copy_on_select);
+        assert_eq!(settings.language, "auto");
     }
 
     #[test]
@@ -772,6 +788,7 @@ mod tests {
                 paste: "Ctrl+V".to_string(),
                 ..KeybindSettings::default()
             },
+            language: "ja".to_string(),
         };
 
         let json = serde_json::to_string(&settings).unwrap();
@@ -799,6 +816,7 @@ mod tests {
         assert_eq!(restored.keybinds.copy, "Ctrl+C");
         assert_eq!(restored.keybinds.paste, "Ctrl+V");
         assert_eq!(restored.keybinds.select_all, "Ctrl+Shift+A");
+        assert_eq!(restored.language, "ja");
     }
 
     #[test]
@@ -813,6 +831,45 @@ mod tests {
     }
 
     // -- Validation --
+
+    // -- Language field deserialization --
+
+    #[test]
+    fn test_deserialize_missing_language_defaults_to_auto() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.language, "auto");
+    }
+
+    #[test]
+    fn test_deserialize_null_language_defaults_to_auto() {
+        let json = r#"{"language": null}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.language, "auto");
+    }
+
+    #[test]
+    fn test_deserialize_language_ja() {
+        let json = r#"{"language": "ja"}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.language, "ja");
+    }
+
+    #[test]
+    fn test_deserialize_language_en() {
+        let json = r#"{"language": "en"}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.language, "en");
+    }
+
+    #[test]
+    fn test_language_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.language = "ja".to_string();
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.language, "ja");
+    }
 
     #[test]
     fn test_validate_valid_settings() {

@@ -192,7 +192,10 @@ fn test_image_over_size_limit() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("too large") || stderr.contains("size limit") || stderr.contains("exceeds"),
+        stderr.contains("too large")
+            || stderr.contains("size limit")
+            || stderr.contains("exceeds")
+            || stderr.contains("\u{5236}\u{9650}\u{3092}\u{8d85}\u{3048}"), // 制限を超え (ja)
         "Error message should mention size limit: {}",
         stderr
     );
@@ -225,7 +228,11 @@ fn test_image_unsupported_format() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unsupported") || stderr.contains("format") || stderr.contains("invalid"),
+        stderr.contains("unsupported")
+            || stderr.contains("format")
+            || stderr.contains("invalid")
+            || stderr.contains("\u{30b5}\u{30dd}\u{30fc}\u{30c8}\u{3055}\u{308c}\u{3066}\u{3044}\u{306a}\u{3044}") // サポートされていない (ja)
+            || stderr.contains("\u{30c7}\u{30b3}\u{30fc}\u{30c9}"), // デコード (ja)
         "Error message should mention unsupported format: {}",
         stderr
     );
@@ -261,7 +268,9 @@ fn test_image_corrupted_file() {
         stderr.contains("invalid")
             || stderr.contains("decode")
             || stderr.contains("failed")
-            || stderr.contains("corrupted"),
+            || stderr.contains("corrupted")
+            || stderr.contains("\u{30c7}\u{30b3}\u{30fc}\u{30c9}\u{306b}\u{5931}\u{6557}") // デコードに失敗 (ja)
+            || stderr.contains("\u{5931}\u{6557}\u{3057}\u{307e}\u{3057}\u{305f}"), // 失敗しました (ja)
         "Error message should mention decode failure: {}",
         stderr
     );

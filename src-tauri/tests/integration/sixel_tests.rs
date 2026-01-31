@@ -158,7 +158,10 @@ fn test_image_invalid_protocol() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     // Error could be from clap (invalid value) or from application logic
     assert!(
-        stderr.contains("invalid") || stderr.contains("protocol") || stderr.contains("value"),
+        stderr.contains("invalid")
+            || stderr.contains("protocol")
+            || stderr.contains("value")
+            || stderr.contains("\u{7121}\u{52b9}\u{306a}\u{30d7}\u{30ed}\u{30c8}\u{30b3}\u{30eb}"), // 無効なプロトコル (ja)
         "Error message should mention invalid protocol: {}",
         stderr
     );
@@ -191,7 +194,10 @@ fn test_image_protocol_case_sensitivity() {
         // Case-sensitive, should error
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("invalid") || stderr.contains("protocol"),
+            stderr.contains("invalid")
+                || stderr.contains("protocol")
+                || stderr
+                    .contains("\u{7121}\u{52b9}\u{306a}\u{30d7}\u{30ed}\u{30c8}\u{30b3}\u{30eb}"), // 無効なプロトコル (ja)
             "Should provide clear error for case mismatch"
         );
     }

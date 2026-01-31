@@ -4,10 +4,12 @@
  */
 
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { invoke } from "@tauri-apps/api/core";
 import { TerminalApp } from "./terminal-app";
 import { TabManager, TabBarUI, TabKeyboardHandler } from "./tab-bar";
 import { initConsoleBridge } from "./utils/console-bridge";
 import { SettingsService, applySettingsToCSS } from "./settings";
+import { initI18n, resolveLocale } from "./i18n/index.ts";
 
 let tabManager: TabManager | null = null;
 let tabBarUI: TabBarUI | null = null;
@@ -24,9 +26,20 @@ async function main(): Promise<void> {
   try {
     const settings = await SettingsService.load();
     applySettingsToCSS(settings);
+
+    // Initialize i18n with resolved locale
+    const resolvedLocale = resolveLocale(settings.language ?? "auto");
+    initI18n(resolvedLocale);
+
+    // Sync backend locale (fire-and-forget)
+    invoke("set_language", { language: resolvedLocale }).catch((err) => {
+      console.warn("Failed to sync backend language:", err);
+    });
   } catch (error) {
     console.error("Failed to load settings at startup:", error);
-    // Continue with defaults - applySettingsToCSS uses CSS defaults if not called
+    // Continue with defaults - initialize i18n with auto-detected locale
+    const resolvedLocale = resolveLocale("auto");
+    initI18n(resolvedLocale);
   }
 
   const tabBarContainer = document.getElementById("tab-bar");

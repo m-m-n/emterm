@@ -3,6 +3,8 @@
 //! This is the main library for the Tauri backend, providing PTY functionality
 //! and IPC commands for the frontend.
 
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod ansi;
 pub mod image;
 pub mod logging;
@@ -254,6 +256,28 @@ fn console_info(message: String) {
 #[tauri::command]
 fn console_debug(message: String) {
     println!("{}", logging::format_frontend_log("debug", &message));
+}
+
+/// Sets the backend locale at runtime.
+///
+/// Called from the frontend to synchronize language settings.
+///
+/// # Arguments
+///
+/// * `language` - Language code ("en" or "ja")
+///
+/// # Returns
+///
+/// Ok(()) on success, or Err with unsupported language message.
+#[tauri::command]
+fn set_language(language: String) -> Result<(), String> {
+    const SUPPORTED: &[&str] = &["en", "ja"];
+    if SUPPORTED.contains(&language.as_str()) {
+        rust_i18n::set_locale(&language);
+        Ok(())
+    } else {
+        Err(format!("Unsupported language: {}", language))
+    }
 }
 
 /// Returns the number of active PTY sessions.
@@ -621,6 +645,7 @@ pub fn run() {
             tab_close_graceful,
             commands::config::load_settings,
             commands::config::save_settings,
+            set_language,
         ])
         .setup(|_app| {
             // Initialize custom logger for backend

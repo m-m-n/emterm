@@ -11,6 +11,7 @@ import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { LinkConfirmDialog } from "./link-dialog.ts";
 import { ZoomController } from "../shared/zoom-controller.ts";
 import type { FullscreenConfig, FullscreenState, MarkdownBlock } from "./types.ts";
+import { t } from "../i18n/index.ts";
 
 /**
  * Default minimum zoom level.
@@ -109,7 +110,7 @@ export class FullscreenMarkdownView {
 		this.overlay.className = "markdown-fullscreen-overlay";
 		this.overlay.setAttribute("role", "dialog");
 		this.overlay.setAttribute("aria-modal", "true");
-		this.overlay.setAttribute("aria-label", "Markdown Document");
+		this.overlay.setAttribute("aria-label", t("markdown.label"));
 
 		// Create content container
 		this.content = document.createElement("div");
@@ -380,8 +381,11 @@ export class FullscreenMarkdownView {
 			const button = document.createElement("button");
 			button.className = "copy-code-button";
 			button.setAttribute("type", "button");
-			button.setAttribute("aria-label", "Copy code");
-			button.innerHTML = '<span class="copy-icon">Copy</span>';
+			button.setAttribute("aria-label", t("markdown.copyCode"));
+			const copyIcon = document.createElement("span");
+			copyIcon.className = "copy-icon";
+			copyIcon.textContent = t("markdown.copyCode");
+			button.appendChild(copyIcon);
 
 			pre.appendChild(button);
 		}
@@ -418,14 +422,17 @@ export class FullscreenMarkdownView {
 	 * Show copy feedback on button.
 	 */
 	private showCopyFeedback(button: HTMLElement, success: boolean): void {
-		const originalText = button.innerHTML;
-		button.innerHTML = success
-			? '<span class="copy-icon">Copied!</span>'
-			: '<span class="copy-icon">Failed</span>';
+		const icon = button.querySelector(".copy-icon");
+		const originalLabel = icon?.textContent ?? "";
+		if (icon) {
+			icon.textContent = success ? t("markdown.copySuccess") : t("markdown.copyFailed");
+		}
 		button.classList.add(success ? "copy-success" : "copy-error");
 
 		setTimeout(() => {
-			button.innerHTML = originalText;
+			if (icon) {
+				icon.textContent = originalLabel;
+			}
 			button.classList.remove("copy-success", "copy-error");
 		}, 2000);
 	}
