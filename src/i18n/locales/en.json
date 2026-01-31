@@ -1,0 +1,133 @@
+{
+  "settings": {
+    "categories": {
+      "appearance": "Appearance",
+      "terminal": "Terminal",
+      "keybinds": "Keybinds"
+    },
+    "appearance": {
+      "title": "Appearance",
+      "font": "Font",
+      "fontSize": "Font Size",
+      "fontSizeHint": "Range: {min}-{max}pt",
+      "fontFamily": "Font Family",
+      "fontFamilyPlaceholder": "monospace (default)",
+      "fontFamilyHint": "CSS font-family value",
+      "lineHeight": "Line Height",
+      "lineHeightHint": "Range: {min}-{max}",
+      "themeColor": "Theme & Color",
+      "uiTheme": "UI Theme",
+      "uiThemeSystem": "System",
+      "uiThemeLight": "Light",
+      "uiThemeDark": "Dark",
+      "colorScheme": "Terminal Color Scheme",
+      "colorSchemeDefault": "Default",
+      "opacity": "Opacity",
+      "opacityHint": "Range: {min}-{max}",
+      "layout": "Layout",
+      "padding": "Padding",
+      "paddingHint": "Range: {min}-{max}px",
+      "scrollbackLines": "Scrollback Lines",
+      "scrollbackLinesHint": "Range: {min}-{max}",
+      "showScrollbar": "Show Scrollbar",
+      "scrollbarAuto": "Auto",
+      "scrollbarAlways": "Always",
+      "scrollbarNever": "Never",
+      "richContent": "Rich Content",
+      "inlineImages": "Inline Images",
+      "markdownRendering": "Markdown Rendering"
+    },
+    "terminal": {
+      "title": "Terminal",
+      "cursor": "Cursor",
+      "cursorStyle": "Cursor Style",
+      "cursorBlock": "Block",
+      "cursorUnderline": "Underline",
+      "cursorBar": "Bar",
+      "cursorBlink": "Cursor Blink",
+      "shell": "Shell",
+      "shellPath": "Shell Path",
+      "shellPathPlaceholder": "System default",
+      "shellPathHint": "Applies to new tabs only",
+      "shellArgs": "Shell Arguments",
+      "shellArgsPlaceholder": "e.g. --login, -i",
+      "shellArgsHint": "Comma-separated. Applies to new tabs only",
+      "behavior": "Behavior",
+      "scrollSpeed": "Scroll Speed",
+      "scrollSpeedHint": "Range: {min}-{max}",
+      "bellAction": "Bell Action",
+      "bellVisual": "Visual",
+      "bellSound": "Sound",
+      "bellNone": "None",
+      "urlDetection": "URL Detection",
+      "copyOnSelect": "Copy on Select"
+    },
+    "keybinds": {
+      "title": "Keybinds",
+      "basic": "Basic",
+      "copy": "Copy",
+      "paste": "Paste",
+      "selectAll": "Select All",
+      "search": "Search",
+      "tabManagement": "Tab Management",
+      "newTab": "New Tab",
+      "closeTab": "Close Tab",
+      "nextTab": "Next Tab",
+      "prevTab": "Previous Tab",
+      "display": "Display",
+      "zoomIn": "Zoom In",
+      "zoomOut": "Zoom Out",
+      "zoomReset": "Zoom Reset",
+      "toggleFullscreen": "Toggle Fullscreen",
+      "settingsSection": "Settings",
+      "openSettings": "Open Settings",
+      "pressKey": "Press a key..."
+    },
+    "language": {
+      "title": "Language",
+      "label": "Language",
+      "auto": "Auto (System)",
+      "en": "English",
+      "ja": "\u65e5\u672c\u8a9e"
+    }
+  },
+  "tabBar": {
+    "terminalTabs": "Terminal tabs",
+    "newTab": "New Tab",
+    "newTabShortcut": "New Tab (Ctrl+T)",
+    "settings": "Settings",
+    "openSettings": "Open settings",
+    "createNewTab": "Create new tab"
+  },
+  "paste": {
+    "title": "Confirm Paste",
+    "message": "You are about to paste {count} lines of text into the terminal.",
+    "moreLines": "... and {count} more lines",
+    "cancel": "Cancel",
+    "paste": "Paste"
+  },
+  "link": {
+    "title": "Open external link?",
+    "cancel": "Cancel",
+    "open": "Open"
+  },
+  "imageViewer": {
+    "label": "Image Viewer",
+    "info": "{width} x {height} | {mode} | {help}",
+    "modeFit": "Fit",
+    "helpText": "f:toggle 1:100% 0:fit Esc:close",
+    "decodeError": "Failed to decode image"
+  },
+  "markdown": {
+    "label": "Markdown Document",
+    "copyCode": "Copy code",
+    "copySuccess": "Copied!",
+    "copyFailed": "Failed"
+  },
+  "zoom": {
+    "closeViewer": "Close viewer",
+    "zoomOut": "Zoom out",
+    "zoomIn": "Zoom in",
+    "resetZoom": "Reset zoom to {level}%"
+  }
+}

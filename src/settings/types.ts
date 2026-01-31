@@ -12,6 +12,7 @@ export type UiTheme = "light" | "dark" | "system";
 export type CursorStyle = "block" | "underline" | "bar";
 export type BellAction = "sound" | "visual" | "none";
 export type ScrollbarMode = "auto" | "always" | "never";
+export type Language = "auto" | "en" | "ja";
 
 // ============================================================
 // Settings Interfaces
@@ -56,6 +57,9 @@ export interface AppSettings {
 
   // Keybinds
   keybinds: KeybindSettings;
+
+  // Language
+  language: Language;
 }
 
 export interface KeybindSettings {

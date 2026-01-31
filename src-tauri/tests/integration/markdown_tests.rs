@@ -145,7 +145,10 @@ fn test_markdown_over_size_limit() {
     // Should output error to stderr
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("too large") || stderr.contains("size limit") || stderr.contains("exceeds"),
+        stderr.contains("too large")
+            || stderr.contains("size limit")
+            || stderr.contains("exceeds")
+            || stderr.contains("\u{5236}\u{9650}\u{3092}\u{8d85}\u{3048}"), // 制限を超え (ja)
         "Error message should mention size limit: {}",
         stderr
     );
@@ -176,7 +179,9 @@ fn test_markdown_nonexistent_file() {
     // Should output error to stderr
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("not found") || stderr.contains("No such file"),
+        stderr.contains("not found")
+            || stderr.contains("No such file")
+            || stderr.contains("\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}"), // 見つかりません (ja)
         "Error message should mention file not found: {}",
         stderr
     );

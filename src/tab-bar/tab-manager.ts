@@ -22,6 +22,7 @@ import type {
   TabEventEmitter,
 } from "./types";
 import { isTerminalTab } from "./types";
+import { t } from "../i18n/index.ts";
 
 /**
  * Options for creating TabManager
@@ -231,7 +232,7 @@ export class TabManager {
     const tab: SettingsTab = {
       id: tabId,
       type: "settings",
-      title: title ?? "Settings",
+      title: title ?? t("tabBar.settings"),
     };
 
     // Update previous active tab

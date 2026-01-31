@@ -4,6 +4,7 @@
  * UI component for application settings with category navigation.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import { SettingsService } from "./settings-service";
 import {
   applySettings,
@@ -20,7 +21,7 @@ import {
 } from "./settings-applier";
 import type {
   AppSettings, UiTheme, CursorStyle, BellAction, ScrollbarMode,
-  KeybindSettings,
+  KeybindSettings, Language,
 } from "./types";
 import {
   MIN_FONT_SIZE, MAX_FONT_SIZE,
@@ -30,6 +31,7 @@ import {
   MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES,
   MIN_SCROLL_SPEED, MAX_SCROLL_SPEED,
 } from "./types";
+import { t, setLocale, resolveLocale } from "../i18n/index.ts";
 
 /**
  * Options for creating SettingsPanel
@@ -67,11 +69,13 @@ export class SettingsPanel {
   private capturingKeybindKey: string | null = null;
   private capturingOriginalValue: string | null = null;
 
-  private readonly categories: Category[] = [
-    { id: "appearance", label: "Appearance", enabled: true },
-    { id: "terminal", label: "Terminal", enabled: true },
-    { id: "keybinds", label: "Keybinds", enabled: true },
-  ];
+  private get categories(): Category[] {
+    return [
+      { id: "appearance", label: t("settings.categories.appearance"), enabled: true },
+      { id: "terminal", label: t("settings.categories.terminal"), enabled: true },
+      { id: "keybinds", label: t("settings.categories.keybinds"), enabled: true },
+    ];
+  }
 
   constructor(options: SettingsPanelOptions) {
     this.container = options.container;
@@ -182,22 +186,49 @@ export class SettingsPanel {
 
     const header = document.createElement("h2");
     header.className = "settings-section-header";
-    header.textContent = "Appearance";
+    header.textContent = t("settings.appearance.title");
     panel.appendChild(header);
 
+    // -- Language subsection --
+    this.renderSubsectionHeader(panel, t("settings.language.title"));
+
+    this.renderSelect(panel, {
+      key: "language",
+      label: t("settings.language.label"),
+      value: this.currentSettings.language,
+      options: [
+        { value: "auto", label: t("settings.language.auto") },
+        { value: "en", label: t("settings.language.en") },
+        { value: "ja", label: t("settings.language.ja") },
+      ],
+      onSave: (v) => {
+        this.saveSetting("language", v as Language);
+        // Apply language change
+        const resolved = resolveLocale(v);
+        setLocale(resolved);
+        invoke("set_language", { language: resolved }).catch((err) => {
+          console.warn("Failed to sync backend language:", err);
+        });
+        // Re-render settings panel with new language
+        this.detachContentListeners();
+        this.render();
+        this.attachEventListeners();
+      },
+    });
+
     // -- Font subsection --
-    this.renderSubsectionHeader(panel, "Font");
+    this.renderSubsectionHeader(panel, t("settings.appearance.font"));
 
     // Font Size (number input)
     this.renderNumberInput(panel, {
       key: "font-size",
-      label: "Font Size",
+      label: t("settings.appearance.fontSize"),
       value: this.currentSettings.font_size,
       min: MIN_FONT_SIZE,
       max: MAX_FONT_SIZE,
       step: 1,
       unit: "pt",
-      hint: `Range: ${MIN_FONT_SIZE}-${MAX_FONT_SIZE}pt`,
+      hint: t("settings.appearance.fontSizeHint", { min: MIN_FONT_SIZE, max: MAX_FONT_SIZE }),
       onInput: (v) => applyFontSize(v),
       onSave: (v) => this.saveSetting("font_size", v),
     });
@@ -205,10 +236,10 @@ export class SettingsPanel {
     // Font Family (text input)
     this.renderTextInput(panel, {
       key: "font-family",
-      label: "Font Family",
+      label: t("settings.appearance.fontFamily"),
       value: this.currentSettings.font_family,
-      placeholder: "monospace (default)",
-      hint: "CSS font-family value",
+      placeholder: t("settings.appearance.fontFamilyPlaceholder"),
+      hint: t("settings.appearance.fontFamilyHint"),
       onSave: (v) => {
         applyFontFamily(v);
         this.saveSetting("font_family", v);
@@ -218,29 +249,29 @@ export class SettingsPanel {
     // Line Height (number input)
     this.renderNumberInput(panel, {
       key: "line-height",
-      label: "Line Height",
+      label: t("settings.appearance.lineHeight"),
       value: this.currentSettings.line_height,
       min: MIN_LINE_HEIGHT,
       max: MAX_LINE_HEIGHT,
       step: LINE_HEIGHT_STEP,
       unit: "",
-      hint: `Range: ${MIN_LINE_HEIGHT}-${MAX_LINE_HEIGHT}`,
+      hint: t("settings.appearance.lineHeightHint", { min: MIN_LINE_HEIGHT, max: MAX_LINE_HEIGHT }),
       onInput: (v) => applyLineHeight(v),
       onSave: (v) => this.saveSetting("line_height", v),
     });
 
     // -- Theme & Color subsection --
-    this.renderSubsectionHeader(panel, "Theme & Color");
+    this.renderSubsectionHeader(panel, t("settings.appearance.themeColor"));
 
     // UI Theme (select)
     this.renderSelect(panel, {
       key: "ui-theme",
-      label: "UI Theme",
+      label: t("settings.appearance.uiTheme"),
       value: this.currentSettings.ui_theme,
       options: [
-        { value: "system", label: "System" },
-        { value: "light", label: "Light" },
-        { value: "dark", label: "Dark" },
+        { value: "system", label: t("settings.appearance.uiThemeSystem") },
+        { value: "light", label: t("settings.appearance.uiThemeLight") },
+        { value: "dark", label: t("settings.appearance.uiThemeDark") },
       ],
       onSave: (v) => {
         applyUiTheme(v as UiTheme);
@@ -251,10 +282,10 @@ export class SettingsPanel {
     // Terminal Color Scheme (select)
     this.renderSelect(panel, {
       key: "terminal-color-scheme",
-      label: "Terminal Color Scheme",
+      label: t("settings.appearance.colorScheme"),
       value: this.currentSettings.terminal_color_scheme || "default",
       options: [
-        { value: "default", label: "Default" },
+        { value: "default", label: t("settings.appearance.colorSchemeDefault") },
       ],
       onSave: (v) => {
         const scheme = v === "default" ? "" : v;
@@ -266,29 +297,29 @@ export class SettingsPanel {
     // Opacity (slider)
     this.renderSlider(panel, {
       key: "opacity",
-      label: "Opacity",
+      label: t("settings.appearance.opacity"),
       value: this.currentSettings.opacity,
       min: MIN_OPACITY,
       max: MAX_OPACITY,
       step: OPACITY_STEP,
-      hint: `Range: ${MIN_OPACITY}-${MAX_OPACITY}`,
+      hint: t("settings.appearance.opacityHint", { min: MIN_OPACITY, max: MAX_OPACITY }),
       onInput: (v) => applyOpacity(v),
       onSave: (v) => this.saveSetting("opacity", v),
     });
 
     // -- Layout subsection --
-    this.renderSubsectionHeader(panel, "Layout");
+    this.renderSubsectionHeader(panel, t("settings.appearance.layout"));
 
     // Padding (number input)
     this.renderNumberInput(panel, {
       key: "padding",
-      label: "Padding",
+      label: t("settings.appearance.padding"),
       value: this.currentSettings.padding,
       min: MIN_PADDING,
       max: MAX_PADDING,
       step: 1,
       unit: "px",
-      hint: `Range: ${MIN_PADDING}-${MAX_PADDING}px`,
+      hint: t("settings.appearance.paddingHint", { min: MIN_PADDING, max: MAX_PADDING }),
       onInput: (v) => applyPadding(v),
       onSave: (v) => this.saveSetting("padding", v),
     });
@@ -296,13 +327,13 @@ export class SettingsPanel {
     // Scrollback Lines (number input)
     this.renderNumberInput(panel, {
       key: "scrollback-lines",
-      label: "Scrollback Lines",
+      label: t("settings.appearance.scrollbackLines"),
       value: this.currentSettings.scrollback_lines,
       min: MIN_SCROLLBACK_LINES,
       max: MAX_SCROLLBACK_LINES,
       step: 1000,
       unit: "",
-      hint: `Range: ${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}`,
+      hint: t("settings.appearance.scrollbackLinesHint", { min: MIN_SCROLLBACK_LINES, max: MAX_SCROLLBACK_LINES }),
       onInput: () => {},
       onSave: (v) => this.saveSetting("scrollback_lines", v),
     });
@@ -310,12 +341,12 @@ export class SettingsPanel {
     // Show Scrollbar (select)
     this.renderSelect(panel, {
       key: "show-scrollbar",
-      label: "Show Scrollbar",
+      label: t("settings.appearance.showScrollbar"),
       value: this.currentSettings.show_scrollbar,
       options: [
-        { value: "auto", label: "Auto" },
-        { value: "always", label: "Always" },
-        { value: "never", label: "Never" },
+        { value: "auto", label: t("settings.appearance.scrollbarAuto") },
+        { value: "always", label: t("settings.appearance.scrollbarAlways") },
+        { value: "never", label: t("settings.appearance.scrollbarNever") },
       ],
       onSave: (v) => {
         applyScrollbar(v as ScrollbarMode);
@@ -324,12 +355,12 @@ export class SettingsPanel {
     });
 
     // -- Rich Content subsection --
-    this.renderSubsectionHeader(panel, "Rich Content");
+    this.renderSubsectionHeader(panel, t("settings.appearance.richContent"));
 
     // Inline Images (toggle)
     this.renderToggle(panel, {
       key: "inline-images",
-      label: "Inline Images",
+      label: t("settings.appearance.inlineImages"),
       value: this.currentSettings.inline_images_enabled,
       onSave: (v) => this.saveSetting("inline_images_enabled", v),
     });
@@ -337,7 +368,7 @@ export class SettingsPanel {
     // Markdown Rendering (toggle)
     this.renderToggle(panel, {
       key: "markdown-rendering",
-      label: "Markdown Rendering",
+      label: t("settings.appearance.markdownRendering"),
       value: this.currentSettings.markdown_rendering,
       onSave: (v) => this.saveSetting("markdown_rendering", v),
     });
@@ -352,21 +383,21 @@ export class SettingsPanel {
 
     const header = document.createElement("h2");
     header.className = "settings-section-header";
-    header.textContent = "Terminal";
+    header.textContent = t("settings.terminal.title");
     panel.appendChild(header);
 
     // -- Cursor subsection --
-    this.renderSubsectionHeader(panel, "Cursor");
+    this.renderSubsectionHeader(panel, t("settings.terminal.cursor"));
 
     // Cursor Style (select)
     this.renderSelect(panel, {
       key: "cursor-style",
-      label: "Cursor Style",
+      label: t("settings.terminal.cursorStyle"),
       value: this.currentSettings.cursor_style,
       options: [
-        { value: "block", label: "Block" },
-        { value: "underline", label: "Underline" },
-        { value: "bar", label: "Bar" },
+        { value: "block", label: t("settings.terminal.cursorBlock") },
+        { value: "underline", label: t("settings.terminal.cursorUnderline") },
+        { value: "bar", label: t("settings.terminal.cursorBar") },
       ],
       onSave: (v) => {
         applyCursorStyle(v as CursorStyle);
@@ -377,7 +408,7 @@ export class SettingsPanel {
     // Cursor Blink (toggle)
     this.renderToggle(panel, {
       key: "cursor-blink",
-      label: "Cursor Blink",
+      label: t("settings.terminal.cursorBlink"),
       value: this.currentSettings.cursor_blink,
       onSave: (v) => {
         applyCursorBlink(v);
@@ -386,25 +417,25 @@ export class SettingsPanel {
     });
 
     // -- Shell subsection --
-    this.renderSubsectionHeader(panel, "Shell");
+    this.renderSubsectionHeader(panel, t("settings.terminal.shell"));
 
     // Shell Path (text input)
     this.renderTextInput(panel, {
       key: "shell-path",
-      label: "Shell Path",
+      label: t("settings.terminal.shellPath"),
       value: this.currentSettings.shell_path,
-      placeholder: "System default",
-      hint: "Applies to new tabs only",
+      placeholder: t("settings.terminal.shellPathPlaceholder"),
+      hint: t("settings.terminal.shellPathHint"),
       onSave: (v) => this.saveSetting("shell_path", v),
     });
 
     // Shell Arguments (text input, comma-separated)
     this.renderTextInput(panel, {
       key: "shell-args",
-      label: "Shell Arguments",
+      label: t("settings.terminal.shellArgs"),
       value: this.currentSettings.shell_args.join(", "),
-      placeholder: "e.g. --login, -i",
-      hint: "Comma-separated. Applies to new tabs only",
+      placeholder: t("settings.terminal.shellArgsPlaceholder"),
+      hint: t("settings.terminal.shellArgsHint"),
       onSave: (v) => {
         const args = v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
         this.saveSetting("shell_args", args);
@@ -412,17 +443,17 @@ export class SettingsPanel {
     });
 
     // -- Behavior subsection --
-    this.renderSubsectionHeader(panel, "Behavior");
+    this.renderSubsectionHeader(panel, t("settings.terminal.behavior"));
 
     // Scroll Speed (slider)
     this.renderSlider(panel, {
       key: "scroll-speed",
-      label: "Scroll Speed",
+      label: t("settings.terminal.scrollSpeed"),
       value: this.currentSettings.scroll_speed,
       min: MIN_SCROLL_SPEED,
       max: MAX_SCROLL_SPEED,
       step: 1,
-      hint: `Range: ${MIN_SCROLL_SPEED}-${MAX_SCROLL_SPEED}`,
+      hint: t("settings.terminal.scrollSpeedHint", { min: MIN_SCROLL_SPEED, max: MAX_SCROLL_SPEED }),
       onInput: () => {},
       onSave: (v) => this.saveSetting("scroll_speed", v),
     });
@@ -430,12 +461,12 @@ export class SettingsPanel {
     // Bell Action (select)
     this.renderSelect(panel, {
       key: "bell-action",
-      label: "Bell Action",
+      label: t("settings.terminal.bellAction"),
       value: this.currentSettings.bell_action,
       options: [
-        { value: "visual", label: "Visual" },
-        { value: "sound", label: "Sound" },
-        { value: "none", label: "None" },
+        { value: "visual", label: t("settings.terminal.bellVisual") },
+        { value: "sound", label: t("settings.terminal.bellSound") },
+        { value: "none", label: t("settings.terminal.bellNone") },
       ],
       onSave: (v) => this.saveSetting("bell_action", v as BellAction),
     });
@@ -443,7 +474,7 @@ export class SettingsPanel {
     // URL Detection (toggle)
     this.renderToggle(panel, {
       key: "url-detection",
-      label: "URL Detection",
+      label: t("settings.terminal.urlDetection"),
       value: this.currentSettings.url_detection,
       onSave: (v) => this.saveSetting("url_detection", v),
     });
@@ -451,7 +482,7 @@ export class SettingsPanel {
     // Copy on Select (toggle)
     this.renderToggle(panel, {
       key: "copy-on-select",
-      label: "Copy on Select",
+      label: t("settings.terminal.copyOnSelect"),
       value: this.currentSettings.copy_on_select,
       onSave: (v) => this.saveSetting("copy_on_select", v),
     });
@@ -467,33 +498,33 @@ export class SettingsPanel {
 
     const header = document.createElement("h2");
     header.className = "settings-section-header";
-    header.textContent = "Keybinds";
+    header.textContent = t("settings.keybinds.title");
     panel.appendChild(header);
 
     // -- Basic subsection --
-    this.renderSubsectionHeader(panel, "Basic");
-    this.renderKeybindInput(panel, "copy", "Copy", kb.copy);
-    this.renderKeybindInput(panel, "paste", "Paste", kb.paste);
-    this.renderKeybindInput(panel, "select_all", "Select All", kb.select_all);
-    this.renderKeybindInput(panel, "search", "Search", kb.search);
+    this.renderSubsectionHeader(panel, t("settings.keybinds.basic"));
+    this.renderKeybindInput(panel, "copy", t("settings.keybinds.copy"), kb.copy);
+    this.renderKeybindInput(panel, "paste", t("settings.keybinds.paste"), kb.paste);
+    this.renderKeybindInput(panel, "select_all", t("settings.keybinds.selectAll"), kb.select_all);
+    this.renderKeybindInput(panel, "search", t("settings.keybinds.search"), kb.search);
 
     // -- Tab Management subsection --
-    this.renderSubsectionHeader(panel, "Tab Management");
-    this.renderKeybindInput(panel, "new_tab", "New Tab", kb.new_tab);
-    this.renderKeybindInput(panel, "close_tab", "Close Tab", kb.close_tab);
-    this.renderKeybindInput(panel, "next_tab", "Next Tab", kb.next_tab);
-    this.renderKeybindInput(panel, "prev_tab", "Previous Tab", kb.prev_tab);
+    this.renderSubsectionHeader(panel, t("settings.keybinds.tabManagement"));
+    this.renderKeybindInput(panel, "new_tab", t("settings.keybinds.newTab"), kb.new_tab);
+    this.renderKeybindInput(panel, "close_tab", t("settings.keybinds.closeTab"), kb.close_tab);
+    this.renderKeybindInput(panel, "next_tab", t("settings.keybinds.nextTab"), kb.next_tab);
+    this.renderKeybindInput(panel, "prev_tab", t("settings.keybinds.prevTab"), kb.prev_tab);
 
     // -- Display subsection --
-    this.renderSubsectionHeader(panel, "Display");
-    this.renderKeybindInput(panel, "zoom_in", "Zoom In", kb.zoom_in);
-    this.renderKeybindInput(panel, "zoom_out", "Zoom Out", kb.zoom_out);
-    this.renderKeybindInput(panel, "zoom_reset", "Zoom Reset", kb.zoom_reset);
-    this.renderKeybindInput(panel, "toggle_fullscreen", "Toggle Fullscreen", kb.toggle_fullscreen);
+    this.renderSubsectionHeader(panel, t("settings.keybinds.display"));
+    this.renderKeybindInput(panel, "zoom_in", t("settings.keybinds.zoomIn"), kb.zoom_in);
+    this.renderKeybindInput(panel, "zoom_out", t("settings.keybinds.zoomOut"), kb.zoom_out);
+    this.renderKeybindInput(panel, "zoom_reset", t("settings.keybinds.zoomReset"), kb.zoom_reset);
+    this.renderKeybindInput(panel, "toggle_fullscreen", t("settings.keybinds.toggleFullscreen"), kb.toggle_fullscreen);
 
     // -- Settings subsection --
-    this.renderSubsectionHeader(panel, "Settings");
-    this.renderKeybindInput(panel, "open_settings", "Open Settings", kb.open_settings);
+    this.renderSubsectionHeader(panel, t("settings.keybinds.settingsSection"));
+    this.renderKeybindInput(panel, "open_settings", t("settings.keybinds.openSettings"), kb.open_settings);
   }
 
   // ============================================================
@@ -814,7 +845,7 @@ export class SettingsPanel {
     this.capturingOriginalValue = originalValue;
 
     button.classList.add("capturing");
-    button.textContent = "Press a key...";
+    button.textContent = t("settings.keybinds.pressKey");
     button.focus();
 
     // Capture keydown

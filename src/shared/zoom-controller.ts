@@ -7,6 +7,7 @@
  */
 
 import { ZOOM_CONTROLLER_STYLES } from "./zoom-styles.ts";
+import { t } from "../i18n/index.ts";
 
 /**
  * Module-level reference count for shared styles.
@@ -285,7 +286,7 @@ export class ZoomController {
     this.closeButton = document.createElement("button");
     this.closeButton.className = "viewer-close-button";
     this.closeButton.setAttribute("type", "button");
-    this.closeButton.setAttribute("aria-label", "Close viewer");
+    this.closeButton.setAttribute("aria-label", t("zoom.closeViewer"));
     this.closeButton.innerHTML = "\u00D7"; // multiplication sign (x)
     this.closeButton.addEventListener("click", () => {
       this.options.onClose?.();
@@ -304,7 +305,7 @@ export class ZoomController {
     const zoomOutBtn = document.createElement("button");
     zoomOutBtn.className = "viewer-zoom-button";
     zoomOutBtn.setAttribute("type", "button");
-    zoomOutBtn.setAttribute("aria-label", "Zoom out");
+    zoomOutBtn.setAttribute("aria-label", t("zoom.zoomOut"));
     zoomOutBtn.textContent = "\u2212"; // minus sign
     zoomOutBtn.addEventListener("click", () => this.zoomOut());
 
@@ -312,7 +313,7 @@ export class ZoomController {
     this.zoomLevelDisplay = document.createElement("span");
     this.zoomLevelDisplay.className = "viewer-zoom-level";
     this.zoomLevelDisplay.setAttribute("role", "button");
-    this.zoomLevelDisplay.setAttribute("aria-label", "Reset zoom to 100%");
+    this.zoomLevelDisplay.setAttribute("aria-label", t("zoom.resetZoom", { level: 100 }));
     this.zoomLevelDisplay.textContent = "100%";
     this.zoomLevelDisplay.addEventListener("click", () => this.resetZoom());
 
@@ -320,7 +321,7 @@ export class ZoomController {
     const zoomInBtn = document.createElement("button");
     zoomInBtn.className = "viewer-zoom-button";
     zoomInBtn.setAttribute("type", "button");
-    zoomInBtn.setAttribute("aria-label", "Zoom in");
+    zoomInBtn.setAttribute("aria-label", t("zoom.zoomIn"));
     zoomInBtn.textContent = "+";
     zoomInBtn.addEventListener("click", () => this.zoomIn());
 
@@ -336,6 +337,7 @@ export class ZoomController {
   private updateZoomDisplay(): void {
     if (this.zoomLevelDisplay) {
       this.zoomLevelDisplay.textContent = `${this.state.level}%`;
+      this.zoomLevelDisplay.setAttribute("aria-label", t("zoom.resetZoom", { level: this.state.level }));
     }
   }
 

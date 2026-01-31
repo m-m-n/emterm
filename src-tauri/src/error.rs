@@ -1,31 +1,88 @@
+use rust_i18n::t;
+use std::fmt;
 use std::path::PathBuf;
-use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum CommandError {
-    #[error("File not found: {0}")]
     FileNotFound(PathBuf),
 
-    #[error("Path is not a file: {0}")]
     NotAFile(PathBuf),
 
-    #[error("Failed to read file: {0}")]
-    FileReadError(#[from] std::io::Error),
+    FileReadError(std::io::Error),
 
-    #[error("File size ({size} bytes) exceeds {max_size} bytes limit")]
     FileTooLarge { size: u64, max_size: u64 },
 
-    #[error("Unsupported image format: {0:?}")]
     UnsupportedImageFormat(image::ImageFormat),
 
-    #[error("Failed to decode image: {0}")]
-    ImageDecodeError(#[from] image::ImageError),
+    ImageDecodeError(image::ImageError),
 
-    #[error("Invalid protocol: {0}")]
     InvalidProtocol(String),
 
-    #[error("Encoding error: {0}")]
     EncodingError(String),
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CommandError::FileNotFound(path) => {
+                write!(f, "{}", t!("error.fileNotFound", path = path.display()))
+            }
+            CommandError::NotAFile(path) => {
+                write!(f, "{}", t!("error.notAFile", path = path.display()))
+            }
+            CommandError::FileReadError(source) => {
+                write!(f, "{}", t!("error.fileReadError", error = source))
+            }
+            CommandError::FileTooLarge { size, max_size } => {
+                write!(
+                    f,
+                    "{}",
+                    t!("error.fileTooLarge", size = size, maxSize = max_size)
+                )
+            }
+            CommandError::UnsupportedImageFormat(format) => {
+                write!(
+                    f,
+                    "{}",
+                    t!(
+                        "error.unsupportedImageFormat",
+                        format = format!("{:?}", format)
+                    )
+                )
+            }
+            CommandError::ImageDecodeError(source) => {
+                write!(f, "{}", t!("error.imageDecodeError", error = source))
+            }
+            CommandError::InvalidProtocol(protocol) => {
+                write!(f, "{}", t!("error.invalidProtocol", protocol = protocol))
+            }
+            CommandError::EncodingError(msg) => {
+                write!(f, "{}", t!("error.encodingError", error = msg))
+            }
+        }
+    }
+}
+
+impl std::error::Error for CommandError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            CommandError::FileReadError(source) => Some(source),
+            CommandError::ImageDecodeError(source) => Some(source),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for CommandError {
+    fn from(err: std::io::Error) -> Self {
+        CommandError::FileReadError(err)
+    }
+}
+
+impl From<image::ImageError> for CommandError {
+    fn from(err: image::ImageError) -> Self {
+        CommandError::ImageDecodeError(err)
+    }
 }
 
 impl CommandError {
@@ -84,8 +141,12 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
+    // Single test for both locales to avoid race conditions with global locale state
     #[test]
-    fn test_error_display_messages() {
+    fn test_error_display_messages_localized() {
+        // English
+        rust_i18n::set_locale("en");
+
         let err = CommandError::FileNotFound(PathBuf::from("missing.txt"));
         assert!(err.to_string().contains("File not found"));
         assert!(err.to_string().contains("missing.txt"));
@@ -97,5 +158,18 @@ mod tests {
         assert!(err.to_string().contains("exceeds"));
         assert!(err.to_string().contains("3000000"));
         assert!(err.to_string().contains("2000000"));
+
+        // Japanese
+        rust_i18n::set_locale("ja");
+
+        let err = CommandError::FileNotFound(PathBuf::from("test.txt"));
+        let msg = err.to_string();
+        assert!(msg.contains("test.txt"));
+        assert!(
+            msg.contains("\u{30d5}\u{30a1}\u{30a4}\u{30eb}\u{304c}\u{898b}\u{3064}\u{304b}\u{308a}\u{307e}\u{305b}\u{3093}")
+        );
+
+        // Reset to English
+        rust_i18n::set_locale("en");
     }
 }
