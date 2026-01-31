@@ -50,8 +50,16 @@ const mockContainer = {
 	},
 };
 
+// Save original globals (set by test-setup.ts / happy-dom)
+const savedDocument = globalThis.document;
+const savedGetComputedStyle = globalThis.getComputedStyle;
+const savedWindow = globalThis.window;
+const savedPerformance = globalThis.performance;
+const savedImageData = globalThis.ImageData;
+const savedCreateImageBitmap = globalThis.createImageBitmap;
+
 // Mock document.createElement
-globalThis.document = {
+const mockDocument = {
 	createElement: mock((tag: string) => {
 		if (tag === "canvas") {
 			return { ...mockCanvas, getContext: mockCanvas.getContext };
@@ -66,32 +74,6 @@ globalThis.document = {
 		};
 	}),
 } as unknown as Document;
-
-// Mock getComputedStyle
-globalThis.getComputedStyle = mock(() => ({
-	position: "static",
-})) as unknown as typeof getComputedStyle;
-
-// Mock window with setTimeout/clearTimeout
-globalThis.window = {
-	devicePixelRatio: 1,
-	setTimeout: mock((fn: () => void, delay: number) => {
-		// Execute immediately in tests
-		fn();
-		return 1;
-	}),
-	clearTimeout: mock(() => {}),
-} as unknown as Window & typeof globalThis;
-
-// Mock performance.now()
-globalThis.performance = {
-	now: mock(() => Date.now()),
-} as unknown as Performance;
-
-// Mock atob for base64 decoding
-globalThis.atob = (data: string) => {
-	return Buffer.from(data, "base64").toString("binary");
-};
 
 // Mock ImageData
 class MockImageData {
@@ -115,9 +97,27 @@ class MockImageData {
 		}
 	}
 }
-globalThis.ImageData = MockImageData as unknown as typeof ImageData;
 
-// Mock createImageBitmap
+// Apply mocks before import (required for module initialization)
+globalThis.document = mockDocument;
+globalThis.getComputedStyle = mock(() => ({
+	position: "static",
+})) as unknown as typeof getComputedStyle;
+globalThis.window = {
+	devicePixelRatio: 1,
+	setTimeout: mock((fn: () => void, delay: number) => {
+		fn();
+		return 1;
+	}),
+	clearTimeout: mock(() => {}),
+} as unknown as Window & typeof globalThis;
+globalThis.performance = {
+	now: mock(() => Date.now()),
+} as unknown as Performance;
+globalThis.atob = (data: string) => {
+	return Buffer.from(data, "base64").toString("binary");
+};
+globalThis.ImageData = MockImageData as unknown as typeof ImageData;
 globalThis.createImageBitmap = mock(async () => ({
 	width: 10,
 	height: 10,
@@ -131,6 +131,29 @@ describe("ImageLayer", () => {
 	let layer: ImageLayer;
 
 	beforeEach(() => {
+		// Apply mocks before each test
+		globalThis.document = mockDocument;
+		globalThis.getComputedStyle = mock(() => ({
+			position: "static",
+		})) as unknown as typeof getComputedStyle;
+		globalThis.window = {
+			devicePixelRatio: 1,
+			setTimeout: mock((fn: () => void, delay: number) => {
+				fn();
+				return 1;
+			}),
+			clearTimeout: mock(() => {}),
+		} as unknown as Window & typeof globalThis;
+		globalThis.performance = {
+			now: mock(() => Date.now()),
+		} as unknown as Performance;
+		globalThis.ImageData = MockImageData as unknown as typeof ImageData;
+		globalThis.createImageBitmap = mock(async () => ({
+			width: 10,
+			height: 10,
+			close: mock(() => {}),
+		})) as unknown as typeof createImageBitmap;
+
 		// Reset mocks
 		mockCanvas.getContext.mockClear?.();
 		mockContainer.appendChild.mockClear?.();
@@ -146,6 +169,14 @@ describe("ImageLayer", () => {
 
 	afterEach(() => {
 		layer.dispose();
+
+		// Restore original globals to avoid polluting other test files
+		globalThis.document = savedDocument;
+		globalThis.getComputedStyle = savedGetComputedStyle;
+		globalThis.window = savedWindow;
+		globalThis.performance = savedPerformance;
+		globalThis.ImageData = savedImageData;
+		globalThis.createImageBitmap = savedCreateImageBitmap;
 	});
 
 	describe("constructor", () => {

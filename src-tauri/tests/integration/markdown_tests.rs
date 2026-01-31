@@ -37,7 +37,7 @@ fn test_markdown_small_file() {
         "Missing OSC end sequence"
     );
     assert!(stdout.contains("format=gfm"), "Missing format parameter");
-    assert!(stdout.contains("render=block"), "Missing render parameter");
+    assert!(stdout.contains("render=fullscreen"), "Missing render parameter");
     assert!(stdout.contains("version=1.0"), "Missing version parameter");
 }
 

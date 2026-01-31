@@ -2,7 +2,7 @@
  * Tests for Settings Applier
  */
 
-import { describe, test, expect, beforeEach } from "bun:test";
+import { afterEach, describe, test, expect, beforeEach } from "bun:test";
 import {
   applySettings,
   applySettingsToCSS,
@@ -55,6 +55,10 @@ const mockMediaQueryList = {
   },
 };
 
+// Save original globals
+const savedDocument = globalThis.document;
+const savedWindow = globalThis.window;
+
 // Setup mock before each test
 beforeEach(() => {
   mockStyle.properties = {};
@@ -90,6 +94,12 @@ beforeEach(() => {
     },
     tabManager: mockTabManager,
   };
+});
+
+// Restore original globals after each test
+afterEach(() => {
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
 });
 
 function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {

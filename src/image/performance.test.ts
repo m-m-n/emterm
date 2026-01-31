@@ -6,11 +6,15 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+// Save original globals
+const savedPerformance = globalThis.performance;
+
 // Mock performance.now()
 let mockTime = 0;
-globalThis.performance = {
+const mockPerformance = {
 	now: mock(() => mockTime),
 } as unknown as Performance;
+globalThis.performance = mockPerformance;
 
 // Helper to advance mock time
 function advanceTime(ms: number): void {
@@ -26,7 +30,12 @@ import {
 
 describe("PerformanceMonitor", () => {
 	beforeEach(() => {
+		globalThis.performance = mockPerformance;
 		mockTime = 0;
+	});
+
+	afterEach(() => {
+		globalThis.performance = savedPerformance;
 	});
 
 	describe("constructor", () => {

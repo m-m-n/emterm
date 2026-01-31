@@ -12,6 +12,12 @@ import type {
 	AnimationState,
 } from "./types.ts";
 
+// Save original globals
+const savedWindow = globalThis.window;
+const savedCreateImageBitmap = globalThis.createImageBitmap;
+const savedImageData = globalThis.ImageData;
+const savedClearTimeout = globalThis.clearTimeout;
+
 // Mock ImageBitmap
 const createMockBitmap = () => ({
 	width: 10,
@@ -140,6 +146,17 @@ describe("AnimationController", () => {
 	let controller: AnimationController;
 
 	beforeEach(() => {
+		// Apply mocks
+		globalThis.window = {
+			setTimeout: mockSetTimeout,
+			clearTimeout: mockClearTimeout,
+		} as unknown as Window & typeof globalThis;
+		globalThis.clearTimeout = mockClearTimeout as unknown as typeof clearTimeout;
+		globalThis.createImageBitmap = mock(async () =>
+			createMockBitmap(),
+		) as unknown as typeof createImageBitmap;
+		globalThis.ImageData = MockImageData as unknown as typeof ImageData;
+
 		// Reset timer state
 		timeoutCallbacks.clear();
 		nextTimerId = 1;
@@ -152,6 +169,12 @@ describe("AnimationController", () => {
 
 	afterEach(() => {
 		controller.dispose();
+
+		// Restore original globals
+		globalThis.window = savedWindow;
+		globalThis.createImageBitmap = savedCreateImageBitmap;
+		globalThis.ImageData = savedImageData;
+		globalThis.clearTimeout = savedClearTimeout;
 	});
 
 	describe("constructor / initialization", () => {
