@@ -361,7 +361,7 @@
 }
 
 .settings-toggle.on .settings-toggle-thumb {
-  left: 28px;
+  left: 22px;
   width: 24px;
   height: 24px;
   background-color: var(--md-sys-color-on-primary);
@@ -377,7 +377,7 @@
 .settings-toggle.on:hover .settings-toggle-thumb {
   width: 28px;
   height: 28px;
-  left: 24px;
+  left: 20px;
 }
 
 /* Toggle focus */

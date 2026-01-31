@@ -3,7 +3,7 @@
  * Uses full paths and longer timeouts for container environment
  */
 
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
@@ -47,24 +47,8 @@ export const config = {
 	connectionRetryCount: 5,
 
 	onPrepare: async () => {
-		console.log("Building Tauri application...");
-		const build = spawnSync(
-			"bun",
-			["tauri", "build", "--debug", "--no-bundle"],
-			{
-				cwd: projectRoot,
-				stdio: "inherit",
-				env: {
-					...process.env,
-					PATH: `/root/.cargo/bin:/root/.bun/bin:${process.env.PATH}`,
-				},
-			},
-		);
-
-		if (build.status !== 0) {
-			throw new Error(`Build failed with code ${build.status}`);
-		}
-		console.log("Build completed.");
+		// Build is done separately via: docker compose run --rm build
+		console.log("Using pre-built binary at:", appPath);
 	},
 
 	beforeSession: async () => {
