@@ -1,15 +1,45 @@
 # Docker Compose for E2E Testing
-# Usage: docker compose -f docker-compose.e2e.yml up --build
+# Usage:
+#   ./scripts/run-e2e-docker.sh              # Full cycle: install → build → test
+#   ./scripts/run-e2e-docker.sh build        # Build only (incremental)
+#   ./scripts/run-e2e-docker.sh test         # Test only
+#   ./scripts/run-e2e-docker.sh test foo.js  # Specific test
 
 services:
+  # Install dependencies (run on first setup or when packages change)
+  install:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+    volumes:
+      - .:/app
+      - cargo-target:/app/src-tauri/target
+      - node-modules:/app/node_modules
+      - e2e-node-modules:/app/e2e-tests/node_modules
+    command: sh -c "bun install && cd e2e-tests && npm ci --legacy-peer-deps"
+
+  # Build application (incremental builds via cargo-target volume)
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+    volumes:
+      - .:/app
+      - cargo-target:/app/src-tauri/target
+      - node-modules:/app/node_modules
+    command: bun tauri build --debug --no-bundle
+
+  # Run E2E tests
   e2e-test:
     build:
       context: .
       dockerfile: Dockerfile.e2e
-    # Share screenshots with host
     volumes:
+      - .:/app
+      - cargo-target:/app/src-tauri/target
+      - node-modules:/app/node_modules
+      - e2e-node-modules:/app/e2e-tests/node_modules
       - ./e2e-tests/screenshots:/app/e2e-tests/screenshots
-    # Required for GUI applications and disable proxy for localhost
     environment:
       - DISPLAY=:99
       - http_proxy=
@@ -18,9 +48,18 @@ services:
       - HTTPS_PROXY=
       - no_proxy=localhost,127.0.0.1
       - NO_PROXY=localhost,127.0.0.1
-    # Security options for running GUI apps
     security_opt:
       - seccomp:unconfined
-    # Needed for PTY operations
     tty: true
     stdin_open: true
+    command: >-
+      sh -c "cp -n src-tauri/icons/128x128.png /tmp/test.png 2>/dev/null || true
+      && Xvfb :99 -screen 0 1280x720x24 &
+      sleep 2
+      && cd e2e-tests
+      && npx wdio run wdio.docker.conf.js"
+
+volumes:
+  cargo-target:
+  node-modules:
+  e2e-node-modules:
