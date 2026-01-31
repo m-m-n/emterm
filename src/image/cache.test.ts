@@ -6,6 +6,10 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+// Save original globals
+const savedCreateImageBitmap = globalThis.createImageBitmap;
+const savedImageData = globalThis.ImageData;
+
 // Mock createImageBitmap
 const mockBitmap = {
 	width: 100,
@@ -46,6 +50,19 @@ globalThis.ImageData = MockImageData as unknown as typeof ImageData;
 import { BitmapCache, CacheKey, CacheStats } from "./cache.ts";
 
 describe("BitmapCache", () => {
+	beforeEach(() => {
+		globalThis.createImageBitmap = mock(async () => ({
+			...mockBitmap,
+			close: mock(() => {}),
+		})) as unknown as typeof createImageBitmap;
+		globalThis.ImageData = MockImageData as unknown as typeof ImageData;
+	});
+
+	afterEach(() => {
+		globalThis.createImageBitmap = savedCreateImageBitmap;
+		globalThis.ImageData = savedImageData;
+	});
+
 	describe("constructor", () => {
 		test("creates cache with default capacity", () => {
 			const cache = new BitmapCache();

@@ -3,6 +3,33 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
+
+// Mock Tauri API before importing modules that depend on it
+mock.module("@tauri-apps/api/core", () => ({
+  invoke: mock(async (cmd: string) => {
+    if (cmd === "load_settings") {
+      return {
+        font_size: 14, font_family: "monospace", line_height: 1.4,
+        ui_theme: "dark", terminal_color_scheme: "default", opacity: 1.0,
+        padding: 8, scrollback_lines: 10000, show_scrollbar: "auto",
+        inline_images_enabled: true, markdown_rendering: true,
+        shell_path: "/bin/bash", shell_args: [], cursor_style: "block",
+        cursor_blink: true, scroll_speed: 3, bell_action: "none",
+        url_detection: true, copy_on_select: false,
+        keybinds: {
+          copy: "Ctrl+Shift+C", paste: "Ctrl+Shift+V", select_all: "Ctrl+Shift+A",
+          search: "Ctrl+Shift+F", new_tab: "Ctrl+Shift+T", close_tab: "Ctrl+Shift+W",
+          next_tab: "Ctrl+Tab", prev_tab: "Ctrl+Shift+Tab",
+          zoom_in: "Ctrl+Plus", zoom_out: "Ctrl+Minus", zoom_reset: "Ctrl+0",
+          toggle_fullscreen: "F11", open_settings: "Ctrl+Comma",
+        },
+        language: "auto",
+      };
+    }
+    return null;
+  }),
+}));
+
 import { TabBarUI } from "./tab-bar-ui";
 import { TabManager } from "./tab-manager";
 import type { Tab } from "./types";

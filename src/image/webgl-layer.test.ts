@@ -91,8 +91,15 @@ const mockContainer = {
 	},
 };
 
+// Save original globals (set by test-setup.ts / happy-dom)
+const savedDocument = globalThis.document;
+const savedGetComputedStyle = globalThis.getComputedStyle;
+const savedWindow = globalThis.window;
+const savedImageData = globalThis.ImageData;
+const savedCreateImageBitmap = globalThis.createImageBitmap;
+
 // Mock document.createElement
-globalThis.document = {
+const mockDocument = {
 	createElement: mock((tag: string) => {
 		if (tag === "canvas") {
 			return { ...mockCanvas };
@@ -100,21 +107,6 @@ globalThis.document = {
 		return {};
 	}),
 } as unknown as Document;
-
-// Mock getComputedStyle
-globalThis.getComputedStyle = mock(() => ({
-	position: "static",
-})) as unknown as typeof getComputedStyle;
-
-// Mock window
-globalThis.window = {
-	devicePixelRatio: 1,
-	setTimeout: mock((fn: () => void, delay: number) => {
-		fn();
-		return 1;
-	}),
-	clearTimeout: mock(() => {}),
-} as unknown as Window & typeof globalThis;
 
 // Mock ImageData
 class MockImageData {
@@ -138,9 +130,21 @@ class MockImageData {
 		}
 	}
 }
-globalThis.ImageData = MockImageData as unknown as typeof ImageData;
 
-// Mock createImageBitmap
+// Apply mocks before import (required for module initialization)
+globalThis.document = mockDocument;
+globalThis.getComputedStyle = mock(() => ({
+	position: "static",
+})) as unknown as typeof getComputedStyle;
+globalThis.window = {
+	devicePixelRatio: 1,
+	setTimeout: mock((fn: () => void, delay: number) => {
+		fn();
+		return 1;
+	}),
+	clearTimeout: mock(() => {}),
+} as unknown as Window & typeof globalThis;
+globalThis.ImageData = MockImageData as unknown as typeof ImageData;
 globalThis.createImageBitmap = mock(async () => ({
 	width: 10,
 	height: 10,
@@ -151,6 +155,37 @@ globalThis.createImageBitmap = mock(async () => ({
 import { isWebGLSupported, WebGLLayer } from "./webgl-layer.ts";
 
 describe("WebGLLayer", () => {
+	beforeEach(() => {
+		// Apply mocks before each test
+		globalThis.document = mockDocument;
+		globalThis.getComputedStyle = mock(() => ({
+			position: "static",
+		})) as unknown as typeof getComputedStyle;
+		globalThis.window = {
+			devicePixelRatio: 1,
+			setTimeout: mock((fn: () => void, delay: number) => {
+				fn();
+				return 1;
+			}),
+			clearTimeout: mock(() => {}),
+		} as unknown as Window & typeof globalThis;
+		globalThis.ImageData = MockImageData as unknown as typeof ImageData;
+		globalThis.createImageBitmap = mock(async () => ({
+			width: 10,
+			height: 10,
+			close: mock(() => {}),
+		})) as unknown as typeof createImageBitmap;
+	});
+
+	afterEach(() => {
+		// Restore original globals to avoid polluting other test files
+		globalThis.document = savedDocument;
+		globalThis.getComputedStyle = savedGetComputedStyle;
+		globalThis.window = savedWindow;
+		globalThis.ImageData = savedImageData;
+		globalThis.createImageBitmap = savedCreateImageBitmap;
+	});
+
 	describe("isWebGLSupported", () => {
 		test("returns true when WebGL2 is available", () => {
 			const result = isWebGLSupported();

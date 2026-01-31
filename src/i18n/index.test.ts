@@ -9,6 +9,10 @@ describe("i18n module", () => {
     initI18n("en");
   });
 
+  afterEach(() => {
+    initI18n("en");
+  });
+
   describe("SUPPORTED_LOCALES", () => {
     test("should contain en and ja", () => {
       expect(SUPPORTED_LOCALES).toContain("en");

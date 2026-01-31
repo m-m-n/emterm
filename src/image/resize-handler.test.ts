@@ -6,12 +6,15 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+// Save original globals
+const savedWindow = globalThis.window;
+
 // Mock timers
 const timeoutCallbacks: Map<number, { fn: () => void; delay: number }> =
 	new Map();
 let nextTimeoutId = 1;
 
-globalThis.window = {
+const mockWindow = {
 	setTimeout: mock((fn: () => void, delay: number) => {
 		const id = nextTimeoutId++;
 		timeoutCallbacks.set(id, { fn, delay });
@@ -25,6 +28,8 @@ globalThis.window = {
 		return 1;
 	}),
 } as unknown as Window & typeof globalThis;
+
+globalThis.window = mockWindow;
 
 // Helper to advance time and trigger callbacks
 function advanceTimers(ms: number): void {
@@ -45,8 +50,13 @@ import {
 
 describe("ResizeHandler", () => {
 	beforeEach(() => {
+		globalThis.window = mockWindow;
 		timeoutCallbacks.clear();
 		nextTimeoutId = 1;
+	});
+
+	afterEach(() => {
+		globalThis.window = savedWindow;
 	});
 
 	describe("constructor", () => {

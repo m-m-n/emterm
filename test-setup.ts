@@ -32,3 +32,7 @@ globalThis.requestAnimationFrame = (callback: FrameRequestCallback): number => {
 globalThis.cancelAnimationFrame = (id: number): void => {
 	clearTimeout(id);
 };
+
+// Set default locale to English for deterministic test results
+import { initI18n } from "./src/i18n/index.ts";
+initI18n("en");
