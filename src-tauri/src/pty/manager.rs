@@ -65,12 +65,13 @@ impl PtyManager {
     pub async fn create_session(
         &self,
         shell: Option<String>,
+        args: Option<Vec<String>>,
         cols: u16,
         rows: u16,
     ) -> Result<SessionId, PtyError> {
         let shell = shell.unwrap_or_else(detect_default_shell);
         let id = generate_session_id();
-        let session = PtySession::new(id.clone(), &shell, cols, rows)?;
+        let session = PtySession::new(id.clone(), &shell, args, cols, rows)?;
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), Arc::new(Mutex::new(session)));
@@ -120,12 +121,13 @@ impl PtyManager {
     pub async fn create_session_atomic(
         &self,
         shell: Option<String>,
+        args: Option<Vec<String>>,
         cols: u16,
         rows: u16,
     ) -> Result<SessionCreatedResult, PtyError> {
         let shell = shell.unwrap_or_else(detect_default_shell);
         let id = generate_session_id();
-        let session = PtySession::new(id.clone(), &shell, cols, rows)?;
+        let session = PtySession::new(id.clone(), &shell, args, cols, rows)?;
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), Arc::new(Mutex::new(session)));
@@ -166,7 +168,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_session() {
         let manager = PtyManager::new();
-        let result = manager.create_session(None, 80, 24).await;
+        let result = manager.create_session(None, None, 80, 24).await;
 
         assert!(result.is_ok(), "Session creation should succeed");
         assert_eq!(manager.session_count().await, 1);
@@ -182,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_session() {
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, 80, 24).await.unwrap();
+        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
 
         let session = manager.get_session(&session_id).await;
         assert!(session.is_some(), "Session should be retrievable");
@@ -203,7 +205,7 @@ mod tests {
     #[tokio::test]
     async fn test_remove_session() {
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, 80, 24).await.unwrap();
+        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
 
         assert_eq!(manager.session_count().await, 1);
 
@@ -222,8 +224,8 @@ mod tests {
     async fn test_multiple_sessions() {
         let manager = PtyManager::new();
 
-        let id1 = manager.create_session(None, 80, 24).await.unwrap();
-        let id2 = manager.create_session(None, 120, 40).await.unwrap();
+        let id1 = manager.create_session(None, None, 80, 24).await.unwrap();
+        let id2 = manager.create_session(None, None, 120, 40).await.unwrap();
 
         assert_eq!(manager.session_count().await, 2);
         assert_ne!(id1, id2, "Session IDs should be unique");
@@ -244,7 +246,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_session_atomic() {
         let manager = PtyManager::new();
-        let result = manager.create_session_atomic(None, 80, 24).await;
+        let result = manager.create_session_atomic(None, None, 80, 24).await;
 
         assert!(result.is_ok(), "Atomic session creation should succeed");
         let result = result.unwrap();
@@ -269,8 +271,8 @@ mod tests {
         let manager = PtyManager::new();
 
         // Create two sessions
-        let result1 = manager.create_session_atomic(None, 80, 24).await.unwrap();
-        let result2 = manager.create_session_atomic(None, 80, 24).await.unwrap();
+        let result1 = manager.create_session_atomic(None, None, 80, 24).await.unwrap();
+        let result2 = manager.create_session_atomic(None, None, 80, 24).await.unwrap();
 
         assert_eq!(result1.count, 1);
         assert_eq!(result2.count, 2);

@@ -33,6 +33,7 @@ impl PtySession {
     ///
     /// * `id` - Unique session identifier
     /// * `shell` - Path to the shell executable
+    /// * `args` - Optional arguments to pass to the shell
     /// * `cols` - Number of columns for the terminal
     /// * `rows` - Number of rows for the terminal
     ///
@@ -44,7 +45,7 @@ impl PtySession {
     ///
     /// - Shells are spawned as non-login shells for faster startup
     /// - TERM and COLORTERM environment variables are set for compatibility
-    pub fn new(id: SessionId, shell: &str, cols: u16, rows: u16) -> Result<Self, PtyError> {
+    pub fn new(id: SessionId, shell: &str, args: Option<Vec<String>>, cols: u16, rows: u16) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(PtySize {
@@ -55,6 +56,13 @@ impl PtySession {
         })?;
 
         let mut cmd = CommandBuilder::new(shell);
+
+        // Add shell arguments if provided
+        if let Some(ref shell_args) = args {
+            for arg in shell_args {
+                cmd.arg(arg);
+            }
+        }
 
         // Set TERM environment variable for proper terminal emulation
         // This is essential for applications like SSH, vim, htop, etc.
@@ -153,7 +161,7 @@ mod tests {
     fn test_session_creation() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let result = PtySession::new(id.clone(), &shell, 80, 24);
+        let result = PtySession::new(id.clone(), &shell, None, 80, 24);
 
         assert!(result.is_ok(), "Session creation should succeed");
 
@@ -168,7 +176,7 @@ mod tests {
     fn test_session_resize() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
 
         let resize_result = session.resize(120, 40);
         assert!(resize_result.is_ok(), "Resize should succeed");
@@ -181,7 +189,7 @@ mod tests {
     fn test_session_take_reader() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
 
         let reader_result = session.take_reader();
         assert!(reader_result.is_ok(), "Taking reader should succeed");
@@ -194,7 +202,7 @@ mod tests {
     fn test_session_kill() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
 
         let kill_result = session.kill();
         assert!(kill_result.is_ok(), "Kill should succeed");
@@ -212,7 +220,7 @@ mod tests {
 
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
 
         // Get a reader to drain output
         let mut reader = session.take_reader().unwrap();
@@ -284,7 +292,7 @@ mod tests {
     fn test_session_write() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
 
         // Write some data
         let write_result = session.write(b"echo hello\n");

@@ -55,6 +55,11 @@ export interface PtySpawnOptions {
 	shell?: string;
 
 	/**
+	 * Arguments to pass to the shell executable.
+	 */
+	args?: string[];
+
+	/**
 	 * Number of terminal columns.
 	 * @default 80
 	 */

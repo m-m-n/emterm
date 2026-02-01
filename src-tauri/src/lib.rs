@@ -110,6 +110,7 @@ pub struct ImageEventPayload {
 /// # Arguments
 ///
 /// * `shell` - Optional path to the shell executable. If None, uses default shell.
+/// * `args` - Optional arguments to pass to the shell.
 /// * `cols` - Number of columns (default: 80)
 /// * `rows` - Number of rows (default: 24)
 ///
@@ -121,6 +122,7 @@ async fn pty_spawn(
     app: AppHandle,
     state: State<'_, PtyManager>,
     shell: Option<String>,
+    args: Option<Vec<String>>,
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<SpawnResult, String> {
@@ -129,7 +131,7 @@ async fn pty_spawn(
 
     // Use atomic method to get session_id and count in one lock (NFR2 compliance)
     let result = state
-        .create_session_atomic(shell, cols, rows)
+        .create_session_atomic(shell, args, cols, rows)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -678,11 +680,11 @@ mod tests {
         assert_eq!(manager.session_count().await, 0);
 
         // Create a session
-        let session_id = manager.create_session(None, 80, 24).await.unwrap();
+        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
         assert_eq!(manager.session_count().await, 1);
 
         // Create another session
-        let session_id2 = manager.create_session(None, 80, 24).await.unwrap();
+        let session_id2 = manager.create_session(None, None, 80, 24).await.unwrap();
         assert_eq!(manager.session_count().await, 2);
 
         // Remove one session

@@ -21,6 +21,7 @@ import type {
   ImageEventPayload,
 } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
+import { SettingsService } from "../settings/settings-service";
 import type { DecodedImage, ImageEvent } from "../image/types";
 
 /**
@@ -199,7 +200,12 @@ export class TerminalApp {
 
     // Spawn PTY session (non-blocking UI)
     try {
-      await this.ptyClient.spawn({ cols, rows });
+      // Read shell settings for this session
+      const cachedSettings = SettingsService.getCached();
+      const shell = cachedSettings?.shell_path || undefined;
+      const args = cachedSettings?.shell_args?.length ? cachedSettings.shell_args : undefined;
+
+      await this.ptyClient.spawn({ shell, args, cols, rows });
 
       // Flush any terminal actions that arrived before spawn returned
       if (this.state && this.renderer) {
