@@ -1,0 +1,461 @@
+/**
+ * Settings Sections
+ *
+ * Section renderers for Appearance, Terminal, and Keybinds categories.
+ * Each function renders its section into the provided panel element.
+ */
+
+import { invoke } from "@tauri-apps/api/core";
+import {
+  applyFontSize,
+  applyFontFamily,
+  applyLineHeight,
+  applyUiTheme,
+  applyTerminalColorScheme,
+  applyPadding,
+  applyScrollbar,
+  applyOpacity,
+  applyCursorStyle,
+  applyCursorBlink,
+} from "./settings-applier";
+import type {
+  AppSettings, UiTheme, CursorStyle, BellAction, ScrollbarMode,
+  Language, FontCategory,
+} from "./types";
+import {
+  MIN_FONT_SIZE, MAX_FONT_SIZE,
+  MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, LINE_HEIGHT_STEP,
+  MIN_OPACITY, MAX_OPACITY, OPACITY_STEP,
+  MIN_PADDING, MAX_PADDING,
+  MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES,
+  MIN_SCROLL_SPEED, MAX_SCROLL_SPEED,
+} from "./types";
+import { t, setLocale, resolveLocale } from "../i18n/index.ts";
+import {
+  renderSubsectionHeader,
+  renderNumberInput,
+  renderTextInput,
+  renderSelect,
+  renderToggle,
+  renderSlider,
+} from "./settings-components";
+import type { AddListenerFn } from "./settings-components";
+import { renderFontPickerInput } from "./font-picker";
+import { renderKeybindInput } from "./keybind-editor";
+import type { KeybindEditorContext } from "./keybind-editor";
+
+// ============================================================
+// Section Context
+// ============================================================
+
+export interface SectionContext {
+  currentSettings: AppSettings;
+  addContentListener: AddListenerFn;
+  saveSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  showFontPicker: (category: FontCategory, currentValue: string, onSelect: (value: string) => void) => void;
+  keybindCtx: KeybindEditorContext;
+  reRender: () => void;
+}
+
+// ============================================================
+// Appearance Section
+// ============================================================
+
+export function renderAppearanceSection(panel: HTMLElement, ctx: SectionContext): void {
+  const settings = ctx.currentSettings;
+
+  const header = document.createElement("h2");
+  header.className = "settings-section-header";
+  header.textContent = t("settings.appearance.title");
+  panel.appendChild(header);
+
+  // -- Language subsection --
+  renderSubsectionHeader(panel, t("settings.language.title"));
+
+  renderSelect(panel, {
+    key: "language",
+    label: t("settings.language.label"),
+    value: settings.language,
+    options: [
+      { value: "auto", label: t("settings.language.auto") },
+      { value: "en", label: t("settings.language.en") },
+      { value: "ja", label: t("settings.language.ja") },
+    ],
+    description: t("settings.language.labelDesc"),
+    onSave: (v) => {
+      ctx.saveSetting("language", v as Language);
+      // Apply language change
+      const resolved = resolveLocale(v);
+      setLocale(resolved);
+      invoke("set_language", { language: resolved }).catch((err) => {
+        console.warn("Failed to sync backend language:", err);
+      });
+      // Re-render settings panel with new language
+      ctx.reRender();
+    },
+  }, ctx.addContentListener);
+
+  // -- Font subsection --
+  renderSubsectionHeader(panel, t("settings.appearance.font"));
+
+  // Font Size (number input)
+  renderNumberInput(panel, {
+    key: "font-size",
+    label: t("settings.appearance.fontSize"),
+    value: settings.font_size,
+    min: MIN_FONT_SIZE,
+    max: MAX_FONT_SIZE,
+    step: 1,
+    unit: "pt",
+    hint: t("settings.appearance.fontSizeHint", { min: MIN_FONT_SIZE, max: MAX_FONT_SIZE }),
+    description: t("settings.appearance.fontSizeDesc"),
+    onInput: (v) => applyFontSize(v),
+    onSave: (v) => ctx.saveSetting("font_size", v),
+  }, ctx.addContentListener);
+
+  // Primary Font (font picker)
+  renderFontPickerInput(panel, {
+    key: "font-family-primary",
+    label: t("settings.appearance.fontFamilyPrimary"),
+    value: settings.font_family_primary,
+    placeholder: t("settings.appearance.fontFamilyPrimaryPlaceholder"),
+    hint: t("settings.appearance.fontFamilyPrimaryHint"),
+    description: t("settings.appearance.fontFamilyPrimaryDesc"),
+    category: "primary",
+    onSelect: (v) => {
+      ctx.currentSettings.font_family_primary = v;
+      applyCurrentFontFamily(ctx.currentSettings);
+      ctx.saveSetting("font_family_primary", v);
+    },
+  }, ctx.addContentListener, (category, currentValue, onSelect) => {
+    ctx.showFontPicker(category, currentValue, onSelect);
+  });
+
+  // Secondary Font (font picker)
+  renderFontPickerInput(panel, {
+    key: "font-family-secondary",
+    label: t("settings.appearance.fontFamilySecondary"),
+    value: settings.font_family_secondary,
+    placeholder: t("settings.appearance.fontFamilySecondaryPlaceholder"),
+    hint: t("settings.appearance.fontFamilySecondaryHint"),
+    description: t("settings.appearance.fontFamilySecondaryDesc"),
+    category: "secondary",
+    onSelect: (v) => {
+      ctx.currentSettings.font_family_secondary = v;
+      applyCurrentFontFamily(ctx.currentSettings);
+      ctx.saveSetting("font_family_secondary", v);
+    },
+  }, ctx.addContentListener, (category, currentValue, onSelect) => {
+    ctx.showFontPicker(category, currentValue, onSelect);
+  });
+
+  // Emoji Font (font picker)
+  renderFontPickerInput(panel, {
+    key: "font-family-emoji",
+    label: t("settings.appearance.fontFamilyEmoji"),
+    value: settings.font_family_emoji,
+    placeholder: t("settings.appearance.fontFamilyEmojiPlaceholder"),
+    hint: t("settings.appearance.fontFamilyEmojiHint"),
+    description: t("settings.appearance.fontFamilyEmojiDesc"),
+    category: "emoji",
+    onSelect: (v) => {
+      ctx.currentSettings.font_family_emoji = v;
+      applyCurrentFontFamily(ctx.currentSettings);
+      ctx.saveSetting("font_family_emoji", v);
+    },
+  }, ctx.addContentListener, (category, currentValue, onSelect) => {
+    ctx.showFontPicker(category, currentValue, onSelect);
+  });
+
+  // Line Height (number input)
+  renderNumberInput(panel, {
+    key: "line-height",
+    label: t("settings.appearance.lineHeight"),
+    value: settings.line_height,
+    min: MIN_LINE_HEIGHT,
+    max: MAX_LINE_HEIGHT,
+    step: LINE_HEIGHT_STEP,
+    unit: "",
+    hint: t("settings.appearance.lineHeightHint", { min: MIN_LINE_HEIGHT, max: MAX_LINE_HEIGHT }),
+    description: t("settings.appearance.lineHeightDesc"),
+    onInput: (v) => applyLineHeight(v),
+    onSave: (v) => ctx.saveSetting("line_height", v),
+  }, ctx.addContentListener);
+
+  // -- Theme & Color subsection --
+  renderSubsectionHeader(panel, t("settings.appearance.themeColor"));
+
+  // UI Theme (select)
+  renderSelect(panel, {
+    key: "ui-theme",
+    label: t("settings.appearance.uiTheme"),
+    value: settings.ui_theme,
+    options: [
+      { value: "system", label: t("settings.appearance.uiThemeSystem") },
+      { value: "light", label: t("settings.appearance.uiThemeLight") },
+      { value: "dark", label: t("settings.appearance.uiThemeDark") },
+    ],
+    description: t("settings.appearance.uiThemeDesc"),
+    onSave: (v) => {
+      applyUiTheme(v as UiTheme);
+      ctx.saveSetting("ui_theme", v as UiTheme);
+    },
+  }, ctx.addContentListener);
+
+  // Terminal Color Scheme (select)
+  renderSelect(panel, {
+    key: "terminal-color-scheme",
+    label: t("settings.appearance.colorScheme"),
+    value: settings.terminal_color_scheme || "emterm",
+    options: [
+      { value: "emterm", label: "eMterm" },
+      { value: "solarized-dark", label: "Solarized Dark" },
+      { value: "solarized-light", label: "Solarized Light" },
+      { value: "monokai", label: "Monokai" },
+      { value: "dracula", label: "Dracula" },
+      { value: "nord", label: "Nord" },
+    ],
+    description: t("settings.appearance.colorSchemeDesc"),
+    onSave: (v) => {
+      const scheme = v === "emterm" ? "" : v;
+      applyTerminalColorScheme(scheme);
+      ctx.saveSetting("terminal_color_scheme", scheme);
+    },
+  }, ctx.addContentListener);
+
+  // Opacity (slider)
+  renderSlider(panel, {
+    key: "opacity",
+    label: t("settings.appearance.opacity"),
+    value: settings.opacity,
+    min: MIN_OPACITY,
+    max: MAX_OPACITY,
+    step: OPACITY_STEP,
+    hint: t("settings.appearance.opacityHint", { min: MIN_OPACITY, max: MAX_OPACITY }),
+    description: t("settings.appearance.opacityDesc"),
+    onInput: (v) => applyOpacity(v),
+    onSave: (v) => ctx.saveSetting("opacity", v),
+  }, ctx.addContentListener);
+
+  // -- Layout subsection --
+  renderSubsectionHeader(panel, t("settings.appearance.layout"));
+
+  // Padding (number input)
+  renderNumberInput(panel, {
+    key: "padding",
+    label: t("settings.appearance.padding"),
+    value: settings.padding,
+    min: MIN_PADDING,
+    max: MAX_PADDING,
+    step: 1,
+    unit: "px",
+    hint: t("settings.appearance.paddingHint", { min: MIN_PADDING, max: MAX_PADDING }),
+    description: t("settings.appearance.paddingDesc"),
+    onInput: (v) => applyPadding(v),
+    onSave: (v) => ctx.saveSetting("padding", v),
+  }, ctx.addContentListener);
+
+  // Scrollback Lines (number input)
+  renderNumberInput(panel, {
+    key: "scrollback-lines",
+    label: t("settings.appearance.scrollbackLines"),
+    value: settings.scrollback_lines,
+    min: MIN_SCROLLBACK_LINES,
+    max: MAX_SCROLLBACK_LINES,
+    step: 1000,
+    unit: "",
+    hint: t("settings.appearance.scrollbackLinesHint", { min: MIN_SCROLLBACK_LINES, max: MAX_SCROLLBACK_LINES }),
+    description: t("settings.appearance.scrollbackLinesDesc"),
+    onInput: () => {},
+    onSave: (v) => ctx.saveSetting("scrollback_lines", v),
+  }, ctx.addContentListener);
+
+  // Show Scrollbar (select)
+  renderSelect(panel, {
+    key: "show-scrollbar",
+    label: t("settings.appearance.showScrollbar"),
+    value: settings.show_scrollbar,
+    options: [
+      { value: "auto", label: t("settings.appearance.scrollbarAuto") },
+      { value: "always", label: t("settings.appearance.scrollbarAlways") },
+      { value: "never", label: t("settings.appearance.scrollbarNever") },
+    ],
+    description: t("settings.appearance.showScrollbarDesc"),
+    onSave: (v) => {
+      applyScrollbar(v as ScrollbarMode);
+      ctx.saveSetting("show_scrollbar", v as ScrollbarMode);
+    },
+  }, ctx.addContentListener);
+}
+
+// ============================================================
+// Terminal Section
+// ============================================================
+
+export function renderTerminalSection(panel: HTMLElement, ctx: SectionContext): void {
+  const settings = ctx.currentSettings;
+
+  const header = document.createElement("h2");
+  header.className = "settings-section-header";
+  header.textContent = t("settings.terminal.title");
+  panel.appendChild(header);
+
+  // -- Cursor subsection --
+  renderSubsectionHeader(panel, t("settings.terminal.cursor"));
+
+  // Cursor Style (select)
+  renderSelect(panel, {
+    key: "cursor-style",
+    label: t("settings.terminal.cursorStyle"),
+    value: settings.cursor_style,
+    options: [
+      { value: "block", label: t("settings.terminal.cursorBlock") },
+      { value: "underline", label: t("settings.terminal.cursorUnderline") },
+      { value: "bar", label: t("settings.terminal.cursorBar") },
+    ],
+    description: t("settings.terminal.cursorStyleDesc"),
+    onSave: (v) => {
+      applyCursorStyle(v as CursorStyle);
+      ctx.saveSetting("cursor_style", v as CursorStyle);
+    },
+  }, ctx.addContentListener);
+
+  // Cursor Blink (toggle)
+  renderToggle(panel, {
+    key: "cursor-blink",
+    label: t("settings.terminal.cursorBlink"),
+    value: settings.cursor_blink,
+    description: t("settings.terminal.cursorBlinkDesc"),
+    onSave: (v) => {
+      applyCursorBlink(v);
+      ctx.saveSetting("cursor_blink", v);
+    },
+  }, ctx.addContentListener);
+
+  // -- Shell subsection --
+  renderSubsectionHeader(panel, t("settings.terminal.shell"));
+
+  // Shell Path (text input)
+  renderTextInput(panel, {
+    key: "shell-path",
+    label: t("settings.terminal.shellPath"),
+    value: settings.shell_path,
+    placeholder: t("settings.terminal.shellPathPlaceholder"),
+    hint: t("settings.terminal.shellPathHint"),
+    description: t("settings.terminal.shellPathDesc"),
+    onSave: (v) => ctx.saveSetting("shell_path", v),
+  }, ctx.addContentListener);
+
+  // Shell Arguments (text input, comma-separated)
+  renderTextInput(panel, {
+    key: "shell-args",
+    label: t("settings.terminal.shellArgs"),
+    value: settings.shell_args.join(", "),
+    placeholder: t("settings.terminal.shellArgsPlaceholder"),
+    hint: t("settings.terminal.shellArgsHint"),
+    description: t("settings.terminal.shellArgsDesc"),
+    onSave: (v) => {
+      const args = v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      ctx.saveSetting("shell_args", args);
+    },
+  }, ctx.addContentListener);
+
+  // -- Behavior subsection --
+  renderSubsectionHeader(panel, t("settings.terminal.behavior"));
+
+  // Scroll Speed (slider)
+  renderSlider(panel, {
+    key: "scroll-speed",
+    label: t("settings.terminal.scrollSpeed"),
+    value: settings.scroll_speed,
+    min: MIN_SCROLL_SPEED,
+    max: MAX_SCROLL_SPEED,
+    step: 1,
+    hint: t("settings.terminal.scrollSpeedHint", { min: MIN_SCROLL_SPEED, max: MAX_SCROLL_SPEED }),
+    description: t("settings.terminal.scrollSpeedDesc"),
+    onInput: () => {},
+    onSave: (v) => ctx.saveSetting("scroll_speed", v),
+  }, ctx.addContentListener);
+
+  // Bell Action (select)
+  renderSelect(panel, {
+    key: "bell-action",
+    label: t("settings.terminal.bellAction"),
+    value: settings.bell_action,
+    options: [
+      { value: "visual", label: t("settings.terminal.bellVisual") },
+      { value: "sound", label: t("settings.terminal.bellSound") },
+      { value: "none", label: t("settings.terminal.bellNone") },
+    ],
+    description: t("settings.terminal.bellActionDesc"),
+    onSave: (v) => ctx.saveSetting("bell_action", v as BellAction),
+  }, ctx.addContentListener);
+
+  // URL Detection (toggle)
+  renderToggle(panel, {
+    key: "url-detection",
+    label: t("settings.terminal.urlDetection"),
+    value: settings.url_detection,
+    description: t("settings.terminal.urlDetectionDesc"),
+    onSave: (v) => ctx.saveSetting("url_detection", v),
+  }, ctx.addContentListener);
+
+  // Copy on Select (toggle)
+  renderToggle(panel, {
+    key: "copy-on-select",
+    label: t("settings.terminal.copyOnSelect"),
+    value: settings.copy_on_select,
+    description: t("settings.terminal.copyOnSelectDesc"),
+    onSave: (v) => ctx.saveSetting("copy_on_select", v),
+  }, ctx.addContentListener);
+}
+
+// ============================================================
+// Keybinds Section
+// ============================================================
+
+export function renderKeybindsSection(panel: HTMLElement, ctx: SectionContext): void {
+  const kb = ctx.currentSettings.keybinds;
+
+  const header = document.createElement("h2");
+  header.className = "settings-section-header";
+  header.textContent = t("settings.keybinds.title");
+  panel.appendChild(header);
+
+  // -- Basic subsection --
+  renderSubsectionHeader(panel, t("settings.keybinds.basic"));
+  renderKeybindInput(panel, "copy", t("settings.keybinds.copy"), kb.copy, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "paste", t("settings.keybinds.paste"), kb.paste, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "select_all", t("settings.keybinds.selectAll"), kb.select_all, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "search", t("settings.keybinds.search"), kb.search, ctx.addContentListener, ctx.keybindCtx);
+
+  // -- Tab Management subsection --
+  renderSubsectionHeader(panel, t("settings.keybinds.tabManagement"));
+  renderKeybindInput(panel, "new_tab", t("settings.keybinds.newTab"), kb.new_tab, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "close_tab", t("settings.keybinds.closeTab"), kb.close_tab, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "next_tab", t("settings.keybinds.nextTab"), kb.next_tab, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "prev_tab", t("settings.keybinds.prevTab"), kb.prev_tab, ctx.addContentListener, ctx.keybindCtx);
+
+  // -- Display subsection --
+  renderSubsectionHeader(panel, t("settings.keybinds.display"));
+  renderKeybindInput(panel, "zoom_in", t("settings.keybinds.zoomIn"), kb.zoom_in, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "zoom_out", t("settings.keybinds.zoomOut"), kb.zoom_out, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "zoom_reset", t("settings.keybinds.zoomReset"), kb.zoom_reset, ctx.addContentListener, ctx.keybindCtx);
+  renderKeybindInput(panel, "toggle_fullscreen", t("settings.keybinds.toggleFullscreen"), kb.toggle_fullscreen, ctx.addContentListener, ctx.keybindCtx);
+
+  // -- Settings subsection --
+  renderSubsectionHeader(panel, t("settings.keybinds.settingsSection"));
+  renderKeybindInput(panel, "open_settings", t("settings.keybinds.openSettings"), kb.open_settings, ctx.addContentListener, ctx.keybindCtx);
+}
+
+// ============================================================
+// Helper
+// ============================================================
+
+function applyCurrentFontFamily(settings: AppSettings): void {
+  applyFontFamily(
+    settings.font_family_primary,
+    settings.font_family_emoji,
+    settings.font_family_secondary,
+  );
+}
