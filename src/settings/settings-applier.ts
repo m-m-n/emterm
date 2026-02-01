@@ -22,6 +22,7 @@ export interface RendererSettings {
   cursorStyle: CursorStyle;
   cursorBlink: boolean;
   opacity: number;
+  colorScheme: string;
 }
 
 /** Listener for system theme media query */
@@ -171,18 +172,21 @@ const TERMINAL_COLOR_VARS = [
 export function applyTerminalColorScheme(scheme: string): void {
   const root = document.documentElement;
 
-  if (!scheme || scheme === "default") {
+  if (!scheme || scheme === "default" || scheme === "emterm") {
     // Remove all custom terminal color overrides
     for (const varName of TERMINAL_COLOR_VARS) {
       root.style.removeProperty(varName);
     }
     root.removeAttribute("data-terminal-color-scheme");
+    // Notify renderers with "emterm" for default
+    notifyRenderers("colorScheme", "emterm");
     return;
   }
 
-  // Future: look up preset by name and set CSS variables
-  // For now, just store the scheme name as a data attribute for downstream consumers
+  // Store the scheme name as a data attribute
   root.setAttribute("data-terminal-color-scheme", scheme);
+  // Notify renderers with the scheme name
+  notifyRenderers("colorScheme", scheme);
 }
 
 /**

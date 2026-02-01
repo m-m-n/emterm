@@ -4,8 +4,10 @@
 import { describe, expect, it } from "bun:test";
 import {
 	brightColorToRgb,
+	COLOR_SCHEME_PRESETS,
 	DEFAULT_BACKGROUND,
 	DEFAULT_FOREGROUND,
+	getColorSchemePreset,
 	indexToCSS,
 	indexToRgb,
 	PALETTE_16,
@@ -225,5 +227,54 @@ describe("DEFAULT_FOREGROUND", () => {
 describe("DEFAULT_BACKGROUND", () => {
 	it("should be black", () => {
 		expect(DEFAULT_BACKGROUND).toEqual({ r: 0, g: 0, b: 0 });
+	});
+});
+
+describe("COLOR_SCHEME_PRESETS", () => {
+	it("should have 6 presets", () => {
+		expect(COLOR_SCHEME_PRESETS.length).toBe(6);
+	});
+
+	it("should include all required presets", () => {
+		const names = COLOR_SCHEME_PRESETS.map((p) => p.name);
+		expect(names).toContain("emterm");
+		expect(names).toContain("solarized-dark");
+		expect(names).toContain("solarized-light");
+		expect(names).toContain("monokai");
+		expect(names).toContain("dracula");
+		expect(names).toContain("nord");
+	});
+
+	it("should have 16 ANSI colors in each preset", () => {
+		for (const preset of COLOR_SCHEME_PRESETS) {
+			expect(preset.ansiColors.length).toBe(16);
+		}
+	});
+
+	it("emterm preset should use default foreground", () => {
+		const emterm = COLOR_SCHEME_PRESETS.find((p) => p.name === "emterm");
+		expect(emterm?.foreground).toEqual(DEFAULT_FOREGROUND);
+	});
+});
+
+describe("getColorSchemePreset", () => {
+	it("should return preset for valid name", () => {
+		const preset = getColorSchemePreset("emterm");
+		expect(preset).toBeDefined();
+		expect(preset?.name).toBe("emterm");
+	});
+
+	it("should return undefined for unknown name", () => {
+		const preset = getColorSchemePreset("unknown-scheme");
+		expect(preset).toBeUndefined();
+	});
+
+	it("should return all presets by name", () => {
+		expect(getColorSchemePreset("emterm")).toBeDefined();
+		expect(getColorSchemePreset("solarized-dark")).toBeDefined();
+		expect(getColorSchemePreset("solarized-light")).toBeDefined();
+		expect(getColorSchemePreset("monokai")).toBeDefined();
+		expect(getColorSchemePreset("dracula")).toBeDefined();
+		expect(getColorSchemePreset("nord")).toBeDefined();
 	});
 });
