@@ -285,6 +285,14 @@ describe("applyOpacity", () => {
     applyOpacity(1.0);
     expect(mockStyle.properties["--terminal-opacity"]).toBe("1");
   });
+
+  test("should notify renderers with opacity", () => {
+    applyOpacity(0.5);
+    expect(mockRendererCalls).toContainEqual({
+      setting: "opacity",
+      value: 0.5,
+    });
+  });
 });
 
 describe("applySettings (full)", () => {

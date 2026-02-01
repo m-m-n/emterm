@@ -253,6 +253,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Line height multiplier. */
 	private lineHeightMultiplier: number = 1.2;
 
+	/** Background opacity (0.3-1.0). Text remains fully opaque. */
+	private opacity: number = 1.0;
+
 	/** Number of columns. */
 	private cols: number = 80;
 
@@ -523,9 +526,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 	private renderLine(rowIndex: number, line: Line): void {
 		const y = rowIndex * this.charHeight;
 
-		// Clear the row with default background
+		// Clear the row with default background (apply opacity)
+		const savedAlpha = this.ctx.globalAlpha;
+		this.ctx.globalAlpha = this.opacity;
 		this.ctx.fillStyle = rgbToCSS(DEFAULT_BACKGROUND);
 		this.ctx.fillRect(0, y, this.cols * this.charWidth, this.charHeight);
+		this.ctx.globalAlpha = savedAlpha;
 
 		// Group cells into spans
 		const spans = groupCellsIntoSpans(line);
@@ -551,10 +557,13 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const fg = getEffectiveForeground(span.attrs);
 		const bg = getEffectiveBackground(span.attrs);
 
-		// Draw background if not default
+		// Draw background if not default (apply opacity)
 		if (bg !== null) {
+			const savedAlpha = this.ctx.globalAlpha;
+			this.ctx.globalAlpha = this.opacity;
 			this.ctx.fillStyle = rgbToCSS(bg);
 			this.ctx.fillRect(x, y, width, this.charHeight);
+			this.ctx.globalAlpha = savedAlpha;
 		}
 
 		// Get text attribute styles
@@ -710,9 +719,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const y = row * this.charHeight;
 		const x = col * this.charWidth;
 
-		// Clear just the cursor cell with background
+		// Clear just the cursor cell with background (apply opacity)
+		const savedAlpha = this.ctx.globalAlpha;
+		this.ctx.globalAlpha = this.opacity;
 		this.ctx.fillStyle = rgbToCSS(DEFAULT_BACKGROUND);
 		this.ctx.fillRect(x, y, this.charWidth, this.charHeight);
+		this.ctx.globalAlpha = savedAlpha;
 
 		// Re-draw the character at cursor position if any
 		const cell = line.getCell(col);
@@ -754,7 +766,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.pendingState = state;
 		const buffer = state.getActiveBuffer();
 
-		// Clear entire canvas
+		// Clear entire canvas (apply opacity to background)
+		const savedAlpha = this.ctx.globalAlpha;
+		this.ctx.globalAlpha = this.opacity;
 		this.ctx.fillStyle = rgbToCSS(DEFAULT_BACKGROUND);
 		this.ctx.fillRect(
 			0,
@@ -762,6 +776,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.cols * this.charWidth,
 			this.rows * this.charHeight,
 		);
+		this.ctx.globalAlpha = savedAlpha;
 
 		// Render all rows
 		for (let row = 0; row < state.rows; row++) {
@@ -853,6 +868,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 			case "lineHeight":
 				this.setLineHeight(value as number);
 				break;
+			case "opacity":
+				this.setOpacity(value as number);
+				break;
 		}
 	}
 
@@ -875,6 +893,18 @@ export class CanvasRenderer implements ITerminalRenderer {
 	setLineHeight(lineHeight: number): void {
 		this.lineHeightMultiplier = lineHeight;
 		this.measureCharacterSize();
+		if (this.pendingState) {
+			this.forceRender(this.pendingState);
+		}
+	}
+
+	/**
+	 * Set the background opacity.
+	 * Text remains fully opaque; only background fill is affected.
+	 * @param opacity - Opacity value (0.3-1.0)
+	 */
+	setOpacity(opacity: number): void {
+		this.opacity = opacity;
 		if (this.pendingState) {
 			this.forceRender(this.pendingState);
 		}
