@@ -22,6 +22,7 @@ import type {
 } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
+import { findUrlAtPosition } from "../terminal/url-detector";
 import type { DecodedImage, ImageEvent } from "../image/types";
 
 /**
@@ -181,6 +182,9 @@ export class TerminalApp {
 
     // Add mouse wheel handler for scrollback
     terminalContainer.addEventListener('wheel', (e) => this.handleWheel(e));
+
+    // Add Ctrl+click handler for URL opening
+    terminalContainer.addEventListener('click', (e) => this.handleUrlClick(e));
 
     // Initialize ImageViewer with overlay-root container
     this.imageViewer = new ImageViewer(this.overlayRoot!);
@@ -515,6 +519,45 @@ export class TerminalApp {
       }
       case "none":
         break;
+    }
+  }
+
+  /**
+   * Handle Ctrl+click to open URLs in the default browser
+   */
+  private handleUrlClick(e: MouseEvent): void {
+    if (!e.ctrlKey && !e.metaKey) return;
+    if (!this.state) return;
+
+    const cachedSettings = SettingsService.getCached();
+    if (cachedSettings && !cachedSettings.url_detection) return;
+
+    // Calculate grid position from click coordinates
+    const rect = this.terminalRoot?.getBoundingClientRect();
+    if (!rect) return;
+
+    const col = Math.floor((e.clientX - rect.left) / this.charSize.width);
+    const row = Math.floor((e.clientY - rect.top) / this.charSize.height);
+
+    // Get the text content of the clicked row
+    const buffer = this.state.getActiveBuffer();
+    if (row < 0 || row >= this.state.rows) return;
+
+    const line = buffer.getLine(row);
+    if (!line) return;
+
+    // Build text string from line cells
+    let text = "";
+    for (let c = 0; c < line.length; c++) {
+      text += line.getCell(c).char || " ";
+    }
+
+    const url = findUrlAtPosition(text, col);
+    if (url) {
+      e.preventDefault();
+      import("@tauri-apps/plugin-shell").then(({ open }) => {
+        open(url).catch(console.error);
+      }).catch(console.error);
     }
   }
 
