@@ -21,6 +21,7 @@ export interface RendererSettings {
   lineHeight: number;
   cursorStyle: CursorStyle;
   cursorBlink: boolean;
+  opacity: number;
 }
 
 /** Listener for system theme media query */
@@ -134,6 +135,8 @@ export function applyScrollbar(mode: ScrollbarMode): void {
 export function applyOpacity(opacity: number): void {
   const root = document.documentElement;
   root.style.setProperty("--terminal-opacity", String(opacity));
+
+  notifyRenderers("opacity", opacity);
 }
 
 /** Terminal color scheme CSS variable names */
