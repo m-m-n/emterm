@@ -12,6 +12,7 @@ import {
 	calculateScrollPosition,
 } from "./canvas-renderer.ts";
 import { TerminalState } from "./state.ts";
+import { C0 } from "../types/terminal.ts";
 
 describe("CanvasRenderer", () => {
 	describe("groupCellsIntoSpans", () => {
@@ -111,6 +112,47 @@ describe("CanvasRenderer", () => {
 
 			const lines = getVisibleLines(state, 0);
 
+			expect(lines.length).toBe(3);
+		});
+
+		test("returns lines from scrollback when scrollOffset > 0", () => {
+			const state = new TerminalState(10, 3);
+
+			// Fill 5 lines to create scrollback
+			for (let i = 0; i < 5; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: String.fromCharCode(65 + i) });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			// Should have some scrollback
+			const scrollbackLength = state.getScrollbackLength();
+			expect(scrollbackLength).toBeGreaterThan(0);
+
+			// When scrollOffset = 1, should show lines from scrollback + screen
+			const lines = getVisibleLines(state, 1);
+			expect(lines.length).toBe(3);
+		});
+
+		test("handles scrollOffset at max scrollback", () => {
+			const state = new TerminalState(10, 3);
+
+			// Fill lines to create scrollback
+			for (let i = 0; i < 5; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: String.fromCharCode(65 + i) });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			const scrollbackLength = state.getScrollbackLength();
+			expect(scrollbackLength).toBeGreaterThan(0);
+
+			// scrollOffset at max should show oldest scrollback lines
+			const lines = getVisibleLines(state, scrollbackLength);
 			expect(lines.length).toBe(3);
 		});
 	});

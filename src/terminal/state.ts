@@ -9,6 +9,7 @@ import { MarkdownSessionManager } from "../markdown/session.ts";
 import type { CharSet, TerminalAction } from "../types/terminal.ts";
 import { ScreenBuffer } from "./buffer.ts";
 import { CursorState } from "./cursor.ts";
+import { Line } from "./grid.ts";
 import { createDefaultModes, type TerminalModes } from "./modes.ts";
 
 // Import handlers from the handlers module
@@ -87,14 +88,29 @@ export class TerminalState implements TerminalStateAccessor {
   /** Markdown session manager. */
   private markdownManager: MarkdownSessionManager;
 
+  /** Scrollback buffer for primary buffer only. */
+  private scrollbackBuffer: Line[] = [];
+
+  /** Maximum number of lines to keep in scrollback. */
+  private maxScrollbackLines: number = 10000;
+
   /**
    * Create a new terminal state.
    *
    * @param cols - Number of columns
    * @param rows - Number of rows
+   * @param scrollbackLines - Maximum number of lines to keep in scrollback (default: 10000)
    */
-  constructor(cols: number, rows: number) {
-    this.primaryBuffer = new ScreenBuffer(cols, rows);
+  constructor(cols: number, rows: number, scrollbackLines: number = 10000) {
+    this.maxScrollbackLines = scrollbackLines;
+
+    // Create primary buffer with scrollback callback
+    this.primaryBuffer = new ScreenBuffer(
+      cols,
+      rows,
+      (lines) => this.addToScrollback(lines)
+    );
+
     this.primaryCursor = new CursorState(cols, rows);
     this.cursor = this.primaryCursor;
     this.modes = createDefaultModes();
@@ -223,6 +239,51 @@ export class TerminalState implements TerminalStateAccessor {
     return this.useAlternate && this.alternateBuffer
       ? this.alternateBuffer
       : this.primaryBuffer;
+  }
+
+  /**
+   * Get scrollback buffer.
+   *
+   * Only available for primary buffer (not alternate screen).
+   *
+   * @returns Array of lines in scrollback buffer
+   */
+  getScrollbackBuffer(): Line[] {
+    return this.scrollbackBuffer;
+  }
+
+  /**
+   * Get number of lines in scrollback buffer.
+   *
+   * @returns Number of lines currently in scrollback
+   */
+  getScrollbackLength(): number {
+    return this.scrollbackBuffer.length;
+  }
+
+  /**
+   * Add lines to scrollback buffer (called when lines scroll off the top).
+   *
+   * Only captures lines from primary buffer, not alternate screen.
+   * Enforces maximum scrollback size.
+   *
+   * @param lines - Lines to add to scrollback
+   */
+  private addToScrollback(lines: Line[]): void {
+    // Only capture scrollback for primary buffer
+    if (this.useAlternate) {
+      return;
+    }
+
+    // Clone lines before storing (to avoid mutations)
+    const clonedLines = lines.map(line => line.clone());
+    this.scrollbackBuffer.push(...clonedLines);
+
+    // Enforce maximum scrollback size
+    if (this.scrollbackBuffer.length > this.maxScrollbackLines) {
+      const excess = this.scrollbackBuffer.length - this.maxScrollbackLines;
+      this.scrollbackBuffer.splice(0, excess);
+    }
   }
 
   /**
@@ -383,8 +444,12 @@ export class TerminalState implements TerminalStateAccessor {
     const cols = this.cols;
     const rows = this.rows;
 
-    // Reset buffers
-    this.primaryBuffer = new ScreenBuffer(cols, rows);
+    // Reset buffers (recreate primary buffer with scrollback callback)
+    this.primaryBuffer = new ScreenBuffer(
+      cols,
+      rows,
+      (lines) => this.addToScrollback(lines)
+    );
     this.alternateBuffer = null;
     this.useAlternate = false;
 
@@ -414,6 +479,9 @@ export class TerminalState implements TerminalStateAccessor {
     // Reset markdown state
     this.markdownManager.dispose();
     this.markdownManager = new MarkdownSessionManager();
+
+    // Clear scrollback buffer on reset
+    this.scrollbackBuffer = [];
   }
 
   /**

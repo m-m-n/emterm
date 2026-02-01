@@ -116,27 +116,39 @@ export function groupCellsIntoSpans(line: Line): TextSpan[] {
 /**
  * Get visible lines based on scroll offset.
  *
- * Note: Current implementation doesn't use scrollback buffer.
- * When scrollback is implemented, this will return lines from the scrollback.
- *
  * @param state - Terminal state
- * @param _scrollOffset - Number of lines scrolled back (0 = current view). Currently unused.
+ * @param scrollOffset - Number of lines scrolled back (0 = current view)
  * @returns Array of lines to render
  */
-export function getVisibleLines(state: TerminalState, _scrollOffset: number): Line[] {
+export function getVisibleLines(state: TerminalState, scrollOffset: number): Line[] {
 	const buffer = state.getActiveBuffer();
 	const visibleRows = state.rows;
 
-	// For now, just return current screen buffer lines
-	// Scrollback buffer support will be added later
-	// When implemented, _scrollOffset will be used to calculate which lines to return
-	const linesToRender: Line[] = [];
-
-	for (let screenRow = 0; screenRow < visibleRows; screenRow++) {
-		linesToRender.push(buffer.getLine(screenRow));
+	// If not scrolled (at bottom), return current screen buffer
+	if (scrollOffset === 0) {
+		const linesToRender: Line[] = [];
+		for (let screenRow = 0; screenRow < visibleRows; screenRow++) {
+			linesToRender.push(buffer.getLine(screenRow));
+		}
+		return linesToRender;
 	}
 
-	return linesToRender;
+	// When scrolled back, combine scrollback + screen buffer
+	const scrollbackBuffer = state.getScrollbackBuffer();
+	const scrollbackLength = scrollbackBuffer.length;
+
+	// Create combined buffer (scrollback + current screen)
+	const combinedBuffer: Line[] = [...scrollbackBuffer];
+	for (let screenRow = 0; screenRow < visibleRows; screenRow++) {
+		combinedBuffer.push(buffer.getLine(screenRow));
+	}
+
+	// Calculate which lines to render based on scroll offset
+	const startIndex = scrollbackLength - scrollOffset;
+	const endIndex = startIndex + visibleRows;
+
+	// Return the appropriate slice
+	return combinedBuffer.slice(startIndex, endIndex);
 }
 
 /**
@@ -332,6 +344,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Current 16-color palette (can be changed by color scheme). */
 	private currentPalette16: readonly Rgb[] = PALETTE_16;
 
+	/** Current scroll offset (number of lines scrolled back from bottom). */
+	private scrollOffset: number = 0;
+
 	/**
 	 * Create a new canvas renderer.
 	 *
@@ -480,6 +495,18 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.renderTimer.start();
 
 		const state = this.pendingState;
+
+		// When scrolled back, always do a full render
+		if (this.scrollOffset > 0) {
+			this.forceRender(state);
+			const duration = this.renderTimer.end();
+			const monitor = getPerformanceMonitor();
+			if (monitor.isEnabled()) {
+				monitor.recordRender(duration);
+			}
+			return;
+		}
+
 		const buffer = state.getActiveBuffer();
 		const dirtyRows = state.getDirtyRows();
 
@@ -784,7 +811,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	forceRender(state: TerminalState): void {
 		this.pendingState = state;
-		const buffer = state.getActiveBuffer();
+
+		// Get visible lines based on scroll offset
+		const visibleLines = getVisibleLines(state, this.scrollOffset);
 
 		// Clear entire canvas (apply opacity to background)
 		const savedAlpha = this.ctx.globalAlpha;
@@ -798,27 +827,31 @@ export class CanvasRenderer implements ITerminalRenderer {
 		);
 		this.ctx.globalAlpha = savedAlpha;
 
-		// Render all rows
-		for (let row = 0; row < state.rows; row++) {
-			const line = buffer.getLine(row);
-			this.renderLine(row, line);
+		// Render all visible rows
+		for (let row = 0; row < visibleLines.length; row++) {
+			const line = visibleLines[row];
+			if (line) {
+				this.renderLine(row, line);
+			}
 		}
 
 		// Clear dirty flags
 		state.clearDirty();
 
-		// Render cursor
-		this.renderCursor(
-			state.cursorCol,
-			state.cursorRow,
-			state.cursorVisible,
-			state.cursorStyle,
-			state.cursorBlink,
-		);
+		// Only render cursor when at bottom (scrollOffset = 0)
+		if (this.scrollOffset === 0) {
+			this.renderCursor(
+				state.cursorCol,
+				state.cursorRow,
+				state.cursorVisible,
+				state.cursorStyle,
+				state.cursorBlink,
+			);
 
-		// Save current cursor position for next render
-		this.prevCursorCol = state.cursorCol;
-		this.prevCursorRow = state.cursorRow;
+			// Save current cursor position for next render
+			this.prevCursorCol = state.cursorCol;
+			this.prevCursorRow = state.cursorRow;
+		}
 	}
 
 	/**
@@ -1104,6 +1137,33 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	clearSelectionHighlight(): void {
 		this.clearSelectionOverlays();
+	}
+
+	/**
+	 * Scroll up in the scrollback buffer (toward past).
+	 * @param lines - Number of lines to scroll up
+	 */
+	scrollUp(lines: number): void {
+		if (!this.pendingState) return;
+
+		const maxOffset = this.pendingState.getScrollbackLength();
+		this.scrollOffset = Math.min(this.scrollOffset + lines, maxOffset);
+	}
+
+	/**
+	 * Scroll down in the scrollback buffer (toward present).
+	 * @param lines - Number of lines to scroll down
+	 */
+	scrollDown(lines: number): void {
+		this.scrollOffset = Math.max(this.scrollOffset - lines, 0);
+	}
+
+	/**
+	 * Get current scroll offset.
+	 * @returns Number of lines scrolled back (0 = at bottom/present)
+	 */
+	getScrollOffset(): number {
+		return this.scrollOffset;
 	}
 
 	/**

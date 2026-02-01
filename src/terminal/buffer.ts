@@ -36,13 +36,17 @@ export class ScreenBuffer {
 	/** Debug: unique buffer ID */
 	readonly bufferId: number;
 
+	/** Callback for when lines scroll off the top (for scrollback). */
+	private onLinesRemovedCallback?: (lines: Line[]) => void;
+
 	/**
 	 * Create a new screen buffer.
 	 *
 	 * @param cols - Number of columns
 	 * @param rows - Number of rows
+	 * @param onLinesRemoved - Optional callback for lines scrolled off the top
 	 */
-	constructor(cols: number, rows: number) {
+	constructor(cols: number, rows: number, onLinesRemoved?: (lines: Line[]) => void) {
 		this.bufferId = ++bufferIdCounter;
 		this._cols = cols;
 		this._rows = rows;
@@ -50,6 +54,7 @@ export class ScreenBuffer {
 		for (let i = 0; i < rows; i++) {
 			this.lines.push(new Line(cols));
 		}
+		this.onLinesRemovedCallback = onLinesRemoved;
 	}
 
 	/** Get number of columns. */
@@ -156,6 +161,12 @@ export class ScreenBuffer {
 		const { top, bottom } = this.getEffectiveScrollRegion();
 		const regionHeight = bottom - top + 1;
 		const actualCount = Math.min(count, regionHeight);
+
+		// Capture lines being removed from top if callback provided and scrolling at top of screen
+		if (this.onLinesRemovedCallback && top === 0) {
+			const removedLines = this.lines.slice(top, top + actualCount);
+			this.onLinesRemovedCallback(removedLines);
+		}
 
 		// Remove lines from top of region
 		this.lines.splice(top, actualCount);

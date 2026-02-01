@@ -93,6 +93,24 @@ export interface ITerminalRenderer {
 	 * Dispose of the renderer and clean up resources.
 	 */
 	dispose(): void;
+
+	/**
+	 * Scroll up in the scrollback buffer (toward past).
+	 * @param lines - Number of lines to scroll up
+	 */
+	scrollUp(lines: number): void;
+
+	/**
+	 * Scroll down in the scrollback buffer (toward present).
+	 * @param lines - Number of lines to scroll down
+	 */
+	scrollDown(lines: number): void;
+
+	/**
+	 * Get current scroll offset.
+	 * @returns Number of lines scrolled back (0 = at bottom/present)
+	 */
+	getScrollOffset(): number;
 }
 
 /**
