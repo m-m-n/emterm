@@ -34,7 +34,7 @@ let systemThemeListener: ((e: MediaQueryListEvent) => void) | null = null;
  */
 export function applySettings(settings: AppSettings): void {
   applyFontSize(settings.font_size);
-  applyFontFamily(settings.font_family);
+  applyFontFamily(settings.font_family_primary, settings.font_family_emoji, settings.font_family_secondary);
   applyLineHeight(settings.line_height);
   applyUiTheme(settings.ui_theme);
   applyTerminalColorScheme(settings.terminal_color_scheme);
@@ -58,18 +58,33 @@ export function applyFontSize(fontSize: number): void {
 }
 
 /**
- * Apply font family setting.
- * Empty string means system monospace (browser fallback).
+ * Build a CSS font-family fallback chain from three font fields.
+ * Order: primary, emoji, secondary, monospace.
+ * Empty fields are omitted from the chain.
  */
-export function applyFontFamily(fontFamily: string): void {
+export function buildFontFamilyChain(primary: string, emoji: string, secondary: string): string {
+  const parts: string[] = [];
+  if (primary) parts.push(primary);
+  if (emoji) parts.push(emoji);
+  if (secondary) parts.push(secondary);
+  parts.push("monospace");
+  return parts.join(", ");
+}
+
+/**
+ * Apply font family setting from three separate fields.
+ * Builds a CSS font-family chain and applies it.
+ */
+export function applyFontFamily(primary: string, emoji: string, secondary: string): void {
+  const chain = buildFontFamilyChain(primary, emoji, secondary);
   const root = document.documentElement;
-  if (fontFamily) {
-    root.style.setProperty("--terminal-font-family", fontFamily);
+  if (chain !== "monospace") {
+    root.style.setProperty("--terminal-font-family", chain);
   } else {
     root.style.removeProperty("--terminal-font-family");
   }
 
-  notifyRenderers("fontFamily", fontFamily);
+  notifyRenderers("fontFamily", chain);
 }
 
 /**
