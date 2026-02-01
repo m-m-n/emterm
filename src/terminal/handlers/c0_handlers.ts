@@ -50,12 +50,12 @@ export function handleExecuteDispatch(
 /**
  * Handle BEL (0x07).
  *
- * Bell - could emit event, for now do nothing.
+ * Bell - invokes the onBell callback if registered.
  *
- * @param _state - Terminal state accessor (unused)
+ * @param state - Terminal state accessor
  */
-export function handleBel(_state: TerminalStateAccessor): void {
-  // Bell - could emit event, for now do nothing
+export function handleBel(state: TerminalStateAccessor): void {
+  state.onBell?.();
 }
 
 /**

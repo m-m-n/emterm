@@ -145,6 +145,16 @@ body {
   position: relative;
 }
 
+/* Visual bell flash animation */
+.terminal-bell-flash {
+  animation: bell-flash 150ms ease-out;
+}
+
+@keyframes bell-flash {
+  0% { filter: brightness(2); }
+  100% { filter: brightness(1); }
+}
+
 .overlay-root {
   position: absolute;
   top: 0;
