@@ -90,6 +90,7 @@ export class PtyClient {
 
 		const result = await invoke<SpawnResult>("pty_spawn", {
 			shell: options.shell,
+			args: options.args,
 			cols: options.cols ?? 80,
 			rows: options.rows ?? 24,
 		});

@@ -182,7 +182,7 @@ mod tests {
     async fn test_shutdown_stage1_success() {
         // Create a manager and session
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, 80, 24).await.unwrap();
+        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
 
         // Normal shell should exit on "exit" command (Stage 1)
         let result = shutdown(&manager, &session_id).await;
@@ -206,7 +206,7 @@ mod tests {
     async fn test_shutdown_stage3_force_kill() {
         // Create a manager and session with a long-running command
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, 80, 24).await.unwrap();
+        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
 
         // Send a command that won't exit on "exit" or EOF
         if let Some(session) = manager.get_session(&session_id).await {
@@ -231,7 +231,7 @@ mod tests {
     #[tokio::test]
     async fn test_wait_for_exit_timeout() {
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, 80, 24).await.unwrap();
+        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
 
         let session = manager.get_session(&session_id).await.unwrap();
 
@@ -285,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_with_custom_config() {
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, 80, 24).await.unwrap();
+        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
 
         // Use custom short timeouts
         let config = ShutdownConfig {
