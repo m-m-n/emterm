@@ -288,13 +288,18 @@ export class SettingsPanel {
     this.renderSelect(panel, {
       key: "terminal-color-scheme",
       label: t("settings.appearance.colorScheme"),
-      value: this.currentSettings.terminal_color_scheme || "default",
+      value: this.currentSettings.terminal_color_scheme || "emterm",
       options: [
-        { value: "default", label: t("settings.appearance.colorSchemeDefault") },
+        { value: "emterm", label: "eMterm" },
+        { value: "solarized-dark", label: "Solarized Dark" },
+        { value: "solarized-light", label: "Solarized Light" },
+        { value: "monokai", label: "Monokai" },
+        { value: "dracula", label: "Dracula" },
+        { value: "nord", label: "Nord" },
       ],
       description: t("settings.appearance.colorSchemeDesc"),
       onSave: (v) => {
-        const scheme = v === "default" ? "" : v;
+        const scheme = v === "emterm" ? "" : v;
         applyTerminalColorScheme(scheme);
         this.saveSetting("terminal_color_scheme", scheme);
       },

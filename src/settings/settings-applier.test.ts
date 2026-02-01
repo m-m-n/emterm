@@ -389,12 +389,58 @@ describe("applyTerminalColorScheme", () => {
     expect(mockStyle.properties["--terminal-cursor-color"]).toBeUndefined();
   });
 
+  test("should remove custom CSS variables for 'emterm' scheme", () => {
+    mockStyle.properties["--terminal-foreground"] = "#fff";
+    mockStyle.properties["--terminal-background"] = "#000";
+
+    applyTerminalColorScheme("emterm");
+
+    expect(mockStyle.properties["--terminal-foreground"]).toBeUndefined();
+    expect(mockStyle.properties["--terminal-background"]).toBeUndefined();
+  });
+
+  test("should notify renderers with 'emterm' for default scheme", () => {
+    applyTerminalColorScheme("default");
+
+    expect(mockRendererCalls).toContainEqual({
+      setting: "colorScheme",
+      value: "emterm",
+    });
+  });
+
+  test("should notify renderers with 'emterm' for empty string", () => {
+    applyTerminalColorScheme("");
+
+    expect(mockRendererCalls).toContainEqual({
+      setting: "colorScheme",
+      value: "emterm",
+    });
+  });
+
+  test("should notify renderers with 'emterm' for emterm scheme", () => {
+    applyTerminalColorScheme("emterm");
+
+    expect(mockRendererCalls).toContainEqual({
+      setting: "colorScheme",
+      value: "emterm",
+    });
+  });
+
   test("should set data attribute for named scheme", () => {
     applyTerminalColorScheme("solarized-dark");
 
     expect(mockAttributes["data-terminal-color-scheme"]).toBe(
       "solarized-dark",
     );
+  });
+
+  test("should notify renderers with scheme name for named scheme", () => {
+    applyTerminalColorScheme("solarized-dark");
+
+    expect(mockRendererCalls).toContainEqual({
+      setting: "colorScheme",
+      value: "solarized-dark",
+    });
   });
 
   test("should remove data attribute when switching to default scheme", () => {

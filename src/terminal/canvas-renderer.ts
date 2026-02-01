@@ -11,7 +11,14 @@ import {
 	getEffectiveBackground,
 	getEffectiveForeground,
 } from "./attributes.ts";
-import { DEFAULT_BACKGROUND, DEFAULT_FOREGROUND, rgbToCSS } from "./colors.ts";
+import {
+	DEFAULT_BACKGROUND,
+	DEFAULT_FOREGROUND,
+	getColorSchemePreset,
+	PALETTE_16,
+	type Rgb,
+	rgbToCSS,
+} from "./colors.ts";
 import type { CursorStyle } from "./cursor.ts";
 import type { Line } from "./grid.ts";
 import {
@@ -313,6 +320,18 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Previous cursor row for clearing. */
 	private prevCursorRow: number = -1;
 
+	/** Current foreground color (can be changed by color scheme). */
+	private currentForeground: Rgb = DEFAULT_FOREGROUND;
+
+	/** Current background color (can be changed by color scheme). */
+	private currentBackground: Rgb = DEFAULT_BACKGROUND;
+
+	/** Current cursor color (can be changed by color scheme). */
+	private currentCursorColor: Rgb = { r: 0, g: 128, b: 0 };
+
+	/** Current 16-color palette (can be changed by color scheme). */
+	private currentPalette16: readonly Rgb[] = PALETTE_16;
+
 	/**
 	 * Create a new canvas renderer.
 	 *
@@ -526,10 +545,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 	private renderLine(rowIndex: number, line: Line): void {
 		const y = rowIndex * this.charHeight;
 
-		// Clear the row with default background (apply opacity)
+		// Clear the row with current background (apply opacity)
 		const savedAlpha = this.ctx.globalAlpha;
 		this.ctx.globalAlpha = this.opacity;
-		this.ctx.fillStyle = rgbToCSS(DEFAULT_BACKGROUND);
+		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
 		this.ctx.fillRect(0, y, this.cols * this.charWidth, this.charHeight);
 		this.ctx.globalAlpha = savedAlpha;
 
@@ -670,9 +689,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const x = col * this.charWidth;
 		const y = row * this.charHeight;
 
-		// Cursor color (green)
-		this.ctx.fillStyle = "#008000";
-		this.ctx.strokeStyle = "#008000";
+		// Use current cursor color
+		const cursorColorCSS = rgbToCSS(this.currentCursorColor);
+		this.ctx.fillStyle = cursorColorCSS;
+		this.ctx.strokeStyle = cursorColorCSS;
 
 		switch (style) {
 			case "block":
@@ -719,10 +739,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const y = row * this.charHeight;
 		const x = col * this.charWidth;
 
-		// Clear just the cursor cell with background (apply opacity)
+		// Clear just the cursor cell with current background (apply opacity)
 		const savedAlpha = this.ctx.globalAlpha;
 		this.ctx.globalAlpha = this.opacity;
-		this.ctx.fillStyle = rgbToCSS(DEFAULT_BACKGROUND);
+		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
 		this.ctx.fillRect(x, y, this.charWidth, this.charHeight);
 		this.ctx.globalAlpha = savedAlpha;
 
@@ -769,7 +789,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Clear entire canvas (apply opacity to background)
 		const savedAlpha = this.ctx.globalAlpha;
 		this.ctx.globalAlpha = this.opacity;
-		this.ctx.fillStyle = rgbToCSS(DEFAULT_BACKGROUND);
+		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
 		this.ctx.fillRect(
 			0,
 			0,
@@ -877,6 +897,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 			case "cursorBlink":
 				this.setCursorBlink(value as boolean);
 				break;
+			case "colorScheme":
+				this.setColorScheme(value as string);
+				break;
 		}
 	}
 
@@ -942,6 +965,33 @@ export class CanvasRenderer implements ITerminalRenderer {
 			if (this.pendingState) {
 				this.forceRender(this.pendingState);
 			}
+		}
+	}
+
+	/**
+	 * Set the color scheme.
+	 * @param schemeName - Color scheme name (e.g., "emterm", "solarized-dark")
+	 */
+	setColorScheme(schemeName: string): void {
+		const preset = getColorSchemePreset(schemeName);
+
+		if (!preset || schemeName === "emterm") {
+			// Reset to defaults
+			this.currentForeground = DEFAULT_FOREGROUND;
+			this.currentBackground = DEFAULT_BACKGROUND;
+			this.currentCursorColor = { r: 0, g: 128, b: 0 };
+			this.currentPalette16 = PALETTE_16;
+		} else {
+			// Apply preset colors
+			this.currentForeground = preset.foreground;
+			this.currentBackground = preset.background;
+			this.currentCursorColor = preset.cursor;
+			this.currentPalette16 = preset.ansiColors;
+		}
+
+		// Force full re-render
+		if (this.pendingState) {
+			this.forceRender(this.pendingState);
 		}
 	}
 
