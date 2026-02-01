@@ -21,8 +21,9 @@ import {
 } from "./settings-applier";
 import type {
   AppSettings, UiTheme, CursorStyle, BellAction, ScrollbarMode,
-  KeybindSettings, Language,
+  KeybindSettings, Language, FontCategory,
 } from "./types";
+import { FontService } from "./font-service";
 import {
   MIN_FONT_SIZE, MAX_FONT_SIZE,
   MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, LINE_HEIGHT_STEP,
@@ -235,45 +236,48 @@ export class SettingsPanel {
       onSave: (v) => this.saveSetting("font_size", v),
     });
 
-    // Primary Font (text input)
-    this.renderTextInput(panel, {
+    // Primary Font (font picker)
+    this.renderFontPickerInput(panel, {
       key: "font-family-primary",
       label: t("settings.appearance.fontFamilyPrimary"),
       value: this.currentSettings.font_family_primary,
       placeholder: t("settings.appearance.fontFamilyPrimaryPlaceholder"),
       hint: t("settings.appearance.fontFamilyPrimaryHint"),
       description: t("settings.appearance.fontFamilyPrimaryDesc"),
-      onSave: (v) => {
+      category: "primary",
+      onSelect: (v) => {
         this.currentSettings!.font_family_primary = v;
         this.applyCurrentFontFamily();
         this.saveSetting("font_family_primary", v);
       },
     });
 
-    // Secondary Font (text input)
-    this.renderTextInput(panel, {
+    // Secondary Font (font picker)
+    this.renderFontPickerInput(panel, {
       key: "font-family-secondary",
       label: t("settings.appearance.fontFamilySecondary"),
       value: this.currentSettings.font_family_secondary,
       placeholder: t("settings.appearance.fontFamilySecondaryPlaceholder"),
       hint: t("settings.appearance.fontFamilySecondaryHint"),
       description: t("settings.appearance.fontFamilySecondaryDesc"),
-      onSave: (v) => {
+      category: "secondary",
+      onSelect: (v) => {
         this.currentSettings!.font_family_secondary = v;
         this.applyCurrentFontFamily();
         this.saveSetting("font_family_secondary", v);
       },
     });
 
-    // Emoji Font (text input)
-    this.renderTextInput(panel, {
+    // Emoji Font (font picker)
+    this.renderFontPickerInput(panel, {
       key: "font-family-emoji",
       label: t("settings.appearance.fontFamilyEmoji"),
       value: this.currentSettings.font_family_emoji,
       placeholder: t("settings.appearance.fontFamilyEmojiPlaceholder"),
       hint: t("settings.appearance.fontFamilyEmojiHint"),
       description: t("settings.appearance.fontFamilyEmojiDesc"),
-      onSave: (v) => {
+      category: "emoji",
+      onSelect: (v) => {
         this.currentSettings!.font_family_emoji = v;
         this.applyCurrentFontFamily();
         this.saveSetting("font_family_emoji", v);
@@ -903,6 +907,308 @@ export class SettingsPanel {
       const v = Number(input.value);
       opts.onSave(v);
     });
+  }
+
+  // ============================================================
+  // Font Picker
+  // ============================================================
+
+  private renderFontPickerInput(panel: HTMLElement, opts: {
+    key: string;
+    label: string;
+    value: string;
+    placeholder: string;
+    hint: string;
+    description?: string;
+    category: FontCategory;
+    onSelect: (value: string) => void;
+  }): void {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+
+    const label = document.createElement("label");
+    label.className = "settings-label";
+    label.htmlFor = `settings-${opts.key}`;
+    label.textContent = opts.label;
+    row.appendChild(label);
+
+    if (opts.description) {
+      const desc = document.createElement("span");
+      desc.className = "settings-description";
+      desc.id = `settings-${opts.key}-desc`;
+      desc.textContent = opts.description;
+      row.appendChild(desc);
+    }
+
+    const inputGroup = document.createElement("div");
+    inputGroup.className = "settings-font-picker-group";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = `settings-${opts.key}`;
+    input.className = "settings-font-picker-input";
+    input.value = opts.value;
+    input.placeholder = opts.placeholder;
+    input.readOnly = true;
+    if (opts.description) {
+      input.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
+    }
+    inputGroup.appendChild(input);
+
+    const changeBtn = document.createElement("button");
+    changeBtn.className = "settings-font-picker-button";
+    changeBtn.textContent = t("settings.appearance.fontPickerChange");
+    changeBtn.type = "button";
+    inputGroup.appendChild(changeBtn);
+
+    row.appendChild(inputGroup);
+
+    const hint = document.createElement("span");
+    hint.className = "settings-hint";
+    hint.textContent = opts.hint;
+    row.appendChild(hint);
+
+    panel.appendChild(row);
+
+    // Button click opens font picker
+    this.addContentListener(changeBtn, "click", () => {
+      this.showFontPicker(opts.category, opts.value, (selectedFont) => {
+        input.value = selectedFont;
+        opts.onSelect(selectedFont);
+      });
+    });
+  }
+
+  private async showFontPicker(
+    category: FontCategory,
+    currentValue: string,
+    onSelect: (value: string) => void,
+  ): Promise<void> {
+    if (!this.contentElement) return;
+
+    // Detach current content listeners
+    this.detachContentListeners();
+
+    // Clear content area
+    this.contentElement.innerHTML = "";
+
+    // Disable navigation tabs
+    this.setNavTabsEnabled(false);
+
+    // Get title based on category
+    const titleMap: Record<FontCategory, string> = {
+      primary: t("settings.appearance.fontPickerPrimaryTitle"),
+      secondary: t("settings.appearance.fontPickerSecondaryTitle"),
+      emoji: t("settings.appearance.fontPickerEmojiTitle"),
+    };
+
+    // Load fonts
+    let fontList: string[] = [];
+    try {
+      const fonts = await FontService.list();
+      switch (category) {
+        case "primary":
+          fontList = fonts.monospace_fonts;
+          break;
+        case "secondary":
+          fontList = fonts.all_fonts;
+          break;
+        case "emoji":
+          fontList = fonts.emoji_fonts;
+          break;
+      }
+    } catch (err) {
+      console.error("Failed to load fonts:", err);
+    }
+
+    // Build font picker UI
+    const picker = document.createElement("div");
+    picker.className = "font-picker";
+
+    // Header
+    const header = document.createElement("div");
+    header.className = "font-picker-header";
+
+    const backBtn = document.createElement("button");
+    backBtn.className = "font-picker-back";
+    backBtn.setAttribute("aria-label", t("settings.appearance.fontPickerBack"));
+    backBtn.textContent = "\u2190"; // Left arrow
+    backBtn.type = "button";
+    header.appendChild(backBtn);
+
+    const title = document.createElement("h3");
+    title.className = "font-picker-title";
+    title.textContent = titleMap[category];
+    header.appendChild(title);
+
+    picker.appendChild(header);
+
+    // Search
+    const searchContainer = document.createElement("div");
+    searchContainer.className = "font-picker-search";
+
+    const searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.className = "font-picker-search-input";
+    searchInput.placeholder = t("settings.appearance.fontPickerSearch");
+    searchInput.setAttribute("aria-label", t("settings.appearance.fontPickerSearch"));
+    searchContainer.appendChild(searchInput);
+
+    picker.appendChild(searchContainer);
+
+    // Font list container
+    const listContainer = document.createElement("div");
+    listContainer.className = "font-picker-list";
+    listContainer.setAttribute("role", "listbox");
+    listContainer.setAttribute("aria-label", titleMap[category]);
+    picker.appendChild(listContainer);
+
+    this.contentElement.appendChild(picker);
+
+    // Render the font list
+    const renderList = (fonts: string[]) => {
+      listContainer.innerHTML = "";
+
+      if (fonts.length === 0) {
+        const noResults = document.createElement("div");
+        noResults.className = "font-picker-no-results";
+        noResults.textContent = t("settings.appearance.fontPickerNoResults");
+        listContainer.appendChild(noResults);
+        return;
+      }
+
+      for (const fontName of fonts) {
+        const item = document.createElement("div");
+        item.className = "font-picker-item";
+        item.setAttribute("role", "option");
+        item.setAttribute("tabindex", "-1");
+        item.style.fontFamily = `'${fontName.replace(/'/g, "\\'")}', sans-serif`;
+        item.textContent = fontName;
+
+        const isSelected = fontName === currentValue;
+        item.setAttribute("aria-selected", String(isSelected));
+        if (isSelected) {
+          item.setAttribute("tabindex", "0");
+        }
+
+        listContainer.appendChild(item);
+      }
+
+      // Scroll selected item into view
+      const selectedItem = listContainer.querySelector('[aria-selected="true"]');
+      if (selectedItem) {
+        selectedItem.scrollIntoView({ block: "center" });
+      }
+    };
+
+    renderList(fontList);
+
+    // Event: back button
+    this.addContentListener(backBtn, "click", () => {
+      this.hideFontPicker();
+    });
+
+    // Event: search input
+    this.addContentListener(searchInput, "input", () => {
+      const filtered = this.filterFontList(searchInput.value, fontList);
+      renderList(filtered);
+    });
+
+    // Event: font list click
+    this.addContentListener(listContainer, "click", (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (target.classList.contains("font-picker-item")) {
+        const fontName = target.textContent || "";
+        onSelect(fontName);
+        this.hideFontPicker();
+      }
+    });
+
+    // Event: keyboard navigation on list
+    this.addContentListener(listContainer, "keydown", (e: Event) => {
+      const ke = e as KeyboardEvent;
+      const target = ke.target as HTMLElement;
+      if (!target.classList.contains("font-picker-item")) return;
+
+      switch (ke.key) {
+        case "ArrowDown": {
+          ke.preventDefault();
+          const next = target.nextElementSibling as HTMLElement | null;
+          if (next && next.classList.contains("font-picker-item")) {
+            target.setAttribute("tabindex", "-1");
+            next.setAttribute("tabindex", "0");
+            next.focus();
+          }
+          break;
+        }
+        case "ArrowUp": {
+          ke.preventDefault();
+          const prev = target.previousElementSibling as HTMLElement | null;
+          if (prev && prev.classList.contains("font-picker-item")) {
+            target.setAttribute("tabindex", "-1");
+            prev.setAttribute("tabindex", "0");
+            prev.focus();
+          }
+          break;
+        }
+        case "Enter": {
+          ke.preventDefault();
+          const fontName = target.textContent || "";
+          onSelect(fontName);
+          this.hideFontPicker();
+          break;
+        }
+        case "Escape": {
+          ke.preventDefault();
+          this.hideFontPicker();
+          break;
+        }
+      }
+    });
+
+    // Event: Escape on search input
+    this.addContentListener(searchInput, "keydown", (e: Event) => {
+      if ((e as KeyboardEvent).key === "Escape") {
+        e.preventDefault();
+        this.hideFontPicker();
+      }
+    });
+
+    // Focus search input
+    searchInput.focus();
+  }
+
+  private hideFontPicker(): void {
+    // Re-enable navigation tabs
+    this.setNavTabsEnabled(true);
+
+    // Detach font picker listeners
+    this.detachContentListeners();
+
+    // Restore settings view
+    this.renderContent();
+  }
+
+  private setNavTabsEnabled(enabled: boolean): void {
+    if (!this.navElement) return;
+    const tabs = this.navElement.querySelectorAll(".settings-nav-item");
+    for (const tab of tabs) {
+      if (enabled) {
+        tab.classList.remove("disabled");
+        (tab as HTMLButtonElement).disabled = false;
+        tab.removeAttribute("aria-disabled");
+      } else {
+        tab.classList.add("disabled");
+        (tab as HTMLButtonElement).disabled = true;
+        tab.setAttribute("aria-disabled", "true");
+      }
+    }
+  }
+
+  filterFontList(searchText: string, fonts: string[]): string[] {
+    if (!searchText) return fonts;
+    const lower = searchText.toLowerCase();
+    return fonts.filter((name) => name.toLowerCase().includes(lower));
   }
 
   private renderKeybindInput(
