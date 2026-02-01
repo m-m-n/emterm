@@ -116,24 +116,26 @@ body {
 #terminal {
   width: 100%;
   height: 100%;
-  padding: 0;
+  padding: var(--terminal-padding, 0px);
   font-size: var(--terminal-font-size);
   line-height: var(--terminal-line-height);
   background-color: #000000;
   position: relative;
+  box-sizing: border-box;
 }
 
 /* Tab content terminals */
 .tab-content {
   width: 100%;
   height: 100%;
-  padding: 0;
+  padding: var(--terminal-padding, 0px);
   font-size: var(--terminal-font-size);
   line-height: var(--terminal-line-height);
   background-color: #000000;
   position: absolute;
   top: 0;
   left: 0;
+  box-sizing: border-box;
 }
 
 /* Container structure for terminal/overlay separation */
