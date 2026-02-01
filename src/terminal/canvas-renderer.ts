@@ -871,6 +871,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 			case "opacity":
 				this.setOpacity(value as number);
 				break;
+			case "cursorStyle":
+				this.setCursorStyle(value as CursorStyle);
+				break;
+			case "cursorBlink":
+				this.setCursorBlink(value as boolean);
+				break;
 		}
 	}
 
@@ -907,6 +913,35 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.opacity = opacity;
 		if (this.pendingState) {
 			this.forceRender(this.pendingState);
+		}
+	}
+
+	/**
+	 * Set the cursor style.
+	 * @param style - Cursor style ("block", "underline", or "bar")
+	 */
+	setCursorStyle(style: CursorStyle): void {
+		if (this.pendingState) {
+			this.pendingState.cursor.style = style;
+			this.forceRender(this.pendingState);
+		}
+	}
+
+	/**
+	 * Set cursor blink mode.
+	 * @param blink - Whether cursor should blink
+	 */
+	setCursorBlink(blink: boolean): void {
+		if (this.pendingState) {
+			this.pendingState.modes.cursorBlink = blink;
+		}
+		if (blink) {
+			this.startCursorBlink();
+		} else {
+			this.stopCursorBlink();
+			if (this.pendingState) {
+				this.forceRender(this.pendingState);
+			}
 		}
 	}
 
