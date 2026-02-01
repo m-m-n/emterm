@@ -199,6 +199,14 @@ describe("applyLineHeight", () => {
     applyLineHeight(1.2);
     expect(mockStyle.properties["--terminal-line-height"]).toBe("1.2");
   });
+
+  test("should notify renderers with lineHeight", () => {
+    applyLineHeight(1.5);
+    expect(mockRendererCalls).toContainEqual({
+      setting: "lineHeight",
+      value: 1.5,
+    });
+  });
 });
 
 describe("applyUiTheme", () => {

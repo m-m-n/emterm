@@ -250,6 +250,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Font size in pixels. */
 	private fontSize: number;
 
+	/** Line height multiplier. */
+	private lineHeightMultiplier: number = 1.2;
+
 	/** Number of columns. */
 	private cols: number = 80;
 
@@ -385,14 +388,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const descent = metrics.fontBoundingBoxDescent ?? this.fontSize * 0.2;
 		this.fontDescent = descent;
 
-		// Calculate lineHeight from fontSize directly to avoid CSS computed style timing issues
-		// Formula matches settings-applier.ts: lineHeight (pt) = fontSize (pt) + 2
-		// this.fontSize is in px, so convert: px -> pt -> add 2 -> back to px
-		const fontSizePt = this.fontSize * (72 / 96);
-		const lineHeightPt = fontSizePt + 2;
-		const lineHeightPx = lineHeightPt * (96 / 72);
-
-		this.charHeight = lineHeightPx;
+		// Calculate lineHeight using the lineHeight multiplier from settings
+		this.charHeight = this.fontSize * this.lineHeightMultiplier;
 	}
 
 	/**
@@ -853,6 +850,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 			case "fontFamily":
 				this.setFontFamily(value as string);
 				break;
+			case "lineHeight":
+				this.setLineHeight(value as number);
+				break;
 		}
 	}
 
@@ -862,6 +862,18 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	setFontFamily(fontFamily: string): void {
 		this.fontFamily = fontFamily || "monospace";
+		this.measureCharacterSize();
+		if (this.pendingState) {
+			this.forceRender(this.pendingState);
+		}
+	}
+
+	/**
+	 * Set the line height multiplier dynamically.
+	 * @param lineHeight - Line height multiplier (e.g., 1.2)
+	 */
+	setLineHeight(lineHeight: number): void {
+		this.lineHeightMultiplier = lineHeight;
 		this.measureCharacterSize();
 		if (this.pendingState) {
 			this.forceRender(this.pendingState);
