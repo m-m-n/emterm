@@ -647,6 +647,7 @@ pub fn run() {
             tab_close_graceful,
             commands::config::load_settings,
             commands::config::save_settings,
+            commands::font::list_fonts,
             set_language,
         ])
         .setup(|_app| {

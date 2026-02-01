@@ -49,7 +49,14 @@
       "opacityDesc": "Sets the background transparency of the terminal window",
       "paddingDesc": "Adjusts the space between the terminal text and the window edge",
       "scrollbackLinesDesc": "Sets how many lines of output are kept in the scroll history",
-      "showScrollbarDesc": "Controls when the scrollbar is visible"
+      "showScrollbarDesc": "Controls when the scrollbar is visible",
+      "fontPickerBack": "Back",
+      "fontPickerSearch": "Search fonts...",
+      "fontPickerNoResults": "No fonts found",
+      "fontPickerChange": "Change",
+      "fontPickerPrimaryTitle": "Primary Font",
+      "fontPickerSecondaryTitle": "Secondary Font",
+      "fontPickerEmojiTitle": "Emoji Font"
     },
     "terminal": {
       "title": "Terminal",

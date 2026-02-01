@@ -77,6 +77,18 @@ export interface KeybindSettings {
 }
 
 // ============================================================
+// Font Picker Types
+// ============================================================
+
+export interface FontListResponse {
+  monospace_fonts: string[];
+  all_fonts: string[];
+  emoji_fonts: string[];
+}
+
+export type FontCategory = "primary" | "secondary" | "emoji";
+
+// ============================================================
 // Validation Constants
 // ============================================================
 

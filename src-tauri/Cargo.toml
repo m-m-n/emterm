@@ -41,6 +41,7 @@ clap = { version = "4.5.54", features = ["derive"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 rust-i18n = "3"
 sys-locale = "0.3"
+font-kit = "0.14"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
