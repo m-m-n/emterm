@@ -171,6 +171,22 @@ describe("applyFontFamily", () => {
     applyFontFamily("");
     expect(mockStyle.properties["--terminal-font-family"]).toBeUndefined();
   });
+
+  test("should notify renderers with fontFamily", () => {
+    applyFontFamily("JetBrains Mono");
+    expect(mockRendererCalls).toContainEqual({
+      setting: "fontFamily",
+      value: "JetBrains Mono",
+    });
+  });
+
+  test("should notify renderers with empty string for default", () => {
+    applyFontFamily("");
+    expect(mockRendererCalls).toContainEqual({
+      setting: "fontFamily",
+      value: "",
+    });
+  });
 });
 
 describe("applyLineHeight", () => {

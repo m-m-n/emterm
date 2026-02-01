@@ -850,10 +850,21 @@ export class CanvasRenderer implements ITerminalRenderer {
 			case "fontSize":
 				this.setFontSize(value as number);
 				break;
-			// Future cases:
-			// case "colorScheme":
-			//   this.setColorScheme(value as ColorScheme);
-			//   break;
+			case "fontFamily":
+				this.setFontFamily(value as string);
+				break;
+		}
+	}
+
+	/**
+	 * Set the font family dynamically.
+	 * @param fontFamily - New font family (empty string falls back to "monospace")
+	 */
+	setFontFamily(fontFamily: string): void {
+		this.fontFamily = fontFamily || "monospace";
+		this.measureCharacterSize();
+		if (this.pendingState) {
+			this.forceRender(this.pendingState);
 		}
 	}
 
