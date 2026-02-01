@@ -66,8 +66,6 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     padding: 4,
     scrollback_lines: 10000,
     show_scrollbar: "auto",
-    inline_images_enabled: true,
-    markdown_rendering: true,
     shell_path: "",
     shell_args: [],
     cursor_style: "block",
@@ -108,8 +106,8 @@ describe("SettingsPanel render methods - description feature", () => {
   describe("description spans are created for all settings items", () => {
     test("should create description spans with correct class in appearance section", () => {
       const descriptions = container.querySelectorAll(".settings-description");
-      // Appearance section has 12 items with descriptions (language + 11 appearance)
-      expect(descriptions.length).toBeGreaterThanOrEqual(12);
+      // Appearance section has 10 items with descriptions (language + 9 appearance)
+      expect(descriptions.length).toBeGreaterThanOrEqual(10);
     });
 
     test("should create description spans with correct id pattern", () => {
@@ -155,10 +153,10 @@ describe("SettingsPanel render methods - description feature", () => {
       expect(languageSelect?.getAttribute("aria-describedby")).toBe("settings-language-desc");
     });
 
-    test("should set aria-describedby on toggle buttons", () => {
-      const inlineImagesToggle = container.querySelector("#settings-inline-images") as HTMLButtonElement;
-      expect(inlineImagesToggle).not.toBeNull();
-      expect(inlineImagesToggle?.getAttribute("aria-describedby")).toBe("settings-inline-images-desc");
+    test("should set aria-describedby on select elements (ui-theme)", () => {
+      const uiThemeSelect = container.querySelector("#settings-ui-theme") as HTMLSelectElement;
+      expect(uiThemeSelect).not.toBeNull();
+      expect(uiThemeSelect?.getAttribute("aria-describedby")).toBe("settings-ui-theme-desc");
     });
 
     test("should set aria-describedby on slider inputs", () => {
@@ -173,12 +171,18 @@ describe("SettingsPanel render methods - description feature", () => {
   // ============================================================
 
   describe("toggle rows use wrapper div for description", () => {
+    beforeEach(() => {
+      // Switch to terminal category which has toggle buttons
+      const terminalTab = container.querySelector('[data-category-id="terminal"]') as HTMLButtonElement;
+      terminalTab?.click();
+    });
+
     test("should wrap label and description in settings-toggle-label-group", () => {
-      const inlineImagesToggle = container.querySelector("#settings-inline-images");
-      expect(inlineImagesToggle).not.toBeNull();
+      const cursorBlinkToggle = container.querySelector("#settings-cursor-blink");
+      expect(cursorBlinkToggle).not.toBeNull();
 
       // Find the row containing this toggle
-      const row = inlineImagesToggle?.closest(".settings-row-toggle");
+      const row = cursorBlinkToggle?.closest(".settings-row-toggle");
       expect(row).not.toBeNull();
 
       // The row should contain a wrapper div

@@ -41,10 +41,6 @@ export interface AppSettings {
   scrollback_lines: number;
   show_scrollbar: ScrollbarMode;
 
-  // Rich Content
-  inline_images_enabled: boolean;
-  markdown_rendering: boolean;
-
   // Terminal
   shell_path: string;
   shell_args: string[];

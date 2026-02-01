@@ -129,8 +129,6 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     padding: 4,
     scrollback_lines: 10000,
     show_scrollbar: "auto",
-    inline_images_enabled: true,
-    markdown_rendering: true,
     shell_path: "",
     shell_args: [],
     cursor_style: "block",

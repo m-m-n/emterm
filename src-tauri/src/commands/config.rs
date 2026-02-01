@@ -292,12 +292,6 @@ pub struct AppSettings {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub show_scrollbar: ScrollbarMode,
 
-    // Rich Content
-    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
-    pub inline_images_enabled: bool,
-    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
-    pub markdown_rendering: bool,
-
     // Terminal
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub shell_path: String,
@@ -343,8 +337,6 @@ impl Default for AppSettings {
             padding: default_padding(),
             scrollback_lines: default_scrollback_lines(),
             show_scrollbar: ScrollbarMode::default(),
-            inline_images_enabled: default_true(),
-            markdown_rendering: default_true(),
             shell_path: String::new(),
             shell_args: Vec::new(),
             cursor_style: CursorStyle::default(),
@@ -603,8 +595,6 @@ mod tests {
         assert_eq!(settings.padding, 4);
         assert_eq!(settings.scrollback_lines, 10000);
         assert_eq!(settings.show_scrollbar, ScrollbarMode::Auto);
-        assert!(settings.inline_images_enabled);
-        assert!(settings.markdown_rendering);
         assert_eq!(settings.shell_path, "");
         assert!(settings.shell_args.is_empty());
         assert_eq!(settings.cursor_style, CursorStyle::Block);
@@ -694,8 +684,6 @@ mod tests {
             "scrollback_lines": null,
             "scroll_speed": null,
             "cursor_blink": null,
-            "inline_images_enabled": null,
-            "markdown_rendering": null,
             "url_detection": null
         }"#;
         let settings: AppSettings = serde_json::from_str(json).unwrap();
@@ -706,8 +694,6 @@ mod tests {
         assert_eq!(settings.scrollback_lines, 10000);
         assert_eq!(settings.scroll_speed, 3);
         assert!(settings.cursor_blink);
-        assert!(settings.inline_images_enabled);
-        assert!(settings.markdown_rendering);
         assert!(settings.url_detection);
     }
 
@@ -773,8 +759,6 @@ mod tests {
             padding: 8,
             scrollback_lines: 5000,
             show_scrollbar: ScrollbarMode::Always,
-            inline_images_enabled: false,
-            markdown_rendering: false,
             shell_path: "/bin/zsh".to_string(),
             shell_args: vec!["--login".to_string(), "-i".to_string()],
             cursor_style: CursorStyle::Bar,
@@ -803,8 +787,6 @@ mod tests {
         assert_eq!(restored.padding, 8);
         assert_eq!(restored.scrollback_lines, 5000);
         assert_eq!(restored.show_scrollbar, ScrollbarMode::Always);
-        assert!(!restored.inline_images_enabled);
-        assert!(!restored.markdown_rendering);
         assert_eq!(restored.shell_path, "/bin/zsh");
         assert_eq!(restored.shell_args, vec!["--login", "-i"]);
         assert_eq!(restored.cursor_style, CursorStyle::Bar);
