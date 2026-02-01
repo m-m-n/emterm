@@ -21,7 +21,6 @@ import type {
   ImageEventPayload,
 } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
-import { SettingsService } from "../settings/settings-service";
 import type { DecodedImage, ImageEvent } from "../image/types";
 
 /**
@@ -304,15 +303,6 @@ export class TerminalApp {
       }
 
       case "Place": {
-        // Check if inline images are enabled
-        const settings = SettingsService.getCached();
-        if (settings && !settings.inline_images_enabled) {
-          console.debug(
-            "[DEBUG][FRONTEND] Image display skipped: inline_images_enabled=false",
-          );
-          break;
-        }
-
         // Display the image at the specified position
         const placement = payload.placement;
         if (!placement) {

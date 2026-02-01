@@ -12,7 +12,6 @@ mock.module("@tauri-apps/api/core", () => ({
         font_size: 14, font_family: "monospace", line_height: 1.4,
         ui_theme: "dark", terminal_color_scheme: "default", opacity: 1.0,
         padding: 8, scrollback_lines: 10000, show_scrollbar: "auto",
-        inline_images_enabled: true, markdown_rendering: true,
         shell_path: "/bin/bash", shell_args: [], cursor_style: "block",
         cursor_blink: true, scroll_speed: 3, bell_action: "none",
         url_detection: true, copy_on_select: false,

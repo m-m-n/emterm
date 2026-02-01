@@ -364,26 +364,6 @@ export class SettingsPanel {
       },
     });
 
-    // -- Rich Content subsection --
-    this.renderSubsectionHeader(panel, t("settings.appearance.richContent"));
-
-    // Inline Images (toggle)
-    this.renderToggle(panel, {
-      key: "inline-images",
-      label: t("settings.appearance.inlineImages"),
-      value: this.currentSettings.inline_images_enabled,
-      description: t("settings.appearance.inlineImagesDesc"),
-      onSave: (v) => this.saveSetting("inline_images_enabled", v),
-    });
-
-    // Markdown Rendering (toggle)
-    this.renderToggle(panel, {
-      key: "markdown-rendering",
-      label: t("settings.appearance.markdownRendering"),
-      value: this.currentSettings.markdown_rendering,
-      description: t("settings.appearance.markdownRenderingDesc"),
-      onSave: (v) => this.saveSetting("markdown_rendering", v),
-    });
   }
 
   // ============================================================

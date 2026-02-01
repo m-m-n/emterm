@@ -33,9 +33,6 @@
       "scrollbarAuto": "Auto",
       "scrollbarAlways": "Always",
       "scrollbarNever": "Never",
-      "richContent": "Rich Content",
-      "inlineImages": "Inline Images",
-      "markdownRendering": "Markdown Rendering",
       "fontSizeDesc": "Changes the text size in the terminal",
       "fontFamilyDesc": "Sets the font used for terminal text",
       "lineHeightDesc": "Adjusts the vertical spacing between lines",
@@ -44,9 +41,7 @@
       "opacityDesc": "Sets the background transparency of the terminal window",
       "paddingDesc": "Adjusts the space between the terminal text and the window edge",
       "scrollbackLinesDesc": "Sets how many lines of output are kept in the scroll history",
-      "showScrollbarDesc": "Controls when the scrollbar is visible",
-      "inlineImagesDesc": "Displays images inline in the terminal output",
-      "markdownRenderingDesc": "Renders Markdown content in the terminal output"
+      "showScrollbarDesc": "Controls when the scrollbar is visible"
     },
     "terminal": {
       "title": "Terminal",
