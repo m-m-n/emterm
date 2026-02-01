@@ -459,8 +459,12 @@ export class TerminalApp {
 
     if (!this.renderer || !this.state) return;
 
-    // Calculate number of lines to scroll based on wheel delta
-    const lines = Math.ceil(Math.abs(e.deltaY) / this.charSize.height);
+    // Get scroll speed multiplier from settings (default: 3)
+    const cachedSettings = SettingsService.getCached();
+    const scrollSpeed = cachedSettings?.scroll_speed ?? 3;
+
+    // Calculate number of lines to scroll based on wheel delta and speed
+    const lines = Math.ceil(Math.abs(e.deltaY) / this.charSize.height * scrollSpeed);
 
     if (e.deltaY < 0) {
       // Scroll up (toward past)
