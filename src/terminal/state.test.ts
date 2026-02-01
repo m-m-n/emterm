@@ -658,4 +658,103 @@ describe("TerminalState", () => {
 			expect(region).toEqual({ top: 4, bottom: 19 });
 		});
 	});
+
+	describe("Scrollback buffer", () => {
+		test("captures lines when they scroll off the top", () => {
+			const state = new TerminalState(10, 3);
+
+			// Fill screen with content: write enough lines to cause scrolling
+			// Start at top, write "AAAA...", then LF, write "BBBB...", then LF, etc.
+			for (let i = 0; i < 5; i++) {
+				// Write a full line of characters
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: String.fromCharCode(65 + i) });
+				}
+				// Move to next line (this causes scrolling when at bottom)
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			// Should have captured at least some scrollback
+			expect(state.getScrollbackLength()).toBeGreaterThan(0);
+		});
+
+		test("enforces maximum scrollback size", () => {
+			const state = new TerminalState(10, 2, 5); // Max 5 lines in scrollback
+
+			// Scroll many lines off the top
+			for (let i = 0; i < 12; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: String.fromCharCode(65 + (i % 26)) });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			// Should enforce max scrollback (may be <= 5 due to how scrolling works)
+			expect(state.getScrollbackLength()).toBeLessThanOrEqual(5);
+		});
+
+		test("does not capture scrollback in alternate buffer", () => {
+			const state = new TerminalState(10, 3);
+
+			// Switch to alternate buffer
+			state.processAction({
+				type: "Csi",
+				value: { action: "SetMode", data: [1049] },
+			});
+
+			// Fill lines in alternate buffer to cause scrolling
+			for (let i = 0; i < 6; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: "X" });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			// Scrollback should be empty (alternate buffer doesn't save scrollback)
+			expect(state.getScrollbackLength()).toBe(0);
+		});
+
+		test("getScrollbackBuffer returns array of lines", () => {
+			const state = new TerminalState(10, 3);
+
+			// Fill with content and scroll
+			for (let i = 0; i < 5; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: String.fromCharCode(65 + i) });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			const scrollback = state.getScrollbackBuffer();
+			expect(scrollback.length).toBeGreaterThan(0);
+			// Verify it's an array of Line objects
+			expect(scrollback[0]).toBeDefined();
+			expect(scrollback[0]!.getText).toBeDefined();
+		});
+
+		test("clears scrollback on reset", () => {
+			const state = new TerminalState(10, 3);
+
+			// Fill some lines to create scrollback
+			for (let i = 0; i < 6; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: "X" });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			expect(state.getScrollbackLength()).toBeGreaterThan(0);
+
+			// Reset terminal
+			state.reset();
+
+			// Scrollback should be cleared
+			expect(state.getScrollbackLength()).toBe(0);
+		});
+	});
 });

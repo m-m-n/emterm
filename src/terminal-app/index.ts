@@ -175,6 +175,9 @@ export class TerminalApp {
     // Attach selection controller
     this.selectionController.attach();
 
+    // Add mouse wheel handler for scrollback
+    terminalContainer.addEventListener('wheel', (e) => this.handleWheel(e));
+
     // Initialize ImageViewer with overlay-root container
     this.imageViewer = new ImageViewer(this.overlayRoot!);
 
@@ -440,6 +443,29 @@ export class TerminalApp {
    */
   focus(): void {
     this.imeHandler?.focus();
+  }
+
+  /**
+   * Handle mouse wheel events for scrollback
+   */
+  private handleWheel(e: WheelEvent): void {
+    e.preventDefault();
+
+    if (!this.renderer || !this.state) return;
+
+    // Calculate number of lines to scroll based on wheel delta
+    const lines = Math.ceil(Math.abs(e.deltaY) / this.charSize.height);
+
+    if (e.deltaY < 0) {
+      // Scroll up (toward past)
+      this.renderer.scrollUp(lines);
+    } else {
+      // Scroll down (toward present)
+      this.renderer.scrollDown(lines);
+    }
+
+    // Force re-render with new scroll offset
+    this.renderer.forceRender(this.state);
   }
 
   /**
