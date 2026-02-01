@@ -114,6 +114,9 @@ export class TerminalApp {
     this.state = new TerminalState(cols, rows);
     this.renderer = await createRendererAsync(terminalContainer, fontFamily, fontSize);
 
+    // Register bell callback
+    this.state.onBell = () => this.handleBell();
+
     // Initialize selection controller (new v2 system)
     this.selectionController = new SelectionController({
       container: terminalContainer,
@@ -476,6 +479,43 @@ export class TerminalApp {
 
     // Force re-render with new scroll offset
     this.renderer.forceRender(this.state);
+  }
+
+  /**
+   * Handle BEL character based on bell_action setting
+   */
+  private handleBell(): void {
+    const cachedSettings = SettingsService.getCached();
+    const bellAction = cachedSettings?.bell_action ?? "visual";
+
+    switch (bellAction) {
+      case "visual": {
+        const container = this.terminalRoot;
+        if (container) {
+          container.classList.add("terminal-bell-flash");
+          setTimeout(() => container.classList.remove("terminal-bell-flash"), 150);
+        }
+        break;
+      }
+      case "sound": {
+        try {
+          const ctx = new AudioContext();
+          const oscillator = ctx.createOscillator();
+          const gain = ctx.createGain();
+          oscillator.connect(gain);
+          gain.connect(ctx.destination);
+          oscillator.frequency.value = 800;
+          gain.gain.value = 0.1;
+          oscillator.start();
+          oscillator.stop(ctx.currentTime + 0.1);
+        } catch {
+          // Audio not available
+        }
+        break;
+      }
+      case "none":
+        break;
+    }
   }
 
   /**

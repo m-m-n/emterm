@@ -88,6 +88,9 @@ export class TerminalState implements TerminalStateAccessor {
   /** Markdown session manager. */
   private markdownManager: MarkdownSessionManager;
 
+  /** Bell callback for BEL character handling. */
+  onBell?: () => void;
+
   /** Scrollback buffer for primary buffer only. */
   private scrollbackBuffer: Line[] = [];
 

@@ -50,6 +50,9 @@ export interface TerminalStateAccessor {
   _workingDirectory: string;
   _activeHyperlink: { params: string; uri: string } | null;
 
+  // Callbacks
+  onBell?: () => void;
+
   // Methods for handlers to use
   getActiveBuffer(): ScreenBuffer;
   addPendingResponse(response: Uint8Array): void;
