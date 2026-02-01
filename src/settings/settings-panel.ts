@@ -1,38 +1,27 @@
 /**
  * Settings Panel
  *
- * UI component for application settings with category navigation.
+ * Orchestrator for application settings UI with category navigation.
+ * Delegates section rendering, UI components, font picker, and keybind
+ * editing to dedicated modules.
  */
 
-import { invoke } from "@tauri-apps/api/core";
 import { SettingsService } from "./settings-service";
+import type { AppSettings } from "./types";
+import { t } from "../i18n/index.ts";
+import { showFontPicker } from "./font-picker";
+import type { FontCategory } from "./types";
 import {
-  applySettings,
-  applyFontSize,
-  applyFontFamily,
-  applyLineHeight,
-  applyUiTheme,
-  applyTerminalColorScheme,
-  applyPadding,
-  applyScrollbar,
-  applyOpacity,
-  applyCursorStyle,
-  applyCursorBlink,
-} from "./settings-applier";
-import type {
-  AppSettings, UiTheme, CursorStyle, BellAction, ScrollbarMode,
-  KeybindSettings, Language, FontCategory,
-} from "./types";
-import { FontService } from "./font-service";
+  createKeybindCaptureState,
+  exitKeybindCapture,
+} from "./keybind-editor";
+import type { KeybindCaptureState } from "./keybind-editor";
 import {
-  MIN_FONT_SIZE, MAX_FONT_SIZE,
-  MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, LINE_HEIGHT_STEP,
-  MIN_OPACITY, MAX_OPACITY, OPACITY_STEP,
-  MIN_PADDING, MAX_PADDING,
-  MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES,
-  MIN_SCROLL_SPEED, MAX_SCROLL_SPEED,
-} from "./types";
-import { t, setLocale, resolveLocale } from "../i18n/index.ts";
+  renderAppearanceSection,
+  renderTerminalSection,
+  renderKeybindsSection,
+} from "./settings-sections";
+import { filterFontList } from "./font-picker";
 
 /**
  * Options for creating SettingsPanel
@@ -65,10 +54,9 @@ export class SettingsPanel {
     type: string;
     handler: EventListener;
   }> = [];
-  /** Keybind button currently in capture mode */
-  private capturingKeybindButton: HTMLButtonElement | null = null;
-  private capturingKeybindKey: string | null = null;
-  private capturingOriginalValue: string | null = null;
+
+  /** Keybind capture state (shared with keybind-editor module) */
+  private keybindState: KeybindCaptureState = createKeybindCaptureState();
 
   private get categories(): Category[] {
     return [
@@ -165,1194 +153,59 @@ export class SettingsPanel {
 
     this.contentElement.appendChild(panel);
 
+    if (!this.currentSettings) return;
+
+    const ctx = this.buildSectionContext();
+
     switch (this.activeCategory) {
       case "appearance":
-        this.renderAppearanceSection(panel);
+        renderAppearanceSection(panel, ctx);
         break;
       case "terminal":
-        this.renderTerminalSection(panel);
+        renderTerminalSection(panel, ctx);
         break;
       case "keybinds":
-        this.renderKeybindsSection(panel);
+        renderKeybindsSection(panel, ctx);
         break;
     }
   }
 
   // ============================================================
-  // Appearance Category
+  // Section Context Builder
   // ============================================================
 
-  private renderAppearanceSection(panel: HTMLElement): void {
-    if (!this.currentSettings) return;
-
-    const header = document.createElement("h2");
-    header.className = "settings-section-header";
-    header.textContent = t("settings.appearance.title");
-    panel.appendChild(header);
-
-    // -- Language subsection --
-    this.renderSubsectionHeader(panel, t("settings.language.title"));
-
-    this.renderSelect(panel, {
-      key: "language",
-      label: t("settings.language.label"),
-      value: this.currentSettings.language,
-      options: [
-        { value: "auto", label: t("settings.language.auto") },
-        { value: "en", label: t("settings.language.en") },
-        { value: "ja", label: t("settings.language.ja") },
-      ],
-      description: t("settings.language.labelDesc"),
-      onSave: (v) => {
-        this.saveSetting("language", v as Language);
-        // Apply language change
-        const resolved = resolveLocale(v);
-        setLocale(resolved);
-        invoke("set_language", { language: resolved }).catch((err) => {
-          console.warn("Failed to sync backend language:", err);
+  private buildSectionContext() {
+    return {
+      currentSettings: this.currentSettings!,
+      addContentListener: this.addContentListener.bind(this),
+      saveSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+        this.saveSetting(key, value);
+      },
+      showFontPicker: (category: FontCategory, currentValue: string, onSelect: (value: string) => void) => {
+        showFontPicker(category, currentValue, onSelect, {
+          contentElement: this.contentElement!,
+          navElement: this.navElement,
+          addContentListener: this.addContentListener.bind(this),
+          detachContentListeners: this.detachContentListeners.bind(this),
+          renderContent: this.renderContent.bind(this),
         });
-        // Re-render settings panel with new language
+      },
+      keybindCtx: {
+        state: this.keybindState,
+        eventListeners: this.eventListeners,
+        currentSettings: this.currentSettings,
+      },
+      reRender: () => {
         this.detachContentListeners();
         this.render();
         this.attachEventListeners();
       },
-    });
-
-    // -- Font subsection --
-    this.renderSubsectionHeader(panel, t("settings.appearance.font"));
-
-    // Font Size (number input)
-    this.renderNumberInput(panel, {
-      key: "font-size",
-      label: t("settings.appearance.fontSize"),
-      value: this.currentSettings.font_size,
-      min: MIN_FONT_SIZE,
-      max: MAX_FONT_SIZE,
-      step: 1,
-      unit: "pt",
-      hint: t("settings.appearance.fontSizeHint", { min: MIN_FONT_SIZE, max: MAX_FONT_SIZE }),
-      description: t("settings.appearance.fontSizeDesc"),
-      onInput: (v) => applyFontSize(v),
-      onSave: (v) => this.saveSetting("font_size", v),
-    });
-
-    // Primary Font (font picker)
-    this.renderFontPickerInput(panel, {
-      key: "font-family-primary",
-      label: t("settings.appearance.fontFamilyPrimary"),
-      value: this.currentSettings.font_family_primary,
-      placeholder: t("settings.appearance.fontFamilyPrimaryPlaceholder"),
-      hint: t("settings.appearance.fontFamilyPrimaryHint"),
-      description: t("settings.appearance.fontFamilyPrimaryDesc"),
-      category: "primary",
-      onSelect: (v) => {
-        this.currentSettings!.font_family_primary = v;
-        this.applyCurrentFontFamily();
-        this.saveSetting("font_family_primary", v);
-      },
-    });
-
-    // Secondary Font (font picker)
-    this.renderFontPickerInput(panel, {
-      key: "font-family-secondary",
-      label: t("settings.appearance.fontFamilySecondary"),
-      value: this.currentSettings.font_family_secondary,
-      placeholder: t("settings.appearance.fontFamilySecondaryPlaceholder"),
-      hint: t("settings.appearance.fontFamilySecondaryHint"),
-      description: t("settings.appearance.fontFamilySecondaryDesc"),
-      category: "secondary",
-      onSelect: (v) => {
-        this.currentSettings!.font_family_secondary = v;
-        this.applyCurrentFontFamily();
-        this.saveSetting("font_family_secondary", v);
-      },
-    });
-
-    // Emoji Font (font picker)
-    this.renderFontPickerInput(panel, {
-      key: "font-family-emoji",
-      label: t("settings.appearance.fontFamilyEmoji"),
-      value: this.currentSettings.font_family_emoji,
-      placeholder: t("settings.appearance.fontFamilyEmojiPlaceholder"),
-      hint: t("settings.appearance.fontFamilyEmojiHint"),
-      description: t("settings.appearance.fontFamilyEmojiDesc"),
-      category: "emoji",
-      onSelect: (v) => {
-        this.currentSettings!.font_family_emoji = v;
-        this.applyCurrentFontFamily();
-        this.saveSetting("font_family_emoji", v);
-      },
-    });
-
-    // Line Height (number input)
-    this.renderNumberInput(panel, {
-      key: "line-height",
-      label: t("settings.appearance.lineHeight"),
-      value: this.currentSettings.line_height,
-      min: MIN_LINE_HEIGHT,
-      max: MAX_LINE_HEIGHT,
-      step: LINE_HEIGHT_STEP,
-      unit: "",
-      hint: t("settings.appearance.lineHeightHint", { min: MIN_LINE_HEIGHT, max: MAX_LINE_HEIGHT }),
-      description: t("settings.appearance.lineHeightDesc"),
-      onInput: (v) => applyLineHeight(v),
-      onSave: (v) => this.saveSetting("line_height", v),
-    });
-
-    // -- Theme & Color subsection --
-    this.renderSubsectionHeader(panel, t("settings.appearance.themeColor"));
-
-    // UI Theme (select)
-    this.renderSelect(panel, {
-      key: "ui-theme",
-      label: t("settings.appearance.uiTheme"),
-      value: this.currentSettings.ui_theme,
-      options: [
-        { value: "system", label: t("settings.appearance.uiThemeSystem") },
-        { value: "light", label: t("settings.appearance.uiThemeLight") },
-        { value: "dark", label: t("settings.appearance.uiThemeDark") },
-      ],
-      description: t("settings.appearance.uiThemeDesc"),
-      onSave: (v) => {
-        applyUiTheme(v as UiTheme);
-        this.saveSetting("ui_theme", v as UiTheme);
-      },
-    });
-
-    // Terminal Color Scheme (select)
-    this.renderSelect(panel, {
-      key: "terminal-color-scheme",
-      label: t("settings.appearance.colorScheme"),
-      value: this.currentSettings.terminal_color_scheme || "emterm",
-      options: [
-        { value: "emterm", label: "eMterm" },
-        { value: "solarized-dark", label: "Solarized Dark" },
-        { value: "solarized-light", label: "Solarized Light" },
-        { value: "monokai", label: "Monokai" },
-        { value: "dracula", label: "Dracula" },
-        { value: "nord", label: "Nord" },
-      ],
-      description: t("settings.appearance.colorSchemeDesc"),
-      onSave: (v) => {
-        const scheme = v === "emterm" ? "" : v;
-        applyTerminalColorScheme(scheme);
-        this.saveSetting("terminal_color_scheme", scheme);
-      },
-    });
-
-    // Opacity (slider)
-    this.renderSlider(panel, {
-      key: "opacity",
-      label: t("settings.appearance.opacity"),
-      value: this.currentSettings.opacity,
-      min: MIN_OPACITY,
-      max: MAX_OPACITY,
-      step: OPACITY_STEP,
-      hint: t("settings.appearance.opacityHint", { min: MIN_OPACITY, max: MAX_OPACITY }),
-      description: t("settings.appearance.opacityDesc"),
-      onInput: (v) => applyOpacity(v),
-      onSave: (v) => this.saveSetting("opacity", v),
-    });
-
-    // -- Layout subsection --
-    this.renderSubsectionHeader(panel, t("settings.appearance.layout"));
-
-    // Padding (number input)
-    this.renderNumberInput(panel, {
-      key: "padding",
-      label: t("settings.appearance.padding"),
-      value: this.currentSettings.padding,
-      min: MIN_PADDING,
-      max: MAX_PADDING,
-      step: 1,
-      unit: "px",
-      hint: t("settings.appearance.paddingHint", { min: MIN_PADDING, max: MAX_PADDING }),
-      description: t("settings.appearance.paddingDesc"),
-      onInput: (v) => applyPadding(v),
-      onSave: (v) => this.saveSetting("padding", v),
-    });
-
-    // Scrollback Lines (number input)
-    this.renderNumberInput(panel, {
-      key: "scrollback-lines",
-      label: t("settings.appearance.scrollbackLines"),
-      value: this.currentSettings.scrollback_lines,
-      min: MIN_SCROLLBACK_LINES,
-      max: MAX_SCROLLBACK_LINES,
-      step: 1000,
-      unit: "",
-      hint: t("settings.appearance.scrollbackLinesHint", { min: MIN_SCROLLBACK_LINES, max: MAX_SCROLLBACK_LINES }),
-      description: t("settings.appearance.scrollbackLinesDesc"),
-      onInput: () => {},
-      onSave: (v) => this.saveSetting("scrollback_lines", v),
-    });
-
-    // Show Scrollbar (select)
-    this.renderSelect(panel, {
-      key: "show-scrollbar",
-      label: t("settings.appearance.showScrollbar"),
-      value: this.currentSettings.show_scrollbar,
-      options: [
-        { value: "auto", label: t("settings.appearance.scrollbarAuto") },
-        { value: "always", label: t("settings.appearance.scrollbarAlways") },
-        { value: "never", label: t("settings.appearance.scrollbarNever") },
-      ],
-      description: t("settings.appearance.showScrollbarDesc"),
-      onSave: (v) => {
-        applyScrollbar(v as ScrollbarMode);
-        this.saveSetting("show_scrollbar", v as ScrollbarMode);
-      },
-    });
-
-  }
-
-  // ============================================================
-  // Terminal Category
-  // ============================================================
-
-  private renderTerminalSection(panel: HTMLElement): void {
-    if (!this.currentSettings) return;
-
-    const header = document.createElement("h2");
-    header.className = "settings-section-header";
-    header.textContent = t("settings.terminal.title");
-    panel.appendChild(header);
-
-    // -- Cursor subsection --
-    this.renderSubsectionHeader(panel, t("settings.terminal.cursor"));
-
-    // Cursor Style (select)
-    this.renderSelect(panel, {
-      key: "cursor-style",
-      label: t("settings.terminal.cursorStyle"),
-      value: this.currentSettings.cursor_style,
-      options: [
-        { value: "block", label: t("settings.terminal.cursorBlock") },
-        { value: "underline", label: t("settings.terminal.cursorUnderline") },
-        { value: "bar", label: t("settings.terminal.cursorBar") },
-      ],
-      description: t("settings.terminal.cursorStyleDesc"),
-      onSave: (v) => {
-        applyCursorStyle(v as CursorStyle);
-        this.saveSetting("cursor_style", v as CursorStyle);
-      },
-    });
-
-    // Cursor Blink (toggle)
-    this.renderToggle(panel, {
-      key: "cursor-blink",
-      label: t("settings.terminal.cursorBlink"),
-      value: this.currentSettings.cursor_blink,
-      description: t("settings.terminal.cursorBlinkDesc"),
-      onSave: (v) => {
-        applyCursorBlink(v);
-        this.saveSetting("cursor_blink", v);
-      },
-    });
-
-    // -- Shell subsection --
-    this.renderSubsectionHeader(panel, t("settings.terminal.shell"));
-
-    // Shell Path (text input)
-    this.renderTextInput(panel, {
-      key: "shell-path",
-      label: t("settings.terminal.shellPath"),
-      value: this.currentSettings.shell_path,
-      placeholder: t("settings.terminal.shellPathPlaceholder"),
-      hint: t("settings.terminal.shellPathHint"),
-      description: t("settings.terminal.shellPathDesc"),
-      onSave: (v) => this.saveSetting("shell_path", v),
-    });
-
-    // Shell Arguments (text input, comma-separated)
-    this.renderTextInput(panel, {
-      key: "shell-args",
-      label: t("settings.terminal.shellArgs"),
-      value: this.currentSettings.shell_args.join(", "),
-      placeholder: t("settings.terminal.shellArgsPlaceholder"),
-      hint: t("settings.terminal.shellArgsHint"),
-      description: t("settings.terminal.shellArgsDesc"),
-      onSave: (v) => {
-        const args = v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
-        this.saveSetting("shell_args", args);
-      },
-    });
-
-    // -- Behavior subsection --
-    this.renderSubsectionHeader(panel, t("settings.terminal.behavior"));
-
-    // Scroll Speed (slider)
-    this.renderSlider(panel, {
-      key: "scroll-speed",
-      label: t("settings.terminal.scrollSpeed"),
-      value: this.currentSettings.scroll_speed,
-      min: MIN_SCROLL_SPEED,
-      max: MAX_SCROLL_SPEED,
-      step: 1,
-      hint: t("settings.terminal.scrollSpeedHint", { min: MIN_SCROLL_SPEED, max: MAX_SCROLL_SPEED }),
-      description: t("settings.terminal.scrollSpeedDesc"),
-      onInput: () => {},
-      onSave: (v) => this.saveSetting("scroll_speed", v),
-    });
-
-    // Bell Action (select)
-    this.renderSelect(panel, {
-      key: "bell-action",
-      label: t("settings.terminal.bellAction"),
-      value: this.currentSettings.bell_action,
-      options: [
-        { value: "visual", label: t("settings.terminal.bellVisual") },
-        { value: "sound", label: t("settings.terminal.bellSound") },
-        { value: "none", label: t("settings.terminal.bellNone") },
-      ],
-      description: t("settings.terminal.bellActionDesc"),
-      onSave: (v) => this.saveSetting("bell_action", v as BellAction),
-    });
-
-    // URL Detection (toggle)
-    this.renderToggle(panel, {
-      key: "url-detection",
-      label: t("settings.terminal.urlDetection"),
-      value: this.currentSettings.url_detection,
-      description: t("settings.terminal.urlDetectionDesc"),
-      onSave: (v) => this.saveSetting("url_detection", v),
-    });
-
-    // Copy on Select (toggle)
-    this.renderToggle(panel, {
-      key: "copy-on-select",
-      label: t("settings.terminal.copyOnSelect"),
-      value: this.currentSettings.copy_on_select,
-      description: t("settings.terminal.copyOnSelectDesc"),
-      onSave: (v) => this.saveSetting("copy_on_select", v),
-    });
-  }
-
-  // ============================================================
-  // Keybinds Category
-  // ============================================================
-
-  private renderKeybindsSection(panel: HTMLElement): void {
-    if (!this.currentSettings) return;
-    const kb = this.currentSettings.keybinds;
-
-    const header = document.createElement("h2");
-    header.className = "settings-section-header";
-    header.textContent = t("settings.keybinds.title");
-    panel.appendChild(header);
-
-    // -- Basic subsection --
-    this.renderSubsectionHeader(panel, t("settings.keybinds.basic"));
-    this.renderKeybindInput(panel, "copy", t("settings.keybinds.copy"), kb.copy);
-    this.renderKeybindInput(panel, "paste", t("settings.keybinds.paste"), kb.paste);
-    this.renderKeybindInput(panel, "select_all", t("settings.keybinds.selectAll"), kb.select_all);
-    this.renderKeybindInput(panel, "search", t("settings.keybinds.search"), kb.search);
-
-    // -- Tab Management subsection --
-    this.renderSubsectionHeader(panel, t("settings.keybinds.tabManagement"));
-    this.renderKeybindInput(panel, "new_tab", t("settings.keybinds.newTab"), kb.new_tab);
-    this.renderKeybindInput(panel, "close_tab", t("settings.keybinds.closeTab"), kb.close_tab);
-    this.renderKeybindInput(panel, "next_tab", t("settings.keybinds.nextTab"), kb.next_tab);
-    this.renderKeybindInput(panel, "prev_tab", t("settings.keybinds.prevTab"), kb.prev_tab);
-
-    // -- Display subsection --
-    this.renderSubsectionHeader(panel, t("settings.keybinds.display"));
-    this.renderKeybindInput(panel, "zoom_in", t("settings.keybinds.zoomIn"), kb.zoom_in);
-    this.renderKeybindInput(panel, "zoom_out", t("settings.keybinds.zoomOut"), kb.zoom_out);
-    this.renderKeybindInput(panel, "zoom_reset", t("settings.keybinds.zoomReset"), kb.zoom_reset);
-    this.renderKeybindInput(panel, "toggle_fullscreen", t("settings.keybinds.toggleFullscreen"), kb.toggle_fullscreen);
-
-    // -- Settings subsection --
-    this.renderSubsectionHeader(panel, t("settings.keybinds.settingsSection"));
-    this.renderKeybindInput(panel, "open_settings", t("settings.keybinds.openSettings"), kb.open_settings);
-  }
-
-  // ============================================================
-  // UI Control Renderers
-  // ============================================================
-
-  private renderSubsectionHeader(panel: HTMLElement, text: string): void {
-    const h3 = document.createElement("h3");
-    h3.className = "settings-subsection-header";
-    h3.textContent = text;
-    panel.appendChild(h3);
-  }
-
-  private renderNumberInput(panel: HTMLElement, opts: {
-    key: string;
-    label: string;
-    value: number;
-    min: number;
-    max: number;
-    step: number;
-    unit: string;
-    hint: string;
-    description?: string;
-    onInput: (value: number) => void;
-    onSave: (value: number) => void;
-  }): void {
-    const row = document.createElement("div");
-    row.className = "settings-row";
-
-    const label = document.createElement("label");
-    label.className = "settings-label";
-    label.htmlFor = `settings-${opts.key}`;
-    label.textContent = opts.label;
-    row.appendChild(label);
-
-    if (opts.description) {
-      const desc = document.createElement("span");
-      desc.className = "settings-description";
-      desc.id = `settings-${opts.key}-desc`;
-      desc.textContent = opts.description;
-      row.appendChild(desc);
-    }
-
-    const inputGroup = document.createElement("div");
-    inputGroup.className = "settings-input-group";
-
-    const input = document.createElement("input");
-    input.type = "number";
-    input.id = `settings-${opts.key}`;
-    input.className = "settings-number-input";
-    input.min = String(opts.min);
-    input.max = String(opts.max);
-    input.step = String(opts.step);
-    input.value = String(opts.value);
-    if (opts.description) {
-      input.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
-    }
-    inputGroup.appendChild(input);
-
-    if (opts.unit) {
-      const unit = document.createElement("span");
-      unit.className = "settings-unit";
-      unit.textContent = opts.unit;
-      inputGroup.appendChild(unit);
-    }
-
-    row.appendChild(inputGroup);
-
-    const hint = document.createElement("span");
-    hint.className = "settings-hint";
-    hint.textContent = opts.hint;
-    row.appendChild(hint);
-
-    panel.appendChild(row);
-
-    // Event listeners
-    let lastSavedValue = opts.value;
-
-    const inputHandler = () => {
-      const v = Number(input.value);
-      if (v >= opts.min && v <= opts.max) {
-        opts.onInput(v);
-      }
     };
-    this.addContentListener(input, "input", inputHandler);
-
-    const saveHandler = () => {
-      let v = Number(input.value);
-      if (isNaN(v)) {
-        v = lastSavedValue;
-      }
-      v = Math.max(opts.min, Math.min(opts.max, v));
-      input.value = String(v);
-      if (v !== lastSavedValue) {
-        lastSavedValue = v;
-        opts.onSave(v);
-      }
-    };
-    this.addContentListener(input, "blur", saveHandler);
-    this.addContentListener(input, "keydown", (e: Event) => {
-      if ((e as KeyboardEvent).key === "Enter") saveHandler();
-    });
-  }
-
-  private renderTextInput(panel: HTMLElement, opts: {
-    key: string;
-    label: string;
-    value: string;
-    placeholder: string;
-    hint: string;
-    description?: string;
-    onSave: (value: string) => void;
-  }): void {
-    const row = document.createElement("div");
-    row.className = "settings-row";
-
-    const label = document.createElement("label");
-    label.className = "settings-label";
-    label.htmlFor = `settings-${opts.key}`;
-    label.textContent = opts.label;
-    row.appendChild(label);
-
-    if (opts.description) {
-      const desc = document.createElement("span");
-      desc.className = "settings-description";
-      desc.id = `settings-${opts.key}-desc`;
-      desc.textContent = opts.description;
-      row.appendChild(desc);
-    }
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.id = `settings-${opts.key}`;
-    input.className = "settings-text-input";
-    input.value = opts.value;
-    input.placeholder = opts.placeholder;
-    if (opts.description) {
-      input.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
-    }
-    row.appendChild(input);
-
-    const hint = document.createElement("span");
-    hint.className = "settings-hint";
-    hint.textContent = opts.hint;
-    row.appendChild(hint);
-
-    panel.appendChild(row);
-
-    // Save on blur/Enter
-    let lastSaved = opts.value;
-    const saveHandler = () => {
-      const v = input.value;
-      if (v !== lastSaved) {
-        lastSaved = v;
-        opts.onSave(v);
-      }
-    };
-    this.addContentListener(input, "blur", saveHandler);
-    this.addContentListener(input, "keydown", (e: Event) => {
-      if ((e as KeyboardEvent).key === "Enter") saveHandler();
-    });
-  }
-
-  private renderSelect(panel: HTMLElement, opts: {
-    key: string;
-    label: string;
-    value: string;
-    options: Array<{ value: string; label: string }>;
-    description?: string;
-    onSave: (value: string) => void;
-  }): void {
-    const row = document.createElement("div");
-    row.className = "settings-row";
-
-    const label = document.createElement("label");
-    label.className = "settings-label";
-    label.htmlFor = `settings-${opts.key}`;
-    label.textContent = opts.label;
-    row.appendChild(label);
-
-    if (opts.description) {
-      const desc = document.createElement("span");
-      desc.className = "settings-description";
-      desc.id = `settings-${opts.key}-desc`;
-      desc.textContent = opts.description;
-      row.appendChild(desc);
-    }
-
-    const select = document.createElement("select");
-    select.id = `settings-${opts.key}`;
-    select.className = "settings-select";
-    if (opts.description) {
-      select.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
-    }
-
-    for (const opt of opts.options) {
-      const option = document.createElement("option");
-      option.value = opt.value;
-      option.textContent = opt.label;
-      if (opt.value === opts.value) option.selected = true;
-      select.appendChild(option);
-    }
-    row.appendChild(select);
-
-    panel.appendChild(row);
-
-    // Save on change
-    this.addContentListener(select, "change", () => {
-      opts.onSave(select.value);
-    });
-  }
-
-  private renderToggle(panel: HTMLElement, opts: {
-    key: string;
-    label: string;
-    value: boolean;
-    description?: string;
-    onSave: (value: boolean) => void;
-  }): void {
-    const row = document.createElement("div");
-    row.className = "settings-row settings-row-toggle";
-
-    const label = document.createElement("label");
-    label.className = "settings-label";
-    label.htmlFor = `settings-${opts.key}`;
-    label.textContent = opts.label;
-
-    if (opts.description) {
-      const wrapper = document.createElement("div");
-      wrapper.className = "settings-toggle-label-group";
-      wrapper.appendChild(label);
-
-      const desc = document.createElement("span");
-      desc.className = "settings-description";
-      desc.id = `settings-${opts.key}-desc`;
-      desc.textContent = opts.description;
-      wrapper.appendChild(desc);
-
-      row.appendChild(wrapper);
-    } else {
-      row.appendChild(label);
-    }
-
-    const button = document.createElement("button");
-    button.id = `settings-${opts.key}`;
-    button.className = "settings-toggle";
-    button.setAttribute("role", "switch");
-    button.setAttribute("aria-checked", String(opts.value));
-    if (opts.description) {
-      button.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
-    }
-    if (opts.value) button.classList.add("on");
-
-    const track = document.createElement("span");
-    track.className = "settings-toggle-track";
-    const thumb = document.createElement("span");
-    thumb.className = "settings-toggle-thumb";
-    track.appendChild(thumb);
-    button.appendChild(track);
-
-    row.appendChild(button);
-    panel.appendChild(row);
-
-    // Toggle on click
-    let currentValue = opts.value;
-    this.addContentListener(button, "click", () => {
-      currentValue = !currentValue;
-      button.setAttribute("aria-checked", String(currentValue));
-      button.classList.toggle("on", currentValue);
-      opts.onSave(currentValue);
-    });
-  }
-
-  private renderSlider(panel: HTMLElement, opts: {
-    key: string;
-    label: string;
-    value: number;
-    min: number;
-    max: number;
-    step: number;
-    hint: string;
-    description?: string;
-    onInput: (value: number) => void;
-    onSave: (value: number) => void;
-  }): void {
-    const row = document.createElement("div");
-    row.className = "settings-row";
-
-    const label = document.createElement("label");
-    label.className = "settings-label";
-    label.htmlFor = `settings-${opts.key}`;
-    label.textContent = opts.label;
-    row.appendChild(label);
-
-    if (opts.description) {
-      const desc = document.createElement("span");
-      desc.className = "settings-description";
-      desc.id = `settings-${opts.key}-desc`;
-      desc.textContent = opts.description;
-      row.appendChild(desc);
-    }
-
-    const sliderGroup = document.createElement("div");
-    sliderGroup.className = "settings-slider-group";
-
-    const input = document.createElement("input");
-    input.type = "range";
-    input.id = `settings-${opts.key}`;
-    input.className = "settings-slider";
-    input.min = String(opts.min);
-    input.max = String(opts.max);
-    input.step = String(opts.step);
-    input.value = String(opts.value);
-    if (opts.description) {
-      input.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
-    }
-    sliderGroup.appendChild(input);
-
-    const valueDisplay = document.createElement("span");
-    valueDisplay.className = "settings-slider-value";
-    valueDisplay.textContent = String(opts.value);
-    sliderGroup.appendChild(valueDisplay);
-
-    row.appendChild(sliderGroup);
-
-    const hint = document.createElement("span");
-    hint.className = "settings-hint";
-    hint.textContent = opts.hint;
-    row.appendChild(hint);
-
-    panel.appendChild(row);
-
-    // Event listeners
-    this.addContentListener(input, "input", () => {
-      const v = Number(input.value);
-      valueDisplay.textContent = String(v);
-      opts.onInput(v);
-    });
-    this.addContentListener(input, "change", () => {
-      const v = Number(input.value);
-      opts.onSave(v);
-    });
-  }
-
-  // ============================================================
-  // Font Picker
-  // ============================================================
-
-  private renderFontPickerInput(panel: HTMLElement, opts: {
-    key: string;
-    label: string;
-    value: string;
-    placeholder: string;
-    hint: string;
-    description?: string;
-    category: FontCategory;
-    onSelect: (value: string) => void;
-  }): void {
-    const row = document.createElement("div");
-    row.className = "settings-row";
-
-    const label = document.createElement("label");
-    label.className = "settings-label";
-    label.htmlFor = `settings-${opts.key}`;
-    label.textContent = opts.label;
-    row.appendChild(label);
-
-    if (opts.description) {
-      const desc = document.createElement("span");
-      desc.className = "settings-description";
-      desc.id = `settings-${opts.key}-desc`;
-      desc.textContent = opts.description;
-      row.appendChild(desc);
-    }
-
-    const inputGroup = document.createElement("div");
-    inputGroup.className = "settings-font-picker-group";
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.id = `settings-${opts.key}`;
-    input.className = "settings-font-picker-input";
-    input.value = opts.value;
-    input.placeholder = opts.placeholder;
-    input.readOnly = true;
-    if (opts.description) {
-      input.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
-    }
-    inputGroup.appendChild(input);
-
-    const changeBtn = document.createElement("button");
-    changeBtn.className = "settings-font-picker-button";
-    changeBtn.textContent = t("settings.appearance.fontPickerChange");
-    changeBtn.type = "button";
-    inputGroup.appendChild(changeBtn);
-
-    row.appendChild(inputGroup);
-
-    const hint = document.createElement("span");
-    hint.className = "settings-hint";
-    hint.textContent = opts.hint;
-    row.appendChild(hint);
-
-    panel.appendChild(row);
-
-    // Button click opens font picker
-    this.addContentListener(changeBtn, "click", () => {
-      this.showFontPicker(opts.category, opts.value, (selectedFont) => {
-        input.value = selectedFont;
-        opts.onSelect(selectedFont);
-      });
-    });
-  }
-
-  private async showFontPicker(
-    category: FontCategory,
-    currentValue: string,
-    onSelect: (value: string) => void,
-  ): Promise<void> {
-    if (!this.contentElement) return;
-
-    // Detach current content listeners
-    this.detachContentListeners();
-
-    // Clear content area
-    this.contentElement.innerHTML = "";
-
-    // Disable navigation tabs
-    this.setNavTabsEnabled(false);
-
-    // Get title based on category
-    const titleMap: Record<FontCategory, string> = {
-      primary: t("settings.appearance.fontPickerPrimaryTitle"),
-      secondary: t("settings.appearance.fontPickerSecondaryTitle"),
-      emoji: t("settings.appearance.fontPickerEmojiTitle"),
-    };
-
-    // Load fonts
-    let fontList: string[] = [];
-    try {
-      const fonts = await FontService.list();
-      switch (category) {
-        case "primary":
-          fontList = fonts.monospace_fonts;
-          break;
-        case "secondary":
-          fontList = fonts.all_fonts;
-          break;
-        case "emoji":
-          fontList = fonts.emoji_fonts;
-          break;
-      }
-    } catch (err) {
-      console.error("Failed to load fonts:", err);
-    }
-
-    // Build font picker UI
-    const picker = document.createElement("div");
-    picker.className = "font-picker";
-
-    // Header
-    const header = document.createElement("div");
-    header.className = "font-picker-header";
-
-    const backBtn = document.createElement("button");
-    backBtn.className = "font-picker-back";
-    backBtn.setAttribute("aria-label", t("settings.appearance.fontPickerBack"));
-    backBtn.textContent = "\u2190"; // Left arrow
-    backBtn.type = "button";
-    header.appendChild(backBtn);
-
-    const title = document.createElement("h3");
-    title.className = "font-picker-title";
-    title.textContent = titleMap[category];
-    header.appendChild(title);
-
-    picker.appendChild(header);
-
-    // Search
-    const searchContainer = document.createElement("div");
-    searchContainer.className = "font-picker-search";
-
-    const searchInput = document.createElement("input");
-    searchInput.type = "text";
-    searchInput.className = "font-picker-search-input";
-    searchInput.placeholder = t("settings.appearance.fontPickerSearch");
-    searchInput.setAttribute("aria-label", t("settings.appearance.fontPickerSearch"));
-    searchContainer.appendChild(searchInput);
-
-    picker.appendChild(searchContainer);
-
-    // Font list container
-    const listContainer = document.createElement("div");
-    listContainer.className = "font-picker-list";
-    listContainer.setAttribute("role", "listbox");
-    listContainer.setAttribute("aria-label", titleMap[category]);
-    picker.appendChild(listContainer);
-
-    this.contentElement.appendChild(picker);
-
-    // Render the font list
-    const renderList = (fonts: string[]) => {
-      listContainer.innerHTML = "";
-
-      if (fonts.length === 0) {
-        const noResults = document.createElement("div");
-        noResults.className = "font-picker-no-results";
-        noResults.textContent = t("settings.appearance.fontPickerNoResults");
-        listContainer.appendChild(noResults);
-        return;
-      }
-
-      for (const fontName of fonts) {
-        const item = document.createElement("div");
-        item.className = "font-picker-item";
-        item.setAttribute("role", "option");
-        item.setAttribute("tabindex", "-1");
-        item.style.fontFamily = `'${fontName.replace(/'/g, "\\'")}', sans-serif`;
-        item.textContent = fontName;
-
-        const isSelected = fontName === currentValue;
-        item.setAttribute("aria-selected", String(isSelected));
-        if (isSelected) {
-          item.setAttribute("tabindex", "0");
-        }
-
-        listContainer.appendChild(item);
-      }
-
-      // Scroll selected item into view
-      const selectedItem = listContainer.querySelector('[aria-selected="true"]');
-      if (selectedItem) {
-        selectedItem.scrollIntoView({ block: "center" });
-      }
-    };
-
-    renderList(fontList);
-
-    // Event: back button
-    this.addContentListener(backBtn, "click", () => {
-      this.hideFontPicker();
-    });
-
-    // Event: search input
-    this.addContentListener(searchInput, "input", () => {
-      const filtered = this.filterFontList(searchInput.value, fontList);
-      renderList(filtered);
-    });
-
-    // Event: font list click
-    this.addContentListener(listContainer, "click", (e: Event) => {
-      const target = e.target as HTMLElement;
-      if (target.classList.contains("font-picker-item")) {
-        const fontName = target.textContent || "";
-        onSelect(fontName);
-        this.hideFontPicker();
-      }
-    });
-
-    // Event: keyboard navigation on list
-    this.addContentListener(listContainer, "keydown", (e: Event) => {
-      const ke = e as KeyboardEvent;
-      const target = ke.target as HTMLElement;
-      if (!target.classList.contains("font-picker-item")) return;
-
-      switch (ke.key) {
-        case "ArrowDown": {
-          ke.preventDefault();
-          const next = target.nextElementSibling as HTMLElement | null;
-          if (next && next.classList.contains("font-picker-item")) {
-            target.setAttribute("tabindex", "-1");
-            next.setAttribute("tabindex", "0");
-            next.focus();
-          }
-          break;
-        }
-        case "ArrowUp": {
-          ke.preventDefault();
-          const prev = target.previousElementSibling as HTMLElement | null;
-          if (prev && prev.classList.contains("font-picker-item")) {
-            target.setAttribute("tabindex", "-1");
-            prev.setAttribute("tabindex", "0");
-            prev.focus();
-          }
-          break;
-        }
-        case "Enter": {
-          ke.preventDefault();
-          const fontName = target.textContent || "";
-          onSelect(fontName);
-          this.hideFontPicker();
-          break;
-        }
-        case "Escape": {
-          ke.preventDefault();
-          this.hideFontPicker();
-          break;
-        }
-      }
-    });
-
-    // Event: Escape on search input
-    this.addContentListener(searchInput, "keydown", (e: Event) => {
-      if ((e as KeyboardEvent).key === "Escape") {
-        e.preventDefault();
-        this.hideFontPicker();
-      }
-    });
-
-    // Focus search input
-    searchInput.focus();
-  }
-
-  private hideFontPicker(): void {
-    // Re-enable navigation tabs
-    this.setNavTabsEnabled(true);
-
-    // Detach font picker listeners
-    this.detachContentListeners();
-
-    // Restore settings view
-    this.renderContent();
-  }
-
-  private setNavTabsEnabled(enabled: boolean): void {
-    if (!this.navElement) return;
-    const tabs = this.navElement.querySelectorAll(".settings-nav-item");
-    for (const tab of tabs) {
-      if (enabled) {
-        tab.classList.remove("disabled");
-        (tab as HTMLButtonElement).disabled = false;
-        tab.removeAttribute("aria-disabled");
-      } else {
-        tab.classList.add("disabled");
-        (tab as HTMLButtonElement).disabled = true;
-        tab.setAttribute("aria-disabled", "true");
-      }
-    }
-  }
-
-  filterFontList(searchText: string, fonts: string[]): string[] {
-    if (!searchText) return fonts;
-    const lower = searchText.toLowerCase();
-    return fonts.filter((name) => name.toLowerCase().includes(lower));
-  }
-
-  private renderKeybindInput(
-    panel: HTMLElement,
-    keybindKey: string,
-    label: string,
-    currentValue: string,
-  ): void {
-    const row = document.createElement("div");
-    row.className = "settings-row settings-row-keybind";
-
-    const labelEl = document.createElement("label");
-    labelEl.className = "settings-label";
-    labelEl.textContent = label;
-    row.appendChild(labelEl);
-
-    const button = document.createElement("button");
-    button.className = "settings-keybind-input";
-    button.dataset.key = keybindKey;
-    button.textContent = currentValue;
-    row.appendChild(button);
-
-    panel.appendChild(row);
-
-    // Click to enter capture mode
-    this.addContentListener(button, "click", () => {
-      this.enterKeybindCapture(button, keybindKey, currentValue);
-    });
-  }
-
-  // ============================================================
-  // Keybind Capture
-  // ============================================================
-
-  private enterKeybindCapture(button: HTMLButtonElement, key: string, originalValue: string): void {
-    // Cancel any existing capture
-    if (this.capturingKeybindButton) {
-      this.exitKeybindCapture(true);
-    }
-
-    this.capturingKeybindButton = button;
-    this.capturingKeybindKey = key;
-    this.capturingOriginalValue = originalValue;
-
-    button.classList.add("capturing");
-    button.textContent = t("settings.keybinds.pressKey");
-    button.focus();
-
-    // Capture keydown
-    const keydownHandler = (e: Event) => {
-      const ke = e as KeyboardEvent;
-      e.preventDefault();
-      e.stopPropagation();
-
-      // Escape cancels
-      if (ke.key === "Escape") {
-        this.exitKeybindCapture(true);
-        return;
-      }
-
-      // Ignore bare modifier keys
-      if (["Control", "Shift", "Alt", "Meta"].includes(ke.key)) {
-        return;
-      }
-
-      // Build key combination string
-      const parts: string[] = [];
-      if (ke.ctrlKey) parts.push("Ctrl");
-      if (ke.shiftKey) parts.push("Shift");
-      if (ke.altKey) parts.push("Alt");
-      if (ke.metaKey) parts.push("Meta");
-
-      // Normalize key name
-      let keyName = ke.key;
-      if (keyName === " ") keyName = "Space";
-      else if (keyName === "+") keyName = "Plus";
-      else if (keyName === "-") keyName = "Minus";
-      else if (keyName.length === 1) keyName = keyName.toUpperCase();
-
-      parts.push(keyName);
-      const combo = parts.join("+");
-
-      // Update button and save
-      button.textContent = combo;
-      this.saveKeybind(key, combo);
-      this.exitKeybindCapture(false);
-    };
-
-    // Use capture phase to intercept before other handlers
-    document.addEventListener("keydown", keydownHandler, true);
-
-    // Store cleanup
-    this.eventListeners.push({
-      element: document,
-      type: "keydown",
-      handler: keydownHandler,
-    });
-  }
-
-  private exitKeybindCapture(cancelled: boolean): void {
-    if (!this.capturingKeybindButton) return;
-
-    if (cancelled && this.capturingOriginalValue !== null) {
-      this.capturingKeybindButton.textContent = this.capturingOriginalValue;
-    }
-
-    this.capturingKeybindButton.classList.remove("capturing");
-    this.capturingKeybindButton = null;
-    this.capturingKeybindKey = null;
-    this.capturingOriginalValue = null;
-
-    // Remove the capture keydown listener
-    this.eventListeners = this.eventListeners.filter((listener) => {
-      if (listener.element === document && listener.type === "keydown") {
-        listener.element.removeEventListener(listener.type, listener.handler, true);
-        return false;
-      }
-      return true;
-    });
-  }
-
-  private async saveKeybind(key: string, value: string): Promise<void> {
-    if (!this.currentSettings) return;
-    (this.currentSettings.keybinds as any)[key] = value;
-    try {
-      await SettingsService.save(this.currentSettings);
-    } catch (error) {
-      console.error("Failed to save keybind:", error);
-    }
   }
 
   // ============================================================
   // Settings Save Helper
   // ============================================================
-
-  /** Apply font family chain from current settings. */
-  private applyCurrentFontFamily(): void {
-    if (!this.currentSettings) return;
-    applyFontFamily(
-      this.currentSettings.font_family_primary,
-      this.currentSettings.font_family_emoji,
-      this.currentSettings.font_family_secondary,
-    );
-  }
 
   private async saveSetting<K extends keyof AppSettings>(
     key: K,
@@ -1492,8 +345,12 @@ export class SettingsPanel {
 
   private switchCategory(categoryId: string): void {
     // Cancel any keybind capture
-    if (this.capturingKeybindButton) {
-      this.exitKeybindCapture(true);
+    if (this.keybindState.capturingKeybindButton) {
+      exitKeybindCapture(true, {
+        state: this.keybindState,
+        eventListeners: this.eventListeners,
+        currentSettings: this.currentSettings,
+      });
     }
 
     this.detachContentListeners();
@@ -1506,13 +363,22 @@ export class SettingsPanel {
   // Public API
   // ============================================================
 
+  /** Delegate to font-picker filterFontList for backward compatibility */
+  filterFontList(searchText: string, fonts: string[]): string[] {
+    return filterFontList(searchText, fonts);
+  }
+
   getPanelElement(): HTMLElement {
     return this.container;
   }
 
   dispose(): void {
-    if (this.capturingKeybindButton) {
-      this.exitKeybindCapture(true);
+    if (this.keybindState.capturingKeybindButton) {
+      exitKeybindCapture(true, {
+        state: this.keybindState,
+        eventListeners: this.eventListeners,
+        currentSettings: this.currentSettings,
+      });
     }
 
     this.detachContentListeners();
