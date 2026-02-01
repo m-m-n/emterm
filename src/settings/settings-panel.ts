@@ -235,17 +235,48 @@ export class SettingsPanel {
       onSave: (v) => this.saveSetting("font_size", v),
     });
 
-    // Font Family (text input)
+    // Primary Font (text input)
     this.renderTextInput(panel, {
-      key: "font-family",
-      label: t("settings.appearance.fontFamily"),
-      value: this.currentSettings.font_family,
-      placeholder: t("settings.appearance.fontFamilyPlaceholder"),
-      hint: t("settings.appearance.fontFamilyHint"),
-      description: t("settings.appearance.fontFamilyDesc"),
+      key: "font-family-primary",
+      label: t("settings.appearance.fontFamilyPrimary"),
+      value: this.currentSettings.font_family_primary,
+      placeholder: t("settings.appearance.fontFamilyPrimaryPlaceholder"),
+      hint: t("settings.appearance.fontFamilyPrimaryHint"),
+      description: t("settings.appearance.fontFamilyPrimaryDesc"),
       onSave: (v) => {
-        applyFontFamily(v);
-        this.saveSetting("font_family", v);
+        this.currentSettings!.font_family_primary = v;
+        this.applyCurrentFontFamily();
+        this.saveSetting("font_family_primary", v);
+      },
+    });
+
+    // Secondary Font (text input)
+    this.renderTextInput(panel, {
+      key: "font-family-secondary",
+      label: t("settings.appearance.fontFamilySecondary"),
+      value: this.currentSettings.font_family_secondary,
+      placeholder: t("settings.appearance.fontFamilySecondaryPlaceholder"),
+      hint: t("settings.appearance.fontFamilySecondaryHint"),
+      description: t("settings.appearance.fontFamilySecondaryDesc"),
+      onSave: (v) => {
+        this.currentSettings!.font_family_secondary = v;
+        this.applyCurrentFontFamily();
+        this.saveSetting("font_family_secondary", v);
+      },
+    });
+
+    // Emoji Font (text input)
+    this.renderTextInput(panel, {
+      key: "font-family-emoji",
+      label: t("settings.appearance.fontFamilyEmoji"),
+      value: this.currentSettings.font_family_emoji,
+      placeholder: t("settings.appearance.fontFamilyEmojiPlaceholder"),
+      hint: t("settings.appearance.fontFamilyEmojiHint"),
+      description: t("settings.appearance.fontFamilyEmojiDesc"),
+      onSave: (v) => {
+        this.currentSettings!.font_family_emoji = v;
+        this.applyCurrentFontFamily();
+        this.saveSetting("font_family_emoji", v);
       },
     });
 
@@ -1006,6 +1037,16 @@ export class SettingsPanel {
   // ============================================================
   // Settings Save Helper
   // ============================================================
+
+  /** Apply font family chain from current settings. */
+  private applyCurrentFontFamily(): void {
+    if (!this.currentSettings) return;
+    applyFontFamily(
+      this.currentSettings.font_family_primary,
+      this.currentSettings.font_family_emoji,
+      this.currentSettings.font_family_secondary,
+    );
+  }
 
   private async saveSetting<K extends keyof AppSettings>(
     key: K,

@@ -8,6 +8,7 @@ import {
   applySettingsToCSS,
   applyFontSize,
   applyFontFamily,
+  buildFontFamilyChain,
   applyLineHeight,
   applyUiTheme,
   applyTerminalColorScheme,
@@ -121,7 +122,9 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
 
   return {
     font_size: 13,
-    font_family: "",
+    font_family_primary: "",
+    font_family_secondary: "",
+    font_family_emoji: "",
     line_height: 1.2,
     ui_theme: "system",
     terminal_color_scheme: "",
@@ -138,6 +141,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     url_detection: true,
     copy_on_select: false,
     keybinds: defaultKeybinds,
+    language: "auto",
     ...overrides,
   };
 }
@@ -159,33 +163,73 @@ describe("applyFontSize", () => {
   });
 });
 
-describe("applyFontFamily", () => {
-  test("should set --terminal-font-family for non-empty value", () => {
-    applyFontFamily("Fira Code");
-    expect(mockStyle.properties["--terminal-font-family"]).toBe("Fira Code");
+describe("buildFontFamilyChain", () => {
+  test("all empty -> monospace", () => {
+    expect(buildFontFamilyChain("", "", "")).toBe("monospace");
   });
 
-  test("should remove --terminal-font-family for empty string", () => {
-    // First set it
-    mockStyle.properties["--terminal-font-family"] = "Fira Code";
-    applyFontFamily("");
+  test("primary only", () => {
+    expect(buildFontFamilyChain("Fira Code", "", "")).toBe("Fira Code, monospace");
+  });
+
+  test("primary + secondary", () => {
+    expect(buildFontFamilyChain("Fira Code", "", "Noto Sans JP")).toBe("Fira Code, Noto Sans JP, monospace");
+  });
+
+  test("all three filled", () => {
+    expect(buildFontFamilyChain("JetBrains Mono", "Noto Color Emoji", "Noto Sans JP")).toBe(
+      "JetBrains Mono, Noto Color Emoji, Noto Sans JP, monospace",
+    );
+  });
+
+  test("emoji + secondary (no primary)", () => {
+    expect(buildFontFamilyChain("", "Noto Color Emoji", "Noto Sans JP")).toBe(
+      "Noto Color Emoji, Noto Sans JP, monospace",
+    );
+  });
+
+  test("secondary only", () => {
+    expect(buildFontFamilyChain("", "", "Noto Sans JP")).toBe("Noto Sans JP, monospace");
+  });
+
+  test("emoji only", () => {
+    expect(buildFontFamilyChain("", "Noto Color Emoji", "")).toBe("Noto Color Emoji, monospace");
+  });
+});
+
+describe("applyFontFamily", () => {
+  test("should set --terminal-font-family for non-empty primary", () => {
+    applyFontFamily("Fira Code", "", "");
+    expect(mockStyle.properties["--terminal-font-family"]).toBe("Fira Code, monospace");
+  });
+
+  test("should remove --terminal-font-family when all empty", () => {
+    mockStyle.properties["--terminal-font-family"] = "Fira Code, monospace";
+    applyFontFamily("", "", "");
     expect(mockStyle.properties["--terminal-font-family"]).toBeUndefined();
   });
 
-  test("should notify renderers with fontFamily", () => {
-    applyFontFamily("JetBrains Mono");
+  test("should notify renderers with chain string", () => {
+    applyFontFamily("JetBrains Mono", "", "");
     expect(mockRendererCalls).toContainEqual({
       setting: "fontFamily",
-      value: "JetBrains Mono",
+      value: "JetBrains Mono, monospace",
     });
   });
 
-  test("should notify renderers with empty string for default", () => {
-    applyFontFamily("");
+  test("should notify renderers with monospace when all empty", () => {
+    applyFontFamily("", "", "");
     expect(mockRendererCalls).toContainEqual({
       setting: "fontFamily",
-      value: "",
+      value: "monospace",
     });
+  });
+
+  test("should build full chain with all three fonts", () => {
+    applyFontFamily("Fira Code", "Noto Color Emoji", "Noto Sans JP");
+    expect(mockStyle.properties["--terminal-font-family"]).toBe(
+      "Fira Code, Noto Color Emoji, Noto Sans JP, monospace",
+    );
   });
 });
 
@@ -314,7 +358,7 @@ describe("applySettings (full)", () => {
   test("should apply all settings", () => {
     const settings = makeSettings({
       font_size: 16,
-      font_family: "JetBrains Mono",
+      font_family_primary: "JetBrains Mono",
       line_height: 1.4,
       ui_theme: "dark",
       padding: 8,
@@ -326,7 +370,7 @@ describe("applySettings (full)", () => {
 
     expect(mockStyle.properties["--terminal-font-size"]).toBe("16pt");
     expect(mockStyle.properties["--terminal-font-family"]).toBe(
-      "JetBrains Mono",
+      "JetBrains Mono, monospace",
     );
     expect(mockStyle.properties["--terminal-line-height"]).toBe("1.4");
     expect(mockDataTheme).toBe("dark");

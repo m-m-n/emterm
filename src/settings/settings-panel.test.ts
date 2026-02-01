@@ -25,8 +25,10 @@ mock.module("./settings-service", () => ({
 // Mock settings-applier
 mock.module("./settings-applier", () => ({
   applySettings: () => {},
+  applySettingsToCSS: () => {},
   applyFontSize: () => {},
   applyFontFamily: () => {},
+  buildFontFamilyChain: () => "monospace",
   applyLineHeight: () => {},
   applyUiTheme: () => {},
   applyTerminalColorScheme: () => {},
@@ -58,7 +60,9 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
 
   return {
     font_size: 13,
-    font_family: "",
+    font_family_primary: "",
+    font_family_secondary: "",
+    font_family_emoji: "",
     line_height: 1.2,
     ui_theme: "system",
     terminal_color_scheme: "",
@@ -142,9 +146,9 @@ describe("SettingsPanel render methods - description feature", () => {
     });
 
     test("should set aria-describedby on text inputs", () => {
-      const fontFamilyInput = container.querySelector("#settings-font-family") as HTMLInputElement;
+      const fontFamilyInput = container.querySelector("#settings-font-family-primary") as HTMLInputElement;
       expect(fontFamilyInput).not.toBeNull();
-      expect(fontFamilyInput?.getAttribute("aria-describedby")).toBe("settings-font-family-desc");
+      expect(fontFamilyInput?.getAttribute("aria-describedby")).toBe("settings-font-family-primary-desc");
     });
 
     test("should set aria-describedby on select elements", () => {

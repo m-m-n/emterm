@@ -48,18 +48,27 @@ bun tauri build
 
 ### Testing & Verification
 
-**Rust Tests:**
+**⚠️ テスト実行はDocker環境を優先すること。** ホスト環境の設定ファイルやキャッシュを破損するリスクを避けるため、テストは原則Docker内で実行する。
+
+**Docker経由（推奨）:**
+```bash
+# Rust テスト
+docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --manifest-path src-tauri/Cargo.toml"
+
+# TypeScript テスト
+docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "bun test"
+
+# TypeScript 型チェック
+docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "bun run typecheck"
+
+# E2E テスト（フルサイクル）
+./scripts/run-e2e-docker.sh
+```
+
+**ホスト直接実行（開発者が明示的に許可した場合のみ）:**
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-**TypeScript Tests:**
-```bash
 bun test
-```
-
-**Type Check:**
-```bash
 bun run typecheck
 ```
 

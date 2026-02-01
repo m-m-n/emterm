@@ -28,7 +28,9 @@ export type Language = "auto" | "en" | "ja";
 export interface AppSettings {
   // Font
   font_size: number;
-  font_family: string;
+  font_family_primary: string;
+  font_family_secondary: string;
+  font_family_emoji: string;
   line_height: number;
 
   // Theme / Color

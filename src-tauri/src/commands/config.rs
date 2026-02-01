@@ -260,7 +260,15 @@ pub struct AppSettings {
     )]
     pub font_size: u32,
     #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub font_family: String,
+    pub font_family_primary: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub font_family_secondary: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub font_family_emoji: String,
+
+    /// Legacy field for backward compatibility. Read during deserialization but never serialized.
+    #[serde(default, skip_serializing)]
+    font_family: String,
     #[serde(
         default = "default_line_height",
         deserialize_with = "deserialize_null_line_height"
@@ -329,6 +337,9 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             font_size: default_font_size(),
+            font_family_primary: String::new(),
+            font_family_secondary: String::new(),
+            font_family_emoji: String::new(),
             font_family: String::new(),
             line_height: default_line_height(),
             ui_theme: UiTheme::default(),
@@ -537,7 +548,15 @@ pub fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
     // Parse JSON — serde(default) handles missing fields,
     // deserialize_null_default handles null values
     match serde_json::from_str::<AppSettings>(&contents) {
-        Ok(settings) => Ok(settings),
+        Ok(mut settings) => {
+            // Migration: move legacy font_family to font_family_primary if needed
+            if !settings.font_family.is_empty() && settings.font_family_primary.is_empty() {
+                settings.font_family_primary = std::mem::take(&mut settings.font_family);
+            } else {
+                settings.font_family.clear();
+            }
+            Ok(settings)
+        }
         Err(e) => {
             log::warn!("Failed to parse settings file: {}", e);
             Ok(AppSettings::default())
@@ -587,7 +606,9 @@ mod tests {
     fn test_app_settings_default() {
         let settings = AppSettings::default();
         assert_eq!(settings.font_size, 13);
-        assert_eq!(settings.font_family, "");
+        assert_eq!(settings.font_family_primary, "");
+        assert_eq!(settings.font_family_secondary, "");
+        assert_eq!(settings.font_family_emoji, "");
         assert_eq!(settings.line_height, 1.2);
         assert_eq!(settings.ui_theme, UiTheme::System);
         assert_eq!(settings.terminal_color_scheme, "");
@@ -644,7 +665,9 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.font_size, 16);
         // All new fields use defaults
-        assert_eq!(settings.font_family, "");
+        assert_eq!(settings.font_family_primary, "");
+        assert_eq!(settings.font_family_secondary, "");
+        assert_eq!(settings.font_family_emoji, "");
         assert_eq!(settings.line_height, 1.2);
         assert_eq!(settings.ui_theme, UiTheme::System);
         assert_eq!(settings.cursor_style, CursorStyle::Block);
@@ -751,7 +774,10 @@ mod tests {
     fn test_round_trip_preserves_all_fields() {
         let settings = AppSettings {
             font_size: 16,
-            font_family: "Fira Code".to_string(),
+            font_family_primary: "Fira Code".to_string(),
+            font_family_secondary: "Noto Sans JP".to_string(),
+            font_family_emoji: "Noto Color Emoji".to_string(),
+            font_family: String::new(),
             line_height: 1.5,
             ui_theme: UiTheme::Dark,
             terminal_color_scheme: "monokai".to_string(),
@@ -779,7 +805,9 @@ mod tests {
         let restored: AppSettings = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.font_size, 16);
-        assert_eq!(restored.font_family, "Fira Code");
+        assert_eq!(restored.font_family_primary, "Fira Code");
+        assert_eq!(restored.font_family_secondary, "Noto Sans JP");
+        assert_eq!(restored.font_family_emoji, "Noto Color Emoji");
         assert_eq!(restored.line_height, 1.5);
         assert_eq!(restored.ui_theme, UiTheme::Dark);
         assert_eq!(restored.terminal_color_scheme, "monokai");
@@ -949,5 +977,66 @@ mod tests {
 
         settings.scroll_speed = MAX_SCROLL_SPEED;
         assert!(validate_settings(&settings).is_ok());
+    }
+
+    // -- Font family migration --
+
+    #[test]
+    fn test_migrate_legacy_font_family_to_primary() {
+        let json = r#"{"font_family": "Fira Code"}"#;
+        let mut settings: AppSettings = serde_json::from_str(json).unwrap();
+        // Simulate migration (load_settings does this)
+        if !settings.font_family.is_empty() && settings.font_family_primary.is_empty() {
+            settings.font_family_primary = std::mem::take(&mut settings.font_family);
+        } else {
+            settings.font_family.clear();
+        }
+        assert_eq!(settings.font_family_primary, "Fira Code");
+        assert_eq!(settings.font_family_secondary, "");
+        assert_eq!(settings.font_family_emoji, "");
+    }
+
+    #[test]
+    fn test_migrate_font_family_primary_takes_precedence() {
+        let json = r#"{"font_family": "Old Font", "font_family_primary": "New Font"}"#;
+        let mut settings: AppSettings = serde_json::from_str(json).unwrap();
+        if !settings.font_family.is_empty() && settings.font_family_primary.is_empty() {
+            settings.font_family_primary = std::mem::take(&mut settings.font_family);
+        } else {
+            settings.font_family.clear();
+        }
+        assert_eq!(settings.font_family_primary, "New Font");
+    }
+
+    #[test]
+    fn test_font_family_not_serialized() {
+        let settings = AppSettings::default();
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(!json.contains("\"font_family\""));
+        assert!(json.contains("\"font_family_primary\""));
+        assert!(json.contains("\"font_family_secondary\""));
+        assert!(json.contains("\"font_family_emoji\""));
+    }
+
+    #[test]
+    fn test_deserialize_null_font_family_fields() {
+        let json = r#"{"font_family_primary": null, "font_family_secondary": null, "font_family_emoji": null}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.font_family_primary, "");
+        assert_eq!(settings.font_family_secondary, "");
+        assert_eq!(settings.font_family_emoji, "");
+    }
+
+    #[test]
+    fn test_three_font_family_fields_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.font_family_primary = "JetBrains Mono".to_string();
+        settings.font_family_secondary = "Noto Sans JP".to_string();
+        settings.font_family_emoji = "Noto Color Emoji".to_string();
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.font_family_primary, "JetBrains Mono");
+        assert_eq!(restored.font_family_secondary, "Noto Sans JP");
+        assert_eq!(restored.font_family_emoji, "Noto Color Emoji");
     }
 }
