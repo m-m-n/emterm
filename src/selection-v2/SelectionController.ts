@@ -6,6 +6,7 @@
 
 import type { TerminalState } from "../terminal/state";
 import { isMouseTrackingEnabled } from "../terminal/mouse";
+import { SettingsService } from "../settings/settings-service";
 import { ClipboardBridge } from "./ClipboardBridge";
 import { SelectionModel } from "./SelectionModel";
 import { SelectionRenderer } from "./SelectionRenderer";
@@ -337,6 +338,12 @@ export class SelectionController {
 
 		if (this.model.isActivelySelecting()) {
 			this.model.endSelection();
+
+			// Auto-copy on selection if enabled
+			const settings = SettingsService.getCached();
+			if (settings?.copy_on_select) {
+				this.copy().catch(() => {});
+			}
 		}
 	}
 
