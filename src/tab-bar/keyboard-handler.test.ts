@@ -52,9 +52,9 @@ describe("TabKeyboardHandler", () => {
     keyboardHandler = new TabKeyboardHandler(tabManager);
   });
 
-  describe("Ctrl+T (new tab)", () => {
+  describe("Ctrl+Shift+T (new tab)", () => {
     test("creates new tab", async () => {
-      const event = createKeyboardEvent("t", { ctrlKey: true });
+      const event = createKeyboardEvent("t", { ctrlKey: true, shiftKey: true });
       const handled = keyboardHandler.handleKeyDown(event);
 
       expect(handled).toBe(true);
@@ -66,20 +66,20 @@ describe("TabKeyboardHandler", () => {
     });
 
     test("handles uppercase T", async () => {
-      const event = createKeyboardEvent("T", { ctrlKey: true });
+      const event = createKeyboardEvent("T", { ctrlKey: true, shiftKey: true });
       const handled = keyboardHandler.handleKeyDown(event);
 
       expect(handled).toBe(true);
     });
   });
 
-  describe("Ctrl+W (close tab)", () => {
+  describe("Ctrl+Shift+W (close tab)", () => {
     test("closes active tab", async () => {
       // Create a tab first
       await tabManager.createTab();
       expect(tabManager.getTabs().length).toBe(1);
 
-      const event = createKeyboardEvent("w", { ctrlKey: true });
+      const event = createKeyboardEvent("w", { ctrlKey: true, shiftKey: true });
       const handled = keyboardHandler.handleKeyDown(event);
 
       expect(handled).toBe(true);
@@ -93,7 +93,7 @@ describe("TabKeyboardHandler", () => {
     test("handles uppercase W", async () => {
       await tabManager.createTab();
 
-      const event = createKeyboardEvent("W", { ctrlKey: true });
+      const event = createKeyboardEvent("W", { ctrlKey: true, shiftKey: true });
       const handled = keyboardHandler.handleKeyDown(event);
 
       expect(handled).toBe(true);
@@ -237,16 +237,17 @@ describe("TabKeyboardHandler", () => {
       keyboardHandler.attach(target);
 
       // Simulate keydown event
-      const event = createKeyboardEvent("t", { ctrlKey: true });
+      const event = createKeyboardEvent("t", { ctrlKey: true, shiftKey: true });
       target.dispatchEvent(
         new (
           globalThis.KeyboardEvent ??
           class extends Event {
             ctrlKey = true;
+            shiftKey = true;
             key = "t";
             preventDefault = mock(() => {});
           }
-        )("keydown", { ctrlKey: true, key: "t" }),
+        )("keydown", { ctrlKey: true, shiftKey: true, key: "t" }),
       );
 
       keyboardHandler.detach();

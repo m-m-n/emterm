@@ -10,6 +10,8 @@ import { IME_DEBUG } from "../config";
 import { keyEventToBytes, shouldHandleKey } from "../../pty/keyboard";
 import type { SelectionController } from "../../selection-v2";
 import { showPasteDialog, sendTextInChunks } from "../../clipboard";
+import { SettingsService } from "../../settings/settings-service";
+import { matchKeybindStr } from "../../keybind/matcher";
 
 /**
  * Extended options for keyboard handler including IME integration
@@ -159,18 +161,15 @@ export class KeyboardHandler {
       }
     }
 
-    // Handle Shift+Ctrl+C - copy selection
-    // Note: This is a fallback for non-IME scenarios. When IME is active,
-    // handleClipboardShortcut (capture phase) handles this before reaching here.
-    if (event.key.toLowerCase() === "c" && event.shiftKey && event.ctrlKey) {
+    // Handle copy shortcut (fallback for non-IME scenarios)
+    const keybinds = SettingsService.getCached()?.keybinds;
+    if (matchKeybindStr(event, keybinds?.copy ?? "Ctrl+Shift+C")) {
       this.handleCopy(event);
       return;
     }
 
-    // Handle Shift+Ctrl+V - paste from clipboard
-    // Note: This is a fallback for non-IME scenarios. When IME is active,
-    // handleClipboardShortcut (capture phase) handles this before reaching here.
-    if (event.key.toLowerCase() === "v" && event.shiftKey && event.ctrlKey) {
+    // Handle paste shortcut (fallback for non-IME scenarios)
+    if (matchKeybindStr(event, keybinds?.paste ?? "Ctrl+Shift+V")) {
       this.handlePaste(event);
       return;
     }
@@ -240,14 +239,9 @@ export class KeyboardHandler {
       return;
     }
 
-    // Only handle Ctrl+Shift combinations
-    if (!event.ctrlKey || !event.shiftKey) {
-      return;
-    }
+    const keybinds = SettingsService.getCached()?.keybinds;
 
-    const key = event.key.toLowerCase();
-
-    if (key === "c") {
+    if (matchKeybindStr(event, keybinds?.copy ?? "Ctrl+Shift+C")) {
       // CRITICAL: preventDefault/stopPropagation must be called synchronously
       // before any async operation to prevent IME from consuming the event
       event.preventDefault();
@@ -256,7 +250,7 @@ export class KeyboardHandler {
       return;
     }
 
-    if (key === "v") {
+    if (matchKeybindStr(event, keybinds?.paste ?? "Ctrl+Shift+V")) {
       // CRITICAL: preventDefault/stopPropagation must be called synchronously
       // before any async operation to prevent IME from consuming the event
       event.preventDefault();
