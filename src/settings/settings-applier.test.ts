@@ -273,6 +273,21 @@ describe("applyScrollbar", () => {
     applyScrollbar("never");
     expect(mockStyle.properties["--terminal-scrollbar-mode"]).toBe("never");
   });
+
+  test("should map 'always' to overflow 'scroll'", () => {
+    applyScrollbar("always");
+    expect(mockStyle.properties["--terminal-scrollbar-overflow"]).toBe("scroll");
+  });
+
+  test("should map 'never' to overflow 'hidden'", () => {
+    applyScrollbar("never");
+    expect(mockStyle.properties["--terminal-scrollbar-overflow"]).toBe("hidden");
+  });
+
+  test("should map 'auto' to overflow 'auto'", () => {
+    applyScrollbar("auto");
+    expect(mockStyle.properties["--terminal-scrollbar-overflow"]).toBe("auto");
+  });
 });
 
 describe("applyOpacity", () => {

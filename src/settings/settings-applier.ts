@@ -127,6 +127,17 @@ export function applyPadding(padding: number): void {
 export function applyScrollbar(mode: ScrollbarMode): void {
   const root = document.documentElement;
   root.style.setProperty("--terminal-scrollbar-mode", mode);
+
+  // Map scrollbar mode to CSS overflow-y value
+  const overflowMap: Record<ScrollbarMode, string> = {
+    always: "scroll",
+    never: "hidden",
+    auto: "auto",
+  };
+  root.style.setProperty(
+    "--terminal-scrollbar-overflow",
+    overflowMap[mode] || "auto",
+  );
 }
 
 /**
