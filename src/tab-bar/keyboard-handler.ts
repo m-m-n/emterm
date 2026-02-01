@@ -5,6 +5,8 @@
  */
 
 import type { TabManager } from "./tab-manager";
+import { SettingsService } from "../settings/settings-service";
+import { matchKeybindStr } from "../keybind/matcher";
 
 /**
  * TabKeyboardHandler - Manages tab-related keyboard shortcuts
@@ -31,48 +33,46 @@ export class TabKeyboardHandler {
    * @returns true if the event was handled (should stop propagation)
    */
   handleKeyDown(event: KeyboardEvent): boolean {
-    // Only handle Ctrl+key combinations (not Ctrl+Alt or Ctrl+Meta)
-    if (!event.ctrlKey || event.altKey || event.metaKey) {
-      return false;
-    }
+    const keybinds = SettingsService.getCached()?.keybinds;
 
-    const key = event.key.toLowerCase();
-
-    // Ctrl+T: New tab
-    if (key === "t" && !event.shiftKey) {
+    // New tab
+    if (matchKeybindStr(event, keybinds?.new_tab ?? "Ctrl+Shift+T")) {
       event.preventDefault();
       this.tabManager.createTab();
       return true;
     }
 
-    // Ctrl+W: Close active tab
-    if (key === "w" && !event.shiftKey) {
+    // Close active tab
+    if (matchKeybindStr(event, keybinds?.close_tab ?? "Ctrl+Shift+W")) {
       event.preventDefault();
       this.tabManager.closeActiveTab();
       return true;
     }
 
-    // Ctrl+Tab or Ctrl+Shift+Tab: Navigate tabs
-    if (event.key === "Tab") {
+    // Next tab
+    if (matchKeybindStr(event, keybinds?.next_tab ?? "Ctrl+Tab")) {
       event.preventDefault();
-      if (event.shiftKey) {
-        this.tabManager.activatePreviousTab();
-      } else {
-        this.tabManager.activateNextTab();
-      }
+      this.tabManager.activateNextTab();
       return true;
     }
 
-    // Ctrl+1-8: Jump to tab by index
-    if (!event.shiftKey && /^[1-8]$/.test(event.key)) {
+    // Previous tab
+    if (matchKeybindStr(event, keybinds?.prev_tab ?? "Ctrl+Shift+Tab")) {
+      event.preventDefault();
+      this.tabManager.activatePreviousTab();
+      return true;
+    }
+
+    // Ctrl+1-8: Jump to tab by index (not configurable)
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && /^[1-8]$/.test(event.key)) {
       event.preventDefault();
       const index = parseInt(event.key, 10) - 1;
       this.tabManager.activateTabByIndex(index);
       return true;
     }
 
-    // Ctrl+9: Jump to last tab
-    if (event.key === "9" && !event.shiftKey) {
+    // Ctrl+9: Jump to last tab (not configurable)
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key === "9") {
       event.preventDefault();
       this.tabManager.activateLastTab();
       return true;
