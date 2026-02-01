@@ -35,7 +35,18 @@
       "scrollbarNever": "Never",
       "richContent": "Rich Content",
       "inlineImages": "Inline Images",
-      "markdownRendering": "Markdown Rendering"
+      "markdownRendering": "Markdown Rendering",
+      "fontSizeDesc": "Changes the text size in the terminal",
+      "fontFamilyDesc": "Sets the font used for terminal text",
+      "lineHeightDesc": "Adjusts the vertical spacing between lines",
+      "uiThemeDesc": "Switches the application color scheme between light and dark",
+      "colorSchemeDesc": "Changes the color palette used for terminal text and background",
+      "opacityDesc": "Sets the background transparency of the terminal window",
+      "paddingDesc": "Adjusts the space between the terminal text and the window edge",
+      "scrollbackLinesDesc": "Sets how many lines of output are kept in the scroll history",
+      "showScrollbarDesc": "Controls when the scrollbar is visible",
+      "inlineImagesDesc": "Displays images inline in the terminal output",
+      "markdownRenderingDesc": "Renders Markdown content in the terminal output"
     },
     "terminal": {
       "title": "Terminal",
@@ -60,7 +71,15 @@
       "bellSound": "Sound",
       "bellNone": "None",
       "urlDetection": "URL Detection",
-      "copyOnSelect": "Copy on Select"
+      "copyOnSelect": "Copy on Select",
+      "cursorStyleDesc": "Changes the visual shape of the text cursor",
+      "cursorBlinkDesc": "Makes the cursor blink on and off",
+      "shellPathDesc": "Sets the shell program to launch in new tabs",
+      "shellArgsDesc": "Sets the command-line arguments passed to the shell",
+      "scrollSpeedDesc": "Adjusts how fast the terminal scrolls",
+      "bellActionDesc": "Controls how the terminal notifies you on a bell character",
+      "urlDetectionDesc": "Highlights clickable URLs in the terminal output",
+      "copyOnSelectDesc": "Automatically copies text to clipboard when selected"
     },
     "keybinds": {
       "title": "Keybinds",
@@ -86,6 +105,7 @@
     "language": {
       "title": "Language",
       "label": "Language",
+      "labelDesc": "Changes the display language of the application",
       "auto": "Auto (System)",
       "en": "English",
       "ja": "\u65e5\u672c\u8a9e"

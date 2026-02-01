@@ -201,6 +201,7 @@ export class SettingsPanel {
         { value: "en", label: t("settings.language.en") },
         { value: "ja", label: t("settings.language.ja") },
       ],
+      description: t("settings.language.labelDesc"),
       onSave: (v) => {
         this.saveSetting("language", v as Language);
         // Apply language change
@@ -229,6 +230,7 @@ export class SettingsPanel {
       step: 1,
       unit: "pt",
       hint: t("settings.appearance.fontSizeHint", { min: MIN_FONT_SIZE, max: MAX_FONT_SIZE }),
+      description: t("settings.appearance.fontSizeDesc"),
       onInput: (v) => applyFontSize(v),
       onSave: (v) => this.saveSetting("font_size", v),
     });
@@ -240,6 +242,7 @@ export class SettingsPanel {
       value: this.currentSettings.font_family,
       placeholder: t("settings.appearance.fontFamilyPlaceholder"),
       hint: t("settings.appearance.fontFamilyHint"),
+      description: t("settings.appearance.fontFamilyDesc"),
       onSave: (v) => {
         applyFontFamily(v);
         this.saveSetting("font_family", v);
@@ -256,6 +259,7 @@ export class SettingsPanel {
       step: LINE_HEIGHT_STEP,
       unit: "",
       hint: t("settings.appearance.lineHeightHint", { min: MIN_LINE_HEIGHT, max: MAX_LINE_HEIGHT }),
+      description: t("settings.appearance.lineHeightDesc"),
       onInput: (v) => applyLineHeight(v),
       onSave: (v) => this.saveSetting("line_height", v),
     });
@@ -273,6 +277,7 @@ export class SettingsPanel {
         { value: "light", label: t("settings.appearance.uiThemeLight") },
         { value: "dark", label: t("settings.appearance.uiThemeDark") },
       ],
+      description: t("settings.appearance.uiThemeDesc"),
       onSave: (v) => {
         applyUiTheme(v as UiTheme);
         this.saveSetting("ui_theme", v as UiTheme);
@@ -287,6 +292,7 @@ export class SettingsPanel {
       options: [
         { value: "default", label: t("settings.appearance.colorSchemeDefault") },
       ],
+      description: t("settings.appearance.colorSchemeDesc"),
       onSave: (v) => {
         const scheme = v === "default" ? "" : v;
         applyTerminalColorScheme(scheme);
@@ -303,6 +309,7 @@ export class SettingsPanel {
       max: MAX_OPACITY,
       step: OPACITY_STEP,
       hint: t("settings.appearance.opacityHint", { min: MIN_OPACITY, max: MAX_OPACITY }),
+      description: t("settings.appearance.opacityDesc"),
       onInput: (v) => applyOpacity(v),
       onSave: (v) => this.saveSetting("opacity", v),
     });
@@ -320,6 +327,7 @@ export class SettingsPanel {
       step: 1,
       unit: "px",
       hint: t("settings.appearance.paddingHint", { min: MIN_PADDING, max: MAX_PADDING }),
+      description: t("settings.appearance.paddingDesc"),
       onInput: (v) => applyPadding(v),
       onSave: (v) => this.saveSetting("padding", v),
     });
@@ -334,6 +342,7 @@ export class SettingsPanel {
       step: 1000,
       unit: "",
       hint: t("settings.appearance.scrollbackLinesHint", { min: MIN_SCROLLBACK_LINES, max: MAX_SCROLLBACK_LINES }),
+      description: t("settings.appearance.scrollbackLinesDesc"),
       onInput: () => {},
       onSave: (v) => this.saveSetting("scrollback_lines", v),
     });
@@ -348,6 +357,7 @@ export class SettingsPanel {
         { value: "always", label: t("settings.appearance.scrollbarAlways") },
         { value: "never", label: t("settings.appearance.scrollbarNever") },
       ],
+      description: t("settings.appearance.showScrollbarDesc"),
       onSave: (v) => {
         applyScrollbar(v as ScrollbarMode);
         this.saveSetting("show_scrollbar", v as ScrollbarMode);
@@ -362,6 +372,7 @@ export class SettingsPanel {
       key: "inline-images",
       label: t("settings.appearance.inlineImages"),
       value: this.currentSettings.inline_images_enabled,
+      description: t("settings.appearance.inlineImagesDesc"),
       onSave: (v) => this.saveSetting("inline_images_enabled", v),
     });
 
@@ -370,6 +381,7 @@ export class SettingsPanel {
       key: "markdown-rendering",
       label: t("settings.appearance.markdownRendering"),
       value: this.currentSettings.markdown_rendering,
+      description: t("settings.appearance.markdownRenderingDesc"),
       onSave: (v) => this.saveSetting("markdown_rendering", v),
     });
   }
@@ -399,6 +411,7 @@ export class SettingsPanel {
         { value: "underline", label: t("settings.terminal.cursorUnderline") },
         { value: "bar", label: t("settings.terminal.cursorBar") },
       ],
+      description: t("settings.terminal.cursorStyleDesc"),
       onSave: (v) => {
         applyCursorStyle(v as CursorStyle);
         this.saveSetting("cursor_style", v as CursorStyle);
@@ -410,6 +423,7 @@ export class SettingsPanel {
       key: "cursor-blink",
       label: t("settings.terminal.cursorBlink"),
       value: this.currentSettings.cursor_blink,
+      description: t("settings.terminal.cursorBlinkDesc"),
       onSave: (v) => {
         applyCursorBlink(v);
         this.saveSetting("cursor_blink", v);
@@ -426,6 +440,7 @@ export class SettingsPanel {
       value: this.currentSettings.shell_path,
       placeholder: t("settings.terminal.shellPathPlaceholder"),
       hint: t("settings.terminal.shellPathHint"),
+      description: t("settings.terminal.shellPathDesc"),
       onSave: (v) => this.saveSetting("shell_path", v),
     });
 
@@ -436,6 +451,7 @@ export class SettingsPanel {
       value: this.currentSettings.shell_args.join(", "),
       placeholder: t("settings.terminal.shellArgsPlaceholder"),
       hint: t("settings.terminal.shellArgsHint"),
+      description: t("settings.terminal.shellArgsDesc"),
       onSave: (v) => {
         const args = v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [];
         this.saveSetting("shell_args", args);
@@ -454,6 +470,7 @@ export class SettingsPanel {
       max: MAX_SCROLL_SPEED,
       step: 1,
       hint: t("settings.terminal.scrollSpeedHint", { min: MIN_SCROLL_SPEED, max: MAX_SCROLL_SPEED }),
+      description: t("settings.terminal.scrollSpeedDesc"),
       onInput: () => {},
       onSave: (v) => this.saveSetting("scroll_speed", v),
     });
@@ -468,6 +485,7 @@ export class SettingsPanel {
         { value: "sound", label: t("settings.terminal.bellSound") },
         { value: "none", label: t("settings.terminal.bellNone") },
       ],
+      description: t("settings.terminal.bellActionDesc"),
       onSave: (v) => this.saveSetting("bell_action", v as BellAction),
     });
 
@@ -476,6 +494,7 @@ export class SettingsPanel {
       key: "url-detection",
       label: t("settings.terminal.urlDetection"),
       value: this.currentSettings.url_detection,
+      description: t("settings.terminal.urlDetectionDesc"),
       onSave: (v) => this.saveSetting("url_detection", v),
     });
 
@@ -484,6 +503,7 @@ export class SettingsPanel {
       key: "copy-on-select",
       label: t("settings.terminal.copyOnSelect"),
       value: this.currentSettings.copy_on_select,
+      description: t("settings.terminal.copyOnSelectDesc"),
       onSave: (v) => this.saveSetting("copy_on_select", v),
     });
   }
@@ -547,6 +567,7 @@ export class SettingsPanel {
     step: number;
     unit: string;
     hint: string;
+    description?: string;
     onInput: (value: number) => void;
     onSave: (value: number) => void;
   }): void {
@@ -559,6 +580,14 @@ export class SettingsPanel {
     label.textContent = opts.label;
     row.appendChild(label);
 
+    if (opts.description) {
+      const desc = document.createElement("span");
+      desc.className = "settings-description";
+      desc.id = `settings-${opts.key}-desc`;
+      desc.textContent = opts.description;
+      row.appendChild(desc);
+    }
+
     const inputGroup = document.createElement("div");
     inputGroup.className = "settings-input-group";
 
@@ -570,6 +599,9 @@ export class SettingsPanel {
     input.max = String(opts.max);
     input.step = String(opts.step);
     input.value = String(opts.value);
+    if (opts.description) {
+      input.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
+    }
     inputGroup.appendChild(input);
 
     if (opts.unit) {
@@ -623,6 +655,7 @@ export class SettingsPanel {
     value: string;
     placeholder: string;
     hint: string;
+    description?: string;
     onSave: (value: string) => void;
   }): void {
     const row = document.createElement("div");
@@ -634,12 +667,23 @@ export class SettingsPanel {
     label.textContent = opts.label;
     row.appendChild(label);
 
+    if (opts.description) {
+      const desc = document.createElement("span");
+      desc.className = "settings-description";
+      desc.id = `settings-${opts.key}-desc`;
+      desc.textContent = opts.description;
+      row.appendChild(desc);
+    }
+
     const input = document.createElement("input");
     input.type = "text";
     input.id = `settings-${opts.key}`;
     input.className = "settings-text-input";
     input.value = opts.value;
     input.placeholder = opts.placeholder;
+    if (opts.description) {
+      input.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
+    }
     row.appendChild(input);
 
     const hint = document.createElement("span");
@@ -669,6 +713,7 @@ export class SettingsPanel {
     label: string;
     value: string;
     options: Array<{ value: string; label: string }>;
+    description?: string;
     onSave: (value: string) => void;
   }): void {
     const row = document.createElement("div");
@@ -680,9 +725,20 @@ export class SettingsPanel {
     label.textContent = opts.label;
     row.appendChild(label);
 
+    if (opts.description) {
+      const desc = document.createElement("span");
+      desc.className = "settings-description";
+      desc.id = `settings-${opts.key}-desc`;
+      desc.textContent = opts.description;
+      row.appendChild(desc);
+    }
+
     const select = document.createElement("select");
     select.id = `settings-${opts.key}`;
     select.className = "settings-select";
+    if (opts.description) {
+      select.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
+    }
 
     for (const opt of opts.options) {
       const option = document.createElement("option");
@@ -705,6 +761,7 @@ export class SettingsPanel {
     key: string;
     label: string;
     value: boolean;
+    description?: string;
     onSave: (value: boolean) => void;
   }): void {
     const row = document.createElement("div");
@@ -714,13 +771,31 @@ export class SettingsPanel {
     label.className = "settings-label";
     label.htmlFor = `settings-${opts.key}`;
     label.textContent = opts.label;
-    row.appendChild(label);
+
+    if (opts.description) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "settings-toggle-label-group";
+      wrapper.appendChild(label);
+
+      const desc = document.createElement("span");
+      desc.className = "settings-description";
+      desc.id = `settings-${opts.key}-desc`;
+      desc.textContent = opts.description;
+      wrapper.appendChild(desc);
+
+      row.appendChild(wrapper);
+    } else {
+      row.appendChild(label);
+    }
 
     const button = document.createElement("button");
     button.id = `settings-${opts.key}`;
     button.className = "settings-toggle";
     button.setAttribute("role", "switch");
     button.setAttribute("aria-checked", String(opts.value));
+    if (opts.description) {
+      button.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
+    }
     if (opts.value) button.classList.add("on");
 
     const track = document.createElement("span");
@@ -751,6 +826,7 @@ export class SettingsPanel {
     max: number;
     step: number;
     hint: string;
+    description?: string;
     onInput: (value: number) => void;
     onSave: (value: number) => void;
   }): void {
@@ -763,6 +839,14 @@ export class SettingsPanel {
     label.textContent = opts.label;
     row.appendChild(label);
 
+    if (opts.description) {
+      const desc = document.createElement("span");
+      desc.className = "settings-description";
+      desc.id = `settings-${opts.key}-desc`;
+      desc.textContent = opts.description;
+      row.appendChild(desc);
+    }
+
     const sliderGroup = document.createElement("div");
     sliderGroup.className = "settings-slider-group";
 
@@ -774,6 +858,9 @@ export class SettingsPanel {
     input.max = String(opts.max);
     input.step = String(opts.step);
     input.value = String(opts.value);
+    if (opts.description) {
+      input.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
+    }
     sliderGroup.appendChild(input);
 
     const valueDisplay = document.createElement("span");
