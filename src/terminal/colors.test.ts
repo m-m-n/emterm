@@ -278,3 +278,118 @@ describe("getColorSchemePreset", () => {
 		expect(getColorSchemePreset("nord")).toBeDefined();
 	});
 });
+
+// ============================================================
+// Hex Conversion Utilities (Phase 1)
+// ============================================================
+
+import { hexToRgb, rgbToHex, validateHexColor } from "./colors.ts";
+
+describe("hexToRgb", () => {
+	it("parses valid #RRGGBB format", () => {
+		expect(hexToRgb("#ff0000")).toEqual({ r: 255, g: 0, b: 0 });
+		expect(hexToRgb("#00ff00")).toEqual({ r: 0, g: 255, b: 0 });
+		expect(hexToRgb("#0000ff")).toEqual({ r: 0, g: 0, b: 255 });
+		expect(hexToRgb("#ffffff")).toEqual({ r: 255, g: 255, b: 255 });
+		expect(hexToRgb("#000000")).toEqual({ r: 0, g: 0, b: 0 });
+	});
+
+	it("parses uppercase hex", () => {
+		expect(hexToRgb("#FF0000")).toEqual({ r: 255, g: 0, b: 0 });
+		expect(hexToRgb("#AABBCC")).toEqual({ r: 170, g: 187, b: 204 });
+	});
+
+	it("parses mixed case hex", () => {
+		expect(hexToRgb("#AaBbCc")).toEqual({ r: 170, g: 187, b: 204 });
+	});
+
+	it("returns null for invalid formats", () => {
+		expect(hexToRgb("")).toBeNull();
+		expect(hexToRgb("ff0000")).toBeNull();
+		expect(hexToRgb("#ff000")).toBeNull();
+		expect(hexToRgb("#ff00000")).toBeNull();
+		expect(hexToRgb("#gggggg")).toBeNull();
+		expect(hexToRgb("red")).toBeNull();
+		expect(hexToRgb("#fff")).toBeNull();
+	});
+});
+
+describe("rgbToHex", () => {
+	it("formats Rgb to lowercase #rrggbb", () => {
+		expect(rgbToHex({ r: 255, g: 0, b: 0 })).toBe("#ff0000");
+		expect(rgbToHex({ r: 0, g: 255, b: 0 })).toBe("#00ff00");
+		expect(rgbToHex({ r: 0, g: 0, b: 255 })).toBe("#0000ff");
+		expect(rgbToHex({ r: 255, g: 255, b: 255 })).toBe("#ffffff");
+		expect(rgbToHex({ r: 0, g: 0, b: 0 })).toBe("#000000");
+	});
+
+	it("pads single-digit hex values with zero", () => {
+		expect(rgbToHex({ r: 1, g: 2, b: 3 })).toBe("#010203");
+		expect(rgbToHex({ r: 15, g: 15, b: 15 })).toBe("#0f0f0f");
+	});
+
+	it("handles specific color values", () => {
+		expect(rgbToHex({ r: 170, g: 187, b: 204 })).toBe("#aabbcc");
+		expect(rgbToHex({ r: 64, g: 255, b: 64 })).toBe("#40ff40");
+	});
+});
+
+describe("hex conversion round-trip", () => {
+	it("rgbToHex(hexToRgb(hex)) returns original hex (lowercase)", () => {
+		const testCases = [
+			"#ff0000",
+			"#00ff00",
+			"#0000ff",
+			"#ffffff",
+			"#000000",
+			"#aabbcc",
+			"#123456",
+			"#fedcba",
+		];
+
+		for (const hex of testCases) {
+			const rgb = hexToRgb(hex);
+			expect(rgb).not.toBeNull();
+			expect(rgbToHex(rgb!)).toBe(hex.toLowerCase());
+		}
+	});
+
+	it("hexToRgb(rgbToHex(rgb)) returns original rgb", () => {
+		const testCases: Rgb[] = [
+			{ r: 255, g: 0, b: 0 },
+			{ r: 0, g: 255, b: 0 },
+			{ r: 0, g: 0, b: 255 },
+			{ r: 170, g: 187, b: 204 },
+			{ r: 0, g: 0, b: 0 },
+			{ r: 255, g: 255, b: 255 },
+		];
+
+		for (const rgb of testCases) {
+			const hex = rgbToHex(rgb);
+			const result = hexToRgb(hex);
+			expect(result).toEqual(rgb);
+		}
+	});
+});
+
+describe("validateHexColor", () => {
+	it("accepts valid #RRGGBB format", () => {
+		expect(validateHexColor("#ff0000")).toBe(true);
+		expect(validateHexColor("#00ff00")).toBe(true);
+		expect(validateHexColor("#0000ff")).toBe(true);
+		expect(validateHexColor("#aabbcc")).toBe(true);
+		expect(validateHexColor("#AABBCC")).toBe(true);
+		expect(validateHexColor("#123456")).toBe(true);
+	});
+
+	it("rejects invalid formats", () => {
+		expect(validateHexColor("")).toBe(false);
+		expect(validateHexColor("ff0000")).toBe(false);
+		expect(validateHexColor("#ff000")).toBe(false);
+		expect(validateHexColor("#ff00000")).toBe(false);
+		expect(validateHexColor("#gggggg")).toBe(false);
+		expect(validateHexColor("red")).toBe(false);
+		expect(validateHexColor("#fff")).toBe(false);
+		expect(validateHexColor("#f00")).toBe(false);
+	});
+});

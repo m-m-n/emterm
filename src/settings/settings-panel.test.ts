@@ -15,7 +15,9 @@ const mockFontList: FontListResponse = {
   emoji_fonts: ["Noto Color Emoji"],
 };
 
-// Mock @tauri-apps/api/core before importing the module
+// Mock @tauri-apps/api/core before importing the module.
+// Include Resource/Channel stubs for transitive dependencies
+// (e.g., @tauri-apps/api/image, @tauri-apps/plugin-clipboard-manager).
 mock.module("@tauri-apps/api/core", () => ({
   invoke: (cmd: string) => {
     if (cmd === "list_fonts") {
@@ -23,31 +25,22 @@ mock.module("@tauri-apps/api/core", () => ({
     }
     return Promise.resolve();
   },
+  Resource: class Resource {
+    readonly rid: number;
+    constructor(rid: number) { this.rid = rid; }
+    close() { return Promise.resolve(); }
+  },
+  Channel: class Channel {},
+  transformCallback: () => 0,
 }));
 
-// Mock settings-service
+// Mock settings-service (must include getCached for cross-file compatibility)
 mock.module("./settings-service", () => ({
   SettingsService: {
     load: () => Promise.resolve(makeSettings()),
     save: () => Promise.resolve(),
+    getCached: () => null,
   },
-}));
-
-// Mock settings-applier
-mock.module("./settings-applier", () => ({
-  applySettings: () => {},
-  applySettingsToCSS: () => {},
-  applyFontSize: () => {},
-  applyFontFamily: () => {},
-  buildFontFamilyChain: () => "monospace",
-  applyLineHeight: () => {},
-  applyUiTheme: () => {},
-  applyTerminalColorScheme: () => {},
-  applyPadding: () => {},
-  applyScrollbar: () => {},
-  applyOpacity: () => {},
-  applyCursorStyle: () => {},
-  applyCursorBlink: () => {},
 }));
 
 import type { AppSettings, KeybindSettings } from "./types";
@@ -76,8 +69,8 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     font_family_emoji: "",
     line_height: 1.2,
     ui_theme: "system",
+    ui_theme_preset: "purple",
     terminal_color_scheme: "",
-    opacity: 1.0,
     padding: 4,
     scrollback_lines: 10000,
     show_scrollbar: "auto",
@@ -91,6 +84,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     copy_on_select: false,
     language: "auto",
     keybinds: defaultKeybinds,
+    custom_color_schemes: [],
     ...overrides,
   };
 }
@@ -175,9 +169,12 @@ describe("SettingsPanel render methods - description feature", () => {
     });
 
     test("should set aria-describedby on slider inputs", () => {
-      const opacitySlider = container.querySelector("#settings-opacity") as HTMLInputElement;
-      expect(opacitySlider).not.toBeNull();
-      expect(opacitySlider?.getAttribute("aria-describedby")).toBe("settings-opacity-desc");
+      // Check scroll-speed slider in terminal section (opacity removed)
+      const terminalTab = container.querySelector('[data-category-id="terminal"]') as HTMLButtonElement;
+      terminalTab?.click();
+      const scrollSpeedSlider = container.querySelector("#settings-scroll-speed") as HTMLInputElement;
+      expect(scrollSpeedSlider).not.toBeNull();
+      expect(scrollSpeedSlider?.getAttribute("aria-describedby")).toBe("settings-scroll-speed-desc");
     });
   });
 
@@ -312,6 +309,7 @@ describe("SettingsPanel - font picker input", () => {
       SettingsService: {
         load: () => Promise.resolve(makeSettings({ font_family_primary: "Fira Code" })),
         save: () => Promise.resolve(),
+        getCached: () => null,
       },
     }));
 

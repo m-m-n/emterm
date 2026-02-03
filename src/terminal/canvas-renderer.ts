@@ -15,10 +15,12 @@ import {
 	DEFAULT_BACKGROUND,
 	DEFAULT_FOREGROUND,
 	getColorSchemePreset,
+	hexToRgb,
 	PALETTE_16,
 	type Rgb,
 	rgbToCSS,
 } from "./colors.ts";
+import type { UserColorScheme } from "../settings/types";
 import type { CursorStyle } from "./cursor.ts";
 import type { Line } from "./grid.ts";
 import {
@@ -271,9 +273,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	/** Line height multiplier. */
 	private lineHeightMultiplier: number = 1.2;
-
-	/** Background opacity (0.3-1.0). Text remains fully opaque. */
-	private opacity: number = 1.0;
 
 	/** Number of columns. */
 	private cols: number = 80;
@@ -572,12 +571,15 @@ export class CanvasRenderer implements ITerminalRenderer {
 	private renderLine(rowIndex: number, line: Line): void {
 		const y = rowIndex * this.charHeight;
 
-		// Clear the row with current background (apply opacity)
-		const savedAlpha = this.ctx.globalAlpha;
-		this.ctx.globalAlpha = this.opacity;
+		// Use integer-aligned coordinates to avoid sub-pixel gaps between rows
+		const fillY = Math.floor(y);
+		const fillNextY = Math.ceil((rowIndex + 1) * this.charHeight);
+		const fillHeight = fillNextY - fillY;
+		const canvasWidth = this.canvas.width / this.dpr;
+
+		// Clear the row with current background, full canvas width
 		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
-		this.ctx.fillRect(0, y, this.cols * this.charWidth, this.charHeight);
-		this.ctx.globalAlpha = savedAlpha;
+		this.ctx.fillRect(0, fillY, canvasWidth, fillHeight);
 
 		// Group cells into spans
 		const spans = groupCellsIntoSpans(line);
@@ -603,13 +605,14 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const fg = getEffectiveForeground(span.attrs);
 		const bg = getEffectiveBackground(span.attrs);
 
-		// Draw background if not default (apply opacity)
+		// Draw background if not default
+		// Use integer-aligned Y to match renderLine and avoid sub-pixel gaps
 		if (bg !== null) {
-			const savedAlpha = this.ctx.globalAlpha;
-			this.ctx.globalAlpha = this.opacity;
+			const fillY = Math.floor(y);
+			const fillNextY = Math.ceil((rowIndex + 1) * this.charHeight);
+			const fillHeight = fillNextY - fillY;
 			this.ctx.fillStyle = rgbToCSS(bg);
-			this.ctx.fillRect(x, y, width, this.charHeight);
-			this.ctx.globalAlpha = savedAlpha;
+			this.ctx.fillRect(x, fillY, width, fillHeight);
 		}
 
 		// Get text attribute styles
@@ -766,12 +769,13 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const y = row * this.charHeight;
 		const x = col * this.charWidth;
 
-		// Clear just the cursor cell with current background (apply opacity)
-		const savedAlpha = this.ctx.globalAlpha;
-		this.ctx.globalAlpha = this.opacity;
+		// Clear just the cursor cell with current background
+		// Use integer-aligned Y to match renderLine
+		const fillY = Math.floor(y);
+		const fillNextY = Math.ceil((row + 1) * this.charHeight);
+		const fillHeight = fillNextY - fillY;
 		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
-		this.ctx.fillRect(x, y, this.charWidth, this.charHeight);
-		this.ctx.globalAlpha = savedAlpha;
+		this.ctx.fillRect(x, fillY, this.charWidth, fillHeight);
 
 		// Re-draw the character at cursor position if any
 		const cell = line.getCell(col);
@@ -815,17 +819,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Get visible lines based on scroll offset
 		const visibleLines = getVisibleLines(state, this.scrollOffset);
 
-		// Clear entire canvas (apply opacity to background)
-		const savedAlpha = this.ctx.globalAlpha;
-		this.ctx.globalAlpha = this.opacity;
+		// Clear entire canvas including bottom/right remainder
 		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
-		this.ctx.fillRect(
-			0,
-			0,
-			this.cols * this.charWidth,
-			this.rows * this.charHeight,
-		);
-		this.ctx.globalAlpha = savedAlpha;
+		const canvasWidth = this.canvas.width / this.dpr;
+		const canvasHeight = this.canvas.height / this.dpr;
+		this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
 		// Render all visible rows
 		for (let row = 0; row < visibleLines.length; row++) {
@@ -921,9 +919,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 			case "lineHeight":
 				this.setLineHeight(value as number);
 				break;
-			case "opacity":
-				this.setOpacity(value as number);
-				break;
 			case "cursorStyle":
 				this.setCursorStyle(value as CursorStyle);
 				break;
@@ -955,18 +950,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 	setLineHeight(lineHeight: number): void {
 		this.lineHeightMultiplier = lineHeight;
 		this.measureCharacterSize();
-		if (this.pendingState) {
-			this.forceRender(this.pendingState);
-		}
-	}
-
-	/**
-	 * Set the background opacity.
-	 * Text remains fully opaque; only background fill is affected.
-	 * @param opacity - Opacity value (0.3-1.0)
-	 */
-	setOpacity(opacity: number): void {
-		this.opacity = opacity;
 		if (this.pendingState) {
 			this.forceRender(this.pendingState);
 		}
@@ -1020,6 +1003,38 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.currentBackground = preset.background;
 			this.currentCursorColor = preset.cursor;
 			this.currentPalette16 = preset.ansiColors;
+		}
+
+		// Force full re-render
+		if (this.pendingState) {
+			this.forceRender(this.pendingState);
+		}
+	}
+
+	/**
+	 * Set a user-defined color scheme.
+	 * Used for custom color schemes stored in settings.
+	 * @param scheme - User color scheme with hex color values
+	 */
+	setUserColorScheme(scheme: UserColorScheme): void {
+		const fg = hexToRgb(scheme.foreground);
+		const bg = hexToRgb(scheme.background);
+		const cursor = hexToRgb(scheme.cursor);
+
+		if (fg) this.currentForeground = fg;
+		if (bg) this.currentBackground = bg;
+		if (cursor) this.currentCursorColor = cursor;
+
+		// Convert ANSI colors from hex to Rgb
+		const ansiColors: Rgb[] = [];
+		for (const hex of scheme.ansi_colors) {
+			const rgb = hexToRgb(hex);
+			if (rgb) {
+				ansiColors.push(rgb);
+			}
+		}
+		if (ansiColors.length === 16) {
+			this.currentPalette16 = ansiColors;
 		}
 
 		// Force full re-render

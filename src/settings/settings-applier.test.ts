@@ -16,9 +16,8 @@ import {
   applyCursorBlink,
   applyPadding,
   applyScrollbar,
-  applyOpacity,
 } from "./settings-applier";
-import type { AppSettings, KeybindSettings } from "./types";
+import type { AppSettings, KeybindSettings, UserColorScheme } from "./types";
 
 // Mock document.documentElement
 const mockStyle = {
@@ -127,8 +126,8 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     font_family_emoji: "",
     line_height: 1.2,
     ui_theme: "system",
+    ui_theme_preset: "purple",
     terminal_color_scheme: "",
-    opacity: 1.0,
     padding: 4,
     scrollback_lines: 10000,
     show_scrollbar: "auto",
@@ -142,6 +141,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     copy_on_select: false,
     keybinds: defaultKeybinds,
     language: "auto",
+    custom_color_schemes: [],
     ...overrides,
   };
 }
@@ -288,6 +288,56 @@ describe("applyUiTheme", () => {
     applyUiTheme("dark");
     expect(mockMediaChangeHandler).toBeNull();
   });
+
+  test("should apply purple dark preset colors for dark theme by default", () => {
+    applyUiTheme("dark");
+    expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#D0BCFF");
+    expect(mockStyle.properties["--md-sys-color-surface"]).toBe("#141218");
+  });
+
+  test("should apply blue dark preset colors for dark + blue", () => {
+    applyUiTheme("dark", "blue");
+    expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#A8C7FA");
+    expect(mockStyle.properties["--md-sys-color-surface"]).toBe("#111318");
+  });
+
+  test("should apply green light preset colors for light + green", () => {
+    applyUiTheme("light", "green");
+    expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#006D3E");
+    expect(mockStyle.properties["--md-sys-color-surface"]).toBe("#F5FBF5");
+  });
+
+  test("should apply orange preset with system theme (dark)", () => {
+    mockMatchesDark = true;
+    applyUiTheme("system", "orange");
+    expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#FFB877");
+    expect(mockStyle.properties["--md-sys-color-surface"]).toBe("#18120B");
+  });
+
+  test("should apply orange preset with system theme (light)", () => {
+    mockMatchesDark = false;
+    applyUiTheme("system", "orange");
+    expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#8B5000");
+    expect(mockStyle.properties["--md-sys-color-surface"]).toBe("#FFF8F4");
+  });
+
+  test("system theme listener should re-apply preset colors on change", () => {
+    mockMatchesDark = false;
+    applyUiTheme("system", "blue");
+    expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#0B57D0"); // blue light
+
+    // Simulate system theme change to dark
+    if (mockMediaChangeHandler) {
+      mockMediaChangeHandler({ matches: true } as any);
+    }
+    expect(mockDataTheme).toBe("dark");
+    expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#A8C7FA"); // blue dark
+  });
+
+  test("should fallback to purple when preset is invalid", () => {
+    applyUiTheme("dark", "invalid" as any);
+    expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#D0BCFF"); // purple dark
+  });
 });
 
 describe("applyPadding", () => {
@@ -334,26 +384,6 @@ describe("applyScrollbar", () => {
   });
 });
 
-describe("applyOpacity", () => {
-  test("should set --terminal-opacity CSS variable", () => {
-    applyOpacity(0.8);
-    expect(mockStyle.properties["--terminal-opacity"]).toBe("0.8");
-  });
-
-  test("should set full opacity", () => {
-    applyOpacity(1.0);
-    expect(mockStyle.properties["--terminal-opacity"]).toBe("1");
-  });
-
-  test("should notify renderers with opacity", () => {
-    applyOpacity(0.5);
-    expect(mockRendererCalls).toContainEqual({
-      setting: "opacity",
-      value: 0.5,
-    });
-  });
-});
-
 describe("applySettings (full)", () => {
   test("should apply all settings", () => {
     const settings = makeSettings({
@@ -363,7 +393,6 @@ describe("applySettings (full)", () => {
       ui_theme: "dark",
       padding: 8,
       show_scrollbar: "always",
-      opacity: 0.9,
     });
 
     applySettings(settings);
@@ -376,7 +405,6 @@ describe("applySettings (full)", () => {
     expect(mockDataTheme).toBe("dark");
     expect(mockStyle.properties["--terminal-padding"]).toBe("8px");
     expect(mockStyle.properties["--terminal-scrollbar-mode"]).toBe("always");
-    expect(mockStyle.properties["--terminal-opacity"]).toBe("0.9");
   });
 });
 
@@ -520,5 +548,214 @@ describe("applySettingsToCSS (legacy)", () => {
     applySettingsToCSS(settings);
 
     expect(mockStyle.properties["--terminal-font-size"]).toBe("20pt");
+  });
+});
+
+describe("startup race condition: color scheme applied before tabManager exists", () => {
+  test("notifyRenderers is silently dropped when tabManager is null", () => {
+    // Simulate startup state: tabManager does not exist yet
+    // @ts-expect-error - Mock for testing
+    globalThis.window = {
+      matchMedia: () => {
+        mockMediaQueryList.matches = false;
+        return mockMediaQueryList;
+      },
+      tabManager: null, // Not yet created
+    };
+
+    mockRendererCalls = [];
+
+    // Apply a non-default color scheme (e.g., solarized-light with light background)
+    applyTerminalColorScheme("solarized-light");
+
+    // CSS variable IS set (padding area will show theme background)
+    expect(mockStyle.properties["--terminal-background"]).toBe(
+      "rgb(253, 246, 227)",
+    );
+
+    // But renderer notification is LOST - no renderer gets the color scheme
+    // This is the root cause: the canvas renderer starts with DEFAULT_BACKGROUND (black)
+    // while the CSS padding area already shows the theme's background color
+    expect(mockRendererCalls).toEqual([]);
+  });
+
+  test("notifyRenderers succeeds when tabManager exists", () => {
+    // Simulate normal state: tabManager exists
+    // @ts-expect-error - Mock for testing
+    globalThis.window = {
+      matchMedia: () => {
+        mockMediaQueryList.matches = false;
+        return mockMediaQueryList;
+      },
+      tabManager: mockTabManager,
+    };
+
+    mockRendererCalls = [];
+
+    applyTerminalColorScheme("solarized-light");
+
+    // Renderer notification IS delivered
+    expect(mockRendererCalls).toContainEqual({
+      setting: "colorScheme",
+      value: "solarized-light",
+    });
+  });
+
+  test("CSS variable and renderer notification are in sync when tabManager exists", () => {
+    // @ts-expect-error - Mock for testing
+    globalThis.window = {
+      matchMedia: () => {
+        mockMediaQueryList.matches = false;
+        return mockMediaQueryList;
+      },
+      tabManager: mockTabManager,
+    };
+
+    mockRendererCalls = [];
+
+    applyTerminalColorScheme("dracula");
+
+    // Both CSS variable and renderer are updated
+    expect(mockStyle.properties["--terminal-background"]).toBe(
+      "rgb(40, 42, 54)",
+    );
+    expect(mockRendererCalls).toContainEqual({
+      setting: "colorScheme",
+      value: "dracula",
+    });
+  });
+
+  test("full startup sequence: applySettings before tabManager causes desync", () => {
+    // Step 1: Simulate main.ts startup - applySettings called before tabManager
+    // @ts-expect-error - Mock for testing
+    globalThis.window = {
+      matchMedia: () => {
+        mockMediaQueryList.matches = false;
+        return mockMediaQueryList;
+      },
+      tabManager: null, // Not yet created at this point in main()
+    };
+
+    mockRendererCalls = [];
+
+    const settings = makeSettings({
+      terminal_color_scheme: "solarized-light",
+    });
+
+    applySettings(settings);
+
+    // CSS variable is set (padding/body shows theme background)
+    expect(mockStyle.properties["--terminal-background"]).toBe(
+      "rgb(253, 246, 227)",
+    );
+
+    // But NO renderer notification was delivered
+    // The colorScheme notification was lost because tabManager was null
+    const colorSchemeNotifications = mockRendererCalls.filter(
+      (c) => c.setting === "colorScheme",
+    );
+    expect(colorSchemeNotifications).toEqual([]);
+
+    // This means: after CanvasRenderer is created, it will use DEFAULT_BACKGROUND (black)
+    // while the CSS padding area shows rgb(253, 246, 227) - a visible mismatch
+  });
+});
+
+// ============================================================
+// User Color Scheme Tests (Phase 3)
+// ============================================================
+
+function createMockUserScheme(name: string): UserColorScheme {
+  return {
+    name,
+    foreground: "#f8f8f2",
+    background: "#282a36",
+    cursor: "#f8f8f2",
+    selection: "#44475a",
+    ansi_colors: [
+      "#21222c", "#ff5555", "#50fa7b", "#f1fa8c",
+      "#bd93f9", "#ff79c6", "#8be9fd", "#f8f8f2",
+      "#6272a4", "#ff6e6e", "#69ff94", "#ffffa5",
+      "#d6acff", "#ff92df", "#a4ffff", "#ffffff",
+    ],
+  };
+}
+
+describe("applyTerminalColorScheme with user schemes", () => {
+  test("should apply user scheme colors as CSS variables", () => {
+    const userSchemes = [createMockUserScheme("my_theme")];
+    applyTerminalColorScheme("my_theme", userSchemes);
+
+    expect(mockStyle.properties["--terminal-foreground"]).toBe("#f8f8f2");
+    expect(mockStyle.properties["--terminal-background"]).toBe("#282a36");
+    expect(mockStyle.properties["--terminal-cursor-color"]).toBe("#f8f8f2");
+    expect(mockStyle.properties["--terminal-selection-bg"]).toBe("#44475a");
+  });
+
+  test("should apply all 16 ANSI colors from user scheme", () => {
+    const userSchemes = [createMockUserScheme("my_theme")];
+    applyTerminalColorScheme("my_theme", userSchemes);
+
+    expect(mockStyle.properties["--terminal-color-0"]).toBe("#21222c");
+    expect(mockStyle.properties["--terminal-color-1"]).toBe("#ff5555");
+    expect(mockStyle.properties["--terminal-color-7"]).toBe("#f8f8f2");
+    expect(mockStyle.properties["--terminal-color-8"]).toBe("#6272a4");
+    expect(mockStyle.properties["--terminal-color-15"]).toBe("#ffffff");
+  });
+
+  test("should set data attribute for user scheme", () => {
+    const userSchemes = [createMockUserScheme("my_theme")];
+    applyTerminalColorScheme("my_theme", userSchemes);
+
+    expect(mockAttributes["data-terminal-color-scheme"]).toBe("my_theme");
+  });
+
+  test("should notify renderers with user scheme name", () => {
+    const userSchemes = [createMockUserScheme("my_theme")];
+    applyTerminalColorScheme("my_theme", userSchemes);
+
+    expect(mockRendererCalls).toContainEqual({
+      setting: "colorScheme",
+      value: "my_theme",
+    });
+  });
+
+  test("should fall back to preset lookup when user scheme not found", () => {
+    const userSchemes: UserColorScheme[] = [];
+    applyTerminalColorScheme("dracula", userSchemes);
+
+    // Should use preset's background color
+    expect(mockStyle.properties["--terminal-background"]).toBe("rgb(40, 42, 54)");
+    expect(mockAttributes["data-terminal-color-scheme"]).toBe("dracula");
+  });
+
+  test("should fall back to preset when empty userSchemes array provided", () => {
+    applyTerminalColorScheme("solarized-dark", []);
+
+    expect(mockAttributes["data-terminal-color-scheme"]).toBe("solarized-dark");
+    expect(mockRendererCalls).toContainEqual({
+      setting: "colorScheme",
+      value: "solarized-dark",
+    });
+  });
+
+  test("should apply emterm/default and clear CSS vars even with user schemes", () => {
+    const userSchemes = [createMockUserScheme("my_theme")];
+
+    // First apply user scheme
+    applyTerminalColorScheme("my_theme", userSchemes);
+    expect(mockStyle.properties["--terminal-foreground"]).toBe("#f8f8f2");
+
+    // Then apply emterm
+    applyTerminalColorScheme("emterm", userSchemes);
+    expect(mockStyle.properties["--terminal-foreground"]).toBeUndefined();
+    expect(mockAttributes["data-terminal-color-scheme"]).toBeUndefined();
+  });
+
+  test("should handle undefined userSchemes (backward compatibility)", () => {
+    // @ts-expect-error - Testing backward compatibility
+    applyTerminalColorScheme("dracula", undefined);
+
+    expect(mockAttributes["data-terminal-color-scheme"]).toBe("dracula");
   });
 });

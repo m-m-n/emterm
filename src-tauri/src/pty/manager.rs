@@ -271,8 +271,14 @@ mod tests {
         let manager = PtyManager::new();
 
         // Create two sessions
-        let result1 = manager.create_session_atomic(None, None, 80, 24).await.unwrap();
-        let result2 = manager.create_session_atomic(None, None, 80, 24).await.unwrap();
+        let result1 = manager
+            .create_session_atomic(None, None, 80, 24)
+            .await
+            .unwrap();
+        let result2 = manager
+            .create_session_atomic(None, None, 80, 24)
+            .await
+            .unwrap();
 
         assert_eq!(result1.count, 1);
         assert_eq!(result2.count, 2);

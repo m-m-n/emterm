@@ -20,7 +20,6 @@
   "validation": {
     "fontSize": "font_size must be between %{min} and %{max}",
     "lineHeight": "line_height must be between %{min} and %{max}",
-    "opacity": "opacity must be between %{min} and %{max}",
     "padding": "padding must be between %{min} and %{max}",
     "scrollbackLines": "scrollback_lines must be between %{min} and %{max}",
     "scrollSpeed": "scroll_speed must be between %{min} and %{max}"

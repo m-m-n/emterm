@@ -3,6 +3,34 @@
  */
 
 import { describe, expect, it, mock, spyOn } from "bun:test";
+
+// Mock external dependencies that keyboard.ts transitively imports.
+// These mocks must be registered before importing the module under test.
+mock.module("@tauri-apps/api/core", () => ({
+  invoke: mock(async () => null),
+  Resource: class Resource {
+    readonly rid: number;
+    constructor(rid: number) { this.rid = rid; }
+    close() { return Promise.resolve(); }
+  },
+  Channel: class Channel {},
+  transformCallback: () => 0,
+}));
+
+mock.module("../../settings/settings-service", () => ({
+  SettingsService: {
+    load: () => Promise.resolve(null),
+    save: () => Promise.resolve(),
+    getCached: () => null,
+  },
+}));
+
+mock.module("../../clipboard", () => ({
+  ClipboardManager: {},
+  showPasteDialog: mock(async () => ({ confirmed: false })),
+  sendTextInChunks: mock(async () => {}),
+}));
+
 import { KeyboardHandler, type KeyboardHandlerContext } from "./keyboard";
 import type { PtyClient } from "../../pty/client";
 import type { TerminalState } from "../../terminal/state";
