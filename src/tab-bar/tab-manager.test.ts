@@ -10,7 +10,7 @@ mock.module("@tauri-apps/api/core", () => ({
     if (cmd === "load_settings") {
       return {
         font_size: 14, font_family: "monospace", line_height: 1.4,
-        ui_theme: "dark", terminal_color_scheme: "default", opacity: 1.0,
+        ui_theme: "dark", ui_theme_preset: "purple", terminal_color_scheme: "default",
         padding: 8, scrollback_lines: 10000, show_scrollbar: "auto",
         shell_path: "/bin/bash", shell_args: [], cursor_style: "block",
         cursor_blink: true, scroll_speed: 3, bell_action: "none",
@@ -23,6 +23,7 @@ mock.module("@tauri-apps/api/core", () => ({
           toggle_fullscreen: "F11", open_settings: "Ctrl+Comma",
         },
         language: "auto",
+        custom_color_schemes: [],
       };
     }
     return null;

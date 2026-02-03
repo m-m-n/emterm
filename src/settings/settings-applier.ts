@@ -8,9 +8,13 @@
 import type {
   AppSettings,
   UiTheme,
+  UiThemePreset,
   CursorStyle,
   ScrollbarMode,
+  UserColorScheme,
 } from "./types";
+import { getColorSchemePreset, rgbToCSS } from "../terminal/colors";
+import { UI_THEME_PRESETS, applyPresetColors } from "./ui-theme-presets";
 
 /**
  * Settings that can be applied to renderers.
@@ -21,7 +25,6 @@ export interface RendererSettings {
   lineHeight: number;
   cursorStyle: CursorStyle;
   cursorBlink: boolean;
-  opacity: number;
   colorScheme: string;
 }
 
@@ -36,11 +39,10 @@ export function applySettings(settings: AppSettings): void {
   applyFontSize(settings.font_size);
   applyFontFamily(settings.font_family_primary, settings.font_family_emoji, settings.font_family_secondary);
   applyLineHeight(settings.line_height);
-  applyUiTheme(settings.ui_theme);
-  applyTerminalColorScheme(settings.terminal_color_scheme);
+  applyUiTheme(settings.ui_theme, settings.ui_theme_preset);
+  applyTerminalColorScheme(settings.terminal_color_scheme, settings.custom_color_schemes);
   applyPadding(settings.padding);
   applyScrollbar(settings.show_scrollbar);
-  applyOpacity(settings.opacity);
   applyCursorStyle(settings.cursor_style);
   applyCursorBlink(settings.cursor_blink);
 }
@@ -99,10 +101,11 @@ export function applyLineHeight(lineHeight: number): void {
 }
 
 /**
- * Apply UI theme setting.
+ * Apply UI theme setting with preset colors.
  * "system" respects prefers-color-scheme media query.
+ * Preset colors are applied as CSS variables on :root.
  */
-export function applyUiTheme(theme: UiTheme): void {
+export function applyUiTheme(theme: UiTheme, preset: UiThemePreset = "purple"): void {
   const root = document.documentElement;
 
   // Clean up previous system theme listener
@@ -112,18 +115,25 @@ export function applyUiTheme(theme: UiTheme): void {
     systemThemeListener = null;
   }
 
+  // Fallback to "purple" if preset is invalid
+  const safePreset = UI_THEME_PRESETS[preset] ? preset : "purple";
+
   if (theme === "system") {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const resolved = mq.matches ? "dark" : "light";
     root.setAttribute("data-theme", resolved);
+    applyPresetColors(UI_THEME_PRESETS[safePreset][resolved]);
 
     // Listen for system theme changes
     systemThemeListener = (e: MediaQueryListEvent) => {
-      root.setAttribute("data-theme", e.matches ? "dark" : "light");
+      const newResolved = e.matches ? "dark" : "light";
+      root.setAttribute("data-theme", newResolved);
+      applyPresetColors(UI_THEME_PRESETS[safePreset][newResolved]);
     };
     mq.addEventListener("change", systemThemeListener);
   } else {
     root.setAttribute("data-theme", theme);
+    applyPresetColors(UI_THEME_PRESETS[safePreset][theme]);
   }
 }
 
@@ -155,17 +165,6 @@ export function applyScrollbar(mode: ScrollbarMode): void {
   );
 }
 
-/**
- * Apply opacity setting.
- * @param opacity - Opacity value (0.3-1.0)
- */
-export function applyOpacity(opacity: number): void {
-  const root = document.documentElement;
-  root.style.setProperty("--terminal-opacity", String(opacity));
-
-  notifyRenderers("opacity", opacity);
-}
-
 /** Terminal color scheme CSS variable names */
 const TERMINAL_COLOR_VARS = [
   "--terminal-foreground",
@@ -193,9 +192,12 @@ const TERMINAL_COLOR_VARS = [
 /**
  * Apply terminal color scheme setting.
  * "default" or empty string removes custom overrides (uses CSS theme defaults).
- * Other values set terminal color CSS variables from a preset.
+ * Other values set terminal color CSS variables from a preset or user scheme.
+ *
+ * @param scheme - Scheme name to apply
+ * @param userSchemes - Optional array of user-defined color schemes
  */
-export function applyTerminalColorScheme(scheme: string): void {
+export function applyTerminalColorScheme(scheme: string, userSchemes?: UserColorScheme[]): void {
   const root = document.documentElement;
 
   if (!scheme || scheme === "default" || scheme === "emterm") {
@@ -211,8 +213,40 @@ export function applyTerminalColorScheme(scheme: string): void {
 
   // Store the scheme name as a data attribute
   root.setAttribute("data-terminal-color-scheme", scheme);
+
+  // Check if it's a user scheme first
+  const userScheme = userSchemes?.find((s) => s.name === scheme);
+  if (userScheme) {
+    applyUserColorScheme(root, userScheme);
+    notifyRenderers("colorScheme", scheme);
+    return;
+  }
+
+  // Fall back to preset lookup
+  const preset = getColorSchemePreset(scheme);
+  if (preset) {
+    root.style.setProperty("--terminal-background", rgbToCSS(preset.background));
+  }
+
   // Notify renderers with the scheme name
   notifyRenderers("colorScheme", scheme);
+}
+
+/**
+ * Apply a user-defined color scheme by setting all CSS variables.
+ */
+function applyUserColorScheme(root: HTMLElement, scheme: UserColorScheme): void {
+  root.style.setProperty("--terminal-foreground", scheme.foreground);
+  root.style.setProperty("--terminal-background", scheme.background);
+  root.style.setProperty("--terminal-cursor-color", scheme.cursor);
+  root.style.setProperty("--terminal-selection-bg", scheme.selection);
+
+  for (let i = 0; i < 16; i++) {
+    const color = scheme.ansi_colors[i];
+    if (color) {
+      root.style.setProperty(`--terminal-color-${i}`, color);
+    }
+  }
 }
 
 /**

@@ -13,7 +13,13 @@
   min-height: 0;
   background-color: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
-  font-family: 'Roboto', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    "Roboto",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   font-size: 14px;
 }
 
@@ -48,19 +54,21 @@
   font-family: inherit;
   position: relative;
   transition:
-    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    background-color var(--md-motion-duration-short4)
+      var(--md-motion-easing-standard),
     color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
 }
 
 /* State Layer for nav items */
 .settings-nav-item::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   border-radius: var(--md-sys-shape-corner-full);
   background-color: currentColor;
   opacity: 0;
-  transition: opacity var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: opacity var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .settings-nav-item:hover:not(.disabled)::before {
@@ -141,21 +149,21 @@
   color: var(--md-sys-color-on-surface);
 }
 
-/* Hint - MD3 Body Small */
+/* Hint - MD3 Body Small (enhanced contrast) */
 .settings-hint {
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 13px;
+  line-height: 18px;
   letter-spacing: 0.4px;
-  color: var(--md-sys-color-on-surface-variant);
+  color: color-mix(in srgb, var(--md-sys-color-on-surface) 70%, transparent);
   margin-top: 4px;
 }
 
-/* Description - MD3 Body Small (supporting text) */
+/* Description - MD3 Body Small (supporting text, enhanced contrast) */
 .settings-description {
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 13px;
+  line-height: 18px;
   letter-spacing: 0.4px;
-  color: var(--md-sys-color-on-surface-variant);
+  color: color-mix(in srgb, var(--md-sys-color-on-surface) 65%, transparent);
 }
 
 /* Toggle row label group wrapper */
@@ -184,7 +192,8 @@
   line-height: 24px;
   font-family: inherit;
   text-align: center;
-  transition: border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: border-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .settings-number-input:hover {
@@ -196,6 +205,11 @@
   border-color: var(--md-sys-color-primary);
   border-width: 2px;
   padding: 11px 15px;
+}
+
+.settings-number-input:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 .settings-number-input::-webkit-inner-spin-button,
@@ -240,12 +254,13 @@
   line-height: 24px;
   letter-spacing: 0.15px;
   color: var(--md-sys-color-on-surface-variant);
-  margin: 8px 0 16px 0;
+  margin: 36px 0 16px 0;
   padding: 0;
 }
 
-.settings-subsection-header:first-of-type {
-  margin-top: 0;
+/* First subsection header after section header has reduced margin */
+.settings-section-header + .settings-subsection-header {
+  margin-top: 8px;
 }
 
 /* ============================================
@@ -263,7 +278,8 @@
   font-size: 16px;
   line-height: 24px;
   font-family: inherit;
-  transition: border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: border-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .settings-text-input::placeholder {
@@ -279,6 +295,11 @@
   border-color: var(--md-sys-color-primary);
   border-width: 2px;
   padding: 11px 15px;
+}
+
+.settings-text-input:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 /* ============================================
@@ -298,11 +319,12 @@
   line-height: 24px;
   font-family: inherit;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%2349454F' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='currentColor' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 8px center;
   cursor: pointer;
-  transition: border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: border-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .settings-select:hover {
@@ -315,6 +337,11 @@
   border-width: 2px;
   padding: 11px 15px;
   padding-right: 35px;
+}
+
+.settings-select:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 /* ============================================
@@ -349,8 +376,10 @@
   background-color: var(--md-sys-color-surface-variant);
   border: 2px solid var(--md-sys-color-outline);
   transition:
-    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
-    border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+    background-color var(--md-motion-duration-short4)
+      var(--md-motion-easing-standard),
+    border-color var(--md-motion-duration-short4)
+      var(--md-motion-easing-standard);
 }
 
 .settings-toggle-thumb {
@@ -366,7 +395,8 @@
     left var(--md-motion-duration-short4) var(--md-motion-easing-standard),
     width var(--md-motion-duration-short4) var(--md-motion-easing-standard),
     height var(--md-motion-duration-short4) var(--md-motion-easing-standard),
-    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+    background-color var(--md-motion-duration-short4)
+      var(--md-motion-easing-standard);
 }
 
 /* Toggle ON state */
@@ -420,7 +450,8 @@
   align-items: center;
   justify-content: center;
   min-width: 120px;
-  padding: 8px 16px;
+  min-height: 44px;
+  padding: 10px 16px;
   background-color: var(--md-sys-color-surface-variant);
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-small);
@@ -431,8 +462,10 @@
   font-family: inherit;
   cursor: pointer;
   transition:
-    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
-    border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+    background-color var(--md-motion-duration-short4)
+      var(--md-motion-easing-standard),
+    border-color var(--md-motion-duration-short4)
+      var(--md-motion-easing-standard);
 }
 
 .settings-keybind-input:hover {
@@ -458,8 +491,13 @@
 }
 
 @keyframes keybind-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 
 /* ============================================
@@ -495,12 +533,13 @@
   background-color: var(--md-sys-color-primary);
   margin-top: -8px;
   border: none;
-  transition:
-    box-shadow var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: box-shadow var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .settings-slider::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 0 8px color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  box-shadow: 0 0 0 8px
+    color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
 }
 
 .settings-slider:focus-visible {
@@ -508,7 +547,8 @@
 }
 
 .settings-slider:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 8px color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent);
+  box-shadow: 0 0 0 8px
+    color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent);
 }
 
 .settings-slider-value {
@@ -564,12 +604,18 @@
   font-family: inherit;
   cursor: pointer;
   transition:
-    background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
-    border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+    background-color var(--md-motion-duration-short4)
+      var(--md-motion-easing-standard),
+    border-color var(--md-motion-duration-short4)
+      var(--md-motion-easing-standard);
 }
 
 .settings-font-picker-button:hover {
-  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-primary) 8%,
+    transparent
+  );
 }
 
 .settings-font-picker-button:focus-visible {
@@ -609,11 +655,16 @@
   color: var(--md-sys-color-on-surface);
   font-size: 20px;
   cursor: pointer;
-  transition: background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: background-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .font-picker-back:hover {
-  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-surface) 8%,
+    transparent
+  );
 }
 
 .font-picker-back:focus-visible {
@@ -645,7 +696,8 @@
   line-height: 24px;
   font-family: inherit;
   box-sizing: border-box;
-  transition: border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: border-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .font-picker-search-input::placeholder {
@@ -675,11 +727,16 @@
   font-size: 16px;
   line-height: 24px;
   color: var(--md-sys-color-on-surface);
-  transition: background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: background-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .font-picker-item:hover {
-  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-surface) 8%,
+    transparent
+  );
 }
 
 .font-picker-item:focus-visible {
@@ -698,4 +755,221 @@
   text-align: center;
   font-size: 14px;
   color: var(--md-sys-color-on-surface-variant);
+}
+
+/* ============================================
+ * Color Scheme Editor
+ * ============================================ */
+
+.color-scheme-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.color-scheme-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.color-scheme-rename {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-scheme-rename span {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.color-scheme-rename .settings-input {
+  width: 180px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  background-color: var(--md-sys-color-surface-container-highest);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  color: var(--md-sys-color-on-surface);
+  transition: border-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
+}
+
+.color-scheme-rename .settings-input:hover {
+  border-color: var(--md-sys-color-on-surface);
+}
+
+.color-scheme-rename .settings-input:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  padding: 7px 11px;
+}
+
+/* Color Palette Editor */
+.color-palette-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background-color: var(--md-sys-color-surface-container);
+  border-radius: 8px;
+}
+
+.color-palette-label {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--md-sys-color-on-surface-variant);
+  margin-top: 8px;
+}
+
+.color-palette-special {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.color-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+
+/* Color Input Row (for special colors) */
+.color-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-input-label {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface);
+  min-width: 80px;
+}
+
+.color-input-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Color Picker Input */
+.color-picker {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 4px;
+  cursor: pointer;
+  background: none;
+}
+
+.color-picker::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-picker::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+/* Hex Input */
+.color-hex-input {
+  width: 80px;
+  min-height: 36px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: monospace;
+  background-color: var(--md-sys-color-surface-container-highest);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 4px;
+  color: var(--md-sys-color-on-surface);
+}
+
+.color-hex-input:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+}
+
+.color-hex-input:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 1px;
+}
+
+/* Compact Color Input (for ANSI grid) */
+.color-input-compact {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.color-input-compact .color-input-group {
+  flex-direction: column;
+}
+
+.color-input-compact .color-picker {
+  width: 100%;
+  min-width: 28px;
+  height: 28px;
+}
+
+.color-input-compact .color-hex-input {
+  width: 100%;
+  min-width: 60px;
+  text-align: center;
+  padding: 4px 6px;
+  /* font-size: 13px inherited from .color-hex-input */
+}
+
+/* Settings Buttons - Base style */
+.settings-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  height: 36px;
+  padding: 0 16px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
+}
+
+.settings-button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+/* Button Variants */
+.settings-button-secondary {
+  background-color: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.settings-button-secondary:hover {
+  background-color: var(--md-sys-color-secondary);
+  color: var(--md-sys-color-on-secondary);
+}
+
+.settings-button-danger {
+  background-color: var(--md-sys-color-error-container, #8c1d18);
+  color: var(--md-sys-color-on-error-container, #f9dedc);
+}
+
+.settings-button-danger:hover {
+  background-color: var(--md-sys-color-error, #f2b8b5);
+  color: var(--md-sys-color-on-error, #601410);
 }

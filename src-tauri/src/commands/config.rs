@@ -22,10 +22,6 @@ pub const MAX_PADDING: u32 = 32;
 pub const MIN_SCROLLBACK_LINES: u32 = 0;
 pub const MAX_SCROLLBACK_LINES: u32 = 100000;
 
-// Opacity
-pub const MIN_OPACITY: f32 = 0.3;
-pub const MAX_OPACITY: f32 = 1.0;
-
 // Scroll
 pub const MIN_SCROLL_SPEED: u32 = 1;
 pub const MAX_SCROLL_SPEED: u32 = 10;
@@ -70,6 +66,16 @@ pub enum ScrollbarMode {
     Never,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum UiThemePreset {
+    #[default]
+    Purple,
+    Blue,
+    Green,
+    Orange,
+}
+
 // ============================================================
 // Null-safe Deserialization Helpers
 // ============================================================
@@ -92,7 +98,6 @@ macro_rules! deserialize_null_with {
 // Generate per-field null deserializers
 deserialize_null_with!(deserialize_null_font_size, u32, default_font_size);
 deserialize_null_with!(deserialize_null_line_height, f32, default_line_height);
-deserialize_null_with!(deserialize_null_opacity, f32, default_opacity);
 deserialize_null_with!(deserialize_null_padding, u32, default_padding);
 deserialize_null_with!(
     deserialize_null_scrollback_lines,
@@ -186,9 +191,6 @@ fn default_font_size() -> u32 {
 fn default_line_height() -> f32 {
     1.2
 }
-fn default_opacity() -> f32 {
-    1.0
-}
 fn default_padding() -> u32 {
     4
 }
@@ -246,6 +248,22 @@ fn default_language() -> String {
 }
 
 // ============================================================
+// User Color Scheme
+// ============================================================
+
+/// User-defined terminal color scheme.
+/// Stored in settings.json under custom_color_schemes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UserColorScheme {
+    pub name: String,
+    pub foreground: String,
+    pub background: String,
+    pub cursor: String,
+    pub selection: String,
+    pub ansi_colors: Vec<String>,
+}
+
+// ============================================================
 // Settings Structs
 // ============================================================
 
@@ -279,12 +297,9 @@ pub struct AppSettings {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub ui_theme: UiTheme,
     #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub ui_theme_preset: UiThemePreset,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub terminal_color_scheme: String,
-    #[serde(
-        default = "default_opacity",
-        deserialize_with = "deserialize_null_opacity"
-    )]
-    pub opacity: f32,
 
     // Layout
     #[serde(
@@ -331,6 +346,10 @@ pub struct AppSettings {
         deserialize_with = "deserialize_null_language"
     )]
     pub language: String,
+
+    // Custom Color Schemes
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub custom_color_schemes: Vec<UserColorScheme>,
 }
 
 impl Default for AppSettings {
@@ -343,8 +362,8 @@ impl Default for AppSettings {
             font_family: String::new(),
             line_height: default_line_height(),
             ui_theme: UiTheme::default(),
+            ui_theme_preset: UiThemePreset::default(),
             terminal_color_scheme: String::new(),
-            opacity: default_opacity(),
             padding: default_padding(),
             scrollback_lines: default_scrollback_lines(),
             show_scrollbar: ScrollbarMode::default(),
@@ -358,6 +377,7 @@ impl Default for AppSettings {
             copy_on_select: false,
             keybinds: KeybindSettings::default(),
             language: default_language(),
+            custom_color_schemes: Vec::new(),
         }
     }
 }
@@ -475,10 +495,6 @@ fn validate_settings(settings: &AppSettings) -> Result<(), String> {
             max = MAX_LINE_HEIGHT
         )
         .to_string());
-    }
-
-    if settings.opacity < MIN_OPACITY || settings.opacity > MAX_OPACITY {
-        return Err(t!("validation.opacity", min = MIN_OPACITY, max = MAX_OPACITY).to_string());
     }
 
     if settings.padding > MAX_PADDING {
@@ -611,8 +627,8 @@ mod tests {
         assert_eq!(settings.font_family_emoji, "");
         assert_eq!(settings.line_height, 1.2);
         assert_eq!(settings.ui_theme, UiTheme::System);
+        assert_eq!(settings.ui_theme_preset, UiThemePreset::Purple);
         assert_eq!(settings.terminal_color_scheme, "");
-        assert_eq!(settings.opacity, 1.0);
         assert_eq!(settings.padding, 4);
         assert_eq!(settings.scrollback_lines, 10000);
         assert_eq!(settings.show_scrollbar, ScrollbarMode::Auto);
@@ -702,7 +718,6 @@ mod tests {
         let json = r#"{
             "font_size": null,
             "line_height": null,
-            "opacity": null,
             "padding": null,
             "scrollback_lines": null,
             "scroll_speed": null,
@@ -712,7 +727,6 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.font_size, 13);
         assert_eq!(settings.line_height, 1.2);
-        assert_eq!(settings.opacity, 1.0);
         assert_eq!(settings.padding, 4);
         assert_eq!(settings.scrollback_lines, 10000);
         assert_eq!(settings.scroll_speed, 3);
@@ -756,6 +770,63 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // -- UiThemePreset --
+
+    #[test]
+    fn test_ui_theme_preset_default_is_purple() {
+        assert_eq!(UiThemePreset::default(), UiThemePreset::Purple);
+    }
+
+    #[test]
+    fn test_deserialize_ui_theme_preset_values() {
+        let test_cases = vec![
+            (r#""purple""#, UiThemePreset::Purple),
+            (r#""blue""#, UiThemePreset::Blue),
+            (r#""green""#, UiThemePreset::Green),
+            (r#""orange""#, UiThemePreset::Orange),
+        ];
+        for (json, expected) in test_cases {
+            let result: UiThemePreset = serde_json::from_str(json).unwrap();
+            assert_eq!(result, expected, "Failed for {}", json);
+        }
+    }
+
+    #[test]
+    fn test_deserialize_null_ui_theme_preset() {
+        let json = r#"{"ui_theme_preset": null}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.ui_theme_preset, UiThemePreset::Purple);
+    }
+
+    #[test]
+    fn test_deserialize_missing_ui_theme_preset() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.ui_theme_preset, UiThemePreset::Purple);
+    }
+
+    #[test]
+    fn test_deserialize_invalid_ui_theme_preset_errors() {
+        let json = r#"{"ui_theme_preset": "invalid"}"#;
+        let result = serde_json::from_str::<AppSettings>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ui_theme_preset_round_trip() {
+        let test_cases = vec![
+            UiThemePreset::Purple,
+            UiThemePreset::Blue,
+            UiThemePreset::Green,
+            UiThemePreset::Orange,
+        ];
+        for preset in test_cases {
+            let json = serde_json::to_string(&preset).unwrap();
+            let restored: UiThemePreset = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, preset);
+        }
+    }
+
     // -- Serialization --
 
     #[test]
@@ -763,6 +834,7 @@ mod tests {
         let settings = AppSettings::default();
         let json = serde_json::to_string(&settings).unwrap();
         assert!(json.contains("\"ui_theme\":\"system\""));
+        assert!(json.contains("\"ui_theme_preset\":\"purple\""));
         assert!(json.contains("\"cursor_style\":\"block\""));
         assert!(json.contains("\"bell_action\":\"visual\""));
         assert!(json.contains("\"show_scrollbar\":\"auto\""));
@@ -780,8 +852,8 @@ mod tests {
             font_family: String::new(),
             line_height: 1.5,
             ui_theme: UiTheme::Dark,
+            ui_theme_preset: UiThemePreset::Blue,
             terminal_color_scheme: "monokai".to_string(),
-            opacity: 0.8,
             padding: 8,
             scrollback_lines: 5000,
             show_scrollbar: ScrollbarMode::Always,
@@ -799,6 +871,7 @@ mod tests {
                 ..KeybindSettings::default()
             },
             language: "ja".to_string(),
+            custom_color_schemes: Vec::new(),
         };
 
         let json = serde_json::to_string(&settings).unwrap();
@@ -810,8 +883,8 @@ mod tests {
         assert_eq!(restored.font_family_emoji, "Noto Color Emoji");
         assert_eq!(restored.line_height, 1.5);
         assert_eq!(restored.ui_theme, UiTheme::Dark);
+        assert_eq!(restored.ui_theme_preset, UiThemePreset::Blue);
         assert_eq!(restored.terminal_color_scheme, "monokai");
-        assert_eq!(restored.opacity, 0.8);
         assert_eq!(restored.padding, 8);
         assert_eq!(restored.scrollback_lines, 5000);
         assert_eq!(restored.show_scrollbar, ScrollbarMode::Always);
@@ -916,20 +989,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_rejects_opacity_below_min() {
-        let mut settings = AppSettings::default();
-        settings.opacity = 0.1;
-        assert!(validate_settings(&settings).is_err());
-    }
-
-    #[test]
-    fn test_validate_rejects_opacity_above_max() {
-        let mut settings = AppSettings::default();
-        settings.opacity = 1.5;
-        assert!(validate_settings(&settings).is_err());
-    }
-
-    #[test]
     fn test_validate_rejects_scroll_speed_below_min() {
         let mut settings = AppSettings::default();
         settings.scroll_speed = 0;
@@ -964,12 +1023,6 @@ mod tests {
         assert!(validate_settings(&settings).is_ok());
 
         settings.font_size = MAX_FONT_SIZE;
-        assert!(validate_settings(&settings).is_ok());
-
-        settings.opacity = MIN_OPACITY;
-        assert!(validate_settings(&settings).is_ok());
-
-        settings.opacity = MAX_OPACITY;
         assert!(validate_settings(&settings).is_ok());
 
         settings.scroll_speed = MIN_SCROLL_SPEED;
@@ -1038,5 +1091,89 @@ mod tests {
         assert_eq!(restored.font_family_primary, "JetBrains Mono");
         assert_eq!(restored.font_family_secondary, "Noto Sans JP");
         assert_eq!(restored.font_family_emoji, "Noto Color Emoji");
+    }
+
+    // -- UserColorScheme tests --
+
+    #[test]
+    fn test_deserialize_missing_custom_color_schemes_defaults_to_empty() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.custom_color_schemes.is_empty());
+    }
+
+    #[test]
+    fn test_deserialize_null_custom_color_schemes_defaults_to_empty() {
+        let json = r#"{"custom_color_schemes": null}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.custom_color_schemes.is_empty());
+    }
+
+    #[test]
+    fn test_user_color_scheme_round_trip() {
+        let scheme = UserColorScheme {
+            name: "my_theme".to_string(),
+            foreground: "#f8f8f2".to_string(),
+            background: "#282a36".to_string(),
+            cursor: "#f8f8f2".to_string(),
+            selection: "#44475a".to_string(),
+            ansi_colors: vec![
+                "#21222c".to_string(),
+                "#ff5555".to_string(),
+                "#50fa7b".to_string(),
+                "#f1fa8c".to_string(),
+                "#bd93f9".to_string(),
+                "#ff79c6".to_string(),
+                "#8be9fd".to_string(),
+                "#f8f8f2".to_string(),
+                "#6272a4".to_string(),
+                "#ff6e6e".to_string(),
+                "#69ff94".to_string(),
+                "#ffffa5".to_string(),
+                "#d6acff".to_string(),
+                "#ff92df".to_string(),
+                "#a4ffff".to_string(),
+                "#ffffff".to_string(),
+            ],
+        };
+
+        let json = serde_json::to_string(&scheme).unwrap();
+        let restored: UserColorScheme = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, scheme);
+    }
+
+    #[test]
+    fn test_settings_with_custom_color_schemes_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.custom_color_schemes = vec![
+            UserColorScheme {
+                name: "theme1".to_string(),
+                foreground: "#ffffff".to_string(),
+                background: "#000000".to_string(),
+                cursor: "#ffffff".to_string(),
+                selection: "#333333".to_string(),
+                ansi_colors: (0..16).map(|i| format!("#{:02x}{:02x}{:02x}", i * 16, i * 16, i * 16)).collect(),
+            },
+            UserColorScheme {
+                name: "theme2".to_string(),
+                foreground: "#00ff00".to_string(),
+                background: "#001100".to_string(),
+                cursor: "#00ff00".to_string(),
+                selection: "#003300".to_string(),
+                ansi_colors: (0..16).map(|i| format!("#00{:02x}00", i * 16)).collect(),
+            },
+        ];
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.custom_color_schemes.len(), 2);
+        assert_eq!(restored.custom_color_schemes[0].name, "theme1");
+        assert_eq!(restored.custom_color_schemes[1].name, "theme2");
+    }
+
+    #[test]
+    fn test_app_settings_default_has_empty_custom_color_schemes() {
+        let settings = AppSettings::default();
+        assert!(settings.custom_color_schemes.is_empty());
     }
 }

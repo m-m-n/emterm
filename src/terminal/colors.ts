@@ -345,3 +345,49 @@ export const COLOR_SCHEME_PRESETS: readonly ColorSchemePreset[] = Object.freeze(
 export function getColorSchemePreset(name: string): ColorSchemePreset | undefined {
 	return COLOR_SCHEME_PRESETS.find((preset) => preset.name === name);
 }
+
+// ============================================================
+// Hex Color Conversion Utilities
+// ============================================================
+
+/** Regex for validating #RRGGBB hex color format */
+const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * Validate a hex color string.
+ *
+ * @param hex - Color string to validate
+ * @returns True if the string is a valid #RRGGBB format
+ */
+export function validateHexColor(hex: string): boolean {
+	return HEX_COLOR_REGEX.test(hex);
+}
+
+/**
+ * Convert a hex color string to RGB.
+ *
+ * @param hex - Hex color string in #RRGGBB format
+ * @returns RGB color value or null if invalid
+ */
+export function hexToRgb(hex: string): Rgb | null {
+	if (!validateHexColor(hex)) {
+		return null;
+	}
+	const r = parseInt(hex.slice(1, 3), 16);
+	const g = parseInt(hex.slice(3, 5), 16);
+	const b = parseInt(hex.slice(5, 7), 16);
+	return { r, g, b };
+}
+
+/**
+ * Convert an RGB color to hex string.
+ *
+ * @param rgb - RGB color value
+ * @returns Hex color string in #rrggbb format (lowercase)
+ */
+export function rgbToHex(rgb: Rgb): string {
+	const r = rgb.r.toString(16).padStart(2, "0");
+	const g = rgb.g.toString(16).padStart(2, "0");
+	const b = rgb.b.toString(16).padStart(2, "0");
+	return `#${r}${g}${b}`;
+}

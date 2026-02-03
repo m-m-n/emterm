@@ -115,6 +115,31 @@ export class TerminalApp {
     this.state = new TerminalState(cols, rows);
     this.renderer = await createRendererAsync(terminalContainer, fontFamily, fontSize);
 
+    // Apply cached settings to the newly created renderer
+    // (applySettings runs before tabManager exists, so renderer notifications are dropped)
+    const cachedSettings = SettingsService.getCached();
+    if (cachedSettings) {
+      if (cachedSettings.terminal_color_scheme) {
+        // Check if it's a user-defined color scheme
+        const userScheme = cachedSettings.custom_color_schemes?.find(
+          (s) => s.name === cachedSettings.terminal_color_scheme
+        );
+        if (userScheme) {
+          // Apply user-defined color scheme directly
+          this.renderer.setUserColorScheme(userScheme);
+        } else {
+          // Apply preset color scheme
+          this.renderer.applySetting("colorScheme", cachedSettings.terminal_color_scheme);
+        }
+      }
+      if (cachedSettings.cursor_style) {
+        this.renderer.applySetting("cursorStyle", cachedSettings.cursor_style);
+      }
+      if (cachedSettings.cursor_blink !== undefined) {
+        this.renderer.applySetting("cursorBlink", cachedSettings.cursor_blink);
+      }
+    }
+
     // Register bell callback
     this.state.onBell = () => this.handleBell();
 

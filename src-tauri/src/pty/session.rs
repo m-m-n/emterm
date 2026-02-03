@@ -45,7 +45,13 @@ impl PtySession {
     ///
     /// - Shells are spawned as non-login shells for faster startup
     /// - TERM and COLORTERM environment variables are set for compatibility
-    pub fn new(id: SessionId, shell: &str, args: Option<Vec<String>>, cols: u16, rows: u16) -> Result<Self, PtyError> {
+    pub fn new(
+        id: SessionId,
+        shell: &str,
+        args: Option<Vec<String>>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(PtySize {

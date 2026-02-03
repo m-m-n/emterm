@@ -6,6 +6,7 @@
  */
 
 import type { RendererSettings } from "../settings/settings-applier";
+import type { UserColorScheme } from "../settings/types";
 import type { TerminalState } from "./state.ts";
 
 /**
@@ -88,6 +89,13 @@ export interface ITerminalRenderer {
 		setting: K,
 		value: RendererSettings[K],
 	): void;
+
+	/**
+	 * Set a user-defined color scheme.
+	 * Used for custom color schemes stored in settings.
+	 * @param scheme - User color scheme with hex color values
+	 */
+	setUserColorScheme(scheme: UserColorScheme): void;
 
 	/**
 	 * Dispose of the renderer and clean up resources.

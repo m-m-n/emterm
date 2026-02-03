@@ -9,6 +9,7 @@
 // ============================================================
 
 export type UiTheme = "light" | "dark" | "system";
+export type UiThemePreset = "purple" | "blue" | "green" | "orange";
 export type CursorStyle = "block" | "underline" | "bar";
 export type BellAction = "sound" | "visual" | "none";
 export type ScrollbarMode = "auto" | "always" | "never";
@@ -35,8 +36,8 @@ export interface AppSettings {
 
   // Theme / Color
   ui_theme: UiTheme;
+  ui_theme_preset: UiThemePreset;
   terminal_color_scheme: string;
-  opacity: number;
 
   // Layout
   padding: number;
@@ -58,6 +59,9 @@ export interface AppSettings {
 
   // Language
   language: Language;
+
+  // Custom Color Schemes
+  custom_color_schemes: UserColorScheme[];
 }
 
 export interface KeybindSettings {
@@ -89,6 +93,23 @@ export interface FontListResponse {
 export type FontCategory = "primary" | "secondary" | "emoji";
 
 // ============================================================
+// User Color Scheme
+// ============================================================
+
+/**
+ * User-defined terminal color scheme.
+ * Stored in settings.json under custom_color_schemes.
+ */
+export interface UserColorScheme {
+  name: string;
+  foreground: string; // "#RRGGBB"
+  background: string; // "#RRGGBB"
+  cursor: string; // "#RRGGBB"
+  selection: string; // "#RRGGBB"
+  ansi_colors: string[]; // 16 "#RRGGBB" strings
+}
+
+// ============================================================
 // Validation Constants
 // ============================================================
 
@@ -97,9 +118,6 @@ export const MAX_FONT_SIZE = 32;
 export const MIN_LINE_HEIGHT = 0.8;
 export const MAX_LINE_HEIGHT = 3.0;
 export const LINE_HEIGHT_STEP = 0.1;
-export const MIN_OPACITY = 0.3;
-export const MAX_OPACITY = 1.0;
-export const OPACITY_STEP = 0.05;
 export const MIN_PADDING = 0;
 export const MAX_PADDING = 32;
 export const MIN_SCROLLBACK_LINES = 0;
