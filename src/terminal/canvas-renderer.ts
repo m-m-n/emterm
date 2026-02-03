@@ -564,12 +564,24 @@ export class CanvasRenderer implements ITerminalRenderer {
 	}
 
 	/**
-	 * Render a single line.
+	 * Render a single line (both background and text).
+	 * Used for incremental rendering of dirty rows.
 	 *
 	 * @param rowIndex - Row index (0-based)
 	 * @param line - Line to render
 	 */
 	private renderLine(rowIndex: number, line: Line): void {
+		this.renderLineBackground(rowIndex, line);
+		this.renderLineText(rowIndex, line);
+	}
+
+	/**
+	 * Render only the background of a line.
+	 *
+	 * @param rowIndex - Row index (0-based)
+	 * @param line - Line to render
+	 */
+	private renderLineBackground(rowIndex: number, line: Line): void {
 		const y = rowIndex * this.charHeight;
 
 		// Use integer-aligned coordinates to avoid sub-pixel gaps between rows
@@ -582,17 +594,38 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
 		this.ctx.fillRect(0, fillY, canvasWidth, fillHeight);
 
-		// Group cells into spans
+		// Group cells into spans and render colored backgrounds
 		const spans = groupCellsIntoSpans(line);
-
-		// Render each span
 		for (const span of spans) {
-			this.renderSpan(span, rowIndex);
+			const bg = getEffectiveBackground(span.attrs);
+			if (bg !== null) {
+				const x = span.startCol * this.charWidth;
+				const width = span.cellCount * this.charWidth;
+				this.ctx.fillStyle = rgbToCSS(bg);
+				this.ctx.fillRect(x, fillY, width, fillHeight);
+			}
 		}
 	}
 
 	/**
-	 * Render a text span.
+	 * Render only the text of a line (no background clearing).
+	 *
+	 * @param rowIndex - Row index (0-based)
+	 * @param line - Line to render
+	 */
+	private renderLineText(rowIndex: number, line: Line): void {
+		// Group cells into spans
+		const spans = groupCellsIntoSpans(line);
+
+		// Render text for each span
+		for (const span of spans) {
+			this.renderSpanText(span, rowIndex);
+		}
+	}
+
+	/**
+	 * Render a text span (both background and text).
+	 * Kept for backward compatibility with incremental rendering.
 	 *
 	 * @param span - Text span to render
 	 * @param rowIndex - Row index for Y position calculation
@@ -603,7 +636,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const width = span.cellCount * this.charWidth;
 
 		// Get effective colors
-		const fg = getEffectiveForeground(span.attrs);
 		const bg = getEffectiveBackground(span.attrs);
 
 		// Draw background if not default
@@ -615,6 +647,24 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.ctx.fillStyle = rgbToCSS(bg);
 			this.ctx.fillRect(x, fillY, width, fillHeight);
 		}
+
+		// Render text portion
+		this.renderSpanText(span, rowIndex);
+	}
+
+	/**
+	 * Render only the text portion of a span (no background).
+	 *
+	 * @param span - Text span to render
+	 * @param rowIndex - Row index for Y position calculation
+	 */
+	private renderSpanText(span: TextSpan, rowIndex: number): void {
+		const x = span.startCol * this.charWidth;
+		const y = rowIndex * this.charHeight;
+		const width = span.cellCount * this.charWidth;
+
+		// Get foreground color
+		const fg = getEffectiveForeground(span.attrs);
 
 		// Get text attribute styles
 		const styles = applyTextAttributes(span.attrs);
@@ -820,6 +870,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	/**
 	 * Force a full re-render.
+	 * Uses two-pass rendering to prevent descenders from being clipped:
+	 * 1. First pass: Render all backgrounds
+	 * 2. Second pass: Render all text (so descenders aren't overwritten)
 	 *
 	 * @param state - Terminal state to render
 	 */
@@ -835,11 +888,20 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const canvasHeight = this.canvas.height / this.dpr;
 		this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-		// Render all visible rows
+		// Two-pass rendering to prevent descender clipping:
+		// First pass: Render all backgrounds
 		for (let row = 0; row < visibleLines.length; row++) {
 			const line = visibleLines[row];
 			if (line) {
-				this.renderLine(row, line);
+				this.renderLineBackground(row, line);
+			}
+		}
+
+		// Second pass: Render all text (descenders won't be overwritten)
+		for (let row = 0; row < visibleLines.length; row++) {
+			const line = visibleLines[row];
+			if (line) {
+				this.renderLineText(row, line);
 			}
 		}
 
