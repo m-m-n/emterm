@@ -680,14 +680,17 @@ function renderColorSchemeEditor(
   container.dataset.key = "terminal-color-scheme-editor";
   panel.appendChild(container);
 
-  // Label and description
-  const labelDiv = document.createElement("div");
-  labelDiv.className = "settings-label";
-  labelDiv.innerHTML = `
-    <span class="label-text">${t("settings.appearance.colorScheme")}</span>
-    <span class="label-desc">${t("settings.appearance.colorSchemeDesc")}</span>
-  `;
-  container.appendChild(labelDiv);
+  // Label
+  const label = document.createElement("label");
+  label.className = "settings-label";
+  label.textContent = t("settings.appearance.colorScheme");
+  container.appendChild(label);
+
+  // Description
+  const desc = document.createElement("span");
+  desc.className = "settings-description";
+  desc.textContent = t("settings.appearance.colorSchemeDesc");
+  container.appendChild(desc);
 
   // Control area
   const controlDiv = document.createElement("div");

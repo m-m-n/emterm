@@ -11,6 +11,7 @@ import {
 	getEffectiveBackground,
 	getEffectiveForeground,
 } from "./attributes.ts";
+import { drawCustomGlyph, isCustomGlyph } from "./custom-glyphs.ts";
 import {
 	DEFAULT_BACKGROUND,
 	DEFAULT_FOREGROUND,
@@ -638,8 +639,17 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Calculate text baseline position
 		const textY = y + (this.charHeight - this.fontDescent);
 
-		// Draw text (skip if blink and currently hidden - handled by blink timer)
-		this.ctx.fillText(span.text, x, textY);
+		// Draw each character, using custom glyphs for block/box drawing characters
+		let col = span.startCol;
+		for (const char of span.text) {
+			const charX = col * this.charWidth;
+			// Try custom glyph rendering first (for block elements and box drawing)
+			if (!isCustomGlyph(char) || !drawCustomGlyph(this.ctx, char, charX, y, this.charWidth, this.charHeight)) {
+				// Fall back to font glyph
+				this.ctx.fillText(char, charX, textY);
+			}
+			col++;
+		}
 
 		// Draw underline
 		if (styles.underline) {
