@@ -32,6 +32,7 @@ import {
 import type { ITerminalRenderer } from "./renderer-interface.ts";
 import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
+import { charWidth } from "./unicode.ts";
 
 /**
  * A span of text with uniform attributes.
@@ -660,7 +661,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	private renderSpanText(span: TextSpan, rowIndex: number): void {
 		const x = span.startCol * this.charWidth;
-		const y = rowIndex * this.charHeight;
+		// Use integer-aligned Y coordinate to match background rendering
+		// This prevents gaps between block characters and their backgrounds
+		const y = Math.floor(rowIndex * this.charHeight);
 		const width = span.cellCount * this.charWidth;
 
 		// Get foreground color
@@ -690,6 +693,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const textY = y + (this.charHeight - this.fontDescent);
 
 		// Draw each character, using custom glyphs for block/box drawing characters
+		// Advance column position by character width to handle wide characters (e.g., CJK)
 		let col = span.startCol;
 		for (const char of span.text) {
 			const charX = col * this.charWidth;
@@ -698,7 +702,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 				// Fall back to font glyph
 				this.ctx.fillText(char, charX, textY);
 			}
-			col++;
+			// Advance by character display width (1 for narrow, 2 for wide characters)
+			const cw = charWidth(char);
+			col += cw > 0 ? cw : 1;
 		}
 
 		// Draw underline
