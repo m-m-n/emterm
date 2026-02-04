@@ -46,6 +46,7 @@ export function applySettings(settings: AppSettings): void {
   applyScrollbar(settings.show_scrollbar);
   applyCursorStyle(settings.cursor_style);
   applyCursorBlink(settings.cursor_blink);
+  applyUiFont(settings.ui_font_family);
 }
 
 /**
@@ -263,6 +264,21 @@ export function applyCursorStyle(cursorStyle: CursorStyle): void {
  */
 export function applyCursorBlink(cursorBlink: boolean): void {
   notifyRenderers("cursorBlink", cursorBlink);
+}
+
+/**
+ * Apply UI font family setting.
+ * Sets the --ui-font-family CSS variable for application UI text.
+ * Empty or whitespace-only values are ignored (uses CSS default).
+ */
+export function applyUiFont(fontFamily: string): void {
+  const root = document.documentElement;
+  const trimmed = fontFamily?.trim();
+  if (trimmed) {
+    root.style.setProperty("--ui-font-family", trimmed);
+  } else {
+    root.style.removeProperty("--ui-font-family");
+  }
 }
 
 /**

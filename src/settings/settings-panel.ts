@@ -17,9 +17,10 @@ import {
 } from "./keybind-editor";
 import type { KeybindCaptureState } from "./keybind-editor";
 import {
-  renderAppearanceSection,
-  renderTerminalSection,
+  renderUiSection,
   renderKeybindsSection,
+  renderTerminalAppearanceSection,
+  renderTerminalBehaviorSection,
 } from "./settings-sections";
 import { filterFontList } from "./font-picker";
 
@@ -47,7 +48,7 @@ export class SettingsPanel {
   private container: HTMLElement;
   private navElement: HTMLElement | null = null;
   private contentElement: HTMLElement | null = null;
-  private activeCategory = "appearance";
+  private activeCategory = "ui";
   private currentSettings: AppSettings | null = null;
   private eventListeners: Array<{
     element: EventTarget;
@@ -60,9 +61,10 @@ export class SettingsPanel {
 
   private get categories(): Category[] {
     return [
-      { id: "appearance", label: t("settings.categories.appearance"), enabled: true },
-      { id: "terminal", label: t("settings.categories.terminal"), enabled: true },
+      { id: "ui", label: t("settings.categories.ui"), enabled: true },
       { id: "keybinds", label: t("settings.categories.keybinds"), enabled: true },
+      { id: "terminal-appearance", label: t("settings.categories.terminalAppearance"), enabled: true },
+      { id: "terminal-behavior", label: t("settings.categories.terminalBehavior"), enabled: true },
     ];
   }
 
@@ -158,14 +160,17 @@ export class SettingsPanel {
     const ctx = this.buildSectionContext();
 
     switch (this.activeCategory) {
-      case "appearance":
-        renderAppearanceSection(panel, ctx);
-        break;
-      case "terminal":
-        renderTerminalSection(panel, ctx);
+      case "ui":
+        renderUiSection(panel, ctx);
         break;
       case "keybinds":
         renderKeybindsSection(panel, ctx);
+        break;
+      case "terminal-appearance":
+        renderTerminalAppearanceSection(panel, ctx);
+        break;
+      case "terminal-behavior":
+        renderTerminalBehaviorSection(panel, ctx);
         break;
     }
   }

@@ -3,7 +3,10 @@
     "categories": {
       "appearance": "Appearance",
       "terminal": "Terminal",
-      "keybinds": "Keybinds"
+      "keybinds": "Keybinds",
+      "ui": "UI Settings",
+      "terminalAppearance": "Terminal Appearance",
+      "terminalBehavior": "Terminal Behavior"
     },
     "appearance": {
       "title": "Appearance",
@@ -131,6 +134,35 @@
       "auto": "Auto (System)",
       "en": "English",
       "ja": "\u65e5\u672c\u8a9e"
+    },
+    "ui": {
+      "title": "UI Settings",
+      "theme": "Theme",
+      "themeColor": "Theme & Color",
+      "uiTheme": "UI Theme",
+      "uiThemeSystem": "System",
+      "uiThemeLight": "Light",
+      "uiThemeDark": "Dark",
+      "uiThemeDesc": "Switches the application color scheme between light and dark",
+      "uiThemePreset": "Color Preset",
+      "uiThemePresetDesc": "Changes the accent color of the UI",
+      "presetPurple": "Purple",
+      "presetBlue": "Blue",
+      "presetGreen": "Green",
+      "presetOrange": "Orange",
+      "fontSection": "UI Font",
+      "fontFamily": "UI Font",
+      "fontFamilyPlaceholder": "System default",
+      "fontFamilyHint": "Application interface font",
+      "fontFamilyDesc": "Sets the font for application interface elements",
+      "fontPickerUiTitle": "UI Font"
+    },
+    "terminalAppearance": {
+      "title": "Terminal Appearance",
+      "color": "Color"
+    },
+    "terminalBehavior": {
+      "title": "Terminal Behavior"
     }
   },
   "tabBar": {

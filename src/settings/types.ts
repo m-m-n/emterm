@@ -60,6 +60,9 @@ export interface AppSettings {
   // Language
   language: Language;
 
+  // UI Font
+  ui_font_family: string;
+
   // Custom Color Schemes
   custom_color_schemes: UserColorScheme[];
 }
@@ -90,7 +93,7 @@ export interface FontListResponse {
   emoji_fonts: string[];
 }
 
-export type FontCategory = "primary" | "secondary" | "emoji";
+export type FontCategory = "primary" | "secondary" | "emoji" | "ui";
 
 // ============================================================
 // User Color Scheme

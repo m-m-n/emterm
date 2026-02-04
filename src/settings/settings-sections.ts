@@ -1,8 +1,11 @@
 /**
  * Settings Sections
  *
- * Section renderers for Appearance, Terminal, and Keybinds categories.
- * Each function renders its section into the provided panel element.
+ * Section renderers for the 4 settings categories:
+ * - UI Settings: language, theme, UI font
+ * - Keybinds: keyboard shortcuts
+ * - Terminal Appearance: fonts, colors, layout
+ * - Terminal Behavior: cursor, shell, scrolling
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -16,6 +19,7 @@ import {
   applyScrollbar,
   applyCursorStyle,
   applyCursorBlink,
+  applyUiFont,
 } from "./settings-applier";
 import type {
   AppSettings,
@@ -87,10 +91,10 @@ export interface SectionContext {
 }
 
 // ============================================================
-// Appearance Section
+// UI Settings Section
 // ============================================================
 
-export function renderAppearanceSection(
+export function renderUiSection(
   panel: HTMLElement,
   ctx: SectionContext,
 ): void {
@@ -98,10 +102,10 @@ export function renderAppearanceSection(
 
   const header = document.createElement("h2");
   header.className = "settings-section-header";
-  header.textContent = t("settings.appearance.title");
+  header.textContent = t("settings.ui.title");
   panel.appendChild(header);
 
-  // -- Language (no subsection header to avoid label duplication) --
+  // -- Language --
   renderSelect(
     panel,
     {
@@ -128,6 +132,94 @@ export function renderAppearanceSection(
     },
     ctx.addContentListener,
   );
+
+  // -- Theme subsection --
+  renderSubsectionHeader(panel, t("settings.ui.theme"));
+
+  // UI Theme (select)
+  renderSelect(
+    panel,
+    {
+      key: "ui-theme",
+      label: t("settings.appearance.uiTheme"),
+      value: settings.ui_theme,
+      options: [
+        { value: "system", label: t("settings.appearance.uiThemeSystem") },
+        { value: "light", label: t("settings.appearance.uiThemeLight") },
+        { value: "dark", label: t("settings.appearance.uiThemeDark") },
+      ],
+      description: t("settings.appearance.uiThemeDesc"),
+      onSave: (v) => {
+        applyUiTheme(v as UiTheme, ctx.currentSettings.ui_theme_preset);
+        ctx.saveSetting("ui_theme", v as UiTheme);
+      },
+    },
+    ctx.addContentListener,
+  );
+
+  // UI Theme Preset (select)
+  renderSelect(
+    panel,
+    {
+      key: "ui-theme-preset",
+      label: t("settings.appearance.uiThemePreset"),
+      value: settings.ui_theme_preset,
+      options: [
+        { value: "purple", label: t("settings.appearance.presetPurple") },
+        { value: "blue", label: t("settings.appearance.presetBlue") },
+        { value: "green", label: t("settings.appearance.presetGreen") },
+        { value: "orange", label: t("settings.appearance.presetOrange") },
+      ],
+      description: t("settings.appearance.uiThemePresetDesc"),
+      onSave: (v) => {
+        applyUiTheme(ctx.currentSettings.ui_theme, v as UiThemePreset);
+        ctx.saveSetting("ui_theme_preset", v as UiThemePreset);
+      },
+    },
+    ctx.addContentListener,
+  );
+
+  // -- UI Font subsection --
+  renderSubsectionHeader(panel, t("settings.ui.fontSection"));
+
+  // UI Font Family (font picker)
+  renderFontPickerInput(
+    panel,
+    {
+      key: "ui-font-family",
+      label: t("settings.ui.fontFamily"),
+      value: settings.ui_font_family,
+      placeholder: "Roboto",
+      hint: t("settings.ui.fontFamilyHint"),
+      description: t("settings.ui.fontFamilyDesc"),
+      category: "ui",
+      onSelect: (v) => {
+        ctx.currentSettings.ui_font_family = v;
+        applyUiFont(v);
+        ctx.saveSetting("ui_font_family", v);
+      },
+    },
+    ctx.addContentListener,
+    (category, currentValue, onSelect) => {
+      ctx.showFontPicker(category, currentValue, onSelect);
+    },
+  );
+}
+
+// ============================================================
+// Terminal Appearance Section
+// ============================================================
+
+export function renderTerminalAppearanceSection(
+  panel: HTMLElement,
+  ctx: SectionContext,
+): void {
+  const settings = ctx.currentSettings;
+
+  const header = document.createElement("h2");
+  header.className = "settings-section-header";
+  header.textContent = t("settings.terminalAppearance.title");
+  panel.appendChild(header);
 
   // -- Font subsection --
   renderSubsectionHeader(panel, t("settings.appearance.font"));
@@ -245,51 +337,8 @@ export function renderAppearanceSection(
     ctx.addContentListener,
   );
 
-  // -- Theme & Color subsection --
-  renderSubsectionHeader(panel, t("settings.appearance.themeColor"));
-
-  // UI Theme (select)
-  renderSelect(
-    panel,
-    {
-      key: "ui-theme",
-      label: t("settings.appearance.uiTheme"),
-      value: settings.ui_theme,
-      options: [
-        { value: "system", label: t("settings.appearance.uiThemeSystem") },
-        { value: "light", label: t("settings.appearance.uiThemeLight") },
-        { value: "dark", label: t("settings.appearance.uiThemeDark") },
-      ],
-      description: t("settings.appearance.uiThemeDesc"),
-      onSave: (v) => {
-        applyUiTheme(v as UiTheme, ctx.currentSettings.ui_theme_preset);
-        ctx.saveSetting("ui_theme", v as UiTheme);
-      },
-    },
-    ctx.addContentListener,
-  );
-
-  // UI Theme Preset (select)
-  renderSelect(
-    panel,
-    {
-      key: "ui-theme-preset",
-      label: t("settings.appearance.uiThemePreset"),
-      value: settings.ui_theme_preset,
-      options: [
-        { value: "purple", label: t("settings.appearance.presetPurple") },
-        { value: "blue", label: t("settings.appearance.presetBlue") },
-        { value: "green", label: t("settings.appearance.presetGreen") },
-        { value: "orange", label: t("settings.appearance.presetOrange") },
-      ],
-      description: t("settings.appearance.uiThemePresetDesc"),
-      onSave: (v) => {
-        applyUiTheme(ctx.currentSettings.ui_theme, v as UiThemePreset);
-        ctx.saveSetting("ui_theme_preset", v as UiThemePreset);
-      },
-    },
-    ctx.addContentListener,
-  );
+  // -- Color subsection --
+  renderSubsectionHeader(panel, t("settings.terminalAppearance.color"));
 
   // Terminal Color Scheme (with inline palette editor)
   renderColorSchemeEditor(panel, ctx);
@@ -364,10 +413,10 @@ export function renderAppearanceSection(
 }
 
 // ============================================================
-// Terminal Section
+// Terminal Behavior Section
 // ============================================================
 
-export function renderTerminalSection(
+export function renderTerminalBehaviorSection(
   panel: HTMLElement,
   ctx: SectionContext,
 ): void {
@@ -375,7 +424,7 @@ export function renderTerminalSection(
 
   const header = document.createElement("h2");
   header.className = "settings-section-header";
-  header.textContent = t("settings.terminal.title");
+  header.textContent = t("settings.terminalBehavior.title");
   panel.appendChild(header);
 
   // -- Cursor subsection --
@@ -545,8 +594,9 @@ export function renderKeybindsSection(
 
   // -- Basic subsection --
   renderSubsectionHeader(panel, t("settings.keybinds.basic"));
+  const basicGrid = createKeybindGrid(panel);
   renderKeybindInput(
-    panel,
+    basicGrid,
     "copy",
     t("settings.keybinds.copy"),
     kb.copy,
@@ -554,7 +604,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    basicGrid,
     "paste",
     t("settings.keybinds.paste"),
     kb.paste,
@@ -562,7 +612,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    basicGrid,
     "select_all",
     t("settings.keybinds.selectAll"),
     kb.select_all,
@@ -570,7 +620,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    basicGrid,
     "search",
     t("settings.keybinds.search"),
     kb.search,
@@ -580,8 +630,9 @@ export function renderKeybindsSection(
 
   // -- Tab Management subsection --
   renderSubsectionHeader(panel, t("settings.keybinds.tabManagement"));
+  const tabGrid = createKeybindGrid(panel);
   renderKeybindInput(
-    panel,
+    tabGrid,
     "new_tab",
     t("settings.keybinds.newTab"),
     kb.new_tab,
@@ -589,7 +640,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    tabGrid,
     "close_tab",
     t("settings.keybinds.closeTab"),
     kb.close_tab,
@@ -597,7 +648,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    tabGrid,
     "next_tab",
     t("settings.keybinds.nextTab"),
     kb.next_tab,
@@ -605,7 +656,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    tabGrid,
     "prev_tab",
     t("settings.keybinds.prevTab"),
     kb.prev_tab,
@@ -615,8 +666,9 @@ export function renderKeybindsSection(
 
   // -- Display subsection --
   renderSubsectionHeader(panel, t("settings.keybinds.display"));
+  const displayGrid = createKeybindGrid(panel);
   renderKeybindInput(
-    panel,
+    displayGrid,
     "zoom_in",
     t("settings.keybinds.zoomIn"),
     kb.zoom_in,
@@ -624,7 +676,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    displayGrid,
     "zoom_out",
     t("settings.keybinds.zoomOut"),
     kb.zoom_out,
@@ -632,7 +684,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    displayGrid,
     "zoom_reset",
     t("settings.keybinds.zoomReset"),
     kb.zoom_reset,
@@ -640,7 +692,7 @@ export function renderKeybindsSection(
     ctx.keybindCtx,
   );
   renderKeybindInput(
-    panel,
+    displayGrid,
     "toggle_fullscreen",
     t("settings.keybinds.toggleFullscreen"),
     kb.toggle_fullscreen,
@@ -650,14 +702,25 @@ export function renderKeybindsSection(
 
   // -- Settings subsection --
   renderSubsectionHeader(panel, t("settings.keybinds.settingsSection"));
+  const settingsGrid = createKeybindGrid(panel);
   renderKeybindInput(
-    panel,
+    settingsGrid,
     "open_settings",
     t("settings.keybinds.openSettings"),
     kb.open_settings,
     ctx.addContentListener,
     ctx.keybindCtx,
   );
+}
+
+/**
+ * Creates a keybind grid container and appends it to the panel
+ */
+function createKeybindGrid(panel: HTMLElement): HTMLElement {
+  const grid = document.createElement("div");
+  grid.className = "settings-keybind-grid";
+  panel.appendChild(grid);
+  return grid;
 }
 
 // ============================================================
@@ -1053,8 +1116,7 @@ function renderColorSchemeEditor(
     }, 300);
   };
 
-  // Wire up select change
-  select.onchange = handleSelectChange;
+  // Wire up select change (use addContentListener for proper cleanup)
   ctx.addContentListener(select, "change", handleSelectChange);
 
   // Initial render
