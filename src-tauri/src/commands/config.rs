@@ -180,6 +180,7 @@ deserialize_null_with!(
     default_keybind_open_settings
 );
 deserialize_null_with!(deserialize_null_language, String, default_language);
+deserialize_null_with!(deserialize_null_ui_font_family, String, default_ui_font_family);
 
 // ============================================================
 // Default Value Functions
@@ -245,6 +246,9 @@ fn default_keybind_open_settings() -> String {
 }
 fn default_language() -> String {
     "auto".to_string()
+}
+fn default_ui_font_family() -> String {
+    "Roboto".to_string()
 }
 
 // ============================================================
@@ -347,6 +351,13 @@ pub struct AppSettings {
     )]
     pub language: String,
 
+    // UI Font
+    #[serde(
+        default = "default_ui_font_family",
+        deserialize_with = "deserialize_null_ui_font_family"
+    )]
+    pub ui_font_family: String,
+
     // Custom Color Schemes
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub custom_color_schemes: Vec<UserColorScheme>,
@@ -377,6 +388,7 @@ impl Default for AppSettings {
             copy_on_select: false,
             keybinds: KeybindSettings::default(),
             language: default_language(),
+            ui_font_family: default_ui_font_family(),
             custom_color_schemes: Vec::new(),
         }
     }
@@ -641,6 +653,7 @@ mod tests {
         assert!(settings.url_detection);
         assert!(!settings.copy_on_select);
         assert_eq!(settings.language, "auto");
+        assert_eq!(settings.ui_font_family, "Roboto");
     }
 
     #[test]
@@ -871,6 +884,7 @@ mod tests {
                 ..KeybindSettings::default()
             },
             language: "ja".to_string(),
+            ui_font_family: "Noto Sans".to_string(),
             custom_color_schemes: Vec::new(),
         };
 
@@ -899,6 +913,7 @@ mod tests {
         assert_eq!(restored.keybinds.copy, "Ctrl+C");
         assert_eq!(restored.keybinds.paste, "Ctrl+V");
         assert_eq!(restored.keybinds.select_all, "Ctrl+Shift+A");
+        assert_eq!(restored.ui_font_family, "Noto Sans");
         assert_eq!(restored.language, "ja");
     }
 
@@ -952,6 +967,38 @@ mod tests {
         let json = serde_json::to_string(&settings).unwrap();
         let restored: AppSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.language, "ja");
+    }
+
+    // -- UI font family tests --
+
+    #[test]
+    fn test_deserialize_missing_ui_font_family_defaults_to_roboto() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.ui_font_family, "Roboto");
+    }
+
+    #[test]
+    fn test_deserialize_null_ui_font_family_defaults_to_roboto() {
+        let json = r#"{"ui_font_family": null}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.ui_font_family, "Roboto");
+    }
+
+    #[test]
+    fn test_deserialize_ui_font_family_custom_value() {
+        let json = r#"{"ui_font_family": "Noto Sans"}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.ui_font_family, "Noto Sans");
+    }
+
+    #[test]
+    fn test_ui_font_family_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.ui_font_family = "Open Sans".to_string();
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.ui_font_family, "Open Sans");
     }
 
     #[test]

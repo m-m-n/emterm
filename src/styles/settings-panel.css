@@ -13,13 +13,15 @@
   min-height: 0;
   background-color: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
-  font-family:
+  font-family: var(
+    --ui-font-family,
     "Roboto",
     system-ui,
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
-    sans-serif;
+    sans-serif
+  );
   font-size: 14px;
 }
 
@@ -364,6 +366,7 @@
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
+  max-width: 480px;
 }
 
 .settings-toggle {
@@ -451,10 +454,26 @@
  * Keybind Capture Input
  * ============================================ */
 
+/* Keybind Grid Layout - 2 columns for compact display */
+.settings-keybind-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 24px;
+  margin-bottom: 24px;
+}
+
+/* Single column on narrow containers */
+@container settings (max-width: 599px) {
+  .settings-keybind-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-row-keybind {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
+  margin-bottom: 0; /* Grid handles spacing */
 }
 
 .settings-keybind-input {

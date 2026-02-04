@@ -1,9 +1,12 @@
 {
   "settings": {
     "categories": {
-      "appearance": "\u5916\u89b3",
-      "terminal": "\u30bf\u30fc\u30df\u30ca\u30eb",
-      "keybinds": "\u30ad\u30fc\u30d0\u30a4\u30f3\u30c9"
+      "appearance": "外観",
+      "terminal": "ターミナル",
+      "keybinds": "キーバインド",
+      "ui": "UI設定",
+      "terminalAppearance": "ターミナル外観",
+      "terminalBehavior": "ターミナル動作"
     },
     "appearance": {
       "title": "\u5916\u89b3",
@@ -125,12 +128,41 @@
       "pressKey": "\u30ad\u30fc\u3092\u62bc\u3057\u3066\u304f\u3060\u3055\u3044..."
     },
     "language": {
-      "title": "\u8a00\u8a9e",
-      "label": "\u8a00\u8a9e",
-      "labelDesc": "\u30a2\u30d7\u30ea\u30b1\u30fc\u30b7\u30e7\u30f3\u306e\u8868\u793a\u8a00\u8a9e\u3092\u5909\u66f4\u3057\u307e\u3059",
-      "auto": "\u81ea\u52d5 (\u30b7\u30b9\u30c6\u30e0)",
+      "title": "言語",
+      "label": "言語",
+      "labelDesc": "アプリケーションの表示言語を変更します",
+      "auto": "自動 (システム)",
       "en": "English",
-      "ja": "\u65e5\u672c\u8a9e"
+      "ja": "日本語"
+    },
+    "ui": {
+      "title": "UI設定",
+      "theme": "テーマ",
+      "themeColor": "テーマとカラー",
+      "uiTheme": "UIテーマ",
+      "uiThemeSystem": "システム",
+      "uiThemeLight": "ライト",
+      "uiThemeDark": "ダーク",
+      "uiThemeDesc": "アプリケーションのカラースキームをライト・ダークで切り替えます",
+      "uiThemePreset": "カラープリセット",
+      "uiThemePresetDesc": "UIのアクセントカラーを変更します",
+      "presetPurple": "パープル",
+      "presetBlue": "ブルー",
+      "presetGreen": "グリーン",
+      "presetOrange": "オレンジ",
+      "fontSection": "UIフォント",
+      "fontFamily": "UIフォント",
+      "fontFamilyPlaceholder": "システムデフォルト",
+      "fontFamilyHint": "アプリケーションインターフェースのフォント",
+      "fontFamilyDesc": "アプリケーションインターフェースに使用するフォントを設定します",
+      "fontPickerUiTitle": "UIフォント"
+    },
+    "terminalAppearance": {
+      "title": "ターミナル外観",
+      "color": "カラー"
+    },
+    "terminalBehavior": {
+      "title": "ターミナル動作"
     }
   },
   "tabBar": {

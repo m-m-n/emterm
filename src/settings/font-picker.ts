@@ -125,6 +125,7 @@ export async function showFontPicker(
     primary: t("settings.appearance.fontPickerPrimaryTitle"),
     secondary: t("settings.appearance.fontPickerSecondaryTitle"),
     emoji: t("settings.appearance.fontPickerEmojiTitle"),
+    ui: t("settings.ui.fontPickerUiTitle"),
   };
 
   // Load fonts
@@ -136,6 +137,7 @@ export async function showFontPicker(
         fontList = fonts.monospace_fonts;
         break;
       case "secondary":
+      case "ui":
         fontList = fonts.all_fonts;
         break;
       case "emoji":

@@ -85,6 +85,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     language: "auto",
     keybinds: defaultKeybinds,
     custom_color_schemes: [],
+    ui_font_family: "",
     ...overrides,
   };
 }
@@ -113,29 +114,29 @@ describe("SettingsPanel render methods - description feature", () => {
   // ============================================================
 
   describe("description spans are created for all settings items", () => {
-    test("should create description spans with correct class in appearance section", () => {
+    test("should create description spans with correct class in UI section", () => {
       const descriptions = container.querySelectorAll(".settings-description");
-      // Appearance section has 10 items with descriptions (language + 9 appearance)
-      expect(descriptions.length).toBeGreaterThanOrEqual(10);
+      // UI section has 4 items with descriptions (language, ui_theme, ui_theme_preset, ui_font_family)
+      expect(descriptions.length).toBeGreaterThanOrEqual(4);
     });
 
     test("should create description spans with correct id pattern", () => {
-      // Check a few known description ids
-      const fontSizeDesc = container.querySelector("#settings-font-size-desc");
-      expect(fontSizeDesc).not.toBeNull();
-      expect(fontSizeDesc?.className).toBe("settings-description");
-
+      // Check known description ids in UI section
       const languageDesc = container.querySelector("#settings-language-desc");
       expect(languageDesc).not.toBeNull();
+      expect(languageDesc?.className).toBe("settings-description");
+
+      const uiThemeDesc = container.querySelector("#settings-ui-theme-desc");
+      expect(uiThemeDesc).not.toBeNull();
     });
 
     test("should set description text via textContent (not innerHTML)", () => {
-      const fontSizeDesc = container.querySelector("#settings-font-size-desc");
-      expect(fontSizeDesc).not.toBeNull();
+      const languageDesc = container.querySelector("#settings-language-desc");
+      expect(languageDesc).not.toBeNull();
       // textContent should be a non-empty string
-      expect(fontSizeDesc?.textContent).toBeTruthy();
+      expect(languageDesc?.textContent).toBeTruthy();
       // innerHTML should equal textContent (no HTML tags)
-      expect(fontSizeDesc?.innerHTML).toBe(fontSizeDesc?.textContent);
+      expect(languageDesc?.innerHTML).toBe(languageDesc?.textContent);
     });
   });
 
@@ -145,12 +146,18 @@ describe("SettingsPanel render methods - description feature", () => {
 
   describe("aria-describedby is set on input elements", () => {
     test("should set aria-describedby on number inputs", () => {
+      // Switch to terminal-appearance for font-size
+      const termAppTab = container.querySelector('[data-category-id="terminal-appearance"]') as HTMLButtonElement;
+      termAppTab?.click();
       const fontSizeInput = container.querySelector("#settings-font-size") as HTMLInputElement;
       expect(fontSizeInput).not.toBeNull();
       expect(fontSizeInput?.getAttribute("aria-describedby")).toBe("settings-font-size-desc");
     });
 
     test("should set aria-describedby on font picker inputs", () => {
+      // Switch to terminal-appearance for font pickers
+      const termAppTab = container.querySelector('[data-category-id="terminal-appearance"]') as HTMLButtonElement;
+      termAppTab?.click();
       const fontFamilyInput = container.querySelector("#settings-font-family-primary") as HTMLInputElement;
       expect(fontFamilyInput).not.toBeNull();
       expect(fontFamilyInput?.getAttribute("aria-describedby")).toBe("settings-font-family-primary-desc");
@@ -169,8 +176,8 @@ describe("SettingsPanel render methods - description feature", () => {
     });
 
     test("should set aria-describedby on slider inputs", () => {
-      // Check scroll-speed slider in terminal section (opacity removed)
-      const terminalTab = container.querySelector('[data-category-id="terminal"]') as HTMLButtonElement;
+      // Check scroll-speed slider in terminal-behavior section (opacity removed)
+      const terminalTab = container.querySelector('[data-category-id="terminal-behavior"]') as HTMLButtonElement;
       terminalTab?.click();
       const scrollSpeedSlider = container.querySelector("#settings-scroll-speed") as HTMLInputElement;
       expect(scrollSpeedSlider).not.toBeNull();
@@ -184,8 +191,8 @@ describe("SettingsPanel render methods - description feature", () => {
 
   describe("toggle rows use wrapper div for description", () => {
     beforeEach(() => {
-      // Switch to terminal category which has toggle buttons
-      const terminalTab = container.querySelector('[data-category-id="terminal"]') as HTMLButtonElement;
+      // Switch to terminal-behavior category which has toggle buttons
+      const terminalTab = container.querySelector('[data-category-id="terminal-behavior"]') as HTMLButtonElement;
       terminalTab?.click();
     });
 
@@ -217,8 +224,8 @@ describe("SettingsPanel render methods - description feature", () => {
 
   describe("terminal section descriptions", () => {
     beforeEach(() => {
-      // Switch to terminal category
-      const terminalTab = container.querySelector('[data-category-id="terminal"]') as HTMLButtonElement;
+      // Switch to terminal-behavior category
+      const terminalTab = container.querySelector('[data-category-id="terminal-behavior"]') as HTMLButtonElement;
       terminalTab?.click();
     });
 
@@ -261,6 +268,9 @@ describe("SettingsPanel - font picker input", () => {
     document.body.appendChild(container);
     panel = new SettingsPanel({ container });
     await panel.init();
+    // Switch to terminal-appearance category where font pickers are
+    const termAppearanceTab = container.querySelector('[data-category-id="terminal-appearance"]') as HTMLElement;
+    termAppearanceTab?.click();
   });
 
   afterEach(() => {
