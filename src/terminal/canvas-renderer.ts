@@ -598,7 +598,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Group cells into spans and render colored backgrounds
 		const spans = groupCellsIntoSpans(line);
 		for (const span of spans) {
-			const bg = getEffectiveBackground(span.attrs);
+			const bg = getEffectiveBackground(span.attrs, this.currentForeground);
 			if (bg !== null) {
 				const x = span.startCol * this.charWidth;
 				const width = span.cellCount * this.charWidth;
@@ -637,7 +637,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const width = span.cellCount * this.charWidth;
 
 		// Get effective colors
-		const bg = getEffectiveBackground(span.attrs);
+		const bg = getEffectiveBackground(span.attrs, this.currentForeground);
 
 		// Draw background if not default
 		// Use integer-aligned Y to match renderLine and avoid sub-pixel gaps
@@ -666,8 +666,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const y = Math.floor(rowIndex * this.charHeight);
 		const width = span.cellCount * this.charWidth;
 
-		// Get foreground color
-		const fg = getEffectiveForeground(span.attrs);
+		// Get foreground color (use current theme colors for defaults)
+		const fg = getEffectiveForeground(span.attrs, this.currentForeground, this.currentBackground);
 
 		// Get text attribute styles
 		const styles = applyTextAttributes(span.attrs);
@@ -846,7 +846,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Re-draw the character at cursor position if any
 		const cell = line.getCell(col);
 		if (cell.char !== " " && cell.char !== "") {
-			const fg = getEffectiveForeground(cell.attrs);
+			const fg = getEffectiveForeground(cell.attrs, this.currentForeground, this.currentBackground);
 			this.ctx.fillStyle = rgbToCSS(fg);
 			const textY = y + (this.charHeight - this.fontDescent);
 			this.ctx.fillText(cell.char, x, textY);
@@ -1005,6 +1005,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 				break;
 			case "colorScheme":
 				this.setColorScheme(value as string);
+				break;
+			case "userColorScheme":
+				if (value) {
+					this.setUserColorScheme(value as UserColorScheme);
+				}
 				break;
 		}
 	}

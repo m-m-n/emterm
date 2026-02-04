@@ -710,13 +710,14 @@ describe("applyTerminalColorScheme with user schemes", () => {
     expect(mockAttributes["data-terminal-color-scheme"]).toBe("my_theme");
   });
 
-  test("should notify renderers with user scheme name", () => {
-    const userSchemes = [createMockUserScheme("my_theme")];
+  test("should notify renderers with user scheme object", () => {
+    const userScheme = createMockUserScheme("my_theme");
+    const userSchemes = [userScheme];
     applyTerminalColorScheme("my_theme", userSchemes);
 
     expect(mockRendererCalls).toContainEqual({
-      setting: "colorScheme",
-      value: "my_theme",
+      setting: "userColorScheme",
+      value: userScheme,
     });
   });
 

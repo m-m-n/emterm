@@ -292,9 +292,15 @@ export function applySgrAttrs(
  * Takes into account the reverse attribute.
  *
  * @param attrs - Cell attributes
+ * @param defaultFg - Default foreground color (from current theme), defaults to DEFAULT_FOREGROUND
+ * @param defaultBg - Default background color (from current theme), defaults to DEFAULT_BACKGROUND
  * @returns RGB color for foreground
  */
-export function getEffectiveForeground(attrs: CellAttributes): Rgb {
+export function getEffectiveForeground(
+	attrs: CellAttributes,
+	defaultFg: Rgb = DEFAULT_FOREGROUND,
+	defaultBg: Rgb = DEFAULT_BACKGROUND,
+): Rgb {
 	if (attrs.reverse) {
 		return attrs.bg
 			? {
@@ -302,7 +308,7 @@ export function getEffectiveForeground(attrs: CellAttributes): Rgb {
 					g: (attrs.bg as { r: number; g: number; b: number }).g,
 					b: (attrs.bg as { r: number; g: number; b: number }).b,
 				}
-			: DEFAULT_BACKGROUND;
+			: defaultBg;
 	}
 	return attrs.fg
 		? {
@@ -310,7 +316,7 @@ export function getEffectiveForeground(attrs: CellAttributes): Rgb {
 				g: (attrs.fg as { r: number; g: number; b: number }).g,
 				b: (attrs.fg as { r: number; g: number; b: number }).b,
 			}
-		: DEFAULT_FOREGROUND;
+		: defaultFg;
 }
 
 /**
@@ -319,9 +325,13 @@ export function getEffectiveForeground(attrs: CellAttributes): Rgb {
  * Takes into account the reverse attribute.
  *
  * @param attrs - Cell attributes
- * @returns RGB color for background
+ * @param defaultFg - Default foreground color (from current theme), defaults to DEFAULT_FOREGROUND
+ * @returns RGB color for background, or null to use default/transparent
  */
-export function getEffectiveBackground(attrs: CellAttributes): Rgb | null {
+export function getEffectiveBackground(
+	attrs: CellAttributes,
+	defaultFg: Rgb = DEFAULT_FOREGROUND,
+): Rgb | null {
 	if (attrs.reverse) {
 		return attrs.fg
 			? {
@@ -329,7 +339,7 @@ export function getEffectiveBackground(attrs: CellAttributes): Rgb | null {
 					g: (attrs.fg as { r: number; g: number; b: number }).g,
 					b: (attrs.fg as { r: number; g: number; b: number }).b,
 				}
-			: DEFAULT_FOREGROUND;
+			: defaultFg;
 	}
 	return attrs.bg
 		? {

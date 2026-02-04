@@ -26,6 +26,7 @@ export interface RendererSettings {
   cursorStyle: CursorStyle;
   cursorBlink: boolean;
   colorScheme: string;
+  userColorScheme: UserColorScheme | null;
 }
 
 /** Listener for system theme media query */
@@ -218,7 +219,8 @@ export function applyTerminalColorScheme(scheme: string, userSchemes?: UserColor
   const userScheme = userSchemes?.find((s) => s.name === scheme);
   if (userScheme) {
     applyUserColorScheme(root, userScheme);
-    notifyRenderers("colorScheme", scheme);
+    // Pass the full user scheme object to renderers
+    notifyRenderers("userColorScheme", userScheme);
     return;
   }
 
