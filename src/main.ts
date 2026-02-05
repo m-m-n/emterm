@@ -6,7 +6,12 @@
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
 import { TerminalApp } from "./terminal-app";
-import { TabManager, TabBarUI, TabKeyboardHandler } from "./tab-bar";
+import {
+  TabManager,
+  TabBarUI,
+  TabKeyboardHandler,
+  TabDragHandler,
+} from "./tab-bar";
 import { initConsoleBridge } from "./utils/console-bridge";
 import { SettingsService, applySettingsToCSS } from "./settings";
 import { initI18n, resolveLocale } from "./i18n/index.ts";
@@ -14,6 +19,7 @@ import { initI18n, resolveLocale } from "./i18n/index.ts";
 let tabManager: TabManager | null = null;
 let tabBarUI: TabBarUI | null = null;
 let keyboardHandler: TabKeyboardHandler | null = null;
+let dragHandler: TabDragHandler | null = null;
 
 /**
  * Initialize the terminal application with tab support
@@ -93,6 +99,13 @@ async function main(): Promise<void> {
   keyboardHandler = new TabKeyboardHandler(tabManager);
   keyboardHandler.attach(document);
 
+  // Create drag handler for tab reordering
+  dragHandler = new TabDragHandler({
+    tabManager,
+    tabBarUI,
+  });
+  dragHandler.init();
+
   // Focus the terminal when a tab is activated and update global references
   manager.on("tab:activated", ({ tab }) => {
     const app = manager.getTerminalApp(tab.id);
@@ -146,12 +159,14 @@ async function initLegacyMode(): Promise<void> {
  */
 function cleanup(): void {
   keyboardHandler?.detach();
+  dragHandler?.dispose();
   tabBarUI?.dispose();
   tabManager?.dispose();
 
   tabManager = null;
   tabBarUI = null;
   keyboardHandler = null;
+  dragHandler = null;
 }
 
 // Initialize when DOM is ready
