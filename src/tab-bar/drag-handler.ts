@@ -176,6 +176,7 @@ export class TabDragHandler {
     target.classList.remove("dragging");
 
     this.clearDragState();
+    this.restoreFocusToTerminal();
   }
 
   /**
@@ -296,6 +297,17 @@ export class TabDragHandler {
 
     this.draggedTabId = null;
     this.hideDropIndicator();
+  }
+
+  /**
+   * Restores focus to the active terminal after drag operations
+   */
+  private restoreFocusToTerminal(): void {
+    const activeTab = this.tabManager.getActiveTab();
+    if (activeTab) {
+      const app = this.tabManager.getTerminalApp(activeTab.id);
+      app?.focus();
+    }
   }
 
   /**
