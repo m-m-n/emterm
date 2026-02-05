@@ -4,10 +4,10 @@
 	"type": "module",
 	"private": true,
 	"scripts": {
-		"postinstall": "./scripts/generate-icons.sh",
+		"postinstall": "bash scripts/generate-icons.sh || true",
 		"dev": "bun run --hot serve.ts",
-		"icons": "./scripts/generate-icons.sh",
-		"prebuild": "./scripts/generate-icons.sh",
+		"icons": "bash scripts/generate-icons.sh",
+		"prebuild": "bash scripts/generate-icons.sh",
 		"build": "bun build src/index.html --outdir dist --minify",
 		"tauri": "tauri",
 		"tauri:dev": "tauri dev",
