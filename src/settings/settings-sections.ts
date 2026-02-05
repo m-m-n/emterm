@@ -794,9 +794,9 @@ function renderColorSchemeEditor(
     );
     if (!schemeColors) return;
 
-    // Special colors section
+    // Special colors section (8-column grid, 4 items occupy first 4 columns)
     const specialDiv = document.createElement("div");
-    specialDiv.className = "color-palette-special";
+    specialDiv.className = "color-palette-grid";
     paletteDiv.appendChild(specialDiv);
 
     renderColorInput(
@@ -840,7 +840,6 @@ function renderColorSchemeEditor(
         String(i),
         color,
         `ansi_${i}` as ColorKey,
-        true,
       );
     }
 
@@ -859,7 +858,6 @@ function renderColorSchemeEditor(
         String(i),
         color,
         `ansi_${i}` as ColorKey,
-        true,
       );
     }
   };
@@ -913,17 +911,14 @@ function renderColorSchemeEditor(
     label: string,
     value: string,
     colorKey: ColorKey,
-    compact = false,
   ) => {
     const row = document.createElement("div");
-    row.className = compact ? "color-input-compact" : "color-input-row";
+    row.className = "color-input-compact";
 
-    if (!compact) {
-      const labelEl = document.createElement("span");
-      labelEl.className = "color-input-label";
-      labelEl.textContent = label;
-      row.appendChild(labelEl);
-    }
+    const labelEl = document.createElement("span");
+    labelEl.className = "color-input-label";
+    labelEl.textContent = label;
+    row.appendChild(labelEl);
 
     const inputGroup = document.createElement("div");
     inputGroup.className = "color-input-group";
@@ -933,7 +928,7 @@ function renderColorSchemeEditor(
     colorPicker.type = "color";
     colorPicker.className = "color-picker";
     colorPicker.value = value;
-    colorPicker.title = compact ? label : "";
+    colorPicker.title = "";
     inputGroup.appendChild(colorPicker);
 
     const hexInput = document.createElement("input");
