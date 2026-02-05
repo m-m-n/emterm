@@ -520,6 +520,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
+                #[cfg(unix)]
                 Err(e) if e.raw_os_error() == Some(libc::EIO) => {
                     // EIO typically means the PTY slave was closed (shell exited)
                     log::debug!("PTY reader: EIO (slave closed) for session {}", session_id);
