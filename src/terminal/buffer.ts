@@ -486,17 +486,23 @@ export class ScreenBuffer {
 			}
 		}
 
-		// Add or remove rows
-		if (rows > this._rows) {
-			for (let i = this._rows; i < rows; i++) {
+		// Add or remove rows based on actual line count after reflow
+		const currentLineCount = this.lines.length;
+		if (rows > currentLineCount) {
+			for (let i = currentLineCount; i < rows; i++) {
 				this.lines.push(new Line(cols));
 			}
-		} else if (rows < this._rows) {
+		} else if (rows < currentLineCount) {
 			this.lines.length = rows;
 		}
 
 		this._cols = cols;
 		this._rows = rows;
+
+		// Invalidate scroll region if it references out-of-bounds rows
+		if (this.scrollRegion && this.scrollRegion.bottom >= rows) {
+			this.scrollRegion = null;
+		}
 
 		// Mark all as dirty after resize
 		for (const line of this.lines) {

@@ -197,6 +197,9 @@ export class ImageViewer {
   // Pan controller
   private panController: PanController | null = null;
 
+  // Callback invoked after the viewer is hidden
+  private onHideCallback: (() => void) | null = null;
+
   /**
    * Creates a new ImageViewer instance.
    *
@@ -592,6 +595,15 @@ export class ImageViewer {
     this.overlay.classList.remove("visible");
     this.stopAnimation();
     this.currentImage = null;
+
+    this.onHideCallback?.();
+  }
+
+  /**
+   * Sets a callback to be invoked after the viewer is hidden.
+   */
+  onHide(callback: () => void): void {
+    this.onHideCallback = callback;
   }
 
   /**

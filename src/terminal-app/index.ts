@@ -213,6 +213,12 @@ export class TerminalApp {
 
     // Initialize ImageViewer with overlay-root container
     this.imageViewer = new ImageViewer(this.overlayRoot!);
+    this.imageViewer.onHide(() => {
+      // Force re-render after image viewer closes (e.g. via Escape key)
+      if (this.state && this.renderer) {
+        this.renderer.forceRender(this.state);
+      }
+    });
 
     // Set markdown session manager's container for fullscreen view
     this.state.getMarkdownManager().setContainer(this.overlayRoot!);
@@ -375,6 +381,10 @@ export class TerminalApp {
         if (target.type === "All" || target.type === "AllIncludingHidden") {
           this.pendingImages.clear();
           this.imageViewer?.hide();
+          // Force re-render after closing image viewer to show correct state
+          if (this.state && this.renderer) {
+            this.renderer.forceRender(this.state);
+          }
         } else if (target.type === "ById" && target.id !== undefined) {
           this.pendingImages.delete(target.id);
         }
@@ -434,9 +444,19 @@ export class TerminalApp {
 
         // Always update local terminal state/renderer (even if PTY not ready)
         if (this.state && this.renderer) {
-          this.state.resize(newCols, newRows);
-          this.renderer.resize(newCols, newRows);
-          this.renderer.forceRender(this.state);
+          try {
+            this.state.resize(newCols, newRows);
+            this.renderer.resize(newCols, newRows);
+            this.renderer.forceRender(this.state);
+          } catch (error) {
+            console.error("Failed to resize terminal:", error);
+            // Attempt recovery: force re-render with current state
+            try {
+              this.renderer.forceRender(this.state);
+            } catch {
+              // Rendering failed too - nothing we can do
+            }
+          }
           this.imeHandler?.updatePosition();
           this.mouseHandler?.updateCharSize(
             this.charSize.width,
