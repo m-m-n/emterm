@@ -19,13 +19,23 @@ import { matchKeybindStr } from "../keybind/matcher";
  * - Ctrl+1-8: Jump to tab by index
  * - Ctrl+9: Jump to last tab
  */
+/**
+ * Options for creating TabKeyboardHandler
+ */
+export interface TabKeyboardHandlerOptions {
+  /** Callback when tab bar toggle keybind is pressed */
+  onToggleTabBar?: () => void;
+}
+
 export class TabKeyboardHandler {
   private tabManager: TabManager;
   private target: EventTarget | null = null;
   private boundHandler: ((event: KeyboardEvent) => void) | null = null;
+  private onToggleTabBar?: () => void;
 
-  constructor(tabManager: TabManager) {
+  constructor(tabManager: TabManager, options?: TabKeyboardHandlerOptions) {
     this.tabManager = tabManager;
+    this.onToggleTabBar = options?.onToggleTabBar;
   }
 
   /**
@@ -34,6 +44,13 @@ export class TabKeyboardHandler {
    */
   handleKeyDown(event: KeyboardEvent): boolean {
     const keybinds = SettingsService.getCached()?.keybinds;
+
+    // Toggle tab bar
+    if (matchKeybindStr(event, keybinds?.toggle_tab_bar ?? "Ctrl+Shift+B")) {
+      event.preventDefault();
+      this.onToggleTabBar?.();
+      return true;
+    }
 
     // New tab
     if (matchKeybindStr(event, keybinds?.new_tab ?? "Ctrl+Shift+T")) {

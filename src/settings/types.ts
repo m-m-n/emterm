@@ -43,6 +43,7 @@ export interface AppSettings {
   padding: number;
   scrollback_lines: number;
   show_scrollbar: ScrollbarMode;
+  show_tab_bar: boolean;
 
   // Terminal
   shell_path: string;
@@ -81,6 +82,7 @@ export interface KeybindSettings {
   zoom_reset: string;
   toggle_fullscreen: string;
   open_settings: string;
+  toggle_tab_bar: string;
 }
 
 // ============================================================

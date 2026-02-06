@@ -39,6 +39,7 @@ import type { Tab } from "./types";
 const mockTerminalApp = () => ({
   init: mock(() => Promise.resolve()),
   dispose: mock(() => {}),
+  focus: mock(() => {}),
   pty: {
     getSessionId: () => `session-${Math.random().toString(36).slice(2)}`,
     kill: mock(() => Promise.resolve()),

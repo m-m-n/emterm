@@ -331,6 +331,25 @@ export class TabBarUI {
   }
 
   /**
+   * Sets the visibility of the tab bar
+   * @param visible - true to show, false to hide
+   */
+  setVisible(visible: boolean): void {
+    if (visible) {
+      this.container.classList.remove("hidden");
+    } else {
+      this.container.classList.add("hidden");
+    }
+  }
+
+  /**
+   * Returns whether the tab bar is currently visible
+   */
+  isVisible(): boolean {
+    return !this.container.classList.contains("hidden");
+  }
+
+  /**
    * Disposes the UI
    */
   dispose(): void {

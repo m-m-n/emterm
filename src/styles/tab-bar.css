@@ -12,6 +12,15 @@
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   user-select: none;
   flex-shrink: 0;
+  overflow: hidden;
+  transition: height var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+              border-bottom-width var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+/* Hidden state for tab bar toggle */
+.tab-bar.hidden {
+  height: 0;
+  border-bottom-width: 0;
 }
 
 /* Tab Scroll Area */
