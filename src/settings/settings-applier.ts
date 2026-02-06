@@ -47,6 +47,11 @@ export function applySettings(settings: AppSettings): void {
   applyCursorStyle(settings.cursor_style);
   applyCursorBlink(settings.cursor_blink);
   applyUiFont(settings.ui_font_family);
+  applyMarkdownSettings(
+    settings.markdown_body_font_family,
+    settings.markdown_code_font_family,
+    settings.markdown_font_size,
+  );
 }
 
 /**
@@ -279,6 +284,32 @@ export function applyUiFont(fontFamily: string): void {
   } else {
     root.style.removeProperty("--ui-font-family");
   }
+}
+
+/**
+ * Apply Markdown viewer settings.
+ * Sets CSS variables for Markdown fullscreen overlay fonts and size.
+ * Empty font strings remove the property so CSS fallback chains apply.
+ */
+export function applyMarkdownSettings(
+  bodyFont: string,
+  codeFont: string,
+  fontSize: number,
+): void {
+  const root = document.documentElement;
+  const trimmedBody = bodyFont?.trim();
+  if (trimmedBody) {
+    root.style.setProperty("--markdown-body-font-family", trimmedBody);
+  } else {
+    root.style.removeProperty("--markdown-body-font-family");
+  }
+  const trimmedCode = codeFont?.trim();
+  if (trimmedCode) {
+    root.style.setProperty("--markdown-code-font-family", trimmedCode);
+  } else {
+    root.style.removeProperty("--markdown-code-font-family");
+  }
+  root.style.setProperty("--markdown-body-font-size", `${fontSize}pt`);
 }
 
 /**

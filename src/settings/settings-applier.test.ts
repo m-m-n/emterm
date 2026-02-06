@@ -16,6 +16,7 @@ import {
   applyCursorBlink,
   applyPadding,
   applyScrollbar,
+  applyMarkdownSettings,
 } from "./settings-applier";
 import type { AppSettings, KeybindSettings, UserColorScheme } from "./types";
 
@@ -117,6 +118,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     zoom_reset: "Ctrl+0",
     toggle_fullscreen: "F11",
     open_settings: "Ctrl+Comma",
+    toggle_tab_bar: "Ctrl+Shift+B",
   };
 
   return {
@@ -131,6 +133,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     padding: 4,
     scrollback_lines: 10000,
     show_scrollbar: "auto",
+    show_tab_bar: true,
     shell_path: "",
     shell_args: [],
     cursor_style: "block",
@@ -141,7 +144,11 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     copy_on_select: false,
     keybinds: defaultKeybinds,
     language: "auto",
+    ui_font_family: "",
     custom_color_schemes: [],
+    markdown_body_font_family: "",
+    markdown_code_font_family: "",
+    markdown_font_size: 14,
     ...overrides,
   };
 }
@@ -758,5 +765,51 @@ describe("applyTerminalColorScheme with user schemes", () => {
     applyTerminalColorScheme("dracula", undefined);
 
     expect(mockAttributes["data-terminal-color-scheme"]).toBe("dracula");
+  });
+});
+
+describe("applyMarkdownSettings", () => {
+  test("should set all three CSS variables when fonts are non-empty", () => {
+    applyMarkdownSettings("Georgia", "Fira Code", 16);
+    expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
+    expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
+    expect(mockStyle.properties["--markdown-body-font-size"]).toBe("16pt");
+  });
+
+  test("should remove body font CSS variable when empty string", () => {
+    // First set it
+    applyMarkdownSettings("Georgia", "Fira Code", 14);
+    expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
+
+    // Then clear it
+    applyMarkdownSettings("", "Fira Code", 14);
+    expect(mockStyle.properties["--markdown-body-font-family"]).toBeUndefined();
+    expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
+  });
+
+  test("should remove code font CSS variable when empty string", () => {
+    applyMarkdownSettings("Georgia", "", 14);
+    expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
+    expect(mockStyle.properties["--markdown-code-font-family"]).toBeUndefined();
+  });
+
+  test("should remove font CSS variables for whitespace-only strings", () => {
+    applyMarkdownSettings("  ", "  \t  ", 14);
+    expect(mockStyle.properties["--markdown-body-font-family"]).toBeUndefined();
+    expect(mockStyle.properties["--markdown-code-font-family"]).toBeUndefined();
+  });
+
+  test("should always set font size with pt unit", () => {
+    applyMarkdownSettings("", "", 8);
+    expect(mockStyle.properties["--markdown-body-font-size"]).toBe("8pt");
+
+    applyMarkdownSettings("", "", 32);
+    expect(mockStyle.properties["--markdown-body-font-size"]).toBe("32pt");
+  });
+
+  test("should trim font names before setting", () => {
+    applyMarkdownSettings("  Georgia  ", "  Fira Code  ", 14);
+    expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
+    expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
   });
 });

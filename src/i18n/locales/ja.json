@@ -6,7 +6,8 @@
       "keybinds": "キーバインド",
       "ui": "UI設定",
       "terminalAppearance": "ターミナル外観",
-      "terminalBehavior": "ターミナル動作"
+      "terminalBehavior": "ターミナル動作",
+      "markdownViewer": "Markdownビューアー"
     },
     "appearance": {
       "title": "\u5916\u89b3",
@@ -163,6 +164,21 @@
     },
     "terminalBehavior": {
       "title": "ターミナル動作"
+    },
+    "markdownViewer": {
+      "title": "Markdownビューアー",
+      "font": "フォント",
+      "bodyFontFamily": "本文フォント",
+      "bodyFontFamilyHint": "Markdown本文のフォント",
+      "bodyFontFamilyDesc": "Markdown本文（段落、見出し、リスト）に使用するフォントを設定します",
+      "codeFontFamily": "コードフォント",
+      "codeFontFamilyHint": "Markdownコードブロックのフォント",
+      "codeFontFamilyDesc": "Markdownのコードブロックに使用するフォントを設定します",
+      "fontSize": "フォントサイズ",
+      "fontSizeHint": "範囲: {min}-{max}pt",
+      "fontSizeDesc": "Markdownコンテンツの基準フォントサイズを設定します",
+      "fontPickerBodyTitle": "Markdown本文フォント",
+      "fontPickerCodeTitle": "Markdownコードフォント"
     }
   },
   "tabBar": {

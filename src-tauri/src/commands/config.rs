@@ -186,6 +186,21 @@ deserialize_null_with!(
 );
 deserialize_null_with!(deserialize_null_language, String, default_language);
 deserialize_null_with!(deserialize_null_ui_font_family, String, default_ui_font_family);
+deserialize_null_with!(
+    deserialize_null_markdown_font_size,
+    u32,
+    default_markdown_font_size
+);
+deserialize_null_with!(
+    deserialize_null_markdown_body_font_family,
+    String,
+    default_markdown_body_font_family
+);
+deserialize_null_with!(
+    deserialize_null_markdown_code_font_family,
+    String,
+    default_markdown_code_font_family
+);
 
 // ============================================================
 // Default Value Functions
@@ -257,6 +272,15 @@ fn default_language() -> String {
 }
 fn default_ui_font_family() -> String {
     "Roboto".to_string()
+}
+fn default_markdown_body_font_family() -> String {
+    String::new()
+}
+fn default_markdown_code_font_family() -> String {
+    String::new()
+}
+fn default_markdown_font_size() -> u32 {
+    14
 }
 
 // ============================================================
@@ -371,6 +395,23 @@ pub struct AppSettings {
     // Custom Color Schemes
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub custom_color_schemes: Vec<UserColorScheme>,
+
+    // Markdown Viewer
+    #[serde(
+        default = "default_markdown_body_font_family",
+        deserialize_with = "deserialize_null_markdown_body_font_family"
+    )]
+    pub markdown_body_font_family: String,
+    #[serde(
+        default = "default_markdown_code_font_family",
+        deserialize_with = "deserialize_null_markdown_code_font_family"
+    )]
+    pub markdown_code_font_family: String,
+    #[serde(
+        default = "default_markdown_font_size",
+        deserialize_with = "deserialize_null_markdown_font_size"
+    )]
+    pub markdown_font_size: u32,
 }
 
 impl Default for AppSettings {
@@ -401,6 +442,9 @@ impl Default for AppSettings {
             language: default_language(),
             ui_font_family: default_ui_font_family(),
             custom_color_schemes: Vec::new(),
+            markdown_body_font_family: default_markdown_body_font_family(),
+            markdown_code_font_family: default_markdown_code_font_family(),
+            markdown_font_size: default_markdown_font_size(),
         }
     }
 }
@@ -548,6 +592,15 @@ fn validate_settings(settings: &AppSettings) -> Result<(), String> {
         .to_string());
     }
 
+    if settings.markdown_font_size < MIN_FONT_SIZE || settings.markdown_font_size > MAX_FONT_SIZE {
+        return Err(t!(
+            "validation.markdownFontSize",
+            min = MIN_FONT_SIZE,
+            max = MAX_FONT_SIZE
+        )
+        .to_string());
+    }
+
     Ok(())
 }
 
@@ -672,6 +725,9 @@ mod tests {
         assert_eq!(settings.language, "auto");
         assert_eq!(settings.ui_font_family, "Roboto");
         assert!(settings.show_tab_bar);
+        assert_eq!(settings.markdown_body_font_family, "");
+        assert_eq!(settings.markdown_code_font_family, "");
+        assert_eq!(settings.markdown_font_size, 14);
     }
 
     #[test]
@@ -906,6 +962,9 @@ mod tests {
             language: "ja".to_string(),
             ui_font_family: "Noto Sans".to_string(),
             custom_color_schemes: Vec::new(),
+            markdown_body_font_family: "Noto Sans".to_string(),
+            markdown_code_font_family: "Fira Code".to_string(),
+            markdown_font_size: 16,
         };
 
         let json = serde_json::to_string(&settings).unwrap();
@@ -936,6 +995,9 @@ mod tests {
         assert_eq!(restored.ui_font_family, "Noto Sans");
         assert_eq!(restored.language, "ja");
         assert!(!restored.show_tab_bar);
+        assert_eq!(restored.markdown_body_font_family, "Noto Sans");
+        assert_eq!(restored.markdown_code_font_family, "Fira Code");
+        assert_eq!(restored.markdown_font_size, 16);
     }
 
     #[test]
@@ -1291,5 +1353,91 @@ mod tests {
     fn test_app_settings_default_has_empty_custom_color_schemes() {
         let settings = AppSettings::default();
         assert!(settings.custom_color_schemes.is_empty());
+    }
+
+    // -- Markdown Viewer settings tests --
+
+    #[test]
+    fn test_markdown_settings_defaults() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.markdown_body_font_family, "");
+        assert_eq!(settings.markdown_code_font_family, "");
+        assert_eq!(settings.markdown_font_size, 14);
+    }
+
+    #[test]
+    fn test_deserialize_missing_markdown_fields_use_defaults() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.markdown_body_font_family, "");
+        assert_eq!(settings.markdown_code_font_family, "");
+        assert_eq!(settings.markdown_font_size, 14);
+    }
+
+    #[test]
+    fn test_deserialize_null_markdown_fields_use_defaults() {
+        let json = r#"{
+            "markdown_body_font_family": null,
+            "markdown_code_font_family": null,
+            "markdown_font_size": null
+        }"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.markdown_body_font_family, "");
+        assert_eq!(settings.markdown_code_font_family, "");
+        assert_eq!(settings.markdown_font_size, 14);
+    }
+
+    #[test]
+    fn test_deserialize_markdown_fields_explicit_values() {
+        let json = r#"{
+            "markdown_body_font_family": "Noto Sans",
+            "markdown_code_font_family": "Fira Code",
+            "markdown_font_size": 18
+        }"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.markdown_body_font_family, "Noto Sans");
+        assert_eq!(settings.markdown_code_font_family, "Fira Code");
+        assert_eq!(settings.markdown_font_size, 18);
+    }
+
+    #[test]
+    fn test_validate_markdown_font_size_below_min() {
+        let mut settings = AppSettings::default();
+        settings.markdown_font_size = 7;
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn test_validate_markdown_font_size_above_max() {
+        let mut settings = AppSettings::default();
+        settings.markdown_font_size = 33;
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn test_validate_markdown_font_size_min_boundary() {
+        let mut settings = AppSettings::default();
+        settings.markdown_font_size = MIN_FONT_SIZE;
+        assert!(validate_settings(&settings).is_ok());
+    }
+
+    #[test]
+    fn test_validate_markdown_font_size_max_boundary() {
+        let mut settings = AppSettings::default();
+        settings.markdown_font_size = MAX_FONT_SIZE;
+        assert!(validate_settings(&settings).is_ok());
+    }
+
+    #[test]
+    fn test_markdown_settings_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.markdown_body_font_family = "Georgia".to_string();
+        settings.markdown_code_font_family = "JetBrains Mono".to_string();
+        settings.markdown_font_size = 20;
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.markdown_body_font_family, "Georgia");
+        assert_eq!(restored.markdown_code_font_family, "JetBrains Mono");
+        assert_eq!(restored.markdown_font_size, 20);
     }
 }

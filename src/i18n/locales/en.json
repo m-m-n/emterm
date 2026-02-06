@@ -6,7 +6,8 @@
       "keybinds": "Keybinds",
       "ui": "UI Settings",
       "terminalAppearance": "Terminal Appearance",
-      "terminalBehavior": "Terminal Behavior"
+      "terminalBehavior": "Terminal Behavior",
+      "markdownViewer": "Markdown Viewer"
     },
     "appearance": {
       "title": "Appearance",
@@ -163,6 +164,21 @@
     },
     "terminalBehavior": {
       "title": "Terminal Behavior"
+    },
+    "markdownViewer": {
+      "title": "Markdown Viewer",
+      "font": "Font",
+      "bodyFontFamily": "Body Font",
+      "bodyFontFamilyHint": "Markdown body text font",
+      "bodyFontFamilyDesc": "Sets the font for Markdown body text (paragraphs, headings, lists)",
+      "codeFontFamily": "Code Font",
+      "codeFontFamilyHint": "Markdown code block font",
+      "codeFontFamilyDesc": "Sets the font for code blocks in Markdown",
+      "fontSize": "Font Size",
+      "fontSizeHint": "Range: {min}-{max}pt",
+      "fontSizeDesc": "Sets the base font size for Markdown content",
+      "fontPickerBodyTitle": "Markdown Body Font",
+      "fontPickerCodeTitle": "Markdown Code Font"
     }
   },
   "tabBar": {
