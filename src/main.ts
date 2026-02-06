@@ -95,8 +95,36 @@ async function main(): Promise<void> {
   });
   tabBarUI.init();
 
-  // Create keyboard handler and attach to document
-  keyboardHandler = new TabKeyboardHandler(tabManager);
+  // Apply initial tab bar visibility from settings
+  try {
+    const settings = await SettingsService.load();
+    if (settings.show_tab_bar === false) {
+      tabBarUI.setVisible(false);
+    }
+  } catch (error) {
+    console.warn("Failed to apply initial tab bar visibility:", error);
+  }
+
+  // Create keyboard handler with toggle callback
+  const tabBarUIRef = tabBarUI;
+  keyboardHandler = new TabKeyboardHandler(tabManager, {
+    onToggleTabBar: async () => {
+      const newVisible = !tabBarUIRef.isVisible();
+      tabBarUIRef.setVisible(newVisible);
+      // Save to settings
+      try {
+        const currentSettings = SettingsService.getCached();
+        if (currentSettings) {
+          await SettingsService.save({
+            ...currentSettings,
+            show_tab_bar: newVisible,
+          });
+        }
+      } catch (error) {
+        console.warn("Failed to save tab bar visibility:", error);
+      }
+    },
+  });
   keyboardHandler.attach(document);
 
   // Create drag handler for tab reordering

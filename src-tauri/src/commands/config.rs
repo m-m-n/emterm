@@ -179,6 +179,11 @@ deserialize_null_with!(
     String,
     default_keybind_open_settings
 );
+deserialize_null_with!(
+    deserialize_null_keybind_toggle_tab_bar,
+    String,
+    default_keybind_toggle_tab_bar
+);
 deserialize_null_with!(deserialize_null_language, String, default_language);
 deserialize_null_with!(deserialize_null_ui_font_family, String, default_ui_font_family);
 
@@ -243,6 +248,9 @@ fn default_keybind_toggle_fullscreen() -> String {
 }
 fn default_keybind_open_settings() -> String {
     "Ctrl+Comma".to_string()
+}
+fn default_keybind_toggle_tab_bar() -> String {
+    "Ctrl+Shift+B".to_string()
 }
 fn default_language() -> String {
     "auto".to_string()
@@ -318,6 +326,8 @@ pub struct AppSettings {
     pub scrollback_lines: u32,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub show_scrollbar: ScrollbarMode,
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub show_tab_bar: bool,
 
     // Terminal
     #[serde(default, deserialize_with = "deserialize_null_default")]
@@ -378,6 +388,7 @@ impl Default for AppSettings {
             padding: default_padding(),
             scrollback_lines: default_scrollback_lines(),
             show_scrollbar: ScrollbarMode::default(),
+            show_tab_bar: default_true(),
             shell_path: String::new(),
             shell_args: Vec::new(),
             cursor_style: CursorStyle::default(),
@@ -463,6 +474,11 @@ pub struct KeybindSettings {
         deserialize_with = "deserialize_null_keybind_open_settings"
     )]
     pub open_settings: String,
+    #[serde(
+        default = "default_keybind_toggle_tab_bar",
+        deserialize_with = "deserialize_null_keybind_toggle_tab_bar"
+    )]
+    pub toggle_tab_bar: String,
 }
 
 impl Default for KeybindSettings {
@@ -481,6 +497,7 @@ impl Default for KeybindSettings {
             zoom_reset: default_keybind_zoom_reset(),
             toggle_fullscreen: default_keybind_toggle_fullscreen(),
             open_settings: default_keybind_open_settings(),
+            toggle_tab_bar: default_keybind_toggle_tab_bar(),
         }
     }
 }
@@ -654,6 +671,7 @@ mod tests {
         assert!(!settings.copy_on_select);
         assert_eq!(settings.language, "auto");
         assert_eq!(settings.ui_font_family, "Roboto");
+        assert!(settings.show_tab_bar);
     }
 
     #[test]
@@ -672,6 +690,7 @@ mod tests {
         assert_eq!(keybinds.zoom_reset, "Ctrl+0");
         assert_eq!(keybinds.toggle_fullscreen, "F11");
         assert_eq!(keybinds.open_settings, "Ctrl+Comma");
+        assert_eq!(keybinds.toggle_tab_bar, "Ctrl+Shift+B");
     }
 
     // -- Deserialization --
@@ -870,6 +889,7 @@ mod tests {
             padding: 8,
             scrollback_lines: 5000,
             show_scrollbar: ScrollbarMode::Always,
+            show_tab_bar: false,
             shell_path: "/bin/zsh".to_string(),
             shell_args: vec!["--login".to_string(), "-i".to_string()],
             cursor_style: CursorStyle::Bar,
@@ -915,6 +935,7 @@ mod tests {
         assert_eq!(restored.keybinds.select_all, "Ctrl+Shift+A");
         assert_eq!(restored.ui_font_family, "Noto Sans");
         assert_eq!(restored.language, "ja");
+        assert!(!restored.show_tab_bar);
     }
 
     #[test]
@@ -1138,6 +1159,54 @@ mod tests {
         assert_eq!(restored.font_family_primary, "JetBrains Mono");
         assert_eq!(restored.font_family_secondary, "Noto Sans JP");
         assert_eq!(restored.font_family_emoji, "Noto Color Emoji");
+    }
+
+    // -- show_tab_bar tests --
+
+    #[test]
+    fn test_deserialize_missing_show_tab_bar_defaults_to_true() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.show_tab_bar);
+    }
+
+    #[test]
+    fn test_deserialize_null_show_tab_bar_defaults_to_true() {
+        let json = r#"{"show_tab_bar": null}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.show_tab_bar);
+    }
+
+    #[test]
+    fn test_show_tab_bar_false_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.show_tab_bar = false;
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(!restored.show_tab_bar);
+    }
+
+    // -- toggle_tab_bar keybind tests --
+
+    #[test]
+    fn test_deserialize_missing_toggle_tab_bar_keybind_defaults() {
+        let json = r#"{"keybinds": {}}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.keybinds.toggle_tab_bar, "Ctrl+Shift+B");
+    }
+
+    #[test]
+    fn test_deserialize_null_toggle_tab_bar_keybind_defaults() {
+        let json = r#"{"keybinds": {"toggle_tab_bar": null}}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.keybinds.toggle_tab_bar, "Ctrl+Shift+B");
+    }
+
+    #[test]
+    fn test_toggle_tab_bar_keybind_custom_value() {
+        let json = r#"{"keybinds": {"toggle_tab_bar": "Ctrl+Shift+H"}}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.keybinds.toggle_tab_bar, "Ctrl+Shift+H");
     }
 
     // -- UserColorScheme tests --
