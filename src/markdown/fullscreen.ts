@@ -375,8 +375,12 @@ export class FullscreenMarkdownView {
 			const pre = code.parentElement;
 			if (!pre) continue;
 
-			// Wrap in container for positioning
-			pre.style.position = "relative";
+			// Wrap pre in a container div so the copy button stays fixed
+			// relative to the visible area, not the scrollable content
+			const wrapper = document.createElement("div");
+			wrapper.className = "code-block-wrapper";
+			pre.parentNode?.insertBefore(wrapper, pre);
+			wrapper.appendChild(pre);
 
 			const button = document.createElement("button");
 			button.className = "copy-code-button";
@@ -387,7 +391,7 @@ export class FullscreenMarkdownView {
 			copyIcon.textContent = t("markdown.copyCode");
 			button.appendChild(copyIcon);
 
-			pre.appendChild(button);
+			wrapper.appendChild(button);
 		}
 	}
 
@@ -402,8 +406,8 @@ export class FullscreenMarkdownView {
 		e.preventDefault();
 		e.stopPropagation();
 
-		const pre = button.closest("pre");
-		const code = pre?.querySelector("code");
+		const wrapper = button.closest(".code-block-wrapper");
+		const code = wrapper?.querySelector("pre > code");
 		if (!code) return;
 
 		const text = code.textContent || "";
