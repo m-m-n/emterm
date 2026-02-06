@@ -18,9 +18,9 @@ mock.module("@tauri-apps/api/core", () => ({
         keybinds: {
           copy: "Ctrl+Shift+C", paste: "Ctrl+Shift+V", select_all: "Ctrl+Shift+A",
           search: "Ctrl+Shift+F", new_tab: "Ctrl+Shift+T", close_tab: "Ctrl+Shift+W",
-          next_tab: "Ctrl+Tab", prev_tab: "Ctrl+Shift+Tab",
+          next_tab: "Ctrl+PageDown", prev_tab: "Ctrl+PageUp",
           zoom_in: "Ctrl+Plus", zoom_out: "Ctrl+Minus", zoom_reset: "Ctrl+0",
-          toggle_fullscreen: "F11", open_settings: "Ctrl+Comma",
+          toggle_fullscreen: "F11", open_settings: "Ctrl+,",
         },
         language: "auto",
         custom_color_schemes: [],

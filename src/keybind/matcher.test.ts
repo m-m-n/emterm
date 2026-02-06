@@ -47,7 +47,13 @@ describe("parseKeybind", () => {
     expect(result.key).toBe("0");
   });
 
-  test("should parse Ctrl+Comma", () => {
+  test("should parse Ctrl+, (comma key)", () => {
+    const result = parseKeybind("Ctrl+,");
+    expect(result.ctrlKey).toBe(true);
+    expect(result.key).toBe(",");
+  });
+
+  test("should parse Ctrl+Comma (legacy format)", () => {
     const result = parseKeybind("Ctrl+Comma");
     expect(result.ctrlKey).toBe(true);
     expect(result.key).toBe(",");

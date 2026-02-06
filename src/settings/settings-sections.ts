@@ -613,23 +613,6 @@ export function renderKeybindsSection(
     ctx.addContentListener,
     ctx.keybindCtx,
   );
-  renderKeybindInput(
-    basicGrid,
-    "select_all",
-    t("settings.keybinds.selectAll"),
-    kb.select_all,
-    ctx.addContentListener,
-    ctx.keybindCtx,
-  );
-  renderKeybindInput(
-    basicGrid,
-    "search",
-    t("settings.keybinds.search"),
-    kb.search,
-    ctx.addContentListener,
-    ctx.keybindCtx,
-  );
-
   // -- Tab Management subsection --
   renderSubsectionHeader(panel, t("settings.keybinds.tabManagement"));
   const tabGrid = createKeybindGrid(panel);
@@ -662,42 +645,6 @@ export function renderKeybindsSection(
     "prev_tab",
     t("settings.keybinds.prevTab"),
     kb.prev_tab,
-    ctx.addContentListener,
-    ctx.keybindCtx,
-  );
-
-  // -- Display subsection --
-  renderSubsectionHeader(panel, t("settings.keybinds.display"));
-  const displayGrid = createKeybindGrid(panel);
-  renderKeybindInput(
-    displayGrid,
-    "zoom_in",
-    t("settings.keybinds.zoomIn"),
-    kb.zoom_in,
-    ctx.addContentListener,
-    ctx.keybindCtx,
-  );
-  renderKeybindInput(
-    displayGrid,
-    "zoom_out",
-    t("settings.keybinds.zoomOut"),
-    kb.zoom_out,
-    ctx.addContentListener,
-    ctx.keybindCtx,
-  );
-  renderKeybindInput(
-    displayGrid,
-    "zoom_reset",
-    t("settings.keybinds.zoomReset"),
-    kb.zoom_reset,
-    ctx.addContentListener,
-    ctx.keybindCtx,
-  );
-  renderKeybindInput(
-    displayGrid,
-    "toggle_fullscreen",
-    t("settings.keybinds.toggleFullscreen"),
-    kb.toggle_fullscreen,
     ctx.addContentListener,
     ctx.keybindCtx,
   );

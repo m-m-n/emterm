@@ -124,6 +124,9 @@ async function main(): Promise<void> {
         console.warn("Failed to save tab bar visibility:", error);
       }
     },
+    onOpenSettings: () => {
+      tabBarUIRef.openOrFocusSettingsTab();
+    },
   });
   keyboardHandler.attach(document);
 

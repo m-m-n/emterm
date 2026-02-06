@@ -244,10 +244,10 @@ fn default_keybind_close_tab() -> String {
     "Ctrl+Shift+W".to_string()
 }
 fn default_keybind_next_tab() -> String {
-    "Ctrl+Tab".to_string()
+    "Ctrl+PageDown".to_string()
 }
 fn default_keybind_prev_tab() -> String {
-    "Ctrl+Shift+Tab".to_string()
+    "Ctrl+PageUp".to_string()
 }
 fn default_keybind_zoom_in() -> String {
     "Ctrl+Plus".to_string()
@@ -262,7 +262,7 @@ fn default_keybind_toggle_fullscreen() -> String {
     "F11".to_string()
 }
 fn default_keybind_open_settings() -> String {
-    "Ctrl+Comma".to_string()
+    "Ctrl+,".to_string()
 }
 fn default_keybind_toggle_tab_bar() -> String {
     "Ctrl+Shift+B".to_string()
@@ -653,6 +653,7 @@ pub fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
             } else {
                 settings.font_family.clear();
             }
+
             Ok(settings)
         }
         Err(e) => {
@@ -739,13 +740,13 @@ mod tests {
         assert_eq!(keybinds.search, "Ctrl+Shift+F");
         assert_eq!(keybinds.new_tab, "Ctrl+Shift+T");
         assert_eq!(keybinds.close_tab, "Ctrl+Shift+W");
-        assert_eq!(keybinds.next_tab, "Ctrl+Tab");
-        assert_eq!(keybinds.prev_tab, "Ctrl+Shift+Tab");
+        assert_eq!(keybinds.next_tab, "Ctrl+PageDown");
+        assert_eq!(keybinds.prev_tab, "Ctrl+PageUp");
         assert_eq!(keybinds.zoom_in, "Ctrl+Plus");
         assert_eq!(keybinds.zoom_out, "Ctrl+Minus");
         assert_eq!(keybinds.zoom_reset, "Ctrl+0");
         assert_eq!(keybinds.toggle_fullscreen, "F11");
-        assert_eq!(keybinds.open_settings, "Ctrl+Comma");
+        assert_eq!(keybinds.open_settings, "Ctrl+,");
         assert_eq!(keybinds.toggle_tab_bar, "Ctrl+Shift+B");
     }
 
