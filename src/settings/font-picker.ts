@@ -126,6 +126,8 @@ export async function showFontPicker(
     secondary: t("settings.appearance.fontPickerSecondaryTitle"),
     emoji: t("settings.appearance.fontPickerEmojiTitle"),
     ui: t("settings.ui.fontPickerUiTitle"),
+    "markdown-body": t("settings.markdownViewer.fontPickerBodyTitle"),
+    "markdown-code": t("settings.markdownViewer.fontPickerCodeTitle"),
   };
 
   // Load fonts
@@ -134,10 +136,12 @@ export async function showFontPicker(
     const fonts = await FontService.list();
     switch (category) {
       case "primary":
+      case "markdown-code":
         fontList = fonts.monospace_fonts;
         break;
       case "secondary":
       case "ui":
+      case "markdown-body":
         fontList = fonts.all_fonts;
         break;
       case "emoji":

@@ -66,6 +66,11 @@ export interface AppSettings {
 
   // Custom Color Schemes
   custom_color_schemes: UserColorScheme[];
+
+  // Markdown Viewer
+  markdown_body_font_family: string;
+  markdown_code_font_family: string;
+  markdown_font_size: number;
 }
 
 export interface KeybindSettings {
@@ -95,7 +100,7 @@ export interface FontListResponse {
   emoji_fonts: string[];
 }
 
-export type FontCategory = "primary" | "secondary" | "emoji" | "ui";
+export type FontCategory = "primary" | "secondary" | "emoji" | "ui" | "markdown-body" | "markdown-code";
 
 // ============================================================
 // User Color Scheme

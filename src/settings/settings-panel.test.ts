@@ -60,6 +60,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     zoom_reset: "Ctrl+0",
     toggle_fullscreen: "F11",
     open_settings: "Ctrl+Comma",
+    toggle_tab_bar: "Ctrl+Shift+B",
   };
 
   return {
@@ -74,6 +75,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     padding: 4,
     scrollback_lines: 10000,
     show_scrollbar: "auto",
+    show_tab_bar: true,
     shell_path: "",
     shell_args: [],
     cursor_style: "block",
@@ -86,6 +88,9 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     keybinds: defaultKeybinds,
     custom_color_schemes: [],
     ui_font_family: "",
+    markdown_body_font_family: "",
+    markdown_code_font_family: "",
+    markdown_font_size: 14,
     ...overrides,
   };
 }

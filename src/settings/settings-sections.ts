@@ -1,11 +1,12 @@
 /**
  * Settings Sections
  *
- * Section renderers for the 4 settings categories:
+ * Section renderers for the 5 settings categories:
  * - UI Settings: language, theme, UI font
  * - Keybinds: keyboard shortcuts
  * - Terminal Appearance: fonts, colors, layout
  * - Terminal Behavior: cursor, shell, scrolling
+ * - Markdown Viewer: fonts for Markdown content
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -20,6 +21,7 @@ import {
   applyCursorStyle,
   applyCursorBlink,
   applyUiFont,
+  applyMarkdownSettings,
 } from "./settings-applier";
 import type {
   AppSettings,
@@ -1128,5 +1130,106 @@ function applyCurrentFontFamily(settings: AppSettings): void {
     settings.font_family_primary,
     settings.font_family_emoji,
     settings.font_family_secondary,
+  );
+}
+
+// ============================================================
+// Markdown Viewer Section
+// ============================================================
+
+export function renderMarkdownViewerSection(
+  panel: HTMLElement,
+  ctx: SectionContext,
+): void {
+  const settings = ctx.currentSettings;
+
+  const header = document.createElement("h2");
+  header.className = "settings-section-header";
+  header.textContent = t("settings.markdownViewer.title");
+  panel.appendChild(header);
+
+  // -- Font subsection --
+  renderSubsectionHeader(panel, t("settings.markdownViewer.font"));
+
+  // Body Font Family (font picker)
+  renderFontPickerInput(
+    panel,
+    {
+      key: "markdown-body-font-family",
+      label: t("settings.markdownViewer.bodyFontFamily"),
+      value: settings.markdown_body_font_family,
+      placeholder: "",
+      hint: t("settings.markdownViewer.bodyFontFamilyHint"),
+      description: t("settings.markdownViewer.bodyFontFamilyDesc"),
+      category: "markdown-body",
+      onSelect: (v) => {
+        ctx.currentSettings.markdown_body_font_family = v;
+        applyMarkdownSettings(
+          v,
+          ctx.currentSettings.markdown_code_font_family,
+          ctx.currentSettings.markdown_font_size,
+        );
+        ctx.saveSetting("markdown_body_font_family", v);
+      },
+    },
+    ctx.addContentListener,
+    (category, currentValue, onSelect) => {
+      ctx.showFontPicker(category, currentValue, onSelect);
+    },
+  );
+
+  // Code Font Family (font picker)
+  renderFontPickerInput(
+    panel,
+    {
+      key: "markdown-code-font-family",
+      label: t("settings.markdownViewer.codeFontFamily"),
+      value: settings.markdown_code_font_family,
+      placeholder: "",
+      hint: t("settings.markdownViewer.codeFontFamilyHint"),
+      description: t("settings.markdownViewer.codeFontFamilyDesc"),
+      category: "markdown-code",
+      onSelect: (v) => {
+        ctx.currentSettings.markdown_code_font_family = v;
+        applyMarkdownSettings(
+          ctx.currentSettings.markdown_body_font_family,
+          v,
+          ctx.currentSettings.markdown_font_size,
+        );
+        ctx.saveSetting("markdown_code_font_family", v);
+      },
+    },
+    ctx.addContentListener,
+    (category, currentValue, onSelect) => {
+      ctx.showFontPicker(category, currentValue, onSelect);
+    },
+  );
+
+  // Font Size (number input)
+  renderNumberInput(
+    panel,
+    {
+      key: "markdown-font-size",
+      label: t("settings.markdownViewer.fontSize"),
+      value: settings.markdown_font_size,
+      min: MIN_FONT_SIZE,
+      max: MAX_FONT_SIZE,
+      step: 1,
+      unit: "pt",
+      hint: t("settings.markdownViewer.fontSizeHint", {
+        min: MIN_FONT_SIZE,
+        max: MAX_FONT_SIZE,
+      }),
+      description: t("settings.markdownViewer.fontSizeDesc"),
+      onInput: (v) => {
+        applyMarkdownSettings(
+          ctx.currentSettings.markdown_body_font_family,
+          ctx.currentSettings.markdown_code_font_family,
+          v,
+        );
+      },
+      onSave: (v) => ctx.saveSetting("markdown_font_size", v),
+    },
+    ctx.addContentListener,
   );
 }
