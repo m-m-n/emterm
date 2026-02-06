@@ -53,13 +53,13 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     search: "Ctrl+Shift+F",
     new_tab: "Ctrl+Shift+T",
     close_tab: "Ctrl+Shift+W",
-    next_tab: "Ctrl+Tab",
-    prev_tab: "Ctrl+Shift+Tab",
+    next_tab: "Ctrl+PageDown",
+    prev_tab: "Ctrl+PageUp",
     zoom_in: "Ctrl+Plus",
     zoom_out: "Ctrl+Minus",
     zoom_reset: "Ctrl+0",
     toggle_fullscreen: "F11",
-    open_settings: "Ctrl+Comma",
+    open_settings: "Ctrl+,",
     toggle_tab_bar: "Ctrl+Shift+B",
   };
 

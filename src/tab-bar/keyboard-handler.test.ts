@@ -100,7 +100,7 @@ describe("TabKeyboardHandler", () => {
     });
   });
 
-  describe("Ctrl+Tab (next tab)", () => {
+  describe("Ctrl+PageDown (next tab)", () => {
     test("activates next tab", async () => {
       const tab1 = await tabManager.createTab();
       const tab2 = await tabManager.createTab();
@@ -108,7 +108,7 @@ describe("TabKeyboardHandler", () => {
 
       tabManager.switchTab(tab1!.id);
 
-      const event = createKeyboardEvent("Tab", { ctrlKey: true });
+      const event = createKeyboardEvent("PageDown", { ctrlKey: true });
       const handled = keyboardHandler.handleKeyDown(event);
 
       expect(handled).toBe(true);
@@ -121,24 +121,21 @@ describe("TabKeyboardHandler", () => {
       const tab2 = await tabManager.createTab();
 
       // tab2 is active (last created)
-      const event = createKeyboardEvent("Tab", { ctrlKey: true });
+      const event = createKeyboardEvent("PageDown", { ctrlKey: true });
       keyboardHandler.handleKeyDown(event);
 
       expect(tabManager.getActiveTab()?.id).toBe(tab1!.id);
     });
   });
 
-  describe("Ctrl+Shift+Tab (previous tab)", () => {
+  describe("Ctrl+PageUp (previous tab)", () => {
     test("activates previous tab", async () => {
       const tab1 = await tabManager.createTab();
       const tab2 = await tabManager.createTab();
       const tab3 = await tabManager.createTab();
 
       // tab3 is active
-      const event = createKeyboardEvent("Tab", {
-        ctrlKey: true,
-        shiftKey: true,
-      });
+      const event = createKeyboardEvent("PageUp", { ctrlKey: true });
       const handled = keyboardHandler.handleKeyDown(event);
 
       expect(handled).toBe(true);
@@ -152,10 +149,7 @@ describe("TabKeyboardHandler", () => {
 
       tabManager.switchTab(tab1!.id);
 
-      const event = createKeyboardEvent("Tab", {
-        ctrlKey: true,
-        shiftKey: true,
-      });
+      const event = createKeyboardEvent("PageUp", { ctrlKey: true });
       keyboardHandler.handleKeyDown(event);
 
       expect(tabManager.getActiveTab()?.id).toBe(tab2!.id);
@@ -203,6 +197,28 @@ describe("TabKeyboardHandler", () => {
       expect(handled).toBe(true);
       expect(event.preventDefault).toHaveBeenCalled();
       expect(tabManager.getActiveTab()?.id).toBe(tab3!.id);
+    });
+  });
+
+  describe("Ctrl+, (open settings)", () => {
+    test("calls onOpenSettings callback", () => {
+      const onOpenSettings = mock(() => {});
+      const handler = new TabKeyboardHandler(tabManager, { onOpenSettings });
+
+      const event = createKeyboardEvent(",", { ctrlKey: true });
+      const handled = handler.handleKeyDown(event);
+
+      expect(handled).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(onOpenSettings).toHaveBeenCalled();
+    });
+
+    test("does nothing without callback", () => {
+      const event = createKeyboardEvent(",", { ctrlKey: true });
+      const handled = keyboardHandler.handleKeyDown(event);
+
+      expect(handled).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalled();
     });
   });
 

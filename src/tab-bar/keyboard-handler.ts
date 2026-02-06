@@ -14,8 +14,8 @@ import { matchKeybindStr } from "../keybind/matcher";
  * Supported shortcuts:
  * - Ctrl+T: New tab
  * - Ctrl+W: Close active tab
- * - Ctrl+Tab: Next tab
- * - Ctrl+Shift+Tab: Previous tab
+ * - Ctrl+PageDown: Next tab
+ * - Ctrl+PageUp: Previous tab
  * - Ctrl+1-8: Jump to tab by index
  * - Ctrl+9: Jump to last tab
  */
@@ -25,6 +25,8 @@ import { matchKeybindStr } from "../keybind/matcher";
 export interface TabKeyboardHandlerOptions {
   /** Callback when tab bar toggle keybind is pressed */
   onToggleTabBar?: () => void;
+  /** Callback when open settings keybind is pressed */
+  onOpenSettings?: () => void;
 }
 
 export class TabKeyboardHandler {
@@ -32,10 +34,12 @@ export class TabKeyboardHandler {
   private target: EventTarget | null = null;
   private boundHandler: ((event: KeyboardEvent) => void) | null = null;
   private onToggleTabBar?: () => void;
+  private onOpenSettings?: () => void;
 
   constructor(tabManager: TabManager, options?: TabKeyboardHandlerOptions) {
     this.tabManager = tabManager;
     this.onToggleTabBar = options?.onToggleTabBar;
+    this.onOpenSettings = options?.onOpenSettings;
   }
 
   /**
@@ -49,6 +53,13 @@ export class TabKeyboardHandler {
     if (matchKeybindStr(event, keybinds?.toggle_tab_bar ?? "Ctrl+Shift+B")) {
       event.preventDefault();
       this.onToggleTabBar?.();
+      return true;
+    }
+
+    // Open settings
+    if (matchKeybindStr(event, keybinds?.open_settings ?? "Ctrl+,")) {
+      event.preventDefault();
+      this.onOpenSettings?.();
       return true;
     }
 
@@ -67,14 +78,14 @@ export class TabKeyboardHandler {
     }
 
     // Next tab
-    if (matchKeybindStr(event, keybinds?.next_tab ?? "Ctrl+Tab")) {
+    if (matchKeybindStr(event, keybinds?.next_tab ?? "Ctrl+PageDown")) {
       event.preventDefault();
       this.tabManager.activateNextTab();
       return true;
     }
 
     // Previous tab
-    if (matchKeybindStr(event, keybinds?.prev_tab ?? "Ctrl+Shift+Tab")) {
+    if (matchKeybindStr(event, keybinds?.prev_tab ?? "Ctrl+PageUp")) {
       event.preventDefault();
       this.tabManager.activatePreviousTab();
       return true;
