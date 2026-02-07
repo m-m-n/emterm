@@ -22,6 +22,7 @@ eMterm is a cross-platform terminal emulator built with Tauri, featuring rich re
 A modern terminal emulator that combines traditional terminal reliability with rich content rendering. It enables displaying images and formatted Markdown directly in the terminal via control sequences, while maintaining low-latency typing performance.
 
 **Design Philosophy:**
+- AI-first: Built for the AI era, prioritizing compatibility with AI coding tools like Claude Code
 - Explicit display commands only (no auto-detection)
 - Stateless CLI design (works over SSH)
 - Robust isolation (XSS protection, resource management)
