@@ -12,6 +12,7 @@ import type {
 	AnimationFrameData,
 	AnimationState,
 } from "./types.ts";
+import { decodeBase64ToBytes } from "./utils.ts";
 
 /**
  * Callback for frame updates.
@@ -178,11 +179,7 @@ export class AnimationController {
 		height: number,
 	): Promise<ImageBitmap | null> {
 		try {
-			const binaryString = atob(base64);
-			const bytes = new Uint8ClampedArray(binaryString.length);
-			for (let i = 0; i < binaryString.length; i++) {
-				bytes[i] = binaryString.charCodeAt(i);
-			}
+			const bytes = decodeBase64ToBytes(base64);
 
 			const imageData = new ImageData(bytes, width, height);
 			return await createImageBitmap(imageData);

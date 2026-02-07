@@ -61,13 +61,13 @@ export function applySettings(settings: AppSettings): void {
     settings.markdown_code_font_family,
     settings.markdown_font_size,
   );
-  applyMarkdownColorTheme(
-    settings.markdown_theme_follow_ui,
-    settings.markdown_theme,
-    settings.markdown_theme_preset,
-    settings.ui_theme,
-    settings.ui_theme_preset,
-  );
+  applyMarkdownColorTheme({
+    followUi: settings.markdown_theme_follow_ui,
+    mdTheme: settings.markdown_theme,
+    mdPreset: settings.markdown_theme_preset,
+    uiTheme: settings.ui_theme,
+    uiPreset: settings.ui_theme_preset,
+  });
 }
 
 /**
@@ -329,17 +329,23 @@ export function applyMarkdownSettings(
 }
 
 /**
+ * Options for applyMarkdownColorTheme.
+ */
+export interface MarkdownColorThemeOptions {
+  followUi: boolean;
+  mdTheme: UiTheme;
+  mdPreset: UiThemePreset;
+  uiTheme: UiTheme;
+  uiPreset: UiThemePreset;
+}
+
+/**
  * Apply Markdown viewer color theme.
  * Resolves the effective theme/preset (follow UI or independent) and applies
  * the corresponding palette to --markdown-* CSS color variables.
  */
-export function applyMarkdownColorTheme(
-  followUi: boolean,
-  mdTheme: UiTheme,
-  mdPreset: UiThemePreset,
-  uiTheme: UiTheme,
-  uiPreset: UiThemePreset,
-): void {
+export function applyMarkdownColorTheme(options: MarkdownColorThemeOptions): void {
+  const { followUi, mdTheme, mdPreset, uiTheme, uiPreset } = options;
   const root = document.documentElement;
 
   // Clean up previous markdown system theme listener

@@ -238,8 +238,7 @@ export class TerminalApp {
 
     // Spawn PTY session (non-blocking UI)
     try {
-      // Read shell settings for this session
-      const cachedSettings = SettingsService.getCached();
+      // Read shell settings from cached settings (reuse from above)
       const shell = cachedSettings?.shell_path || undefined;
       const args = cachedSettings?.shell_args?.length ? cachedSettings.shell_args : undefined;
 

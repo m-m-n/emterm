@@ -18,6 +18,7 @@ import {
   applyScrollbar,
   applyMarkdownSettings,
   applyMarkdownColorTheme,
+  type MarkdownColorThemeOptions,
 } from "./settings-applier";
 import type { AppSettings, KeybindSettings, UserColorScheme } from "./types";
 
@@ -825,7 +826,7 @@ describe("applyMarkdownSettings", () => {
 describe("applyMarkdownColorTheme", () => {
   test("with followUi=true uses UI theme and preset", () => {
     // followUi=true: should use uiTheme (dark) + uiPreset (blue), ignoring md values
-    applyMarkdownColorTheme(true, "light", "green", "dark", "blue");
+    applyMarkdownColorTheme({ followUi: true, mdTheme: "light", mdPreset: "green", uiTheme: "dark", uiPreset: "blue" });
     // Verify blue/dark palette colors
     expect(mockStyle.properties["--markdown-bg"]).toBe("#111318");
     expect(mockStyle.properties["--markdown-link"]).toBe("#A8C7FA");
@@ -833,14 +834,14 @@ describe("applyMarkdownColorTheme", () => {
 
   test("with followUi=false uses markdown theme and preset", () => {
     // followUi=false: should use mdTheme (light) + mdPreset (green), ignoring ui values
-    applyMarkdownColorTheme(false, "light", "green", "dark", "blue");
+    applyMarkdownColorTheme({ followUi: false, mdTheme: "light", mdPreset: "green", uiTheme: "dark", uiPreset: "blue" });
     // Verify green/light palette colors
     expect(mockStyle.properties["--markdown-bg"]).toBe("#F5FBF5");
     expect(mockStyle.properties["--markdown-link"]).toBe("#006D3E");
   });
 
   test("sets all 11 --markdown-* color CSS variables", () => {
-    applyMarkdownColorTheme(false, "dark", "purple", "system", "purple");
+    applyMarkdownColorTheme({ followUi: false, mdTheme: "dark", mdPreset: "purple", uiTheme: "system", uiPreset: "purple" });
     const expectedVars = [
       "--markdown-bg",
       "--markdown-fg",
@@ -863,7 +864,7 @@ describe("applyMarkdownColorTheme", () => {
   test("system theme resolves to dark when prefers-color-scheme is dark", () => {
     mockMatchesDark = true;
     mockMediaQueryList.matches = true;
-    applyMarkdownColorTheme(false, "system", "orange", "system", "purple");
+    applyMarkdownColorTheme({ followUi: false, mdTheme: "system", mdPreset: "orange", uiTheme: "system", uiPreset: "purple" });
     // Should use orange/dark palette
     expect(mockStyle.properties["--markdown-bg"]).toBe("#18120B");
     expect(mockStyle.properties["--markdown-link"]).toBe("#FFB877");
@@ -872,7 +873,7 @@ describe("applyMarkdownColorTheme", () => {
   test("system theme resolves to light when prefers-color-scheme is light", () => {
     mockMatchesDark = false;
     mockMediaQueryList.matches = false;
-    applyMarkdownColorTheme(false, "system", "orange", "system", "purple");
+    applyMarkdownColorTheme({ followUi: false, mdTheme: "system", mdPreset: "orange", uiTheme: "system", uiPreset: "purple" });
     // Should use orange/light palette
     expect(mockStyle.properties["--markdown-bg"]).toBe("#FFF8F4");
     expect(mockStyle.properties["--markdown-link"]).toBe("#8B5000");
@@ -881,16 +882,16 @@ describe("applyMarkdownColorTheme", () => {
   test("followUi=true with system UI theme resolves correctly", () => {
     mockMatchesDark = true;
     mockMediaQueryList.matches = true;
-    applyMarkdownColorTheme(true, "light", "green", "system", "purple");
+    applyMarkdownColorTheme({ followUi: true, mdTheme: "light", mdPreset: "green", uiTheme: "system", uiPreset: "purple" });
     // Should use purple/dark palette (UI is system->dark, purple preset)
     expect(mockStyle.properties["--markdown-bg"]).toBe("#141218");
     expect(mockStyle.properties["--markdown-link"]).toBe("#D0BCFF");
   });
 
   test("should clean up previous media listener when switching themes", () => {
-    applyMarkdownColorTheme(false, "system", "purple", "system", "purple");
+    applyMarkdownColorTheme({ followUi: false, mdTheme: "system", mdPreset: "purple", uiTheme: "system", uiPreset: "purple" });
     expect(mockMediaChangeHandler).not.toBeNull();
-    applyMarkdownColorTheme(false, "dark", "purple", "system", "purple");
+    applyMarkdownColorTheme({ followUi: false, mdTheme: "dark", mdPreset: "purple", uiTheme: "system", uiPreset: "purple" });
     expect(mockMediaChangeHandler).toBeNull();
   });
 });
