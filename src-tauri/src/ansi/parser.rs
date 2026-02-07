@@ -211,26 +211,11 @@ impl Parser {
     {
         // Check if this is a start byte (0b11xxxxxx) or continuation byte (0b10xxxxxx)
         match byte {
-            // 2-byte sequence start: 110xxxxx
-            0xC0..=0xDF => {
-                // Flush any incomplete sequence
-                if !self.utf8_buffer.is_empty() {
-                    emit(TerminalAction::Print('\u{FFFD}'));
-                }
-                self.utf8_buffer.clear();
-                self.utf8_buffer.push(byte);
-            }
-            // 3-byte sequence start: 1110xxxx
-            0xE0..=0xEF => {
-                // Flush any incomplete sequence
-                if !self.utf8_buffer.is_empty() {
-                    emit(TerminalAction::Print('\u{FFFD}'));
-                }
-                self.utf8_buffer.clear();
-                self.utf8_buffer.push(byte);
-            }
-            // 4-byte sequence start: 11110xxx
-            0xF0..=0xF7 => {
+            // UTF-8 multibyte sequence start byte:
+            //   0xC0..=0xDF: 2-byte (110xxxxx)
+            //   0xE0..=0xEF: 3-byte (1110xxxx)
+            //   0xF0..=0xF7: 4-byte (11110xxx)
+            0xC0..=0xF7 => {
                 // Flush any incomplete sequence
                 if !self.utf8_buffer.is_empty() {
                     emit(TerminalAction::Print('\u{FFFD}'));

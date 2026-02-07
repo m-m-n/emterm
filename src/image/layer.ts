@@ -18,6 +18,7 @@ import { AnimationController } from "./animation.ts";
 import { BitmapCache } from "./cache.ts";
 import { PerformanceMonitor } from "./performance.ts";
 import { ResizeHandler } from "./resize-handler.ts";
+import { decodeBase64ToBytes } from "./utils.ts";
 import type {
 	ActivePlacement,
 	AnimationEvent,
@@ -354,11 +355,7 @@ export class ImageLayer {
 		const useProgressiveLoading = dataSize > this.progressiveLoadingThreshold;
 
 		// Decode base64 RGBA data
-		const binaryString = atob(image.rgba_base64);
-		const bytes = new Uint8ClampedArray(binaryString.length);
-		for (let i = 0; i < binaryString.length; i++) {
-			bytes[i] = binaryString.charCodeAt(i);
-		}
+		const bytes = decodeBase64ToBytes(image.rgba_base64);
 
 		// Create ImageData
 		const imageData = new ImageData(bytes, image.width, image.height);
@@ -466,11 +463,7 @@ export class ImageLayer {
 
 			// Upload full resolution to WebGL
 			if (this.activeBackend === "webgl" && this.webglLayer) {
-				const binaryString = atob(image.rgba_base64);
-				const bytes = new Uint8ClampedArray(binaryString.length);
-				for (let i = 0; i < binaryString.length; i++) {
-					bytes[i] = binaryString.charCodeAt(i);
-				}
+				const bytes = decodeBase64ToBytes(image.rgba_base64);
 				this.webglLayer.uploadTexture(
 					image.id,
 					bytes,
@@ -807,11 +800,7 @@ export class ImageLayer {
 		const tempCtx = tempCanvas.getContext("2d");
 		if (!tempCtx) return;
 
-		const binaryString = atob(image.rgba_base64);
-		const bytes = new Uint8ClampedArray(binaryString.length);
-		for (let i = 0; i < binaryString.length; i++) {
-			bytes[i] = binaryString.charCodeAt(i);
-		}
+		const bytes = decodeBase64ToBytes(image.rgba_base64);
 
 		const imageData = new ImageData(bytes, image.width, image.height);
 		tempCtx.putImageData(imageData, 0, 0);

@@ -15,7 +15,6 @@ import {
   applyFontFamily,
   applyLineHeight,
   applyUiTheme,
-  applyTerminalColorScheme,
   applyPadding,
   applyScrollbar,
   applyCursorStyle,
@@ -60,18 +59,7 @@ import type { AddListenerFn } from "./settings-components";
 import { renderFontPickerInput } from "./font-picker";
 import { renderKeybindInput } from "./keybind-editor";
 import type { KeybindEditorContext } from "./keybind-editor";
-import {
-  buildSelectOptions,
-  getSchemeColors,
-  isUserScheme,
-  createUserSchemeFromPreset,
-  updateUserSchemeColor,
-  deleteUserScheme,
-  duplicateScheme,
-  renameUserScheme,
-  type ColorKey,
-} from "./color-scheme-editor";
-import { validateHexColor } from "../terminal/colors";
+import { renderColorSchemeEditor } from "./color-scheme-editor";
 
 // ============================================================
 // Section Context
@@ -157,13 +145,13 @@ export function renderUiSection(
         applyUiTheme(v as UiTheme, ctx.currentSettings.ui_theme_preset);
         ctx.saveSetting("ui_theme", v as UiTheme);
         if (ctx.currentSettings.markdown_theme_follow_ui) {
-          applyMarkdownColorTheme(
-            true,
-            ctx.currentSettings.markdown_theme,
-            ctx.currentSettings.markdown_theme_preset,
-            v as UiTheme,
-            ctx.currentSettings.ui_theme_preset,
-          );
+          applyMarkdownColorTheme({
+            followUi: true,
+            mdTheme: ctx.currentSettings.markdown_theme,
+            mdPreset: ctx.currentSettings.markdown_theme_preset,
+            uiTheme: v as UiTheme,
+            uiPreset: ctx.currentSettings.ui_theme_preset,
+          });
         }
       },
     },
@@ -189,13 +177,13 @@ export function renderUiSection(
         applyUiTheme(ctx.currentSettings.ui_theme, v as UiThemePreset);
         ctx.saveSetting("ui_theme_preset", v as UiThemePreset);
         if (ctx.currentSettings.markdown_theme_follow_ui) {
-          applyMarkdownColorTheme(
-            true,
-            ctx.currentSettings.markdown_theme,
-            ctx.currentSettings.markdown_theme_preset,
-            ctx.currentSettings.ui_theme,
-            v as UiThemePreset,
-          );
+          applyMarkdownColorTheme({
+            followUi: true,
+            mdTheme: ctx.currentSettings.markdown_theme,
+            mdPreset: ctx.currentSettings.markdown_theme_preset,
+            uiTheme: ctx.currentSettings.ui_theme,
+            uiPreset: v as UiThemePreset,
+          });
         }
       },
     },
@@ -694,402 +682,6 @@ function createKeybindGrid(panel: HTMLElement): HTMLElement {
 }
 
 // ============================================================
-// Color Scheme Editor
-// ============================================================
-
-/** Debounce timer for color changes */
-let colorSaveTimer: ReturnType<typeof setTimeout> | null = null;
-
-function renderColorSchemeEditor(
-  panel: HTMLElement,
-  ctx: SectionContext,
-): void {
-  const settings = ctx.currentSettings;
-  const currentScheme = settings.terminal_color_scheme || "emterm";
-
-  // Container
-  const container = document.createElement("div");
-  container.className = "settings-row";
-  container.dataset.key = "terminal-color-scheme-editor";
-  panel.appendChild(container);
-
-  // Label
-  const label = document.createElement("label");
-  label.className = "settings-label";
-  label.textContent = t("settings.appearance.colorScheme");
-  container.appendChild(label);
-
-  // Description
-  const desc = document.createElement("span");
-  desc.className = "settings-description";
-  desc.textContent = t("settings.appearance.colorSchemeDesc");
-  container.appendChild(desc);
-
-  // Control area
-  const controlDiv = document.createElement("div");
-  controlDiv.className = "settings-control color-scheme-editor";
-  container.appendChild(controlDiv);
-
-  // Select box
-  const select = document.createElement("select");
-  select.className = "settings-select";
-  const options = buildSelectOptions(settings.custom_color_schemes);
-  for (const opt of options) {
-    const optEl = document.createElement("option");
-    optEl.value = opt.value;
-    optEl.textContent = opt.label;
-    if (opt.value === currentScheme) {
-      optEl.selected = true;
-    }
-    select.appendChild(optEl);
-  }
-  controlDiv.appendChild(select);
-
-  // Action buttons container
-  const actionsDiv = document.createElement("div");
-  actionsDiv.className = "color-scheme-actions";
-  controlDiv.appendChild(actionsDiv);
-
-  // Palette container
-  const paletteDiv = document.createElement("div");
-  paletteDiv.className = "color-palette-editor";
-  controlDiv.appendChild(paletteDiv);
-
-  // Render functions
-  const renderPalette = () => {
-    paletteDiv.innerHTML = "";
-    const schemeColors = getSchemeColors(
-      select.value,
-      settings.custom_color_schemes,
-    );
-    if (!schemeColors) return;
-
-    // Special colors section (8-column grid, 4 items occupy first 4 columns)
-    const specialDiv = document.createElement("div");
-    specialDiv.className = "color-palette-grid";
-    paletteDiv.appendChild(specialDiv);
-
-    renderColorInput(
-      specialDiv,
-      t("settings.appearance.colorSchemeForeground"),
-      schemeColors.foreground,
-      "foreground",
-    );
-    renderColorInput(
-      specialDiv,
-      t("settings.appearance.colorSchemeBackground"),
-      schemeColors.background,
-      "background",
-    );
-    renderColorInput(
-      specialDiv,
-      t("settings.appearance.colorSchemeCursor"),
-      schemeColors.cursor,
-      "cursor",
-    );
-    renderColorInput(
-      specialDiv,
-      t("settings.appearance.colorSchemeSelection"),
-      schemeColors.selection,
-      "selection",
-    );
-
-    // ANSI colors section
-    const ansiLabel = document.createElement("div");
-    ansiLabel.className = "color-palette-label";
-    ansiLabel.textContent = t("settings.appearance.colorSchemeStandardColors");
-    paletteDiv.appendChild(ansiLabel);
-
-    const standardGrid = document.createElement("div");
-    standardGrid.className = "color-palette-grid";
-    paletteDiv.appendChild(standardGrid);
-    for (let i = 0; i < 8; i++) {
-      const color = schemeColors.ansi_colors[i] || "#000000";
-      renderColorInput(
-        standardGrid,
-        String(i),
-        color,
-        `ansi_${i}` as ColorKey,
-      );
-    }
-
-    const brightLabel = document.createElement("div");
-    brightLabel.className = "color-palette-label";
-    brightLabel.textContent = t("settings.appearance.colorSchemeBrightColors");
-    paletteDiv.appendChild(brightLabel);
-
-    const brightGrid = document.createElement("div");
-    brightGrid.className = "color-palette-grid";
-    paletteDiv.appendChild(brightGrid);
-    for (let i = 8; i < 16; i++) {
-      const color = schemeColors.ansi_colors[i] || "#000000";
-      renderColorInput(
-        brightGrid,
-        String(i),
-        color,
-        `ansi_${i}` as ColorKey,
-      );
-    }
-  };
-
-  const renderActions = () => {
-    actionsDiv.innerHTML = "";
-    const isUser = isUserScheme(select.value, settings.custom_color_schemes);
-
-    // Duplicate button (always visible)
-    const dupBtn = document.createElement("button");
-    dupBtn.className = "settings-button settings-button-secondary";
-    dupBtn.textContent = t("settings.appearance.colorSchemeDuplicate");
-    dupBtn.onclick = () => handleDuplicate();
-    actionsDiv.appendChild(dupBtn);
-
-    if (isUser) {
-      // Delete button (user schemes only)
-      const delBtn = document.createElement("button");
-      delBtn.className = "settings-button settings-button-danger";
-      delBtn.textContent = t("settings.appearance.colorSchemeDelete");
-      delBtn.onclick = () => handleDelete();
-      actionsDiv.appendChild(delBtn);
-
-      // Rename field (user schemes only)
-      const renameDiv = document.createElement("div");
-      renameDiv.className = "color-scheme-rename";
-      actionsDiv.appendChild(renameDiv);
-
-      const renameLabel = document.createElement("span");
-      renameLabel.textContent =
-        t("settings.appearance.colorSchemeRename") + ":";
-      renameDiv.appendChild(renameLabel);
-
-      const renameInput = document.createElement("input");
-      renameInput.type = "text";
-      renameInput.className = "settings-input";
-      renameInput.value = select.value;
-      renameDiv.appendChild(renameInput);
-
-      renameInput.onblur = () => handleRename(renameInput.value);
-      renameInput.onkeydown = (e) => {
-        if (e.key === "Enter") {
-          renameInput.blur();
-        }
-      };
-    }
-  };
-
-  const renderColorInput = (
-    parent: HTMLElement,
-    label: string,
-    value: string,
-    colorKey: ColorKey,
-  ) => {
-    const row = document.createElement("div");
-    row.className = "color-input-compact";
-
-    const labelEl = document.createElement("span");
-    labelEl.className = "color-input-label";
-    labelEl.textContent = label;
-    row.appendChild(labelEl);
-
-    const inputGroup = document.createElement("div");
-    inputGroup.className = "color-input-group";
-    row.appendChild(inputGroup);
-
-    const colorPicker = document.createElement("input");
-    colorPicker.type = "color";
-    colorPicker.className = "color-picker";
-    colorPicker.value = value;
-    colorPicker.title = "";
-    inputGroup.appendChild(colorPicker);
-
-    const hexInput = document.createElement("input");
-    hexInput.type = "text";
-    hexInput.className = "color-hex-input";
-    hexInput.value = value;
-    hexInput.maxLength = 7;
-    inputGroup.appendChild(hexInput);
-
-    // Store original value for change detection
-    let originalValue = value.toLowerCase();
-
-    // Use 'change' event instead of 'input' - fires only on commit (not during drag)
-    colorPicker.onchange = () => {
-      const newValue = colorPicker.value.toLowerCase();
-      hexInput.value = newValue;
-      if (newValue !== originalValue) {
-        handleColorChange(colorKey, newValue);
-        originalValue = newValue; // Update after successful change
-      }
-    };
-
-    // Sync hex input -> color picker (on blur)
-    hexInput.onblur = () => {
-      const newValue = hexInput.value.toLowerCase();
-      if (validateHexColor(newValue)) {
-        colorPicker.value = newValue;
-        if (newValue !== originalValue) {
-          handleColorChange(colorKey, newValue);
-          originalValue = newValue; // Update after successful change
-        }
-      } else {
-        // Revert to picker value
-        hexInput.value = colorPicker.value;
-      }
-    };
-
-    parent.appendChild(row);
-  };
-
-  // Event handlers
-  const handleSelectChange = () => {
-    const newScheme = select.value === "emterm" ? "" : select.value;
-    applyTerminalColorScheme(newScheme, settings.custom_color_schemes);
-    ctx.saveSetting("terminal_color_scheme", newScheme);
-    settings.terminal_color_scheme = newScheme;
-    renderActions();
-    renderPalette();
-  };
-
-  const handleColorChange = (colorKey: ColorKey, newValue: string) => {
-    const currentSchemeName = select.value;
-    const isUser = isUserScheme(
-      currentSchemeName,
-      settings.custom_color_schemes,
-    );
-
-    if (!isUser) {
-      // Auto-copy: create user scheme from preset
-      const newScheme = createUserSchemeFromPreset(
-        currentSchemeName,
-        settings.custom_color_schemes,
-      );
-      if (newScheme) {
-        // Apply the color change to the new scheme
-        const updated = updateUserSchemeColor(newScheme, colorKey, newValue);
-        settings.custom_color_schemes = [
-          ...settings.custom_color_schemes,
-          updated,
-        ];
-        settings.terminal_color_scheme = updated.name;
-
-        // Update select box
-        refreshSelectOptions();
-        select.value = updated.name;
-
-        // Save
-        debouncedSave();
-        applyTerminalColorScheme(updated.name, settings.custom_color_schemes);
-        renderActions();
-      }
-    } else {
-      // Update existing user scheme
-      const schemeIndex = settings.custom_color_schemes.findIndex(
-        (s) => s.name === currentSchemeName,
-      );
-      if (schemeIndex >= 0) {
-        const existingScheme = settings.custom_color_schemes[schemeIndex];
-        if (existingScheme) {
-          const updated = updateUserSchemeColor(
-            existingScheme,
-            colorKey,
-            newValue,
-          );
-          settings.custom_color_schemes[schemeIndex] = updated;
-          debouncedSave();
-          applyTerminalColorScheme(
-            currentSchemeName,
-            settings.custom_color_schemes,
-          );
-        }
-      }
-    }
-  };
-
-  const handleDuplicate = () => {
-    const newScheme = duplicateScheme(
-      select.value,
-      settings.custom_color_schemes,
-    );
-    if (newScheme) {
-      settings.custom_color_schemes = [
-        ...settings.custom_color_schemes,
-        newScheme,
-      ];
-      settings.terminal_color_scheme = newScheme.name;
-      refreshSelectOptions();
-      select.value = newScheme.name;
-      ctx.saveSetting("custom_color_schemes", settings.custom_color_schemes);
-      ctx.saveSetting("terminal_color_scheme", newScheme.name);
-      applyTerminalColorScheme(newScheme.name, settings.custom_color_schemes);
-      renderActions();
-      renderPalette();
-    }
-  };
-
-  const handleDelete = () => {
-    const schemeName = select.value;
-    settings.custom_color_schemes = deleteUserScheme(
-      settings.custom_color_schemes,
-      schemeName,
-    );
-    settings.terminal_color_scheme = "";
-    refreshSelectOptions();
-    select.value = "emterm";
-    ctx.saveSetting("custom_color_schemes", settings.custom_color_schemes);
-    ctx.saveSetting("terminal_color_scheme", "");
-    applyTerminalColorScheme("", settings.custom_color_schemes);
-    renderActions();
-    renderPalette();
-  };
-
-  const handleRename = (newName: string) => {
-    const oldName = select.value;
-    const result = renameUserScheme(
-      settings.custom_color_schemes,
-      oldName,
-      newName,
-    );
-    if (result.success && result.schemes) {
-      settings.custom_color_schemes = result.schemes;
-      if (settings.terminal_color_scheme === oldName) {
-        settings.terminal_color_scheme = newName.trim();
-      }
-      refreshSelectOptions();
-      select.value = newName.trim();
-      ctx.saveSetting("custom_color_schemes", settings.custom_color_schemes);
-      ctx.saveSetting("terminal_color_scheme", settings.terminal_color_scheme);
-    }
-  };
-
-  const refreshSelectOptions = () => {
-    select.innerHTML = "";
-    const options = buildSelectOptions(settings.custom_color_schemes);
-    for (const opt of options) {
-      const optEl = document.createElement("option");
-      optEl.value = opt.value;
-      optEl.textContent = opt.label;
-      select.appendChild(optEl);
-    }
-  };
-
-  const debouncedSave = () => {
-    if (colorSaveTimer) {
-      clearTimeout(colorSaveTimer);
-    }
-    colorSaveTimer = setTimeout(() => {
-      ctx.saveSetting("custom_color_schemes", settings.custom_color_schemes);
-      ctx.saveSetting("terminal_color_scheme", settings.terminal_color_scheme);
-    }, 300);
-  };
-
-  // Wire up select change (use addContentListener for proper cleanup)
-  ctx.addContentListener(select, "change", handleSelectChange);
-
-  // Initial render
-  renderActions();
-  renderPalette();
-}
-
-// ============================================================
 // Helper
 // ============================================================
 
@@ -1214,13 +806,13 @@ export function renderMarkdownViewerSection(
       description: t("settings.markdownViewer.followUiThemeDesc"),
       onSave: (v) => {
         ctx.currentSettings.markdown_theme_follow_ui = v;
-        applyMarkdownColorTheme(
-          v,
-          ctx.currentSettings.markdown_theme,
-          ctx.currentSettings.markdown_theme_preset,
-          ctx.currentSettings.ui_theme,
-          ctx.currentSettings.ui_theme_preset,
-        );
+        applyMarkdownColorTheme({
+          followUi: v,
+          mdTheme: ctx.currentSettings.markdown_theme,
+          mdPreset: ctx.currentSettings.markdown_theme_preset,
+          uiTheme: ctx.currentSettings.ui_theme,
+          uiPreset: ctx.currentSettings.ui_theme_preset,
+        });
         ctx.saveSetting("markdown_theme_follow_ui", v);
         ctx.reRender();
       },
@@ -1248,13 +840,13 @@ export function renderMarkdownViewerSection(
         description: t("settings.markdownViewer.themeDesc"),
         onSave: (v) => {
           ctx.currentSettings.markdown_theme = v as UiTheme;
-          applyMarkdownColorTheme(
-            false,
-            v as UiTheme,
-            ctx.currentSettings.markdown_theme_preset,
-            ctx.currentSettings.ui_theme,
-            ctx.currentSettings.ui_theme_preset,
-          );
+          applyMarkdownColorTheme({
+            followUi: false,
+            mdTheme: v as UiTheme,
+            mdPreset: ctx.currentSettings.markdown_theme_preset,
+            uiTheme: ctx.currentSettings.ui_theme,
+            uiPreset: ctx.currentSettings.ui_theme_preset,
+          });
           ctx.saveSetting("markdown_theme", v as UiTheme);
         },
       },
@@ -1283,13 +875,13 @@ export function renderMarkdownViewerSection(
         description: t("settings.markdownViewer.presetDesc"),
         onSave: (v) => {
           ctx.currentSettings.markdown_theme_preset = v as UiThemePreset;
-          applyMarkdownColorTheme(
-            false,
-            ctx.currentSettings.markdown_theme,
-            v as UiThemePreset,
-            ctx.currentSettings.ui_theme,
-            ctx.currentSettings.ui_theme_preset,
-          );
+          applyMarkdownColorTheme({
+            followUi: false,
+            mdTheme: ctx.currentSettings.markdown_theme,
+            mdPreset: v as UiThemePreset,
+            uiTheme: ctx.currentSettings.ui_theme,
+            uiPreset: ctx.currentSettings.ui_theme_preset,
+          });
           ctx.saveSetting("markdown_theme_preset", v as UiThemePreset);
         },
       },

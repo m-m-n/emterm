@@ -625,35 +625,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 	}
 
 	/**
-	 * Render a text span (both background and text).
-	 * Kept for backward compatibility with incremental rendering.
-	 *
-	 * @param span - Text span to render
-	 * @param rowIndex - Row index for Y position calculation
-	 */
-	private renderSpan(span: TextSpan, rowIndex: number): void {
-		const x = span.startCol * this.charWidth;
-		const y = rowIndex * this.charHeight;
-		const width = span.cellCount * this.charWidth;
-
-		// Get effective colors
-		const bg = getEffectiveBackground(span.attrs, this.currentForeground);
-
-		// Draw background if not default
-		// Use integer-aligned Y to match renderLine and avoid sub-pixel gaps
-		if (bg !== null) {
-			const fillY = Math.floor(y);
-			const fillNextY = Math.ceil((rowIndex + 1) * this.charHeight);
-			const fillHeight = fillNextY - fillY;
-			this.ctx.fillStyle = rgbToCSS(bg);
-			this.ctx.fillRect(x, fillY, width, fillHeight);
-		}
-
-		// Render text portion
-		this.renderSpanText(span, rowIndex);
-	}
-
-	/**
 	 * Render only the text portion of a span (no background).
 	 *
 	 * @param span - Text span to render

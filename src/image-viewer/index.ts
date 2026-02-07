@@ -13,6 +13,7 @@ import type {
   AnimationEvent,
   AnimationState,
 } from "../image/types.ts";
+import { decodeBase64ToBytes } from "../image/utils.ts";
 import { DisplayModeController } from "./display-mode.ts";
 import type { DisplayModeState } from "./display-mode.ts";
 import { PanController } from "./pan-controller.ts";
@@ -510,22 +511,17 @@ export class ImageViewer {
       }
 
       // Decode base64 to binary
-      const binaryString = atob(image.rgba_base64);
+      const bytes = decodeBase64ToBytes(image.rgba_base64);
 
-      if (binaryString.length !== expectedSize) {
+      if (bytes.length !== expectedSize) {
         throw new Error(
-          `Size mismatch: decoded ${binaryString.length} bytes, expected ${expectedSize}`,
+          `Size mismatch: decoded ${bytes.length} bytes, expected ${expectedSize}`,
         );
-      }
-
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
       }
 
       // Create ImageData from RGBA bytes
       const imageData = new ImageData(
-        new Uint8ClampedArray(bytes.buffer),
+        bytes,
         image.width,
         image.height,
       );
@@ -645,14 +641,10 @@ export class ImageViewer {
 
     try {
       // Decode frame
-      const binaryString = atob(event.rgba_base64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
+      const bytes = decodeBase64ToBytes(event.rgba_base64);
 
       const imageData = new ImageData(
-        new Uint8ClampedArray(bytes.buffer),
+        bytes,
         event.width,
         event.height,
       );
