@@ -156,6 +156,12 @@ export class TabManager {
       const terminalApp = await this.createTerminalApp(tabContainer);
       this.terminalApps.set(tabId, terminalApp);
 
+      // Connect title change callback
+      const currentTabId = tabId;
+      terminalApp.onTitleChange((newTitle: string) => {
+        this.updateTabTitle(currentTabId, newTitle);
+      });
+
       // Get session ID from PTY
       const sessionId = terminalApp.pty?.getSessionId() ?? `session-${tabId}`;
 
@@ -583,6 +589,17 @@ export class TabManager {
 
     if (tab) {
       await this.closeTab(tab.id);
+    }
+  }
+
+  /**
+   * Updates a tab's title and emits titleChanged event
+   */
+  updateTabTitle(tabId: string, title: string): void {
+    const tab = this.tabs.find((t) => t.id === tabId);
+    if (tab && tab.title !== title) {
+      tab.title = title;
+      this.eventEmitter.emit("tab:titleChanged", { tabId, title });
     }
   }
 
