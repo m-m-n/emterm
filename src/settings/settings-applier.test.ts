@@ -17,6 +17,7 @@ import {
   applyPadding,
   applyScrollbar,
   applyMarkdownSettings,
+  applyMarkdownColorTheme,
 } from "./settings-applier";
 import type { AppSettings, KeybindSettings, UserColorScheme } from "./types";
 
@@ -146,6 +147,9 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     language: "auto",
     ui_font_family: "",
     custom_color_schemes: [],
+    markdown_theme_follow_ui: true,
+    markdown_theme: "system",
+    markdown_theme_preset: "purple",
     markdown_body_font_family: "",
     markdown_code_font_family: "",
     markdown_font_size: 14,
@@ -811,5 +815,82 @@ describe("applyMarkdownSettings", () => {
     applyMarkdownSettings("  Georgia  ", "  Fira Code  ", 14);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
     expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
+  });
+});
+
+// ============================================================
+// applyMarkdownColorTheme
+// ============================================================
+
+describe("applyMarkdownColorTheme", () => {
+  test("with followUi=true uses UI theme and preset", () => {
+    // followUi=true: should use uiTheme (dark) + uiPreset (blue), ignoring md values
+    applyMarkdownColorTheme(true, "light", "green", "dark", "blue");
+    // Verify blue/dark palette colors
+    expect(mockStyle.properties["--markdown-bg"]).toBe("#111318");
+    expect(mockStyle.properties["--markdown-link"]).toBe("#A8C7FA");
+  });
+
+  test("with followUi=false uses markdown theme and preset", () => {
+    // followUi=false: should use mdTheme (light) + mdPreset (green), ignoring ui values
+    applyMarkdownColorTheme(false, "light", "green", "dark", "blue");
+    // Verify green/light palette colors
+    expect(mockStyle.properties["--markdown-bg"]).toBe("#F5FBF5");
+    expect(mockStyle.properties["--markdown-link"]).toBe("#006D3E");
+  });
+
+  test("sets all 11 --markdown-* color CSS variables", () => {
+    applyMarkdownColorTheme(false, "dark", "purple", "system", "purple");
+    const expectedVars = [
+      "--markdown-bg",
+      "--markdown-fg",
+      "--markdown-heading",
+      "--markdown-link",
+      "--markdown-border",
+      "--markdown-blockquote",
+      "--markdown-code-bg",
+      "--markdown-code-fg",
+      "--markdown-pre-bg",
+      "--markdown-table-bg",
+      "--markdown-table-stripe",
+    ];
+    for (const v of expectedVars) {
+      expect(mockStyle.properties[v]).toBeDefined();
+      expect(mockStyle.properties[v].length).toBeGreaterThan(0);
+    }
+  });
+
+  test("system theme resolves to dark when prefers-color-scheme is dark", () => {
+    mockMatchesDark = true;
+    mockMediaQueryList.matches = true;
+    applyMarkdownColorTheme(false, "system", "orange", "system", "purple");
+    // Should use orange/dark palette
+    expect(mockStyle.properties["--markdown-bg"]).toBe("#18120B");
+    expect(mockStyle.properties["--markdown-link"]).toBe("#FFB877");
+  });
+
+  test("system theme resolves to light when prefers-color-scheme is light", () => {
+    mockMatchesDark = false;
+    mockMediaQueryList.matches = false;
+    applyMarkdownColorTheme(false, "system", "orange", "system", "purple");
+    // Should use orange/light palette
+    expect(mockStyle.properties["--markdown-bg"]).toBe("#FFF8F4");
+    expect(mockStyle.properties["--markdown-link"]).toBe("#8B5000");
+  });
+
+  test("followUi=true with system UI theme resolves correctly", () => {
+    mockMatchesDark = true;
+    mockMediaQueryList.matches = true;
+    applyMarkdownColorTheme(true, "light", "green", "system", "purple");
+    // Should use purple/dark palette (UI is system->dark, purple preset)
+    expect(mockStyle.properties["--markdown-bg"]).toBe("#141218");
+    expect(mockStyle.properties["--markdown-link"]).toBe("#D0BCFF");
+  });
+
+  test("should clean up previous media listener when switching themes", () => {
+    applyMarkdownColorTheme(false, "system", "purple", "system", "purple");
+    expect(mockMediaChangeHandler).not.toBeNull();
+    applyMarkdownColorTheme(false, "dark", "purple", "system", "purple");
+    expect(mockMediaChangeHandler).toBeNull();
   });
 });

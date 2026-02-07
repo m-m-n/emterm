@@ -178,7 +178,17 @@
       "fontSizeHint": "Range: {min}-{max}pt",
       "fontSizeDesc": "Sets the base font size for Markdown content",
       "fontPickerBodyTitle": "Markdown Body Font",
-      "fontPickerCodeTitle": "Markdown Code Font"
+      "fontPickerCodeTitle": "Markdown Code Font",
+      "colorTheme": "Color Theme",
+      "followUiTheme": "Follow UI Theme",
+      "followUiThemeDesc": "Use the same theme and preset as the UI settings",
+      "theme": "Theme",
+      "themeDesc": "Color theme for the Markdown viewer",
+      "themeSystem": "System",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "preset": "Preset",
+      "presetDesc": "Color preset for the Markdown viewer"
     }
   },
   "tabBar": {

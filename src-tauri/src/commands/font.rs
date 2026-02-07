@@ -45,9 +45,9 @@ fn enumerate_fonts() -> FontListResponse {
         }
     }
 
-    monospace_fonts.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    all_fonts.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    emoji_fonts.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    monospace_fonts.sort_by_key(|a| a.to_lowercase());
+    all_fonts.sort_by_key(|a| a.to_lowercase());
+    emoji_fonts.sort_by_key(|a| a.to_lowercase());
 
     monospace_fonts.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     all_fonts.dedup_by(|a, b| a.eq_ignore_ascii_case(b));

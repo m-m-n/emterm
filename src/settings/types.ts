@@ -67,7 +67,12 @@ export interface AppSettings {
   // Custom Color Schemes
   custom_color_schemes: UserColorScheme[];
 
-  // Markdown Viewer
+  // Markdown Viewer Theme
+  markdown_theme_follow_ui: boolean;
+  markdown_theme: UiTheme;
+  markdown_theme_preset: UiThemePreset;
+
+  // Markdown Viewer Font
   markdown_body_font_family: string;
   markdown_code_font_family: string;
   markdown_font_size: number;

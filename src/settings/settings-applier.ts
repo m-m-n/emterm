@@ -15,6 +15,11 @@ import type {
 } from "./types";
 import { getColorSchemePreset, rgbToCSS } from "../terminal/colors";
 import { UI_THEME_PRESETS, applyPresetColors } from "./ui-theme-presets";
+import {
+  MARKDOWN_THEME_PRESETS,
+  MARKDOWN_COLOR_TO_CSS_VAR,
+  type MarkdownThemeColors,
+} from "./markdown-theme-presets";
 
 /**
  * Settings that can be applied to renderers.
@@ -29,8 +34,12 @@ export interface RendererSettings {
   userColorScheme: UserColorScheme | null;
 }
 
-/** Listener for system theme media query */
+/** Listener for system theme media query (UI theme) */
 let systemThemeListener: ((e: MediaQueryListEvent) => void) | null = null;
+
+/** Listener for system theme media query (Markdown color theme) */
+let markdownSystemThemeListener: ((e: MediaQueryListEvent) => void) | null =
+  null;
 
 /**
  * Apply all settings to the application.
@@ -51,6 +60,13 @@ export function applySettings(settings: AppSettings): void {
     settings.markdown_body_font_family,
     settings.markdown_code_font_family,
     settings.markdown_font_size,
+  );
+  applyMarkdownColorTheme(
+    settings.markdown_theme_follow_ui,
+    settings.markdown_theme,
+    settings.markdown_theme_preset,
+    settings.ui_theme,
+    settings.ui_theme_preset,
   );
 }
 
@@ -310,6 +326,61 @@ export function applyMarkdownSettings(
     root.style.removeProperty("--markdown-code-font-family");
   }
   root.style.setProperty("--markdown-body-font-size", `${fontSize}pt`);
+}
+
+/**
+ * Apply Markdown viewer color theme.
+ * Resolves the effective theme/preset (follow UI or independent) and applies
+ * the corresponding palette to --markdown-* CSS color variables.
+ */
+export function applyMarkdownColorTheme(
+  followUi: boolean,
+  mdTheme: UiTheme,
+  mdPreset: UiThemePreset,
+  uiTheme: UiTheme,
+  uiPreset: UiThemePreset,
+): void {
+  const root = document.documentElement;
+
+  // Clean up previous markdown system theme listener
+  if (markdownSystemThemeListener) {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    mq.removeEventListener("change", markdownSystemThemeListener);
+    markdownSystemThemeListener = null;
+  }
+
+  const effectiveTheme = followUi ? uiTheme : mdTheme;
+  const effectivePreset = followUi ? uiPreset : mdPreset;
+
+  // Fallback to "purple" if preset is invalid
+  const safePreset = MARKDOWN_THEME_PRESETS[effectivePreset]
+    ? effectivePreset
+    : "purple";
+
+  const applyPalette = (mode: "dark" | "light") => {
+    const palette = MARKDOWN_THEME_PRESETS[safePreset][mode];
+    for (const [key, cssVar] of Object.entries(MARKDOWN_COLOR_TO_CSS_VAR)) {
+      root.style.setProperty(
+        cssVar,
+        palette[key as keyof MarkdownThemeColors],
+      );
+    }
+  };
+
+  if (effectiveTheme === "system") {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const resolved = mq.matches ? "dark" : "light";
+    applyPalette(resolved);
+
+    // Listen for system theme changes
+    markdownSystemThemeListener = (e: MediaQueryListEvent) => {
+      const newResolved = e.matches ? "dark" : "light";
+      applyPalette(newResolved);
+    };
+    mq.addEventListener("change", markdownSystemThemeListener);
+  } else {
+    applyPalette(effectiveTheme);
+  }
 }
 
 /**
