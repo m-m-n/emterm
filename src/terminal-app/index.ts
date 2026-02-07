@@ -47,6 +47,7 @@ export class TerminalApp {
   private disconnectResizeObserver: (() => void) | null = null;
   private lastWindowTitle = "";
   private sessionExitCallback: ((sessionId: string) => void) | null = null;
+  private titleChangeCallback: ((title: string) => void) | null = null;
 
   /**
    * Creates a new TerminalApp instance
@@ -291,6 +292,10 @@ export class TerminalApp {
             await appWindow.setTitle(newTitle || "eMterm");
           } catch (error) {
             console.error("Failed to set window title:", error);
+          }
+          // Notify tab title change
+          if (this.titleChangeCallback) {
+            this.titleChangeCallback(newTitle || "Terminal");
           }
         }
 
@@ -641,6 +646,8 @@ export class TerminalApp {
     this.state = null;
     this.renderer = null;
     this.selectionController = null;
+    this.sessionExitCallback = null;
+    this.titleChangeCallback = null;
 
     // Remove container structure elements
     if (this.terminalRoot) {
@@ -689,6 +696,14 @@ export class TerminalApp {
    */
   onSessionExit(callback: (sessionId: string) => void): void {
     this.sessionExitCallback = callback;
+  }
+
+  /**
+   * Sets callback for when terminal title changes via OSC sequences
+   * Used by TabManager to update the tab title
+   */
+  onTitleChange(callback: (title: string) => void): void {
+    this.titleChangeCallback = callback;
   }
 
   /**

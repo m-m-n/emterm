@@ -190,6 +190,7 @@ export class TabBarUI {
     tabElement.setAttribute("tabindex", "0");
     tabElement.setAttribute("aria-label", tab.title);
     tabElement.setAttribute("aria-selected", "false");
+    tabElement.setAttribute("title", tab.title);
 
     // Tab icon (different for terminal vs settings)
     const icon = document.createElement("span");
@@ -284,6 +285,8 @@ export class TabBarUI {
       if (titleElement) {
         titleElement.textContent = title;
       }
+      element.setAttribute("title", title);
+      element.setAttribute("aria-label", title);
     }
   }
 
