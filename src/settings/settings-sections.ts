@@ -22,6 +22,7 @@ import {
   applyCursorBlink,
   applyUiFont,
   applyMarkdownSettings,
+  applyMarkdownColorTheme,
 } from "./settings-applier";
 import type {
   AppSettings,
@@ -152,8 +153,18 @@ export function renderUiSection(
       ],
       description: t("settings.appearance.uiThemeDesc"),
       onSave: (v) => {
+        ctx.currentSettings.ui_theme = v as UiTheme;
         applyUiTheme(v as UiTheme, ctx.currentSettings.ui_theme_preset);
         ctx.saveSetting("ui_theme", v as UiTheme);
+        if (ctx.currentSettings.markdown_theme_follow_ui) {
+          applyMarkdownColorTheme(
+            true,
+            ctx.currentSettings.markdown_theme,
+            ctx.currentSettings.markdown_theme_preset,
+            v as UiTheme,
+            ctx.currentSettings.ui_theme_preset,
+          );
+        }
       },
     },
     ctx.addContentListener,
@@ -174,8 +185,18 @@ export function renderUiSection(
       ],
       description: t("settings.appearance.uiThemePresetDesc"),
       onSave: (v) => {
+        ctx.currentSettings.ui_theme_preset = v as UiThemePreset;
         applyUiTheme(ctx.currentSettings.ui_theme, v as UiThemePreset);
         ctx.saveSetting("ui_theme_preset", v as UiThemePreset);
+        if (ctx.currentSettings.markdown_theme_follow_ui) {
+          applyMarkdownColorTheme(
+            true,
+            ctx.currentSettings.markdown_theme,
+            ctx.currentSettings.markdown_theme_preset,
+            ctx.currentSettings.ui_theme,
+            v as UiThemePreset,
+          );
+        }
       },
     },
     ctx.addContentListener,
@@ -1179,4 +1200,100 @@ export function renderMarkdownViewerSection(
     },
     ctx.addContentListener,
   );
+
+  // -- Color Theme subsection --
+  renderSubsectionHeader(panel, t("settings.markdownViewer.colorTheme"));
+
+  // Follow UI Theme (toggle)
+  renderToggle(
+    panel,
+    {
+      key: "markdown-theme-follow-ui",
+      label: t("settings.markdownViewer.followUiTheme"),
+      value: settings.markdown_theme_follow_ui,
+      description: t("settings.markdownViewer.followUiThemeDesc"),
+      onSave: (v) => {
+        ctx.currentSettings.markdown_theme_follow_ui = v;
+        applyMarkdownColorTheme(
+          v,
+          ctx.currentSettings.markdown_theme,
+          ctx.currentSettings.markdown_theme_preset,
+          ctx.currentSettings.ui_theme,
+          ctx.currentSettings.ui_theme_preset,
+        );
+        ctx.saveSetting("markdown_theme_follow_ui", v);
+        ctx.reRender();
+      },
+    },
+    ctx.addContentListener,
+  );
+
+  // Show theme/preset selectors only when follow UI is OFF
+  if (!settings.markdown_theme_follow_ui) {
+    // Markdown Theme (select)
+    renderSelect(
+      panel,
+      {
+        key: "markdown-theme",
+        label: t("settings.markdownViewer.theme"),
+        value: settings.markdown_theme,
+        options: [
+          {
+            value: "system",
+            label: t("settings.markdownViewer.themeSystem"),
+          },
+          { value: "light", label: t("settings.markdownViewer.themeLight") },
+          { value: "dark", label: t("settings.markdownViewer.themeDark") },
+        ],
+        description: t("settings.markdownViewer.themeDesc"),
+        onSave: (v) => {
+          ctx.currentSettings.markdown_theme = v as UiTheme;
+          applyMarkdownColorTheme(
+            false,
+            v as UiTheme,
+            ctx.currentSettings.markdown_theme_preset,
+            ctx.currentSettings.ui_theme,
+            ctx.currentSettings.ui_theme_preset,
+          );
+          ctx.saveSetting("markdown_theme", v as UiTheme);
+        },
+      },
+      ctx.addContentListener,
+    );
+
+    // Markdown Preset (select)
+    renderSelect(
+      panel,
+      {
+        key: "markdown-theme-preset",
+        label: t("settings.markdownViewer.preset"),
+        value: settings.markdown_theme_preset,
+        options: [
+          {
+            value: "purple",
+            label: t("settings.appearance.presetPurple"),
+          },
+          { value: "blue", label: t("settings.appearance.presetBlue") },
+          { value: "green", label: t("settings.appearance.presetGreen") },
+          {
+            value: "orange",
+            label: t("settings.appearance.presetOrange"),
+          },
+        ],
+        description: t("settings.markdownViewer.presetDesc"),
+        onSave: (v) => {
+          ctx.currentSettings.markdown_theme_preset = v as UiThemePreset;
+          applyMarkdownColorTheme(
+            false,
+            ctx.currentSettings.markdown_theme,
+            v as UiThemePreset,
+            ctx.currentSettings.ui_theme,
+            ctx.currentSettings.ui_theme_preset,
+          );
+          ctx.saveSetting("markdown_theme_preset", v as UiThemePreset);
+        },
+      },
+      ctx.addContentListener,
+    );
+  }
 }

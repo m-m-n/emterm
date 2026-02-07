@@ -18,14 +18,7 @@ export { LinkConfirmDialog } from "./link-dialog.ts";
 
 // Session Manager
 export { MarkdownSessionManager } from "./session.ts";
-// Theme
-export type { MarkdownTheme } from "./theme.ts";
-export {
-	applyMarkdownTheme,
-	generateMarkdownTheme,
-	getDarkTheme,
-	getLightTheme,
-} from "./theme.ts";
+
 // Types
 export type {
 	BeginParams,

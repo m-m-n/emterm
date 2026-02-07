@@ -10,7 +10,7 @@
 	bottom: 0;
 	height: 100vh;
 	z-index: 9999;
-	background-color: var(--md-bg, #1e1e1e);
+	background-color: var(--markdown-bg, #1e1e1e);
 	display: flex;
 	justify-content: center;
 	align-items: stretch;
@@ -25,7 +25,7 @@
 	padding: 2rem 3rem;
 	overflow-y: auto;
 	overflow-x: hidden;
-	color: var(--md-fg, #d4d4d4);
+	color: var(--markdown-fg, #d4d4d4);
 	font-family: var(--markdown-body-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
 	font-size: var(--markdown-body-font-size, 14pt);
 	line-height: 1.6;
@@ -38,17 +38,17 @@
 }
 
 .markdown-fullscreen-content::-webkit-scrollbar-track {
-	background: var(--md-bg, #1e1e1e);
+	background: var(--markdown-bg, #1e1e1e);
 }
 
 .markdown-fullscreen-content::-webkit-scrollbar-thumb {
-	background-color: var(--md-border, #404040);
+	background-color: var(--markdown-border, #404040);
 	border-radius: 6px;
-	border: 3px solid var(--md-bg, #1e1e1e);
+	border: 3px solid var(--markdown-bg, #1e1e1e);
 }
 
 .markdown-fullscreen-content::-webkit-scrollbar-thumb:hover {
-	background-color: var(--md-fg, #606060);
+	background-color: var(--markdown-fg, #606060);
 }
 
 /* Focus outline */
@@ -64,10 +64,13 @@
 /* Code block container */
 .markdown-fullscreen-content pre {
 	padding: 1rem;
-	background: var(--md-code-bg, #2d2d2d);
+	background: var(--markdown-pre-bg, #2d2d2d);
 	border-radius: 6px;
 	overflow-x: auto;
-	font-size: 0.9em;
+	font-size: 85%;
+	line-height: 1.45;
+	margin-top: 0;
+	margin-bottom: 16px;
 }
 
 /* Copy button - hidden by default, shown on hover */
@@ -76,10 +79,10 @@
 	top: 0.5rem;
 	right: 0.5rem;
 	padding: 0.25rem 0.5rem;
-	background: var(--md-border, #404040);
+	background: var(--markdown-border, #404040);
 	border: none;
 	border-radius: 4px;
-	color: var(--md-fg, #d4d4d4);
+	color: var(--markdown-fg, #d4d4d4);
 	font-size: 12px;
 	cursor: pointer;
 	z-index: 1;
@@ -97,7 +100,7 @@
 
 .copy-code-button:hover {
 	opacity: 1;
-	background: var(--md-link, #569cd6);
+	background: var(--markdown-link, #569cd6);
 }
 
 .copy-code-button.copy-success {
@@ -114,7 +117,7 @@
 
 /* Link styling */
 .markdown-fullscreen-content a {
-	color: var(--md-link, #569cd6);
+	color: var(--markdown-link, #569cd6);
 	text-decoration: none;
 }
 
@@ -124,8 +127,8 @@
 
 /* Selection styling */
 .markdown-fullscreen-content ::selection {
-	background: var(--md-link, #569cd6);
-	color: var(--md-bg, #1e1e1e);
+	background: var(--markdown-link, #569cd6);
+	color: var(--markdown-bg, #1e1e1e);
 }
 
 /* Headings */
@@ -135,46 +138,156 @@
 .markdown-fullscreen-content h4,
 .markdown-fullscreen-content h5,
 .markdown-fullscreen-content h6 {
-	color: var(--md-heading, #ffffff);
+	color: var(--markdown-heading, #ffffff);
+	font-weight: 600;
 	margin-top: 1.5em;
 	margin-bottom: 0.5em;
+	line-height: 1.25;
 }
 
 .markdown-fullscreen-content h1 {
 	font-size: 2em;
-	border-bottom: 1px solid var(--md-border, #404040);
+	border-bottom: 1px solid var(--markdown-border, #404040);
 	padding-bottom: 0.3em;
 }
 
 .markdown-fullscreen-content h2 {
 	font-size: 1.5em;
-	border-bottom: 1px solid var(--md-border, #404040);
+	border-bottom: 1px solid var(--markdown-border, #404040);
 	padding-bottom: 0.3em;
+}
+
+.markdown-fullscreen-content h3 {
+	font-size: 1.25em;
+}
+
+.markdown-fullscreen-content h4 {
+	font-size: 1em;
+}
+
+.markdown-fullscreen-content h5 {
+	font-size: 0.875em;
+}
+
+.markdown-fullscreen-content h6 {
+	font-size: 0.85em;
+	color: var(--markdown-blockquote, #808080);
+}
+
+/* Paragraphs */
+.markdown-fullscreen-content p {
+	margin-top: 0;
+	margin-bottom: 16px;
+}
+
+/* Lists */
+.markdown-fullscreen-content ul,
+.markdown-fullscreen-content ol {
+	margin-top: 0;
+	margin-bottom: 16px;
+	padding-left: 2em;
+}
+
+.markdown-fullscreen-content li {
+	margin-top: 0.25em;
+}
+
+.markdown-fullscreen-content li + li {
+	margin-top: 0.25em;
 }
 
 /* Blockquotes */
 .markdown-fullscreen-content blockquote {
-	border-left: 4px solid var(--md-border, #404040);
-	margin: 1em 0;
-	padding: 0.5em 1em;
-	color: var(--md-blockquote, #808080);
+	border-left: 4px solid var(--markdown-border, #404040);
+	margin: 0 0 16px 0;
+	padding: 0 1em;
+	color: var(--markdown-blockquote, #808080);
+}
+
+.markdown-fullscreen-content blockquote > :first-child {
+	margin-top: 0;
+}
+
+.markdown-fullscreen-content blockquote > :last-child {
+	margin-bottom: 0;
+}
+
+/* Inline code */
+.markdown-fullscreen-content code {
+	background-color: var(--markdown-code-bg, rgba(110, 118, 129, 0.4));
+	color: var(--markdown-code-fg, #e0e0e0);
+	padding: 0.2em 0.4em;
+	margin: 0;
+	font-size: 85%;
+	font-family: var(--markdown-code-font-family, "Inconsolata", monospace);
+	border-radius: 3px;
+}
+
+/* Code inside pre (reset inline code styles) */
+.markdown-fullscreen-content pre code {
+	display: inline;
+	max-width: none;
+	padding: 0;
+	margin: 0;
+	overflow: visible;
+	line-height: inherit;
+	word-wrap: normal;
+	background-color: transparent;
+	border: 0;
 }
 
 /* Tables */
 .markdown-fullscreen-content table {
+	background-color: var(--markdown-table-bg, transparent);
 	width: 100%;
 	border-collapse: collapse;
-	margin: 1em 0;
+	border-spacing: 0;
+	margin-top: 0;
+	margin-bottom: 16px;
 }
 
 .markdown-fullscreen-content th,
 .markdown-fullscreen-content td {
-	border: 1px solid var(--md-border, #404040);
-	padding: 0.5em 1em;
+	border: 1px solid var(--markdown-border, #404040);
+	padding: 6px 13px;
 }
 
 .markdown-fullscreen-content th {
-	background: var(--md-code-bg, #2d2d2d);
+	font-weight: 600;
+	background-color: var(--markdown-table-stripe, rgba(110, 118, 129, 0.1));
+}
+
+.markdown-fullscreen-content tr {
+	background-color: var(--markdown-table-bg, transparent);
+}
+
+.markdown-fullscreen-content tr:nth-child(2n) {
+	background-color: var(--markdown-table-stripe, rgba(110, 118, 129, 0.1));
+}
+
+/* Horizontal Rule */
+.markdown-fullscreen-content hr {
+	height: 0.25em;
+	padding: 0;
+	margin: 24px 0;
+	background-color: var(--markdown-border, #404040);
+	border: 0;
+}
+
+/* Images */
+.markdown-fullscreen-content img {
+	max-width: 100%;
+	box-sizing: content-box;
+	background-color: var(--markdown-bg, #1e1e1e);
+}
+
+/* Strong and Emphasis */
+.markdown-fullscreen-content strong {
+	font-weight: 600;
+}
+
+.markdown-fullscreen-content em {
+	font-style: italic;
 }
 
 /* Task lists */

@@ -178,7 +178,17 @@
       "fontSizeHint": "範囲: {min}-{max}pt",
       "fontSizeDesc": "Markdownコンテンツの基準フォントサイズを設定します",
       "fontPickerBodyTitle": "Markdown本文フォント",
-      "fontPickerCodeTitle": "Markdownコードフォント"
+      "fontPickerCodeTitle": "Markdownコードフォント",
+      "colorTheme": "カラーテーマ",
+      "followUiTheme": "UIテーマに合わせる",
+      "followUiThemeDesc": "UI設定と同じテーマ・プリセットを使用します",
+      "theme": "テーマ",
+      "themeDesc": "Markdownビューアーのカラーテーマ",
+      "themeSystem": "システム",
+      "themeLight": "ライト",
+      "themeDark": "ダーク",
+      "preset": "プリセット",
+      "presetDesc": "Markdownビューアーのカラープリセット"
     }
   },
   "tabBar": {

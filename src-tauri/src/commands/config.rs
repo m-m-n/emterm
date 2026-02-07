@@ -185,7 +185,11 @@ deserialize_null_with!(
     default_keybind_toggle_tab_bar
 );
 deserialize_null_with!(deserialize_null_language, String, default_language);
-deserialize_null_with!(deserialize_null_ui_font_family, String, default_ui_font_family);
+deserialize_null_with!(
+    deserialize_null_ui_font_family,
+    String,
+    default_ui_font_family
+);
 deserialize_null_with!(
     deserialize_null_markdown_font_size,
     u32,
@@ -397,6 +401,12 @@ pub struct AppSettings {
     pub custom_color_schemes: Vec<UserColorScheme>,
 
     // Markdown Viewer
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub markdown_theme_follow_ui: bool,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub markdown_theme: UiTheme,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub markdown_theme_preset: UiThemePreset,
     #[serde(
         default = "default_markdown_body_font_family",
         deserialize_with = "deserialize_null_markdown_body_font_family"
@@ -442,6 +452,9 @@ impl Default for AppSettings {
             language: default_language(),
             ui_font_family: default_ui_font_family(),
             custom_color_schemes: Vec::new(),
+            markdown_theme_follow_ui: default_true(),
+            markdown_theme: UiTheme::default(),
+            markdown_theme_preset: UiThemePreset::default(),
             markdown_body_font_family: default_markdown_body_font_family(),
             markdown_code_font_family: default_markdown_code_font_family(),
             markdown_font_size: default_markdown_font_size(),
@@ -726,6 +739,9 @@ mod tests {
         assert_eq!(settings.language, "auto");
         assert_eq!(settings.ui_font_family, "Roboto");
         assert!(settings.show_tab_bar);
+        assert!(settings.markdown_theme_follow_ui);
+        assert_eq!(settings.markdown_theme, UiTheme::System);
+        assert_eq!(settings.markdown_theme_preset, UiThemePreset::Purple);
         assert_eq!(settings.markdown_body_font_family, "");
         assert_eq!(settings.markdown_code_font_family, "");
         assert_eq!(settings.markdown_font_size, 14);
@@ -927,6 +943,9 @@ mod tests {
         assert!(json.contains("\"cursor_style\":\"block\""));
         assert!(json.contains("\"bell_action\":\"visual\""));
         assert!(json.contains("\"show_scrollbar\":\"auto\""));
+        assert!(json.contains("\"markdown_theme\":\"system\""));
+        assert!(json.contains("\"markdown_theme_preset\":\"purple\""));
+        assert!(json.contains("\"markdown_theme_follow_ui\":true"));
     }
 
     // -- Round-trip --
@@ -963,6 +982,9 @@ mod tests {
             language: "ja".to_string(),
             ui_font_family: "Noto Sans".to_string(),
             custom_color_schemes: Vec::new(),
+            markdown_theme_follow_ui: false,
+            markdown_theme: UiTheme::Light,
+            markdown_theme_preset: UiThemePreset::Green,
             markdown_body_font_family: "Noto Sans".to_string(),
             markdown_code_font_family: "Fira Code".to_string(),
             markdown_font_size: 16,
@@ -996,6 +1018,9 @@ mod tests {
         assert_eq!(restored.ui_font_family, "Noto Sans");
         assert_eq!(restored.language, "ja");
         assert!(!restored.show_tab_bar);
+        assert!(!restored.markdown_theme_follow_ui);
+        assert_eq!(restored.markdown_theme, UiTheme::Light);
+        assert_eq!(restored.markdown_theme_preset, UiThemePreset::Green);
         assert_eq!(restored.markdown_body_font_family, "Noto Sans");
         assert_eq!(restored.markdown_code_font_family, "Fira Code");
         assert_eq!(restored.markdown_font_size, 16);
@@ -1331,7 +1356,9 @@ mod tests {
                 background: "#000000".to_string(),
                 cursor: "#ffffff".to_string(),
                 selection: "#333333".to_string(),
-                ansi_colors: (0..16).map(|i| format!("#{:02x}{:02x}{:02x}", i * 16, i * 16, i * 16)).collect(),
+                ansi_colors: (0..16)
+                    .map(|i| format!("#{:02x}{:02x}{:02x}", i * 16, i * 16, i * 16))
+                    .collect(),
             },
             UserColorScheme {
                 name: "theme2".to_string(),
@@ -1427,6 +1454,75 @@ mod tests {
         let mut settings = AppSettings::default();
         settings.markdown_font_size = MAX_FONT_SIZE;
         assert!(validate_settings(&settings).is_ok());
+    }
+
+    // -- Markdown Theme settings tests --
+
+    #[test]
+    fn test_markdown_theme_follow_ui_default_is_true() {
+        let settings = AppSettings::default();
+        assert!(settings.markdown_theme_follow_ui);
+    }
+
+    #[test]
+    fn test_markdown_theme_default_is_system() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.markdown_theme, UiTheme::System);
+    }
+
+    #[test]
+    fn test_markdown_theme_preset_default_is_purple() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.markdown_theme_preset, UiThemePreset::Purple);
+    }
+
+    #[test]
+    fn test_deserialize_missing_markdown_theme_fields_use_defaults() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.markdown_theme_follow_ui);
+        assert_eq!(settings.markdown_theme, UiTheme::System);
+        assert_eq!(settings.markdown_theme_preset, UiThemePreset::Purple);
+    }
+
+    #[test]
+    fn test_deserialize_null_markdown_theme_fields_use_defaults() {
+        let json = r#"{
+            "markdown_theme_follow_ui": null,
+            "markdown_theme": null,
+            "markdown_theme_preset": null
+        }"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.markdown_theme_follow_ui);
+        assert_eq!(settings.markdown_theme, UiTheme::System);
+        assert_eq!(settings.markdown_theme_preset, UiThemePreset::Purple);
+    }
+
+    #[test]
+    fn test_markdown_theme_fields_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.markdown_theme_follow_ui = false;
+        settings.markdown_theme = UiTheme::Dark;
+        settings.markdown_theme_preset = UiThemePreset::Orange;
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(!restored.markdown_theme_follow_ui);
+        assert_eq!(restored.markdown_theme, UiTheme::Dark);
+        assert_eq!(restored.markdown_theme_preset, UiThemePreset::Orange);
+    }
+
+    #[test]
+    fn test_deserialize_invalid_markdown_theme_errors() {
+        let json = r#"{"markdown_theme": "invalid"}"#;
+        let result = serde_json::from_str::<AppSettings>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_invalid_markdown_theme_preset_errors() {
+        let json = r#"{"markdown_theme_preset": "invalid"}"#;
+        let result = serde_json::from_str::<AppSettings>(json);
+        assert!(result.is_err());
     }
 
     #[test]
