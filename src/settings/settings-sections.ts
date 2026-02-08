@@ -586,6 +586,19 @@ export function renderTerminalBehaviorSection(
     },
     ctx.addContentListener,
   );
+
+  // Fold Enabled (toggle)
+  renderToggle(
+    panel,
+    {
+      key: "fold-enabled",
+      label: t("settings.terminal.foldEnabled"),
+      value: settings.fold_enabled,
+      description: t("settings.terminal.foldEnabledDesc"),
+      onSave: (v) => ctx.saveSetting("fold_enabled", v),
+    },
+    ctx.addContentListener,
+  );
 }
 
 // ============================================================

@@ -11,6 +11,9 @@ import {
   handleSetTitleAndIcon,
   handleSetWorkingDirectory,
   handleHyperlink,
+  handleFoldCommand,
+  handleSemanticPrompt,
+  _getPendingFoldBegins,
 } from "./osc_handlers.ts";
 import type { TerminalStateAccessor } from "./types.ts";
 
@@ -120,6 +123,146 @@ describe("osc_handlers", () => {
     test("should handle SetColorPalette (no-op)", () => {
       // Should not throw
       handleOscDispatch(getAccessor(), { action: "SetColorPalette", index: 0, color: "#ffffff" });
+    });
+
+    test("should dispatch EmtermExtension fold verb", () => {
+      const accessor = getAccessor();
+      handleOscDispatch(accessor, {
+        action: "EmtermExtension",
+        data: { verb: "emterm", params: ["fold", "begin", "Test Label"] },
+      });
+      // Pending fold should be stored
+      const pending = _getPendingFoldBegins().get(accessor);
+      expect(pending).not.toBeUndefined();
+      expect(pending!.label).toBe("Test Label");
+    });
+  });
+
+  describe("handleFoldCommand", () => {
+    test("T2-1: fold;begin creates pending fold", () => {
+      const accessor = getAccessor();
+      handleFoldCommand(accessor, ["begin", "Build Output"]);
+
+      const pending = _getPendingFoldBegins().get(accessor);
+      expect(pending).not.toBeUndefined();
+      expect(pending!.label).toBe("Build Output");
+    });
+
+    test("T2-2: fold;end completes region", () => {
+      const accessor = getAccessor();
+      // Simulate begin at current cursor position (row 0)
+      handleFoldCommand(accessor, ["begin", "Build Output"]);
+
+      // Move cursor down to simulate output (col=0, row=10)
+      state.cursor.moveTo(0, 10);
+
+      // End fold
+      handleFoldCommand(accessor, ["end"]);
+
+      // Pending should be cleared
+      expect(_getPendingFoldBegins().get(accessor)).toBeUndefined();
+
+      // Fold region should be registered (startLine=0, endLine=10)
+      const foldManager = state.getFoldManager();
+      const region = foldManager.getRegionAtLine(0);
+      expect(region).not.toBeNull();
+      expect(region!.source).toBe("custom");
+      expect(region!.label).toBe("Build Output");
+    });
+
+    test("T2-3: fold;end without begin is silently ignored", () => {
+      const accessor = getAccessor();
+      // Should not throw
+      expect(() => handleFoldCommand(accessor, ["end"])).not.toThrow();
+
+      const foldManager = state.getFoldManager();
+      expect(foldManager.getCollapsedRegions().length).toBe(0);
+    });
+
+    test("T2-4: consecutive begin discards previous", () => {
+      const accessor = getAccessor();
+      handleFoldCommand(accessor, ["begin", "First"]);
+      handleFoldCommand(accessor, ["begin", "Second"]);
+
+      const pending = _getPendingFoldBegins().get(accessor);
+      expect(pending!.label).toBe("Second");
+    });
+
+    test("fold;begin with empty label uses fallback", () => {
+      const accessor = getAccessor();
+      handleFoldCommand(accessor, ["begin", ""]);
+
+      const pending = _getPendingFoldBegins().get(accessor);
+      expect(pending!.label).toBe("...");
+    });
+
+    test("fold commands ignored in alternate buffer", () => {
+      const accessor = getAccessor();
+      state.switchToAlternateBuffer(false);
+
+      handleFoldCommand(accessor, ["begin", "Test"]);
+      expect(_getPendingFoldBegins().get(accessor)).toBeUndefined();
+    });
+  });
+
+  describe("handleSemanticPrompt - fold region detection", () => {
+    test("T2-5: D marker creates fold region from C→D pair", () => {
+      const accessor = getAccessor();
+
+      // Simulate: A (prompt), B (command), C (output start), D (output end)
+      // cursor.moveTo(col, row)
+      handleSemanticPrompt(accessor, "A", null);  // row=0, line=0
+      handleSemanticPrompt(accessor, "B", null);  // row=0, line=0
+      state.cursor.moveTo(0, 1);
+      handleSemanticPrompt(accessor, "C", null);  // row=1, line=1
+      state.cursor.moveTo(0, 10);
+      handleSemanticPrompt(accessor, "D", 0);     // row=10, line=10
+
+      const foldManager = state.getFoldManager();
+      // C marker at line 1, D at line 10
+      const region = foldManager.getRegionAtLine(1);
+      expect(region).not.toBeNull();
+      expect(region!.source).toBe("osc133");
+      expect(region!.exitCode).toBe(0);
+    });
+
+    test("T2-7: C without D does not create region", () => {
+      const accessor = getAccessor();
+
+      handleSemanticPrompt(accessor, "A", null);
+      handleSemanticPrompt(accessor, "B", null);
+      state.cursor.moveTo(1, 0);
+      handleSemanticPrompt(accessor, "C", null);
+
+      // No D marker
+      const foldManager = state.getFoldManager();
+      // Region at C line should not exist (no D to close it)
+      // getRegionAtLine checks FoldManager, which only has registered regions
+      expect(foldManager.getCollapsedRegions().length).toBe(0);
+    });
+
+    test("TS-18: D marker without preceding C is ignored", () => {
+      const accessor = getAccessor();
+
+      // Send D marker without any prior C marker
+      handleSemanticPrompt(accessor, "D", 0);
+
+      const foldManager = state.getFoldManager();
+      expect(foldManager.getCollapsedRegions().length).toBe(0);
+    });
+
+    test("D marker in alternate buffer is ignored for folding", () => {
+      const accessor = getAccessor();
+
+      handleSemanticPrompt(accessor, "C", null);
+      state.switchToAlternateBuffer(false);
+      state.cursor.moveTo(10, 0);
+      // D marker in alternate buffer should not trigger fold registration
+      handleSemanticPrompt(accessor, "D", 0);
+
+      state.switchToPrimaryBuffer(false);
+      const foldManager = state.getFoldManager();
+      expect(foldManager.getCollapsedRegions().length).toBe(0);
     });
   });
 });

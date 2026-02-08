@@ -143,6 +143,9 @@ export class TerminalApp {
       if (cachedSettings.cursor_blink !== undefined) {
         this.renderer.applySetting("cursorBlink", cachedSettings.cursor_blink);
       }
+      if (cachedSettings.fold_enabled !== undefined) {
+        this.state.getFoldManager().setEnabled(cachedSettings.fold_enabled);
+      }
     }
 
     // Register bell callback
@@ -222,8 +225,17 @@ export class TerminalApp {
     // Add mouse wheel handler for scrollback
     terminalContainer.addEventListener('wheel', (e) => this.handleWheel(e));
 
-    // Add Ctrl+click handler for URL opening
-    terminalContainer.addEventListener('click', (e) => this.handleUrlClick(e));
+    // Add click handler for fold toggle (plain click) and URL opening (Ctrl+click)
+    terminalContainer.addEventListener('click', (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        this.handleUrlClick(e);
+      } else {
+        this.handleFoldClick(e);
+      }
+    });
+
+    // Add mousemove handler for fold cursor feedback
+    terminalContainer.addEventListener('mousemove', (e) => this.handleFoldHover(e));
 
     // Initialize ImageViewer with overlay-root container
     this.imageViewer = new ImageViewer(this.overlayRoot!);
@@ -588,7 +600,6 @@ export class TerminalApp {
    * Handle Ctrl+click to open URLs in the default browser
    */
   private handleUrlClick(e: MouseEvent): void {
-    if (!e.ctrlKey && !e.metaKey) return;
     if (!this.state) return;
 
     const cachedSettings = SettingsService.getCached();
@@ -621,6 +632,115 @@ export class TerminalApp {
         open(url).catch(console.error);
       }).catch(console.error);
     }
+  }
+
+  /**
+   * Handle click on fold region to toggle fold/unfold.
+   * Only triggers on plain left-click (no modifiers, no text selection).
+   */
+  private handleFoldClick(e: MouseEvent): void {
+    if (!this.state || !this.renderer) return;
+
+    const cachedSettings = SettingsService.getCached();
+    if (cachedSettings && !cachedSettings.fold_enabled) return;
+
+    const foldManager = this.state.getFoldManager();
+    if (!foldManager.isEnabled()) return;
+    if (foldManager.getCollapsedRegions().length === 0 && !this.hasFoldableRegions()) return;
+
+    // Don't toggle if user is selecting text
+    const selection = window.getSelection();
+    if (selection && selection.toString().length > 0) return;
+
+    // Calculate display row from click coordinates
+    const rect = this.terminalRoot?.getBoundingClientRect();
+    if (!rect) return;
+
+    const displayRow = Math.floor((e.clientY - rect.top) / this.charSize.height);
+    if (displayRow < 0 || displayRow >= this.state.rows) return;
+
+    // Calculate actual display line index
+    const scrollbackLength = this.state.getScrollbackLength();
+    const totalActualLines = scrollbackLength + this.state.rows;
+    const totalDisplayLines = foldManager.getTotalDisplayLines(totalActualLines);
+    const displayStart = Math.max(0, totalDisplayLines - this.state.rows - this.renderer.getScrollOffset());
+    const displayLine = displayStart + displayRow;
+
+    // Check if clicking on a summary line (expand)
+    const summaryRegion = foldManager.getSummaryRegion(displayLine);
+    if (summaryRegion) {
+      foldManager.expandRegionContaining(summaryRegion.startLine);
+      this.renderer.forceRender(this.state);
+      return;
+    }
+
+    // Check if clicking on a foldable region (collapse)
+    const actualLine = foldManager.displayLineToActual(displayLine);
+    const region = foldManager.getRegionAtLine(actualLine);
+    if (region && !region.collapsed) {
+      // Calculate scroll adjustment: if fold is above or at viewport top, adjust scroll
+      const regionDisplayLine = foldManager.actualLineToDisplay(region.startLine);
+      foldManager.toggleFold(actualLine);
+      // Adjust scroll if the fold causes viewport shift
+      if (regionDisplayLine < displayStart) {
+        const delta = region.lineCount - 1;
+        this.renderer.setScrollOffset(Math.max(0, this.renderer.getScrollOffset() - delta));
+      }
+      this.renderer.forceRender(this.state);
+    }
+  }
+
+  /**
+   * Check if there are any foldable regions (even if not collapsed).
+   */
+  private hasFoldableRegions(): boolean {
+    if (!this.state) return false;
+    const foldManager = this.state.getFoldManager();
+    // Quick check: if there are any regions registered
+    return foldManager.getRegionAtLine(0) !== null ||
+      foldManager.getCollapsedRegions().length > 0;
+  }
+
+  /**
+   * Handle mousemove for fold cursor feedback.
+   */
+  private handleFoldHover(e: MouseEvent): void {
+    if (!this.state || !this.renderer || !this.terminalRoot) return;
+
+    const cachedSettings = SettingsService.getCached();
+    if (cachedSettings && !cachedSettings.fold_enabled) return;
+
+    const foldManager = this.state.getFoldManager();
+    if (!foldManager.isEnabled()) return;
+
+    const rect = this.terminalRoot.getBoundingClientRect();
+    const displayRow = Math.floor((e.clientY - rect.top) / this.charSize.height);
+    if (displayRow < 0 || displayRow >= this.state.rows) {
+      this.terminalRoot.style.cursor = "";
+      return;
+    }
+
+    const scrollbackLength = this.state.getScrollbackLength();
+    const totalActualLines = scrollbackLength + this.state.rows;
+    const totalDisplayLines = foldManager.getTotalDisplayLines(totalActualLines);
+    const displayStart = Math.max(0, totalDisplayLines - this.state.rows - this.renderer.getScrollOffset());
+    const displayLine = displayStart + displayRow;
+
+    // Check if hovering over a summary line or foldable region
+    const summaryRegion = foldManager.getSummaryRegion(displayLine);
+    if (summaryRegion) {
+      this.terminalRoot.style.cursor = "pointer";
+      return;
+    }
+
+    const actualLine = foldManager.displayLineToActual(displayLine);
+    const region = foldManager.getRegionAtLine(actualLine);
+    if (region && !region.collapsed) {
+      this.terminalRoot.style.cursor = "pointer";
+      return;
+    }
+
+    this.terminalRoot.style.cursor = "";
   }
 
   /**
@@ -733,6 +853,10 @@ export class TerminalApp {
 
     const match = this.searchStateManager.getCurrentMatch();
     if (!match) return;
+
+    // Auto-expand fold region if match is inside a collapsed region
+    const foldManager = this.state.getFoldManager();
+    foldManager.expandRegionContaining(match.lineIndex);
 
     const scrollbackLength = this.state.getScrollbackLength();
     const currentScrollOffset = this.renderer.getScrollOffset();
@@ -896,6 +1020,13 @@ export class TerminalApp {
     setting: K,
     value: RendererSettings[K],
   ): void {
+    if (setting === "foldEnabled") {
+      this.state?.getFoldManager().setEnabled(value as boolean);
+      if (this.state && this.renderer) {
+        this.renderer.forceRender(this.state);
+      }
+      return;
+    }
     this.renderer?.applySetting(setting, value);
   }
 }

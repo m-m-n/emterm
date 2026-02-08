@@ -105,7 +105,9 @@
       "scrollSpeedDesc": "Adjusts how fast the terminal scrolls",
       "bellActionDesc": "Controls how the terminal notifies you on a bell character",
       "urlDetectionDesc": "Highlights clickable URLs in the terminal output",
-      "copyOnSelectDesc": "Automatically copies text to clipboard when selected"
+      "copyOnSelectDesc": "Automatically copies text to clipboard when selected",
+      "foldEnabled": "Output Folding",
+      "foldEnabledDesc": "Allow folding command output into summary lines"
     },
     "keybinds": {
       "title": "Keybinds",

@@ -54,6 +54,7 @@ export interface AppSettings {
   bell_action: BellAction;
   url_detection: boolean;
   copy_on_select: boolean;
+  fold_enabled: boolean;
 
   // Keybinds
   keybinds: KeybindSettings;
