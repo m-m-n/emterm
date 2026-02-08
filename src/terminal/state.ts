@@ -9,6 +9,7 @@ import { MarkdownSessionManager } from "../markdown/session.ts";
 import type { CharSet, TerminalAction } from "../types/terminal.ts";
 import { ScreenBuffer } from "./buffer.ts";
 import { CursorState } from "./cursor.ts";
+import { FoldManager } from "./fold-manager.ts";
 import { Line } from "./grid.ts";
 import { createDefaultModes, type TerminalModes } from "./modes.ts";
 import { SemanticZoneTracker } from "./semantic-zone.ts";
@@ -92,6 +93,9 @@ export class TerminalState implements TerminalStateAccessor {
   /** Semantic zone tracker for OSC 133. */
   private semanticZoneTracker: SemanticZoneTracker;
 
+  /** Fold manager for command output folding. */
+  private foldManager: FoldManager;
+
   /** Bell callback for BEL character handling. */
   onBell?: () => void;
 
@@ -124,6 +128,7 @@ export class TerminalState implements TerminalStateAccessor {
     this.tabStops = this.createDefaultTabStops(cols);
     this.markdownManager = new MarkdownSessionManager();
     this.semanticZoneTracker = new SemanticZoneTracker();
+    this.foldManager = new FoldManager();
   }
 
   /**
@@ -293,6 +298,8 @@ export class TerminalState implements TerminalStateAccessor {
       this.scrollbackBuffer.splice(0, excess);
       // Prune semantic zone markers for discarded lines
       this.semanticZoneTracker.pruneBeforeLine(excess);
+      // Prune fold regions for discarded lines
+      this.foldManager.pruneBeforeLine(excess);
     }
   }
 
@@ -457,6 +464,15 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Get the fold manager.
+   *
+   * @returns The fold manager instance
+   */
+  getFoldManager(): FoldManager {
+    return this.foldManager;
+  }
+
+  /**
    * Reset terminal to initial state.
    */
   reset(): void {
@@ -504,6 +520,9 @@ export class TerminalState implements TerminalStateAccessor {
 
     // Reset semantic zone tracker
     this.semanticZoneTracker.clear();
+
+    // Reset fold manager (keep enabled state)
+    this.foldManager.unfoldAll();
   }
 
   /**

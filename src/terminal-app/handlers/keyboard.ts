@@ -377,6 +377,10 @@ export class KeyboardHandler {
         : tracker.findNextPrompt(currentTopLine);
 
     if (marker) {
+      // Auto-expand fold region if jumping into a collapsed region
+      const foldManager = state.getFoldManager();
+      foldManager.expandRegionContaining(marker.lineIndex);
+
       // Scroll so the marker line is at the top of the view
       const newScrollOffset = scrollbackLength - marker.lineIndex;
       renderer.setScrollOffset(newScrollOffset);

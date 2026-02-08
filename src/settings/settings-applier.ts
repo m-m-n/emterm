@@ -32,6 +32,7 @@ export interface RendererSettings {
   cursorBlink: boolean;
   colorScheme: string;
   userColorScheme: UserColorScheme | null;
+  foldEnabled: boolean;
 }
 
 /** Listener for system theme media query (UI theme) */
@@ -68,6 +69,15 @@ export function applySettings(settings: AppSettings): void {
     uiTheme: settings.ui_theme,
     uiPreset: settings.ui_theme_preset,
   });
+  applyFoldEnabled(settings.fold_enabled);
+}
+
+/**
+ * Apply fold enabled setting.
+ * Notifies terminal instances to enable/disable FoldManager.
+ */
+export function applyFoldEnabled(enabled: boolean): void {
+  notifyRenderers("foldEnabled", enabled);
 }
 
 /**

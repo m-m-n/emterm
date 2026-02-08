@@ -175,7 +175,99 @@ export function handleSemanticPrompt(
     lineIndex,
     exitCode !== null ? exitCode : undefined,
   );
+
+  // On D marker: detect C→D pair and register fold region
+  if (zoneType === "D") {
+    registerOsc133FoldRegion(state, lineIndex, exitCode);
+  }
 }
+
+/**
+ * Register an OSC 133 fold region when a D marker is received.
+ * Looks back in markers to find matching C, and B for command text.
+ */
+function registerOsc133FoldRegion(
+  state: TerminalStateAccessor,
+  dLineIndex: number,
+  exitCode: number | null,
+): void {
+  const tracker = state.getSemanticZoneTracker();
+  const markers = tracker.getMarkers();
+
+  // Find the most recent C marker before this D
+  let cMarker: { lineIndex: number } | null = null;
+  let bMarker: { lineIndex: number } | null = null;
+
+  for (let i = markers.length - 1; i >= 0; i--) {
+    const m = markers[i]!;
+    // Skip the D marker we just added (last one)
+    if (m.type === "D" && m.lineIndex === dLineIndex) continue;
+    if (!cMarker && m.type === "C") {
+      cMarker = m;
+    }
+    if (cMarker && m.type === "B") {
+      bMarker = m;
+      break;
+    }
+    // If we hit another D before finding C, no matching C exists
+    if (m.type === "D") break;
+  }
+
+  if (!cMarker) return;
+
+  // Extract command text from B marker line
+  let commandText = "";
+  if (bMarker) {
+    commandText = extractLineText(state, bMarker.lineIndex);
+  }
+
+  const foldManager = state.getFoldManager();
+  foldManager.registerOsc133Region(
+    cMarker.lineIndex,
+    dLineIndex,
+    commandText,
+    exitCode !== null ? exitCode : undefined,
+  );
+}
+
+/**
+ * Extract plain text from a line for command text display.
+ */
+function extractLineText(
+  state: TerminalStateAccessor,
+  lineIndex: number,
+): string {
+  const scrollbackLength = state.getScrollbackLength();
+  const buffer = state.getActiveBuffer();
+
+  let text = "";
+  if (lineIndex < scrollbackLength) {
+    // Line is in scrollback - not directly accessible via buffer
+    // Will be populated when we have scrollback access
+    return "";
+  }
+
+  const screenRow = lineIndex - scrollbackLength;
+  if (screenRow < 0 || screenRow >= buffer.rows) return "";
+
+  const line = buffer.getLine(screenRow);
+  for (let col = 0; col < line.length; col++) {
+    const cell = line.getCell(col);
+    text += cell.char;
+  }
+  return text.trim();
+}
+
+/**
+ * Pending fold begin marker for custom OSC fold sequences.
+ */
+interface PendingFoldBegin {
+  lineIndex: number;
+  label: string;
+}
+
+/** Pending fold begin state per terminal. Stored at module level. */
+const pendingFoldBegins = new WeakMap<TerminalStateAccessor, PendingFoldBegin>();
 
 /**
  * Handle EmtermExtension (OSC 777;emterm;...).
@@ -191,7 +283,53 @@ export function handleEmtermExtension(
   verb: string,
   params: string[]
 ): void {
-  // Route to markdown manager
+  // OSC 777;emterm;... → verb="emterm", params=["subcommand", ...]
+  if (verb === "emterm" && params.length > 0 && params[0] === "fold") {
+    // params = ["fold", "begin", label] or ["fold", "end"]
+    // Pass params from index 1 onward as fold command params
+    handleFoldCommand(state, params.slice(1));
+    return;
+  }
+
+  // Route to markdown manager (handles verb="emterm", params=["markdown", ...])
   const manager = state.getMarkdownManager();
   manager.handleCommand(verb, params);
+}
+
+/**
+ * Handle fold command from OSC 777;emterm;fold;...
+ *
+ * @param state - Terminal state accessor
+ * @param params - Fold parameters: ["begin", label] or ["end"]
+ */
+export function handleFoldCommand(
+  state: TerminalStateAccessor,
+  params: string[],
+): void {
+  if (state.isAlternateBuffer) return;
+
+  const subCommand = params[0];
+  if (subCommand === "begin") {
+    const label = params[1] || "...";
+    const scrollbackLength = state.getScrollbackLength();
+    const lineIndex = scrollbackLength + state.cursor.row;
+    // Overwrite any previous pending begin
+    pendingFoldBegins.set(state, { lineIndex, label });
+  } else if (subCommand === "end") {
+    const pending = pendingFoldBegins.get(state);
+    if (!pending) return; // Orphaned end: silently ignored
+
+    const scrollbackLength = state.getScrollbackLength();
+    const lineIndex = scrollbackLength + state.cursor.row;
+    const foldManager = state.getFoldManager();
+    foldManager.registerCustomRegion(pending.lineIndex, lineIndex, pending.label);
+    pendingFoldBegins.delete(state);
+  }
+}
+
+/**
+ * Get pending fold begins map (for testing).
+ */
+export function _getPendingFoldBegins(): WeakMap<TerminalStateAccessor, PendingFoldBegin> {
+  return pendingFoldBegins;
 }

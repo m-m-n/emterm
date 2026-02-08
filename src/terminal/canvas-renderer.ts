@@ -34,6 +34,7 @@ import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
 import type { SearchMatch } from "./search/search-state.ts";
 import { charWidth } from "./unicode.ts";
+import type { FoldRegion } from "./fold-manager.ts";
 
 /**
  * A span of text with uniform attributes.
@@ -863,8 +864,14 @@ export class CanvasRenderer implements ITerminalRenderer {
 	forceRender(state: TerminalState): void {
 		this.pendingState = state;
 
-		// Get visible lines based on scroll offset
-		const visibleLines = getVisibleLines(state, this.scrollOffset);
+		const foldManager = state.getFoldManager();
+		const collapsedRegions = foldManager.getCollapsedRegions();
+		const hasFolds = collapsedRegions.length > 0;
+
+		// Get visible lines based on scroll offset (fold-aware)
+		const visibleLines = hasFolds
+			? this.getVisibleLinesWithFolding(state, foldManager)
+			: getVisibleLines(state, this.scrollOffset);
 
 		// Clear entire canvas including bottom/right remainder
 		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
@@ -876,7 +883,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// First pass: Render all backgrounds
 		for (let row = 0; row < visibleLines.length; row++) {
 			const line = visibleLines[row];
-			if (line) {
+			if (line === null) {
+				// Summary line placeholder - rendered in summary pass
+			} else if (line) {
 				this.renderLineBackground(row, line);
 			}
 		}
@@ -884,9 +893,16 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Second pass: Render all text (descenders won't be overwritten)
 		for (let row = 0; row < visibleLines.length; row++) {
 			const line = visibleLines[row];
-			if (line) {
+			if (line === null) {
+				// Summary line placeholder - rendered in summary pass
+			} else if (line) {
 				this.renderLineText(row, line);
 			}
+		}
+
+		// Fold summary line pass: Render summary lines for collapsed regions
+		if (hasFolds) {
+			this.renderFoldSummaryLines(state, visibleLines, foldManager);
 		}
 
 		// Third pass: Render search highlights over text
@@ -911,6 +927,123 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.prevCursorCol = state.cursorCol;
 			this.prevCursorRow = state.cursorRow;
 		}
+	}
+
+	/**
+	 * Get visible lines accounting for collapsed fold regions.
+	 * Collapsed regions are replaced with null markers (summary lines).
+	 */
+	private getVisibleLinesWithFolding(
+		state: TerminalState,
+		foldManager: ReturnType<TerminalState["getFoldManager"]>,
+	): (Line | null)[] {
+		const buffer = state.getActiveBuffer();
+		const scrollbackBuffer = state.getScrollbackBuffer();
+		const scrollbackLength = scrollbackBuffer.length;
+		const visibleRows = state.rows;
+		const collapsedRegions = foldManager.getCollapsedRegions();
+
+		// Build combined buffer
+		const totalActualLines = scrollbackLength + visibleRows;
+		const totalDisplayLines = foldManager.getTotalDisplayLines(totalActualLines);
+
+		// Calculate display start based on scroll offset
+		const displayStart = Math.max(0, totalDisplayLines - visibleRows - this.scrollOffset);
+
+		const result: (Line | null)[] = [];
+		for (let displayRow = 0; displayRow < visibleRows; displayRow++) {
+			const displayLine = displayStart + displayRow;
+
+			// Check if this display line is a summary line
+			const summaryRegion = foldManager.getSummaryRegion(displayLine);
+			if (summaryRegion) {
+				result.push(null); // null = summary line placeholder
+				continue;
+			}
+
+			// Map display line to actual line
+			const actualLine = foldManager.displayLineToActual(displayLine);
+
+			if (actualLine < scrollbackLength) {
+				result.push(scrollbackBuffer[actualLine] ?? null);
+			} else {
+				const screenRow = actualLine - scrollbackLength;
+				if (screenRow >= 0 && screenRow < visibleRows) {
+					result.push(buffer.getLine(screenRow));
+				} else {
+					result.push(null);
+				}
+			}
+		}
+
+		return result;
+	}
+
+	/**
+	 * Render fold summary lines on the canvas.
+	 */
+	private renderFoldSummaryLines(
+		state: TerminalState,
+		visibleLines: (Line | null)[],
+		foldManager: ReturnType<TerminalState["getFoldManager"]>,
+	): void {
+		const scrollbackLength = state.getScrollbackLength();
+		const totalActualLines = scrollbackLength + state.rows;
+		const totalDisplayLines = foldManager.getTotalDisplayLines(totalActualLines);
+		const displayStart = Math.max(0, totalDisplayLines - state.rows - this.scrollOffset);
+
+		for (let row = 0; row < visibleLines.length; row++) {
+			if (visibleLines[row] !== null) continue;
+
+			const displayLine = displayStart + row;
+			const region = foldManager.getSummaryRegion(displayLine);
+			if (!region) continue;
+
+			this.renderSummaryLine(row, region);
+		}
+	}
+
+	/**
+	 * Render a single fold summary line.
+	 */
+	private renderSummaryLine(rowIndex: number, region: FoldRegion): void {
+		const y = rowIndex * this.charHeight;
+		const width = this.cols * this.charWidth;
+
+		// Semi-transparent bar background
+		this.ctx.fillStyle = "rgba(60, 60, 80, 0.3)";
+		this.ctx.fillRect(0, y, width, this.charHeight);
+
+		// Build summary text
+		const icon = "\u25B6"; // ▶
+		const name = region.source === "custom"
+			? (region.label || "...")
+			: (region.commandText || "...");
+		const truncatedName = name.length > 80 ? name.substring(0, 77) + "..." : name;
+
+		let rightText = `\u2014 ${region.lineCount} lines`;
+		if (region.source === "osc133" && region.exitCode !== undefined) {
+			rightText += ` (exit ${region.exitCode})`;
+		}
+
+		// Text color based on exit code
+		const isError = region.source === "osc133" && region.exitCode !== undefined && region.exitCode !== 0;
+		const textColor = isError ? "#ff6b6b" : "rgba(200, 200, 210, 0.7)";
+
+		// Set font
+		this.ctx.font = `${this.fontSize}px "${this.fontFamily}"`;
+		this.ctx.textBaseline = "top";
+
+		// Draw icon
+		this.ctx.fillStyle = textColor;
+		const textY = y + (this.charHeight - this.fontSize) / 2;
+		this.ctx.fillText(`${icon} ${truncatedName}`, this.charWidth * 0.5, textY);
+
+		// Draw right-aligned info
+		const rightWidth = this.ctx.measureText(rightText).width;
+		const rightX = width - rightWidth - this.charWidth * 0.5;
+		this.ctx.fillStyle = textColor;
+		this.ctx.fillText(rightText, rightX, textY);
 	}
 
 	/**
@@ -1282,21 +1415,39 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	private renderSearchHighlights(state: TerminalState): void {
 		const scrollbackLength = state.getScrollbackLength();
-		// Calculate visible line range in absolute coordinates
-		const visibleStartLine = scrollbackLength - this.scrollOffset;
-		const visibleEndLine = visibleStartLine + state.rows;
+		const foldManager = state.getFoldManager();
+		const hasFolds = foldManager.getCollapsedRegions().length > 0;
+
+		// Calculate visible range in display coordinates
+		const totalActualLines = scrollbackLength + state.rows;
+		const totalDisplayLines = hasFolds
+			? foldManager.getTotalDisplayLines(totalActualLines)
+			: totalActualLines;
+		const displayStart = Math.max(0, totalDisplayLines - state.rows - this.scrollOffset);
+		const displayEnd = displayStart + state.rows;
 
 		for (let i = 0; i < this.searchMatches.length; i++) {
 			const match = this.searchMatches[i];
 			if (!match) continue;
 
-			// Skip if match is outside visible range
-			if (match.lineIndex < visibleStartLine || match.lineIndex >= visibleEndLine) {
+			// Skip if match is inside a collapsed region
+			if (hasFolds) {
+				const region = foldManager.getRegionAtLine(match.lineIndex);
+				if (region && region.collapsed) continue;
+			}
+
+			// Convert actual line index to display line
+			const displayLine = hasFolds
+				? foldManager.actualLineToDisplay(match.lineIndex)
+				: match.lineIndex;
+
+			// Skip if outside visible display range
+			if (displayLine < displayStart || displayLine >= displayEnd) {
 				continue;
 			}
 
-			// Convert absolute line index to screen row
-			const screenRow = match.lineIndex - visibleStartLine;
+			// Convert to screen row
+			const screenRow = displayLine - displayStart;
 
 			const x = match.startCol * this.charWidth;
 			const y = Math.floor(screenRow * this.charHeight);

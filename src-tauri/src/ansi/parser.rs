@@ -666,19 +666,16 @@ impl Parser {
             133 => {
                 // Semantic Prompt (OSC 133): subcommand[;params]
                 // A = prompt start, B = command start, C = output start, D = output end
-                let (subcommand, params) = data.split_once(';').map_or(
-                    (data.as_str(), None),
-                    |(s, p)| (s, Some(p)),
-                );
+                let (subcommand, params) = data
+                    .split_once(';')
+                    .map_or((data.as_str(), None), |(s, p)| (s, Some(p)));
                 match subcommand {
                     "A" | "B" | "C" => OscAction::SemanticPrompt {
                         zone_type: subcommand.to_string(),
                         exit_code: None,
                     },
                     "D" => {
-                        let exit_code = params
-                            .and_then(|s| s.parse::<i32>().ok())
-                            .unwrap_or(0);
+                        let exit_code = params.and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
                         OscAction::SemanticPrompt {
                             zone_type: "D".to_string(),
                             exit_code: Some(exit_code),

@@ -375,6 +375,8 @@ pub struct AppSettings {
     pub url_detection: bool,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub copy_on_select: bool,
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub fold_enabled: bool,
 
     // Keybinds
     #[serde(default, deserialize_with = "deserialize_null_default")]
@@ -456,6 +458,7 @@ impl Default for AppSettings {
             markdown_body_font_family: default_markdown_body_font_family(),
             markdown_code_font_family: default_markdown_code_font_family(),
             markdown_font_size: default_markdown_font_size(),
+            fold_enabled: default_true(),
         }
     }
 }
@@ -889,6 +892,7 @@ mod tests {
             markdown_body_font_family: "Noto Sans".to_string(),
             markdown_code_font_family: "Fira Code".to_string(),
             markdown_font_size: 16,
+            fold_enabled: false,
         };
 
         let json = serde_json::to_string(&settings).unwrap();
