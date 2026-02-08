@@ -56,6 +56,13 @@ export interface AppSettings {
   copy_on_select: boolean;
   fold_enabled: boolean;
 
+  // Notification
+  notification_enabled: boolean;
+  tab_activity_indicator: boolean;
+  notify_on_process_exit: boolean;
+  notify_on_output: boolean;
+  notify_on_bell: boolean;
+
   // Keybinds
   keybinds: KeybindSettings;
 

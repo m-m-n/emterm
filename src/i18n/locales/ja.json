@@ -7,6 +7,7 @@
       "ui": "UI設定",
       "terminalAppearance": "ターミナル外観",
       "terminalBehavior": "ターミナル動作",
+      "notification": "通知",
       "markdownViewer": "Markdownビューアー"
     },
     "appearance": {
@@ -169,6 +170,26 @@
     },
     "terminalBehavior": {
       "title": "ターミナル動作"
+    },
+    "notification": {
+      "title": "通知",
+      "general": "全般",
+      "notificationEnabled": "デスクトップ通知",
+      "notificationEnabledDesc": "バックグラウンドタブのアクティビティをOS通知で表示します",
+      "tabActivityIndicator": "タブアクティビティインジケーター",
+      "tabActivityIndicatorDesc": "未読アクティビティがあるタブにドットインジケーターを表示します",
+      "triggers": "トリガー",
+      "notifyOnProcessExit": "プロセス終了",
+      "notifyOnProcessExitDesc": "バックグラウンドタブでプロセスが終了した時に通知します",
+      "notifyOnOutput": "新しい出力",
+      "notifyOnOutputDesc": "バックグラウンドタブに新しい出力が表示された時に通知します",
+      "notifyOnBell": "ベル",
+      "notifyOnBellDesc": "バックグラウンドタブでベル文字を受信した時に通知します",
+      "body": {
+        "processExit": "プロセスが終了しました",
+        "newOutput": "新しい出力",
+        "bell": "ベル"
+      }
     },
     "markdownViewer": {
       "title": "Markdownビューアー",

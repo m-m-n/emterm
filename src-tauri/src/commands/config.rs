@@ -378,6 +378,18 @@ pub struct AppSettings {
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub fold_enabled: bool,
 
+    // Notification
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub notification_enabled: bool,
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub tab_activity_indicator: bool,
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub notify_on_process_exit: bool,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub notify_on_output: bool,
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub notify_on_bell: bool,
+
     // Keybinds
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub keybinds: KeybindSettings,
@@ -459,6 +471,11 @@ impl Default for AppSettings {
             markdown_code_font_family: default_markdown_code_font_family(),
             markdown_font_size: default_markdown_font_size(),
             fold_enabled: default_true(),
+            notification_enabled: default_true(),
+            tab_activity_indicator: default_true(),
+            notify_on_process_exit: default_true(),
+            notify_on_output: false,
+            notify_on_bell: default_true(),
         }
     }
 }
@@ -649,6 +666,12 @@ mod tests {
         assert_eq!(settings.markdown_body_font_family, "");
         assert_eq!(settings.markdown_code_font_family, "");
         assert_eq!(settings.markdown_font_size, 14);
+        // Notification defaults
+        assert!(settings.notification_enabled);
+        assert!(settings.tab_activity_indicator);
+        assert!(settings.notify_on_process_exit);
+        assert!(!settings.notify_on_output);
+        assert!(settings.notify_on_bell);
     }
 
     #[test]
@@ -893,6 +916,11 @@ mod tests {
             markdown_code_font_family: "Fira Code".to_string(),
             markdown_font_size: 16,
             fold_enabled: false,
+            notification_enabled: false,
+            tab_activity_indicator: false,
+            notify_on_process_exit: false,
+            notify_on_output: true,
+            notify_on_bell: false,
         };
 
         let json = serde_json::to_string(&settings).unwrap();
@@ -929,6 +957,11 @@ mod tests {
         assert_eq!(restored.markdown_body_font_family, "Noto Sans");
         assert_eq!(restored.markdown_code_font_family, "Fira Code");
         assert_eq!(restored.markdown_font_size, 16);
+        assert!(!restored.notification_enabled);
+        assert!(!restored.tab_activity_indicator);
+        assert!(!restored.notify_on_process_exit);
+        assert!(restored.notify_on_output);
+        assert!(!restored.notify_on_bell);
     }
 
     #[test]
@@ -1441,5 +1474,52 @@ mod tests {
         assert_eq!(restored.markdown_body_font_family, "Georgia");
         assert_eq!(restored.markdown_code_font_family, "JetBrains Mono");
         assert_eq!(restored.markdown_font_size, 20);
+    }
+
+    // -- Notification settings tests --
+
+    #[test]
+    fn test_deserialize_missing_notification_fields_use_defaults() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.notification_enabled);
+        assert!(settings.tab_activity_indicator);
+        assert!(settings.notify_on_process_exit);
+        assert!(!settings.notify_on_output);
+        assert!(settings.notify_on_bell);
+    }
+
+    #[test]
+    fn test_deserialize_null_notification_fields_use_defaults() {
+        let json = r#"{
+            "notification_enabled": null,
+            "tab_activity_indicator": null,
+            "notify_on_process_exit": null,
+            "notify_on_output": null,
+            "notify_on_bell": null
+        }"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.notification_enabled);
+        assert!(settings.tab_activity_indicator);
+        assert!(settings.notify_on_process_exit);
+        assert!(!settings.notify_on_output);
+        assert!(settings.notify_on_bell);
+    }
+
+    #[test]
+    fn test_notification_settings_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.notification_enabled = false;
+        settings.tab_activity_indicator = false;
+        settings.notify_on_process_exit = false;
+        settings.notify_on_output = true;
+        settings.notify_on_bell = false;
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(!restored.notification_enabled);
+        assert!(!restored.tab_activity_indicator);
+        assert!(!restored.notify_on_process_exit);
+        assert!(restored.notify_on_output);
+        assert!(!restored.notify_on_bell);
     }
 }

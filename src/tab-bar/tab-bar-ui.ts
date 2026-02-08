@@ -44,6 +44,7 @@ export class TabBarUI {
   private scrollArea: HTMLElement | null = null;
   private fixedArea: HTMLElement | null = null;
   private tabElements: Map<string, HTMLElement> = new Map();
+  private dotElements: Map<string, HTMLElement> = new Map();
   private unsubscribers: (() => void)[] = [];
 
   constructor(options: TabBarUIOptions) {
@@ -202,6 +203,15 @@ export class TabBarUI {
     }
     tabElement.appendChild(icon);
 
+    // Activity dot indicator (terminal tabs only)
+    if (tab.type === "terminal") {
+      const dot = document.createElement("span");
+      dot.className = "tab-activity-dot";
+      dot.setAttribute("aria-hidden", "true");
+      tabElement.appendChild(dot);
+      this.dotElements.set(tab.id, dot);
+    }
+
     // Tab title
     const title = document.createElement("span");
     title.className = "tab-title";
@@ -234,6 +244,7 @@ export class TabBarUI {
     if (element) {
       element.remove();
       this.tabElements.delete(tabId);
+      this.dotElements.delete(tabId);
     }
   }
 
@@ -327,6 +338,26 @@ export class TabBarUI {
   }
 
   /**
+   * Shows the activity dot indicator on a tab
+   */
+  showActivityDot(tabId: string): void {
+    const dot = this.dotElements.get(tabId);
+    if (dot) {
+      dot.classList.add("visible");
+    }
+  }
+
+  /**
+   * Hides the activity dot indicator on a tab
+   */
+  hideActivityDot(tabId: string): void {
+    const dot = this.dotElements.get(tabId);
+    if (dot) {
+      dot.classList.remove("visible");
+    }
+  }
+
+  /**
    * Gets the tab element for a tab ID
    */
   getTabElement(tabId: string): HTMLElement | null {
@@ -365,6 +396,7 @@ export class TabBarUI {
     // Clear DOM
     this.container.innerHTML = "";
     this.tabElements.clear();
+    this.dotElements.clear();
     this.scrollArea = null;
     this.fixedArea = null;
   }

@@ -633,6 +633,7 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(PtyManager::new())
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
