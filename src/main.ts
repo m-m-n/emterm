@@ -12,14 +12,19 @@ import {
   TabKeyboardHandler,
   TabDragHandler,
 } from "./tab-bar";
+import { TabActivityTracker } from "./tab-bar/tab-activity-tracker";
+import { NotificationManager } from "./notification/notification-manager";
 import { initConsoleBridge } from "./utils/console-bridge";
 import { SettingsService, applySettingsToCSS } from "./settings";
 import { initI18n, resolveLocale } from "./i18n/index.ts";
+import { isTerminalTab } from "./tab-bar/types";
 
 let tabManager: TabManager | null = null;
 let tabBarUI: TabBarUI | null = null;
 let keyboardHandler: TabKeyboardHandler | null = null;
 let dragHandler: TabDragHandler | null = null;
+let activityTracker: TabActivityTracker | null = null;
+let notificationManager: NotificationManager | null = null;
 
 /**
  * Initialize the terminal application with tab support
@@ -69,6 +74,13 @@ async function main(): Promise<void> {
       const sessionId = app.pty?.getSessionId();
       if (sessionId) {
         app.onSessionExit((exitedSessionId) => {
+          // Notify activity tracker before tab closes
+          const exitTab = manager.getTabs().find(
+            (t) => isTerminalTab(t) && t.sessionId === exitedSessionId,
+          );
+          if (exitTab) {
+            activityTracker?.markActivity(exitTab.id, "process_exit");
+          }
           manager.handleSessionExit(exitedSessionId);
         });
       }
@@ -129,6 +141,44 @@ async function main(): Promise<void> {
     },
   });
   keyboardHandler.attach(document);
+
+  // Create activity tracker and notification manager
+  activityTracker = new TabActivityTracker(manager);
+  notificationManager = new NotificationManager();
+
+  // Connect activity tracker to notification manager and tab bar UI
+  activityTracker.onActivity((tabId, type) => {
+    const tab = manager.getTab(tabId);
+    if (tab) {
+      notificationManager?.notify(tabId, tab.title, type);
+      const settings = SettingsService.getCached();
+      if (!settings || settings.tab_activity_indicator) {
+        tabBarUI?.showActivityDot(tabId);
+      }
+    }
+  });
+  activityTracker.onClear((tabId) => {
+    tabBarUI?.hideActivityDot(tabId);
+  });
+
+  // Wire up activity callbacks when tabs are created
+  manager.on("tab:created", ({ tab }) => {
+    if (!isTerminalTab(tab)) return;
+    const app = manager.getTerminalApp(tab.id);
+    if (!app) return;
+
+    app.onBellActivity(() => {
+      activityTracker?.markActivity(tab.id, "bell");
+    });
+    app.onOutputActivity(() => {
+      activityTracker?.markActivity(tab.id, "output");
+    });
+  });
+
+  // Clean up notification throttle when tab closes
+  manager.on("tab:closed", ({ tabId }) => {
+    notificationManager?.clearThrottle(tabId);
+  });
 
   // Create drag handler for tab reordering
   dragHandler = new TabDragHandler({
@@ -191,6 +241,8 @@ async function initLegacyMode(): Promise<void> {
 function cleanup(): void {
   keyboardHandler?.detach();
   dragHandler?.dispose();
+  activityTracker?.dispose();
+  notificationManager?.dispose();
   tabBarUI?.dispose();
   tabManager?.dispose();
 
@@ -198,6 +250,8 @@ function cleanup(): void {
   tabBarUI = null;
   keyboardHandler = null;
   dragHandler = null;
+  activityTracker = null;
+  notificationManager = null;
 }
 
 // Initialize when DOM is ready

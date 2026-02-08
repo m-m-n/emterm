@@ -123,6 +123,11 @@ export type TabEventHandler<T extends TabEventType> = (
 export type UnsubscribeFn = () => void;
 
 /**
+ * Activity type for tab activity tracking
+ */
+export type ActivityType = "process_exit" | "output" | "bell";
+
+/**
  * Tab event emitter interface
  */
 export interface TabEventEmitter {

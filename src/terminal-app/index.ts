@@ -50,6 +50,8 @@ export class TerminalApp {
   private lastWindowTitle = "";
   private sessionExitCallback: ((sessionId: string) => void) | null = null;
   private titleChangeCallback: ((title: string) => void) | null = null;
+  private bellActivityCallback: (() => void) | null = null;
+  private outputActivityCallback: (() => void) | null = null;
   private searchStateManager: SearchStateManager = new SearchStateManager();
   private searchBar: SearchBar | null = null;
 
@@ -324,6 +326,9 @@ export class TerminalApp {
           }
         }
 
+        // Notify activity tracker of output
+        this.outputActivityCallback?.();
+
         // Schedule render
         this.renderer.scheduleRender(this.state);
 
@@ -594,6 +599,9 @@ export class TerminalApp {
       case "none":
         break;
     }
+
+    // Notify activity tracker
+    this.bellActivityCallback?.();
   }
 
   /**
@@ -945,6 +953,8 @@ export class TerminalApp {
     this.selectionController = null;
     this.sessionExitCallback = null;
     this.titleChangeCallback = null;
+    this.bellActivityCallback = null;
+    this.outputActivityCallback = null;
 
     // Remove container structure elements
     if (this.terminalRoot) {
@@ -1001,6 +1011,22 @@ export class TerminalApp {
    */
   onTitleChange(callback: (title: string) => void): void {
     this.titleChangeCallback = callback;
+  }
+
+  /**
+   * Sets callback for when BEL character is received.
+   * Used by TabActivityTracker for activity monitoring.
+   */
+  onBellActivity(callback: () => void): void {
+    this.bellActivityCallback = callback;
+  }
+
+  /**
+   * Sets callback for when terminal output is received.
+   * Used by TabActivityTracker for activity monitoring.
+   */
+  onOutputActivity(callback: () => void): void {
+    this.outputActivityCallback = callback;
   }
 
   /**

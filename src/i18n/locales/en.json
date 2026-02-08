@@ -7,6 +7,7 @@
       "ui": "UI Settings",
       "terminalAppearance": "Terminal Appearance",
       "terminalBehavior": "Terminal Behavior",
+      "notification": "Notifications",
       "markdownViewer": "Markdown Viewer"
     },
     "appearance": {
@@ -169,6 +170,26 @@
     },
     "terminalBehavior": {
       "title": "Terminal Behavior"
+    },
+    "notification": {
+      "title": "Notifications",
+      "general": "General",
+      "notificationEnabled": "Desktop Notifications",
+      "notificationEnabledDesc": "Show OS desktop notifications for background tab activity",
+      "tabActivityIndicator": "Tab Activity Indicator",
+      "tabActivityIndicatorDesc": "Show a dot indicator on tabs with unread activity",
+      "triggers": "Triggers",
+      "notifyOnProcessExit": "Process Exit",
+      "notifyOnProcessExitDesc": "Notify when a process exits in a background tab",
+      "notifyOnOutput": "New Output",
+      "notifyOnOutputDesc": "Notify when new output appears in a background tab",
+      "notifyOnBell": "Bell",
+      "notifyOnBellDesc": "Notify when a bell character is received in a background tab",
+      "body": {
+        "processExit": "Process exited",
+        "newOutput": "New output",
+        "bell": "Bell"
+      }
     },
     "markdownViewer": {
       "title": "Markdown Viewer",

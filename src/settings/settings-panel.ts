@@ -21,6 +21,7 @@ import {
   renderKeybindsSection,
   renderTerminalAppearanceSection,
   renderTerminalBehaviorSection,
+  renderNotificationSection,
   renderMarkdownViewerSection,
 } from "./settings-sections";
 import { filterFontList } from "./font-picker";
@@ -66,6 +67,7 @@ export class SettingsPanel {
       { id: "keybinds", label: t("settings.categories.keybinds"), enabled: true },
       { id: "terminal-appearance", label: t("settings.categories.terminalAppearance"), enabled: true },
       { id: "terminal-behavior", label: t("settings.categories.terminalBehavior"), enabled: true },
+      { id: "notification", label: t("settings.categories.notification"), enabled: true },
       { id: "markdown-viewer", label: t("settings.categories.markdownViewer"), enabled: true },
     ];
   }
@@ -173,6 +175,9 @@ export class SettingsPanel {
         break;
       case "terminal-behavior":
         renderTerminalBehaviorSection(panel, ctx);
+        break;
+      case "notification":
+        renderNotificationSection(panel, ctx);
         break;
       case "markdown-viewer":
         renderMarkdownViewerSection(panel, ctx);
