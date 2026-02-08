@@ -121,6 +121,8 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     toggle_fullscreen: "F11",
     open_settings: "Ctrl+,",
     toggle_tab_bar: "Ctrl+Shift+B",
+    jump_to_prev_prompt: "Ctrl+Shift+ArrowUp",
+    jump_to_next_prompt: "Ctrl+Shift+ArrowDown",
   };
 
   return {

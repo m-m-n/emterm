@@ -10,6 +10,7 @@ import type { CursorState } from "../cursor.ts";
 import type { TerminalModes } from "../modes.ts";
 import type { CharSet } from "../../types/terminal.ts";
 import type { MarkdownSessionManager } from "../../markdown/session.ts";
+import type { SemanticZoneTracker } from "../semantic-zone.ts";
 
 /**
  * Active character set (G0 or G1).
@@ -59,5 +60,8 @@ export interface TerminalStateAccessor {
   switchToAlternateBuffer(saveCursor: boolean): void;
   switchToPrimaryBuffer(restoreCursor: boolean): void;
   getMarkdownManager(): MarkdownSessionManager;
+  getSemanticZoneTracker(): SemanticZoneTracker;
+  getScrollbackLength(): number;
+  readonly isAlternateBuffer: boolean;
   reset(): void;
 }

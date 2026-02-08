@@ -663,6 +663,34 @@ impl Parser {
             }
             10 => OscAction::SetForegroundColor(data),
             11 => OscAction::SetBackgroundColor(data),
+            133 => {
+                // Semantic Prompt (OSC 133): subcommand[;params]
+                // A = prompt start, B = command start, C = output start, D = output end
+                let (subcommand, params) = data.split_once(';').map_or(
+                    (data.as_str(), None),
+                    |(s, p)| (s, Some(p)),
+                );
+                match subcommand {
+                    "A" | "B" | "C" => OscAction::SemanticPrompt {
+                        zone_type: subcommand.to_string(),
+                        exit_code: None,
+                    },
+                    "D" => {
+                        let exit_code = params
+                            .and_then(|s| s.parse::<i32>().ok())
+                            .unwrap_or(0);
+                        OscAction::SemanticPrompt {
+                            zone_type: "D".to_string(),
+                            exit_code: Some(exit_code),
+                        }
+                    }
+                    _ => {
+                        // Unknown subcommand - ignore silently
+                        log::debug!("Unknown OSC 133 subcommand: {}", subcommand);
+                        OscAction::Unknown { ps: 133, data }
+                    }
+                }
+            }
             777 => {
                 // eMterm extension format: verb;param1;param2;...
                 let parts: Vec<&str> = data.split(';').collect();
@@ -2268,5 +2296,156 @@ mod tests {
             &actions[1],
             TerminalAction::Dcs(DcsAction::Sixel(_))
         ));
+    }
+
+    // =========================================================================
+    // OSC 133 (Semantic Prompt) Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_osc_133_a() {
+        // OSC 133;A ST (prompt start)
+        let actions = parse_all(b"\x1B]133;A\x1B\\");
+        assert_eq!(actions.len(), 1);
+        if let TerminalAction::Osc(OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        }) = &actions[0]
+        {
+            assert_eq!(zone_type, "A");
+            assert_eq!(*exit_code, None);
+        } else {
+            panic!("Expected SemanticPrompt A, got {:?}", actions[0]);
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_133_b() {
+        // OSC 133;B ST (command start)
+        let actions = parse_all(b"\x1B]133;B\x1B\\");
+        assert_eq!(actions.len(), 1);
+        if let TerminalAction::Osc(OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        }) = &actions[0]
+        {
+            assert_eq!(zone_type, "B");
+            assert_eq!(*exit_code, None);
+        } else {
+            panic!("Expected SemanticPrompt B, got {:?}", actions[0]);
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_133_c() {
+        // OSC 133;C ST (output start)
+        let actions = parse_all(b"\x1B]133;C\x1B\\");
+        assert_eq!(actions.len(), 1);
+        if let TerminalAction::Osc(OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        }) = &actions[0]
+        {
+            assert_eq!(zone_type, "C");
+            assert_eq!(*exit_code, None);
+        } else {
+            panic!("Expected SemanticPrompt C, got {:?}", actions[0]);
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_133_d_with_exit_code() {
+        // OSC 133;D;0 ST (output end with exit code 0)
+        let actions = parse_all(b"\x1B]133;D;0\x1B\\");
+        assert_eq!(actions.len(), 1);
+        if let TerminalAction::Osc(OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        }) = &actions[0]
+        {
+            assert_eq!(zone_type, "D");
+            assert_eq!(*exit_code, Some(0));
+        } else {
+            panic!("Expected SemanticPrompt D, got {:?}", actions[0]);
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_133_d_without_exit_code() {
+        // OSC 133;D ST (output end without exit code, defaults to 0)
+        let actions = parse_all(b"\x1B]133;D\x1B\\");
+        assert_eq!(actions.len(), 1);
+        if let TerminalAction::Osc(OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        }) = &actions[0]
+        {
+            assert_eq!(zone_type, "D");
+            assert_eq!(*exit_code, Some(0));
+        } else {
+            panic!("Expected SemanticPrompt D, got {:?}", actions[0]);
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_133_unknown_subcommand() {
+        // OSC 133;X ST (unknown subcommand)
+        let actions = parse_all(b"\x1B]133;X\x1B\\");
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            &actions[0],
+            TerminalAction::Osc(OscAction::Unknown { ps: 133, .. })
+        ));
+    }
+
+    #[test]
+    fn test_parse_osc_133_a_with_bel() {
+        // OSC 133;A BEL (terminated with BEL instead of ST)
+        let actions = parse_all(b"\x1B]133;A\x07");
+        assert_eq!(actions.len(), 1);
+        if let TerminalAction::Osc(OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        }) = &actions[0]
+        {
+            assert_eq!(zone_type, "A");
+            assert_eq!(*exit_code, None);
+        } else {
+            panic!("Expected SemanticPrompt A, got {:?}", actions[0]);
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_133_d_with_nonzero_exit_code() {
+        // OSC 133;D;127 ST (output end with nonzero exit code)
+        let actions = parse_all(b"\x1B]133;D;127\x1B\\");
+        assert_eq!(actions.len(), 1);
+        if let TerminalAction::Osc(OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        }) = &actions[0]
+        {
+            assert_eq!(zone_type, "D");
+            assert_eq!(*exit_code, Some(127));
+        } else {
+            panic!("Expected SemanticPrompt D, got {:?}", actions[0]);
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_133_d_with_invalid_exit_code() {
+        // OSC 133;D;abc ST (invalid exit code defaults to 0)
+        let actions = parse_all(b"\x1B]133;D;abc\x1B\\");
+        assert_eq!(actions.len(), 1);
+        if let TerminalAction::Osc(OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        }) = &actions[0]
+        {
+            assert_eq!(zone_type, "D");
+            assert_eq!(*exit_code, Some(0));
+        } else {
+            panic!("Expected SemanticPrompt D, got {:?}", actions[0]);
+        }
     }
 }

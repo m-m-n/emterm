@@ -4,6 +4,9 @@
 /* Settings Panel Styles */
 @import "./styles/settings-panel.css";
 
+/* Search Bar Styles */
+@import "./terminal/search/search-bar.css";
+
 * {
   margin: 0;
   padding: 0;

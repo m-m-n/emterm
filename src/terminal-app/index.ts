@@ -24,6 +24,8 @@ import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
 import { findUrlAtPosition } from "../terminal/url-detector";
 import type { DecodedImage, ImageEvent } from "../image/types";
+import { SearchStateManager } from "../terminal/search/search-state";
+import { SearchBar } from "../terminal/search/search-bar";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -48,6 +50,8 @@ export class TerminalApp {
   private lastWindowTitle = "";
   private sessionExitCallback: ((sessionId: string) => void) | null = null;
   private titleChangeCallback: ((title: string) => void) | null = null;
+  private searchStateManager: SearchStateManager = new SearchStateManager();
+  private searchBar: SearchBar | null = null;
 
   /**
    * Creates a new TerminalApp instance
@@ -185,11 +189,20 @@ export class TerminalApp {
       isImeInputFocused: () => this.imeHandler?.isImeInputFocused() ?? false,
       // Check if this tab's container is visible (for multi-tab support)
       isActiveTab: () => this.container.style.display !== "none",
+      onToggleSearch: () => this.toggleSearch(),
     };
     this.keyboardHandler = new KeyboardHandler(keyboardContext);
     // Attach to document but check if this tab's container is visible
     // This allows keyboard input to work even when focus is elsewhere in the window
     this.keyboardHandler.attach(document);
+
+    // Initialize search bar
+    this.searchBar = new SearchBar(this.terminalRoot!, {
+      onSearch: (query, options) => this.handleSearch(query, options),
+      onNextMatch: () => this.handleSearchNext(),
+      onPrevMatch: () => this.handleSearchPrev(),
+      onClose: () => this.handleSearchClose(),
+    });
 
     // Initialize mouse handler (for PTY mouse tracking only - selection handled by SelectionController)
     this.mouseHandler = new MouseHandler(
@@ -611,6 +624,164 @@ export class TerminalApp {
   }
 
   /**
+   * Toggle the search bar open/closed.
+   */
+  toggleSearch(): void {
+    if (!this.searchBar) return;
+
+    if (this.searchBar.isVisible()) {
+      this.handleSearchClose();
+    } else {
+      this.searchBar.show();
+    }
+  }
+
+  /**
+   * Handle search query/options change from search bar.
+   */
+  private handleSearch(query: string, options: { isRegex: boolean; caseSensitive: boolean }): void {
+    if (!this.state || !this.renderer) return;
+
+    this.searchStateManager.setQuery(query);
+    this.searchStateManager.setOptions(options);
+
+    // Collect all line texts (scrollback + screen)
+    const lines = this.getAllLineTexts();
+    this.searchStateManager.executeSearch(lines);
+
+    // Update search bar UI
+    this.searchBar?.updateCount(
+      this.searchStateManager.currentMatchIndex,
+      this.searchStateManager.matches.length,
+    );
+    this.searchBar?.setError(this.searchStateManager.error !== null);
+
+    // Update highlight rendering
+    this.renderer.setSearchHighlights(
+      this.searchStateManager.matches,
+      this.searchStateManager.currentMatchIndex,
+    );
+    this.renderer.forceRender(this.state);
+
+    // Scroll to first match if found
+    if (this.searchStateManager.matches.length > 0) {
+      this.scrollToCurrentMatch();
+    }
+  }
+
+  /**
+   * Handle next match navigation.
+   */
+  private handleSearchNext(): void {
+    if (!this.state || !this.renderer) return;
+
+    const match = this.searchStateManager.nextMatch();
+    if (match) {
+      this.renderer.setSearchHighlights(
+        this.searchStateManager.matches,
+        this.searchStateManager.currentMatchIndex,
+      );
+      this.searchBar?.updateCount(
+        this.searchStateManager.currentMatchIndex,
+        this.searchStateManager.matches.length,
+      );
+      this.scrollToCurrentMatch();
+      this.renderer.forceRender(this.state);
+    }
+  }
+
+  /**
+   * Handle previous match navigation.
+   */
+  private handleSearchPrev(): void {
+    if (!this.state || !this.renderer) return;
+
+    const match = this.searchStateManager.prevMatch();
+    if (match) {
+      this.renderer.setSearchHighlights(
+        this.searchStateManager.matches,
+        this.searchStateManager.currentMatchIndex,
+      );
+      this.searchBar?.updateCount(
+        this.searchStateManager.currentMatchIndex,
+        this.searchStateManager.matches.length,
+      );
+      this.scrollToCurrentMatch();
+      this.renderer.forceRender(this.state);
+    }
+  }
+
+  /**
+   * Handle search bar close.
+   */
+  private handleSearchClose(): void {
+    this.searchBar?.hide();
+    this.searchStateManager.clear();
+    this.renderer?.clearSearchHighlights();
+    if (this.state && this.renderer) {
+      this.renderer.forceRender(this.state);
+    }
+    // Return focus to terminal
+    this.imeHandler?.focus();
+  }
+
+  /**
+   * Scroll to make the current search match visible.
+   */
+  private scrollToCurrentMatch(): void {
+    if (!this.state || !this.renderer) return;
+
+    const match = this.searchStateManager.getCurrentMatch();
+    if (!match) return;
+
+    const scrollbackLength = this.state.getScrollbackLength();
+    const currentScrollOffset = this.renderer.getScrollOffset();
+    const visibleStartLine = scrollbackLength - currentScrollOffset;
+    const visibleEndLine = visibleStartLine + this.state.rows;
+
+    // Check if match is visible
+    if (match.lineIndex >= visibleStartLine && match.lineIndex < visibleEndLine) {
+      return; // Already visible
+    }
+
+    // Scroll so the match is roughly centered in view
+    const targetOffset = Math.max(0, scrollbackLength - match.lineIndex + Math.floor(this.state.rows / 2));
+    this.renderer.setScrollOffset(targetOffset);
+  }
+
+  /**
+   * Get all line texts (scrollback + screen buffer) for search.
+   */
+  private getAllLineTexts(): string[] {
+    if (!this.state) return [];
+
+    const lines: string[] = [];
+    const scrollback = this.state.getScrollbackBuffer();
+    const buffer = this.state.getActiveBuffer();
+
+    // Scrollback lines
+    for (const line of scrollback) {
+      const chars: string[] = [];
+      for (let c = 0; c < line.length; c++) {
+        chars.push(line.getCell(c).char || " ");
+      }
+      lines.push(chars.join(""));
+    }
+
+    // Screen buffer lines
+    for (let row = 0; row < this.state.rows; row++) {
+      const line = buffer.getLine(row);
+      const chars: string[] = [];
+      for (let c = 0; c < line.length; c++) {
+        chars.push(line.getCell(c).char || " ");
+      }
+      lines.push(chars.join(""));
+    }
+
+    return lines;
+  }
+
+  /**
    * Cleans up resources and event listeners
    */
   dispose(): void {
@@ -625,6 +796,8 @@ export class TerminalApp {
     this.mouseHandler?.detach();
     this.imeHandler?.dispose();
     this.selectionController?.dispose();
+    this.searchBar?.dispose();
+    this.searchBar = null;
 
     // Clean up image viewer and listener
     if (this.imageEventUnlisten) {

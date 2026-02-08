@@ -8,6 +8,7 @@
 import type { RendererSettings } from "../settings/settings-applier";
 import type { UserColorScheme } from "../settings/types";
 import type { TerminalState } from "./state.ts";
+import type { SearchMatch } from "./search/search-state.ts";
 
 /**
  * Terminal renderer interface.
@@ -119,6 +120,24 @@ export interface ITerminalRenderer {
 	 * @returns Number of lines scrolled back (0 = at bottom/present)
 	 */
 	getScrollOffset(): number;
+
+	/**
+	 * Set scroll offset directly for programmatic scroll positioning.
+	 * @param offset - Number of lines to scroll back (0 = at bottom)
+	 */
+	setScrollOffset(offset: number): void;
+
+	/**
+	 * Set search matches for highlight rendering.
+	 * @param matches - Array of search matches
+	 * @param currentIndex - Index of the current/active match (-1 for none)
+	 */
+	setSearchHighlights(matches: SearchMatch[], currentIndex: number): void;
+
+	/**
+	 * Clear all search highlights.
+	 */
+	clearSearchHighlights(): void;
 }
 
 /**

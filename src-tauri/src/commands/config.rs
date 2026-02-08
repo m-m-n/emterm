@@ -293,6 +293,12 @@ define_keybinds! {
     toggle_tab_bar,   default_keybind_toggle_tab_bar,   deserialize_null_keybind_toggle_tab_bar,
                       "default_keybind_toggle_tab_bar", "deserialize_null_keybind_toggle_tab_bar",
                       "Ctrl+Shift+B";
+    jump_to_prev_prompt, default_keybind_jump_to_prev_prompt, deserialize_null_keybind_jump_to_prev_prompt,
+                      "default_keybind_jump_to_prev_prompt", "deserialize_null_keybind_jump_to_prev_prompt",
+                      "Ctrl+Shift+ArrowUp";
+    jump_to_next_prompt, default_keybind_jump_to_next_prompt, deserialize_null_keybind_jump_to_next_prompt,
+                      "default_keybind_jump_to_next_prompt", "deserialize_null_keybind_jump_to_next_prompt",
+                      "Ctrl+Shift+ArrowDown";
 }
 
 // ============================================================
