@@ -32,6 +32,7 @@ import {
 import type { ITerminalRenderer } from "./renderer-interface.ts";
 import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
+import type { SearchMatch } from "./search/search-state.ts";
 import { charWidth } from "./unicode.ts";
 
 /**
@@ -347,6 +348,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	/** Current scroll offset (number of lines scrolled back from bottom). */
 	private scrollOffset: number = 0;
+
+	/** Search matches to highlight (set externally). */
+	private searchMatches: SearchMatch[] = [];
+
+	/** Current search match index (-1 if none). */
+	private searchCurrentIndex: number = -1;
 
 	/**
 	 * Create a new canvas renderer.
@@ -882,6 +889,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 			}
 		}
 
+		// Third pass: Render search highlights over text
+		if (this.searchMatches.length > 0) {
+			this.renderSearchHighlights(state);
+		}
+
 		// Clear dirty flags
 		state.clearDirty();
 
@@ -1233,6 +1245,73 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	getScrollOffset(): number {
 		return this.scrollOffset;
+	}
+
+	/**
+	 * Set scroll offset directly for programmatic scroll positioning.
+	 * @param offset - Number of lines to scroll back (0 = at bottom)
+	 */
+	setScrollOffset(offset: number): void {
+		if (!this.pendingState) return;
+
+		const maxOffset = this.pendingState.getScrollbackLength();
+		this.scrollOffset = Math.max(0, Math.min(offset, maxOffset));
+	}
+
+	/**
+	 * Set search matches for highlight rendering.
+	 * @param matches - Array of search matches
+	 * @param currentIndex - Index of the current/active match (-1 for none)
+	 */
+	setSearchHighlights(matches: SearchMatch[], currentIndex: number): void {
+		this.searchMatches = matches;
+		this.searchCurrentIndex = currentIndex;
+	}
+
+	/**
+	 * Clear all search highlights.
+	 */
+	clearSearchHighlights(): void {
+		this.searchMatches = [];
+		this.searchCurrentIndex = -1;
+	}
+
+	/**
+	 * Render search match highlights on the canvas.
+	 * Called after text rendering in forceRender.
+	 */
+	private renderSearchHighlights(state: TerminalState): void {
+		const scrollbackLength = state.getScrollbackLength();
+		// Calculate visible line range in absolute coordinates
+		const visibleStartLine = scrollbackLength - this.scrollOffset;
+		const visibleEndLine = visibleStartLine + state.rows;
+
+		for (let i = 0; i < this.searchMatches.length; i++) {
+			const match = this.searchMatches[i];
+			if (!match) continue;
+
+			// Skip if match is outside visible range
+			if (match.lineIndex < visibleStartLine || match.lineIndex >= visibleEndLine) {
+				continue;
+			}
+
+			// Convert absolute line index to screen row
+			const screenRow = match.lineIndex - visibleStartLine;
+
+			const x = match.startCol * this.charWidth;
+			const y = Math.floor(screenRow * this.charHeight);
+			const width = (match.endCol - match.startCol) * this.charWidth;
+			const height = Math.ceil(this.charHeight);
+
+			if (i === this.searchCurrentIndex) {
+				// Current match: orange highlight
+				this.ctx.fillStyle = "rgba(230, 150, 30, 0.45)";
+			} else {
+				// Other matches: yellow highlight
+				this.ctx.fillStyle = "rgba(230, 230, 50, 0.3)";
+			}
+			this.ctx.fillRect(x, y, width, height);
+		}
 	}
 
 	/**

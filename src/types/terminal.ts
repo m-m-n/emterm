@@ -78,6 +78,10 @@ export type OscAction =
   | { action: "SetForegroundColor"; data: string }
   | { action: "SetBackgroundColor"; data: string }
   | { action: "EmtermExtension"; data: { verb: string; params: string[] } }
+  | {
+      action: "SemanticPrompt";
+      data: { zone_type: string; exit_code: number | null };
+    }
   | { action: "Unknown"; ps: number; data: string };
 
 /**

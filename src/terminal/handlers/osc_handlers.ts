@@ -49,6 +49,13 @@ export function handleOscDispatch(
     case "EmtermExtension":
       handleEmtermExtension(state, action.data.verb, action.data.params);
       break;
+    case "SemanticPrompt":
+      handleSemanticPrompt(
+        state,
+        action.data.zone_type,
+        action.data.exit_code,
+      );
+      break;
     case "Unknown":
       // Unknown OSC sequences are ignored
       break;
@@ -137,6 +144,37 @@ export function handleHyperlink(
     // End hyperlink (empty URI)
     state._activeHyperlink = null;
   }
+}
+
+/**
+ * Handle SemanticPrompt (OSC 133).
+ *
+ * Records semantic zone markers for prompt/command/output identification.
+ * Only records markers when primary buffer is active (not alternate).
+ *
+ * @param state - Terminal state accessor
+ * @param zoneType - Zone type (A/B/C/D)
+ * @param exitCode - Exit code (only for type D)
+ */
+export function handleSemanticPrompt(
+  state: TerminalStateAccessor,
+  zoneType: string,
+  exitCode: number | null,
+): void {
+  // Don't record markers in alternate buffer
+  if (state.isAlternateBuffer) {
+    return;
+  }
+
+  const tracker = state.getSemanticZoneTracker();
+  const scrollbackLength = state.getScrollbackLength();
+  const lineIndex = scrollbackLength + state.cursor.row;
+
+  tracker.addMarker(
+    zoneType,
+    lineIndex,
+    exitCode !== null ? exitCode : undefined,
+  );
 }
 
 /**

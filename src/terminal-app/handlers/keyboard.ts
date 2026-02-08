@@ -33,6 +33,8 @@ export interface KeyboardHandlerContext {
   isImeInputFocused?: () => boolean;
   /** Function to check if this tab is active (visible) - for multi-tab support */
   isActiveTab?: () => boolean;
+  /** Callback to toggle the search bar */
+  onToggleSearch?: () => void;
 }
 
 /**
@@ -47,6 +49,7 @@ export class KeyboardHandler {
   private isEditContextActive: () => boolean;
   private isImeInputFocused: () => boolean;
   private isActiveTab: () => boolean;
+  private onToggleSearch: (() => void) | null;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -65,6 +68,7 @@ export class KeyboardHandler {
     this.isEditContextActive = context.isEditContextActive || (() => false);
     this.isImeInputFocused = context.isImeInputFocused || (() => false);
     this.isActiveTab = context.isActiveTab || (() => true);
+    this.onToggleSearch = context.onToggleSearch || null;
   }
 
   /**
@@ -174,6 +178,37 @@ export class KeyboardHandler {
       return;
     }
 
+    // Handle prompt jump shortcuts
+    if (
+      matchKeybindStr(
+        event,
+        keybinds?.jump_to_prev_prompt ?? "Ctrl+Shift+ArrowUp",
+      )
+    ) {
+      this.handlePromptJump("prev");
+      event.preventDefault();
+      return;
+    }
+    if (
+      matchKeybindStr(
+        event,
+        keybinds?.jump_to_next_prompt ?? "Ctrl+Shift+ArrowDown",
+      )
+    ) {
+      this.handlePromptJump("next");
+      event.preventDefault();
+      return;
+    }
+
+    // Handle search shortcut
+    if (matchKeybindStr(event, keybinds?.search ?? "Ctrl+Shift+F")) {
+      if (this.onToggleSearch) {
+        this.onToggleSearch();
+      }
+      event.preventDefault();
+      return;
+    }
+
     if (!shouldHandleKey(event)) {
       return;
     }
@@ -258,6 +293,15 @@ export class KeyboardHandler {
       this.handlePaste(event);
       return;
     }
+
+    if (matchKeybindStr(event, keybinds?.search ?? "Ctrl+Shift+F")) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.onToggleSearch) {
+        this.onToggleSearch();
+      }
+      return;
+    }
   }
 
   /**
@@ -309,6 +353,43 @@ export class KeyboardHandler {
       console.error("Failed to paste from clipboard:", error);
     }
     event.preventDefault();
+  }
+
+  /**
+   * Handles prompt jump navigation.
+   * Finds the nearest prompt marker and scrolls to it.
+   */
+  private handlePromptJump(direction: "prev" | "next"): void {
+    const state = this.getState();
+    const renderer = this.getRenderer();
+    if (!renderer) return;
+
+    const tracker = state.getSemanticZoneTracker();
+    const scrollbackLength = state.getScrollbackLength();
+    const scrollOffset = renderer.getScrollOffset();
+
+    // Calculate the absolute line of the current view top
+    const currentTopLine = scrollbackLength - scrollOffset;
+
+    const marker =
+      direction === "prev"
+        ? tracker.findPrevPrompt(currentTopLine)
+        : tracker.findNextPrompt(currentTopLine);
+
+    if (marker) {
+      // Scroll so the marker line is at the top of the view
+      const newScrollOffset = scrollbackLength - marker.lineIndex;
+      renderer.setScrollOffset(newScrollOffset);
+      renderer.forceRender(state);
+    } else if (direction === "prev") {
+      // No previous prompt: scroll to top
+      renderer.setScrollOffset(scrollbackLength);
+      renderer.forceRender(state);
+    } else {
+      // No next prompt: scroll to bottom
+      renderer.setScrollOffset(0);
+      renderer.forceRender(state);
+    }
   }
 
   /**

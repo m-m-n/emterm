@@ -93,6 +93,8 @@ export interface KeybindSettings {
   toggle_fullscreen: string;
   open_settings: string;
   toggle_tab_bar: string;
+  jump_to_prev_prompt: string;
+  jump_to_next_prompt: string;
 }
 
 // ============================================================

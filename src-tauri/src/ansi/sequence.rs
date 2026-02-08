@@ -269,6 +269,16 @@ pub enum OscAction {
     /// OSC 777 - eMterm extension (placeholder for future features).
     EmtermExtension { verb: String, params: Vec<String> },
 
+    /// OSC 133 - Semantic Prompt zones.
+    /// Used by shells (bash/zsh/fish) to mark prompt/command/output regions.
+    SemanticPrompt {
+        /// Zone type: "A" (prompt start), "B" (command start),
+        /// "C" (output start), "D" (output end)
+        zone_type: String,
+        /// Exit code (only for zone_type "D")
+        exit_code: Option<i32>,
+    },
+
     /// Unrecognized OSC sequence.
     Unknown { ps: u16, data: String },
 }
@@ -354,5 +364,78 @@ mod tests {
         assert!(json.contains("Sgr"));
         assert!(json.contains("1"));
         assert!(json.contains("31"));
+    }
+
+    #[test]
+    fn test_semantic_prompt_zone_a() {
+        let action = OscAction::SemanticPrompt {
+            zone_type: "A".to_string(),
+            exit_code: None,
+        };
+        if let OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        } = action
+        {
+            assert_eq!(zone_type, "A");
+            assert_eq!(exit_code, None);
+        } else {
+            panic!("Expected SemanticPrompt");
+        }
+    }
+
+    #[test]
+    fn test_semantic_prompt_zone_d_with_exit_code() {
+        let action = OscAction::SemanticPrompt {
+            zone_type: "D".to_string(),
+            exit_code: Some(0),
+        };
+        if let OscAction::SemanticPrompt {
+            zone_type,
+            exit_code,
+        } = action
+        {
+            assert_eq!(zone_type, "D");
+            assert_eq!(exit_code, Some(0));
+        } else {
+            panic!("Expected SemanticPrompt");
+        }
+    }
+
+    #[test]
+    fn test_semantic_prompt_zone_d_with_nonzero_exit() {
+        let action = OscAction::SemanticPrompt {
+            zone_type: "D".to_string(),
+            exit_code: Some(1),
+        };
+        if let OscAction::SemanticPrompt { exit_code, .. } = action {
+            assert_eq!(exit_code, Some(1));
+        } else {
+            panic!("Expected SemanticPrompt");
+        }
+    }
+
+    #[test]
+    fn test_semantic_prompt_serialization() {
+        let action = OscAction::SemanticPrompt {
+            zone_type: "A".to_string(),
+            exit_code: None,
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("SemanticPrompt"));
+        assert!(json.contains("zone_type"));
+        assert!(json.contains("\"A\""));
+    }
+
+    #[test]
+    fn test_semantic_prompt_serialization_with_exit_code() {
+        let action = OscAction::SemanticPrompt {
+            zone_type: "D".to_string(),
+            exit_code: Some(42),
+        };
+        let json = serde_json::to_string(&action).unwrap();
+        assert!(json.contains("SemanticPrompt"));
+        assert!(json.contains("\"D\""));
+        assert!(json.contains("42"));
     }
 }

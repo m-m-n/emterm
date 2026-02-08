@@ -11,6 +11,7 @@ import { ScreenBuffer } from "./buffer.ts";
 import { CursorState } from "./cursor.ts";
 import { Line } from "./grid.ts";
 import { createDefaultModes, type TerminalModes } from "./modes.ts";
+import { SemanticZoneTracker } from "./semantic-zone.ts";
 
 // Import handlers from the handlers module
 import {
@@ -88,6 +89,9 @@ export class TerminalState implements TerminalStateAccessor {
   /** Markdown session manager. */
   private markdownManager: MarkdownSessionManager;
 
+  /** Semantic zone tracker for OSC 133. */
+  private semanticZoneTracker: SemanticZoneTracker;
+
   /** Bell callback for BEL character handling. */
   onBell?: () => void;
 
@@ -119,6 +123,7 @@ export class TerminalState implements TerminalStateAccessor {
     this.modes = createDefaultModes();
     this.tabStops = this.createDefaultTabStops(cols);
     this.markdownManager = new MarkdownSessionManager();
+    this.semanticZoneTracker = new SemanticZoneTracker();
   }
 
   /**
@@ -286,6 +291,8 @@ export class TerminalState implements TerminalStateAccessor {
     if (this.scrollbackBuffer.length > this.maxScrollbackLines) {
       const excess = this.scrollbackBuffer.length - this.maxScrollbackLines;
       this.scrollbackBuffer.splice(0, excess);
+      // Prune semantic zone markers for discarded lines
+      this.semanticZoneTracker.pruneBeforeLine(excess);
     }
   }
 
@@ -441,6 +448,15 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Get the semantic zone tracker.
+   *
+   * @returns The semantic zone tracker instance
+   */
+  getSemanticZoneTracker(): SemanticZoneTracker {
+    return this.semanticZoneTracker;
+  }
+
+  /**
    * Reset terminal to initial state.
    */
   reset(): void {
@@ -485,6 +501,9 @@ export class TerminalState implements TerminalStateAccessor {
 
     // Clear scrollback buffer on reset
     this.scrollbackBuffer = [];
+
+    // Reset semantic zone tracker
+    this.semanticZoneTracker.clear();
   }
 
   /**
