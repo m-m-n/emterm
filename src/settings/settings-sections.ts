@@ -574,6 +574,34 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
+  // File Path Detection (toggle)
+  renderToggle(
+    panel,
+    {
+      key: "file-path-detection",
+      label: t("settings.terminal.filePathDetection"),
+      value: settings.file_path_detection,
+      description: t("settings.terminal.filePathDetectionDesc"),
+      onSave: (v) => ctx.saveSetting("file_path_detection", v),
+    },
+    ctx.addContentListener,
+  );
+
+  // Editor Command (text input)
+  renderTextInput(
+    panel,
+    {
+      key: "editor-command",
+      label: t("settings.terminal.editorCommand"),
+      value: settings.editor_command,
+      placeholder: t("settings.terminal.editorCommandPlaceholder"),
+      hint: t("settings.terminal.editorCommandHint"),
+      description: t("settings.terminal.editorCommandDesc"),
+      onSave: (v) => ctx.saveSetting("editor_command", v),
+    },
+    ctx.addContentListener,
+  );
+
   // Copy on Select (toggle)
   renderToggle(
     panel,

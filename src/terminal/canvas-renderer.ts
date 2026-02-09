@@ -35,6 +35,8 @@ import type { TerminalState } from "./state.ts";
 import type { SearchMatch } from "./search/search-state.ts";
 import { charWidth } from "./unicode.ts";
 import type { FoldRegion } from "./fold-manager.ts";
+import { detectUrls, detectFilePaths } from "./url-detector.ts";
+import { SettingsService } from "../settings/settings-service.ts";
 
 /**
  * A span of text with uniform attributes.
@@ -629,6 +631,45 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Render text for each span
 		for (const span of spans) {
 			this.renderSpanText(span, rowIndex);
+		}
+
+		// Draw underlines for detected URLs and file paths
+		this.renderDetectionUnderlines(rowIndex, line);
+	}
+
+	/**
+	 * Draw underlines for detected URLs and file paths in a line.
+	 */
+	private renderDetectionUnderlines(rowIndex: number, line: Line): void {
+		const cachedSettings = SettingsService.getCached();
+
+		// Build text string from line cells
+		let text = "";
+		for (let c = 0; c < line.length; c++) {
+			text += line.getCell(c).char || " ";
+		}
+
+		const y = Math.floor(rowIndex * this.charHeight);
+		const underlineColor = this.currentForeground;
+
+		// URL underlines
+		if (!cachedSettings || cachedSettings.url_detection) {
+			const urlMatches = detectUrls(text);
+			for (const match of urlMatches) {
+				const x = match.startCol * this.charWidth;
+				const width = (match.endCol - match.startCol) * this.charWidth;
+				this.drawUnderline(x, y, width, underlineColor);
+			}
+		}
+
+		// File path underlines
+		if (!cachedSettings || cachedSettings.file_path_detection) {
+			const fpMatches = detectFilePaths(text);
+			for (const match of fpMatches) {
+				const x = match.startCol * this.charWidth;
+				const width = (match.endCol - match.startCol) * this.charWidth;
+				this.drawUnderline(x, y, width, underlineColor);
+			}
 		}
 	}
 

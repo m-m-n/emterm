@@ -55,6 +55,8 @@ export interface AppSettings {
   url_detection: boolean;
   copy_on_select: boolean;
   fold_enabled: boolean;
+  file_path_detection: boolean;
+  editor_command: string;
 
   // Notification
   notification_enabled: boolean;
