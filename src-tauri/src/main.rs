@@ -29,7 +29,7 @@ fn resolve_system_locale() -> String {
 fn build_cli() -> Command {
     Command::new("emterm")
         .about(t!("cli.about").to_string())
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(env!("APP_VERSION"))
         .subcommand(
             Command::new("markdown")
                 .about(t!("cli.markdownAbout").to_string())

@@ -1,7 +1,7 @@
 {
 	"$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
 	"productName": "emterm",
-	"version": "0.1.0",
+	"version": "0.0.0",
 	"identifier": "net.laser5.app.emterm",
 	"build": {
 		"frontendDist": "../dist",
