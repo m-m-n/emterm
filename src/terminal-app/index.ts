@@ -22,7 +22,7 @@ import type {
 } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
-import { findUrlAtPosition } from "../terminal/url-detector";
+import { findUrlAtPosition, findFilePathAtPosition } from "../terminal/url-detector";
 import type { DecodedImage, ImageEvent } from "../image/types";
 import { SearchStateManager } from "../terminal/search/search-state";
 import { SearchBar } from "../terminal/search/search-bar";
@@ -605,13 +605,12 @@ export class TerminalApp {
   }
 
   /**
-   * Handle Ctrl+click to open URLs in the default browser
+   * Handle Ctrl+click to open URLs or file paths
    */
   private handleUrlClick(e: MouseEvent): void {
     if (!this.state) return;
 
     const cachedSettings = SettingsService.getCached();
-    if (cachedSettings && !cachedSettings.url_detection) return;
 
     // Calculate grid position from click coordinates
     const rect = this.terminalRoot?.getBoundingClientRect();
@@ -633,12 +632,88 @@ export class TerminalApp {
       text += line.getCell(c).char || " ";
     }
 
-    const url = findUrlAtPosition(text, col);
-    if (url) {
-      e.preventDefault();
-      import("@tauri-apps/plugin-shell").then(({ open }) => {
-        open(url).catch(console.error);
-      }).catch(console.error);
+    // Check URL first (existing behavior)
+    if (!cachedSettings || cachedSettings.url_detection) {
+      const url = findUrlAtPosition(text, col);
+      if (url) {
+        e.preventDefault();
+        import("@tauri-apps/plugin-shell").then(({ open }) => {
+          open(url).catch(console.error);
+        }).catch(console.error);
+        return;
+      }
+    }
+
+    // Check file path (new behavior)
+    if (!cachedSettings || cachedSettings.file_path_detection) {
+      const match = findFilePathAtPosition(text, col);
+      if (match) {
+        e.preventDefault();
+        this.openFileInEditor(match.path, match.line, match.col);
+      }
+    }
+  }
+
+  /**
+   * Resolve a file path and open it in the configured editor.
+   */
+  private async openFileInEditor(filePath: string, line: number, col: number): Promise<void> {
+    const cachedSettings = SettingsService.getCached();
+    const editorCommand = cachedSettings?.editor_command ?? "";
+    if (!editorCommand.trim()) return;
+
+    // Resolve relative paths using shell's CWD (from OSC 7)
+    let resolvedPath = filePath;
+    if (!filePath.startsWith("/")) {
+      const cwd = this.state?.workingDirectory ?? "";
+      if (cwd) {
+        // Parse file:// URL properly to handle hostname and percent-encoding
+        let cleanCwd: string;
+        if (cwd.startsWith("file://")) {
+          try {
+            cleanCwd = decodeURIComponent(new URL(cwd).pathname);
+          } catch {
+            cleanCwd = cwd.replace(/^file:\/\//, "");
+          }
+        } else {
+          cleanCwd = cwd;
+        }
+        resolvedPath = `${cleanCwd}/${filePath}`;
+      }
+    }
+
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+
+      // Check file existence
+      const exists = await invoke<boolean>("check_file_exists", { path: resolvedPath });
+      if (!exists) {
+        const { sendNotification, isPermissionGranted } = await import("@tauri-apps/plugin-notification");
+        const permitted = await isPermissionGranted();
+        if (permitted) {
+          sendNotification({ title: "eMterm", body: `File not found: ${resolvedPath}` });
+        } else {
+          console.warn(`File not found: ${resolvedPath}`);
+        }
+        return;
+      }
+
+      // Split template into tokens BEFORE expanding placeholders,
+      // so that spaces in file paths don't break argument boundaries.
+      const tokens = editorCommand.split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) return;
+
+      const program = tokens[0]!;
+      const args = tokens.slice(1).map(token =>
+        token
+          .replace(/\{file\}/g, resolvedPath)
+          .replace(/\{line\}/g, String(line))
+          .replace(/\{col\}/g, String(col)),
+      );
+
+      await invoke("open_file_in_editor", { program, args });
+    } catch (error) {
+      console.error("Failed to open file in editor:", error);
     }
   }
 

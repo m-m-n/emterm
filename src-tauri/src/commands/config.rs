@@ -138,6 +138,11 @@ deserialize_null_with!(
     String,
     default_markdown_code_font_family
 );
+deserialize_null_with!(
+    deserialize_null_editor_command,
+    String,
+    default_editor_command
+);
 
 // ============================================================
 // Default Value Functions
@@ -176,6 +181,9 @@ fn default_markdown_code_font_family() -> String {
 }
 fn default_markdown_font_size() -> u32 {
     14
+}
+fn default_editor_command() -> String {
+    "code --goto {file}:{line}:{col}".to_string()
 }
 
 // ============================================================
@@ -377,6 +385,13 @@ pub struct AppSettings {
     pub copy_on_select: bool,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub fold_enabled: bool,
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub file_path_detection: bool,
+    #[serde(
+        default = "default_editor_command",
+        deserialize_with = "deserialize_null_editor_command"
+    )]
+    pub editor_command: String,
 
     // Notification
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
@@ -471,6 +486,8 @@ impl Default for AppSettings {
             markdown_code_font_family: default_markdown_code_font_family(),
             markdown_font_size: default_markdown_font_size(),
             fold_enabled: default_true(),
+            file_path_detection: default_true(),
+            editor_command: default_editor_command(),
             notification_enabled: default_true(),
             tab_activity_indicator: default_true(),
             notify_on_process_exit: default_true(),
@@ -657,6 +674,8 @@ mod tests {
         assert_eq!(settings.bell_action, BellAction::Visual);
         assert!(settings.url_detection);
         assert!(!settings.copy_on_select);
+        assert!(settings.file_path_detection);
+        assert_eq!(settings.editor_command, "code --goto {file}:{line}:{col}");
         assert_eq!(settings.language, "auto");
         assert_eq!(settings.ui_font_family, "Roboto");
         assert!(settings.show_tab_bar);
@@ -916,6 +935,8 @@ mod tests {
             markdown_code_font_family: "Fira Code".to_string(),
             markdown_font_size: 16,
             fold_enabled: false,
+            file_path_detection: false,
+            editor_command: "vim +{line} {file}".to_string(),
             notification_enabled: false,
             tab_activity_indicator: false,
             notify_on_process_exit: false,
@@ -945,6 +966,8 @@ mod tests {
         assert_eq!(restored.bell_action, BellAction::None);
         assert!(!restored.url_detection);
         assert!(restored.copy_on_select);
+        assert!(!restored.file_path_detection);
+        assert_eq!(restored.editor_command, "vim +{line} {file}");
         assert_eq!(restored.keybinds.copy, "Ctrl+C");
         assert_eq!(restored.keybinds.paste, "Ctrl+V");
         assert_eq!(restored.keybinds.select_all, "Ctrl+Shift+A");

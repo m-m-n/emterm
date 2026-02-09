@@ -649,6 +649,8 @@ pub fn run() {
             tab_close_graceful,
             commands::config::load_settings,
             commands::config::save_settings,
+            commands::editor::check_file_exists,
+            commands::editor::open_file_in_editor,
             commands::font::list_fonts,
             set_language,
         ])

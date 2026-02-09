@@ -108,7 +108,13 @@
       "urlDetectionDesc": "Highlights clickable URLs in the terminal output",
       "copyOnSelectDesc": "Automatically copies text to clipboard when selected",
       "foldEnabled": "Output Folding",
-      "foldEnabledDesc": "Allow folding command output into summary lines"
+      "foldEnabledDesc": "Allow folding command output into summary lines",
+      "filePathDetection": "File Path Detection",
+      "filePathDetectionDesc": "Detect file paths with line numbers in terminal output for click-to-open",
+      "editorCommand": "Editor Command",
+      "editorCommandPlaceholder": "code --goto {file}:{line}:{col}",
+      "editorCommandHint": "Placeholders: {file}, {line}, {col}",
+      "editorCommandDesc": "Command template to open files. Use {file}, {line}, {col} as placeholders"
     },
     "keybinds": {
       "title": "Keybinds",
