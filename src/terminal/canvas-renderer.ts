@@ -729,8 +729,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 			// Try custom glyph rendering first (for block elements and box drawing)
 			if (cellChar.length === 1 && isCustomGlyph(cellChar)) {
 				drawCustomGlyph(this.ctx, cellChar, charX, y, this.charWidth, this.charHeight);
+			} else if (cellWidth >= 2) {
+				// Wide character (emoji/CJK) - fit glyph within allocated cells
+				this.drawWideCharacter(cellChar, charX, textY, cellWidth);
 			} else {
-				// Font glyph (handles single chars and multi-codepoint cluster strings)
+				// Narrow character (ASCII, Latin, etc.)
 				this.ctx.fillText(cellChar, charX, textY);
 			}
 			// Advance by cell width (1 for narrow, 2 for wide/emoji)
@@ -750,6 +753,37 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Restore context state
 		if (styles.globalAlpha !== 1) {
 			this.ctx.globalAlpha = originalAlpha;
+		}
+	}
+
+	/**
+	 * Draw a wide character (emoji/CJK) fitted within its allocated cell space.
+	 *
+	 * Emoji glyphs from color emoji fonts often have different widths than
+	 * the terminal grid expects (e.g., 22px glyph for 18px allocated space).
+	 * This method scales oversized glyphs to fit and centers undersized ones.
+	 *
+	 * @param char - Character string to draw
+	 * @param x - X position (left edge of allocated space)
+	 * @param textY - Y position for text baseline
+	 * @param cellWidth - Width in terminal cells (typically 2)
+	 */
+	private drawWideCharacter(char: string, x: number, textY: number, cellWidth: number): void {
+		const allocatedWidth = cellWidth * this.charWidth;
+		const measured = this.ctx.measureText(char).width;
+
+		if (measured <= allocatedWidth) {
+			// Glyph fits - center horizontally within allocated space
+			const offset = (allocatedWidth - measured) / 2;
+			this.ctx.fillText(char, x + offset, textY);
+		} else {
+			// Glyph is too wide - scale uniformly to preserve aspect ratio
+			const scale = allocatedWidth / measured;
+			this.ctx.save();
+			this.ctx.translate(x + allocatedWidth / 2, textY);
+			this.ctx.scale(scale, scale);
+			this.ctx.fillText(char, -measured / 2, 0);
+			this.ctx.restore();
 		}
 	}
 
@@ -878,8 +912,13 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (cell.char !== " " && cell.char !== "") {
 			const fg = getEffectiveForeground(cell.attrs, this.currentForeground, this.currentBackground);
 			this.ctx.fillStyle = rgbToCSS(fg);
+			this.ctx.font = this.buildFontStringInternal(cell.attrs);
 			const textY = y + (this.charHeight - this.fontDescent);
-			this.ctx.fillText(cell.char, x, textY);
+			if (cell.width >= 2) {
+				this.drawWideCharacter(cell.char, x, textY, cell.width);
+			} else {
+				this.ctx.fillText(cell.char, x, textY);
+			}
 		}
 
 		// Draw cursor if blink state is visible
