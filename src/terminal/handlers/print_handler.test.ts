@@ -292,6 +292,84 @@ describe("print_handler", () => {
     });
   });
 
+  describe("Extended_Pictographic without Emoji_Presentation should be width 1", () => {
+    test("copyright sign © (U+00A9) should be width 1", () => {
+      state.processAction({ type: "Print", value: String.fromCodePoint(0x00a9) });
+      state.flushGraphemeBuffer();
+
+      const buffer = state.getActiveBuffer();
+      expect(buffer.getCell(0, 0).char).toBe("©");
+      expect(buffer.getCell(0, 0).width).toBe(1);
+      expect(state.cursorCol).toBe(1);
+    });
+
+    test("registered sign ® (U+00AE) should be width 1", () => {
+      state.processAction({ type: "Print", value: String.fromCodePoint(0x00ae) });
+      state.flushGraphemeBuffer();
+
+      const buffer = state.getActiveBuffer();
+      expect(buffer.getCell(0, 0).char).toBe("®");
+      expect(buffer.getCell(0, 0).width).toBe(1);
+      expect(state.cursorCol).toBe(1);
+    });
+
+    test("sun ☀ (U+2600) without FE0F should be width 1", () => {
+      state.processAction({ type: "Print", value: String.fromCodePoint(0x2600) });
+      state.flushGraphemeBuffer();
+
+      const buffer = state.getActiveBuffer();
+      expect(buffer.getCell(0, 0).char).toBe("☀");
+      expect(buffer.getCell(0, 0).width).toBe(1);
+      expect(state.cursorCol).toBe(1);
+    });
+
+    test("checkmark ✓ (U+2713) should be width 1", () => {
+      state.processAction({ type: "Print", value: String.fromCodePoint(0x2713) });
+      state.flushGraphemeBuffer();
+
+      const buffer = state.getActiveBuffer();
+      expect(buffer.getCell(0, 0).char).toBe("✓");
+      expect(buffer.getCell(0, 0).width).toBe(1);
+      expect(state.cursorCol).toBe(1);
+    });
+
+    test("trademark ™ (U+2122) should be width 1", () => {
+      state.processAction({ type: "Print", value: String.fromCodePoint(0x2122) });
+      state.flushGraphemeBuffer();
+
+      const buffer = state.getActiveBuffer();
+      expect(buffer.getCell(0, 0).char).toBe("™");
+      expect(buffer.getCell(0, 0).width).toBe(1);
+      expect(state.cursorCol).toBe(1);
+    });
+
+    test("© + FE0F should be width 2 (explicit emoji presentation)", () => {
+      state.processAction({ type: "Print", value: String.fromCodePoint(0x00a9) });
+      state.processAction({ type: "Print", value: String.fromCodePoint(0xfe0f) });
+      state.flushGraphemeBuffer();
+
+      const buffer = state.getActiveBuffer();
+      expect(buffer.getCell(0, 0).width).toBe(2);
+      expect(state.cursorCol).toBe(2);
+    });
+
+    test("cursor position should not drift with mixed EP and non-EP characters", () => {
+      // Simulate: ✓ A ✓ B (all width 1)
+      state.processAction({ type: "Print", value: String.fromCodePoint(0x2713) }); // ✓
+      state.processAction({ type: "Print", value: "A" }); // flushes ✓ then prints A
+      state.processAction({ type: "Print", value: String.fromCodePoint(0x2713) }); // ✓
+      state.processAction({ type: "Print", value: "B" }); // flushes ✓ then prints B
+      state.flushGraphemeBuffer();
+
+      expect(state.cursorCol).toBe(4); // 4 chars, each width 1
+      const buffer = state.getActiveBuffer();
+      expect(buffer.getCell(0, 0).char).toBe("✓");
+      expect(buffer.getCell(1, 0).char).toBe("A");
+      expect(buffer.getCell(2, 0).char).toBe("✓");
+      expect(buffer.getCell(3, 0).char).toBe("B");
+    });
+  });
+
   describe("fast path", () => {
     test("should use fast path for simple ASCII", () => {
       // Multiple ASCII characters in sequence should be fast

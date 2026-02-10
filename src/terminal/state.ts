@@ -14,6 +14,7 @@ import { FoldManager } from "./fold-manager.ts";
 import { Line, type Cell } from "./grid.ts";
 import { createDefaultModes, type TerminalModes } from "./modes.ts";
 import { SemanticZoneTracker } from "./semantic-zone.ts";
+import { isEmojiPresentation } from "./unicode.ts";
 
 // Import handlers from the handlers module
 import {
@@ -393,9 +394,23 @@ export class TerminalState implements TerminalStateAccessor {
     if (this.graphemeBuffer.length === 0) return;
 
     const clusterString = String.fromCodePoint(...this.graphemeBuffer);
-    // Determine width: if U+FE0E is present, width 1; otherwise width 2
+    // Determine width based on presentation properties
     const hasFE0E = this.graphemeBuffer.includes(0xfe0e);
-    const width = hasFE0E ? 1 : 2;
+    const hasFE0F = this.graphemeBuffer.includes(0xfe0f);
+    let width: number;
+    if (hasFE0E) {
+      // Explicit text presentation selector → narrow
+      width = 1;
+    } else if (hasFE0F) {
+      // Explicit emoji presentation selector → wide
+      width = 2;
+    } else if (this.graphemeBuffer.length === 1) {
+      // Single codepoint: only Emoji_Presentation=Yes characters are wide
+      width = isEmojiPresentation(this.graphemeBuffer[0]!) ? 2 : 1;
+    } else {
+      // Multi-codepoint cluster (ZWJ sequence, skin tone, RI pair) → wide
+      width = 2;
+    }
 
     this.graphemeBuffer = [];
 
