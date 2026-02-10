@@ -55,6 +55,10 @@ export interface TerminalStateAccessor {
   // Callbacks
   onBell?: () => void;
 
+  // Grapheme cluster buffer for emoji sequences
+  graphemeBuffer: number[];
+  flushGraphemeBuffer(): void;
+
   // Methods for handlers to use
   getActiveBuffer(): ScreenBuffer;
   addPendingResponse(response: Uint8Array): void;

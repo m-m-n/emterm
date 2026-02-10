@@ -33,7 +33,6 @@ import type { ITerminalRenderer } from "./renderer-interface.ts";
 import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
 import type { SearchMatch } from "./search/search-state.ts";
-import { charWidth } from "./unicode.ts";
 import type { FoldRegion } from "./fold-manager.ts";
 import { detectUrls, detectFilePaths } from "./url-detector.ts";
 import { SettingsService } from "../settings/settings-service.ts";
@@ -48,6 +47,8 @@ export interface TextSpan {
 	startCol: number;
 	/** Number of cells this span occupies (for wide chars, this may differ from text length). */
 	cellCount: number;
+	/** Cell boundaries: array of [charString, cellWidth] for each cell in the span. */
+	cells: Array<[string, number]>;
 }
 
 /**
@@ -66,6 +67,7 @@ export function groupCellsIntoSpans(line: Line): TextSpan[] {
 	let currentAttrs: CellAttributes | null = null;
 	let currentStartCol = 0;
 	let currentCellCount = 0;
+	let currentCells: Array<[string, number]> = [];
 
 	for (let i = 0; i < line.length; i++) {
 		const cell = line.getCell(i);
@@ -76,8 +78,10 @@ export function groupCellsIntoSpans(line: Line): TextSpan[] {
 			if (cell.char === "" || cell.char === " ") {
 				continue;
 			}
-			// Combining mark (has a character) - merge with previous span/text
-			if (currentText.length > 0) {
+			// Combining mark (has a character) - merge with last cell entry
+			if (currentCells.length > 0) {
+				const last = currentCells[currentCells.length - 1]!;
+				last[0] += cell.char;
 				currentText += cell.char;
 			}
 			continue;
@@ -89,10 +93,12 @@ export function groupCellsIntoSpans(line: Line): TextSpan[] {
 			currentText = cell.char;
 			currentStartCol = i;
 			currentCellCount = cell.width;
+			currentCells = [[cell.char, cell.width]];
 		} else if (attributesEqual(currentAttrs, cell.attrs)) {
 			// Same attributes, extend current span
 			currentText += cell.char;
 			currentCellCount += cell.width;
+			currentCells.push([cell.char, cell.width]);
 		} else {
 			// Different attributes, save current span and start new one
 			spans.push({
@@ -100,11 +106,13 @@ export function groupCellsIntoSpans(line: Line): TextSpan[] {
 				attrs: currentAttrs,
 				startCol: currentStartCol,
 				cellCount: currentCellCount,
+				cells: currentCells,
 			});
 			currentText = cell.char;
 			currentAttrs = cell.attrs;
 			currentStartCol = i;
 			currentCellCount = cell.width;
+			currentCells = [[cell.char, cell.width]];
 		}
 	}
 
@@ -115,6 +123,7 @@ export function groupCellsIntoSpans(line: Line): TextSpan[] {
 			attrs: currentAttrs,
 			startCol: currentStartCol,
 			cellCount: currentCellCount,
+			cells: currentCells,
 		});
 	}
 
@@ -712,19 +721,20 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Calculate text baseline position
 		const textY = y + (this.charHeight - this.fontDescent);
 
-		// Draw each character, using custom glyphs for block/box drawing characters
-		// Advance column position by character width to handle wide characters (e.g., CJK)
+		// Draw each cell, using custom glyphs for block/box drawing characters
+		// Uses cell boundary info to correctly handle multi-codepoint cluster strings
 		let col = span.startCol;
-		for (const char of span.text) {
+		for (const [cellChar, cellWidth] of span.cells) {
 			const charX = col * this.charWidth;
 			// Try custom glyph rendering first (for block elements and box drawing)
-			if (!isCustomGlyph(char) || !drawCustomGlyph(this.ctx, char, charX, y, this.charWidth, this.charHeight)) {
-				// Fall back to font glyph
-				this.ctx.fillText(char, charX, textY);
+			if (cellChar.length === 1 && isCustomGlyph(cellChar)) {
+				drawCustomGlyph(this.ctx, cellChar, charX, y, this.charWidth, this.charHeight);
+			} else {
+				// Font glyph (handles single chars and multi-codepoint cluster strings)
+				this.ctx.fillText(cellChar, charX, textY);
 			}
-			// Advance by character display width (1 for narrow, 2 for wide characters)
-			const cw = charWidth(char);
-			col += cw > 0 ? cw : 1;
+			// Advance by cell width (1 for narrow, 2 for wide/emoji)
+			col += cellWidth > 0 ? cellWidth : 1;
 		}
 
 		// Draw underline
