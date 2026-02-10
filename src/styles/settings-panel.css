@@ -210,8 +210,7 @@
 }
 
 .settings-number-input:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 2px;
+  outline: none;
 }
 
 /* Hide browser native spinner for MD3 compliance */
@@ -306,8 +305,7 @@
 }
 
 .settings-text-input:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 2px;
+  outline: none;
 }
 
 /* ============================================
@@ -354,8 +352,7 @@
 }
 
 .settings-select:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 2px;
+  outline: none;
 }
 
 /* ============================================
@@ -914,11 +911,12 @@
 .color-hex-input:focus {
   outline: none;
   border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  padding: 7px 9px;
 }
 
 .color-hex-input:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 1px;
+  outline: none;
 }
 
 /* Compact Color Input (unified for all colors) */
@@ -944,6 +942,10 @@
   text-align: center;
   padding: 4px 6px;
   font-size: 12px;
+}
+
+.color-input-compact .color-hex-input:focus {
+  padding: 3px 5px;
 }
 
 /* Responsive: 8-column palette -> 4-column when content area is narrow */

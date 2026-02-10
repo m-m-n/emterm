@@ -35,6 +35,8 @@ export interface KeyboardHandlerContext {
   isActiveTab?: () => boolean;
   /** Callback to toggle the search bar */
   onToggleSearch?: () => void;
+  /** Callback to restore focus (e.g., to IME input) after paste */
+  onRestoreFocus?: () => void;
 }
 
 /**
@@ -50,6 +52,7 @@ export class KeyboardHandler {
   private isImeInputFocused: () => boolean;
   private isActiveTab: () => boolean;
   private onToggleSearch: (() => void) | null;
+  private onRestoreFocus: (() => void) | null;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -69,6 +72,7 @@ export class KeyboardHandler {
     this.isImeInputFocused = context.isImeInputFocused || (() => false);
     this.isActiveTab = context.isActiveTab || (() => true);
     this.onToggleSearch = context.onToggleSearch || null;
+    this.onRestoreFocus = context.onRestoreFocus || null;
   }
 
   /**
@@ -351,6 +355,9 @@ export class KeyboardHandler {
       }
     } catch (error) {
       console.error("Failed to paste from clipboard:", error);
+    } finally {
+      // Restore focus to IME input after paste completes
+      this.onRestoreFocus?.();
     }
     event.preventDefault();
   }
