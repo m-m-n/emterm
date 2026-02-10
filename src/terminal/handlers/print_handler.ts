@@ -5,7 +5,7 @@
  */
 
 import type { TerminalStateAccessor } from "./types.ts";
-import { charWidth } from "../unicode.ts";
+import { charWidth, isCombiningChar, isExtendedPictographic, isRegionalIndicator, isSkinToneModifier, isVariationSelector } from "../unicode.ts";
 import { createAsciiCell, createCell } from "../grid.ts";
 
 /**
@@ -21,6 +21,62 @@ export function handlePrintDispatch(
   state: TerminalStateAccessor,
   char: string
 ): void {
+  const cp = char.codePointAt(0);
+  if (cp === undefined) return;
+
+  // Handle grapheme cluster buffering for emoji sequences
+  // Safety limit: flush if buffer exceeds max size (prevents unbounded growth from malicious input)
+  if (state.graphemeBuffer.length >= 64) {
+    state.flushGraphemeBuffer();
+  }
+
+  if (state.graphemeBuffer.length > 0) {
+    // Buffer is non-empty - check if codepoint extends the cluster
+    if (cp === 0x200d) {
+      // ZWJ - extends cluster
+      state.graphemeBuffer.push(cp);
+      return;
+    }
+    if (isVariationSelector(cp)) {
+      state.graphemeBuffer.push(cp);
+      return;
+    }
+    if (isSkinToneModifier(cp)) {
+      state.graphemeBuffer.push(cp);
+      return;
+    }
+    if (isRegionalIndicator(cp)) {
+      // Check if buffer started with a single Regional Indicator (length 1)
+      if (state.graphemeBuffer.length === 1 && isRegionalIndicator(state.graphemeBuffer[0]!)) {
+        // Second RI completes the flag pair - buffer and flush
+        state.graphemeBuffer.push(cp);
+        state.flushGraphemeBuffer();
+        return;
+      }
+    }
+    // Check if last buffered codepoint was ZWJ and current is Extended_Pictographic
+    const lastCp = state.graphemeBuffer[state.graphemeBuffer.length - 1]!;
+    if (lastCp === 0x200d && isExtendedPictographic(cp)) {
+      state.graphemeBuffer.push(cp);
+      return;
+    }
+    // Combining marks extend the cluster
+    if (isCombiningChar(cp)) {
+      state.graphemeBuffer.push(cp);
+      return;
+    }
+
+    // Codepoint does not extend cluster - flush buffer, then handle new codepoint
+    state.flushGraphemeBuffer();
+    // Fall through to handle new codepoint below
+  } else {
+    // Buffer is empty - check if codepoint should start buffering
+    if (isExtendedPictographic(cp) || isRegionalIndicator(cp)) {
+      state.graphemeBuffer.push(cp);
+      return;
+    }
+  }
+
   // Fast path for ASCII characters without line drawing and without wrap pending
   const code = char.charCodeAt(0);
   if (

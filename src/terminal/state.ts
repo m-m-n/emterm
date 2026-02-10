@@ -9,8 +9,9 @@ import { MarkdownSessionManager } from "../markdown/session.ts";
 import type { CharSet, TerminalAction } from "../types/terminal.ts";
 import { ScreenBuffer } from "./buffer.ts";
 import { CursorState } from "./cursor.ts";
+import { cloneAttributes } from "./attributes.ts";
 import { FoldManager } from "./fold-manager.ts";
-import { Line } from "./grid.ts";
+import { Line, type Cell } from "./grid.ts";
 import { createDefaultModes, type TerminalModes } from "./modes.ts";
 import { SemanticZoneTracker } from "./semantic-zone.ts";
 
@@ -95,6 +96,9 @@ export class TerminalState implements TerminalStateAccessor {
 
   /** Fold manager for command output folding. */
   private foldManager: FoldManager;
+
+  /** Grapheme cluster buffer for emoji sequences. */
+  graphemeBuffer: number[] = [];
 
   /** Bell callback for BEL character handling. */
   onBell?: () => void;
@@ -380,6 +384,77 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Flush the grapheme cluster buffer.
+   *
+   * Converts buffered codepoints to a cell string and places it on the grid.
+   * Called when a non-extending codepoint arrives or on non-Print actions.
+   */
+  flushGraphemeBuffer(): void {
+    if (this.graphemeBuffer.length === 0) return;
+
+    const clusterString = String.fromCodePoint(...this.graphemeBuffer);
+    // Determine width: if U+FE0E is present, width 1; otherwise width 2
+    const hasFE0E = this.graphemeBuffer.includes(0xfe0e);
+    const width = hasFE0E ? 1 : 2;
+
+    this.graphemeBuffer = [];
+
+    const buffer = this.getActiveBuffer();
+
+    // Handle wrap pending
+    if (this.wrapPending) {
+      this.wrapPending = false;
+      this.cursor.carriageReturn();
+      if (this.cursor.lineFeed()) {
+        buffer.scrollUp();
+      }
+      buffer.getLine(this.cursor.row).wrapped = true;
+    }
+
+    // Wide char wrap: if width 2 and at last column, wrap first
+    if (width === 2 && this.cursor.col >= this.cols - 1) {
+      if (this.modes.autoWrap) {
+        this.cursor.carriageReturn();
+        if (this.cursor.lineFeed()) {
+          buffer.scrollUp();
+        }
+        buffer.getLine(this.cursor.row).wrapped = true;
+      }
+    }
+
+    // Create cell with cluster string
+    const cell: Cell = {
+      char: clusterString,
+      width: width,
+      attrs: cloneAttributes(this.cursor.attrs),
+      dirty: true,
+    };
+    buffer.setCell(this.cursor.col, this.cursor.row, cell);
+
+    // For wide characters, set placeholder in next cell
+    if (width === 2 && this.cursor.col < this.cols - 1) {
+      const placeholder: Cell = {
+        char: "",
+        width: 0,
+        attrs: cloneAttributes(this.cursor.attrs),
+        dirty: true,
+      };
+      buffer.setCell(this.cursor.col + 1, this.cursor.row, placeholder);
+    }
+
+    // Advance cursor
+    const newCol = this.cursor.col + width;
+    if (newCol >= this.cols) {
+      if (this.modes.autoWrap) {
+        this.cursor.col = this.cols - 1;
+        this.wrapPending = true;
+      }
+    } else {
+      this.cursor.col = newCol;
+    }
+  }
+
+  /**
    * Process a terminal action.
    *
    * Delegates to external handlers in the handlers module.
@@ -387,6 +462,11 @@ export class TerminalState implements TerminalStateAccessor {
    * @param action - The action to process
    */
   processAction(action: TerminalAction): void {
+    // Flush grapheme buffer before non-Print actions
+    if (action.type !== "Print" && this.graphemeBuffer.length > 0) {
+      this.flushGraphemeBuffer();
+    }
+
     switch (action.type) {
       case "Print":
         handlePrint(this, action.value);
@@ -443,6 +523,7 @@ export class TerminalState implements TerminalStateAccessor {
     }
     this.tabStops = this.createDefaultTabStops(cols);
     this.wrapPending = false;
+    this.graphemeBuffer = [];
   }
 
   /**
@@ -503,6 +584,9 @@ export class TerminalState implements TerminalStateAccessor {
     this.g0CharSet = "Ascii";
     this.g1CharSet = "Ascii";
     this.activeCharSet = "G0";
+
+    // Reset grapheme buffer
+    this.graphemeBuffer = [];
 
     // Reset OSC state
     this._title = "";
