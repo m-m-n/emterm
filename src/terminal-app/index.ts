@@ -195,6 +195,7 @@ export class TerminalApp {
       // Check if this tab's container is visible (for multi-tab support)
       isActiveTab: () => this.container.style.display !== "none",
       onToggleSearch: () => this.toggleSearch(),
+      onRestoreFocus: () => this.imeHandler?.focus(),
     };
     this.keyboardHandler = new KeyboardHandler(keyboardContext);
     // Attach to document but check if this tab's container is visible

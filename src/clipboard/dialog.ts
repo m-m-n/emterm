@@ -46,6 +46,9 @@ export function showPasteDialog(
 	options: PasteDialogOptions,
 ): Promise<PasteDialogResult> {
 	return new Promise((resolve) => {
+		// Save focused element to restore after dialog closes
+		const previouslyFocused = document.activeElement as HTMLElement | null;
+
 		// Create dialog overlay
 		const overlay = document.createElement("div");
 		overlay.className = "paste-dialog-overlay";
@@ -173,6 +176,8 @@ export function showPasteDialog(
 			// Clean up event listener before removing dialog (must match options)
 			document.removeEventListener("keydown", handleKeyDown, { capture: true });
 			document.body.removeChild(overlay);
+			// Restore focus to the previously focused element
+			previouslyFocused?.focus();
 			resolve({ confirmed });
 		};
 

@@ -100,6 +100,10 @@ body {
   box-sizing: border-box;
 }
 
+#terminal:focus-visible {
+  outline: none;
+}
+
 /* Tab content terminals */
 .tab-content {
   width: 100%;
@@ -112,6 +116,10 @@ body {
   top: 0;
   left: 0;
   box-sizing: border-box;
+}
+
+.tab-content:focus-visible {
+  outline: none;
 }
 
 /* Container structure for terminal/overlay separation */
