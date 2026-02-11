@@ -110,7 +110,6 @@ describe("measureCharacterSize", () => {
 			return {
 				fontFamily: htmlEl.style.fontFamily || "monospace",
 				fontSize: htmlEl.style.fontSize || "14px",
-				lineHeight: htmlEl.style.lineHeight || "16px",
 				paddingLeft: "0px",
 				paddingRight: "0px",
 				paddingTop: "0px",
@@ -121,7 +120,11 @@ describe("measureCharacterSize", () => {
 		// Mock canvas for text measurement
 		const mockCanvas = {
 			getContext: mock(() => ({
-				measureText: mock(() => ({ width: 8.4 })),
+				measureText: mock(() => ({
+					width: 8.4,
+					fontBoundingBoxAscent: 12,
+					fontBoundingBoxDescent: 3,
+				})),
 				font: "",
 			})),
 		};
@@ -138,32 +141,19 @@ describe("measureCharacterSize", () => {
 		globalThis.document.createElement = originalCreateElement;
 	});
 
-	it("should return width and height from container styles", () => {
+	it("should return width and height from font metrics", () => {
 		// Create a mock container element
 		const container = originalCreateElement("div");
 		container.id = "terminal";
 		container.style.fontFamily = "monospace";
 		container.style.fontSize = "14px";
-		container.style.lineHeight = "16px";
 
 		const result = measureCharacterSize(container);
 
 		// Check that we get reasonable values
 		expect(result.width).toBeGreaterThan(0);
-		expect(result.height).toBe(16); // Should match lineHeight
-	});
-
-	it("should read lineHeight from computed styles", () => {
-		const container = originalCreateElement("div");
-		container.style.fontFamily = "monospace";
-		container.style.fontSize = "14px";
-		container.style.lineHeight = "20px";
-
-		const result = measureCharacterSize(container);
-
-		// Height should be based on lineHeight from CSS
-		expect(result.height).toBe(20);
-		expect(result.width).toBeGreaterThan(0);
+		// Height should be ascent + descent from font metrics (12 + 3 = 15)
+		expect(result.height).toBe(15);
 	});
 
 	it("should use fallback when canvas unavailable", () => {
@@ -178,12 +168,11 @@ describe("measureCharacterSize", () => {
 		const container = originalCreateElement("div");
 		container.style.fontFamily = "monospace";
 		container.style.fontSize = "14px";
-		container.style.lineHeight = "18px";
 
 		const result = measureCharacterSize(container);
 
-		// Should return valid fallback dimensions
+		// Should return valid fallback dimensions (height = fontSize when canvas unavailable)
 		expect(result.width).toBeGreaterThan(0);
-		expect(result.height).toBe(18);
+		expect(result.height).toBe(14);
 	});
 });

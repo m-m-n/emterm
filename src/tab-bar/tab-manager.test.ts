@@ -9,7 +9,7 @@ mock.module("@tauri-apps/api/core", () => ({
   invoke: mock(async (cmd: string) => {
     if (cmd === "load_settings") {
       return {
-        font_size: 14, font_family: "monospace", line_height: 1.4,
+        font_size: 14, font_family: "monospace",
         ui_theme: "dark", ui_theme_preset: "purple", terminal_color_scheme: "default",
         padding: 8, scrollback_lines: 10000, show_scrollbar: "auto",
         shell_path: "/bin/bash", shell_args: [], cursor_style: "block",

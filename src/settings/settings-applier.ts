@@ -27,7 +27,6 @@ import {
 export interface RendererSettings {
   fontSize: number;
   fontFamily: string;
-  lineHeight: number;
   cursorStyle: CursorStyle;
   cursorBlink: boolean;
   colorScheme: string;
@@ -49,7 +48,6 @@ let markdownSystemThemeListener: ((e: MediaQueryListEvent) => void) | null =
 export function applySettings(settings: AppSettings): void {
   applyFontSize(settings.font_size);
   applyFontFamily(settings.font_family_primary, settings.font_family_emoji, settings.font_family_secondary);
-  applyLineHeight(settings.line_height);
   applyUiTheme(settings.ui_theme, settings.ui_theme_preset);
   applyTerminalColorScheme(settings.terminal_color_scheme, settings.custom_color_schemes);
   applyPadding(settings.padding);
@@ -120,17 +118,6 @@ export function applyFontFamily(primary: string, emoji: string, secondary: strin
   }
 
   notifyRenderers("fontFamily", chain);
-}
-
-/**
- * Apply line height setting.
- * Sets the line-height as a multiplier (e.g., 1.2).
- */
-export function applyLineHeight(lineHeight: number): void {
-  const root = document.documentElement;
-  root.style.setProperty("--terminal-line-height", String(lineHeight));
-
-  notifyRenderers("lineHeight", lineHeight);
 }
 
 /**

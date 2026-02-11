@@ -286,9 +286,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Font size in pixels. */
 	private fontSize: number;
 
-	/** Line height multiplier. */
-	private lineHeightMultiplier: number = 1.2;
-
 	/** Number of columns. */
 	private cols: number = 80;
 
@@ -449,8 +446,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.fontAscent = ascent;
 		this.fontDescent = descent;
 
-		// Calculate lineHeight using the lineHeight multiplier from settings
-		this.charHeight = this.fontSize * this.lineHeightMultiplier;
+		// Use font metrics (ascent + descent) as the natural line height
+		this.charHeight = ascent + descent;
 	}
 
 	/**
@@ -1204,9 +1201,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 			case "fontFamily":
 				this.setFontFamily(value as string);
 				break;
-			case "lineHeight":
-				this.setLineHeight(value as number);
-				break;
 			case "cursorStyle":
 				this.setCursorStyle(value as CursorStyle);
 				break;
@@ -1230,18 +1224,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	setFontFamily(fontFamily: string): void {
 		this.fontFamily = fontFamily || "monospace";
-		this.measureCharacterSize();
-		if (this.pendingState) {
-			this.forceRender(this.pendingState);
-		}
-	}
-
-	/**
-	 * Set the line height multiplier dynamically.
-	 * @param lineHeight - Line height multiplier (e.g., 1.2)
-	 */
-	setLineHeight(lineHeight: number): void {
-		this.lineHeightMultiplier = lineHeight;
 		this.measureCharacterSize();
 		if (this.pendingState) {
 			this.forceRender(this.pendingState);

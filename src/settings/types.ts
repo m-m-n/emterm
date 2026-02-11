@@ -32,7 +32,6 @@ export interface AppSettings {
   font_family_primary: string;
   font_family_secondary: string;
   font_family_emoji: string;
-  line_height: number;
 
   // Theme / Color
   ui_theme: UiTheme;
@@ -142,9 +141,6 @@ export interface UserColorScheme {
 
 export const MIN_FONT_SIZE = 8;
 export const MAX_FONT_SIZE = 32;
-export const MIN_LINE_HEIGHT = 0.8;
-export const MAX_LINE_HEIGHT = 3.0;
-export const LINE_HEIGHT_STEP = 0.1;
 export const MIN_PADDING = 0;
 export const MAX_PADDING = 32;
 export const MIN_SCROLLBACK_LINES = 0;
