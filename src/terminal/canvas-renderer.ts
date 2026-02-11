@@ -301,6 +301,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Character height in pixels. */
 	private charHeight: number = 0;
 
+	/** Font ascent in pixels (for baseline positioning). */
+	private fontAscent: number = 0;
+
 	/** Font descent in pixels (for baseline positioning). */
 	private fontDescent: number = 0;
 
@@ -443,6 +446,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Calculate height from font metrics
 		const ascent = metrics.fontBoundingBoxAscent ?? this.fontSize * 0.8;
 		const descent = metrics.fontBoundingBoxDescent ?? this.fontSize * 0.2;
+		this.fontAscent = ascent;
 		this.fontDescent = descent;
 
 		// Calculate lineHeight using the lineHeight multiplier from settings
@@ -718,8 +722,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Set foreground color
 		this.ctx.fillStyle = rgbToCSS(fg);
 
-		// Calculate text baseline position
-		const textY = y + (this.charHeight - this.fontDescent);
+		// Calculate text baseline position (vertically centered)
+		const textY = y + (this.charHeight + this.fontAscent - this.fontDescent) / 2;
 
 		// Draw each cell, using custom glyphs for block/box drawing characters
 		// Uses cell boundary info to correctly handle multi-codepoint cluster strings
@@ -913,7 +917,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			const fg = getEffectiveForeground(cell.attrs, this.currentForeground, this.currentBackground);
 			this.ctx.fillStyle = rgbToCSS(fg);
 			this.ctx.font = this.buildFontStringInternal(cell.attrs);
-			const textY = y + (this.charHeight - this.fontDescent);
+			const textY = y + (this.charHeight + this.fontAscent - this.fontDescent) / 2;
 			if (cell.width >= 2) {
 				this.drawWideCharacter(cell.char, x, textY, cell.width);
 			} else {
