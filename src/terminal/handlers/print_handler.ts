@@ -117,6 +117,7 @@ export function handlePrintDispatch(
 function handlePrintSlow(state: TerminalStateAccessor, char: string): void {
   const buffer = state.getActiveBuffer();
   const width = charWidth(char);
+  const { bottom } = buffer.getEffectiveScrollRegion();
 
   // Apply character set translation if needed
   const translatedChar = translateCharacter(state, char);
@@ -125,7 +126,7 @@ function handlePrintSlow(state: TerminalStateAccessor, char: string): void {
   if (state.wrapPending) {
     state.wrapPending = false;
     state.cursor.carriageReturn();
-    if (state.cursor.lineFeed()) {
+    if (state.cursor.lineFeed(bottom)) {
       buffer.scrollUp();
     }
     // Mark the new line as a continuation (soft wrap)
@@ -136,7 +137,7 @@ function handlePrintSlow(state: TerminalStateAccessor, char: string): void {
   if (width === 2 && state.cursor.col >= state.cols - 1) {
     if (state.modes.autoWrap) {
       state.cursor.carriageReturn();
-      if (state.cursor.lineFeed()) {
+      if (state.cursor.lineFeed(bottom)) {
         buffer.scrollUp();
       }
       // Mark the new line as a continuation (soft wrap)

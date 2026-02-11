@@ -104,7 +104,8 @@ export function handleTab(state: TerminalStateAccessor): void {
  */
 export function handleLineFeed(state: TerminalStateAccessor): void {
   const buffer = state.getActiveBuffer();
-  if (state.cursor.lineFeed()) {
+  const { bottom } = buffer.getEffectiveScrollRegion();
+  if (state.cursor.lineFeed(bottom)) {
     buffer.scrollUp();
   }
   state.wrapPending = false;

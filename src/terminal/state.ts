@@ -415,12 +415,13 @@ export class TerminalState implements TerminalStateAccessor {
     this.graphemeBuffer = [];
 
     const buffer = this.getActiveBuffer();
+    const { bottom } = buffer.getEffectiveScrollRegion();
 
     // Handle wrap pending
     if (this.wrapPending) {
       this.wrapPending = false;
       this.cursor.carriageReturn();
-      if (this.cursor.lineFeed()) {
+      if (this.cursor.lineFeed(bottom)) {
         buffer.scrollUp();
       }
       buffer.getLine(this.cursor.row).wrapped = true;
@@ -430,7 +431,7 @@ export class TerminalState implements TerminalStateAccessor {
     if (width === 2 && this.cursor.col >= this.cols - 1) {
       if (this.modes.autoWrap) {
         this.cursor.carriageReturn();
-        if (this.cursor.lineFeed()) {
+        if (this.cursor.lineFeed(bottom)) {
           buffer.scrollUp();
         }
         buffer.getLine(this.cursor.row).wrapped = true;

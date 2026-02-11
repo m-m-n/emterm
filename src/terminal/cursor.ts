@@ -141,14 +141,20 @@ export class CursorState {
 
 	/**
 	 * Line feed - move down one row.
+	 * Respects scroll region bottom margin when provided.
 	 *
-	 * @returns true if scrolling is needed (cursor at bottom)
+	 * @param scrollBottom - Bottom margin of scroll region (0-indexed, inclusive).
+	 *                       If omitted, uses the absolute screen bottom.
+	 * @returns true if scrolling is needed (cursor at bottom margin)
 	 */
-	lineFeed(): boolean {
-		if (this.row >= this.rows - 1) {
+	lineFeed(scrollBottom?: number): boolean {
+		const bottom = scrollBottom ?? (this.rows - 1);
+		if (this.row === bottom) {
 			return true;
 		}
-		this.row++;
+		if (this.row < this.rows - 1) {
+			this.row++;
+		}
 		return false;
 	}
 
