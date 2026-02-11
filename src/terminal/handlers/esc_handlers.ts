@@ -84,7 +84,8 @@ export function handleRestoreCursor(state: TerminalStateAccessor): void {
  */
 export function handleIndex(state: TerminalStateAccessor): void {
   const buffer = state.getActiveBuffer();
-  if (state.cursor.lineFeed()) {
+  const { bottom } = buffer.getEffectiveScrollRegion();
+  if (state.cursor.lineFeed(bottom)) {
     buffer.scrollUp();
   }
 }
@@ -98,8 +99,9 @@ export function handleIndex(state: TerminalStateAccessor): void {
  */
 export function handleNextLine(state: TerminalStateAccessor): void {
   const buffer = state.getActiveBuffer();
+  const { bottom } = buffer.getEffectiveScrollRegion();
   state.cursor.carriageReturn();
-  if (state.cursor.lineFeed()) {
+  if (state.cursor.lineFeed(bottom)) {
     buffer.scrollUp();
   }
 }
@@ -113,9 +115,10 @@ export function handleNextLine(state: TerminalStateAccessor): void {
  */
 export function handleReverseIndex(state: TerminalStateAccessor): void {
   const buffer = state.getActiveBuffer();
-  if (state.cursor.row === 0) {
+  const { top } = buffer.getEffectiveScrollRegion();
+  if (state.cursor.row === top) {
     buffer.scrollDown();
-  } else {
+  } else if (state.cursor.row > 0) {
     state.cursor.moveUp();
   }
 }
