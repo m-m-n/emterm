@@ -70,7 +70,6 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     font_family_primary: "",
     font_family_secondary: "",
     font_family_emoji: "",
-    line_height: 1.2,
     ui_theme: "system",
     ui_theme_preset: "purple",
     terminal_color_scheme: "",

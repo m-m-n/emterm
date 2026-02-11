@@ -13,7 +13,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   applyFontSize,
   applyFontFamily,
-  applyLineHeight,
   applyUiTheme,
   applyPadding,
   applyScrollbar,
@@ -36,9 +35,6 @@ import type {
 import {
   MIN_FONT_SIZE,
   MAX_FONT_SIZE,
-  MIN_LINE_HEIGHT,
-  MAX_LINE_HEIGHT,
-  LINE_HEIGHT_STEP,
   MIN_PADDING,
   MAX_PADDING,
   MIN_SCROLLBACK_LINES,
@@ -324,28 +320,6 @@ export function renderTerminalAppearanceSection(
     (category, currentValue, onSelect) => {
       ctx.showFontPicker(category, currentValue, onSelect);
     },
-  );
-
-  // Line Height (number input)
-  renderNumberInput(
-    panel,
-    {
-      key: "line-height",
-      label: t("settings.appearance.lineHeight"),
-      value: settings.line_height,
-      min: MIN_LINE_HEIGHT,
-      max: MAX_LINE_HEIGHT,
-      step: LINE_HEIGHT_STEP,
-      unit: "",
-      hint: t("settings.appearance.lineHeightHint", {
-        min: MIN_LINE_HEIGHT,
-        max: MAX_LINE_HEIGHT,
-      }),
-      description: t("settings.appearance.lineHeightDesc"),
-      onInput: (v) => applyLineHeight(v),
-      onSave: (v) => ctx.saveSetting("line_height", v),
-    },
-    ctx.addContentListener,
   );
 
   // -- Color subsection --

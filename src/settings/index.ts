@@ -11,7 +11,6 @@ export { applySettings, applySettingsToCSS, applyTerminalColorScheme } from "./s
 export type { AppSettings, KeybindSettings, UiTheme, CursorStyle, BellAction, ScrollbarMode } from "./types";
 export {
   MIN_FONT_SIZE, MAX_FONT_SIZE,
-  MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, LINE_HEIGHT_STEP,
   MIN_PADDING, MAX_PADDING,
   MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES,
   MIN_SCROLL_SPEED, MAX_SCROLL_SPEED,

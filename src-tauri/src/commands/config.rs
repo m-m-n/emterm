@@ -13,8 +13,6 @@ use tauri::Manager;
 // Font
 pub const MIN_FONT_SIZE: u32 = 8;
 pub const MAX_FONT_SIZE: u32 = 32;
-pub const MIN_LINE_HEIGHT: f32 = 0.8;
-pub const MAX_LINE_HEIGHT: f32 = 3.0;
 
 // Layout
 pub const MIN_PADDING: u32 = 0;
@@ -97,7 +95,6 @@ macro_rules! deserialize_null_with {
 
 // Generate per-field null deserializers
 deserialize_null_with!(deserialize_null_font_size, u32, default_font_size);
-deserialize_null_with!(deserialize_null_line_height, f32, default_line_height);
 deserialize_null_with!(deserialize_null_padding, u32, default_padding);
 deserialize_null_with!(
     deserialize_null_scrollback_lines,
@@ -150,9 +147,6 @@ deserialize_null_with!(
 
 fn default_font_size() -> u32 {
     13
-}
-fn default_line_height() -> f32 {
-    1.2
 }
 fn default_padding() -> u32 {
     4
@@ -333,11 +327,10 @@ pub struct AppSettings {
     /// Legacy field for backward compatibility. Read during deserialization but never serialized.
     #[serde(default, skip_serializing)]
     font_family: String,
-    #[serde(
-        default = "default_line_height",
-        deserialize_with = "deserialize_null_line_height"
-    )]
-    pub line_height: f32,
+    /// Deprecated: line_height is no longer configurable (always uses font metrics).
+    /// Kept for backward compatibility with existing config files.
+    #[serde(default, skip_serializing)]
+    _line_height: Option<f32>,
 
     // Theme / Color
     #[serde(default, deserialize_with = "deserialize_null_default")]
@@ -459,7 +452,7 @@ impl Default for AppSettings {
             font_family_secondary: String::new(),
             font_family_emoji: String::new(),
             font_family: String::new(),
-            line_height: default_line_height(),
+            _line_height: None,
             ui_theme: UiTheme::default(),
             ui_theme_preset: UiThemePreset::default(),
             terminal_color_scheme: String::new(),
@@ -508,15 +501,6 @@ fn validate_settings(settings: &AppSettings) -> Result<(), String> {
             "validation.fontSize",
             min = MIN_FONT_SIZE,
             max = MAX_FONT_SIZE
-        )
-        .to_string());
-    }
-
-    if settings.line_height < MIN_LINE_HEIGHT || settings.line_height > MAX_LINE_HEIGHT {
-        return Err(t!(
-            "validation.lineHeight",
-            min = MIN_LINE_HEIGHT,
-            max = MAX_LINE_HEIGHT
         )
         .to_string());
     }
@@ -659,7 +643,6 @@ mod tests {
         assert_eq!(settings.font_family_primary, "");
         assert_eq!(settings.font_family_secondary, "");
         assert_eq!(settings.font_family_emoji, "");
-        assert_eq!(settings.line_height, 1.2);
         assert_eq!(settings.ui_theme, UiTheme::System);
         assert_eq!(settings.ui_theme_preset, UiThemePreset::Purple);
         assert_eq!(settings.terminal_color_scheme, "");
@@ -719,7 +702,6 @@ mod tests {
         let json = r#"{}"#;
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.font_size, 13);
-        assert_eq!(settings.line_height, 1.2);
         assert_eq!(settings.ui_theme, UiTheme::System);
         assert_eq!(settings.cursor_style, CursorStyle::Block);
         assert!(settings.cursor_blink);
@@ -735,7 +717,6 @@ mod tests {
         assert_eq!(settings.font_family_primary, "");
         assert_eq!(settings.font_family_secondary, "");
         assert_eq!(settings.font_family_emoji, "");
-        assert_eq!(settings.line_height, 1.2);
         assert_eq!(settings.ui_theme, UiTheme::System);
         assert_eq!(settings.cursor_style, CursorStyle::Block);
     }
@@ -777,7 +758,6 @@ mod tests {
         }"#;
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.font_size, 13);
-        assert_eq!(settings.line_height, 1.2);
         assert_eq!(settings.padding, 4);
         assert_eq!(settings.scrollback_lines, 10000);
         assert_eq!(settings.scroll_speed, 3);
@@ -904,7 +884,7 @@ mod tests {
             font_family_secondary: "Noto Sans JP".to_string(),
             font_family_emoji: "Noto Color Emoji".to_string(),
             font_family: String::new(),
-            line_height: 1.5,
+            _line_height: None,
             ui_theme: UiTheme::Dark,
             ui_theme_preset: UiThemePreset::Blue,
             terminal_color_scheme: "monokai".to_string(),
@@ -951,7 +931,6 @@ mod tests {
         assert_eq!(restored.font_family_primary, "Fira Code");
         assert_eq!(restored.font_family_secondary, "Noto Sans JP");
         assert_eq!(restored.font_family_emoji, "Noto Color Emoji");
-        assert_eq!(restored.line_height, 1.5);
         assert_eq!(restored.ui_theme, UiTheme::Dark);
         assert_eq!(restored.ui_theme_preset, UiThemePreset::Blue);
         assert_eq!(restored.terminal_color_scheme, "monokai");
@@ -1088,20 +1067,6 @@ mod tests {
     fn test_validate_rejects_font_size_above_max() {
         let mut settings = AppSettings::default();
         settings.font_size = 33;
-        assert!(validate_settings(&settings).is_err());
-    }
-
-    #[test]
-    fn test_validate_rejects_line_height_below_min() {
-        let mut settings = AppSettings::default();
-        settings.line_height = 0.5;
-        assert!(validate_settings(&settings).is_err());
-    }
-
-    #[test]
-    fn test_validate_rejects_line_height_above_max() {
-        let mut settings = AppSettings::default();
-        settings.line_height = 3.5;
         assert!(validate_settings(&settings).is_err());
     }
 

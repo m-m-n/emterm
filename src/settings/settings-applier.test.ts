@@ -9,7 +9,6 @@ import {
   applyFontSize,
   applyFontFamily,
   buildFontFamilyChain,
-  applyLineHeight,
   applyUiTheme,
   applyTerminalColorScheme,
   applyCursorStyle,
@@ -130,7 +129,6 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     font_family_primary: "",
     font_family_secondary: "",
     font_family_emoji: "",
-    line_height: 1.2,
     ui_theme: "system",
     ui_theme_preset: "purple",
     terminal_color_scheme: "",
@@ -244,26 +242,6 @@ describe("applyFontFamily", () => {
     expect(mockStyle.properties["--terminal-font-family"]).toBe(
       "Fira Code, Noto Color Emoji, Noto Sans JP, monospace",
     );
-  });
-});
-
-describe("applyLineHeight", () => {
-  test("should set --terminal-line-height CSS variable", () => {
-    applyLineHeight(1.5);
-    expect(mockStyle.properties["--terminal-line-height"]).toBe("1.5");
-  });
-
-  test("should set default line height", () => {
-    applyLineHeight(1.2);
-    expect(mockStyle.properties["--terminal-line-height"]).toBe("1.2");
-  });
-
-  test("should notify renderers with lineHeight", () => {
-    applyLineHeight(1.5);
-    expect(mockRendererCalls).toContainEqual({
-      setting: "lineHeight",
-      value: 1.5,
-    });
   });
 });
 
@@ -403,7 +381,6 @@ describe("applySettings (full)", () => {
     const settings = makeSettings({
       font_size: 16,
       font_family_primary: "JetBrains Mono",
-      line_height: 1.4,
       ui_theme: "dark",
       padding: 8,
       show_scrollbar: "always",
@@ -415,7 +392,6 @@ describe("applySettings (full)", () => {
     expect(mockStyle.properties["--terminal-font-family"]).toBe(
       "JetBrains Mono, monospace",
     );
-    expect(mockStyle.properties["--terminal-line-height"]).toBe("1.4");
     expect(mockDataTheme).toBe("dark");
     expect(mockStyle.properties["--terminal-padding"]).toBe("8px");
     expect(mockStyle.properties["--terminal-scrollbar-mode"]).toBe("always");

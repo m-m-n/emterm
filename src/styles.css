@@ -27,7 +27,6 @@ body {
 
 :root {
   --terminal-font-size: 13pt;
-  --terminal-line-height: 15pt;
 
   /* Material Design 3 - Dark Theme Color Tokens */
   --md-sys-color-primary: #D0BCFF;
@@ -94,7 +93,7 @@ body {
   height: 100%;
   padding: var(--terminal-padding, 0px);
   font-size: var(--terminal-font-size);
-  line-height: var(--terminal-line-height);
+
   background-color: var(--terminal-background, #000000);
   position: relative;
   box-sizing: border-box;
@@ -110,7 +109,7 @@ body {
   height: 100%;
   padding: var(--terminal-padding, 0px);
   font-size: var(--terminal-font-size);
-  line-height: var(--terminal-line-height);
+
   background-color: var(--terminal-background, #000000);
   position: absolute;
   top: 0;
