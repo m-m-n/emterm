@@ -244,7 +244,7 @@
     "label": "Image Viewer",
     "info": "{width} x {height} | {mode} | {help}",
     "modeFit": "Fit",
-    "helpText": "f:toggle 1:100% 0:fit Esc:close",
+    "helpText": "f:toggle Esc:close",
     "decodeError": "Failed to decode image"
   },
   "markdown": {
