@@ -201,6 +201,18 @@ export class ImeHandler {
 	}
 
 	/**
+	 * Blur (unfocus) the IME input to prevent key interception.
+	 * Called when a modal overlay (image viewer, markdown fullscreen) opens.
+	 */
+	blur(): void {
+		if (this.useEditContext) {
+			this.container.blur();
+		} else if (this.imeInput) {
+			this.imeInput.blur();
+		}
+	}
+
+	/**
 	 * Check if EditContext API is being used
 	 */
 	isEditContextActive(): boolean {

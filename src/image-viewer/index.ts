@@ -106,6 +106,7 @@ const STYLES = `
   visibility: hidden;
   transition: opacity 0.15s ease, visibility 0.15s ease;
   z-index: 1000;
+  outline: none;
 }
 
 .image-viewer-overlay.visible {
@@ -205,6 +206,9 @@ export class ImageViewer {
   // Callback invoked after the viewer is hidden
   private onHideCallback: (() => void) | null = null;
 
+  // Callback invoked before the viewer is shown
+  private onShowCallback: (() => void) | null = null;
+
   /**
    * Creates a new ImageViewer instance.
    *
@@ -225,6 +229,7 @@ export class ImageViewer {
     this.overlay.setAttribute("role", "dialog");
     this.overlay.setAttribute("aria-modal", "true");
     this.overlay.setAttribute("aria-label", t("imageViewer.label"));
+    this.overlay.tabIndex = -1; // Allow programmatic focus
 
     // Create canvas
     this.canvas = document.createElement("canvas");
@@ -287,6 +292,14 @@ export class ImageViewer {
 
     // Show overlay first so we can get viewport dimensions
     this.overlay.classList.add("visible");
+
+    // Notify show callback (e.g., blur IME input to prevent key interception)
+    this.onShowCallback?.();
+
+    // Focus the overlay to ensure keydown events have the correct event target.
+    // This guarantees capture-phase handlers on document fire before bubble-phase handlers,
+    // allowing DisplayModeController to intercept keys before KeyboardHandler.
+    this.overlay.focus();
 
     // Measure constrained base size (actual rendered size before transform)
     // This captures any flexbox constraints applied by the browser
@@ -597,6 +610,13 @@ export class ImageViewer {
     this.currentImage = null;
 
     this.onHideCallback?.();
+  }
+
+  /**
+   * Sets a callback to be invoked before the viewer is shown.
+   */
+  onShow(callback: () => void): void {
+    this.onShowCallback = callback;
   }
 
   /**
