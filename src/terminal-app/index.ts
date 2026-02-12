@@ -242,11 +242,19 @@ export class TerminalApp {
 
     // Initialize ImageViewer with overlay-root container
     this.imageViewer = new ImageViewer(this.overlayRoot!);
+    this.imageViewer.onShow(() => {
+      // Blur IME input to prevent EditContext/textarea from intercepting keyboard events.
+      // Without this, the IME input mechanism consumes keys like '1', '0', 'f'
+      // before DisplayModeController's capture-phase handler can process them.
+      this.imeHandler?.blur();
+    });
     this.imageViewer.onHide(() => {
       // Force re-render after image viewer closes (e.g. via Escape key)
       if (this.state && this.renderer) {
         this.renderer.forceRender(this.state);
       }
+      // Restore IME focus for terminal input
+      this.imeHandler?.focus();
     });
 
     // Set markdown session manager's container for fullscreen view

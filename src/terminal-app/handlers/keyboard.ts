@@ -160,6 +160,13 @@ export class KeyboardHandler {
       return;
     }
 
+    // Skip if a modal overlay (image viewer, markdown fullscreen) is visible.
+    // Defense-in-depth: the overlay's own capture-phase handler should intercept
+    // events first, but we also check here to handle edge cases in event propagation.
+    if (this.isModalOverlayVisible()) {
+      return;
+    }
+
     // Handle Escape key - clear selection
     if (event.key === "Escape" && this.selectionController) {
       if (this.selectionController.hasSelection()) {
@@ -275,6 +282,11 @@ export class KeyboardHandler {
   private handleClipboardShortcut(event: KeyboardEvent): void {
     // Skip if this tab is not active (for multi-tab support)
     if (!this.isActiveTab()) {
+      return;
+    }
+
+    // Skip if a modal overlay is visible - let the overlay handle keys
+    if (this.isModalOverlayVisible()) {
       return;
     }
 
@@ -444,6 +456,38 @@ export class KeyboardHandler {
       return true;
     }
 
+    return false;
+  }
+
+  /**
+   * Checks if a modal overlay (image viewer or markdown fullscreen) is currently visible.
+   * Mirrors the same check in ImeHandler for defense-in-depth.
+   */
+  private isModalOverlayVisible(): boolean {
+    const imageOverlay = document.querySelector(
+      ".image-viewer-overlay.visible",
+    ) as HTMLElement | null;
+    if (imageOverlay && !this.isAncestorHidden(imageOverlay)) return true;
+
+    const markdownOverlay = document.querySelector(
+      ".markdown-fullscreen-overlay.visible",
+    ) as HTMLElement | null;
+    if (markdownOverlay && !this.isAncestorHidden(markdownOverlay)) return true;
+
+    return false;
+  }
+
+  /**
+   * Checks if any ancestor element has display:none (hidden tab detection).
+   */
+  private isAncestorHidden(element: HTMLElement): boolean {
+    let current: HTMLElement | null = element.parentElement;
+    while (current) {
+      if (current.style.display === "none") {
+        return true;
+      }
+      current = current.parentElement;
+    }
     return false;
   }
 }
