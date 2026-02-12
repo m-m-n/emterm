@@ -391,18 +391,6 @@ export class DisplayModeController {
         this.toggle();
         break;
 
-      case "1":
-        e.preventDefault();
-        e.stopPropagation();
-        this.setMode("pixel");
-        break;
-
-      case "0":
-        e.preventDefault();
-        e.stopPropagation();
-        this.setMode("fit");
-        break;
-
       case "Escape":
         e.preventDefault();
         e.stopPropagation();

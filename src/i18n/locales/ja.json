@@ -244,7 +244,7 @@
     "label": "\u753b\u50cf\u30d3\u30e5\u30fc\u30a2",
     "info": "{width} x {height} | {mode} | {help}",
     "modeFit": "\u30d5\u30a3\u30c3\u30c8",
-    "helpText": "f:\u5207\u66ff 1:100% 0:\u30d5\u30a3\u30c3\u30c8 Esc:\u9589\u3058\u308b",
+    "helpText": "f:\u5207\u66ff Esc:\u9589\u3058\u308b",
     "decodeError": "\u753b\u50cf\u306e\u30c7\u30b3\u30fc\u30c9\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
   },
   "markdown": {

@@ -151,8 +151,8 @@ interface AnimationFrame {
  *
  * Features:
  * - Two display modes: Pixel Perfect (100%) and Fit to Window
- * - Keyboard shortcuts: 'f' toggle, '1' pixel mode, '0' fit mode, Escape close
- * - Drag pan for large images in pixel mode
+ * - Keyboard shortcuts: 'f' toggle, Escape close
+ * - Drag pan and wheel scroll for large images in pixel mode
  * - Animated image support (GIF/APNG)
  */
 export class ImageViewer {
@@ -192,6 +192,7 @@ export class ImageViewer {
 
   // Bound event handlers for cleanup
   private boundHandleResize: () => void;
+  private boundHandleWheel: (e: WheelEvent) => void;
 
   // Resize throttling
   private resizeThrottleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -254,6 +255,7 @@ export class ImageViewer {
 
     // Bind event handlers
     this.boundHandleResize = this.handleResize.bind(this);
+    this.boundHandleWheel = this.handleWheel.bind(this);
   }
 
   /**
@@ -334,6 +336,9 @@ export class ImageViewer {
 
     // Update pan state based on initial mode
     this.updatePanState();
+
+    // Setup wheel scroll handler
+    this.overlay.addEventListener("wheel", this.boundHandleWheel, { passive: false });
 
     // Setup resize handler to recalculate fit scale on window resize
     this.setupResizeHandler();
@@ -573,8 +578,9 @@ export class ImageViewer {
    * Hides the viewer.
    */
   hide(): void {
-    // Remove resize handler
+    // Remove event handlers
     this.removeResizeHandler();
+    this.overlay.removeEventListener("wheel", this.boundHandleWheel);
 
     // Clear resize throttle timer
     if (this.resizeThrottleTimer !== null) {
@@ -773,11 +779,37 @@ export class ImageViewer {
   }
 
   /**
+   * Handles wheel events for scrolling large images.
+   */
+  private handleWheel(e: WheelEvent): void {
+    e.preventDefault();
+
+    // Ctrl+Wheel: block browser zoom only (reserved for future zoom)
+    if (e.ctrlKey) return;
+
+    // Ignore if panning is not possible (fit mode or image within viewport)
+    if (!this.panController?.canPan()) return;
+
+    const offset = this.panController.getOffset();
+
+    if (e.shiftKey) {
+      // Shift+Wheel: horizontal scroll
+      // Some OSes put wheel value in deltaX when shiftKey is true
+      const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+      this.panController.setOffset(offset.x - delta, offset.y);
+    } else {
+      // Normal: vertical scroll
+      this.panController.setOffset(offset.x, offset.y - e.deltaY);
+    }
+  }
+
+  /**
    * Disposes the viewer and releases resources.
    */
   dispose(): void {
-    // Remove resize handler
+    // Remove event handlers
     this.removeResizeHandler();
+    this.overlay.removeEventListener("wheel", this.boundHandleWheel);
 
     // Clear resize throttle timer
     if (this.resizeThrottleTimer !== null) {

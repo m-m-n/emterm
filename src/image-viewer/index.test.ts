@@ -210,3 +210,90 @@ describe("ImageViewer - Base64 Decoding Logic", () => {
     expect(decoded[3]).toBe(255); // A
   });
 });
+
+describe("ImageViewer - Wheel Scroll Logic", () => {
+  // Test wheel scroll behavior using PanController directly.
+  // The handleWheel() method in ImageViewer delegates to PanController,
+  // so we verify the same offset update logic here.
+
+  const { PanController } = require("./pan-controller.ts");
+
+  function createPanController(canvasWidth: number, canvasHeight: number) {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+
+    const overlay = document.createElement("div");
+    // Mock overlay dimensions (smaller than canvas to enable panning)
+    Object.defineProperty(overlay, "clientWidth", { value: 800 });
+    Object.defineProperty(overlay, "clientHeight", { value: 600 });
+
+    let lastOffset = { x: 0, y: 0 };
+    const controller = new PanController({
+      canvas,
+      overlay,
+      onOffsetChange: (x: number, y: number) => {
+        lastOffset = { x, y };
+      },
+    });
+
+    // Set canvas size to trigger bounds calculation
+    controller.updateCanvasSize(canvasWidth, canvasHeight);
+
+    return { controller, getLastOffset: () => lastOffset };
+  }
+
+  test("vertical scroll updates pan offset Y", () => {
+    const { controller, getLastOffset } = createPanController(2000, 1500);
+
+    // Simulate scroll down (deltaY > 0) → offset.y decreases (natural scroll)
+    const offset = controller.getOffset();
+    controller.setOffset(offset.x, offset.y - 100);
+
+    expect(getLastOffset().y).toBe(-100);
+
+    controller.dispose();
+  });
+
+  test("Shift+wheel updates pan offset X", () => {
+    const { controller, getLastOffset } = createPanController(2000, 1500);
+
+    // Simulate Shift+scroll → horizontal offset decreases
+    const offset = controller.getOffset();
+    controller.setOffset(offset.x - 50, offset.y);
+
+    expect(getLastOffset().x).toBe(-50);
+
+    controller.dispose();
+  });
+
+  test("scroll is clamped to bounds", () => {
+    const { controller, getLastOffset } = createPanController(2000, 1500);
+
+    // Try to scroll way past the bounds
+    controller.setOffset(0, -99999);
+
+    // Should be clamped to min bound
+    const bounds = controller.getBounds();
+    expect(getLastOffset().y).toBe(bounds.minY);
+
+    controller.dispose();
+  });
+
+  test("canPan returns false when image fits in viewport", () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 400;
+    canvas.height = 300;
+
+    const overlay = document.createElement("div");
+    Object.defineProperty(overlay, "clientWidth", { value: 800 });
+    Object.defineProperty(overlay, "clientHeight", { value: 600 });
+
+    const controller = new PanController({ canvas, overlay });
+    controller.updateCanvasSize(400, 300);
+
+    expect(controller.canPan()).toBe(false);
+
+    controller.dispose();
+  });
+});

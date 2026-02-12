@@ -479,9 +479,8 @@ describe("DisplayModeController - Keyboard Handling", () => {
     controller.dispose();
   });
 
-  test("should switch to pixel mode on '1' key", () => {
+  test("should not change mode on '1' key", () => {
     const overlay = document.createElement("div");
-    // Add visible class to simulate active viewer state
     overlay.classList.add("visible");
     let lastMode: DisplayMode | null = null;
 
@@ -497,18 +496,17 @@ describe("DisplayModeController - Keyboard Handling", () => {
       },
     });
 
-    // Simulate '1' key press
+    // Simulate '1' key press - should not trigger mode change
     const event = new KeyboardEvent("keydown", { key: "1" });
     document.dispatchEvent(event);
 
-    expect(lastMode).toBe("pixel");
+    expect(lastMode).toBeNull();
 
     controller.dispose();
   });
 
-  test("should switch to fit mode on '0' key", () => {
+  test("should not change mode on '0' key", () => {
     const overlay = document.createElement("div");
-    // Add visible class to simulate active viewer state
     overlay.classList.add("visible");
     let lastMode: DisplayMode | null = null;
 
@@ -523,11 +521,11 @@ describe("DisplayModeController - Keyboard Handling", () => {
       },
     });
 
-    // Simulate '0' key press
+    // Simulate '0' key press - should not trigger mode change
     const event = new KeyboardEvent("keydown", { key: "0" });
     document.dispatchEvent(event);
 
-    expect(lastMode).toBe("fit");
+    expect(lastMode).toBeNull();
 
     controller.dispose();
   });
