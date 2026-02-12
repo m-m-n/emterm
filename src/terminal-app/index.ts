@@ -260,6 +260,15 @@ export class TerminalApp {
     // Set markdown session manager's container for fullscreen view
     this.state.getMarkdownManager().setContainer(this.overlayRoot!);
 
+    // Wire up IME blur/focus for fullscreen markdown view (same pattern as ImageViewer)
+    const fullscreenView = this.state.getMarkdownManager().getFullscreenView();
+    fullscreenView.onShow(() => {
+      this.imeHandler?.blur();
+    });
+    fullscreenView.onHide(() => {
+      this.imeHandler?.focus();
+    });
+
     // Set up image event listener
     await this.setupImageEventListener();
 

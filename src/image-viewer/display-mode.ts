@@ -8,6 +8,7 @@
  */
 
 import { DISPLAY_MODE_STYLES } from "./display-mode-styles.ts";
+import { isAncestorHidden } from "../shared/dom-utils.ts";
 
 /**
  * Viewport padding factor (95% of viewport).
@@ -379,7 +380,7 @@ export class DisplayModeController {
     // When tab is switched, the tab container becomes display:none
     // but the visible class remains on the overlay.
     // Check if any ancestor has display:none by walking up the DOM tree.
-    if (this.isAncestorHidden(this.overlay)) {
+    if (isAncestorHidden(this.overlay)) {
       return;
     }
 
@@ -416,22 +417,4 @@ export class DisplayModeController {
     }
   }
 
-  /**
-   * Checks if any ancestor element has display:none.
-   * This is used to detect when the tab container is hidden during tab switch.
-   *
-   * @param element - Element to check
-   * @returns True if any ancestor has display:none
-   */
-  private isAncestorHidden(element: HTMLElement): boolean {
-    let current: HTMLElement | null = element.parentElement;
-    while (current) {
-      // Use inline style check first (faster than getComputedStyle)
-      if (current.style.display === "none") {
-        return true;
-      }
-      current = current.parentElement;
-    }
-    return false;
-  }
 }

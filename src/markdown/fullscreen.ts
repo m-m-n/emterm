@@ -12,6 +12,7 @@ import { LinkConfirmDialog } from "./link-dialog.ts";
 import { ZoomController } from "../shared/zoom-controller.ts";
 import type { FullscreenConfig, FullscreenState, MarkdownBlock } from "./types.ts";
 import { t } from "../i18n/index.ts";
+import { isAncestorHidden } from "../shared/dom-utils.ts";
 
 /**
  * Default minimum zoom level.
@@ -67,6 +68,10 @@ export class FullscreenMarkdownView {
 
 	/** Zoom controller */
 	private zoomController: ZoomController | null = null;
+
+	/** Lifecycle callbacks */
+	private onShowCallback: (() => void) | null = null;
+	private onHideCallback: (() => void) | null = null;
 
 	/**
 	 * Create a new fullscreen view.
@@ -138,6 +143,9 @@ export class FullscreenMarkdownView {
 		// Update state
 		this.state.isActive = true;
 
+		// Notify show callback (e.g., to blur IME input)
+		this.onShowCallback?.();
+
 		// Focus for keyboard navigation
 		this.content.setAttribute("tabindex", "-1");
 		this.content.focus();
@@ -205,6 +213,9 @@ export class FullscreenMarkdownView {
 		}
 		this.previouslyFocusedElement = null;
 
+		// Notify hide callback (e.g., to restore IME focus)
+		this.onHideCallback?.();
+
 		// Reset state
 		this.state = {
 			isActive: false,
@@ -216,6 +227,22 @@ export class FullscreenMarkdownView {
 	 */
 	isActive(): boolean {
 		return this.state.isActive;
+	}
+
+	/**
+	 * Register a callback invoked when the fullscreen view is shown.
+	 * @param callback - Function to call on show
+	 */
+	onShow(callback: () => void): void {
+		this.onShowCallback = callback;
+	}
+
+	/**
+	 * Register a callback invoked when the fullscreen view is closed.
+	 * @param callback - Function to call on close
+	 */
+	onHide(callback: () => void): void {
+		this.onHideCallback = callback;
 	}
 
 	/**
@@ -276,7 +303,7 @@ export class FullscreenMarkdownView {
 		// Additional check: is the overlay actually visible in the DOM?
 		// When tab is switched, the tab container becomes display:none
 		// but the isActive state remains true.
-		if (this.overlay && this.isAncestorHidden(this.overlay)) {
+		if (this.overlay && isAncestorHidden(this.overlay)) {
 			return;
 		}
 
@@ -491,24 +518,5 @@ export class FullscreenMarkdownView {
 	dispose(): void {
 		this.close();
 		this.linkDialog.dispose();
-	}
-
-	/**
-	 * Checks if any ancestor element has display:none.
-	 * This is used to detect when the tab container is hidden during tab switch.
-	 *
-	 * @param element - Element to check
-	 * @returns True if any ancestor has display:none
-	 */
-	private isAncestorHidden(element: HTMLElement): boolean {
-		let current: HTMLElement | null = element.parentElement;
-		while (current) {
-			// Use inline style check first (faster than getComputedStyle)
-			if (current.style.display === "none") {
-				return true;
-			}
-			current = current.parentElement;
-		}
-		return false;
 	}
 }
