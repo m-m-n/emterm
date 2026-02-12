@@ -678,9 +678,6 @@ body {
 }
 
 .image-viewer-canvas {
-  max-width: 95%;
-  max-height: 95%;
-  object-fit: contain;
   image-rendering: pixelated;
 }
 

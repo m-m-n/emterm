@@ -119,6 +119,10 @@ const STYLES = `
   transition: transform 0.1s ease;
   /* Prevent flexbox from shrinking canvas when larger than viewport */
   flex-shrink: 0;
+  /* Override external CSS max-width/max-height constraints.
+     Sizing is handled entirely via CSS transform by DisplayModeController. */
+  max-width: none;
+  max-height: none;
 }
 
 .image-viewer-info {
