@@ -12,6 +12,7 @@ import type { SelectionController } from "../../selection-v2";
 import { showPasteDialog, sendTextInChunks } from "../../clipboard";
 import { SettingsService } from "../../settings/settings-service";
 import { matchKeybindStr } from "../../keybind/matcher";
+import { isAncestorHidden, isModalOverlayVisible } from "../../shared/dom-utils";
 
 /**
  * Extended options for keyboard handler including IME integration
@@ -163,7 +164,7 @@ export class KeyboardHandler {
     // Skip if a modal overlay (image viewer, markdown fullscreen) is visible.
     // Defense-in-depth: the overlay's own capture-phase handler should intercept
     // events first, but we also check here to handle edge cases in event propagation.
-    if (this.isModalOverlayVisible()) {
+    if (isModalOverlayVisible()) {
       return;
     }
 
@@ -286,7 +287,7 @@ export class KeyboardHandler {
     }
 
     // Skip if a modal overlay is visible - let the overlay handle keys
-    if (this.isModalOverlayVisible()) {
+    if (isModalOverlayVisible()) {
       return;
     }
 
@@ -459,35 +460,4 @@ export class KeyboardHandler {
     return false;
   }
 
-  /**
-   * Checks if a modal overlay (image viewer or markdown fullscreen) is currently visible.
-   * Mirrors the same check in ImeHandler for defense-in-depth.
-   */
-  private isModalOverlayVisible(): boolean {
-    const imageOverlay = document.querySelector(
-      ".image-viewer-overlay.visible",
-    ) as HTMLElement | null;
-    if (imageOverlay && !this.isAncestorHidden(imageOverlay)) return true;
-
-    const markdownOverlay = document.querySelector(
-      ".markdown-fullscreen-overlay.visible",
-    ) as HTMLElement | null;
-    if (markdownOverlay && !this.isAncestorHidden(markdownOverlay)) return true;
-
-    return false;
-  }
-
-  /**
-   * Checks if any ancestor element has display:none (hidden tab detection).
-   */
-  private isAncestorHidden(element: HTMLElement): boolean {
-    let current: HTMLElement | null = element.parentElement;
-    while (current) {
-      if (current.style.display === "none") {
-        return true;
-      }
-      current = current.parentElement;
-    }
-    return false;
-  }
 }

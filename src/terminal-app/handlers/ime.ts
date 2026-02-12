@@ -7,6 +7,7 @@ import type { PtyClient } from "../../pty/client";
 import type { TerminalState } from "../../terminal/state";
 import type { CharSize } from "../types";
 import { IME_DEBUG, IME_COMPOSITION_CLASS } from "../config";
+import { isModalOverlayVisible } from "../../shared/dom-utils";
 
 /**
  * EditContext API type definitions (experimental Chromium feature)
@@ -254,7 +255,7 @@ export class ImeHandler {
 			}
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
-			if (this.isModalOverlayVisible()) {
+			if (isModalOverlayVisible()) {
 				if (IME_DEBUG) console.log("[EditContext] textupdate: blocked by modal overlay");
 				// Reset EditContext text
 				if (this.editContext) {
@@ -300,7 +301,7 @@ export class ImeHandler {
 			isComposing = false;
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
-			if (this.isModalOverlayVisible()) {
+			if (isModalOverlayVisible()) {
 				if (IME_DEBUG) console.log("[EditContext] compositionend: blocked by modal overlay");
 				compositionText = "";
 				this.updateCompositionView("");
@@ -468,45 +469,6 @@ export class ImeHandler {
 	}
 
 	/**
-	 * Check if a modal overlay (image viewer or markdown fullscreen) is currently visible.
-	 * Input should be blocked while these overlays are active.
-	 *
-	 * Note: When multi-tab is enabled, the overlay may have the "visible" class but be
-	 * in a hidden tab (ancestor has display:none). We must check if the overlay is
-	 * actually visible by verifying no ancestor is hidden.
-	 */
-	private isModalOverlayVisible(): boolean {
-		// Check image viewer overlay
-		const imageOverlay = document.querySelector(".image-viewer-overlay.visible") as HTMLElement | null;
-		if (imageOverlay && !this.isAncestorHidden(imageOverlay)) return true;
-
-		// Check markdown fullscreen overlay
-		const markdownOverlay = document.querySelector(".markdown-fullscreen-overlay.visible") as HTMLElement | null;
-		if (markdownOverlay && !this.isAncestorHidden(markdownOverlay)) return true;
-
-		return false;
-	}
-
-	/**
-	 * Checks if any ancestor element has display:none.
-	 * This is used to detect when the overlay is in a hidden tab.
-	 *
-	 * @param element - Element to check
-	 * @returns True if any ancestor has display:none
-	 */
-	private isAncestorHidden(element: HTMLElement): boolean {
-		let current: HTMLElement | null = element.parentElement;
-		while (current) {
-			// Use inline style check (faster than getComputedStyle)
-			if (current.style.display === "none") {
-				return true;
-			}
-			current = current.parentElement;
-		}
-		return false;
-	}
-
-	/**
 	 * Update composition view position and content
 	 */
 	private updateCompositionView(text: string): void {
@@ -651,7 +613,7 @@ export class ImeHandler {
 			}
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
-			if (this.isModalOverlayVisible()) {
+			if (isModalOverlayVisible()) {
 				if (IME_DEBUG) console.log("[IME Debug] input: blocked by modal overlay");
 				input.value = "";
 				this.updateCompositionView("");
@@ -727,7 +689,7 @@ export class ImeHandler {
 			isComposing = false;
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
-			if (this.isModalOverlayVisible()) {
+			if (isModalOverlayVisible()) {
 				if (IME_DEBUG) console.log("[IME Debug] compositionend: blocked by modal overlay");
 				input.value = "";
 				this.updateCompositionView("");

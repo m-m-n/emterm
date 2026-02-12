@@ -8,6 +8,7 @@
 
 import { ZOOM_CONTROLLER_STYLES } from "./zoom-styles.ts";
 import { t } from "../i18n/index.ts";
+import { isAncestorHidden } from "./dom-utils.ts";
 
 /**
  * Module-level reference count for shared styles.
@@ -423,7 +424,7 @@ export class ZoomController {
     // Check if the overlay is actually visible in the DOM.
     // When tab is switched, the tab container becomes display:none
     // but the controller remains active.
-    if (this.isAncestorHidden(this.options.overlay)) {
+    if (isAncestorHidden(this.options.overlay)) {
       return;
     }
 
@@ -467,22 +468,4 @@ export class ZoomController {
     }
   }
 
-  /**
-   * Checks if any ancestor element has display:none.
-   * This is used to detect when the tab container is hidden during tab switch.
-   *
-   * @param element - Element to check
-   * @returns True if any ancestor has display:none
-   */
-  private isAncestorHidden(element: HTMLElement): boolean {
-    let current: HTMLElement | null = element.parentElement;
-    while (current) {
-      // Use inline style check first (faster than getComputedStyle)
-      if (current.style.display === "none") {
-        return true;
-      }
-      current = current.parentElement;
-    }
-    return false;
-  }
 }
