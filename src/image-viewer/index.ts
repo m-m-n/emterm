@@ -115,7 +115,10 @@ const STYLES = `
 }
 
 .image-viewer-canvas {
-  image-rendering: pixelated;
+  /* Use browser default interpolation (bilinear/bicubic).
+     DPR-scaled canvas buffer provides pixel-perfect rendering without
+     needing image-rendering: pixelated, which causes nearest-neighbor
+     artifacts when combined with CSS transform compositor layers. */
   /* Use transform for zoom - smoother and better cross-browser support */
   transition: transform 0.1s ease;
   /* Prevent flexbox from shrinking canvas when larger than viewport */
@@ -551,18 +554,25 @@ export class ImageViewer {
       // Create ImageBitmap for efficient rendering
       this.currentBitmap = await createImageBitmap(imageData);
 
-      // Set canvas internal size to match image
-      this.canvas.width = image.width;
-      this.canvas.height = image.height;
+      // Set canvas buffer size with DPR scaling for crisp HiDPI rendering
+      const dpr = window.devicePixelRatio || 1;
+      this.canvas.width = Math.round(image.width * dpr);
+      this.canvas.height = Math.round(image.height * dpr);
 
-      // Set canvas CSS size to match internal dimensions
+      // Set canvas CSS size to match logical image dimensions
       // This is the base size that transform: scale() will operate on
       this.canvas.style.width = `${image.width}px`;
       this.canvas.style.height = `${image.height}px`;
 
-      // Draw the image
-      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      // Draw the image at DPR-scaled resolution
+      // Use actual buffer/logical ratio to avoid fractional DPR rounding mismatch
+      const scaleX = this.canvas.width / image.width;
+      const scaleY = this.canvas.height / image.height;
+      this.ctx.save();
+      this.ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+      this.ctx.clearRect(0, 0, image.width, image.height);
       this.ctx.drawImage(this.currentBitmap, 0, 0);
+      this.ctx.restore();
     } catch (error) {
       console.error("[ERROR][FRONTEND] Failed to decode image:", error);
       // Show error state
@@ -731,6 +741,9 @@ export class ImageViewer {
       (a, b) => a - b,
     );
 
+    // Cache DPR at animation start to avoid per-frame property access
+    const dpr = window.devicePixelRatio || 1;
+
     const renderNextFrame = (): void => {
       if (!this.isVisible() || this.animationState !== "Playing") {
         this.stopAnimation();
@@ -745,18 +758,28 @@ export class ImageViewer {
       const frame = this.animationFrames.get(frameNumber);
 
       if (frame?.bitmap) {
-        // Resize canvas if needed
+        // Resize canvas if needed (with DPR scaling)
+        const bufferWidth = Math.round(frame.bitmap.width * dpr);
+        const bufferHeight = Math.round(frame.bitmap.height * dpr);
         if (
-          this.canvas.width !== frame.bitmap.width ||
-          this.canvas.height !== frame.bitmap.height
+          this.canvas.width !== bufferWidth ||
+          this.canvas.height !== bufferHeight
         ) {
-          this.canvas.width = frame.bitmap.width;
-          this.canvas.height = frame.bitmap.height;
+          this.canvas.width = bufferWidth;
+          this.canvas.height = bufferHeight;
+          this.canvas.style.width = `${frame.bitmap.width}px`;
+          this.canvas.style.height = `${frame.bitmap.height}px`;
         }
 
-        // Draw frame
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        // Draw frame at DPR-scaled resolution
+        // Use actual buffer/logical ratio to avoid fractional DPR rounding mismatch
+        const scaleX = this.canvas.width / frame.bitmap.width;
+        const scaleY = this.canvas.height / frame.bitmap.height;
+        this.ctx.save();
+        this.ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
+        this.ctx.clearRect(0, 0, frame.bitmap.width, frame.bitmap.height);
         this.ctx.drawImage(frame.bitmap, 0, 0);
+        this.ctx.restore();
 
         // Schedule next frame
         this.currentFrameIndex =
