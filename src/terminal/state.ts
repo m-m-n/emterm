@@ -7,7 +7,7 @@
 
 import { MarkdownSessionManager } from "../markdown/session.ts";
 import type { CharSet, TerminalAction } from "../types/terminal.ts";
-import { ScreenBuffer } from "./buffer.ts";
+import { UnifiedBuffer } from "./unified-buffer.ts";
 import { CursorState } from "./cursor.ts";
 import { cloneAttributes } from "./attributes.ts";
 import { FoldManager } from "./fold-manager.ts";
@@ -36,10 +36,10 @@ import type { TerminalStateAccessor, ActiveCharSet } from "./handlers/types.ts";
  */
 export class TerminalState implements TerminalStateAccessor {
   /** Primary screen buffer. */
-  private primaryBuffer: ScreenBuffer;
+  private primaryBuffer: UnifiedBuffer;
 
   /** Alternate screen buffer. */
-  private alternateBuffer: ScreenBuffer | null = null;
+  private alternateBuffer: UnifiedBuffer | null = null;
 
   /** Whether alternate buffer is active. */
   private useAlternate: boolean = false;
@@ -104,9 +104,6 @@ export class TerminalState implements TerminalStateAccessor {
   /** Bell callback for BEL character handling. */
   onBell?: () => void;
 
-  /** Scrollback buffer for primary buffer only. */
-  private scrollbackBuffer: Line[] = [];
-
   /** Maximum number of lines to keep in scrollback. */
   private maxScrollbackLines: number = 10000;
 
@@ -120,12 +117,8 @@ export class TerminalState implements TerminalStateAccessor {
   constructor(cols: number, rows: number, scrollbackLines: number = 10000) {
     this.maxScrollbackLines = scrollbackLines;
 
-    // Create primary buffer with scrollback callback
-    this.primaryBuffer = new ScreenBuffer(
-      cols,
-      rows,
-      (lines) => this.addToScrollback(lines)
-    );
+    // Create primary buffer with unified scrollback
+    this.primaryBuffer = new UnifiedBuffer(cols, rows, scrollbackLines);
 
     this.primaryCursor = new CursorState(cols, rows);
     this.cursor = this.primaryCursor;
@@ -134,6 +127,12 @@ export class TerminalState implements TerminalStateAccessor {
     this.markdownManager = new MarkdownSessionManager();
     this.semanticZoneTracker = new SemanticZoneTracker();
     this.foldManager = new FoldManager();
+
+    // Set eviction callback for scrollback overflow
+    this.primaryBuffer.onEvict = (count: number) => {
+      this.semanticZoneTracker.pruneBeforeLine(count);
+      this.foldManager.pruneBeforeLine(count);
+    };
   }
 
   /**
@@ -253,7 +252,7 @@ export class TerminalState implements TerminalStateAccessor {
   /**
    * Get the active screen buffer.
    */
-  getActiveBuffer(): ScreenBuffer {
+  getActiveBuffer(): UnifiedBuffer {
     return this.useAlternate && this.alternateBuffer
       ? this.alternateBuffer
       : this.primaryBuffer;
@@ -263,11 +262,18 @@ export class TerminalState implements TerminalStateAccessor {
    * Get scrollback buffer.
    *
    * Only available for primary buffer (not alternate screen).
+   * Clones lines at API boundary to prevent external mutations
+   * from corrupting ring buffer contents.
    *
    * @returns Array of lines in scrollback buffer
    */
   getScrollbackBuffer(): Line[] {
-    return this.scrollbackBuffer;
+    const result: Line[] = [];
+    const len = this.primaryBuffer.scrollbackLength;
+    for (let i = 0; i < len; i++) {
+      result.push(this.primaryBuffer.getScrollbackLine(i).clone());
+    }
+    return result;
   }
 
   /**
@@ -276,36 +282,7 @@ export class TerminalState implements TerminalStateAccessor {
    * @returns Number of lines currently in scrollback
    */
   getScrollbackLength(): number {
-    return this.scrollbackBuffer.length;
-  }
-
-  /**
-   * Add lines to scrollback buffer (called when lines scroll off the top).
-   *
-   * Only captures lines from primary buffer, not alternate screen.
-   * Enforces maximum scrollback size.
-   *
-   * @param lines - Lines to add to scrollback
-   */
-  private addToScrollback(lines: Line[]): void {
-    // Only capture scrollback for primary buffer
-    if (this.useAlternate) {
-      return;
-    }
-
-    // Clone lines before storing (to avoid mutations)
-    const clonedLines = lines.map(line => line.clone());
-    this.scrollbackBuffer.push(...clonedLines);
-
-    // Enforce maximum scrollback size
-    if (this.scrollbackBuffer.length > this.maxScrollbackLines) {
-      const excess = this.scrollbackBuffer.length - this.maxScrollbackLines;
-      this.scrollbackBuffer.splice(0, excess);
-      // Prune semantic zone markers for discarded lines
-      this.semanticZoneTracker.pruneBeforeLine(excess);
-      // Prune fold regions for discarded lines
-      this.foldManager.pruneBeforeLine(excess);
-    }
+    return this.primaryBuffer.scrollbackLength;
   }
 
   /**
@@ -326,9 +303,9 @@ export class TerminalState implements TerminalStateAccessor {
       this.savedCursorForAlt = this.primaryCursor.clone();
     }
 
-    // Create or reset alternate buffer
+    // Create or reset alternate buffer (no scrollback)
     if (!this.alternateBuffer) {
-      this.alternateBuffer = new ScreenBuffer(this.cols, this.rows);
+      this.alternateBuffer = new UnifiedBuffer(this.cols, this.rows, 0);
       this.alternateCursor = new CursorState(this.cols, this.rows);
     } else {
       // Clear alternate buffer on switch
@@ -529,14 +506,28 @@ export class TerminalState implements TerminalStateAccessor {
    * @param rows - New number of rows
    */
   resize(cols: number, rows: number): void {
-    this.primaryBuffer.resize(cols, rows);
+    // Primary buffer: full reflow with cursor tracking
+    if (!this.useAlternate) {
+      const adjusted = this.primaryBuffer.resize(
+        cols, rows,
+        this.primaryCursor.row, this.primaryCursor.col
+      );
+      this.primaryCursor.resize(cols, rows);
+      this.primaryCursor.moveTo(adjusted.col, adjusted.row);
+    } else {
+      // When on alternate screen, just resize primary without cursor tracking
+      this.primaryBuffer.resize(cols, rows, 0, 0);
+      this.primaryCursor.resize(cols, rows);
+    }
+
+    // Alternate buffer: no reflow
     if (this.alternateBuffer) {
-      this.alternateBuffer.resize(cols, rows);
+      this.alternateBuffer.resizeNoReflow(cols, rows);
+      if (this.alternateCursor) {
+        this.alternateCursor.resize(cols, rows);
+      }
     }
-    this.primaryCursor.resize(cols, rows);
-    if (this.alternateCursor) {
-      this.alternateCursor.resize(cols, rows);
-    }
+
     this.tabStops = this.createDefaultTabStops(cols);
     this.wrapPending = false;
     this.graphemeBuffer = [];
@@ -576,12 +567,12 @@ export class TerminalState implements TerminalStateAccessor {
     const cols = this.cols;
     const rows = this.rows;
 
-    // Reset buffers (recreate primary buffer with scrollback callback)
-    this.primaryBuffer = new ScreenBuffer(
-      cols,
-      rows,
-      (lines) => this.addToScrollback(lines)
-    );
+    // Reset buffers (recreate primary buffer with unified scrollback)
+    this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines);
+    this.primaryBuffer.onEvict = (count: number) => {
+      this.semanticZoneTracker.pruneBeforeLine(count);
+      this.foldManager.pruneBeforeLine(count);
+    };
     this.alternateBuffer = null;
     this.useAlternate = false;
 
@@ -614,9 +605,6 @@ export class TerminalState implements TerminalStateAccessor {
     // Reset markdown state
     this.markdownManager.dispose();
     this.markdownManager = new MarkdownSessionManager();
-
-    // Clear scrollback buffer on reset
-    this.scrollbackBuffer = [];
 
     // Reset semantic zone tracker
     this.semanticZoneTracker.clear();

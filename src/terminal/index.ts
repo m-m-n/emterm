@@ -16,7 +16,7 @@ export {
 	getEffectiveBackground,
 	getEffectiveForeground,
 } from "./attributes.ts";
-export { ScreenBuffer } from "./buffer.ts";
+export { UnifiedBuffer, UnifiedBuffer as ScreenBuffer } from "./unified-buffer.ts";
 export type { Rgb, SgrColor } from "./colors.ts";
 // Colors
 export {
