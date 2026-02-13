@@ -26,7 +26,7 @@
 }
 
 .image-viewer-canvas {
-  image-rendering: pixelated;
+  /* image-rendering is set dynamically per display mode via JavaScript */
 }
 
 .image-viewer-info {

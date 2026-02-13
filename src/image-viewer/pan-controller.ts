@@ -127,8 +127,11 @@ export class PanController {
    * @param y - Y offset
    */
   setOffset(x: number, y: number): void {
-    const clampedX = Math.max(this.bounds.minX, Math.min(x, this.bounds.maxX));
-    const clampedY = Math.max(this.bounds.minY, Math.min(y, this.bounds.maxY));
+    // Round to integers to prevent sub-pixel CSS translate values.
+    // Fractional offsets (from trackpad wheel deltas or boundary clamping)
+    // cause compositor interpolation that degrades image quality.
+    const clampedX = Math.max(this.bounds.minX, Math.min(Math.round(x), this.bounds.maxX));
+    const clampedY = Math.max(this.bounds.minY, Math.min(Math.round(y), this.bounds.maxY));
 
     this.offset.x = clampedX;
     this.offset.y = clampedY;
@@ -195,13 +198,15 @@ export class PanController {
     const excessWidth = Math.max(0, this.canvasWidth - viewportWidth);
     const excessHeight = Math.max(0, this.canvasHeight - viewportHeight);
 
-    // Max pan is half the excess (centered image can move in both directions)
-    // Use || 0 to convert -0 to 0
+    // Max pan is half the excess (centered image can move in both directions).
+    // Round inward (ceil for min, floor for max) to ensure pixel-aligned boundaries.
+    // Fractional boundaries cause sub-pixel CSS translate values, which degrade
+    // image quality due to compositor interpolation.
     this.bounds = {
-      minX: -excessWidth / 2 || 0,
-      maxX: excessWidth / 2 || 0,
-      minY: -excessHeight / 2 || 0,
-      maxY: excessHeight / 2 || 0,
+      minX: Math.ceil(-excessWidth / 2) || 0,
+      maxX: Math.floor(excessWidth / 2) || 0,
+      minY: Math.ceil(-excessHeight / 2) || 0,
+      maxY: Math.floor(excessHeight / 2) || 0,
     };
   }
 
