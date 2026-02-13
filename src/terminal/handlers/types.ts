@@ -5,7 +5,7 @@
  */
 
 import type { CellAttributes } from "../attributes.ts";
-import type { ScreenBuffer } from "../buffer.ts";
+import type { UnifiedBuffer } from "../unified-buffer.ts";
 import type { CursorState } from "../cursor.ts";
 import type { TerminalModes } from "../modes.ts";
 import type { CharSet } from "../../types/terminal.ts";
@@ -60,7 +60,7 @@ export interface TerminalStateAccessor {
   flushGraphemeBuffer(): void;
 
   // Methods for handlers to use
-  getActiveBuffer(): ScreenBuffer;
+  getActiveBuffer(): UnifiedBuffer;
   addPendingResponse(response: Uint8Array): void;
   switchToAlternateBuffer(saveCursor: boolean): void;
   switchToPrimaryBuffer(restoreCursor: boolean): void;

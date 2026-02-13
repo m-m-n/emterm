@@ -209,16 +209,19 @@ describe("TerminalState", () => {
 			expect(state.rows).toBe(40);
 		});
 
-		test("clamps cursor to new dimensions", () => {
+		test("reflows content and tracks cursor on resize", () => {
 			const state = new TerminalState(80, 24);
-			// Move cursor to position that will be out of bounds
+			// Print 70 X's on an 80-column line
 			for (let i = 0; i < 70; i++) {
 				state.processAction({ type: "Print", value: "X" });
 			}
 			expect(state.cursorCol).toBe(70);
 
+			// Resize to 50 columns: 70 chars reflow into 50+20,
+			// so cursor ends up at row 1, col 20
 			state.resize(50, 10);
-			expect(state.cursorCol).toBe(49);
+			expect(state.cursorCol).toBe(20);
+			expect(state.cursorRow).toBe(1);
 		});
 	});
 
