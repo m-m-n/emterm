@@ -46,6 +46,19 @@ const server = Bun.serve({
 			}
 		}
 
+		// Serve WASM files from wasm/pkg/
+		if (path.endsWith(".wasm")) {
+			const wasmFile = Bun.file(`./wasm/pkg${path}`);
+			if (await wasmFile.exists()) {
+				return new Response(wasmFile, {
+					headers: {
+						"Content-Type": "application/wasm",
+						"Cache-Control": "no-cache, no-store, must-revalidate",
+					},
+				});
+			}
+		}
+
 		// Serve static files from src
 		const filePath = `./src${path}`;
 		const file = Bun.file(filePath);
@@ -84,6 +97,7 @@ function getContentType(path: string): string {
 	if (path.endsWith(".js")) return "application/javascript";
 	if (path.endsWith(".ts")) return "application/javascript";
 	if (path.endsWith(".json")) return "application/json";
+	if (path.endsWith(".wasm")) return "application/wasm";
 	return "application/octet-stream";
 }
 

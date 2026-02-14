@@ -5,7 +5,7 @@
  */
 
 import type { TerminalStateAccessor } from "./types.ts";
-import { charWidth, isCombiningChar, isExtendedPictographic, isRegionalIndicator, isSkinToneModifier, isVariationSelector } from "../unicode.ts";
+import { charWidth, isCombiningChar, isExtendedPictographic, isRegionalIndicator, isSkinToneModifier, isVariationSelector } from "../wasm/unicode.ts";
 import { createAsciiCell, createCell } from "../grid.ts";
 
 /**
