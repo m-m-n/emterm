@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   // Initialize console bridge to forward logs to stdout/stderr
   initConsoleBridge();
 
-  // Initialize WASM module before any terminal processing
+  // Initialize WASM module before any terminal processing (fail-fast on error)
   await initWasm();
 
   // Load and apply settings at startup

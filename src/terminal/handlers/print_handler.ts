@@ -5,7 +5,7 @@
  */
 
 import type { TerminalStateAccessor } from "./types.ts";
-import { charWidth, isCombiningChar, isExtendedPictographic, isRegionalIndicator, isSkinToneModifier, isVariationSelector } from "../wasm/unicode.ts";
+import { charWidth, classifyCodepoint, VARIATION_SEL, SKIN_TONE, REGIONAL_IND, EXT_PICTOGRAPHIC, COMBINING } from "../wasm/unicode.ts";
 import { createAsciiCell, createCell } from "../grid.ts";
 
 /**
@@ -30,6 +30,9 @@ export function handlePrintDispatch(
     state.flushGraphemeBuffer();
   }
 
+  // Single WASM call to classify all Unicode properties at once
+  const props = classifyCodepoint(cp);
+
   if (state.graphemeBuffer.length > 0) {
     // Buffer is non-empty - check if codepoint extends the cluster
     if (cp === 0x200d) {
@@ -37,17 +40,18 @@ export function handlePrintDispatch(
       state.graphemeBuffer.push(cp);
       return;
     }
-    if (isVariationSelector(cp)) {
+    if (props & VARIATION_SEL) {
       state.graphemeBuffer.push(cp);
       return;
     }
-    if (isSkinToneModifier(cp)) {
+    if (props & SKIN_TONE) {
       state.graphemeBuffer.push(cp);
       return;
     }
-    if (isRegionalIndicator(cp)) {
+    if (props & REGIONAL_IND) {
       // Check if buffer started with a single Regional Indicator (length 1)
-      if (state.graphemeBuffer.length === 1 && isRegionalIndicator(state.graphemeBuffer[0]!)) {
+      const buf0 = state.graphemeBuffer[0]!;
+      if (state.graphemeBuffer.length === 1 && buf0 >= 0x1F1E6 && buf0 <= 0x1F1FF) {
         // Second RI completes the flag pair - buffer and flush
         state.graphemeBuffer.push(cp);
         state.flushGraphemeBuffer();
@@ -56,12 +60,12 @@ export function handlePrintDispatch(
     }
     // Check if last buffered codepoint was ZWJ and current is Extended_Pictographic
     const lastCp = state.graphemeBuffer[state.graphemeBuffer.length - 1]!;
-    if (lastCp === 0x200d && isExtendedPictographic(cp)) {
+    if (lastCp === 0x200d && (props & EXT_PICTOGRAPHIC)) {
       state.graphemeBuffer.push(cp);
       return;
     }
     // Combining marks extend the cluster
-    if (isCombiningChar(cp)) {
+    if (props & COMBINING) {
       state.graphemeBuffer.push(cp);
       return;
     }
@@ -71,7 +75,7 @@ export function handlePrintDispatch(
     // Fall through to handle new codepoint below
   } else {
     // Buffer is empty - check if codepoint should start buffering
-    if (isExtendedPictographic(cp) || isRegionalIndicator(cp)) {
+    if (props & (EXT_PICTOGRAPHIC | REGIONAL_IND)) {
       state.graphemeBuffer.push(cp);
       return;
     }
