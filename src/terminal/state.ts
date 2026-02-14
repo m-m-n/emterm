@@ -277,6 +277,18 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Get a single scrollback line by index.
+   * Returns a direct reference for performance (no clone).
+   * Used by the renderer for index-based scrollback access.
+   *
+   * @param index - Scrollback index (0 = oldest)
+   * @returns Line at that scrollback position
+   */
+  getScrollbackLine(index: number): Line {
+    return this.primaryBuffer.getScrollbackLine(index);
+  }
+
+  /**
    * Get number of lines in scrollback buffer.
    *
    * @returns Number of lines currently in scrollback

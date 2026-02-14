@@ -5,7 +5,7 @@
  * screen lines into a single data structure. Enables full-buffer reflow
  * on resize with cursor position tracking.
  */
-import { type Cell, cloneCell, createEmptyCell, Line } from "./grid.ts";
+import { type Cell, createEmptyCell, Line } from "./grid.ts";
 
 /**
  * Scroll region definition.
@@ -730,7 +730,7 @@ export class UnifiedBuffer {
 					const lineLength = Math.min(cols, trimmedCells.length - offset);
 
 					for (let j = 0; j < lineLength; j++) {
-						newLine.setCell(j, cloneCell(trimmedCells[offset + j]!));
+						newLine.setCell(j, trimmedCells[offset + j]!);
 					}
 
 					if (offset > 0) {
@@ -747,8 +747,7 @@ export class UnifiedBuffer {
 		// Phase 3: Trim empty lines from bottom (only if we have more than rows)
 		while (reflowed.length > rows) {
 			const lastLine = reflowed[reflowed.length - 1]!;
-			const isEmpty = lastLine.getText().trim() === "";
-			if (isEmpty) {
+			if (lastLine.isEmpty()) {
 				reflowed.pop();
 				// Adjust cursor if it was on a trimmed line
 				if (adjustedCursor.row >= reflowed.length) {
@@ -874,6 +873,8 @@ export class UnifiedBuffer {
 		cursorRow: number,
 		cursorCol: number,
 	): { col: number; row: number } {
+		const oldRows = this._rows;
+
 		if (rows > this._rows) {
 			// Add blank lines at bottom
 			const toAdd = rows - this._rows;
@@ -888,7 +889,7 @@ export class UnifiedBuffer {
 				const lastViewportRow = this._rows - 1 - trimmed;
 				if (lastViewportRow <= cursorRow) break; // Don't trim at or above cursor
 				const line = this.getLine(lastViewportRow);
-				if (line.getText().trim() === "") {
+				if (line.isEmpty()) {
 					// Remove this empty line from end of ring
 					this._size--;
 					trimmed++;
@@ -902,9 +903,37 @@ export class UnifiedBuffer {
 
 		this._rows = rows;
 
-		// Update capacity to match new rows + scrollback
-		const scrollbackCap = this.capacity - (this._rows + (this._rows - rows));
-		// Actually just keep the same capacity, only _rows changed
+		// Recalculate capacity: preserve original scrollback limit
+		const scrollbackCapacity = this.capacity - oldRows;
+		const newCapacity = scrollbackCapacity + rows;
+
+		if (newCapacity !== this.capacity) {
+			// Rebuild ring buffer with new capacity
+			// Read from old ring before switching capacity
+			const oldRing = this.ring;
+			const oldHead = this.head;
+			const oldCapacity = this.capacity;
+			const oldSize = this._size;
+
+			const startIndex = Math.max(0, oldSize - newCapacity);
+			const evicted = startIndex;
+
+			const newRing: (Line | null)[] = new Array(newCapacity).fill(null);
+			let newSize = 0;
+			for (let i = startIndex; i < oldSize; i++) {
+				newRing[newSize] = oldRing[(oldHead + i) % oldCapacity]!;
+				newSize++;
+			}
+
+			this.ring = newRing;
+			this.head = 0;
+			this._size = newSize;
+			this.capacity = newCapacity;
+
+			if (evicted > 0 && this.onEvict) {
+				this.onEvict(evicted);
+			}
+		}
 
 		// Invalidate scroll region
 		if (this.scrollRegion && this.scrollRegion.bottom >= rows) {
