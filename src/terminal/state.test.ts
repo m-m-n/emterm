@@ -760,4 +760,70 @@ describe("TerminalState", () => {
 			expect(state.getScrollbackLength()).toBe(0);
 		});
 	});
+
+	describe("getScrollbackLine", () => {
+		test("returns correct line by index", () => {
+			const state = new TerminalState(10, 3);
+
+			// Fill with known content to create scrollback
+			for (let i = 0; i < 5; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: String.fromCharCode(65 + i) });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			const scrollbackLength = state.getScrollbackLength();
+			expect(scrollbackLength).toBeGreaterThan(0);
+
+			// Verify getScrollbackLine returns a line with content
+			const line = state.getScrollbackLine(0);
+			expect(line).toBeDefined();
+			expect(line.getText).toBeDefined();
+		});
+
+		test("returns direct reference (not clone)", () => {
+			const state = new TerminalState(10, 3);
+
+			// Create scrollback
+			for (let i = 0; i < 5; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: String.fromCharCode(65 + i) });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			const scrollbackLength = state.getScrollbackLength();
+			expect(scrollbackLength).toBeGreaterThan(0);
+
+			// Two calls should return the same reference
+			const line1 = state.getScrollbackLine(0);
+			const line2 = state.getScrollbackLine(0);
+			expect(line1).toBe(line2); // Same reference, not a clone
+		});
+
+		test("matches getScrollbackBuffer content", () => {
+			const state = new TerminalState(10, 3);
+
+			// Create scrollback
+			for (let i = 0; i < 5; i++) {
+				for (let j = 0; j < 10; j++) {
+					state.processAction({ type: "Print", value: String.fromCharCode(65 + i) });
+				}
+				state.processAction({ type: "Execute", value: C0.LF });
+				state.processAction({ type: "Execute", value: C0.CR });
+			}
+
+			const scrollbackLength = state.getScrollbackLength();
+			const scrollbackBuffer = state.getScrollbackBuffer();
+
+			// Each line from getScrollbackLine should have the same text as the buffer
+			for (let i = 0; i < scrollbackLength; i++) {
+				const line = state.getScrollbackLine(i);
+				expect(line.getText()).toBe(scrollbackBuffer[i]!.getText());
+			}
+		});
+	});
 });

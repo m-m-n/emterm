@@ -206,6 +206,22 @@ export class Line {
 	}
 
 	/**
+	 * Check if this line contains only empty (space) cells.
+	 * More efficient than getText().trim() === "" as it avoids string allocation.
+	 * Matches getText() semantics: width-0 cells (CJK placeholders) are skipped.
+	 *
+	 * @returns true if all cells with width > 0 have char === " "
+	 */
+	isEmpty(): boolean {
+		for (const cell of this.cells) {
+			if (cell.width > 0 && cell.char !== " ") {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Get the text content of this line.
 	 *
 	 * @returns Line text

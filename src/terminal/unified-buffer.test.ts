@@ -928,6 +928,155 @@ describe("UnifiedBuffer", () => {
 		});
 	});
 
+	// ===== adjustRowCount() Capacity Fix =====
+
+	describe("adjustRowCount capacity", () => {
+		test("row decrease preserves scrollback capacity", () => {
+			const scrollbackLines = 100;
+			const initialRows = 24;
+			const buf = new UnifiedBuffer(80, initialRows, scrollbackLines);
+			// capacity = scrollbackLines + initialRows = 124
+			const initialCapacity = scrollbackLines + initialRows;
+
+			// Same cols triggers adjustRowCount (not full reflow)
+			const newRows = 20;
+			buf.resize(80, newRows, 0, 0);
+
+			// New capacity should be scrollbackLines + newRows = 120
+			// scrollbackLength should still be 0 (no scrollback content yet)
+			expect(buf.rows).toBe(newRows);
+			expect(buf.scrollbackLength).toBe(0);
+			// Verify we can still fill to the expected scrollback capacity
+			for (let i = 0; i < scrollbackLines; i++) {
+				const line = new Line(80);
+				line.setCell(0, createCell(String.fromCharCode(65 + (i % 26))));
+				buf.push(line);
+			}
+			expect(buf.scrollbackLength).toBe(scrollbackLines);
+		});
+
+		test("row increase preserves scrollback capacity", () => {
+			const scrollbackLines = 100;
+			const initialRows = 24;
+			const buf = new UnifiedBuffer(80, initialRows, scrollbackLines);
+
+			const newRows = 30;
+			buf.resize(80, newRows, 0, 0);
+
+			expect(buf.rows).toBe(newRows);
+			// Verify we can fill up to scrollbackLines of scrollback
+			for (let i = 0; i < scrollbackLines; i++) {
+				const line = new Line(80);
+				line.setCell(0, createCell("X"));
+				buf.push(line);
+			}
+			expect(buf.scrollbackLength).toBe(scrollbackLines);
+		});
+
+		test("row decrease does not evict scrollback when within limits", () => {
+			const scrollbackLines = 100;
+			const initialRows = 24;
+			const buf = new UnifiedBuffer(80, initialRows, scrollbackLines);
+
+			// Push some scrollback lines
+			for (let i = 0; i < 50; i++) {
+				const line = new Line(80);
+				line.setCell(0, createCell(String.fromCharCode(65 + (i % 26))));
+				buf.push(line);
+			}
+			const sbBefore = buf.scrollbackLength;
+			expect(sbBefore).toBe(50);
+
+			// Decrease rows (same cols = adjustRowCount)
+			// Non-empty viewport lines become scrollback, so scrollback grows by 4
+			buf.resize(80, 20, 0, 0);
+
+			// scrollbackLength = size - rows. Since viewport lines had content,
+			// they couldn't be trimmed, so they become scrollback.
+			// 74 total - 20 rows = 54 scrollback
+			expect(buf.scrollbackLength).toBe(sbBefore + (initialRows - 20));
+			// But no eviction happened because 54 < 100
+			expect(buf.size).toBeLessThanOrEqual(scrollbackLines + 20);
+		});
+
+		test("row decrease then increase round-trips correctly", () => {
+			const scrollbackLines = 100;
+			const initialRows = 24;
+			const buf = new UnifiedBuffer(80, initialRows, scrollbackLines);
+
+			// Push some content
+			for (let i = 0; i < 10; i++) {
+				const line = new Line(80);
+				line.setCell(0, createCell(String.fromCharCode(65 + i)));
+				buf.push(line);
+			}
+			// size = 34, scrollbackLength = 10
+			expect(buf.scrollbackLength).toBe(10);
+
+			// Decrease rows from 24 to 20
+			// Non-empty viewport rows can't be trimmed, they become scrollback
+			buf.resize(80, 20, 0, 0);
+			// size still 34, scrollbackLength = 34 - 20 = 14
+			expect(buf.scrollbackLength).toBe(14);
+
+			// Increase rows back to 24
+			// This adds 4 blank lines at bottom
+			buf.resize(80, 24, 0, 0);
+			// size = 38, scrollbackLength = 38 - 24 = 14
+			// The added empty lines don't reduce scrollback
+			expect(buf.scrollbackLength).toBe(14);
+
+			// Verify viewport content is still accessible
+			expect(buf.rows).toBe(24);
+		});
+
+		test("size <= capacity invariant holds after row changes", () => {
+			const buf = new UnifiedBuffer(80, 24, 100);
+
+			// Push many lines to fill scrollback
+			for (let i = 0; i < 100; i++) {
+				buf.push(new Line(80));
+			}
+
+			// Various row changes
+			buf.resize(80, 10, 0, 0);
+			expect(buf.size).toBeLessThanOrEqual(100 + 10);
+
+			buf.resize(80, 30, 0, 0);
+			expect(buf.size).toBeLessThanOrEqual(100 + 30);
+
+			buf.resize(80, 5, 0, 0);
+			expect(buf.size).toBeLessThanOrEqual(100 + 5);
+		});
+
+		test("onEvict called when capacity shrinks below current size", () => {
+			const scrollbackLines = 10;
+			const initialRows = 24;
+			const buf = new UnifiedBuffer(80, initialRows, scrollbackLines);
+
+			// Fill to capacity: 10 scrollback + 24 viewport = 34 total
+			for (let i = 0; i < scrollbackLines; i++) {
+				const line = new Line(80);
+				line.setCell(0, createCell(String.fromCharCode(65 + i)));
+				buf.push(line);
+			}
+			expect(buf.size).toBe(scrollbackLines + initialRows); // 34
+
+			let evictCount = 0;
+			buf.onEvict = (count: number) => {
+				evictCount += count;
+			};
+
+			// Decrease rows from 24 to 20 (same cols = adjustRowCount)
+			// New capacity = 10 + 20 = 30, current size = 34
+			// Should evict 4 oldest lines
+			buf.resize(80, 20, 0, 0);
+
+			expect(evictCount).toBe(4);
+			expect(buf.size).toBeLessThanOrEqual(scrollbackLines + 20);
+		});
+	});
+
 	// ===== Phase 5: Performance Validation =====
 
 	describe("performance", () => {

@@ -150,22 +150,22 @@ export function getVisibleLines(state: TerminalState, scrollOffset: number): Lin
 		return linesToRender;
 	}
 
-	// When scrolled back, combine scrollback + screen buffer
-	const scrollbackBuffer = state.getScrollbackBuffer();
-	const scrollbackLength = scrollbackBuffer.length;
+	// When scrolled back, use index-based access (O(visibleRows), not O(scrollbackLength))
+	const scrollbackLength = state.getScrollbackLength();
+	// Clamp startIndex to 0 in case scrollOffset > scrollbackLength (stale offset after clear)
+	const startIndex = Math.max(0, scrollbackLength - scrollOffset);
 
-	// Create combined buffer (scrollback + current screen)
-	const combinedBuffer: Line[] = [...scrollbackBuffer];
-	for (let screenRow = 0; screenRow < visibleRows; screenRow++) {
-		combinedBuffer.push(buffer.getLine(screenRow));
+	const linesToRender: Line[] = [];
+	for (let i = 0; i < visibleRows; i++) {
+		const lineIndex = startIndex + i;
+		if (lineIndex < scrollbackLength) {
+			linesToRender.push(state.getScrollbackLine(lineIndex));
+		} else {
+			linesToRender.push(buffer.getLine(lineIndex - scrollbackLength));
+		}
 	}
 
-	// Calculate which lines to render based on scroll offset
-	const startIndex = scrollbackLength - scrollOffset;
-	const endIndex = startIndex + visibleRows;
-
-	// Return the appropriate slice
-	return combinedBuffer.slice(startIndex, endIndex);
+	return linesToRender;
 }
 
 /**
@@ -1029,10 +1029,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 		foldManager: ReturnType<TerminalState["getFoldManager"]>,
 	): (Line | null)[] {
 		const buffer = state.getActiveBuffer();
-		const scrollbackBuffer = state.getScrollbackBuffer();
-		const scrollbackLength = scrollbackBuffer.length;
+		const scrollbackLength = state.getScrollbackLength();
 		const visibleRows = state.rows;
-		const collapsedRegions = foldManager.getCollapsedRegions();
 
 		// Build combined buffer
 		const totalActualLines = scrollbackLength + visibleRows;
@@ -1056,7 +1054,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			const actualLine = foldManager.displayLineToActual(displayLine);
 
 			if (actualLine < scrollbackLength) {
-				result.push(scrollbackBuffer[actualLine] ?? null);
+				result.push(state.getScrollbackLine(actualLine));
 			} else {
 				const screenRow = actualLine - scrollbackLength;
 				if (screenRow >= 0 && screenRow < visibleRows) {

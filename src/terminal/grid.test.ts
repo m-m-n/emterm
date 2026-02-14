@@ -230,6 +230,55 @@ describe("Line", () => {
 		});
 	});
 
+	describe("isEmpty", () => {
+		test("returns true for line of spaces", () => {
+			const line = new Line(10);
+			expect(line.isEmpty()).toBe(true);
+		});
+
+		test("returns false for line with non-space content", () => {
+			const line = new Line(10);
+			line.setCell(3, createCell("A"));
+			expect(line.isEmpty()).toBe(false);
+		});
+
+		test("returns true for line with width-0 placeholder cells", () => {
+			const line = new Line(4);
+			// Simulate CJK character: wide cell + width-0 placeholder
+			const wideCell = createCell("\u4e00"); // width=2
+			line.setCell(0, wideCell);
+			// Set placeholder (width=0, char="")
+			line.setCell(1, { char: "", width: 0, attrs: createEmptyCell().attrs, dirty: true });
+			// Remaining cells are spaces (width=1)
+			// Now make all width>0 cells spaces: set cell 0 to space
+			line.setCell(0, createEmptyCell());
+			// Cell 1 is width-0, should be skipped
+			expect(line.isEmpty()).toBe(true);
+		});
+
+		test("returns false for line with non-space CJK character", () => {
+			const line = new Line(4);
+			const wideCell = createCell("\u4e00"); // width=2, char="\u4e00"
+			line.setCell(0, wideCell);
+			line.setCell(1, { char: "", width: 0, attrs: createEmptyCell().attrs, dirty: true });
+			expect(line.isEmpty()).toBe(false);
+		});
+
+		test("returns true for 0-column line", () => {
+			const line = new Line(0);
+			expect(line.isEmpty()).toBe(true);
+		});
+
+		test("matches getText().trim() === '' semantics", () => {
+			// Verify isEmpty() and getText().trim() === "" give same result
+			const line = new Line(5);
+			expect(line.isEmpty()).toBe(line.getText().trim() === "");
+
+			line.setCell(2, createCell("X"));
+			expect(line.isEmpty()).toBe(line.getText().trim() === "");
+		});
+	});
+
 	describe("clone", () => {
 		test("creates independent copy", () => {
 			const original = new Line(10);
