@@ -36,3 +36,12 @@ globalThis.cancelAnimationFrame = (id: number): void => {
 // Set default locale to English for deterministic test results
 import { initI18n } from "./src/i18n/index.ts";
 initI18n("en");
+
+// Initialize WASM module synchronously for tests
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { initSync } from "./wasm/pkg/emterm_wasm.js";
+
+const wasmPath = resolve(import.meta.dir, "wasm/pkg/emterm_wasm_bg.wasm");
+const wasmBytes = readFileSync(wasmPath);
+initSync({ module: wasmBytes });

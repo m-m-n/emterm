@@ -14,7 +14,7 @@ import { FoldManager } from "./fold-manager.ts";
 import { Line, type Cell } from "./grid.ts";
 import { createDefaultModes, type TerminalModes } from "./modes.ts";
 import { SemanticZoneTracker } from "./semantic-zone.ts";
-import { isEmojiPresentation } from "./unicode.ts";
+import { isEmojiPresentation } from "./wasm/unicode.ts";
 
 // Import handlers from the handlers module
 import {

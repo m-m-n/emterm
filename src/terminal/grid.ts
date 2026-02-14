@@ -6,7 +6,7 @@ import {
 	cloneAttributes,
 	createDefaultAttributes,
 } from "./attributes.ts";
-import { charWidth } from "./unicode.ts";
+import { charWidth } from "./wasm/unicode.ts";
 
 /**
  * A single cell in the terminal grid.

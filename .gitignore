@@ -8,6 +8,8 @@ node_modules/
 dist/
 build/
 src-tauri/target/
+wasm/pkg/
+wasm/target/
 src-tauri/icons/*
 !src-tauri/icons/.gitkeep
 

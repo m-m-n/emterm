@@ -18,6 +18,7 @@ import { initConsoleBridge } from "./utils/console-bridge";
 import { SettingsService, applySettingsToCSS } from "./settings";
 import { initI18n, resolveLocale } from "./i18n/index.ts";
 import { isTerminalTab } from "./tab-bar/types";
+import { initWasm } from "./terminal/wasm/loader.ts";
 
 let tabManager: TabManager | null = null;
 let tabBarUI: TabBarUI | null = null;
@@ -32,6 +33,9 @@ let notificationManager: NotificationManager | null = null;
 async function main(): Promise<void> {
   // Initialize console bridge to forward logs to stdout/stderr
   initConsoleBridge();
+
+  // Initialize WASM module before any terminal processing
+  await initWasm();
 
   // Load and apply settings at startup
   try {

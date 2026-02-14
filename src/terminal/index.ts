@@ -77,4 +77,4 @@ export type { StyleCacheMetrics } from "./style-cache.ts";
 // Style cache (for advanced usage)
 export { getStyleCache, resetStyleCache, StyleCache } from "./style-cache.ts";
 // Unicode utilities
-export { charWidth, isWideChar, stringWidth } from "./unicode.ts";
+export { charWidth, isWideChar, stringWidth } from "./wasm/unicode.ts";

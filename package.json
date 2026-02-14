@@ -5,10 +5,11 @@
 	"private": true,
 	"scripts": {
 		"postinstall": "bash scripts/generate-icons.sh || true",
-		"dev": "bun run --hot serve.ts",
+		"build:wasm": "cd wasm && wasm-pack build --target web --out-dir pkg",
+		"dev": "bun run build:wasm && bun run --hot serve.ts",
 		"icons": "bash scripts/generate-icons.sh",
 		"prebuild": "bash scripts/generate-icons.sh",
-		"build": "bun build src/index.html --outdir dist --minify",
+		"build": "bun run build:wasm && bun build src/index.html --outdir dist --minify && cp wasm/pkg/emterm_wasm_bg.wasm dist/",
 		"tauri": "tauri",
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build",
