@@ -1,5 +1,9 @@
 // Development server for eMterm frontend
 
+import { resolve } from "node:path";
+
+const SRC_ROOT = resolve("./src");
+
 // Build the main bundle with dependencies resolved
 async function buildBundle() {
 	const result = await Bun.build({
@@ -46,21 +50,27 @@ const server = Bun.serve({
 			}
 		}
 
-		// Serve WASM files from wasm/pkg/
+		// Serve WASM files from wasm/pkg/ (allowlist to prevent path traversal)
 		if (path.endsWith(".wasm")) {
-			const wasmFile = Bun.file(`./wasm/pkg${path}`);
-			if (await wasmFile.exists()) {
-				return new Response(wasmFile, {
-					headers: {
-						"Content-Type": "application/wasm",
-						"Cache-Control": "no-cache, no-store, must-revalidate",
-					},
-				});
+			const wasmName = path.split("/").pop()!;
+			if (wasmName === "emterm_wasm_bg.wasm") {
+				const wasmFile = Bun.file(`./wasm/pkg/${wasmName}`);
+				if (await wasmFile.exists()) {
+					return new Response(wasmFile, {
+						headers: {
+							"Content-Type": "application/wasm",
+							"Cache-Control": "no-cache, no-store, must-revalidate",
+						},
+					});
+				}
 			}
 		}
 
-		// Serve static files from src
-		const filePath = `./src${path}`;
+		// Serve static files from src (with path traversal protection)
+		const filePath = resolve(`./src${path}`);
+		if (!filePath.startsWith(SRC_ROOT)) {
+			return new Response("Forbidden", { status: 403 });
+		}
 		const file = Bun.file(filePath);
 
 		if (await file.exists()) {
