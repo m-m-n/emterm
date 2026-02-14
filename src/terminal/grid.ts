@@ -9,6 +9,29 @@ import {
 import { charWidth } from "./wasm/unicode.ts";
 
 /**
+ * Common interface for accessing a terminal line (row).
+ * Both Line (JS) and WasmLineProxy implement this.
+ */
+export interface LineAccessor {
+	/** Whether this line needs re-rendering. */
+	dirty: boolean;
+	/** Whether this line is a continuation of the previous line (soft wrap). */
+	wrapped: boolean;
+	/** Number of cells in this line. */
+	readonly length: number;
+	getCell(index: number): Cell;
+	setCell(index: number, cell: Cell): void;
+	clear(): void;
+	clearRange(start: number, end: number): void;
+	isEmpty(): boolean;
+	getText(): string;
+	getCells(): Cell[];
+	setCells(cells: Cell[]): void;
+	markDirty(): void;
+	clearDirty(): void;
+}
+
+/**
  * A single cell in the terminal grid.
  */
 export interface Cell {
@@ -99,7 +122,7 @@ export function cloneCell(cell: Cell): Cell {
 /**
  * A line (row) in the terminal grid.
  */
-export class Line {
+export class Line implements LineAccessor {
 	/** Cells in this line. */
 	private cells: Cell[];
 

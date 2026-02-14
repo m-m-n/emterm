@@ -55,7 +55,11 @@ export function handleSetMode(
   }
 
   // Execute actions in order after all mode state is updated
+  // (must run before syncModesToWasm so modes are synced to the correct active buffer)
   for (const action of actions) {
     action();
   }
+
+  // Sync boolean modes to WASM bitfield of the now-active buffer
+  state.syncModesToWasm();
 }

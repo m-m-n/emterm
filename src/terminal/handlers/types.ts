@@ -70,4 +70,7 @@ export interface TerminalStateAccessor {
   getScrollbackLength(): number;
   readonly isAlternateBuffer: boolean;
   reset(): void;
+
+  /** Sync boolean modes to WASM bitfield (no-op when WASM is not active). */
+  syncModesToWasm(): void;
 }

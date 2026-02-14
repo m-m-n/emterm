@@ -13,6 +13,17 @@ import {
 export type CursorStyle = "block" | "underline" | "bar";
 
 /**
+ * WASM-backed cursor position storage interface.
+ * Structurally compatible with TerminalCore from wasm_bindgen.
+ */
+export interface WasmCursorCore {
+	get_cursor_col(): number;
+	get_cursor_row(): number;
+	set_cursor_col(col: number): void;
+	set_cursor_row(row: number): void;
+}
+
+/**
  * Saved cursor state for ESC 7 / ESC 8.
  */
 interface SavedCursor {
@@ -23,13 +34,19 @@ interface SavedCursor {
 
 /**
  * Cursor state and operations.
+ *
+ * When a WasmCursorCore is provided, col/row are delegated to WASM
+ * linear memory for efficient cross-boundary access.
  */
 export class CursorState {
-	/** Current column position (0-indexed). */
-	col: number = 0;
+	/** Backing field for column (used when no WASM core). */
+	private _col: number = 0;
 
-	/** Current row position (0-indexed). */
-	row: number = 0;
+	/** Backing field for row (used when no WASM core). */
+	private _row: number = 0;
+
+	/** Optional WASM core for cursor position delegation. */
+	private _core: WasmCursorCore | null;
 
 	/** Terminal columns. */
 	cols: number;
@@ -55,13 +72,41 @@ export class CursorState {
 	/** Saved cursor state. */
 	private saved: SavedCursor | null = null;
 
+	/** Current column position (0-indexed). Delegates to WASM when available. */
+	get col(): number {
+		return this._core ? this._core.get_cursor_col() : this._col;
+	}
+
+	set col(v: number) {
+		if (this._core) {
+			this._core.set_cursor_col(v);
+		} else {
+			this._col = v;
+		}
+	}
+
+	/** Current row position (0-indexed). Delegates to WASM when available. */
+	get row(): number {
+		return this._core ? this._core.get_cursor_row() : this._row;
+	}
+
+	set row(v: number) {
+		if (this._core) {
+			this._core.set_cursor_row(v);
+		} else {
+			this._row = v;
+		}
+	}
+
 	/**
 	 * Create a new cursor state.
 	 *
 	 * @param cols - Number of columns
 	 * @param rows - Number of rows
+	 * @param core - Optional WASM core for position delegation
 	 */
-	constructor(cols: number, rows: number) {
+	constructor(cols: number, rows: number, core?: WasmCursorCore) {
+		this._core = core ?? null;
 		this.cols = cols;
 		this.rows = rows;
 		this.attrs = createDefaultAttributes();

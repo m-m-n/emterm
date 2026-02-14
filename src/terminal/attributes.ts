@@ -136,6 +136,84 @@ export function cloneAttributes(attrs: CellAttributes): CellAttributes {
 	};
 }
 
+// ── WASM pack/unpack utilities ──────────────────────────
+
+/** Style flag constants matching Rust STYLE_* in cell.rs */
+const STYLE_BOLD = 0x0001;
+const STYLE_DIM = 0x0002;
+const STYLE_ITALIC = 0x0004;
+const STYLE_UNDERLINE = 0x0008;
+const STYLE_BLINK = 0x0010;
+const STYLE_REVERSE = 0x0020;
+const STYLE_HIDDEN = 0x0040;
+const STYLE_STRIKETHROUGH = 0x0080;
+
+/** Pack a Color into WASM-friendly components: {tag, r, g, b} */
+export function packColor(color: Color | null): {
+	tag: number;
+	r: number;
+	g: number;
+	b: number;
+} {
+	if (color === null || color.type === "default") {
+		return { tag: 0, r: 0, g: 0, b: 0 };
+	}
+	if (color.type === "indexed") {
+		return { tag: 1, r: color.index, g: 0, b: 0 };
+	}
+	// rgb
+	return { tag: 2, r: color.r, g: color.g, b: color.b };
+}
+
+/** Unpack a u32 (tag<<24 | r<<16 | g<<8 | b) into a Color or null */
+export function unpackColor(packed: number): Color | null {
+	const tag = (packed >>> 24) & 0xff;
+	if (tag === 0) return null;
+	const r = (packed >>> 16) & 0xff;
+	if (tag === 1) return { type: "indexed", index: r };
+	const g = (packed >>> 8) & 0xff;
+	const b = packed & 0xff;
+	return { type: "rgb", r, g, b };
+}
+
+/** Pack CellAttributes style booleans into a u16 bitfield */
+export function packStyleFlags(attrs: CellAttributes): number {
+	let flags = 0;
+	if (attrs.bold) flags |= STYLE_BOLD;
+	if (attrs.dim) flags |= STYLE_DIM;
+	if (attrs.italic) flags |= STYLE_ITALIC;
+	if (attrs.underline) flags |= STYLE_UNDERLINE;
+	if (attrs.blink) flags |= STYLE_BLINK;
+	if (attrs.reverse) flags |= STYLE_REVERSE;
+	if (attrs.hidden) flags |= STYLE_HIDDEN;
+	if (attrs.strikethrough) flags |= STYLE_STRIKETHROUGH;
+	return flags;
+}
+
+/** Unpack a u16 bitfield into CellAttributes style booleans (partial) */
+export function unpackStyleFlags(flags: number): Pick<
+	CellAttributes,
+	| "bold"
+	| "dim"
+	| "italic"
+	| "underline"
+	| "blink"
+	| "reverse"
+	| "hidden"
+	| "strikethrough"
+> {
+	return {
+		bold: (flags & STYLE_BOLD) !== 0,
+		dim: (flags & STYLE_DIM) !== 0,
+		italic: (flags & STYLE_ITALIC) !== 0,
+		underline: (flags & STYLE_UNDERLINE) !== 0,
+		blink: (flags & STYLE_BLINK) !== 0,
+		reverse: (flags & STYLE_REVERSE) !== 0,
+		hidden: (flags & STYLE_HIDDEN) !== 0,
+		strikethrough: (flags & STYLE_STRIKETHROUGH) !== 0,
+	};
+}
+
 /**
  * SGR attribute from the Rust parser.
  */

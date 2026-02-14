@@ -1,3 +1,5 @@
+mod cell;
+mod terminal_core;
 mod unicode;
 
 use wasm_bindgen::prelude::*;
