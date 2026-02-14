@@ -23,7 +23,7 @@ import {
 } from "./colors.ts";
 import type { UserColorScheme } from "../settings/types";
 import type { CursorStyle } from "./cursor.ts";
-import type { Line } from "./grid.ts";
+import type { LineAccessor } from "./grid.ts";
 import {
 	checkFrameBudget,
 	getPerformanceMonitor,
@@ -61,7 +61,7 @@ export interface TextSpan {
  * @param line - The line to process
  * @returns Array of text spans with their attributes
  */
-export function groupCellsIntoSpans(line: Line): TextSpan[] {
+export function groupCellsIntoSpans(line: LineAccessor): TextSpan[] {
 	const spans: TextSpan[] = [];
 	let currentText = "";
 	let currentAttrs: CellAttributes | null = null;
@@ -137,13 +137,13 @@ export function groupCellsIntoSpans(line: Line): TextSpan[] {
  * @param scrollOffset - Number of lines scrolled back (0 = current view)
  * @returns Array of lines to render
  */
-export function getVisibleLines(state: TerminalState, scrollOffset: number): Line[] {
+export function getVisibleLines(state: TerminalState, scrollOffset: number): LineAccessor[] {
 	const buffer = state.getActiveBuffer();
 	const visibleRows = state.rows;
 
 	// If not scrolled (at bottom), return current screen buffer
 	if (scrollOffset === 0) {
-		const linesToRender: Line[] = [];
+		const linesToRender: LineAccessor[] = [];
 		for (let screenRow = 0; screenRow < visibleRows; screenRow++) {
 			linesToRender.push(buffer.getLine(screenRow));
 		}
@@ -155,7 +155,7 @@ export function getVisibleLines(state: TerminalState, scrollOffset: number): Lin
 	// Clamp startIndex to 0 in case scrollOffset > scrollbackLength (stale offset after clear)
 	const startIndex = Math.max(0, scrollbackLength - scrollOffset);
 
-	const linesToRender: Line[] = [];
+	const linesToRender: LineAccessor[] = [];
 	for (let i = 0; i < visibleRows; i++) {
 		const lineIndex = startIndex + i;
 		if (lineIndex < scrollbackLength) {
@@ -591,7 +591,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 * @param rowIndex - Row index (0-based)
 	 * @param line - Line to render
 	 */
-	private renderLine(rowIndex: number, line: Line): void {
+	private renderLine(rowIndex: number, line: LineAccessor): void {
 		this.renderLineBackground(rowIndex, line);
 		this.renderLineText(rowIndex, line);
 	}
@@ -602,7 +602,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 * @param rowIndex - Row index (0-based)
 	 * @param line - Line to render
 	 */
-	private renderLineBackground(rowIndex: number, line: Line): void {
+	private renderLineBackground(rowIndex: number, line: LineAccessor): void {
 		const y = rowIndex * this.charHeight;
 
 		// Use integer-aligned coordinates to avoid sub-pixel gaps between rows
@@ -634,7 +634,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 * @param rowIndex - Row index (0-based)
 	 * @param line - Line to render
 	 */
-	private renderLineText(rowIndex: number, line: Line): void {
+	private renderLineText(rowIndex: number, line: LineAccessor): void {
 		// Group cells into spans
 		const spans = groupCellsIntoSpans(line);
 
@@ -650,7 +650,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/**
 	 * Draw underlines for detected URLs and file paths in a line.
 	 */
-	private renderDetectionUnderlines(rowIndex: number, line: Line): void {
+	private renderDetectionUnderlines(rowIndex: number, line: LineAccessor): void {
 		const cachedSettings = SettingsService.getCached();
 
 		// Build text string from line cells
@@ -1027,7 +1027,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 	private getVisibleLinesWithFolding(
 		state: TerminalState,
 		foldManager: ReturnType<TerminalState["getFoldManager"]>,
-	): (Line | null)[] {
+	): (LineAccessor | null)[] {
 		const buffer = state.getActiveBuffer();
 		const scrollbackLength = state.getScrollbackLength();
 		const visibleRows = state.rows;
@@ -1039,7 +1039,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Calculate display start based on scroll offset
 		const displayStart = Math.max(0, totalDisplayLines - visibleRows - this.scrollOffset);
 
-		const result: (Line | null)[] = [];
+		const result: (LineAccessor | null)[] = [];
 		for (let displayRow = 0; displayRow < visibleRows; displayRow++) {
 			const displayLine = displayStart + displayRow;
 
@@ -1073,7 +1073,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	private renderFoldSummaryLines(
 		state: TerminalState,
-		visibleLines: (Line | null)[],
+		visibleLines: (LineAccessor | null)[],
 		foldManager: ReturnType<TerminalState["getFoldManager"]>,
 	): void {
 		const scrollbackLength = state.getScrollbackLength();

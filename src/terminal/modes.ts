@@ -265,3 +265,60 @@ export function setDecPrivateMode(
 
 	return { changed, action };
 }
+
+// ── WASM mode bit mapping ────────────────────────────────
+
+/**
+ * WASM mode bit constants matching Rust MODE_* constants.
+ * Only boolean modes are mapped (multi-valued modes like
+ * mouseTracking/mouseEncoding/cursorKeys stay in JS).
+ */
+export const WASM_MODE_BITS = {
+	autoWrap: 0,
+	originMode: 1,
+	cursorVisible: 2,
+	cursorBlink: 3,
+	reverseScreen: 4,
+	bracketedPaste: 5,
+	focusTracking: 6,
+	column132: 7,
+} as const;
+
+/**
+ * WASM-backed mode storage interface.
+ * Structurally compatible with TerminalCore from wasm_bindgen.
+ */
+export interface WasmModeCore {
+	get_mode(bit: number): boolean;
+	set_mode(bit: number, value: boolean): void;
+}
+
+/**
+ * Sync all boolean mode flags from JS TerminalModes to WASM bitfield.
+ * Call after mode changes to keep WASM state in sync.
+ */
+export function syncModesToWasm(modes: TerminalModes, core: WasmModeCore): void {
+	core.set_mode(WASM_MODE_BITS.autoWrap, modes.autoWrap);
+	core.set_mode(WASM_MODE_BITS.originMode, modes.originMode);
+	core.set_mode(WASM_MODE_BITS.cursorVisible, modes.cursorVisible);
+	core.set_mode(WASM_MODE_BITS.cursorBlink, modes.cursorBlink);
+	core.set_mode(WASM_MODE_BITS.reverseScreen, modes.reverseScreen);
+	core.set_mode(WASM_MODE_BITS.bracketedPaste, modes.bracketedPaste);
+	core.set_mode(WASM_MODE_BITS.focusTracking, modes.focusTracking);
+	core.set_mode(WASM_MODE_BITS.column132, modes.column132);
+}
+
+/**
+ * Sync all boolean mode flags from WASM bitfield to JS TerminalModes.
+ * Call after buffer switches to restore WASM-stored mode state.
+ */
+export function syncModesFromWasm(modes: TerminalModes, core: WasmModeCore): void {
+	modes.autoWrap = core.get_mode(WASM_MODE_BITS.autoWrap);
+	modes.originMode = core.get_mode(WASM_MODE_BITS.originMode);
+	modes.cursorVisible = core.get_mode(WASM_MODE_BITS.cursorVisible);
+	modes.cursorBlink = core.get_mode(WASM_MODE_BITS.cursorBlink);
+	modes.reverseScreen = core.get_mode(WASM_MODE_BITS.reverseScreen);
+	modes.bracketedPaste = core.get_mode(WASM_MODE_BITS.bracketedPaste);
+	modes.focusTracking = core.get_mode(WASM_MODE_BITS.focusTracking);
+	modes.column132 = core.get_mode(WASM_MODE_BITS.column132);
+}

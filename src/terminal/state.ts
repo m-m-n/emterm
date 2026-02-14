@@ -12,9 +12,10 @@ import { CursorState } from "./cursor.ts";
 import { cloneAttributes } from "./attributes.ts";
 import { FoldManager } from "./fold-manager.ts";
 import { Line, type Cell } from "./grid.ts";
-import { createDefaultModes, type TerminalModes } from "./modes.ts";
+import { createDefaultModes, syncModesToWasm, type TerminalModes } from "./modes.ts";
 import { SemanticZoneTracker } from "./semantic-zone.ts";
 import { isEmojiPresentation } from "./wasm/unicode.ts";
+import { WasmGrid } from "./wasm/terminal-core.ts";
 
 // Import handlers from the handlers module
 import {
@@ -107,20 +108,37 @@ export class TerminalState implements TerminalStateAccessor {
   /** Maximum number of lines to keep in scrollback. */
   private maxScrollbackLines: number = 10000;
 
+  /** Primary WASM grid for viewport backing. */
+  private primaryWasmGrid: WasmGrid | null = null;
+
+  /** Alternate WASM grid for alternate screen. */
+  private alternateWasmGrid: WasmGrid | null = null;
+
   /**
    * Create a new terminal state.
    *
    * @param cols - Number of columns
    * @param rows - Number of rows
    * @param scrollbackLines - Maximum number of lines to keep in scrollback (default: 10000)
+   * @param useWasm - Whether to use WASM-backed viewport (default: true)
    */
-  constructor(cols: number, rows: number, scrollbackLines: number = 10000) {
+  constructor(cols: number, rows: number, scrollbackLines: number = 10000, useWasm: boolean = true) {
     this.maxScrollbackLines = scrollbackLines;
 
-    // Create primary buffer with unified scrollback
-    this.primaryBuffer = new UnifiedBuffer(cols, rows, scrollbackLines);
+    // Create WASM grid for viewport (if WASM is available)
+    if (useWasm) {
+      try {
+        this.primaryWasmGrid = new WasmGrid(cols, rows);
+      } catch {
+        // WASM not available - fall back to JS-only mode
+        this.primaryWasmGrid = null;
+      }
+    }
 
-    this.primaryCursor = new CursorState(cols, rows);
+    // Create primary buffer with unified scrollback
+    this.primaryBuffer = new UnifiedBuffer(cols, rows, scrollbackLines, this.primaryWasmGrid ?? undefined);
+
+    this.primaryCursor = new CursorState(cols, rows, this.primaryWasmGrid?.core);
     this.cursor = this.primaryCursor;
     this.modes = createDefaultModes();
     this.tabStops = this.createDefaultTabStops(cols);
@@ -298,6 +316,17 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Sync boolean modes to WASM bitfield.
+   * No-op when WASM is not active.
+   */
+  syncModesToWasm(): void {
+    const grid = this.useAlternate ? this.alternateWasmGrid : this.primaryWasmGrid;
+    if (grid) {
+      syncModesToWasm(this.modes, grid.core);
+    }
+  }
+
+  /**
    * Switch to alternate screen buffer.
    *
    * @param saveCursor - Whether to save cursor before switching
@@ -317,14 +346,25 @@ export class TerminalState implements TerminalStateAccessor {
 
     // Create or reset alternate buffer (no scrollback)
     if (!this.alternateBuffer) {
-      this.alternateBuffer = new UnifiedBuffer(this.cols, this.rows, 0);
-      this.alternateCursor = new CursorState(this.cols, this.rows);
+      // Create WASM grid for alternate buffer if primary uses WASM
+      if (this.primaryWasmGrid) {
+        try {
+          this.alternateWasmGrid = new WasmGrid(this.cols, this.rows);
+        } catch {
+          this.alternateWasmGrid = null;
+        }
+      }
+      this.alternateBuffer = new UnifiedBuffer(this.cols, this.rows, 0, this.alternateWasmGrid ?? undefined);
+      this.alternateCursor = new CursorState(this.cols, this.rows, this.alternateWasmGrid?.core);
     } else {
       // Clear alternate buffer on switch
       this.alternateBuffer.clearAll();
+      if (this.alternateWasmGrid) {
+        this.alternateWasmGrid.reset();
+      }
       // Reset alternate cursor to home position
       if (!this.alternateCursor) {
-        this.alternateCursor = new CursorState(this.cols, this.rows);
+        this.alternateCursor = new CursorState(this.cols, this.rows, this.alternateWasmGrid?.core);
       } else {
         this.alternateCursor.moveTo(0, 0);
       }
@@ -336,8 +376,9 @@ export class TerminalState implements TerminalStateAccessor {
     this.wrapPending = false;
 
     // Mark all lines as dirty to force redraw
+    // Use markDirty() to propagate to WASM dirty bitset (not just local field)
     for (let row = 0; row < this.rows; row++) {
-      this.alternateBuffer.getLine(row).dirty = true;
+      this.alternateBuffer.getLine(row).markDirty();
     }
   }
 
@@ -367,9 +408,10 @@ export class TerminalState implements TerminalStateAccessor {
     this.wrapPending = false;
 
     // Mark all lines as dirty to force redraw
+    // Use markDirty() to propagate to WASM dirty bitset (not just local field)
     const buffer = this.getActiveBuffer();
     for (let row = 0; row < this.rows; row++) {
-      buffer.getLine(row).dirty = true;
+      buffer.getLine(row).markDirty();
     }
   }
 
@@ -579,8 +621,17 @@ export class TerminalState implements TerminalStateAccessor {
     const cols = this.cols;
     const rows = this.rows;
 
+    // Reset WASM grids
+    if (this.primaryWasmGrid) {
+      this.primaryWasmGrid.reset();
+    }
+    if (this.alternateWasmGrid) {
+      this.alternateWasmGrid.dispose();
+      this.alternateWasmGrid = null;
+    }
+
     // Reset buffers (recreate primary buffer with unified scrollback)
-    this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines);
+    this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, this.primaryWasmGrid ?? undefined);
     this.primaryBuffer.onEvict = (count: number) => {
       this.semanticZoneTracker.pruneBeforeLine(count);
       this.foldManager.pruneBeforeLine(count);
@@ -589,13 +640,18 @@ export class TerminalState implements TerminalStateAccessor {
     this.useAlternate = false;
 
     // Reset cursors
-    this.primaryCursor = new CursorState(cols, rows);
+    this.primaryCursor = new CursorState(cols, rows, this.primaryWasmGrid?.core);
     this.alternateCursor = null;
     this.cursor = this.primaryCursor;
     this.savedCursorForAlt = null;
 
     // Reset modes
     this.modes = createDefaultModes();
+
+    // Sync default modes to WASM
+    if (this.primaryWasmGrid) {
+      syncModesToWasm(this.modes, this.primaryWasmGrid.core);
+    }
 
     // Reset other state
     this.wrapPending = false;
