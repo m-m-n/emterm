@@ -6,6 +6,11 @@ use wasm_bindgen::prelude::*;
 
 use crate::cell::*;
 
+// ── Sentinel constants ───────────────────────────────────
+
+const BEL_SENTINEL: u8 = 0xFE;
+const SCROLLBACK_SENTINEL: u8 = 0xFF;
+
 // ── Mode bit positions (matches SPEC.md) ─────────────────
 
 pub const MODE_AUTO_WRAP: u8 = 0;
@@ -1097,6 +1102,205 @@ impl TerminalCore {
         scroll_count + self.handle_print_slow(cp)
     }
 
+    // ── Sprint 3: C0 Control Handler ─────────────────────
+
+    /// Handle a C0 Execute action.
+    /// Returns: scroll count (0-N for LF/VT/FF), BEL_SENTINEL (0xFE) for BEL.
+    pub fn handle_execute(&mut self, byte: u8) -> u8 {
+        match byte {
+            0x07 => BEL_SENTINEL, // BEL
+            0x08 => {
+                // BS: decrement cursor.col, clamped to 0
+                self.cursor.col = self.cursor.col.saturating_sub(1);
+                self.wrap_pending = false;
+                0
+            }
+            0x09 => {
+                // HT: move to next tab stop
+                self.cursor.col = self.find_next_tab_stop();
+                self.wrap_pending = false;
+                0
+            }
+            0x0A | 0x0B | 0x0C => {
+                // LF/VT/FF
+                self.execute_line_feed()
+            }
+            0x0D => {
+                // CR
+                self.cursor.col = 0;
+                self.wrap_pending = false;
+                0
+            }
+            0x0E => {
+                // SO: switch to G1
+                self.active_charset = 1;
+                0
+            }
+            0x0F => {
+                // SI: switch to G0
+                self.active_charset = 0;
+                0
+            }
+            _ => 0, // Unknown C0: no-op
+        }
+    }
+
+    /// Find the next tab stop after the current cursor column.
+    /// Returns the tab stop column, or cols-1 if no more stops.
+    fn find_next_tab_stop(&self) -> u16 {
+        self.next_tab_stop(self.cursor.col)
+    }
+
+    /// Execute LF: line_feed + clear wrap_pending.
+    /// Returns 1 if scroll needed, 0 otherwise.
+    fn execute_line_feed(&mut self) -> u8 {
+        let scroll = if self.line_feed() { 1 } else { 0 };
+        self.wrap_pending = false;
+        scroll
+    }
+
+    // ── Sprint 3: CSI Cursor Handlers ───────────────────────
+
+    /// Convert 1-indexed ANSI col parameter to 0-indexed, clamped.
+    fn to_zero_indexed_col(&self, col: u16) -> u16 {
+        if col == 0 {
+            0
+        } else {
+            (col - 1).min(self.cols.saturating_sub(1))
+        }
+    }
+
+    /// Convert 1-indexed ANSI row parameter to 0-indexed, clamped.
+    fn to_zero_indexed_row(&self, row: u16) -> u16 {
+        if row == 0 {
+            0
+        } else {
+            (row - 1).min(self.rows.saturating_sub(1))
+        }
+    }
+
+    /// CSI A - Cursor Up by count rows.
+    pub fn handle_cursor_up(&mut self, count: u16) {
+        self.cursor.row = self.cursor.row.saturating_sub(count);
+        self.wrap_pending = false;
+    }
+
+    /// CSI B - Cursor Down by count rows.
+    pub fn handle_cursor_down(&mut self, count: u16) {
+        self.cursor.row = self.cursor.row.saturating_add(count).min(self.rows.saturating_sub(1));
+        self.wrap_pending = false;
+    }
+
+    /// CSI C - Cursor Forward by count cols.
+    pub fn handle_cursor_forward(&mut self, count: u16) {
+        self.cursor.col = self.cursor.col.saturating_add(count).min(self.cols.saturating_sub(1));
+        self.wrap_pending = false;
+    }
+
+    /// CSI D - Cursor Back by count cols.
+    pub fn handle_cursor_back(&mut self, count: u16) {
+        self.cursor.col = self.cursor.col.saturating_sub(count);
+        self.wrap_pending = false;
+    }
+
+    /// CSI E - Cursor Next Line (down + col=0).
+    pub fn handle_cursor_next_line(&mut self, count: u16) {
+        self.cursor.row = self.cursor.row.saturating_add(count).min(self.rows.saturating_sub(1));
+        self.cursor.col = 0;
+        self.wrap_pending = false;
+    }
+
+    /// CSI F - Cursor Previous Line (up + col=0).
+    pub fn handle_cursor_previous_line(&mut self, count: u16) {
+        self.cursor.row = self.cursor.row.saturating_sub(count);
+        self.cursor.col = 0;
+        self.wrap_pending = false;
+    }
+
+    /// CSI G - Cursor Horizontal Absolute (1-indexed input).
+    pub fn handle_cursor_horizontal_absolute(&mut self, col: u16) {
+        self.cursor.col = self.to_zero_indexed_col(col);
+        self.wrap_pending = false;
+    }
+
+    /// CSI H - Cursor Position (1-indexed inputs).
+    pub fn handle_cursor_position(&mut self, row: u16, col: u16) {
+        self.cursor.row = self.to_zero_indexed_row(row);
+        self.cursor.col = self.to_zero_indexed_col(col);
+        self.wrap_pending = false;
+    }
+
+    /// CSI d - Cursor Vertical Absolute (1-indexed input).
+    pub fn handle_cursor_vertical_absolute(&mut self, row: u16) {
+        self.cursor.row = self.to_zero_indexed_row(row);
+        self.wrap_pending = false;
+    }
+
+    // ── Sprint 3: CSI Screen Handlers ───────────────────────
+
+    /// CSI J - Erase in Display.
+    /// mode: 0=Below, 1=Above, 2=All, 3=Scrollback.
+    /// Returns 0 on success, SCROLLBACK_SENTINEL (0xFF) for Scrollback.
+    pub fn handle_erase_in_display(&mut self, mode: u8) -> u8 {
+        match mode {
+            0 => {
+                // Below: clear from cursor to end of screen
+                self.clear_line_range(self.cursor.row, self.cursor.col, self.cols);
+                for r in (self.cursor.row + 1)..self.rows {
+                    self.clear_line(r);
+                }
+                0
+            }
+            1 => {
+                // Above: clear from start to cursor (inclusive)
+                for r in 0..self.cursor.row {
+                    self.clear_line(r);
+                }
+                self.clear_line_range(self.cursor.row, 0, self.cursor.col + 1);
+                0
+            }
+            2 => {
+                // All: clear entire screen
+                for r in 0..self.rows {
+                    self.clear_line(r);
+                }
+                0
+            }
+            3 => {
+                // Scrollback: return sentinel for TS handling
+                SCROLLBACK_SENTINEL
+            }
+            _ => 0, // Invalid mode: no-op
+        }
+    }
+
+    /// CSI K - Erase in Line.
+    /// mode: 0=ToEnd, 1=ToStart, 2=All.
+    pub fn handle_erase_in_line(&mut self, mode: u8) {
+        match mode {
+            0 => {
+                // ToEnd: clear from cursor to end of line
+                self.clear_line_range(self.cursor.row, self.cursor.col, self.cols);
+            }
+            1 => {
+                // ToStart: clear from start to cursor (inclusive)
+                self.clear_line_range(self.cursor.row, 0, self.cursor.col + 1);
+            }
+            2 => {
+                // All: clear entire line
+                self.clear_line(self.cursor.row);
+            }
+            _ => {} // Invalid mode: no-op
+        }
+    }
+
+    /// CSI X - Erase Characters.
+    /// count: number of characters to erase (default 1).
+    pub fn handle_erase_characters(&mut self, count: u16) {
+        let end = self.cursor.col.saturating_add(count).min(self.cols);
+        self.clear_line_range(self.cursor.row, self.cursor.col, end);
+    }
+
     /// Flush the grapheme buffer, writing the accumulated cluster to the grid.
     /// Returns the number of scroll-up operations the caller should perform.
     pub fn flush_grapheme_buffer(&mut self) -> u8 {
@@ -1960,5 +2164,601 @@ mod tests {
         assert_eq!(core.get_scroll_region_top(), 0);
         assert_eq!(core.get_scroll_region_bottom(), 29);
         assert!(!core.get_wrap_pending());
+    }
+
+    // ── Sprint 3: C0 handler tests ─────────────────────────
+
+    #[test]
+    fn test_handle_execute_bel_returns_sentinel() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.handle_execute(0x07), 0xFE);
+    }
+
+    #[test]
+    fn test_handle_execute_bs_at_col5() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(5, 0);
+        let result = core.handle_execute(0x08);
+        assert_eq!(result, 0);
+        assert_eq!(core.get_cursor_col(), 4);
+    }
+
+    #[test]
+    fn test_handle_execute_bs_at_col0_clamped() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 0);
+        let result = core.handle_execute(0x08);
+        assert_eq!(result, 0);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_handle_execute_bs_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(5, 0);
+        core.set_wrap_pending(true);
+        core.handle_execute(0x08);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_execute_ht_default_tab_stops() {
+        let mut core = TerminalCore::new(80, 24);
+        // col=0 → next tab stop at 8
+        core.set_cursor(0, 0);
+        core.handle_execute(0x09);
+        assert_eq!(core.get_cursor_col(), 8);
+    }
+
+    #[test]
+    fn test_handle_execute_ht_col7_to_col8() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(7, 0);
+        core.handle_execute(0x09);
+        assert_eq!(core.get_cursor_col(), 8);
+    }
+
+    #[test]
+    fn test_handle_execute_ht_col8_to_col16() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(8, 0);
+        core.handle_execute(0x09);
+        assert_eq!(core.get_cursor_col(), 16);
+    }
+
+    #[test]
+    fn test_handle_execute_ht_past_last_stop() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(78, 0);
+        core.handle_execute(0x09);
+        assert_eq!(core.get_cursor_col(), 79); // cols-1
+    }
+
+    #[test]
+    fn test_handle_execute_ht_custom_tab_stops() {
+        let mut core = TerminalCore::new(80, 24);
+        core.clear_all_tab_stops();
+        core.set_tab_stop(5);
+        core.set_tab_stop(20);
+        core.set_cursor(0, 0);
+        core.handle_execute(0x09);
+        assert_eq!(core.get_cursor_col(), 5);
+        core.handle_execute(0x09);
+        assert_eq!(core.get_cursor_col(), 20);
+        core.handle_execute(0x09);
+        assert_eq!(core.get_cursor_col(), 79); // no more stops
+    }
+
+    #[test]
+    fn test_handle_execute_ht_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_wrap_pending(true);
+        core.handle_execute(0x09);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_execute_lf_mid_screen() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 0);
+        let result = core.handle_execute(0x0A);
+        assert_eq!(result, 0);
+        assert_eq!(core.get_cursor_row(), 1);
+    }
+
+    #[test]
+    fn test_handle_execute_lf_at_scroll_region_bottom() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_scroll_region(5, 20);
+        core.set_cursor(0, 20);
+        let result = core.handle_execute(0x0A);
+        assert_eq!(result, 1);
+        assert_eq!(core.get_cursor_row(), 20);
+    }
+
+    #[test]
+    fn test_handle_execute_lf_at_bottom_no_scroll_region() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 23);
+        let result = core.handle_execute(0x0A);
+        assert_eq!(result, 1);
+        assert_eq!(core.get_cursor_row(), 23);
+    }
+
+    #[test]
+    fn test_handle_execute_vt_same_as_lf() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 5);
+        let result = core.handle_execute(0x0B);
+        assert_eq!(result, 0);
+        assert_eq!(core.get_cursor_row(), 6);
+    }
+
+    #[test]
+    fn test_handle_execute_ff_same_as_lf() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 5);
+        let result = core.handle_execute(0x0C);
+        assert_eq!(result, 0);
+        assert_eq!(core.get_cursor_row(), 6);
+    }
+
+    #[test]
+    fn test_handle_execute_cr() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(40, 10);
+        let result = core.handle_execute(0x0D);
+        assert_eq!(result, 0);
+        assert_eq!(core.get_cursor_col(), 0);
+        assert_eq!(core.get_cursor_row(), 10);
+    }
+
+    #[test]
+    fn test_handle_execute_cr_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_wrap_pending(true);
+        core.handle_execute(0x0D);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_execute_so() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.get_active_charset(), 0);
+        core.handle_execute(0x0E);
+        assert_eq!(core.get_active_charset(), 1);
+    }
+
+    #[test]
+    fn test_handle_execute_si() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_active_charset(1);
+        core.handle_execute(0x0F);
+        assert_eq!(core.get_active_charset(), 0);
+    }
+
+    #[test]
+    fn test_handle_execute_lf_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 5);
+        core.set_wrap_pending(true);
+        core.handle_execute(0x0A);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_execute_unknown_byte_noop() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(5, 5);
+        let result = core.handle_execute(0x01);
+        assert_eq!(result, 0);
+        assert_eq!(core.get_cursor_col(), 5);
+        assert_eq!(core.get_cursor_row(), 5);
+    }
+
+    // ── Sprint 3: CSI Cursor handler tests ──────────────────
+
+    #[test]
+    fn test_handle_cursor_up_normal() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 5);
+        core.handle_cursor_up(3);
+        assert_eq!(core.get_cursor_row(), 2);
+    }
+
+    #[test]
+    fn test_handle_cursor_up_clamped() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 5);
+        core.handle_cursor_up(10);
+        assert_eq!(core.get_cursor_row(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_up_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 5);
+        core.set_wrap_pending(true);
+        core.handle_cursor_up(1);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_cursor_down_normal() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 5);
+        core.handle_cursor_down(3);
+        assert_eq!(core.get_cursor_row(), 8);
+    }
+
+    #[test]
+    fn test_handle_cursor_down_clamped() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 5);
+        core.handle_cursor_down(100);
+        assert_eq!(core.get_cursor_row(), 23);
+    }
+
+    #[test]
+    fn test_handle_cursor_down_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_wrap_pending(true);
+        core.handle_cursor_down(1);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_cursor_forward_normal() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(10, 0);
+        core.handle_cursor_forward(5);
+        assert_eq!(core.get_cursor_col(), 15);
+    }
+
+    #[test]
+    fn test_handle_cursor_forward_clamped() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(10, 0);
+        core.handle_cursor_forward(100);
+        assert_eq!(core.get_cursor_col(), 79);
+    }
+
+    #[test]
+    fn test_handle_cursor_forward_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_wrap_pending(true);
+        core.handle_cursor_forward(1);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_cursor_back_normal() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(10, 0);
+        core.handle_cursor_back(5);
+        assert_eq!(core.get_cursor_col(), 5);
+    }
+
+    #[test]
+    fn test_handle_cursor_back_clamped() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(10, 0);
+        core.handle_cursor_back(100);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_back_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_wrap_pending(true);
+        core.handle_cursor_back(1);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_cursor_next_line() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(15, 3);
+        core.handle_cursor_next_line(2);
+        assert_eq!(core.get_cursor_row(), 5);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_next_line_clamped() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(15, 20);
+        core.handle_cursor_next_line(100);
+        assert_eq!(core.get_cursor_row(), 23);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_previous_line() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(15, 5);
+        core.handle_cursor_previous_line(2);
+        assert_eq!(core.get_cursor_row(), 3);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_previous_line_clamped() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(15, 2);
+        core.handle_cursor_previous_line(100);
+        assert_eq!(core.get_cursor_row(), 0);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_horizontal_absolute() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_horizontal_absolute(5); // 1-indexed → col=4
+        assert_eq!(core.get_cursor_col(), 4);
+    }
+
+    #[test]
+    fn test_handle_cursor_horizontal_absolute_zero() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_horizontal_absolute(0); // 0 → col=0
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_horizontal_absolute_overflow() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_horizontal_absolute(1000);
+        assert_eq!(core.get_cursor_col(), 79);
+    }
+
+    #[test]
+    fn test_handle_cursor_horizontal_absolute_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_wrap_pending(true);
+        core.handle_cursor_horizontal_absolute(1);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_cursor_position() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_position(3, 5); // 1-indexed → row=2, col=4
+        assert_eq!(core.get_cursor_row(), 2);
+        assert_eq!(core.get_cursor_col(), 4);
+    }
+
+    #[test]
+    fn test_handle_cursor_position_zero_zero() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_position(0, 0);
+        assert_eq!(core.get_cursor_row(), 0);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_position_overflow() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_position(1000, 1000);
+        assert_eq!(core.get_cursor_row(), 23);
+        assert_eq!(core.get_cursor_col(), 79);
+    }
+
+    #[test]
+    fn test_handle_cursor_position_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_wrap_pending(true);
+        core.handle_cursor_position(1, 1);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_handle_cursor_vertical_absolute() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_vertical_absolute(5); // 1-indexed → row=4
+        assert_eq!(core.get_cursor_row(), 4);
+    }
+
+    #[test]
+    fn test_handle_cursor_vertical_absolute_zero() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_vertical_absolute(0);
+        assert_eq!(core.get_cursor_row(), 0);
+    }
+
+    #[test]
+    fn test_handle_cursor_vertical_absolute_overflow() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_cursor_vertical_absolute(1000);
+        assert_eq!(core.get_cursor_row(), 23);
+    }
+
+    #[test]
+    fn test_handle_cursor_vertical_absolute_clears_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_wrap_pending(true);
+        core.handle_cursor_vertical_absolute(1);
+        assert!(!core.get_wrap_pending());
+    }
+
+    // ── Sprint 3: CSI Screen handler tests ──────────────────
+
+    #[test]
+    fn test_handle_erase_in_display_below() {
+        let mut core = TerminalCore::new(10, 5);
+        // Fill entire screen
+        for row in 0..5 {
+            for col in 0..10 {
+                core.set_cell(col, row, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        core.clear_dirty();
+        core.set_cursor(5, 2);
+        let result = core.handle_erase_in_display(0); // Below
+        assert_eq!(result, 0);
+        // Row 2, cols 0-4 should still have "X"
+        assert_eq!(core.get_cell_char(4, 2), "X");
+        // Row 2, cols 5-9 should be cleared
+        assert_eq!(core.get_cell_char(5, 2), " ");
+        assert_eq!(core.get_cell_char(9, 2), " ");
+        // Rows below should be cleared
+        assert_eq!(core.get_cell_char(0, 3), " ");
+        assert_eq!(core.get_cell_char(0, 4), " ");
+        // Rows above should be untouched
+        assert_eq!(core.get_cell_char(0, 0), "X");
+        assert_eq!(core.get_cell_char(0, 1), "X");
+        // Dirty rows marked
+        assert!(core.is_row_dirty(2));
+        assert!(core.is_row_dirty(3));
+        assert!(core.is_row_dirty(4));
+    }
+
+    #[test]
+    fn test_handle_erase_in_display_above() {
+        let mut core = TerminalCore::new(10, 5);
+        for row in 0..5 {
+            for col in 0..10 {
+                core.set_cell(col, row, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        core.clear_dirty();
+        core.set_cursor(5, 2);
+        let result = core.handle_erase_in_display(1); // Above
+        assert_eq!(result, 0);
+        // Rows above cursor should be cleared
+        assert_eq!(core.get_cell_char(0, 0), " ");
+        assert_eq!(core.get_cell_char(9, 1), " ");
+        // Row 2, cols 0-5 should be cleared (inclusive of cursor col)
+        assert_eq!(core.get_cell_char(0, 2), " ");
+        assert_eq!(core.get_cell_char(5, 2), " ");
+        // Row 2, cols 6-9 should still have "X"
+        assert_eq!(core.get_cell_char(6, 2), "X");
+        // Rows below should be untouched
+        assert_eq!(core.get_cell_char(0, 3), "X");
+        assert_eq!(core.get_cell_char(0, 4), "X");
+    }
+
+    #[test]
+    fn test_handle_erase_in_display_all() {
+        let mut core = TerminalCore::new(10, 5);
+        for row in 0..5 {
+            for col in 0..10 {
+                core.set_cell(col, row, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        core.clear_dirty();
+        let result = core.handle_erase_in_display(2); // All
+        assert_eq!(result, 0);
+        for row in 0..5 {
+            for col in 0..10 {
+                assert_eq!(core.get_cell_char(col, row), " ");
+            }
+            assert!(core.is_row_dirty(row));
+        }
+    }
+
+    #[test]
+    fn test_handle_erase_in_display_scrollback_returns_sentinel() {
+        let mut core = TerminalCore::new(10, 5);
+        let result = core.handle_erase_in_display(3); // Scrollback
+        assert_eq!(result, 0xFF);
+    }
+
+    #[test]
+    fn test_handle_erase_in_display_invalid_mode() {
+        let mut core = TerminalCore::new(10, 5);
+        let result = core.handle_erase_in_display(4);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_handle_erase_in_line_to_end() {
+        let mut core = TerminalCore::new(10, 5);
+        for col in 0..10 {
+            core.set_cell(col, 2, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.clear_dirty();
+        core.set_cursor(5, 2);
+        core.handle_erase_in_line(0); // ToEnd
+                                      // Cols 0-4 should still have "X"
+        assert_eq!(core.get_cell_char(4, 2), "X");
+        // Cols 5-9 should be cleared
+        assert_eq!(core.get_cell_char(5, 2), " ");
+        assert_eq!(core.get_cell_char(9, 2), " ");
+        assert!(core.is_row_dirty(2));
+    }
+
+    #[test]
+    fn test_handle_erase_in_line_to_start() {
+        let mut core = TerminalCore::new(10, 5);
+        for col in 0..10 {
+            core.set_cell(col, 2, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.clear_dirty();
+        core.set_cursor(5, 2);
+        core.handle_erase_in_line(1); // ToStart (inclusive)
+                                      // Cols 0-5 should be cleared
+        assert_eq!(core.get_cell_char(0, 2), " ");
+        assert_eq!(core.get_cell_char(5, 2), " ");
+        // Cols 6-9 should still have "X"
+        assert_eq!(core.get_cell_char(6, 2), "X");
+        assert!(core.is_row_dirty(2));
+    }
+
+    #[test]
+    fn test_handle_erase_in_line_all() {
+        let mut core = TerminalCore::new(10, 5);
+        for col in 0..10 {
+            core.set_cell(col, 2, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.clear_dirty();
+        core.set_cursor(3, 2);
+        core.handle_erase_in_line(2); // All
+        for col in 0..10 {
+            assert_eq!(core.get_cell_char(col, 2), " ");
+        }
+        assert!(core.is_row_dirty(2));
+    }
+
+    #[test]
+    fn test_handle_erase_characters_normal() {
+        let mut core = TerminalCore::new(10, 5);
+        for col in 0..10 {
+            core.set_cell(col, 2, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.clear_dirty();
+        core.set_cursor(5, 2);
+        core.handle_erase_characters(3);
+        // Cols 5,6,7 should be cleared
+        assert_eq!(core.get_cell_char(5, 2), " ");
+        assert_eq!(core.get_cell_char(6, 2), " ");
+        assert_eq!(core.get_cell_char(7, 2), " ");
+        // Col 8 should still have "X"
+        assert_eq!(core.get_cell_char(8, 2), "X");
+        assert!(core.is_row_dirty(2));
+    }
+
+    #[test]
+    fn test_handle_erase_characters_overflow_clamped() {
+        let mut core = TerminalCore::new(10, 5);
+        for col in 0..10 {
+            core.set_cell(col, 2, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cursor(8, 2);
+        core.handle_erase_characters(100); // overflow
+                                           // Cols 8-9 cleared, no panic
+        assert_eq!(core.get_cell_char(8, 2), " ");
+        assert_eq!(core.get_cell_char(9, 2), " ");
+        // Col 7 untouched
+        assert_eq!(core.get_cell_char(7, 2), "X");
+    }
+
+    #[test]
+    fn test_handle_erase_characters_dirty() {
+        let mut core = TerminalCore::new(10, 5);
+        core.clear_dirty();
+        core.set_cursor(0, 0);
+        core.handle_erase_characters(5);
+        assert!(core.is_row_dirty(0));
     }
 }

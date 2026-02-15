@@ -6,7 +6,7 @@
  */
 
 import { MarkdownSessionManager } from "../markdown/session.ts";
-import type { CharSet, TerminalAction } from "../types/terminal.ts";
+import type { CharSet, CsiAction, EraseMode, TerminalAction } from "../types/terminal.ts";
 import { UnifiedBuffer } from "./unified-buffer.ts";
 import { CursorState } from "./cursor.ts";
 import { cloneAttributes, packColor, packStyleFlags } from "./attributes.ts";
@@ -28,6 +28,22 @@ import {
   handleDcs,
 } from "./handlers/index.ts";
 import type { TerminalStateAccessor, ActiveCharSet } from "./handlers/types.ts";
+
+// ── WASM Sentinel Constants ─────────────────────────────
+const WASM_BEL_SENTINEL = 0xFE;
+const WASM_SCROLLBACK_SENTINEL = 0xFF;
+
+/**
+ * Convert EraseMode string to numeric mode byte for WASM.
+ */
+function eraseModeToByte(mode: EraseMode): number {
+  switch (mode) {
+    case "Below": return 0;
+    case "Above": return 1;
+    case "All": return 2;
+    case "Scrollback": return 3;
+  }
+}
 
 /**
  * Terminal state manager.
@@ -378,6 +394,30 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Sync a tab stop addition to WASM core.
+   * No-op when WASM is not active.
+   */
+  syncTabStopToWasm(col: number): void {
+    this.getActiveWasmGrid()?.core.set_tab_stop(col);
+  }
+
+  /**
+   * Sync a tab stop removal to WASM core.
+   * No-op when WASM is not active.
+   */
+  syncClearTabStopToWasm(col: number): void {
+    this.getActiveWasmGrid()?.core.clear_tab_stop(col);
+  }
+
+  /**
+   * Sync clearing all tab stops to WASM core.
+   * No-op when WASM is not active.
+   */
+  syncClearAllTabStopsToWasm(): void {
+    this.getActiveWasmGrid()?.core.clear_all_tab_stops();
+  }
+
+  /**
    * Switch to alternate screen buffer.
    *
    * @param saveCursor - Whether to save cursor before switching
@@ -608,12 +648,31 @@ export class TerminalState implements TerminalStateAccessor {
         }
         break;
       }
-      case "Execute":
-        handleExecute(this, action.value);
+      case "Execute": {
+        const grid = this.getActiveWasmGrid();
+        if (grid) {
+          const result = grid.core.handle_execute(action.value);
+          if (result === WASM_BEL_SENTINEL) {
+            this.onBell?.();
+          } else if (result > 0) {
+            const buffer = this.getActiveBuffer();
+            for (let i = 0; i < result; i++) {
+              buffer.scrollUp();
+            }
+          }
+        } else {
+          handleExecute(this, action.value);
+        }
         break;
-      case "Csi":
-        handleCsi(this, action.value);
+      }
+      case "Csi": {
+        const grid = this.getActiveWasmGrid();
+        if (grid && this.handleCsiWasm(grid, action.value)) {
+          break; // Handled by WASM
+        }
+        handleCsi(this, action.value); // Fallback to TS
         break;
+      }
       case "Esc":
         handleEsc(this, action.value);
         break;
@@ -702,6 +761,66 @@ export class TerminalState implements TerminalStateAccessor {
    */
   getFoldManager(): FoldManager {
     return this.foldManager;
+  }
+
+  /**
+   * Try to handle a CSI action via WASM.
+   * Returns true if handled, false if TS fallback needed.
+   */
+  private handleCsiWasm(grid: WasmGrid, action: CsiAction): boolean {
+    switch (action.action) {
+      case "CursorUp":
+        grid.core.handle_cursor_up(action.data || 1);
+        return true;
+      case "CursorDown":
+        grid.core.handle_cursor_down(action.data || 1);
+        return true;
+      case "CursorForward":
+        grid.core.handle_cursor_forward(action.data || 1);
+        return true;
+      case "CursorBack":
+        grid.core.handle_cursor_back(action.data || 1);
+        return true;
+      case "CursorNextLine":
+        grid.core.handle_cursor_next_line(action.data || 1);
+        return true;
+      case "CursorPreviousLine":
+        grid.core.handle_cursor_previous_line(action.data || 1);
+        return true;
+      case "CursorHorizontalAbsolute":
+        grid.core.handle_cursor_horizontal_absolute(action.data || 1);
+        return true;
+      case "CursorPosition":
+        grid.core.handle_cursor_position(
+          action.data.row || 1,
+          action.data.col || 1
+        );
+        return true;
+      case "CursorVerticalAbsolute":
+        grid.core.handle_cursor_vertical_absolute(action.data || 1);
+        return true;
+      case "EraseInDisplay": {
+        const mode = eraseModeToByte(action.data);
+        const result = grid.core.handle_erase_in_display(mode);
+        if (result === WASM_SCROLLBACK_SENTINEL) {
+          // Scrollback: call clearScrollback() directly
+          // (existing TS handler has a bug calling clearAll() instead)
+          const buffer = this.getActiveBuffer();
+          buffer.clearScrollback();
+        }
+        return true;
+      }
+      case "EraseInLine": {
+        const mode = eraseModeToByte(action.data);
+        grid.core.handle_erase_in_line(mode);
+        return true;
+      }
+      case "EraseCharacters":
+        grid.core.handle_erase_characters(action.data || 1);
+        return true;
+      default:
+        return false; // Not handled by Sprint 3 WASM
+    }
   }
 
   /**

@@ -1,0 +1,18 @@
+feature: wasm-c0-csi-handlers
+description: "WASM C0 + CSI Cursor + CSI Screen Handlers (Sprint 3)"
+tasks:
+  - - id: phase1
+      name: "Rust C0 Handler + BEL Sentinel"
+      status: completed
+  - - id: phase2
+      name: "Rust CSI Cursor Handlers"
+      status: completed
+  - - id: phase3
+      name: "Rust CSI Screen Handlers"
+      status: completed
+  - - id: phase4
+      name: "TypeScript Integration"
+      status: completed
+  - - id: phase5
+      name: "Verification and Regression Testing"
+      status: completed

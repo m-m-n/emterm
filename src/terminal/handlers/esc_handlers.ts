@@ -133,6 +133,7 @@ export function handleReverseIndex(state: TerminalStateAccessor): void {
  */
 export function handleHorizontalTabSet(state: TerminalStateAccessor): void {
   state.tabStops.add(state.cursor.col);
+  state.syncTabStopToWasm(state.cursor.col);
 }
 
 /**
