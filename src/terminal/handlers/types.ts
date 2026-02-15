@@ -76,4 +76,13 @@ export interface TerminalStateAccessor {
 
   /** Sync cursor attributes (fg, bg, flags) to WASM core. */
   syncCursorAttrsToWasm(): void;
+
+  /** Sync a tab stop addition to WASM core (no-op when WASM is not active). */
+  syncTabStopToWasm(col: number): void;
+
+  /** Sync a tab stop removal to WASM core (no-op when WASM is not active). */
+  syncClearTabStopToWasm(col: number): void;
+
+  /** Sync clearing all tab stops to WASM core (no-op when WASM is not active). */
+  syncClearAllTabStopsToWasm(): void;
 }
