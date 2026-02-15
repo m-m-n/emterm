@@ -125,7 +125,7 @@ impl TerminalCore {
             g1_charset: 0,
             active_charset: 0,
             scroll_region_top: 0,
-            scroll_region_bottom: rows - 1,
+            scroll_region_bottom: rows.saturating_sub(1),
             // Sprint 4
             response_buffer: [0u8; 64],
             response_len: 0,
@@ -563,7 +563,7 @@ impl TerminalCore {
 
         // Sprint 2: reset print state on resize
         self.scroll_region_top = 0;
-        self.scroll_region_bottom = new_rows - 1;
+        self.scroll_region_bottom = new_rows.saturating_sub(1);
         self.wrap_pending = false;
         self.grapheme_buffer.clear();
     }
@@ -783,7 +783,7 @@ impl TerminalCore {
         self.g1_charset = 0;
         self.active_charset = 0;
         self.scroll_region_top = 0;
-        self.scroll_region_bottom = self.rows - 1;
+        self.scroll_region_bottom = self.rows.saturating_sub(1);
         // Sprint 4
         self.response_buffer = [0u8; 64];
         self.response_len = 0;
@@ -1017,9 +1017,9 @@ impl TerminalCore {
             cell.fg = self.cursor.fg;
             cell.bg = self.cursor.bg;
             cell.flags = self.cursor.flags;
-            if cell.is_overflow() {
-                self.overflow.remove(&(col, row));
-            }
+            // Always remove overflow entry (char_len is already set to 1 above,
+            // so is_overflow() would be false -- must remove unconditionally)
+            self.overflow.remove(&(col, row));
             self.mark_row_dirty(row);
         }
 
@@ -1205,13 +1205,21 @@ impl TerminalCore {
 
     /// CSI B - Cursor Down by count rows.
     pub fn handle_cursor_down(&mut self, count: u16) {
-        self.cursor.row = self.cursor.row.saturating_add(count).min(self.rows.saturating_sub(1));
+        self.cursor.row = self
+            .cursor
+            .row
+            .saturating_add(count)
+            .min(self.rows.saturating_sub(1));
         self.wrap_pending = false;
     }
 
     /// CSI C - Cursor Forward by count cols.
     pub fn handle_cursor_forward(&mut self, count: u16) {
-        self.cursor.col = self.cursor.col.saturating_add(count).min(self.cols.saturating_sub(1));
+        self.cursor.col = self
+            .cursor
+            .col
+            .saturating_add(count)
+            .min(self.cols.saturating_sub(1));
         self.wrap_pending = false;
     }
 
@@ -1223,7 +1231,11 @@ impl TerminalCore {
 
     /// CSI E - Cursor Next Line (down + col=0).
     pub fn handle_cursor_next_line(&mut self, count: u16) {
-        self.cursor.row = self.cursor.row.saturating_add(count).min(self.rows.saturating_sub(1));
+        self.cursor.row = self
+            .cursor
+            .row
+            .saturating_add(count)
+            .min(self.rows.saturating_sub(1));
         self.cursor.col = 0;
         self.wrap_pending = false;
     }
@@ -1401,7 +1413,9 @@ impl TerminalCore {
                 38 => {
                     // Extended foreground color
                     i += 1;
-                    if i >= params.len() { break; }
+                    if i >= params.len() {
+                        break;
+                    }
                     match params[i] {
                         5 => {
                             // 38;5;n - Indexed color
@@ -1429,7 +1443,9 @@ impl TerminalCore {
                 48 => {
                     // Extended background color
                     i += 1;
-                    if i >= params.len() { break; }
+                    if i >= params.len() {
+                        break;
+                    }
                     match params[i] {
                         5 => {
                             // 48;5;n - Indexed color
@@ -1573,8 +1589,16 @@ impl TerminalCore {
     /// CSI r - DECSTBM (Set Scrolling Region).
     /// top/bottom are 1-indexed (0 = default).
     pub fn handle_decstbm(&mut self, top: u16, bottom: u16) {
-        let t = if top == 0 { 0 } else { (top - 1).min(self.rows.saturating_sub(1)) };
-        let b = if bottom == 0 { self.rows.saturating_sub(1) } else { (bottom - 1).min(self.rows.saturating_sub(1)) };
+        let t = if top == 0 {
+            0
+        } else {
+            (top - 1).min(self.rows.saturating_sub(1))
+        };
+        let b = if bottom == 0 {
+            self.rows.saturating_sub(1)
+        } else {
+            (bottom - 1).min(self.rows.saturating_sub(1))
+        };
         self.set_scroll_region(t, b);
         self.cursor.col = 0;
         self.cursor.row = 0;
@@ -1588,27 +1612,63 @@ impl TerminalCore {
     pub fn handle_set_mode(&mut self, mode: u16, enable: bool) -> u8 {
         match mode {
             // Boolean modes: set directly in WASM bitfield
-            3 => { self.set_mode(MODE_COLUMN_132, enable); MODE_ACTION_NONE }
-            5 => { self.set_mode(MODE_REVERSE_SCREEN, enable); MODE_ACTION_NONE }
-            6 => { self.set_mode(MODE_ORIGIN, enable); MODE_ACTION_NONE }
-            7 => { self.set_mode(MODE_AUTO_WRAP, enable); MODE_ACTION_NONE }
-            12 => { self.set_mode(MODE_CURSOR_BLINK, enable); MODE_ACTION_NONE }
-            25 => { self.set_mode(MODE_CURSOR_VISIBLE, enable); MODE_ACTION_NONE }
+            3 => {
+                self.set_mode(MODE_COLUMN_132, enable);
+                MODE_ACTION_NONE
+            }
+            5 => {
+                self.set_mode(MODE_REVERSE_SCREEN, enable);
+                MODE_ACTION_NONE
+            }
+            6 => {
+                self.set_mode(MODE_ORIGIN, enable);
+                MODE_ACTION_NONE
+            }
+            7 => {
+                self.set_mode(MODE_AUTO_WRAP, enable);
+                MODE_ACTION_NONE
+            }
+            12 => {
+                self.set_mode(MODE_CURSOR_BLINK, enable);
+                MODE_ACTION_NONE
+            }
+            25 => {
+                self.set_mode(MODE_CURSOR_VISIBLE, enable);
+                MODE_ACTION_NONE
+            }
 
             // Buffer switch modes: return action code
             47 | 1047 => {
-                if enable { MODE_ACTION_SWITCH_TO_ALT } else { MODE_ACTION_SWITCH_TO_MAIN }
+                if enable {
+                    MODE_ACTION_SWITCH_TO_ALT
+                } else {
+                    MODE_ACTION_SWITCH_TO_MAIN
+                }
             }
             1048 => {
-                if enable { MODE_ACTION_SAVE_CURSOR } else { MODE_ACTION_RESTORE_CURSOR }
+                if enable {
+                    MODE_ACTION_SAVE_CURSOR
+                } else {
+                    MODE_ACTION_RESTORE_CURSOR
+                }
             }
             1049 => {
-                if enable { MODE_ACTION_SAVE_AND_SWITCH_TO_ALT } else { MODE_ACTION_SWITCH_TO_MAIN }
+                if enable {
+                    MODE_ACTION_SAVE_AND_SWITCH_TO_ALT
+                } else {
+                    MODE_ACTION_SWITCH_TO_MAIN
+                }
             }
 
             // Boolean modes handled via TS fallback for multi-valued side effects
-            1004 => { self.set_mode(MODE_FOCUS_TRACKING, enable); MODE_ACTION_NONE }
-            2004 => { self.set_mode(MODE_BRACKETED_PASTE, enable); MODE_ACTION_NONE }
+            1004 => {
+                self.set_mode(MODE_FOCUS_TRACKING, enable);
+                MODE_ACTION_NONE
+            }
+            2004 => {
+                self.set_mode(MODE_BRACKETED_PASTE, enable);
+                MODE_ACTION_NONE
+            }
 
             // Multi-valued modes: TS fallback
             1 | 1000 | 1002 | 1003 | 1005 | 1006 => MODE_ACTION_TS_FALLBACK,
@@ -1674,8 +1734,8 @@ impl TerminalCore {
 
     /// Format cursor position report into response buffer.
     fn format_cpr(&mut self) -> u8 {
-        let row = self.cursor.row + 1;
-        let col = self.cursor.col + 1;
+        let row = self.cursor.row.saturating_add(1);
+        let col = self.cursor.col.saturating_add(1);
         // Format: ESC [ row ; col R
         let mut buf = [0u8; 20];
         buf[0] = b'\x1b';
@@ -3158,30 +3218,50 @@ mod tests {
     #[test]
     fn test_sgr_style_flags() {
         let cases: &[(u16, u16)] = &[
-            (1, STYLE_BOLD), (2, STYLE_DIM), (3, STYLE_ITALIC),
-            (4, STYLE_UNDERLINE), (5, STYLE_BLINK), (7, STYLE_REVERSE),
-            (8, STYLE_HIDDEN), (9, STYLE_STRIKETHROUGH),
+            (1, STYLE_BOLD),
+            (2, STYLE_DIM),
+            (3, STYLE_ITALIC),
+            (4, STYLE_UNDERLINE),
+            (5, STYLE_BLINK),
+            (7, STYLE_REVERSE),
+            (8, STYLE_HIDDEN),
+            (9, STYLE_STRIKETHROUGH),
         ];
         for &(param, flag) in cases {
             let mut core = TerminalCore::new(80, 24);
             core.handle_sgr(&[param]);
-            assert_ne!(core.cursor.flags & flag, 0, "SGR {} should set flag 0x{:04x}", param, flag);
+            assert_ne!(
+                core.cursor.flags & flag,
+                0,
+                "SGR {} should set flag 0x{:04x}",
+                param,
+                flag
+            );
         }
     }
 
     #[test]
     fn test_sgr_style_resets() {
         let cases: &[(u16, u16)] = &[
-            (22, STYLE_BOLD | STYLE_DIM), (23, STYLE_ITALIC),
-            (24, STYLE_UNDERLINE), (25, STYLE_BLINK),
-            (27, STYLE_REVERSE), (28, STYLE_HIDDEN),
+            (22, STYLE_BOLD | STYLE_DIM),
+            (23, STYLE_ITALIC),
+            (24, STYLE_UNDERLINE),
+            (25, STYLE_BLINK),
+            (27, STYLE_REVERSE),
+            (28, STYLE_HIDDEN),
             (29, STYLE_STRIKETHROUGH),
         ];
         for &(param, flag) in cases {
             let mut core = TerminalCore::new(80, 24);
             core.cursor.flags = 0xFFFF;
             core.handle_sgr(&[param]);
-            assert_eq!(core.cursor.flags & flag, 0, "SGR {} should clear flag 0x{:04x}", param, flag);
+            assert_eq!(
+                core.cursor.flags & flag,
+                0,
+                "SGR {} should clear flag 0x{:04x}",
+                param,
+                flag
+            );
         }
     }
 
@@ -3324,7 +3404,7 @@ mod tests {
         core.set_cursor(0, 3);
         core.set_cell(0, 3, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         core.handle_insert_lines(100); // Exceeds available rows
-        // Should still work, no panic, row 3 cleared
+                                       // Should still work, no panic, row 3 cleared
         assert_eq!(core.get_cell_char(0, 3), " ");
     }
 
@@ -3360,7 +3440,21 @@ mod tests {
     fn test_insert_characters_basic() {
         let mut core = TerminalCore::new(10, 1);
         for col in 0..10 {
-            core.set_cell(col, 0, &format!("{}", col % 10), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            core.set_cell(
+                col,
+                0,
+                &format!("{}", col % 10),
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
         }
         core.set_cursor(3, 0);
         core.handle_insert_characters(2);
@@ -3388,7 +3482,21 @@ mod tests {
     fn test_delete_characters_basic() {
         let mut core = TerminalCore::new(10, 1);
         for col in 0..10 {
-            core.set_cell(col, 0, &format!("{}", col % 10), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            core.set_cell(
+                col,
+                0,
+                &format!("{}", col % 10),
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            );
         }
         core.set_cursor(3, 0);
         core.handle_delete_characters(2);
@@ -3446,7 +3554,7 @@ mod tests {
         }
         let result = core.handle_scroll_up(2);
         assert_eq!(result, 0); // WASM handled
-        // Rows 4-7 moved to 2-5
+                               // Rows 4-7 moved to 2-5
         assert_eq!(core.get_cell_char(0, 2), "4");
         assert_eq!(core.get_cell_char(0, 5), "7");
         // Bottom rows cleared
@@ -3505,7 +3613,7 @@ mod tests {
         core.set_cursor(10, 15);
         core.wrap_pending = true;
         core.handle_decstbm(5, 20);
-        assert_eq!(core.get_scroll_region_top(), 4);  // 1-indexed to 0-indexed
+        assert_eq!(core.get_scroll_region_top(), 4); // 1-indexed to 0-indexed
         assert_eq!(core.get_scroll_region_bottom(), 19);
         assert_eq!(core.get_cursor_col(), 0);
         assert_eq!(core.get_cursor_row(), 0);
@@ -3562,21 +3670,21 @@ mod tests {
     #[test]
     fn test_mode_buffer_switch_47() {
         let mut core = TerminalCore::new(80, 24);
-        assert_eq!(core.handle_set_mode(47, true), 1);  // switchToAlt
+        assert_eq!(core.handle_set_mode(47, true), 1); // switchToAlt
         assert_eq!(core.handle_set_mode(47, false), 3); // switchToMain
     }
 
     #[test]
     fn test_mode_buffer_switch_1049() {
         let mut core = TerminalCore::new(80, 24);
-        assert_eq!(core.handle_set_mode(1049, true), 2);  // saveAndSwitchToAlt
+        assert_eq!(core.handle_set_mode(1049, true), 2); // saveAndSwitchToAlt
         assert_eq!(core.handle_set_mode(1049, false), 3); // switchToMain
     }
 
     #[test]
     fn test_mode_save_restore_cursor_1048() {
         let mut core = TerminalCore::new(80, 24);
-        assert_eq!(core.handle_set_mode(1048, true), 4);  // saveCursor
+        assert_eq!(core.handle_set_mode(1048, true), 4); // saveCursor
         assert_eq!(core.handle_set_mode(1048, false), 5); // restoreCursor
     }
 
@@ -3584,7 +3692,12 @@ mod tests {
     fn test_mode_ts_fallback() {
         let mut core = TerminalCore::new(80, 24);
         for mode in [1, 1000, 1002, 1003, 1005, 1006] {
-            assert_eq!(core.handle_set_mode(mode, true), 0xFF, "Mode {} should fallback", mode);
+            assert_eq!(
+                core.handle_set_mode(mode, true),
+                0xFF,
+                "Mode {} should fallback",
+                mode
+            );
         }
         // 1004 and 2004 are boolean modes handled in WASM
         assert_eq!(core.handle_set_mode(1004, true), 0);

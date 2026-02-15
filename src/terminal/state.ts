@@ -880,21 +880,21 @@ export class TerminalState implements TerminalStateAccessor {
       case "DeviceStatusReport": {
         const len = grid.core.handle_device_status_report(action.data);
         if (len > 0) {
-          this.readAndSendResponse(grid, len);
+          this.readAndSendResponse(grid);
         }
         return true;
       }
       case "PrimaryDeviceAttributes": {
         const len = grid.core.handle_primary_device_attributes();
         if (len > 0) {
-          this.readAndSendResponse(grid, len);
+          this.readAndSendResponse(grid);
         }
         return true;
       }
       case "SecondaryDeviceAttributes": {
         const len = grid.core.handle_secondary_device_attributes();
         if (len > 0) {
-          this.readAndSendResponse(grid, len);
+          this.readAndSendResponse(grid);
         }
         return true;
       }
@@ -964,7 +964,7 @@ export class TerminalState implements TerminalStateAccessor {
   /**
    * Read device response from WASM and add to pending responses.
    */
-  private readAndSendResponse(grid: WasmGrid, _len: number): void {
+  private readAndSendResponse(grid: WasmGrid): void {
     const bytes = grid.core.get_response_bytes();
     if (bytes.length > 0) {
       this.addPendingResponse(bytes);
