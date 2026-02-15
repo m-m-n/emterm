@@ -24,4 +24,5 @@ export function handleSgr(
   for (const sgrAttr of sgrAttrs) {
     applySgrAttr(state.cursor.attrs, sgrAttr);
   }
+  state.syncCursorAttrsToWasm();
 }

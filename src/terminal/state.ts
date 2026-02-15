@@ -9,7 +9,7 @@ import { MarkdownSessionManager } from "../markdown/session.ts";
 import type { CharSet, TerminalAction } from "../types/terminal.ts";
 import { UnifiedBuffer } from "./unified-buffer.ts";
 import { CursorState } from "./cursor.ts";
-import { cloneAttributes } from "./attributes.ts";
+import { cloneAttributes, packColor, packStyleFlags } from "./attributes.ts";
 import { FoldManager } from "./fold-manager.ts";
 import { Line, type Cell } from "./grid.ts";
 import { createDefaultModes, syncModesToWasm, type TerminalModes } from "./modes.ts";
@@ -349,6 +349,24 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Sync cursor attributes (fg, bg, flags) to WASM core.
+   * Called after SGR attribute changes and cursor restore.
+   */
+  syncCursorAttrsToWasm(): void {
+    const grid = this.getActiveWasmGrid();
+    if (!grid) return;
+
+    const fg = packColor(this.cursor.attrs.fg);
+    grid.core.set_cursor_fg(fg.tag, fg.r, fg.g, fg.b);
+
+    const bg = packColor(this.cursor.attrs.bg);
+    grid.core.set_cursor_bg(bg.tag, bg.r, bg.g, bg.b);
+
+    const flags = packStyleFlags(this.cursor.attrs);
+    grid.core.set_cursor_flags(flags);
+  }
+
+  /**
    * Sync boolean modes to WASM bitfield.
    * No-op when WASM is not active.
    */
@@ -407,6 +425,7 @@ export class TerminalState implements TerminalStateAccessor {
     this.useAlternate = true;
     this.cursor = this.alternateCursor!;
     this.wrapPending = false;
+    this.syncCursorAttrsToWasm();
 
     // Mark all lines as dirty to force redraw
     // Use markDirty() to propagate to WASM dirty bitset (not just local field)
@@ -439,6 +458,7 @@ export class TerminalState implements TerminalStateAccessor {
     }
 
     this.wrapPending = false;
+    this.syncCursorAttrsToWasm();
 
     // Mark all lines as dirty to force redraw
     // Use markDirty() to propagate to WASM dirty bitset (not just local field)
@@ -722,6 +742,9 @@ export class TerminalState implements TerminalStateAccessor {
     if (this.primaryWasmGrid) {
       syncModesToWasm(this.modes, this.primaryWasmGrid.core);
     }
+
+    // Sync default cursor attrs to WASM
+    this.syncCursorAttrsToWasm();
 
     // Reset other state
     this.wrapPending = false;
