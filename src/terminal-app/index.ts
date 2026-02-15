@@ -395,9 +395,6 @@ export class TerminalApp {
         // Store the decoded image for later display
         const image = payload.image as DecodedImage;
         this.pendingImages.set(image.id, image);
-        console.info(
-          `[INFO][FRONTEND] Image ready: id=${image.id}, ${image.width}x${image.height}`,
-        );
         break;
       }
 
@@ -412,9 +409,6 @@ export class TerminalApp {
         if (image && this.imageViewer) {
           // For fullscreen display mode
           this.imageViewer.show(image);
-          console.info(
-            `[INFO][FRONTEND] Image placed: id=${placement.image_id}`,
-          );
         } else {
           console.warn(
             `[WARN][FRONTEND] Image not found for placement: ${placement.image_id}`,
@@ -440,9 +434,6 @@ export class TerminalApp {
         } else if (target.type === "ById" && target.id !== undefined) {
           this.pendingImages.delete(target.id);
         }
-        console.info(
-          `[INFO][FRONTEND] Image deleted: ${JSON.stringify(target)}`,
-        );
         break;
       }
 
