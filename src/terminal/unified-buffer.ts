@@ -254,6 +254,11 @@ export class UnifiedBuffer {
 		} else if (top < bottom) {
 			this.scrollRegion = { top, bottom };
 		}
+
+		// Sync to WASM scroll region (only valid regions)
+		if (this.wasmGrid && top < bottom) {
+			this.wasmGrid.core.set_scroll_region(top, bottom);
+		}
 	}
 
 	/**
@@ -261,6 +266,11 @@ export class UnifiedBuffer {
 	 */
 	clearScrollRegion(): void {
 		this.scrollRegion = null;
+
+		// Sync to WASM: full screen = (0, rows-1)
+		if (this.wasmGrid) {
+			this.wasmGrid.core.set_scroll_region(0, this._rows - 1);
+		}
 	}
 
 	/**
