@@ -2,6 +2,17 @@ mod cell;
 mod terminal_core;
 mod unicode;
 
+// Handler modules (impl TerminalCore in separate files)
+mod c0_handler;
+mod csi_cursor;
+mod csi_device;
+mod csi_edit;
+mod csi_modes;
+mod csi_screen;
+mod csi_scroll;
+mod print_handler;
+mod sgr;
+
 use wasm_bindgen::prelude::*;
 
 /// Trivial function to verify WASM pipeline works.
