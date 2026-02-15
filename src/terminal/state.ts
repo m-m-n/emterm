@@ -57,20 +57,20 @@ export class TerminalState implements TerminalStateAccessor {
   /** Terminal modes (public for handler access). */
   modes: TerminalModes;
 
-  /** Pending wrap flag - next character will wrap (public for handler access). */
-  wrapPending: boolean = false;
+  /** Pending wrap flag backing field. */
+  private _wrapPending: boolean = false;
 
   /** Tab stops (column indices where tab stops are set, public for handler access). */
   tabStops: Set<number>;
 
-  /** G0 character set (public for handler access). */
-  g0CharSet: CharSet = "Ascii";
+  /** G0 character set backing field. */
+  private _g0CharSet: CharSet = "Ascii";
 
-  /** G1 character set (public for handler access). */
-  g1CharSet: CharSet = "Ascii";
+  /** G1 character set backing field. */
+  private _g1CharSet: CharSet = "Ascii";
 
-  /** Active character set (G0 or G1, public for handler access). */
-  activeCharSet: ActiveCharSet = "G0";
+  /** Active character set backing field. */
+  private _activeCharSet: ActiveCharSet = "G0";
 
   /** Saved cursor for alternate buffer switch (1049). */
   private savedCursorForAlt: CursorState | null = null;
@@ -197,6 +197,39 @@ export class TerminalState implements TerminalStateAccessor {
   /** Get cursor style. */
   get cursorStyle(): "block" | "underline" | "bar" {
     return this.cursor.style;
+  }
+
+  /** Wrap pending with WASM auto-sync. */
+  get wrapPending(): boolean { return this._wrapPending; }
+  set wrapPending(value: boolean) {
+    this._wrapPending = value;
+    this.getActiveWasmGrid()?.core.set_wrap_pending(value);
+  }
+
+  /** G0 character set with WASM auto-sync. */
+  get g0CharSet(): CharSet { return this._g0CharSet; }
+  set g0CharSet(value: CharSet) {
+    this._g0CharSet = value;
+    this.getActiveWasmGrid()?.core.set_g0_charset(value === "DecLineDrawing" ? 1 : 0);
+  }
+
+  /** G1 character set with WASM auto-sync. */
+  get g1CharSet(): CharSet { return this._g1CharSet; }
+  set g1CharSet(value: CharSet) {
+    this._g1CharSet = value;
+    this.getActiveWasmGrid()?.core.set_g1_charset(value === "DecLineDrawing" ? 1 : 0);
+  }
+
+  /** Active character set with WASM auto-sync. */
+  get activeCharSet(): ActiveCharSet { return this._activeCharSet; }
+  set activeCharSet(value: ActiveCharSet) {
+    this._activeCharSet = value;
+    this.getActiveWasmGrid()?.core.set_active_charset(value === "G1" ? 1 : 0);
+  }
+
+  /** Get the active WASM grid (primary or alternate). */
+  private getActiveWasmGrid(): WasmGrid | null {
+    return this.useAlternate ? this.alternateWasmGrid : this.primaryWasmGrid;
   }
 
   /** Get terminal modes. */
@@ -422,6 +455,21 @@ export class TerminalState implements TerminalStateAccessor {
    * Called when a non-extending codepoint arrives or on non-Print actions.
    */
   flushGraphemeBuffer(): void {
+    // WASM path: delegate to WASM core
+    const wasmGrid = this.getActiveWasmGrid();
+    if (wasmGrid) {
+      if (wasmGrid.core.get_grapheme_buffer_len() === 0) return;
+      const scrollCount = wasmGrid.core.flush_grapheme_buffer();
+      if (scrollCount > 0) {
+        const buffer = this.getActiveBuffer();
+        for (let i = 0; i < scrollCount; i++) {
+          buffer.scrollUp();
+        }
+      }
+      return;
+    }
+
+    // JS fallback path
     if (this.graphemeBuffer.length === 0) return;
 
     const clusterString = String.fromCodePoint(...this.graphemeBuffer);
@@ -510,14 +558,36 @@ export class TerminalState implements TerminalStateAccessor {
    */
   processAction(action: TerminalAction): void {
     // Flush grapheme buffer before non-Print actions
-    if (action.type !== "Print" && this.graphemeBuffer.length > 0) {
-      this.flushGraphemeBuffer();
+    if (action.type !== "Print") {
+      const grid = this.getActiveWasmGrid();
+      const hasBufferedContent = grid
+        ? grid.core.get_grapheme_buffer_len() > 0
+        : this.graphemeBuffer.length > 0;
+      if (hasBufferedContent) {
+        this.flushGraphemeBuffer();
+      }
     }
 
     switch (action.type) {
-      case "Print":
-        handlePrint(this, action.value);
+      case "Print": {
+        const grid = this.getActiveWasmGrid();
+        if (grid) {
+          // WASM fast path: delegate single codepoint to WASM handle_print
+          const cp = action.value.codePointAt(0);
+          if (cp !== undefined) {
+            const scrollCount = grid.core.handle_print(cp);
+            if (scrollCount > 0) {
+              const buffer = this.getActiveBuffer();
+              for (let i = 0; i < scrollCount; i++) {
+                buffer.scrollUp();
+              }
+            }
+          }
+        } else {
+          handlePrint(this, action.value);
+        }
         break;
+      }
       case "Execute":
         handleExecute(this, action.value);
         break;
@@ -662,6 +732,7 @@ export class TerminalState implements TerminalStateAccessor {
 
     // Reset grapheme buffer
     this.graphemeBuffer = [];
+    // WASM grapheme buffer already cleared by primaryWasmGrid.reset() above
 
     // Reset OSC state
     this._title = "";

@@ -305,19 +305,83 @@ export class WasmGrid {
 
 // ── Conversion utilities ────────────────────────────────
 
+/** Shared TextDecoder for UTF-8 parsing in wasmRowToLine. */
+const utf8Decoder = new TextDecoder("utf-8");
+
 /**
  * Read a WASM row and create a JS Line object (for scroll-out to scrollback).
+ *
+ * Uses get_row_packed() for a single WASM call per row instead of cols*5
+ * individual calls. Binary format per cell:
+ *   Inline: char_len(1) + char_data(char_len) + width(1) + fg(4) + bg(4) + flags(2 LE)
+ *   Overflow: 0xFF(1) + len_hi(1) + len_lo(1) + utf8_data(len) + width(1) + fg(4) + bg(4) + flags(2 LE)
  */
 export function wasmRowToLine(core: TerminalCore, row: number): Line {
 	const cols = core.cols();
 	const line = new Line(cols);
+	const packed = core.get_row_packed(row);
+	let offset = 0;
 
 	for (let col = 0; col < cols; col++) {
-		const ch = core.get_cell_char(col, row);
-		const width = core.get_cell_width(col, row);
-		const fg = unpackColor(core.get_cell_fg(col, row));
-		const bg = unpackColor(core.get_cell_bg(col, row));
-		const flags = core.get_cell_flags(col, row);
+		// Safety: ensure minimum bytes remain (1 charLen + 1 width + 8 colors + 2 flags = 12)
+		if (offset + 12 > packed.length) break;
+
+		// Read character data
+		const charLen = packed[offset++]!;
+		let ch: string;
+		if (charLen === 0xFF) {
+			// Overflow: 2-byte big-endian length + UTF-8 data
+			const lenHi = packed[offset++]!;
+			const lenLo = packed[offset++]!;
+			const byteLen = (lenHi << 8) | lenLo;
+			ch = utf8Decoder.decode(packed.subarray(offset, offset + byteLen));
+			offset += byteLen;
+		} else if (charLen === 0) {
+			ch = "";
+		} else if (charLen === 1) {
+			// Fast path for ASCII (most common case)
+			ch = String.fromCharCode(packed[offset++]!);
+		} else {
+			ch = utf8Decoder.decode(packed.subarray(offset, offset + charLen));
+			offset += charLen;
+		}
+
+		// Read width (1 byte)
+		const width = packed[offset++]!;
+
+		// Read fg color (4 bytes: tag, r, g, b)
+		const fgTag = packed[offset++]!;
+		const fgR = packed[offset++]!;
+		const fgG = packed[offset++]!;
+		const fgB = packed[offset++]!;
+		let fg: Color | null;
+		if (fgTag === 0) {
+			fg = null;
+		} else if (fgTag === 1) {
+			fg = { type: "indexed", index: fgR };
+		} else {
+			fg = { type: "rgb", r: fgR, g: fgG, b: fgB };
+		}
+
+		// Read bg color (4 bytes: tag, r, g, b)
+		const bgTag = packed[offset++]!;
+		const bgR = packed[offset++]!;
+		const bgG = packed[offset++]!;
+		const bgB = packed[offset++]!;
+		let bg: Color | null;
+		if (bgTag === 0) {
+			bg = null;
+		} else if (bgTag === 1) {
+			bg = { type: "indexed", index: bgR };
+		} else {
+			bg = { type: "rgb", r: bgR, g: bgG, b: bgB };
+		}
+
+		// Read flags (2 bytes, little-endian)
+		const flagsLo = packed[offset++]!;
+		const flagsHi = packed[offset++]!;
+		const flags = flagsLo | (flagsHi << 8);
+
 		const attrs: CellAttributes = { ...unpackStyleFlags(flags), fg, bg };
 		line.setCell(col, { char: ch, width, attrs, dirty: false });
 	}

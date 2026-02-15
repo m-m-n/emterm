@@ -63,6 +63,14 @@ pub struct TerminalCore {
     modes: u32,
     tab_stops: Vec<bool>,
     overflow: OverflowTable,
+    // Sprint 2: Print handler state
+    grapheme_buffer: Vec<u32>,
+    wrap_pending: bool,
+    g0_charset: u8,     // 0=Ascii, 1=DecLineDrawing
+    g1_charset: u8,     // 0=Ascii, 1=DecLineDrawing
+    active_charset: u8, // 0=G0, 1=G1
+    scroll_region_top: u16,
+    scroll_region_bottom: u16,
 }
 
 #[wasm_bindgen]
@@ -93,6 +101,14 @@ impl TerminalCore {
             modes: default_modes,
             tab_stops,
             overflow: OverflowTable::new(),
+            // Sprint 2
+            grapheme_buffer: Vec::with_capacity(8),
+            wrap_pending: false,
+            g0_charset: 0,
+            g1_charset: 0,
+            active_charset: 0,
+            scroll_region_top: 0,
+            scroll_region_bottom: rows - 1,
         };
         core.mark_all_dirty();
         core
@@ -524,6 +540,12 @@ impl TerminalCore {
 
         // Clean up overflow
         overflow_resize(&mut self.overflow, new_cols, new_rows);
+
+        // Sprint 2: reset print state on resize
+        self.scroll_region_top = 0;
+        self.scroll_region_bottom = new_rows - 1;
+        self.wrap_pending = false;
+        self.grapheme_buffer.clear();
     }
 
     // ── Cursor ───────────────────────────────────────────
@@ -734,7 +756,386 @@ impl TerminalCore {
             self.tab_stops[i] = true;
         }
         self.overflow.clear();
+        // Sprint 2
+        self.grapheme_buffer.clear();
+        self.wrap_pending = false;
+        self.g0_charset = 0;
+        self.g1_charset = 0;
+        self.active_charset = 0;
+        self.scroll_region_top = 0;
+        self.scroll_region_bottom = self.rows - 1;
         self.mark_all_dirty();
+    }
+
+    // ── Sprint 2: Charset ───────────────────────────────
+
+    pub fn get_g0_charset(&self) -> u8 {
+        self.g0_charset
+    }
+
+    pub fn set_g0_charset(&mut self, val: u8) {
+        self.g0_charset = if val <= 1 { val } else { 0 };
+    }
+
+    pub fn get_g1_charset(&self) -> u8 {
+        self.g1_charset
+    }
+
+    pub fn set_g1_charset(&mut self, val: u8) {
+        self.g1_charset = if val <= 1 { val } else { 0 };
+    }
+
+    pub fn get_active_charset(&self) -> u8 {
+        self.active_charset
+    }
+
+    pub fn set_active_charset(&mut self, val: u8) {
+        self.active_charset = if val <= 1 { val } else { 0 };
+    }
+
+    // ── Sprint 2: Scroll region ─────────────────────────
+
+    pub fn get_scroll_region_top(&self) -> u16 {
+        self.scroll_region_top
+    }
+
+    pub fn get_scroll_region_bottom(&self) -> u16 {
+        self.scroll_region_bottom
+    }
+
+    pub fn set_scroll_region(&mut self, top: u16, bottom: u16) {
+        let t = top.min(self.rows.saturating_sub(1));
+        let b = bottom.min(self.rows.saturating_sub(1));
+        if t < b {
+            self.scroll_region_top = t;
+            self.scroll_region_bottom = b;
+        } else {
+            // Invalid region: reset to full screen
+            self.scroll_region_top = 0;
+            self.scroll_region_bottom = self.rows.saturating_sub(1);
+        }
+    }
+
+    // ── Sprint 2: Wrap pending ──────────────────────────
+
+    pub fn get_wrap_pending(&self) -> bool {
+        self.wrap_pending
+    }
+
+    pub fn set_wrap_pending(&mut self, val: bool) {
+        self.wrap_pending = val;
+    }
+
+    // ── Sprint 2: Grapheme buffer ───────────────────────
+
+    pub fn get_grapheme_buffer_len(&self) -> u32 {
+        self.grapheme_buffer.len() as u32
+    }
+
+    pub fn clear_grapheme_buffer(&mut self) {
+        self.grapheme_buffer.clear();
+    }
+
+    // ── Sprint 2: Internal print helpers ────────────────
+
+    fn carriage_return(&mut self) {
+        self.cursor.col = 0;
+    }
+
+    /// Advance cursor row. Returns true if scroll is needed
+    /// (cursor at scroll_region_bottom).
+    fn line_feed(&mut self) -> bool {
+        if self.cursor.row >= self.scroll_region_bottom {
+            true
+        } else {
+            self.cursor.row += 1;
+            false
+        }
+    }
+
+    /// Apply active charset translation to a codepoint.
+    fn translate_charset(&self, cp: u32) -> u32 {
+        let charset = if self.active_charset == 0 {
+            self.g0_charset
+        } else {
+            self.g1_charset
+        };
+        if charset == 1 {
+            Self::translate_line_drawing(cp)
+        } else {
+            cp
+        }
+    }
+
+    /// DEC Line Drawing translation table (0x5F-0x7E, 32 entries).
+    fn translate_line_drawing(cp: u32) -> u32 {
+        match cp {
+            0x5F => 0x0020, // _ → Blank
+            0x60 => 0x25C6, // ` → Diamond
+            0x61 => 0x2592, // a → Checkerboard
+            0x62 => 0x2409, // b → HT
+            0x63 => 0x240C, // c → FF
+            0x64 => 0x240D, // d → CR
+            0x65 => 0x240A, // e → LF
+            0x66 => 0x00B0, // f → Degree
+            0x67 => 0x00B1, // g → Plus/minus
+            0x68 => 0x2424, // h → NL
+            0x69 => 0x240B, // i → VT
+            0x6A => 0x2518, // j → Lower right corner
+            0x6B => 0x2510, // k → Upper right corner
+            0x6C => 0x250C, // l → Upper left corner
+            0x6D => 0x2514, // m → Lower left corner
+            0x6E => 0x253C, // n → Crossing lines
+            0x6F => 0x23BA, // o → Scan 1
+            0x70 => 0x23BB, // p → Scan 3
+            0x71 => 0x2500, // q → Scan 5 (horizontal line)
+            0x72 => 0x23BC, // r → Scan 7
+            0x73 => 0x23BD, // s → Scan 9
+            0x74 => 0x251C, // t → Left tee
+            0x75 => 0x2524, // u → Right tee
+            0x76 => 0x2534, // v → Bottom tee
+            0x77 => 0x252C, // w → Top tee
+            0x78 => 0x2502, // x → Vertical line
+            0x79 => 0x2264, // y → Less than or equal
+            0x7A => 0x2265, // z → Greater than or equal
+            0x7B => 0x03C0, // { → Pi
+            0x7C => 0x2260, // | → Not equal
+            0x7D => 0x00A3, // } → UK pound
+            0x7E => 0x00B7, // ~ → Bullet
+            _ => cp,
+        }
+    }
+
+    /// Write a character/grapheme to grid at cursor, handling wrap and scroll.
+    /// Returns scroll count.
+    fn write_grapheme_to_grid(&mut self, char_str: &str, width: u8) -> u8 {
+        let mut scroll_count: u8 = 0;
+
+        // Handle wrap_pending
+        if self.wrap_pending {
+            self.wrap_pending = false;
+            self.carriage_return();
+            if self.line_feed() {
+                scroll_count += 1;
+            }
+            self.wrapped[self.cursor.row as usize] = true;
+        }
+
+        // Wide char at line end: wrap before printing
+        if width == 2 && self.cursor.col >= self.cols.saturating_sub(1) {
+            if self.get_mode(MODE_AUTO_WRAP) {
+                self.carriage_return();
+                if self.line_feed() {
+                    scroll_count += 1;
+                }
+                self.wrapped[self.cursor.row as usize] = true;
+            }
+        }
+
+        // Write cell
+        let col = self.cursor.col;
+        let row = self.cursor.row;
+        if let Some(idx) = self.cell_index(col, row) {
+            let cell = &mut self.grid[idx];
+            cell.set_char(char_str);
+            if cell.is_overflow() {
+                self.overflow.insert((col, row), char_str.to_string());
+            } else {
+                self.overflow.remove(&(col, row));
+            }
+            cell.width = width;
+            cell.fg = self.cursor.fg;
+            cell.bg = self.cursor.bg;
+            cell.flags = self.cursor.flags;
+            self.mark_row_dirty(row);
+        }
+
+        // Placeholder for width-2 characters
+        if width == 2 && col + 1 < self.cols {
+            if let Some(idx) = self.cell_index(col + 1, row) {
+                let ph = &mut self.grid[idx];
+                ph.char_data = [0; 16];
+                ph.char_len = 0;
+                ph.width = 0;
+                ph.fg = self.cursor.fg;
+                ph.bg = self.cursor.bg;
+                ph.flags = self.cursor.flags;
+                self.overflow.remove(&(col + 1, row));
+            }
+        }
+
+        // Advance cursor
+        let new_col = col as u32 + width as u32;
+        if new_col >= self.cols as u32 {
+            if self.get_mode(MODE_AUTO_WRAP) {
+                self.cursor.col = self.cols - 1;
+                self.wrap_pending = true;
+            }
+        } else {
+            self.cursor.col = new_col as u16;
+        }
+
+        scroll_count
+    }
+
+    /// ASCII fast path: direct byte write without string allocation.
+    fn handle_print_ascii(&mut self, cp: u32) -> u8 {
+        let byte = cp as u8;
+        let col = self.cursor.col;
+        let row = self.cursor.row;
+        if let Some(idx) = self.cell_index(col, row) {
+            let cell = &mut self.grid[idx];
+            cell.char_data[0] = byte;
+            for b in &mut cell.char_data[1..] {
+                *b = 0;
+            }
+            cell.char_len = 1;
+            cell.width = 1;
+            cell.fg = self.cursor.fg;
+            cell.bg = self.cursor.bg;
+            cell.flags = self.cursor.flags;
+            if cell.is_overflow() {
+                self.overflow.remove(&(col, row));
+            }
+            self.mark_row_dirty(row);
+        }
+
+        let new_col = col + 1;
+        if new_col < self.cols {
+            self.cursor.col = new_col;
+        } else if self.get_mode(MODE_AUTO_WRAP) {
+            self.cursor.col = self.cols - 1;
+            self.wrap_pending = true;
+        }
+
+        0
+    }
+
+    /// Slow path: handles charWidth, charset translation, wrap.
+    fn handle_print_slow(&mut self, cp: u32) -> u8 {
+        let width = crate::unicode::char_width(cp);
+        let translated = self.translate_charset(cp);
+        let mut buf = [0u8; 4];
+        let ch = char::from_u32(translated).unwrap_or(' ');
+        let s = ch.encode_utf8(&mut buf);
+        self.write_grapheme_to_grid(s, width)
+    }
+
+    // ── Sprint 2: Public print API ──────────────────────
+
+    /// Process a single codepoint for printing.
+    /// Returns the number of scroll-up operations the caller should perform.
+    pub fn handle_print(&mut self, cp: u32) -> u8 {
+        let mut scroll_count: u8 = 0;
+
+        // Safety: flush if buffer exceeds max size
+        if self.grapheme_buffer.len() >= 64 {
+            scroll_count += self.flush_grapheme_buffer();
+        }
+
+        let props = crate::unicode::classify_codepoint(cp);
+
+        if !self.grapheme_buffer.is_empty() {
+            // Buffer non-empty: check if cp extends the cluster
+            if cp == 0x200D {
+                self.grapheme_buffer.push(cp);
+                return scroll_count;
+            }
+            if props & crate::unicode::VARIATION_SEL != 0 {
+                self.grapheme_buffer.push(cp);
+                return scroll_count;
+            }
+            if props & crate::unicode::SKIN_TONE != 0 {
+                self.grapheme_buffer.push(cp);
+                return scroll_count;
+            }
+            if props & crate::unicode::REGIONAL_IND != 0 {
+                if self.grapheme_buffer.len() == 1 {
+                    let buf0 = self.grapheme_buffer[0];
+                    if (0x1F1E6..=0x1F1FF).contains(&buf0) {
+                        self.grapheme_buffer.push(cp);
+                        scroll_count += self.flush_grapheme_buffer();
+                        return scroll_count;
+                    }
+                }
+            }
+            if let Some(&last) = self.grapheme_buffer.last() {
+                if last == 0x200D && (props & crate::unicode::EXT_PICTOGRAPHIC != 0) {
+                    self.grapheme_buffer.push(cp);
+                    return scroll_count;
+                }
+            }
+            if props & crate::unicode::COMBINING != 0 {
+                self.grapheme_buffer.push(cp);
+                return scroll_count;
+            }
+
+            // Does not extend: flush and fall through
+            scroll_count += self.flush_grapheme_buffer();
+        } else {
+            // Buffer empty: check if cp starts buffering
+            if props & (crate::unicode::EXT_PICTOGRAPHIC | crate::unicode::REGIONAL_IND) != 0 {
+                self.grapheme_buffer.push(cp);
+                return scroll_count;
+            }
+        }
+
+        // ASCII fast path
+        if cp >= 0x20
+            && cp < 0x7F
+            && !self.wrap_pending
+            && self.active_charset == 0
+            && self.g0_charset == 0
+        {
+            let new_col = self.cursor.col + 1;
+            if new_col < self.cols || self.get_mode(MODE_AUTO_WRAP) {
+                return scroll_count + self.handle_print_ascii(cp);
+            }
+        }
+
+        // Slow path
+        scroll_count + self.handle_print_slow(cp)
+    }
+
+    /// Flush the grapheme buffer, writing the accumulated cluster to the grid.
+    /// Returns the number of scroll-up operations the caller should perform.
+    pub fn flush_grapheme_buffer(&mut self) -> u8 {
+        if self.grapheme_buffer.is_empty() {
+            return 0;
+        }
+
+        let mut cluster = String::with_capacity(self.grapheme_buffer.len() * 4);
+        let mut has_fe0e = false;
+        let mut has_fe0f = false;
+
+        for &cp in &self.grapheme_buffer {
+            if cp == 0xFE0E {
+                has_fe0e = true;
+            }
+            if cp == 0xFE0F {
+                has_fe0f = true;
+            }
+            if let Some(ch) = char::from_u32(cp) {
+                cluster.push(ch);
+            }
+        }
+
+        let width: u8 = if has_fe0e {
+            1
+        } else if has_fe0f {
+            2
+        } else if self.grapheme_buffer.len() == 1 {
+            if crate::unicode::is_emoji_presentation(self.grapheme_buffer[0]) {
+                2
+            } else {
+                crate::unicode::char_width(self.grapheme_buffer[0])
+            }
+        } else {
+            2
+        };
+
+        self.grapheme_buffer.clear();
+        self.write_grapheme_to_grid(&cluster, width)
     }
 }
 
@@ -1136,5 +1537,428 @@ mod tests {
         core.shift_rows_up(0, 4, 2);
         // Row 3 shifted to row 1
         assert_eq!(core.get_cell_char(0, 1), long);
+    }
+
+    // ── Sprint 2: Print handler tests ───────────────────
+
+    // TS-R01: handle_print ASCII 'A' at (0,0)
+    #[test]
+    fn test_handle_print_ascii_basic() {
+        let mut core = TerminalCore::new(80, 24);
+        let scroll = core.handle_print(0x41); // 'A'
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cell_char(0, 0), "A");
+        assert_eq!(core.get_cell_width(0, 0), 1);
+        assert_eq!(core.get_cursor_col(), 1);
+        assert_eq!(core.get_cursor_row(), 0);
+    }
+
+    // TS-R02: handle_print ASCII at (cols-1,0) with autoWrap
+    #[test]
+    fn test_handle_print_ascii_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(79, 0);
+        let scroll = core.handle_print(0x41); // 'A'
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cell_char(79, 0), "A");
+        assert!(core.get_wrap_pending());
+        assert_eq!(core.get_cursor_col(), 79);
+    }
+
+    // TS-R03: handle_print ASCII with wrap_pending
+    #[test]
+    fn test_handle_print_with_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(79, 0);
+        core.handle_print(0x41); // 'A' - sets wrap_pending
+        assert!(core.get_wrap_pending());
+        let scroll = core.handle_print(0x42); // 'B' - triggers wrap
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cell_char(0, 1), "B");
+        assert_eq!(core.get_cursor_col(), 1);
+        assert_eq!(core.get_cursor_row(), 1);
+        assert!(!core.get_wrap_pending());
+        assert!(core.get_line_wrapped(1));
+    }
+
+    // TS-R04: handle_print ASCII at bottom with wrap_pending → scroll
+    #[test]
+    fn test_handle_print_scroll_at_bottom() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(79, 23);
+        core.handle_print(0x41); // 'A' - sets wrap_pending
+        let scroll = core.handle_print(0x42); // 'B' - triggers wrap+scroll
+        assert_eq!(scroll, 1);
+        assert_eq!(core.get_cursor_col(), 1);
+        assert_eq!(core.get_cursor_row(), 23);
+    }
+
+    // TS-R05: handle_print CJK at (0,0)
+    #[test]
+    fn test_handle_print_cjk() {
+        let mut core = TerminalCore::new(80, 24);
+        let scroll = core.handle_print(0x6F22); // '漢'
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cell_char(0, 0), "漢");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_width(1, 0), 0); // placeholder
+        assert_eq!(core.get_cursor_col(), 2);
+    }
+
+    // TS-R06: handle_print CJK at (cols-1,0) with autoWrap
+    #[test]
+    fn test_handle_print_cjk_wrap() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(79, 0);
+        let scroll = core.handle_print(0x6F22); // '漢' width=2 wraps
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cell_char(0, 1), "漢");
+        assert_eq!(core.get_cell_width(0, 1), 2);
+        assert_eq!(core.get_cursor_col(), 2);
+        assert_eq!(core.get_cursor_row(), 1);
+    }
+
+    // TS-R07: handle_print Emoji → buffered
+    #[test]
+    fn test_handle_print_emoji_buffered() {
+        let mut core = TerminalCore::new(80, 24);
+        let scroll = core.handle_print(0x1F600); // 😀
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_grapheme_buffer_len(), 1);
+        assert_eq!(core.get_cell_char(0, 0), " "); // not written yet
+    }
+
+    // TS-R08: handle_print ZWJ after emoji → extends buffer
+    #[test]
+    fn test_handle_print_zwj_extends() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x1F468); // 👨
+        core.handle_print(0x200D); // ZWJ
+        assert_eq!(core.get_grapheme_buffer_len(), 2);
+    }
+
+    // TS-R09: handle_print non-extending after buffered emoji → flush + new
+    #[test]
+    fn test_handle_print_flush_then_new() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x1F600); // 😀 → buffer
+        assert_eq!(core.get_grapheme_buffer_len(), 1);
+        core.handle_print(0x41); // 'A' → flush 😀 then print A
+        assert_eq!(core.get_grapheme_buffer_len(), 0);
+        assert_eq!(core.get_cell_char(0, 0), "😀");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_char(2, 0), "A");
+        assert_eq!(core.get_cursor_col(), 3);
+    }
+
+    // TS-R10: Regional Indicator pair → auto-flush
+    #[test]
+    fn test_handle_print_ri_pair() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x1F1EF); // Regional Indicator J
+        assert_eq!(core.get_grapheme_buffer_len(), 1);
+        core.handle_print(0x1F1F5); // Regional Indicator P → auto-flush
+        assert_eq!(core.get_grapheme_buffer_len(), 0);
+        assert_eq!(core.get_cell_char(0, 0), "🇯🇵");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+    }
+
+    // TS-R11: Variation Selector FE0E → width 1
+    #[test]
+    fn test_handle_print_vs_fe0e() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x2660); // ♠
+        core.handle_print(0xFE0E); // VS15 text
+        assert_eq!(core.get_grapheme_buffer_len(), 2);
+        core.handle_print(0x41); // flush
+        assert_eq!(core.get_cell_width(0, 0), 1);
+    }
+
+    // TS-R12: Variation Selector FE0F → width 2
+    #[test]
+    fn test_handle_print_vs_fe0f() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x2660); // ♠
+        core.handle_print(0xFE0F); // VS16 emoji
+        assert_eq!(core.get_grapheme_buffer_len(), 2);
+        core.handle_print(0x41); // flush
+        assert_eq!(core.get_cell_width(0, 0), 2);
+    }
+
+    // TS-R13: Skin tone modifier → extends buffer
+    #[test]
+    fn test_handle_print_skin_tone() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x1F44B); // 👋
+        core.handle_print(0x1F3FD); // Medium skin tone
+        assert_eq!(core.get_grapheme_buffer_len(), 2);
+    }
+
+    // TS-R14: Buffer overflow → auto-flush at 64
+    #[test]
+    fn test_handle_print_buffer_overflow() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x1F468); // 👨
+        for _ in 0..31 {
+            core.handle_print(0x200D);
+            core.handle_print(0x1F468);
+        }
+        assert_eq!(core.get_grapheme_buffer_len(), 63);
+        core.handle_print(0x200D); // now 64
+                                   // Next should trigger auto-flush (>= 64)
+        core.handle_print(0x1F468);
+        assert!(core.get_grapheme_buffer_len() <= 1);
+    }
+
+    // TS-R15: DEC Line Drawing 'q' → '─' when active
+    #[test]
+    fn test_handle_print_dec_line_drawing() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_g0_charset(1); // DecLineDrawing
+        let scroll = core.handle_print(0x71); // 'q'
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cell_char(0, 0), "─"); // U+2500
+    }
+
+    // TS-R16: DEC Line Drawing inactive → no translation
+    #[test]
+    fn test_handle_print_dec_line_drawing_inactive() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x71); // 'q'
+        assert_eq!(core.get_cell_char(0, 0), "q");
+    }
+
+    // TS-R17: G1 charset with DecLineDrawing
+    #[test]
+    fn test_handle_print_g1_dec_line_drawing() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_g1_charset(1);
+        core.set_active_charset(1);
+        core.handle_print(0x78); // 'x'
+        assert_eq!(core.get_cell_char(0, 0), "│"); // U+2502
+    }
+
+    // TS-R18: autoWrap OFF at line end
+    #[test]
+    fn test_handle_print_no_autowrap() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_mode(MODE_AUTO_WRAP, false);
+        core.set_cursor(79, 0);
+        core.handle_print(0x41); // 'A'
+        assert_eq!(core.get_cell_char(79, 0), "A");
+        assert_eq!(core.get_cursor_col(), 79);
+        assert!(!core.get_wrap_pending());
+        core.handle_print(0x42); // 'B' overwrites
+        assert_eq!(core.get_cell_char(79, 0), "B");
+        assert_eq!(core.get_cursor_col(), 79);
+    }
+
+    // TS-R19: flush_grapheme_buffer empty
+    #[test]
+    fn test_flush_empty() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.flush_grapheme_buffer(), 0);
+    }
+
+    // TS-R20: flush_grapheme_buffer single emoji
+    #[test]
+    fn test_flush_single_emoji() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x1F600); // 😀
+        let scroll = core.flush_grapheme_buffer();
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cell_char(0, 0), "😀");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+    }
+
+    // TS-R21: flush_grapheme_buffer ZWJ sequence
+    #[test]
+    fn test_flush_zwj_sequence() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x1F468); // 👨
+        core.handle_print(0x200D); // ZWJ
+        core.handle_print(0x1F469); // 👩
+        let scroll = core.flush_grapheme_buffer();
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        let ch = core.get_cell_char(0, 0);
+        assert!(ch.contains('\u{200D}'));
+    }
+
+    // TS-R22: flush_grapheme_buffer flag (RI pair)
+    #[test]
+    fn test_flush_flag_ri_pair() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_print(0x1F1EF); // J
+        core.handle_print(0x1F1F5); // P → auto-flush
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        assert_eq!(core.get_cell_char(0, 0), "🇯🇵");
+    }
+
+    // TS-R23: flush_grapheme_buffer with wrap_pending
+    #[test]
+    fn test_flush_with_wrap_pending() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(79, 23);
+        core.handle_print(0x41); // 'A' → wrap_pending
+        assert!(core.get_wrap_pending());
+        core.handle_print(0x1F600); // 😀 → buffered
+        let scroll = core.flush_grapheme_buffer();
+        assert_eq!(scroll, 1);
+        assert_eq!(core.get_cursor_row(), 23);
+    }
+
+    // TS-R24: scroll_region: LF within region
+    #[test]
+    fn test_scroll_region_lf_within() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_scroll_region(5, 20);
+        core.set_cursor(79, 10);
+        core.handle_print(0x41); // wrap_pending
+        let scroll = core.handle_print(0x42); // LF within region
+        assert_eq!(scroll, 0);
+        assert_eq!(core.get_cursor_row(), 11);
+    }
+
+    // TS-R25: scroll_region: LF at region bottom
+    #[test]
+    fn test_scroll_region_lf_at_bottom() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_scroll_region(5, 20);
+        core.set_cursor(79, 20);
+        core.handle_print(0x41); // wrap_pending
+        let scroll = core.handle_print(0x42); // LF at bottom → scroll
+        assert_eq!(scroll, 1);
+        assert_eq!(core.get_cursor_row(), 20);
+    }
+
+    // TS-R26: Charset getter/setter round-trip
+    #[test]
+    fn test_charset_round_trip() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_g0_charset(1);
+        assert_eq!(core.get_g0_charset(), 1);
+        core.set_g1_charset(1);
+        assert_eq!(core.get_g1_charset(), 1);
+        core.set_g0_charset(0);
+        assert_eq!(core.get_g0_charset(), 0);
+    }
+
+    // TS-R27: Active charset switch
+    #[test]
+    fn test_active_charset_switch() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.get_active_charset(), 0);
+        core.set_active_charset(1);
+        assert_eq!(core.get_active_charset(), 1);
+        core.set_active_charset(0);
+        assert_eq!(core.get_active_charset(), 0);
+    }
+
+    // TS-R28: wrap_pending getter/setter
+    #[test]
+    fn test_wrap_pending_round_trip() {
+        let mut core = TerminalCore::new(80, 24);
+        assert!(!core.get_wrap_pending());
+        core.set_wrap_pending(true);
+        assert!(core.get_wrap_pending());
+        core.set_wrap_pending(false);
+        assert!(!core.get_wrap_pending());
+    }
+
+    // TS-R29: scroll_region getter/setter
+    #[test]
+    fn test_scroll_region_round_trip() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.get_scroll_region_top(), 0);
+        assert_eq!(core.get_scroll_region_bottom(), 23);
+        core.set_scroll_region(5, 20);
+        assert_eq!(core.get_scroll_region_top(), 5);
+        assert_eq!(core.get_scroll_region_bottom(), 20);
+    }
+
+    // DEC Line Drawing: all 32 entries
+    #[test]
+    fn test_dec_line_drawing_all_entries() {
+        let expected: [(u32, u32); 32] = [
+            (0x5F, 0x0020),
+            (0x60, 0x25C6),
+            (0x61, 0x2592),
+            (0x62, 0x2409),
+            (0x63, 0x240C),
+            (0x64, 0x240D),
+            (0x65, 0x240A),
+            (0x66, 0x00B0),
+            (0x67, 0x00B1),
+            (0x68, 0x2424),
+            (0x69, 0x240B),
+            (0x6A, 0x2518),
+            (0x6B, 0x2510),
+            (0x6C, 0x250C),
+            (0x6D, 0x2514),
+            (0x6E, 0x253C),
+            (0x6F, 0x23BA),
+            (0x70, 0x23BB),
+            (0x71, 0x2500),
+            (0x72, 0x23BC),
+            (0x73, 0x23BD),
+            (0x74, 0x251C),
+            (0x75, 0x2524),
+            (0x76, 0x2534),
+            (0x77, 0x252C),
+            (0x78, 0x2502),
+            (0x79, 0x2264),
+            (0x7A, 0x2265),
+            (0x7B, 0x03C0),
+            (0x7C, 0x2260),
+            (0x7D, 0x00A3),
+            (0x7E, 0x00B7),
+        ];
+        for (input, output) in expected {
+            assert_eq!(
+                TerminalCore::translate_line_drawing(input),
+                output,
+                "0x{:02X} → 0x{:04X}",
+                input,
+                output
+            );
+        }
+    }
+
+    // Reset clears Sprint 2 state
+    #[test]
+    fn test_reset_clears_sprint2_state() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_g0_charset(1);
+        core.set_g1_charset(1);
+        core.set_active_charset(1);
+        core.set_wrap_pending(true);
+        core.set_scroll_region(5, 20);
+        core.handle_print(0x1F600);
+        assert_eq!(core.get_grapheme_buffer_len(), 1);
+
+        core.reset();
+
+        assert_eq!(core.get_g0_charset(), 0);
+        assert_eq!(core.get_g1_charset(), 0);
+        assert_eq!(core.get_active_charset(), 0);
+        assert!(!core.get_wrap_pending());
+        assert_eq!(core.get_scroll_region_top(), 0);
+        assert_eq!(core.get_scroll_region_bottom(), 23);
+        assert_eq!(core.get_grapheme_buffer_len(), 0);
+    }
+
+    // Resize resets scroll region
+    #[test]
+    fn test_resize_resets_scroll_region() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_scroll_region(5, 20);
+        core.set_wrap_pending(true);
+
+        core.resize(100, 30);
+
+        assert_eq!(core.get_scroll_region_top(), 0);
+        assert_eq!(core.get_scroll_region_bottom(), 29);
+        assert!(!core.get_wrap_pending());
     }
 }
