@@ -1,0 +1,169 @@
+schema_version: 1
+feature: wasm-sgr-edit-scroll
+scale: standard
+created: 2026-02-15
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cd wasm && wasm-pack build --target web --out-dir pkg"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path wasm/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: f78560bcd796332f166e5edc1e0cccc6db6b6f0d
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: f78560bcd796332f166e5edc1e0cccc6db6b6f0d
+  - id: implement
+    status: completed
+    completed_at_commit: f78560bcd796332f166e5edc1e0cccc6db6b6f0d
+  - id: check
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+  - id: review
+    status: pending
+
+requirements:
+  FR1:
+    title: handle_sgr batch API for SGR parameter parsing and cursor attr application
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: SGR Reset (param 0 or empty) sets cursor attrs to default
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: SGR extended color (38/48;5;n indexed, 38/48;2;r;g;b TrueColor)
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: syncCursorAttrsToWasm() removed from all non-restore call sites
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: handle_insert_lines within scroll region
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: handle_delete_lines within scroll region
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: handle_insert_characters at cursor position
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: handle_delete_characters at cursor position
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: handle_scroll_up with scroll bridge (0=WASM, count=TS scrollback)
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: handle_scroll_down always WASM-internal
+    status: ok
+    tasks: []
+    tests: []
+  FR11:
+    title: handle_decstbm set scroll region + cursor home
+    status: ok
+    tasks: []
+    tests: []
+  FR12:
+    title: handle_set_mode returns action code (0-5, 0xFF)
+    status: ok
+    tasks: []
+    tests: []
+  FR13:
+    title: Boolean modes set directly in WASM bitfield
+    status: ok
+    tasks: []
+    tests: []
+  FR14:
+    title: handle_device_status_report generates response in linear memory
+    status: ok
+    tasks: []
+    tests: []
+  FR15:
+    title: handle_primary_device_attributes generates VT420 response
+    status: ok
+    tasks: []
+    tests: []
+  FR16:
+    title: handle_secondary_device_attributes generates VT420 identification
+    status: ok
+    tasks: []
+    tests: []
+  FR17:
+    title: get_response_ptr/get_response_len expose response buffer
+    status: ok
+    tasks: []
+    tests: []
+  FR18:
+    title: handleCsiWasm routes all CSI actions to WASM
+    status: ok
+    tasks: []
+    tests: []
+  FR19:
+    title: JS fallback when WASM unavailable
+    status: ok
+    tasks: []
+    tests: []
+  FR20:
+    title: syncCursorAttrsToWasm removal (kept only for cursor restore)
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: SGR batch processing in 1 WASM call
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: IL/DL/ICH/DCH in 1 WASM call each
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: All existing TypeScript tests pass (1824+)
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: WASM binary increase < 10KB (Sprint 3 baseline 45.8KB)
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: JS fallback path unchanged
+    status: ok
+    tasks: []
+    tests: []
+  NFR6:
+    title: vttest basic tests unchanged
+    status: ok
+    tasks: []
+    tests: []

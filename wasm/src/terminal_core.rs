@@ -11,6 +11,15 @@ use crate::cell::*;
 const BEL_SENTINEL: u8 = 0xFE;
 const SCROLLBACK_SENTINEL: u8 = 0xFF;
 
+// ── Sprint 4: Mode action code constants ─────────────────
+const MODE_ACTION_NONE: u8 = 0;
+const MODE_ACTION_SWITCH_TO_ALT: u8 = 1;
+const MODE_ACTION_SAVE_AND_SWITCH_TO_ALT: u8 = 2;
+const MODE_ACTION_SWITCH_TO_MAIN: u8 = 3;
+const MODE_ACTION_SAVE_CURSOR: u8 = 4;
+const MODE_ACTION_RESTORE_CURSOR: u8 = 5;
+const MODE_ACTION_TS_FALLBACK: u8 = 0xFF;
+
 // ── Mode bit positions (matches SPEC.md) ─────────────────
 
 pub const MODE_AUTO_WRAP: u8 = 0;
@@ -76,6 +85,9 @@ pub struct TerminalCore {
     active_charset: u8, // 0=G0, 1=G1
     scroll_region_top: u16,
     scroll_region_bottom: u16,
+    // Sprint 4: Device response buffer
+    response_buffer: [u8; 64],
+    response_len: u8,
 }
 
 #[wasm_bindgen]
@@ -114,6 +126,9 @@ impl TerminalCore {
             active_charset: 0,
             scroll_region_top: 0,
             scroll_region_bottom: rows - 1,
+            // Sprint 4
+            response_buffer: [0u8; 64],
+            response_len: 0,
         };
         core.mark_all_dirty();
         core
@@ -769,6 +784,9 @@ impl TerminalCore {
         self.active_charset = 0;
         self.scroll_region_top = 0;
         self.scroll_region_bottom = self.rows - 1;
+        // Sprint 4
+        self.response_buffer = [0u8; 64];
+        self.response_len = 0;
         self.mark_all_dirty();
     }
 
@@ -1340,6 +1358,358 @@ impl TerminalCore {
 
         self.grapheme_buffer.clear();
         self.write_grapheme_to_grid(&cluster, width)
+    }
+
+    // ── Sprint 4: SGR Handler ───────────────────────────────
+
+    /// Handle SGR (Select Graphic Rendition) parameters.
+    /// Parses the raw parameter array and applies attributes to cursor.
+    pub fn handle_sgr(&mut self, params: &[u16]) {
+        if params.is_empty() {
+            // Empty params = Reset
+            self.cursor.fg = PackedColor::DEFAULT;
+            self.cursor.bg = PackedColor::DEFAULT;
+            self.cursor.flags = 0;
+            return;
+        }
+
+        let mut i = 0;
+        while i < params.len() {
+            let p = params[i];
+            match p {
+                0 => {
+                    self.cursor.fg = PackedColor::DEFAULT;
+                    self.cursor.bg = PackedColor::DEFAULT;
+                    self.cursor.flags = 0;
+                }
+                1 => self.cursor.flags |= STYLE_BOLD,
+                2 => self.cursor.flags |= STYLE_DIM,
+                3 => self.cursor.flags |= STYLE_ITALIC,
+                4 => self.cursor.flags |= STYLE_UNDERLINE,
+                5 => self.cursor.flags |= STYLE_BLINK,
+                7 => self.cursor.flags |= STYLE_REVERSE,
+                8 => self.cursor.flags |= STYLE_HIDDEN,
+                9 => self.cursor.flags |= STYLE_STRIKETHROUGH,
+                22 => self.cursor.flags &= !(STYLE_BOLD | STYLE_DIM),
+                23 => self.cursor.flags &= !STYLE_ITALIC,
+                24 => self.cursor.flags &= !STYLE_UNDERLINE,
+                25 => self.cursor.flags &= !STYLE_BLINK,
+                27 => self.cursor.flags &= !STYLE_REVERSE,
+                28 => self.cursor.flags &= !STYLE_HIDDEN,
+                29 => self.cursor.flags &= !STYLE_STRIKETHROUGH,
+                30..=37 => self.cursor.fg = PackedColor::indexed((p - 30) as u8),
+                38 => {
+                    // Extended foreground color
+                    i += 1;
+                    if i >= params.len() { break; }
+                    match params[i] {
+                        5 => {
+                            // 38;5;n - Indexed color
+                            i += 1;
+                            if i < params.len() {
+                                self.cursor.fg = PackedColor::indexed(params[i] as u8);
+                            }
+                        }
+                        2 => {
+                            // 38;2;r;g;b - RGB color
+                            if i + 3 < params.len() {
+                                self.cursor.fg = PackedColor::rgb(
+                                    params[i + 1] as u8,
+                                    params[i + 2] as u8,
+                                    params[i + 3] as u8,
+                                );
+                                i += 3;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                39 => self.cursor.fg = PackedColor::DEFAULT,
+                40..=47 => self.cursor.bg = PackedColor::indexed((p - 40) as u8),
+                48 => {
+                    // Extended background color
+                    i += 1;
+                    if i >= params.len() { break; }
+                    match params[i] {
+                        5 => {
+                            // 48;5;n - Indexed color
+                            i += 1;
+                            if i < params.len() {
+                                self.cursor.bg = PackedColor::indexed(params[i] as u8);
+                            }
+                        }
+                        2 => {
+                            // 48;2;r;g;b - RGB color
+                            if i + 3 < params.len() {
+                                self.cursor.bg = PackedColor::rgb(
+                                    params[i + 1] as u8,
+                                    params[i + 2] as u8,
+                                    params[i + 3] as u8,
+                                );
+                                i += 3;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                49 => self.cursor.bg = PackedColor::DEFAULT,
+                90..=97 => self.cursor.fg = PackedColor::indexed((p - 90 + 8) as u8),
+                100..=107 => self.cursor.bg = PackedColor::indexed((p - 100 + 8) as u8),
+                _ => {} // Unknown: ignore
+            }
+            i += 1;
+        }
+    }
+
+    // ── Sprint 4: Edit Handlers ─────────────────────────────
+
+    /// CSI L - Insert Lines at cursor row within scroll region.
+    pub fn handle_insert_lines(&mut self, count: u16) {
+        let top = self.scroll_region_top;
+        let bottom = self.scroll_region_bottom;
+        if self.cursor.row < top || self.cursor.row > bottom {
+            return; // No-op if cursor outside scroll region
+        }
+        let count = count.min(bottom - self.cursor.row + 1);
+        // Shift rows down from cursor.row within region
+        self.shift_rows_down(self.cursor.row, bottom, count);
+    }
+
+    /// CSI M - Delete Lines at cursor row within scroll region.
+    pub fn handle_delete_lines(&mut self, count: u16) {
+        let top = self.scroll_region_top;
+        let bottom = self.scroll_region_bottom;
+        if self.cursor.row < top || self.cursor.row > bottom {
+            return; // No-op if cursor outside scroll region
+        }
+        let count = count.min(bottom - self.cursor.row + 1);
+        // Shift rows up from cursor.row within region
+        self.shift_rows_up(self.cursor.row, bottom, count);
+    }
+
+    /// CSI @ - Insert Characters at cursor position.
+    pub fn handle_insert_characters(&mut self, count: u16) {
+        let col = self.cursor.col;
+        let row = self.cursor.row;
+        if col >= self.cols {
+            return;
+        }
+        let remaining = self.cols - col;
+        let count = count.min(remaining);
+        if count == 0 {
+            return;
+        }
+        let base = row as usize * self.cols as usize;
+
+        // Shift cells right (iterate in reverse)
+        for c in (col + count..self.cols).rev() {
+            self.grid[base + c as usize] = self.grid[base + (c - count) as usize];
+        }
+        // Clear inserted cells
+        for c in col..col + count {
+            self.grid[base + c as usize] = Cell::EMPTY;
+        }
+        // Handle overflow entries for this row
+        overflow_clear_range(&mut self.overflow, row, col, self.cols);
+        self.mark_row_dirty(row);
+    }
+
+    /// CSI P - Delete Characters at cursor position.
+    pub fn handle_delete_characters(&mut self, count: u16) {
+        let col = self.cursor.col;
+        let row = self.cursor.row;
+        if col >= self.cols {
+            return;
+        }
+        let remaining = self.cols - col;
+        let count = count.min(remaining);
+        if count == 0 {
+            return;
+        }
+        let base = row as usize * self.cols as usize;
+
+        // Shift cells left
+        for c in col..self.cols - count {
+            self.grid[base + c as usize] = self.grid[base + (c + count) as usize];
+        }
+        // Clear trailing cells
+        for c in self.cols - count..self.cols {
+            self.grid[base + c as usize] = Cell::EMPTY;
+        }
+        // Handle overflow entries for this row
+        overflow_clear_range(&mut self.overflow, row, col, self.cols);
+        self.mark_row_dirty(row);
+    }
+
+    // ── Sprint 4: Scroll Handlers ───────────────────────────
+
+    /// CSI S - Scroll Up.
+    /// Returns 0 if handled by WASM (scroll region internal).
+    /// Returns count if TS should handle scrollback (full screen scroll).
+    pub fn handle_scroll_up(&mut self, count: u16) -> u8 {
+        let top = self.scroll_region_top;
+        let bottom = self.scroll_region_bottom;
+        let is_full_screen = top == 0 && bottom == self.rows.saturating_sub(1);
+
+        if is_full_screen {
+            // Full screen: TS handles scrollback
+            return count.min(255) as u8;
+        }
+
+        // Scroll region: WASM handles internally
+        let count = count.min(bottom - top + 1);
+        self.shift_rows_up(top, bottom, count);
+        0
+    }
+
+    /// CSI T - Scroll Down. Always WASM-internal.
+    pub fn handle_scroll_down(&mut self, count: u16) {
+        let top = self.scroll_region_top;
+        let bottom = self.scroll_region_bottom;
+        let count = count.min(bottom - top + 1);
+        self.shift_rows_down(top, bottom, count);
+    }
+
+    /// CSI r - DECSTBM (Set Scrolling Region).
+    /// top/bottom are 1-indexed (0 = default).
+    pub fn handle_decstbm(&mut self, top: u16, bottom: u16) {
+        let t = if top == 0 { 0 } else { (top - 1).min(self.rows.saturating_sub(1)) };
+        let b = if bottom == 0 { self.rows.saturating_sub(1) } else { (bottom - 1).min(self.rows.saturating_sub(1)) };
+        self.set_scroll_region(t, b);
+        self.cursor.col = 0;
+        self.cursor.row = 0;
+        self.wrap_pending = false;
+    }
+
+    // ── Sprint 4: Mode Handler ──────────────────────────────
+
+    /// CSI ? Pm h/l - Set/Reset DEC Private Mode.
+    /// Returns action code for TS-side execution.
+    pub fn handle_set_mode(&mut self, mode: u16, enable: bool) -> u8 {
+        match mode {
+            // Boolean modes: set directly in WASM bitfield
+            3 => { self.set_mode(MODE_COLUMN_132, enable); MODE_ACTION_NONE }
+            5 => { self.set_mode(MODE_REVERSE_SCREEN, enable); MODE_ACTION_NONE }
+            6 => { self.set_mode(MODE_ORIGIN, enable); MODE_ACTION_NONE }
+            7 => { self.set_mode(MODE_AUTO_WRAP, enable); MODE_ACTION_NONE }
+            12 => { self.set_mode(MODE_CURSOR_BLINK, enable); MODE_ACTION_NONE }
+            25 => { self.set_mode(MODE_CURSOR_VISIBLE, enable); MODE_ACTION_NONE }
+
+            // Buffer switch modes: return action code
+            47 | 1047 => {
+                if enable { MODE_ACTION_SWITCH_TO_ALT } else { MODE_ACTION_SWITCH_TO_MAIN }
+            }
+            1048 => {
+                if enable { MODE_ACTION_SAVE_CURSOR } else { MODE_ACTION_RESTORE_CURSOR }
+            }
+            1049 => {
+                if enable { MODE_ACTION_SAVE_AND_SWITCH_TO_ALT } else { MODE_ACTION_SWITCH_TO_MAIN }
+            }
+
+            // Boolean modes handled via TS fallback for multi-valued side effects
+            1004 => { self.set_mode(MODE_FOCUS_TRACKING, enable); MODE_ACTION_NONE }
+            2004 => { self.set_mode(MODE_BRACKETED_PASTE, enable); MODE_ACTION_NONE }
+
+            // Multi-valued modes: TS fallback
+            1 | 1000 | 1002 | 1003 | 1005 | 1006 => MODE_ACTION_TS_FALLBACK,
+
+            // Unknown mode: no-op
+            _ => MODE_ACTION_NONE,
+        }
+    }
+
+    // ── Sprint 4: Device Response Handlers ──────────────────
+
+    /// CSI Ps n - Device Status Report.
+    /// Returns response length (0 if no response).
+    pub fn handle_device_status_report(&mut self, ps: u8) -> u8 {
+        match ps {
+            5 => {
+                // OK status
+                self.write_response(b"\x1b[0n")
+            }
+            6 => {
+                // Cursor position report (1-indexed)
+                self.format_cpr()
+            }
+            _ => 0, // Unknown: no response
+        }
+    }
+
+    /// CSI c - Primary Device Attributes.
+    /// Returns response length.
+    pub fn handle_primary_device_attributes(&mut self) -> u8 {
+        self.write_response(b"\x1b[?64;1;2;6;22c")
+    }
+
+    /// CSI > c - Secondary Device Attributes.
+    /// Returns response length.
+    pub fn handle_secondary_device_attributes(&mut self) -> u8 {
+        self.write_response(b"\x1b[>41;1;0c")
+    }
+
+    /// Get pointer to response buffer in linear memory.
+    pub fn get_response_ptr(&self) -> *const u8 {
+        self.response_buffer.as_ptr()
+    }
+
+    /// Get length of last device response.
+    pub fn get_response_len(&self) -> u32 {
+        self.response_len as u32
+    }
+
+    /// Get response buffer contents as a byte vector.
+    /// Convenient alternative to ptr/len for TS integration.
+    pub fn get_response_bytes(&self) -> Vec<u8> {
+        self.response_buffer[..self.response_len as usize].to_vec()
+    }
+
+    /// Write bytes to response buffer. Returns length.
+    fn write_response(&mut self, data: &[u8]) -> u8 {
+        let len = data.len().min(self.response_buffer.len());
+        self.response_buffer[..len].copy_from_slice(&data[..len]);
+        self.response_len = len as u8;
+        len as u8
+    }
+
+    /// Format cursor position report into response buffer.
+    fn format_cpr(&mut self) -> u8 {
+        let row = self.cursor.row + 1;
+        let col = self.cursor.col + 1;
+        // Format: ESC [ row ; col R
+        let mut buf = [0u8; 20];
+        buf[0] = b'\x1b';
+        buf[1] = b'[';
+        let mut pos = 2;
+        pos = Self::write_u16_decimal(&mut buf, pos, row);
+        buf[pos] = b';';
+        pos += 1;
+        pos = Self::write_u16_decimal(&mut buf, pos, col);
+        buf[pos] = b'R';
+        pos += 1;
+        self.write_response(&buf[..pos])
+    }
+
+    /// Write a u16 as decimal digits to buffer, return new position.
+    fn write_u16_decimal(buf: &mut [u8], start: usize, val: u16) -> usize {
+        if val == 0 {
+            buf[start] = b'0';
+            return start + 1;
+        }
+        let mut digits = [0u8; 5];
+        let mut n = val;
+        let mut count = 0;
+        while n > 0 {
+            digits[count] = (n % 10) as u8 + b'0';
+            n /= 10;
+            count += 1;
+        }
+        let mut pos = start;
+        for i in (0..count).rev() {
+            buf[pos] = digits[i];
+            pos += 1;
+        }
+        pos
     }
 }
 
@@ -2760,5 +3130,543 @@ mod tests {
         core.set_cursor(0, 0);
         core.handle_erase_characters(5);
         assert!(core.is_row_dirty(0));
+    }
+
+    // ── Sprint 4: SGR Tests ─────────────────────────────────
+
+    #[test]
+    fn test_sgr_empty_resets() {
+        let mut core = TerminalCore::new(80, 24);
+        core.cursor.fg = PackedColor::indexed(1);
+        core.cursor.flags = STYLE_BOLD;
+        core.handle_sgr(&[]);
+        assert_eq!(core.cursor.fg, PackedColor::DEFAULT);
+        assert_eq!(core.cursor.bg, PackedColor::DEFAULT);
+        assert_eq!(core.cursor.flags, 0);
+    }
+
+    #[test]
+    fn test_sgr_reset_param0() {
+        let mut core = TerminalCore::new(80, 24);
+        core.cursor.fg = PackedColor::indexed(1);
+        core.cursor.flags = STYLE_BOLD | STYLE_ITALIC;
+        core.handle_sgr(&[0]);
+        assert_eq!(core.cursor.fg, PackedColor::DEFAULT);
+        assert_eq!(core.cursor.flags, 0);
+    }
+
+    #[test]
+    fn test_sgr_style_flags() {
+        let cases: &[(u16, u16)] = &[
+            (1, STYLE_BOLD), (2, STYLE_DIM), (3, STYLE_ITALIC),
+            (4, STYLE_UNDERLINE), (5, STYLE_BLINK), (7, STYLE_REVERSE),
+            (8, STYLE_HIDDEN), (9, STYLE_STRIKETHROUGH),
+        ];
+        for &(param, flag) in cases {
+            let mut core = TerminalCore::new(80, 24);
+            core.handle_sgr(&[param]);
+            assert_ne!(core.cursor.flags & flag, 0, "SGR {} should set flag 0x{:04x}", param, flag);
+        }
+    }
+
+    #[test]
+    fn test_sgr_style_resets() {
+        let cases: &[(u16, u16)] = &[
+            (22, STYLE_BOLD | STYLE_DIM), (23, STYLE_ITALIC),
+            (24, STYLE_UNDERLINE), (25, STYLE_BLINK),
+            (27, STYLE_REVERSE), (28, STYLE_HIDDEN),
+            (29, STYLE_STRIKETHROUGH),
+        ];
+        for &(param, flag) in cases {
+            let mut core = TerminalCore::new(80, 24);
+            core.cursor.flags = 0xFFFF;
+            core.handle_sgr(&[param]);
+            assert_eq!(core.cursor.flags & flag, 0, "SGR {} should clear flag 0x{:04x}", param, flag);
+        }
+    }
+
+    #[test]
+    fn test_sgr_standard_foreground() {
+        for p in 30..=37 {
+            let mut core = TerminalCore::new(80, 24);
+            core.handle_sgr(&[p]);
+            assert_eq!(core.cursor.fg, PackedColor::indexed((p - 30) as u8));
+        }
+    }
+
+    #[test]
+    fn test_sgr_standard_background() {
+        for p in 40..=47 {
+            let mut core = TerminalCore::new(80, 24);
+            core.handle_sgr(&[p]);
+            assert_eq!(core.cursor.bg, PackedColor::indexed((p - 40) as u8));
+        }
+    }
+
+    #[test]
+    fn test_sgr_bright_foreground() {
+        for p in 90..=97 {
+            let mut core = TerminalCore::new(80, 24);
+            core.handle_sgr(&[p]);
+            assert_eq!(core.cursor.fg, PackedColor::indexed((p - 90 + 8) as u8));
+        }
+    }
+
+    #[test]
+    fn test_sgr_bright_background() {
+        for p in 100..=107 {
+            let mut core = TerminalCore::new(80, 24);
+            core.handle_sgr(&[p]);
+            assert_eq!(core.cursor.bg, PackedColor::indexed((p - 100 + 8) as u8));
+        }
+    }
+
+    #[test]
+    fn test_sgr_indexed_fg() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_sgr(&[38, 5, 196]);
+        assert_eq!(core.cursor.fg, PackedColor::indexed(196));
+    }
+
+    #[test]
+    fn test_sgr_indexed_bg() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_sgr(&[48, 5, 21]);
+        assert_eq!(core.cursor.bg, PackedColor::indexed(21));
+    }
+
+    #[test]
+    fn test_sgr_rgb_fg() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_sgr(&[38, 2, 255, 128, 0]);
+        assert_eq!(core.cursor.fg, PackedColor::rgb(255, 128, 0));
+    }
+
+    #[test]
+    fn test_sgr_rgb_bg() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_sgr(&[48, 2, 0, 128, 255]);
+        assert_eq!(core.cursor.bg, PackedColor::rgb(0, 128, 255));
+    }
+
+    #[test]
+    fn test_sgr_default_fg_bg() {
+        let mut core = TerminalCore::new(80, 24);
+        core.cursor.fg = PackedColor::indexed(5);
+        core.cursor.bg = PackedColor::indexed(3);
+        core.handle_sgr(&[39]);
+        assert_eq!(core.cursor.fg, PackedColor::DEFAULT);
+        core.handle_sgr(&[49]);
+        assert_eq!(core.cursor.bg, PackedColor::DEFAULT);
+    }
+
+    #[test]
+    fn test_sgr_multiple_params() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_sgr(&[1, 31, 42]);
+        assert_ne!(core.cursor.flags & STYLE_BOLD, 0);
+        assert_eq!(core.cursor.fg, PackedColor::indexed(1)); // red
+        assert_eq!(core.cursor.bg, PackedColor::indexed(2)); // green
+    }
+
+    #[test]
+    fn test_sgr_truncated_extended() {
+        let mut core = TerminalCore::new(80, 24);
+        // 38;5 without index - should not panic
+        core.handle_sgr(&[38, 5]);
+        // 38 without subtype - should not panic
+        core.handle_sgr(&[38]);
+    }
+
+    #[test]
+    fn test_sgr_unknown_param() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_sgr(&[99]);
+        // Should not crash, attrs unchanged
+        assert_eq!(core.cursor.fg, PackedColor::DEFAULT);
+        assert_eq!(core.cursor.flags, 0);
+    }
+
+    // ── Sprint 4: Edit Tests ────────────────────────────────
+
+    #[test]
+    fn test_insert_lines_basic() {
+        let mut core = TerminalCore::new(10, 5);
+        // Fill rows with identifiable content
+        for row in 0..5 {
+            core.set_cell(0, row, &format!("{}", row), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cursor(0, 1);
+        core.handle_insert_lines(2);
+        // Row 0 unchanged
+        assert_eq!(core.get_cell_char(0, 0), "0");
+        // Rows 1-2 should be blank (inserted)
+        assert_eq!(core.get_cell_char(0, 1), " ");
+        assert_eq!(core.get_cell_char(0, 2), " ");
+        // Old row 1 moved to row 3
+        assert_eq!(core.get_cell_char(0, 3), "1");
+    }
+
+    #[test]
+    fn test_insert_lines_outside_region() {
+        let mut core = TerminalCore::new(10, 10);
+        core.set_scroll_region(2, 7);
+        core.set_cursor(0, 1); // Outside region
+        core.set_cell(0, 1, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.handle_insert_lines(1);
+        // No-op: content unchanged
+        assert_eq!(core.get_cell_char(0, 1), "X");
+    }
+
+    #[test]
+    fn test_insert_lines_count_clamped() {
+        let mut core = TerminalCore::new(10, 5);
+        core.set_cursor(0, 3);
+        core.set_cell(0, 3, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.handle_insert_lines(100); // Exceeds available rows
+        // Should still work, no panic, row 3 cleared
+        assert_eq!(core.get_cell_char(0, 3), " ");
+    }
+
+    #[test]
+    fn test_delete_lines_basic() {
+        let mut core = TerminalCore::new(10, 5);
+        for row in 0..5 {
+            core.set_cell(0, row, &format!("{}", row), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cursor(0, 1);
+        core.handle_delete_lines(2);
+        // Row 0 unchanged
+        assert_eq!(core.get_cell_char(0, 0), "0");
+        // Old rows 3,4 moved to 1,2
+        assert_eq!(core.get_cell_char(0, 1), "3");
+        assert_eq!(core.get_cell_char(0, 2), "4");
+        // Rows 3-4 cleared
+        assert_eq!(core.get_cell_char(0, 3), " ");
+        assert_eq!(core.get_cell_char(0, 4), " ");
+    }
+
+    #[test]
+    fn test_delete_lines_outside_region() {
+        let mut core = TerminalCore::new(10, 10);
+        core.set_scroll_region(2, 7);
+        core.set_cursor(0, 1);
+        core.set_cell(0, 1, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.handle_delete_lines(1);
+        assert_eq!(core.get_cell_char(0, 1), "X");
+    }
+
+    #[test]
+    fn test_insert_characters_basic() {
+        let mut core = TerminalCore::new(10, 1);
+        for col in 0..10 {
+            core.set_cell(col, 0, &format!("{}", col % 10), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cursor(3, 0);
+        core.handle_insert_characters(2);
+        // Cols 0-2 unchanged
+        assert_eq!(core.get_cell_char(0, 0), "0");
+        assert_eq!(core.get_cell_char(2, 0), "2");
+        // Cols 3-4 should be blank (inserted)
+        assert_eq!(core.get_cell_char(3, 0), " ");
+        assert_eq!(core.get_cell_char(4, 0), " ");
+        // Old col 3 moved to col 5
+        assert_eq!(core.get_cell_char(5, 0), "3");
+    }
+
+    #[test]
+    fn test_insert_characters_clamped() {
+        let mut core = TerminalCore::new(10, 1);
+        core.set_cursor(8, 0);
+        core.set_cell(8, 0, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.handle_insert_characters(100); // Exceeds remaining cols
+        assert_eq!(core.get_cell_char(8, 0), " ");
+        assert_eq!(core.get_cell_char(9, 0), " ");
+    }
+
+    #[test]
+    fn test_delete_characters_basic() {
+        let mut core = TerminalCore::new(10, 1);
+        for col in 0..10 {
+            core.set_cell(col, 0, &format!("{}", col % 10), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cursor(3, 0);
+        core.handle_delete_characters(2);
+        // Cols 0-2 unchanged
+        assert_eq!(core.get_cell_char(0, 0), "0");
+        assert_eq!(core.get_cell_char(2, 0), "2");
+        // Old col 5 moved to col 3
+        assert_eq!(core.get_cell_char(3, 0), "5");
+        // Trailing cols cleared
+        assert_eq!(core.get_cell_char(8, 0), " ");
+        assert_eq!(core.get_cell_char(9, 0), " ");
+    }
+
+    #[test]
+    fn test_delete_characters_clamped() {
+        let mut core = TerminalCore::new(10, 1);
+        core.set_cursor(8, 0);
+        core.set_cell(8, 0, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.handle_delete_characters(100);
+        assert_eq!(core.get_cell_char(8, 0), " ");
+    }
+
+    #[test]
+    fn test_edit_dirty_marking() {
+        let mut core = TerminalCore::new(10, 5);
+        core.clear_dirty();
+        core.set_cursor(0, 2);
+        core.handle_insert_lines(1);
+        assert!(core.is_row_dirty(2));
+
+        core.clear_dirty();
+        core.set_cursor(0, 2);
+        core.handle_delete_lines(1);
+        assert!(core.is_row_dirty(2));
+
+        core.clear_dirty();
+        core.set_cursor(3, 0);
+        core.handle_insert_characters(1);
+        assert!(core.is_row_dirty(0));
+
+        core.clear_dirty();
+        core.set_cursor(3, 0);
+        core.handle_delete_characters(1);
+        assert!(core.is_row_dirty(0));
+    }
+
+    // ── Sprint 4: Scroll Tests ──────────────────────────────
+
+    #[test]
+    fn test_scroll_up_scroll_region() {
+        let mut core = TerminalCore::new(10, 10);
+        core.set_scroll_region(2, 7);
+        for row in 2..=7 {
+            core.set_cell(0, row, &format!("{}", row), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        let result = core.handle_scroll_up(2);
+        assert_eq!(result, 0); // WASM handled
+        // Rows 4-7 moved to 2-5
+        assert_eq!(core.get_cell_char(0, 2), "4");
+        assert_eq!(core.get_cell_char(0, 5), "7");
+        // Bottom rows cleared
+        assert_eq!(core.get_cell_char(0, 6), " ");
+        assert_eq!(core.get_cell_char(0, 7), " ");
+    }
+
+    #[test]
+    fn test_scroll_up_full_screen() {
+        let mut core = TerminalCore::new(10, 10);
+        // Full screen (default region 0..9)
+        let result = core.handle_scroll_up(3);
+        assert_eq!(result, 3); // TS handles scrollback
+    }
+
+    #[test]
+    fn test_scroll_up_clamped() {
+        let mut core = TerminalCore::new(10, 10);
+        core.set_scroll_region(2, 5);
+        let result = core.handle_scroll_up(100);
+        assert_eq!(result, 0); // Still WASM (scroll region)
+    }
+
+    #[test]
+    fn test_scroll_down_basic() {
+        let mut core = TerminalCore::new(10, 10);
+        core.set_scroll_region(2, 7);
+        for row in 2..=7 {
+            core.set_cell(0, row, &format!("{}", row), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.handle_scroll_down(2);
+        // Top rows cleared
+        assert_eq!(core.get_cell_char(0, 2), " ");
+        assert_eq!(core.get_cell_char(0, 3), " ");
+        // Rows 2-5 moved to 4-7
+        assert_eq!(core.get_cell_char(0, 4), "2");
+        assert_eq!(core.get_cell_char(0, 7), "5");
+    }
+
+    #[test]
+    fn test_scroll_down_full_screen() {
+        let mut core = TerminalCore::new(10, 5);
+        for row in 0..5 {
+            core.set_cell(0, row, &format!("{}", row), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.handle_scroll_down(2);
+        assert_eq!(core.get_cell_char(0, 0), " ");
+        assert_eq!(core.get_cell_char(0, 1), " ");
+        assert_eq!(core.get_cell_char(0, 2), "0");
+        assert_eq!(core.get_cell_char(0, 4), "2");
+    }
+
+    #[test]
+    fn test_decstbm_basic() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(10, 15);
+        core.wrap_pending = true;
+        core.handle_decstbm(5, 20);
+        assert_eq!(core.get_scroll_region_top(), 4);  // 1-indexed to 0-indexed
+        assert_eq!(core.get_scroll_region_bottom(), 19);
+        assert_eq!(core.get_cursor_col(), 0);
+        assert_eq!(core.get_cursor_row(), 0);
+        assert!(!core.get_wrap_pending());
+    }
+
+    #[test]
+    fn test_decstbm_defaults() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_scroll_region(5, 15);
+        core.handle_decstbm(0, 0);
+        assert_eq!(core.get_scroll_region_top(), 0);
+        assert_eq!(core.get_scroll_region_bottom(), 23);
+    }
+
+    #[test]
+    fn test_decstbm_invalid() {
+        let mut core = TerminalCore::new(80, 24);
+        // top >= bottom should reset to full screen
+        core.handle_decstbm(20, 5);
+        assert_eq!(core.get_scroll_region_top(), 0);
+        assert_eq!(core.get_scroll_region_bottom(), 23);
+    }
+
+    // ── Sprint 4: Mode Tests ────────────────────────────────
+
+    #[test]
+    fn test_mode_boolean_autowrap() {
+        let mut core = TerminalCore::new(80, 24);
+        let code = core.handle_set_mode(7, true);
+        assert_eq!(code, 0);
+        assert!(core.get_mode(MODE_AUTO_WRAP));
+        let code = core.handle_set_mode(7, false);
+        assert_eq!(code, 0);
+        assert!(!core.get_mode(MODE_AUTO_WRAP));
+    }
+
+    #[test]
+    fn test_mode_boolean_cursor_visible() {
+        let mut core = TerminalCore::new(80, 24);
+        let code = core.handle_set_mode(25, false);
+        assert_eq!(code, 0);
+        assert!(!core.get_mode(MODE_CURSOR_VISIBLE));
+    }
+
+    #[test]
+    fn test_mode_boolean_origin() {
+        let mut core = TerminalCore::new(80, 24);
+        let code = core.handle_set_mode(6, true);
+        assert_eq!(code, 0);
+        assert!(core.get_mode(MODE_ORIGIN));
+    }
+
+    #[test]
+    fn test_mode_buffer_switch_47() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.handle_set_mode(47, true), 1);  // switchToAlt
+        assert_eq!(core.handle_set_mode(47, false), 3); // switchToMain
+    }
+
+    #[test]
+    fn test_mode_buffer_switch_1049() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.handle_set_mode(1049, true), 2);  // saveAndSwitchToAlt
+        assert_eq!(core.handle_set_mode(1049, false), 3); // switchToMain
+    }
+
+    #[test]
+    fn test_mode_save_restore_cursor_1048() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.handle_set_mode(1048, true), 4);  // saveCursor
+        assert_eq!(core.handle_set_mode(1048, false), 5); // restoreCursor
+    }
+
+    #[test]
+    fn test_mode_ts_fallback() {
+        let mut core = TerminalCore::new(80, 24);
+        for mode in [1, 1000, 1002, 1003, 1005, 1006] {
+            assert_eq!(core.handle_set_mode(mode, true), 0xFF, "Mode {} should fallback", mode);
+        }
+        // 1004 and 2004 are boolean modes handled in WASM
+        assert_eq!(core.handle_set_mode(1004, true), 0);
+        assert!(core.get_mode(MODE_FOCUS_TRACKING));
+        assert_eq!(core.handle_set_mode(2004, true), 0);
+        assert!(core.get_mode(MODE_BRACKETED_PASTE));
+    }
+
+    #[test]
+    fn test_mode_unknown() {
+        let mut core = TerminalCore::new(80, 24);
+        assert_eq!(core.handle_set_mode(9999, true), 0);
+    }
+
+    // ── Sprint 4: Device Response Tests ─────────────────────
+
+    #[test]
+    fn test_dsr_ok_status() {
+        let mut core = TerminalCore::new(80, 24);
+        let len = core.handle_device_status_report(5);
+        assert_eq!(len, 4);
+        let resp = &core.response_buffer[..len as usize];
+        assert_eq!(resp, b"\x1b[0n");
+    }
+
+    #[test]
+    fn test_dsr_cursor_position_home() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(0, 0);
+        let len = core.handle_device_status_report(6);
+        let resp = &core.response_buffer[..len as usize];
+        assert_eq!(resp, b"\x1b[1;1R");
+    }
+
+    #[test]
+    fn test_dsr_cursor_position_nonzero() {
+        let mut core = TerminalCore::new(80, 24);
+        core.set_cursor(79, 23);
+        let len = core.handle_device_status_report(6);
+        let resp = &core.response_buffer[..len as usize];
+        assert_eq!(resp, b"\x1b[24;80R");
+    }
+
+    #[test]
+    fn test_dsr_unknown() {
+        let mut core = TerminalCore::new(80, 24);
+        let len = core.handle_device_status_report(0);
+        assert_eq!(len, 0);
+    }
+
+    #[test]
+    fn test_da1() {
+        let mut core = TerminalCore::new(80, 24);
+        let len = core.handle_primary_device_attributes();
+        let resp = &core.response_buffer[..len as usize];
+        assert_eq!(resp, b"\x1b[?64;1;2;6;22c");
+    }
+
+    #[test]
+    fn test_da2() {
+        let mut core = TerminalCore::new(80, 24);
+        let len = core.handle_secondary_device_attributes();
+        let resp = &core.response_buffer[..len as usize];
+        assert_eq!(resp, b"\x1b[>41;1;0c");
+    }
+
+    #[test]
+    fn test_response_ptr_len() {
+        let mut core = TerminalCore::new(80, 24);
+        core.handle_primary_device_attributes();
+        let ptr = core.get_response_ptr();
+        let len = core.get_response_len();
+        assert!(!ptr.is_null());
+        assert!(len > 0);
+    }
+
+    #[test]
+    fn test_dsr_large_position() {
+        let mut core = TerminalCore::new(1000, 1000);
+        core.set_cursor(999, 999);
+        let len = core.handle_device_status_report(6);
+        let resp = &core.response_buffer[..len as usize];
+        assert_eq!(resp, b"\x1b[1000;1000R");
     }
 }

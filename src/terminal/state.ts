@@ -12,7 +12,7 @@ import { CursorState } from "./cursor.ts";
 import { cloneAttributes, packColor, packStyleFlags } from "./attributes.ts";
 import { FoldManager } from "./fold-manager.ts";
 import { Line, type Cell } from "./grid.ts";
-import { createDefaultModes, syncModesToWasm, type TerminalModes } from "./modes.ts";
+import { createDefaultModes, setDecPrivateMode, syncModesFromWasm, syncModesToWasm, type TerminalModes } from "./modes.ts";
 import { SemanticZoneTracker } from "./semantic-zone.ts";
 import { isEmojiPresentation } from "./wasm/unicode.ts";
 import { WasmGrid } from "./wasm/terminal-core.ts";
@@ -32,6 +32,15 @@ import type { TerminalStateAccessor, ActiveCharSet } from "./handlers/types.ts";
 // ── WASM Sentinel Constants ─────────────────────────────
 const WASM_BEL_SENTINEL = 0xFE;
 const WASM_SCROLLBACK_SENTINEL = 0xFF;
+
+// ── WASM Mode Action Codes (mirror Rust constants) ──────
+const MODE_ACTION_NONE = 0;
+const MODE_ACTION_SWITCH_TO_ALT = 1;
+const MODE_ACTION_SAVE_AND_SWITCH_TO_ALT = 2;
+const MODE_ACTION_SWITCH_TO_MAIN = 3;
+const MODE_ACTION_SAVE_CURSOR = 4;
+const MODE_ACTION_RESTORE_CURSOR = 5;
+const MODE_ACTION_TS_FALLBACK = 0xFF;
 
 /**
  * Convert EraseMode string to numeric mode byte for WASM.
@@ -465,7 +474,6 @@ export class TerminalState implements TerminalStateAccessor {
     this.useAlternate = true;
     this.cursor = this.alternateCursor!;
     this.wrapPending = false;
-    this.syncCursorAttrsToWasm();
 
     // Mark all lines as dirty to force redraw
     // Use markDirty() to propagate to WASM dirty bitset (not just local field)
@@ -498,7 +506,6 @@ export class TerminalState implements TerminalStateAccessor {
     }
 
     this.wrapPending = false;
-    this.syncCursorAttrsToWasm();
 
     // Mark all lines as dirty to force redraw
     // Use markDirty() to propagate to WASM dirty bitset (not just local field)
@@ -818,8 +825,149 @@ export class TerminalState implements TerminalStateAccessor {
       case "EraseCharacters":
         grid.core.handle_erase_characters(action.data || 1);
         return true;
+
+      // ── Sprint 4: SGR ───────────────────────────────
+      case "Sgr": {
+        const params = new Uint16Array(action.data);
+        grid.core.handle_sgr(params);
+        return true;
+      }
+
+      // ── Sprint 4: Edit operations ───────────────────
+      case "InsertLines":
+        grid.core.handle_insert_lines(action.data || 1);
+        return true;
+      case "DeleteLines":
+        grid.core.handle_delete_lines(action.data || 1);
+        return true;
+      case "InsertCharacters":
+        grid.core.handle_insert_characters(action.data || 1);
+        return true;
+      case "DeleteCharacters":
+        grid.core.handle_delete_characters(action.data || 1);
+        return true;
+
+      // ── Sprint 4: Scroll operations ─────────────────
+      case "ScrollUp": {
+        const scrollCount = grid.core.handle_scroll_up(action.data || 1);
+        if (scrollCount > 0) {
+          const buffer = this.getActiveBuffer();
+          for (let i = 0; i < scrollCount; i++) {
+            buffer.scrollUp();
+          }
+        }
+        return true;
+      }
+      case "ScrollDown":
+        grid.core.handle_scroll_down(action.data || 1);
+        return true;
+      case "SetScrollRegion": {
+        grid.core.handle_decstbm(action.data.top, action.data.bottom);
+        // Sync scroll region to UnifiedBuffer (WASM sets its own, buffer needs its copy)
+        const top = action.data.top === 0 ? 0 : action.data.top - 1;
+        const bottom = action.data.bottom === 0 ? this.rows - 1 : action.data.bottom - 1;
+        this.getActiveBuffer().setScrollRegion(top, bottom);
+        return true;
+      }
+
+      // ── Sprint 4: Mode handling ─────────────────────
+      case "SetMode":
+        return this.handleModesWasm(grid, action.data, true);
+      case "ResetMode":
+        return this.handleModesWasm(grid, action.data, false);
+
+      // ── Sprint 4: Device responses ──────────────────
+      case "DeviceStatusReport": {
+        const len = grid.core.handle_device_status_report(action.data);
+        if (len > 0) {
+          this.readAndSendResponse(grid, len);
+        }
+        return true;
+      }
+      case "PrimaryDeviceAttributes": {
+        const len = grid.core.handle_primary_device_attributes();
+        if (len > 0) {
+          this.readAndSendResponse(grid, len);
+        }
+        return true;
+      }
+      case "SecondaryDeviceAttributes": {
+        const len = grid.core.handle_secondary_device_attributes();
+        if (len > 0) {
+          this.readAndSendResponse(grid, len);
+        }
+        return true;
+      }
+      case "TertiaryDeviceAttributes":
+        return false; // No WASM handler, fallback to TS
+
       default:
-        return false; // Not handled by Sprint 3 WASM
+        return false;
+    }
+  }
+
+  /**
+   * Process SetMode/ResetMode via WASM with action code dispatch.
+   * Handles boolean modes in WASM, falls back to TS for multi-valued modes.
+   */
+  private handleModesWasm(grid: WasmGrid, modes: number[], enable: boolean): boolean {
+    const actions: number[] = [];
+
+    for (const mode of modes) {
+      const code = grid.core.handle_set_mode(mode, enable);
+      if (code === MODE_ACTION_TS_FALLBACK) {
+        // Multi-valued mode (mouse, cursor keys, etc.) - handle in TS
+        setDecPrivateMode(this.modes, mode, enable);
+      } else if (code !== MODE_ACTION_NONE) {
+        actions.push(code);
+      }
+    }
+
+    // Execute collected actions after all mode state is updated
+    for (const code of actions) {
+      this.executeModAction(code);
+    }
+
+    // Sync boolean modes from WASM to TS
+    syncModesFromWasm(this.modes, grid.core);
+
+    // Sync TS-only multi-valued modes back to WASM
+    syncModesToWasm(this.modes, grid.core);
+
+    return true;
+  }
+
+  /**
+   * Execute a mode action code from WASM.
+   */
+  private executeModAction(code: number): void {
+    switch (code) {
+      case MODE_ACTION_SWITCH_TO_ALT:
+        this.switchToAlternateBuffer(false);
+        break;
+      case MODE_ACTION_SAVE_AND_SWITCH_TO_ALT:
+        this.switchToAlternateBuffer(true);
+        break;
+      case MODE_ACTION_SWITCH_TO_MAIN:
+        this.switchToPrimaryBuffer(true);
+        break;
+      case MODE_ACTION_SAVE_CURSOR:
+        this.cursor.save();
+        break;
+      case MODE_ACTION_RESTORE_CURSOR:
+        this.cursor.restore();
+        this.syncCursorAttrsToWasm();
+        break;
+    }
+  }
+
+  /**
+   * Read device response from WASM and add to pending responses.
+   */
+  private readAndSendResponse(grid: WasmGrid, _len: number): void {
+    const bytes = grid.core.get_response_bytes();
+    if (bytes.length > 0) {
+      this.addPendingResponse(bytes);
     }
   }
 
@@ -861,9 +1009,6 @@ export class TerminalState implements TerminalStateAccessor {
     if (this.primaryWasmGrid) {
       syncModesToWasm(this.modes, this.primaryWasmGrid.core);
     }
-
-    // Sync default cursor attrs to WASM
-    this.syncCursorAttrsToWasm();
 
     // Reset other state
     this.wrapPending = false;
