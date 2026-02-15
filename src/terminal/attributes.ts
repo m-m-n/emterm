@@ -7,6 +7,7 @@
 import {
 	DEFAULT_BACKGROUND,
 	DEFAULT_FOREGROUND,
+	indexToRgb,
 	type Rgb,
 	type SgrColor,
 	sgrColorToRgb,
@@ -365,6 +366,21 @@ export function applySgrAttrs(
 }
 
 /**
+ * Convert a Color value to RGB.
+ * Handles indexed colors via palette lookup and RGB passthrough.
+ */
+function colorToRgb(color: Color): Rgb {
+	if (color.type === "indexed") {
+		return indexToRgb(color.index);
+	}
+	if (color.type === "rgb") {
+		return { r: color.r, g: color.g, b: color.b };
+	}
+	// "default" type - shouldn't reach here but return black as fallback
+	return { r: 0, g: 0, b: 0 };
+}
+
+/**
  * Get the effective foreground RGB color for rendering.
  *
  * Takes into account the reverse attribute.
@@ -380,21 +396,9 @@ export function getEffectiveForeground(
 	defaultBg: Rgb = DEFAULT_BACKGROUND,
 ): Rgb {
 	if (attrs.reverse) {
-		return attrs.bg
-			? {
-					r: (attrs.bg as { r: number; g: number; b: number }).r,
-					g: (attrs.bg as { r: number; g: number; b: number }).g,
-					b: (attrs.bg as { r: number; g: number; b: number }).b,
-				}
-			: defaultBg;
+		return attrs.bg ? colorToRgb(attrs.bg) : defaultBg;
 	}
-	return attrs.fg
-		? {
-				r: (attrs.fg as { r: number; g: number; b: number }).r,
-				g: (attrs.fg as { r: number; g: number; b: number }).g,
-				b: (attrs.fg as { r: number; g: number; b: number }).b,
-			}
-		: defaultFg;
+	return attrs.fg ? colorToRgb(attrs.fg) : defaultFg;
 }
 
 /**
@@ -411,19 +415,7 @@ export function getEffectiveBackground(
 	defaultFg: Rgb = DEFAULT_FOREGROUND,
 ): Rgb | null {
 	if (attrs.reverse) {
-		return attrs.fg
-			? {
-					r: (attrs.fg as { r: number; g: number; b: number }).r,
-					g: (attrs.fg as { r: number; g: number; b: number }).g,
-					b: (attrs.fg as { r: number; g: number; b: number }).b,
-				}
-			: defaultFg;
+		return attrs.fg ? colorToRgb(attrs.fg) : defaultFg;
 	}
-	return attrs.bg
-		? {
-				r: (attrs.bg as { r: number; g: number; b: number }).r,
-				g: (attrs.bg as { r: number; g: number; b: number }).g,
-				b: (attrs.bg as { r: number; g: number; b: number }).b,
-			}
-		: null; // null means use default/transparent
+	return attrs.bg ? colorToRgb(attrs.bg) : null;
 }

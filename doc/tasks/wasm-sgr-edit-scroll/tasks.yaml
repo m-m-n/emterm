@@ -1,0 +1,19 @@
+tasks:
+  - - id: phase1-sgr
+      title: "Phase 1: Rust SGR Handler"
+      status: completed
+  - - id: phase2-edit
+      title: "Phase 2: Rust Edit Handlers (IL/DL/ICH/DCH)"
+      status: completed
+  - - id: phase3-scroll
+      title: "Phase 3: Rust Scroll Handlers (SU/SD/DECSTBM)"
+      status: completed
+  - - id: phase4-mode-device
+      title: "Phase 4: Rust Mode + Device Handlers"
+      status: completed
+  - - id: phase5-ts-integration
+      title: "Phase 5: TypeScript Integration"
+      status: completed
+  - - id: phase6-verification
+      title: "Phase 6: Verification and Regression Testing"
+      status: completed
