@@ -48,6 +48,7 @@ export function handleSetMode(
             break;
           case "restoreCursor":
             state.cursor.restore();
+            state.syncCursorAttrsToWasm();
             break;
         }
       });

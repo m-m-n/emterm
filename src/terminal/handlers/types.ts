@@ -73,4 +73,7 @@ export interface TerminalStateAccessor {
 
   /** Sync boolean modes to WASM bitfield (no-op when WASM is not active). */
   syncModesToWasm(): void;
+
+  /** Sync cursor attributes (fg, bg, flags) to WASM core. */
+  syncCursorAttrsToWasm(): void;
 }
