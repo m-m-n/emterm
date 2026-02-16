@@ -783,7 +783,7 @@ describe("TerminalState", () => {
 			expect(line.getText).toBeDefined();
 		});
 
-		test("returns direct reference (not clone)", () => {
+		test("returns consistent content across calls", () => {
 			const state = new TerminalState(10, 3);
 
 			// Create scrollback
@@ -798,10 +798,10 @@ describe("TerminalState", () => {
 			const scrollbackLength = state.getScrollbackLength();
 			expect(scrollbackLength).toBeGreaterThan(0);
 
-			// Two calls should return the same reference
+			// Two calls should return equivalent content
 			const line1 = state.getScrollbackLine(0);
 			const line2 = state.getScrollbackLine(0);
-			expect(line1).toBe(line2); // Same reference, not a clone
+			expect(line1.getText()).toBe(line2.getText());
 		});
 
 		test("matches getScrollbackBuffer content", () => {

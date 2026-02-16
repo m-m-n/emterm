@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_sgr_empty_resets() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.cursor.fg = PackedColor::indexed(1);
         core.cursor.flags = STYLE_BOLD;
         core.handle_sgr(&[]);
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_sgr_reset_param0() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.cursor.fg = PackedColor::indexed(1);
         core.cursor.flags = STYLE_BOLD | STYLE_ITALIC;
         core.handle_sgr(&[0]);
@@ -151,7 +151,7 @@ mod tests {
             (9, STYLE_STRIKETHROUGH),
         ];
         for &(param, flag) in cases {
-            let mut core = TerminalCore::new(80, 24);
+            let mut core = TerminalCore::new(80, 24, 0);
             core.handle_sgr(&[param]);
             assert_ne!(
                 core.cursor.flags & flag,
@@ -175,7 +175,7 @@ mod tests {
             (29, STYLE_STRIKETHROUGH),
         ];
         for &(param, flag) in cases {
-            let mut core = TerminalCore::new(80, 24);
+            let mut core = TerminalCore::new(80, 24, 0);
             core.cursor.flags = 0xFFFF;
             core.handle_sgr(&[param]);
             assert_eq!(
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn test_sgr_standard_foreground() {
         for p in 30..=37 {
-            let mut core = TerminalCore::new(80, 24);
+            let mut core = TerminalCore::new(80, 24, 0);
             core.handle_sgr(&[p]);
             assert_eq!(core.cursor.fg, PackedColor::indexed((p - 30) as u8));
         }
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn test_sgr_standard_background() {
         for p in 40..=47 {
-            let mut core = TerminalCore::new(80, 24);
+            let mut core = TerminalCore::new(80, 24, 0);
             core.handle_sgr(&[p]);
             assert_eq!(core.cursor.bg, PackedColor::indexed((p - 40) as u8));
         }
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn test_sgr_bright_foreground() {
         for p in 90..=97 {
-            let mut core = TerminalCore::new(80, 24);
+            let mut core = TerminalCore::new(80, 24, 0);
             core.handle_sgr(&[p]);
             assert_eq!(core.cursor.fg, PackedColor::indexed((p - 90 + 8) as u8));
         }
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn test_sgr_bright_background() {
         for p in 100..=107 {
-            let mut core = TerminalCore::new(80, 24);
+            let mut core = TerminalCore::new(80, 24, 0);
             core.handle_sgr(&[p]);
             assert_eq!(core.cursor.bg, PackedColor::indexed((p - 100 + 8) as u8));
         }
@@ -226,35 +226,35 @@ mod tests {
 
     #[test]
     fn test_sgr_indexed_fg() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_sgr(&[38, 5, 196]);
         assert_eq!(core.cursor.fg, PackedColor::indexed(196));
     }
 
     #[test]
     fn test_sgr_indexed_bg() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_sgr(&[48, 5, 21]);
         assert_eq!(core.cursor.bg, PackedColor::indexed(21));
     }
 
     #[test]
     fn test_sgr_rgb_fg() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_sgr(&[38, 2, 255, 128, 0]);
         assert_eq!(core.cursor.fg, PackedColor::rgb(255, 128, 0));
     }
 
     #[test]
     fn test_sgr_rgb_bg() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_sgr(&[48, 2, 0, 128, 255]);
         assert_eq!(core.cursor.bg, PackedColor::rgb(0, 128, 255));
     }
 
     #[test]
     fn test_sgr_default_fg_bg() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.cursor.fg = PackedColor::indexed(5);
         core.cursor.bg = PackedColor::indexed(3);
         core.handle_sgr(&[39]);
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_sgr_multiple_params() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_sgr(&[1, 31, 42]);
         assert_ne!(core.cursor.flags & STYLE_BOLD, 0);
         assert_eq!(core.cursor.fg, PackedColor::indexed(1)); // red
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_sgr_truncated_extended() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         // 38;5 without index - should not panic
         core.handle_sgr(&[38, 5]);
         // 38 without subtype - should not panic
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn test_sgr_unknown_param() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_sgr(&[99]);
         // Should not crash, attrs unchanged
         assert_eq!(core.cursor.fg, PackedColor::DEFAULT);

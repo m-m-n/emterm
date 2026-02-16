@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_up_normal() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 5);
         core.handle_cursor_up(3);
         assert_eq!(core.get_cursor_row(), 2);
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_up_clamped() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 2);
         core.handle_cursor_up(10);
         assert_eq!(core.get_cursor_row(), 0);
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_up_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 5);
         core.set_wrap_pending(true);
         core.handle_cursor_up(1);
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_down_normal() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 5);
         core.handle_cursor_down(3);
         assert_eq!(core.get_cursor_row(), 8);
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_down_clamped() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 20);
         core.handle_cursor_down(100);
         assert_eq!(core.get_cursor_row(), 23);
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_down_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_cursor_down(1);
         assert!(!core.get_wrap_pending());
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_forward_normal() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(5, 0);
         core.handle_cursor_forward(3);
         assert_eq!(core.get_cursor_col(), 8);
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_forward_clamped() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(70, 0);
         core.handle_cursor_forward(100);
         assert_eq!(core.get_cursor_col(), 79);
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_forward_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_cursor_forward(1);
         assert!(!core.get_wrap_pending());
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_back_normal() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(5, 0);
         core.handle_cursor_back(3);
         assert_eq!(core.get_cursor_col(), 2);
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_back_clamped() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(2, 0);
         core.handle_cursor_back(10);
         assert_eq!(core.get_cursor_col(), 0);
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_back_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_cursor_back(1);
         assert!(!core.get_wrap_pending());
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_next_line() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(10, 5);
         core.handle_cursor_next_line(3);
         assert_eq!(core.get_cursor_row(), 8);
@@ -209,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_next_line_clamped() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(10, 20);
         core.handle_cursor_next_line(100);
         assert_eq!(core.get_cursor_row(), 23);
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_previous_line() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(10, 5);
         core.handle_cursor_previous_line(3);
         assert_eq!(core.get_cursor_row(), 2);
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_previous_line_clamped() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(10, 2);
         core.handle_cursor_previous_line(10);
         assert_eq!(core.get_cursor_row(), 0);
@@ -236,28 +236,28 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_horizontal_absolute() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_cursor_horizontal_absolute(5);
         assert_eq!(core.get_cursor_col(), 4); // 1-indexed → 0-indexed
     }
 
     #[test]
     fn test_handle_cursor_horizontal_absolute_zero() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_cursor_horizontal_absolute(0);
         assert_eq!(core.get_cursor_col(), 0);
     }
 
     #[test]
     fn test_handle_cursor_horizontal_absolute_overflow() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_cursor_horizontal_absolute(1000);
         assert_eq!(core.get_cursor_col(), 79);
     }
 
     #[test]
     fn test_handle_cursor_horizontal_absolute_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_cursor_horizontal_absolute(1);
         assert!(!core.get_wrap_pending());
@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_position() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_cursor_position(5, 10);
         assert_eq!(core.get_cursor_row(), 4);
         assert_eq!(core.get_cursor_col(), 9);
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_position_zero_zero() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(10, 10);
         core.handle_cursor_position(0, 0);
         assert_eq!(core.get_cursor_row(), 0);
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_position_overflow() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_cursor_position(1000, 1000);
         assert_eq!(core.get_cursor_row(), 23);
         assert_eq!(core.get_cursor_col(), 79);
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_position_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_cursor_position(1, 1);
         assert!(!core.get_wrap_pending());
@@ -298,28 +298,28 @@ mod tests {
 
     #[test]
     fn test_handle_cursor_vertical_absolute() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_cursor_vertical_absolute(5);
         assert_eq!(core.get_cursor_row(), 4);
     }
 
     #[test]
     fn test_handle_cursor_vertical_absolute_zero() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_cursor_vertical_absolute(0);
         assert_eq!(core.get_cursor_row(), 0);
     }
 
     #[test]
     fn test_handle_cursor_vertical_absolute_overflow() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_cursor_vertical_absolute(1000);
         assert_eq!(core.get_cursor_row(), 23);
     }
 
     #[test]
     fn test_handle_cursor_vertical_absolute_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_cursor_vertical_absolute(1);
         assert!(!core.get_wrap_pending());

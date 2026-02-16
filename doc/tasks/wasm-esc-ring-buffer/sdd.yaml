@@ -1,0 +1,269 @@
+schema_version: 1
+feature: wasm-esc-ring-buffer
+scale: full
+created: 2026-02-15
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cd wasm && wasm-pack build --target web --out-dir pkg"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+    frontend:
+      language: typescript
+      build_command: "bun build src/index.html --outdir dist --minify"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 610ae6a6194ce67fa33921b30e1407d577954ff3
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 610ae6a6194ce67fa33921b30e1407d577954ff3
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 610ae6a6194ce67fa33921b30e1407d577954ff3
+  - id: implement
+    status: completed
+  - id: check
+    status: completed
+    completed_at_commit: 610ae6a6194ce67fa33921b30e1407d577954ff3
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 610ae6a6194ce67fa33921b30e1407d577954ff3
+  - id: review
+    status: completed
+    completed_at_commit: 610ae6a6194ce67fa33921b30e1407d577954ff3
+
+requirements:
+  FR1:
+    title: ESC action dispatcher (handle_esc)
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: SaveCursor saves cursor position and attributes
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: RestoreCursor restores all saved state
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Index (IND) cursor down with WASM-internal scroll
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: NextLine (NEL) carriage return + index
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: ReverseIndex (RI) cursor up with WASM-internal scroll down
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: HorizontalTabSet (HTS) sets tab stop
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: ResetToInitialState (RIS) full reset including Ring Buffer
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: SetG0CharSet/SetG1CharSet via existing setters
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: Ring Buffer replaces flat grid with ring_cells/ring_head/ring_size
+    status: ok
+    tasks: []
+    tests: []
+  FR11:
+    title: Viewport maps to last N rows of ring buffer
+    status: ok
+    tasks: []
+    tests: []
+  FR12:
+    title: Scrollback index mapping
+    status: ok
+    tasks: []
+    tests: []
+  FR13:
+    title: ring_push adds line, evicts oldest at capacity
+    status: ok
+    tasks: []
+    tests: []
+  FR14:
+    title: get_scrollback_length returns scrollback count
+    status: ok
+    tasks: []
+    tests: []
+  FR15:
+    title: Ring Buffer capacity = scrollback_lines + rows
+    status: ok
+    tasks: []
+    tests: []
+  FR16:
+    title: Dirty tracking covers viewport rows only
+    status: ok
+    tasks: []
+    tests: []
+  FR17:
+    title: Full-screen scroll up pushes to scrollback (WASM-internal)
+    status: ok
+    tasks: []
+    tests: []
+  FR18:
+    title: Scroll region scroll up shifts within region
+    status: ok
+    tasks: []
+    tests: []
+  FR19:
+    title: Scroll down shifts rows down, clears top
+    status: ok
+    tasks: []
+    tests: []
+  FR20:
+    title: handle_print returns 0 (scroll internal)
+    status: ok
+    tasks: []
+    tests: []
+  FR21:
+    title: handle_execute returns BEL or 0 (LF scroll internal)
+    status: ok
+    tasks: []
+    tests: []
+  FR22:
+    title: handle_scroll_up returns 0 always
+    status: ok
+    tasks: []
+    tests: []
+  FR23:
+    title: resize_reflow performs full reflow in WASM
+    status: ok
+    tasks: []
+    tests: []
+  FR24:
+    title: Reflow algorithm (drain, join, trim, split, write back)
+    status: ok
+    tasks: []
+    tests: []
+  FR25:
+    title: Same-width resize adjusts row count only
+    status: ok
+    tasks: []
+    tests: []
+  FR26:
+    title: resize_no_reflow for alternate buffer
+    status: ok
+    tasks: []
+    tests: []
+  FR27:
+    title: Scroll region invalidated after resize
+    status: ok
+    tasks: []
+    tests: []
+  FR28:
+    title: get_scrollback_row_packed for renderer
+    status: ok
+    tasks: []
+    tests: []
+  FR29:
+    title: get_scrollback_length for renderer
+    status: ok
+    tasks: []
+    tests: []
+  FR30:
+    title: get_scrollback_text for search/selection
+    status: ok
+    tasks: []
+    tests: []
+  FR31:
+    title: Remove syncCursorAttrsToWasm from TerminalState
+    status: ok
+    tasks: []
+    tests: []
+  FR32:
+    title: Remove syncCursorAttrsToWasm from TerminalStateAccessor
+    status: ok
+    tasks: []
+    tests: []
+  FR33:
+    title: Remove all syncCursorAttrsToWasm call sites
+    status: ok
+    tasks: []
+    tests: []
+  FR34:
+    title: handleEscWasm dispatch in state.ts
+    status: ok
+    tasks: []
+    tests: []
+  FR35:
+    title: UnifiedBuffer WASM mode delegates scroll to WASM
+    status: ok
+    tasks: []
+    tests: []
+  FR36:
+    title: UnifiedBuffer WASM mode resize uses WASM reflow
+    status: ok
+    tasks: []
+    tests: []
+  FR37:
+    title: JS fallback path unchanged
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Performance: 0 WASM-TS boundary crossings for scroll"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Performance: Reflow >= TS implementation speed"
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Memory: scrollback in WASM linear memory"
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Compatibility: All existing TS tests pass"
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: "Compatibility: JS fallback unchanged"
+    status: ok
+    tasks: []
+    tests: []
+  NFR6:
+    title: "Compatibility: vttest unchanged"
+    status: ok
+    tasks: []
+    tests: []
+  NFR7:
+    title: "Binary size: WASM < 70KB"
+    status: ok
+    tasks: []
+    tests: []
+  NFR8:
+    title: "Compatibility: scrollback_lines setting works"
+    status: ok
+    tasks: []
+    tests: []

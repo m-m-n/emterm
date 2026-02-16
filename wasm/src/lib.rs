@@ -10,7 +10,9 @@ mod csi_edit;
 mod csi_modes;
 mod csi_screen;
 mod csi_scroll;
+mod esc_handler;
 mod print_handler;
+mod ring_buffer;
 mod sgr;
 
 use wasm_bindgen::prelude::*;
