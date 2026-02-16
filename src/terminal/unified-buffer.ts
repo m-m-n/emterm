@@ -6,7 +6,7 @@
  * on resize with cursor position tracking.
  */
 import { type Cell, type LineAccessor, createEmptyCell, Line } from "./grid.ts";
-import { type WasmGrid, wasmRowToLine } from "./wasm/terminal-core.ts";
+import { type WasmGrid, parsePackedRow } from "./wasm/terminal-core.ts";
 
 /**
  * Scroll region definition.
@@ -68,9 +68,9 @@ export class UnifiedBuffer {
 		this.wasmGrid = wasmGrid ?? null;
 
 		if (this.wasmGrid) {
-			// WASM mode: ring buffer only stores scrollback
-			this.capacity = Math.max(1, scrollbackLines);
-			this.ring = new Array(this.capacity).fill(null);
+			// WASM Ring Buffer mode: scrollback is in WASM linear memory, no JS ring needed
+			this.capacity = 0;
+			this.ring = [];
 			this.head = 0;
 			this._size = 0;
 		} else {
@@ -105,8 +105,8 @@ export class UnifiedBuffer {
 	/** Get number of scrollback lines (lines above viewport). */
 	get scrollbackLength(): number {
 		if (this.wasmGrid) {
-			// WASM mode: all ring entries are scrollback
-			return this._size;
+			// WASM mode: scrollback is managed by WASM ring buffer
+			return this.wasmGrid.getScrollbackLength();
 		}
 		return Math.max(0, this._size - this._rows);
 	}
@@ -233,6 +233,13 @@ export class UnifiedBuffer {
 	getScrollbackLine(index: number): Line {
 		if (index < 0 || index >= this.scrollbackLength) {
 			throw new Error(`Scrollback index ${index} out of bounds (0-${this.scrollbackLength - 1})`);
+		}
+		if (this.wasmGrid) {
+			// WASM mode: read from WASM ring buffer
+			const packed = this.wasmGrid.getScrollbackRowPacked(index);
+			const line = parsePackedRow(packed, this._cols);
+			line.wrapped = this.wasmGrid.getScrollbackLineWrapped(index);
+			return line;
 		}
 		return this.getAbsolute(index);
 	}
@@ -371,10 +378,8 @@ export class UnifiedBuffer {
 		if (this.scrollbackLength === 0) return;
 
 		if (this.wasmGrid) {
-			// WASM mode: just clear the scrollback ring (viewport stays in WASM)
-			this.ring = new Array(this.capacity).fill(null);
-			this.head = 0;
-			this._size = 0;
+			// WASM mode: clear scrollback in WASM ring buffer
+			this.wasmGrid.clearScrollback();
 			return;
 		}
 
@@ -414,29 +419,8 @@ export class UnifiedBuffer {
 		const actualCount = Math.min(count, regionHeight);
 
 		if (this.wasmGrid) {
-			// WASM mode: scroll bridge
-			if (top === 0 && bottom === this._rows - 1) {
-				// Full-screen scroll: save top rows to scrollback, shift WASM grid
-				for (let i = 0; i < actualCount; i++) {
-					// Read top row from WASM → JS Line → push to scrollback ring
-					const jsLine = wasmRowToLine(this.wasmGrid.core, 0);
-					this.push(jsLine);
-					// Shift WASM grid up by 1
-					this.wasmGrid.shiftRowsUp(0, this._rows - 1, 1);
-					// Clear bottom row
-					this.wasmGrid.fillRowDefault(this._rows - 1);
-				}
-			} else {
-				// Partial scroll region: shift within WASM grid (no scrollback)
-				this.wasmGrid.shiftRowsUp(top, bottom, actualCount);
-				for (let i = 0; i < actualCount; i++) {
-					this.wasmGrid.fillRowDefault(bottom - actualCount + 1 + i);
-				}
-			}
-			// Mark affected rows dirty in WASM
-			for (let i = top; i <= bottom; i++) {
-				this.wasmGrid.markRowDirty(i);
-			}
+			// WASM Ring Buffer mode: scroll handled entirely within WASM
+			this.wasmGrid.core.handle_scroll_up(actualCount);
 			return;
 		}
 
@@ -455,12 +439,6 @@ export class UnifiedBuffer {
 
 		// Partial scroll region: rearrange viewport lines in-place
 		const sbLen = this.scrollbackLength;
-
-		// Collect the lines that will be removed from top of region
-		const removedLines: Line[] = [];
-		for (let i = 0; i < actualCount; i++) {
-			removedLines.push(this.getAbsolute(sbLen + top + i));
-		}
 
 		// Shift remaining lines up within region
 		for (let i = top; i <= bottom - actualCount; i++) {
@@ -493,15 +471,8 @@ export class UnifiedBuffer {
 		const actualCount = Math.min(count, regionHeight);
 
 		if (this.wasmGrid) {
-			// WASM mode: shift rows down, fill top with defaults
-			this.wasmGrid.shiftRowsDown(top, bottom, actualCount);
-			for (let i = 0; i < actualCount; i++) {
-				this.wasmGrid.fillRowDefault(top + i);
-			}
-			// Mark affected rows dirty
-			for (let i = top; i <= bottom; i++) {
-				this.wasmGrid.markRowDirty(i);
-			}
+			// WASM Ring Buffer mode: scroll handled entirely within WASM
+			this.wasmGrid.core.handle_scroll_down(actualCount);
 			return;
 		}
 
@@ -949,8 +920,8 @@ export class UnifiedBuffer {
 		rows = Math.max(1, rows);
 
 		if (this.wasmGrid) {
-			// WASM mode: delegate resize to WASM grid
-			this.wasmGrid.resize(cols, rows);
+			// WASM mode: delegate to resize_no_reflow (no reflow for alternate buffer)
+			this.wasmGrid.resizeNoReflow(cols, rows);
 			this._cols = cols;
 			this._rows = rows;
 			// Invalidate scroll region if needed
@@ -1093,7 +1064,8 @@ export class UnifiedBuffer {
 	}
 
 	/**
-	 * Resize with WASM grid: materialize viewport → reflow → write back.
+	 * Resize with WASM grid: delegate entirely to WASM resize_reflow.
+	 * WASM handles scrollback reflow, cursor tracking, and ring buffer management.
 	 */
 	private resizeWithWasm(
 		cols: number,
@@ -1102,180 +1074,27 @@ export class UnifiedBuffer {
 		cursorCol: number,
 	): { col: number; row: number } {
 		const grid = this.wasmGrid!;
-		const oldCols = this._cols;
-		const oldRows = this._rows;
 
-		// Same width: just adjust row count
-		if (cols === oldCols) {
-			// Resize scrollback lines
-			for (let i = 0; i < this._size; i++) {
-				this.getAbsolute(i).resize(cols);
-			}
-			// Resize WASM grid
-			grid.resize(cols, rows);
-			this._cols = cols;
-			this._rows = rows;
-			// Recalculate scrollback capacity
-			const scrollbackCap = this.capacity;
-			// Invalidate scroll region
-			if (this.scrollRegion && this.scrollRegion.bottom >= rows) {
-				this.scrollRegion = null;
-			}
-			grid.markAllDirty();
-			// Clamp cursor
-			return {
-				col: Math.max(0, Math.min(cursorCol, cols - 1)),
-				row: Math.max(0, Math.min(cursorRow, rows - 1)),
-			};
-		}
+		// Sync cursor to WASM before resize
+		grid.core.set_cursor(cursorCol, cursorRow);
 
-		// Full reflow: materialize WASM viewport → combine with scrollback → reflow → write back
+		// Delegate entirely to WASM resize (internally calls resize_reflow)
+		grid.resize(cols, rows);
 
-		// Step 1: Drain scrollback from ring
-		const scrollbackLines = this.drain();
+		// Read back adjusted cursor from WASM
+		const newCol = grid.core.get_cursor_col();
+		const newRow = grid.core.get_cursor_row();
 
-		// Step 2: Read viewport from WASM → JS Lines
-		const viewportLines: Line[] = [];
-		for (let r = 0; r < oldRows; r++) {
-			viewportLines.push(wasmRowToLine(grid.core, r));
-		}
-
-		// Step 3: Combine all lines (scrollback + viewport)
-		const allLines = [...scrollbackLines, ...viewportLines];
-
-		// Map cursor from viewport-relative to absolute index
-		const scrollbackLen = scrollbackLines.length;
-		const cursorAbsRow = scrollbackLen + cursorRow;
-
-		// Step 4: Reflow (same algorithm as JS mode)
-		const reflowed: Line[] = [];
-		let adjustedCursor = { col: cursorCol, row: cursorRow };
-		let outputLineCount = 0;
-		let i = 0;
-
-		while (i < allLines.length) {
-			const logicalCells: Cell[] = [];
-			let cursorInThisLogical = false;
-			let logicalCursorX = 0;
-
-			if (i === cursorAbsRow) {
-				cursorInThisLogical = true;
-				logicalCursorX = cursorCol;
-			}
-			logicalCells.push(...allLines[i]!.getCells());
-			i++;
-
-			while (i < allLines.length && allLines[i]!.wrapped) {
-				if (i === cursorAbsRow) {
-					cursorInThisLogical = true;
-					logicalCursorX = cursorCol + logicalCells.length;
-				}
-				logicalCells.push(...allLines[i]!.getCells());
-				i++;
-			}
-
-			let endIndex = logicalCells.length;
-			while (endIndex > 0) {
-				const cell = logicalCells[endIndex - 1]!;
-				if (cell.char !== " " || cell.width !== 1) break;
-				endIndex--;
-			}
-			const trimmedCells = endIndex > 0 ? logicalCells.slice(0, endIndex) : [];
-
-			if (trimmedCells.length === 0) {
-				reflowed.push(new Line(cols));
-				if (cursorInThisLogical) {
-					adjustedCursor = { col: 0, row: outputLineCount };
-				}
-				outputLineCount++;
-			} else {
-				if (cursorInThisLogical) {
-					const clampedX = Math.min(logicalCursorX, trimmedCells.length);
-					const newRow = Math.floor(clampedX / cols);
-					const newCol = clampedX % cols;
-					adjustedCursor = { col: newCol, row: outputLineCount + newRow };
-				}
-				let offset = 0;
-				while (offset < trimmedCells.length) {
-					const newLine = new Line(cols);
-					const lineLength = Math.min(cols, trimmedCells.length - offset);
-					for (let j = 0; j < lineLength; j++) {
-						newLine.setCell(j, trimmedCells[offset + j]!);
-					}
-					if (offset > 0) {
-						newLine.wrapped = true;
-					}
-					reflowed.push(newLine);
-					offset += lineLength;
-				}
-				outputLineCount += Math.ceil(trimmedCells.length / cols);
-			}
-		}
-
-		// Step 5: Trim empty lines from bottom
-		while (reflowed.length > rows) {
-			const lastLine = reflowed[reflowed.length - 1]!;
-			if (lastLine.isEmpty()) {
-				reflowed.pop();
-				if (adjustedCursor.row >= reflowed.length) {
-					adjustedCursor.row = Math.max(0, reflowed.length - 1);
-					adjustedCursor.col = 0;
-				}
-			} else {
-				break;
-			}
-		}
-		while (reflowed.length < rows) {
-			reflowed.push(new Line(cols));
-		}
-
-		// Step 6: Split result into scrollback and viewport
-		const newScrollbackCount = Math.max(0, reflowed.length - rows);
-		const scrollbackCapacity = this.capacity; // preserved
-
-		// Rebuild scrollback ring
-		this.ring = new Array(scrollbackCapacity).fill(null);
-		this.head = 0;
-		this._size = 0;
+		// Update TS state
 		this._cols = cols;
 		this._rows = rows;
-
-		// If reflowed scrollback exceeds capacity, only keep last N
-		const sbStart = Math.max(0, newScrollbackCount - scrollbackCapacity);
-		const evicted = sbStart;
-		for (let k = sbStart; k < newScrollbackCount; k++) {
-			this.push(reflowed[k]!);
-		}
-
-		if (evicted > 0 && this.onEvict) {
-			this.onEvict(evicted);
-		}
-
-		// Step 7: Resize WASM grid and write viewport lines back
-		grid.resize(cols, rows);
-		for (let r = 0; r < rows; r++) {
-			const line = reflowed[newScrollbackCount + r]!;
-			grid.setRowFromCells(r, line.getCells());
-			grid.core.set_line_wrapped(r, line.wrapped);
-		}
-		grid.markAllDirty();
 
 		// Invalidate scroll region
 		this.scrollRegion = null;
 
-		// Adjust cursor for evicted lines
-		if (evicted > 0) {
-			adjustedCursor.row -= evicted;
-		}
+		grid.markAllDirty();
 
-		// Convert cursor from absolute to viewport-relative
-		adjustedCursor.row -= this.scrollbackLength;
-
-		// Clamp cursor
-		adjustedCursor.row = Math.max(0, Math.min(adjustedCursor.row, rows - 1));
-		adjustedCursor.col = Math.max(0, Math.min(adjustedCursor.col, cols - 1));
-
-		return adjustedCursor;
+		return { col: newCol, row: newRow };
 	}
 
 	// ===== Buffer Utilities =====
@@ -1286,7 +1105,6 @@ export class UnifiedBuffer {
 	 * @returns New independent buffer
 	 */
 	clone(): UnifiedBuffer {
-		const scrollbackLines = this.capacity - this._rows;
 		const newBuf = new UnifiedBuffer(this._cols, 0, 0);
 		// Manually set internals for an exact copy
 		newBuf.ring = new Array(this.capacity).fill(null);

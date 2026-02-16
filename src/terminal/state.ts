@@ -6,10 +6,10 @@
  */
 
 import { MarkdownSessionManager } from "../markdown/session.ts";
-import type { CharSet, CsiAction, EraseMode, TerminalAction } from "../types/terminal.ts";
+import type { CharSet, CsiAction, EscAction, EraseMode, TerminalAction } from "../types/terminal.ts";
 import { UnifiedBuffer } from "./unified-buffer.ts";
 import { CursorState } from "./cursor.ts";
-import { cloneAttributes, packColor, packStyleFlags } from "./attributes.ts";
+import { cloneAttributes } from "./attributes.ts";
 import { FoldManager } from "./fold-manager.ts";
 import { Line, type Cell } from "./grid.ts";
 import { createDefaultModes, setDecPrivateMode, syncModesFromWasm, syncModesToWasm, type TerminalModes } from "./modes.ts";
@@ -41,6 +41,18 @@ const MODE_ACTION_SWITCH_TO_MAIN = 3;
 const MODE_ACTION_SAVE_CURSOR = 4;
 const MODE_ACTION_RESTORE_CURSOR = 5;
 const MODE_ACTION_TS_FALLBACK = 0xFF;
+
+/**
+ * Convert CharSet string to numeric byte for WASM ESC handler.
+ */
+function charSetToByte(charset: CharSet): number {
+  switch (charset) {
+    case "Ascii": return 0;
+    case "DecLineDrawing": return 1;
+    case "Uk": return 2;
+    default: return 0;
+  }
+}
 
 /**
  * Convert EraseMode string to numeric mode byte for WASM.
@@ -153,7 +165,7 @@ export class TerminalState implements TerminalStateAccessor {
     // Create WASM grid for viewport (if WASM is available)
     if (useWasm) {
       try {
-        this.primaryWasmGrid = new WasmGrid(cols, rows);
+        this.primaryWasmGrid = new WasmGrid(cols, rows, scrollbackLines);
       } catch {
         // WASM not available - fall back to JS-only mode
         this.primaryWasmGrid = null;
@@ -371,24 +383,6 @@ export class TerminalState implements TerminalStateAccessor {
    */
   getScrollbackLength(): number {
     return this.primaryBuffer.scrollbackLength;
-  }
-
-  /**
-   * Sync cursor attributes (fg, bg, flags) to WASM core.
-   * Called after SGR attribute changes and cursor restore.
-   */
-  syncCursorAttrsToWasm(): void {
-    const grid = this.getActiveWasmGrid();
-    if (!grid) return;
-
-    const fg = packColor(this.cursor.attrs.fg);
-    grid.core.set_cursor_fg(fg.tag, fg.r, fg.g, fg.b);
-
-    const bg = packColor(this.cursor.attrs.bg);
-    grid.core.set_cursor_bg(bg.tag, bg.r, bg.g, bg.b);
-
-    const flags = packStyleFlags(this.cursor.attrs);
-    grid.core.set_cursor_flags(flags);
   }
 
   /**
@@ -680,9 +674,15 @@ export class TerminalState implements TerminalStateAccessor {
         handleCsi(this, action.value); // Fallback to TS
         break;
       }
-      case "Esc":
+      case "Esc": {
+        const grid = this.getActiveWasmGrid();
+        if (grid) {
+          this.handleEscWasm(grid, action.value);
+          break;
+        }
         handleEsc(this, action.value);
         break;
+      }
       case "Osc":
         handleOsc(this, action.value);
         break;
@@ -907,6 +907,56 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Handle an ESC action via WASM.
+   * Maps ESC action names to WASM action codes and dispatches.
+   */
+  private handleEscWasm(grid: WasmGrid, action: EscAction): void {
+    let actionCode: number;
+    let data = 0;
+
+    switch (action.action) {
+      case "SaveCursor":
+        actionCode = 0;
+        break;
+      case "RestoreCursor":
+        actionCode = 1;
+        break;
+      case "Index":
+        actionCode = 2;
+        break;
+      case "NextLine":
+        actionCode = 3;
+        break;
+      case "ReverseIndex":
+        actionCode = 4;
+        break;
+      case "HorizontalTabSet":
+        actionCode = 5;
+        break;
+      case "ResetToInitialState":
+        actionCode = 6;
+        break;
+      case "SetG0CharSet":
+        actionCode = 7;
+        data = charSetToByte(action.data);
+        break;
+      case "SetG1CharSet":
+        actionCode = 8;
+        data = charSetToByte(action.data);
+        break;
+      case "Unknown":
+        return; // No-op for unknown ESC sequences
+    }
+
+    grid.core.handle_esc(actionCode, data);
+
+    // RIS: also reset TS-side state
+    if (actionCode === 6) {
+      this.reset();
+    }
+  }
+
+  /**
    * Process SetMode/ResetMode via WASM with action code dispatch.
    * Handles boolean modes in WASM, falls back to TS for multi-valued modes.
    */
@@ -956,7 +1006,6 @@ export class TerminalState implements TerminalStateAccessor {
         break;
       case MODE_ACTION_RESTORE_CURSOR:
         this.cursor.restore();
-        this.syncCursorAttrsToWasm();
         break;
     }
   }

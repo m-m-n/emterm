@@ -1,0 +1,137 @@
+phases:
+  - id: phase1
+    name: "Ring Buffer Foundation"
+    status: completed
+    tasks:
+      - id: p1-t1
+        name: "Create ring_buffer.rs with index mapping + tests"
+        status: completed
+      - id: p1-t2
+        name: "Refactor TerminalCore struct: grid → ring_cells, add ring fields"
+        status: completed
+      - id: p1-t3
+        name: "Update cell access paths and overflow table to absolute indices"
+        status: completed
+      - id: p1-t4
+        name: "Update handler files (csi_edit, print_handler)"
+        status: completed
+      - id: p1-t5
+        name: "Migrate all test call sites: new(cols, rows) → new(cols, rows, 0)"
+        status: completed
+      - id: p1-t6
+        name: "Run all Rust tests"
+        status: completed
+
+  - id: phase2
+    name: "Scroll Internal"
+    status: completed
+    tasks:
+      - id: p2-t1
+        name: "Implement ring_push_blank, scroll_up_internal, scroll_down_internal"
+        status: completed
+      - id: p2-t2
+        name: "Modify line_feed to call scroll_up_internal directly"
+        status: completed
+      - id: p2-t3
+        name: "Update handle_print/execute/scroll_up return values to 0"
+        status: completed
+      - id: p2-t4
+        name: "Update test assertions (scroll count → scrollback verification)"
+        status: completed
+      - id: p2-t5
+        name: "Run all Rust tests"
+        status: completed
+
+  - id: phase3
+    name: "Scrollback Access APIs"
+    status: completed
+    tasks:
+      - id: p3-t1
+        name: "Implement get_scrollback_length, get_scrollback_row_packed, get_scrollback_text"
+        status: completed
+      - id: p3-t2
+        name: "Export via wasm_bindgen"
+        status: completed
+      - id: p3-t3
+        name: "Run all Rust tests"
+        status: completed
+
+  - id: phase4
+    name: "ESC Handlers"
+    status: completed
+    tasks:
+      - id: p4-t1
+        name: "Create esc_handler.rs with handle_esc dispatch"
+        status: completed
+      - id: p4-t2
+        name: "Extend CursorState with charset/origin_mode/wrap_pending fields"
+        status: completed
+      - id: p4-t3
+        name: "Implement SaveCursor/RestoreCursor enhancements"
+        status: completed
+      - id: p4-t4
+        name: "Implement Index/NextLine/ReverseIndex"
+        status: completed
+      - id: p4-t5
+        name: "Implement HTS and RIS"
+        status: completed
+      - id: p4-t6
+        name: "Run all Rust tests"
+        status: completed
+
+  - id: phase5
+    name: "Reflow"
+    status: completed
+    tasks:
+      - id: p5-t1
+        name: "Implement same-width resize"
+        status: completed
+      - id: p5-t2
+        name: "Implement reflow_drain, reflow_join_wrapped, reflow_split_at_width"
+        status: completed
+      - id: p5-t3
+        name: "Implement cursor tracking through reflow"
+        status: completed
+      - id: p5-t4
+        name: "Implement resize_reflow and resize_no_reflow"
+        status: completed
+      - id: p5-t5
+        name: "Remove old resize() method"
+        status: completed
+      - id: p5-t6
+        name: "Run all Rust tests"
+        status: completed
+
+  - id: phase6
+    name: "TypeScript Integration"
+    status: completed
+    tasks:
+      - id: p6-t1
+        name: "Add handleEscWasm to state.ts"
+        status: completed
+      - id: p6-t2
+        name: "Update UnifiedBuffer for WASM mode"
+        status: completed
+      - id: p6-t3
+        name: "Update WasmGrid constructor with scrollback_lines"
+        status: completed
+      - id: p6-t4
+        name: "Remove syncCursorAttrsToWasm"
+        status: completed
+      - id: p6-t5
+        name: "Run TS tests and typecheck"
+        status: completed
+
+  - id: phase7
+    name: "Verification"
+    status: completed
+    tasks:
+      - id: p7-t1
+        name: "Run full test suite (Rust + TS)"
+        status: completed
+      - id: p7-t2
+        name: "WASM binary size check (< 70KB)"
+        status: completed
+      - id: p7-t3
+        name: "Manual testing (vttest, vim, less, top)"
+        status: pending

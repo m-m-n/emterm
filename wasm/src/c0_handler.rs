@@ -56,12 +56,11 @@ impl TerminalCore {
         self.next_tab_stop(self.cursor.col)
     }
 
-    /// Execute LF: line_feed + clear wrap_pending.
-    /// Returns 1 if scroll needed, 0 otherwise.
+    /// Execute LF: line_feed (scroll handled internally) + clear wrap_pending.
     fn execute_line_feed(&mut self) -> u8 {
-        let scroll = if self.line_feed() { 1 } else { 0 };
+        self.line_feed();
         self.wrap_pending = false;
-        scroll
+        0
     }
 }
 
@@ -73,13 +72,13 @@ mod tests {
 
     #[test]
     fn test_handle_execute_bel_returns_sentinel() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.handle_execute(0x07), 0xFE);
     }
 
     #[test]
     fn test_handle_execute_bs_at_col5() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(5, 0);
         let result = core.handle_execute(0x08);
         assert_eq!(result, 0);
@@ -88,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_bs_at_col0_clamped() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 0);
         let result = core.handle_execute(0x08);
         assert_eq!(result, 0);
@@ -97,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_bs_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_execute(0x08);
         assert!(!core.get_wrap_pending());
@@ -105,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_ht_default_tab_stops() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 0);
         core.handle_execute(0x09);
         assert_eq!(core.get_cursor_col(), 8);
@@ -113,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_ht_col7_to_col8() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(7, 0);
         core.handle_execute(0x09);
         assert_eq!(core.get_cursor_col(), 8);
@@ -121,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_ht_col8_to_col16() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(8, 0);
         core.handle_execute(0x09);
         assert_eq!(core.get_cursor_col(), 16);
@@ -129,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_ht_past_last_stop() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(78, 0);
         core.handle_execute(0x09);
         assert_eq!(core.get_cursor_col(), 79);
@@ -137,7 +136,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_ht_custom_tab_stops() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.clear_all_tab_stops();
         core.set_tab_stop(5);
         core.set_tab_stop(15);
@@ -153,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_ht_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_execute(0x09);
         assert!(!core.get_wrap_pending());
@@ -161,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_lf_mid_screen() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 5);
         let result = core.handle_execute(0x0A);
         assert_eq!(result, 0);
@@ -170,26 +169,26 @@ mod tests {
 
     #[test]
     fn test_handle_execute_lf_at_scroll_region_bottom() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_scroll_region(5, 15);
         core.set_cursor(0, 15); // At scroll region bottom
         let result = core.handle_execute(0x0A);
-        assert_eq!(result, 1); // Scroll needed
+        assert_eq!(result, 0); // Scroll handled internally
         assert_eq!(core.get_cursor_row(), 15); // Stay at bottom
     }
 
     #[test]
     fn test_handle_execute_lf_at_bottom_no_scroll_region() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 23); // Last row
         let result = core.handle_execute(0x0A);
-        assert_eq!(result, 1);
+        assert_eq!(result, 0); // Scroll handled internally
         assert_eq!(core.get_cursor_row(), 23);
     }
 
     #[test]
     fn test_handle_execute_vt_same_as_lf() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 5);
         let result = core.handle_execute(0x0B); // VT
         assert_eq!(result, 0);
@@ -198,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_ff_same_as_lf() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 5);
         let result = core.handle_execute(0x0C); // FF
         assert_eq!(result, 0);
@@ -207,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_cr() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(30, 5);
         let result = core.handle_execute(0x0D);
         assert_eq!(result, 0);
@@ -217,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_cr_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_wrap_pending(true);
         core.handle_execute(0x0D);
         assert!(!core.get_wrap_pending());
@@ -225,14 +224,14 @@ mod tests {
 
     #[test]
     fn test_handle_execute_so() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_execute(0x0E); // SO
         assert_eq!(core.get_active_charset(), 1);
     }
 
     #[test]
     fn test_handle_execute_si() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_active_charset(1);
         core.handle_execute(0x0F); // SI
         assert_eq!(core.get_active_charset(), 0);
@@ -240,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_lf_clears_wrap_pending() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 5);
         core.set_wrap_pending(true);
         core.handle_execute(0x0A);
@@ -249,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_handle_execute_unknown_byte_noop() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(5, 5);
         let result = core.handle_execute(0x01); // SOH
         assert_eq!(result, 0);

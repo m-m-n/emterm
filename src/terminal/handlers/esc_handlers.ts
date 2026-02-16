@@ -73,7 +73,6 @@ export function handleSaveCursor(state: TerminalStateAccessor): void {
 export function handleRestoreCursor(state: TerminalStateAccessor): void {
   state.cursor.restore();
   state.wrapPending = false;
-  state.syncCursorAttrsToWasm();
 }
 
 /**

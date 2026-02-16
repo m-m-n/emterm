@@ -32,6 +32,11 @@ pub(crate) struct CursorState {
     pub(crate) visible: bool,
     pub(crate) style: u8, // 0=block, 1=underline, 2=bar
     pub(crate) blink: bool,
+    // SaveCursor/RestoreCursor extended fields
+    pub(crate) g0_charset: u8,
+    pub(crate) g1_charset: u8,
+    pub(crate) origin_mode: bool,
+    pub(crate) wrap_pending: bool,
 }
 
 impl CursorState {
@@ -45,6 +50,10 @@ impl CursorState {
             visible: true,
             style: 0,
             blink: true,
+            g0_charset: 0,
+            g1_charset: 0,
+            origin_mode: false,
+            wrap_pending: false,
         }
     }
 }
@@ -55,8 +64,12 @@ impl CursorState {
 pub struct TerminalCore {
     pub(crate) cols: u16,
     pub(crate) rows: u16,
-    pub(crate) grid: Vec<Cell>,
-    pub(crate) wrapped: Vec<bool>,
+    // Ring buffer: unified viewport + scrollback storage
+    pub(crate) ring_cells: Vec<Cell>,
+    pub(crate) ring_wrapped: Vec<bool>,
+    pub(crate) ring_head: usize,     // Index of oldest line in ring
+    pub(crate) ring_size: usize,     // Current number of lines (>= rows)
+    pub(crate) ring_capacity: usize, // Maximum line count (scrollback_lines + rows)
     pub(crate) dirty: Vec<u64>,
     pub(crate) cursor: CursorState,
     pub(crate) saved_cursor: Option<CursorState>,
@@ -79,9 +92,10 @@ pub struct TerminalCore {
 #[wasm_bindgen]
 impl TerminalCore {
     #[wasm_bindgen(constructor)]
-    pub fn new(cols: u16, rows: u16) -> Self {
+    pub fn new(cols: u16, rows: u16, scrollback_lines: u32) -> Self {
         debug_assert!(cols > 0 && rows > 0, "cols and rows must be > 0");
-        let total = cols as usize * rows as usize;
+        let ring_capacity = scrollback_lines as usize + rows as usize;
+        let total = ring_capacity * cols as usize;
         let dirty_words = (rows as usize + 63) / 64;
 
         // Default modes: autoWrap=true, cursorVisible=true, cursorBlink=true
@@ -96,8 +110,11 @@ impl TerminalCore {
         let mut core = Self {
             cols,
             rows,
-            grid: vec![Cell::EMPTY; total],
-            wrapped: vec![false; rows as usize],
+            ring_cells: vec![Cell::EMPTY; total],
+            ring_wrapped: vec![false; ring_capacity],
+            ring_head: 0,
+            ring_size: rows as usize,
+            ring_capacity,
             dirty: vec![u64::MAX; dirty_words], // all dirty initially
             cursor: CursorState::new(),
             saved_cursor: None,
@@ -133,11 +150,7 @@ impl TerminalCore {
     // ── Cell access (internal) ───────────────────────────
 
     pub(crate) fn cell_index(&self, col: u16, row: u16) -> Option<usize> {
-        if col < self.cols && row < self.rows {
-            Some(row as usize * self.cols as usize + col as usize)
-        } else {
-            None
-        }
+        self.viewport_cell_offset(col, row)
     }
 
     // ── Cell write ───────────────────────────────────────
@@ -159,12 +172,13 @@ impl TerminalCore {
         flags: u16,
     ) {
         if let Some(idx) = self.cell_index(col, row) {
-            let cell = &mut self.grid[idx];
+            let abs = self.viewport_abs(row) as u16;
+            let cell = &mut self.ring_cells[idx];
             cell.set_char(char_str);
             if cell.is_overflow() {
-                self.overflow.insert((col, row), char_str.to_string());
+                self.overflow.insert((col, abs), char_str.to_string());
             } else {
-                self.overflow.remove(&(col, row));
+                self.overflow.remove(&(col, abs));
             }
             cell.width = width;
             cell.fg = PackedColor {
@@ -200,7 +214,7 @@ impl TerminalCore {
         flags: u16,
     ) {
         if let Some(idx) = self.cell_index(col, row) {
-            let cell = &mut self.grid[idx];
+            let cell = &mut self.ring_cells[idx];
             cell.char_data[0] = byte;
             for b in &mut cell.char_data[1..] {
                 *b = 0;
@@ -220,7 +234,8 @@ impl TerminalCore {
                 b: bg_b,
             };
             cell.flags = flags;
-            self.overflow.remove(&(col, row));
+            let abs = self.viewport_abs(row) as u16;
+            self.overflow.remove(&(col, abs));
             self.mark_row_dirty(row);
         }
     }
@@ -229,9 +244,10 @@ impl TerminalCore {
 
     pub fn get_cell_char(&self, col: u16, row: u16) -> String {
         if let Some(idx) = self.cell_index(col, row) {
-            let cell = &self.grid[idx];
+            let abs = self.viewport_abs(row) as u16;
+            let cell = &self.ring_cells[idx];
             if cell.is_overflow() {
-                self.overflow.get(&(col, row)).cloned().unwrap_or_default()
+                self.overflow.get(&(col, abs)).cloned().unwrap_or_default()
             } else {
                 cell.get_char_inline().unwrap_or(" ").to_string()
             }
@@ -242,25 +258,25 @@ impl TerminalCore {
 
     pub fn get_cell_width(&self, col: u16, row: u16) -> u8 {
         self.cell_index(col, row)
-            .map(|i| self.grid[i].width)
+            .map(|i| self.ring_cells[i].width)
             .unwrap_or(1)
     }
 
     pub fn get_cell_fg(&self, col: u16, row: u16) -> u32 {
         self.cell_index(col, row)
-            .map(|i| self.grid[i].fg.to_u32())
+            .map(|i| self.ring_cells[i].fg.to_u32())
             .unwrap_or(0)
     }
 
     pub fn get_cell_bg(&self, col: u16, row: u16) -> u32 {
         self.cell_index(col, row)
-            .map(|i| self.grid[i].bg.to_u32())
+            .map(|i| self.ring_cells[i].bg.to_u32())
             .unwrap_or(0)
     }
 
     pub fn get_cell_flags(&self, col: u16, row: u16) -> u16 {
         self.cell_index(col, row)
-            .map(|i| self.grid[i].flags)
+            .map(|i| self.ring_cells[i].flags)
             .unwrap_or(0)
     }
 
@@ -270,44 +286,8 @@ impl TerminalCore {
         if row >= self.rows {
             return Vec::new();
         }
-        // Estimate capacity: ~12 bytes per cell for ASCII (common case)
-        let mut buf = Vec::with_capacity(self.cols as usize * 12);
-        let base = row as usize * self.cols as usize;
-
-        for col in 0..self.cols {
-            let cell = &self.grid[base + col as usize];
-            if cell.is_overflow() {
-                let s = self
-                    .overflow
-                    .get(&(col, row))
-                    .map(|s| s.as_bytes())
-                    .unwrap_or(b" ");
-                let len = s.len();
-                buf.push(0xFF); // overflow marker
-                buf.push((len >> 8) as u8);
-                buf.push(len as u8);
-                buf.extend_from_slice(s);
-            } else {
-                let len = cell.char_len;
-                buf.push(len);
-                buf.extend_from_slice(&cell.char_data[..len as usize]);
-            }
-            buf.push(cell.width);
-            // fg: 4 bytes
-            buf.push(cell.fg.tag);
-            buf.push(cell.fg.r);
-            buf.push(cell.fg.g);
-            buf.push(cell.fg.b);
-            // bg: 4 bytes
-            buf.push(cell.bg.tag);
-            buf.push(cell.bg.r);
-            buf.push(cell.bg.g);
-            buf.push(cell.bg.b);
-            // flags: 2 bytes (little-endian)
-            buf.push(cell.flags as u8);
-            buf.push((cell.flags >> 8) as u8);
-        }
-        buf
+        let abs = self.viewport_abs(row);
+        self.pack_row_abs(abs)
     }
 
     // ── Line operations ──────────────────────────────────
@@ -316,12 +296,13 @@ impl TerminalCore {
         if row >= self.rows {
             return;
         }
-        let base = row as usize * self.cols as usize;
+        let abs = self.viewport_abs(row);
+        let base = abs * self.cols as usize;
         for i in base..base + self.cols as usize {
-            self.grid[i] = Cell::EMPTY;
+            self.ring_cells[i] = Cell::EMPTY;
         }
-        self.wrapped[row as usize] = false;
-        overflow_clear_row(&mut self.overflow, row);
+        self.ring_wrapped[abs] = false;
+        overflow_clear_row(&mut self.overflow, abs as u16);
         self.mark_row_dirty(row);
     }
 
@@ -331,11 +312,12 @@ impl TerminalCore {
         }
         let start = start_col.min(self.cols) as usize;
         let end = end_col.min(self.cols) as usize;
-        let base = row as usize * self.cols as usize;
+        let abs = self.viewport_abs(row);
+        let base = abs * self.cols as usize;
         for i in base + start..base + end {
-            self.grid[i] = Cell::EMPTY;
+            self.ring_cells[i] = Cell::EMPTY;
         }
-        overflow_clear_range(&mut self.overflow, row, start_col, end_col);
+        overflow_clear_range(&mut self.overflow, abs as u16, start_col, end_col);
         self.mark_row_dirty(row);
     }
 
@@ -343,30 +325,17 @@ impl TerminalCore {
         if row >= self.rows {
             return String::new();
         }
-        let mut text = String::new();
-        let base = row as usize * self.cols as usize;
-        for col in 0..self.cols {
-            let cell = &self.grid[base + col as usize];
-            if cell.width > 0 {
-                if cell.is_overflow() {
-                    if let Some(s) = self.overflow.get(&(col, row)) {
-                        text.push_str(s);
-                    }
-                } else if let Some(s) = cell.get_char_inline() {
-                    text.push_str(s);
-                }
-            }
-        }
-        text
+        let abs = self.viewport_abs(row);
+        self.line_text_abs(abs)
     }
 
     pub fn is_line_empty(&self, row: u16) -> bool {
         if row >= self.rows {
             return true;
         }
-        let base = row as usize * self.cols as usize;
+        let base = self.viewport_row_base(row);
         for col in 0..self.cols as usize {
-            let cell = &self.grid[base + col];
+            let cell = &self.ring_cells[base + col];
             if cell.width > 0 {
                 if cell.is_overflow() {
                     return false;
@@ -383,7 +352,7 @@ impl TerminalCore {
 
     pub fn get_line_wrapped(&self, row: u16) -> bool {
         if row < self.rows {
-            self.wrapped[row as usize]
+            self.ring_wrapped[self.viewport_abs(row)]
         } else {
             false
         }
@@ -391,7 +360,8 @@ impl TerminalCore {
 
     pub fn set_line_wrapped(&mut self, row: u16, wrapped: bool) {
         if row < self.rows {
-            self.wrapped[row as usize] = wrapped;
+            let abs = self.viewport_abs(row);
+            self.ring_wrapped[abs] = wrapped;
         }
     }
 
@@ -404,29 +374,49 @@ impl TerminalCore {
         let count = count.min(end_row - start_row + 1);
         let cols = self.cols as usize;
 
+        // Clear overflow for rows that will be overwritten (deleted range)
+        for r in start_row..start_row + count {
+            let abs = self.viewport_abs(r) as u16;
+            overflow_clear_row(&mut self.overflow, abs);
+        }
+
         // Move row data
         for dst_row in start_row..=end_row.saturating_sub(count) {
             let src_row = dst_row + count;
             if src_row <= end_row {
-                let dst_base = dst_row as usize * cols;
-                let src_base = src_row as usize * cols;
+                let dst_abs = self.viewport_abs(dst_row);
+                let src_abs = self.viewport_abs(src_row);
+                let dst_base = dst_abs * cols;
+                let src_base = src_abs * cols;
                 for i in 0..cols {
-                    self.grid[dst_base + i] = self.grid[src_base + i];
+                    self.ring_cells[dst_base + i] = self.ring_cells[src_base + i];
                 }
-                self.wrapped[dst_row as usize] = self.wrapped[src_row as usize];
+                self.ring_wrapped[dst_abs] = self.ring_wrapped[src_abs];
+                // Move overflow entries from source to destination
+                let src_abs_u16 = src_abs as u16;
+                let dst_abs_u16 = dst_abs as u16;
+                let entries: Vec<(u16, String)> = self
+                    .overflow
+                    .iter()
+                    .filter(|&(&(_, r), _)| r == src_abs_u16)
+                    .map(|(&(c, _), v)| (c, v.clone()))
+                    .collect();
+                self.overflow.retain(|&(_, r), _| r != src_abs_u16);
+                for (c, v) in entries {
+                    self.overflow.insert((c, dst_abs_u16), v);
+                }
             }
         }
         // Clear vacated rows at bottom
         for row in (end_row + 1 - count)..=end_row {
-            let base = row as usize * cols;
+            let abs = self.viewport_abs(row);
+            let base = abs * cols;
             for i in base..base + cols {
-                self.grid[i] = Cell::EMPTY;
+                self.ring_cells[i] = Cell::EMPTY;
             }
-            self.wrapped[row as usize] = false;
+            self.ring_wrapped[abs] = false;
+            overflow_clear_row(&mut self.overflow, abs as u16);
         }
-
-        // Remap overflow side table
-        overflow_shift_up(&mut self.overflow, start_row, end_row, count);
 
         // Mark all affected rows dirty
         for row in start_row..=end_row {
@@ -441,27 +431,49 @@ impl TerminalCore {
         let count = count.min(end_row - start_row + 1);
         let cols = self.cols as usize;
 
+        // Clear overflow for rows that will be overwritten (bottom range)
+        for r in (end_row + 1 - count)..=end_row {
+            let abs = self.viewport_abs(r) as u16;
+            overflow_clear_row(&mut self.overflow, abs);
+        }
+
         // Move row data (iterate in reverse)
         for dst_row in (start_row + count..=end_row).rev() {
             let src_row = dst_row - count;
-            let dst_base = dst_row as usize * cols;
-            let src_base = src_row as usize * cols;
+            let dst_abs = self.viewport_abs(dst_row);
+            let src_abs = self.viewport_abs(src_row);
+            let dst_base = dst_abs * cols;
+            let src_base = src_abs * cols;
             for i in 0..cols {
-                self.grid[dst_base + i] = self.grid[src_base + i];
+                self.ring_cells[dst_base + i] = self.ring_cells[src_base + i];
             }
-            self.wrapped[dst_row as usize] = self.wrapped[src_row as usize];
+            self.ring_wrapped[dst_abs] = self.ring_wrapped[src_abs];
+            // Move overflow entries from source to destination
+            let src_abs_u16 = src_abs as u16;
+            let dst_abs_u16 = dst_abs as u16;
+            let entries: Vec<(u16, String)> = self
+                .overflow
+                .iter()
+                .filter(|&(&(_, r), _)| r == src_abs_u16)
+                .map(|(&(c, _), v)| (c, v.clone()))
+                .collect();
+            self.overflow.retain(|&(_, r), _| r != src_abs_u16);
+            for (c, v) in entries {
+                self.overflow.insert((c, dst_abs_u16), v);
+            }
         }
         // Clear vacated rows at top
         for row in start_row..start_row + count {
-            let base = row as usize * cols;
+            let abs = self.viewport_abs(row);
+            let base = abs * cols;
             for i in base..base + cols {
-                self.grid[i] = Cell::EMPTY;
+                self.ring_cells[i] = Cell::EMPTY;
             }
-            self.wrapped[row as usize] = false;
+            self.ring_wrapped[abs] = false;
+            overflow_clear_row(&mut self.overflow, abs as u16);
         }
 
-        overflow_shift_down(&mut self.overflow, start_row, end_row, count);
-
+        // Mark all affected rows dirty
         for row in start_row..=end_row {
             self.mark_row_dirty(row);
         }
@@ -472,23 +484,27 @@ impl TerminalCore {
             return;
         }
         let cols = self.cols as usize;
-        let src_base = src_row as usize * cols;
-        let dst_base = dst_row as usize * cols;
+        let src_abs = self.viewport_abs(src_row);
+        let dst_abs = self.viewport_abs(dst_row);
+        let src_base = src_abs * cols;
+        let dst_base = dst_abs * cols;
         for i in 0..cols {
-            self.grid[dst_base + i] = self.grid[src_base + i];
+            self.ring_cells[dst_base + i] = self.ring_cells[src_base + i];
         }
-        self.wrapped[dst_row as usize] = self.wrapped[src_row as usize];
+        self.ring_wrapped[dst_abs] = self.ring_wrapped[src_abs];
 
         // Copy overflow entries
-        overflow_clear_row(&mut self.overflow, dst_row);
+        let dst_abs_u16 = dst_abs as u16;
+        let src_abs_u16 = src_abs as u16;
+        overflow_clear_row(&mut self.overflow, dst_abs_u16);
         let src_entries: Vec<(u16, String)> = self
             .overflow
             .iter()
-            .filter(|&(&(_, r), _)| r == src_row)
+            .filter(|&(&(_, r), _)| r == src_abs_u16)
             .map(|(&(c, _), v)| (c, v.clone()))
             .collect();
         for (c, v) in src_entries {
-            self.overflow.insert((c, dst_row), v);
+            self.overflow.insert((c, dst_abs_u16), v);
         }
 
         self.mark_row_dirty(dst_row);
@@ -500,58 +516,12 @@ impl TerminalCore {
 
     // ── Resize ───────────────────────────────────────────
 
+    /// Legacy resize (delegates to resize_reflow with scrollback_lines=0).
+    /// Kept for backward compatibility with existing tests.
     pub fn resize(&mut self, new_cols: u16, new_rows: u16) {
-        debug_assert!(new_cols > 0 && new_rows > 0);
-        let old_cols = self.cols;
-        let old_rows = self.rows;
-
-        let mut new_grid = vec![Cell::EMPTY; new_cols as usize * new_rows as usize];
-        let copy_rows = old_rows.min(new_rows);
-        let copy_cols = old_cols.min(new_cols);
-
-        for row in 0..copy_rows as usize {
-            let old_base = row * old_cols as usize;
-            let new_base = row * new_cols as usize;
-            for col in 0..copy_cols as usize {
-                new_grid[new_base + col] = self.grid[old_base + col];
-            }
-        }
-
-        self.grid = new_grid;
-
-        // Resize wrapped
-        self.wrapped.resize(new_rows as usize, false);
-
-        // Resize tab stops
-        self.tab_stops.resize(new_cols as usize, false);
-        if new_cols > old_cols {
-            for i in (old_cols as usize..new_cols as usize).step_by(8) {
-                if !self.tab_stops[i] {
-                    self.tab_stops[i] = true;
-                }
-            }
-        }
-
-        self.cols = new_cols;
-        self.rows = new_rows;
-
-        // Clamp cursor
-        self.cursor.col = self.cursor.col.min(new_cols.saturating_sub(1));
-        self.cursor.row = self.cursor.row.min(new_rows.saturating_sub(1));
-
-        // Resize dirty bitset and mark all dirty
-        let dirty_words = (new_rows as usize + 63) / 64;
-        self.dirty = vec![0; dirty_words];
-        self.mark_all_dirty();
-
-        // Clean up overflow
-        overflow_resize(&mut self.overflow, new_cols, new_rows);
-
-        // Sprint 2: reset print state on resize
-        self.scroll_region_top = 0;
-        self.scroll_region_bottom = new_rows.saturating_sub(1);
-        self.wrap_pending = false;
-        self.grapheme_buffer.clear();
+        // Use reflow with current scrollback capacity
+        let scrollback_lines = self.ring_capacity.saturating_sub(self.rows as usize) as u32;
+        self.resize_reflow(new_cols, new_rows, scrollback_lines);
     }
 
     // ── Cursor ───────────────────────────────────────────
@@ -632,7 +602,13 @@ impl TerminalCore {
     }
 
     pub fn save_cursor(&mut self) {
-        self.saved_cursor = Some(self.cursor.clone());
+        let mut saved = self.cursor.clone();
+        // Save charset and mode state into CursorState
+        saved.g0_charset = self.g0_charset;
+        saved.g1_charset = self.g1_charset;
+        saved.origin_mode = self.get_mode(MODE_ORIGIN);
+        saved.wrap_pending = self.wrap_pending;
+        self.saved_cursor = Some(saved);
     }
 
     pub fn restore_cursor(&mut self) {
@@ -641,9 +617,18 @@ impl TerminalCore {
             // Clamp to current bounds
             self.cursor.col = self.cursor.col.min(self.cols.saturating_sub(1));
             self.cursor.row = self.cursor.row.min(self.rows.saturating_sub(1));
+            // Restore charset and mode state
+            self.g0_charset = self.cursor.g0_charset;
+            self.g1_charset = self.cursor.g1_charset;
+            self.set_mode(MODE_ORIGIN, self.cursor.origin_mode);
+            self.wrap_pending = self.cursor.wrap_pending;
         } else {
             // Reset to defaults if no saved state
             self.cursor = CursorState::new();
+            self.g0_charset = 0;
+            self.g1_charset = 0;
+            self.set_mode(MODE_ORIGIN, false);
+            self.wrap_pending = false;
         }
     }
 
@@ -750,9 +735,11 @@ impl TerminalCore {
     // ── Reset ────────────────────────────────────────────
 
     pub fn reset(&mut self) {
-        let total = self.cols as usize * self.rows as usize;
-        self.grid = vec![Cell::EMPTY; total];
-        self.wrapped = vec![false; self.rows as usize];
+        let total = self.ring_capacity * self.cols as usize;
+        self.ring_cells = vec![Cell::EMPTY; total];
+        self.ring_wrapped = vec![false; self.ring_capacity];
+        self.ring_head = 0;
+        self.ring_size = self.rows as usize;
         self.cursor = CursorState::new();
         self.saved_cursor = None;
         self.modes =
@@ -851,17 +838,14 @@ impl TerminalCore {
         self.cursor.col = 0;
     }
 
-    /// Advance cursor row. Returns true if scroll is needed
-    /// (cursor at scroll_region_bottom).
-    pub(crate) fn line_feed(&mut self) -> bool {
+    /// Advance cursor row. Scrolls internally if at scroll_region_bottom.
+    pub(crate) fn line_feed(&mut self) {
         if self.cursor.row >= self.scroll_region_bottom {
-            true
+            self.scroll_up_internal(1);
         } else {
             self.cursor.row += 1;
-            false
         }
     }
-
 }
 
 // ── Tests ────────────────────────────────────────────────
@@ -874,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_grid_new_80x24() {
-        let core = TerminalCore::new(80, 24);
+        let core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.cols(), 80);
         assert_eq!(core.rows(), 24);
         // All cells should be empty spaces
@@ -887,7 +871,7 @@ mod tests {
 
     #[test]
     fn test_set_get_cell_ascii() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cell(0, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         assert_eq!(core.get_cell_char(0, 0), "A");
         assert_eq!(core.get_cell_width(0, 0), 1);
@@ -895,7 +879,7 @@ mod tests {
 
     #[test]
     fn test_set_get_cell_cjk() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cell(5, 3, "漢", 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         assert_eq!(core.get_cell_char(5, 3), "漢");
         assert_eq!(core.get_cell_width(5, 3), 2);
@@ -903,7 +887,7 @@ mod tests {
 
     #[test]
     fn test_set_get_cell_ascii_fast() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cell_ascii(10, 5, b'Z', 2, 100, 200, 50, 0, 0, 0, 0, 0);
         assert_eq!(core.get_cell_char(10, 5), "Z");
         assert_eq!(core.get_cell_width(10, 5), 1);
@@ -914,7 +898,7 @@ mod tests {
 
     #[test]
     fn test_set_get_cell_with_attrs() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         // Set with RGB fg, indexed bg, bold+italic
         core.set_cell(
             0,
@@ -943,7 +927,7 @@ mod tests {
 
     #[test]
     fn test_oob_write_noop() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         // Should not panic
         core.set_cell(80, 0, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         core.set_cell(0, 24, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -951,7 +935,7 @@ mod tests {
 
     #[test]
     fn test_oob_read_default() {
-        let core = TerminalCore::new(80, 24);
+        let core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.get_cell_char(80, 0), " ");
         assert_eq!(core.get_cell_width(0, 24), 1);
         assert_eq!(core.get_cell_fg(100, 100), 0);
@@ -961,14 +945,14 @@ mod tests {
 
     #[test]
     fn test_cursor_initial() {
-        let core = TerminalCore::new(80, 24);
+        let core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.get_cursor_col(), 0);
         assert_eq!(core.get_cursor_row(), 0);
     }
 
     #[test]
     fn test_cursor_set_clamp() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(100, 50);
         assert_eq!(core.get_cursor_col(), 79);
         assert_eq!(core.get_cursor_row(), 23);
@@ -976,7 +960,7 @@ mod tests {
 
     #[test]
     fn test_cursor_save_restore() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(10, 5);
         core.set_cursor_fg(2, 255, 0, 0);
         core.set_cursor_flags(STYLE_BOLD);
@@ -1000,7 +984,7 @@ mod tests {
 
     #[test]
     fn test_modes_default() {
-        let core = TerminalCore::new(80, 24);
+        let core = TerminalCore::new(80, 24, 0);
         assert!(core.get_mode(MODE_AUTO_WRAP));
         assert!(core.get_mode(MODE_CURSOR_VISIBLE));
         assert!(core.get_mode(MODE_CURSOR_BLINK));
@@ -1010,7 +994,7 @@ mod tests {
 
     #[test]
     fn test_modes_set_get() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_mode(MODE_BRACKETED_PASTE, true);
         assert!(core.get_mode(MODE_BRACKETED_PASTE));
         core.set_mode(MODE_AUTO_WRAP, false);
@@ -1021,7 +1005,7 @@ mod tests {
 
     #[test]
     fn test_tab_stops_default() {
-        let core = TerminalCore::new(80, 24);
+        let core = TerminalCore::new(80, 24, 0);
         // Default: every 8 columns
         assert_eq!(core.next_tab_stop(0), 8);
         assert_eq!(core.next_tab_stop(7), 8);
@@ -1031,7 +1015,7 @@ mod tests {
 
     #[test]
     fn test_tab_stops_set_clear() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.clear_all_tab_stops();
         core.set_tab_stop(10);
         core.set_tab_stop(30);
@@ -1047,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_dirty_after_set_cell() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.clear_dirty();
         assert!(!core.is_row_dirty(5));
         core.set_cell(0, 5, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -1056,7 +1040,7 @@ mod tests {
 
     #[test]
     fn test_dirty_clear_resets() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         // Initially all dirty
         assert!(!core.get_dirty_rows().is_empty());
         core.clear_dirty();
@@ -1065,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_dirty_resize_marks_all() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.clear_dirty();
         core.resize(100, 30);
         let dirty = core.get_dirty_rows();
@@ -1076,7 +1060,7 @@ mod tests {
 
     #[test]
     fn test_clear_line() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cell(0, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         core.set_cell(1, 0, "B", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         core.clear_line(0);
@@ -1087,7 +1071,7 @@ mod tests {
 
     #[test]
     fn test_clear_line_range() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         for col in 0..10 {
             core.set_cell(col, 0, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
@@ -1100,7 +1084,7 @@ mod tests {
 
     #[test]
     fn test_get_line_text() {
-        let mut core = TerminalCore::new(10, 1);
+        let mut core = TerminalCore::new(10, 1, 0);
         core.set_cell(0, 0, "H", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         core.set_cell(1, 0, "i", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         // Width-0 placeholder (e.g., second cell of wide char)
@@ -1110,7 +1094,7 @@ mod tests {
 
     #[test]
     fn test_get_line_text_skips_width0() {
-        let mut core = TerminalCore::new(10, 1);
+        let mut core = TerminalCore::new(10, 1, 0);
         core.set_cell(0, 0, "漢", 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         // Set width=0 placeholder at col 1
         core.set_cell(1, 0, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -1122,7 +1106,7 @@ mod tests {
 
     #[test]
     fn test_is_line_empty() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         assert!(core.is_line_empty(0));
         core.set_cell(5, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         assert!(!core.is_line_empty(0));
@@ -1132,7 +1116,7 @@ mod tests {
 
     #[test]
     fn test_shift_rows_up() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         // Set identifiable content on each row
         for row in 0..5 {
             core.set_cell(0, row, &format!("{row}"), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -1149,7 +1133,7 @@ mod tests {
 
     #[test]
     fn test_shift_rows_down() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         for row in 0..5 {
             core.set_cell(0, row, &format!("{row}"), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
@@ -1165,7 +1149,7 @@ mod tests {
 
     #[test]
     fn test_copy_row() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_cell(0, 0, "X", 1, 2, 255, 0, 0, 0, 0, 0, 0, STYLE_BOLD);
         core.set_line_wrapped(0, true);
         core.copy_row(0, 3);
@@ -1176,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_fill_row_default() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_cell(0, 2, "Z", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         core.fill_row_default(2);
         assert!(core.is_line_empty(2));
@@ -1186,7 +1170,7 @@ mod tests {
 
     #[test]
     fn test_resize_grow_cols() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_cell(5, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         core.resize(20, 5);
         assert_eq!(core.cols(), 20);
@@ -1195,7 +1179,7 @@ mod tests {
 
     #[test]
     fn test_resize_shrink_cols() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_cell(8, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         core.resize(5, 5);
         assert_eq!(core.cols(), 5);
@@ -1205,7 +1189,7 @@ mod tests {
 
     #[test]
     fn test_resize_grow_shrink_rows() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_cell(0, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
         // Grow
@@ -1223,7 +1207,7 @@ mod tests {
 
     #[test]
     fn test_reset() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cell(5, 5, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, STYLE_BOLD);
         core.set_cursor(40, 12);
         core.set_mode(MODE_BRACKETED_PASTE, true);
@@ -1240,7 +1224,7 @@ mod tests {
 
     #[test]
     fn test_get_row_packed_basic() {
-        let mut core = TerminalCore::new(3, 1);
+        let mut core = TerminalCore::new(3, 1, 0);
         core.set_cell(0, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         let packed = core.get_row_packed(0);
         assert!(!packed.is_empty());
@@ -1253,7 +1237,7 @@ mod tests {
 
     #[test]
     fn test_overflow_remapped_on_shift_up() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         let long = "👨‍👩‍👧‍👦";
         assert!(long.as_bytes().len() > 16);
         core.set_cell(0, 3, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -1263,5 +1247,4 @@ mod tests {
         // Row 3 shifted to row 1
         assert_eq!(core.get_cell_char(0, 1), long);
     }
-
 }

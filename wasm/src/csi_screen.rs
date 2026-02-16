@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn test_handle_erase_in_display_below() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         // Fill entire screen
         for r in 0..5 {
             for c in 0..10 {
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn test_handle_erase_in_display_above() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         for r in 0..5 {
             for c in 0..10 {
                 core.set_cell_ascii(c, r, b'B', 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_handle_erase_in_display_all() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         for r in 0..5 {
             for c in 0..10 {
                 core.set_cell_ascii(c, r, b'C', 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -149,21 +149,21 @@ mod tests {
 
     #[test]
     fn test_handle_erase_in_display_scrollback_returns_sentinel() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         let result = core.handle_erase_in_display(3);
         assert_eq!(result, 0xFF); // SCROLLBACK_SENTINEL
     }
 
     #[test]
     fn test_handle_erase_in_display_invalid_mode() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         let result = core.handle_erase_in_display(99);
         assert_eq!(result, 0);
     }
 
     #[test]
     fn test_handle_erase_in_line_to_end() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         for c in 0..10 {
             core.set_cell_ascii(c, 0, b'D', 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_handle_erase_in_line_to_start() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         for c in 0..10 {
             core.set_cell_ascii(c, 0, b'E', 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_handle_erase_in_line_all() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         for c in 0..10 {
             core.set_cell_ascii(c, 0, b'F', 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_handle_erase_characters_normal() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         for c in 0..10 {
             core.set_cell_ascii(c, 0, b'G', 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
@@ -238,13 +238,13 @@ mod tests {
 
     #[test]
     fn test_handle_erase_characters_overflow_clamped() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         for c in 0..10 {
             core.set_cell_ascii(c, 0, b'H', 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
         core.set_cursor(7, 0);
         core.handle_erase_characters(100); // More than remaining
-        // Cols 0-6 still 'H'
+                                           // Cols 0-6 still 'H'
         for c in 0..7 {
             assert_eq!(core.get_cell_char(c, 0), "H");
         }
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_handle_erase_characters_dirty() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         core.clear_dirty();
         core.set_cursor(0, 0);
         core.handle_erase_characters(5);

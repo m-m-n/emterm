@@ -43,18 +43,19 @@ impl TerminalCore {
         if count == 0 {
             return;
         }
-        let base = row as usize * self.cols as usize;
+        let base = self.viewport_row_base(row);
 
         // Shift cells right (iterate in reverse)
         for c in (col + count..self.cols).rev() {
-            self.grid[base + c as usize] = self.grid[base + (c - count) as usize];
+            self.ring_cells[base + c as usize] = self.ring_cells[base + (c - count) as usize];
         }
         // Clear inserted cells
         for c in col..col + count {
-            self.grid[base + c as usize] = Cell::EMPTY;
+            self.ring_cells[base + c as usize] = Cell::EMPTY;
         }
         // Handle overflow entries for this row
-        overflow_clear_range(&mut self.overflow, row, col, self.cols);
+        let abs = self.viewport_abs(row) as u16;
+        overflow_clear_range(&mut self.overflow, abs, col, self.cols);
         self.mark_row_dirty(row);
     }
 
@@ -70,18 +71,19 @@ impl TerminalCore {
         if count == 0 {
             return;
         }
-        let base = row as usize * self.cols as usize;
+        let base = self.viewport_row_base(row);
 
         // Shift cells left
         for c in col..self.cols - count {
-            self.grid[base + c as usize] = self.grid[base + (c + count) as usize];
+            self.ring_cells[base + c as usize] = self.ring_cells[base + (c + count) as usize];
         }
         // Clear trailing cells
         for c in self.cols - count..self.cols {
-            self.grid[base + c as usize] = Cell::EMPTY;
+            self.ring_cells[base + c as usize] = Cell::EMPTY;
         }
         // Handle overflow entries for this row
-        overflow_clear_range(&mut self.overflow, row, col, self.cols);
+        let abs = self.viewport_abs(row) as u16;
+        overflow_clear_range(&mut self.overflow, abs, col, self.cols);
         self.mark_row_dirty(row);
     }
 }
@@ -94,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_insert_lines_basic() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         // Fill rows with identifying chars
         for r in 0..5 {
             for c in 0..10 {
@@ -117,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_insert_lines_outside_region() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_scroll_region(1, 3);
         core.set_cursor(0, 0); // Outside scroll region
         for c in 0..10 {
@@ -130,17 +132,17 @@ mod tests {
 
     #[test]
     fn test_insert_lines_count_clamped() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_scroll_region(0, 4);
         core.set_cursor(0, 3);
         core.handle_insert_lines(100); // Much more than available
-        // Should not panic
+                                       // Should not panic
         assert_eq!(core.get_cell_char(0, 3), " ");
     }
 
     #[test]
     fn test_delete_lines_basic() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         for r in 0..5 {
             for c in 0..10 {
                 core.set_cell_ascii(c, r, b'0' + r as u8, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -162,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_delete_lines_outside_region() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_scroll_region(1, 3);
         core.set_cursor(0, 4); // Below scroll region
         core.handle_delete_lines(1);
@@ -171,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_insert_characters_basic() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         // Fill row 0: "ABCDEFGHIJ"
         for (c, ch) in (b'A'..=b'J').enumerate() {
             core.set_cell_ascii(c as u16, 0, ch, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -196,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_insert_characters_clamped() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         core.set_cursor(8, 0);
         core.handle_insert_characters(100);
         // Should not panic, effectively clears last 2 cells
@@ -206,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_delete_characters_basic() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         // Fill row 0: "ABCDEFGHIJ"
         for (c, ch) in (b'A'..=b'J').enumerate() {
             core.set_cell_ascii(c as u16, 0, ch, 0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -230,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_delete_characters_clamped() {
-        let mut core = TerminalCore::new(10, 3);
+        let mut core = TerminalCore::new(10, 3, 0);
         core.set_cursor(8, 0);
         core.handle_delete_characters(100);
         // Should not panic
@@ -239,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_edit_dirty_marking() {
-        let mut core = TerminalCore::new(10, 5);
+        let mut core = TerminalCore::new(10, 5, 0);
         core.set_scroll_region(0, 4);
         core.clear_dirty();
 

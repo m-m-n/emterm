@@ -11,7 +11,6 @@ import { Line } from "../grid.ts";
 import {
 	type CellAttributes,
 	type Color,
-	createDefaultAttributes,
 	packColor,
 	packStyleFlags,
 	unpackColor,
@@ -154,8 +153,8 @@ export class WasmLineProxy implements LineAccessor {
 export class WasmGrid {
 	readonly core: TerminalCore;
 
-	constructor(cols: number, rows: number) {
-		this.core = new TerminalCore(cols, rows);
+	constructor(cols: number, rows: number, scrollbackLines: number = 0) {
+		this.core = new TerminalCore(cols, rows, scrollbackLines);
 	}
 
 	get cols(): number {
@@ -288,6 +287,29 @@ export class WasmGrid {
 		this.core.resize(cols, rows);
 	}
 
+	/**
+	 * Resize with full reflow (for primary buffer).
+	 * Returns packed cursor: { col: high 16 bits, row: low 16 bits }.
+	 */
+	resizeReflow(
+		cols: number,
+		rows: number,
+		scrollbackLines: number,
+	): { col: number; row: number } {
+		const packed = this.core.resize_reflow(cols, rows, scrollbackLines);
+		return {
+			col: (packed >>> 16) & 0xffff,
+			row: packed & 0xffff,
+		};
+	}
+
+	/**
+	 * Simple resize without reflow (for alternate buffer).
+	 */
+	resizeNoReflow(cols: number, rows: number): void {
+		this.core.resize_no_reflow(cols, rows);
+	}
+
 	reset(): void {
 		this.core.reset();
 	}
@@ -296,6 +318,24 @@ export class WasmGrid {
 
 	getRowPacked(row: number): Uint8Array {
 		return this.core.get_row_packed(row);
+	}
+
+	// ── Scrollback access ────────────────────────────
+
+	getScrollbackLength(): number {
+		return this.core.get_scrollback_length();
+	}
+
+	clearScrollback(): void {
+		this.core.clear_scrollback();
+	}
+
+	getScrollbackRowPacked(index: number): Uint8Array {
+		return this.core.get_scrollback_row_packed(index);
+	}
+
+	getScrollbackLineWrapped(index: number): boolean {
+		return this.core.get_scrollback_line_wrapped(index);
 	}
 
 	dispose(): void {
@@ -309,17 +349,14 @@ export class WasmGrid {
 const utf8Decoder = new TextDecoder("utf-8");
 
 /**
- * Read a WASM row and create a JS Line object (for scroll-out to scrollback).
+ * Parse packed binary row data into a JS Line object.
  *
- * Uses get_row_packed() for a single WASM call per row instead of cols*5
- * individual calls. Binary format per cell:
+ * Binary format per cell:
  *   Inline: char_len(1) + char_data(char_len) + width(1) + fg(4) + bg(4) + flags(2 LE)
  *   Overflow: 0xFF(1) + len_hi(1) + len_lo(1) + utf8_data(len) + width(1) + fg(4) + bg(4) + flags(2 LE)
  */
-export function wasmRowToLine(core: TerminalCore, row: number): Line {
-	const cols = core.cols();
+export function parsePackedRow(packed: Uint8Array, cols: number): Line {
 	const line = new Line(cols);
-	const packed = core.get_row_packed(row);
 	let offset = 0;
 
 	for (let col = 0; col < cols; col++) {
@@ -386,6 +423,18 @@ export function wasmRowToLine(core: TerminalCore, row: number): Line {
 		line.setCell(col, { char: ch, width, attrs, dirty: false });
 	}
 
+	return line;
+}
+
+/**
+ * Read a WASM viewport row and create a JS Line object.
+ *
+ * Uses get_row_packed() for a single WASM call per row instead of cols*5
+ * individual calls.
+ */
+export function wasmRowToLine(core: TerminalCore, row: number): Line {
+	const packed = core.get_row_packed(row);
+	const line = parsePackedRow(packed, core.cols());
 	line.wrapped = core.get_line_wrapped(row);
 	return line;
 }

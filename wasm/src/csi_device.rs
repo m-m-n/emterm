@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_dsr_ok_status() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         let len = core.handle_device_status_report(5);
         assert_eq!(len, 4);
         let bytes = core.get_response_bytes();
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_dsr_cursor_position_home() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(0, 0);
         let len = core.handle_device_status_report(6);
         assert!(len > 0);
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_dsr_cursor_position_nonzero() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.set_cursor(9, 4); // 0-indexed
         let len = core.handle_device_status_report(6);
         assert!(len > 0);
@@ -137,14 +137,14 @@ mod tests {
 
     #[test]
     fn test_dsr_unknown() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         let len = core.handle_device_status_report(99);
         assert_eq!(len, 0);
     }
 
     #[test]
     fn test_da1() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         let len = core.handle_primary_device_attributes();
         assert!(len > 0);
         let bytes = core.get_response_bytes();
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_da2() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         let len = core.handle_secondary_device_attributes();
         assert!(len > 0);
         let bytes = core.get_response_bytes();
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_response_ptr_len() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         core.handle_primary_device_attributes();
         let ptr = core.get_response_ptr();
         let len = core.get_response_len();
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_dsr_large_position() {
-        let mut core = TerminalCore::new(500, 500);
+        let mut core = TerminalCore::new(500, 500, 0);
         core.set_cursor(499, 499);
         let len = core.handle_device_status_report(6);
         assert!(len > 0);

@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn test_mode_boolean_autowrap() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         let code = core.handle_set_mode(7, true);
         assert_eq!(code, 0);
         assert!(core.get_mode(MODE_AUTO_WRAP));
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_mode_boolean_cursor_visible() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         let code = core.handle_set_mode(25, false);
         assert_eq!(code, 0);
         assert!(!core.get_mode(MODE_CURSOR_VISIBLE));
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_mode_boolean_origin() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         let code = core.handle_set_mode(6, true);
         assert_eq!(code, 0);
         assert!(core.get_mode(MODE_ORIGIN));
@@ -120,28 +120,28 @@ mod tests {
 
     #[test]
     fn test_mode_buffer_switch_47() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.handle_set_mode(47, true), 1); // switchToAlt
         assert_eq!(core.handle_set_mode(47, false), 3); // switchToMain
     }
 
     #[test]
     fn test_mode_buffer_switch_1049() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.handle_set_mode(1049, true), 2); // saveAndSwitchToAlt
         assert_eq!(core.handle_set_mode(1049, false), 3); // switchToMain
     }
 
     #[test]
     fn test_mode_save_restore_cursor_1048() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.handle_set_mode(1048, true), 4); // saveCursor
         assert_eq!(core.handle_set_mode(1048, false), 5); // restoreCursor
     }
 
     #[test]
     fn test_mode_ts_fallback() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         for mode in [1, 1000, 1002, 1003, 1005, 1006] {
             assert_eq!(
                 core.handle_set_mode(mode, true),
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_mode_unknown() {
-        let mut core = TerminalCore::new(80, 24);
+        let mut core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.handle_set_mode(9999, true), 0);
     }
 }
