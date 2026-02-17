@@ -2,8 +2,9 @@ use crate::error::CommandError;
 use crate::protocols::{kitty, sixel};
 use crate::validation::{file, image as image_validation};
 use image::DynamicImage;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 /// Maximum file size for image files (10MB)
 const MAX_IMAGE_SIZE: u64 = 10 * 1024 * 1024;
@@ -30,6 +31,9 @@ impl ImageProtocol {
     }
 }
 
+/// Timeout for waiting for Kitty protocol response
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Executes the image command: reads file, decodes image, generates protocol sequences
 pub fn execute_image_command(
     file_path: &Path,
@@ -54,6 +58,13 @@ pub fn execute_image_command(
     // Output to stdout
     output_to_stdout(&sequence)?;
 
+    // Wait for terminal to acknowledge the image (Kitty protocol response)
+    // This blocks until the terminal sends back ESC _G ... ESC \ response,
+    // preventing the shell prompt from appearing before the image viewer opens.
+    if matches!(protocol, ImageProtocol::Kitty) {
+        wait_for_kitty_response();
+    }
+
     Ok(())
 }
 
@@ -71,6 +82,186 @@ fn decode_image(path: &Path) -> Result<DynamicImage, CommandError> {
 
     let img = image::open(path)?;
     Ok(img)
+}
+
+/// Waits for Kitty Graphics Protocol response from the terminal.
+///
+/// The terminal sends back `ESC _G <params> ; OK ESC \` or `ESC _G <params> ; ERROR:<code> ESC \`
+/// after processing image data. This function blocks until it receives the response
+/// or times out, ensuring the command stays in the foreground during image processing.
+fn wait_for_kitty_response() {
+    // Set stdin to raw mode to read escape sequences byte-by-byte
+    let Some(mut raw_guard) = enable_raw_stdin() else {
+        return; // Not a terminal or failed to set raw mode
+    };
+
+    let mut buf = [0u8; 1];
+    let start = Instant::now();
+
+    // State machine to detect ESC _G ... ESC \ (or BEL) pattern
+    // States: 0=normal, 1=saw ESC, 2=saw ESC _, 3=saw ESC _G (in response),
+    //         4=saw ESC in response (waiting for \)
+    let mut state: u8 = 0;
+    let mut received = false;
+
+    loop {
+        if start.elapsed() > RESPONSE_TIMEOUT {
+            break;
+        }
+
+        match raw_guard.stdin.read(&mut buf) {
+            Ok(1) => {
+                let b = buf[0];
+                state = match (state, b) {
+                    (0, 0x1B) => 1,         // ESC
+                    (1, b'_') => 2,          // ESC _
+                    (2, b'G') => 3,          // ESC _G - start of response
+                    (3, 0x07) => {           // BEL - alternative APC terminator
+                        received = true;
+                        break;
+                    }
+                    (3, 0x1B) => 4,          // ESC in response body
+                    (3, _) => 3,             // Continue reading response body
+                    (4, b'\\') => {          // ESC \ - response complete
+                        received = true;
+                        break;
+                    }
+                    (4, _) => 3,             // False ESC, continue response
+                    (_, 0x1B) => 1,          // ESC in any state restarts detection
+                    (_, _) => 0,             // Reset
+                };
+            }
+            Ok(_) => {}
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => break,
+        }
+    }
+
+    if !received {
+        eprintln!("emterm: warning: timed out waiting for terminal response");
+    }
+}
+
+/// Signal-safe termios restoration for SIGINT/SIGTERM.
+///
+/// Ensures the terminal is restored to its original state even if the process
+/// is interrupted while stdin is in raw mode. Without this, Ctrl+C during
+/// `wait_for_kitty_response()` would leave the terminal in raw mode.
+#[cfg(unix)]
+mod raw_mode_signal {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    // Safety: Written only while ACTIVE is false (before install), read only
+    // in signal handler when ACTIVE is true. No concurrent write possible.
+    // Uses addr_of!/addr_of_mut! to avoid creating references (Rust 2024).
+    static mut SAVED_TERMIOS: libc::termios = unsafe { std::mem::zeroed() };
+
+    extern "C" fn handler(sig: libc::c_int) {
+        // All operations here are async-signal-safe (tcsetattr, signal, raise)
+        unsafe {
+            if ACTIVE.load(Ordering::Acquire) {
+                libc::tcsetattr(
+                    libc::STDIN_FILENO,
+                    libc::TCSANOW,
+                    std::ptr::addr_of!(SAVED_TERMIOS),
+                );
+            }
+            // Re-raise with default handler for proper exit behavior
+            libc::signal(sig, libc::SIG_DFL);
+            libc::raise(sig);
+        }
+    }
+
+    /// Install signal handlers that restore termios on SIGINT/SIGTERM.
+    ///
+    /// # Safety
+    /// Must be called from a single thread. `original` must be a valid termios.
+    pub(super) unsafe fn install(original: &libc::termios) {
+        unsafe {
+            std::ptr::addr_of_mut!(SAVED_TERMIOS).write(*original);
+            ACTIVE.store(true, Ordering::Release);
+            libc::signal(libc::SIGINT, handler as *const () as libc::sighandler_t);
+            libc::signal(libc::SIGTERM, handler as *const () as libc::sighandler_t);
+        }
+    }
+
+    /// Remove signal handlers, restoring default behavior.
+    ///
+    /// # Safety
+    /// Must be called from a single thread.
+    pub(super) unsafe fn uninstall() {
+        unsafe {
+            ACTIVE.store(false, Ordering::Release);
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            libc::signal(libc::SIGTERM, libc::SIG_DFL);
+        }
+    }
+}
+
+/// RAII guard for raw stdin mode.
+struct RawStdinGuard {
+    stdin: io::Stdin,
+    #[cfg(unix)]
+    original_termios: libc::termios,
+}
+
+impl Drop for RawStdinGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.original_termios);
+            raw_mode_signal::uninstall();
+        }
+    }
+}
+
+/// Enable raw mode on stdin for reading escape sequences.
+/// Returns None if stdin is not a terminal.
+fn enable_raw_stdin() -> Option<RawStdinGuard> {
+    #[cfg(unix)]
+    {
+        use std::mem::MaybeUninit;
+
+        unsafe {
+            // Verify stdin is a terminal (not a pipe or file)
+            if libc::isatty(libc::STDIN_FILENO) == 0 {
+                return None;
+            }
+
+            let mut termios = MaybeUninit::<libc::termios>::uninit();
+            if libc::tcgetattr(libc::STDIN_FILENO, termios.as_mut_ptr()) != 0 {
+                return None;
+            }
+            let original = termios.assume_init();
+
+            let mut raw = original;
+            // Disable canonical mode and echo
+            raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+            // Set minimum read to 0 bytes, timeout to 100ms (1 decisecond)
+            raw.c_cc[libc::VMIN] = 0;
+            raw.c_cc[libc::VTIME] = 1;
+
+            if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) != 0 {
+                return None;
+            }
+
+            // Install signal handlers to restore termios on Ctrl+C / kill
+            raw_mode_signal::install(&original);
+
+            Some(RawStdinGuard {
+                stdin: io::stdin(),
+                original_termios: original,
+            })
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 /// Writes sequence to stdout with proper flushing

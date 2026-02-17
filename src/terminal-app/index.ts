@@ -55,6 +55,7 @@ export class TerminalApp {
   private searchBar: SearchBar | null = null;
   private pendingApcQueue: Uint8Array[] = [];
   private pendingDcsQueue: Uint8Array[] = [];
+  private pendingProtocolResponses: string[] = [];
 
   /**
    * Creates a new TerminalApp instance
@@ -256,6 +257,17 @@ export class TerminalApp {
       }
       // Restore IME focus for terminal input
       this.imeHandler?.focus();
+
+      // Flush deferred protocol responses (unblocks CLI commands like `emterm image`)
+      if (this.pendingProtocolResponses.length > 0 && this.ptyClient) {
+        const responses = this.pendingProtocolResponses;
+        this.pendingProtocolResponses = [];
+        for (const response of responses) {
+          this.ptyClient.write(response).catch((error) => {
+            console.error("Failed to write deferred protocol response:", error);
+          });
+        }
+      }
     });
 
     // Set markdown session manager's container for fullscreen view
@@ -620,8 +632,17 @@ export class TerminalApp {
         // This is used by Kitty protocol for OK/ERROR responses
         const responseData = payload.data as string | undefined;
         if (responseData && this.ptyClient) {
-          // Write response back to PTY
-          this.ptyClient.write(responseData);
+          if (this.imageViewer?.isVisible()) {
+            // Defer response until viewer is closed so CLI stays in foreground
+            // Cap to prevent unbounded memory growth
+            if (this.pendingProtocolResponses.length < 100) {
+              this.pendingProtocolResponses.push(responseData);
+            }
+          } else {
+            this.ptyClient.write(responseData).catch((error) => {
+              console.error("Failed to write protocol response:", error);
+            });
+          }
         }
         break;
       }
@@ -1183,6 +1204,16 @@ export class TerminalApp {
     this.imageViewer?.dispose();
     this.imageViewer = null;
     this.pendingImages.clear();
+    this.pendingApcQueue = [];
+    this.pendingDcsQueue = [];
+
+    // Flush deferred protocol responses before PTY disposal
+    if (this.pendingProtocolResponses.length > 0 && this.ptyClient) {
+      for (const response of this.pendingProtocolResponses) {
+        this.ptyClient.write(response).catch(() => {});
+      }
+    }
+    this.pendingProtocolResponses = [];
 
     // Clean up PTY
     if (this.ptyClient) {
