@@ -50,9 +50,12 @@ pub fn execute_image_command(
     let img = decode_image(&validated_path)?;
 
     // Generate protocol sequence
-    let sequence = match protocol {
-        ImageProtocol::Kitty => kitty::generate_kitty_sequence(&img)?,
-        ImageProtocol::Sixel => sixel::generate_sixel_sequence(&img)?,
+    let (sequence, expected_image_id) = match protocol {
+        ImageProtocol::Kitty => {
+            let (seq, id) = kitty::generate_kitty_sequence(&img)?;
+            (seq, Some(id))
+        }
+        ImageProtocol::Sixel => (sixel::generate_sixel_sequence(&img)?, None),
     };
 
     // Output to stdout
@@ -61,8 +64,8 @@ pub fn execute_image_command(
     // Wait for terminal to acknowledge the image (Kitty protocol response)
     // This blocks until the terminal sends back ESC _G ... ESC \ response,
     // preventing the shell prompt from appearing before the image viewer opens.
-    if matches!(protocol, ImageProtocol::Kitty) {
-        wait_for_kitty_response();
+    if let Some(image_id) = expected_image_id {
+        wait_for_kitty_response(image_id);
     }
 
     Ok(())
@@ -87,9 +90,12 @@ fn decode_image(path: &Path) -> Result<DynamicImage, CommandError> {
 /// Waits for Kitty Graphics Protocol response from the terminal.
 ///
 /// The terminal sends back `ESC _G <params> ; OK ESC \` or `ESC _G <params> ; ERROR:<code> ESC \`
-/// after processing image data. This function blocks until it receives the response
-/// or times out, ensuring the command stays in the foreground during image processing.
-fn wait_for_kitty_response() {
+/// after processing image data. This function blocks until it receives a response
+/// whose `i={id}` matches `expected_id`, or times out.
+///
+/// If a response with a mismatched id is received, it is ignored and the function
+/// continues waiting for the correct response within the timeout period.
+fn wait_for_kitty_response(expected_id: u32) {
     // Set stdin to raw mode to read escape sequences byte-by-byte
     let Some(mut raw_guard) = enable_raw_stdin() else {
         return; // Not a terminal or failed to set raw mode
@@ -103,6 +109,8 @@ fn wait_for_kitty_response() {
     //         4=saw ESC in response (waiting for \)
     let mut state: u8 = 0;
     let mut received = false;
+    // Collect response body bytes to parse i={id}
+    let mut response_body: Vec<u8> = Vec::new();
 
     loop {
         if start.elapsed() > RESPONSE_TIMEOUT {
@@ -113,22 +121,50 @@ fn wait_for_kitty_response() {
             Ok(1) => {
                 let b = buf[0];
                 state = match (state, b) {
-                    (0, 0x1B) => 1,         // ESC
-                    (1, b'_') => 2,          // ESC _
-                    (2, b'G') => 3,          // ESC _G - start of response
-                    (3, 0x07) => {           // BEL - alternative APC terminator
-                        received = true;
-                        break;
+                    (0, 0x1B) => 1, // ESC
+                    (1, b'_') => 2, // ESC _
+                    (2, b'G') => {
+                        // ESC _G - start of response
+                        response_body.clear();
+                        3
                     }
-                    (3, 0x1B) => 4,          // ESC in response body
-                    (3, _) => 3,             // Continue reading response body
-                    (4, b'\\') => {          // ESC \ - response complete
-                        received = true;
-                        break;
+                    (3, 0x07) => {
+                        // BEL - alternative APC terminator
+                        if parse_and_match_id(&response_body, expected_id) {
+                            received = true;
+                            break;
+                        }
+                        0 // Mismatched id, keep waiting
                     }
-                    (4, _) => 3,             // False ESC, continue response
-                    (_, 0x1B) => 1,          // ESC in any state restarts detection
-                    (_, _) => 0,             // Reset
+                    (3, 0x1B) => {
+                        // ESC in response body
+                        response_body.push(b);
+                        4
+                    }
+                    (3, _) => {
+                        // Continue reading response body (cap at 4KB)
+                        if response_body.len() < 4096 {
+                            response_body.push(b);
+                        }
+                        3
+                    }
+                    (4, b'\\') => {
+                        // ESC \ - response complete
+                        // Remove the trailing ESC we pushed
+                        response_body.pop();
+                        if parse_and_match_id(&response_body, expected_id) {
+                            received = true;
+                            break;
+                        }
+                        0 // Mismatched id, keep waiting
+                    }
+                    (4, _) => {
+                        // False ESC, continue response
+                        response_body.push(b);
+                        3
+                    }
+                    (_, 0x1B) => 1, // ESC in any state restarts detection
+                    (_, _) => 0,    // Reset
                 };
             }
             Ok(_) => {}
@@ -142,6 +178,31 @@ fn wait_for_kitty_response() {
     if !received {
         eprintln!("emterm: warning: timed out waiting for terminal response");
     }
+}
+
+/// Parse `i={id}` from Kitty response body and check if it matches expected_id.
+///
+/// Response body format: `i={id};OK` or `i={id};ENOENT:{message}` etc.
+/// The params section (before `;`) contains comma-separated key=value pairs.
+fn parse_and_match_id(body: &[u8], expected_id: u32) -> bool {
+    let body_str = match std::str::from_utf8(body) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    // Params are before the semicolon
+    let params = body_str.split(';').next().unwrap_or("");
+
+    for param in params.split(',') {
+        if let Some(id_str) = param.strip_prefix("i=") {
+            if let Ok(id) = id_str.parse::<u32>() {
+                return id == expected_id;
+            }
+        }
+    }
+
+    // No i= param found; accept anyway (terminal may not echo id back)
+    true
 }
 
 /// Signal-safe termios restoration for SIGINT/SIGTERM.
@@ -361,5 +422,41 @@ mod tests {
     fn test_max_dimension_constant() {
         // Verify MAX_IMAGE_DIMENSION is set to a reasonable value
         assert_eq!(MAX_IMAGE_DIMENSION, 8192);
+    }
+
+    #[test]
+    fn test_parse_and_match_id_matching() {
+        // Standard OK response with matching id
+        assert!(parse_and_match_id(b"i=42;OK", 42));
+    }
+
+    #[test]
+    fn test_parse_and_match_id_mismatching() {
+        // Response with different id
+        assert!(!parse_and_match_id(b"i=99;OK", 42));
+    }
+
+    #[test]
+    fn test_parse_and_match_id_no_id_param() {
+        // No i= param - accept (terminal may not echo id)
+        assert!(parse_and_match_id(b"OK", 42));
+    }
+
+    #[test]
+    fn test_parse_and_match_id_error_response() {
+        // Error response with matching id
+        assert!(parse_and_match_id(b"i=42;ENOENT:not found", 42));
+    }
+
+    #[test]
+    fn test_parse_and_match_id_multiple_params() {
+        // Multiple params in response
+        assert!(parse_and_match_id(b"i=42,I=1;OK", 42));
+    }
+
+    #[test]
+    fn test_parse_and_match_id_empty_body() {
+        // Empty body - accept (no id to compare)
+        assert!(parse_and_match_id(b"", 42));
     }
 }

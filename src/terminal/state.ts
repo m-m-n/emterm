@@ -455,6 +455,22 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Get packed binary data for a viewport row.
+   * Returns null if WASM is not available.
+   */
+  getRowPacked(row: number): Uint8Array | null {
+    return this.getActiveBuffer().getRowPacked(row);
+  }
+
+  /**
+   * Get packed binary data for a scrollback row.
+   * Returns null if WASM is not available.
+   */
+  getScrollbackRowPacked(index: number): Uint8Array | null {
+    return this.getActiveBuffer().getScrollbackRowPacked(index);
+  }
+
+  /**
    * Sync boolean modes to WASM bitfield.
    * No-op when WASM is not active.
    */

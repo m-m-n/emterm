@@ -222,6 +222,34 @@ export class UnifiedBuffer {
 		this.getLine(row).setCell(col, cell);
 	}
 
+	// ===== Packed Data Access =====
+
+	/**
+	 * Get packed binary data for a viewport row.
+	 * Returns null if WASM grid is not available.
+	 *
+	 * @param row - Row index within viewport
+	 * @returns Uint8Array of packed cell data or null
+	 */
+	getRowPacked(row: number): Uint8Array | null {
+		if (!this.wasmGrid) return null;
+		if (row < 0 || row >= this._rows) return null;
+		return this.wasmGrid.getRowPacked(row);
+	}
+
+	/**
+	 * Get packed binary data for a scrollback row.
+	 * Returns null if WASM grid is not available.
+	 *
+	 * @param index - Scrollback index (0 = oldest)
+	 * @returns Uint8Array of packed cell data or null
+	 */
+	getScrollbackRowPacked(index: number): Uint8Array | null {
+		if (!this.wasmGrid) return null;
+		if (index < 0 || index >= this.scrollbackLength) return null;
+		return this.wasmGrid.getScrollbackRowPacked(index);
+	}
+
 	// ===== Scrollback Access =====
 
 	/**

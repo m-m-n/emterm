@@ -1,0 +1,83 @@
+schema_version: 1
+feature: wasm-renderer-zero-copy
+generated_from: IMPLEMENTATION.md
+
+tasks:
+  - id: T1
+    phase: 1
+    title: Packed binary span parser
+    description: >
+      Implement groupPackedCellsIntoSpans, packedAttrsEqual, unpackAttrsFromBinary
+      in canvas-renderer.ts. Parse packed Uint8Array directly into TextSpan[] without
+      intermediate Cell/Line object allocation.
+    files:
+      - src/terminal/canvas-renderer.ts
+      - src/terminal/canvas-renderer.test.ts
+    requirements: [FR1]
+    status: completed
+    depends_on: []
+
+  - id: T2
+    phase: 2
+    title: Expose packed data from buffer/state layer
+    description: >
+      Add getRowPacked and getScrollbackRowPacked to UnifiedBuffer and TerminalState.
+      Returns Uint8Array from WASM grid or null if WASM unavailable.
+    files:
+      - src/terminal/unified-buffer.ts
+      - src/terminal/state.ts
+    requirements: [FR5]
+    status: completed
+    depends_on: []
+
+  - id: T3
+    phase: 2
+    title: Integrate packed rendering into CanvasRenderer
+    description: >
+      Add renderLinePacked method that parses packed data once and renders both
+      background and text. Modify render() for dirty rows and forceRender() for
+      all visible rows to use packed path with LineAccessor fallback.
+    files:
+      - src/terminal/canvas-renderer.ts
+      - src/terminal/canvas-renderer.test.ts
+    requirements: [FR2, FR3, FR4, FR10]
+    status: completed
+    depends_on: [T1, T2]
+
+  - id: T4
+    phase: 3
+    title: WasmLineProxy dirty getter delegation
+    description: >
+      Replace WasmLineProxy.dirty boolean field with getter delegating to
+      WASM is_row_dirty. Make clearDirty a no-op. Dirty clearing managed
+      at renderer level via core.clear_dirty().
+    files:
+      - src/terminal/wasm/terminal-core.ts
+      - src/terminal/wasm/__tests__/terminal-core.test.ts
+    requirements: [FR6, FR7]
+    status: completed
+    depends_on: []
+
+  - id: T5
+    phase: 4
+    title: Kitty AtomicU32 image_id generation
+    description: >
+      Add process-wide AtomicU32 counter for unique image_id. Update
+      generate_kitty_sequence to return (String, u32) tuple. Skip 0 on wrap-around.
+    files:
+      - src-tauri/src/protocols/kitty.rs
+    requirements: [FR8]
+    status: completed
+    depends_on: []
+
+  - id: T6
+    phase: 4
+    title: Kitty response image_id correlation
+    description: >
+      Add expected_id parameter to wait_for_kitty_response. Parse i={id} from
+      response body and verify match. Update execute_image_command to pass image_id.
+    files:
+      - src-tauri/src/commands/image.rs
+    requirements: [FR9]
+    status: completed
+    depends_on: [T5]

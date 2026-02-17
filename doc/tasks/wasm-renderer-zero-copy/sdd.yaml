@@ -1,0 +1,121 @@
+schema_version: 1
+feature: wasm-renderer-zero-copy
+scale: standard
+created: 2026-02-17
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun run build:wasm && bun build src/index.html --outdir dist --minify"
+      test_command: "bun test"
+      format_command: ""
+    wasm:
+      language: rust
+      build_command: "cd wasm && wasm-pack build --target web --out-dir pkg"
+      test_command: "cargo test --manifest-path wasm/Cargo.toml"
+      format_command: "cargo fmt --manifest-path wasm/Cargo.toml"
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: e84c4e07ce0697848e24c7cae4c05fb18edf8891
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: e84c4e07ce0697848e24c7cae4c05fb18edf8891
+  - id: implement
+    status: completed
+  - id: check
+    status: completed
+    completed_at_commit: e84c4e07ce0697848e24c7cae4c05fb18edf8891
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: e84c4e07ce0697848e24c7cae4c05fb18edf8891
+  - id: review
+    status: completed
+    completed_at_commit: e84c4e07ce0697848e24c7cae4c05fb18edf8891
+
+requirements:
+  FR1:
+    title: groupPackedCellsIntoSpans function
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: renderLinePacked method
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: render() packed path for dirty rows
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: forceRender() packed path for all visible rows
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: getVisibleLinesPacked for scrollback
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: WasmLineProxy dirty getter delegation
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: WasmLineProxy clearDirty no-op
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Kitty AtomicU32 image_id generation
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: Kitty response image_id correlation
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: JS fallback rendering path preserved
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Dirty row rendering within 2ms
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Zero intermediate object allocation in packed path
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: WASM binary under 80KB
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: All existing tests pass
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: Packed data parsing bounds safety
+    status: ok
+    tasks: []
+    tests: []

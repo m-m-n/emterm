@@ -46,12 +46,18 @@ export class WasmCellProxy implements Cell {
  * Provides Line-compatible interface backed by TerminalCore.
  */
 export class WasmLineProxy implements LineAccessor {
-	dirty = true;
-
 	constructor(
 		private readonly core: TerminalCore,
 		private readonly row: number,
 	) {}
+
+	get dirty(): boolean {
+		return this.core.is_row_dirty(this.row);
+	}
+
+	set dirty(_: boolean) {
+		// No-op: dirty is managed by WASM core
+	}
 
 	get length(): number {
 		return this.core.cols();
@@ -136,11 +142,10 @@ export class WasmLineProxy implements LineAccessor {
 
 	markDirty(): void {
 		this.core.mark_row_dirty(this.row);
-		this.dirty = true;
 	}
 
 	clearDirty(): void {
-		this.dirty = false;
+		// No-op: dirty cleared at renderer level via core.clear_dirty()
 	}
 }
 
