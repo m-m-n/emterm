@@ -1,37 +1,40 @@
 /**
  * PTY Client - Manages communication with the Tauri PTY backend.
  *
- * This module provides the PtyClient class for spawning and interacting
- * with pseudo-terminal sessions.
+ * Uses Tauri Channel for binary IPC (raw PTY data sent as Vec<u8>).
+ * WASM parser processes the raw data in the frontend.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
 	PtyErrorCallback,
 	PtyErrorPayload,
 	PtyExitCallback,
 	PtyExitPayload,
-	PtyOutputCallback,
-	PtyOutputPayload,
 	PtySpawnOptions,
 	SpawnResult,
 } from "../types/pty";
-import type { TerminalActionsPayload } from "../types/terminal";
+
+/**
+ * Callback type for raw PTY data received via Channel.
+ */
+export type PtyDataCallback = (data: Uint8Array) => void;
 
 /**
  * Client for managing PTY (Pseudo Terminal) sessions.
  *
  * Provides methods for spawning shells, sending input, resizing,
- * and listening to output events.
+ * and listening to output events via binary Channel IPC.
  *
  * @example
  * ```typescript
  * const client = new PtyClient();
  *
- * // Set up listeners before spawning
- * await client.onOutput((data) => {
- *   console.log('Output:', new TextDecoder().decode(data));
+ * // Set up data handler before spawning
+ * client.onData((data) => {
+ *   // Process raw PTY data through WASM
+ *   wasmCore.process_pty_data(data);
  * });
  *
  * await client.onExit((code) => {
@@ -58,13 +61,11 @@ export class PtyClient {
 	/** Flag to prevent duplicate exit event processing */
 	private exitHandled = false;
 
-	/** Pending terminal action events that arrived before sessionId was set */
-	private pendingTerminalActions: TerminalActionsPayload[] = [];
+	/** Tauri Channel for binary PTY data */
+	private channel: Channel<number[]> | null = null;
 
-	/** Callback for terminal actions (stored for replay) */
-	private terminalActionsCallback:
-		| ((payload: TerminalActionsPayload) => void)
-		| null = null;
+	/** Callback for raw PTY data */
+	private dataCallback: PtyDataCallback | null = null;
 
 	/**
 	 * Returns the current session ID, or null if no session is active.
@@ -74,7 +75,20 @@ export class PtyClient {
 	}
 
 	/**
+	 * Registers a callback for raw PTY data received via Channel.
+	 *
+	 * Must be called before spawn() to avoid missing data.
+	 *
+	 * @param callback - Function called with raw PTY data as Uint8Array
+	 */
+	onData(callback: PtyDataCallback): void {
+		this.dataCallback = callback;
+	}
+
+	/**
 	 * Spawns a new PTY session with the specified options.
+	 *
+	 * Creates a Tauri Channel for binary IPC and passes it to the backend.
 	 *
 	 * @param options - Configuration options for the session
 	 * @returns The session ID of the spawned session
@@ -88,7 +102,16 @@ export class PtyClient {
 		// Reset exitHandled flag for new session
 		this.exitHandled = false;
 
+		// Create Channel for binary data transfer
+		this.channel = new Channel<number[]>();
+		this.channel.onmessage = (data: number[]) => {
+			if (this.dataCallback) {
+				this.dataCallback(new Uint8Array(data));
+			}
+		};
+
 		const result = await invoke<SpawnResult>("pty_spawn", {
+			channel: this.channel,
 			shell: options.shell,
 			args: options.args,
 			cols: options.cols ?? 80,
@@ -157,34 +180,7 @@ export class PtyClient {
 
 		this.sessionId = null;
 		this.exitHandled = false;
-	}
-
-	/**
-	 * Registers a callback for PTY output data.
-	 *
-	 * @param callback - Function called with output data as Uint8Array
-	 */
-	async onOutput(callback: PtyOutputCallback): Promise<void> {
-		const currentSessionId = this.sessionId;
-		const unlisten = await listen<PtyOutputPayload>(
-			"pty_output",
-			(event: { payload: PtyOutputPayload }) => {
-				// Only process events for the current session
-				if (
-					currentSessionId !== null &&
-					event.payload.session_id === currentSessionId
-				) {
-					callback(new Uint8Array(event.payload.data));
-				} else if (
-					this.sessionId !== null &&
-					event.payload.session_id === this.sessionId
-				) {
-					// Handle case where session was spawned after listener registration
-					callback(new Uint8Array(event.payload.data));
-				}
-			},
-		);
-		this.unlisteners.push(unlisten);
+		this.channel = null;
 	}
 
 	/**
@@ -234,6 +230,7 @@ export class PtyClient {
 						}
 						unlisten(); // Cleanup listener
 						this.sessionId = null;
+						this.channel = null;
 					}
 				}
 			},
@@ -259,50 +256,7 @@ export class PtyClient {
 	}
 
 	/**
-	 * Registers a callback for terminal actions events.
-	 * This will be used when the ANSI parser is integrated (Phase 1).
-	 *
-	 * @param callback - Function called with parsed terminal actions
-	 */
-	async onTerminalActions(
-		callback: (payload: TerminalActionsPayload) => void,
-	): Promise<void> {
-		this.terminalActionsCallback = callback;
-
-		const unlisten = await listen<TerminalActionsPayload>(
-			"terminal_actions",
-			(event: { payload: TerminalActionsPayload }) => {
-				if (this.sessionId === null) {
-					// sessionId not yet set (spawn hasn't returned yet), buffer the event
-					this.pendingTerminalActions.push(event.payload);
-				} else if (event.payload.session_id === this.sessionId) {
-					callback(event.payload);
-				}
-			},
-		);
-		this.unlisteners.push(unlisten);
-	}
-
-	/**
-	 * Flushes pending terminal action events that arrived before sessionId was set.
-	 * Should be called immediately after spawn() returns.
-	 */
-	flushPendingTerminalActions(): void {
-		if (this.sessionId === null || this.terminalActionsCallback === null) {
-			return;
-		}
-
-		for (const pending of this.pendingTerminalActions) {
-			if (pending.session_id === this.sessionId) {
-				this.terminalActionsCallback(pending);
-			}
-		}
-
-		this.pendingTerminalActions = [];
-	}
-
-	/**
-	 * Cleans up all event listeners.
+	 * Cleans up all event listeners and channel.
 	 *
 	 * Should be called when the client is no longer needed to prevent
 	 * memory leaks.
@@ -312,5 +266,7 @@ export class PtyClient {
 			unlisten();
 		}
 		this.unlisteners = [];
+		this.channel = null;
+		this.dataCallback = null;
 	}
 }

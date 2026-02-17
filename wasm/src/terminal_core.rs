@@ -87,6 +87,15 @@ pub struct TerminalCore {
     // Sprint 4: Device response buffer
     pub(crate) response_buffer: [u8; 64],
     pub(crate) response_len: u8,
+    // Sprint 6: Parser and mode action queue
+    pub(crate) parser: crate::parser::Parser,
+    pub(crate) mode_actions: Vec<u8>,
+    // Sprint 6: Callbacks
+    pub(crate) osc_callback: Option<crate::callbacks::Callback>,
+    pub(crate) apc_callback: Option<crate::callbacks::Callback>,
+    pub(crate) dcs_callback: Option<crate::callbacks::Callback>,
+    pub(crate) bell_callback: Option<crate::callbacks::Callback>,
+    pub(crate) device_response_callback: Option<crate::callbacks::Callback>,
 }
 
 #[wasm_bindgen]
@@ -132,6 +141,15 @@ impl TerminalCore {
             // Sprint 4
             response_buffer: [0u8; 64],
             response_len: 0,
+            // Sprint 6
+            parser: crate::parser::Parser::new(),
+            mode_actions: Vec::new(),
+            // Sprint 6: Callbacks
+            osc_callback: None,
+            apc_callback: None,
+            dcs_callback: None,
+            bell_callback: None,
+            device_response_callback: None,
         };
         core.mark_all_dirty();
         core
@@ -760,7 +778,59 @@ impl TerminalCore {
         // Sprint 4
         self.response_buffer = [0u8; 64];
         self.response_len = 0;
+        // Sprint 6
+        self.parser.reset();
+        self.mode_actions.clear();
+        // Note: callbacks are NOT cleared on reset (terminal reset != dispose)
         self.mark_all_dirty();
+    }
+
+    /// Process raw PTY data through the WASM parser and dispatch internally.
+    pub fn process_pty_data(&mut self, data: &[u8]) {
+        use crate::parser_types::ParsedAction;
+
+        let mut actions = Vec::new();
+        self.parser.parse(data, |action| {
+            actions.push(action);
+        });
+
+        for action in actions {
+            match action {
+                ParsedAction::Print(ch) => {
+                    self.handle_print(ch as u32);
+                }
+                ParsedAction::Execute(byte) => {
+                    self.handle_execute_internal(byte);
+                }
+                ParsedAction::CsiDispatch {
+                    params,
+                    intermediates,
+                    final_byte,
+                } => {
+                    self.handle_csi_internal(&params, &intermediates, final_byte);
+                }
+                ParsedAction::EscDispatch {
+                    intermediate,
+                    final_byte,
+                } => {
+                    self.handle_esc_internal(intermediate, final_byte);
+                }
+                ParsedAction::OscDispatch { param, data } => {
+                    self.handle_osc_internal(param, &data);
+                }
+                ParsedAction::ApcDispatch(payload) => {
+                    self.fire_apc_callback(&payload);
+                }
+                ParsedAction::DcsDispatch(payload) => {
+                    self.fire_dcs_callback(&payload);
+                }
+            }
+        }
+    }
+
+    /// Take and clear the mode action queue.
+    pub fn take_mode_actions(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.mode_actions)
     }
 
     // ── Sprint 2: Charset ───────────────────────────────

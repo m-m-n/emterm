@@ -269,6 +269,75 @@ export class TerminalState implements TerminalStateAccessor {
     return this.useAlternate ? this.alternateWasmGrid : this.primaryWasmGrid;
   }
 
+  /**
+   * Get the primary WASM TerminalCore for process_pty_data().
+   * The parser lives in the primary core and is used for all data processing.
+   */
+  getWasmCore(): import("../../wasm/pkg/emterm_wasm.js").TerminalCore {
+    if (!this.primaryWasmGrid) throw new Error("WASM not initialized");
+    return this.primaryWasmGrid.core;
+  }
+
+  /**
+   * Handle a mode action code returned by WASM take_mode_actions().
+   * Standard actions (1-5) map to buffer switch and cursor save/restore.
+   */
+  handleModeAction(actionCode: number): void {
+    switch (actionCode) {
+      case MODE_ACTION_SWITCH_TO_ALT:
+        this.switchToAlternateBuffer(false);
+        break;
+      case MODE_ACTION_SAVE_AND_SWITCH_TO_ALT:
+        this.switchToAlternateBuffer(true);
+        break;
+      case MODE_ACTION_SWITCH_TO_MAIN:
+        this.switchToPrimaryBuffer(true);
+        break;
+      case MODE_ACTION_SAVE_CURSOR:
+        this.cursor.save();
+        break;
+      case MODE_ACTION_RESTORE_CURSOR:
+        this.cursor.restore();
+        break;
+    }
+  }
+
+  /**
+   * Set a DEC private mode from TS-side (for TS_FALLBACK modes).
+   * Used by the setupPtyHandlers mode action decoder.
+   */
+  setDecPrivateMode(mode: number, enable: boolean): void {
+    setDecPrivateMode(this.modes, mode, enable);
+    // Sync to WASM if available
+    const grid = this.getActiveWasmGrid();
+    if (grid) {
+      syncModesToWasm(this.modes, grid.core);
+    }
+  }
+
+  /**
+   * Dispose WASM resources and callbacks.
+   */
+  dispose(): void {
+    // Clear WASM callbacks
+    const core = this.primaryWasmGrid?.core;
+    if (core) {
+      core.clear_callbacks();
+    }
+
+    // Free WASM grids
+    this.primaryWasmGrid?.dispose();
+    this.primaryWasmGrid = null;
+
+    if (this.alternateWasmGrid) {
+      this.alternateWasmGrid.dispose();
+      this.alternateWasmGrid = null;
+    }
+
+    // Dispose markdown manager
+    this.markdownManager.dispose();
+  }
+
   /** Get terminal modes. */
   getModes(): Readonly<TerminalModes> {
     return this.modes;

@@ -16,13 +16,12 @@ import { ImageViewer } from "../image-viewer";
 import type { TerminalAppOptions, CharSize } from "./types";
 import { KeyboardHandler, MouseHandler, ImeHandler } from "./handlers";
 import type { KeyboardHandlerContext } from "./handlers/keyboard";
-import type {
-  TerminalActionsPayload,
-  ImageEventPayload,
-} from "../types/terminal";
+import { invoke } from "@tauri-apps/api/core";
+import type { ImageEventPayload } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
 import { findUrlAtPosition, findFilePathAtPosition } from "../terminal/url-detector";
+import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/osc_handlers";
 import type { DecodedImage, ImageEvent } from "../image/types";
 import { SearchStateManager } from "../terminal/search/search-state";
 import { SearchBar } from "../terminal/search/search-bar";
@@ -54,6 +53,8 @@ export class TerminalApp {
   private outputActivityCallback: (() => void) | null = null;
   private searchStateManager: SearchStateManager = new SearchStateManager();
   private searchBar: SearchBar | null = null;
+  private pendingApcQueue: Uint8Array[] = [];
+  private pendingDcsQueue: Uint8Array[] = [];
 
   /**
    * Creates a new TerminalApp instance
@@ -290,9 +291,8 @@ export class TerminalApp {
 
       await this.ptyClient.spawn({ shell, args, cols, rows });
 
-      // Flush any terminal actions that arrived before spawn returned
+      // Force render after spawn completes (data may have arrived via onData)
       if (this.state && this.renderer) {
-        this.ptyClient.flushPendingTerminalActions();
         this.renderer.forceRender(this.state);
       }
     } catch (error) {
@@ -303,57 +303,86 @@ export class TerminalApp {
   }
 
   /**
-   * Sets up PTY output handlers
+   * Sets up PTY output handlers using WASM parser + binary Channel IPC.
    */
   private async setupPtyHandlers(): Promise<void> {
-    if (!this.ptyClient) return;
+    if (!this.ptyClient || !this.state) return;
 
-    // Listen for terminal_actions events (from Phase 1 ANSI parser)
-    await this.ptyClient.onTerminalActions(
-      async (payload: TerminalActionsPayload) => {
-        if (!this.state || !this.renderer || !this.ptyClient) return;
+    const core = this.state.getWasmCore();
 
-        // Process each action
-        for (const action of payload.actions) {
-          this.state.processAction(action);
+    // Register WASM callbacks
+    core.set_osc_callback((actionType: number, data: string) => {
+      this.handleOscCallback(actionType, data);
+    });
+
+    core.set_apc_callback((data: Uint8Array) => {
+      // Queue data - do NOT access core here (recursive borrow error)
+      this.pendingApcQueue.push(new Uint8Array(data));
+    });
+
+    core.set_dcs_callback((data: Uint8Array) => {
+      // Queue data - do NOT access core here (recursive borrow error)
+      this.pendingDcsQueue.push(new Uint8Array(data));
+    });
+
+    core.set_bell_callback(() => {
+      this.state?.onBell?.();
+    });
+
+    core.set_device_response_callback((data: Uint8Array) => {
+      this.ptyClient?.write(data);
+    });
+
+    // Register binary data handler
+    this.ptyClient.onData((data: Uint8Array) => {
+      if (!this.state || !this.renderer) return;
+
+      core.process_pty_data(data);
+
+      // Process queued APC/DCS events (safe: process_pty_data has returned)
+      if (this.pendingApcQueue.length > 0) {
+        const apcEvents = this.pendingApcQueue;
+        this.pendingApcQueue = [];
+        for (const apcData of apcEvents) {
+          this.handleApcCallback(apcData);
         }
+      }
+      if (this.pendingDcsQueue.length > 0) {
+        const dcsEvents = this.pendingDcsQueue;
+        this.pendingDcsQueue = [];
+        for (const dcsData of dcsEvents) {
+          this.handleDcsCallback(dcsData);
+        }
+      }
 
-        // Handle DSR responses - write back to PTY
-        const response = this.state.takePendingResponse();
-        if (response) {
-          try {
-            await this.ptyClient.write(response);
-          } catch (error) {
-            console.error("Failed to write DSR response:", error);
+      // Process mode actions (variable-length encoding)
+      const modeActions = core.take_mode_actions();
+      if (modeActions.length > 0) {
+        let i = 0;
+        while (i < modeActions.length) {
+          const action = modeActions[i]!;
+          if (action === 0xFF || action === 0xFE) {
+            // TS_FALLBACK: 3 bytes [marker, mode_lo, mode_hi]
+            const mode = modeActions[i + 1]! | (modeActions[i + 2]! << 8);
+            const isSet = action === 0xFF;
+            this.state.setDecPrivateMode(mode, isSet);
+            i += 3;
+          } else {
+            this.state.handleModeAction(action);
+            i += 1;
           }
         }
+      }
 
-        // Handle window title changes
-        const newTitle = this.state.title;
-        if (newTitle !== this.lastWindowTitle) {
-          this.lastWindowTitle = newTitle;
-          try {
-            const appWindow = getCurrentWebviewWindow();
-            await appWindow.setTitle(newTitle || "eMterm");
-          } catch (error) {
-            console.error("Failed to set window title:", error);
-          }
-          // Notify tab title change
-          if (this.titleChangeCallback) {
-            this.titleChangeCallback(newTitle || "Terminal");
-          }
-        }
+      // Notify activity tracker of output
+      this.outputActivityCallback?.();
 
-        // Notify activity tracker of output
-        this.outputActivityCallback?.();
+      // Schedule render
+      this.renderer.scheduleRender(this.state);
 
-        // Schedule render
-        this.renderer.scheduleRender(this.state);
-
-        // Update IME position after terminal state changes
-        this.imeHandler?.updatePosition();
-      },
-    );
+      // Update IME position after terminal state changes
+      this.imeHandler?.updatePosition();
+    });
 
     // Handle exit event
     await this.ptyClient.onExit(async (_code, _remainingSessions) => {
@@ -363,6 +392,137 @@ export class TerminalApp {
         this.sessionExitCallback(sessionId);
       }
       // Note: Window close is now handled by TabManager.onLastTabClosed()
+    });
+  }
+
+  /**
+   * Handle OSC callback from WASM parser.
+   * actionType maps to OSC number (0=SetTitleAndIcon, 2=SetTitle, etc.)
+   */
+  private handleOscCallback(actionType: number, data: string): void {
+    if (!this.state) return;
+
+    switch (actionType) {
+      case 0: // SetTitleAndIcon
+        this.state._title = data;
+        this.state._iconName = data;
+        this.updateWindowTitle(data);
+        break;
+      case 1: // SetIconName
+        this.state._iconName = data;
+        break;
+      case 2: // SetTitle
+        this.state._title = data;
+        this.updateWindowTitle(data);
+        break;
+      case 4: // SetColorPalette
+        // Color palette customization - not yet implemented
+        break;
+      case 7: // SetWorkingDirectory
+        this.state._workingDirectory = data;
+        break;
+      case 8: { // Hyperlink
+        // data format: "params;uri" (semicolon-separated)
+        const sepIdx = data.indexOf(";");
+        if (sepIdx >= 0) {
+          const params = data.substring(0, sepIdx);
+          const uri = data.substring(sepIdx + 1);
+          if (uri) {
+            this.state._activeHyperlink = { params, uri };
+          } else {
+            this.state._activeHyperlink = null;
+          }
+        }
+        break;
+      }
+      case 10: // SetForegroundColor
+      case 11: // SetBackgroundColor
+        // Color query/set - not yet implemented
+        break;
+      case 100: { // EmtermExtension (OSC 777)
+        // data format: "verb;param1;param2;..."
+        const parts = data.split(";");
+        const verb = parts[0] || "";
+        const params = parts.slice(1);
+        // Handle fold commands first
+        if (verb === "emterm" && params.length > 0 && params[0] === "fold") {
+          handleFoldCommand(this.state, params.slice(1));
+        } else {
+          // Route to markdown manager
+          this.state.getMarkdownManager().handleCommand(verb, params);
+        }
+        break;
+      }
+      case 133: { // SemanticPrompt
+        // data format: "A" or "D;0" (zone_type[;exit_code])
+        const parts = data.split(";");
+        const zoneType = parts[0] || "";
+        const exitCode = parts.length > 1 ? parseInt(parts[1]!, 10) : null;
+        handleSemanticPrompt(this.state, zoneType, exitCode);
+        break;
+      }
+      // Unknown (255) - ignored
+    }
+  }
+
+  /**
+   * Update window title and notify callbacks.
+   */
+  private updateWindowTitle(title: string): void {
+    if (title === this.lastWindowTitle) return;
+    this.lastWindowTitle = title;
+
+    const displayTitle = title || "eMterm";
+    getCurrentWebviewWindow().setTitle(displayTitle).catch((error) => {
+      console.error("Failed to set window title:", error);
+    });
+
+    if (this.titleChangeCallback) {
+      this.titleChangeCallback(title || "Terminal");
+    }
+  }
+
+  /**
+   * Handle APC callback from WASM parser (Kitty Graphics Protocol).
+   */
+  private handleApcCallback(data: Uint8Array): void {
+    const core = this.state?.getWasmCore();
+    if (!core || !this.ptyClient) return;
+
+    const sessionId = this.ptyClient.getSessionId();
+    const cursorRow = core.get_cursor_row();
+    const cursorCol = core.get_cursor_col();
+
+    invoke("process_image_data", {
+      sessionId,
+      protocol: "kitty",
+      data: Array.from(data),
+      cursorRow,
+      cursorCol,
+    }).catch((error) => {
+      console.error("Failed to process Kitty image data:", error);
+    });
+  }
+
+  /**
+   * Handle DCS callback from WASM parser (SIXEL graphics).
+   */
+  private handleDcsCallback(data: Uint8Array): void {
+    const core = this.state?.getWasmCore();
+    if (!core || !this.ptyClient) return;
+
+    const sessionId = this.ptyClient.getSessionId();
+    const cursorRow = core.get_cursor_row();
+    const cursorCol = core.get_cursor_col();
+
+    invoke("process_image_data", {
+      sessionId,
+      protocol: "sixel",
+      data: Array.from(data),
+      cursorRow,
+      cursorCol,
+    }).catch((error) => {
+      console.error("Failed to process SIXEL image data:", error);
     });
   }
 
@@ -1030,6 +1190,9 @@ export class TerminalApp {
       this.ptyClient.kill().catch(console.error);
       this.ptyClient = null;
     }
+
+    // Dispose WASM resources and callbacks
+    this.state?.dispose();
 
     // Clear references
     this.state = null;
