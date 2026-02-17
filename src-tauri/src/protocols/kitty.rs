@@ -10,7 +10,7 @@ const KITTY_CHUNK_SIZE: usize = 4096;
 ///
 /// # Format
 /// ```text
-/// ESC _G i=1,f=100,a=T,q=1,m=1 ; {base64-chunk-1} ESC \
+/// ESC _G i=1,f=100,a=T,m=1 ; {base64-chunk-1} ESC \
 /// ESC _G i=1,m=1 ; {base64-chunk-2} ESC \
 /// ...
 /// ESC _G i=1,m=0 ; {base64-chunk-last} ESC \
@@ -20,9 +20,12 @@ const KITTY_CHUNK_SIZE: usize = 4096;
 /// - i=1: Image ID (required for chunked transfer)
 /// - f=100: PNG format
 /// - a=T: Transmit and display
-/// - q=1: Quiet mode - suppress OK responses (errors still reported)
 /// - m=1: More data follows
 /// - m=0: Last chunk
+///
+/// Note: q=1 (quiet mode) is intentionally NOT set so the terminal
+/// sends back an OK/ERROR response. The `emterm image` CLI command
+/// reads this response from stdin to block until processing completes.
 pub fn generate_kitty_sequence(img: &DynamicImage) -> Result<String, CommandError> {
     // Convert image to PNG bytes
     let mut png_bytes = Vec::new();
@@ -39,16 +42,17 @@ pub fn generate_kitty_sequence(img: &DynamicImage) -> Result<String, CommandErro
         return Err(CommandError::EncodingError("No data to encode".to_string()));
     }
 
-    let mut output = String::new();
+    // Pre-allocate: base64 data + ~30 bytes per chunk for escape sequence headers
+    let mut output = String::with_capacity(encoded.len() + chunks.len() * 30);
 
     // Use image_id=1 for all chunks to associate them
     // When using chunked transfer, all chunks must have the same image_id
     let image_id = 1;
 
     // First chunk with metadata
-    // q=1: suppress OK responses (only errors will be sent back)
+    // No q=1: allow OK response so CLI can block until processing completes
     output.push_str(&format!(
-        "\x1b_Gi={},f=100,a=T,q=1,m={};{}\x1b\\",
+        "\x1b_Gi={},f=100,a=T,m={};{}\x1b\\",
         image_id,
         if chunks.len() > 1 { 1 } else { 0 },
         String::from_utf8_lossy(chunks[0])
@@ -98,8 +102,8 @@ mod tests {
         assert!(sequence.contains("f=100"));
         // Should have a=T (transmit and display)
         assert!(sequence.contains("a=T"));
-        // Should have q=1 (quiet mode - suppress OK responses)
-        assert!(sequence.contains("q=1"));
+        // Should NOT have q=1 (responses enabled for CLI blocking)
+        assert!(!sequence.contains("q=1"));
         // Small image should fit in one chunk (m=0)
         assert!(sequence.contains("m=0"));
     }
