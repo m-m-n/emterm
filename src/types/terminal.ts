@@ -192,14 +192,6 @@ export type TerminalAction =
   | { type: "Dcs"; value: DcsAction };
 
 /**
- * Payload for the terminal_actions event.
- */
-export interface TerminalActionsPayload {
-  session_id: string;
-  actions: TerminalAction[];
-}
-
-/**
  * C0 control character constants.
  */
 export const C0 = {

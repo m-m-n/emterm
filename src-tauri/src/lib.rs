@@ -17,15 +17,41 @@ pub mod error;
 pub mod protocols;
 pub mod validation;
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
+use tokio::sync::Mutex;
 
 use pty::{PtyError, PtyManager};
+
+/// Per-session image processor state.
+///
+/// Maintains `ImageProcessor` instances per PTY session to preserve
+/// state across multiple `process_image_data` calls (e.g., chunked
+/// Kitty transfers that require accumulating data across APC sequences).
+#[derive(Default)]
+pub struct ImageProcessorState {
+    processors: Mutex<HashMap<String, image::ImageProcessor>>,
+}
+
+impl ImageProcessorState {
+    pub fn new() -> Self {
+        Self {
+            processors: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Remove processor state for a session (cleanup on exit).
+    pub async fn remove(&self, session_id: &str) {
+        self.processors.lock().await.remove(session_id);
+    }
+}
 
 // ============================================================================
 // Payload Types
@@ -35,13 +61,6 @@ use pty::{PtyError, PtyManager};
 #[derive(Serialize, Deserialize)]
 pub struct SpawnResult {
     session_id: String,
-}
-
-/// Payload for pty_output event.
-#[derive(Serialize, Clone)]
-pub struct PtyOutputPayload {
-    session_id: String,
-    data: Vec<u8>,
 }
 
 /// Payload for pty_exit event.
@@ -59,13 +78,6 @@ pub struct PtyExitPayload {
 pub struct PtyErrorPayload {
     session_id: String,
     message: String,
-}
-
-/// Payload for terminal_actions event (parsed ANSI sequences).
-#[derive(Serialize, Clone)]
-pub struct TerminalActionsPayload {
-    session_id: String,
-    actions: Vec<ansi::TerminalAction>,
 }
 
 /// Payload for tab_created event.
@@ -121,6 +133,7 @@ pub struct ImageEventPayload {
 async fn pty_spawn(
     app: AppHandle,
     state: State<'_, PtyManager>,
+    channel: Channel<Vec<u8>>,
     shell: Option<String>,
     args: Option<Vec<String>>,
     cols: Option<u16>,
@@ -147,8 +160,8 @@ async fn pty_spawn(
     );
     let _ = app.emit("tab_count_changed", TabCountChangedPayload { count });
 
-    // Start output reader thread
-    spawn_reader_thread(app, state.inner().clone(), session_id.clone());
+    // Start output reader thread with binary channel
+    spawn_reader_thread(app, state.inner().clone(), session_id.clone(), channel);
 
     Ok(SpawnResult { session_id })
 }
@@ -282,6 +295,66 @@ fn set_language(language: String) -> Result<(), String> {
     }
 }
 
+/// Processes image data (Kitty/SIXEL) from the frontend WASM parser.
+///
+/// Called when the WASM APC or DCS callback fires with image protocol data.
+/// Parses the raw data, runs it through the per-session ImageProcessor,
+/// and emits `image_event` IPC events to the frontend.
+///
+/// # Arguments
+///
+/// * `session_id` - The PTY session ID for event routing
+/// * `protocol` - Image protocol: "kitty" or "sixel"
+/// * `data` - Raw protocol data bytes
+/// * `cursor_row` - Current cursor row (0-based)
+/// * `cursor_col` - Current cursor column (0-based)
+#[tauri::command]
+async fn process_image_data(
+    app: AppHandle,
+    image_state: State<'_, ImageProcessorState>,
+    session_id: String,
+    protocol: String,
+    data: Vec<u8>,
+    cursor_row: u32,
+    cursor_col: u32,
+) -> Result<(), String> {
+    let mut processors = image_state.processors.lock().await;
+    let processor = processors
+        .entry(session_id.clone())
+        .or_insert_with(image::ImageProcessor::new);
+
+    let events = match protocol.as_str() {
+        "kitty" => {
+            if let Some(cmd) = ansi::apc::parse_kitty_command(&data) {
+                processor.process_kitty_command(&cmd, cursor_row, cursor_col)
+            } else {
+                return Ok(());
+            }
+        }
+        "sixel" => {
+            if let Some(sixel) = ansi::dcs::parse_sixel_sequence(&data) {
+                processor.process_sixel(&sixel, cursor_row, cursor_col)
+            } else {
+                return Ok(());
+            }
+        }
+        _ => {
+            return Err(format!("Unknown image protocol: {}", protocol));
+        }
+    };
+
+    for event in events {
+        let payload = ImageEventPayload {
+            session_id: session_id.clone(),
+            event,
+        };
+        app.emit("image_event", payload)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 /// Returns the number of active PTY sessions.
 ///
 /// This command exposes the existing `PtyManager::session_count()` method
@@ -323,15 +396,19 @@ async fn tab_close_graceful(
 
 /// Spawns a dedicated thread to read output from a PTY session.
 ///
-/// This thread continuously reads from the PTY and emits events to the frontend:
-/// - `pty_output`: Raw data (for backward compatibility)
-/// - `terminal_actions`: Parsed ANSI sequences as TerminalAction array
+/// This thread continuously reads from the PTY and sends raw bytes via Channel:
+/// - Binary data is sent via `Channel<Vec<u8>>` for WASM processing
 /// - `pty_error`: When an error occurs
 /// - `pty_exit`: When the process exits
 ///
 /// Uses a separate monitoring thread to detect process exit, since PTY read()
 /// on Linux may not return EOF even after the shell process terminates.
-fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) {
+fn spawn_reader_thread(
+    app: AppHandle,
+    manager: PtyManager,
+    session_id: String,
+    channel: Channel<Vec<u8>>,
+) {
     // Shared flag to signal reader to stop when process exits
     let process_exited = Arc::new(AtomicBool::new(false));
     let process_exited_clone = Arc::clone(&process_exited);
@@ -409,14 +486,6 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
         }
 
         let mut buf = [0u8; 4096];
-        let mut parser = ansi::Parser::new();
-        let mut image_processor = image::ImageProcessor::new();
-
-        // Track cursor position for image placement
-        // Note: This is a simplified approach - actual cursor tracking
-        // should ideally be synchronized with frontend state
-        let mut cursor_row: u32 = 0;
-        let mut cursor_col: u32 = 0;
 
         log::trace!("PTY reader: starting read loop for session {}", session_id);
 
@@ -436,78 +505,8 @@ fn spawn_reader_thread(app: AppHandle, manager: PtyManager, session_id: String) 
                     break;
                 }
                 Ok(n) => {
-                    // Parse ANSI sequences and emit terminal_actions event
-                    let mut actions = Vec::new();
-                    parser.parse(&buf[..n], |action| {
-                        actions.push(action);
-                    });
-
-                    // Process image-related actions (APC for Kitty, DCS for SIXEL)
-                    for action in &actions {
-                        match action {
-                            ansi::TerminalAction::Apc(ansi::ApcAction::KittyGraphics(cmd)) => {
-                                // Process Kitty Graphics Protocol command
-                                let image_events = image_processor
-                                    .process_kitty_command(cmd, cursor_row, cursor_col);
-                                for event in image_events {
-                                    let payload = ImageEventPayload {
-                                        session_id: session_id.clone(),
-                                        event,
-                                    };
-                                    if let Err(e) = app.emit("image_event", payload) {
-                                        log::warn!("PTY reader: failed to emit image_event: {}", e);
-                                    }
-                                }
-                            }
-                            ansi::TerminalAction::Dcs(ansi::DcsAction::Sixel(sixel)) => {
-                                // Process SIXEL graphics
-                                let image_events =
-                                    image_processor.process_sixel(sixel, cursor_row, cursor_col);
-                                for event in image_events {
-                                    let payload = ImageEventPayload {
-                                        session_id: session_id.clone(),
-                                        event,
-                                    };
-                                    if let Err(e) = app.emit("image_event", payload) {
-                                        log::warn!("PTY reader: failed to emit image_event: {}", e);
-                                    }
-                                }
-                            }
-                            // Track cursor position for image placement
-                            ansi::TerminalAction::Csi(ansi::CsiAction::CursorPosition {
-                                row,
-                                col,
-                            }) => {
-                                cursor_row = (*row).saturating_sub(1) as u32;
-                                cursor_col = (*col).saturating_sub(1) as u32;
-                            }
-                            ansi::TerminalAction::Execute(0x0D) => {
-                                // Carriage return
-                                cursor_col = 0;
-                            }
-                            ansi::TerminalAction::Execute(0x0A) => {
-                                // Line feed
-                                cursor_row = cursor_row.saturating_add(1);
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    // Always emit if we have actions
-                    if !actions.is_empty() {
-                        let payload = TerminalActionsPayload {
-                            session_id: session_id.clone(),
-                            actions,
-                        };
-                        let _ = app.emit("terminal_actions", payload);
-                    }
-
-                    // Also emit raw data for backward compatibility
-                    let payload = PtyOutputPayload {
-                        session_id: session_id.clone(),
-                        data: buf[..n].to_vec(),
-                    };
-                    let _ = app.emit("pty_output", payload);
+                    // Send raw bytes via Channel for WASM processing
+                    let _ = channel.send(buf[..n].to_vec());
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // No data available, check if process exited then sleep briefly
@@ -635,11 +634,13 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .manage(PtyManager::new())
+        .manage(ImageProcessorState::new())
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
             pty_resize,
             pty_kill,
+            process_image_data,
             console_log,
             console_warn,
             console_error,

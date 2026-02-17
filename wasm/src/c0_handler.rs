@@ -50,6 +50,16 @@ impl TerminalCore {
 }
 
 impl TerminalCore {
+    /// Internal C0 handler for process_pty_data.
+    /// Fires bell callback instead of returning sentinel.
+    pub(crate) fn handle_execute_internal(&mut self, byte: u8) {
+        if byte == 0x07 {
+            self.fire_bell_callback();
+            return;
+        }
+        self.handle_execute(byte);
+    }
+
     /// Find the next tab stop after the current cursor column.
     /// Returns the tab stop column, or cols-1 if no more stops.
     fn find_next_tab_stop(&self) -> u16 {

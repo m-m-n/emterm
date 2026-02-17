@@ -554,8 +554,7 @@ impl TerminalCore {
             loop {
                 let line_cells = &phys_lines[i].cells;
                 // Check if next line is a continuation (backward ref: wrapped on continuation)
-                let next_is_continuation =
-                    i + 1 < phys_lines.len() && phys_lines[i + 1].wrapped;
+                let next_is_continuation = i + 1 < phys_lines.len() && phys_lines[i + 1].wrapped;
                 let trimmed_len = if next_is_continuation {
                     // More continuation follows: keep full width
                     line_cells.len()

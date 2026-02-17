@@ -1,0 +1,268 @@
+schema_version: 1
+feature: wasm-ansi-parser-binary-ipc
+scale: full
+created: 2026-02-16
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cd wasm && wasm-pack build --target web --out-dir pkg"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+    frontend:
+      language: typescript
+      build_command: "bun build src/index.html --outdir dist --minify"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 81de0f092d0987a3a2a4e6d3aec13016550dbed3
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 81de0f092d0987a3a2a4e6d3aec13016550dbed3
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 81de0f092d0987a3a2a4e6d3aec13016550dbed3
+  - id: implement
+    status: completed
+    completed_at_commit: 81de0f092d0987a3a2a4e6d3aec13016550dbed3
+  - id: check
+    status: completed
+    completed_at_commit: 81de0f092d0987a3a2a4e6d3aec13016550dbed3
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+  - id: review
+    status: pending
+
+requirements:
+  FR1:
+    title: process_pty_data end-to-end processing API
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: ANSI parser port from backend to WASM
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Parser handles streaming input (split sequences)
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: CSI internal dispatch (no boundary crossing)
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: ESC internal dispatch (no boundary crossing)
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: OSC closure callback registration
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: APC closure callback registration
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: DCS closure callback registration
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: BEL closure callback registration
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: Device response closure callback
+    status: ok
+    tasks: []
+    tests: []
+  FR11:
+    title: Callbacks stored as Option<js_sys::Function>
+    status: ok
+    tasks: []
+    tests: []
+  FR12:
+    title: BEL switches from sentinel to callback
+    status: ok
+    tasks: []
+    tests: []
+  FR13:
+    title: Device response switches from buffer polling to callback
+    status: ok
+    tasks: []
+    tests: []
+  FR14:
+    title: pty_spawn accepts Channel<Vec<u8>> parameter
+    status: ok
+    tasks: []
+    tests: []
+  FR15:
+    title: PTY reader sends raw bytes via Channel
+    status: ok
+    tasks: []
+    tests: []
+  FR16:
+    title: terminal_actions event removed
+    status: ok
+    tasks: []
+    tests: []
+  FR17:
+    title: pty_output event removed
+    status: ok
+    tasks: []
+    tests: []
+  FR18:
+    title: PtyClient refactored for Channel-based data flow
+    status: ok
+    tasks: []
+    tests: []
+  FR19:
+    title: APC (Kitty) callback with raw protocol data
+    status: ok
+    tasks: []
+    tests: []
+  FR20:
+    title: DCS (SIXEL) callback with raw protocol data
+    status: ok
+    tasks: []
+    tests: []
+  FR21:
+    title: Image data sent to backend via invoke with cursor position
+    status: ok
+    tasks: []
+    tests: []
+  FR22:
+    title: Backend process_image_data command
+    status: ok
+    tasks: []
+    tests: []
+  FR23:
+    title: Image event listener unchanged
+    status: ok
+    tasks: []
+    tests: []
+  FR24:
+    title: PtyClient.spawn creates Channel
+    status: ok
+    tasks: []
+    tests: []
+  FR25:
+    title: TerminalApp.setupPtyHandlers refactored for callbacks
+    status: ok
+    tasks: []
+    tests: []
+  FR26:
+    title: TerminalActionsPayload TypeScript type removed
+    status: ok
+    tasks: []
+    tests: []
+  FR27:
+    title: processAction no longer main entry point
+    status: ok
+    tasks: []
+    tests: []
+  FR28:
+    title: TerminalState.dispose() method
+    status: ok
+    tasks: []
+    tests: []
+  FR29:
+    title: dispose() frees WasmGrid resources
+    status: ok
+    tasks: []
+    tests: []
+  FR30:
+    title: dispose() clears callback references
+    status: ok
+    tasks: []
+    tests: []
+  FR31:
+    title: TerminalApp.dispose() calls state.dispose()
+    status: ok
+    tasks: []
+    tests: []
+  FR32:
+    title: src-tauri/src/ansi/ deleted (except apc.rs/dcs.rs)
+    status: ok
+    tasks: []
+    tests: []
+  FR33:
+    title: APC/DCS types preserved in backend for image processing
+    status: ok
+    tasks: []
+    tests: []
+  FR34:
+    title: TerminalActionsPayload removed from backend
+    status: ok
+    tasks: []
+    tests: []
+  FR35:
+    title: PTY reader thread simplified (no parsing)
+    status: ok
+    tasks: []
+    tests: []
+  FR36:
+    title: Backend cursor tracking removed (handled by WASM)
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Performance: JSON serialize/deserialize eliminated"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Performance: 1 WASM-TS crossing per PTY chunk + N callbacks"
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Performance: 3-5x throughput improvement"
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Binary size: WASM < 80KB"
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: "Compatibility: All existing TS tests pass"
+    status: ok
+    tasks: []
+    tests: []
+  NFR6:
+    title: "Compatibility: vttest unchanged"
+    status: ok
+    tasks: []
+    tests: []
+  NFR7:
+    title: "Multi-tab safety: closure callbacks per-instance"
+    status: ok
+    tasks: []
+    tests: []
+  NFR8:
+    title: "Compatibility: Image display works (Kitty/SIXEL)"
+    status: ok
+    tasks: []
+    tests: []
+  NFR9:
+    title: "Resource cleanup: dispose() releases all WASM resources"
+    status: ok
+    tasks: []
+    tests: []

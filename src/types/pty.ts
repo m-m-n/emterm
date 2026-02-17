@@ -13,16 +13,6 @@ export interface SpawnResult {
 }
 
 /**
- * Payload for the pty_output event.
- * Contains raw bytes from the shell process output.
- */
-export interface PtyOutputPayload {
-	session_id: string;
-	/** Raw bytes as number array (0-255) */
-	data: number[];
-}
-
-/**
  * Payload for the pty_exit event.
  * Emitted when the shell process terminates.
  */
@@ -71,11 +61,6 @@ export interface PtySpawnOptions {
 	 */
 	rows?: number;
 }
-
-/**
- * Callback type for PTY output data.
- */
-export type PtyOutputCallback = (data: Uint8Array) => void;
 
 /**
  * Callback type for PTY exit events.

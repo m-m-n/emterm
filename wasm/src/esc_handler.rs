@@ -72,6 +72,29 @@ impl TerminalCore {
     fn esc_full_reset(&mut self) {
         self.reset();
     }
+
+    /// Internal ESC dispatch: maps raw (intermediate, final_byte) to handler calls.
+    pub(crate) fn handle_esc_internal(&mut self, intermediate: Option<u8>, final_byte: u8) {
+        match (intermediate, final_byte) {
+            (Some(b'('), byte) => self.set_g0_charset(charset_byte_to_value(byte)),
+            (Some(b')'), byte) => self.set_g1_charset(charset_byte_to_value(byte)),
+            (None, b'7') => self.save_cursor(),
+            (None, b'8') => self.restore_cursor(),
+            (None, b'D') => self.esc_index(),
+            (None, b'E') => self.esc_next_line(),
+            (None, b'M') => self.esc_reverse_index(),
+            (None, b'H') => self.esc_horizontal_tab_set(),
+            (None, b'c') => self.esc_full_reset(),
+            _ => {} // Unknown: ignore
+        }
+    }
+}
+
+fn charset_byte_to_value(byte: u8) -> u8 {
+    match byte {
+        b'0' => 1, // DecLineDrawing
+        _ => 0,    // ASCII (includes 'B', 'A', etc.)
+    }
 }
 
 #[cfg(test)]

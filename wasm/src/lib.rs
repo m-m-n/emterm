@@ -2,15 +2,23 @@ mod cell;
 mod terminal_core;
 mod unicode;
 
+// Parser modules
+mod parser;
+mod parser_params;
+mod parser_types;
+
 // Handler modules (impl TerminalCore in separate files)
 mod c0_handler;
+mod callbacks;
 mod csi_cursor;
 mod csi_device;
+mod csi_dispatch;
 mod csi_edit;
 mod csi_modes;
 mod csi_screen;
 mod csi_scroll;
 mod esc_handler;
+mod osc_handler;
 mod print_handler;
 mod ring_buffer;
 mod sgr;

@@ -1,0 +1,51 @@
+tasks:
+  - - id: phase1-parser-migration
+      title: "Phase 1: Parser Migration to WASM"
+      status: completed
+      files:
+        - wasm/src/parser_types.rs
+        - wasm/src/parser_params.rs
+        - wasm/src/parser.rs
+        - wasm/src/lib.rs
+  - - id: phase2-internal-dispatch
+      title: "Phase 2: Internal Dispatch"
+      status: completed
+      files:
+        - wasm/src/csi_dispatch.rs
+        - wasm/src/osc_handler.rs
+        - wasm/src/terminal_core.rs
+        - wasm/src/csi_modes.rs
+        - wasm/src/esc_handler.rs
+  - - id: phase3-callback-infrastructure
+      title: "Phase 3: Callback Infrastructure"
+      status: completed
+      files:
+        - wasm/src/callbacks.rs
+        - wasm/src/terminal_core.rs
+        - wasm/src/c0_handler.rs
+        - wasm/Cargo.toml
+  - - id: phase4-binary-ipc
+      title: "Phase 4: Binary IPC (Tauri Channel)"
+      status: completed
+      files:
+        - src-tauri/src/lib.rs
+        - src/pty/client.ts
+        - src/types/pty.ts
+        - src/types/terminal.ts
+  - - id: phase5-image-pipeline
+      title: "Phase 5: Image Pipeline Rebuild"
+      status: completed
+      files:
+        - src-tauri/src/lib.rs
+  - - id: phase6-frontend-integration
+      title: "Phase 6: Frontend Integration"
+      status: completed
+      files:
+        - src/terminal-app/index.ts
+        - src/terminal/state.ts
+        - src/terminal/wasm/__tests__/terminal-core.test.ts
+  - - id: phase7-backend-cleanup
+      title: "Phase 7: Backend Cleanup & Verification"
+      status: completed
+      files:
+        - src-tauri/src/ansi/mod.rs
