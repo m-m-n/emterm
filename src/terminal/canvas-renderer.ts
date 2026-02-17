@@ -5,11 +5,12 @@
  * Optimized for high-performance scrolling with High DPI support.
  */
 
-import type { CellAttributes } from "./attributes.ts";
+import type { CellAttributes, Color } from "./attributes.ts";
 import {
 	attributesEqual,
 	getEffectiveBackground,
 	getEffectiveForeground,
+	unpackStyleFlags,
 } from "./attributes.ts";
 import { drawCustomGlyph, isCustomGlyph } from "./custom-glyphs.ts";
 import {
@@ -118,6 +119,155 @@ export function groupCellsIntoSpans(line: LineAccessor): TextSpan[] {
 
 	// Don't forget the last span
 	if (currentText.length > 0 && currentAttrs !== null) {
+		spans.push({
+			text: currentText,
+			attrs: currentAttrs,
+			startCol: currentStartCol,
+			cellCount: currentCellCount,
+			cells: currentCells,
+		});
+	}
+
+	return spans;
+}
+
+/** Shared TextDecoder for UTF-8 parsing in packed binary parser. */
+const utf8Decoder = new TextDecoder("utf-8");
+
+/**
+ * Compare 10 attribute bytes (fg 4 + bg 4 + flags 2) at two offsets.
+ */
+export function packedAttrsEqual(buf: Uint8Array, a: number, b: number): boolean {
+	return buf[a] === buf[b] && buf[a + 1] === buf[b + 1] && buf[a + 2] === buf[b + 2] &&
+		buf[a + 3] === buf[b + 3] && buf[a + 4] === buf[b + 4] && buf[a + 5] === buf[b + 5] &&
+		buf[a + 6] === buf[b + 6] && buf[a + 7] === buf[b + 7] && buf[a + 8] === buf[b + 8] &&
+		buf[a + 9] === buf[b + 9];
+}
+
+/**
+ * Unpack CellAttributes from 10 binary bytes at the given offset.
+ * Layout: fg(4: tag,r,g,b) + bg(4: tag,r,g,b) + flags(2: LE u16)
+ */
+export function unpackAttrsFromBinary(buf: Uint8Array, offset: number): CellAttributes {
+	const fgTag = buf[offset]!;
+	const fgR = buf[offset + 1]!;
+	const fgG = buf[offset + 2]!;
+	const fgB = buf[offset + 3]!;
+	let fg: Color | null;
+	if (fgTag === 0) fg = null;
+	else if (fgTag === 1) fg = { type: "indexed", index: fgR };
+	else fg = { type: "rgb", r: fgR, g: fgG, b: fgB };
+
+	const bgTag = buf[offset + 4]!;
+	const bgR = buf[offset + 5]!;
+	const bgG = buf[offset + 6]!;
+	const bgB = buf[offset + 7]!;
+	let bg: Color | null;
+	if (bgTag === 0) bg = null;
+	else if (bgTag === 1) bg = { type: "indexed", index: bgR };
+	else bg = { type: "rgb", r: bgR, g: bgG, b: bgB };
+
+	const flagsLo = buf[offset + 8]!;
+	const flagsHi = buf[offset + 9]!;
+	const flags = flagsLo | (flagsHi << 8);
+
+	return { ...unpackStyleFlags(flags), fg, bg };
+}
+
+/**
+ * Parse packed binary row data directly into TextSpan array.
+ * Avoids creating Cell, CellAttributes, or Line objects except for span attributes.
+ *
+ * Binary format per cell:
+ *   Inline: char_len(1) + char_data(char_len) + width(1) + fg(4) + bg(4) + flags(2 LE)
+ *   Overflow: 0xFF(1) + len_hi(1) + len_lo(1) + utf8_data(len) + width(1) + fg(4) + bg(4) + flags(2 LE)
+ */
+export function groupPackedCellsIntoSpans(packed: Uint8Array, cols: number): TextSpan[] {
+	const spans: TextSpan[] = [];
+	let offset = 0;
+
+	let currentText = "";
+	let currentStartCol = 0;
+	let currentCellCount = 0;
+	let currentCells: Array<[string, number]> = [];
+	let prevAttrOffset = -1;
+	let currentAttrs: CellAttributes | null = null;
+
+	for (let col = 0; col < cols; col++) {
+		if (offset + 12 > packed.length) break;
+
+		// Parse character
+		const charLen = packed[offset++]!;
+		let ch: string;
+		if (charLen === 0xFF) {
+			if (offset + 2 > packed.length) break;
+			const lenHi = packed[offset++]!;
+			const lenLo = packed[offset++]!;
+			const byteLen = (lenHi << 8) | lenLo;
+			if (offset + byteLen + 11 > packed.length) break; // byteLen + width(1) + attrs(10)
+			ch = utf8Decoder.decode(packed.subarray(offset, offset + byteLen));
+			offset += byteLen;
+		} else if (charLen === 0) {
+			ch = "";
+		} else if (charLen === 1) {
+			ch = String.fromCharCode(packed[offset++]!);
+		} else {
+			ch = utf8Decoder.decode(packed.subarray(offset, offset + charLen));
+			offset += charLen;
+		}
+
+		// Read width
+		const width = packed[offset++]!;
+
+		// Attribute bytes start here (10 bytes)
+		const attrStart = offset;
+		offset += 10;
+
+		// Handle zero-width cells
+		if (width === 0) {
+			if (ch === "" || ch === " ") continue; // wide char placeholder
+			// Combining mark - merge with previous cell
+			if (currentCells.length > 0) {
+				const last = currentCells[currentCells.length - 1]!;
+				last[0] += ch;
+				currentText += ch;
+			}
+			continue;
+		}
+
+		// Fast attribute comparison: compare 10 bytes inline
+		const attrsMatch = prevAttrOffset >= 0 &&
+			packedAttrsEqual(packed, prevAttrOffset, attrStart);
+
+		if (currentAttrs === null || !attrsMatch) {
+			// Save previous span
+			if (currentAttrs !== null) {
+				spans.push({
+					text: currentText,
+					attrs: currentAttrs,
+					startCol: currentStartCol,
+					cellCount: currentCellCount,
+					cells: currentCells,
+				});
+			}
+			// Start new span
+			currentAttrs = unpackAttrsFromBinary(packed, attrStart);
+			currentText = ch;
+			currentStartCol = col;
+			currentCellCount = width;
+			currentCells = [[ch, width]];
+		} else {
+			// Extend current span
+			currentText += ch;
+			currentCellCount += width;
+			currentCells.push([ch, width]);
+		}
+
+		prevAttrOffset = attrStart;
+	}
+
+	// Final span
+	if (currentAttrs !== null && currentText.length > 0) {
 		spans.push({
 			text: currentText,
 			attrs: currentAttrs,
@@ -531,11 +681,16 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const buffer = state.getActiveBuffer();
 		const dirtyRows = state.getDirtyRows();
 
-		// Render dirty rows
+		// Render dirty rows (packed path with LineAccessor fallback)
 		let renderedCount = 0;
 		for (const rowIndex of dirtyRows) {
-			const line = buffer.getLine(rowIndex);
-			this.renderLine(rowIndex, line);
+			const packed = state.getRowPacked(rowIndex);
+			if (packed) {
+				this.renderLinePacked(rowIndex, packed);
+			} else {
+				const line = buffer.getLine(rowIndex);
+				this.renderLine(rowIndex, line);
+			}
 			renderedCount++;
 		}
 
@@ -556,8 +711,13 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 		if (prevRowNeedsRedraw) {
 			// Re-render the previous cursor row to clear the old cursor
-			const prevLine = buffer.getLine(this.prevCursorRow);
-			this.renderLine(this.prevCursorRow, prevLine);
+			const prevPacked = state.getRowPacked(this.prevCursorRow);
+			if (prevPacked) {
+				this.renderLinePacked(this.prevCursorRow, prevPacked);
+			} else {
+				const prevLine = buffer.getLine(this.prevCursorRow);
+				this.renderLine(this.prevCursorRow, prevLine);
+			}
 		}
 
 		// Update cursor
@@ -594,6 +754,20 @@ export class CanvasRenderer implements ITerminalRenderer {
 	private renderLine(rowIndex: number, line: LineAccessor): void {
 		this.renderLineBackground(rowIndex, line);
 		this.renderLineText(rowIndex, line);
+	}
+
+	/**
+	 * Render a line from packed binary data (single pass: background + text).
+	 * Parses packed data once via groupPackedCellsIntoSpans and uses the result
+	 * for both background and text rendering (FR10).
+	 *
+	 * @param rowIndex - Row index (0-based)
+	 * @param packed - Packed binary row data from WASM
+	 */
+	private renderLinePacked(rowIndex: number, packed: Uint8Array): void {
+		const spans = groupPackedCellsIntoSpans(packed, this.cols);
+		this.renderLineBackgroundFromSpans(rowIndex, spans);
+		this.renderLineTextFromSpans(rowIndex, spans);
 	}
 
 	/**
@@ -645,6 +819,83 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 		// Draw underlines for detected URLs and file paths
 		this.renderDetectionUnderlines(rowIndex, line);
+	}
+
+	/**
+	 * Render backgrounds from pre-parsed spans (packed path).
+	 * Same logic as renderLineBackground but avoids re-parsing line.
+	 */
+	private renderLineBackgroundFromSpans(rowIndex: number, spans: TextSpan[]): void {
+		const y = rowIndex * this.charHeight;
+		const fillY = Math.floor(y);
+		const fillNextY = Math.ceil((rowIndex + 1) * this.charHeight);
+		const fillHeight = fillNextY - fillY;
+		const canvasWidth = this.canvas.width / this.dpr;
+
+		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
+		this.ctx.fillRect(0, fillY, canvasWidth, fillHeight);
+
+		for (const span of spans) {
+			const bg = getEffectiveBackground(span.attrs, this.currentForeground);
+			if (bg !== null) {
+				const x = span.startCol * this.charWidth;
+				const width = span.cellCount * this.charWidth;
+				this.ctx.fillStyle = rgbToCSS(bg);
+				this.ctx.fillRect(x, fillY, width, fillHeight);
+			}
+		}
+	}
+
+	/**
+	 * Render text from pre-parsed spans (packed path).
+	 * Same logic as renderLineText but avoids re-parsing line.
+	 */
+	private renderLineTextFromSpans(rowIndex: number, spans: TextSpan[]): void {
+		for (const span of spans) {
+			this.renderSpanText(span, rowIndex);
+		}
+		this.renderDetectionUnderlinesFromSpans(rowIndex, spans);
+	}
+
+	/**
+	 * Draw underlines for detected URLs and file paths from pre-parsed spans.
+	 */
+	private renderDetectionUnderlinesFromSpans(rowIndex: number, spans: TextSpan[]): void {
+		const cachedSettings = SettingsService.getCached();
+
+		// Build text string from spans (same as cell-by-cell iteration)
+		const textChars: string[] = new Array(this.cols).fill(" ");
+		for (const span of spans) {
+			let col = span.startCol;
+			for (const [cellChar, cellWidth] of span.cells) {
+				if (col >= 0 && col < this.cols) {
+					textChars[col] = cellChar || " ";
+				}
+				col += cellWidth > 0 ? cellWidth : 1;
+			}
+		}
+		const text = textChars.join("");
+
+		const y = Math.floor(rowIndex * this.charHeight);
+		const underlineColor = this.currentForeground;
+
+		if (!cachedSettings || cachedSettings.url_detection) {
+			const urlMatches = detectUrls(text);
+			for (const match of urlMatches) {
+				const x = match.startCol * this.charWidth;
+				const width = (match.endCol - match.startCol) * this.charWidth;
+				this.drawUnderline(x, y, width, underlineColor);
+			}
+		}
+
+		if (!cachedSettings || cachedSettings.file_path_detection) {
+			const fpMatches = detectFilePaths(text);
+			for (const match of fpMatches) {
+				const x = match.startCol * this.charWidth;
+				const width = (match.endCol - match.startCol) * this.charWidth;
+				this.drawUnderline(x, y, width, underlineColor);
+			}
+		}
 	}
 
 	/**
@@ -970,6 +1221,18 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const canvasHeight = this.canvas.height / this.dpr;
 		this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
+		// Pre-parse packed data for visible rows (parse once per row, FR10)
+		const packedSpans: (TextSpan[] | null)[] = new Array(visibleLines.length).fill(null);
+		if (!hasFolds) {
+			const packedRows = this.getVisibleRowsPacked(state, this.scrollOffset, visibleLines.length);
+			for (let row = 0; row < visibleLines.length; row++) {
+				const packed = packedRows[row];
+				if (packed) {
+					packedSpans[row] = groupPackedCellsIntoSpans(packed, this.cols);
+				}
+			}
+		}
+
 		// Two-pass rendering to prevent descender clipping:
 		// First pass: Render all backgrounds
 		for (let row = 0; row < visibleLines.length; row++) {
@@ -977,7 +1240,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 			if (line === null) {
 				// Summary line placeholder - rendered in summary pass
 			} else if (line) {
-				this.renderLineBackground(row, line);
+				const spans = packedSpans[row];
+				if (spans) {
+					this.renderLineBackgroundFromSpans(row, spans);
+				} else {
+					this.renderLineBackground(row, line);
+				}
 			}
 		}
 
@@ -987,7 +1255,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 			if (line === null) {
 				// Summary line placeholder - rendered in summary pass
 			} else if (line) {
-				this.renderLineText(row, line);
+				const spans = packedSpans[row];
+				if (spans) {
+					this.renderLineTextFromSpans(row, spans);
+				} else {
+					this.renderLineText(row, line);
+				}
 			}
 		}
 
@@ -1018,6 +1291,37 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.prevCursorCol = state.cursorCol;
 			this.prevCursorRow = state.cursorRow;
 		}
+	}
+
+	/**
+	 * Get packed binary data for visible rows, accounting for scroll offset.
+	 * Returns null entries when packed data is unavailable.
+	 */
+	private getVisibleRowsPacked(
+		state: TerminalState,
+		scrollOffset: number,
+		count: number,
+	): (Uint8Array | null)[] {
+		const result: (Uint8Array | null)[] = [];
+
+		if (scrollOffset === 0) {
+			for (let row = 0; row < count; row++) {
+				result.push(state.getRowPacked(row));
+			}
+		} else {
+			const scrollbackLength = state.getScrollbackLength();
+			const startIndex = Math.max(0, scrollbackLength - scrollOffset);
+			for (let i = 0; i < count; i++) {
+				const lineIndex = startIndex + i;
+				if (lineIndex < scrollbackLength) {
+					result.push(state.getScrollbackRowPacked(lineIndex));
+				} else {
+					result.push(state.getRowPacked(lineIndex - scrollbackLength));
+				}
+			}
+		}
+
+		return result;
 	}
 
 	/**

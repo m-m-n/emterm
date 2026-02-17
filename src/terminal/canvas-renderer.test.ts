@@ -8,9 +8,13 @@ import { createDefaultAttributes } from "./attributes.ts";
 import { Line } from "./grid.ts";
 import {
 	groupCellsIntoSpans,
+	groupPackedCellsIntoSpans,
+	packedAttrsEqual,
+	unpackAttrsFromBinary,
 	getVisibleLines,
 	calculateScrollPosition,
 } from "./canvas-renderer.ts";
+import { attributesEqual, packColor, packStyleFlags } from "./attributes.ts";
 import { TerminalState } from "./state.ts";
 import { C0 } from "../types/terminal.ts";
 
@@ -438,5 +442,281 @@ describe("Phase 3: Cursor and Selection", () => {
 		test.todo("renders single line selection");
 		test.todo("renders multi-line selection");
 		test.todo("clears selection highlight");
+	});
+});
+
+// ── Packed Binary Span Parser Tests (Phase 1) ─────────────
+
+/**
+ * Helper: pack a single cell into bytes matching WASM packed format.
+ * Binary: char_len(1) + char_data + width(1) + fg(4) + bg(4) + flags(2 LE)
+ */
+function packCell(
+	ch: string,
+	width: number,
+	attrs: CellAttributes,
+): number[] {
+	const bytes: number[] = [];
+	const encoder = new TextEncoder();
+
+	if (ch.length === 0) {
+		bytes.push(0); // charLen = 0
+	} else {
+		const encoded = encoder.encode(ch);
+		if (encoded.length >= 0xFF) {
+			bytes.push(0xFF);
+			bytes.push((encoded.length >> 8) & 0xFF);
+			bytes.push(encoded.length & 0xFF);
+			bytes.push(...encoded);
+		} else {
+			bytes.push(encoded.length);
+			bytes.push(...encoded);
+		}
+	}
+
+	bytes.push(width);
+
+	const fg = packColor(attrs.fg);
+	bytes.push(fg.tag, fg.r, fg.g, fg.b);
+
+	const bg = packColor(attrs.bg);
+	bytes.push(bg.tag, bg.r, bg.g, bg.b);
+
+	const flags = packStyleFlags(attrs);
+	bytes.push(flags & 0xFF, (flags >> 8) & 0xFF);
+
+	return bytes;
+}
+
+/** Helper: build packed row from cell byte arrays. */
+function buildPackedRow(...cells: number[][]): Uint8Array {
+	const flat: number[] = [];
+	for (const cell of cells) {
+		flat.push(...cell);
+	}
+	return new Uint8Array(flat);
+}
+
+describe("Packed Binary Span Parser", () => {
+	const defaultAttrs = createDefaultAttributes();
+	const boldAttrs: CellAttributes = { ...createDefaultAttributes(), bold: true };
+	const colorAttrs: CellAttributes = {
+		...createDefaultAttributes(),
+		fg: { type: "rgb", r: 255, g: 0, b: 0 },
+		bg: { type: "rgb", r: 0, g: 255, b: 0 },
+	};
+
+	describe("packedAttrsEqual", () => {
+		test("returns true for identical attribute bytes", () => {
+			const packed = buildPackedRow(
+				packCell("A", 1, defaultAttrs),
+				packCell("B", 1, defaultAttrs),
+			);
+			// Attribute bytes start after char+width: A=1+1+1=3, B=1+1+1=3
+			// Cell A: charLen(1) + charData(1) + width(1) = offset 3 for attrs
+			// Cell B: offset 3+10 + charLen(1) + charData(1) + width(1) = offset 16
+			const attrOffsetA = 3; // after "A" (charLen=1, charData=1, width=1)
+			const attrOffsetB = 3 + 10 + 3; // after 10 attr bytes of A, then B's header
+			expect(packedAttrsEqual(packed, attrOffsetA, attrOffsetB)).toBe(true);
+		});
+
+		test("returns false for different attribute bytes", () => {
+			const packed = buildPackedRow(
+				packCell("A", 1, defaultAttrs),
+				packCell("B", 1, boldAttrs),
+			);
+			const attrOffsetA = 3;
+			const attrOffsetB = 3 + 10 + 3;
+			expect(packedAttrsEqual(packed, attrOffsetA, attrOffsetB)).toBe(false);
+		});
+	});
+
+	describe("unpackAttrsFromBinary", () => {
+		test("unpacks default attributes", () => {
+			const packed = buildPackedRow(packCell("A", 1, defaultAttrs));
+			const attrs = unpackAttrsFromBinary(packed, 3);
+			expect(attrs.bold).toBe(false);
+			expect(attrs.fg).toBe(null);
+			expect(attrs.bg).toBe(null);
+		});
+
+		test("unpacks bold attribute", () => {
+			const packed = buildPackedRow(packCell("A", 1, boldAttrs));
+			const attrs = unpackAttrsFromBinary(packed, 3);
+			expect(attrs.bold).toBe(true);
+		});
+
+		test("unpacks RGB colors", () => {
+			const packed = buildPackedRow(packCell("A", 1, colorAttrs));
+			const attrs = unpackAttrsFromBinary(packed, 3);
+			expect(attrs.fg).toEqual({ type: "rgb", r: 255, g: 0, b: 0 });
+			expect(attrs.bg).toEqual({ type: "rgb", r: 0, g: 255, b: 0 });
+		});
+
+		test("unpacks indexed color", () => {
+			const indexedAttrs: CellAttributes = {
+				...createDefaultAttributes(),
+				fg: { type: "indexed", index: 5 },
+			};
+			const packed = buildPackedRow(packCell("A", 1, indexedAttrs));
+			const attrs = unpackAttrsFromBinary(packed, 3);
+			expect(attrs.fg).toEqual({ type: "indexed", index: 5 });
+		});
+	});
+
+	describe("groupPackedCellsIntoSpans", () => {
+		test("TS-07: groups consecutive cells with same attributes", () => {
+			const packed = buildPackedRow(
+				packCell("H", 1, defaultAttrs),
+				packCell("e", 1, defaultAttrs),
+				packCell("l", 1, defaultAttrs),
+				packCell("l", 1, defaultAttrs),
+				packCell("o", 1, defaultAttrs),
+			);
+			const spans = groupPackedCellsIntoSpans(packed, 5);
+			expect(spans.length).toBe(1);
+			expect(spans[0]!.text).toBe("Hello");
+			expect(spans[0]!.startCol).toBe(0);
+			expect(spans[0]!.cellCount).toBe(5);
+		});
+
+		test("TS-08: splits spans at attribute boundaries", () => {
+			const packed = buildPackedRow(
+				packCell("A", 1, defaultAttrs),
+				packCell("B", 1, defaultAttrs),
+				packCell("C", 1, boldAttrs),
+				packCell("D", 1, boldAttrs),
+			);
+			const spans = groupPackedCellsIntoSpans(packed, 4);
+			expect(spans.length).toBe(2);
+			expect(spans[0]!.text).toBe("AB");
+			expect(spans[0]!.startCol).toBe(0);
+			expect(spans[0]!.cellCount).toBe(2);
+			expect(spans[1]!.text).toBe("CD");
+			expect(spans[1]!.startCol).toBe(2);
+			expect(spans[1]!.cellCount).toBe(2);
+			expect(spans[1]!.attrs.bold).toBe(true);
+		});
+
+		test("TS-02: handles empty row (all space cells)", () => {
+			const packed = buildPackedRow(
+				packCell(" ", 1, defaultAttrs),
+				packCell(" ", 1, defaultAttrs),
+				packCell(" ", 1, defaultAttrs),
+			);
+			const spans = groupPackedCellsIntoSpans(packed, 3);
+			expect(spans.length).toBe(1);
+			expect(spans[0]!.text).toBe("   ");
+		});
+
+		test("TS-03: handles wide characters", () => {
+			const packed = buildPackedRow(
+				packCell("A", 1, defaultAttrs),
+				packCell("\u3042", 2, defaultAttrs), // あ (wide)
+				packCell("", 0, defaultAttrs),       // placeholder
+				packCell("B", 1, defaultAttrs),
+			);
+			const spans = groupPackedCellsIntoSpans(packed, 4);
+			expect(spans.length).toBe(1);
+			expect(spans[0]!.text).toBe("A\u3042B");
+			expect(spans[0]!.cellCount).toBe(4);
+		});
+
+		test("TS-04: handles combining marks", () => {
+			const packed = buildPackedRow(
+				packCell("e", 1, defaultAttrs),
+				packCell("\u0301", 0, defaultAttrs), // combining acute
+				packCell("x", 1, defaultAttrs),
+			);
+			const spans = groupPackedCellsIntoSpans(packed, 3);
+			expect(spans.length).toBe(1);
+			expect(spans[0]!.text).toBe("e\u0301x");
+			// cellCount: e(1) + x(1) = 2 (combining mark doesn't add cells)
+			expect(spans[0]!.cellCount).toBe(2);
+		});
+
+		test("TS-05: handles overflow characters (charLen=0xFF)", () => {
+			// Build overflow character manually: a 4-byte emoji
+			const encoder = new TextEncoder();
+			const emoji = "\u{1F600}"; // 😀
+			const emojiBytes = encoder.encode(emoji);
+			expect(emojiBytes.length).toBe(4);
+
+			// Manually build packed data with overflow format
+			const bytes: number[] = [];
+			bytes.push(0xFF); // overflow marker
+			bytes.push(0, emojiBytes.length); // 2-byte BE length
+			bytes.push(...emojiBytes);
+			bytes.push(2); // width=2
+
+			// Default attrs (10 bytes: fg 4 + bg 4 + flags 2)
+			bytes.push(0, 0, 0, 0); // fg=null
+			bytes.push(0, 0, 0, 0); // bg=null
+			bytes.push(0, 0);       // flags=0
+
+			// Placeholder cell for wide char
+			bytes.push(0); // charLen=0
+			bytes.push(0); // width=0
+			bytes.push(0, 0, 0, 0, 0, 0, 0, 0, 0, 0); // attrs
+
+			const packed = new Uint8Array(bytes);
+			const spans = groupPackedCellsIntoSpans(packed, 2);
+			expect(spans.length).toBe(1);
+			expect(spans[0]!.text).toBe(emoji);
+			expect(spans[0]!.cellCount).toBe(2);
+		});
+
+		test("TS-06: handles truncated packed data safely", () => {
+			// Only provide partial data (less than one full cell)
+			const packed = new Uint8Array([1, 65]); // charLen=1, charData='A', but no width/attrs
+			const spans = groupPackedCellsIntoSpans(packed, 5);
+			// Should return empty (bounds check fails for minimum 12 bytes)
+			expect(spans.length).toBe(0);
+		});
+
+		test("TS-01: equivalence with groupCellsIntoSpans", () => {
+			// Create a Line with known cells
+			const line = new Line(6);
+			line.setCell(0, { char: "A", width: 1, attrs: defaultAttrs, dirty: false });
+			line.setCell(1, { char: "B", width: 1, attrs: defaultAttrs, dirty: false });
+			line.setCell(2, { char: "C", width: 1, attrs: boldAttrs, dirty: false });
+			line.setCell(3, { char: "\u3042", width: 2, attrs: boldAttrs, dirty: false });
+			line.setCell(4, { char: "", width: 0, attrs: boldAttrs, dirty: false });
+			line.setCell(5, { char: "D", width: 1, attrs: boldAttrs, dirty: false });
+
+			const existing = groupCellsIntoSpans(line);
+
+			// Build matching packed data
+			const packed = buildPackedRow(
+				packCell("A", 1, defaultAttrs),
+				packCell("B", 1, defaultAttrs),
+				packCell("C", 1, boldAttrs),
+				packCell("\u3042", 2, boldAttrs),
+				packCell("", 0, boldAttrs),
+				packCell("D", 1, boldAttrs),
+			);
+			const packed_spans = groupPackedCellsIntoSpans(packed, 6);
+
+			// Compare spans
+			expect(packed_spans.length).toBe(existing.length);
+			for (let i = 0; i < existing.length; i++) {
+				expect(packed_spans[i]!.text).toBe(existing[i]!.text);
+				expect(packed_spans[i]!.startCol).toBe(existing[i]!.startCol);
+				expect(packed_spans[i]!.cellCount).toBe(existing[i]!.cellCount);
+				expect(packed_spans[i]!.cells.length).toBe(existing[i]!.cells.length);
+				expect(attributesEqual(packed_spans[i]!.attrs, existing[i]!.attrs)).toBe(true);
+			}
+		});
+
+		test("handles multi-byte UTF-8 inline characters", () => {
+			const packed = buildPackedRow(
+				packCell("é", 1, defaultAttrs), // 2-byte UTF-8
+				packCell("漢", 2, defaultAttrs), // 3-byte UTF-8
+				packCell("", 0, defaultAttrs),   // placeholder
+			);
+			const spans = groupPackedCellsIntoSpans(packed, 3);
+			expect(spans.length).toBe(1);
+			expect(spans[0]!.text).toBe("é漢");
+		});
 	});
 });

@@ -409,6 +409,79 @@ describe("dirty tracking", () => {
 	});
 });
 
+// ── WasmLineProxy dirty delegation tests ─────────────────
+
+describe("WasmLineProxy dirty delegation", () => {
+	test("TS-09: dirty getter reflects WASM core state", () => {
+		const grid = new WasmGrid(10, 3);
+		grid.clearDirty();
+
+		const line = grid.getLine(1);
+		expect(line.dirty).toBe(false);
+
+		// Writing a cell marks the row dirty in WASM core
+		grid.setCell(0, 1, {
+			char: "A",
+			width: 1,
+			attrs: createDefaultAttributes(),
+			dirty: true,
+		});
+		expect(line.dirty).toBe(true);
+
+		// Clearing dirty via core resets it
+		grid.clearDirty();
+		expect(line.dirty).toBe(false);
+		grid.dispose();
+	});
+
+	test("TS-10: markDirty() sets WASM core dirty bit", () => {
+		const grid = new WasmGrid(10, 3);
+		grid.clearDirty();
+
+		const line = grid.getLine(2);
+		expect(line.dirty).toBe(false);
+
+		line.markDirty();
+		expect(line.dirty).toBe(true);
+		expect(grid.isRowDirty(2)).toBe(true);
+		grid.dispose();
+	});
+
+	test("TS-11: clearDirty() is no-op (dirty unchanged)", () => {
+		const grid = new WasmGrid(10, 3);
+		grid.clearDirty();
+
+		const line = grid.getLine(0);
+		line.markDirty();
+		expect(line.dirty).toBe(true);
+
+		// clearDirty on the proxy is a no-op
+		line.clearDirty();
+		expect(line.dirty).toBe(true);
+
+		// Only grid-level clearDirty resets it
+		grid.clearDirty();
+		expect(line.dirty).toBe(false);
+		grid.dispose();
+	});
+
+	test("dirty setter is no-op", () => {
+		const grid = new WasmGrid(10, 3);
+		grid.clearDirty();
+
+		const line = grid.getLine(0);
+		expect(line.dirty).toBe(false);
+
+		// Setting dirty via proxy does nothing
+		line.dirty = true;
+		expect(line.dirty).toBe(false);
+
+		// Actual state unchanged
+		expect(grid.isRowDirty(0)).toBe(false);
+		grid.dispose();
+	});
+});
+
 // ── Row batch API tests ─────────────────────────────────
 
 describe("getRowPacked", () => {
