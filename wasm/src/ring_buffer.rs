@@ -575,9 +575,7 @@ impl TerminalCore {
             for c in 0..cols {
                 let cell = self.ring_cells[base + c];
                 if cell.is_overflow() {
-                    overflow_data.push(
-                        self.overflow.get(&(c as u32, abs32)).cloned()
-                    );
+                    overflow_data.push(self.overflow.get(&(c as u32, abs32)).cloned());
                 } else {
                     overflow_data.push(None);
                 }
@@ -657,7 +655,10 @@ impl TerminalCore {
                 }
             }
 
-            logical.push(LogicalLine { cells, overflow_data: oflow });
+            logical.push(LogicalLine {
+                cells,
+                overflow_data: oflow,
+            });
         }
 
         (logical, cursor_logical_idx, cursor_logical_col)
