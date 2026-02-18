@@ -75,7 +75,10 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target }},wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -92,6 +95,15 @@ jobs:
             librsvg2-dev \
             librsvg2-bin \
             patchelf
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Setting version to $VERSION"
+          sed -i.bak "s/\"version\": \"0.0.0\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+          sed -i.bak "s/^version = \"0.0.0\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          rm -f src-tauri/tauri.conf.json.bak src-tauri/Cargo.toml.bak
 
       - name: Install frontend dependencies
         run: bun install
