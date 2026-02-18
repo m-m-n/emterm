@@ -176,12 +176,22 @@ async fn pty_spawn(
 ///
 /// * `session_id` - The target session ID
 /// * `data` - Bytes to write to the PTY
+/// Maximum allowed write size per call (1 MB).
+const PTY_WRITE_MAX_SIZE: usize = 1024 * 1024;
+
 #[tauri::command]
 fn pty_write(
     state: State<'_, PtyManager>,
     session_id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
+    if data.len() > PTY_WRITE_MAX_SIZE {
+        return Err(format!(
+            "Write data too large: {} bytes (max {} bytes)",
+            data.len(),
+            PTY_WRITE_MAX_SIZE
+        ));
+    }
     state
         .writer_registry()
         .send(&session_id, data)
@@ -676,6 +686,7 @@ pub fn run() {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

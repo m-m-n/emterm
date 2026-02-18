@@ -7,6 +7,9 @@
 
 import type { CursorKeysMode } from "../terminal/modes";
 
+/** Reusable TextEncoder instance to avoid per-keystroke allocation. */
+const textEncoder = new TextEncoder();
+
 /**
  * Mapping definition for special key sequences.
  */
@@ -152,7 +155,7 @@ export function keyEventToBytes(
 
 	// Alt + key -> ESC prefix followed by the key
 	if (event.altKey && !event.ctrlKey && event.key.length === 1) {
-		const bytes = new TextEncoder().encode(event.key);
+		const bytes = textEncoder.encode(event.key);
 		const result = new Uint8Array(bytes.length + 1);
 		result[0] = 0x1b; // ESC
 		result.set(bytes, 1);
@@ -161,7 +164,7 @@ export function keyEventToBytes(
 
 	// Regular printable character (no modifiers except Shift)
 	if (event.key.length === 1 && !event.ctrlKey && !event.altKey) {
-		return new TextEncoder().encode(event.key);
+		return textEncoder.encode(event.key);
 	}
 
 	// Key should be ignored (e.g., modifier keys alone, unhandled special keys)

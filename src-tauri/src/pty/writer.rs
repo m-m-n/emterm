@@ -40,9 +40,11 @@ impl WriterRegistry {
     ///
     /// * `session_id` - The session ID to register
     /// * `sender` - The unbounded sender for the write channel
-    pub fn register(&self, session_id: SessionId, sender: mpsc::UnboundedSender<Vec<u8>>) {
-        let mut senders = self.senders.write().expect("WriterRegistry lock poisoned");
+    pub fn register(&self, session_id: SessionId, sender: mpsc::UnboundedSender<Vec<u8>>) -> Result<(), PtyError> {
+        let mut senders = self.senders.write()
+            .map_err(|_| PtyError::Pty("WriterRegistry lock poisoned".into()))?;
         senders.insert(session_id, sender);
+        Ok(())
     }
 
     /// Sends data to a session's write channel.
@@ -55,7 +57,8 @@ impl WriterRegistry {
     /// * `session_id` - The target session ID
     /// * `data` - Bytes to write to the PTY
     pub fn send(&self, session_id: &str, data: Vec<u8>) -> Result<(), PtyError> {
-        let senders = self.senders.read().expect("WriterRegistry lock poisoned");
+        let senders = self.senders.read()
+            .map_err(|_| PtyError::Pty("WriterRegistry lock poisoned".into()))?;
         let sender = senders
             .get(session_id)
             .ok_or_else(|| PtyError::SessionNotFound(session_id.to_string()))?;
@@ -72,9 +75,10 @@ impl WriterRegistry {
     /// # Arguments
     ///
     /// * `session_id` - The session ID to remove
-    pub fn remove(&self, session_id: &str) -> Option<mpsc::UnboundedSender<Vec<u8>>> {
-        let mut senders = self.senders.write().expect("WriterRegistry lock poisoned");
-        senders.remove(session_id)
+    pub fn remove(&self, session_id: &str) -> Result<Option<mpsc::UnboundedSender<Vec<u8>>>, PtyError> {
+        let mut senders = self.senders.write()
+            .map_err(|_| PtyError::Pty("WriterRegistry lock poisoned".into()))?;
+        Ok(senders.remove(session_id))
     }
 
     /// Returns the number of registered writers.
@@ -106,13 +110,22 @@ pub fn spawn_writer_thread(
     std::thread::spawn(move || {
         log::trace!("PTY writer: starting for session {}", session_id);
 
-        // Use blocking_recv() to wait for data on a std thread
+        // Use blocking_recv() to wait for data on a std thread.
+        // After writing the first message, drain any pending messages
+        // via try_recv() before flushing once (batch optimization).
         while let Some(data) = receiver.blocking_recv() {
             if let Err(e) = writer.write_all(&data) {
-                // Write error - PTY is likely closing, log and continue
-                // to drain remaining messages gracefully
                 log::debug!("PTY writer: write error for session {}: {}", session_id, e);
                 break;
+            }
+            // Drain pending messages to batch writes before flush
+            while let Ok(data) = receiver.try_recv() {
+                if let Err(e) = writer.write_all(&data) {
+                    log::debug!("PTY writer: write error for session {}: {}", session_id, e);
+                    // Flush what we have so far and exit
+                    let _ = writer.flush();
+                    return;
+                }
             }
             if let Err(e) = writer.flush() {
                 log::debug!("PTY writer: flush error for session {}: {}", session_id, e);
@@ -133,7 +146,7 @@ mod tests {
         let registry = WriterRegistry::new();
         let (tx, mut rx) = mpsc::unbounded_channel();
 
-        registry.register("session-1".to_string(), tx);
+        registry.register("session-1".to_string(), tx).unwrap();
 
         // Send data through registry
         let result = registry.send("session-1", vec![0x61]); // 'a'
@@ -165,10 +178,10 @@ mod tests {
         let registry = WriterRegistry::new();
         let (tx, _rx) = mpsc::unbounded_channel();
 
-        registry.register("session-1".to_string(), tx);
+        registry.register("session-1".to_string(), tx).unwrap();
         assert_eq!(registry.len(), 1);
 
-        let removed = registry.remove("session-1");
+        let removed = registry.remove("session-1").unwrap();
         assert!(removed.is_some());
         assert_eq!(registry.len(), 0);
 
@@ -181,7 +194,7 @@ mod tests {
     fn test_registry_remove_nonexistent() {
         let registry = WriterRegistry::new();
 
-        let removed = registry.remove("nonexistent");
+        let removed = registry.remove("nonexistent").unwrap();
         assert!(removed.is_none());
     }
 
@@ -191,8 +204,8 @@ mod tests {
         let (tx1, mut rx1) = mpsc::unbounded_channel();
         let (tx2, mut rx2) = mpsc::unbounded_channel();
 
-        registry.register("session-1".to_string(), tx1);
-        registry.register("session-2".to_string(), tx2);
+        registry.register("session-1".to_string(), tx1).unwrap();
+        registry.register("session-2".to_string(), tx2).unwrap();
         assert_eq!(registry.len(), 2);
 
         // Send to session-1
@@ -209,7 +222,7 @@ mod tests {
         let registry = WriterRegistry::new();
         let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
-        registry.register("session-1".to_string(), tx);
+        registry.register("session-1".to_string(), tx).unwrap();
 
         // Drop receiver to close channel
         drop(rx);

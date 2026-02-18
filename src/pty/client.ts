@@ -7,6 +7,9 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+/** Reusable TextEncoder instance to avoid per-call allocation. */
+const textEncoder = new TextEncoder();
 import type {
 	PtyErrorCallback,
 	PtyErrorPayload,
@@ -139,7 +142,7 @@ export class PtyClient {
 		}
 
 		const bytes =
-			typeof data === "string" ? new TextEncoder().encode(data) : data;
+			typeof data === "string" ? textEncoder.encode(data) : data;
 
 		// Array.from() is required: Tauri v2 invoke uses JSON serialization,
 		// and JSON.stringify(Uint8Array) produces an object, not an array.
