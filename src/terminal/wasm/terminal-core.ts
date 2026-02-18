@@ -286,6 +286,23 @@ export class WasmGrid {
 		this.core.clear_dirty();
 	}
 
+	// ── Scroll Event ────────────────────────────────
+
+	/** Returns scroll direction: 1=Up, 0=none. */
+	getScrollEventDirection(): number {
+		return this.core.get_scroll_event_direction();
+	}
+
+	/** Returns scroll count (0 if no event). */
+	getScrollEventCount(): number {
+		return this.core.get_scroll_event_count();
+	}
+
+	/** Clears the pending scroll event. */
+	clearScrollEvent(): void {
+		this.core.clear_scroll_event();
+	}
+
 	// ── Resize / Reset ───────────────────────────────
 
 	resize(cols: number, rows: number): void {

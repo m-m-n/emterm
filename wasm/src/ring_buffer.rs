@@ -17,6 +17,22 @@
 use crate::cell::*;
 use crate::terminal_core::TerminalCore;
 
+// ── Scroll Event ─────────────────────────────────────────
+
+/// Direction of a scroll event for differential rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScrollDirection {
+    Up,
+}
+
+/// Scroll event emitted by full-screen scroll for differential Canvas rendering.
+/// Only emitted when full-screen scroll with count=1 (the common case).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ScrollEvent {
+    pub(crate) direction: ScrollDirection,
+    pub(crate) count: u16,
+}
+
 impl TerminalCore {
     // ── Ring buffer index mapping ────────────────────────
 
@@ -33,7 +49,7 @@ impl TerminalCore {
     }
 
     /// Compute cell offset in ring_cells from absolute line index and column.
-    #[inline]
+    #[cfg(test)]
     pub(crate) fn ring_cell_offset(&self, abs_line: usize, col: u16) -> usize {
         abs_line * self.cols as usize + col as usize
     }
@@ -77,7 +93,9 @@ impl TerminalCore {
                 self.ring_cells[i] = Cell::EMPTY;
             }
             self.ring_wrapped[new_abs] = false;
-            overflow_clear_row(&mut self.overflow, new_abs as u16);
+            let abs32 = new_abs as u32;
+            overflow_clear_row(&mut self.overflow, abs32);
+            overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);
             self.ring_size += 1;
         } else {
             // Reuse oldest line's slot
@@ -88,13 +106,20 @@ impl TerminalCore {
                 self.ring_cells[i] = Cell::EMPTY;
             }
             self.ring_wrapped[new_abs] = false;
-            overflow_clear_row(&mut self.overflow, new_abs as u16);
+            let abs32 = new_abs as u32;
+            overflow_clear_row(&mut self.overflow, abs32);
+            overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);
         }
     }
 
     /// Scroll up internally (WASM-internal, no TS bridge).
     /// Full screen: pushes top line(s) to scrollback via ring_push_blank.
     /// Scroll region: shifts rows within region only.
+    ///
+    /// For full-screen scroll with count=1 (the common case), emits a
+    /// ScrollEvent and marks only the last row dirty instead of all rows.
+    /// The frontend can use the scroll event to shift the canvas content
+    /// and draw only the new row.
     pub(crate) fn scroll_up_internal(&mut self, count: u16) {
         let top = self.scroll_region_top;
         let bottom = self.scroll_region_bottom;
@@ -105,7 +130,17 @@ impl TerminalCore {
             for _ in 0..count {
                 self.ring_push_blank();
             }
-            self.mark_all_dirty();
+            if count == 1 {
+                // Differential rendering: emit scroll event, mark only last row dirty
+                self.scroll_event = Some(ScrollEvent {
+                    direction: ScrollDirection::Up,
+                    count,
+                });
+                self.mark_row_dirty(bottom);
+            } else {
+                // Fallback: mark all dirty for multi-line scroll
+                self.mark_all_dirty();
+            }
         } else {
             self.shift_rows_up(top, bottom, count);
         }
@@ -132,7 +167,7 @@ impl TerminalCore {
             if cell.is_overflow() {
                 let s = self
                     .overflow
-                    .get(&(col, abs as u16))
+                    .get(&(col as u32, abs as u32))
                     .map(|s| s.as_bytes())
                     .unwrap_or(b" ");
                 let len = s.len();
@@ -173,7 +208,7 @@ impl TerminalCore {
             let cell = &self.ring_cells[base + col as usize];
             if cell.width > 0 {
                 if cell.is_overflow() {
-                    if let Some(s) = self.overflow.get(&(col, abs as u16)) {
+                    if let Some(s) = self.overflow.get(&(col as u32, abs as u32)) {
                         text.push_str(s);
                     }
                 } else if let Some(s) = cell.get_char_inline() {
@@ -347,12 +382,16 @@ impl TerminalCore {
 /// A physical line extracted from ring buffer.
 struct PhysicalLine {
     cells: Vec<Cell>,
+    /// Overflow strings per column (None = inline, Some = overflow data).
+    overflow_data: Vec<Option<String>>,
     wrapped: bool,
 }
 
 /// A logical line = joined wrapped physical lines.
 struct LogicalLine {
     cells: Vec<Cell>,
+    /// Overflow strings per column (None = inline, Some = overflow data).
+    overflow_data: Vec<Option<String>>,
 }
 
 impl TerminalCore {
@@ -400,11 +439,15 @@ impl TerminalCore {
         let mut new_grid = vec![Cell::EMPTY; new_total];
         let mut new_wrapped = vec![false; new_cap];
 
+        let mut new_overflow = OverflowTable::new();
         for (i, line) in lines.iter().skip(skip).take(keep).enumerate() {
             let base = i * cols;
             let copy_len = line.cells.len().min(cols);
             for c in 0..copy_len {
                 new_grid[base + c] = line.cells[c];
+                if let Some(Some(ref s)) = line.overflow_data.get(c) {
+                    new_overflow.insert((c as u32, i as u32), s.clone());
+                }
             }
             new_wrapped[i] = line.wrapped;
         }
@@ -416,6 +459,8 @@ impl TerminalCore {
         let actual_size = keep.max(new_rows_usize);
         self.ring_size = actual_size;
         self.ring_capacity = new_cap;
+        self.overflow = new_overflow;
+        self.overflow_ridx = overflow_ridx_rebuild(&self.overflow);
 
         // Cursor tracking
         let cursor_abs_new = cursor_abs.saturating_sub(skip);
@@ -488,11 +533,15 @@ impl TerminalCore {
         let mut new_grid = vec![Cell::EMPTY; new_total];
         let mut new_wrapped = vec![false; new_cap];
 
+        let mut new_overflow = OverflowTable::new();
         for (i, line) in new_phys.iter().skip(skip).take(keep).enumerate() {
             let base = i * new_cols_usize;
             let copy_len = line.cells.len().min(new_cols_usize);
             for c in 0..copy_len {
                 new_grid[base + c] = line.cells[c];
+                if let Some(Some(ref s)) = line.overflow_data.get(c) {
+                    new_overflow.insert((c as u32, i as u32), s.clone());
+                }
             }
             new_wrapped[i] = line.wrapped;
         }
@@ -502,6 +551,8 @@ impl TerminalCore {
         self.ring_head = 0;
         self.ring_size = keep;
         self.ring_capacity = new_cap;
+        self.overflow = new_overflow;
+        self.overflow_ridx = overflow_ridx_rebuild(&self.overflow);
 
         // 6. Track cursor
         let cursor_new_phys_adj = cursor_new_phys.saturating_sub(skip);
@@ -511,21 +562,30 @@ impl TerminalCore {
     }
 
     /// Drain all lines from ring buffer (scrollback + viewport) in order.
+    /// Captures overflow strings from the overflow table for each cell.
     fn reflow_drain(&self) -> Vec<PhysicalLine> {
         let cols = self.cols as usize;
         let mut lines = Vec::with_capacity(self.ring_size);
         for i in 0..self.ring_size {
             let abs = (self.ring_head + i) % self.ring_capacity;
+            let abs32 = abs as u32;
             let base = abs * cols;
             let mut cells = Vec::with_capacity(cols);
+            let mut overflow_data = Vec::with_capacity(cols);
             for c in 0..cols {
                 let cell = self.ring_cells[base + c];
-                // Handle overflow cells: convert to inline representation for reflow
-                // (overflow entries won't survive reflow anyway, so keep cell as-is)
+                if cell.is_overflow() {
+                    overflow_data.push(
+                        self.overflow.get(&(c as u32, abs32)).cloned()
+                    );
+                } else {
+                    overflow_data.push(None);
+                }
                 cells.push(cell);
             }
             lines.push(PhysicalLine {
                 cells,
+                overflow_data,
                 wrapped: self.ring_wrapped[abs],
             });
         }
@@ -549,10 +609,12 @@ impl TerminalCore {
         let mut i = 0;
         while i < phys_lines.len() {
             let mut cells = Vec::new();
+            let mut oflow = Vec::new();
             let start_i = i;
 
             loop {
                 let line_cells = &phys_lines[i].cells;
+                let line_oflow = &phys_lines[i].overflow_data;
                 // Check if next line is a continuation (backward ref: wrapped on continuation)
                 let next_is_continuation = i + 1 < phys_lines.len() && phys_lines[i + 1].wrapped;
                 let trimmed_len = if next_is_continuation {
@@ -579,6 +641,7 @@ impl TerminalCore {
                 }
 
                 cells.extend_from_slice(&line_cells[..trimmed_len]);
+                oflow.extend_from_slice(&line_oflow[..trimmed_len]);
 
                 i += 1;
                 if !next_is_continuation {
@@ -594,7 +657,7 @@ impl TerminalCore {
                 }
             }
 
-            logical.push(LogicalLine { cells });
+            logical.push(LogicalLine { cells, overflow_data: oflow });
         }
 
         (logical, cursor_logical_idx, cursor_logical_col)
@@ -616,6 +679,7 @@ impl TerminalCore {
 
         for (li, logical) in logical_lines.iter().enumerate() {
             let cells = &logical.cells;
+            let oflow = &logical.overflow_data;
             let first_phys_of_group = phys.len();
 
             if cells.is_empty() {
@@ -626,6 +690,7 @@ impl TerminalCore {
                 }
                 phys.push(PhysicalLine {
                     cells: vec![Cell::EMPTY; new_cols],
+                    overflow_data: vec![None; new_cols],
                     wrapped: false,
                 });
                 continue;
@@ -633,6 +698,7 @@ impl TerminalCore {
 
             let mut col = 0; // current column in physical line
             let mut line_cells = Vec::with_capacity(new_cols);
+            let mut line_oflow = Vec::with_capacity(new_cols);
             let mut ci = 0; // cell index in logical line
 
             while ci < cells.len() {
@@ -642,9 +708,11 @@ impl TerminalCore {
                 // Wide char at last column: pad and wrap
                 if w == 2 && col == new_cols - 1 {
                     line_cells.push(Cell::EMPTY);
+                    line_oflow.push(None);
                     // Flush line
                     while line_cells.len() < new_cols {
                         line_cells.push(Cell::EMPTY);
+                        line_oflow.push(None);
                     }
                     if li == cursor_logical_idx && cursor_logical_col >= ci {
                         // Cursor was at or after this position in logical line
@@ -654,9 +722,11 @@ impl TerminalCore {
                     let is_continuation = phys.len() > first_phys_of_group;
                     phys.push(PhysicalLine {
                         cells: line_cells,
+                        overflow_data: line_oflow,
                         wrapped: is_continuation,
                     });
                     line_cells = Vec::with_capacity(new_cols);
+                    line_oflow = Vec::with_capacity(new_cols);
                     col = 0;
                     continue; // re-process this cell
                 }
@@ -668,11 +738,13 @@ impl TerminalCore {
                 }
 
                 line_cells.push(*cell);
+                line_oflow.push(oflow.get(ci).cloned().flatten());
                 col += 1;
 
                 // Add placeholder for wide char
                 if w == 2 && ci + 1 < cells.len() && cells[ci + 1].width == 0 {
                     line_cells.push(cells[ci + 1]);
+                    line_oflow.push(None);
                     col += 1;
                     ci += 1;
                 }
@@ -682,14 +754,17 @@ impl TerminalCore {
                 if col >= new_cols && ci < cells.len() {
                     while line_cells.len() < new_cols {
                         line_cells.push(Cell::EMPTY);
+                        line_oflow.push(None);
                     }
                     // Backward ref: continuation lines have wrapped=true
                     let is_continuation = phys.len() > first_phys_of_group;
                     phys.push(PhysicalLine {
                         cells: line_cells,
+                        overflow_data: line_oflow,
                         wrapped: is_continuation,
                     });
                     line_cells = Vec::with_capacity(new_cols);
+                    line_oflow = Vec::with_capacity(new_cols);
                     col = 0;
                 }
             }
@@ -703,11 +778,13 @@ impl TerminalCore {
             // Pad and flush last physical line
             while line_cells.len() < new_cols {
                 line_cells.push(Cell::EMPTY);
+                line_oflow.push(None);
             }
             // Backward ref: continuation lines have wrapped=true
             let is_continuation = phys.len() > first_phys_of_group;
             phys.push(PhysicalLine {
                 cells: line_cells,
+                overflow_data: line_oflow,
                 wrapped: is_continuation,
             });
         }
@@ -737,8 +814,8 @@ impl TerminalCore {
         self.dirty = vec![0; dirty_words];
         self.mark_all_dirty();
 
-        // Clear overflow (reflow doesn't preserve overflow entries)
-        self.overflow.clear();
+        // Overflow is now rebuilt by resize_same_width / resize_full_reflow;
+        // no need to clear here.
 
         // Reset scroll region and print state
         self.scroll_region_top = 0;
@@ -1200,5 +1277,170 @@ mod tests {
         // Resize narrower: shouldn't expand due to empty trailing lines
         core.resize_reflow(5, 3, 0);
         assert_eq!(core.get_cell_char(0, 0), "X");
+    }
+
+    // ── Phase 4: Reflow overflow preservation tests ──────
+
+    #[test]
+    fn test_overflow_survives_same_width_resize() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦"; // ZWJ family emoji, >16 bytes
+        assert!(long.as_bytes().len() > 16);
+        core.set_cell(0, 2, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(core.get_cell_char(0, 2), long);
+
+        // Same-width resize (row count change)
+        core.set_cursor(0, 2);
+        core.resize_reflow(10, 8, 0);
+        // Overflow cell should survive
+        assert_eq!(core.get_cell_char(0, 2), long);
+        assert!(!core.overflow.is_empty());
+        assert!(!core.overflow_ridx.is_empty());
+    }
+
+    #[test]
+    fn test_overflow_survives_width_change_reflow() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(0, 0, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.set_cell(5, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(core.get_cell_char(0, 0), long);
+
+        // Resize wider
+        core.set_cursor(5, 0);
+        core.resize_reflow(20, 5, 0);
+        // Overflow cell should be preserved at new position
+        assert_eq!(core.get_cell_char(0, 0), long);
+        assert!(!core.overflow.is_empty());
+    }
+
+    #[test]
+    fn test_overflow_survives_narrower_reflow() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(0, 0, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(core.get_cell_char(0, 0), long);
+
+        core.set_cursor(0, 0);
+        core.resize_reflow(5, 5, 0);
+        assert_eq!(core.get_cell_char(0, 0), long);
+        assert!(!core.overflow.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_overflow_cells_survive_reflow() {
+        let mut core = TerminalCore::new(20, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(0, 0, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.set_cell(10, 0, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert_eq!(core.get_cell_char(0, 0), long);
+        assert_eq!(core.get_cell_char(10, 0), long);
+        assert_eq!(core.overflow.len(), 2);
+
+        // Resize wider
+        core.set_cursor(0, 0);
+        core.resize_reflow(30, 5, 0);
+        assert_eq!(core.get_cell_char(0, 0), long);
+        assert_eq!(core.get_cell_char(10, 0), long);
+        assert_eq!(core.overflow.len(), 2);
+    }
+
+    #[test]
+    fn test_overflow_ridx_rebuilt_after_reflow() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(0, 0, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+        core.set_cursor(0, 0);
+        core.resize_reflow(10, 8, 0);
+        // Reverse index should be consistent with overflow table
+        for &(col, row) in core.overflow.keys() {
+            assert!(core.overflow_ridx.contains_key(&row));
+            assert!(core.overflow_ridx[&row].contains(&col));
+        }
+    }
+
+    #[test]
+    fn test_ring_push_blank_clears_ridx() {
+        let mut core = TerminalCore::new(10, 3, 2); // 2 scrollback lines
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(0, 0, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert!(!core.overflow_ridx.is_empty());
+
+        // Push enough blanks to evict the overflow row
+        for _ in 0..5 {
+            core.ring_push_blank();
+        }
+        // The original row should have been evicted
+        assert!(core.overflow.is_empty());
+        assert!(core.overflow_ridx.is_empty());
+    }
+
+    // ── Scroll event tests ──────────────────────────────────
+
+    #[test]
+    fn test_scroll_up_full_screen_count1_emits_scroll_event() {
+        let mut core = TerminalCore::new(80, 24, 100);
+        core.clear_dirty();
+        assert!(core.scroll_event.is_none());
+
+        core.scroll_up_internal(1);
+
+        // Should emit scroll event
+        assert!(core.scroll_event.is_some());
+        let evt = core.scroll_event.as_ref().unwrap();
+        assert_eq!(evt.direction, super::ScrollDirection::Up);
+        assert_eq!(evt.count, 1);
+
+        // Should only mark the last row dirty (row 23)
+        assert!(core.is_row_dirty(23));
+        // Other rows should NOT be dirty
+        assert!(!core.is_row_dirty(0));
+        assert!(!core.is_row_dirty(12));
+        assert!(!core.is_row_dirty(22));
+    }
+
+    #[test]
+    fn test_scroll_up_full_screen_count_gt1_no_scroll_event() {
+        let mut core = TerminalCore::new(80, 24, 100);
+        core.clear_dirty();
+
+        core.scroll_up_internal(3);
+
+        // Should NOT emit scroll event (count > 1)
+        assert!(core.scroll_event.is_none());
+        // All rows should be dirty (fallback)
+        assert!(core.is_row_dirty(0));
+        assert!(core.is_row_dirty(12));
+        assert!(core.is_row_dirty(23));
+    }
+
+    #[test]
+    fn test_scroll_up_scroll_region_no_scroll_event() {
+        let mut core = TerminalCore::new(80, 24, 100);
+        // Set scroll region (not full screen)
+        core.scroll_region_top = 5;
+        core.scroll_region_bottom = 20;
+        core.clear_dirty();
+
+        core.scroll_up_internal(1);
+
+        // Should NOT emit scroll event (scroll region, not full screen)
+        assert!(core.scroll_event.is_none());
+    }
+
+    #[test]
+    fn test_scroll_event_cleared_correctly() {
+        let mut core = TerminalCore::new(80, 24, 100);
+
+        core.scroll_up_internal(1);
+        assert!(core.scroll_event.is_some());
+        assert_eq!(core.get_scroll_event_direction(), 1);
+        assert_eq!(core.get_scroll_event_count(), 1);
+
+        core.clear_scroll_event();
+        assert!(core.scroll_event.is_none());
+        assert_eq!(core.get_scroll_event_direction(), 0);
+        assert_eq!(core.get_scroll_event_count(), 0);
     }
 }

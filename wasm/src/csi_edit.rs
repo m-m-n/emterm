@@ -54,8 +54,9 @@ impl TerminalCore {
             self.ring_cells[base + c as usize] = Cell::EMPTY;
         }
         // Handle overflow entries for this row
-        let abs = self.viewport_abs(row) as u16;
-        overflow_clear_range(&mut self.overflow, abs, col, self.cols);
+        let abs = self.viewport_abs(row) as u32;
+        overflow_clear_range(&mut self.overflow, abs, col as u32, self.cols as u32);
+        overflow_ridx_clear_range(&mut self.overflow_ridx, abs, col as u32, self.cols as u32);
         self.mark_row_dirty(row);
     }
 
@@ -82,8 +83,9 @@ impl TerminalCore {
             self.ring_cells[base + c as usize] = Cell::EMPTY;
         }
         // Handle overflow entries for this row
-        let abs = self.viewport_abs(row) as u16;
-        overflow_clear_range(&mut self.overflow, abs, col, self.cols);
+        let abs = self.viewport_abs(row) as u32;
+        overflow_clear_range(&mut self.overflow, abs, col as u32, self.cols as u32);
+        overflow_ridx_clear_range(&mut self.overflow_ridx, abs, col as u32, self.cols as u32);
         self.mark_row_dirty(row);
     }
 }

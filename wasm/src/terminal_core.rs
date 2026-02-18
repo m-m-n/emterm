@@ -76,6 +76,7 @@ pub struct TerminalCore {
     pub(crate) modes: u32,
     pub(crate) tab_stops: Vec<bool>,
     pub(crate) overflow: OverflowTable,
+    pub(crate) overflow_ridx: OverflowRowIndex,
     // Sprint 2: Print handler state
     pub(crate) grapheme_buffer: Vec<u32>,
     pub(crate) wrap_pending: bool,
@@ -87,6 +88,8 @@ pub struct TerminalCore {
     // Sprint 4: Device response buffer
     pub(crate) response_buffer: [u8; 64],
     pub(crate) response_len: u8,
+    // Scroll event for differential rendering
+    pub(crate) scroll_event: Option<crate::ring_buffer::ScrollEvent>,
     // Sprint 6: Parser and mode action queue
     pub(crate) parser: crate::parser::Parser,
     pub(crate) mode_actions: Vec<u8>,
@@ -130,6 +133,7 @@ impl TerminalCore {
             modes: default_modes,
             tab_stops,
             overflow: OverflowTable::new(),
+            overflow_ridx: OverflowRowIndex::new(),
             // Sprint 2
             grapheme_buffer: Vec::with_capacity(8),
             wrap_pending: false,
@@ -141,6 +145,8 @@ impl TerminalCore {
             // Sprint 4
             response_buffer: [0u8; 64],
             response_len: 0,
+            // Scroll event
+            scroll_event: None,
             // Sprint 6
             parser: crate::parser::Parser::new(),
             mode_actions: Vec::new(),
@@ -190,13 +196,18 @@ impl TerminalCore {
         flags: u16,
     ) {
         if let Some(idx) = self.cell_index(col, row) {
-            let abs = self.viewport_abs(row) as u16;
+            let abs = self.viewport_abs(row) as u32;
             let cell = &mut self.ring_cells[idx];
             cell.set_char(char_str);
+            let col32 = col as u32;
             if cell.is_overflow() {
-                self.overflow.insert((col, abs), char_str.to_string());
+                self.overflow
+                    .insert((col32, abs), char_str.to_string());
+                overflow_ridx_insert(&mut self.overflow_ridx, abs, col32);
             } else {
-                self.overflow.remove(&(col, abs));
+                if self.overflow.remove(&(col32, abs)).is_some() {
+                    overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+                }
             }
             cell.width = width;
             cell.fg = PackedColor {
@@ -252,8 +263,11 @@ impl TerminalCore {
                 b: bg_b,
             };
             cell.flags = flags;
-            let abs = self.viewport_abs(row) as u16;
-            self.overflow.remove(&(col, abs));
+            let abs = self.viewport_abs(row) as u32;
+            let col32 = col as u32;
+            if self.overflow.remove(&(col32, abs)).is_some() {
+                overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+            }
             self.mark_row_dirty(row);
         }
     }
@@ -262,10 +276,13 @@ impl TerminalCore {
 
     pub fn get_cell_char(&self, col: u16, row: u16) -> String {
         if let Some(idx) = self.cell_index(col, row) {
-            let abs = self.viewport_abs(row) as u16;
+            let abs = self.viewport_abs(row) as u32;
             let cell = &self.ring_cells[idx];
             if cell.is_overflow() {
-                self.overflow.get(&(col, abs)).cloned().unwrap_or_default()
+                self.overflow
+                    .get(&(col as u32, abs))
+                    .cloned()
+                    .unwrap_or_default()
             } else {
                 cell.get_char_inline().unwrap_or(" ").to_string()
             }
@@ -320,7 +337,9 @@ impl TerminalCore {
             self.ring_cells[i] = Cell::EMPTY;
         }
         self.ring_wrapped[abs] = false;
-        overflow_clear_row(&mut self.overflow, abs as u16);
+        let abs32 = abs as u32;
+        overflow_clear_row(&mut self.overflow, abs32);
+        overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);
         self.mark_row_dirty(row);
     }
 
@@ -335,7 +354,19 @@ impl TerminalCore {
         for i in base + start..base + end {
             self.ring_cells[i] = Cell::EMPTY;
         }
-        overflow_clear_range(&mut self.overflow, abs as u16, start_col, end_col);
+        let abs32 = abs as u32;
+        overflow_clear_range(
+            &mut self.overflow,
+            abs32,
+            start_col as u32,
+            end_col as u32,
+        );
+        overflow_ridx_clear_range(
+            &mut self.overflow_ridx,
+            abs32,
+            start_col as u32,
+            end_col as u32,
+        );
         self.mark_row_dirty(row);
     }
 
@@ -394,8 +425,9 @@ impl TerminalCore {
 
         // Clear overflow for rows that will be overwritten (deleted range)
         for r in start_row..start_row + count {
-            let abs = self.viewport_abs(r) as u16;
+            let abs = self.viewport_abs(r) as u32;
             overflow_clear_row(&mut self.overflow, abs);
+            overflow_ridx_clear_row(&mut self.overflow_ridx, abs);
         }
 
         // Move row data
@@ -410,18 +442,16 @@ impl TerminalCore {
                     self.ring_cells[dst_base + i] = self.ring_cells[src_base + i];
                 }
                 self.ring_wrapped[dst_abs] = self.ring_wrapped[src_abs];
-                // Move overflow entries from source to destination
-                let src_abs_u16 = src_abs as u16;
-                let dst_abs_u16 = dst_abs as u16;
-                let entries: Vec<(u16, String)> = self
-                    .overflow
-                    .iter()
-                    .filter(|&(&(_, r), _)| r == src_abs_u16)
-                    .map(|(&(c, _), v)| (c, v.clone()))
-                    .collect();
-                self.overflow.retain(|&(_, r), _| r != src_abs_u16);
-                for (c, v) in entries {
-                    self.overflow.insert((c, dst_abs_u16), v);
+                // Move overflow entries using reverse index for O(1) row lookup
+                let src_abs_u32 = src_abs as u32;
+                let dst_abs_u32 = dst_abs as u32;
+                if let Some(src_cols) = self.overflow_ridx.remove(&src_abs_u32) {
+                    for &c in &src_cols {
+                        if let Some(v) = self.overflow.remove(&(c, src_abs_u32)) {
+                            self.overflow.insert((c, dst_abs_u32), v);
+                        }
+                    }
+                    self.overflow_ridx.insert(dst_abs_u32, src_cols);
                 }
             }
         }
@@ -433,7 +463,9 @@ impl TerminalCore {
                 self.ring_cells[i] = Cell::EMPTY;
             }
             self.ring_wrapped[abs] = false;
-            overflow_clear_row(&mut self.overflow, abs as u16);
+            let abs32 = abs as u32;
+            overflow_clear_row(&mut self.overflow, abs32);
+            overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);
         }
 
         // Mark all affected rows dirty
@@ -451,8 +483,9 @@ impl TerminalCore {
 
         // Clear overflow for rows that will be overwritten (bottom range)
         for r in (end_row + 1 - count)..=end_row {
-            let abs = self.viewport_abs(r) as u16;
+            let abs = self.viewport_abs(r) as u32;
             overflow_clear_row(&mut self.overflow, abs);
+            overflow_ridx_clear_row(&mut self.overflow_ridx, abs);
         }
 
         // Move row data (iterate in reverse)
@@ -466,18 +499,16 @@ impl TerminalCore {
                 self.ring_cells[dst_base + i] = self.ring_cells[src_base + i];
             }
             self.ring_wrapped[dst_abs] = self.ring_wrapped[src_abs];
-            // Move overflow entries from source to destination
-            let src_abs_u16 = src_abs as u16;
-            let dst_abs_u16 = dst_abs as u16;
-            let entries: Vec<(u16, String)> = self
-                .overflow
-                .iter()
-                .filter(|&(&(_, r), _)| r == src_abs_u16)
-                .map(|(&(c, _), v)| (c, v.clone()))
-                .collect();
-            self.overflow.retain(|&(_, r), _| r != src_abs_u16);
-            for (c, v) in entries {
-                self.overflow.insert((c, dst_abs_u16), v);
+            // Move overflow entries using reverse index for O(1) row lookup
+            let src_abs_u32 = src_abs as u32;
+            let dst_abs_u32 = dst_abs as u32;
+            if let Some(src_cols) = self.overflow_ridx.remove(&src_abs_u32) {
+                for &c in &src_cols {
+                    if let Some(v) = self.overflow.remove(&(c, src_abs_u32)) {
+                        self.overflow.insert((c, dst_abs_u32), v);
+                    }
+                }
+                self.overflow_ridx.insert(dst_abs_u32, src_cols);
             }
         }
         // Clear vacated rows at top
@@ -488,7 +519,9 @@ impl TerminalCore {
                 self.ring_cells[i] = Cell::EMPTY;
             }
             self.ring_wrapped[abs] = false;
-            overflow_clear_row(&mut self.overflow, abs as u16);
+            let abs32 = abs as u32;
+            overflow_clear_row(&mut self.overflow, abs32);
+            overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);
         }
 
         // Mark all affected rows dirty
@@ -511,18 +544,22 @@ impl TerminalCore {
         }
         self.ring_wrapped[dst_abs] = self.ring_wrapped[src_abs];
 
-        // Copy overflow entries
-        let dst_abs_u16 = dst_abs as u16;
-        let src_abs_u16 = src_abs as u16;
-        overflow_clear_row(&mut self.overflow, dst_abs_u16);
-        let src_entries: Vec<(u16, String)> = self
-            .overflow
-            .iter()
-            .filter(|&(&(_, r), _)| r == src_abs_u16)
-            .map(|(&(c, _), v)| (c, v.clone()))
-            .collect();
-        for (c, v) in src_entries {
-            self.overflow.insert((c, dst_abs_u16), v);
+        // Copy overflow entries using reverse index for O(1) lookup
+        let dst_abs_u32 = dst_abs as u32;
+        let src_abs_u32 = src_abs as u32;
+        overflow_clear_row(&mut self.overflow, dst_abs_u32);
+        overflow_ridx_clear_row(&mut self.overflow_ridx, dst_abs_u32);
+        if let Some(src_cols) = self.overflow_ridx.get(&src_abs_u32) {
+            let mut dst_cols = Vec::with_capacity(src_cols.len());
+            for &c in src_cols {
+                if let Some(v) = self.overflow.get(&(c, src_abs_u32)) {
+                    self.overflow.insert((c, dst_abs_u32), v.clone());
+                    dst_cols.push(c);
+                }
+            }
+            if !dst_cols.is_empty() {
+                self.overflow_ridx.insert(dst_abs_u32, dst_cols);
+            }
         }
 
         self.mark_row_dirty(dst_row);
@@ -750,6 +787,28 @@ impl TerminalCore {
         }
     }
 
+    // ── Scroll Event ─────────────────────────────────────
+
+    /// Returns the scroll event direction: 1=Up, 0=none.
+    pub fn get_scroll_event_direction(&self) -> u8 {
+        match &self.scroll_event {
+            Some(e) => match e.direction {
+                crate::ring_buffer::ScrollDirection::Up => 1,
+            },
+            None => 0,
+        }
+    }
+
+    /// Returns the scroll event count (0 if no event).
+    pub fn get_scroll_event_count(&self) -> u16 {
+        self.scroll_event.as_ref().map_or(0, |e| e.count)
+    }
+
+    /// Clears the pending scroll event.
+    pub fn clear_scroll_event(&mut self) {
+        self.scroll_event = None;
+    }
+
     // ── Reset ────────────────────────────────────────────
 
     pub fn reset(&mut self) {
@@ -767,6 +826,8 @@ impl TerminalCore {
             self.tab_stops[i] = true;
         }
         self.overflow.clear();
+        self.overflow_ridx.clear();
+        self.scroll_event = None;
         // Sprint 2
         self.grapheme_buffer.clear();
         self.wrap_pending = false;
@@ -786,44 +847,55 @@ impl TerminalCore {
     }
 
     /// Process raw PTY data through the WASM parser and dispatch internally.
+    ///
+    /// Uses take-dispatch-restore pattern to avoid intermediate Vec allocation:
+    /// the parser is temporarily moved out of self so the parse callback can
+    /// call dispatch methods on self without borrow conflicts.
     pub fn process_pty_data(&mut self, data: &[u8]) {
-        use crate::parser_types::ParsedAction;
-
-        let mut actions = Vec::new();
-        self.parser.parse(data, |action| {
-            actions.push(action);
+        let mut parser = std::mem::take(&mut self.parser);
+        parser.parse(data, |action| {
+            self.dispatch_action(action);
         });
+        self.parser = parser;
+    }
 
-        for action in actions {
-            match action {
-                ParsedAction::Print(ch) => {
-                    self.handle_print(ch as u32);
-                }
-                ParsedAction::Execute(byte) => {
-                    self.handle_execute_internal(byte);
-                }
-                ParsedAction::CsiDispatch {
-                    params,
-                    intermediates,
+    /// Route a single ParsedAction to the appropriate handler.
+    fn dispatch_action(&mut self, action: crate::parser_types::ParsedAction) {
+        use crate::parser_types::ParsedAction;
+        match action {
+            ParsedAction::Print(ch) => {
+                self.handle_print(ch as u32);
+            }
+            ParsedAction::Execute(byte) => {
+                self.handle_execute_internal(byte);
+            }
+            ParsedAction::CsiDispatch {
+                params,
+                param_count,
+                intermediates,
+                intermediate_count,
+                final_byte,
+            } => {
+                self.handle_csi_internal(
+                    &params[..param_count as usize],
+                    &intermediates[..intermediate_count as usize],
                     final_byte,
-                } => {
-                    self.handle_csi_internal(&params, &intermediates, final_byte);
-                }
-                ParsedAction::EscDispatch {
-                    intermediate,
-                    final_byte,
-                } => {
-                    self.handle_esc_internal(intermediate, final_byte);
-                }
-                ParsedAction::OscDispatch { param, data } => {
-                    self.handle_osc_internal(param, &data);
-                }
-                ParsedAction::ApcDispatch(payload) => {
-                    self.fire_apc_callback(&payload);
-                }
-                ParsedAction::DcsDispatch(payload) => {
-                    self.fire_dcs_callback(&payload);
-                }
+                );
+            }
+            ParsedAction::EscDispatch {
+                intermediate,
+                final_byte,
+            } => {
+                self.handle_esc_internal(intermediate, final_byte);
+            }
+            ParsedAction::OscDispatch { param, data } => {
+                self.handle_osc_internal(param, &data);
+            }
+            ParsedAction::ApcDispatch(payload) => {
+                self.fire_apc_callback(&payload);
+            }
+            ParsedAction::DcsDispatch(payload) => {
+                self.fire_dcs_callback(&payload);
             }
         }
     }
@@ -1316,5 +1388,100 @@ mod tests {
         core.shift_rows_up(0, 4, 2);
         // Row 3 shifted to row 1
         assert_eq!(core.get_cell_char(0, 1), long);
+    }
+
+    // ── Phase 4: Reverse index tests ────────────────────
+
+    #[test]
+    fn test_ridx_maintained_on_set_cell_overflow() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(3, 2, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        let abs = core.viewport_abs(2) as u32;
+        assert!(core.overflow_ridx.contains_key(&abs));
+        assert!(core.overflow_ridx[&abs].contains(&3));
+    }
+
+    #[test]
+    fn test_ridx_removed_on_overwrite_with_ascii() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(3, 2, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        let abs = core.viewport_abs(2) as u32;
+        assert!(core.overflow_ridx.contains_key(&abs));
+
+        // Overwrite with ASCII
+        core.set_cell_ascii(3, 2, b'X', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert!(!core.overflow_ridx.contains_key(&abs));
+    }
+
+    #[test]
+    fn test_ridx_maintained_after_shift_rows_up() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(5, 3, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        let old_abs = core.viewport_abs(3) as u32;
+        assert!(core.overflow_ridx.contains_key(&old_abs));
+
+        core.shift_rows_up(0, 4, 2);
+        // Row 3 -> row 1
+        let new_abs = core.viewport_abs(1) as u32;
+        assert!(core.overflow_ridx.contains_key(&new_abs));
+        assert!(core.overflow_ridx[&new_abs].contains(&5));
+        // Old abs should be gone
+        assert!(!core.overflow_ridx.contains_key(&old_abs));
+    }
+
+    #[test]
+    fn test_ridx_maintained_after_shift_rows_down() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(5, 1, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        let old_abs = core.viewport_abs(1) as u32;
+        assert!(core.overflow_ridx.contains_key(&old_abs));
+
+        core.shift_rows_down(0, 4, 2);
+        // Row 1 -> row 3
+        let new_abs = core.viewport_abs(3) as u32;
+        assert!(core.overflow_ridx.contains_key(&new_abs));
+        assert!(core.overflow_ridx[&new_abs].contains(&5));
+    }
+
+    #[test]
+    fn test_ridx_cleared_on_clear_line() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(5, 2, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        let abs = core.viewport_abs(2) as u32;
+        assert!(core.overflow_ridx.contains_key(&abs));
+
+        core.clear_line(2);
+        assert!(!core.overflow_ridx.contains_key(&abs));
+    }
+
+    #[test]
+    fn test_ridx_copy_row() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(5, 1, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+        core.copy_row(1, 3);
+        let dst_abs = core.viewport_abs(3) as u32;
+        assert!(core.overflow_ridx.contains_key(&dst_abs));
+        assert!(core.overflow_ridx[&dst_abs].contains(&5));
+        // Source should still have it
+        let src_abs = core.viewport_abs(1) as u32;
+        assert!(core.overflow_ridx.contains_key(&src_abs));
+    }
+
+    #[test]
+    fn test_ridx_cleared_on_reset() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        let long = "👨‍👩‍👧‍👦";
+        core.set_cell(5, 2, long, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        assert!(!core.overflow_ridx.is_empty());
+
+        core.reset();
+        assert!(core.overflow_ridx.is_empty());
     }
 }

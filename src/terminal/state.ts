@@ -795,6 +795,27 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Get scroll event direction from WASM (1=Up, 0=none).
+   */
+  getScrollEventDirection(): number {
+    return this.getActiveWasmGrid()?.getScrollEventDirection() ?? 0;
+  }
+
+  /**
+   * Get scroll event count from WASM (0 if no event).
+   */
+  getScrollEventCount(): number {
+    return this.getActiveWasmGrid()?.getScrollEventCount() ?? 0;
+  }
+
+  /**
+   * Clear the pending scroll event in WASM.
+   */
+  clearScrollEvent(): void {
+    this.getActiveWasmGrid()?.clearScrollEvent();
+  }
+
+  /**
    * Resize the terminal.
    *
    * @param cols - New number of columns

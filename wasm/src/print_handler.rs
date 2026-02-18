@@ -2,6 +2,7 @@
 /// DEC charset translation.
 use wasm_bindgen::prelude::*;
 
+use crate::cell::{overflow_ridx_insert, overflow_ridx_remove};
 use crate::terminal_core::{TerminalCore, MODE_AUTO_WRAP};
 
 impl TerminalCore {
@@ -84,13 +85,18 @@ impl TerminalCore {
         let col = self.cursor.col;
         let row = self.cursor.row;
         if let Some(idx) = self.cell_index(col, row) {
-            let abs = self.viewport_abs(row) as u16;
+            let abs = self.viewport_abs(row) as u32;
             let cell = &mut self.ring_cells[idx];
             cell.set_char(char_str);
+            let col32 = col as u32;
             if cell.is_overflow() {
-                self.overflow.insert((col, abs), char_str.to_string());
+                self.overflow
+                    .insert((col32, abs), char_str.to_string());
+                overflow_ridx_insert(&mut self.overflow_ridx, abs, col32);
             } else {
-                self.overflow.remove(&(col, abs));
+                if self.overflow.remove(&(col32, abs)).is_some() {
+                    overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+                }
             }
             cell.width = width;
             cell.fg = self.cursor.fg;
@@ -102,7 +108,7 @@ impl TerminalCore {
         // Placeholder for width-2 characters
         if width == 2 && col + 1 < self.cols {
             if let Some(idx) = self.cell_index(col + 1, row) {
-                let abs = self.viewport_abs(row) as u16;
+                let abs = self.viewport_abs(row) as u32;
                 let ph = &mut self.ring_cells[idx];
                 ph.char_data = [0; 16];
                 ph.char_len = 0;
@@ -110,7 +116,10 @@ impl TerminalCore {
                 ph.fg = self.cursor.fg;
                 ph.bg = self.cursor.bg;
                 ph.flags = self.cursor.flags;
-                self.overflow.remove(&(col + 1, abs));
+                let col1_32 = (col + 1) as u32;
+                if self.overflow.remove(&(col1_32, abs)).is_some() {
+                    overflow_ridx_remove(&mut self.overflow_ridx, abs, col1_32);
+                }
             }
         }
 
@@ -144,8 +153,11 @@ impl TerminalCore {
             cell.flags = self.cursor.flags;
             // Always remove overflow entry (char_len is already set to 1 above,
             // so is_overflow() would be false -- must remove unconditionally)
-            let abs = self.viewport_abs(row) as u16;
-            self.overflow.remove(&(col, abs));
+            let abs = self.viewport_abs(row) as u32;
+            let col32 = col as u32;
+            if self.overflow.remove(&(col32, abs)).is_some() {
+                overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+            }
             self.mark_row_dirty(row);
         }
 
