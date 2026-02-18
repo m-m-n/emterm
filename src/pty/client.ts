@@ -126,18 +126,24 @@ export class PtyClient {
 	/**
 	 * Writes data to the PTY session.
 	 *
+	 * Non-async to minimize overhead on the key repeat hot path.
+	 * The backend pty_write command is synchronous (channel send),
+	 * so the returned Promise resolves quickly.
+	 *
 	 * @param data - String or byte array to send to the shell
 	 * @throws Error if no session is active
 	 */
-	async write(data: Uint8Array | string): Promise<void> {
+	write(data: Uint8Array | string): Promise<void> {
 		if (!this.sessionId) {
-			throw new Error("PTY session not started");
+			return Promise.reject(new Error("PTY session not started"));
 		}
 
 		const bytes =
 			typeof data === "string" ? new TextEncoder().encode(data) : data;
 
-		await invoke("pty_write", {
+		// Array.from() is required: Tauri v2 invoke uses JSON serialization,
+		// and JSON.stringify(Uint8Array) produces an object, not an array.
+		return invoke<void>("pty_write", {
 			sessionId: this.sessionId,
 			data: Array.from(bytes),
 		});

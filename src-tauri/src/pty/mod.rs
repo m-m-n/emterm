@@ -14,11 +14,13 @@ pub mod graceful_shutdown;
 pub mod manager;
 pub mod session;
 pub mod shell;
+pub mod writer;
 
 // Re-export commonly used types
 pub use manager::PtyManager;
 pub use session::PtySession;
 pub use shell::detect_default_shell;
+pub use writer::WriterRegistry;
 
 use thiserror::Error;
 use uuid::Uuid;

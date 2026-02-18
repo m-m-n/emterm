@@ -1,0 +1,89 @@
+schema_version: 1
+feature: key-input-performance
+scale: standard
+created: 2026-02-18
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: b54d8266c2a81e297bbb19dd444786f74da15b50
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: b54d8266c2a81e297bbb19dd444786f74da15b50
+  - id: implement
+    status: completed
+    completed_at_commit: b54d8266c2a81e297bbb19dd444786f74da15b50
+  - id: check
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+  - id: review
+    status: pending
+
+requirements:
+  FR1:
+    title: Replace JSON-based invoke IPC with lower-overhead mechanism
+    status: ok
+    tasks: [Phase1-Step5]
+    tests: [TS-03, TS-05]
+  FR2:
+    title: Eliminate Uint8Array-to-number[] conversion in write path
+    status: ok
+    tasks: [Phase2-Step2]
+    tests: [TS-07]
+  FR3:
+    title: Reduce lock acquisition overhead in Rust pty_write handler
+    status: ok
+    tasks: [Phase1-Step1, Phase1-Step2, Phase1-Step4, Phase1-Step5]
+    tests: [TS-01, TS-02, TS-03]
+  FR4:
+    title: Maintain fire-and-forget semantics for key input
+    status: ok
+    tasks: [Phase1-Step5, Phase2-Step2]
+    tests: [TS-07]
+  FR5:
+    title: Preserve IME input path without modification
+    status: ok
+    tasks: [Phase2-Step3]
+    tests: [TS-09]
+  NFR1:
+    title: Key repeat throughput comparable to WezTerm/Alacritty
+    status: ok
+    tasks: [Phase1, Phase2]
+    tests: [TS-08, SC-01]
+  NFR2:
+    title: Single-key input latency must not increase
+    status: ok
+    tasks: [Phase1, Phase2]
+    tests: [SC-02]
+  NFR3:
+    title: Minimize additional CPU usage during key repeat
+    status: ok
+    tasks: [Phase1-Step2]
+    tests: []
+  NFR4:
+    title: All existing keybindings and shortcuts must work
+    status: ok
+    tasks: []
+    tests: [TS-10, SC-04]
+  NFR5:
+    title: No regressions in existing test suite
+    status: ok
+    tasks: []
+    tests: [SC-05]

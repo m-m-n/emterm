@@ -100,30 +100,30 @@ pub async fn shutdown_with_config(
         .await
         .ok_or("Session not found")?;
 
-    // Stage 1: Send exit command
+    let registry = pty_manager.writer_registry();
+
+    // Stage 1: Send exit command via writer channel
     eprintln!(
         "Graceful shutdown stage 1: sending 'exit' command (timeout: {:?})",
         config.stage1_timeout
     );
-    {
-        let session = session.lock().await;
-        session.write(b"exit\n").map_err(|e| e.to_string())?;
-    }
+    registry
+        .send(session_id, b"exit\n".to_vec())
+        .map_err(|e| e.to_string())?;
 
     if wait_for_exit(&session, config.stage1_timeout).await {
         eprintln!("Graceful shutdown: process exited in stage 1");
         return Ok(());
     }
 
-    // Stage 2: Send EOF
+    // Stage 2: Send EOF via writer channel
     eprintln!(
         "Graceful shutdown stage 2: sending EOF (timeout: {:?})",
         config.stage2_timeout
     );
-    {
-        let session = session.lock().await;
-        session.write(b"\x04").map_err(|e| e.to_string())?;
-    }
+    registry
+        .send(session_id, vec![0x04])
+        .map_err(|e| e.to_string())?;
 
     if wait_for_exit(&session, config.stage2_timeout).await {
         eprintln!("Graceful shutdown: process exited in stage 2");
@@ -180,9 +180,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_stage1_success() {
-        // Create a manager and session
+        // Create a manager and session (atomic sets up writer channel)
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
+        let result = manager
+            .create_session_atomic(None, None, 80, 24)
+            .await
+            .unwrap();
+        let session_id = result.session_id;
 
         // Normal shell should exit on "exit" command (Stage 1)
         let result = shutdown(&manager, &session_id).await;
@@ -204,18 +208,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_stage3_force_kill() {
-        // Create a manager and session with a long-running command
+        // Create a manager and session with a long-running command (atomic sets up writer channel)
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
+        let created = manager
+            .create_session_atomic(None, None, 80, 24)
+            .await
+            .unwrap();
+        let session_id = created.session_id;
 
-        // Send a command that won't exit on "exit" or EOF
-        if let Some(session) = manager.get_session(&session_id).await {
-            let session = session.lock().await;
-            // Start a sleep that ignores exit/EOF
-            let _ = session.write(b"sleep 999 & disown\n");
-            // Wait a bit for the command to start
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
+        // Send a command that won't exit on "exit" or EOF via writer channel
+        let registry = manager.writer_registry();
+        let _ = registry.send(&session_id, b"sleep 999 & disown\n".to_vec());
+        // Wait a bit for the command to start
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Shutdown should eventually kill it in stage 3
         let result = shutdown(&manager, &session_id).await;
@@ -231,15 +236,18 @@ mod tests {
     #[tokio::test]
     async fn test_wait_for_exit_timeout() {
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
+        let created = manager
+            .create_session_atomic(None, None, 80, 24)
+            .await
+            .unwrap();
+        let session_id = created.session_id;
 
         let session = manager.get_session(&session_id).await.unwrap();
 
-        // Send a long-running command
-        {
-            let session_guard = session.lock().await;
-            let _ = session_guard.write(b"sleep 10\n");
-        }
+        // Send a long-running command via writer channel
+        let _ = manager
+            .writer_registry()
+            .send(&session_id, b"sleep 10\n".to_vec());
 
         // Wait for exit with very short timeout
         let exited = wait_for_exit(&session, Duration::from_millis(100)).await;
@@ -285,7 +293,11 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_with_custom_config() {
         let manager = PtyManager::new();
-        let session_id = manager.create_session(None, None, 80, 24).await.unwrap();
+        let created = manager
+            .create_session_atomic(None, None, 80, 24)
+            .await
+            .unwrap();
+        let session_id = created.session_id;
 
         // Use custom short timeouts
         let config = ShutdownConfig {

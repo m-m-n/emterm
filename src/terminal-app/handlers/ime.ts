@@ -534,11 +534,12 @@ export class ImeHandler {
 		input: HTMLTextAreaElement,
 		view: HTMLDivElement,
 	): void {
-		// Duplicate detection
-		let lastSentValue = "";
-		let lastSentTimestamp = 0;
 		// Track if we're in composition mode
 		let isComposing = false;
+		// One-shot token: set by compositionend after sending, consumed by the
+		// immediately-following input event. Prevents double-send of the same
+		// composition commit without blocking key-repeat throughput.
+		let compositionJustCommitted = false;
 
 		// Focus debugging
 		input.addEventListener("focus", () => {
@@ -648,10 +649,11 @@ export class ImeHandler {
 				return;
 			}
 
-			// Duplicate detection - skip if same value sent within 100ms
-			const now = Date.now();
-			if (value === lastSentValue && now - lastSentTimestamp < 100) {
-				if (IME_DEBUG) console.log("[IME Debug] input: duplicate, skipping");
+			// One-shot guard: if compositionend just committed this exact value,
+			// skip this input event (it is the paired double-fire, not a new keystroke).
+			if (compositionJustCommitted) {
+				compositionJustCommitted = false;
+				if (IME_DEBUG) console.log("[IME Debug] input: post-composition double-fire, skipping");
 				input.value = "";
 				this.updateCompositionView("");
 				return;
@@ -662,9 +664,6 @@ export class ImeHandler {
 				// Encode as UTF-8 and send to PTY
 				const bytes = new TextEncoder().encode(value);
 				await this.ptyClient.write(bytes);
-				// Set duplicate tracking AFTER successful write
-				lastSentValue = value;
-				lastSentTimestamp = now;
 				if (IME_DEBUG) console.log("[IME Debug] input: sent successfully");
 			} catch (error) {
 				console.error("Failed to write IME input to PTY:", error);
@@ -714,26 +713,14 @@ export class ImeHandler {
 				return;
 			}
 
-			// Duplicate detection - skip if same value sent within 100ms
-			const now = Date.now();
-			if (value === lastSentValue && now - lastSentTimestamp < 100) {
-				if (IME_DEBUG)
-					console.log(
-						"[IME Debug] compositionend: duplicate detected, skipping",
-					);
-				input.value = "";
-				this.updateCompositionView("");
-				return;
-			}
-
 			try {
 				if (IME_DEBUG)
 					console.log("[IME Debug] compositionend: sending value:", value);
 				const bytes = new TextEncoder().encode(value);
 				await this.ptyClient.write(bytes);
-				// Set duplicate tracking AFTER successful write
-				lastSentValue = value;
-				lastSentTimestamp = now;
+				// Set one-shot flag: the input event that fires right after
+				// compositionend for the same value should be skipped.
+				compositionJustCommitted = true;
 				if (IME_DEBUG)
 					console.log("[IME Debug] compositionend: sent successfully");
 			} catch (error) {

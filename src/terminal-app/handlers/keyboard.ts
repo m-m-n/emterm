@@ -267,8 +267,8 @@ export class KeyboardHandler {
     const bytes = keyEventToBytes(event, cursorKeysMode);
     if (bytes) {
       event.preventDefault();
+
       // Fire-and-forget: don't await to avoid blocking key repeat
-      // This significantly improves key repeat throughput by not waiting for IPC completion
       this.ptyClient.write(bytes).catch((error) => {
         console.error("Failed to write to PTY:", error);
       });
