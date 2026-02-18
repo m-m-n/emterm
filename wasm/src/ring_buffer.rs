@@ -130,15 +130,16 @@ impl TerminalCore {
             for _ in 0..count {
                 self.ring_push_blank();
             }
-            if count == 1 {
-                // Differential rendering: emit scroll event, mark only last row dirty
+            if count == 1 && self.scroll_event.is_none() {
+                // Differential rendering: single scroll with no pending event
                 self.scroll_event = Some(ScrollEvent {
                     direction: ScrollDirection::Up,
                     count,
                 });
                 self.mark_row_dirty(bottom);
             } else {
-                // Fallback: mark all dirty for multi-line scroll
+                // Fallback: multi-scroll, count > 1, or pending event exists
+                self.scroll_event = None;
                 self.mark_all_dirty();
             }
         } else {

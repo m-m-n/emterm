@@ -4,12 +4,44 @@ A cross-platform terminal emulator built with Tauri, featuring rich rendering ca
 
 ## Features
 
-- [ ] Full ANSI control sequence support
-- [ ] Kitty Graphics Protocol support
-- [ ] SIXEL graphics support
-- [x] Inline Markdown rendering (custom OSC extension)
-- [ ] Low-latency typing performance
-- [ ] Cross-platform (Linux, macOS, Windows)
+- **Core Terminal**
+  - Full ANSI/VT100/VT220/xterm control sequence support
+  - Multi-tab terminal with independent PTY sessions
+  - WASM-based terminal core for high-performance grid rendering
+  - Unified ring buffer with full-buffer reflow on resize
+  - Canvas 2D renderer with dirty-row tracking
+
+- **Rich Content Display**
+  - Inline Markdown rendering via custom OSC 777 extension (CommonMark, GFM, syntax highlighting, Mermaid diagrams)
+  - Fullscreen Markdown viewer with zoom and keyboard navigation
+  - Inline image rendering (Kitty Graphics Protocol and SIXEL)
+  - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll)
+  - CLI commands: `emterm markdown` and `emterm image` (work over SSH)
+
+- **Input and IME**
+  - High-throughput key input (event-based binary IPC, zero JSON serialization)
+  - Full IME support: EditContext API (Chromium) and hidden textarea fallback (WebKit)
+  - Capture-phase clipboard shortcuts (Ctrl+Shift+C/V) compatible with IME
+  - Word selection drag (double-click and drag to extend by word)
+
+- **Navigation**
+  - OSC 133 semantic prompt jump (Ctrl+Up / Ctrl+Down)
+  - Incremental text search with match highlighting (Ctrl+F)
+  - Command output folding (collapse/expand)
+  - File path Ctrl+click to open in editor
+  - URL Ctrl+click to open in browser
+
+- **Settings and Appearance**
+  - Settings panel with five categories (UI, Keybinds, Terminal Appearance, Terminal Behavior, Markdown Viewer)
+  - Dark/light/system theme with four accent color presets (Purple, Blue, Green, Orange)
+  - Terminal color schemes: built-in presets plus fully user-customizable palette
+  - Three-field font configuration (primary, CJK/secondary, emoji) with system font picker
+  - Configurable cursor shape, scrollbar, opacity, line height, scrollback, shell, and more
+  - All keyboard shortcuts configurable
+
+- **Internationalization**
+  - English and Japanese UI (auto-detected from OS locale)
+  - Unicode 17.0 and Emoji 17.0 character width support
 
 ## Requirements
 
