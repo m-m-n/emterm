@@ -688,17 +688,20 @@ export class CanvasRenderer implements ITerminalRenderer {
 			const shiftPx = scrollCount * this.charHeight;
 			const canvasW = this.canvas.width / this.dpr;
 			const canvasH = this.canvas.height / this.dpr;
-			// Shift existing content up by shiftPx
-			this.ctx.drawImage(
-				this.canvas,
-				0, shiftPx * this.dpr,
-				this.canvas.width, this.canvas.height - shiftPx * this.dpr,
-				0, 0,
-				canvasW, canvasH - shiftPx,
-			);
-			// Clear the vacated area at the bottom
-			this.ctx.fillStyle = rgbToCSS(this.currentBackground);
-			this.ctx.fillRect(0, canvasH - shiftPx, canvasW, shiftPx);
+			if (shiftPx > 0 && shiftPx < canvasH) {
+				// Shift existing content up by shiftPx (pixel-aligned source offset)
+				const srcOffsetPx = Math.round(shiftPx * this.dpr);
+				this.ctx.drawImage(
+					this.canvas,
+					0, srcOffsetPx,
+					this.canvas.width, this.canvas.height - srcOffsetPx,
+					0, 0,
+					canvasW, canvasH - shiftPx,
+				);
+				// Clear the vacated area at the bottom
+				this.ctx.fillStyle = rgbToCSS(this.currentBackground);
+				this.ctx.fillRect(0, canvasH - shiftPx, canvasW, shiftPx);
+			}
 		}
 
 		const buffer = state.getActiveBuffer();

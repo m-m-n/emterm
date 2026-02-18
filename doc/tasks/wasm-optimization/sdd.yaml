@@ -29,12 +29,15 @@ workflow:
     status: completed
     completed_at_commit: c63d7c7d18583a5dc75301bf589b1b57e923dd3c
   - id: check
-    status: pending
+    status: completed
+    completed_at_commit: 4fb513d14461366cf15dcaab6502e5f70dbf9a64
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
-    status: pending
+    status: completed
+    completed_at_commit: 4fb513d14461366cf15dcaab6502e5f70dbf9a64
   - id: review
-    status: pending
+    status: completed
+    completed_at_commit: 4fb513d14461366cf15dcaab6502e5f70dbf9a64
 
 requirements:
   FR1:
