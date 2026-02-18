@@ -601,12 +601,12 @@ export class ImeHandler {
 		});
 
 		// Handle input event (primary handler)
-		input.addEventListener("input", async (event: Event) => {
+		input.addEventListener("input", (event: Event) => {
 			const inputEvent = event as InputEvent;
 			const value = input.value;
 			const isActive = this.isActiveTab();
 
-				// Skip if this tab is not active (for multi-tab support)
+			// Skip if this tab is not active (for multi-tab support)
 			if (!isActive) {
 				input.value = "";
 				this.updateCompositionView("");
@@ -659,24 +659,17 @@ export class ImeHandler {
 				return;
 			}
 
-			try {
-				if (IME_DEBUG) console.log("[IME Debug] input: sending value:", value);
-				// Encode as UTF-8 and send to PTY
-				const bytes = new TextEncoder().encode(value);
-				await this.ptyClient.write(bytes);
-				if (IME_DEBUG) console.log("[IME Debug] input: sent successfully");
-			} catch (error) {
+			if (IME_DEBUG) console.log("[IME Debug] input: sending value:", value);
+			const bytes = new TextEncoder().encode(value);
+			this.ptyClient.write(bytes).catch((error) => {
 				console.error("Failed to write IME input to PTY:", error);
-				// Don't set lastSent on failure - allow retry
-			} finally {
-				// Clear input, view, and reset flag
-				input.value = "";
-				this.updateCompositionView("");
-			}
+			});
+			input.value = "";
+			this.updateCompositionView("");
 		});
 
 		// Handle compositionend (fallback for standard IME)
-		input.addEventListener("compositionend", async (event) => {
+		input.addEventListener("compositionend", (event) => {
 			if (IME_DEBUG) {
 				console.log("[IME Debug] compositionend:", {
 					data: (event as CompositionEvent).data,
@@ -713,23 +706,20 @@ export class ImeHandler {
 				return;
 			}
 
-			try {
-				if (IME_DEBUG)
-					console.log("[IME Debug] compositionend: sending value:", value);
-				const bytes = new TextEncoder().encode(value);
-				await this.ptyClient.write(bytes);
-				// Set one-shot flag: the input event that fires right after
-				// compositionend for the same value should be skipped.
-				compositionJustCommitted = true;
-				if (IME_DEBUG)
-					console.log("[IME Debug] compositionend: sent successfully");
-			} catch (error) {
+			if (IME_DEBUG)
+				console.log("[IME Debug] compositionend: sending value:", value);
+			const bytes = new TextEncoder().encode(value);
+			// Set one-shot flag BEFORE async write to prevent race condition
+			// where the paired input event fires before write() resolves.
+			compositionJustCommitted = true;
+			this.ptyClient.write(bytes).catch((error) => {
+				compositionJustCommitted = false;
 				console.error("Failed to write IME composition to PTY:", error);
-				// Don't set lastSent on failure - allow retry
-			} finally {
-				input.value = "";
-				this.updateCompositionView("");
-			}
+			});
+			if (IME_DEBUG)
+				console.log("[IME Debug] compositionend: sent successfully");
+			input.value = "";
+			this.updateCompositionView("");
 		});
 	}
 }

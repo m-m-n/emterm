@@ -66,6 +66,11 @@ impl PtyManager {
 
     /// Creates a new PTY session with the specified parameters.
     ///
+    /// **Deprecated:** Use `create_session_atomic` instead, which also sets up
+    /// the dedicated writer thread and registers the write channel in the
+    /// WriterRegistry. Sessions created with this method will not have a
+    /// writer channel and `pty_write` will fail with `SessionNotFound`.
+    ///
     /// # Arguments
     ///
     /// * `shell` - Optional shell path. If `None`, the default shell is used.
@@ -75,6 +80,7 @@ impl PtyManager {
     /// # Returns
     ///
     /// The session ID of the newly created session, or an error if creation fails.
+    #[deprecated(note = "Use create_session_atomic instead, which sets up the writer channel")]
     pub async fn create_session(
         &self,
         shell: Option<String>,
@@ -118,7 +124,9 @@ impl PtyManager {
     ///
     /// The removed session if found, or `None` if it didn't exist.
     pub async fn remove_session(&self, id: &str) -> Option<Arc<Mutex<PtySession>>> {
-        self.writer_registry.remove(id);
+        if let Err(e) = self.writer_registry.remove(id) {
+            log::warn!("Failed to remove writer for session {}: {}", id, e);
+        }
         let mut sessions = self.sessions.write().await;
         sessions.remove(id)
     }
@@ -155,7 +163,7 @@ impl PtyManager {
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         super::writer::spawn_writer_thread(id.clone(), writer_handle, rx);
-        self.writer_registry.register(id.clone(), tx);
+        self.writer_registry.register(id.clone(), tx)?;
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), Arc::new(Mutex::new(session)));
@@ -179,7 +187,9 @@ impl PtyManager {
         id: &str,
     ) -> Option<(Arc<Mutex<PtySession>>, SessionRemovedResult)> {
         // Remove writer channel first (drops sender, writer thread will exit)
-        self.writer_registry.remove(id);
+        if let Err(e) = self.writer_registry.remove(id) {
+            log::warn!("Failed to remove writer for session {}: {}", id, e);
+        }
 
         let mut sessions = self.sessions.write().await;
         let session = sessions.remove(id)?;
@@ -190,6 +200,7 @@ impl PtyManager {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
