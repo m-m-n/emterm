@@ -174,7 +174,12 @@ pub fn overflow_ridx_clear_row(ridx: &mut OverflowRowIndex, row: u32) {
 }
 
 /// Remove entries in a column range for a given row from the reverse index.
-pub fn overflow_ridx_clear_range(ridx: &mut OverflowRowIndex, row: u32, start_col: u32, end_col: u32) {
+pub fn overflow_ridx_clear_range(
+    ridx: &mut OverflowRowIndex,
+    row: u32,
+    start_col: u32,
+    end_col: u32,
+) {
     if let Some(cols) = ridx.get_mut(&row) {
         cols.retain(|&c| c < start_col || c >= end_col);
         if cols.is_empty() {

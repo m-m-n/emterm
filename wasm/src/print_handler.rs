@@ -90,8 +90,7 @@ impl TerminalCore {
             cell.set_char(char_str);
             let col32 = col as u32;
             if cell.is_overflow() {
-                self.overflow
-                    .insert((col32, abs), char_str.to_string());
+                self.overflow.insert((col32, abs), char_str.to_string());
                 overflow_ridx_insert(&mut self.overflow_ridx, abs, col32);
             } else {
                 if self.overflow.remove(&(col32, abs)).is_some() {
