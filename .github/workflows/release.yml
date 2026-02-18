@@ -22,6 +22,7 @@ jobs:
     outputs:
       release_id: ${{ steps.create-release.outputs.id }}
       release_upload_url: ${{ steps.create-release.outputs.upload_url }}
+      version: ${{ steps.get-version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,7 +100,8 @@ jobs:
       - name: Set version from tag
         shell: bash
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          VERSION="${{ needs.create-release.outputs.version }}"
+          VERSION="${VERSION#v}"
           echo "Setting version to $VERSION"
           sed -i.bak "s/\"version\": \"0.0.0\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
           sed -i.bak "s/^version = \"0.0.0\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
@@ -123,5 +125,5 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ needs.create-release.outputs.version }}
           draft: false

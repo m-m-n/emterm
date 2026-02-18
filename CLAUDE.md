@@ -5,8 +5,9 @@ eMterm is a cross-platform terminal emulator built with Tauri, featuring rich re
 ## What (Technology Stack)
 
 **Primary Technologies:**
-- Rust (Tauri backend) - PTY handling, ANSI parsing, app logic
-- Vanilla TypeScript (frontend) - Terminal UI, WebView rendering
+- Rust (Tauri backend) - PTY management, image processing, IPC
+- Rust/WebAssembly (WASM) - ANSI parsing, grid state, Unicode processing
+- Vanilla TypeScript (frontend) - Terminal UI, Canvas rendering, event handling
 - Bun - Package manager and bundler
 
 **Project Type:** Desktop application (Tauri)
@@ -49,24 +50,24 @@ bun tauri build
 
 ### Testing & Verification
 
-**⚠️ テスト実行はDocker環境を優先すること。** ホスト環境の設定ファイルやキャッシュを破損するリスクを避けるため、テストは原則Docker内で実行する。
+**⚠️ Prefer Docker for test execution.** Running tests on the host risks corrupting local config files and caches.
 
-**Docker経由（推奨）:**
+**Docker (recommended):**
 ```bash
-# Rust テスト
+# Rust tests
 docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --manifest-path src-tauri/Cargo.toml"
 
-# TypeScript テスト
+# TypeScript tests
 docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "bun test"
 
-# TypeScript 型チェック
+# TypeScript typecheck
 docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "bun run typecheck"
 
-# E2E テスト（フルサイクル）
+# E2E tests (full cycle)
 ./scripts/run-e2e-docker.sh
 ```
 
-**ホスト直接実行（開発者が明示的に許可した場合のみ）:**
+**Host execution (only when explicitly permitted by the developer):**
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml
 bun test
@@ -76,10 +77,62 @@ bun run typecheck
 ### Project Structure
 
 ```
-src-tauri/         - Rust backend (Tauri core, PTY, ANSI parser)
+src-tauri/         - Rust backend (Tauri core, PTY, image processing)
 src/               - TypeScript frontend (terminal UI, rendering)
+wasm/              - Rust WASM module (ANSI parser, grid, Unicode)
 tmp/               - Temporary files and drafts
 ```
+
+### Architecture & Development Policy
+
+**Backend (Rust / `src-tauri/`)**
+
+The backend handles OS-level operations and resource-intensive processing that requires native performance or system access:
+
+- **PTY management** - Session lifecycle, shell spawning, lock-free writer threads via channels
+- **Image processing** - Kitty/SIXEL decoding, LRU cache (320MB quota), animation frames
+- **IPC bridge** - Tauri commands/events, binary PTY data streaming via Channel
+- **CLI commands** - `emterm markdown`, `emterm image` (stateless, pipeable)
+- **Settings & i18n** - Config persistence, validation with `rust-i18n`
+
+Key conventions:
+- Synchronous Tauri commands for hot paths (e.g., `pty_write`) to avoid async overhead
+- `Arc<RwLock<HashMap>>` for session registries (read-optimized)
+- Atomic operations for race-free session creation/removal
+- `portable-pty` for cross-platform PTY abstraction
+
+**Frontend (TypeScript + WASM / `src/` + `wasm/`)**
+
+The frontend is split between WASM (performance-critical data processing) and TypeScript (UI, events, coordination).
+
+WASM module (`wasm/src/`) owns:
+- **ANSI/VT100 parser** - Full state machine for escape sequences (CSI, ESC, OSC, APC, DCS)
+- **Terminal grid** - Ring buffer storage, viewport, cursor state, dirty row tracking
+- **Unicode processing** - Codepoint width, emoji detection, grapheme classification
+- **Control sequence handlers** - C0, CSI cursor/screen/edit/scroll/modes, ESC, OSC
+
+TypeScript (`src/`) owns:
+- **Canvas 2D rendering** - Differential drawing based on WASM dirty flags
+- **Event handling** - Keyboard, mouse, IME, resize
+- **UI components** - Tab bar, settings panel, image viewer, markdown renderer, selection
+- **Application orchestration** - TerminalApp, TerminalState, PTY client
+- **WASM integration layer** - `src/terminal/wasm/` (loader, proxies, adapters)
+
+Data flow: `PTY (Rust) → Binary Channel → PtyClient (TS) → process_pty_data (WASM) → callbacks (TS) → Canvas render (TS)`
+
+**WASM Adoption Criteria**
+
+Use WASM when:
+- Processing runs on **every byte of PTY output** (parser, grid updates, Unicode width)
+- The operation is **CPU-bound with tight loops** (escape sequence state machine, cell iteration)
+- **Data stays within WASM** across multiple operations (grid read/write without crossing boundary)
+- The logic is **algorithmically complex** and benefits from Rust's type safety (parser state machine, ring buffer)
+
+Keep in TypeScript when:
+- The code **interacts with DOM/Canvas/Browser APIs** (rendering, clipboard, notifications)
+- The operation is **event-driven and infrequent** (user input, settings, tab management)
+- It requires **Tauri API access** (IPC commands, file dialogs, system tray)
+- The data **crosses the WASM boundary per-call** with no batching benefit (one-shot lookups)
 
 ### Logging
 
