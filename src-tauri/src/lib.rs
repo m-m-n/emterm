@@ -166,25 +166,26 @@ async fn pty_spawn(
     Ok(SpawnResult { session_id })
 }
 
-/// Writes data to a PTY session.
+/// Writes data to a PTY session via the dedicated writer channel.
+///
+/// This is a synchronous (non-async) command that performs a single read-lock
+/// lookup in the WriterRegistry and a lock-free channel send, minimizing
+/// per-keystroke overhead for fast key repeat.
 ///
 /// # Arguments
 ///
 /// * `session_id` - The target session ID
 /// * `data` - Bytes to write to the PTY
 #[tauri::command]
-async fn pty_write(
+fn pty_write(
     state: State<'_, PtyManager>,
     session_id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    let session = state
-        .get_session(&session_id)
-        .await
-        .ok_or_else(|| PtyError::SessionNotFound(session_id.clone()).to_string())?;
-
-    let session = session.lock().await;
-    session.write(&data).map_err(|e| e.to_string())
+    state
+        .writer_registry()
+        .send(&session_id, data)
+        .map_err(|e| e.to_string())
 }
 
 /// Resizes a PTY session.

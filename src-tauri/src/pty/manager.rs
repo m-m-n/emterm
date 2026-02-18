@@ -9,7 +9,9 @@ use std::sync::Arc;
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 
-use super::{PtyError, PtySession, SessionId, detect_default_shell, generate_session_id};
+use super::{
+    PtyError, PtySession, SessionId, WriterRegistry, detect_default_shell, generate_session_id,
+};
 
 /// Result of session creation with atomic count.
 #[derive(Clone, Serialize)]
@@ -31,10 +33,15 @@ pub struct SessionRemovedResult {
 ///
 /// `PtyManager` maintains a registry of active PTY sessions and provides
 /// methods for creating, accessing, and removing sessions.
+///
+/// Also manages a `WriterRegistry` for fast, lock-minimal PTY write operations
+/// via dedicated per-session writer threads.
 #[derive(Clone)]
 pub struct PtyManager {
     /// Thread-safe map of session ID to session instance.
     sessions: Arc<RwLock<HashMap<SessionId, Arc<Mutex<PtySession>>>>>,
+    /// Registry of write channel senders for fast PTY writes.
+    writer_registry: Arc<WriterRegistry>,
 }
 
 impl Default for PtyManager {
@@ -48,7 +55,13 @@ impl PtyManager {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            writer_registry: Arc::new(WriterRegistry::new()),
         }
+    }
+
+    /// Returns a reference to the writer registry for fast PTY writes.
+    pub fn writer_registry(&self) -> &WriterRegistry {
+        &self.writer_registry
     }
 
     /// Creates a new PTY session with the specified parameters.
@@ -95,6 +108,8 @@ impl PtyManager {
 
     /// Removes and returns a session by its ID.
     ///
+    /// Also cleans up the write channel from the WriterRegistry.
+    ///
     /// # Arguments
     ///
     /// * `id` - The session ID to remove
@@ -103,6 +118,7 @@ impl PtyManager {
     ///
     /// The removed session if found, or `None` if it didn't exist.
     pub async fn remove_session(&self, id: &str) -> Option<Arc<Mutex<PtySession>>> {
+        self.writer_registry.remove(id);
         let mut sessions = self.sessions.write().await;
         sessions.remove(id)
     }
@@ -118,6 +134,9 @@ impl PtyManager {
     ///
     /// This ensures the count is captured inside the write lock, preventing race conditions
     /// between session creation and count emission (NFR2 compliance).
+    ///
+    /// Also sets up the dedicated writer thread and registers the write channel
+    /// in the WriterRegistry for fast, lock-minimal PTY writes.
     pub async fn create_session_atomic(
         &self,
         shell: Option<String>,
@@ -127,7 +146,16 @@ impl PtyManager {
     ) -> Result<SessionCreatedResult, PtyError> {
         let shell = shell.unwrap_or_else(detect_default_shell);
         let id = generate_session_id();
-        let session = PtySession::new(id.clone(), &shell, args, cols, rows)?;
+        let mut session = PtySession::new(id.clone(), &shell, args, cols, rows)?;
+
+        // Extract writer handle and set up dedicated writer thread
+        let writer_handle = session
+            .take_writer_handle()
+            .ok_or_else(|| PtyError::Pty("Failed to take writer handle".to_string()))?;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        super::writer::spawn_writer_thread(id.clone(), writer_handle, rx);
+        self.writer_registry.register(id.clone(), tx);
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), Arc::new(Mutex::new(session)));
@@ -143,10 +171,16 @@ impl PtyManager {
     ///
     /// This ensures the count is captured inside the write lock, preventing race conditions
     /// between session removal and count emission (NFR2 compliance).
+    ///
+    /// Also removes the write channel from the WriterRegistry, which causes
+    /// the dedicated writer thread to exit naturally.
     pub async fn remove_session_atomic(
         &self,
         id: &str,
     ) -> Option<(Arc<Mutex<PtySession>>, SessionRemovedResult)> {
+        // Remove writer channel first (drops sender, writer thread will exit)
+        self.writer_registry.remove(id);
+
         let mut sessions = self.sessions.write().await;
         let session = sessions.remove(id)?;
         let count = sessions.len(); // Captured inside lock

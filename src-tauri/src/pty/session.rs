@@ -23,7 +23,9 @@ pub struct PtySession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     /// Thread-safe writer handle for sending input to the PTY.
     /// Uses std::sync::Mutex for synchronous write operations.
-    writer: Arc<StdMutex<Box<dyn Write + Send>>>,
+    /// When `take_writer_handle()` is called, this becomes None as ownership
+    /// is transferred to the dedicated writer thread.
+    writer: Option<Arc<StdMutex<Box<dyn Write + Send>>>>,
 }
 
 impl PtySession {
@@ -82,7 +84,7 @@ impl PtySession {
             id,
             pair,
             child,
-            writer,
+            writer: Some(writer),
         })
     }
 
@@ -107,18 +109,43 @@ impl PtySession {
     /// Writes data to the PTY input.
     ///
     /// This sends the provided bytes to the shell's stdin.
+    /// Note: After `take_writer_handle()` is called, this method will return an error.
+    /// Use the writer channel instead.
     ///
     /// # Arguments
     ///
     /// * `data` - Bytes to write to the PTY
     pub fn write(&self, data: &[u8]) -> Result<(), PtyError> {
-        let mut writer = self
+        let writer_arc = self
             .writer
+            .as_ref()
+            .ok_or_else(|| PtyError::Pty("Writer handle already taken".to_string()))?;
+        let mut writer = writer_arc
             .lock()
             .map_err(|e| PtyError::Pty(format!("Lock poisoned: {}", e)))?;
         writer.write_all(data)?;
         writer.flush()?;
         Ok(())
+    }
+
+    /// Takes ownership of the PTY writer handle.
+    ///
+    /// This extracts the writer so it can be transferred to a dedicated writer
+    /// thread. After calling this, `write()` will return an error.
+    ///
+    /// Returns the inner `Box<dyn Write + Send>` if the writer is still present,
+    /// consuming the `Arc<StdMutex<...>>` wrapper.
+    pub fn take_writer_handle(&mut self) -> Option<Box<dyn Write + Send>> {
+        let writer_arc = self.writer.take()?;
+        // Try to unwrap the Arc. If there are other references, this will fail.
+        match Arc::try_unwrap(writer_arc) {
+            Ok(mutex) => mutex.into_inner().ok(),
+            Err(_arc) => {
+                // Should not happen in normal use - the Arc is only held here
+                log::warn!("take_writer_handle: Arc has multiple references");
+                None
+            }
+        }
     }
 
     /// Takes ownership of the PTY reader.
