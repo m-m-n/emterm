@@ -1,0 +1,109 @@
+schema_version: 1
+feature: wasm-optimization
+scale: standard
+created: 2026-02-18
+
+project:
+  components:
+    wasm:
+      language: rust
+      build_command: "wasm-pack build --release --target web"
+      test_command: "cargo test --manifest-path wasm/Cargo.toml"
+      format_command: "cargo fmt --manifest-path wasm/Cargo.toml"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "bun test"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: c63d7c7d18583a5dc75301bf589b1b57e923dd3c
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: c63d7c7d18583a5dc75301bf589b1b57e923dd3c
+  - id: implement
+    status: completed
+    completed_at_commit: c63d7c7d18583a5dc75301bf589b1b57e923dd3c
+  - id: check
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+  - id: review
+    status: pending
+
+requirements:
+  FR1:
+    title: "process_pty_data direct dispatch via std::mem::take"
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-01, TS-02, TS-15]
+  FR2:
+    title: "Reflow overflow preservation"
+    status: ok
+    tasks: [Phase4]
+    tests: [TS-03, TS-04, TS-14, TS-16]
+  FR3:
+    title: "ParsedAction fixed-length arrays"
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-05, TS-06, TS-07, TS-17]
+  FR4:
+    title: "Cell padding utilization (underline_style + underline_color)"
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-08]
+  FR5:
+    title: "OverflowTable key expansion to u32"
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-09, TS-18]
+  FR6:
+    title: "Overflow reverse index for shift_rows"
+    status: ok
+    tasks: [Phase4]
+    tests: [TS-10]
+  FR7:
+    title: "Cargo.toml build optimization"
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-21]
+  FR8:
+    title: "Differential scroll rendering"
+    status: ok
+    tasks: [Phase5]
+    tests: [TS-11, TS-12, TS-19]
+  FR9:
+    title: "APC/DCS buffer pre-allocation"
+    status: ok
+    tasks: [Phase1]
+    tests: []
+  NFR1:
+    title: "Performance - heap allocation reduction"
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-20]
+  NFR2:
+    title: "Memory - Cell struct 32 bytes"
+    status: ok
+    tasks: [Phase2]
+    tests: []
+  NFR3:
+    title: "Binary size reduction"
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-21]
+  NFR4:
+    title: "Packed format compatibility"
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-13]
+  NFR5:
+    title: "Existing test compatibility"
+    status: ok
+    tasks: []
+    tests: []

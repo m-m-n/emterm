@@ -678,6 +678,29 @@ export class CanvasRenderer implements ITerminalRenderer {
 			return;
 		}
 
+		// Check for scroll event before processing dirty rows.
+		// If a full-screen scroll(1) occurred, shift existing canvas content
+		// up and only draw the new row instead of redrawing everything.
+		const scrollDir = state.getScrollEventDirection();
+		if (scrollDir === 1) {
+			const scrollCount = state.getScrollEventCount();
+			state.clearScrollEvent();
+			const shiftPx = scrollCount * this.charHeight;
+			const canvasW = this.canvas.width / this.dpr;
+			const canvasH = this.canvas.height / this.dpr;
+			// Shift existing content up by shiftPx
+			this.ctx.drawImage(
+				this.canvas,
+				0, shiftPx * this.dpr,
+				this.canvas.width, this.canvas.height - shiftPx * this.dpr,
+				0, 0,
+				canvasW, canvasH - shiftPx,
+			);
+			// Clear the vacated area at the bottom
+			this.ctx.fillStyle = rgbToCSS(this.currentBackground);
+			this.ctx.fillRect(0, canvasH - shiftPx, canvasW, shiftPx);
+		}
+
 		const buffer = state.getActiveBuffer();
 		const dirtyRows = state.getDirtyRows();
 

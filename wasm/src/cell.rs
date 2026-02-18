@@ -55,6 +55,7 @@ impl PackedColor {
     }
 
     /// Unpack from u32.
+    #[cfg(test)]
     pub fn from_u32(v: u32) -> Self {
         Self {
             tag: (v >> 24) as u8,
@@ -81,7 +82,8 @@ pub struct Cell {
     pub fg: PackedColor,
     pub bg: PackedColor,
     pub flags: u16,
-    pub _padding: [u8; 4],
+    pub underline_style: u8,
+    pub underline_color: [u8; 3],
 }
 
 impl Cell {
@@ -92,7 +94,8 @@ impl Cell {
         fg: PackedColor::DEFAULT,
         bg: PackedColor::DEFAULT,
         flags: 0,
-        _padding: [0; 4],
+        underline_style: 0,
+        underline_color: [0; 3],
     };
 
     /// Create a cell from a UTF-8 string slice. Returns true if inline, false if overflow.
@@ -130,71 +133,63 @@ impl Cell {
 
 // ── Overflow side table ──────────────────────────────────
 
-pub type OverflowTable = HashMap<(u16, u16), String>;
+pub type OverflowTable = HashMap<(u32, u32), String>;
 
-/// Remap overflow keys when rows shift up.
-pub fn overflow_shift_up(table: &mut OverflowTable, start: u16, end: u16, count: u16) {
-    let keys: Vec<(u16, u16)> = table.keys().copied().collect();
-    let mut to_insert = Vec::new();
-
-    for key in keys {
-        let (col, row) = key;
-        if row >= start && row <= end {
-            if row < start + count {
-                // Row is in the deleted range
-                table.remove(&key);
-            } else {
-                // Remap to row - count
-                if let Some(val) = table.remove(&key) {
-                    to_insert.push(((col, row - count), val));
-                }
-            }
-        }
-    }
-    for (k, v) in to_insert {
-        table.insert(k, v);
-    }
-}
-
-/// Remap overflow keys when rows shift down.
-pub fn overflow_shift_down(table: &mut OverflowTable, start: u16, end: u16, count: u16) {
-    let keys: Vec<(u16, u16)> = table.keys().copied().collect();
-    let mut to_insert = Vec::new();
-
-    for key in keys {
-        let (col, row) = key;
-        if row >= start && row <= end {
-            // Guard: when count covers the entire range, end - count underflows on u16.
-            // In that case all entries in [start..=end] are overwritten.
-            if count > end - start || row > end - count {
-                // Row is in the overwritten range
-                table.remove(&key);
-            } else {
-                // Remap to row + count
-                if let Some(val) = table.remove(&key) {
-                    to_insert.push(((col, row + count), val));
-                }
-            }
-        }
-    }
-    for (k, v) in to_insert {
-        table.insert(k, v);
-    }
-}
+/// Reverse index: row → list of column keys with overflow entries.
+pub type OverflowRowIndex = HashMap<u32, Vec<u32>>;
 
 /// Remove overflow entries for a specific row.
-pub fn overflow_clear_row(table: &mut OverflowTable, row: u16) {
+pub fn overflow_clear_row(table: &mut OverflowTable, row: u32) {
     table.retain(|&(_, r), _| r != row);
 }
 
 /// Remove overflow entries for a row/col range.
-pub fn overflow_clear_range(table: &mut OverflowTable, row: u16, start_col: u16, end_col: u16) {
+pub fn overflow_clear_range(table: &mut OverflowTable, row: u32, start_col: u32, end_col: u32) {
     table.retain(|&(c, r), _| r != row || c < start_col || c >= end_col);
 }
 
-/// Remove overflow entries outside new dimensions.
-pub fn overflow_resize(table: &mut OverflowTable, cols: u16, rows: u16) {
-    table.retain(|&(c, r), _| c < cols && r < rows);
+// ── Reverse index helpers ────────────────────────────────
+
+/// Add a (row, col) entry to the reverse index.
+pub fn overflow_ridx_insert(ridx: &mut OverflowRowIndex, row: u32, col: u32) {
+    let cols = ridx.entry(row).or_default();
+    if !cols.contains(&col) {
+        cols.push(col);
+    }
+}
+
+/// Remove a (row, col) entry from the reverse index.
+pub fn overflow_ridx_remove(ridx: &mut OverflowRowIndex, row: u32, col: u32) {
+    if let Some(cols) = ridx.get_mut(&row) {
+        cols.retain(|&c| c != col);
+        if cols.is_empty() {
+            ridx.remove(&row);
+        }
+    }
+}
+
+/// Remove all entries for a given row from the reverse index.
+pub fn overflow_ridx_clear_row(ridx: &mut OverflowRowIndex, row: u32) {
+    ridx.remove(&row);
+}
+
+/// Remove entries in a column range for a given row from the reverse index.
+pub fn overflow_ridx_clear_range(ridx: &mut OverflowRowIndex, row: u32, start_col: u32, end_col: u32) {
+    if let Some(cols) = ridx.get_mut(&row) {
+        cols.retain(|&c| c < start_col || c >= end_col);
+        if cols.is_empty() {
+            ridx.remove(&row);
+        }
+    }
+}
+
+/// Rebuild reverse index from the overflow table.
+pub fn overflow_ridx_rebuild(table: &OverflowTable) -> OverflowRowIndex {
+    let mut ridx = OverflowRowIndex::new();
+    for &(col, row) in table.keys() {
+        ridx.entry(row).or_default().push(col);
+    }
+    ridx
 }
 
 // ── Tests ────────────────────────────────────────────────
@@ -347,59 +342,6 @@ mod tests {
     // ── Overflow table tests ─────────────────────────────
 
     #[test]
-    fn test_overflow_shift_up() {
-        let mut table = OverflowTable::new();
-        table.insert((5, 3), "emoji_a".to_string());
-        table.insert((5, 5), "emoji_b".to_string());
-        table.insert((5, 0), "emoji_c".to_string());
-
-        // Shift rows 2..5 up by 2
-        overflow_shift_up(&mut table, 2, 5, 2);
-
-        // Row 3 was in deleted range [2, 4) → "emoji_a" removed
-        // Row 5 → remapped to 3 → "emoji_b" now at (5, 3)
-        assert_eq!(table.get(&(5, 3)), Some(&"emoji_b".to_string()));
-        // Original row 5 key gone
-        assert!(!table.contains_key(&(5, 5)));
-        // Row 0 was outside range → unchanged
-        assert_eq!(table.get(&(5, 0)), Some(&"emoji_c".to_string()));
-        // Only 2 entries remain
-        assert_eq!(table.len(), 2);
-    }
-
-    #[test]
-    fn test_overflow_shift_down_full_region() {
-        // Regression: overflow_shift_down with start=0 and count=end+1
-        // caused u16 underflow in `end - count` calculation.
-        let mut table = OverflowTable::new();
-        table.insert((5, 0), "a".to_string());
-        table.insert((3, 3), "b".to_string());
-        table.insert((7, 5), "c".to_string());
-
-        // Shift full region [0..5] down by 6 (entire range)
-        overflow_shift_down(&mut table, 0, 5, 6);
-
-        // All entries in [0..=5] should be removed (overwritten)
-        assert!(table.is_empty(), "All overflow entries should be removed");
-    }
-
-    #[test]
-    fn test_overflow_shift_down_partial() {
-        let mut table = OverflowTable::new();
-        table.insert((5, 1), "a".to_string());
-        table.insert((3, 4), "b".to_string());
-
-        // Shift [0..5] down by 2: rows [0..3] remap to [2..5], rows [4..5] removed
-        overflow_shift_down(&mut table, 0, 5, 2);
-
-        // Row 1 → remapped to 3
-        assert_eq!(table.get(&(5, 3)), Some(&"a".to_string()));
-        // Row 4 was in overwritten range → removed
-        assert!(!table.contains_key(&(3, 4)));
-        assert_eq!(table.len(), 1);
-    }
-
-    #[test]
     fn test_overflow_clear_row() {
         let mut table = OverflowTable::new();
         table.insert((0, 5), "a".to_string());
@@ -413,17 +355,59 @@ mod tests {
         assert_eq!(table.get(&(0, 6)), Some(&"c".to_string()));
     }
 
+    // ── Reverse index tests ─────────────────────────────
+
     #[test]
-    fn test_overflow_resize() {
+    fn test_ridx_insert_and_remove() {
+        let mut ridx = OverflowRowIndex::new();
+        overflow_ridx_insert(&mut ridx, 5, 10);
+        overflow_ridx_insert(&mut ridx, 5, 20);
+        overflow_ridx_insert(&mut ridx, 5, 10); // duplicate: no-op
+        assert_eq!(ridx.get(&5).unwrap().len(), 2);
+
+        overflow_ridx_remove(&mut ridx, 5, 10);
+        assert_eq!(ridx.get(&5).unwrap(), &vec![20]);
+
+        overflow_ridx_remove(&mut ridx, 5, 20);
+        assert!(!ridx.contains_key(&5)); // row removed entirely
+    }
+
+    #[test]
+    fn test_ridx_clear_row() {
+        let mut ridx = OverflowRowIndex::new();
+        overflow_ridx_insert(&mut ridx, 3, 1);
+        overflow_ridx_insert(&mut ridx, 3, 5);
+        overflow_ridx_insert(&mut ridx, 4, 2);
+
+        overflow_ridx_clear_row(&mut ridx, 3);
+        assert!(!ridx.contains_key(&3));
+        assert!(ridx.contains_key(&4));
+    }
+
+    #[test]
+    fn test_ridx_clear_range() {
+        let mut ridx = OverflowRowIndex::new();
+        overflow_ridx_insert(&mut ridx, 5, 0);
+        overflow_ridx_insert(&mut ridx, 5, 5);
+        overflow_ridx_insert(&mut ridx, 5, 10);
+
+        overflow_ridx_clear_range(&mut ridx, 5, 3, 8);
+        // Only col 5 is in [3,8) range, so removed
+        let cols = ridx.get(&5).unwrap();
+        assert_eq!(cols.len(), 2);
+        assert!(cols.contains(&0));
+        assert!(cols.contains(&10));
+    }
+
+    #[test]
+    fn test_ridx_rebuild() {
         let mut table = OverflowTable::new();
-        table.insert((79, 23), "a".to_string());
-        table.insert((80, 23), "b".to_string());
-        table.insert((5, 24), "c".to_string());
+        table.insert((1, 10), "a".to_string());
+        table.insert((5, 10), "b".to_string());
+        table.insert((3, 20), "c".to_string());
 
-        overflow_resize(&mut table, 80, 24);
-
-        assert!(table.contains_key(&(79, 23)));
-        assert!(!table.contains_key(&(80, 23)));
-        assert!(!table.contains_key(&(5, 24)));
+        let ridx = overflow_ridx_rebuild(&table);
+        assert_eq!(ridx.get(&10).unwrap().len(), 2);
+        assert_eq!(ridx.get(&20).unwrap().len(), 1);
     }
 }

@@ -46,6 +46,7 @@ impl ParamParser {
         &self.intermediates
     }
 
+    #[cfg(test)]
     pub fn is_dec_private(&self) -> bool {
         self.intermediates.first() == Some(&b'?')
     }

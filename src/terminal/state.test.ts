@@ -277,9 +277,12 @@ describe("TerminalState", () => {
 			state.clearDirty();
 
 			state.processAction({ type: "Execute", value: C0.LF });
-			// All rows should be dirty after scroll
+			// With differential scroll optimization (FR8), full-screen
+			// scroll(1) marks only the last row dirty + emits scroll event.
+			// At minimum, the last row (where new blank line appears) must be dirty.
 			const dirty = state.getDirtyRows();
-			expect(dirty.length).toBe(3);
+			expect(dirty.length).toBeGreaterThanOrEqual(1);
+			expect(dirty).toContain(2); // last row (0-indexed) of 3-row terminal
 		});
 	});
 

@@ -58,8 +58,8 @@ impl Parser {
             osc_param: 0,
             osc_param_done: false,
             utf8_buffer: Vec::with_capacity(4),
-            apc_buffer: Vec::new(),
-            dcs_buffer: Vec::new(),
+            apc_buffer: Vec::with_capacity(4096),
+            dcs_buffer: Vec::with_capacity(4096),
         }
     }
 
@@ -335,12 +335,32 @@ impl Parser {
     where
         F: FnMut(ParsedAction),
     {
-        let params = self.params.finish();
-        let intermediates = self.params.intermediates().to_vec();
+        use crate::parser_types::{MAX_CSI_INTERMEDIATES, MAX_CSI_PARAMS};
+
+        let param_vec = self.params.finish();
+        let intermediates_slice = self.params.intermediates();
+
+        let mut params = [0u16; MAX_CSI_PARAMS];
+        let param_count = param_vec.len().min(MAX_CSI_PARAMS) as u8;
+        for (i, &p) in param_vec.iter().take(MAX_CSI_PARAMS).enumerate() {
+            params[i] = p;
+        }
+
+        let mut intermediates = [0u8; MAX_CSI_INTERMEDIATES];
+        let intermediate_count = intermediates_slice.len().min(MAX_CSI_INTERMEDIATES) as u8;
+        for (i, &b) in intermediates_slice
+            .iter()
+            .take(MAX_CSI_INTERMEDIATES)
+            .enumerate()
+        {
+            intermediates[i] = b;
+        }
 
         emit(ParsedAction::CsiDispatch {
             params,
+            param_count,
             intermediates,
+            intermediate_count,
             final_byte,
         });
         self.params.reset();
@@ -498,6 +518,26 @@ mod tests {
         let mut actions = Vec::new();
         parser.parse(input, |action| actions.push(action));
         actions
+    }
+
+    /// Helper to construct CsiDispatch from slices for test assertions.
+    fn csi(params: &[u16], intermediates: &[u8], final_byte: u8) -> ParsedAction {
+        use crate::parser_types::{MAX_CSI_INTERMEDIATES, MAX_CSI_PARAMS};
+        let mut p = [0u16; MAX_CSI_PARAMS];
+        for (i, &v) in params.iter().take(MAX_CSI_PARAMS).enumerate() {
+            p[i] = v;
+        }
+        let mut im = [0u8; MAX_CSI_INTERMEDIATES];
+        for (i, &v) in intermediates.iter().take(MAX_CSI_INTERMEDIATES).enumerate() {
+            im[i] = v;
+        }
+        ParsedAction::CsiDispatch {
+            params: p,
+            param_count: params.len() as u8,
+            intermediates: im,
+            intermediate_count: intermediates.len() as u8,
+            final_byte,
+        }
     }
 
     // =========================================================================
@@ -718,326 +758,151 @@ mod tests {
     #[test]
     fn test_parse_csi_sgr_reset() {
         let actions = parse_all(b"\x1B[m");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[], &[], b'm')]);
     }
 
     #[test]
     fn test_parse_csi_sgr_explicit_reset() {
         let actions = parse_all(b"\x1B[0m");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![0],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[0], &[], b'm')]);
     }
 
     #[test]
     fn test_parse_csi_sgr_bold() {
         let actions = parse_all(b"\x1B[1m");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![1],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[1], &[], b'm')]);
     }
 
     #[test]
     fn test_parse_csi_sgr_red_foreground() {
         let actions = parse_all(b"\x1B[31m");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![31],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[31], &[], b'm')]);
     }
 
     #[test]
     fn test_parse_csi_sgr_multiple_params() {
         let actions = parse_all(b"\x1B[1;31m");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![1, 31],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[1, 31], &[], b'm')]);
     }
 
     #[test]
     fn test_parse_csi_sgr_256_color() {
         let actions = parse_all(b"\x1B[38;5;196m");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![38, 5, 196],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[38, 5, 196], &[], b'm')]);
     }
 
     #[test]
     fn test_parse_csi_sgr_rgb() {
         let actions = parse_all(b"\x1B[38;2;255;0;128m");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![38, 2, 255, 0, 128],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[38, 2, 255, 0, 128], &[], b'm')]);
     }
 
     #[test]
     fn test_parse_csi_cursor_up() {
         let actions = parse_all(b"\x1B[A");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![],
-                final_byte: b'A',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[], &[], b'A')]);
     }
 
     #[test]
     fn test_parse_csi_cursor_up_with_count() {
         let actions = parse_all(b"\x1B[5A");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![5],
-                intermediates: vec![],
-                final_byte: b'A',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[5], &[], b'A')]);
     }
 
     #[test]
     fn test_parse_csi_cursor_down() {
         let actions = parse_all(b"\x1B[3B");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![3],
-                intermediates: vec![],
-                final_byte: b'B',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[3], &[], b'B')]);
     }
 
     #[test]
     fn test_parse_csi_cursor_forward() {
         let actions = parse_all(b"\x1B[10C");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![10],
-                intermediates: vec![],
-                final_byte: b'C',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[10], &[], b'C')]);
     }
 
     #[test]
     fn test_parse_csi_cursor_back() {
         let actions = parse_all(b"\x1B[2D");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![2],
-                intermediates: vec![],
-                final_byte: b'D',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[2], &[], b'D')]);
     }
 
     #[test]
     fn test_parse_csi_cursor_position() {
         let actions = parse_all(b"\x1B[10;20H");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![10, 20],
-                intermediates: vec![],
-                final_byte: b'H',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[10, 20], &[], b'H')]);
     }
 
     #[test]
     fn test_parse_csi_cursor_position_default() {
         let actions = parse_all(b"\x1B[H");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![],
-                final_byte: b'H',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[], &[], b'H')]);
     }
 
     #[test]
     fn test_parse_csi_cursor_position_partial() {
         let actions = parse_all(b"\x1B[;10H");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![0, 10],
-                intermediates: vec![],
-                final_byte: b'H',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[0, 10], &[], b'H')]);
     }
 
     #[test]
     fn test_parse_csi_erase_display_below() {
         let actions = parse_all(b"\x1B[J");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![],
-                final_byte: b'J',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[], &[], b'J')]);
     }
 
     #[test]
     fn test_parse_csi_erase_display_all() {
         let actions = parse_all(b"\x1B[2J");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![2],
-                intermediates: vec![],
-                final_byte: b'J',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[2], &[], b'J')]);
     }
 
     #[test]
     fn test_parse_csi_erase_line() {
         let actions = parse_all(b"\x1B[K");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![],
-                final_byte: b'K',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[], &[], b'K')]);
     }
 
     #[test]
     fn test_parse_csi_dec_private_set_mode() {
         let actions = parse_all(b"\x1B[?25h");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![25],
-                intermediates: vec![b'?'],
-                final_byte: b'h',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[25], &[b'?'], b'h')]);
     }
 
     #[test]
     fn test_parse_csi_dec_private_reset_mode() {
         let actions = parse_all(b"\x1B[?25l");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![25],
-                intermediates: vec![b'?'],
-                final_byte: b'l',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[25], &[b'?'], b'l')]);
     }
 
     #[test]
     fn test_parse_csi_device_status_report() {
         let actions = parse_all(b"\x1B[6n");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![6],
-                intermediates: vec![],
-                final_byte: b'n',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[6], &[], b'n')]);
     }
 
     #[test]
     fn test_parse_csi_primary_device_attributes() {
         let actions = parse_all(b"\x1B[c");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![],
-                final_byte: b'c',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[], &[], b'c')]);
     }
 
     #[test]
     fn test_parse_csi_secondary_device_attributes() {
         let actions = parse_all(b"\x1B[>c");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![b'>'],
-                final_byte: b'c',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[], &[b'>'], b'c')]);
     }
 
     #[test]
     fn test_parse_csi_tertiary_device_attributes() {
         let actions = parse_all(b"\x1B[=c");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![b'='],
-                final_byte: b'c',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[], &[b'='], b'c')]);
     }
 
     #[test]
     fn test_parse_csi_unknown() {
         let actions = parse_all(b"\x1B[1;2;3z");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![1, 2, 3],
-                intermediates: vec![],
-                final_byte: b'z',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[1, 2, 3], &[], b'z')]);
     }
 
     // =========================================================================
@@ -1186,14 +1051,7 @@ mod tests {
         assert!(actions.is_empty());
 
         parser.parse(b"31m", |action| actions.push(action));
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![31],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[31], &[], b'm')]);
     }
 
     #[test]
@@ -1241,14 +1099,7 @@ mod tests {
             parser.parse(&[*byte], |action| actions.push(action));
         }
 
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![1, 31],
-                intermediates: vec![],
-                final_byte: b'm',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[1, 31], &[], b'm')]);
     }
 
     #[test]
@@ -1457,14 +1308,7 @@ mod tests {
         let actions = parse_all(b"\x1B[1\x07;31m");
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0], ParsedAction::Execute(0x07));
-        assert_eq!(
-            actions[1],
-            ParsedAction::CsiDispatch {
-                params: vec![1, 31],
-                intermediates: vec![],
-                final_byte: b'm',
-            }
-        );
+        assert_eq!(actions[1], csi(&[1, 31], &[], b'm'));
     }
 
     #[test]
@@ -1485,70 +1329,28 @@ mod tests {
         let actions = parse_all(b"Hello\x1B[31mRed\x1B[0mWorld");
         assert_eq!(actions.len(), 15);
         assert_eq!(actions[0], ParsedAction::Print('H'));
-        assert_eq!(
-            actions[5],
-            ParsedAction::CsiDispatch {
-                params: vec![31],
-                intermediates: vec![],
-                final_byte: b'm',
-            }
-        );
-        assert_eq!(
-            actions[9],
-            ParsedAction::CsiDispatch {
-                params: vec![0],
-                intermediates: vec![],
-                final_byte: b'm',
-            }
-        );
+        assert_eq!(actions[5], csi(&[31], &[], b'm'));
+        assert_eq!(actions[9], csi(&[0], &[], b'm'));
     }
 
     #[test]
     fn test_parse_cursor_movement_sequence() {
         let actions = parse_all(b"\x1B[H\x1B[2J");
         assert_eq!(actions.len(), 2);
-        assert_eq!(
-            actions[0],
-            ParsedAction::CsiDispatch {
-                params: vec![],
-                intermediates: vec![],
-                final_byte: b'H',
-            }
-        );
-        assert_eq!(
-            actions[1],
-            ParsedAction::CsiDispatch {
-                params: vec![2],
-                intermediates: vec![],
-                final_byte: b'J',
-            }
-        );
+        assert_eq!(actions[0], csi(&[], &[], b'H'));
+        assert_eq!(actions[1], csi(&[2], &[], b'J'));
     }
 
     #[test]
     fn test_parse_csi_with_space_intermediate() {
         let actions = parse_all(b"\x1B[1 q");
         assert_eq!(actions.len(), 1);
-        assert_eq!(
-            actions[0],
-            ParsedAction::CsiDispatch {
-                params: vec![1],
-                intermediates: vec![b' '],
-                final_byte: b'q',
-            }
-        );
+        assert_eq!(actions[0], csi(&[1], &[b' '], b'q'));
     }
 
     #[test]
     fn test_parse_scroll_region() {
         let actions = parse_all(b"\x1B[5;20r");
-        assert_eq!(
-            actions,
-            vec![ParsedAction::CsiDispatch {
-                params: vec![5, 20],
-                intermediates: vec![],
-                final_byte: b'r',
-            }]
-        );
+        assert_eq!(actions, vec![csi(&[5, 20], &[], b'r')]);
     }
 }
