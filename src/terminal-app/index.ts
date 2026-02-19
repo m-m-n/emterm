@@ -150,6 +150,9 @@ export class TerminalApp {
       if (cachedSettings.fold_enabled !== undefined) {
         this.state.getFoldManager().setEnabled(cachedSettings.fold_enabled);
       }
+      if (cachedSettings.bold_brightens_ansi_colors !== undefined) {
+        this.renderer.applySetting("boldBrightensAnsiColors", cachedSettings.bold_brightens_ansi_colors);
+      }
     }
 
     // Register bell callback

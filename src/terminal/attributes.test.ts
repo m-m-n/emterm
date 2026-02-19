@@ -14,7 +14,12 @@ import {
 	getEffectiveForeground,
 	type SgrAttr,
 } from "./attributes.ts";
-import { DEFAULT_BACKGROUND, DEFAULT_FOREGROUND } from "./colors.ts";
+import {
+	DEFAULT_BACKGROUND,
+	DEFAULT_FOREGROUND,
+	PALETTE_256,
+	type Rgb,
+} from "./colors.ts";
 
 describe("DEFAULT_ATTRIBUTES", () => {
 	test("has default values", () => {
@@ -262,6 +267,122 @@ describe("getEffectiveForeground", () => {
 		const attrs = createDefaultAttributes();
 		attrs.reverse = true;
 		expect(getEffectiveForeground(attrs)).toEqual(DEFAULT_BACKGROUND);
+	});
+
+	// --- Palette parameter tests (FR1/FR2) ---
+
+	test("colorToRgb with palette returns palette color for indexed(1)", () => {
+		const customPalette: Rgb[] = Array.from({ length: 256 }, (_, i) => ({
+			r: i,
+			g: i,
+			b: i,
+		}));
+		// indexed(1) should use customPalette[1] = {r:1, g:1, b:1}
+		const attrs = createDefaultAttributes();
+		attrs.fg = { type: "indexed", index: 1 };
+		const result = getEffectiveForeground(attrs, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND, customPalette);
+		expect(result).toEqual({ r: 1, g: 1, b: 1 });
+	});
+
+	test("colorToRgb without palette falls back to static PALETTE_256", () => {
+		const attrs = createDefaultAttributes();
+		attrs.fg = { type: "indexed", index: 1 };
+		const result = getEffectiveForeground(attrs);
+		expect(result).toEqual(PALETTE_256[1]);
+	});
+
+	// --- Bold-brightens tests (FR5/FR6/FR7) ---
+
+	test("bold + indexed(1) + bold_brightens returns palette[9]", () => {
+		const customPalette: Rgb[] = Array.from({ length: 256 }, (_, i) => ({
+			r: i,
+			g: i,
+			b: i,
+		}));
+		const attrs = createDefaultAttributes();
+		attrs.bold = true;
+		attrs.fg = { type: "indexed", index: 1 };
+		const result = getEffectiveForeground(
+			attrs, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND, customPalette, true,
+		);
+		// bold + indexed(1) -> palette[1+8] = palette[9] = {r:9, g:9, b:9}
+		expect(result).toEqual({ r: 9, g: 9, b: 9 });
+	});
+
+	test("bold + indexed(1) + bold_brightens OFF returns palette[1]", () => {
+		const customPalette: Rgb[] = Array.from({ length: 256 }, (_, i) => ({
+			r: i,
+			g: i,
+			b: i,
+		}));
+		const attrs = createDefaultAttributes();
+		attrs.bold = true;
+		attrs.fg = { type: "indexed", index: 1 };
+		const result = getEffectiveForeground(
+			attrs, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND, customPalette, false,
+		);
+		expect(result).toEqual({ r: 1, g: 1, b: 1 });
+	});
+
+	test("bold + indexed(8) does NOT double-brighten to 16", () => {
+		const customPalette: Rgb[] = Array.from({ length: 256 }, (_, i) => ({
+			r: i,
+			g: i,
+			b: i,
+		}));
+		const attrs = createDefaultAttributes();
+		attrs.bold = true;
+		attrs.fg = { type: "indexed", index: 8 };
+		const result = getEffectiveForeground(
+			attrs, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND, customPalette, true,
+		);
+		// index 8 is already bright (>=8), should NOT brighten to 16
+		expect(result).toEqual({ r: 8, g: 8, b: 8 });
+	});
+
+	test("bold + rgb color is unaffected by bold-brightens", () => {
+		const attrs = createDefaultAttributes();
+		attrs.bold = true;
+		attrs.fg = { type: "rgb", r: 100, g: 200, b: 50 };
+		const result = getEffectiveForeground(
+			attrs, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND, undefined, true,
+		);
+		expect(result).toEqual({ r: 100, g: 200, b: 50 });
+	});
+
+	test("bold + indexed(1) + reverse uses effective fg (was bg) for brightening", () => {
+		const customPalette: Rgb[] = Array.from({ length: 256 }, (_, i) => ({
+			r: i,
+			g: i,
+			b: i,
+		}));
+		const attrs = createDefaultAttributes();
+		attrs.bold = true;
+		attrs.reverse = true;
+		// With reverse: effective fg comes from bg
+		attrs.bg = { type: "indexed", index: 3 };
+		attrs.fg = { type: "rgb", r: 200, g: 200, b: 200 };
+		const result = getEffectiveForeground(
+			attrs, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND, customPalette, true,
+		);
+		// reverse: use bg (indexed 3) as fg, then bold-brighten: 3+8=11
+		expect(result).toEqual({ r: 11, g: 11, b: 11 });
+	});
+
+	test("bold_brightens defaults to false when not specified (backward compatible)", () => {
+		const customPalette: Rgb[] = Array.from({ length: 256 }, (_, i) => ({
+			r: i,
+			g: i,
+			b: i,
+		}));
+		const attrs = createDefaultAttributes();
+		attrs.bold = true;
+		attrs.fg = { type: "indexed", index: 1 };
+		// No boldBrightens param = no brightening (backward compatible)
+		const result = getEffectiveForeground(
+			attrs, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND, customPalette,
+		);
+		expect(result).toEqual({ r: 1, g: 1, b: 1 });
 	});
 });
 

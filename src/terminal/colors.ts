@@ -102,6 +102,26 @@ export function indexToRgb(index: number): Rgb {
 }
 
 /**
+ * Build a full 256-color palette with custom ANSI 16 colors.
+ *
+ * Replaces the first 16 entries of PALETTE_256 with the given ANSI colors,
+ * keeping indices 16-255 (color cube + grayscale) from the static palette.
+ *
+ * @param ansi16 - Custom 16-color ANSI palette
+ * @returns Full 256-color palette
+ */
+export function buildPalette256(ansi16: readonly Rgb[]): Rgb[] {
+	const palette: Rgb[] = [];
+	for (let i = 0; i < 16; i++) {
+		palette.push(ansi16[i] ?? PALETTE_256[i]!);
+	}
+	for (let i = 16; i < 256; i++) {
+		palette.push(PALETTE_256[i]!);
+	}
+	return palette;
+}
+
+/**
  * Convert a standard color index (0-7) to RGB.
  *
  * @param index - Standard color index (0-7)

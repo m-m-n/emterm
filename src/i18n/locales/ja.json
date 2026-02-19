@@ -108,6 +108,8 @@
       "foldEnabledDesc": "コマンド出力をサマリー行に折りたたむ機能を有効にします",
       "filePathDetection": "ファイルパス検出",
       "filePathDetectionDesc": "ターミナル出力内の行番号付きファイルパスを検出してクリックで開けるようにします",
+      "boldBrightensAnsiColors": "ボールドでANSIカラーを明るくする",
+      "boldBrightensAnsiColorsDesc": "ボールド属性付きの標準ANSIカラー（0-7）をブライトバリアント（8-15）で表示します",
       "editorCommand": "エディタコマンド",
       "editorCommandPlaceholder": "code --goto {file}:{line}:{col}",
       "editorCommandHint": "プレースホルダー: {file}, {line}, {col}",

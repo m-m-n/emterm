@@ -380,6 +380,8 @@ pub struct AppSettings {
     pub fold_enabled: bool,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub file_path_detection: bool,
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub bold_brightens_ansi_colors: bool,
     #[serde(
         default = "default_editor_command",
         deserialize_with = "deserialize_null_editor_command"
@@ -480,6 +482,7 @@ impl Default for AppSettings {
             markdown_font_size: default_markdown_font_size(),
             fold_enabled: default_true(),
             file_path_detection: default_true(),
+            bold_brightens_ansi_colors: default_true(),
             editor_command: default_editor_command(),
             notification_enabled: default_true(),
             tab_activity_indicator: default_true(),
@@ -658,6 +661,7 @@ mod tests {
         assert!(settings.url_detection);
         assert!(!settings.copy_on_select);
         assert!(settings.file_path_detection);
+        assert!(settings.bold_brightens_ansi_colors);
         assert_eq!(settings.editor_command, "code --goto {file}:{line}:{col}");
         assert_eq!(settings.language, "auto");
         assert_eq!(settings.ui_font_family, "Roboto");
@@ -916,6 +920,7 @@ mod tests {
             markdown_font_size: 16,
             fold_enabled: false,
             file_path_detection: false,
+            bold_brightens_ansi_colors: false,
             editor_command: "vim +{line} {file}".to_string(),
             notification_enabled: false,
             tab_activity_indicator: false,
@@ -946,6 +951,7 @@ mod tests {
         assert!(!restored.url_detection);
         assert!(restored.copy_on_select);
         assert!(!restored.file_path_detection);
+        assert!(!restored.bold_brightens_ansi_colors);
         assert_eq!(restored.editor_command, "vim +{line} {file}");
         assert_eq!(restored.keybinds.copy, "Ctrl+C");
         assert_eq!(restored.keybinds.paste, "Ctrl+V");

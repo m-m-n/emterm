@@ -1,0 +1,87 @@
+schema_version: 1
+feature: ansi-color-palette
+scale: light
+created: 2026-02-19
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: df6da2d9c3f233be7e8d6a667f7b883a28906738
+  - id: implement
+    status: completed
+    completed_at_commit: df6da2d9c3f233be7e8d6a667f7b883a28906738
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: df6da2d9c3f233be7e8d6a667f7b883a28906738
+
+requirements:
+  FR1:
+    title: colorToRgb accepts optional palette parameter
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: getEffectiveForeground/Background accept optional palette parameter
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: CanvasRenderer maintains dynamic currentPalette256
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: All CanvasRenderer color calls pass currentPalette256
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Bold-brightens logic in getEffectiveForeground
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Bold-brightens foreground only
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Bold-brightens applies after reverse processing
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Setting bold_brightens_ansi_colors with default true
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: StyleCache accepts optional palette parameter
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: No rendering performance regression
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Backward compatible optional parameters
+    status: ok
+    tasks: []
+    tests: []
