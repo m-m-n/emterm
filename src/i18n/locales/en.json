@@ -108,6 +108,8 @@
       "foldEnabledDesc": "Allow folding command output into summary lines",
       "filePathDetection": "File Path Detection",
       "filePathDetectionDesc": "Detect file paths with line numbers in terminal output for click-to-open",
+      "boldBrightensAnsiColors": "Bold Brightens ANSI Colors",
+      "boldBrightensAnsiColorsDesc": "Bold text with standard ANSI colors (0-7) displays using their bright variants (8-15)",
       "editorCommand": "Editor Command",
       "editorCommandPlaceholder": "code --goto {file}:{line}:{col}",
       "editorCommandHint": "Placeholders: {file}, {line}, {col}",

@@ -32,6 +32,7 @@ export interface RendererSettings {
   colorScheme: string;
   userColorScheme: UserColorScheme | null;
   foldEnabled: boolean;
+  boldBrightensAnsiColors: boolean;
 }
 
 /** Listener for system theme media query (UI theme) */
@@ -68,6 +69,7 @@ export function applySettings(settings: AppSettings): void {
     uiPreset: settings.ui_theme_preset,
   });
   applyFoldEnabled(settings.fold_enabled);
+  applyBoldBrightensAnsiColors(settings.bold_brightens_ansi_colors);
 }
 
 /**
@@ -76,6 +78,14 @@ export function applySettings(settings: AppSettings): void {
  */
 export function applyFoldEnabled(enabled: boolean): void {
   notifyRenderers("foldEnabled", enabled);
+}
+
+/**
+ * Apply bold-brightens ANSI colors setting.
+ * Notifies terminal instances to enable/disable bold-to-bright conversion.
+ */
+export function applyBoldBrightensAnsiColors(enabled: boolean): void {
+  notifyRenderers("boldBrightensAnsiColors", enabled);
 }
 
 /**

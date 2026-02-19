@@ -113,9 +113,9 @@ export class StyleCache {
 	 * Generate a hash key for attributes.
 	 * This is used for fast lookup in the cache.
 	 */
-	private hashAttributes(attrs: CellAttributes): string {
-		const fg = getEffectiveForeground(attrs);
-		const bg = getEffectiveBackground(attrs);
+	private hashAttributes(attrs: CellAttributes, palette?: readonly Rgb[]): string {
+		const fg = getEffectiveForeground(attrs, undefined, undefined, palette);
+		const bg = getEffectiveBackground(attrs, undefined, palette);
 
 		// Create a compact string representation
 		const parts: string[] = [];
@@ -145,10 +145,11 @@ export class StyleCache {
 	 * Get or create a CSS class for the given attributes.
 	 *
 	 * @param attrs - Cell attributes
+	 * @param palette - Optional dynamic palette for indexed color lookup
 	 * @returns CSS class name to apply
 	 */
-	getClass(attrs: CellAttributes): string {
-		const hash = this.hashAttributes(attrs);
+	getClass(attrs: CellAttributes, palette?: readonly Rgb[]): string {
+		const hash = this.hashAttributes(attrs, palette);
 
 		// Check cache
 		let className = this.classMap.get(hash);
@@ -165,7 +166,7 @@ export class StyleCache {
 		this.attrCache.set(hash, { ...attrs });
 
 		// Generate CSS rule
-		const rule = this.generateCSSRule(className, attrs);
+		const rule = this.generateCSSRule(className, attrs, palette);
 		this.pendingRules.push(rule);
 		this.hasPendingRules = true;
 
@@ -175,15 +176,15 @@ export class StyleCache {
 	/**
 	 * Generate a CSS rule for the given class and attributes.
 	 */
-	private generateCSSRule(className: string, attrs: CellAttributes): string {
+	private generateCSSRule(className: string, attrs: CellAttributes, palette?: readonly Rgb[]): string {
 		const styles: string[] = [];
 
 		// Foreground color
-		const fg = getEffectiveForeground(attrs);
+		const fg = getEffectiveForeground(attrs, undefined, undefined, palette);
 		styles.push(`color: rgb(${fg.r}, ${fg.g}, ${fg.b})`);
 
 		// Background color
-		const bg = getEffectiveBackground(attrs);
+		const bg = getEffectiveBackground(attrs, undefined, palette);
 		if (bg !== null) {
 			styles.push(`background-color: rgb(${bg.r}, ${bg.g}, ${bg.b})`);
 		}

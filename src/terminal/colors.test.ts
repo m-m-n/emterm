@@ -4,6 +4,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	brightColorToRgb,
+	buildPalette256,
 	COLOR_SCHEME_PRESETS,
 	DEFAULT_BACKGROUND,
 	DEFAULT_FOREGROUND,
@@ -214,6 +215,42 @@ describe("sgrColorToRgb", () => {
 	it("should handle RGB colors", () => {
 		const color: SgrColor = { type: "Rgb", value: { r: 123, g: 45, b: 67 } };
 		expect(sgrColorToRgb(color)).toEqual({ r: 123, g: 45, b: 67 });
+	});
+});
+
+describe("buildPalette256", () => {
+	it("produces 256 entries", () => {
+		const customAnsi16: Rgb[] = Array.from({ length: 16 }, (_, i) => ({
+			r: i * 10,
+			g: i * 10 + 1,
+			b: i * 10 + 2,
+		}));
+		const palette = buildPalette256(customAnsi16);
+		expect(palette.length).toBe(256);
+	});
+
+	it("uses custom first 16 entries from input", () => {
+		const customAnsi16: Rgb[] = Array.from({ length: 16 }, (_, i) => ({
+			r: i * 10,
+			g: i * 10 + 1,
+			b: i * 10 + 2,
+		}));
+		const palette = buildPalette256(customAnsi16);
+		for (let i = 0; i < 16; i++) {
+			expect(palette[i]).toEqual(customAnsi16[i]);
+		}
+	});
+
+	it("uses static PALETTE_256 for entries 16-255", () => {
+		const customAnsi16: Rgb[] = Array.from({ length: 16 }, () => ({
+			r: 99,
+			g: 99,
+			b: 99,
+		}));
+		const palette = buildPalette256(customAnsi16);
+		for (let i = 16; i < 256; i++) {
+			expect(palette[i]).toEqual(PALETTE_256[i]);
+		}
 	});
 });
 

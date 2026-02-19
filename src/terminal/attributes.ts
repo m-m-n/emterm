@@ -368,9 +368,15 @@ export function applySgrAttrs(
 /**
  * Convert a Color value to RGB.
  * Handles indexed colors via palette lookup and RGB passthrough.
+ *
+ * @param color - Color to resolve
+ * @param palette - Optional dynamic palette for indexed color lookup (e.g., first 16 entries from color scheme)
  */
-function colorToRgb(color: Color): Rgb {
+function colorToRgb(color: Color, palette?: readonly Rgb[]): Rgb {
 	if (color.type === "indexed") {
+		if (palette && color.index >= 0 && color.index < palette.length) {
+			return palette[color.index]!;
+		}
 		return indexToRgb(color.index);
 	}
 	if (color.type === "rgb") {
@@ -383,22 +389,42 @@ function colorToRgb(color: Color): Rgb {
 /**
  * Get the effective foreground RGB color for rendering.
  *
- * Takes into account the reverse attribute.
+ * Takes into account the reverse attribute and bold-brightens behavior.
+ * Bold-brightens: when bold + indexed color 0-7, substitute with bright variant (index+8).
+ * Applied after reverse processing (FR7), foreground only (FR6).
  *
  * @param attrs - Cell attributes
  * @param defaultFg - Default foreground color (from current theme), defaults to DEFAULT_FOREGROUND
  * @param defaultBg - Default background color (from current theme), defaults to DEFAULT_BACKGROUND
+ * @param palette - Optional dynamic palette for indexed color lookup
+ * @param boldBrightens - Whether bold attribute brightens standard ANSI colors (default: false for backward compat)
  * @returns RGB color for foreground
  */
 export function getEffectiveForeground(
 	attrs: CellAttributes,
 	defaultFg: Rgb = DEFAULT_FOREGROUND,
 	defaultBg: Rgb = DEFAULT_BACKGROUND,
+	palette?: readonly Rgb[],
+	boldBrightens: boolean = false,
 ): Rgb {
-	if (attrs.reverse) {
-		return attrs.bg ? colorToRgb(attrs.bg) : defaultBg;
+	// Resolve effective color accounting for reverse (FR7)
+	const effectiveColor: Color | null = attrs.reverse ? attrs.bg : attrs.fg;
+	const defaultColor = attrs.reverse ? defaultBg : defaultFg;
+
+	if (!effectiveColor) {
+		return defaultColor;
 	}
-	return attrs.fg ? colorToRgb(attrs.fg) : defaultFg;
+
+	// Bold-brightens: indexed 0-7 -> index+8 (FR5, foreground only FR6, after reverse FR7)
+	if (boldBrightens && attrs.bold && effectiveColor.type === "indexed" && effectiveColor.index < 8) {
+		const brightIndex = effectiveColor.index + 8;
+		if (palette && brightIndex < palette.length) {
+			return palette[brightIndex]!;
+		}
+		return indexToRgb(brightIndex);
+	}
+
+	return colorToRgb(effectiveColor, palette);
 }
 
 /**
@@ -408,14 +434,16 @@ export function getEffectiveForeground(
  *
  * @param attrs - Cell attributes
  * @param defaultFg - Default foreground color (from current theme), defaults to DEFAULT_FOREGROUND
+ * @param palette - Optional dynamic palette for indexed color lookup
  * @returns RGB color for background, or null to use default/transparent
  */
 export function getEffectiveBackground(
 	attrs: CellAttributes,
 	defaultFg: Rgb = DEFAULT_FOREGROUND,
+	palette?: readonly Rgb[],
 ): Rgb | null {
 	if (attrs.reverse) {
-		return attrs.fg ? colorToRgb(attrs.fg) : defaultFg;
+		return attrs.fg ? colorToRgb(attrs.fg, palette) : defaultFg;
 	}
-	return attrs.bg ? colorToRgb(attrs.bg) : null;
+	return attrs.bg ? colorToRgb(attrs.bg, palette) : null;
 }

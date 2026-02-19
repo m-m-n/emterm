@@ -14,11 +14,13 @@ import {
 } from "./attributes.ts";
 import { drawCustomGlyph, isCustomGlyph } from "./custom-glyphs.ts";
 import {
+	buildPalette256,
 	DEFAULT_BACKGROUND,
 	DEFAULT_FOREGROUND,
 	getColorSchemePreset,
 	hexToRgb,
 	PALETTE_16,
+	PALETTE_256,
 	type Rgb,
 	rgbToCSS,
 } from "./colors.ts";
@@ -508,6 +510,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Current 16-color palette (can be changed by color scheme). */
 	private currentPalette16: readonly Rgb[] = PALETTE_16;
 
+	/** Current full 256-color palette (first 16 entries from currentPalette16, rest from static). */
+	private currentPalette256: readonly Rgb[] = PALETTE_256;
+
+	/** Whether bold attribute brightens standard ANSI colors (0-7 -> 8-15). */
+	private boldBrightensAnsiColors: boolean = true;
+
 	/** Current scroll offset (number of lines scrolled back from bottom). */
 	private scrollOffset: number = 0;
 
@@ -818,7 +826,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Group cells into spans and render colored backgrounds
 		const spans = groupCellsIntoSpans(line);
 		for (const span of spans) {
-			const bg = getEffectiveBackground(span.attrs, this.currentForeground);
+			const bg = getEffectiveBackground(span.attrs, this.currentForeground, this.currentPalette256);
 			if (bg !== null) {
 				const x = span.startCol * this.charWidth;
 				const width = span.cellCount * this.charWidth;
@@ -862,7 +870,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.ctx.fillRect(0, fillY, canvasWidth, fillHeight);
 
 		for (const span of spans) {
-			const bg = getEffectiveBackground(span.attrs, this.currentForeground);
+			const bg = getEffectiveBackground(span.attrs, this.currentForeground, this.currentPalette256);
 			if (bg !== null) {
 				const x = span.startCol * this.charWidth;
 				const width = span.cellCount * this.charWidth;
@@ -974,7 +982,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const width = span.cellCount * this.charWidth;
 
 		// Get foreground color (use current theme colors for defaults)
-		const fg = getEffectiveForeground(span.attrs, this.currentForeground, this.currentBackground);
+		const fg = getEffectiveForeground(span.attrs, this.currentForeground, this.currentBackground, this.currentPalette256, this.boldBrightensAnsiColors);
 
 		// Get text attribute styles
 		const styles = applyTextAttributes(span.attrs);
@@ -1188,7 +1196,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Re-draw the character at cursor position if any
 		const cell = line.getCell(col);
 		if (cell.char !== " " && cell.char !== "") {
-			const fg = getEffectiveForeground(cell.attrs, this.currentForeground, this.currentBackground);
+			const fg = getEffectiveForeground(cell.attrs, this.currentForeground, this.currentBackground, this.currentPalette256, this.boldBrightensAnsiColors);
 			this.ctx.fillStyle = rgbToCSS(fg);
 			this.ctx.font = this.buildFontStringInternal(cell.attrs);
 			const textY = y + (this.charHeight + this.fontAscent - this.fontDescent) / 2;
@@ -1543,6 +1551,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 					this.setUserColorScheme(value as UserColorScheme);
 				}
 				break;
+			case "boldBrightensAnsiColors":
+				this.setBoldBrightensAnsiColors(value as boolean);
+				break;
 		}
 	}
 
@@ -1608,6 +1619,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.currentPalette16 = preset.ansiColors;
 		}
 
+		// Rebuild full 256-palette with updated ANSI 16 colors
+		this.currentPalette256 = buildPalette256(this.currentPalette16);
+
 		// Force full re-render
 		if (this.pendingState) {
 			this.forceRender(this.pendingState);
@@ -1640,7 +1654,21 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.currentPalette16 = ansiColors;
 		}
 
+		// Rebuild full 256-palette with updated ANSI 16 colors
+		this.currentPalette256 = buildPalette256(this.currentPalette16);
+
 		// Force full re-render
+		if (this.pendingState) {
+			this.forceRender(this.pendingState);
+		}
+	}
+
+	/**
+	 * Set bold-brightens ANSI colors behavior.
+	 * @param enabled - Whether bold should brighten standard ANSI colors
+	 */
+	setBoldBrightensAnsiColors(enabled: boolean): void {
+		this.boldBrightensAnsiColors = enabled;
 		if (this.pendingState) {
 			this.forceRender(this.pendingState);
 		}
