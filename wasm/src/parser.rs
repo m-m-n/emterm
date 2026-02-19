@@ -97,6 +97,47 @@ impl Parser {
         }
     }
 
+    /// Parse input with interruptible callback.
+    ///
+    /// The `emit` callback returns `bool`: `true` to continue, `false` to stop
+    /// after the current byte. Returns the number of bytes consumed.
+    /// After a CSI dispatch the parser is always in Ground state, so the
+    /// remaining bytes can be safely fed to a different parser instance.
+    pub fn parse_interruptible<F>(&mut self, input: &[u8], mut emit: F) -> usize
+    where
+        F: FnMut(ParsedAction) -> bool,
+    {
+        for (i, &byte) in input.iter().enumerate() {
+            let mut should_stop = false;
+            {
+                let mut wrapper = |action: ParsedAction| {
+                    if !emit(action) {
+                        should_stop = true;
+                    }
+                };
+                match self.state {
+                    State::Ground => self.ground(byte, &mut wrapper),
+                    State::Escape => self.escape(byte, &mut wrapper),
+                    State::EscapeCharset(designator) => {
+                        self.escape_charset(designator, byte, &mut wrapper)
+                    }
+                    State::CsiEntry => self.csi_entry(byte, &mut wrapper),
+                    State::CsiParam => self.csi_param(byte, &mut wrapper),
+                    State::OscString => self.osc_string(byte, &mut wrapper),
+                    State::OscEscape => self.osc_escape(byte, &mut wrapper),
+                    State::ApcString => self.apc_string(byte),
+                    State::ApcEscape => self.apc_escape(byte, &mut wrapper),
+                    State::DcsString => self.dcs_string(byte),
+                    State::DcsEscape => self.dcs_escape(byte, &mut wrapper),
+                }
+            }
+            if should_stop {
+                return i + 1;
+            }
+        }
+        input.len()
+    }
+
     fn ground<F>(&mut self, byte: u8, emit: &mut F)
     where
         F: FnMut(ParsedAction),
@@ -1352,5 +1393,63 @@ mod tests {
     fn test_parse_scroll_region() {
         let actions = parse_all(b"\x1B[5;20r");
         assert_eq!(actions, vec![csi(&[5, 20], &[], b'r')]);
+    }
+
+    // =========================================================================
+    // parse_interruptible Tests
+    // =========================================================================
+
+    #[test]
+    fn test_interruptible_no_interrupt() {
+        let mut parser = Parser::new();
+        let mut actions = Vec::new();
+        let consumed = parser.parse_interruptible(b"Hello", |action| {
+            actions.push(action);
+            true
+        });
+        assert_eq!(consumed, 5);
+        assert_eq!(actions.len(), 5);
+    }
+
+    #[test]
+    fn test_interruptible_stop_after_csi() {
+        let mut parser = Parser::new();
+        let mut actions = Vec::new();
+        // CSI ?1049h followed by text "AB"
+        let input = b"\x1B[?1049hAB";
+        let consumed = parser.parse_interruptible(input, |action| {
+            let is_csi = matches!(action, ParsedAction::CsiDispatch { .. });
+            actions.push(action);
+            // Stop after seeing any CSI dispatch
+            !is_csi
+        });
+        // Should have consumed the CSI sequence bytes only
+        assert_eq!(consumed, 8); // ESC [ ? 1 0 4 9 h = 8 bytes
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0], csi(&[1049], &[b'?'], b'h'));
+        // Parser should be in Ground state
+        assert_eq!(parser.state, State::Ground);
+    }
+
+    #[test]
+    fn test_interruptible_remaining_parseable() {
+        let mut parser = Parser::new();
+        let mut actions = Vec::new();
+        let input = b"\x1B[?1049hHello";
+        let consumed = parser.parse_interruptible(input, |action| {
+            let is_csi = matches!(action, ParsedAction::CsiDispatch { .. });
+            actions.push(action);
+            !is_csi
+        });
+        assert_eq!(consumed, 8);
+
+        // Feed remaining to a fresh parser
+        let remaining = &input[consumed..];
+        assert_eq!(remaining, b"Hello");
+        let mut parser2 = Parser::new();
+        let mut actions2 = Vec::new();
+        parser2.parse(remaining, |action| actions2.push(action));
+        assert_eq!(actions2.len(), 5);
+        assert_eq!(actions2[0], ParsedAction::Print('H'));
     }
 }
