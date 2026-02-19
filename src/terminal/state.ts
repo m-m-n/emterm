@@ -279,6 +279,18 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Get the active WASM TerminalCore (primary or alternate).
+   * Used by setupPtyHandlers to route data to the correct core after buffer switch.
+   */
+  getActiveCore(): import("../../wasm/pkg/emterm_wasm.js").TerminalCore {
+    if (this.useAlternate && this.alternateWasmGrid) {
+      return this.alternateWasmGrid.core;
+    }
+    if (!this.primaryWasmGrid) throw new Error("WASM not initialized");
+    return this.primaryWasmGrid.core;
+  }
+
+  /**
    * Handle a mode action code returned by WASM take_mode_actions().
    * Standard actions (1-5) map to buffer switch and cursor save/restore.
    */

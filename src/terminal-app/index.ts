@@ -315,14 +315,10 @@ export class TerminalApp {
   }
 
   /**
-   * Sets up PTY output handlers using WASM parser + binary Channel IPC.
+   * Register WASM callbacks on a TerminalCore instance.
+   * Called once for primary core and again when alternate core becomes active.
    */
-  private async setupPtyHandlers(): Promise<void> {
-    if (!this.ptyClient || !this.state) return;
-
-    const core = this.state.getWasmCore();
-
-    // Register WASM callbacks
+  private registerCoreCallbacks(core: ReturnType<TerminalState["getActiveCore"]>): void {
     core.set_osc_callback((actionType: number, data: string) => {
       this.handleOscCallback(actionType, data);
     });
@@ -344,46 +340,82 @@ export class TerminalApp {
     core.set_device_response_callback((data: Uint8Array) => {
       this.ptyClient?.write(data);
     });
+  }
+
+  /**
+   * Sets up PTY output handlers using WASM parser + binary Channel IPC.
+   *
+   * The onData handler uses a while loop to support buffer switch interruption:
+   * when process_pty_data encounters a mode 47/1047/1049 switch, it stops early
+   * so the TS side can perform the buffer switch, then the remaining data is
+   * routed to the correct (alternate or primary) core.
+   */
+  private async setupPtyHandlers(): Promise<void> {
+    if (!this.ptyClient || !this.state) return;
+
+    // Register callbacks on primary core
+    this.registerCoreCallbacks(this.state.getWasmCore());
+
+    // Track which core has callbacks registered
+    let registeredCore = this.state.getWasmCore();
 
     // Register binary data handler
     this.ptyClient.onData((data: Uint8Array) => {
       if (!this.state || !this.renderer) return;
 
-      core.process_pty_data(data);
+      let remaining = data;
 
-      // Process queued APC/DCS events (safe: process_pty_data has returned)
-      if (this.pendingApcQueue.length > 0) {
-        const apcEvents = this.pendingApcQueue;
-        this.pendingApcQueue = [];
-        for (const apcData of apcEvents) {
-          this.handleApcCallback(apcData);
-        }
-      }
-      if (this.pendingDcsQueue.length > 0) {
-        const dcsEvents = this.pendingDcsQueue;
-        this.pendingDcsQueue = [];
-        for (const dcsData of dcsEvents) {
-          this.handleDcsCallback(dcsData);
-        }
-      }
+      while (remaining.length > 0) {
+        // Get the active core (may change after buffer switch)
+        const core = this.state.getActiveCore();
 
-      // Process mode actions (variable-length encoding)
-      const modeActions = core.take_mode_actions();
-      if (modeActions.length > 0) {
-        let i = 0;
-        while (i < modeActions.length) {
-          const action = modeActions[i]!;
-          if (action === 0xFF || action === 0xFE) {
-            // TS_FALLBACK: 3 bytes [marker, mode_lo, mode_hi]
-            const mode = modeActions[i + 1]! | (modeActions[i + 2]! << 8);
-            const isSet = action === 0xFF;
-            this.state.setDecPrivateMode(mode, isSet);
-            i += 3;
-          } else {
-            this.state.handleModeAction(action);
-            i += 1;
+        // Register callbacks if core changed (e.g., after buffer switch)
+        if (core !== registeredCore) {
+          this.registerCoreCallbacks(core);
+          registeredCore = core;
+        }
+
+        const consumed = core.process_pty_data(remaining);
+
+        // Process queued APC/DCS events (safe: process_pty_data has returned)
+        if (this.pendingApcQueue.length > 0) {
+          const apcEvents = this.pendingApcQueue;
+          this.pendingApcQueue = [];
+          for (const apcData of apcEvents) {
+            this.handleApcCallback(apcData);
           }
         }
+        if (this.pendingDcsQueue.length > 0) {
+          const dcsEvents = this.pendingDcsQueue;
+          this.pendingDcsQueue = [];
+          for (const dcsData of dcsEvents) {
+            this.handleDcsCallback(dcsData);
+          }
+        }
+
+        // Process mode actions (variable-length encoding)
+        const modeActions = core.take_mode_actions();
+        if (modeActions.length > 0) {
+          let i = 0;
+          while (i < modeActions.length) {
+            const action = modeActions[i]!;
+            if (action === 0xFF || action === 0xFE) {
+              // TS_FALLBACK: 3 bytes [marker, mode_lo, mode_hi]
+              const mode = modeActions[i + 1]! | (modeActions[i + 2]! << 8);
+              const isSet = action === 0xFF;
+              this.state.setDecPrivateMode(mode, isSet);
+              i += 3;
+            } else {
+              this.state.handleModeAction(action);
+              i += 1;
+            }
+          }
+        }
+
+        remaining = remaining.subarray(consumed);
+
+        // Safety: break if no progress to prevent infinite loop
+        if (consumed === 0) break;
       }
 
       // Notify activity tracker of output
@@ -498,7 +530,7 @@ export class TerminalApp {
    * Handle APC callback from WASM parser (Kitty Graphics Protocol).
    */
   private handleApcCallback(data: Uint8Array): void {
-    const core = this.state?.getWasmCore();
+    const core = this.state?.getActiveCore();
     if (!core || !this.ptyClient) return;
 
     const sessionId = this.ptyClient.getSessionId();
@@ -520,7 +552,7 @@ export class TerminalApp {
    * Handle DCS callback from WASM parser (SIXEL graphics).
    */
   private handleDcsCallback(data: Uint8Array): void {
-    const core = this.state?.getWasmCore();
+    const core = this.state?.getActiveCore();
     if (!core || !this.ptyClient) return;
 
     const sessionId = this.ptyClient.getSessionId();

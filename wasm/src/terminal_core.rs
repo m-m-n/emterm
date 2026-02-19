@@ -845,12 +845,38 @@ impl TerminalCore {
     /// Uses take-dispatch-restore pattern to avoid intermediate Vec allocation:
     /// the parser is temporarily moved out of self so the parse callback can
     /// call dispatch methods on self without borrow conflicts.
-    pub fn process_pty_data(&mut self, data: &[u8]) {
+    ///
+    /// Returns the number of bytes consumed. If a buffer switch action is queued
+    /// (mode 47/1047/1049), processing stops early so the caller can route
+    /// remaining data to the correct core.
+    pub fn process_pty_data(&mut self, data: &[u8]) -> usize {
         let mut parser = std::mem::take(&mut self.parser);
-        parser.parse(data, |action| {
+        let consumed = parser.parse_interruptible(data, |action| {
             self.dispatch_action(action);
+            !self.has_pending_buffer_switch()
         });
         self.parser = parser;
+        consumed
+    }
+
+    /// Check if mode_actions contains a pending buffer switch (action codes 1, 2, or 3).
+    /// Skips TS_FALLBACK entries (3-byte: 0xFF/0xFE + mode_lo + mode_hi).
+    fn has_pending_buffer_switch(&self) -> bool {
+        let actions = &self.mode_actions;
+        let mut i = 0;
+        while i < actions.len() {
+            let code = actions[i];
+            if code == 0xFF || code == 0xFE {
+                // TS_FALLBACK: 3-byte entry, skip
+                i += 3;
+            } else {
+                if code >= 1 && code <= 3 {
+                    return true;
+                }
+                i += 1;
+            }
+        }
+        false
     }
 
     /// Route a single ParsedAction to the appropriate handler.
@@ -1477,5 +1503,59 @@ mod tests {
 
         core.reset();
         assert!(core.overflow_ridx.is_empty());
+    }
+
+    // ── process_pty_data interruptible tests ─────────────
+
+    #[test]
+    fn test_process_pty_data_normal_consumes_all() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let data = b"Hello";
+        let consumed = core.process_pty_data(data);
+        assert_eq!(consumed, data.len());
+        assert!(core.mode_actions.is_empty());
+    }
+
+    #[test]
+    fn test_process_pty_data_stops_on_buffer_switch() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // CSI ?1049h (8 bytes) followed by "AB"
+        let data = b"\x1B[?1049hAB";
+        let consumed = core.process_pty_data(data);
+        assert_eq!(consumed, 8);
+        assert!(core.has_pending_buffer_switch());
+        // The mode action should be MODE_ACTION_SAVE_AND_SWITCH_TO_ALT (2)
+        let actions = core.take_mode_actions();
+        assert!(actions.contains(&2));
+    }
+
+    #[test]
+    fn test_has_pending_buffer_switch_empty() {
+        let core = TerminalCore::new(80, 24, 0);
+        assert!(!core.has_pending_buffer_switch());
+    }
+
+    #[test]
+    fn test_has_pending_buffer_switch_skips_ts_fallback() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Simulate TS_FALLBACK entry: [0xFF, lo, hi]
+        core.mode_actions.push(0xFF);
+        core.mode_actions.push(0x01);
+        core.mode_actions.push(0x00);
+        assert!(!core.has_pending_buffer_switch());
+    }
+
+    #[test]
+    fn test_has_pending_buffer_switch_detects_switch_to_alt() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.mode_actions.push(1); // SWITCH_TO_ALT
+        assert!(core.has_pending_buffer_switch());
+    }
+
+    #[test]
+    fn test_has_pending_buffer_switch_detects_switch_to_main() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.mode_actions.push(3); // SWITCH_TO_MAIN
+        assert!(core.has_pending_buffer_switch());
     }
 }
