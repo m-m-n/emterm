@@ -37,7 +37,7 @@ import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
 import type { SearchMatch } from "./search/search-state.ts";
 import type { FoldRegion } from "./fold-manager.ts";
-import { detectUrls, detectFilePaths } from "./url-detector.ts";
+import { detectUrls, detectFilePaths, getLogicalLine, type LogicalLine, type UrlMatch, type FilePathMatch } from "./url-detector.ts";
 import { SettingsService } from "../settings/settings-service.ts";
 
 /**
@@ -519,6 +519,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Current scroll offset (number of lines scrolled back from bottom). */
 	private scrollOffset: number = 0;
 
+	/** Visible lines resolved for the current render pass (scroll-aware). */
+	private renderVisibleLines: (LineAccessor | null)[] | null = null;
+
 	/** Search matches to highlight (set externally). */
 	private searchMatches: SearchMatch[] = [];
 
@@ -728,6 +731,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 			renderedCount++;
 		}
 
+		// Clear per-frame detection cache
+		this.detectionCache.clear();
+
 		// Clear dirty flags
 		state.clearDirty();
 
@@ -893,79 +899,94 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	/**
 	 * Draw underlines for detected URLs and file paths from pre-parsed spans.
+	 * Joins soft-wrapped lines into a logical line for cross-line URL detection.
 	 */
-	private renderDetectionUnderlinesFromSpans(rowIndex: number, spans: TextSpan[]): void {
-		const cachedSettings = SettingsService.getCached();
-
-		// Build text string from spans (same as cell-by-cell iteration)
-		const textChars: string[] = new Array(this.cols).fill(" ");
-		for (const span of spans) {
-			let col = span.startCol;
-			for (const [cellChar, cellWidth] of span.cells) {
-				if (col >= 0 && col < this.cols) {
-					textChars[col] = cellChar || " ";
-				}
-				col += cellWidth > 0 ? cellWidth : 1;
-			}
-		}
-		const text = textChars.join("");
-
-		const y = Math.floor(rowIndex * this.charHeight);
-		const underlineColor = this.currentForeground;
-
-		if (!cachedSettings || cachedSettings.url_detection) {
-			const urlMatches = detectUrls(text);
-			for (const match of urlMatches) {
-				const x = match.startCol * this.charWidth;
-				const width = (match.endCol - match.startCol) * this.charWidth;
-				this.drawUnderline(x, y, width, underlineColor);
-			}
-		}
-
-		if (!cachedSettings || cachedSettings.file_path_detection) {
-			const fpMatches = detectFilePaths(text);
-			for (const match of fpMatches) {
-				const x = match.startCol * this.charWidth;
-				const width = (match.endCol - match.startCol) * this.charWidth;
-				this.drawUnderline(x, y, width, underlineColor);
-			}
-		}
+	private renderDetectionUnderlinesFromSpans(rowIndex: number, _spans: TextSpan[]): void {
+		this.renderDetectionUnderlinesLogical(rowIndex);
 	}
 
 	/**
 	 * Draw underlines for detected URLs and file paths in a line.
+	 * Joins soft-wrapped lines into a logical line for cross-line URL detection.
 	 */
-	private renderDetectionUnderlines(rowIndex: number, line: LineAccessor): void {
-		const cachedSettings = SettingsService.getCached();
+	private renderDetectionUnderlines(rowIndex: number, _line: LineAccessor): void {
+		this.renderDetectionUnderlinesLogical(rowIndex);
+	}
 
-		// Build text string from line cells
-		let text = "";
-		for (let c = 0; c < line.length; c++) {
-			text += line.getCell(c).char || " ";
+	/** Per-frame cache for logical line detection (keyed by startRow). */
+	private detectionCache: Map<number, { logical: LogicalLine; urls: UrlMatch[]; fps: FilePathMatch[] }> = new Map();
+
+	/**
+	 * Shared logic for drawing detection underlines with logical line support.
+	 * Builds a logical line by joining soft-wrapped physical lines,
+	 * detects URLs/file paths in the full logical text, then clips
+	 * each match to the current physical row for drawing.
+	 *
+	 * Uses renderVisibleLines when available (forceRender/scrollback path)
+	 * to ensure correct line data regardless of scroll position.
+	 * Results are cached per logical line startRow within a frame.
+	 */
+	private renderDetectionUnderlinesLogical(rowIndex: number): void {
+		const cachedSettings = SettingsService.getCached();
+		if (!this.pendingState) return;
+
+		// Use scroll-aware visible lines when available, otherwise fall back to buffer
+		const getLine = this.renderVisibleLines
+			? (r: number): LineAccessor | null => {
+				if (r < 0 || r >= this.renderVisibleLines!.length) return null;
+				return this.renderVisibleLines![r] ?? null;
+			}
+			: (r: number): LineAccessor | null => this.pendingState!.getActiveBuffer().getLine(r);
+
+		const logical = getLogicalLine(getLine, rowIndex, this.rows);
+		if (logical.rowCount === 0) return;
+
+		// Check per-frame cache to avoid recomputing for the same logical line
+		let cached = this.detectionCache.get(logical.startRow);
+		if (!cached) {
+			const urls = (!cachedSettings || cachedSettings.url_detection)
+				? detectUrls(logical.text) : [];
+			const fps = (!cachedSettings || cachedSettings.file_path_detection)
+				? detectFilePaths(logical.text) : [];
+			cached = { logical, urls, fps };
+			this.detectionCache.set(logical.startRow, cached);
 		}
 
 		const y = Math.floor(rowIndex * this.charHeight);
 		const underlineColor = this.currentForeground;
 
-		// URL underlines
-		if (!cachedSettings || cachedSettings.url_detection) {
-			const urlMatches = detectUrls(text);
-			for (const match of urlMatches) {
-				const x = match.startCol * this.charWidth;
-				const width = (match.endCol - match.startCol) * this.charWidth;
-				this.drawUnderline(x, y, width, underlineColor);
-			}
+		for (const match of cached.urls) {
+			this.drawClippedUnderline(match.startCol, match.endCol, rowIndex, cached.logical, y, underlineColor);
 		}
+		for (const match of cached.fps) {
+			this.drawClippedUnderline(match.startCol, match.endCol, rowIndex, cached.logical, y, underlineColor);
+		}
+	}
 
-		// File path underlines
-		if (!cachedSettings || cachedSettings.file_path_detection) {
-			const fpMatches = detectFilePaths(text);
-			for (const match of fpMatches) {
-				const x = match.startCol * this.charWidth;
-				const width = (match.endCol - match.startCol) * this.charWidth;
-				this.drawUnderline(x, y, width, underlineColor);
-			}
-		}
+	/**
+	 * Draw underline for a match clipped to a single physical row.
+	 * Converts logical column range to the physical row's column range.
+	 */
+	private drawClippedUnderline(
+		matchStart: number,
+		matchEnd: number,
+		rowIndex: number,
+		logical: LogicalLine,
+		y: number,
+		color: Rgb,
+	): void {
+		const rowStartLogical = (rowIndex - logical.startRow) * logical.cols;
+		const rowEndLogical = rowStartLogical + logical.cols;
+
+		const clippedStart = Math.max(matchStart, rowStartLogical);
+		const clippedEnd = Math.min(matchEnd, rowEndLogical);
+		if (clippedStart >= clippedEnd) return;
+
+		const physStartCol = clippedStart - rowStartLogical;
+		const physEndCol = clippedEnd - rowStartLogical;
+		const x = physStartCol * this.charWidth;
+		const width = (physEndCol - physStartCol) * this.charWidth;
+		this.drawUnderline(x, y, width, color);
 	}
 
 	/**
@@ -1249,6 +1270,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 			? this.getVisibleLinesWithFolding(state, foldManager)
 			: getVisibleLines(state, this.scrollOffset);
 
+		// Store visible lines for scroll-aware URL detection in renderDetectionUnderlinesLogical
+		this.renderVisibleLines = visibleLines;
+
 		// Clear entire canvas including bottom/right remainder
 		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
 		const canvasWidth = this.canvas.width / this.dpr;
@@ -1307,6 +1331,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (this.searchMatches.length > 0) {
 			this.renderSearchHighlights(state);
 		}
+
+		// Clear render-pass state
+		this.renderVisibleLines = null;
+		this.detectionCache.clear();
 
 		// Clear dirty flags
 		state.clearDirty();

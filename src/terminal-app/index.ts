@@ -20,7 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ImageEventPayload } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
-import { findUrlAtPosition, findFilePathAtPosition } from "../terminal/url-detector";
+import { findUrlAtPosition, findFilePathAtPosition, getLogicalLine, physicalToLogicalCol } from "../terminal/url-detector";
 import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/osc_handlers";
 import type { DecodedImage, ImageEvent } from "../image/types";
 import { SearchStateManager } from "../terminal/search/search-state";
@@ -855,22 +855,16 @@ export class TerminalApp {
     const col = Math.floor((e.clientX - rect.left) / this.charSize.width);
     const row = Math.floor((e.clientY - rect.top) / this.charSize.height);
 
-    // Get the text content of the clicked row
+    // Get the text content by joining soft-wrapped lines into a logical line
     const buffer = this.state.getActiveBuffer();
     if (row < 0 || row >= this.state.rows) return;
 
-    const line = buffer.getLine(row);
-    if (!line) return;
-
-    // Build text string from line cells
-    let text = "";
-    for (let c = 0; c < line.length; c++) {
-      text += line.getCell(c).char || " ";
-    }
+    const logical = getLogicalLine((r) => buffer.getLine(r), row, this.state.rows);
+    const logicalCol = physicalToLogicalCol(row, col, logical);
 
     // Check URL first (existing behavior)
     if (!cachedSettings || cachedSettings.url_detection) {
-      const url = findUrlAtPosition(text, col);
+      const url = findUrlAtPosition(logical.text, logicalCol);
       if (url) {
         e.preventDefault();
         import("@tauri-apps/plugin-shell").then(({ open }) => {
@@ -882,7 +876,7 @@ export class TerminalApp {
 
     // Check file path (new behavior)
     if (!cachedSettings || cachedSettings.file_path_detection) {
-      const match = findFilePathAtPosition(text, col);
+      const match = findFilePathAtPosition(logical.text, logicalCol);
       if (match) {
         e.preventDefault();
         this.openFileInEditor(match.path, match.line, match.col);
@@ -1074,21 +1068,16 @@ export class TerminalApp {
       const col = Math.floor((e.clientX - rect.left) / this.charSize.width);
       const buffer = this.state.getActiveBuffer();
       if (displayRow >= 0 && displayRow < this.state.rows) {
-        const line = buffer.getLine(displayRow);
-        if (line) {
-          let text = "";
-          for (let c = 0; c < line.length; c++) {
-            text += line.getCell(c).char || " ";
-          }
+        const logical = getLogicalLine((r) => buffer.getLine(r), displayRow, this.state.rows);
+        const logicalCol = physicalToLogicalCol(displayRow, col, logical);
 
-          if ((!cachedSettings || cachedSettings.url_detection) && findUrlAtPosition(text, col)) {
-            this.terminalRoot.style.cursor = "pointer";
-            return;
-          }
-          if ((!cachedSettings || cachedSettings.file_path_detection) && findFilePathAtPosition(text, col)) {
-            this.terminalRoot.style.cursor = "pointer";
-            return;
-          }
+        if ((!cachedSettings || cachedSettings.url_detection) && findUrlAtPosition(logical.text, logicalCol)) {
+          this.terminalRoot.style.cursor = "pointer";
+          return;
+        }
+        if ((!cachedSettings || cachedSettings.file_path_detection) && findFilePathAtPosition(logical.text, logicalCol)) {
+          this.terminalRoot.style.cursor = "pointer";
+          return;
         }
       }
     }
