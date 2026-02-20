@@ -1,0 +1,62 @@
+schema_version: 1
+feature: middle-click-paste
+scale: light
+created: 2026-02-20
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: d31575ca8af6da0d6f30d72975a8c42213fb184d
+  - id: implement
+    status: completed
+    completed_at_commit: d31575ca8af6da0d6f30d72975a8c42213fb184d
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: d31575ca8af6da0d6f30d72975a8c42213fb184d
+
+requirements:
+  FR1:
+    title: Middle mouse button click triggers clipboard paste
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Paste behavior identical to Ctrl+Shift+V
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Middle-click paste takes priority over PTY mouse tracking
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: middle_click_paste boolean setting with default true
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Paste should feel instant for single-line text
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Behavior identical to existing keyboard paste
+    status: ok
+    tasks: []
+    tests: []

@@ -56,6 +56,7 @@ export interface AppSettings {
   fold_enabled: boolean;
   file_path_detection: boolean;
   bold_brightens_ansi_colors: boolean;
+  middle_click_paste: boolean;
   editor_command: string;
 
   // Notification
