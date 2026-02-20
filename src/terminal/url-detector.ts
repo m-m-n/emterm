@@ -2,8 +2,84 @@
  * URL and file path detection for terminal output.
  *
  * Detects URLs and file paths with line numbers in text lines
- * and returns their positions.
+ * and returns their positions. Supports soft-wrapped lines by
+ * joining consecutive wrapped physical lines into logical lines.
  */
+
+import type { LineAccessor } from "./grid.ts";
+
+/** A logical line formed by joining soft-wrapped physical lines. */
+export interface LogicalLine {
+  /** Concatenated text of all physical lines (cell-by-cell, including width-0 placeholders). */
+  text: string;
+  /** The viewport row where this logical line starts. */
+  startRow: number;
+  /** Number of physical rows in this logical line. */
+  rowCount: number;
+  /** Number of cells per physical row (terminal cols). */
+  cols: number;
+}
+
+/**
+ * Build a logical line by joining soft-wrapped physical lines
+ * that contain the given row.
+ *
+ * Walks backward from `row` to find the first non-wrapped line
+ * (wrapped === true means "this line is a continuation of the previous"),
+ * then walks forward collecting all continuation lines.
+ *
+ * The getLine callback may return null for unavailable rows (e.g. fold
+ * summary placeholders); null stops the walk in that direction.
+ */
+export function getLogicalLine(
+  getLine: (row: number) => LineAccessor | null,
+  row: number,
+  totalRows: number,
+): LogicalLine {
+  const currentLine = getLine(row);
+  if (!currentLine) {
+    return { text: "", startRow: row, rowCount: 0, cols: 0 };
+  }
+
+  // Walk backward to find the start of the logical line
+  let startRow = row;
+  while (startRow > 0) {
+    const prevLine = getLine(startRow);
+    if (!prevLine || !prevLine.wrapped) break;
+    startRow--;
+  }
+
+  // Walk forward collecting all continuation lines
+  let text = "";
+  let r = startRow;
+  const cols = currentLine.length;
+
+  while (r < totalRows) {
+    const line = getLine(r);
+    if (!line) break;
+    for (let c = 0; c < line.length; c++) {
+      text += line.getCell(c).char || " ";
+    }
+    r++;
+    if (r < totalRows) {
+      const nextLine = getLine(r);
+      if (!nextLine || !nextLine.wrapped) break;
+    }
+  }
+
+  return { text, startRow, rowCount: r - startRow, cols };
+}
+
+/**
+ * Convert a physical (row, col) to a column in the logical line text.
+ */
+export function physicalToLogicalCol(
+  row: number,
+  col: number,
+  logical: LogicalLine,
+): number {
+  return (row - logical.startRow) * logical.cols + col;
+}
 
 /** A detected URL match with position information. */
 export interface UrlMatch {
