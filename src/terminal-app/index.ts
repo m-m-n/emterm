@@ -20,6 +20,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ImageEventPayload } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
+import { showPasteDialog, sendTextInChunks } from "../clipboard";
 import { findUrlAtPosition, findFilePathAtPosition, getLogicalLine, physicalToLogicalCol } from "../terminal/url-detector";
 import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/osc_handlers";
 import type { DecodedImage, ImageEvent } from "../image/types";
@@ -215,6 +216,29 @@ export class TerminalApp {
       onNextMatch: () => this.handleSearchNext(),
       onPrevMatch: () => this.handleSearchPrev(),
       onClose: () => this.handleSearchClose(),
+    });
+
+    // Add middle-click paste handler (registered before MouseHandler so stopImmediatePropagation
+    // prevents PTY mouse tracking from seeing middle button events when paste is enabled)
+    terminalContainer.addEventListener('mousedown', (e) => {
+      if (e.button === 1) {
+        const settings = SettingsService.getCached();
+        if (settings?.middle_click_paste !== false) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          // Suppress the matching mouseup to prevent an orphaned release event reaching the PTY.
+          // Uses capture phase so it fires before MouseHandler's bubble-phase listener.
+          const suppressMouseUp = (ev: MouseEvent) => {
+            if (ev.button === 1) {
+              ev.stopPropagation();
+              ev.preventDefault();
+              terminalContainer.removeEventListener('mouseup', suppressMouseUp, true);
+            }
+          };
+          terminalContainer.addEventListener('mouseup', suppressMouseUp, true);
+          this.handleMiddleClickPaste();
+        }
+      }
     });
 
     // Initialize mouse handler (for PTY mouse tracking only - selection handled by SelectionController)
@@ -798,6 +822,35 @@ export class TerminalApp {
 
     // Force re-render with new scroll offset
     this.renderer.forceRender(this.state);
+  }
+
+  /**
+   * Handle middle-click paste from clipboard
+   */
+  private async handleMiddleClickPaste(): Promise<void> {
+    if (!this.selectionController || !this.ptyClient) return;
+
+    try {
+      const text = await this.selectionController.paste();
+      if (!text) return;
+
+      if (this.selectionController.isMultiLinePaste(text)) {
+        const lineCount = this.selectionController.countPasteLines(text);
+        const result = await showPasteDialog({ text, lineCount });
+        if (result.confirmed) {
+          await sendTextInChunks(text, (data: Uint8Array) =>
+            this.ptyClient!.write(data),
+          );
+        }
+      } else {
+        const bytes = new TextEncoder().encode(text);
+        await this.ptyClient.write(bytes);
+      }
+    } catch (error) {
+      console.error("Failed to paste from clipboard (middle-click):", error);
+    } finally {
+      this.imeHandler?.focus();
+    }
   }
 
   /**

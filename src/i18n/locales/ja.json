@@ -113,7 +113,9 @@
       "editorCommand": "エディタコマンド",
       "editorCommandPlaceholder": "code --goto {file}:{line}:{col}",
       "editorCommandHint": "プレースホルダー: {file}, {line}, {col}",
-      "editorCommandDesc": "ファイルを開くコマンドテンプレート。{file}, {line}, {col} をプレースホルダーとして使用"
+      "editorCommandDesc": "ファイルを開くコマンドテンプレート。{file}, {line}, {col} をプレースホルダーとして使用",
+      "middleClickPaste": "ホイールクリックでペースト",
+      "middleClickPasteDesc": "マウスの中ボタンをクリックするとクリップボードの内容をペーストします"
     },
     "keybinds": {
       "title": "\u30ad\u30fc\u30d0\u30a4\u30f3\u30c9",

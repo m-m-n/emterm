@@ -113,7 +113,9 @@
       "editorCommand": "Editor Command",
       "editorCommandPlaceholder": "code --goto {file}:{line}:{col}",
       "editorCommandHint": "Placeholders: {file}, {line}, {col}",
-      "editorCommandDesc": "Command template to open files. Use {file}, {line}, {col} as placeholders"
+      "editorCommandDesc": "Command template to open files. Use {file}, {line}, {col} as placeholders",
+      "middleClickPaste": "Middle-Click Paste",
+      "middleClickPasteDesc": "Paste clipboard contents when middle mouse button is clicked"
     },
     "keybinds": {
       "title": "Keybinds",

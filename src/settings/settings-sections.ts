@@ -606,6 +606,19 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
+  // Middle Click Paste (toggle)
+  renderToggle(
+    panel,
+    {
+      key: "middle-click-paste",
+      label: t("settings.terminal.middleClickPaste"),
+      value: settings.middle_click_paste,
+      description: t("settings.terminal.middleClickPasteDesc"),
+      onSave: (v) => ctx.saveSetting("middle_click_paste", v),
+    },
+    ctx.addContentListener,
+  );
+
   // Fold Enabled (toggle)
   renderToggle(
     panel,
