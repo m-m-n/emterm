@@ -329,6 +329,22 @@ export function renderTerminalAppearanceSection(
   // Terminal Color Scheme (with inline palette editor)
   renderColorSchemeEditor(panel, ctx);
 
+  // Bold Brightens ANSI Colors (toggle)
+  renderToggle(
+    panel,
+    {
+      key: "bold-brightens-ansi-colors",
+      label: t("settings.terminal.boldBrightensAnsiColors"),
+      value: settings.bold_brightens_ansi_colors,
+      description: t("settings.terminal.boldBrightensAnsiColorsDesc"),
+      onSave: (v) => {
+        applyBoldBrightensAnsiColors(v);
+        ctx.saveSetting("bold_brightens_ansi_colors", v);
+      },
+    },
+    ctx.addContentListener,
+  );
+
   // -- Layout subsection --
   renderSubsectionHeader(panel, t("settings.appearance.layout"));
 
@@ -558,22 +574,6 @@ export function renderTerminalBehaviorSection(
       value: settings.file_path_detection,
       description: t("settings.terminal.filePathDetectionDesc"),
       onSave: (v) => ctx.saveSetting("file_path_detection", v),
-    },
-    ctx.addContentListener,
-  );
-
-  // Bold Brightens ANSI Colors (toggle)
-  renderToggle(
-    panel,
-    {
-      key: "bold-brightens-ansi-colors",
-      label: t("settings.terminal.boldBrightensAnsiColors"),
-      value: settings.bold_brightens_ansi_colors,
-      description: t("settings.terminal.boldBrightensAnsiColorsDesc"),
-      onSave: (v) => {
-        applyBoldBrightensAnsiColors(v);
-        ctx.saveSetting("bold_brightens_ansi_colors", v);
-      },
     },
     ctx.addContentListener,
   );
