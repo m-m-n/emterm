@@ -91,11 +91,9 @@ SPEC.md Unit Tests チェックリスト 8/8 実装済み:
 
 ### SPEC.md からの軽微な差異
 
-1. **設定カテゴリ**: SPECは "Appearance" と記載しているが、実装は "Terminal Behavior" セクションに配置。Terminal Behavior はカーソルスタイル・シェル・スクロール等の振る舞い設定を含み、bold-brightens は色の振る舞いなのでこちらが適切。
+1. **StyleCache + boldBrightens**: StyleCache は palette を受け取るが boldBrightens は受け取らない。しかし StyleCache はアクティブなレンダリングパスで使用されておらず（CanvasRenderer が唯一の実行パス）、影響なし。
 
-2. **StyleCache + boldBrightens**: StyleCache は palette を受け取るが boldBrightens は受け取らない。しかし StyleCache はアクティブなレンダリングパスで使用されておらず（CanvasRenderer が唯一の実行パス）、影響なし。
-
-3. **Rust ファイルパス**: SPECは `src-tauri/src/settings.rs` と記載しているが、実際は `src-tauri/src/commands/config.rs`。
+2. **Rust ファイルパス**: SPECは `src-tauri/src/settings.rs` と記載しているが、実際は `src-tauri/src/commands/config.rs`。
 
 ---
 
