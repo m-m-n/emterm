@@ -74,6 +74,7 @@ impl Parser {
         self.dcs_buffer.clear();
     }
 
+    #[cfg(test)]
     pub fn parse<F>(&mut self, input: &[u8], mut emit: F)
     where
         F: FnMut(ParsedAction),

@@ -93,11 +93,16 @@ pub struct TerminalCore {
     // Sprint 6: Parser and mode action queue
     pub(crate) parser: crate::parser::Parser,
     pub(crate) mode_actions: Vec<u8>,
-    // Sprint 6: Callbacks
+    // Sprint 6: Callbacks (read on wasm32 only via fire_*_callback / set_*_callback)
+    #[allow(dead_code)]
     pub(crate) osc_callback: Option<crate::callbacks::Callback>,
+    #[allow(dead_code)]
     pub(crate) apc_callback: Option<crate::callbacks::Callback>,
+    #[allow(dead_code)]
     pub(crate) dcs_callback: Option<crate::callbacks::Callback>,
+    #[allow(dead_code)]
     pub(crate) bell_callback: Option<crate::callbacks::Callback>,
+    #[allow(dead_code)]
     pub(crate) device_response_callback: Option<crate::callbacks::Callback>,
 }
 

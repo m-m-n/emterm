@@ -56,6 +56,8 @@ export class TerminalApp {
   private pendingApcQueue: Uint8Array[] = [];
   private pendingDcsQueue: Uint8Array[] = [];
   private pendingProtocolResponses: string[] = [];
+  private lastMouseEvent: MouseEvent | null = null;
+  private ctrlKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 
   /**
    * Creates a new TerminalApp instance
@@ -242,8 +244,17 @@ export class TerminalApp {
       }
     });
 
-    // Add mousemove handler for fold cursor feedback
-    terminalContainer.addEventListener('mousemove', (e) => this.handleFoldHover(e));
+    // Add mousemove handler for hover cursor feedback (folds, URLs, file paths)
+    terminalContainer.addEventListener('mousemove', (e) => this.handleHover(e));
+
+    // Add keydown/keyup handler for Ctrl key to update cursor over URLs/file paths
+    this.ctrlKeyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Control' || e.key === 'Meta') {
+        this.updateHoverCursor();
+      }
+    };
+    window.addEventListener('keydown', this.ctrlKeyHandler);
+    window.addEventListener('keyup', this.ctrlKeyHandler);
 
     // Initialize ImageViewer with overlay-root container
     this.imageViewer = new ImageViewer(this.overlayRoot!);
@@ -1010,16 +1021,19 @@ export class TerminalApp {
   }
 
   /**
-   * Handle mousemove for fold cursor feedback.
+   * Handle mousemove for hover cursor feedback (folds, URLs, file paths).
    */
-  private handleFoldHover(e: MouseEvent): void {
-    if (!this.state || !this.renderer || !this.terminalRoot) return;
+  private handleHover(e: MouseEvent): void {
+    this.lastMouseEvent = e;
+    this.updateHoverCursor();
+  }
 
-    const cachedSettings = SettingsService.getCached();
-    if (cachedSettings && !cachedSettings.fold_enabled) return;
-
-    const foldManager = this.state.getFoldManager();
-    if (!foldManager.isEnabled()) return;
+  /**
+   * Update hover cursor based on current mouse position and modifier keys.
+   */
+  private updateHoverCursor(): void {
+    const e = this.lastMouseEvent;
+    if (!e || !this.state || !this.renderer || !this.terminalRoot) return;
 
     const rect = this.terminalRoot.getBoundingClientRect();
     const displayRow = Math.floor((e.clientY - rect.top) / this.charSize.height);
@@ -1028,24 +1042,55 @@ export class TerminalApp {
       return;
     }
 
-    const scrollbackLength = this.state.getScrollbackLength();
-    const totalActualLines = scrollbackLength + this.state.rows;
-    const totalDisplayLines = foldManager.getTotalDisplayLines(totalActualLines);
-    const displayStart = Math.max(0, totalDisplayLines - this.state.rows - this.renderer.getScrollOffset());
-    const displayLine = displayStart + displayRow;
+    // Fold hover detection
+    const cachedSettings = SettingsService.getCached();
+    const foldEnabled = !cachedSettings || cachedSettings.fold_enabled;
+    if (foldEnabled) {
+      const foldManager = this.state.getFoldManager();
+      if (foldManager.isEnabled()) {
+        const scrollbackLength = this.state.getScrollbackLength();
+        const totalActualLines = scrollbackLength + this.state.rows;
+        const totalDisplayLines = foldManager.getTotalDisplayLines(totalActualLines);
+        const displayStart = Math.max(0, totalDisplayLines - this.state.rows - this.renderer.getScrollOffset());
+        const displayLine = displayStart + displayRow;
 
-    // Check if hovering over a summary line or foldable region
-    const summaryRegion = foldManager.getSummaryRegion(displayLine);
-    if (summaryRegion) {
-      this.terminalRoot.style.cursor = "pointer";
-      return;
+        const summaryRegion = foldManager.getSummaryRegion(displayLine);
+        if (summaryRegion) {
+          this.terminalRoot.style.cursor = "pointer";
+          return;
+        }
+
+        const actualLine = foldManager.displayLineToActual(displayLine);
+        const region = foldManager.getRegionAtLine(actualLine);
+        if (region && !region.collapsed) {
+          this.terminalRoot.style.cursor = "pointer";
+          return;
+        }
+      }
     }
 
-    const actualLine = foldManager.displayLineToActual(displayLine);
-    const region = foldManager.getRegionAtLine(actualLine);
-    if (region && !region.collapsed) {
-      this.terminalRoot.style.cursor = "pointer";
-      return;
+    // URL/file path hover detection (Ctrl or Meta held)
+    if (e.ctrlKey || e.metaKey) {
+      const col = Math.floor((e.clientX - rect.left) / this.charSize.width);
+      const buffer = this.state.getActiveBuffer();
+      if (displayRow >= 0 && displayRow < this.state.rows) {
+        const line = buffer.getLine(displayRow);
+        if (line) {
+          let text = "";
+          for (let c = 0; c < line.length; c++) {
+            text += line.getCell(c).char || " ";
+          }
+
+          if ((!cachedSettings || cachedSettings.url_detection) && findUrlAtPosition(text, col)) {
+            this.terminalRoot.style.cursor = "pointer";
+            return;
+          }
+          if ((!cachedSettings || cachedSettings.file_path_detection) && findFilePathAtPosition(text, col)) {
+            this.terminalRoot.style.cursor = "pointer";
+            return;
+          }
+        }
+      }
     }
 
     this.terminalRoot.style.cursor = "";
@@ -1224,6 +1269,12 @@ export class TerminalApp {
     }
 
     // Clean up handlers
+    if (this.ctrlKeyHandler) {
+      window.removeEventListener('keydown', this.ctrlKeyHandler);
+      window.removeEventListener('keyup', this.ctrlKeyHandler);
+      this.ctrlKeyHandler = null;
+    }
+    this.lastMouseEvent = null;
     this.keyboardHandler?.detach();
     this.mouseHandler?.detach();
     this.imeHandler?.dispose();
