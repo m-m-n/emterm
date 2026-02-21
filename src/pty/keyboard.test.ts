@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { keyEventToBytes, shouldHandleKey } from "./keyboard";
+import { keyEventToBytes, shouldHandleKey, calcModifierParam } from "./keyboard";
 
 /**
  * Helper to create a mock KeyboardEvent.
@@ -145,17 +145,15 @@ describe("keyEventToBytes", () => {
 		it("should skip application mode for arrow keys with Ctrl modifier", () => {
 			const event = createKeyEvent("ArrowUp", { ctrlKey: true });
 			const result = keyEventToBytes(event, "application");
-			// Ctrl+Arrow is not in SPECIAL_KEYS (no Ctrl variant defined)
-			// Falls through and returns null as unhandled
-			expect(result).toBeNull();
+			// Ctrl+Arrow skips DECCKM and uses modified key handler
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x41])); // ESC [1;5A
 		});
 
 		it("should skip application mode for arrow keys with Alt modifier", () => {
 			const event = createKeyEvent("ArrowUp", { altKey: true });
 			const result = keyEventToBytes(event, "application");
-			// Alt+Arrow is not in SPECIAL_KEYS (no Alt variant defined)
-			// Falls through and returns null as unhandled
-			expect(result).toBeNull();
+			// Alt+Arrow skips DECCKM and uses modified key handler
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x33, 0x41])); // ESC [1;3A
 		});
 
 		it("should use normal sequence for non-arrow keys in application mode", () => {
@@ -222,6 +220,13 @@ describe("keyEventToBytes", () => {
 			const result = keyEventToBytes(event);
 			expect(result).toEqual(new Uint8Array([0x1b]));
 		});
+
+		it("should convert Ctrl+[ to ESC (0x1b)", () => {
+			// Browser reports Ctrl+[ as key="Escape" with ctrlKey=true
+			const event = createKeyEvent("Escape", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b]));
+		});
 	});
 
 	describe("function keys", () => {
@@ -244,6 +249,196 @@ describe("keyEventToBytes", () => {
 		});
 	});
 
+	describe("Ctrl+symbol keys", () => {
+		it("should convert Ctrl+[ with key='[' (WebKitGTK) to ESC (0x1B)", () => {
+			// WebKitGTK reports Ctrl+[ as key="[" with ctrlKey=true
+			const event = createKeyEvent("[", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b]));
+		});
+
+		it("should convert Ctrl+[ with key='Escape' (Chromium) to ESC (0x1B)", () => {
+			// Chromium reports Ctrl+[ as key="Escape" with ctrlKey=true
+			const event = createKeyEvent("Escape", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b]));
+		});
+
+		it("should convert Ctrl+] to GS (0x1D)", () => {
+			const event = createKeyEvent("]", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1d]));
+		});
+
+		it("should convert Ctrl+\\ to FS (0x1C)", () => {
+			const event = createKeyEvent("\\", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1c]));
+		});
+
+		it("should convert Ctrl+^ to RS (0x1E)", () => {
+			const event = createKeyEvent("^", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1e]));
+		});
+
+		it("should convert Ctrl+_ to US (0x1F)", () => {
+			const event = createKeyEvent("_", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1f]));
+		});
+
+		it("should convert Ctrl+@ to NUL (0x00)", () => {
+			const event = createKeyEvent("@", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x00]));
+		});
+
+		it("should convert Ctrl+Space to NUL (0x00)", () => {
+			const event = createKeyEvent(" ", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x00]));
+		});
+	});
+
+	describe("Shift+Tab (back-tab)", () => {
+		it("should convert Shift+Tab to ESC [ Z", () => {
+			const event = createKeyEvent("Tab", { shiftKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x5a])); // ESC [ Z
+		});
+	});
+
+	describe("modifier parameter calculator", () => {
+		it("should return 0 for no modifiers", () => {
+			expect(calcModifierParam(false, false, false)).toBe(0);
+		});
+
+		it("should return 2 for Shift", () => {
+			expect(calcModifierParam(true, false, false)).toBe(2);
+		});
+
+		it("should return 3 for Alt", () => {
+			expect(calcModifierParam(false, true, false)).toBe(3);
+		});
+
+		it("should return 5 for Ctrl", () => {
+			expect(calcModifierParam(false, false, true)).toBe(5);
+		});
+
+		it("should return 6 for Ctrl+Shift", () => {
+			expect(calcModifierParam(true, false, true)).toBe(6);
+		});
+
+		it("should return 4 for Shift+Alt", () => {
+			expect(calcModifierParam(true, true, false)).toBe(4);
+		});
+
+		it("should return 7 for Ctrl+Alt", () => {
+			expect(calcModifierParam(false, true, true)).toBe(7);
+		});
+
+		it("should return 8 for Ctrl+Alt+Shift", () => {
+			expect(calcModifierParam(true, true, true)).toBe(8);
+		});
+	});
+
+	describe("modified arrow keys", () => {
+		it("should convert Ctrl+ArrowUp to ESC [1;5A", () => {
+			const event = createKeyEvent("ArrowUp", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x41]));
+		});
+
+		it("should convert Ctrl+ArrowRight to ESC [1;5C", () => {
+			const event = createKeyEvent("ArrowRight", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x43]));
+		});
+
+		it("should convert Shift+ArrowUp to ESC [1;2A", () => {
+			const event = createKeyEvent("ArrowUp", { shiftKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x41]));
+		});
+
+		it("should convert Alt+ArrowUp to ESC [1;3A", () => {
+			const event = createKeyEvent("ArrowUp", { altKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x33, 0x41]));
+		});
+
+		it("should convert Ctrl+Shift+ArrowRight to ESC [1;6C", () => {
+			const event = createKeyEvent("ArrowRight", { ctrlKey: true, shiftKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x36, 0x43]));
+		});
+	});
+
+	describe("modified Home/End", () => {
+		it("should convert Ctrl+Home to ESC [1;5H", () => {
+			const event = createKeyEvent("Home", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x48]));
+		});
+
+		it("should convert Ctrl+End to ESC [1;5F", () => {
+			const event = createKeyEvent("End", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x46]));
+		});
+
+		it("should convert Shift+Home to ESC [1;2H", () => {
+			const event = createKeyEvent("Home", { shiftKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x48]));
+		});
+	});
+
+	describe("modified Delete/Insert/PageUp/PageDown", () => {
+		it("should convert Ctrl+Delete to ESC [3;5~", () => {
+			const event = createKeyEvent("Delete", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x33, 0x3b, 0x35, 0x7e]));
+		});
+
+		it("should convert Ctrl+PageUp to ESC [5;5~", () => {
+			const event = createKeyEvent("PageUp", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x35, 0x3b, 0x35, 0x7e]));
+		});
+
+		it("should convert Shift+Insert to ESC [2;2~", () => {
+			const event = createKeyEvent("Insert", { shiftKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x32, 0x3b, 0x32, 0x7e]));
+		});
+	});
+
+	describe("modified F1-F4", () => {
+		it("should convert Shift+F1 to ESC [1;2P", () => {
+			const event = createKeyEvent("F1", { shiftKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x3b, 0x32, 0x50]));
+		});
+	});
+
+	describe("modified F5-F12", () => {
+		it("should convert Ctrl+F5 to ESC [15;5~", () => {
+			const event = createKeyEvent("F5", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			// ESC [ 1 5 ; 5 ~
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x31, 0x35, 0x3b, 0x35, 0x7e]));
+		});
+
+		it("should convert Ctrl+F12 to ESC [24;5~", () => {
+			const event = createKeyEvent("F12", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			// ESC [ 2 4 ; 5 ~
+			expect(result).toEqual(new Uint8Array([0x1b, 0x5b, 0x32, 0x34, 0x3b, 0x35, 0x7e]));
+		});
+	});
+
 	describe("Alt combinations", () => {
 		it("should add ESC prefix for Alt+letter", () => {
 			const event = createKeyEvent("x", { altKey: true });
@@ -255,6 +450,26 @@ describe("keyEventToBytes", () => {
 			const event = createKeyEvent("1", { altKey: true });
 			const result = keyEventToBytes(event);
 			expect(result).toEqual(new Uint8Array([0x1b, 0x31])); // ESC + '1'
+		});
+	});
+
+	describe("Ctrl+Alt combinations", () => {
+		it("should convert Ctrl+Alt+C to ESC 0x03", () => {
+			const event = createKeyEvent("c", { ctrlKey: true, altKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x03]));
+		});
+
+		it("should convert Ctrl+Alt+A to ESC 0x01", () => {
+			const event = createKeyEvent("a", { ctrlKey: true, altKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x01]));
+		});
+
+		it("should not affect plain Alt+letter", () => {
+			const event = createKeyEvent("x", { altKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x78])); // ESC + 'x'
 		});
 	});
 

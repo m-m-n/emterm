@@ -6,13 +6,12 @@ import type { PtyClient } from "../../pty/client";
 import type { TerminalState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import type { KeyboardHandlerOptions } from "../types";
-import { IME_DEBUG } from "../config";
 import { keyEventToBytes, shouldHandleKey } from "../../pty/keyboard";
 import type { SelectionController } from "../../selection-v2";
 import { showPasteDialog, sendTextInChunks } from "../../clipboard";
 import { SettingsService } from "../../settings/settings-service";
 import { matchKeybindStr } from "../../keybind/matcher";
-import { isAncestorHidden, isModalOverlayVisible } from "../../shared/dom-utils";
+import { isModalOverlayVisible } from "../../shared/dom-utils";
 
 /**
  * Extended options for keyboard handler including IME integration
@@ -231,9 +230,18 @@ export class KeyboardHandler {
       return;
     }
 
-    // Skip Ctrl+J - commonly used by Emacs-style IMEs (SKK) for mode switching
+    // Skip Ctrl+J when SKK mode is enabled (default: true)
+    // Ctrl+J is commonly used by Emacs-style IMEs (SKK) for mode switching
     // Without this, Ctrl+J would send LF (0x0A) which causes unwanted newlines
-    if (event.ctrlKey && event.key.toLowerCase() === "j") {
+    const cachedSettings = SettingsService.getCached();
+    if (
+      event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !event.metaKey &&
+      event.key.toLowerCase() === "j" &&
+      cachedSettings?.skk_mode !== false
+    ) {
       return;
     }
 

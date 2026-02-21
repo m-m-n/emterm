@@ -1,0 +1,112 @@
+schema_version: 1
+feature: special-key-handling
+scale: standard
+created: 2026-02-21
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: d676bde9458ff69c2aef4a8a888a712bd0009590
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: d676bde9458ff69c2aef4a8a888a712bd0009590
+  - id: implement
+    status: completed
+    completed_at_commit: d676bde9458ff69c2aef4a8a888a712bd0009590
+  - id: check
+    status: completed
+    completed_at_commit: d676bde9458ff69c2aef4a8a888a712bd0009590
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: d676bde9458ff69c2aef4a8a888a712bd0009590
+  - id: review
+    status: completed
+    completed_at_commit: d676bde9458ff69c2aef4a8a888a712bd0009590
+
+requirements:
+  FR1:
+    title: Ctrl+symbol control character mapping (@[\]^_ and Space)
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-01, TS-03, TS-04, TS-05, TS-06, TS-07, TS-08]
+  FR2:
+    title: WebKitGTK compatibility for Ctrl+[ (key="[" vs key="Escape")
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-01, TS-02]
+  FR3:
+    title: Shift+Tab produces ESC [ Z (back-tab)
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-09]
+  FR4:
+    title: Modified arrow keys with xterm modifier parameter
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-10, TS-11, TS-12, TS-13, TS-14]
+  FR5:
+    title: Modified Home/End with xterm modifier parameter
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-15, TS-16, TS-17]
+  FR6:
+    title: Modified Delete/Insert/PageUp/PageDown with modifier
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-18, TS-19, TS-20]
+  FR7:
+    title: Modified F1-F4 with xterm modifier parameter
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-21]
+  FR8:
+    title: Modified F5-F12 with xterm modifier parameter
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-22, TS-23]
+  FR9:
+    title: Ctrl+Alt+letter produces ESC + control character
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-24, TS-25]
+  FR10:
+    title: Ctrl+J blocking configurable via ime.skk_mode setting
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-32, TS-33]
+  FR11:
+    title: Existing keybinds take priority over new sequences
+    status: ok
+    tasks: [All]
+    tests: [regression]
+  NFR1:
+    title: No increase in key-to-PTY latency
+    status: ok
+    tasks: [All]
+    tests: []
+  NFR2:
+    title: Works on WebKitGTK and Chromium WebViews
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-01, TS-02]
+  NFR3:
+    title: All existing key behaviors preserved
+    status: ok
+    tasks: [All]
+    tests: [regression]

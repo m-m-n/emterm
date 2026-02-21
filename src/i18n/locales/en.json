@@ -115,7 +115,9 @@
       "editorCommandHint": "Placeholders: {file}, {line}, {col}",
       "editorCommandDesc": "Command template to open files. Use {file}, {line}, {col} as placeholders",
       "middleClickPaste": "Middle-Click Paste",
-      "middleClickPasteDesc": "Paste clipboard contents when middle mouse button is clicked"
+      "middleClickPasteDesc": "Paste clipboard contents when middle mouse button is clicked",
+      "skkMode": "SKK Mode (Block Ctrl+J)",
+      "skkModeDesc": "Block Ctrl+J for Emacs-style IME (SKK) compatibility. Disable to send Ctrl+J to terminal"
     },
     "keybinds": {
       "title": "Keybinds",
