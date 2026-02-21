@@ -607,8 +607,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.fontAscent = ascent;
 		this.fontDescent = descent;
 
-		// Use font metrics (ascent + descent) as the natural line height
-		this.charHeight = ascent + descent;
+		// Use font metrics (ascent + descent) as the natural line height.
+		// Ceil to integer so drawImage scroll shift aligns with Math.floor row positions.
+		this.charHeight = Math.ceil(ascent + descent);
 	}
 
 	/**
@@ -724,17 +725,33 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const buffer = state.getActiveBuffer();
 		const dirtyRows = state.getDirtyRows();
 
-		// Render dirty rows (packed path with LineAccessor fallback)
-		let renderedCount = 0;
+		// Pre-parse packed data for dirty rows
+		const parsedRows: { rowIndex: number; spans: TextSpan[] | null; line: LineAccessor | null }[] = [];
 		for (const rowIndex of dirtyRows) {
 			const packed = state.getRowPacked(rowIndex);
 			if (packed) {
-				this.renderLinePacked(rowIndex, packed);
+				parsedRows.push({ rowIndex, spans: groupPackedCellsIntoSpans(packed, this.cols), line: null });
 			} else {
-				const line = buffer.getLine(rowIndex);
-				this.renderLine(rowIndex, line);
+				parsedRows.push({ rowIndex, spans: null, line: buffer.getLine(rowIndex) });
 			}
-			renderedCount++;
+		}
+
+		// Two-pass rendering to prevent descender clipping
+		// Pass 1: backgrounds
+		for (const { rowIndex, spans, line } of parsedRows) {
+			if (spans) {
+				this.renderLineBackgroundFromSpans(rowIndex, spans);
+			} else if (line) {
+				this.renderLineBackground(rowIndex, line);
+			}
+		}
+		// Pass 2: text
+		for (const { rowIndex, spans, line } of parsedRows) {
+			if (spans) {
+				this.renderLineTextFromSpans(rowIndex, spans);
+			} else if (line) {
+				this.renderLineText(rowIndex, line);
+			}
 		}
 
 		// Clear per-frame detection cache
@@ -744,9 +761,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 		state.clearDirty();
 
 		// Clear previous cursor position if it moved
-		// Need to re-render the previous row if:
-		// 1. Cursor moved to a different row AND that row wasn't already dirty
-		// 2. Cursor moved within the same row AND that row wasn't already dirty
 		const cursorMoved =
 			this.prevCursorCol !== state.cursorCol ||
 			this.prevCursorRow !== state.cursorRow;
@@ -756,13 +770,16 @@ export class CanvasRenderer implements ITerminalRenderer {
 			!dirtyRows.includes(this.prevCursorRow);
 
 		if (prevRowNeedsRedraw) {
-			// Re-render the previous cursor row to clear the old cursor
+			// Two-pass rendering consistent with dirty-row path above
 			const prevPacked = state.getRowPacked(this.prevCursorRow);
 			if (prevPacked) {
-				this.renderLinePacked(this.prevCursorRow, prevPacked);
+				const prevSpans = groupPackedCellsIntoSpans(prevPacked, this.cols);
+				this.renderLineBackgroundFromSpans(this.prevCursorRow, prevSpans);
+				this.renderLineTextFromSpans(this.prevCursorRow, prevSpans);
 			} else {
 				const prevLine = buffer.getLine(this.prevCursorRow);
-				this.renderLine(this.prevCursorRow, prevLine);
+				this.renderLineBackground(this.prevCursorRow, prevLine);
+				this.renderLineText(this.prevCursorRow, prevLine);
 			}
 		}
 
@@ -792,10 +809,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	/**
 	 * Render a single line (both background and text).
-	 * Used for incremental rendering of dirty rows.
-	 *
-	 * @param rowIndex - Row index (0-based)
-	 * @param line - Line to render
 	 */
 	private renderLine(rowIndex: number, line: LineAccessor): void {
 		this.renderLineBackground(rowIndex, line);
@@ -804,11 +817,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	/**
 	 * Render a line from packed binary data (single pass: background + text).
-	 * Parses packed data once via groupPackedCellsIntoSpans and uses the result
-	 * for both background and text rendering (FR10).
-	 *
-	 * @param rowIndex - Row index (0-based)
-	 * @param packed - Packed binary row data from WASM
 	 */
 	private renderLinePacked(rowIndex: number, packed: Uint8Array): void {
 		const spans = groupPackedCellsIntoSpans(packed, this.cols);

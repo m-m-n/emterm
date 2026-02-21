@@ -20,7 +20,9 @@ use crate::terminal_core::TerminalCore;
 // ── Scroll Event ─────────────────────────────────────────
 
 /// Direction of a scroll event for differential rendering.
+/// Currently unused: scroll optimization is disabled for diagnosis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum ScrollDirection {
     Up,
 }
@@ -130,18 +132,10 @@ impl TerminalCore {
             for _ in 0..count {
                 self.ring_push_blank();
             }
-            if count == 1 && self.scroll_event.is_none() {
-                // Differential rendering: single scroll with no pending event
-                self.scroll_event = Some(ScrollEvent {
-                    direction: ScrollDirection::Up,
-                    count,
-                });
-                self.mark_row_dirty(bottom);
-            } else {
-                // Fallback: multi-scroll, count > 1, or pending event exists
-                self.scroll_event = None;
-                self.mark_all_dirty();
-            }
+            // TODO: Scroll optimization disabled for diagnosis.
+            // Always fall back to full redraw to isolate rendering issues.
+            self.scroll_event = None;
+            self.mark_all_dirty();
         } else {
             self.shift_rows_up(top, bottom, count);
         }
@@ -1381,25 +1375,23 @@ mod tests {
     // ── Scroll event tests ──────────────────────────────────
 
     #[test]
-    fn test_scroll_up_full_screen_count1_emits_scroll_event() {
+    fn test_scroll_up_full_screen_count1_marks_all_dirty() {
+        // Scroll optimization is disabled: full-screen scroll always marks
+        // all rows dirty instead of emitting a scroll event.
         let mut core = TerminalCore::new(80, 24, 100);
         core.clear_dirty();
         assert!(core.scroll_event.is_none());
 
         core.scroll_up_internal(1);
 
-        // Should emit scroll event
-        assert!(core.scroll_event.is_some());
-        let evt = core.scroll_event.as_ref().unwrap();
-        assert_eq!(evt.direction, super::ScrollDirection::Up);
-        assert_eq!(evt.count, 1);
+        // No scroll event (optimization disabled)
+        assert!(core.scroll_event.is_none());
 
-        // Should only mark the last row dirty (row 23)
+        // All rows should be dirty
+        assert!(core.is_row_dirty(0));
+        assert!(core.is_row_dirty(12));
+        assert!(core.is_row_dirty(22));
         assert!(core.is_row_dirty(23));
-        // Other rows should NOT be dirty
-        assert!(!core.is_row_dirty(0));
-        assert!(!core.is_row_dirty(12));
-        assert!(!core.is_row_dirty(22));
     }
 
     #[test]
@@ -1435,14 +1427,69 @@ mod tests {
     fn test_scroll_event_cleared_correctly() {
         let mut core = TerminalCore::new(80, 24, 100);
 
+        // Scroll optimization is disabled, so scroll_up_internal does not
+        // emit a scroll event.  Verify clear_scroll_event is safe on None.
         core.scroll_up_internal(1);
-        assert!(core.scroll_event.is_some());
-        assert_eq!(core.get_scroll_event_direction(), 1);
-        assert_eq!(core.get_scroll_event_count(), 1);
+        assert!(core.scroll_event.is_none());
+        assert_eq!(core.get_scroll_event_direction(), 0);
+        assert_eq!(core.get_scroll_event_count(), 0);
 
         core.clear_scroll_event();
         assert!(core.scroll_event.is_none());
         assert_eq!(core.get_scroll_event_direction(), 0);
         assert_eq!(core.get_scroll_event_count(), 0);
+    }
+
+    #[test]
+    fn test_scroll_up_marks_all_dirty_regardless_of_pre_existing() {
+        // Scroll optimization is disabled: mark_all_dirty overrides any
+        // pre-existing dirty bits.
+        let mut core = TerminalCore::new(80, 24, 100);
+        core.clear_dirty();
+
+        core.mark_row_dirty(15);
+        core.mark_row_dirty(20);
+
+        core.scroll_up_internal(1);
+
+        assert!(core.scroll_event.is_none());
+        // All rows should be dirty
+        for row in 0..24 {
+            assert!(core.is_row_dirty(row), "row {} should be dirty", row);
+        }
+    }
+
+    #[test]
+    fn test_scroll_up_marks_all_dirty_with_row0() {
+        // Scroll optimization is disabled: all rows become dirty after scroll
+        // regardless of pre-existing state.
+        let mut core = TerminalCore::new(80, 24, 100);
+        core.clear_dirty();
+
+        core.mark_row_dirty(0);
+        core.mark_row_dirty(10);
+
+        core.scroll_up_internal(1);
+
+        // All rows should be dirty
+        for row in 0..24 {
+            assert!(core.is_row_dirty(row), "row {} should be dirty", row);
+        }
+    }
+
+    #[test]
+    fn test_shift_dirty_down_by_one_across_word_boundary() {
+        // Test that bits shift correctly across u64 word boundaries
+        let mut core = TerminalCore::new(80, 128, 100); // 128 rows = 2 u64 words
+        core.clear_dirty();
+
+        // Mark row 64 dirty (first bit of second word)
+        core.mark_row_dirty(64);
+
+        core.shift_dirty_down_by_one();
+
+        // Should shift to row 63 (last bit of first word)
+        assert!(core.is_row_dirty(63), "row 63 should be dirty (shifted from 64)");
+        assert!(!core.is_row_dirty(64), "row 64 should not be dirty (shifted to 63)");
     }
 }

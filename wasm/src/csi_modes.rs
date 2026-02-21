@@ -7,8 +7,9 @@ const MODE_ACTION_NONE: u8 = 0;
 const MODE_ACTION_SWITCH_TO_ALT: u8 = 1;
 const MODE_ACTION_SAVE_AND_SWITCH_TO_ALT: u8 = 2;
 const MODE_ACTION_SWITCH_TO_MAIN: u8 = 3;
-const MODE_ACTION_SAVE_CURSOR: u8 = 4;
-const MODE_ACTION_RESTORE_CURSOR: u8 = 5;
+// MODE_ACTION_SAVE_CURSOR (4) and MODE_ACTION_RESTORE_CURSOR (5) are no longer
+// used: DEC mode 1048h/l now calls save_cursor()/restore_cursor() immediately
+// in WASM instead of deferring to TS via mode actions.
 const MODE_ACTION_TS_FALLBACK: u8 = 0xFF;
 
 #[wasm_bindgen]
@@ -52,11 +53,18 @@ impl TerminalCore {
                 }
             }
             1048 => {
+                // Handle cursor save/restore immediately in WASM (same as ESC 7/8).
+                // Previously deferred to TS via mode actions, which caused:
+                // 1. Timing bug: save/restore happened after the entire data chunk
+                //    was processed, not at the point the sequence appeared
+                // 2. Dual-slot bug: ESC 7/8 used WASM saved_cursor while 1048h/l
+                //    used a separate TS saved cursor, causing mismatches
                 if enable {
-                    MODE_ACTION_SAVE_CURSOR
+                    self.save_cursor();
                 } else {
-                    MODE_ACTION_RESTORE_CURSOR
+                    self.restore_cursor();
                 }
+                MODE_ACTION_NONE
             }
             1049 => {
                 if enable {
@@ -135,8 +143,13 @@ mod tests {
     #[test]
     fn test_mode_save_restore_cursor_1048() {
         let mut core = TerminalCore::new(80, 24, 0);
-        assert_eq!(core.handle_set_mode(1048, true), 4); // saveCursor
-        assert_eq!(core.handle_set_mode(1048, false), 5); // restoreCursor
+        // 1048h/l now handled immediately in WASM (returns NONE)
+        core.set_cursor(10, 5);
+        assert_eq!(core.handle_set_mode(1048, true), 0); // saveCursor (immediate)
+        core.set_cursor(20, 10);
+        assert_eq!(core.handle_set_mode(1048, false), 0); // restoreCursor (immediate)
+        assert_eq!(core.get_cursor_col(), 10);
+        assert_eq!(core.get_cursor_row(), 5);
     }
 
     #[test]

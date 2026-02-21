@@ -786,6 +786,28 @@ impl TerminalCore {
         }
     }
 
+    /// Shift dirty bits down by 1 position (row N's bit moves to row N-1).
+    /// Row 0's dirty bit is discarded (scrolled into scrollback).
+    /// Used when full-screen scroll optimization shifts the viewport mapping.
+    /// Currently unused: scroll optimization is disabled for diagnosis.
+    #[allow(dead_code)]
+    pub(crate) fn shift_dirty_down_by_one(&mut self) {
+        let len = self.dirty.len();
+        if len == 0 {
+            return;
+        }
+        for i in 0..len {
+            // Shift current word right by 1 (row N → row N-1 within this word)
+            self.dirty[i] >>= 1;
+            // Bring in the lowest bit from the next word as this word's highest bit
+            if i + 1 < len {
+                if self.dirty[i + 1] & 1 != 0 {
+                    self.dirty[i] |= 1u64 << 63;
+                }
+            }
+        }
+    }
+
     // ── Scroll Event ─────────────────────────────────────
 
     /// Returns the scroll event direction: 1=Up, 0=none.
@@ -891,7 +913,14 @@ impl TerminalCore {
             ParsedAction::Print(ch) => {
                 self.handle_print(ch as u32);
             }
+            // For all non-Print actions, flush the grapheme buffer first.
+            // This ensures any accumulated emoji/pictographic codepoints are
+            // written to the grid at the correct cursor position BEFORE
+            // cursor movements, erases, or other operations change the state.
             ParsedAction::Execute(byte) => {
+                if !self.grapheme_buffer.is_empty() {
+                    self.flush_grapheme_buffer();
+                }
                 self.handle_execute_internal(byte);
             }
             ParsedAction::CsiDispatch {
@@ -901,6 +930,9 @@ impl TerminalCore {
                 intermediate_count,
                 final_byte,
             } => {
+                if !self.grapheme_buffer.is_empty() {
+                    self.flush_grapheme_buffer();
+                }
                 self.handle_csi_internal(
                     &params[..param_count as usize],
                     &intermediates[..intermediate_count as usize],
@@ -911,15 +943,27 @@ impl TerminalCore {
                 intermediate,
                 final_byte,
             } => {
+                if !self.grapheme_buffer.is_empty() {
+                    self.flush_grapheme_buffer();
+                }
                 self.handle_esc_internal(intermediate, final_byte);
             }
             ParsedAction::OscDispatch { param, data } => {
+                if !self.grapheme_buffer.is_empty() {
+                    self.flush_grapheme_buffer();
+                }
                 self.handle_osc_internal(param, &data);
             }
             ParsedAction::ApcDispatch(payload) => {
+                if !self.grapheme_buffer.is_empty() {
+                    self.flush_grapheme_buffer();
+                }
                 self.fire_apc_callback(&payload);
             }
             ParsedAction::DcsDispatch(payload) => {
+                if !self.grapheme_buffer.is_empty() {
+                    self.flush_grapheme_buffer();
+                }
                 self.fire_dcs_callback(&payload);
             }
         }
@@ -1562,5 +1606,100 @@ mod tests {
         let mut core = TerminalCore::new(80, 24, 0);
         core.mode_actions.push(3); // SWITCH_TO_MAIN
         assert!(core.has_pending_buffer_switch());
+    }
+
+    // ── Grapheme buffer flush on non-Print dispatch ──────
+
+    #[test]
+    fn test_grapheme_buffer_flushed_before_csi_cursor_move() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Print emoji (gets buffered as Extended_Pictographic)
+        // then CSI CUP to move cursor, then print 'A'
+        // Emoji should be at position (0,0), not at the CUP destination
+        let data = b"\xF0\x9F\x98\x80\x1B[3;5HA"; // 😀 \x1b[3;5H A
+        core.process_pty_data(data);
+        // 😀 should be at (0, 0)
+        assert_eq!(core.get_cell_char(0, 0), "😀");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        // 'A' should be at (4, 2) [CUP row=3 col=5 → 0-indexed (2, 4)]
+        assert_eq!(core.get_cell_char(4, 2), "A");
+    }
+
+    #[test]
+    fn test_grapheme_buffer_flushed_before_execute_cr() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Move cursor to col 10 first, print emoji then CR
+        // Emoji should be at col 10 (flushed before CR), not lost
+        let data = b"\x1B[1;11H\xF0\x9F\x98\x80\r"; // CUP(1,11) 😀 CR
+        core.process_pty_data(data);
+        // 😀 should be at (10, 0) with width 2
+        assert_eq!(core.get_cell_char(10, 0), "😀");
+        assert_eq!(core.get_cell_width(10, 0), 2);
+        // After CR, cursor should be at col 0
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_grapheme_buffer_flushed_before_execute_lf() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Print emoji then LF then 'A'
+        let data = b"\xF0\x9F\x98\x80\nA"; // 😀 LF A
+        core.process_pty_data(data);
+        // 😀 should be at (0, 0), width 2
+        assert_eq!(core.get_cell_char(0, 0), "😀");
+        assert_eq!(core.get_cell_width(0, 0), 2);
+        // After LF, cursor moves to row 1 (col stays at 2 from emoji advance)
+        // 'A' should be at (2, 1)
+        assert_eq!(core.get_cell_char(2, 1), "A");
+    }
+
+    #[test]
+    fn test_grapheme_buffer_flushed_before_esc_dispatch() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Move to row 1 first so ESC M (Reverse Index) goes to row 0
+        // Print emoji at row 1, then ESC M
+        let data = b"\x1B[2;1H\xF0\x9F\x98\x80\x1BM"; // CUP(2,1) 😀 ESC_M
+        core.process_pty_data(data);
+        // 😀 should be at (0, 1) — row 1, col 0
+        assert_eq!(core.get_cell_char(0, 1), "😀");
+        assert_eq!(core.get_cell_width(0, 1), 2);
+        // After ESC M (reverse index), cursor should be at row 0
+        assert_eq!(core.get_cursor_row(), 0);
+    }
+
+    // ── DEC mode 1048 immediate save/restore ──────────────
+
+    #[test]
+    fn test_dec_1048_save_restore_immediate_in_data_stream() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Write "AB" at (0,0), save cursor (CSI ?1048h), move to (10,5),
+        // write "CD", restore cursor (CSI ?1048l), write "EF"
+        // "EF" should appear at (2,0) (where cursor was saved), not at (12,5)
+        let data = b"AB\x1B[?1048h\x1B[6;11HCD\x1B[?1048lEF";
+        core.process_pty_data(data);
+        // "AB" at (0,0) and (1,0)
+        assert_eq!(core.get_cell_char(0, 0), "A");
+        assert_eq!(core.get_cell_char(1, 0), "B");
+        // "CD" at (10,5) and (11,5)
+        assert_eq!(core.get_cell_char(10, 5), "C");
+        assert_eq!(core.get_cell_char(11, 5), "D");
+        // "EF" at (2,0) and (3,0) (restored cursor position)
+        assert_eq!(core.get_cell_char(2, 0), "E");
+        assert_eq!(core.get_cell_char(3, 0), "F");
+        // No mode actions should be queued (handled immediately)
+        assert!(core.mode_actions.is_empty());
+    }
+
+    #[test]
+    fn test_dec_1048_and_esc7_share_same_saved_cursor() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Save with ESC 7 at (5,3), move, restore with CSI ?1048l
+        // They should share the same saved cursor slot
+        core.set_cursor(5, 3);
+        let data = b"\x1B7\x1B[10;20HX\x1B[?1048l";
+        core.process_pty_data(data);
+        // Cursor should be restored to (5,3) from ESC 7 save
+        assert_eq!(core.get_cursor_col(), 5);
+        assert_eq!(core.get_cursor_row(), 3);
     }
 }
