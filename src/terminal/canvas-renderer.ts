@@ -660,8 +660,14 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (!this.renderPending) {
 			this.renderPending = true;
 			requestAnimationFrame(() => {
-				this.render();
-				this.renderPending = false;
+				try {
+					this.render();
+				} catch (error) {
+					console.error("[ERROR][FRONTEND] Render failed:", error);
+					this.detectionCache.clear();
+				} finally {
+					this.renderPending = false;
+				}
 			});
 		}
 	}
@@ -936,7 +942,15 @@ export class CanvasRenderer implements ITerminalRenderer {
 				if (r < 0 || r >= this.renderVisibleLines!.length) return null;
 				return this.renderVisibleLines![r] ?? null;
 			}
-			: (r: number): LineAccessor | null => this.pendingState!.getActiveBuffer().getLine(r);
+			: (r: number): LineAccessor | null => {
+				if (r < 0 || r >= this.rows) return null;
+				try {
+					return this.pendingState!.getActiveBuffer().getLine(r);
+				} catch (e) {
+					console.warn("[WARN][FRONTEND] Unexpected getLine error at row", r, e);
+					return null;
+				}
+			};
 
 		const logical = getLogicalLine(getLine, rowIndex, this.rows);
 		if (logical.rowCount === 0) return;
