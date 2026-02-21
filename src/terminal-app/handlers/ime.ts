@@ -280,6 +280,14 @@ export class ImeHandler {
 						console.error("Failed to write to PTY:", error);
 					});
 				}
+				// Reset EditContext buffer after direct input to prevent accumulation.
+				// Without this, the browser's text input system may intercept subsequent
+				// special keys (e.g., Shift+Enter) to "commit" the accumulated buffer,
+				// calling preventDefault() on the keydown event and causing key loss.
+				if (this.editContext && this.editContext.text.length > 0) {
+					this.editContext.updateText(0, this.editContext.text.length, "");
+					this.editContext.updateSelection(0, 0);
+				}
 			}
 
 			// Update EditContext's text bounds for IME positioning

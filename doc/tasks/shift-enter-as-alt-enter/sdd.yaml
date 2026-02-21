@@ -1,0 +1,75 @@
+schema_version: 1
+feature: shift-enter-as-alt-enter
+scale: light
+created: 2026-02-21
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 776e3d5f7292d607aa82f369e6882fc3f23ff8da
+  - id: implement
+    status: completed
+    completed_at_commit: 776e3d5f7292d607aa82f369e6882fc3f23ff8da
+  - id: check
+    status: completed
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+  - id: review
+    status: pending
+
+requirements:
+  FR1:
+    title: Setting field shift_enter_as_alt_enter (bool, default true)
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Shift+Enter key remapping (ESC+CR when enabled, CR when disabled)
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Alt+Enter always sends ESC+CR
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Modifier exclusion (Ctrl+Shift+Enter unaffected)
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Additional special key mappings (Shift+Backspace, Shift+Escape)
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Settings UI toggle in Terminal Behavior section
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Default-true cache handling (!== false pattern)
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Backward compatibility (CursorKeysMode | KeyboardOptions)
+    status: ok
+    tasks: []
+    tests: []

@@ -11,6 +11,14 @@ import type { CursorKeysMode } from "../terminal/modes";
 const textEncoder = new TextEncoder();
 
 /**
+ * Options for keyEventToBytes conversion.
+ */
+export interface KeyboardOptions {
+	cursorKeysMode?: CursorKeysMode;
+	shiftEnterAsAltEnter?: boolean;
+}
+
+/**
  * Mapping definition for special key sequences.
  */
 export interface KeyMapping {
@@ -84,9 +92,13 @@ const SPECIAL_KEYS: KeyMapping[] = [
 	// Special keys
 	{ key: "Tab", shift: true, sequence: [0x1b, 0x5b, 0x5a] }, // ESC [ Z (back-tab)
 	{ key: "Enter", sequence: [0x0d] }, // CR (Carriage Return)
+	{ key: "Enter", shift: true, sequence: [0x0d] }, // Shift+Enter -> CR (default; overridden by shiftEnterAsAltEnter option)
+	{ key: "Enter", alt: true, sequence: [0x1b, 0x0d] }, // Alt+Enter -> ESC + CR
 	{ key: "Tab", sequence: [0x09] }, // HT (Horizontal Tab)
 	{ key: "Backspace", sequence: [0x7f] }, // DEL
+	{ key: "Backspace", shift: true, sequence: [0x7f] }, // Shift+Backspace -> same as Backspace
 	{ key: "Escape", sequence: [0x1b] }, // ESC
+	{ key: "Escape", shift: true, sequence: [0x1b] }, // Shift+Escape -> same as Escape
 	{ key: "Escape", ctrl: true, sequence: [0x1b] }, // Ctrl+[ (browser reports as Escape with ctrlKey)
 ];
 
@@ -210,8 +222,26 @@ function encodeModifiedTildeSeq(num: string, mod: number): Uint8Array {
  */
 export function keyEventToBytes(
 	event: KeyboardEvent,
-	cursorKeysMode: CursorKeysMode = "normal",
+	cursorKeysModeOrOptions?: CursorKeysMode | KeyboardOptions,
 ): Uint8Array | null {
+	// Normalize arguments: support both legacy positional and new options form
+	const options: KeyboardOptions =
+		typeof cursorKeysModeOrOptions === "object" && cursorKeysModeOrOptions !== null
+			? cursorKeysModeOrOptions
+			: { cursorKeysMode: cursorKeysModeOrOptions ?? "normal" };
+	const cursorKeysMode = options.cursorKeysMode ?? "normal";
+
+	// Handle Shift+Enter → Alt+Enter remapping (when option is enabled)
+	if (
+		options.shiftEnterAsAltEnter &&
+		event.key === "Enter" &&
+		event.shiftKey &&
+		!event.ctrlKey &&
+		!event.altKey
+	) {
+		return new Uint8Array([0x1b, 0x0d]); // ESC + CR (same as Alt+Enter)
+	}
+
 	// Handle Application Cursor Keys mode (DECCKM)
 	// Arrow keys send ESC O instead of ESC [ when DECCKM is set
 	if (

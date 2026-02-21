@@ -384,6 +384,8 @@ pub struct AppSettings {
     pub bold_brightens_ansi_colors: bool,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub middle_click_paste: bool,
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub shift_enter_as_alt_enter: bool,
     #[serde(
         default = "default_editor_command",
         deserialize_with = "deserialize_null_editor_command"
@@ -490,6 +492,7 @@ impl Default for AppSettings {
             file_path_detection: default_true(),
             bold_brightens_ansi_colors: default_true(),
             middle_click_paste: default_true(),
+            shift_enter_as_alt_enter: default_true(),
             editor_command: default_editor_command(),
             skk_mode: default_true(),
             notification_enabled: default_true(),
@@ -671,6 +674,7 @@ mod tests {
         assert!(settings.file_path_detection);
         assert!(settings.bold_brightens_ansi_colors);
         assert!(settings.middle_click_paste);
+        assert!(settings.shift_enter_as_alt_enter);
         assert_eq!(settings.editor_command, "code --goto {file}:{line}:{col}");
         assert!(settings.skk_mode);
         assert_eq!(settings.language, "auto");
@@ -932,6 +936,7 @@ mod tests {
             file_path_detection: false,
             bold_brightens_ansi_colors: false,
             middle_click_paste: false,
+            shift_enter_as_alt_enter: false,
             editor_command: "vim +{line} {file}".to_string(),
             skk_mode: false,
             notification_enabled: false,
@@ -965,6 +970,7 @@ mod tests {
         assert!(!restored.file_path_detection);
         assert!(!restored.bold_brightens_ansi_colors);
         assert!(!restored.middle_click_paste);
+        assert!(!restored.shift_enter_as_alt_enter);
         assert_eq!(restored.editor_command, "vim +{line} {file}");
         assert!(!restored.skk_mode);
         assert_eq!(restored.keybinds.copy, "Ctrl+C");

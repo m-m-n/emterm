@@ -57,6 +57,7 @@ export interface AppSettings {
   file_path_detection: boolean;
   bold_brightens_ansi_colors: boolean;
   middle_click_paste: boolean;
+  shift_enter_as_alt_enter: boolean;
   editor_command: string;
 
   // IME

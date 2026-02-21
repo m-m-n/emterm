@@ -116,6 +116,8 @@
       "editorCommandDesc": "ファイルを開くコマンドテンプレート。{file}, {line}, {col} をプレースホルダーとして使用",
       "middleClickPaste": "ホイールクリックでペースト",
       "middleClickPasteDesc": "マウスの中ボタンをクリックするとクリップボードの内容をペーストします",
+      "shiftEnterAsAltEnter": "Shift+EnterをAlt+Enterとして送信",
+      "shiftEnterAsAltEnterDesc": "Shift+EnterでAlt+Enterと同じエスケープシーケンスを送信し、マルチライン入力を可能にします",
       "skkMode": "SKKモード（Ctrl+Jブロック）",
       "skkModeDesc": "Emacs系IME（SKK）との互換性のためCtrl+Jをブロックします。無効にするとCtrl+Jをターミナルに送信します"
     },
