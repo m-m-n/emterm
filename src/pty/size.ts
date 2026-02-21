@@ -103,13 +103,14 @@ export function measureCharacterSize(container: HTMLElement): CharacterSize {
 	// Measure 'M' as a representative character for monospace fonts
 	const metrics = ctx.measureText("M");
 
-	// Use font metrics (ascent + descent) as the natural line height
+	// Use font metrics (ascent + descent) as the natural line height.
+	// Ceil to integer so drawImage scroll shift aligns with Math.floor row positions.
 	const ascent = metrics.fontBoundingBoxAscent ?? fontSize * 0.8;
 	const descent = metrics.fontBoundingBoxDescent ?? fontSize * 0.2;
 
 	return {
 		width: metrics.width,
-		height: ascent + descent,
+		height: Math.ceil(ascent + descent),
 	};
 }
 

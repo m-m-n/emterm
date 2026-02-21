@@ -1,0 +1,50 @@
+schema_version: 1
+feature: render-corruption-fix
+scale: light
+created: 2026-02-21
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+    wasm:
+      language: rust
+      build_command: "cd wasm && wasm-pack build --target web --out-dir pkg"
+      test_command: "cd wasm && cargo test"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 3a9d6f1f28c4d416ff896f03e4dc6a3d76115a64
+  - id: implement
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+
+requirements:
+  FR1:
+    title: "Differential render must produce identical output to full render"
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: "All rendering paths must handle rapid sequential updates within a single frame"
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "No noticeable performance degradation"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Correct rendering across different devicePixelRatio values"
+    status: ok
+    tasks: []
+    tests: []

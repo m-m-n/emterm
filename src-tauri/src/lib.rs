@@ -517,7 +517,15 @@ fn spawn_reader_thread(
                 }
                 Ok(n) => {
                     // Send raw bytes via Channel for WASM processing
-                    let _ = channel.send(buf[..n].to_vec());
+                    if let Err(e) = channel.send(buf[..n].to_vec()) {
+                        log::warn!(
+                            "PTY reader: channel.send failed for session {} ({} bytes lost): {}",
+                            session_id,
+                            n,
+                            e
+                        );
+                        break;
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     // No data available, check if process exited then sleep briefly
