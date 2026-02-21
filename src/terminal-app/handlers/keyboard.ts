@@ -271,8 +271,10 @@ export class KeyboardHandler {
 
     // Get cursor keys mode from terminal state for DECCKM support
     const state = this.getState();
-    const cursorKeysMode = state.getModes().cursorKeys;
-    const bytes = keyEventToBytes(event, cursorKeysMode);
+    const bytes = keyEventToBytes(event, {
+      cursorKeysMode: state.getModes().cursorKeys,
+      shiftEnterAsAltEnter: cachedSettings?.shift_enter_as_alt_enter !== false,
+    });
     if (bytes) {
       event.preventDefault();
 

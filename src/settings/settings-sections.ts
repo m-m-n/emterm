@@ -619,6 +619,19 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
+  // Shift+Enter as Alt+Enter (toggle)
+  renderToggle(
+    panel,
+    {
+      key: "shift-enter-as-alt-enter",
+      label: t("settings.terminal.shiftEnterAsAltEnter"),
+      value: settings.shift_enter_as_alt_enter,
+      description: t("settings.terminal.shiftEnterAsAltEnterDesc"),
+      onSave: (v) => ctx.saveSetting("shift_enter_as_alt_enter", v),
+    },
+    ctx.addContentListener,
+  );
+
   // SKK Mode (toggle)
   renderToggle(
     panel,

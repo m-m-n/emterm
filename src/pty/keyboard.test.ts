@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { keyEventToBytes, shouldHandleKey, calcModifierParam } from "./keyboard";
+import { keyEventToBytes, shouldHandleKey, calcModifierParam, type KeyboardOptions } from "./keyboard";
 
 /**
  * Helper to create a mock KeyboardEvent.
@@ -224,6 +224,30 @@ describe("keyEventToBytes", () => {
 		it("should convert Ctrl+[ to ESC (0x1b)", () => {
 			// Browser reports Ctrl+[ as key="Escape" with ctrlKey=true
 			const event = createKeyEvent("Escape", { ctrlKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b]));
+		});
+
+		it("should convert Shift+Enter to CR (0x0d) by default (setting OFF)", () => {
+			const event = createKeyEvent("Enter", { shiftKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x0d]));
+		});
+
+		it("should convert Alt+Enter to ESC + CR (0x1b, 0x0d)", () => {
+			const event = createKeyEvent("Enter", { altKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x1b, 0x0d]));
+		});
+
+		it("should convert Shift+Backspace to DEL (0x7f), same as Backspace", () => {
+			const event = createKeyEvent("Backspace", { shiftKey: true });
+			const result = keyEventToBytes(event);
+			expect(result).toEqual(new Uint8Array([0x7f]));
+		});
+
+		it("should convert Shift+Escape to ESC (0x1b), same as Escape", () => {
+			const event = createKeyEvent("Escape", { shiftKey: true });
 			const result = keyEventToBytes(event);
 			expect(result).toEqual(new Uint8Array([0x1b]));
 		});
@@ -470,6 +494,39 @@ describe("keyEventToBytes", () => {
 			const event = createKeyEvent("x", { altKey: true });
 			const result = keyEventToBytes(event);
 			expect(result).toEqual(new Uint8Array([0x1b, 0x78])); // ESC + 'x'
+		});
+	});
+
+	describe("shiftEnterAsAltEnter option", () => {
+		it("should convert Shift+Enter to ESC + CR when option is enabled", () => {
+			const event = createKeyEvent("Enter", { shiftKey: true });
+			const result = keyEventToBytes(event, { shiftEnterAsAltEnter: true });
+			expect(result).toEqual(new Uint8Array([0x1b, 0x0d]));
+		});
+
+		it("should convert Shift+Enter to CR when option is disabled", () => {
+			const event = createKeyEvent("Enter", { shiftKey: true });
+			const result = keyEventToBytes(event, { shiftEnterAsAltEnter: false });
+			expect(result).toEqual(new Uint8Array([0x0d]));
+		});
+
+		it("should not affect Ctrl+Shift+Enter", () => {
+			const event = createKeyEvent("Enter", { shiftKey: true, ctrlKey: true });
+			const result = keyEventToBytes(event, { shiftEnterAsAltEnter: true });
+			// Should NOT trigger the remapping (ctrlKey is true)
+			expect(result).not.toEqual(new Uint8Array([0x1b, 0x0d]));
+		});
+
+		it("should not affect plain Enter when option is enabled", () => {
+			const event = createKeyEvent("Enter");
+			const result = keyEventToBytes(event, { shiftEnterAsAltEnter: true });
+			expect(result).toEqual(new Uint8Array([0x0d]));
+		});
+
+		it("should accept KeyboardOptions object with cursorKeysMode", () => {
+			const event = createKeyEvent("ArrowUp");
+			const result = keyEventToBytes(event, { cursorKeysMode: "application" });
+			expect(result).toEqual(new Uint8Array([0x1b, 0x4f, 0x41])); // ESC O A
 		});
 	});
 
