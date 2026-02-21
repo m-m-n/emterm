@@ -390,6 +390,10 @@ pub struct AppSettings {
     )]
     pub editor_command: String,
 
+    // IME
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub skk_mode: bool,
+
     // Notification
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub notification_enabled: bool,
@@ -487,6 +491,7 @@ impl Default for AppSettings {
             bold_brightens_ansi_colors: default_true(),
             middle_click_paste: default_true(),
             editor_command: default_editor_command(),
+            skk_mode: default_true(),
             notification_enabled: default_true(),
             tab_activity_indicator: default_true(),
             notify_on_process_exit: default_true(),
@@ -667,6 +672,7 @@ mod tests {
         assert!(settings.bold_brightens_ansi_colors);
         assert!(settings.middle_click_paste);
         assert_eq!(settings.editor_command, "code --goto {file}:{line}:{col}");
+        assert!(settings.skk_mode);
         assert_eq!(settings.language, "auto");
         assert_eq!(settings.ui_font_family, "Roboto");
         assert!(settings.show_tab_bar);
@@ -927,6 +933,7 @@ mod tests {
             bold_brightens_ansi_colors: false,
             middle_click_paste: false,
             editor_command: "vim +{line} {file}".to_string(),
+            skk_mode: false,
             notification_enabled: false,
             tab_activity_indicator: false,
             notify_on_process_exit: false,
@@ -959,6 +966,7 @@ mod tests {
         assert!(!restored.bold_brightens_ansi_colors);
         assert!(!restored.middle_click_paste);
         assert_eq!(restored.editor_command, "vim +{line} {file}");
+        assert!(!restored.skk_mode);
         assert_eq!(restored.keybinds.copy, "Ctrl+C");
         assert_eq!(restored.keybinds.paste, "Ctrl+V");
         assert_eq!(restored.keybinds.select_all, "Ctrl+Shift+A");

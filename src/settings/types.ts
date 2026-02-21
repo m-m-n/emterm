@@ -59,6 +59,9 @@ export interface AppSettings {
   middle_click_paste: boolean;
   editor_command: string;
 
+  // IME
+  skk_mode: boolean;
+
   // Notification
   notification_enabled: boolean;
   tab_activity_indicator: boolean;

@@ -633,6 +633,74 @@ describe("KeyboardHandler", () => {
     });
   });
 
+  describe("Ctrl+J blocking (skk_mode)", () => {
+    it("should block Ctrl+J when skk_mode is true (default)", () => {
+      // Mock SettingsService.getCached to return skk_mode: true
+      const { SettingsService } = require("../../settings/settings-service");
+      SettingsService.getCached = () => ({ skk_mode: true, keybinds: {} });
+
+      const ptyClient = createMockPtyClient();
+      const context = createTestContext({
+        ptyClient,
+        getState: () =>
+          ({
+            getModes: () => ({ cursorKeys: "normal" }),
+          }) as unknown as TerminalState,
+      });
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("j", { ctrlKey: true });
+      handler.handleKeyDown(event);
+
+      // Ctrl+J should be blocked - write not called
+      expect(ptyClient.write).not.toHaveBeenCalled();
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("should block Ctrl+J when skk_mode is not explicitly set (null settings)", () => {
+      const { SettingsService } = require("../../settings/settings-service");
+      SettingsService.getCached = () => null;
+
+      const ptyClient = createMockPtyClient();
+      const context = createTestContext({
+        ptyClient,
+        getState: () =>
+          ({
+            getModes: () => ({ cursorKeys: "normal" }),
+          }) as unknown as TerminalState,
+      });
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("j", { ctrlKey: true });
+      handler.handleKeyDown(event);
+
+      // Ctrl+J should be blocked - skk_mode defaults to blocking
+      expect(ptyClient.write).not.toHaveBeenCalled();
+    });
+
+    it("should allow Ctrl+J through when skk_mode is false", () => {
+      const { SettingsService } = require("../../settings/settings-service");
+      SettingsService.getCached = () => ({ skk_mode: false, keybinds: {} });
+
+      const ptyClient = createMockPtyClient();
+      const context = createTestContext({
+        ptyClient,
+        getState: () =>
+          ({
+            getModes: () => ({ cursorKeys: "normal" }),
+          }) as unknown as TerminalState,
+      });
+      const handler = new KeyboardHandler(context);
+
+      const event = createKeyEvent("j", { ctrlKey: true });
+      handler.handleKeyDown(event);
+
+      // Ctrl+J should pass through - produces 0x0A (LF)
+      expect(ptyClient.write).toHaveBeenCalled();
+      expect(event.preventDefault).toHaveBeenCalled();
+    });
+  });
+
   describe("isSpecialKey", () => {
     it("should return true for Ctrl combinations", () => {
       const context = createTestContext();

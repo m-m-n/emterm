@@ -619,6 +619,19 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
+  // SKK Mode (toggle)
+  renderToggle(
+    panel,
+    {
+      key: "skk-mode",
+      label: t("settings.terminal.skkMode"),
+      value: settings.skk_mode,
+      description: t("settings.terminal.skkModeDesc"),
+      onSave: (v) => ctx.saveSetting("skk_mode", v),
+    },
+    ctx.addContentListener,
+  );
+
   // Fold Enabled (toggle)
   renderToggle(
     panel,

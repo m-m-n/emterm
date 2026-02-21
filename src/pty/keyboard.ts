@@ -82,11 +82,105 @@ const SPECIAL_KEYS: KeyMapping[] = [
 	{ key: "F12", sequence: [0x1b, 0x5b, 0x32, 0x34, 0x7e] }, // ESC [ 24 ~
 
 	// Special keys
+	{ key: "Tab", shift: true, sequence: [0x1b, 0x5b, 0x5a] }, // ESC [ Z (back-tab)
 	{ key: "Enter", sequence: [0x0d] }, // CR (Carriage Return)
 	{ key: "Tab", sequence: [0x09] }, // HT (Horizontal Tab)
 	{ key: "Backspace", sequence: [0x7f] }, // DEL
 	{ key: "Escape", sequence: [0x1b] }, // ESC
+	{ key: "Escape", ctrl: true, sequence: [0x1b] }, // Ctrl+[ (browser reports as Escape with ctrlKey)
 ];
+
+/**
+ * Computes the xterm modifier parameter from modifier key states.
+ *
+ * The formula is: 1 + shift_bit + alt_bit*2 + ctrl_bit*4
+ * Returns 0 when no modifiers are pressed.
+ *
+ * @param shift - Shift key pressed
+ * @param alt - Alt key pressed
+ * @param ctrl - Ctrl key pressed
+ * @returns Modifier parameter (0 for none, 2-8 for combinations)
+ */
+export function calcModifierParam(
+	shift: boolean,
+	alt: boolean,
+	ctrl: boolean,
+): number {
+	const bits =
+		(shift ? 1 : 0) + (alt ? 2 : 0) + (ctrl ? 4 : 0);
+	return bits === 0 ? 0 : bits + 1;
+}
+
+/** Arrow key -> suffix letter */
+const ARROW_KEY_LETTERS: Record<string, number> = {
+	ArrowUp: 0x41, // A
+	ArrowDown: 0x42, // B
+	ArrowRight: 0x43, // C
+	ArrowLeft: 0x44, // D
+};
+
+/** Navigation key -> suffix letter (Home/End) */
+const NAV_KEY_LETTERS: Record<string, number> = {
+	Home: 0x48, // H
+	End: 0x46, // F
+};
+
+/** Tilde-style key -> CSI number string */
+const TILDE_KEY_NUMBERS: Record<string, string> = {
+	Insert: "2",
+	Delete: "3",
+	PageUp: "5",
+	PageDown: "6",
+};
+
+/** F1-F4 -> suffix letter */
+const FKEY_LETTERS: Record<string, number> = {
+	F1: 0x50, // P
+	F2: 0x51, // Q
+	F3: 0x52, // R
+	F4: 0x53, // S
+};
+
+/** F5-F12 -> CSI number string */
+const FKEY_TILDE_NUMBERS: Record<string, string> = {
+	F5: "15",
+	F6: "17",
+	F7: "18",
+	F8: "19",
+	F9: "20",
+	F10: "21",
+	F11: "23",
+	F12: "24",
+};
+
+/**
+ * Encodes a letter-style modified sequence: ESC [ {prefix} ; {mod} {letter}
+ */
+function encodeModifiedLetterSeq(
+	prefix: string,
+	mod: number,
+	letter: number,
+): Uint8Array {
+	const seq = `\x1b[${prefix};${mod}`;
+	const bytes = new Uint8Array(seq.length + 1);
+	for (let i = 0; i < seq.length; i++) {
+		bytes[i] = seq.charCodeAt(i);
+	}
+	bytes[seq.length] = letter;
+	return bytes;
+}
+
+/**
+ * Encodes a tilde-style modified sequence: ESC [ {num} ; {mod} ~
+ */
+function encodeModifiedTildeSeq(num: string, mod: number): Uint8Array {
+	const seq = `\x1b[${num};${mod}~`;
+	const bytes = new Uint8Array(seq.length);
+	for (let i = 0; i < seq.length; i++) {
+		bytes[i] = seq.charCodeAt(i);
+	}
+	return bytes;
+}
 
 /**
  * Converts a DOM KeyboardEvent to a byte sequence for PTY input.
@@ -150,6 +244,61 @@ export function keyEventToBytes(
 		if (char >= "a" && char <= "z") {
 			// Ctrl+A = 0x01, Ctrl+B = 0x02, ..., Ctrl+Z = 0x1a
 			return new Uint8Array([char.charCodeAt(0) - 96]);
+		}
+
+		// Ctrl + symbol (@[\]^_) -> control characters via bitwise AND
+		const code = event.key.charCodeAt(0);
+		if (code >= 0x40 && code <= 0x5f) {
+			return new Uint8Array([code & 0x1f]);
+		}
+
+		// Ctrl + Space -> NUL (0x00)
+		if (event.key === " ") {
+			return new Uint8Array([0x00]);
+		}
+	}
+
+	// Modified special keys (Ctrl/Shift/Alt + Arrow/Home/End/Delete/PageUp/PageDown/F-keys)
+	{
+		const mod = calcModifierParam(event.shiftKey, event.altKey, event.ctrlKey);
+		if (mod > 0) {
+			// Arrow keys -> ESC [1;{mod}{letter}
+			const arrowLetter = ARROW_KEY_LETTERS[event.key];
+			if (arrowLetter !== undefined) {
+				return encodeModifiedLetterSeq("1", mod, arrowLetter);
+			}
+
+			// Home/End -> ESC [1;{mod}{letter}
+			const navLetter = NAV_KEY_LETTERS[event.key];
+			if (navLetter !== undefined) {
+				return encodeModifiedLetterSeq("1", mod, navLetter);
+			}
+
+			// Delete/Insert/PageUp/PageDown -> ESC [{num};{mod}~
+			const tildeNum = TILDE_KEY_NUMBERS[event.key];
+			if (tildeNum !== undefined) {
+				return encodeModifiedTildeSeq(tildeNum, mod);
+			}
+
+			// F1-F4 -> ESC [1;{mod}{letter}
+			const fkeyLetter = FKEY_LETTERS[event.key];
+			if (fkeyLetter !== undefined) {
+				return encodeModifiedLetterSeq("1", mod, fkeyLetter);
+			}
+
+			// F5-F12 -> ESC [{num};{mod}~
+			const fkeyTildeNum = FKEY_TILDE_NUMBERS[event.key];
+			if (fkeyTildeNum !== undefined) {
+				return encodeModifiedTildeSeq(fkeyTildeNum, mod);
+			}
+		}
+	}
+
+	// Ctrl+Alt + letter -> ESC + control character
+	if (event.altKey && event.ctrlKey && event.key.length === 1) {
+		const char = event.key.toLowerCase();
+		if (char >= "a" && char <= "z") {
+			return new Uint8Array([0x1b, char.charCodeAt(0) - 96]);
 		}
 	}
 
