@@ -1,33 +1,17 @@
 # Docker Compose for E2E Testing
 # Usage:
-#   ./scripts/run-e2e-docker.sh              # Full cycle: install → build → test
-#   ./scripts/run-e2e-docker.sh build        # Build only (incremental)
+#   ./scripts/run-e2e-docker.sh              # Full cycle: build image → test
+#   ./scripts/run-e2e-docker.sh build        # Rebuild Docker image
 #   ./scripts/run-e2e-docker.sh test         # Test only
 #   ./scripts/run-e2e-docker.sh test foo.js  # Specific test
 
 services:
-  # Install dependencies (run on first setup or when packages change)
-  install:
-    build:
-      context: .
-      dockerfile: Dockerfile.e2e
-    volumes:
-      - .:/app
-      - cargo-target:/app/src-tauri/target
-      - node-modules:/app/node_modules
-      - e2e-node-modules:/app/e2e-tests/node_modules
-    command: sh -c "bun install && cd e2e-tests && npm ci --legacy-peer-deps"
-
-  # Build application (incremental builds via cargo-target volume)
+  # General-purpose runner (unit tests, typecheck, etc.)
   build:
     build:
       context: .
       dockerfile: Dockerfile.e2e
-    volumes:
-      - .:/app
-      - cargo-target:/app/src-tauri/target
-      - node-modules:/app/node_modules
-    command: bun tauri build --debug --no-bundle
+    command: echo "Build complete"
 
   # Run E2E tests
   e2e-test:
@@ -35,10 +19,6 @@ services:
       context: .
       dockerfile: Dockerfile.e2e
     volumes:
-      - .:/app
-      - cargo-target:/app/src-tauri/target
-      - node-modules:/app/node_modules
-      - e2e-node-modules:/app/e2e-tests/node_modules
       - ./e2e-tests/screenshots:/app/e2e-tests/screenshots
     environment:
       - DISPLAY=:99
@@ -58,8 +38,3 @@ services:
       sleep 2
       && cd e2e-tests
       && npx wdio run wdio.docker.conf.js"
-
-volumes:
-  cargo-target:
-  node-modules:
-  e2e-node-modules:

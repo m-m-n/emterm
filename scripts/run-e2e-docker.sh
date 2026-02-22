@@ -10,13 +10,9 @@ mkdir -p e2e-tests/screenshots
 COMPOSE="docker compose -f docker-compose.e2e.yml"
 
 case "${1:-}" in
-  install)
-    echo "Installing dependencies..."
-    $COMPOSE run --rm install
-    ;;
   build)
-    echo "Building application..."
-    $COMPOSE run --rm build
+    echo "Building Docker image..."
+    $COMPOSE build
     ;;
   test)
     if [ -n "$2" ]; then
@@ -31,25 +27,23 @@ case "${1:-}" in
     fi
     ;;
   clean)
-    echo "Removing volumes and containers..."
-    $COMPOSE down -v
+    echo "Removing containers..."
+    $COMPOSE down --rmi local
     ;;
   "")
-    # Full cycle: install → build → test
+    # Full cycle: build image → test
     echo "=== Full E2E cycle ==="
-    $COMPOSE run --rm install
-    $COMPOSE run --rm build
+    $COMPOSE build
     $COMPOSE run --rm e2e-test
     ;;
   *)
-    echo "Usage: $0 [install|build|test [spec]|clean]"
+    echo "Usage: $0 [build|test [spec]|clean]"
     echo ""
-    echo "  (no args)  Full cycle: install → build → test"
-    echo "  install    Install dependencies"
-    echo "  build      Build application"
+    echo "  (no args)  Full cycle: build image → test"
+    echo "  build      Rebuild Docker image"
     echo "  test       Run all E2E tests"
     echo "  test foo   Run specific spec file"
-    echo "  clean      Remove all volumes"
+    echo "  clean      Remove containers and images"
     exit 1
     ;;
 esac

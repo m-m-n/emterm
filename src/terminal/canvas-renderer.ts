@@ -498,6 +498,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Previous cursor row for clearing. */
 	private prevCursorRow: number = -1;
 
+	/** Previous cursor visible state for detecting visibility changes. */
+	private prevCursorVisible: boolean = true;
+
 	/** Current foreground color (can be changed by color scheme). */
 	private currentForeground: Rgb = DEFAULT_FOREGROUND;
 
@@ -760,13 +763,15 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Clear dirty flags
 		state.clearDirty();
 
-		// Clear previous cursor position if it moved
+		// Clear previous cursor position if it moved or became invisible
 		const cursorMoved =
 			this.prevCursorCol !== state.cursorCol ||
 			this.prevCursorRow !== state.cursorRow;
+		const cursorBecameInvisible =
+			this.prevCursorVisible && !state.cursorVisible;
 		const prevRowNeedsRedraw =
 			this.prevCursorRow >= 0 &&
-			cursorMoved &&
+			(cursorMoved || cursorBecameInvisible) &&
 			!dirtyRows.includes(this.prevCursorRow);
 
 		if (prevRowNeedsRedraw) {
@@ -795,6 +800,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Save current cursor position for next render
 		this.prevCursorCol = state.cursorCol;
 		this.prevCursorRow = state.cursorRow;
+		this.prevCursorVisible = state.cursorVisible;
 
 		// Record performance metrics
 		const duration = this.renderTimer.end();
@@ -1374,6 +1380,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			// Save current cursor position for next render
 			this.prevCursorCol = state.cursorCol;
 			this.prevCursorRow = state.cursorRow;
+			this.prevCursorVisible = state.cursorVisible;
 		}
 	}
 

@@ -48,6 +48,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 
+# Install wasm-pack (for WASM build)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
 # Install tauri-cli and tauri-driver
 RUN cargo install tauri-cli tauri-driver
 
@@ -62,3 +65,22 @@ RUN convert -size 1080x1920 -depth 8 xc:blue -fill white -draw "rectangle 100,10
 ENV PATH="/root/.cargo/bin:/root/.bun/bin:/app/src-tauri/target/debug:${PATH}"
 
 WORKDIR /app
+
+# -- Layer cache optimization: copy dependency files first --
+COPY package.json bun.lock ./
+COPY wasm/Cargo.toml ./wasm/
+COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./src-tauri/
+COPY e2e-tests/package.json e2e-tests/package-lock.json ./e2e-tests/
+
+# bun install (postinstall generate-icons.sh needs src-tauri/icons to exist)
+RUN mkdir -p src-tauri/icons && bun install
+RUN cd e2e-tests && npm ci --legacy-peer-deps
+
+# -- Copy full source code (.dockerignore excludes unnecessary files) --
+COPY . .
+
+# -- WASM build --
+RUN cd wasm && wasm-pack build --target web --out-dir pkg
+
+# -- Tauri app build --
+RUN bun tauri build --debug --no-bundle

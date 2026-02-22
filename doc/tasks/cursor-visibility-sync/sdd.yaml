@@ -1,0 +1,52 @@
+schema_version: 1
+feature: cursor-visibility-sync
+scale: light
+created: 2026-02-22
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+    wasm:
+      language: rust
+      build_command: "wasm-pack build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 39ad88cc47f789191b74bf38ee15a4fe1cc98577
+  - id: implement
+    status: completed
+    completed_at_commit: 39ad88cc47f789191b74bf38ee15a4fe1cc98577
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 39ad88cc47f789191b74bf38ee15a4fe1cc98577
+
+requirements:
+  FR1:
+    title: Sync WASM boolean modes to TS after process_pty_data
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Cursor blink mode (ATT160) also synced correctly
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Sync occurs after mode action processing, before render
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: No measurable performance regression
+    status: ok
+    tasks: []
+    tests: []

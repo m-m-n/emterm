@@ -431,6 +431,12 @@ export class TerminalApp {
           }
         }
 
+        // Sync boolean modes from WASM to TS BEFORE processing mode actions.
+        // This ensures WASM-managed mode bits (e.g., cursorVisible set by
+        // CSI ?25l) are read into TS before setDecPrivateMode's syncModesToWasm
+        // can overwrite them with stale TS values.
+        this.state.syncModesFromWasm();
+
         // Process mode actions (variable-length encoding)
         const modeActions = core.take_mode_actions();
         if (modeActions.length > 0) {
