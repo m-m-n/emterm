@@ -57,6 +57,7 @@ export class TerminalApp {
   private pendingApcQueue: Uint8Array[] = [];
   private pendingDcsQueue: Uint8Array[] = [];
   private pendingProtocolResponses: string[] = [];
+  private imageInvokeChain: Promise<void> = Promise.resolve();
   private lastMouseEvent: MouseEvent | null = null;
   private ctrlKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 
@@ -590,13 +591,18 @@ export class TerminalApp {
     const cursorRow = core.get_cursor_row();
     const cursorCol = core.get_cursor_col();
 
-    invoke("process_image_data", {
-      sessionId,
-      protocol: "kitty",
-      data: Array.from(data),
-      cursorRow,
-      cursorCol,
-    }).catch((error) => {
+    // Serialize invoke calls via promise chain to preserve chunk ordering.
+    // Without this, concurrent invokes race for the backend Mutex and chunks
+    // may be processed out of order, breaking multi-chunk image assembly.
+    this.imageInvokeChain = this.imageInvokeChain.then(() =>
+      invoke("process_image_data", {
+        sessionId,
+        protocol: "kitty",
+        data: Array.from(data),
+        cursorRow,
+        cursorCol,
+      }) as Promise<void>,
+    ).catch((error) => {
       console.error("Failed to process Kitty image data:", error);
     });
   }
@@ -612,13 +618,16 @@ export class TerminalApp {
     const cursorRow = core.get_cursor_row();
     const cursorCol = core.get_cursor_col();
 
-    invoke("process_image_data", {
-      sessionId,
-      protocol: "sixel",
-      data: Array.from(data),
-      cursorRow,
-      cursorCol,
-    }).catch((error) => {
+    // Share the same invoke chain as APC to serialize all image processing
+    this.imageInvokeChain = this.imageInvokeChain.then(() =>
+      invoke("process_image_data", {
+        sessionId,
+        protocol: "sixel",
+        data: Array.from(data),
+        cursorRow,
+        cursorCol,
+      }) as Promise<void>,
+    ).catch((error) => {
       console.error("Failed to process SIXEL image data:", error);
     });
   }
