@@ -811,6 +811,63 @@ describe("Modes WASM sync", () => {
 	});
 });
 
+// ── Cursor visibility PTY flow simulation ────────────────
+
+describe("Cursor visibility: PTY flow (top startup)", () => {
+	test("CSI ?25l alone hides cursor in primary buffer", () => {
+		const grid = new WasmGrid(80, 24);
+		const modes = createDefaultModes();
+
+		// Send CSI ?25l: \x1b[?25l
+		const data = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x6c]);
+		const consumed = grid.core.process_pty_data(data);
+		grid.core.take_mode_actions(); // drain (should be empty)
+		syncModesFromWasm(modes, grid.core);
+
+		expect(consumed).toBe(6);
+		expect(grid.core.get_mode(WASM_MODE_BITS.cursorVisible)).toBe(false);
+		expect(modes.cursorVisible).toBe(false);
+		grid.dispose();
+	});
+
+	test("CSI ?1049h + CSI ?25l: simulate top startup sequence", () => {
+		const primaryGrid = new WasmGrid(80, 24);
+		const modes = createDefaultModes();
+
+		// Simulate: \x1b[?1049h\x1b[?25l\x1b[H (save+alt, hide cursor, home)
+		const data = new Uint8Array([
+			0x1b, 0x5b, 0x3f, 0x31, 0x30, 0x34, 0x39, 0x68, // CSI ?1049h
+			0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x6c,               // CSI ?25l
+			0x1b, 0x5b, 0x48,                                   // CSI H (home)
+		]);
+
+		// First iteration: process with primary core
+		const consumed1 = primaryGrid.core.process_pty_data(data);
+		const actions1 = primaryGrid.core.take_mode_actions();
+
+		// Expect: stops after CSI ?1049h (buffer switch detected)
+		expect(consumed1).toBeLessThan(data.length); // should NOT consume all
+		expect(actions1.length).toBeGreaterThan(0); // should have buffer switch action
+
+		// Simulate buffer switch: create alternate grid
+		const altGrid = new WasmGrid(80, 24);
+		syncModesFromWasm(modes, altGrid.core); // sync from NEW alt (defaults)
+
+		// Second iteration: process remaining data with alt core
+		const remaining = data.subarray(consumed1);
+		const consumed2 = altGrid.core.process_pty_data(remaining);
+		expect(consumed2).toBe(remaining.length); // should consume all remaining
+		altGrid.core.take_mode_actions();
+		syncModesFromWasm(modes, altGrid.core);
+
+		expect(modes.cursorVisible).toBe(false);
+		expect(altGrid.core.get_mode(WASM_MODE_BITS.cursorVisible)).toBe(false);
+
+		primaryGrid.dispose();
+		altGrid.dispose();
+	});
+});
+
 // ── Performance benchmarks ──────────────────────────────
 
 describe("Performance benchmarks", () => {

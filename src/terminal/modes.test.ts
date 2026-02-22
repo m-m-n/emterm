@@ -7,7 +7,11 @@ import {
 	createDefaultModes,
 	DECPrivateMode,
 	setDecPrivateMode,
+	syncModesFromWasm,
+	syncModesToWasm,
+	WASM_MODE_BITS,
 	type TerminalModes,
+	type WasmModeCore,
 } from "./modes.ts";
 
 describe("createDefaultModes", () => {
@@ -273,5 +277,133 @@ describe("setDecPrivateMode", () => {
 			expect(result.changed).toBe(true);
 			expect(modes.focusTracking).toBe(true);
 		});
+	});
+});
+
+/**
+ * Create a mock WasmModeCore backed by a simple Map.
+ */
+function createMockWasmCore(): WasmModeCore {
+	const store = new Map<number, boolean>();
+	return {
+		get_mode(bit: number): boolean {
+			return store.get(bit) ?? false;
+		},
+		set_mode(bit: number, value: boolean): void {
+			store.set(bit, value);
+		},
+	};
+}
+
+describe("syncModesFromWasm", () => {
+	it("should sync cursorVisible=false from WASM to TS modes", () => {
+		const modes = createDefaultModes();
+		const core = createMockWasmCore();
+
+		// Simulate WASM setting cursor invisible (as CSI ?25l would)
+		core.set_mode(WASM_MODE_BITS.cursorVisible, false);
+		// Other modes at defaults
+		core.set_mode(WASM_MODE_BITS.autoWrap, true);
+		core.set_mode(WASM_MODE_BITS.cursorBlink, true);
+
+		syncModesFromWasm(modes, core);
+
+		expect(modes.cursorVisible).toBe(false);
+	});
+
+	it("should sync cursorVisible=true from WASM to TS modes", () => {
+		const modes = createDefaultModes();
+		modes.cursorVisible = false; // TS thinks hidden
+		const core = createMockWasmCore();
+
+		// WASM has cursor visible (as CSI ?25h would)
+		core.set_mode(WASM_MODE_BITS.cursorVisible, true);
+		core.set_mode(WASM_MODE_BITS.autoWrap, true);
+		core.set_mode(WASM_MODE_BITS.cursorBlink, true);
+
+		syncModesFromWasm(modes, core);
+
+		expect(modes.cursorVisible).toBe(true);
+	});
+
+	it("should sync cursorBlink (ATT160/mode 12) from WASM to TS modes", () => {
+		const modes = createDefaultModes();
+		const core = createMockWasmCore();
+
+		// Simulate WASM disabling blink
+		core.set_mode(WASM_MODE_BITS.cursorBlink, false);
+		core.set_mode(WASM_MODE_BITS.autoWrap, true);
+		core.set_mode(WASM_MODE_BITS.cursorVisible, true);
+
+		syncModesFromWasm(modes, core);
+
+		expect(modes.cursorBlink).toBe(false);
+	});
+
+	it("should sync all boolean modes from WASM to TS", () => {
+		const modes = createDefaultModes();
+		const core = createMockWasmCore();
+
+		// Set all WASM bits to non-default values
+		core.set_mode(WASM_MODE_BITS.autoWrap, false);
+		core.set_mode(WASM_MODE_BITS.originMode, true);
+		core.set_mode(WASM_MODE_BITS.cursorVisible, false);
+		core.set_mode(WASM_MODE_BITS.cursorBlink, false);
+		core.set_mode(WASM_MODE_BITS.reverseScreen, true);
+		core.set_mode(WASM_MODE_BITS.bracketedPaste, true);
+		core.set_mode(WASM_MODE_BITS.focusTracking, true);
+		core.set_mode(WASM_MODE_BITS.column132, true);
+
+		syncModesFromWasm(modes, core);
+
+		expect(modes.autoWrap).toBe(false);
+		expect(modes.originMode).toBe(true);
+		expect(modes.cursorVisible).toBe(false);
+		expect(modes.cursorBlink).toBe(false);
+		expect(modes.reverseScreen).toBe(true);
+		expect(modes.bracketedPaste).toBe(true);
+		expect(modes.focusTracking).toBe(true);
+		expect(modes.column132).toBe(true);
+	});
+});
+
+describe("syncModesToWasm", () => {
+	it("should write all boolean modes from TS to WASM", () => {
+		const modes = createDefaultModes();
+		modes.cursorVisible = false;
+		modes.autoWrap = false;
+		modes.bracketedPaste = true;
+
+		const core = createMockWasmCore();
+		syncModesToWasm(modes, core);
+
+		expect(core.get_mode(WASM_MODE_BITS.cursorVisible)).toBe(false);
+		expect(core.get_mode(WASM_MODE_BITS.autoWrap)).toBe(false);
+		expect(core.get_mode(WASM_MODE_BITS.bracketedPaste)).toBe(true);
+		expect(core.get_mode(WASM_MODE_BITS.cursorBlink)).toBe(true);
+	});
+});
+
+describe("syncModesFromWasm round-trip", () => {
+	it("should preserve mode state through TS→WASM→TS round-trip", () => {
+		const original = createDefaultModes();
+		original.cursorVisible = false;
+		original.cursorBlink = false;
+		original.autoWrap = false;
+		original.bracketedPaste = true;
+
+		const core = createMockWasmCore();
+
+		// TS → WASM
+		syncModesToWasm(original, core);
+
+		// WASM → TS (fresh modes object)
+		const restored = createDefaultModes();
+		syncModesFromWasm(restored, core);
+
+		expect(restored.cursorVisible).toBe(false);
+		expect(restored.cursorBlink).toBe(false);
+		expect(restored.autoWrap).toBe(false);
+		expect(restored.bracketedPaste).toBe(true);
 	});
 });

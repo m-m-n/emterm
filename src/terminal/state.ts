@@ -494,6 +494,19 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Sync boolean modes from WASM bitfield to TS TerminalModes.
+   * Call after process_pty_data() to pick up mode changes made inside WASM
+   * (e.g. DECTCEM cursor visibility, ATT160 cursor blink).
+   * No-op when WASM is not active.
+   */
+  syncModesFromWasm(): void {
+    const grid = this.useAlternate ? this.alternateWasmGrid : this.primaryWasmGrid;
+    if (grid) {
+      syncModesFromWasm(this.modes, grid.core);
+    }
+  }
+
+  /**
    * Sync a tab stop addition to WASM core.
    * No-op when WASM is not active.
    */
