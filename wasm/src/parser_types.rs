@@ -2,7 +2,9 @@
 /// Not exported via wasm_bindgen - used only within the crate.
 
 /// Maximum number of CSI parameters stored inline.
-pub(crate) const MAX_CSI_PARAMS: usize = 8;
+/// Must be >= 16 to handle combined SGR sequences like
+/// `38;2;r;g;b;48;2;r;g;b;1;3;4m` (fg RGB + bg RGB + styles).
+pub(crate) const MAX_CSI_PARAMS: usize = 16;
 /// Maximum number of CSI intermediate bytes stored inline.
 pub(crate) const MAX_CSI_INTERMEDIATES: usize = 2;
 

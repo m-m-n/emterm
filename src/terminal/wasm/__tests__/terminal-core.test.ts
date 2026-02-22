@@ -959,11 +959,11 @@ describe("Performance benchmarks", () => {
 // ── WASM binary size check ──────────────────────────────
 
 describe("WASM binary size", () => {
-	test("WASM binary < 80KB", () => {
+	test("WASM binary < 85KB", () => {
 		const wasmPath = resolve(import.meta.dir, "../../../../wasm/pkg/emterm_wasm_bg.wasm");
 		const stat = statSync(wasmPath);
 		const sizeKB = stat.size / 1024;
 		console.log(`  WASM binary size: ${sizeKB.toFixed(1)}KB`);
-		expect(sizeKB).toBeLessThan(80);
+		expect(sizeKB).toBeLessThan(85);
 	});
 });

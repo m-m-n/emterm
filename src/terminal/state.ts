@@ -151,6 +151,12 @@ export class TerminalState implements TerminalStateAccessor {
   /** Alternate WASM grid for alternate screen. */
   private alternateWasmGrid: WasmGrid | null = null;
 
+  /** Cell width in pixels (for XTWINOPS responses, propagated to new cores). */
+  private cellWidthPx: number = 8;
+
+  /** Cell height in pixels (for XTWINOPS responses, propagated to new cores). */
+  private cellHeightPx: number = 16;
+
   /**
    * Create a new terminal state.
    *
@@ -507,6 +513,16 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Set cell size in pixels and propagate to active WASM core.
+   * Stored locally so alternate buffer cores receive the correct size.
+   */
+  setCellSizePx(width: number, height: number): void {
+    this.cellWidthPx = width;
+    this.cellHeightPx = height;
+    this.getActiveWasmGrid()?.core.set_cell_size_px(width, height);
+  }
+
+  /**
    * Sync a tab stop addition to WASM core.
    * No-op when WASM is not active.
    */
@@ -572,6 +588,14 @@ export class TerminalState implements TerminalStateAccessor {
       } else {
         this.alternateCursor.moveTo(0, 0);
       }
+    }
+
+    // Propagate cell size to alternate core
+    if (this.alternateWasmGrid) {
+      this.alternateWasmGrid.core.set_cell_size_px(
+        this.cellWidthPx,
+        this.cellHeightPx,
+      );
     }
 
     // Switch to alternate buffer

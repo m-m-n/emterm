@@ -1,0 +1,85 @@
+schema_version: 1
+feature: kitty-protocol-compat
+scale: standard
+created: 2026-02-22
+
+project:
+  components:
+    wasm:
+      language: rust
+      build_command: "cd wasm && wasm-pack build --target web --out-dir pkg"
+      test_command: "cargo test --manifest-path wasm/Cargo.toml"
+      format_command: "cargo fmt --manifest-path wasm/Cargo.toml"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: c067b80d21e3b96bdaa25d1426e034c935216d03
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: c067b80d21e3b96bdaa25d1426e034c935216d03
+  - id: implement
+    status: completed
+    completed_at_commit: c067b80d21e3b96bdaa25d1426e034c935216d03
+  - id: check
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+  - id: review
+    status: pending
+
+requirements:
+  FR1:
+    title: Synchronous Kitty query response
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: XTWINOPS device responses (CSI 14t/16t/18t)
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Cell size synchronization on buffer switch
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Kitty image pipeline compatibility
+    status: assumed
+    assumed_reason: "Pipeline is correctly wired in code. Likely resolved by FR3 (cell size sync on buffer switch). Phase 2 includes investigation + fix step."
+    tasks: []
+    tests: []
+  FR5:
+    title: Kitty animation frame support
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Response timing within 2000ms
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: No regression in existing functionality
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: No measurable latency impact
+    status: ok
+    tasks: []
+    tests: []

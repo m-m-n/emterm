@@ -54,6 +54,9 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://rustwasm.github.io/wasm-pack/in
 # Install tauri-cli and tauri-driver
 RUN cargo install tauri-cli tauri-driver
 
+# Install treemd (ratatui-based TUI Markdown viewer for Kitty protocol testing)
+RUN cargo install treemd
+
 # Set display for Xvfb
 ENV DISPLAY=:99
 
