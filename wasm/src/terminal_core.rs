@@ -88,6 +88,9 @@ pub struct TerminalCore {
     // Sprint 4: Device response buffer
     pub(crate) response_buffer: [u8; 64],
     pub(crate) response_len: u8,
+    // Cell size in pixels (for CSI 14t/16t responses)
+    pub(crate) cell_width_px: u16,
+    pub(crate) cell_height_px: u16,
     // Scroll event for differential rendering
     pub(crate) scroll_event: Option<crate::ring_buffer::ScrollEvent>,
     // Sprint 6: Parser and mode action queue
@@ -150,6 +153,8 @@ impl TerminalCore {
             // Sprint 4
             response_buffer: [0u8; 64],
             response_len: 0,
+            cell_width_px: 8,
+            cell_height_px: 16,
             // Scroll event
             scroll_event: None,
             // Sprint 6
@@ -174,6 +179,23 @@ impl TerminalCore {
 
     pub fn rows(&self) -> u16 {
         self.rows
+    }
+
+    /// Set cell size in pixels (for CSI 14t/16t XTWINOPS responses).
+    /// Called from TypeScript after measuring character dimensions.
+    pub fn set_cell_size_px(&mut self, width: u16, height: u16) {
+        self.cell_width_px = width;
+        self.cell_height_px = height;
+    }
+
+    /// Get cell width in pixels.
+    pub fn get_cell_width_px(&self) -> u16 {
+        self.cell_width_px
+    }
+
+    /// Get cell height in pixels.
+    pub fn get_cell_height_px(&self) -> u16 {
+        self.cell_height_px
     }
 
     // ── Cell access (internal) ───────────────────────────
@@ -958,7 +980,11 @@ impl TerminalCore {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
-                self.fire_apc_callback(&payload);
+                // Kitty query (a=q) must respond synchronously to avoid
+                // late responses being misinterpreted as key events.
+                if !self.try_handle_kitty_query(&payload) {
+                    self.fire_apc_callback(&payload);
+                }
             }
             ParsedAction::DcsDispatch(payload) => {
                 if !self.grapheme_buffer.is_empty() {
@@ -1608,6 +1634,24 @@ mod tests {
         assert!(core.has_pending_buffer_switch());
     }
 
+    // ── SGR combined RGB through full parse pipeline ──────
+
+    #[test]
+    fn test_process_pty_data_sgr_combined_rgb_fg_bg() {
+        // Full pipeline test: raw bytes → parser → CSI dispatch → SGR handler.
+        // ESC[38;2;200;200;200;48;2;43;48;59m = 10 SGR params
+        // Then print 'X' to commit cursor attrs to a cell.
+        let mut core = TerminalCore::new(80, 24, 0);
+        let data = b"\x1b[38;2;200;200;200;48;2;43;48;59mX";
+        let consumed = core.process_pty_data(data);
+        assert_eq!(consumed, data.len());
+        // Cell at (0,0) should have the correct colors
+        let fg = PackedColor::from_u32(core.get_cell_fg(0, 0));
+        let bg = PackedColor::from_u32(core.get_cell_bg(0, 0));
+        assert_eq!(fg, PackedColor::rgb(200, 200, 200));
+        assert_eq!(bg, PackedColor::rgb(43, 48, 59), "bg should be rgb(43,48,59), not indexed(3)");
+    }
+
     // ── Grapheme buffer flush on non-Print dispatch ──────
 
     #[test]
@@ -1701,5 +1745,41 @@ mod tests {
         // Cursor should be restored to (5,3) from ESC 7 save
         assert_eq!(core.get_cursor_col(), 5);
         assert_eq!(core.get_cursor_row(), 3);
+    }
+
+    // ── Cell size propagation tests ──────────────────────
+
+    #[test]
+    fn test_cell_size_defaults() {
+        let core = TerminalCore::new(80, 24, 0);
+        assert_eq!(core.get_cell_width_px(), 8);
+        assert_eq!(core.get_cell_height_px(), 16);
+    }
+
+    #[test]
+    fn test_cell_size_preserved_after_reset() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_cell_size_px(10, 20);
+        core.reset();
+        // Cell size is not reset (app-managed, not terminal state)
+        assert_eq!(core.get_cell_width_px(), 10);
+        assert_eq!(core.get_cell_height_px(), 20);
+    }
+
+    #[test]
+    fn test_xtwinops_cell_size_after_buffer_switch_defaults() {
+        // Simulates the problem: a new alternate core starts with default 8x16
+        // CSI 16t should return the default before cell size is set
+        let mut core = TerminalCore::new(80, 24, 0);
+        let len = core.handle_xtwinops_cell_size();
+        assert!(len > 0);
+        let bytes = core.get_response_bytes();
+        assert_eq!(&bytes, b"\x1b[6;16;8t");
+
+        // After setting cell size, CSI 16t should return the new values
+        core.set_cell_size_px(10, 20);
+        core.handle_xtwinops_cell_size();
+        let bytes = core.get_response_bytes();
+        assert_eq!(&bytes, b"\x1b[6;20;10t");
     }
 }

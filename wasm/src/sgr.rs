@@ -289,4 +289,28 @@ mod tests {
         assert_eq!(core.cursor.fg, PackedColor::DEFAULT);
         assert_eq!(core.cursor.flags, 0);
     }
+
+    #[test]
+    fn test_sgr_combined_rgb_fg_and_bg_10_params() {
+        // Reproduces the treemd color corruption bug:
+        // Combined fg RGB + bg RGB requires 10 params.
+        // bg rgb(43, 48, 59) - the r=43 falls in SGR 40-47 range,
+        // so if params are truncated it gets misinterpreted as SGR 43 (yellow bg).
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_sgr(&[38, 2, 200, 200, 200, 48, 2, 43, 48, 59]);
+        assert_eq!(core.cursor.fg, PackedColor::rgb(200, 200, 200));
+        assert_eq!(core.cursor.bg, PackedColor::rgb(43, 48, 59));
+    }
+
+    #[test]
+    fn test_sgr_combined_rgb_fg_bg_with_styles_13_params() {
+        // Maximum realistic SGR: bold + fg RGB + bg RGB = 1 + 5 + 5 + 1 + 1 = 13 params
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_sgr(&[1, 3, 38, 2, 100, 150, 200, 48, 2, 50, 60, 70, 4]);
+        assert_ne!(core.cursor.flags & STYLE_BOLD, 0);
+        assert_ne!(core.cursor.flags & STYLE_ITALIC, 0);
+        assert_ne!(core.cursor.flags & STYLE_UNDERLINE, 0);
+        assert_eq!(core.cursor.fg, PackedColor::rgb(100, 150, 200));
+        assert_eq!(core.cursor.bg, PackedColor::rgb(50, 60, 70));
+    }
 }

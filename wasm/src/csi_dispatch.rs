@@ -140,6 +140,20 @@ impl TerminalCore {
                 // TertiaryDeviceAttributes - currently ignored
             }
 
+            // XTWINOPS (window operations / size reports)
+            (None, b't') => {
+                let ps = ParamParser::get_first_or_zero(params);
+                let len = match ps {
+                    14 => self.handle_xtwinops_text_area_px(),
+                    16 => self.handle_xtwinops_cell_size(),
+                    18 => self.handle_xtwinops_text_area_chars(),
+                    _ => 0,
+                };
+                if len > 0 {
+                    self.fire_device_response_callback();
+                }
+            }
+
             _ => { /* Unknown CSI - ignore */ }
         }
     }

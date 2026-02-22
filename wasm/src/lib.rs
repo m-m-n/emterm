@@ -8,6 +8,7 @@ mod parser_params;
 mod parser_types;
 
 // Handler modules (impl TerminalCore in separate files)
+mod apc_handler;
 mod c0_handler;
 mod callbacks;
 mod csi_cursor;

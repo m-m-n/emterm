@@ -125,6 +125,11 @@ export class TerminalApp {
 
     // Initialize terminal state and renderer
     this.state = new TerminalState(cols, rows);
+    // Set cell size in pixels for CSI 14t/16t XTWINOPS responses
+    this.state.setCellSizePx(
+      Math.round(this.charSize.width),
+      Math.round(this.charSize.height),
+    );
     this.renderer = await createRendererAsync(terminalContainer, fontFamily, fontSize);
 
     // Apply cached settings to the newly created renderer
@@ -407,9 +412,13 @@ export class TerminalApp {
         // Get the active core (may change after buffer switch)
         const core = this.state.getActiveCore();
 
-        // Register callbacks if core changed (e.g., after buffer switch)
+        // Register callbacks and propagate cell size if core changed (e.g., after buffer switch)
         if (core !== registeredCore) {
           this.registerCoreCallbacks(core);
+          this.state.setCellSizePx(
+            Math.round(this.charSize.width),
+            Math.round(this.charSize.height),
+          );
           registeredCore = core;
         }
 
@@ -746,6 +755,11 @@ export class TerminalApp {
         if (this.state && this.renderer) {
           try {
             this.state.resize(newCols, newRows);
+            // Update cell size for CSI 14t/16t XTWINOPS responses
+            this.state.setCellSizePx(
+              Math.round(this.charSize.width),
+              Math.round(this.charSize.height),
+            );
             this.renderer.resize(newCols, newRows);
             this.renderer.forceRender(this.state);
           } catch (error) {
