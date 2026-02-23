@@ -53,6 +53,36 @@ impl ImageProcessorState {
     }
 }
 
+/// Threshold above which image data is sent via on-demand fetch instead of events.
+///
+/// Tauri's event system broadcasts payloads through webview eval/postMessage,
+/// which can stall or fail for very large JSON strings. By storing large
+/// `rgba_base64` data separately and letting the frontend fetch it via a
+/// dedicated Tauri command, we avoid passing multi-megabyte payloads through
+/// the event channel.
+///
+/// 2 MB of base64 ≈ 1.5 MB of raw pixel data ≈ ~600×600 RGBA image.
+const LARGE_IMAGE_DATA_THRESHOLD: usize = 2_000_000;
+
+/// Temporary storage for image data too large for Tauri events.
+///
+/// When `rgba_base64` exceeds [`LARGE_IMAGE_DATA_THRESHOLD`], it is moved
+/// here and the event payload carries an empty string. The frontend detects
+/// the empty field and calls `fetch_image_data` to retrieve the data via
+/// a regular Tauri command (invoke), which handles large responses reliably.
+#[derive(Default)]
+pub struct LargeImageDataStore {
+    data: Mutex<HashMap<(String, u32), String>>,
+}
+
+impl LargeImageDataStore {
+    pub fn new() -> Self {
+        Self {
+            data: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 // ============================================================================
 // Payload Types
 // ============================================================================
@@ -323,6 +353,7 @@ fn set_language(language: String) -> Result<(), String> {
 async fn process_image_data(
     app: AppHandle,
     image_state: State<'_, ImageProcessorState>,
+    large_image_store: State<'_, LargeImageDataStore>,
     session_id: String,
     protocol: String,
     data: Vec<u8>,
@@ -334,11 +365,12 @@ async fn process_image_data(
         .entry(session_id.clone())
         .or_insert_with(image::ImageProcessor::new);
 
-    let events = match protocol.as_str() {
+    let mut events = match protocol.as_str() {
         "kitty" => {
             if let Some(cmd) = ansi::apc::parse_kitty_command(&data) {
                 processor.process_kitty_command(&cmd, cursor_row, cursor_col)
             } else {
+                log::warn!("Failed to parse Kitty command ({} bytes)", data.len());
                 return Ok(());
             }
         }
@@ -354,7 +386,100 @@ async fn process_image_data(
         }
     };
 
+    // For large images, move rgba_base64 out of the event payload to avoid
+    // overwhelming Tauri's event system. The frontend will fetch it on demand.
+    for event in &mut events {
+        if let image::ImageEvent::ImageReady { image } = event {
+            if image.rgba_base64.len() > LARGE_IMAGE_DATA_THRESHOLD {
+                let moved = std::mem::take(&mut image.rgba_base64);
+                let mut store = large_image_store.data.lock().await;
+                store.insert((session_id.clone(), image.id), moved);
+            }
+        }
+    }
+
     for event in events {
+        let payload = ImageEventPayload {
+            session_id: session_id.clone(),
+            event,
+        };
+        app.emit("image_event", payload)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+/// Fetches large image data that was omitted from the `image_event` payload.
+///
+/// When an image's `rgba_base64` exceeds [`LARGE_IMAGE_DATA_THRESHOLD`],
+/// `process_image_data` stores it here and sends an empty string in the event.
+/// The frontend calls this command to retrieve the actual pixel data.
+///
+/// This is a one-shot retrieval: the data is removed from the store after fetch.
+#[tauri::command]
+async fn fetch_image_data(
+    large_image_store: State<'_, LargeImageDataStore>,
+    session_id: String,
+    image_id: u32,
+) -> Result<String, String> {
+    let mut store = large_image_store.data.lock().await;
+    store
+        .remove(&(session_id, image_id))
+        .ok_or_else(|| format!("No deferred image data for id={}", image_id))
+}
+
+/// Processes a batch of Kitty Graphics Protocol APC sequences in a single IPC call.
+///
+/// Instead of sending 600+ individual `process_image_data` calls for a chunked
+/// Kitty transfer (one per APC sequence), the frontend accumulates the APC bodies
+/// and sends them all at once. This reduces IPC overhead from O(N) round-trips
+/// to O(1), which is critical for large images (600 chunks × ~50ms/invoke = 30s).
+///
+/// Each string in `chunks` is the raw APC body (bytes between `ESC _` and `ESC \`),
+/// e.g. `"Gi=1,f=100,a=T,m=1;base64data..."`.
+#[tauri::command]
+async fn process_kitty_batch(
+    app: AppHandle,
+    image_state: State<'_, ImageProcessorState>,
+    large_image_store: State<'_, LargeImageDataStore>,
+    session_id: String,
+    chunks: Vec<String>,
+    cursor_row: u32,
+    cursor_col: u32,
+) -> Result<(), String> {
+    let mut processors = image_state.processors.lock().await;
+    let processor = processors
+        .entry(session_id.clone())
+        .or_insert_with(image::ImageProcessor::new);
+
+    let mut all_events: Vec<image::ImageEvent> = Vec::new();
+
+    for chunk in &chunks {
+        if let Some(cmd) = ansi::apc::parse_kitty_command(chunk.as_bytes()) {
+            let events = processor.process_kitty_command(&cmd, cursor_row, cursor_col);
+            all_events.extend(events);
+        } else {
+            log::warn!(
+                "process_kitty_batch: parse_kitty_command failed (len={}, first_byte={:?})",
+                chunk.len(),
+                chunk.as_bytes().first()
+            );
+        }
+    }
+
+    // For large images, move rgba_base64 out of the event payload
+    for event in &mut all_events {
+        if let image::ImageEvent::ImageReady { image } = event {
+            if image.rgba_base64.len() > LARGE_IMAGE_DATA_THRESHOLD {
+                let moved = std::mem::take(&mut image.rgba_base64);
+                let mut store = large_image_store.data.lock().await;
+                store.insert((session_id.clone(), image.id), moved);
+            }
+        }
+    }
+
+    for event in all_events {
         let payload = ImageEventPayload {
             session_id: session_id.clone(),
             event,
@@ -655,12 +780,15 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(PtyManager::new())
         .manage(ImageProcessorState::new())
+        .manage(LargeImageDataStore::new())
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
             pty_resize,
             pty_kill,
             process_image_data,
+            process_kitty_batch,
+            fetch_image_data,
             console_log,
             console_warn,
             console_error,
@@ -806,5 +934,206 @@ mod tests {
         assert!(json.contains("session-delete"));
         assert!(json.contains("Delete"));
         assert!(json.contains("All"));
+    }
+
+    #[tokio::test]
+    async fn test_large_image_data_store() {
+        let store = LargeImageDataStore::new();
+
+        // Store data
+        {
+            let mut data = store.data.lock().await;
+            data.insert(
+                ("session1".to_string(), 42),
+                "large_base64_data".to_string(),
+            );
+        }
+
+        // Retrieve data (one-shot: removes from store)
+        {
+            let mut data = store.data.lock().await;
+            let result = data.remove(&("session1".to_string(), 42));
+            assert_eq!(result, Some("large_base64_data".to_string()));
+        }
+
+        // Second retrieval should return None
+        {
+            let mut data = store.data.lock().await;
+            let result = data.remove(&("session1".to_string(), 42));
+            assert_eq!(result, None);
+        }
+    }
+
+    #[test]
+    fn test_large_image_data_threshold() {
+        // Verify the threshold is reasonable (2MB base64 ≈ 1.5MB raw)
+        assert_eq!(LARGE_IMAGE_DATA_THRESHOLD, 2_000_000);
+    }
+
+    /// End-to-end test for the batch Kitty chunk processing flow.
+    ///
+    /// Simulates the exact data flow: CLI generates Kitty sequence → WASM parser
+    /// extracts APC bodies → frontend batches strings → backend processes via
+    /// parse_kitty_command + ImageProcessor.
+    #[test]
+    fn test_kitty_batch_flow_end_to_end() {
+        use ::image::{DynamicImage, RgbaImage};
+
+        // Create a 100x100 test image (produces ~350 bytes PNG → 1 chunk)
+        let img = DynamicImage::ImageRgba8(RgbaImage::new(100, 100));
+
+        // Step 1: CLI generates Kitty sequence
+        let (sequence, _image_id) = protocols::kitty::generate_kitty_sequence(&img).unwrap();
+
+        // Step 2: Extract APC bodies (simulating WASM parser)
+        let apc_bodies = extract_apc_bodies(&sequence);
+        assert!(!apc_bodies.is_empty(), "Should have at least one APC body");
+
+        // Step 3: Process through batch path (simulating process_kitty_batch)
+        let mut processor = image::ImageProcessor::new();
+        let mut all_events: Vec<image::ImageEvent> = Vec::new();
+
+        for body in &apc_bodies {
+            if let Some(cmd) = ansi::apc::parse_kitty_command(body.as_bytes()) {
+                let events = processor.process_kitty_command(&cmd, 0, 0);
+                all_events.extend(events);
+            }
+        }
+
+        // Step 4: Verify image was decoded successfully
+        let has_image_ready = all_events
+            .iter()
+            .any(|e| matches!(e, image::ImageEvent::ImageReady { .. }));
+        assert!(has_image_ready, "Should have ImageReady event");
+    }
+
+    /// End-to-end test for large multi-chunk Kitty batch processing.
+    ///
+    /// Uses a larger image that produces multiple APC chunks (~4096 bytes each).
+    #[test]
+    fn test_kitty_batch_flow_large_image() {
+        use ::image::{DynamicImage, RgbaImage};
+
+        // Create a 400x400 image (produces ~4KB+ PNG → multiple chunks)
+        let img = DynamicImage::ImageRgba8(RgbaImage::new(400, 400));
+
+        // CLI generates Kitty sequence
+        let (sequence, _image_id) = protocols::kitty::generate_kitty_sequence(&img).unwrap();
+
+        // Extract APC bodies
+        let apc_bodies = extract_apc_bodies(&sequence);
+        assert!(
+            apc_bodies.len() > 1,
+            "Large image should produce multiple chunks, got {}",
+            apc_bodies.len()
+        );
+
+        // Process through batch path
+        let mut processor = image::ImageProcessor::new();
+        let mut all_events: Vec<image::ImageEvent> = Vec::new();
+
+        for body in &apc_bodies {
+            if let Some(cmd) = ansi::apc::parse_kitty_command(body.as_bytes()) {
+                let events = processor.process_kitty_command(&cmd, 0, 0);
+                all_events.extend(events);
+            }
+        }
+
+        // Verify image was decoded successfully
+        let image_ready = all_events.iter().find_map(|e| {
+            if let image::ImageEvent::ImageReady { image } = e {
+                Some(image)
+            } else {
+                None
+            }
+        });
+        assert!(image_ready.is_some(), "Should have ImageReady event");
+        let img = image_ready.unwrap();
+        assert_eq!(img.width, 400);
+        assert_eq!(img.height, 400);
+    }
+
+    /// Test batch flow with a very large image producing hundreds of chunks.
+    /// This simulates the actual scenario: 1080x1920 image → ~2.4MB base64 → ~600 chunks.
+    #[test]
+    fn test_kitty_batch_flow_very_large_image() {
+        use ::image::{DynamicImage, RgbaImage, Rgba};
+
+        // Create a 1080x1920 image (matching the failing test case dimensions)
+        // Fill with varied pixel data to prevent extreme compression
+        let mut img = RgbaImage::new(1080, 1920);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = Rgba([
+                (x % 256) as u8,
+                (y % 256) as u8,
+                ((x + y) % 256) as u8,
+                255,
+            ]);
+        }
+        let dyn_img = DynamicImage::ImageRgba8(img);
+
+        // CLI generates Kitty sequence
+        let (sequence, _image_id) = protocols::kitty::generate_kitty_sequence(&dyn_img).unwrap();
+
+        // Extract APC bodies
+        let apc_bodies = extract_apc_bodies(&sequence);
+        assert!(
+            apc_bodies.len() > 100,
+            "Very large image should produce many chunks, got {}",
+            apc_bodies.len()
+        );
+
+        // Process through batch path
+        let mut processor = image::ImageProcessor::new();
+        let mut all_events: Vec<image::ImageEvent> = Vec::new();
+
+        for body in &apc_bodies {
+            if let Some(cmd) = ansi::apc::parse_kitty_command(body.as_bytes()) {
+                let events = processor.process_kitty_command(&cmd, 0, 0);
+                all_events.extend(events);
+            }
+        }
+
+        // Verify image was decoded successfully
+        let image_ready = all_events.iter().find_map(|e| {
+            if let image::ImageEvent::ImageReady { image } = e {
+                Some(image)
+            } else {
+                None
+            }
+        });
+        assert!(image_ready.is_some(), "Should have ImageReady event");
+        let img = image_ready.unwrap();
+        assert_eq!(img.width, 1080);
+        assert_eq!(img.height, 1920);
+        assert!(!img.rgba_base64.is_empty());
+    }
+
+    /// Extract APC bodies from a Kitty escape sequence string.
+    /// Simulates what the WASM parser does: extract bytes between ESC_ and ESC\.
+    fn extract_apc_bodies(sequence: &str) -> Vec<String> {
+        let mut bodies = Vec::new();
+        let bytes = sequence.as_bytes();
+        let mut i = 0;
+        while i + 1 < bytes.len() {
+            if bytes[i] == 0x1B && bytes[i + 1] == b'_' {
+                let start = i + 2;
+                let mut j = start;
+                while j + 1 < bytes.len() {
+                    if bytes[j] == 0x1B && bytes[j + 1] == b'\\' {
+                        bodies.push(String::from_utf8_lossy(&bytes[start..j]).to_string());
+                        i = j + 2;
+                        break;
+                    }
+                    j += 1;
+                }
+                if j + 1 >= bytes.len() {
+                    break;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        bodies
     }
 }

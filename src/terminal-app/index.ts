@@ -58,6 +58,15 @@ export class TerminalApp {
   private pendingDcsQueue: Uint8Array[] = [];
   private pendingProtocolResponses: string[] = [];
   private imageInvokeChain: Promise<void> = Promise.resolve();
+  /** Tracks async fetches for large image data deferred from events. */
+  private fetchingImages: Map<number, Promise<DecodedImage>> = new Map();
+  /** Placements waiting for deferred image data to arrive. */
+  private pendingPlacements: Map<number, import("../image/types").ImagePlacement> = new Map();
+  /** Accumulated Kitty transfer state for batch sending (reduces 600 IPC calls to 1). */
+  private kittyTransfer: {
+    firstChunk: string;          // Full first chunk body (contains params like f=100,a=T,i=<id>)
+    accumulatedPayload: string;  // Concatenated base64 payloads from all chunks
+  } | null = null;
   private lastMouseEvent: MouseEvent | null = null;
   private ctrlKeyHandler: ((e: KeyboardEvent) => void) | null = null;
 
@@ -582,29 +591,91 @@ export class TerminalApp {
 
   /**
    * Handle APC callback from WASM parser (Kitty Graphics Protocol).
+   *
+   * Accumulates Kitty APC chunks and sends them as a single batch invoke
+   * when the final chunk (m=0) arrives. This reduces ~600 IPC round-trips
+   * to 1 for a typical large image transfer, preventing CLI timeout.
    */
   private handleApcCallback(data: Uint8Array): void {
     const core = this.state?.getActiveCore();
     if (!core || !this.ptyClient) return;
 
+    // APC body is ASCII text: "G<params>;<payload>"
+    const body = new TextDecoder().decode(data);
+
+    // Only process Kitty Graphics APC (starts with 'G')
+    if (body.length === 0 || body[0] !== "G") {
+      return;
+    }
+
+    // Split into params and payload at first semicolon
+    const semicolonIdx = body.indexOf(";");
+    const params = semicolonIdx >= 0 ? body.substring(0, semicolonIdx) : body;
+    const payload = semicolonIdx >= 0 ? body.substring(semicolonIdx + 1) : "";
+    const isMore = /(?:^|,)m=1(?:,|$)/.test(params);
+
+    if (isMore) {
+      // Continuation chunk: accumulate base64 payload
+      if (!this.kittyTransfer) {
+        // First chunk of a multi-chunk transfer
+        this.kittyTransfer = { firstChunk: body, accumulatedPayload: payload };
+      } else {
+        // Middle chunk: just append payload
+        this.kittyTransfer.accumulatedPayload += payload;
+      }
+      return;
+    }
+
+    // Final chunk (m=0 or single-chunk transfer)
     const sessionId = this.ptyClient.getSessionId();
     const cursorRow = core.get_cursor_row();
     const cursorCol = core.get_cursor_col();
 
-    // Serialize invoke calls via promise chain to preserve chunk ordering.
-    // Without this, concurrent invokes race for the backend Mutex and chunks
-    // may be processed out of order, breaking multi-chunk image assembly.
-    this.imageInvokeChain = this.imageInvokeChain.then(() =>
-      invoke("process_image_data", {
-        sessionId,
-        protocol: "kitty",
-        data: Array.from(data),
-        cursorRow,
-        cursorCol,
-      }) as Promise<void>,
-    ).catch((error) => {
-      console.error("Failed to process Kitty image data:", error);
-    });
+    if (this.kittyTransfer) {
+      // Multi-chunk transfer: assemble first chunk + accumulated payload + final payload
+      this.kittyTransfer.accumulatedPayload += payload;
+      const assembled = this.kittyTransfer;
+      this.kittyTransfer = null;
+
+      // Build two-chunk representation: first chunk (with params) + final chunk (with full payload)
+      // The first chunk provides format, image_id, etc.
+      // We replace its payload with the full accumulated payload.
+      const firstSemicolon = assembled.firstChunk.indexOf(";");
+      const firstParams = firstSemicolon >= 0
+        ? assembled.firstChunk.substring(0, firstSemicolon)
+        : assembled.firstChunk;
+
+      // Change m=1 to m=0 in first chunk params (since we're sending all data at once)
+      const fixedParams = firstParams.replace(/,m=1(?:,|$)/, (m) =>
+        m.endsWith(",") ? ",m=0," : ",m=0",
+      );
+
+      // Send as a single chunk with all data
+      const fullChunk = fixedParams + ";" + assembled.accumulatedPayload;
+
+      this.imageInvokeChain = this.imageInvokeChain.then(() =>
+        invoke("process_kitty_batch", {
+          sessionId,
+          chunks: [fullChunk],
+          cursorRow,
+          cursorCol,
+        }) as Promise<void>,
+      ).catch((error) => {
+        console.error("Failed to process Kitty batch:", error);
+      });
+    } else {
+      // Single-chunk transfer: send directly
+      this.imageInvokeChain = this.imageInvokeChain.then(() =>
+        invoke("process_kitty_batch", {
+          sessionId,
+          chunks: [body],
+          cursorRow,
+          cursorCol,
+        }) as Promise<void>,
+      ).catch((error) => {
+        console.error("Failed to process Kitty batch:", error);
+      });
+    }
   }
 
   /**
@@ -658,9 +729,14 @@ export class TerminalApp {
 
     switch (eventType) {
       case "ImageReady": {
-        // Store the decoded image for later display
         const image = payload.image as DecodedImage;
-        this.pendingImages.set(image.id, image);
+        if (!image.rgba_base64) {
+          // Large image: data deferred to fetch_image_data command
+          const fetchPromise = this.fetchDeferredImageData(image);
+          this.fetchingImages.set(image.id, fetchPromise);
+        } else {
+          this.pendingImages.set(image.id, image);
+        }
         break;
       }
 
@@ -676,9 +752,15 @@ export class TerminalApp {
           // For fullscreen display mode
           this.imageViewer.show(image);
         } else {
-          console.warn(
-            `[WARN][FRONTEND] Image not found for placement: ${placement.image_id}`,
-          );
+          // Image data may still be fetching (large image deferred load)
+          const fetchPromise = this.fetchingImages.get(placement.image_id);
+          if (fetchPromise) {
+            this.pendingPlacements.set(placement.image_id, placement);
+          } else {
+            console.warn(
+              `[WARN][FRONTEND] Image not found for placement: ${placement.image_id}`,
+            );
+          }
         }
         break;
       }
@@ -741,6 +823,42 @@ export class TerminalApp {
         break;
       }
 
+    }
+  }
+
+  /**
+   * Fetches large image data deferred from the event payload.
+   *
+   * When rgba_base64 exceeds the backend threshold, it is stored separately
+   * and must be retrieved via the fetch_image_data command. After fetching,
+   * the image is added to pendingImages and any deferred placement is executed.
+   */
+  private async fetchDeferredImageData(image: DecodedImage): Promise<DecodedImage> {
+    try {
+      const sessionId = this.ptyClient?.getSessionId();
+      if (!sessionId) throw new Error("No active PTY session");
+
+      const data = await invoke<string>("fetch_image_data", {
+        sessionId,
+        imageId: image.id,
+      });
+      image.rgba_base64 = data;
+      this.pendingImages.set(image.id, image);
+      this.fetchingImages.delete(image.id);
+
+      // Execute deferred placement if any
+      const placement = this.pendingPlacements.get(image.id);
+      if (placement && this.imageViewer) {
+        this.pendingPlacements.delete(image.id);
+        this.imageViewer.show(image);
+      }
+
+      return image;
+    } catch (error) {
+      console.error(`Failed to fetch deferred image data for id=${image.id}:`, error);
+      this.fetchingImages.delete(image.id);
+      this.pendingPlacements.delete(image.id);
+      throw error;
     }
   }
 
@@ -1361,6 +1479,9 @@ export class TerminalApp {
     this.imageViewer?.dispose();
     this.imageViewer = null;
     this.pendingImages.clear();
+    this.fetchingImages.clear();
+    this.pendingPlacements.clear();
+    this.kittyTransfer = null;
     this.pendingApcQueue = [];
     this.pendingDcsQueue = [];
 
