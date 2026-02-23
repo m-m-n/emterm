@@ -70,6 +70,13 @@ pub fn passthrough_if_needed(sequence: &str) -> std::borrow::Cow<'_, str> {
 ///
 /// For single-sequence inputs (e.g. SIXEL), this behaves identically to
 /// `wrap_dcs_passthrough`.
+/// Test-only alias for `wrap_each_sequence` to allow integration tests
+/// to exercise the wrapping logic without setting $TMUX.
+#[cfg(test)]
+pub fn wrap_each_sequence_for_test(input: &str) -> String {
+    wrap_each_sequence(input)
+}
+
 fn wrap_each_sequence(input: &str) -> String {
     const ST: &str = "\x1b\\";
 
