@@ -74,6 +74,32 @@ bun test
 bun run typecheck
 ```
 
+**E2E verification (Docker + tauri-driver):**
+
+Always use Docker for UI verification during implementation and debugging. Never run GUI tests on the host.
+
+```bash
+# Build Docker image (first time or after Dockerfile.e2e changes)
+./scripts/run-e2e-docker.sh build
+
+# Run all E2E tests
+./scripts/run-e2e-docker.sh test
+
+# Run a specific spec (primary method during development)
+./scripts/run-e2e-docker.sh test terminal.e2e.js
+
+# Full cycle (build image → run tests)
+./scripts/run-e2e-docker.sh
+```
+
+Architecture: `Xvfb (virtual display)` → `tauri-driver` → `WebKitWebDriver` → `WebdriverIO`. Screenshots are saved to `e2e-tests/screenshots/`.
+
+Notes for writing E2E specs:
+- Place spec files in `e2e-tests/specs/` as `*.e2e.js`
+- Docker config: `e2e-tests/wdio.docker.conf.js`
+- Timeouts are set to 180s for the Docker environment
+- `tauri:options` points to the pre-built debug binary inside the container
+
 ### Project Structure
 
 ```
@@ -157,3 +183,5 @@ The application provides helper CLI commands:
 - `emterm` - Terminal application
 - `emterm markdown` - Output Markdown display sequences to stdout
 - `emterm image` - Output image display sequences to stdout
+
+**tmux support:** Inside tmux, CLI commands automatically wrap sequences in DCS passthrough (`ESC P tmux; ... ESC \`). Requires `set -g allow-passthrough on` in tmux config.

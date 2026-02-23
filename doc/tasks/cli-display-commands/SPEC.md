@@ -810,7 +810,7 @@ The Markdown display feature uses **OSC 777**, which is an **eMterm-specific ext
 |----------|----------|-----------------|
 | eMterm | Renders Markdown as HTML | ✅ Full support |
 | Other terminals | OSC 777 sequences are ignored | ⚠️ Raw base64 may appear briefly |
-| Terminal multiplexers (tmux, screen) | Passes through to attached terminal | Depends on attached terminal |
+| tmux | DCS passthrough wrapping (`allow-passthrough on` required) | ✅ Supported |
 
 **Important Notes:**
 - OSC 777 with `emterm` namespace is designed to be safely ignored by non-supporting terminals
@@ -845,7 +845,7 @@ This CLI tool intentionally outputs control sequences to stdout without checking
 1. **Stateless Design:** Works over SSH and through pipes
 2. **User Control:** Users know their terminal environment
 3. **No Side Effects:** Non-supporting terminals safely ignore sequences
-4. **Composability:** Can be combined with other tools (e.g., `tmux`, terminal recorders)
+4. **Composability:** Can be combined with other tools (e.g., `tmux` with DCS passthrough, terminal recorders)
 
 ## Implementation Phases
 
