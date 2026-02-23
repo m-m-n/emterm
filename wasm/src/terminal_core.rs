@@ -83,6 +83,9 @@ pub struct TerminalCore {
     pub(crate) g0_charset: u8,     // 0=Ascii, 1=DecLineDrawing
     pub(crate) g1_charset: u8,     // 0=Ascii, 1=DecLineDrawing
     pub(crate) active_charset: u8, // 0=G0, 1=G1
+    /// Suppress Kitty Unicode placeholder characters (U+10EEEE + combining marks).
+    /// Set when U+10EEEE is received; cleared on next non-combining codepoint.
+    pub(crate) kitty_placeholder_active: bool,
     pub(crate) scroll_region_top: u16,
     pub(crate) scroll_region_bottom: u16,
     // Sprint 4: Device response buffer
@@ -148,6 +151,7 @@ impl TerminalCore {
             g0_charset: 0,
             g1_charset: 0,
             active_charset: 0,
+            kitty_placeholder_active: false,
             scroll_region_top: 0,
             scroll_region_bottom: rows.saturating_sub(1),
             // Sprint 4
