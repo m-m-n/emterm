@@ -56,7 +56,6 @@ export class TerminalApp {
   private searchBar: SearchBar | null = null;
   private pendingApcQueue: Uint8Array[] = [];
   private pendingDcsQueue: Uint8Array[] = [];
-  private pendingProtocolResponses: string[] = [];
   private imageInvokeChain: Promise<void> = Promise.resolve();
   /** Tracks async fetches for large image data deferred from events. */
   private fetchingImages: Map<number, Promise<DecodedImage>> = new Map();
@@ -310,17 +309,6 @@ export class TerminalApp {
       }
       // Restore IME focus for terminal input
       this.imeHandler?.focus();
-
-      // Flush deferred protocol responses (unblocks CLI commands like `emterm image`)
-      if (this.pendingProtocolResponses.length > 0 && this.ptyClient) {
-        const responses = this.pendingProtocolResponses;
-        this.pendingProtocolResponses = [];
-        for (const response of responses) {
-          this.ptyClient.write(response).catch((error) => {
-            console.error("Failed to write deferred protocol response:", error);
-          });
-        }
-      }
     });
 
     // Set markdown session manager's container for fullscreen view
@@ -804,21 +792,17 @@ export class TerminalApp {
       }
 
       case "Response": {
-        // Handle protocol response - send back to PTY
-        // This is used by Kitty protocol for OK/ERROR responses
+        // Handle protocol response - send back to PTY immediately.
+        // This is used by Kitty protocol for OK/ERROR responses.
+        // Must not be deferred: the CLI process (emterm image, kitten icat)
+        // blocks on stdin waiting for this response. Deferring until the
+        // image viewer closes causes the CLI to timeout and exit, after
+        // which the response leaks to the shell as garbage input.
         const responseData = payload.data as string | undefined;
         if (responseData && this.ptyClient) {
-          if (this.imageViewer?.isVisible()) {
-            // Defer response until viewer is closed so CLI stays in foreground
-            // Cap to prevent unbounded memory growth
-            if (this.pendingProtocolResponses.length < 100) {
-              this.pendingProtocolResponses.push(responseData);
-            }
-          } else {
-            this.ptyClient.write(responseData).catch((error) => {
-              console.error("Failed to write protocol response:", error);
-            });
-          }
+          this.ptyClient.write(responseData).catch((error) => {
+            console.error("Failed to write protocol response:", error);
+          });
         }
         break;
       }
@@ -1484,14 +1468,6 @@ export class TerminalApp {
     this.kittyTransfer = null;
     this.pendingApcQueue = [];
     this.pendingDcsQueue = [];
-
-    // Flush deferred protocol responses before PTY disposal
-    if (this.pendingProtocolResponses.length > 0 && this.ptyClient) {
-      for (const response of this.pendingProtocolResponses) {
-        this.ptyClient.write(response).catch(() => {});
-      }
-    }
-    this.pendingProtocolResponses = [];
 
     // Clean up PTY
     if (this.ptyClient) {
