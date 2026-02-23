@@ -1109,6 +1109,212 @@ mod tests {
         assert!(!img.rgba_base64.is_empty());
     }
 
+    /// Test that simulates the full tmux DCS passthrough roundtrip.
+    ///
+    /// Flow: generate_kitty_sequence → wrap_each_sequence (tmux wrap)
+    ///       → simulate_tmux_unwrap → extract_apc_bodies → process → verify
+    #[test]
+    fn test_tmux_passthrough_roundtrip_large_image() {
+        use ::image::{DynamicImage, Rgba, RgbaImage};
+
+        // Create a large image (400x400 → multiple chunks)
+        let mut img = RgbaImage::new(400, 400);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255]);
+        }
+        let dyn_img = DynamicImage::ImageRgba8(img);
+
+        // Step 1: Generate Kitty sequence (same as CLI does)
+        let (sequence, _image_id) =
+            protocols::kitty::generate_kitty_sequence(&dyn_img).unwrap();
+
+        // Extract original APC bodies (baseline)
+        let original_bodies = extract_apc_bodies(&sequence);
+        assert!(
+            original_bodies.len() > 1,
+            "Should produce multiple chunks, got {}",
+            original_bodies.len()
+        );
+
+        // Step 2: Wrap for tmux (simulating passthrough_if_needed)
+        let wrapped = commands::tmux::wrap_each_sequence_for_test(&sequence);
+
+        // Verify the wrapped output is larger (DCS overhead + ESC doubling)
+        assert!(wrapped.len() > sequence.len());
+
+        // Step 3: Simulate tmux unwrapping
+        let unwrapped = simulate_tmux_unwrap(&wrapped);
+
+        // Step 4: The unwrapped data should be identical to the original
+        assert_eq!(
+            unwrapped, sequence,
+            "Tmux roundtrip should preserve data exactly"
+        );
+
+        // Step 5: Extract APC bodies from unwrapped data
+        let roundtrip_bodies = extract_apc_bodies(&unwrapped);
+        assert_eq!(
+            roundtrip_bodies.len(),
+            original_bodies.len(),
+            "Roundtrip should preserve chunk count"
+        );
+        for (i, (orig, rt)) in original_bodies
+            .iter()
+            .zip(roundtrip_bodies.iter())
+            .enumerate()
+        {
+            assert_eq!(orig, rt, "Chunk {} differs after roundtrip", i);
+        }
+
+        // Step 6: Process through batch path → verify ImageReady
+        let mut processor = image::ImageProcessor::new();
+        let mut all_events: Vec<image::ImageEvent> = Vec::new();
+        for body in &roundtrip_bodies {
+            if let Some(cmd) = ansi::apc::parse_kitty_command(body.as_bytes()) {
+                let events = processor.process_kitty_command(&cmd, 0, 0);
+                all_events.extend(events);
+            }
+        }
+        let image_ready = all_events.iter().find_map(|e| {
+            if let image::ImageEvent::ImageReady { image } = e {
+                Some(image)
+            } else {
+                None
+            }
+        });
+        assert!(image_ready.is_some(), "Should have ImageReady after tmux roundtrip");
+        let decoded = image_ready.unwrap();
+        assert_eq!(decoded.width, 400);
+        assert_eq!(decoded.height, 400);
+    }
+
+    /// Test tmux roundtrip with frontend-style accumulation (single assembled chunk).
+    ///
+    /// Simulates: tmux unwrap → WASM parser extracts APC bodies →
+    /// frontend accumulates base64 → sends single chunk → backend decodes.
+    #[test]
+    fn test_tmux_passthrough_with_frontend_accumulation() {
+        use ::image::{DynamicImage, Rgba, RgbaImage};
+
+        let mut img = RgbaImage::new(400, 400);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255]);
+        }
+        let dyn_img = DynamicImage::ImageRgba8(img);
+
+        let (sequence, _) = protocols::kitty::generate_kitty_sequence(&dyn_img).unwrap();
+        let wrapped = commands::tmux::wrap_each_sequence_for_test(&sequence);
+        let unwrapped = simulate_tmux_unwrap(&wrapped);
+        let bodies = extract_apc_bodies(&unwrapped);
+        assert!(bodies.len() > 1);
+
+        // Simulate frontend accumulation (handleApcCallback logic)
+        let mut first_chunk_body: Option<String> = None;
+        let mut accumulated_payload = String::new();
+
+        for body in &bodies {
+            let semicolon_idx = body.find(';');
+            let params = match semicolon_idx {
+                Some(idx) => &body[..idx],
+                None => body.as_str(),
+            };
+            let payload = match semicolon_idx {
+                Some(idx) => &body[idx + 1..],
+                None => "",
+            };
+            let is_more = params.contains("m=1");
+
+            if is_more {
+                if first_chunk_body.is_none() {
+                    first_chunk_body = Some(body.clone());
+                }
+                accumulated_payload.push_str(payload);
+            } else {
+                // Final chunk
+                accumulated_payload.push_str(payload);
+
+                if let Some(ref first) = first_chunk_body {
+                    let first_semi = first.find(';').unwrap_or(first.len());
+                    let first_params = &first[..first_semi];
+                    let fixed_params = first_params.replace(",m=1", ",m=0");
+                    let full_chunk =
+                        format!("{};{}", fixed_params, accumulated_payload);
+
+                    // Process the assembled chunk
+                    let mut processor = image::ImageProcessor::new();
+                    if let Some(cmd) =
+                        ansi::apc::parse_kitty_command(full_chunk.as_bytes())
+                    {
+                        let events = processor.process_kitty_command(&cmd, 0, 0);
+                        let image_ready = events.iter().find_map(|e| {
+                            if let image::ImageEvent::ImageReady { image } = e {
+                                Some(image)
+                            } else {
+                                None
+                            }
+                        });
+                        assert!(
+                            image_ready.is_some(),
+                            "Should decode image after frontend accumulation"
+                        );
+                        let decoded = image_ready.unwrap();
+                        assert_eq!(decoded.width, 400);
+                        assert_eq!(decoded.height, 400);
+                    } else {
+                        panic!("Failed to parse assembled chunk");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Simulate tmux unwrapping: for each DCS passthrough block, strip
+    /// the `ESC P tmux;` header and `ESC \` trailer, then undouble ESC bytes.
+    fn simulate_tmux_unwrap(input: &str) -> String {
+        let mut output = String::new();
+        let bytes = input.as_bytes();
+        let header = b"\x1bPtmux;";
+        let mut i = 0;
+
+        while i < bytes.len() {
+            // Look for DCS passthrough header
+            if i + header.len() <= bytes.len() && &bytes[i..i + header.len()] == header {
+                let body_start = i + header.len();
+                // Find DCS ST by scanning for single ESC followed by \
+                // (doubled ESC-ESC is content, not terminator)
+                let mut j = body_start;
+                while j + 1 < bytes.len() {
+                    if bytes[j] == 0x1B {
+                        if j + 1 < bytes.len() && bytes[j + 1] == 0x1B {
+                            // Doubled ESC: output single ESC, skip pair
+                            output.push(0x1B as char);
+                            j += 2;
+                        } else if j + 1 < bytes.len() && bytes[j + 1] == b'\\' {
+                            // DCS ST found: terminate this block
+                            i = j + 2;
+                            break;
+                        } else {
+                            // Bare ESC followed by something else
+                            output.push(0x1B as char);
+                            j += 1;
+                        }
+                    } else {
+                        output.push(bytes[j] as char);
+                        j += 1;
+                    }
+                }
+                if j + 1 >= bytes.len() {
+                    break;
+                }
+            } else {
+                // Outside DCS passthrough: copy verbatim
+                output.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+        output
+    }
+
     /// Extract APC bodies from a Kitty escape sequence string.
     /// Simulates what the WASM parser does: extract bytes between ESC_ and ESC\.
     fn extract_apc_bodies(sequence: &str) -> Vec<String> {
