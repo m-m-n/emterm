@@ -11,7 +11,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.e2e
-    command: echo "Build complete"
+    volumes:
+      - .:/app
+      - cargo-target:/app/src-tauri/target
+      - wasm-target:/app/wasm/target
+      - wasm-pkg:/app/wasm/pkg
+      - node-modules:/app/node_modules
+      - e2e-node-modules:/app/e2e-tests/node_modules
+      - dist:/app/dist
+    entrypoint: ["/app/scripts/docker-entrypoint.sh"]
+    command: echo "Ready"
 
   # Run E2E tests
   e2e-test:
@@ -19,7 +28,15 @@ services:
       context: .
       dockerfile: Dockerfile.e2e
     volumes:
+      - .:/app
+      - cargo-target:/app/src-tauri/target
+      - wasm-target:/app/wasm/target
+      - wasm-pkg:/app/wasm/pkg
+      - node-modules:/app/node_modules
+      - e2e-node-modules:/app/e2e-tests/node_modules
+      - dist:/app/dist
       - ./e2e-tests/screenshots:/app/e2e-tests/screenshots
+    entrypoint: ["/app/scripts/docker-entrypoint.sh"]
     environment:
       - DISPLAY=:99
       - http_proxy=
@@ -38,3 +55,11 @@ services:
       sleep 2
       && cd e2e-tests
       && npx wdio run wdio.docker.conf.js"
+
+volumes:
+  cargo-target:
+  wasm-target:
+  wasm-pkg:
+  node-modules:
+  e2e-node-modules:
+  dist:

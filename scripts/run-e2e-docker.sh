@@ -27,8 +27,8 @@ case "${1:-}" in
     fi
     ;;
   clean)
-    echo "Removing containers..."
-    $COMPOSE down --rmi local
+    echo "Removing containers and volumes..."
+    $COMPOSE down -v --rmi local
     ;;
   "")
     # Full cycle: build image → test
@@ -43,7 +43,7 @@ case "${1:-}" in
     echo "  build      Rebuild Docker image"
     echo "  test       Run all E2E tests"
     echo "  test foo   Run specific spec file"
-    echo "  clean      Remove containers and images"
+    echo "  clean      Remove containers, volumes, and images"
     exit 1
     ;;
 esac

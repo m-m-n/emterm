@@ -185,6 +185,22 @@ impl TerminalCore {
     /// Process a single codepoint for printing.
     /// Returns 0 always (scroll handled internally via ring buffer).
     pub fn handle_print(&mut self, cp: u32) -> u8 {
+        // Kitty Unicode placeholder suppression (U+10EEEE + combining marks).
+        // kitten icat uses these to reserve cell positions for image display.
+        // eMterm handles images via APC/viewer, so placeholders are discarded.
+        if cp == 0x10EEEE {
+            self.flush_grapheme_buffer();
+            self.kitty_placeholder_active = true;
+            return 0;
+        }
+        if self.kitty_placeholder_active {
+            let props_check = crate::unicode::classify_codepoint(cp);
+            if props_check & crate::unicode::COMBINING != 0 {
+                return 0; // Skip combining marks attached to placeholder
+            }
+            self.kitty_placeholder_active = false;
+        }
+
         // Safety: flush if buffer exceeds max size
         if self.grapheme_buffer.len() >= 64 {
             self.flush_grapheme_buffer();
@@ -721,5 +737,100 @@ mod tests {
         core.resize(10, 20);
         assert_eq!(core.get_scroll_region_top(), 0);
         assert_eq!(core.get_scroll_region_bottom(), 19);
+    }
+
+    // ── Kitty Unicode placeholder suppression ─────────────
+
+    #[test]
+    fn test_kitty_placeholder_suppressed() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        // U+10EEEE = Kitty placeholder character
+        core.handle_print(0x10EEEE);
+        // Cursor should not advance (character is suppressed)
+        assert_eq!(core.get_cursor_col(), 0);
+        // Cell remains empty (space = default empty cell)
+        assert_eq!(core.get_cell_char(0, 0), " ");
+    }
+
+    #[test]
+    fn test_kitty_placeholder_combining_suppressed() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        // Placeholder followed by combining marks (row/col encoding)
+        core.handle_print(0x10EEEE);
+        core.handle_print(0x0305); // combining overline (row encoding)
+        core.handle_print(0x0305); // another combining mark (col encoding)
+        // All should be suppressed
+        assert_eq!(core.get_cursor_col(), 0);
+        // Next non-combining character should print normally
+        core.handle_print(0x41); // 'A'
+        assert_eq!(core.get_cursor_col(), 1);
+        assert_eq!(core.get_cell_char(0, 0), "A");
+    }
+
+    #[test]
+    fn test_kitty_placeholder_multiple_cells() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        // Simulate 3 placeholder cells (kitten icat pattern)
+        for _ in 0..3 {
+            core.handle_print(0x10EEEE);
+            core.handle_print(0x0305); // combining mark
+            core.handle_print(0x0305); // combining mark
+        }
+        // All suppressed
+        assert_eq!(core.get_cursor_col(), 0);
+        // Normal text after placeholders
+        core.handle_print(0x42); // 'B'
+        assert_eq!(core.get_cursor_col(), 1);
+        assert_eq!(core.get_cell_char(0, 0), "B");
+    }
+
+    #[test]
+    fn test_kitty_placeholder_arabic_diacritics() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        // kitten icat uses Arabic combining marks (U+0610-061A, U+064B-065F)
+        // for encoding row/column in placeholder cells
+        core.handle_print(0x10EEEE); // placeholder
+        core.handle_print(0x0651);   // Arabic shadda (row encoding)
+        core.handle_print(0x0615);   // Arabic small high tah (col encoding)
+        // All should be suppressed
+        assert_eq!(core.get_cursor_col(), 0);
+        assert_eq!(core.get_cell_char(0, 0), " ");
+
+        // Second cell with different Arabic marks
+        core.handle_print(0x10EEEE); // placeholder
+        core.handle_print(0x0652);   // Arabic sukun
+        core.handle_print(0x0615);   // Arabic small high tah
+        assert_eq!(core.get_cursor_col(), 0);
+
+        // Normal character prints after placeholders
+        core.handle_print(0x41); // 'A'
+        assert_eq!(core.get_cursor_col(), 1);
+        assert_eq!(core.get_cell_char(0, 0), "A");
+    }
+
+    #[test]
+    fn test_kitty_placeholder_mixed_diacritics() {
+        let mut core = TerminalCore::new(20, 3, 0);
+        // Mix of Latin combining marks (0x0300-0x036F) and Arabic marks
+        // as kitten icat uses diacritics from many Unicode blocks
+        core.handle_print(0x10EEEE);
+        core.handle_print(0x0305);   // combining overline (Latin)
+        core.handle_print(0x0610);   // Arabic combining mark
+
+        core.handle_print(0x10EEEE);
+        core.handle_print(0x064B);   // Arabic fathatan
+        core.handle_print(0x065F);   // Arabic wavy hamza below
+
+        core.handle_print(0x10EEEE);
+        core.handle_print(0x0483);   // Cyrillic titlo
+        core.handle_print(0x0711);   // Syriac superscript alaph
+
+        // All suppressed
+        assert_eq!(core.get_cursor_col(), 0);
+
+        // Normal text after
+        core.handle_print(0x58); // 'X'
+        assert_eq!(core.get_cursor_col(), 1);
+        assert_eq!(core.get_cell_char(0, 0), "X");
     }
 }

@@ -65,6 +65,9 @@ docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "bun run
 
 # E2E tests (full cycle)
 ./scripts/run-e2e-docker.sh
+
+# Reset build caches (after Dockerfile.e2e changes or stale state)
+docker compose -f docker-compose.e2e.yml down -v
 ```
 
 **Host execution (only when explicitly permitted by the developer):**
