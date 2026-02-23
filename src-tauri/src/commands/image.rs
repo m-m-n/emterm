@@ -58,8 +58,8 @@ pub fn execute_image_command(
         ImageProtocol::Sixel => (sixel::generate_sixel_sequence(&img)?, None),
     };
 
-    // Output to stdout
-    output_to_stdout(&sequence)?;
+    // Output to stdout (wrap in DCS passthrough when inside tmux)
+    output_to_stdout(&super::tmux::passthrough_if_needed(&sequence))?;
 
     // Wait for terminal to acknowledge the image (Kitty protocol response)
     // This blocks until the terminal sends back ESC _G ... ESC \ response,

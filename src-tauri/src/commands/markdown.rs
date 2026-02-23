@@ -30,8 +30,8 @@ pub fn execute_markdown_command(file_path: &Path) -> Result<(), CommandError> {
     // Generate OSC sequences
     let sequence = osc::generate_markdown_osc(&session_id, chunks);
 
-    // Output to stdout
-    output_to_stdout(&sequence)?;
+    // Output to stdout (wrap in DCS passthrough when inside tmux)
+    output_to_stdout(&super::tmux::passthrough_if_needed(&sequence))?;
 
     Ok(())
 }
