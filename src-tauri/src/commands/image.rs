@@ -64,8 +64,14 @@ pub fn execute_image_command(
     // Wait for terminal to acknowledge the image (Kitty protocol response)
     // This blocks until the terminal sends back ESC _G ... ESC \ response,
     // preventing the shell prompt from appearing before the image viewer opens.
+    //
+    // Skip when inside tmux: DCS passthrough is one-directional (process → terminal).
+    // The terminal's response cannot travel back through tmux to this process,
+    // so waiting would always time out.
     if let Some(image_id) = expected_image_id {
-        wait_for_kitty_response(image_id);
+        if !super::tmux::is_inside_tmux() {
+            wait_for_kitty_response(image_id);
+        }
     }
 
     Ok(())

@@ -49,12 +49,55 @@ pub fn wrap_dcs_passthrough(sequence: &str) -> String {
 ///
 /// If running inside tmux ($TMUX is set), wraps in DCS passthrough.
 /// Otherwise returns the sequence unchanged (avoids allocation).
+///
+/// When the input contains multiple escape sequences (e.g. Kitty chunked
+/// transfer or Markdown OSC chunks), each sequence is wrapped individually
+/// to stay within tmux's passthrough buffer limit.
 pub fn passthrough_if_needed(sequence: &str) -> std::borrow::Cow<'_, str> {
     if is_inside_tmux() {
-        std::borrow::Cow::Owned(wrap_dcs_passthrough(sequence))
+        std::borrow::Cow::Owned(wrap_each_sequence(sequence))
     } else {
         std::borrow::Cow::Borrowed(sequence)
     }
+}
+
+/// Wrap each escape sequence in the input individually for tmux DCS passthrough.
+///
+/// Splits on ST (ESC \) boundaries so each sequence gets its own DCS
+/// passthrough envelope. This prevents exceeding tmux's passthrough buffer
+/// limit (typically 256KB) when sending large chunked data like Kitty
+/// graphics transfers.
+///
+/// For single-sequence inputs (e.g. SIXEL), this behaves identically to
+/// `wrap_dcs_passthrough`.
+fn wrap_each_sequence(input: &str) -> String {
+    const ST: &str = "\x1b\\";
+
+    // Fast path: single sequence (no split needed)
+    let first = match input.find(ST) {
+        Some(pos) => pos + ST.len(),
+        None => return wrap_dcs_passthrough(input),
+    };
+    if first == input.len() {
+        return wrap_dcs_passthrough(input);
+    }
+
+    // Multiple sequences: wrap each individually
+    let mut output = String::with_capacity(input.len() + input.len() / 4);
+    let mut remaining = input;
+
+    while let Some(pos) = remaining.find(ST) {
+        let end = pos + ST.len();
+        output.push_str(&wrap_dcs_passthrough(&remaining[..end]));
+        remaining = &remaining[end..];
+    }
+
+    // Trailing content without ST (shouldn't normally happen)
+    if !remaining.is_empty() {
+        output.push_str(&wrap_dcs_passthrough(remaining));
+    }
+
+    output
 }
 
 #[cfg(test)]
@@ -124,5 +167,60 @@ mod tests {
         let input = "\x1b_Gtest\x1b\\";
         let cow = std::borrow::Cow::Borrowed(input);
         assert_eq!(&*cow, input);
+    }
+
+    // Tests for wrap_each_sequence (per-sequence DCS wrapping)
+
+    #[test]
+    fn test_wrap_each_sequence_single() {
+        // Single sequence: same result as wrap_dcs_passthrough
+        let input = "\x1b_Gi=1,f=100,a=T,m=0;data\x1b\\";
+        let result = wrap_each_sequence(input);
+        assert_eq!(result, wrap_dcs_passthrough(input));
+    }
+
+    #[test]
+    fn test_wrap_each_sequence_multiple_kitty_chunks() {
+        // Two Kitty APC chunks
+        let chunk1 = "\x1b_Gi=1,f=100,a=T,m=1;AAAA\x1b\\";
+        let chunk2 = "\x1b_Gi=1,m=0;BBBB\x1b\\";
+        let input = format!("{}{}", chunk1, chunk2);
+
+        let result = wrap_each_sequence(&input);
+
+        // Each chunk should be wrapped individually
+        let expected = format!(
+            "{}{}",
+            wrap_dcs_passthrough(chunk1),
+            wrap_dcs_passthrough(chunk2)
+        );
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_wrap_each_sequence_multiple_osc() {
+        // Three Markdown OSC sequences
+        let seq1 = "\x1b]777;emterm;markdown;begin;id=abc\x1b\\";
+        let seq2 = "\x1b]777;emterm;markdown;chunk;id=abc;seq=0;data=SGVsbG8=\x1b\\";
+        let seq3 = "\x1b]777;emterm;markdown;end;id=abc\x1b\\";
+        let input = format!("{}{}{}", seq1, seq2, seq3);
+
+        let result = wrap_each_sequence(&input);
+
+        let expected = format!(
+            "{}{}{}",
+            wrap_dcs_passthrough(seq1),
+            wrap_dcs_passthrough(seq2),
+            wrap_dcs_passthrough(seq3)
+        );
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_wrap_each_sequence_no_st() {
+        // Input without ST terminator (edge case)
+        let input = "no escape sequences here";
+        let result = wrap_each_sequence(input);
+        assert_eq!(result, wrap_dcs_passthrough(input));
     }
 }
