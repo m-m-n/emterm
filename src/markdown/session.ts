@@ -37,9 +37,6 @@ import type {
  * ```
  */
 export class MarkdownSessionManager {
-	/** Maximum data size per session (2MB) */
-	static readonly MAX_SESSION_SIZE = 2 * 1024 * 1024;
-
 	/** Session timeout in milliseconds (30 seconds) */
 	static readonly SESSION_TIMEOUT = 30 * 1000;
 
@@ -144,13 +141,15 @@ export class MarkdownSessionManager {
 			format = params.format;
 		}
 
+		const now = Date.now();
 		const session: MarkdownSession = {
 			id,
 			format,
 			version: parseInt(params.version || "1", 10) || 1,
 			chunks: new Map(),
 			nextSeq: 0,
-			createdAt: Date.now(),
+			createdAt: now,
+			lastChunkAt: now,
 			dataSize: 0,
 		};
 
@@ -201,18 +200,9 @@ export class MarkdownSessionManager {
 			return;
 		}
 
-		// Check size limit
-		if (
-			session.dataSize + decoded.length >
-			MarkdownSessionManager.MAX_SESSION_SIZE
-		) {
-			console.warn("Markdown chunk: session size limit exceeded");
-			this.sessions.delete(id);
-			return;
-		}
-
 		session.chunks.set(seqNum, decoded);
 		session.dataSize += decoded.length;
+		session.lastChunkAt = Date.now();
 	}
 
 	/**
@@ -326,7 +316,7 @@ export class MarkdownSessionManager {
 	cleanupExpiredSessions(): void {
 		const now = Date.now();
 		for (const [id, session] of this.sessions) {
-			if (now - session.createdAt > MarkdownSessionManager.SESSION_TIMEOUT) {
+			if (now - session.lastChunkAt > MarkdownSessionManager.SESSION_TIMEOUT) {
 				console.warn(`Markdown session ${id} timed out`);
 				this.sessions.delete(id);
 			}

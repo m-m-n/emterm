@@ -1,8 +1,8 @@
 use crate::parser_params::ParamParser;
 use crate::parser_types::ParsedAction;
 
-/// Maximum size for OSC string data.
-const MAX_OSC_LEN: usize = 4096;
+/// Maximum size for OSC string data (16MB, matching MAX_DCS_LEN).
+const MAX_OSC_LEN: usize = 16 * 1024 * 1024;
 
 /// Maximum size for APC string data (Kitty Graphics).
 const MAX_APC_LEN: usize = 4 * 1024 * 1024;
@@ -1161,6 +1161,71 @@ mod tests {
                 data: "Title".to_string(),
             }
         );
+    }
+
+    // =========================================================================
+    // OSC Large Buffer Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_osc_larger_than_4096_bytes() {
+        // OSC data larger than the old 4096-byte limit should parse correctly
+        let data = "x".repeat(8000);
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1B]777;");
+        input.extend_from_slice(data.as_bytes());
+        input.push(0x07);
+
+        let actions = parse_all(&input);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0],
+            ParsedAction::OscDispatch {
+                param: 777,
+                data: data.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_osc_at_128kb_chunk_size() {
+        // OSC at ~128KB (chunk size + header) should parse correctly
+        let data = "a".repeat(128 * 1024);
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1B]777;");
+        input.extend_from_slice(data.as_bytes());
+        input.push(0x07);
+
+        let actions = parse_all(&input);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(
+            actions[0],
+            ParsedAction::OscDispatch {
+                param: 777,
+                data: data.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_osc_discards_bytes_beyond_16mb() {
+        // Data beyond 16MB cap should be silently discarded
+        let size = 16 * 1024 * 1024;
+        let data = "b".repeat(size + 100);
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1B]777;");
+        input.extend_from_slice(data.as_bytes());
+        input.push(0x07);
+
+        let actions = parse_all(&input);
+        assert_eq!(actions.len(), 1);
+        if let ParsedAction::OscDispatch { param, data } = &actions[0] {
+            assert_eq!(*param, 777);
+            // Data should be capped at MAX_OSC_LEN (16MB)
+            assert_eq!(data.len(), size);
+        } else {
+            panic!("Expected OscDispatch");
+        }
     }
 
     // =========================================================================

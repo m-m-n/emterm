@@ -13,6 +13,7 @@ A cross-platform terminal emulator built with Tauri, featuring rich rendering ca
 
 - **Rich Content Display**
   - Inline Markdown rendering via custom OSC 777 extension (CommonMark, GFM, syntax highlighting, Mermaid diagrams)
+  - Large document support: no file size limit, session timeout resets per chunk
   - Fullscreen Markdown viewer with zoom and keyboard navigation
   - Inline image rendering (Kitty Graphics Protocol and SIXEL)
   - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll)
@@ -118,12 +119,13 @@ eMterm supports inline Markdown rendering via a custom OSC 777 extension protoco
 - Theme synchronization with terminal colors (dark/light mode)
 - Virtual scrolling for large documents
 
-### Limitations
+### Limits
 
-| Limit | Value |
-|-------|-------|
-| Maximum document size | 2 MB per session |
-| Session timeout | 30 seconds |
+| Parameter | Value |
+|-----------|-------|
+| Chunk size | 128 KB (Base64-encoded) |
+| WASM OSC buffer limit | 16 MB per sequence |
+| Session timeout | 30 seconds (reset on each chunk) |
 | Maximum concurrent sessions | 10 |
 
 ### Protocol

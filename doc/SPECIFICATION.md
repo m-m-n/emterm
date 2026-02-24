@@ -184,6 +184,8 @@ Inline Markdown rendering via a custom OSC 777 extension protocol. Content is di
 - Theme synchronization (dark/light mode follows terminal theme)
 - Virtual scrolling for large documents
 - Session-based transfer: `begin` / `chunk` / `end` verbs via OSC 777
+- No artificial size limit: arbitrarily large documents are supported
+- Session timeout resets on each chunk receipt to support slow or large transfers
 
 **Protocol:**
 ```
@@ -193,11 +195,12 @@ ESC ] 777 ; emterm ; markdown ; <verb> ; <params...> ST
 - `chunk`: Send Base64-encoded content (`id=<uuid>`, `seq=<n>`, `data=<base64>`)
 - `end`: Complete and render (`id=<uuid>`)
 
-**Limits:**
+**Transfer Parameters:**
 | Parameter | Value |
 |-----------|-------|
-| Maximum document size | 2 MB per session |
-| Session timeout | 30 seconds |
+| Chunk size | 128 KB (Base64-encoded) |
+| WASM OSC buffer limit | 16 MB per sequence |
+| Session timeout | 30 seconds (reset on each chunk) |
 | Maximum concurrent sessions | 10 |
 
 ---

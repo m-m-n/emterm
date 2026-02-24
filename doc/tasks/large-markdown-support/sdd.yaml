@@ -1,0 +1,78 @@
+schema_version: 1
+feature: large-markdown-support
+scale: standard
+created: 2026-02-24
+
+project:
+  components:
+    main:
+      language: rust,typescript,wasm
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 3d61b5e906776356f928a66bf14236ebf17b0d57
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 3d61b5e906776356f928a66bf14236ebf17b0d57
+  - id: implement
+    status: completed
+    completed_at_commit: 3d61b5e906776356f928a66bf14236ebf17b0d57
+  - id: check
+    status: completed
+    completed_at_commit: 3d61b5e906776356f928a66bf14236ebf17b0d57
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 3d61b5e906776356f928a66bf14236ebf17b0d57
+  - id: review
+    status: completed
+    completed_at_commit: 3d61b5e906776356f928a66bf14236ebf17b0d57
+
+requirements:
+  FR1:
+    title: Expand WASM OSC buffer (MAX_OSC_LEN 4096 → 16MB)
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Remove CLI file size limit (MAX_MARKDOWN_SIZE)
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Remove frontend session size limit (MAX_SESSION_SIZE)
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Reset session timeout on chunk receipt
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Increase chunk size (64KB → 128KB)
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Performance - no regression for small files
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Compatibility - tmux passthrough maintained
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Memory - small initial OSC buffer capacity
+    status: ok
+    tasks: []
+    tests: []

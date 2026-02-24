@@ -44,12 +44,12 @@ fn test_markdown_small_file() {
     assert!(stdout.contains("version=1.0"), "Missing version parameter");
 }
 
-/// Test 2: Medium Markdown file (100KB)
+/// Test 2: Medium Markdown file (200KB, enough to produce multiple 128KB chunks)
 #[test]
 fn test_markdown_medium_file() {
-    // Create a 100KB markdown file
+    // Create a 200KB markdown file (base64 ~267KB → 3 chunks at 128KB)
     let mut temp_file = NamedTempFile::new().unwrap();
-    let content = "# Test Heading\n\nThis is a test paragraph.\n\n".repeat(2000); // ~100KB
+    let content = "# Test Heading\n\nThis is a test paragraph.\n\n".repeat(4500); // ~200KB
     write!(temp_file, "{}", content).unwrap();
     temp_file.flush().unwrap();
 
@@ -74,7 +74,7 @@ fn test_markdown_medium_file() {
     let chunk_count = stdout.matches("\x1b]777;emterm;markdown;chunk").count();
     assert!(
         chunk_count > 1,
-        "Expected multiple chunks for 100KB file, got {}",
+        "Expected multiple chunks for 200KB file, got {}",
         chunk_count
     );
 
@@ -120,12 +120,12 @@ fn test_markdown_at_size_limit() {
     );
 }
 
-/// Test 4: File over size limit (2MB + 1 byte)
+/// Test 4: Large file (> 2MB) should succeed (no size limit)
 #[test]
-fn test_markdown_over_size_limit() {
-    // Create a file just over 2MB
+fn test_markdown_large_file_accepted() {
+    // Create a file over 2MB — should succeed with no size limit
     let mut temp_file = NamedTempFile::new().unwrap();
-    let size = 2_097_153; // 2MB + 1 byte
+    let size = 3 * 1024 * 1024; // 3MB
     let content = vec![b'#'; size];
     temp_file.write_all(&content).unwrap();
     temp_file.flush().unwrap();
@@ -138,22 +138,21 @@ fn test_markdown_over_size_limit() {
         .output()
         .expect("Failed to execute command");
 
-    // Should fail with exit code 1
+    // Should succeed
     assert!(
-        !output.status.success(),
-        "Command should fail for oversized file"
+        output.status.success(),
+        "Command should succeed for large file: {:?}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(output.status.code(), Some(1), "Expected exit code 1");
 
-    // Should output error to stderr
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("too large")
-            || stderr.contains("size limit")
-            || stderr.contains("exceeds")
-            || stderr.contains("\u{5236}\u{9650}\u{3092}\u{8d85}\u{3048}"), // 制限を超え (ja)
-        "Error message should mention size limit: {}",
-        stderr
+        stdout.contains("\x1b]777;emterm;markdown;begin"),
+        "Missing OSC begin sequence"
+    );
+    assert!(
+        stdout.contains("\x1b]777;emterm;markdown;end"),
+        "Missing OSC end sequence"
     );
 }
 

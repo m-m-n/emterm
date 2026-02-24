@@ -58,6 +58,8 @@ export interface MarkdownSession {
 	nextSeq: number;
 	/** Session creation timestamp (milliseconds) */
 	createdAt: number;
+	/** Last chunk receipt timestamp (milliseconds) */
+	lastChunkAt: number;
 	/** Total accumulated data size in bytes */
 	dataSize: number;
 }

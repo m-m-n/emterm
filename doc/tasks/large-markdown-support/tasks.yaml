@@ -1,0 +1,55 @@
+tasks:
+  - id: phase1-wasm-osc-buffer
+    title: "Phase 1: Expand WASM OSC buffer limit to 16MB"
+    phase: 1
+    status: completed
+    files:
+      - wasm/src/parser.rs
+    description: |
+      Change MAX_OSC_LEN from 4096 to 16 * 1024 * 1024.
+      Verify initial buffer capacity stays at 256 bytes.
+      Add unit tests for large OSC sequences.
+    acceptance_criteria:
+      - MAX_OSC_LEN is 16 * 1024 * 1024
+      - Parser handles OSC data > 4096 bytes
+      - Initial buffer capacity unchanged (256 bytes)
+    estimated_effort: small
+
+  - id: phase2-cli-size-limit
+    title: "Phase 2: Remove CLI file size limit and increase chunk size"
+    phase: 2
+    status: completed
+    files:
+      - src-tauri/src/commands/markdown.rs
+    description: |
+      Remove MAX_MARKDOWN_SIZE constant.
+      Change MARKDOWN_CHUNK_SIZE from 64KB to 128KB.
+      Replace open_and_validate_file call to skip size validation.
+      Update tests: remove oversized-file-rejected test, add large file acceptance test.
+    acceptance_criteria:
+      - No MAX_MARKDOWN_SIZE constant
+      - MARKDOWN_CHUNK_SIZE is 128 * 1024
+      - Files > 2MB processed without error
+      - FileNotFound still returned for missing files
+    estimated_effort: small
+
+  - id: phase3-frontend-session
+    title: "Phase 3: Remove frontend session size limit and fix timeout"
+    phase: 3
+    status: completed
+    files:
+      - src/markdown/session.ts
+      - src/markdown/types.ts
+    description: |
+      Remove MAX_SESSION_SIZE constant and size check in handleChunk().
+      Add lastChunkAt field to MarkdownSession type.
+      Update handleChunk() to set lastChunkAt on each chunk.
+      Update cleanupExpiredSessions() to use lastChunkAt instead of createdAt.
+      Update tests: remove size limit test, add timeout reset tests.
+    acceptance_criteria:
+      - No MAX_SESSION_SIZE constant
+      - lastChunkAt field on MarkdownSession
+      - handleChunk() updates lastChunkAt
+      - cleanupExpiredSessions() uses lastChunkAt
+      - Large data accumulation does not delete session
+    estimated_effort: small
