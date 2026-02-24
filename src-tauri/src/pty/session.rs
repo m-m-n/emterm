@@ -77,6 +77,13 @@ impl PtySession {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
 
+        // Clear tmux variables: the shell inside eMterm's PTY is directly
+        // connected to eMterm, not to tmux. Inheriting TMUX causes CLI commands
+        // (e.g. `emterm image`) to incorrectly apply DCS passthrough wrapping
+        // and skip response handling, leading to garbage text on screen.
+        cmd.env_remove("TMUX");
+        cmd.env_remove("TMUX_PANE");
+
         let child = pair.slave.spawn_command(cmd)?;
         let writer = Arc::new(StdMutex::new(pair.master.take_writer()?));
 

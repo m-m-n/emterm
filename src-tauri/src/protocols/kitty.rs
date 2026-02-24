@@ -40,9 +40,11 @@ fn next_image_id() -> u32 {
 /// - m=1: More data follows
 /// - m=0: Last chunk
 ///
-/// Note: q=1 (quiet mode) is intentionally NOT set so the terminal
-/// sends back an OK/ERROR response. The `emterm image` CLI command
-/// reads this response from stdin to block until processing completes.
+/// Uses q=2 (quiet mode) to suppress OK responses from the terminal.
+/// Without this, response bytes leak into the shell prompt after the CLI
+/// exits, because of timing between the PTY reader thread's response
+/// write and the CLI's termios restoration. q=2 still allows error
+/// responses, matching kitten icat's behavior.
 pub fn generate_kitty_sequence(img: &DynamicImage) -> Result<(String, u32), CommandError> {
     // Convert image to PNG bytes
     let mut png_bytes = Vec::new();
@@ -66,9 +68,9 @@ pub fn generate_kitty_sequence(img: &DynamicImage) -> Result<(String, u32), Comm
     let image_id = next_image_id();
 
     // First chunk with metadata
-    // No q=1: allow OK response so CLI can block until processing completes
+    // q=2: suppress OK responses (errors still sent)
     output.push_str(&format!(
-        "\x1b_Gi={},f=100,a=T,m={};{}\x1b\\",
+        "\x1b_Gi={},f=100,q=2,a=T,m={};{}\x1b\\",
         image_id,
         if chunks.len() > 1 { 1 } else { 0 },
         String::from_utf8_lossy(chunks[0])
@@ -79,15 +81,15 @@ pub fn generate_kitty_sequence(img: &DynamicImage) -> Result<(String, u32), Comm
         // Middle chunks
         for chunk in &chunks[1..chunks.len() - 1] {
             output.push_str(&format!(
-                "\x1b_Gi={},m=1;{}\x1b\\",
+                "\x1b_Gi={},q=2,m=1;{}\x1b\\",
                 image_id,
                 String::from_utf8_lossy(chunk)
             ));
         }
 
-        // Last chunk
+        // Last chunk (q=2 needed here for KittyScanner which parses per-chunk)
         output.push_str(&format!(
-            "\x1b_Gi={},m=0;{}\x1b\\",
+            "\x1b_Gi={},q=2,m=0;{}\x1b\\",
             image_id,
             String::from_utf8_lossy(chunks[chunks.len() - 1])
         ));
@@ -118,8 +120,8 @@ mod tests {
         assert!(sequence.contains("f=100"));
         // Should have a=T (transmit and display)
         assert!(sequence.contains("a=T"));
-        // Should NOT have q=1 (responses enabled for CLI blocking)
-        assert!(!sequence.contains("q=1"));
+        // Should have q=2 (suppress OK responses, allow errors)
+        assert!(sequence.contains("q=2"));
         // Small image should fit in one chunk (m=0)
         assert!(sequence.contains("m=0"));
         // image_id must never be 0

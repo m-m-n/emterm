@@ -1,22 +1,40 @@
-/// APC handler: detects Kitty graphics queries and responds synchronously.
+/// APC handler: classifies Kitty graphics protocol APC payloads.
 ///
-/// Kitty query (`a=q`) responses must arrive before the DSR sentinel
-/// that capability-detection libraries use as a read-stop signal.
-/// By handling queries here (instead of routing through the async
-/// Tauri backend), the response is written to the PTY in the same
-/// synchronous pass as DA1/DSR responses.
+/// Response generation is handled by the PTY reader thread's KittyScanner
+/// (in `src-tauri/src/pty/kitty_scanner.rs`) which writes OK responses
+/// directly to the PTY master fd via libc::write(), bypassing all
+/// intermediate layers (writer channel, WebView, Tauri IPC).
+///
+/// This module only classifies the APC payload for the terminal_core's
+/// APC dispatch logic (deciding whether to forward to the frontend).
 use crate::terminal_core::TerminalCore;
 
+/// Result of handling a Kitty APC payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KittyApcResult {
+    /// Not a Kitty Graphics Protocol APC — forward via APC callback.
+    NotKitty,
+    /// Query (`a=q`) — do NOT forward (no image processing needed).
+    QueryHandled,
+    /// Final chunk of a non-query action (m=0 or m absent) —
+    /// forward via APC callback for image processing.
+    FinalChunk,
+    /// Continuation chunk (m=1) — forward via APC callback.
+    MoreChunks,
+}
+
 impl TerminalCore {
-    /// Try to handle an APC payload as a Kitty graphics query.
+    /// Classify an APC payload as Kitty Graphics Protocol.
     ///
-    /// Returns `true` if the payload was a Kitty query (`a=q`) and
-    /// a synchronous response was generated. Returns `false` for all
-    /// other APC payloads, which should be forwarded to the async path.
-    pub(crate) fn try_handle_kitty_query(&mut self, payload: &[u8]) -> bool {
+    /// Returns the classification result used by the APC dispatch logic
+    /// to decide whether to forward the APC to the frontend.
+    ///
+    /// NOTE: Response generation is NOT done here. The PTY reader thread's
+    /// KittyScanner handles OK responses at the Rust level for minimal latency.
+    pub(crate) fn handle_kitty_apc(&mut self, payload: &[u8]) -> KittyApcResult {
         // Must start with 'G' for Kitty Graphics Protocol
         if payload.first() != Some(&b'G') {
-            return false;
+            return KittyApcResult::NotKitty;
         }
 
         let data = &payload[1..];
@@ -27,10 +45,9 @@ impl TerminalCore {
             None => data,
         };
 
-        // Parse key=value pairs to detect a=q and extract i=<id>, q=<quiet>
-        let mut is_query = false;
-        let mut image_id: Option<u32> = None;
-        let mut quiet: Option<u8> = None;
+        // Parse key=value pairs
+        let mut action: u8 = b't'; // default: transmit-and-display
+        let mut more_chunks = false; // m=1
 
         for pair in control_data.split(|&b| b == b',') {
             if let Some(eq_pos) = pair.iter().position(|&b| b == b'=') {
@@ -38,101 +55,33 @@ impl TerminalCore {
                 let val = &pair[eq_pos + 1..];
                 match key {
                     b"a" => {
-                        if val == b"q" {
-                            is_query = true;
+                        if let Some(&first) = val.first() {
+                            action = first;
                         }
                     }
-                    b"i" => {
-                        image_id = parse_u32_from_bytes(val);
-                    }
-                    b"q" => {
-                        quiet = parse_u32_from_bytes(val).map(|v| v as u8);
+                    b"m" => {
+                        if val == b"1" {
+                            more_chunks = true;
+                        }
                     }
                     _ => {}
                 }
             }
         }
 
-        if !is_query {
-            return false;
+        let is_query = action == b'q';
+
+        // Continuation chunk — just forward
+        if more_chunks && !is_query {
+            return KittyApcResult::MoreChunks;
         }
 
-        // Check quiet suppression (q=1 suppresses OK responses)
-        if quiet == Some(1) {
-            return true; // Query handled, but response suppressed
+        if is_query {
+            KittyApcResult::QueryHandled
+        } else {
+            KittyApcResult::FinalChunk
         }
-
-        // Build response: ESC _ G [i=<id>] ; OK ESC backslash
-        let mut buf = [0u8; 32];
-        buf[0] = 0x1B;
-        buf[1] = b'_';
-        buf[2] = b'G';
-        let mut pos = 3;
-
-        if let Some(id) = image_id {
-            buf[pos] = b'i';
-            pos += 1;
-            buf[pos] = b'=';
-            pos += 1;
-            pos = write_u32_decimal(&mut buf, pos, id);
-        }
-
-        buf[pos] = b';';
-        pos += 1;
-        buf[pos] = b'O';
-        pos += 1;
-        buf[pos] = b'K';
-        pos += 1;
-        buf[pos] = 0x1B;
-        pos += 1;
-        buf[pos] = b'\\';
-        pos += 1;
-
-        // Write to response buffer and fire callback
-        let len = pos.min(self.response_buffer.len());
-        self.response_buffer[..len].copy_from_slice(&buf[..len]);
-        self.response_len = len as u8;
-        self.fire_device_response_callback();
-
-        true
     }
-}
-
-/// Parse a u32 from ASCII decimal bytes.
-fn parse_u32_from_bytes(bytes: &[u8]) -> Option<u32> {
-    if bytes.is_empty() {
-        return None;
-    }
-    let mut result: u32 = 0;
-    for &b in bytes {
-        if !b.is_ascii_digit() {
-            return None;
-        }
-        result = result.checked_mul(10)?.checked_add((b - b'0') as u32)?;
-    }
-    Some(result)
-}
-
-/// Write a u32 as decimal digits to buffer, return new position.
-fn write_u32_decimal(buf: &mut [u8], start: usize, val: u32) -> usize {
-    if val == 0 {
-        buf[start] = b'0';
-        return start + 1;
-    }
-    let mut digits = [0u8; 10];
-    let mut n = val;
-    let mut count = 0;
-    while n > 0 {
-        digits[count] = (n % 10) as u8 + b'0';
-        n /= 10;
-        count += 1;
-    }
-    let mut pos = start;
-    for i in (0..count).rev() {
-        buf[pos] = digits[i];
-        pos += 1;
-    }
-    pos
 }
 
 #[cfg(test)]
@@ -141,103 +90,100 @@ mod tests {
 
     use super::*;
 
+    // ── Query (a=q) tests ────────────────────────────────
+
     #[test]
     fn test_kitty_query_with_id() {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA";
-        assert!(core.try_handle_kitty_query(payload));
-        let response = core.get_response_bytes();
-        assert_eq!(&response, b"\x1b_Gi=31;OK\x1b\\");
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::QueryHandled);
+        // No response generated (handled by PTY reader thread)
+        assert_eq!(core.response_len, 0);
     }
 
     #[test]
     fn test_kitty_query_without_id() {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Ga=q;AAAA";
-        assert!(core.try_handle_kitty_query(payload));
-        let response = core.get_response_bytes();
-        assert_eq!(&response, b"\x1b_G;OK\x1b\\");
-    }
-
-    #[test]
-    fn test_kitty_query_quiet_suppressed() {
-        let mut core = TerminalCore::new(80, 24, 0);
-        let payload = b"Gi=31,a=q,q=1;AAAA";
-        assert!(core.try_handle_kitty_query(payload));
-        // Response suppressed, response_len should be 0
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::QueryHandled);
         assert_eq!(core.response_len, 0);
-    }
-
-    #[test]
-    fn test_kitty_non_query_returns_false() {
-        let mut core = TerminalCore::new(80, 24, 0);
-        // Transmit action (a=T) - should not be handled
-        let payload = b"Ga=T,f=100;iVBORw0KGgo=";
-        assert!(!core.try_handle_kitty_query(payload));
-    }
-
-    #[test]
-    fn test_kitty_default_action_returns_false() {
-        let mut core = TerminalCore::new(80, 24, 0);
-        // No action specified (defaults to TransmitAndDisplay)
-        let payload = b"Gf=100;iVBORw0KGgo=";
-        assert!(!core.try_handle_kitty_query(payload));
-    }
-
-    #[test]
-    fn test_non_kitty_apc_returns_false() {
-        let mut core = TerminalCore::new(80, 24, 0);
-        let payload = b"Hello";
-        assert!(!core.try_handle_kitty_query(payload));
-    }
-
-    #[test]
-    fn test_empty_payload_returns_false() {
-        let mut core = TerminalCore::new(80, 24, 0);
-        let payload = b"";
-        assert!(!core.try_handle_kitty_query(payload));
     }
 
     #[test]
     fn test_kitty_query_no_payload() {
         let mut core = TerminalCore::new(80, 24, 0);
         let payload = b"Ga=q";
-        assert!(core.try_handle_kitty_query(payload));
-        let response = core.get_response_bytes();
-        assert_eq!(&response, b"\x1b_G;OK\x1b\\");
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::QueryHandled);
+        assert_eq!(core.response_len, 0);
     }
 
+    // ── Non-query final chunk tests ──────────────────────
+
     #[test]
-    fn test_kitty_query_large_id() {
+    fn test_kitty_transmit_final_chunk() {
         let mut core = TerminalCore::new(80, 24, 0);
-        let payload = b"Gi=4294967295,a=q;";
-        assert!(core.try_handle_kitty_query(payload));
-        let response = core.get_response_bytes();
-        assert_eq!(&response, b"\x1b_Gi=4294967295;OK\x1b\\");
+        let payload = b"Ga=T,i=42,f=100;iVBORw0KGgo=";
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
+        // No response generated (handled by PTY reader thread)
+        assert_eq!(core.response_len, 0);
     }
 
     #[test]
-    fn test_parse_u32_from_bytes() {
-        assert_eq!(parse_u32_from_bytes(b"0"), Some(0));
-        assert_eq!(parse_u32_from_bytes(b"31"), Some(31));
-        assert_eq!(parse_u32_from_bytes(b"4294967295"), Some(4294967295));
-        assert_eq!(parse_u32_from_bytes(b""), None);
-        assert_eq!(parse_u32_from_bytes(b"abc"), None);
-        assert_eq!(parse_u32_from_bytes(b"12x"), None);
+    fn test_kitty_default_action_final_chunk() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let payload = b"Gi=99,f=100;iVBORw0KGgo=";
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
+        assert_eq!(core.response_len, 0);
     }
 
     #[test]
-    fn test_write_u32_decimal() {
-        let mut buf = [0u8; 20];
-        assert_eq!(write_u32_decimal(&mut buf, 0, 0), 1);
-        assert_eq!(&buf[..1], b"0");
+    fn test_kitty_final_chunk_with_placement_id() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let payload = b"Ga=T,i=42,p=7,f=100;iVBORw0KGgo=";
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
+        assert_eq!(core.response_len, 0);
+    }
 
-        let mut buf = [0u8; 20];
-        assert_eq!(write_u32_decimal(&mut buf, 0, 31), 2);
-        assert_eq!(&buf[..2], b"31");
+    #[test]
+    fn test_kitty_final_chunk_quiet() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // q=1 doesn't affect classification (only response generation)
+        let payload = b"Ga=T,i=42,q=1;iVBORw0KGgo=";
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
+        assert_eq!(core.response_len, 0);
+    }
 
-        let mut buf = [0u8; 20];
-        assert_eq!(write_u32_decimal(&mut buf, 0, 12345), 5);
-        assert_eq!(&buf[..5], b"12345");
+    // ── Continuation chunk tests ─────────────────────────
+
+    #[test]
+    fn test_kitty_more_chunks() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let payload = b"Ga=T,i=42,m=1;iVBORw0KGgo=";
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::MoreChunks);
+        assert_eq!(core.response_len, 0);
+    }
+
+    #[test]
+    fn test_kitty_explicit_m0_is_final() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let payload = b"Ga=T,i=42,m=0;iVBORw0KGgo=";
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::FinalChunk);
+        assert_eq!(core.response_len, 0);
+    }
+
+    // ── Non-Kitty APC tests ─────────────────────────────
+
+    #[test]
+    fn test_non_kitty_apc() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let payload = b"Hello";
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::NotKitty);
+    }
+
+    #[test]
+    fn test_empty_payload() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let payload = b"";
+        assert_eq!(core.handle_kitty_apc(payload), KittyApcResult::NotKitty);
     }
 }

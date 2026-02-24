@@ -984,9 +984,10 @@ impl TerminalCore {
                 if !self.grapheme_buffer.is_empty() {
                     self.flush_grapheme_buffer();
                 }
-                // Kitty query (a=q) must respond synchronously to avoid
-                // late responses being misinterpreted as key events.
-                if !self.try_handle_kitty_query(&payload) {
+                use crate::apc_handler::KittyApcResult;
+                let result = self.handle_kitty_apc(&payload);
+                // Forward to backend for all except query (which needs no image processing)
+                if !matches!(result, KittyApcResult::QueryHandled) {
                     self.fire_apc_callback(&payload);
                 }
             }
