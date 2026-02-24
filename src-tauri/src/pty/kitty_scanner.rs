@@ -213,6 +213,15 @@ impl KittyScanner {
             return;
         }
 
+        // For non-query actions, suppress response unless q=0 is explicitly set.
+        // Many CLI tools (e.g. kitten icat) send delete/transmit commands without
+        // q=2 and don't read the response, causing it to leak into the shell as
+        // garbage text. Query actions (a=q) always respond since they are used
+        // for capability detection (e.g. DetectSupport) and the caller reads them.
+        if action != b'q' && quiet != Some(0) {
+            return;
+        }
+
         // Generate OK response and write directly to PTY master fd.
         // Using libc::write() provides true zero-latency delivery — the response
         // reaches the kernel line discipline before we even return from this function,
@@ -398,26 +407,52 @@ mod tests {
     }
 
     // ── Non-query final chunk tests ──────────────────────
+    // Non-query actions suppress responses by default (q not set).
+    // Only respond when q=0 is explicitly set.
 
     #[test]
-    fn transmit_final_chunk() {
+    fn transmit_final_chunk_suppressed_by_default() {
+        // No q= specified → suppressed (prevents leak from CLI tools)
         let data = b"\x1b_Ga=T,i=42,f=100;iVBORw0KGgo=\x1b\\";
+        let responses = scan_and_collect(data);
+        assert_eq!(responses.len(), 0);
+    }
+
+    #[test]
+    fn transmit_final_chunk_explicit_q0_responds() {
+        // q=0 explicitly set → respond
+        let data = b"\x1b_Ga=T,i=42,q=0,f=100;iVBORw0KGgo=\x1b\\";
         let responses = scan_and_collect(data);
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0], b"\x1b_Gi=42;OK\x1b\\");
     }
 
     #[test]
-    fn default_action_final_chunk() {
+    fn default_action_final_chunk_suppressed() {
+        // Default action (a=t) without q → suppressed
         let data = b"\x1b_Gi=99,f=100;iVBORw0KGgo=\x1b\\";
+        let responses = scan_and_collect(data);
+        assert_eq!(responses.len(), 0);
+    }
+
+    #[test]
+    fn default_action_explicit_q0_responds() {
+        let data = b"\x1b_Gi=99,q=0,f=100;iVBORw0KGgo=\x1b\\";
         let responses = scan_and_collect(data);
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0], b"\x1b_Gi=99;OK\x1b\\");
     }
 
     #[test]
-    fn final_chunk_with_placement_id() {
+    fn final_chunk_with_placement_id_suppressed() {
         let data = b"\x1b_Ga=T,i=42,p=7,f=100;iVBORw0KGgo=\x1b\\";
+        let responses = scan_and_collect(data);
+        assert_eq!(responses.len(), 0);
+    }
+
+    #[test]
+    fn final_chunk_with_placement_id_explicit_q0() {
+        let data = b"\x1b_Ga=T,i=42,p=7,q=0,f=100;iVBORw0KGgo=\x1b\\";
         let responses = scan_and_collect(data);
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0], b"\x1b_Gi=42,p=7;OK\x1b\\");
@@ -437,6 +472,33 @@ mod tests {
         assert_eq!(responses.len(), 0);
     }
 
+    // ── Delete action tests ─────────────────────────────
+    // Delete commands (a=d) are suppressed by default — this is the
+    // root cause of kitten icat response leak.
+
+    #[test]
+    fn delete_suppressed_by_default() {
+        // kitten icat --clear sends this without q
+        let data = b"\x1b_Ga=d,d=a;\x1b\\";
+        let responses = scan_and_collect(data);
+        assert_eq!(responses.len(), 0);
+    }
+
+    #[test]
+    fn delete_by_range_suppressed() {
+        let data = b"\x1b_Ga=d,d=R,x=0,y=4294967295;\x1b\\";
+        let responses = scan_and_collect(data);
+        assert_eq!(responses.len(), 0);
+    }
+
+    #[test]
+    fn delete_explicit_q0_responds() {
+        let data = b"\x1b_Ga=d,d=a,q=0;\x1b\\";
+        let responses = scan_and_collect(data);
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0], b"\x1b_G;OK\x1b\\");
+    }
+
     // ── Continuation chunk tests ─────────────────────────
 
     #[test]
@@ -447,8 +509,15 @@ mod tests {
     }
 
     #[test]
-    fn explicit_m0_is_final() {
+    fn explicit_m0_is_final_suppressed_without_q0() {
         let data = b"\x1b_Ga=T,i=42,m=0;iVBORw0KGgo=\x1b\\";
+        let responses = scan_and_collect(data);
+        assert_eq!(responses.len(), 0);
+    }
+
+    #[test]
+    fn explicit_m0_is_final_with_q0() {
+        let data = b"\x1b_Ga=T,i=42,m=0,q=0;iVBORw0KGgo=\x1b\\";
         let responses = scan_and_collect(data);
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0], b"\x1b_Gi=42;OK\x1b\\");
@@ -473,15 +542,30 @@ mod tests {
     // ── Partial read / multi-chunk tests ─────────────────
 
     #[test]
-    fn partial_reads_across_buffers() {
+    fn partial_reads_across_buffers_suppressed() {
+        // Non-query without q=0 → suppressed even across partial reads
         let (read_fd, write_fd) = make_pipe();
         let mut scanner = KittyScanner::new();
 
-        // Split the APC across multiple process() calls
-        scanner.process(b"\x1b", write_fd); // ESC alone
-        scanner.process(b"_Gi=42", write_fd); // APC start + partial control
-        scanner.process(b",a=T;payload", write_fd); // rest of control + payload
-        scanner.process(b"\x1b\\", write_fd); // ST
+        scanner.process(b"\x1b", write_fd);
+        scanner.process(b"_Gi=42", write_fd);
+        scanner.process(b",a=T;payload", write_fd);
+        scanner.process(b"\x1b\\", write_fd);
+
+        let all_data = read_pipe(read_fd);
+        close_pipe(read_fd, write_fd);
+        assert_eq!(all_data, b"");
+    }
+
+    #[test]
+    fn partial_reads_across_buffers_with_q0() {
+        let (read_fd, write_fd) = make_pipe();
+        let mut scanner = KittyScanner::new();
+
+        scanner.process(b"\x1b", write_fd);
+        scanner.process(b"_Gi=42", write_fd);
+        scanner.process(b",a=T,q=0;payload", write_fd);
+        scanner.process(b"\x1b\\", write_fd);
 
         let all_data = read_pipe(read_fd);
         close_pipe(read_fd, write_fd);
@@ -489,11 +573,24 @@ mod tests {
     }
 
     #[test]
-    fn multiple_apcs_in_one_read() {
+    fn multiple_apcs_in_one_read_suppressed() {
+        // Non-query without q=0 → all suppressed
         let mut data = Vec::new();
         data.extend_from_slice(b"\x1b_Gi=1,a=T;data\x1b\\");
         data.extend_from_slice(b"normal text");
         data.extend_from_slice(b"\x1b_Gi=2,a=T;data\x1b\\");
+
+        let responses = scan_and_collect(&data);
+        assert_eq!(responses.len(), 0);
+    }
+
+    #[test]
+    fn multiple_queries_in_one_read() {
+        // Query actions always respond
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\x1b_Gi=1,a=q;data\x1b\\");
+        data.extend_from_slice(b"normal text");
+        data.extend_from_slice(b"\x1b_Gi=2,a=q;data\x1b\\");
 
         let responses = scan_and_collect(&data);
         assert_eq!(responses.len(), 2);
@@ -502,14 +599,23 @@ mod tests {
     }
 
     #[test]
-    fn multi_chunk_sequence() {
-        // First chunk (m=1) — no response
+    fn multi_chunk_sequence_suppressed() {
+        // Multi-chunk transmit without q=0 → all suppressed
         let mut data = Vec::new();
         data.extend_from_slice(b"\x1b_Ga=T,i=42,m=1;chunk1data\x1b\\");
-        // Middle chunk (m=1) — no response
         data.extend_from_slice(b"\x1b_Gm=1;chunk2data\x1b\\");
-        // Final chunk (m=0) — response expected
         data.extend_from_slice(b"\x1b_Gi=42,m=0;chunk3data\x1b\\");
+
+        let responses = scan_and_collect(&data);
+        assert_eq!(responses.len(), 0);
+    }
+
+    #[test]
+    fn multi_chunk_sequence_with_q0() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\x1b_Ga=T,i=42,q=0,m=1;chunk1data\x1b\\");
+        data.extend_from_slice(b"\x1b_Gm=1,q=0;chunk2data\x1b\\");
+        data.extend_from_slice(b"\x1b_Gi=42,m=0,q=0;chunk3data\x1b\\");
 
         let responses = scan_and_collect(&data);
         assert_eq!(responses.len(), 1);
