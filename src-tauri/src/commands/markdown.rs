@@ -1,20 +1,29 @@
 use crate::encoding::{base64, osc};
 use crate::error::CommandError;
-use crate::validation::file;
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use uuid::Uuid;
 
-/// Maximum file size for Markdown files (2MB)
-const MAX_MARKDOWN_SIZE: u64 = 2 * 1024 * 1024;
-
-/// Chunk size for base64 encoded Markdown (64KB)
-const MARKDOWN_CHUNK_SIZE: usize = 64 * 1024;
+/// Chunk size for base64 encoded Markdown (128KB)
+const MARKDOWN_CHUNK_SIZE: usize = 128 * 1024;
 
 /// Executes the markdown command: reads file, encodes to base64, generates OSC sequences
 pub fn execute_markdown_command(file_path: &Path) -> Result<(), CommandError> {
-    // Open and validate file in one operation (prevents TOCTOU)
-    let (mut file, _validated_path) = file::open_and_validate_file(file_path, MAX_MARKDOWN_SIZE)?;
+    // Open file (validates existence and readability, no size limit)
+    let mut file = File::open(file_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            CommandError::FileNotFound(file_path.to_owned())
+        } else {
+            CommandError::FileReadError(e)
+        }
+    })?;
+
+    // Check it's a file (not directory)
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(CommandError::NotAFile(file_path.to_owned()));
+    }
 
     // Read file content from the open handle
     let mut content = Vec::new();
@@ -61,21 +70,26 @@ mod tests {
     }
 
     #[test]
-    fn test_execute_markdown_command_with_oversized_file() {
+    fn test_execute_markdown_command_with_large_file() {
         let mut temp_file = NamedTempFile::new().unwrap();
-        // Create a file larger than 2MB
+        // Create a file larger than 2MB — should succeed (no size limit)
         let large_content = "x".repeat(3 * 1024 * 1024);
         write!(temp_file, "{}", large_content).unwrap();
         temp_file.flush().unwrap();
 
         let result = execute_markdown_command(temp_file.path());
-        assert!(matches!(result, Err(CommandError::FileTooLarge { .. })));
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_execute_markdown_command_with_non_existent_file() {
         let result = execute_markdown_command(Path::new("/nonexistent/file.md"));
         assert!(matches!(result, Err(CommandError::FileNotFound(_))));
+    }
+
+    #[test]
+    fn test_chunk_size_is_128kb() {
+        assert_eq!(MARKDOWN_CHUNK_SIZE, 128 * 1024);
     }
 
     #[test]

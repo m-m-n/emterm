@@ -160,15 +160,10 @@ describe("MarkdownSessionManager", () => {
 			console.warn = originalWarn;
 		});
 
-		test("should enforce size limit", () => {
-			// Create a large Base64 string (> 2MB decoded)
-			const largeData = btoa(
-				"x".repeat(MarkdownSessionManager.MAX_SESSION_SIZE + 1),
-			);
-
-			const consoleSpy = mock(() => {});
-			const originalWarn = console.warn;
-			console.warn = consoleSpy;
+		test("should accumulate large data without size limit", () => {
+			// Create a large Base64 string (> 2MB decoded) — should succeed
+			const largeContent = "x".repeat(3 * 1024 * 1024);
+			const largeData = btoa(largeContent);
 
 			manager.handleCommand("emterm", [
 				"markdown",
@@ -178,11 +173,27 @@ describe("MarkdownSessionManager", () => {
 				`data=${largeData}`,
 			]);
 
-			// Session should be deleted due to size limit
-			expect(manager.getSession("chunk-test")).toBeUndefined();
-			expect(consoleSpy).toHaveBeenCalled();
+			// Session should still exist (no size limit)
+			const session = manager.getSession("chunk-test");
+			expect(session).toBeDefined();
+			expect(session?.chunks.size).toBe(1);
+			expect(session?.dataSize).toBe(largeContent.length);
+		});
 
-			console.warn = originalWarn;
+		test("should update lastChunkAt on each chunk", () => {
+			const before = Date.now();
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"chunk",
+				"id=chunk-test",
+				"seq=0",
+				"data=IyBIZWxsbw==",
+			]);
+
+			const session = manager.getSession("chunk-test");
+			expect(session?.lastChunkAt).toBeGreaterThanOrEqual(before);
+			expect(session?.lastChunkAt).toBeLessThanOrEqual(Date.now());
 		});
 
 		test("should accumulate multiple chunks", () => {
@@ -258,14 +269,14 @@ describe("MarkdownSessionManager", () => {
 	});
 
 	describe("timeout", () => {
-		test("should cleanup expired sessions", async () => {
-			// Create a session and manually set old timestamp
+		test("should cleanup expired sessions based on lastChunkAt", async () => {
+			// Create a session and manually set old lastChunkAt
 			manager.handleCommand("emterm", ["markdown", "begin", "id=old-session"]);
 
 			const session = manager.getSession("old-session");
 			if (session) {
-				// Manually age the session
-				(session as any).createdAt =
+				// Manually age the session via lastChunkAt
+				(session as any).lastChunkAt =
 					Date.now() - MarkdownSessionManager.SESSION_TIMEOUT - 1000;
 			}
 
@@ -285,6 +296,55 @@ describe("MarkdownSessionManager", () => {
 			manager.cleanupExpiredSessions();
 
 			expect(manager.getSession("fresh-session")).toBeDefined();
+		});
+
+		test("should not cleanup session with recent chunk", () => {
+			manager.handleCommand("emterm", ["markdown", "begin", "id=active-session"]);
+
+			const session = manager.getSession("active-session");
+			if (session) {
+				// Age the createdAt, but keep lastChunkAt recent (simulates active transfer)
+				(session as any).createdAt =
+					Date.now() - MarkdownSessionManager.SESSION_TIMEOUT - 10000;
+			}
+
+			// Send a chunk to update lastChunkAt
+			manager.handleCommand("emterm", [
+				"markdown",
+				"chunk",
+				"id=active-session",
+				"seq=0",
+				"data=IyBIZWxsbw==",
+			]);
+
+			// Trigger cleanup
+			manager.cleanupExpiredSessions();
+
+			// Session should survive because lastChunkAt is recent
+			expect(manager.getSession("active-session")).toBeDefined();
+		});
+
+		test("should cleanup session with old lastChunkAt", () => {
+			manager.handleCommand("emterm", ["markdown", "begin", "id=stale-session"]);
+
+			// Send a chunk, then manually age lastChunkAt
+			manager.handleCommand("emterm", [
+				"markdown",
+				"chunk",
+				"id=stale-session",
+				"seq=0",
+				"data=IyBIZWxsbw==",
+			]);
+
+			const session = manager.getSession("stale-session");
+			if (session) {
+				(session as any).lastChunkAt =
+					Date.now() - MarkdownSessionManager.SESSION_TIMEOUT - 1000;
+			}
+
+			manager.cleanupExpiredSessions();
+
+			expect(manager.getSession("stale-session")).toBeUndefined();
 		});
 	});
 
