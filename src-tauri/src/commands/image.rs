@@ -55,10 +55,13 @@ pub fn execute_image_command(
     };
 
     // Output to stdout (wrap in DCS passthrough when inside tmux).
-    // Kitty sequences use q=2 (suppress OK responses), so no response
-    // waiting or raw mode is needed. This avoids the timing race where
-    // response bytes leak into the shell prompt after the CLI exits.
+    // Kitty sequences use q=2 (suppress OK responses), but the hosting
+    // terminal may still send APC responses. Drain stdin after output
+    // to prevent response bytes from leaking into the shell prompt.
     output_to_stdout(&super::tmux::passthrough_if_needed(&sequence))?;
+
+    #[cfg(unix)]
+    drain_stdin_responses();
 
     Ok(())
 }
@@ -77,6 +80,52 @@ fn decode_image(path: &Path) -> Result<DynamicImage, CommandError> {
 
     let img = image::open(path)?;
     Ok(img)
+}
+
+/// Drain any Kitty APC response bytes from stdin after sequence output.
+///
+/// Some terminals send OK responses despite q=2 (suppress). If these
+/// bytes remain in stdin, the shell interprets them as user input,
+/// causing garbage text on the prompt (e.g., `Gi=1;OK`).
+#[cfg(unix)]
+fn drain_stdin_responses() {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+
+    let stdin_fd = std::io::stdin().as_raw_fd();
+
+    let orig = unsafe {
+        let mut termios = std::mem::zeroed::<libc::termios>();
+        if libc::tcgetattr(stdin_fd, &mut termios) != 0 {
+            return;
+        }
+        termios
+    };
+
+    let mut raw = orig;
+    unsafe {
+        libc::cfmakeraw(&mut raw);
+        // VMIN=0: return immediately if no data, VTIME=20: 2s timeout
+        raw.c_cc[libc::VMIN] = 0;
+        raw.c_cc[libc::VTIME] = 20;
+        if libc::tcsetattr(stdin_fd, libc::TCSANOW, &raw) != 0 {
+            return;
+        }
+    }
+
+    let mut buf = [0u8; 256];
+    loop {
+        match std::io::stdin().lock().read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) if n < buf.len() => break,
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+
+    unsafe {
+        libc::tcsetattr(stdin_fd, libc::TCSANOW, &orig);
+    }
 }
 
 /// Writes sequence to stdout with proper flushing
