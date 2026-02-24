@@ -120,10 +120,14 @@ impl KittyResponse {
     }
 
     /// Check if response should be suppressed based on quiet mode.
+    ///
+    /// Per Kitty Graphics Protocol spec:
+    /// - q=1: suppress OK responses only (errors still sent)
+    /// - q=2: suppress ALL responses (both OK and errors)
     pub fn should_suppress(&self, quiet: Option<u8>) -> bool {
         match quiet {
-            Some(1) => self.ok,  // Suppress OK responses
-            Some(2) => !self.ok, // Suppress ERROR responses
+            Some(1) => self.ok, // Suppress OK responses only
+            Some(2) => true,    // Suppress ALL responses
             _ => false,
         }
     }
@@ -1053,15 +1057,15 @@ mod tests {
         let ok_response = KittyResponse::ok(Some(1), None);
         let error_response = KittyResponse::error(Some(1), KittyErrorCode::EINVAL, "test");
 
-        // q=1 suppresses OK responses
+        // q=1 suppresses OK responses only
         assert!(ok_response.should_suppress(Some(1)));
         assert!(!error_response.should_suppress(Some(1)));
 
-        // q=2 suppresses ERROR responses
-        assert!(!ok_response.should_suppress(Some(2)));
+        // q=2 suppresses ALL responses (both OK and ERROR)
+        assert!(ok_response.should_suppress(Some(2)));
         assert!(error_response.should_suppress(Some(2)));
 
-        // No quiet mode
+        // No quiet mode — nothing suppressed
         assert!(!ok_response.should_suppress(None));
         assert!(!error_response.should_suppress(None));
     }

@@ -621,6 +621,13 @@ fn spawn_reader_thread(
             }
         }
 
+        // Set up Kitty APC scanner for immediate protocol response delivery.
+        // This scans raw PTY output for Kitty Graphics Protocol sequences and
+        // writes OK responses directly to the master fd via libc::write(),
+        // bypassing ALL intermediate layers (writer channel, writer thread,
+        // WebView, WASM, Tauri IPC) for true zero-latency response delivery.
+        let mut kitty_scanner = pty::kitty_scanner::KittyScanner::new();
+
         let mut buf = [0u8; 4096];
 
         log::trace!("PTY reader: starting read loop for session {}", session_id);
@@ -641,6 +648,13 @@ fn spawn_reader_thread(
                     break;
                 }
                 Ok(n) => {
+                    // Scan for Kitty APC sequences and write responses directly
+                    // to the master fd via libc::write() (zero latency).
+                    #[cfg(unix)]
+                    if let Some(fd) = master_fd {
+                        kitty_scanner.process(&buf[..n], fd);
+                    }
+
                     // Send raw bytes via Channel for WASM processing
                     if let Err(e) = channel.send(buf[..n].to_vec()) {
                         log::warn!(

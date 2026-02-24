@@ -11,6 +11,7 @@
 //! - `manager`: Multi-session PTY manager
 
 pub mod graceful_shutdown;
+pub mod kitty_scanner;
 pub mod manager;
 pub mod session;
 pub mod shell;
