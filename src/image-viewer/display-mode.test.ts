@@ -603,3 +603,106 @@ describe("DisplayModeController - Keyboard Handling", () => {
     expect(modeChanged).toBe(false);
   });
 });
+
+describe("DisplayModeController - Space Scroll", () => {
+  test("should call onScroll with positive delta on Space key", () => {
+    const overlay = document.createElement("div");
+    overlay.classList.add("visible");
+    Object.defineProperty(overlay, "clientHeight", {
+      value: 600,
+      configurable: true,
+    });
+
+    let scrollDelta: number | null = null;
+
+    const controller = new DisplayModeController({
+      imageWidth: 2000,
+      imageHeight: 1500,
+      viewportWidth: 800,
+      viewportHeight: 600,
+      overlay,
+      onScroll: (delta) => {
+        scrollDelta = delta;
+      },
+    });
+
+    const event = new KeyboardEvent("keydown", { key: " " });
+    document.dispatchEvent(event);
+
+    expect(scrollDelta).toBe(600 * 0.85);
+
+    controller.dispose();
+  });
+
+  test("should call onScroll with negative delta on Shift+Space key", () => {
+    const overlay = document.createElement("div");
+    overlay.classList.add("visible");
+    Object.defineProperty(overlay, "clientHeight", {
+      value: 600,
+      configurable: true,
+    });
+
+    let scrollDelta: number | null = null;
+
+    const controller = new DisplayModeController({
+      imageWidth: 2000,
+      imageHeight: 1500,
+      viewportWidth: 800,
+      viewportHeight: 600,
+      overlay,
+      onScroll: (delta) => {
+        scrollDelta = delta;
+      },
+    });
+
+    const event = new KeyboardEvent("keydown", { key: " ", shiftKey: true });
+    document.dispatchEvent(event);
+
+    expect(scrollDelta).toBe(-600 * 0.85);
+
+    controller.dispose();
+  });
+
+  test("should not call onScroll when overlay is not visible", () => {
+    const overlay = document.createElement("div");
+    // NOT adding "visible" class
+    let scrollCalled = false;
+
+    const controller = new DisplayModeController({
+      imageWidth: 2000,
+      imageHeight: 1500,
+      viewportWidth: 800,
+      viewportHeight: 600,
+      overlay,
+      onScroll: () => {
+        scrollCalled = true;
+      },
+    });
+
+    const event = new KeyboardEvent("keydown", { key: " " });
+    document.dispatchEvent(event);
+
+    expect(scrollCalled).toBe(false);
+
+    controller.dispose();
+  });
+
+  test("should not call onScroll when onScroll is not provided", () => {
+    const overlay = document.createElement("div");
+    overlay.classList.add("visible");
+
+    const controller = new DisplayModeController({
+      imageWidth: 2000,
+      imageHeight: 1500,
+      viewportWidth: 800,
+      viewportHeight: 600,
+      overlay,
+    });
+
+    // Should not throw when Space is pressed without onScroll callback
+    const event = new KeyboardEvent("keydown", { key: " " });
+    expect(() => document.dispatchEvent(event)).not.toThrow();
+
+    controller.dispose();
+  });
+});

@@ -320,6 +320,11 @@ export class ImageViewer {
       initialMode: "pixel",
       onModeChange: (state) => this.handleModeChange(state),
       onClose: () => this.hide(),
+      onScroll: (deltaY) => {
+        if (!this.panController?.canPan()) return;
+        const offset = this.panController.getOffset();
+        this.panController.setOffset(offset.x, offset.y - deltaY);
+      },
     });
 
     // Apply initial pixel mode (100%)

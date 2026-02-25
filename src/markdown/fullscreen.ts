@@ -338,6 +338,14 @@ export class FullscreenMarkdownView {
 				this.scrollBy(this.content?.clientHeight || 400);
 				break;
 
+			case " ":
+				if (e.shiftKey) {
+					this.scrollBy(-(this.content?.clientHeight || 400) * 0.85);
+				} else {
+					this.scrollBy((this.content?.clientHeight || 400) * 0.85);
+				}
+				break;
+
 			case "Home":
 				this.scrollTo("top");
 				break;
