@@ -141,16 +141,12 @@ export class MarkdownSessionManager {
 			format = params.format;
 		}
 
-		const now = Date.now();
 		const session: MarkdownSession = {
 			id,
 			format,
 			version: parseInt(params.version || "1", 10) || 1,
 			chunks: new Map(),
-			nextSeq: 0,
-			createdAt: now,
-			lastChunkAt: now,
-			dataSize: 0,
+			lastChunkAt: Date.now(),
 		};
 
 		this.sessions.set(id, session);
@@ -201,7 +197,6 @@ export class MarkdownSessionManager {
 		}
 
 		session.chunks.set(seqNum, decoded);
-		session.dataSize += decoded.length;
 		session.lastChunkAt = Date.now();
 	}
 
@@ -278,10 +273,7 @@ export class MarkdownSessionManager {
 		}
 
 		const binary = atob(data);
-		const bytes = new Uint8Array(binary.length);
-		for (let i = 0; i < binary.length; i++) {
-			bytes[i] = binary.charCodeAt(i);
-		}
+		const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
 		return new TextDecoder().decode(bytes);
 	}
 

@@ -54,14 +54,8 @@ export interface MarkdownSession {
 	version: number;
 	/** Accumulated chunks indexed by sequence number */
 	chunks: Map<number, string>;
-	/** Expected next sequence number */
-	nextSeq: number;
-	/** Session creation timestamp (milliseconds) */
-	createdAt: number;
 	/** Last chunk receipt timestamp (milliseconds) */
 	lastChunkAt: number;
-	/** Total accumulated data size in bytes */
-	dataSize: number;
 }
 
 /**

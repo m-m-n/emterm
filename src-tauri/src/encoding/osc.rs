@@ -9,26 +9,30 @@ use uuid::Uuid;
 /// ESC ] 777 ; emterm ; markdown ; end ; id={uuid} ESC \
 /// ```
 pub fn generate_markdown_osc(session_id: &Uuid, chunks: Vec<String>) -> String {
-    let mut output = String::new();
+    let total_data: usize = chunks.iter().map(|c| c.len()).sum();
+    let header_overhead = 100;
+    let estimated = total_data + header_overhead * (chunks.len() + 2);
+    let mut output = String::with_capacity(estimated);
+    let id = session_id.to_string();
 
     // Begin sequence
     output.push_str(&format!(
         "\x1b]777;emterm;markdown;begin;id={};format=gfm;render=fullscreen;version=1.0\x1b\\",
-        session_id
+        id
     ));
 
     // Chunk sequences
     for (seq, data) in chunks.iter().enumerate() {
         output.push_str(&format!(
             "\x1b]777;emterm;markdown;chunk;id={};seq={};data={}\x1b\\",
-            session_id, seq, data
+            id, seq, data
         ));
     }
 
     // End sequence
     output.push_str(&format!(
         "\x1b]777;emterm;markdown;end;id={}\x1b\\",
-        session_id
+        id
     ));
 
     output
