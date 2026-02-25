@@ -90,6 +90,7 @@ export interface AppSettings {
   // Markdown Viewer Font
   markdown_body_font_family: string;
   markdown_code_font_family: string;
+  markdown_emoji_font_family: string;
   markdown_font_size: number;
 }
 
@@ -122,7 +123,7 @@ export interface FontListResponse {
   emoji_fonts: string[];
 }
 
-export type FontCategory = "primary" | "secondary" | "emoji" | "ui" | "markdown-body" | "markdown-code";
+export type FontCategory = "primary" | "secondary" | "emoji" | "ui" | "markdown-body" | "markdown-code" | "markdown-emoji";
 
 // ============================================================
 // User Color Scheme

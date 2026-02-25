@@ -11,7 +11,7 @@ export const DEFAULT_ROWS = 24;
 /**
  * Default font settings
  */
-export const DEFAULT_FONT_FAMILY = 'monospace';
+export const DEFAULT_FONT_FAMILY = "monospace";
 export const DEFAULT_FONT_SIZE = 16;
 
 /**

@@ -51,7 +51,7 @@ export const DISPLAY_MODE_STYLES = `
   border: none;
   border-radius: 4px;
   color: white;
-  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
+  font-family: monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   font-size: 12px;
   cursor: pointer;
   display: flex;
@@ -72,7 +72,7 @@ export const DISPLAY_MODE_STYLES = `
   min-width: 50px;
   text-align: center;
   color: white;
-  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
+  font-family: monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   font-size: 12px;
   cursor: pointer;
   padding: 4px 8px;

@@ -21,7 +21,7 @@ body {
 }
 
 body {
-  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
+  font-family: monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   color: #40ff40;
 }
 
@@ -167,7 +167,7 @@ body {
 }
 
 .markdown-content {
-  font-family: var(--markdown-body-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif);
+  font-family: var(--markdown-body-font-family, serif), var(--markdown-emoji-font-family, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji');
   font-size: var(--markdown-body-font-size, 14pt);
   line-height: 1.6;
   word-wrap: break-word;
@@ -271,7 +271,7 @@ body {
   padding: 0.2em 0.4em;
   margin: 0;
   font-size: 85%;
-  font-family: var(--markdown-code-font-family, "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace);
+  font-family: var(--markdown-code-font-family, monospace), var(--markdown-emoji-font-family, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji');
   border-radius: 3px;
 }
 
@@ -405,9 +405,8 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   color: var(--markdown-fg, #d4d4d4);
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  font-size: 16px;
+  font-family: var(--markdown-body-font-family, serif), var(--markdown-emoji-font-family, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji');
+  font-size: var(--markdown-body-font-size, 14pt);
   line-height: 1.6;
   box-sizing: border-box;
 }
@@ -600,7 +599,7 @@ body {
 .link-confirm-url {
   margin: 0 0 1.5rem 0;
   color: var(--markdown-link, #569cd6);
-  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
+  font-family: monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   font-size: 0.9rem;
   word-break: break-all;
   padding: 0.5rem;
@@ -687,7 +686,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.7);
-  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
+  font-family: monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   font-size: 12px;
   user-select: none;
 }

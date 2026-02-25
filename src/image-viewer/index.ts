@@ -135,7 +135,7 @@ const STYLES = `
   left: 50%;
   transform: translateX(-50%);
   color: rgba(255, 255, 255, 0.7);
-  font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
+  font-family: monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   font-size: 12px;
   user-select: none;
 }

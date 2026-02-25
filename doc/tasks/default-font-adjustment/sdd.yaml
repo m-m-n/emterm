@@ -1,0 +1,88 @@
+schema_version: 1
+feature: default-font-adjustment
+scale: standard
+created: 2026-02-25
+
+project:
+  components:
+    main:
+      language: TypeScript/Rust
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: d0c571823a7ac4cd1c60643f89f22c7d75deb9f2
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: d0c571823a7ac4cd1c60643f89f22c7d75deb9f2
+  - id: implement
+    status: completed
+    completed_at_commit: d0c571823a7ac4cd1c60643f89f22c7d75deb9f2
+  - id: check
+    status: completed
+    completed_at_commit: d0c571823a7ac4cd1c60643f89f22c7d75deb9f2
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: d0c571823a7ac4cd1c60643f89f22c7d75deb9f2
+  - id: review
+    status: completed
+    completed_at_commit: d0c571823a7ac4cd1c60643f89f22c7d75deb9f2
+
+requirements:
+  FR1:
+    title: Terminal monospace font stack
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Font picker clear button
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Hardcoded font replacement
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Markdown body font stack
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Markdown code font stack
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: UI font stack emoji support
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Markdown emoji font setting
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Cross-platform compatibility
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Backward compatibility
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Maintainability
+    status: ok
+    tasks: []
+    tests: []

@@ -5,6 +5,7 @@
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
+  calculateTerminalSize,
   measureCharacterSize,
   observeContainerResize,
   PtyClient,
@@ -1584,6 +1585,58 @@ export class TerminalApp {
       return;
     }
     this.renderer?.applySetting(setting, value);
+
+    // Font changes affect character dimensions - recalculate terminal size
+    if (
+      (setting === "fontSize" || setting === "fontFamily") &&
+      this.renderer &&
+      this.state
+    ) {
+      this.handleCharSizeChange();
+    }
+  }
+
+  /**
+   * Recalculate terminal size after character dimensions change (e.g. font change).
+   * Updates charSize, resizes state/renderer/selection/PTY, and reconnects ResizeObserver.
+   */
+  private handleCharSizeChange(): void {
+    if (!this.renderer || !this.state) return;
+    // Skip resize if container is hidden (e.g. inactive tab) - dimensions would be 0x0
+    if (this.container.style.display === "none") return;
+
+    const newWidth = this.renderer.getCharWidth();
+    const newHeight = this.renderer.getCharHeight();
+
+    // Skip if dimensions didn't actually change
+    if (newWidth === this.charSize.width && newHeight === this.charSize.height) {
+      return;
+    }
+
+    this.charSize = { width: newWidth, height: newHeight };
+
+    // Recalculate terminal dimensions with new character size
+    const { cols, rows } = calculateTerminalSize(
+      this.container,
+      newWidth,
+      newHeight,
+    );
+
+    // Resize state, renderer, and selection
+    this.state.resize(cols, rows);
+    this.state.setCellSizePx(Math.round(newWidth), Math.round(newHeight));
+    this.renderer.resize(cols, rows);
+    this.renderer.forceRender(this.state);
+
+    this.mouseHandler?.updateCharSize(newWidth, newHeight);
+    this.selectionController?.resize(cols, rows, newWidth, newHeight);
+
+    // Reconnect ResizeObserver with new character dimensions
+    this.disconnectResizeObserver?.();
+    this.setupResizeObserver();
+
+    // Resize PTY
+    this.ptyClient?.resize(cols, rows);
   }
 }
 

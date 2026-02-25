@@ -137,6 +137,11 @@ deserialize_null_with!(
     default_markdown_code_font_family
 );
 deserialize_null_with!(
+    deserialize_null_markdown_emoji_font_family,
+    String,
+    default_markdown_emoji_font_family
+);
+deserialize_null_with!(
     deserialize_null_editor_command,
     String,
     default_editor_command
@@ -172,6 +177,9 @@ fn default_markdown_body_font_family() -> String {
     String::new()
 }
 fn default_markdown_code_font_family() -> String {
+    String::new()
+}
+fn default_markdown_emoji_font_family() -> String {
     String::new()
 }
 fn default_markdown_font_size() -> u32 {
@@ -449,6 +457,11 @@ pub struct AppSettings {
     )]
     pub markdown_code_font_family: String,
     #[serde(
+        default = "default_markdown_emoji_font_family",
+        deserialize_with = "deserialize_null_markdown_emoji_font_family"
+    )]
+    pub markdown_emoji_font_family: String,
+    #[serde(
         default = "default_markdown_font_size",
         deserialize_with = "deserialize_null_markdown_font_size"
     )]
@@ -488,6 +501,7 @@ impl Default for AppSettings {
             markdown_theme_preset: UiThemePreset::default(),
             markdown_body_font_family: default_markdown_body_font_family(),
             markdown_code_font_family: default_markdown_code_font_family(),
+            markdown_emoji_font_family: default_markdown_emoji_font_family(),
             markdown_font_size: default_markdown_font_size(),
             fold_enabled: default_true(),
             file_path_detection: default_true(),
@@ -686,6 +700,7 @@ mod tests {
         assert_eq!(settings.markdown_theme_preset, UiThemePreset::Purple);
         assert_eq!(settings.markdown_body_font_family, "");
         assert_eq!(settings.markdown_code_font_family, "");
+        assert_eq!(settings.markdown_emoji_font_family, "");
         assert_eq!(settings.markdown_font_size, 14);
         // Notification defaults
         assert!(settings.notification_enabled);
@@ -934,6 +949,7 @@ mod tests {
             markdown_theme_preset: UiThemePreset::Green,
             markdown_body_font_family: "Noto Sans".to_string(),
             markdown_code_font_family: "Fira Code".to_string(),
+            markdown_emoji_font_family: "Noto Color Emoji".to_string(),
             markdown_font_size: 16,
             fold_enabled: false,
             file_path_detection: false,
@@ -987,6 +1003,7 @@ mod tests {
         assert_eq!(restored.markdown_theme_preset, UiThemePreset::Green);
         assert_eq!(restored.markdown_body_font_family, "Noto Sans");
         assert_eq!(restored.markdown_code_font_family, "Fira Code");
+        assert_eq!(restored.markdown_emoji_font_family, "Noto Color Emoji");
         assert_eq!(restored.markdown_font_size, 16);
         assert!(!restored.notification_enabled);
         assert!(!restored.tab_activity_indicator);
@@ -1345,6 +1362,7 @@ mod tests {
         let settings = AppSettings::default();
         assert_eq!(settings.markdown_body_font_family, "");
         assert_eq!(settings.markdown_code_font_family, "");
+        assert_eq!(settings.markdown_emoji_font_family, "");
         assert_eq!(settings.markdown_font_size, 14);
     }
 
@@ -1354,6 +1372,7 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.markdown_body_font_family, "");
         assert_eq!(settings.markdown_code_font_family, "");
+        assert_eq!(settings.markdown_emoji_font_family, "");
         assert_eq!(settings.markdown_font_size, 14);
     }
 
@@ -1362,11 +1381,13 @@ mod tests {
         let json = r#"{
             "markdown_body_font_family": null,
             "markdown_code_font_family": null,
+            "markdown_emoji_font_family": null,
             "markdown_font_size": null
         }"#;
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.markdown_body_font_family, "");
         assert_eq!(settings.markdown_code_font_family, "");
+        assert_eq!(settings.markdown_emoji_font_family, "");
         assert_eq!(settings.markdown_font_size, 14);
     }
 
@@ -1375,11 +1396,13 @@ mod tests {
         let json = r#"{
             "markdown_body_font_family": "Noto Sans",
             "markdown_code_font_family": "Fira Code",
+            "markdown_emoji_font_family": "Noto Color Emoji",
             "markdown_font_size": 18
         }"#;
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert_eq!(settings.markdown_body_font_family, "Noto Sans");
         assert_eq!(settings.markdown_code_font_family, "Fira Code");
+        assert_eq!(settings.markdown_emoji_font_family, "Noto Color Emoji");
         assert_eq!(settings.markdown_font_size, 18);
     }
 

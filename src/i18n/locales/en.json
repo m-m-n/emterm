@@ -71,7 +71,8 @@
       "fontPickerChange": "Change",
       "fontPickerPrimaryTitle": "Primary Font",
       "fontPickerSecondaryTitle": "Secondary Font",
-      "fontPickerEmojiTitle": "Emoji Font"
+      "fontPickerEmojiTitle": "Emoji Font",
+      "fontPickerClear": "Clear"
     },
     "terminal": {
       "title": "Terminal",
@@ -216,8 +217,12 @@
       "fontSize": "Font Size",
       "fontSizeHint": "Range: {min}-{max}pt",
       "fontSizeDesc": "Sets the base font size for Markdown content",
+      "emojiFontFamily": "Emoji Font",
+      "emojiFontFamilyHint": "Markdown emoji font",
+      "emojiFontFamilyDesc": "Sets the font for emoji characters in Markdown",
       "fontPickerBodyTitle": "Markdown Body Font",
       "fontPickerCodeTitle": "Markdown Code Font",
+      "fontPickerEmojiTitle": "Markdown Emoji Font",
       "colorTheme": "Color Theme",
       "followUiTheme": "Follow UI Theme",
       "followUiThemeDesc": "Use the same theme and preset as the UI settings",

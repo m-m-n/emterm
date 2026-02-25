@@ -77,7 +77,7 @@ export function showPasteDialog(
       min-width: 400px;
       max-width: 600px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-family: sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
     `;
 
 		// Create dialog title
@@ -116,7 +116,7 @@ export function showPasteDialog(
       padding: 12px;
       border-radius: 4px;
       font-size: 13px;
-      font-family: "Inconsolata", "Noto Sans JP", "Noto Color Emoji", monospace;
+      font-family: monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
       overflow-x: auto;
       max-height: 200px;
       margin: 0 0 20px 0;

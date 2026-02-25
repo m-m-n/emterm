@@ -153,6 +153,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     markdown_theme_preset: "purple",
     markdown_body_font_family: "",
     markdown_code_font_family: "",
+    markdown_emoji_font_family: "",
     markdown_font_size: 14,
     ...overrides,
   };
@@ -176,56 +177,56 @@ describe("applyFontSize", () => {
 });
 
 describe("buildFontFamilyChain", () => {
-  test("all empty -> monospace", () => {
-    expect(buildFontFamilyChain("", "", "")).toBe("monospace");
+  test("all empty -> empty string", () => {
+    expect(buildFontFamilyChain("", "", "")).toBe("");
   });
 
   test("primary only", () => {
-    expect(buildFontFamilyChain("Fira Code", "", "")).toBe("Fira Code, monospace");
+    expect(buildFontFamilyChain("Fira Code", "", "")).toBe("Fira Code");
   });
 
   test("primary + secondary", () => {
-    expect(buildFontFamilyChain("Fira Code", "", "Noto Sans JP")).toBe("Fira Code, Noto Sans JP, monospace");
+    expect(buildFontFamilyChain("Fira Code", "", "Noto Sans JP")).toBe("Fira Code, Noto Sans JP");
   });
 
   test("all three filled", () => {
     expect(buildFontFamilyChain("JetBrains Mono", "Noto Color Emoji", "Noto Sans JP")).toBe(
-      "JetBrains Mono, Noto Color Emoji, Noto Sans JP, monospace",
+      "JetBrains Mono, Noto Color Emoji, Noto Sans JP",
     );
   });
 
   test("emoji + secondary (no primary)", () => {
     expect(buildFontFamilyChain("", "Noto Color Emoji", "Noto Sans JP")).toBe(
-      "Noto Color Emoji, Noto Sans JP, monospace",
+      "Noto Color Emoji, Noto Sans JP",
     );
   });
 
   test("secondary only", () => {
-    expect(buildFontFamilyChain("", "", "Noto Sans JP")).toBe("Noto Sans JP, monospace");
+    expect(buildFontFamilyChain("", "", "Noto Sans JP")).toBe("Noto Sans JP");
   });
 
   test("emoji only", () => {
-    expect(buildFontFamilyChain("", "Noto Color Emoji", "")).toBe("Noto Color Emoji, monospace");
+    expect(buildFontFamilyChain("", "Noto Color Emoji", "")).toBe("Noto Color Emoji");
   });
 });
 
 describe("applyFontFamily", () => {
   test("should set --terminal-font-family for non-empty primary", () => {
     applyFontFamily("Fira Code", "", "");
-    expect(mockStyle.properties["--terminal-font-family"]).toBe("Fira Code, monospace");
+    expect(mockStyle.properties["--terminal-font-family"]).toBe("Fira Code");
   });
 
   test("should remove --terminal-font-family when all empty", () => {
-    mockStyle.properties["--terminal-font-family"] = "Fira Code, monospace";
+    mockStyle.properties["--terminal-font-family"] = "Fira Code";
     applyFontFamily("", "", "");
     expect(mockStyle.properties["--terminal-font-family"]).toBeUndefined();
   });
 
-  test("should notify renderers with chain string", () => {
+  test("should notify renderers with user font when set", () => {
     applyFontFamily("JetBrains Mono", "", "");
     expect(mockRendererCalls).toContainEqual({
       setting: "fontFamily",
-      value: "JetBrains Mono, monospace",
+      value: "JetBrains Mono",
     });
   });
 
@@ -237,10 +238,10 @@ describe("applyFontFamily", () => {
     });
   });
 
-  test("should build full chain with all three fonts", () => {
+  test("should build chain with only user fonts", () => {
     applyFontFamily("Fira Code", "Noto Color Emoji", "Noto Sans JP");
     expect(mockStyle.properties["--terminal-font-family"]).toBe(
-      "Fira Code, Noto Color Emoji, Noto Sans JP, monospace",
+      "Fira Code, Noto Color Emoji, Noto Sans JP",
     );
   });
 });
@@ -390,7 +391,7 @@ describe("applySettings (full)", () => {
 
     expect(mockStyle.properties["--terminal-font-size"]).toBe("16pt");
     expect(mockStyle.properties["--terminal-font-family"]).toBe(
-      "JetBrains Mono, monospace",
+      "JetBrains Mono",
     );
     expect(mockDataTheme).toBe("dark");
     expect(mockStyle.properties["--terminal-padding"]).toBe("8px");
@@ -752,48 +753,61 @@ describe("applyTerminalColorScheme with user schemes", () => {
 });
 
 describe("applyMarkdownSettings", () => {
-  test("should set all three CSS variables when fonts are non-empty", () => {
-    applyMarkdownSettings("Georgia", "Fira Code", 16);
+  test("should set all CSS variables when fonts are non-empty", () => {
+    applyMarkdownSettings("Georgia", "Fira Code", "Noto Color Emoji", 16);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
     expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
+    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe("Noto Color Emoji");
     expect(mockStyle.properties["--markdown-body-font-size"]).toBe("16pt");
   });
 
   test("should remove body font CSS variable when empty string", () => {
     // First set it
-    applyMarkdownSettings("Georgia", "Fira Code", 14);
+    applyMarkdownSettings("Georgia", "Fira Code", "", 14);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
 
     // Then clear it
-    applyMarkdownSettings("", "Fira Code", 14);
+    applyMarkdownSettings("", "Fira Code", "", 14);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBeUndefined();
     expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
   });
 
   test("should remove code font CSS variable when empty string", () => {
-    applyMarkdownSettings("Georgia", "", 14);
+    applyMarkdownSettings("Georgia", "", "", 14);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
     expect(mockStyle.properties["--markdown-code-font-family"]).toBeUndefined();
   });
 
+  test("should remove emoji font CSS variable when empty string", () => {
+    applyMarkdownSettings("Georgia", "Fira Code", "", 14);
+    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBeUndefined();
+  });
+
+  test("should set emoji font CSS variable when non-empty", () => {
+    applyMarkdownSettings("", "", "Noto Color Emoji", 14);
+    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe("Noto Color Emoji");
+  });
+
   test("should remove font CSS variables for whitespace-only strings", () => {
-    applyMarkdownSettings("  ", "  \t  ", 14);
+    applyMarkdownSettings("  ", "  \t  ", "   ", 14);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBeUndefined();
     expect(mockStyle.properties["--markdown-code-font-family"]).toBeUndefined();
+    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBeUndefined();
   });
 
   test("should always set font size with pt unit", () => {
-    applyMarkdownSettings("", "", 8);
+    applyMarkdownSettings("", "", "", 8);
     expect(mockStyle.properties["--markdown-body-font-size"]).toBe("8pt");
 
-    applyMarkdownSettings("", "", 32);
+    applyMarkdownSettings("", "", "", 32);
     expect(mockStyle.properties["--markdown-body-font-size"]).toBe("32pt");
   });
 
   test("should trim font names before setting", () => {
-    applyMarkdownSettings("  Georgia  ", "  Fira Code  ", 14);
+    applyMarkdownSettings("  Georgia  ", "  Fira Code  ", "  Noto Color Emoji  ", 14);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
     expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
+    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe("Noto Color Emoji");
   });
 });
 

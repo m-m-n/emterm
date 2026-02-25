@@ -59,6 +59,7 @@ export function applySettings(settings: AppSettings): void {
   applyMarkdownSettings(
     settings.markdown_body_font_family,
     settings.markdown_code_font_family,
+    settings.markdown_emoji_font_family,
     settings.markdown_font_size,
   );
   applyMarkdownColorTheme({
@@ -101,33 +102,33 @@ export function applyFontSize(fontSize: number): void {
 }
 
 /**
- * Build a CSS font-family fallback chain from three font fields.
- * Order: primary, emoji, secondary, monospace.
- * Empty fields are omitted from the chain.
+ * Build a CSS font-family value from user-configured font fields.
+ * Order: primary, emoji, secondary. Empty fields are omitted.
+ * Returns empty string when no fonts are configured.
  */
 export function buildFontFamilyChain(primary: string, emoji: string, secondary: string): string {
   const parts: string[] = [];
   if (primary) parts.push(primary);
   if (emoji) parts.push(emoji);
   if (secondary) parts.push(secondary);
-  parts.push("monospace");
   return parts.join(", ");
 }
 
 /**
  * Apply font family setting from three separate fields.
- * Builds a CSS font-family chain and applies it.
+ * Sets --terminal-font-family CSS variable when fonts are configured.
+ * Renderer receives the user chain or "monospace" as default.
  */
 export function applyFontFamily(primary: string, emoji: string, secondary: string): void {
   const chain = buildFontFamilyChain(primary, emoji, secondary);
   const root = document.documentElement;
-  if (chain !== "monospace") {
+  if (chain) {
     root.style.setProperty("--terminal-font-family", chain);
   } else {
     root.style.removeProperty("--terminal-font-family");
   }
 
-  notifyRenderers("fontFamily", chain);
+  notifyRenderers("fontFamily", chain || "monospace");
 }
 
 /**
@@ -317,6 +318,7 @@ export function applyUiFont(fontFamily: string): void {
 export function applyMarkdownSettings(
   bodyFont: string,
   codeFont: string,
+  emojiFont: string,
   fontSize: number,
 ): void {
   const root = document.documentElement;
@@ -331,6 +333,12 @@ export function applyMarkdownSettings(
     root.style.setProperty("--markdown-code-font-family", trimmedCode);
   } else {
     root.style.removeProperty("--markdown-code-font-family");
+  }
+  const trimmedEmoji = emojiFont?.trim();
+  if (trimmedEmoji) {
+    root.style.setProperty("--markdown-emoji-font-family", trimmedEmoji);
+  } else {
+    root.style.removeProperty("--markdown-emoji-font-family");
   }
   root.style.setProperty("--markdown-body-font-size", `${fontSize}pt`);
 }
