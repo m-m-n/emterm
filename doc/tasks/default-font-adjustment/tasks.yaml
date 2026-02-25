@@ -1,0 +1,13 @@
+tasks:
+  - - id: phase-1
+      title: "Font Stack Constants and Core Logic"
+      status: pending
+  - - id: phase-2
+      title: "CSS Font Stack Replacements"
+      status: pending
+  - - id: phase-3
+      title: "Font Picker Clear Button"
+      status: pending
+  - - id: phase-4
+      title: "Markdown Emoji Font Setting"
+      status: pending

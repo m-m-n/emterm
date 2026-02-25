@@ -886,9 +886,38 @@ export function renderMarkdownViewerSection(
         applyMarkdownSettings(
           v,
           ctx.currentSettings.markdown_code_font_family,
+          ctx.currentSettings.markdown_emoji_font_family,
           ctx.currentSettings.markdown_font_size,
         );
         ctx.saveSetting("markdown_body_font_family", v);
+      },
+    },
+    ctx.addContentListener,
+    (category, currentValue, onSelect) => {
+      ctx.showFontPicker(category, currentValue, onSelect);
+    },
+  );
+
+  // Emoji Font Family (font picker) - between body and code per SPEC.md
+  renderFontPickerInput(
+    panel,
+    {
+      key: "markdown-emoji-font-family",
+      label: t("settings.markdownViewer.emojiFontFamily"),
+      value: settings.markdown_emoji_font_family,
+      placeholder: "",
+      hint: t("settings.markdownViewer.emojiFontFamilyHint"),
+      description: t("settings.markdownViewer.emojiFontFamilyDesc"),
+      category: "markdown-emoji",
+      onSelect: (v) => {
+        ctx.currentSettings.markdown_emoji_font_family = v;
+        applyMarkdownSettings(
+          ctx.currentSettings.markdown_body_font_family,
+          ctx.currentSettings.markdown_code_font_family,
+          v,
+          ctx.currentSettings.markdown_font_size,
+        );
+        ctx.saveSetting("markdown_emoji_font_family", v);
       },
     },
     ctx.addContentListener,
@@ -913,6 +942,7 @@ export function renderMarkdownViewerSection(
         applyMarkdownSettings(
           ctx.currentSettings.markdown_body_font_family,
           v,
+          ctx.currentSettings.markdown_emoji_font_family,
           ctx.currentSettings.markdown_font_size,
         );
         ctx.saveSetting("markdown_code_font_family", v);
@@ -944,6 +974,7 @@ export function renderMarkdownViewerSection(
         applyMarkdownSettings(
           ctx.currentSettings.markdown_body_font_family,
           ctx.currentSettings.markdown_code_font_family,
+          ctx.currentSettings.markdown_emoji_font_family,
           v,
         );
       },

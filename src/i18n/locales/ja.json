@@ -71,7 +71,8 @@
       "fontPickerChange": "\u5909\u66f4",
       "fontPickerPrimaryTitle": "\u30d7\u30e9\u30a4\u30de\u30ea\u30d5\u30a9\u30f3\u30c8",
       "fontPickerSecondaryTitle": "\u30bb\u30ab\u30f3\u30c0\u30ea\u30d5\u30a9\u30f3\u30c8",
-      "fontPickerEmojiTitle": "\u7d75\u6587\u5b57\u30d5\u30a9\u30f3\u30c8"
+      "fontPickerEmojiTitle": "\u7d75\u6587\u5b57\u30d5\u30a9\u30f3\u30c8",
+      "fontPickerClear": "\u30af\u30ea\u30a2"
     },
     "terminal": {
       "title": "\u30bf\u30fc\u30df\u30ca\u30eb",
@@ -216,8 +217,12 @@
       "fontSize": "フォントサイズ",
       "fontSizeHint": "範囲: {min}-{max}pt",
       "fontSizeDesc": "Markdownコンテンツの基準フォントサイズを設定します",
+      "emojiFontFamily": "絵文字フォント",
+      "emojiFontFamilyHint": "Markdown絵文字フォント",
+      "emojiFontFamilyDesc": "Markdownの絵文字に使用するフォントを設定します",
       "fontPickerBodyTitle": "Markdown本文フォント",
       "fontPickerCodeTitle": "Markdownコードフォント",
+      "fontPickerEmojiTitle": "Markdown絵文字フォント",
       "colorTheme": "カラーテーマ",
       "followUiTheme": "UIテーマに合わせる",
       "followUiThemeDesc": "UI設定と同じテーマ・プリセットを使用します",

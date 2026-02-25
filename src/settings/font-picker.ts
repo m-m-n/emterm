@@ -75,6 +75,14 @@ export function renderFontPickerInput(
   }
   inputGroup.appendChild(input);
 
+  const clearBtn = document.createElement("button");
+  clearBtn.className = "settings-font-picker-clear";
+  clearBtn.setAttribute("aria-label", t("settings.appearance.fontPickerClear"));
+  clearBtn.textContent = "\u00d7";
+  clearBtn.type = "button";
+  clearBtn.style.display = opts.value ? "" : "none";
+  inputGroup.appendChild(clearBtn);
+
   const changeBtn = document.createElement("button");
   changeBtn.className = "settings-font-picker-button";
   changeBtn.textContent = t("settings.appearance.fontPickerChange");
@@ -90,10 +98,18 @@ export function renderFontPickerInput(
 
   panel.appendChild(row);
 
+  // Clear button resets font value
+  addListener(clearBtn, "click", () => {
+    input.value = "";
+    clearBtn.style.display = "none";
+    opts.onSelect("");
+  });
+
   // Button click opens font picker
   addListener(changeBtn, "click", () => {
-    onChangeClick(opts.category, opts.value, (selectedFont) => {
+    onChangeClick(opts.category, input.value, (selectedFont) => {
       input.value = selectedFont;
+      clearBtn.style.display = selectedFont ? "" : "none";
       opts.onSelect(selectedFont);
     });
   });
@@ -128,6 +144,7 @@ export async function showFontPicker(
     ui: t("settings.ui.fontPickerUiTitle"),
     "markdown-body": t("settings.markdownViewer.fontPickerBodyTitle"),
     "markdown-code": t("settings.markdownViewer.fontPickerCodeTitle"),
+    "markdown-emoji": t("settings.markdownViewer.fontPickerEmojiTitle"),
   };
 
   // Load fonts
@@ -145,6 +162,7 @@ export async function showFontPicker(
         fontList = fonts.all_fonts;
         break;
       case "emoji":
+      case "markdown-emoji":
         fontList = fonts.emoji_fonts;
         break;
     }
