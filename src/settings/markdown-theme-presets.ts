@@ -162,6 +162,34 @@ export const MARKDOWN_THEME_PRESETS: Record<
       tableStripe: "#EEE6E3",
     },
   },
+  pink: {
+    dark: {
+      bg: "#1A1114",
+      fg: "#F0DEE2",
+      heading: "#FFFFFF",
+      link: "#FFB1C8",
+      border: "#514349",
+      blockquote: "#D4BFC5",
+      codeBg: "#322830",
+      codeFg: "#F0DEE2",
+      preBg: "#221820",
+      tableBg: "#271D21",
+      tableStripe: "#322830",
+    },
+    light: {
+      bg: "#FFF8F8",
+      fg: "#22191C",
+      heading: "#3E001D",
+      link: "#984061",
+      border: "#D4BFC5",
+      blockquote: "#514349",
+      codeBg: "#F2E4E8",
+      codeFg: "#22191C",
+      preBg: "#FAECEF",
+      tableBg: "#FDF0F2",
+      tableStripe: "#F2E4E8",
+    },
+  },
 };
 
 // ============================================================

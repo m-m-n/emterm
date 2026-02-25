@@ -72,6 +72,7 @@ pub enum UiThemePreset {
     Blue,
     Green,
     Orange,
+    Pink,
 }
 
 // ============================================================
@@ -833,6 +834,7 @@ mod tests {
             (r#""blue""#, UiThemePreset::Blue),
             (r#""green""#, UiThemePreset::Green),
             (r#""orange""#, UiThemePreset::Orange),
+            (r#""pink""#, UiThemePreset::Pink),
         ];
         for (json, expected) in test_cases {
             let result: UiThemePreset = serde_json::from_str(json).unwrap();
@@ -868,6 +870,7 @@ mod tests {
             UiThemePreset::Blue,
             UiThemePreset::Green,
             UiThemePreset::Orange,
+            UiThemePreset::Pink,
         ];
         for preset in test_cases {
             let json = serde_json::to_string(&preset).unwrap();

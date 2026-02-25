@@ -12,14 +12,14 @@ import type { UiThemePreset } from "./types";
 // ============================================================
 
 describe("UI_THEME_PRESETS", () => {
-  test("should contain 4 presets", () => {
+  test("should contain 5 presets", () => {
     const presetKeys = Object.keys(UI_THEME_PRESETS);
-    expect(presetKeys).toHaveLength(4);
-    expect(presetKeys).toEqual(["purple", "blue", "green", "orange"]);
+    expect(presetKeys).toHaveLength(5);
+    expect(presetKeys).toEqual(["purple", "blue", "green", "orange", "pink"]);
   });
 
   test("each preset should have dark and light variants", () => {
-    const presets: UiThemePreset[] = ["purple", "blue", "green", "orange"];
+    const presets: UiThemePreset[] = ["purple", "blue", "green", "orange", "pink"];
     for (const name of presets) {
       const preset = UI_THEME_PRESETS[name];
       expect(preset.dark).toBeDefined();
@@ -40,7 +40,7 @@ describe("UI_THEME_PRESETS", () => {
       "error", "onError",
     ];
 
-    const presets: UiThemePreset[] = ["purple", "blue", "green", "orange"];
+    const presets: UiThemePreset[] = ["purple", "blue", "green", "orange", "pink"];
     for (const name of presets) {
       const preset = UI_THEME_PRESETS[name];
       for (const variant of [preset.dark, preset.light]) {

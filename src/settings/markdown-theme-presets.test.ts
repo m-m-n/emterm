@@ -9,7 +9,7 @@ import {
 // Helpers
 // ============================================================
 
-const PRESETS = ["purple", "blue", "green", "orange"] as const;
+const PRESETS = ["purple", "blue", "green", "orange", "pink"] as const;
 const MODES = ["dark", "light"] as const;
 
 const REQUIRED_KEYS: (keyof MarkdownThemeColors)[] = [

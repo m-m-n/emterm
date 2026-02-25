@@ -167,6 +167,7 @@ export function renderUiSection(
         { value: "blue", label: t("settings.appearance.presetBlue") },
         { value: "green", label: t("settings.appearance.presetGreen") },
         { value: "orange", label: t("settings.appearance.presetOrange") },
+        { value: "pink", label: t("settings.appearance.presetPink") },
       ],
       description: t("settings.appearance.uiThemePresetDesc"),
       onSave: (v) => {
@@ -1029,6 +1030,7 @@ export function renderMarkdownViewerSection(
             value: "orange",
             label: t("settings.appearance.presetOrange"),
           },
+          { value: "pink", label: t("settings.appearance.presetPink") },
         ],
         description: t("settings.markdownViewer.presetDesc"),
         onSave: (v) => {
