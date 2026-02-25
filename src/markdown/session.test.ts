@@ -120,7 +120,6 @@ describe("MarkdownSessionManager", () => {
 			const session = manager.getSession("chunk-test");
 			expect(session?.chunks.size).toBe(1);
 			expect(session?.chunks.get(0)).toBe("# Hello");
-			expect(session?.dataSize).toBe(7);
 		});
 
 		test("should reject chunk for unknown session", () => {
@@ -177,7 +176,7 @@ describe("MarkdownSessionManager", () => {
 			const session = manager.getSession("chunk-test");
 			expect(session).toBeDefined();
 			expect(session?.chunks.size).toBe(1);
-			expect(session?.dataSize).toBe(largeContent.length);
+			expect(session?.chunks.get(0)).toBe(largeContent);
 		});
 
 		test("should update lastChunkAt on each chunk", () => {
@@ -300,13 +299,6 @@ describe("MarkdownSessionManager", () => {
 
 		test("should not cleanup session with recent chunk", () => {
 			manager.handleCommand("emterm", ["markdown", "begin", "id=active-session"]);
-
-			const session = manager.getSession("active-session");
-			if (session) {
-				// Age the createdAt, but keep lastChunkAt recent (simulates active transfer)
-				(session as any).createdAt =
-					Date.now() - MarkdownSessionManager.SESSION_TIMEOUT - 10000;
-			}
 
 			// Send a chunk to update lastChunkAt
 			manager.handleCommand("emterm", [

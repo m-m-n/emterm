@@ -25,16 +25,18 @@ pub fn execute_markdown_command(file_path: &Path) -> Result<(), CommandError> {
         return Err(CommandError::NotAFile(file_path.to_owned()));
     }
 
-    // Read file content from the open handle
-    let mut content = Vec::new();
+    // Read file content with pre-allocated buffer
+    let mut content = Vec::with_capacity(metadata.len() as usize);
     file.read_to_end(&mut content)?;
 
     // Generate UUID for this session
     let session_id = Uuid::new_v4();
 
-    // Encode to base64 and chunk
+    // Encode to base64 and chunk, releasing intermediates early
     let encoded = base64::encode_base64(&content);
+    drop(content);
     let chunks = base64::chunk_data(&encoded, MARKDOWN_CHUNK_SIZE);
+    drop(encoded);
 
     // Generate OSC sequences
     let sequence = osc::generate_markdown_osc(&session_id, chunks);

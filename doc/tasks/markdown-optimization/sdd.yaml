@@ -1,0 +1,63 @@
+schema_version: 1
+feature: markdown-optimization
+scale: light
+created: 2026-02-25
+
+project:
+  components:
+    main:
+      language: rust,typescript,wasm
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 4b0686bbb909941be594bb41e773e70f25fa00fd
+  - id: implement
+    status: completed
+    completed_at_commit: 4b0686bbb909941be594bb41e773e70f25fa00fd
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 4b0686bbb909941be594bb41e773e70f25fa00fd
+
+requirements:
+  FR1:
+    title: Pre-allocate read_to_end buffer
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Early release of intermediate variables
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Zero-copy dispatch_osc for valid UTF-8
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Remove dead code fields from MarkdownSession
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Pre-allocate OSC output String
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Optimize Base64 byte conversion
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Fix test hygiene
+    status: ok
+    tasks: []
+    tests: []

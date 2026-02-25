@@ -1,6 +1,4 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
-use std::fs;
 use std::io::Write;
 use tempfile::NamedTempFile;
 
@@ -83,24 +81,22 @@ fn test_markdown_medium_file() {
     assert!(stdout.contains("seq=1"), "Missing seq=1");
 }
 
-/// Test 3: File at size limit (exactly 2MB)
+/// Test 3: File at ~2MB boundary
 #[test]
 fn test_markdown_at_size_limit() {
+    // Create a ~2MB markdown file dynamically (no fixture dependency)
+    let mut temp_file = NamedTempFile::new().unwrap();
+    let content = "# Heading\n\nParagraph text for padding.\n\n".repeat(55_000); // ~2MB
+    write!(temp_file, "{}", content).unwrap();
+    temp_file.flush().unwrap();
+
     let mut cmd = Command::cargo_bin("emterm").unwrap();
 
     let output = cmd
         .arg("markdown")
-        .arg("tests/fixtures/large.md")
+        .arg(temp_file.path())
         .output()
         .expect("Failed to execute command");
-
-    // Verify file is close to 2MB
-    let file_size = fs::metadata("tests/fixtures/large.md").unwrap().len();
-    assert!(
-        file_size >= 1_900_000 && file_size <= 2_097_152,
-        "File size should be close to 2MB: {} bytes",
-        file_size
-    );
 
     // Should succeed
     assert!(

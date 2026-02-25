@@ -463,13 +463,16 @@ impl Parser {
     where
         F: FnMut(ParsedAction),
     {
-        let data = String::from_utf8_lossy(&self.osc_buffer).to_string();
+        let buf = std::mem::replace(&mut self.osc_buffer, Vec::with_capacity(256));
+        let data = match String::from_utf8(buf) {
+            Ok(s) => s,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        };
 
         emit(ParsedAction::OscDispatch {
             param: self.osc_param,
             data,
         });
-        self.osc_buffer.clear();
         self.osc_param = 0;
         self.osc_param_done = false;
     }
