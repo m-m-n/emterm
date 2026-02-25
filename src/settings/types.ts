@@ -9,7 +9,7 @@
 // ============================================================
 
 export type UiTheme = "light" | "dark" | "system";
-export type UiThemePreset = "purple" | "blue" | "green" | "orange";
+export type UiThemePreset = "purple" | "blue" | "green" | "orange" | "pink";
 export type CursorStyle = "block" | "underline" | "bar";
 export type BellAction = "sound" | "visual" | "none";
 export type ScrollbarMode = "auto" | "always" | "never";
