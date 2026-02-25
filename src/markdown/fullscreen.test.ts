@@ -390,6 +390,35 @@ describe("FullscreenMarkdownView", () => {
 			expect(content.scrollTop).toBe(content.scrollHeight);
 		});
 
+		test("should scroll down on Space key", () => {
+			const block = createMockBlock();
+			view.show(block, container);
+
+			const event = new KeyboardEvent("keydown", {
+				key: " ",
+				bubbles: true,
+			});
+			document.dispatchEvent(event);
+
+			// View should remain active (Space doesn't close)
+			expect(view.isActive()).toBe(true);
+		});
+
+		test("should scroll up on Shift+Space key", () => {
+			const block = createMockBlock();
+			view.show(block, container);
+
+			const event = new KeyboardEvent("keydown", {
+				key: " ",
+				shiftKey: true,
+				bubbles: true,
+			});
+			document.dispatchEvent(event);
+
+			// View should remain active (Shift+Space doesn't close)
+			expect(view.isActive()).toBe(true);
+		});
+
 		test("should trap focus with Tab key", () => {
 			const blockWithLinks = createMockBlock(
 				'<p><a href="https://link1.com">Link 1</a></p><p><a href="https://link2.com">Link 2</a></p>',

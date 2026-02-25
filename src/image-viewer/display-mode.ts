@@ -61,6 +61,8 @@ export interface DisplayModeControllerOptions {
   onModeChange?: (state: DisplayModeState) => void;
   /** Callback when close button is clicked */
   onClose?: () => void;
+  /** Callback for keyboard-initiated scroll (delta in pixels, positive = down) */
+  onScroll?: (deltaY: number) => void;
   /** Overlay element for UI */
   overlay?: HTMLElement;
 }
@@ -132,6 +134,7 @@ export class DisplayModeController {
 
   private onModeChange?: (state: DisplayModeState) => void;
   private onClose?: () => void;
+  private onScroll?: (deltaY: number) => void;
   private overlay?: HTMLElement;
 
   // UI elements
@@ -155,6 +158,7 @@ export class DisplayModeController {
     this.viewportHeight = options.viewportHeight;
     this.onModeChange = options.onModeChange;
     this.onClose = options.onClose;
+    this.onScroll = options.onScroll;
     this.overlay = options.overlay;
 
     // Calculate fit scale
@@ -396,6 +400,19 @@ export class DisplayModeController {
         e.stopPropagation();
         this.onClose?.();
         break;
+
+      case " ": {
+        e.preventDefault();
+        e.stopPropagation();
+        const viewportHeight = this.overlay?.clientHeight || 0;
+        const delta = viewportHeight * 0.85;
+        if (e.shiftKey) {
+          this.onScroll?.(-delta);
+        } else {
+          this.onScroll?.(delta);
+        }
+        break;
+      }
 
       // Block all other keys from reaching the shell
       default:

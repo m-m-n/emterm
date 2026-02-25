@@ -1,0 +1,48 @@
+schema_version: 1
+feature: viewer-keyboard-scroll
+scale: light
+created: 2026-02-25
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 2fbf1b0274b7c25efbad173a7b2d87ea1e132850
+  - id: implement
+    status: completed
+    completed_at_commit: 2fbf1b0274b7c25efbad173a7b2d87ea1e132850
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 2fbf1b0274b7c25efbad173a7b2d87ea1e132850
+
+requirements:
+  FR1:
+    title: Markdown viewer Space scroll
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Image viewer Space scroll
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Scroll amount consistency with browser convention
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Smooth scrolling animation for Markdown viewer
+    status: ok
+    tasks: []
+    tests: []
