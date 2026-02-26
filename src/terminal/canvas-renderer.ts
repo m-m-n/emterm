@@ -39,6 +39,7 @@ import type { SearchMatch } from "./search/search-state.ts";
 import type { FoldRegion } from "./fold-manager.ts";
 import { detectUrls, detectFilePaths, getLogicalLine, type LogicalLine, type UrlMatch, type FilePathMatch } from "./url-detector.ts";
 import { SettingsService } from "../settings/settings-service.ts";
+import { isExtendedPictographic, hasVariationSelector } from "./unicode.ts";
 
 /**
  * A span of text with uniform attributes.
@@ -1143,6 +1144,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 * @param textY - Y position for text baseline
 	 */
 	private drawFittedCharacter(char: string, x: number, textY: number): void {
+		// Force text presentation for Extended_Pictographic without VS
+		const cp = char.codePointAt(0)!;
+		if (isExtendedPictographic(cp) && !hasVariationSelector(char)) {
+			char = char + "\uFE0E";
+		}
+
 		const fontKey = this.ctx.font;
 		let fontCache = this.glyphWidthCache.get(fontKey);
 		if (!fontCache) {
