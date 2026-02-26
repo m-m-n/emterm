@@ -1,0 +1,58 @@
+schema_version: 1
+feature: emoji-text-presentation
+scale: light
+created: 2026-02-26
+
+project:
+  components:
+    main:
+      language: TypeScript, Rust
+      build_command: "bun tauri build"
+      test_command: "bun test && cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: ef5fd7096e5b6c1ca1c26d069dd6c8b682b45fd0
+  - id: implement
+    status: completed
+    completed_at_commit: pending-commit
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: ef5fd7096e5b6c1ca1c26d069dd6c8b682b45fd0
+
+requirements:
+  FR1:
+    title: Append VS15 to Extended_Pictographic in drawFittedCharacter()
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: drawWideCharacter() is NOT modified
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Characters with existing VS15/VS16 are not modified
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Glyph width cache uses VS15-appended string as key
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: No performance regression
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: No changes to Cell, WASM, or width calculation
+    status: ok
+    tasks: []
+    tests: []

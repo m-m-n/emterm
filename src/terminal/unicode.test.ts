@@ -2,7 +2,7 @@
  * Tests for unicode character width calculation.
  */
 import { describe, expect, test } from "bun:test";
-import { charWidth, isWideChar, isEmojiPresentation, isExtendedPictographic } from "./unicode.ts";
+import { charWidth, isWideChar, isEmojiPresentation, isExtendedPictographic, hasVariationSelector } from "./unicode.ts";
 
 describe("charWidth", () => {
 	test("returns 1 for ASCII characters", () => {
@@ -163,5 +163,34 @@ describe("isWideChar", () => {
 
 	test("returns false for empty string", () => {
 		expect(isWideChar("")).toBe(false);
+	});
+});
+
+describe("hasVariationSelector", () => {
+	test("returns true when string contains VS15 (U+FE0E)", () => {
+		expect(hasVariationSelector("\u2733\uFE0E")).toBe(true); // ✳︎
+		expect(hasVariationSelector("\u2600\uFE0E")).toBe(true); // ☀︎
+		expect(hasVariationSelector("\u00A9\uFE0E")).toBe(true); // ©︎
+	});
+
+	test("returns true when string contains VS16 (U+FE0F)", () => {
+		expect(hasVariationSelector("\u2733\uFE0F")).toBe(true); // ✳️
+		expect(hasVariationSelector("\u2600\uFE0F")).toBe(true); // ☀️
+	});
+
+	test("returns false for characters without variation selector", () => {
+		expect(hasVariationSelector("\u2733")).toBe(false); // ✳
+		expect(hasVariationSelector("\u2600")).toBe(false); // ☀
+		expect(hasVariationSelector("\u00A9")).toBe(false); // ©
+		expect(hasVariationSelector("A")).toBe(false);
+	});
+
+	test("returns false for empty string", () => {
+		expect(hasVariationSelector("")).toBe(false);
+	});
+
+	test("returns true when VS is not at position 1", () => {
+		// Combining character + VS scenario
+		expect(hasVariationSelector("a\u0300\uFE0E")).toBe(true);
 	});
 });
