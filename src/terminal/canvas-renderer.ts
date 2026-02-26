@@ -519,6 +519,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Whether bold attribute brightens standard ANSI colors (0-7 -> 8-15). */
 	private boldBrightensAnsiColors: boolean = true;
 
+	/** Glyph width cache: outer key = ctx.font string, inner key = character. */
+	private glyphWidthCache: Map<string, Map<string, number>> = new Map();
+
 	/** Current scroll offset (number of lines scrolled back from bottom). */
 	private scrollOffset: number = 0;
 
@@ -613,6 +616,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Use font metrics (ascent + descent) as the natural line height.
 		// Ceil to integer so drawImage scroll shift aligns with Math.floor row positions.
 		this.charHeight = Math.ceil(ascent + descent);
+
+		// Clear glyph width cache on font change
+		this.glyphWidthCache.clear();
 	}
 
 	/**
@@ -1067,8 +1073,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 			} else if (cellWidth >= 2) {
 				// Wide character (emoji/CJK) - fit glyph within allocated cells
 				this.drawWideCharacter(cellChar, charX, textY, cellWidth);
+			} else if (cellChar.charCodeAt(0) > 0x7F) {
+				// Non-ASCII narrow character: may overflow 1 cell (e.g. ■, ○, △)
+				this.drawFittedCharacter(cellChar, charX, textY);
 			} else {
-				// Narrow character (ASCII, Latin, etc.)
+				// ASCII character - always fits in 1 cell with monospace font
 				this.ctx.fillText(cellChar, charX, textY);
 			}
 			// Advance by cell width (1 for narrow, 2 for wide/emoji)
@@ -1116,6 +1125,44 @@ export class CanvasRenderer implements ITerminalRenderer {
 			const scale = allocatedWidth / measured;
 			this.ctx.save();
 			this.ctx.translate(x + allocatedWidth / 2, textY);
+			this.ctx.scale(scale, scale);
+			this.ctx.fillText(char, -measured / 2, 0);
+			this.ctx.restore();
+		}
+	}
+
+	/**
+	 * Draw a non-ASCII narrow character, shrinking it to fit 1 cell if needed.
+	 *
+	 * Characters like ■, ○, △ may have glyphs wider than 1 cell in some fonts.
+	 * Uses measureText() with caching to detect oversized glyphs and scales them
+	 * to fit within a single cell width.
+	 *
+	 * @param char - Character string to draw
+	 * @param x - X position (left edge of cell)
+	 * @param textY - Y position for text baseline
+	 */
+	private drawFittedCharacter(char: string, x: number, textY: number): void {
+		const fontKey = this.ctx.font;
+		let fontCache = this.glyphWidthCache.get(fontKey);
+		if (!fontCache) {
+			fontCache = new Map();
+			this.glyphWidthCache.set(fontKey, fontCache);
+		}
+
+		let measured = fontCache.get(char);
+		if (measured === undefined) {
+			measured = this.ctx.measureText(char).width;
+			fontCache.set(char, measured);
+		}
+
+		if (measured <= this.charWidth) {
+			this.ctx.fillText(char, x, textY);
+		} else {
+			// Shrink to fit 1 cell (same scaling technique as drawWideCharacter)
+			const scale = this.charWidth / measured;
+			this.ctx.save();
+			this.ctx.translate(x + this.charWidth / 2, textY);
 			this.ctx.scale(scale, scale);
 			this.ctx.fillText(char, -measured / 2, 0);
 			this.ctx.restore();
@@ -1251,6 +1298,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 			const textY = y + (this.charHeight + this.fontAscent - this.fontDescent) / 2;
 			if (cell.width >= 2) {
 				this.drawWideCharacter(cell.char, x, textY, cell.width);
+			} else if (cell.char.charCodeAt(0) > 0x7F) {
+				this.drawFittedCharacter(cell.char, x, textY);
 			} else {
 				this.ctx.fillText(cell.char, x, textY);
 			}

@@ -22,6 +22,7 @@ import {
   applyMarkdownSettings,
   applyMarkdownColorTheme,
   applyBoldBrightensAnsiColors,
+  applyFoldEnabled,
 } from "./settings-applier";
 import type {
   AppSettings,
@@ -654,7 +655,7 @@ export function renderTerminalBehaviorSection(
       label: t("settings.terminal.foldEnabled"),
       value: settings.fold_enabled,
       description: t("settings.terminal.foldEnabledDesc"),
-      onSave: (v) => ctx.saveSetting("fold_enabled", v),
+      onSave: (v) => { applyFoldEnabled(v); ctx.saveSetting("fold_enabled", v); },
     },
     ctx.addContentListener,
   );

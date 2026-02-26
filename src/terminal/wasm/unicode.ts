@@ -16,6 +16,7 @@ import {
 	is_skin_tone_modifier as wasm_is_skin_tone_modifier,
 	is_variation_selector as wasm_is_variation_selector,
 	is_combining_char as wasm_is_combining_char,
+	is_ambiguous_width as wasm_is_ambiguous_width,
 } from "../../../wasm/pkg/emterm_wasm.js";
 
 // Bit flag constants for packed byte layout
@@ -92,4 +93,8 @@ export function isVariationSelector(cp: number): boolean {
 
 export function isCombiningChar(cp: number): boolean {
 	return wasm_is_combining_char(cp);
+}
+
+export function isAmbiguousWidth(cp: number): boolean {
+	return wasm_is_ambiguous_width(cp);
 }

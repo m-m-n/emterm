@@ -78,6 +78,11 @@ pub fn is_combining_char(cp: u32) -> bool {
     unicode::is_combining_char(cp)
 }
 
+#[wasm_bindgen]
+pub fn is_ambiguous_width(cp: u32) -> bool {
+    unicode::is_ambiguous_width(cp)
+}
+
 // ── Batch / string APIs ─────────────────────────────────
 
 /// Classify all codepoints in a string, returning a packed byte per codepoint.

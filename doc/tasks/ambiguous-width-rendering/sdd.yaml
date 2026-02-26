@@ -1,0 +1,72 @@
+schema_version: 1
+feature: ambiguous-width-rendering
+scale: light
+created: 2026-02-26
+
+project:
+  components:
+    main:
+      language: TypeScript/Rust
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: d714b0895e13a8368f412bd1aad4683edf87254c
+  - id: implement
+    status: completed
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: d714b0895e13a8368f412bd1aad4683edf87254c
+
+requirements:
+  FR1:
+    title: Grid width = 1 for all EAW=A
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Shrink-to-fit rendering
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: ASCII fast path
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Glyph width cache
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Setting removal with backward compatibility
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Combining character table sync
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Performance (ASCII no-overhead)
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: TUI application compatibility
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Config backward compatibility
+    status: ok
+    tasks: []
+    tests: []

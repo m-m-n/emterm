@@ -395,6 +395,8 @@ pub struct AppSettings {
     pub middle_click_paste: bool,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub shift_enter_as_alt_enter: bool,
+    #[serde(skip)]
+    pub ambiguous_width: bool,
     #[serde(
         default = "default_editor_command",
         deserialize_with = "deserialize_null_editor_command"
@@ -508,6 +510,7 @@ impl Default for AppSettings {
             bold_brightens_ansi_colors: default_true(),
             middle_click_paste: default_true(),
             shift_enter_as_alt_enter: default_true(),
+            ambiguous_width: default_true(),
             editor_command: default_editor_command(),
             skk_mode: default_true(),
             notification_enabled: default_true(),
@@ -956,6 +959,7 @@ mod tests {
             bold_brightens_ansi_colors: false,
             middle_click_paste: false,
             shift_enter_as_alt_enter: false,
+            ambiguous_width: false,
             editor_command: "vim +{line} {file}".to_string(),
             skk_mode: false,
             notification_enabled: false,
