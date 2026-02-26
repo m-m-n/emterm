@@ -1,0 +1,53 @@
+schema_version: 1
+feature: skk-ime-freeze-fix
+scale: light
+created: 2026-02-27
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 5ecfc435396a72906aa9d3d4261e345b4a8ee082
+  - id: implement
+    status: completed
+    completed_at_commit: 5ecfc435396a72906aa9d3d4261e345b4a8ee082
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 5ecfc435396a72906aa9d3d4261e345b4a8ee082
+
+requirements:
+  FR1:
+    title: Remove hasSKKMarker() method and all references
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Input event handler relies only on standard isComposing flags
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: compositionend handler sends text to PTY without SKK marker check
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Standard IME compatibility (fcitx5-mozc, ibus, etc.)
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: EditContext API path unaffected
+    status: ok
+    tasks: []
+    tests: []

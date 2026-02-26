@@ -466,17 +466,6 @@ export class ImeHandler {
 	}
 
 	/**
-	 * Check if the input contains SKK conversion markers.
-	 * SKK uses special markers that indicate conversion is in progress:
-	 * - ▽ (U+25BD): Waiting for conversion (hiragana input)
-	 * - ▼ (U+25BC): Converting (candidate selection)
-	 * - 【】: Annotation (dictionary registration)
-	 */
-	private hasSKKMarker(text: string): boolean {
-		return text.includes("▽") || text.includes("▼") || /【.*】/.test(text);
-	}
-
-	/**
 	 * Update composition view position and content
 	 */
 	private updateCompositionView(text: string): void {
@@ -589,7 +578,7 @@ export class ImeHandler {
 			}
 		});
 
-		// Handle any input changes (for SKK which may not use composition events properly)
+		// Handle beforeinput for debugging
 		input.addEventListener("beforeinput", (event) => {
 			if (IME_DEBUG) {
 				console.log("[IME Debug] beforeinput:", {
@@ -636,16 +625,11 @@ export class ImeHandler {
 					localIsComposing: isComposing,
 					inputType: inputEvent.inputType,
 					data: inputEvent.data,
-					hasSKKMarker: this.hasSKKMarker(value),
-				});
+					});
 			}
 
-			// If composing (standard IME or SKK with markers), show in composition view
-			if (
-				inputEvent.isComposing ||
-				isComposing ||
-				this.hasSKKMarker(value)
-			) {
+			// If composing, show in composition view
+			if (inputEvent.isComposing || isComposing) {
 				if (IME_DEBUG)
 					console.log("[IME Debug] input: composing, updating view");
 				this.updateCompositionView(value);
@@ -701,16 +685,6 @@ export class ImeHandler {
 				if (IME_DEBUG)
 					console.log("[IME Debug] compositionend: no value, returning");
 				this.updateCompositionView("");
-				return;
-			}
-
-			// Skip if SKK markers still present (SKK uses compositionend differently)
-			if (this.hasSKKMarker(value)) {
-				if (IME_DEBUG)
-					console.log(
-						"[IME Debug] compositionend: SKK marker found, keeping view",
-					);
-				this.updateCompositionView(value);
 				return;
 			}
 
