@@ -47,6 +47,8 @@ export interface ImeHandlerOptions {
 	isActiveTab?: () => boolean;
 	/** Unique identifier for debugging */
 	debugId?: string;
+	/** Callback to exit scrollback mode (scroll to bottom) */
+	onExitScrollback?: () => void;
 }
 
 /**
@@ -79,6 +81,8 @@ export class ImeHandler {
 	private isActiveTab: () => boolean;
 	/** Unique identifier for debugging */
 	private debugId: string;
+	/** Callback to exit scrollback mode */
+	private onExitScrollback: (() => void) | null;
 
 	constructor(options: ImeHandlerOptions) {
 		this.container = options.container;
@@ -87,6 +91,7 @@ export class ImeHandler {
 		this.charSize = options.charSize;
 		this.isActiveTab = options.isActiveTab || (() => true);
 		this.debugId = options.debugId || `ime-${Date.now()}`;
+		this.onExitScrollback = options.onExitScrollback || null;
 
 		// Check if EditContext API is available
 		this.useEditContext = typeof (window as any).EditContext !== "undefined";
@@ -344,6 +349,7 @@ export class ImeHandler {
 			} else {
 				// Direct input - send to PTY
 				if (text) {
+					this.onExitScrollback?.();
 					const bytes = new TextEncoder().encode(text);
 					this.ptyClient.write(bytes).catch((error: unknown) => {
 						console.error("Failed to write to PTY:", error);
@@ -391,6 +397,7 @@ export class ImeHandler {
 
 			// Send the final composition text to PTY
 			if (compositionText) {
+				this.onExitScrollback?.();
 				const bytes = new TextEncoder().encode(compositionText);
 				this.ptyClient.write(bytes).catch((error) => {
 					console.error("Failed to write to PTY:", error);
@@ -721,6 +728,7 @@ export class ImeHandler {
 			}
 
 			if (IME_DEBUG) console.log("[IME Debug] input: sending value:", value);
+			this.onExitScrollback?.();
 			const bytes = new TextEncoder().encode(value);
 			this.ptyClient.write(bytes).catch((error) => {
 				console.error("Failed to write IME input to PTY:", error);
@@ -759,6 +767,7 @@ export class ImeHandler {
 
 			if (IME_DEBUG)
 				console.log("[IME Debug] compositionend: sending value:", value);
+			this.onExitScrollback?.();
 			const bytes = new TextEncoder().encode(value);
 			// Set one-shot flag BEFORE async write to prevent race condition
 			// where the paired input event fires before write() resolves.

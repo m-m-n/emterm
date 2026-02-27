@@ -203,6 +203,7 @@ export class TerminalApp {
       // Check if this tab's container is visible (for multi-tab support)
       isActiveTab: () => this.container.style.display !== "none",
       debugId: imeDebugId,
+      onExitScrollback: () => this.exitScrollback(),
     });
     this.imeHandler.init();
 
@@ -219,6 +220,7 @@ export class TerminalApp {
       isActiveTab: () => this.container.style.display !== "none",
       onToggleSearch: () => this.toggleSearch(),
       onRestoreFocus: () => this.imeHandler?.focus(),
+      onExitScrollback: () => this.exitScrollback(),
     };
     this.keyboardHandler = new KeyboardHandler(keyboardContext);
     // Attach to document but check if this tab's container is visible
@@ -928,6 +930,18 @@ export class TerminalApp {
   }
 
   /**
+   * Exit scrollback mode by resetting scroll offset to bottom.
+   */
+  private exitScrollback(): void {
+    if (this.renderer && this.renderer.getScrollOffset() > 0) {
+      this.renderer.setScrollOffset(0);
+      if (this.state) {
+        this.renderer.forceRender(this.state);
+      }
+    }
+  }
+
+  /**
    * Handle mouse wheel events for scrollback
    */
   private handleWheel(e: WheelEvent): void {
@@ -963,6 +977,9 @@ export class TerminalApp {
     try {
       const text = await this.selectionController.paste();
       if (!text) return;
+
+      // Auto-scroll to bottom when user pastes during scrollback
+      this.exitScrollback();
 
       if (this.selectionController.isMultiLinePaste(text)) {
         const lineCount = this.selectionController.countPasteLines(text);
