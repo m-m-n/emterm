@@ -153,17 +153,20 @@ export function applyUiTheme(theme: UiTheme, preset: UiThemePreset = "purple"): 
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const resolved = mq.matches ? "dark" : "light";
     root.setAttribute("data-theme", resolved);
+    root.style.colorScheme = resolved;
     applyPresetColors(UI_THEME_PRESETS[safePreset][resolved]);
 
     // Listen for system theme changes
     systemThemeListener = (e: MediaQueryListEvent) => {
       const newResolved = e.matches ? "dark" : "light";
       root.setAttribute("data-theme", newResolved);
+      root.style.colorScheme = newResolved;
       applyPresetColors(UI_THEME_PRESETS[safePreset][newResolved]);
     };
     mq.addEventListener("change", systemThemeListener);
   } else {
     root.setAttribute("data-theme", theme);
+    root.style.colorScheme = theme;
     applyPresetColors(UI_THEME_PRESETS[safePreset][theme]);
   }
 }

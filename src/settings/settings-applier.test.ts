@@ -29,6 +29,7 @@ const mockStyle = {
   removeProperty: (name: string) => {
     delete mockStyle.properties[name];
   },
+  colorScheme: "",
   properties: {} as Record<string, string>,
 };
 
@@ -64,6 +65,7 @@ const savedWindow = globalThis.window;
 // Setup mock before each test
 beforeEach(() => {
   mockStyle.properties = {};
+  mockStyle.colorScheme = "";
   mockDataTheme = "";
   // Clear mockAttributes (keep the same object reference)
   for (const key of Object.keys(mockAttributes)) {
@@ -250,23 +252,27 @@ describe("applyUiTheme", () => {
   test("should set data-theme=light for light theme", () => {
     applyUiTheme("light");
     expect(mockDataTheme).toBe("light");
+    expect(mockStyle.colorScheme).toBe("light");
   });
 
   test("should set data-theme=dark for dark theme", () => {
     applyUiTheme("dark");
     expect(mockDataTheme).toBe("dark");
+    expect(mockStyle.colorScheme).toBe("dark");
   });
 
   test("should resolve system theme to dark when prefers-color-scheme is dark", () => {
     mockMatchesDark = true;
     applyUiTheme("system");
     expect(mockDataTheme).toBe("dark");
+    expect(mockStyle.colorScheme).toBe("dark");
   });
 
   test("should resolve system theme to light when prefers-color-scheme is light", () => {
     mockMatchesDark = false;
     applyUiTheme("system");
     expect(mockDataTheme).toBe("light");
+    expect(mockStyle.colorScheme).toBe("light");
   });
 
   test("should register media change listener for system theme", () => {
@@ -318,12 +324,14 @@ describe("applyUiTheme", () => {
     mockMatchesDark = false;
     applyUiTheme("system", "blue");
     expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#0B57D0"); // blue light
+    expect(mockStyle.colorScheme).toBe("light");
 
     // Simulate system theme change to dark
     if (mockMediaChangeHandler) {
       mockMediaChangeHandler({ matches: true } as any);
     }
     expect(mockDataTheme).toBe("dark");
+    expect(mockStyle.colorScheme).toBe("dark");
     expect(mockStyle.properties["--md-sys-color-primary"]).toBe("#A8C7FA"); // blue dark
   });
 
