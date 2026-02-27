@@ -1,6 +1,6 @@
 # eMterm
 
-A cross-platform terminal emulator built with Tauri, featuring rich rendering capabilities including inline images and Markdown display.
+A terminal emulator for Linux and Windows, built with Tauri, featuring rich rendering capabilities including inline images and Markdown display.
 
 ## Features
 
@@ -55,12 +55,6 @@ A cross-platform terminal emulator built with Tauri, featuring rich rendering ca
 ```bash
 sudo apt update
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-```
-
-### macOS
-
-```bash
-xcode-select --install
 ```
 
 ### Windows

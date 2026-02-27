@@ -1,14 +1,13 @@
-//! Shell detection utilities for cross-platform default shell discovery.
+//! Shell detection utilities for default shell discovery.
 //!
 //! This module provides functionality to detect the default shell on
-//! different platforms (Linux, macOS, Windows).
+//! supported platforms (Linux, Windows).
 
 /// Detects the default shell for the current platform.
 ///
 /// # Platform Behavior
 ///
 /// - **Linux**: Returns `$SHELL` environment variable, or `/bin/sh` as fallback
-/// - **macOS**: Returns `$SHELL` environment variable, or `/bin/zsh` as fallback
 /// - **Windows**: Returns `powershell.exe`
 ///
 /// # Returns
@@ -26,16 +25,7 @@
 pub fn detect_default_shell() -> String {
     #[cfg(unix)]
     {
-        std::env::var("SHELL").unwrap_or_else(|_| {
-            #[cfg(target_os = "macos")]
-            {
-                "/bin/zsh".to_string()
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                "/bin/sh".to_string()
-            }
-        })
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
     }
 
     #[cfg(windows)]

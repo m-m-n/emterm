@@ -1,7 +1,7 @@
 [package]
 name = "emterm"
 version = "0.0.0"
-description = "A cross-platform terminal emulator with rich rendering capabilities"
+description = "A terminal emulator for Linux and Windows with rich rendering capabilities"
 authors = ["m-m-n"]
 license = ""
 repository = ""
