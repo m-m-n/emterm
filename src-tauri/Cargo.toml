@@ -48,6 +48,13 @@ font-kit = "0.14"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+]
+
 [dev-dependencies]
 tempfile = "3.24.0"
 assert_cmd = "2"
