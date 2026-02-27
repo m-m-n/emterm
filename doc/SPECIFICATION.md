@@ -2,7 +2,7 @@
 
 ## Overview
 
-eMterm is a cross-platform terminal emulator built with Tauri (Rust + TypeScript). It provides full ANSI terminal emulation with rich content rendering capabilities, including inline Markdown display and inline image rendering (Kitty Graphics Protocol and SIXEL). The design prioritizes low-latency input performance and compatibility with AI coding tools such as Claude Code.
+eMterm is a terminal emulator for Linux and Windows, built with Tauri (Rust + TypeScript). It provides full ANSI terminal emulation with rich content rendering capabilities, including inline Markdown display and inline image rendering (Kitty Graphics Protocol and SIXEL). The design prioritizes low-latency input performance and compatibility with AI coding tools such as Claude Code.
 
 **Technology Stack:**
 - Rust (Tauri backend) - PTY management, ANSI parsing, app logic

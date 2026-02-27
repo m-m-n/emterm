@@ -626,6 +626,7 @@ fn spawn_reader_thread(
         // writes OK responses directly to the master fd via libc::write(),
         // bypassing ALL intermediate layers (writer channel, writer thread,
         // WebView, WASM, Tauri IPC) for true zero-latency response delivery.
+        #[cfg(unix)]
         let mut kitty_scanner = pty::kitty_scanner::KittyScanner::new();
 
         let mut buf = [0u8; 4096];

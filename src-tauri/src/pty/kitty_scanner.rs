@@ -227,6 +227,7 @@ impl KittyScanner {
         // reaches the kernel line discipline before we even return from this function,
         // and certainly before the CLI process can exit and restore cooked mode.
         let response = build_ok_response(image_id, placement_id);
+        #[cfg(unix)]
         unsafe {
             libc::write(
                 master_fd,
@@ -234,6 +235,8 @@ impl KittyScanner {
                 response.len(),
             );
         }
+        #[cfg(not(unix))]
+        let _ = (master_fd, &response);
     }
 }
 
@@ -289,7 +292,7 @@ fn write_u32_decimal(buf: &mut Vec<u8>, val: u32) {
     buf[start..].reverse();
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

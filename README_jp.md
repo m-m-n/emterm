@@ -1,6 +1,6 @@
 # eMterm
 
-Tauriで構築されたクロスプラットフォーム・ターミナルエミュレータ。インライン画像やMarkdown表示などのリッチな描画機能を備えています。
+Tauriで構築されたLinux/Windows向けターミナルエミュレータ。インライン画像やMarkdown表示などのリッチな描画機能を備えています。
 
 ## 機能
 
@@ -55,12 +55,6 @@ Tauriで構築されたクロスプラットフォーム・ターミナルエミ
 ```bash
 sudo apt update
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-```
-
-### macOS
-
-```bash
-xcode-select --install
 ```
 
 ### Windows

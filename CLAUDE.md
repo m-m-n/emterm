@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-eMterm is a cross-platform terminal emulator built with Tauri, featuring rich rendering capabilities including inline images and Markdown display.
+eMterm is a terminal emulator for Linux and Windows, built with Tauri, featuring rich rendering capabilities including inline images and Markdown display.
 
 ## What (Technology Stack)
 
@@ -128,7 +128,7 @@ Key conventions:
 - Synchronous Tauri commands for hot paths (e.g., `pty_write`) to avoid async overhead
 - `Arc<RwLock<HashMap>>` for session registries (read-optimized)
 - Atomic operations for race-free session creation/removal
-- `portable-pty` for cross-platform PTY abstraction
+- `portable-pty` for PTY abstraction (Linux/Windows)
 
 **Frontend (TypeScript + WASM / `src/` + `wasm/`)**
 
