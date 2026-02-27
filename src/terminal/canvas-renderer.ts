@@ -1279,6 +1279,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 * This clears the cursor cell and redraws it based on blink state.
 	 */
 	private renderCursorArea(state: TerminalState): void {
+		if (this.scrollOffset > 0) {
+			return;
+		}
+
 		const buffer = state.getActiveBuffer();
 		const row = state.cursorRow;
 		const col = state.cursorCol;
