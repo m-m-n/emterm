@@ -65,6 +65,16 @@ export class ImeHandler {
 	private editContextCleanup: (() => void) | null = null;
 	private terminalClickHandler: ((e: MouseEvent) => void) | null = null;
 
+	/** Focus trap: recapture focus after WebKitGTK's native Tab traversal */
+	private focusTrapFocusinHandler: ((e: FocusEvent) => void) | null = null;
+	private focusTrapPointerDownHandler: (() => void) | null = null;
+	private focusTrapPointerUpHandler: (() => void) | null = null;
+	private pointerActive = false;
+	private pointerActiveRafId: number | null = null;
+
+	/** Back-tab escape sequence (ESC [ Z) - shared constant to avoid per-event allocation */
+	private static readonly BACK_TAB_SEQUENCE = new Uint8Array([0x1b, 0x5b, 0x5a]);
+
 	/** Check if this terminal tab is active */
 	private isActiveTab: () => boolean;
 	/** Unique identifier for debugging */
@@ -110,12 +120,66 @@ export class ImeHandler {
 				mode: this.useEditContext ? "EditContext" : "Textarea",
 			});
 		}
+
+		// Focus trap: WebKitGTK handles Shift+Tab at the native level without
+		// dispatching a JavaScript keydown event. We identify Shift+Tab by three
+		// conditions that are ONLY true for native Tab traversal:
+		//   1. No pointer interaction (not a click/touch/pen)
+		//   2. No JS keydown was dispatched (WebKitGTK swallows Shift+Tab keydown)
+		//   3. Focus departed from the IME target (relatedTarget check)
+		// Any programmatic focus change (search bar, settings, etc.) is preceded
+		// by a keydown event (the shortcut that triggered it), so condition 2 filters it.
+		this.focusTrapPointerDownHandler = () => { this.pointerActive = true; };
+		this.focusTrapPointerUpHandler = () => {
+			this.pointerActiveRafId = requestAnimationFrame(() => {
+				this.pointerActive = false;
+				this.pointerActiveRafId = null;
+			});
+		};
+		document.addEventListener("pointerdown", this.focusTrapPointerDownHandler, { capture: true });
+		document.addEventListener("pointerup", this.focusTrapPointerUpHandler, { capture: true });
+
+		this.focusTrapFocusinHandler = (e: FocusEvent) => {
+			// Ignore focus changes from pointer interactions (mouse/touch/pen)
+			if (this.pointerActive) return;
+			if (!this.isActiveTab()) return;
+			if (isModalOverlayVisible()) return;
+
+			const focusTarget = this.useEditContext ? this.container : this.imeInput;
+			// Only act when focus DEPARTED from the IME target (relatedTarget)
+			if (e.relatedTarget === focusTarget && e.target !== focusTarget) {
+				this.focus();
+				this.ptyClient.write(ImeHandler.BACK_TAB_SEQUENCE).catch((error) => {
+					console.error("Failed to write Shift+Tab to PTY:", error);
+				});
+			}
+		};
+		document.addEventListener("focusin", this.focusTrapFocusinHandler);
 	}
 
 	/**
 	 * Clean up IME resources
 	 */
 	dispose(): void {
+		// Clean up focus trap
+		if (this.focusTrapPointerDownHandler) {
+			document.removeEventListener("pointerdown", this.focusTrapPointerDownHandler, { capture: true });
+			this.focusTrapPointerDownHandler = null;
+		}
+		if (this.focusTrapPointerUpHandler) {
+			document.removeEventListener("pointerup", this.focusTrapPointerUpHandler, { capture: true });
+			this.focusTrapPointerUpHandler = null;
+		}
+		if (this.pointerActiveRafId !== null) {
+			cancelAnimationFrame(this.pointerActiveRafId);
+			this.pointerActiveRafId = null;
+		}
+		this.pointerActive = false;
+		if (this.focusTrapFocusinHandler) {
+			document.removeEventListener("focusin", this.focusTrapFocusinHandler);
+			this.focusTrapFocusinHandler = null;
+		}
+
 		// Clean up EditContext
 		if (this.editContextCleanup) {
 			this.editContextCleanup();
