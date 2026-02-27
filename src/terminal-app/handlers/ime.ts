@@ -148,6 +148,11 @@ export class ImeHandler {
 			const focusTarget = this.useEditContext ? this.container : this.imeInput;
 			// Only act when focus DEPARTED from the IME target (relatedTarget)
 			if (e.relatedTarget === focusTarget && e.target !== focusTarget) {
+				// Allow focus to child UI elements (search bar, etc.)
+				// but not the container itself (which is an intermediate
+				// step in WebKitGTK's native Tab traversal)
+				if (e.target !== this.container && this.container.contains(e.target as Node)) return;
+
 				this.focus();
 				this.ptyClient.write(ImeHandler.BACK_TAB_SEQUENCE).catch((error) => {
 					console.error("Failed to write Shift+Tab to PTY:", error);
