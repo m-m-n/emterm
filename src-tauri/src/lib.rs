@@ -378,6 +378,11 @@ async fn process_image_data(
             if let Some(sixel) = ansi::dcs::parse_sixel_sequence(&data) {
                 processor.process_sixel(&sixel, cursor_row, cursor_col)
             } else {
+                log::warn!(
+                    "Failed to parse SIXEL sequence ({} bytes, first={:?})",
+                    data.len(),
+                    &data[..data.len().min(20)]
+                );
                 return Ok(());
             }
         }

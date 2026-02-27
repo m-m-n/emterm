@@ -257,6 +257,7 @@ Inline image rendering supporting two standard protocols.
 **Supported Protocols:**
 - **Kitty Graphics Protocol** (APC `G` command): PNG, JPEG, GIF via base64-encoded APC sequences; supports `image_id` for image management and correlated display
 - **SIXEL** (DCS): Color palette-based pixel graphics via DCS data stream
+  - **Limitation:** Third-party SIXEL tools (e.g., `img2sixel`) do not work inside tmux. tmux consumes raw DCS sequences before they reach the outer terminal. Use `emterm image` or Kitty Graphics Protocol tools inside tmux.
 
 **Key Functionality:**
 - Images rendered in-place within the terminal text flow

@@ -175,6 +175,8 @@ ESC _ G i=<id> ; ERROR:<message> ESC \
 
 ### 2.2 SIXEL Protocol
 
+**Known Limitation:** SIXEL (DCS sequences) is not available inside tmux. tmux consumes DCS sequences from inner programs before they reach the outer terminal. Use `emterm image` or Kitty Graphics Protocol tools inside tmux.
+
 #### 2.2.1 Sequence Format
 
 ```

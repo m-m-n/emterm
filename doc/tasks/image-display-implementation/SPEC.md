@@ -45,6 +45,9 @@ As a user of legacy tools, I want emterm to support SIXEL graphics, so that SIXE
 - [ ] SIXEL color palettes are correctly interpreted
 - [ ] SIXEL aspect ratios are respected
 
+**Known Limitation:**
+- SIXEL (DCS sequences) is not available inside tmux. tmux consumes DCS sequences from inner programs before they reach the outer terminal. Unlike `emterm image` which wraps output in DCS passthrough (`ESC P tmux; ... ESC \`), third-party tools like `img2sixel` output raw DCS sequences that tmux intercepts. Use `emterm image` or Kitty Graphics Protocol tools inside tmux.
+
 ## Technical Requirements
 
 ### Functional Requirements
