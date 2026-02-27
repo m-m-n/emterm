@@ -791,6 +791,51 @@ fn spawn_reader_thread(
 // Application Entry Point
 // ============================================================================
 
+/// Set the taskbar icon from the embedded ICO resource on Windows.
+///
+/// Works around a bug in tao's `CreateIcon()` where the AND mask is created with
+/// 1 byte per pixel instead of 1 bit per pixel, causing alpha transparency to be
+/// lost. By loading the icon directly from the embedded resource via `LoadImageW`,
+/// Windows handles the ICO's alpha channel correctly.
+#[cfg(windows)]
+fn set_taskbar_icon(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::Error>> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IMAGE_ICON, LR_DEFAULTSIZE, LoadImageW, SendMessageW, WM_SETICON,
+    };
+    use windows::core::PCWSTR;
+
+    const ICON_BIG: usize = 1;
+    const MAINICON_ID: u16 = 32512;
+
+    let window_handle = window.window_handle()?;
+    let RawWindowHandle::Win32(handle) = window_handle.as_raw() else {
+        return Err("not a Win32 window".into());
+    };
+
+    unsafe {
+        let hmodule = GetModuleHandleW(PCWSTR::null())?;
+        let hicon = LoadImageW(
+            Some(hmodule.into()),
+            PCWSTR::from_raw(MAINICON_ID as *const u16),
+            IMAGE_ICON,
+            0,
+            0,
+            LR_DEFAULTSIZE,
+        )?;
+        let hwnd = windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut _);
+        SendMessageW(
+            hwnd,
+            WM_SETICON,
+            windows::Win32::Foundation::WPARAM(ICON_BIG),
+            windows::Win32::Foundation::LPARAM(hicon.0 as isize),
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg(not(test))]
 pub fn run() {
@@ -823,7 +868,7 @@ pub fn run() {
             commands::font::list_fonts,
             set_language,
         ])
-        .setup(|_app| {
+        .setup(|app| {
             // Initialize custom logger for backend
             // Use Debug level in debug builds, Info level in release builds
             let level = if cfg!(debug_assertions) {
@@ -832,6 +877,24 @@ pub fn run() {
                 log::Level::Info
             };
             logging::BackendLogger::init(level);
+
+            // On Windows, set ICON_BIG from the embedded ICO resource to fix
+            // taskbar icon transparency. tao's CreateIcon() has a bug where the
+            // AND mask format is incorrect, causing alpha transparency to be lost.
+            // Loading directly from the resource via LoadImageW bypasses this.
+            #[cfg(windows)]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(e) = set_taskbar_icon(&window) {
+                        log::warn!("Failed to set taskbar icon: {e}");
+                    }
+                }
+            }
+
+            #[cfg(not(windows))]
+            let _ = app;
+
             Ok(())
         })
         .run(tauri::generate_context!())
