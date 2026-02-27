@@ -37,6 +37,8 @@ export interface KeyboardHandlerContext {
   onToggleSearch?: () => void;
   /** Callback to restore focus (e.g., to IME input) after paste */
   onRestoreFocus?: () => void;
+  /** Callback to exit scrollback mode (scroll to bottom) */
+  onExitScrollback?: () => void;
 }
 
 /**
@@ -53,6 +55,7 @@ export class KeyboardHandler {
   private isActiveTab: () => boolean;
   private onToggleSearch: (() => void) | null;
   private onRestoreFocus: (() => void) | null;
+  private onExitScrollback: (() => void) | null;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -73,6 +76,7 @@ export class KeyboardHandler {
     this.isActiveTab = context.isActiveTab || (() => true);
     this.onToggleSearch = context.onToggleSearch || null;
     this.onRestoreFocus = context.onRestoreFocus || null;
+    this.onExitScrollback = context.onExitScrollback || null;
   }
 
   /**
@@ -278,6 +282,9 @@ export class KeyboardHandler {
     if (bytes) {
       event.preventDefault();
 
+      // Auto-scroll to bottom when user types during scrollback
+      this.onExitScrollback?.();
+
       // Fire-and-forget: don't await to avoid blocking key repeat
       this.ptyClient.write(bytes).catch((error) => {
         console.error("Failed to write to PTY:", error);
@@ -359,6 +366,9 @@ export class KeyboardHandler {
         event.preventDefault();
         return;
       }
+
+      // Auto-scroll to bottom when user pastes during scrollback
+      this.onExitScrollback?.();
 
       // Check if multi-line
       if (this.selectionController.isMultiLinePaste(text)) {
