@@ -1,0 +1,80 @@
+schema_version: 1
+feature: settings-nav-collapsible
+scale: light
+created: 2026-02-28
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test settings-panel.e2e.js"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: in_progress
+  - id: implement
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+
+requirements:
+  FR1:
+    title: Navigation column width 300px
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: SVG icons for each category (24px, currentColor)
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Hamburger toggle button left-aligned with icons
+    status: needs_update
+    tasks: []
+    tests: []
+  FR4:
+    title: Collapsed state shows 80px icon-only rail
+    status: needs_update
+    tasks: []
+    tests: []
+  FR5:
+    title: Icon click in collapsed state switches category without expanding
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Slide animation with MD3 motion tokens (300ms)
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: State maintained while panel instance exists (not persisted to disk)
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Keyboard accessibility with ARIA labels and tooltips
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: MD3 design token consistency
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Icon position stable between expanded and collapsed states
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: Nav items fill full width for correct highlight/active background
+    status: needs_update
+    tasks: []
+    tests: []
