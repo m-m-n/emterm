@@ -34,10 +34,7 @@
   min-height: 0;
 }
 
-/* Nav collapsed state: keep left padding for icon alignment */
-.nav-collapsed .settings-nav {
-  padding: 12px 4px 12px 12px;
-}
+/* Nav collapsed state: same padding as expanded (80px rail has enough room) */
 
 /* Nav collapse toggle button */
 .settings-nav-toggle-row {
