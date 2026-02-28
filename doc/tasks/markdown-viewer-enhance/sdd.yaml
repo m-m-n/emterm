@@ -1,0 +1,93 @@
+schema_version: 1
+feature: markdown-viewer-enhance
+scale: standard
+created: 2026-02-28
+
+project:
+  components:
+    main:
+      language: rust,typescript,wasm
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 1e7fb942cb7acf66d0aa0521bd125bcf12cb4b6a
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 1e7fb942cb7acf66d0aa0521bd125bcf12cb4b6a
+  - id: implement
+    status: completed
+    completed_at_commit: 1e7fb942cb7acf66d0aa0521bd125bcf12cb4b6a
+  - id: check
+    status: completed
+    completed_at_commit: 1e7fb942cb7acf66d0aa0521bd125bcf12cb4b6a
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 1e7fb942cb7acf66d0aa0521bd125bcf12cb4b6a
+  - id: review
+    status: completed
+    completed_at_commit: 1e7fb942cb7acf66d0aa0521bd125bcf12cb4b6a
+
+requirements:
+  FR1:
+    title: Outline panel
+    status: ok
+    tasks: [Phase2-Step1, Phase2-Step2, Phase2-Step3]
+    tests: [TS-01, TS-02, TS-03, TS-04, TS-05, TS-11]
+  FR2:
+    title: Active heading tracking
+    status: ok
+    tasks: [Phase2-Step5]
+    tests: [TS-06]
+  FR3:
+    title: Smooth scroll navigation
+    status: ok
+    tasks: [Phase2-Step4]
+    tests: [TS-12]
+  FR4:
+    title: Responsive layout
+    status: ok
+    tasks: [Phase2-Step6, Phase2-Step7]
+    tests: [TS-11]
+  FR5:
+    title: Mermaid rendering
+    status: ok
+    tasks: [Phase1-Step1, Phase1-Step4]
+    tests: [TS-07, TS-10, TS-13]
+  FR6:
+    title: Mermaid lazy loading
+    status: ok
+    tasks: [Phase1-Step3]
+    tests: [TS-08]
+  FR7:
+    title: Mermaid error fallback
+    status: ok
+    tasks: [Phase1-Step5]
+    tests: [TS-09]
+  NFR1:
+    title: Performance - no regression for non-Mermaid documents
+    status: ok
+    tasks: [Phase1-Step2]
+    tests: [TS-08]
+  NFR2:
+    title: Security - SVG isolation and strict mode
+    status: ok
+    tasks: [Phase1-Step3]
+    tests: [TS-10]
+  NFR3:
+    title: Compatibility - existing features unaffected
+    status: ok
+    tasks: [Phase3-Step1, Phase3-Step2, Phase3-Step3]
+    tests: [TS-14]
+  NFR4:
+    title: Compatibility - E2E test regression-free
+    status: ok
+    tasks: [Phase3-Step5]
+    tests: []

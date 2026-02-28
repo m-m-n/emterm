@@ -1,0 +1,65 @@
+schema_version: 1
+tasks:
+  - id: Phase1
+    name: "Mermaid Renderer"
+    status: completed
+    steps:
+      - id: Phase1-Step1
+        name: "Create MermaidRenderer class with lazy loading and rendering"
+        status: completed
+      - id: Phase1-Step2
+        name: "Implement mermaid detection"
+        status: completed
+      - id: Phase1-Step3
+        name: "Implement lazy loading with dynamic import"
+        status: completed
+      - id: Phase1-Step4
+        name: "Implement block rendering and error fallback"
+        status: completed
+      - id: Phase1-Step5
+        name: "Add CSS for mermaid containers"
+        status: completed
+  - id: Phase2
+    name: "Outline Panel"
+    status: completed
+    steps:
+      - id: Phase2-Step1
+        name: "Create OutlinePanel class with heading extraction"
+        status: completed
+      - id: Phase2-Step2
+        name: "Implement panel DOM creation"
+        status: completed
+      - id: Phase2-Step3
+        name: "Implement click navigation with smooth scroll"
+        status: completed
+      - id: Phase2-Step4
+        name: "Implement scroll tracking with IntersectionObserver"
+        status: completed
+      - id: Phase2-Step5
+        name: "Implement dispose and cleanup"
+        status: completed
+      - id: Phase2-Step6
+        name: "Implement responsive layout CSS"
+        status: completed
+      - id: Phase2-Step7
+        name: "Add outline panel CSS"
+        status: completed
+  - id: Phase3
+    name: "Integration and Polish"
+    status: completed
+    steps:
+      - id: Phase3-Step1
+        name: "Integrate outline + mermaid into FullscreenMarkdownView"
+        status: completed
+      - id: Phase3-Step2
+        name: "Update module exports and types"
+        status: completed
+      - id: Phase3-Step3
+        name: "Verify existing features (zoom, keyboard, copy, links)"
+        status: completed
+      - id: Phase3-Step4
+        name: "Run all tests and verify no regressions"
+        status: completed
+      - id: Phase3-Step5
+        name: "E2E regression check"
+        status: completed

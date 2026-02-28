@@ -13,6 +13,12 @@ export { MarkdownRenderer } from "./renderer.ts";
 // Fullscreen View
 export { FullscreenMarkdownView } from "./fullscreen.ts";
 
+// Outline Panel
+export { OutlinePanel } from "./outline.ts";
+
+// Mermaid Renderer
+export { MermaidRenderer } from "./mermaid-renderer.ts";
+
 // Link Dialog
 export { LinkConfirmDialog } from "./link-dialog.ts";
 

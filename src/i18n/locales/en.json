@@ -305,7 +305,8 @@
     "label": "Markdown Document",
     "copyCode": "Copy code",
     "copySuccess": "Copied!",
-    "copyFailed": "Failed"
+    "copyFailed": "Failed",
+    "outline": "Document Outline"
   },
   "zoom": {
     "closeViewer": "Close viewer",
