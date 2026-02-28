@@ -11,6 +11,10 @@
       "markdownViewer": "Markdown Viewer",
       "profiles": "Profiles"
     },
+    "nav": {
+      "collapse": "Collapse navigation",
+      "expand": "Expand navigation"
+    },
     "appearance": {
       "title": "Appearance",
       "font": "Font",

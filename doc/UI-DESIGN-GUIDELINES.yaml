@@ -568,20 +568,48 @@ components:
     settings-nav:
       class: .settings-nav
       properties:
-        width: 200px  # grid column
+        width: 300px  # grid column
         padding: 12px
         background: surface-container-low
         border-right: 1px solid outline-variant
         gap: 4px
+      collapsible:
+        toggle-button:
+          class: .settings-nav-collapse-btn
+          container: .settings-nav-toggle-row
+          position: top of nav, right-aligned (expanded) / centered (collapsed)
+          icon: "\u2261"  # ≡ hamburger (same in both states)
+          size: 40px
+        collapsed-width: 56px
+        collapsed-padding: "12px 4px"  # keep left padding for icon alignment
+        animation:
+          property: grid-template-columns
+          duration: duration-medium2 (300ms)
+          easing: easing-emphasized
+        collapsed-class: .nav-collapsed
+        state-persistence: "maintained while panel instance exists (not persisted to disk)"
+        behavior: icon click in collapsed state switches category WITHOUT expanding
 
     nav-item:
       class: .settings-nav-item
       properties:
         padding: 0 24px 0 16px
         height: 48px
+        gap: 12px
         border-radius: corner-full
         font-size: 14px
         color: on-surface-variant
+      icon:
+        class: .settings-nav-icon
+        size: 24px
+        fill: currentColor
+      label:
+        class: .settings-nav-label
+        white-space: nowrap
+        overflow: hidden
+      collapsed:
+        padding: "0 0 0 16px"  # keep left padding for icon position stability
+        label: hidden
       states:
         hover:
           background: color-mix(in srgb, on-surface 8%, transparent)
@@ -599,7 +627,7 @@ components:
       description: "Master-detail settings layout"
       properties:
         display: grid
-        grid-template-columns: 200px 1fr
+        grid-template-columns: 300px 1fr
         content-padding: 24px
         font-size: 14px
 

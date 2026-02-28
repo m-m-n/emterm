@@ -11,6 +11,10 @@
       "markdownViewer": "Markdownビューアー",
       "profiles": "プロファイル"
     },
+    "nav": {
+      "collapse": "ナビゲーションを閉じる",
+      "expand": "ナビゲーションを開く"
+    },
     "appearance": {
       "title": "\u5916\u89b3",
       "font": "\u30d5\u30a9\u30f3\u30c8",
