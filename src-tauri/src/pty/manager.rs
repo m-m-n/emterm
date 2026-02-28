@@ -9,6 +9,8 @@ use std::sync::Arc;
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 
+type EnvVars = HashMap<String, String>;
+
 use super::{
     PtyError, PtySession, SessionId, WriterRegistry, detect_default_shell, generate_session_id,
 };
@@ -90,7 +92,7 @@ impl PtyManager {
     ) -> Result<SessionId, PtyError> {
         let shell = shell.unwrap_or_else(detect_default_shell);
         let id = generate_session_id();
-        let session = PtySession::new(id.clone(), &shell, args, cols, rows)?;
+        let session = PtySession::new(id.clone(), &shell, args, cols, rows, None, None)?;
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), Arc::new(Mutex::new(session)));
@@ -151,10 +153,20 @@ impl PtyManager {
         args: Option<Vec<String>>,
         cols: u16,
         rows: u16,
+        env_vars: Option<EnvVars>,
+        working_directory: Option<String>,
     ) -> Result<SessionCreatedResult, PtyError> {
         let shell = shell.unwrap_or_else(detect_default_shell);
         let id = generate_session_id();
-        let mut session = PtySession::new(id.clone(), &shell, args, cols, rows)?;
+        let mut session = PtySession::new(
+            id.clone(),
+            &shell,
+            args,
+            cols,
+            rows,
+            env_vars,
+            working_directory,
+        )?;
 
         // Extract writer handle and set up dedicated writer thread
         let writer_handle = session
@@ -291,7 +303,9 @@ mod tests {
     #[tokio::test]
     async fn test_create_session_atomic() {
         let manager = PtyManager::new();
-        let result = manager.create_session_atomic(None, None, 80, 24).await;
+        let result = manager
+            .create_session_atomic(None, None, 80, 24, None, None)
+            .await;
 
         assert!(result.is_ok(), "Atomic session creation should succeed");
         let result = result.unwrap();
@@ -317,11 +331,11 @@ mod tests {
 
         // Create two sessions
         let result1 = manager
-            .create_session_atomic(None, None, 80, 24)
+            .create_session_atomic(None, None, 80, 24, None, None)
             .await
             .unwrap();
         let result2 = manager
-            .create_session_atomic(None, None, 80, 24)
+            .create_session_atomic(None, None, 80, 24, None, None)
             .await
             .unwrap();
 

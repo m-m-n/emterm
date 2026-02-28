@@ -78,6 +78,20 @@ export interface TabBarState {
 }
 
 /**
+ * Profile-specific spawn options passed to PTY
+ */
+export interface ProfileSpawnOptions {
+  /** Shell executable path */
+  shell_path?: string;
+  /** Shell arguments */
+  shell_args?: string[];
+  /** Environment variables (key-value map) */
+  env_vars?: Record<string, string>;
+  /** Working directory */
+  working_directory?: string;
+}
+
+/**
  * Tab creation options
  */
 export interface CreateTabOptions {
@@ -85,6 +99,8 @@ export interface CreateTabOptions {
   type?: "terminal" | "settings";
   /** Initial title */
   title?: string;
+  /** Profile-specific spawn options */
+  profileSpawn?: ProfileSpawnOptions;
 }
 
 /**

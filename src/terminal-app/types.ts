@@ -10,6 +10,13 @@ export interface TerminalAppOptions {
   useNewTerminal?: boolean;
   /** Enable IME debug mode */
   imeDebug?: boolean;
+  /** Profile-specific spawn overrides (shell, args, env, cwd) */
+  spawnOverrides?: {
+    shell_path?: string;
+    shell_args?: string[];
+    env_vars?: Record<string, string>;
+    working_directory?: string;
+  };
 }
 
 /**

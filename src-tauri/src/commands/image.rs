@@ -226,5 +226,4 @@ mod tests {
         // Verify MAX_IMAGE_DIMENSION is set to a reasonable value
         assert_eq!(MAX_IMAGE_DIMENSION, 8192);
     }
-
 }

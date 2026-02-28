@@ -310,6 +310,29 @@ define_keybinds! {
     jump_to_next_prompt, default_keybind_jump_to_next_prompt, deserialize_null_keybind_jump_to_next_prompt,
                       "default_keybind_jump_to_next_prompt", "deserialize_null_keybind_jump_to_next_prompt",
                       "Ctrl+Shift+ArrowDown";
+    profile_selector, default_keybind_profile_selector, deserialize_null_keybind_profile_selector,
+                      "default_keybind_profile_selector", "deserialize_null_keybind_profile_selector",
+                      "Ctrl+Shift+P";
+}
+
+// ============================================================
+// Profile
+// ============================================================
+
+/// Terminal profile for per-session shell configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Profile {
+    pub name: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub shell_path: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub shell_args: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub env_vars: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub working_directory: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub is_default: bool,
 }
 
 // ============================================================
@@ -441,6 +464,10 @@ pub struct AppSettings {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub custom_color_schemes: Vec<UserColorScheme>,
 
+    // Profiles
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub profiles: Vec<Profile>,
+
     // Markdown Viewer
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub markdown_theme_follow_ui: bool,
@@ -498,6 +525,7 @@ impl Default for AppSettings {
             language: default_language(),
             ui_font_family: default_ui_font_family(),
             custom_color_schemes: Vec::new(),
+            profiles: Vec::new(),
             markdown_theme_follow_ui: default_true(),
             markdown_theme: UiTheme::default(),
             markdown_theme_preset: UiThemePreset::default(),
@@ -566,6 +594,12 @@ fn validate_settings(settings: &AppSettings) -> Result<(), String> {
             max = MAX_FONT_SIZE
         )
         .to_string());
+    }
+
+    for (i, profile) in settings.profiles.iter().enumerate() {
+        if profile.name.trim().is_empty() {
+            return Err(t!("validation.profileNameEmpty", index = i + 1).to_string());
+        }
     }
 
     Ok(())
@@ -947,6 +981,14 @@ mod tests {
             language: "ja".to_string(),
             ui_font_family: "Noto Sans".to_string(),
             custom_color_schemes: Vec::new(),
+            profiles: vec![Profile {
+                name: "Dev".to_string(),
+                shell_path: "/bin/zsh".to_string(),
+                shell_args: vec!["--login".to_string()],
+                env_vars: "FOO=bar\nBAZ=qux".to_string(),
+                working_directory: "/home/user/projects".to_string(),
+                is_default: true,
+            }],
             markdown_theme_follow_ui: false,
             markdown_theme: UiTheme::Light,
             markdown_theme_preset: UiThemePreset::Green,
@@ -1014,6 +1056,16 @@ mod tests {
         assert!(!restored.notify_on_process_exit);
         assert!(restored.notify_on_output);
         assert!(!restored.notify_on_bell);
+        assert_eq!(restored.profiles.len(), 1);
+        assert_eq!(restored.profiles[0].name, "Dev");
+        assert_eq!(restored.profiles[0].shell_path, "/bin/zsh");
+        assert_eq!(restored.profiles[0].shell_args, vec!["--login"]);
+        assert_eq!(restored.profiles[0].env_vars, "FOO=bar\nBAZ=qux");
+        assert_eq!(
+            restored.profiles[0].working_directory,
+            "/home/user/projects"
+        );
+        assert!(restored.profiles[0].is_default);
     }
 
     #[test]
@@ -1518,6 +1570,156 @@ mod tests {
         assert_eq!(restored.markdown_body_font_family, "Georgia");
         assert_eq!(restored.markdown_code_font_family, "JetBrains Mono");
         assert_eq!(restored.markdown_font_size, 20);
+    }
+
+    // -- Profile tests --
+
+    #[test]
+    fn test_app_settings_default_has_empty_profiles() {
+        let settings = AppSettings::default();
+        assert!(settings.profiles.is_empty());
+    }
+
+    #[test]
+    fn test_deserialize_missing_profiles_defaults_to_empty() {
+        let json = r#"{}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.profiles.is_empty());
+    }
+
+    #[test]
+    fn test_deserialize_null_profiles_defaults_to_empty() {
+        let json = r#"{"profiles": null}"#;
+        let settings: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.profiles.is_empty());
+    }
+
+    #[test]
+    fn test_profile_round_trip() {
+        let profile = Profile {
+            name: "My Shell".to_string(),
+            shell_path: "/usr/bin/fish".to_string(),
+            shell_args: vec!["-l".to_string()],
+            env_vars: "TERM=xterm-256color".to_string(),
+            working_directory: "/tmp".to_string(),
+            is_default: false,
+        };
+        let json = serde_json::to_string(&profile).unwrap();
+        let restored: Profile = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, profile);
+    }
+
+    #[test]
+    fn test_profile_null_fields_use_defaults() {
+        let json = r#"{
+            "name": "Test",
+            "shell_path": null,
+            "shell_args": null,
+            "env_vars": null,
+            "working_directory": null,
+            "is_default": null
+        }"#;
+        let profile: Profile = serde_json::from_str(json).unwrap();
+        assert_eq!(profile.name, "Test");
+        assert_eq!(profile.shell_path, "");
+        assert!(profile.shell_args.is_empty());
+        assert_eq!(profile.env_vars, "");
+        assert_eq!(profile.working_directory, "");
+        assert!(!profile.is_default);
+    }
+
+    #[test]
+    fn test_profile_missing_optional_fields_use_defaults() {
+        let json = r#"{"name": "Minimal"}"#;
+        let profile: Profile = serde_json::from_str(json).unwrap();
+        assert_eq!(profile.name, "Minimal");
+        assert_eq!(profile.shell_path, "");
+        assert!(profile.shell_args.is_empty());
+        assert_eq!(profile.env_vars, "");
+        assert_eq!(profile.working_directory, "");
+        assert!(!profile.is_default);
+    }
+
+    #[test]
+    fn test_settings_with_profiles_round_trip() {
+        let mut settings = AppSettings::default();
+        settings.profiles = vec![
+            Profile {
+                name: "Default".to_string(),
+                shell_path: "/bin/bash".to_string(),
+                shell_args: vec![],
+                env_vars: String::new(),
+                working_directory: String::new(),
+                is_default: true,
+            },
+            Profile {
+                name: "Dev".to_string(),
+                shell_path: "/bin/zsh".to_string(),
+                shell_args: vec!["--login".to_string()],
+                env_vars: "NODE_ENV=development".to_string(),
+                working_directory: "/home/user/dev".to_string(),
+                is_default: false,
+            },
+        ];
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.profiles.len(), 2);
+        assert_eq!(restored.profiles[0].name, "Default");
+        assert!(restored.profiles[0].is_default);
+        assert_eq!(restored.profiles[1].name, "Dev");
+        assert_eq!(restored.profiles[1].shell_path, "/bin/zsh");
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_profile_name() {
+        let mut settings = AppSettings::default();
+        settings.profiles = vec![Profile {
+            name: "".to_string(),
+            shell_path: String::new(),
+            shell_args: vec![],
+            env_vars: String::new(),
+            working_directory: String::new(),
+            is_default: false,
+        }];
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_whitespace_only_profile_name() {
+        let mut settings = AppSettings::default();
+        settings.profiles = vec![Profile {
+            name: "   ".to_string(),
+            shell_path: String::new(),
+            shell_args: vec![],
+            env_vars: String::new(),
+            working_directory: String::new(),
+            is_default: false,
+        }];
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_valid_profiles() {
+        let mut settings = AppSettings::default();
+        settings.profiles = vec![
+            Profile {
+                name: "Shell 1".to_string(),
+                shell_path: String::new(),
+                shell_args: vec![],
+                env_vars: String::new(),
+                working_directory: String::new(),
+                is_default: true,
+            },
+            Profile {
+                name: "Shell 2".to_string(),
+                shell_path: "/bin/fish".to_string(),
+                shell_args: vec![],
+                env_vars: String::new(),
+                working_directory: String::new(),
+                is_default: false,
+            },
+        ];
+        assert!(validate_settings(&settings).is_ok());
     }
 
     // -- Notification settings tests --

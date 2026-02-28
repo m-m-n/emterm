@@ -30,10 +30,7 @@ pub fn generate_markdown_osc(session_id: &Uuid, chunks: Vec<String>) -> String {
     }
 
     // End sequence
-    output.push_str(&format!(
-        "\x1b]777;emterm;markdown;end;id={}\x1b\\",
-        id
-    ));
+    output.push_str(&format!("\x1b]777;emterm;markdown;end;id={}\x1b\\", id));
 
     output
 }

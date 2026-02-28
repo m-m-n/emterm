@@ -82,6 +82,9 @@ export interface AppSettings {
   // Custom Color Schemes
   custom_color_schemes: UserColorScheme[];
 
+  // Profiles
+  profiles: Profile[];
+
   // Markdown Viewer Theme
   markdown_theme_follow_ui: boolean;
   markdown_theme: UiTheme;
@@ -111,6 +114,7 @@ export interface KeybindSettings {
   toggle_tab_bar: string;
   jump_to_prev_prompt: string;
   jump_to_next_prompt: string;
+  profile_selector: string;
 }
 
 // ============================================================
@@ -124,6 +128,19 @@ export interface FontListResponse {
 }
 
 export type FontCategory = "primary" | "secondary" | "emoji" | "ui" | "markdown-body" | "markdown-code" | "markdown-emoji";
+
+// ============================================================
+// Profile
+// ============================================================
+
+export interface Profile {
+  name: string;
+  shell_path: string;
+  shell_args: string[];
+  env_vars: string;
+  working_directory: string;
+  is_default: boolean;
+}
 
 // ============================================================
 // User Color Scheme

@@ -119,6 +119,8 @@ export class PtyClient {
 			args: options.args,
 			cols: options.cols ?? 80,
 			rows: options.rows ?? 24,
+			envVars: options.env_vars,
+			workingDirectory: options.working_directory,
 		});
 
 		const sessionId = result.session_id;

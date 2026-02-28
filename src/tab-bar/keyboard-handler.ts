@@ -5,6 +5,7 @@
  */
 
 import type { TabManager } from "./tab-manager";
+import type { TabBarUI } from "./tab-bar-ui";
 import { SettingsService } from "../settings/settings-service";
 import { matchKeybindStr } from "../keybind/matcher";
 
@@ -27,10 +28,13 @@ export interface TabKeyboardHandlerOptions {
   onToggleTabBar?: () => void;
   /** Callback when open settings keybind is pressed */
   onOpenSettings?: () => void;
+  /** Reference to TabBarUI for profile-aware tab creation */
+  tabBarUI?: TabBarUI;
 }
 
 export class TabKeyboardHandler {
   private tabManager: TabManager;
+  private tabBarUI?: TabBarUI;
   private target: EventTarget | null = null;
   private boundHandler: ((event: KeyboardEvent) => void) | null = null;
   private onToggleTabBar?: () => void;
@@ -38,6 +42,7 @@ export class TabKeyboardHandler {
 
   constructor(tabManager: TabManager, options?: TabKeyboardHandlerOptions) {
     this.tabManager = tabManager;
+    this.tabBarUI = options?.tabBarUI;
     this.onToggleTabBar = options?.onToggleTabBar;
     this.onOpenSettings = options?.onOpenSettings;
   }
@@ -63,10 +68,17 @@ export class TabKeyboardHandler {
       return true;
     }
 
-    // New tab
+    // Profile selector
+    if (matchKeybindStr(event, keybinds?.profile_selector ?? "Ctrl+Shift+P")) {
+      event.preventDefault();
+      this.handleProfileSelector();
+      return true;
+    }
+
+    // New tab (profile-aware)
     if (matchKeybindStr(event, keybinds?.new_tab ?? "Ctrl+Shift+T")) {
       event.preventDefault();
-      this.tabManager.createTab();
+      this.handleNewTab();
       return true;
     }
 
@@ -107,6 +119,39 @@ export class TabKeyboardHandler {
     }
 
     return false;
+  }
+
+  /**
+   * Handles new tab creation with profile awareness.
+   * Delegates to TabBarUI if available (which handles default profile logic).
+   */
+  private handleNewTab(): void {
+    if (this.tabBarUI) {
+      const settings = SettingsService.getCached();
+      const profiles = settings?.profiles;
+
+      if (profiles && profiles.length > 0) {
+        const defaultProfile = profiles.find((p) => p.is_default);
+        if (defaultProfile) {
+          this.tabBarUI.createTabWithProfile(defaultProfile);
+          return;
+        }
+      }
+    }
+    this.tabManager.createTab();
+  }
+
+  /**
+   * Handles profile selector keybind.
+   * Shows the profile selector modal if profiles exist.
+   */
+  private handleProfileSelector(): void {
+    if (!this.tabBarUI) return;
+    const settings = SettingsService.getCached();
+    const profiles = settings?.profiles;
+    if (profiles && profiles.length > 0) {
+      this.tabBarUI.showProfileSelector(profiles);
+    }
   }
 
   /**

@@ -1,0 +1,16 @@
+tasks:
+  - - id: phase1
+      title: "Data Model and Persistence"
+      status: completed
+  - - id: phase2
+      title: "PTY Spawn Extension"
+      status: completed
+  - - id: phase3
+      title: "Profile Management Settings UI"
+      status: completed
+  - - id: phase4
+      title: "Tab Creation Integration and Profile Selector"
+      status: completed
+  - - id: phase5
+      title: "Keybind Registration"
+      status: completed

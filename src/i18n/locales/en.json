@@ -8,7 +8,8 @@
       "terminalAppearance": "Terminal Appearance",
       "terminalBehavior": "Terminal Behavior",
       "notification": "Notifications",
-      "markdownViewer": "Markdown Viewer"
+      "markdownViewer": "Markdown Viewer",
+      "profiles": "Profiles"
     },
     "appearance": {
       "title": "Appearance",
@@ -143,6 +144,7 @@
       "zoomOut": "Zoom Out",
       "zoomReset": "Zoom Reset",
       "toggleFullscreen": "Toggle Fullscreen",
+      "profileSelector": "Profile Selector",
       "settingsSection": "Settings",
       "openSettings": "Open Settings",
       "pressKey": "Press a key..."
@@ -233,6 +235,39 @@
       "themeDark": "Dark",
       "preset": "Preset",
       "presetDesc": "Color preset for the Markdown viewer"
+    },
+    "profiles": {
+      "title": "Profiles",
+      "addProfile": "Add Profile",
+      "editProfile": "Edit Profile",
+      "noProfiles": "No profiles configured. Add a profile to customize shell settings per tab.",
+      "name": "Name",
+      "namePlaceholder": "Profile name",
+      "shellPath": "Shell Path",
+      "shellPathPlaceholder": "Default shell",
+      "shellPathHint": "Leave empty to use system default",
+      "shellArgs": "Shell Arguments",
+      "shellArgsPlaceholder": "--login, -i",
+      "shellArgsHint": "Comma-separated arguments",
+      "envVars": "Environment Variables",
+      "envVarsPlaceholder": "KEY=value\nANOTHER=value",
+      "envVarsHint": "One KEY=VALUE per line",
+      "workingDirectory": "Working Directory",
+      "workingDirectoryPlaceholder": "Default directory",
+      "workingDirectoryHint": "Leave empty to use default",
+      "isDefault": "Default Profile",
+      "isDefaultDesc": "Use this profile when creating new tabs",
+      "save": "Save",
+      "cancel": "Cancel",
+      "edit": "Edit",
+      "duplicate": "Duplicate",
+      "delete": "Delete",
+      "setDefault": "Set as Default",
+      "unsetDefault": "Unset Default",
+      "launch": "Launch",
+      "defaultBadge": "Default",
+      "nameRequired": "Profile name is required",
+      "dragHandle": "Drag to reorder"
     }
   },
   "tabBar": {

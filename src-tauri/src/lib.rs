@@ -160,6 +160,7 @@ pub struct ImageEventPayload {
 ///
 /// A `SpawnResult` containing the session ID, or an error message.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn pty_spawn(
     app: AppHandle,
     state: State<'_, PtyManager>,
@@ -168,13 +169,15 @@ async fn pty_spawn(
     args: Option<Vec<String>>,
     cols: Option<u16>,
     rows: Option<u16>,
+    env_vars: Option<HashMap<String, String>>,
+    working_directory: Option<String>,
 ) -> Result<SpawnResult, String> {
     let cols = cols.unwrap_or(80);
     let rows = rows.unwrap_or(24);
 
     // Use atomic method to get session_id and count in one lock (NFR2 compliance)
     let result = state
-        .create_session_atomic(shell, args, cols, rows)
+        .create_session_atomic(shell, args, cols, rows, env_vars, working_directory)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -206,6 +209,7 @@ async fn pty_spawn(
 ///
 /// * `session_id` - The target session ID
 /// * `data` - Bytes to write to the PTY
+///
 /// Maximum allowed write size per call (1 MB).
 const PTY_WRITE_MAX_SIZE: usize = 1024 * 1024;
 
@@ -350,6 +354,7 @@ fn set_language(language: String) -> Result<(), String> {
 /// * `cursor_row` - Current cursor row (0-based)
 /// * `cursor_col` - Current cursor column (0-based)
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn process_image_data(
     app: AppHandle,
     image_state: State<'_, ImageProcessorState>,
@@ -1140,18 +1145,13 @@ mod tests {
     /// This simulates the actual scenario: 1080x1920 image → ~2.4MB base64 → ~600 chunks.
     #[test]
     fn test_kitty_batch_flow_very_large_image() {
-        use ::image::{DynamicImage, RgbaImage, Rgba};
+        use ::image::{DynamicImage, Rgba, RgbaImage};
 
         // Create a 1080x1920 image (matching the failing test case dimensions)
         // Fill with varied pixel data to prevent extreme compression
         let mut img = RgbaImage::new(1080, 1920);
         for (x, y, pixel) in img.enumerate_pixels_mut() {
-            *pixel = Rgba([
-                (x % 256) as u8,
-                (y % 256) as u8,
-                ((x + y) % 256) as u8,
-                255,
-            ]);
+            *pixel = Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255]);
         }
         let dyn_img = DynamicImage::ImageRgba8(img);
 
@@ -1208,8 +1208,7 @@ mod tests {
         let dyn_img = DynamicImage::ImageRgba8(img);
 
         // Step 1: Generate Kitty sequence (same as CLI does)
-        let (sequence, _image_id) =
-            protocols::kitty::generate_kitty_sequence(&dyn_img).unwrap();
+        let (sequence, _image_id) = protocols::kitty::generate_kitty_sequence(&dyn_img).unwrap();
 
         // Extract original APC bodies (baseline)
         let original_bodies = extract_apc_bodies(&sequence);
@@ -1265,7 +1264,10 @@ mod tests {
                 None
             }
         });
-        assert!(image_ready.is_some(), "Should have ImageReady after tmux roundtrip");
+        assert!(
+            image_ready.is_some(),
+            "Should have ImageReady after tmux roundtrip"
+        );
         let decoded = image_ready.unwrap();
         assert_eq!(decoded.width, 400);
         assert_eq!(decoded.height, 400);
@@ -1320,14 +1322,11 @@ mod tests {
                     let first_semi = first.find(';').unwrap_or(first.len());
                     let first_params = &first[..first_semi];
                     let fixed_params = first_params.replace(",m=1", ",m=0");
-                    let full_chunk =
-                        format!("{};{}", fixed_params, accumulated_payload);
+                    let full_chunk = format!("{};{}", fixed_params, accumulated_payload);
 
                     // Process the assembled chunk
                     let mut processor = image::ImageProcessor::new();
-                    if let Some(cmd) =
-                        ansi::apc::parse_kitty_command(full_chunk.as_bytes())
-                    {
+                    if let Some(cmd) = ansi::apc::parse_kitty_command(full_chunk.as_bytes()) {
                         let events = processor.process_kitty_command(&cmd, 0, 0);
                         let image_ready = events.iter().find_map(|e| {
                             if let image::ImageEvent::ImageReady { image } = e {
