@@ -44,6 +44,17 @@ interface Category {
   enabled: boolean;
 }
 
+/** SVG icons for each settings category (24px viewBox, currentColor fill) */
+const CATEGORY_ICONS: Record<string, string> = {
+  ui: '<svg viewBox="0 0 24 24"><path d="M12 22C6.49 22 2 17.51 2 12S6.49 2 12 2s10 4.04 10 9c0 3.31-2.69 6-6 6h-1.77c-.28 0-.5.22-.5.5 0 .12.05.23.13.33.41.47.64 1.06.64 1.67A2.5 2.5 0 0 1 12 22zm0-18c-4.41 0-8 3.59-8 8s3.59 8 8 8c.28 0 .5-.22.5-.5a.54.54 0 0 0-.14-.35c-.41-.46-.63-1.05-.63-1.65a2.5 2.5 0 0 1 2.5-2.5H16c2.21 0 4-1.79 4-4 0-3.86-3.59-7-8-7z"/><circle cx="6.5" cy="11.5" r="1.5"/><circle cx="9.5" cy="7.5" r="1.5"/><circle cx="14.5" cy="7.5" r="1.5"/><circle cx="17.5" cy="11.5" r="1.5"/></svg>',
+  keybinds: '<svg viewBox="0 0 24 24"><path d="M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zM5 11h2v2H5v-2zm0-3h2v2H5V8zm3 7H5v-2h3v2zm8 0H9v-2h7v2zm2 0h-2v-2h2v2zm0-3h-2v-2h2v2zm0-3h-2V8h2v2zm2 3h-2v-2h2v2z"/></svg>',
+  "terminal-appearance": '<svg viewBox="0 0 24 24"><path d="M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z"/></svg>',
+  "terminal-behavior": '<svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v12zM6 10l4 4-4 4 1.4 1.4L12.8 14l-5.4-5.4L6 10z"/></svg>',
+  notification: '<svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>',
+  "markdown-viewer": '<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>',
+  profiles: '<svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>',
+};
+
 /**
  * SettingsPanel - Displays and manages application settings
  */
@@ -52,6 +63,7 @@ export class SettingsPanel {
   private navElement: HTMLElement | null = null;
   private contentElement: HTMLElement | null = null;
   private activeCategory = "ui";
+  private navCollapsed = false;
   private currentSettings: AppSettings | null = null;
   private eventListeners: Array<{
     element: EventTarget;
@@ -117,11 +129,41 @@ export class SettingsPanel {
     if (!this.navElement) return;
     this.navElement.innerHTML = "";
 
+    // Toggle row (right-aligned when expanded, centered when collapsed)
+    const toggleRow = document.createElement("div");
+    toggleRow.className = "settings-nav-toggle-row";
+    const collapseBtn = document.createElement("button");
+    collapseBtn.className = "settings-nav-collapse-btn";
+    collapseBtn.setAttribute(
+      "aria-label",
+      this.navCollapsed ? t("settings.nav.expand") : t("settings.nav.collapse"),
+    );
+    collapseBtn.textContent = "\u2261"; // ≡ hamburger
+    collapseBtn.addEventListener("click", () => this.toggleNavCollapsed());
+    toggleRow.appendChild(collapseBtn);
+    this.navElement.appendChild(toggleRow);
+
     for (const category of this.categories) {
       const button = document.createElement("button");
       button.className = "settings-nav-item";
-      button.textContent = category.label;
       button.dataset.categoryId = category.id;
+
+      // Icon
+      const iconSpan = document.createElement("span");
+      iconSpan.className = "settings-nav-icon";
+      iconSpan.innerHTML = CATEGORY_ICONS[category.id] || "";
+      button.appendChild(iconSpan);
+
+      // Label
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "settings-nav-label";
+      labelSpan.textContent = category.label;
+      button.appendChild(labelSpan);
+
+      // Tooltip in collapsed state
+      if (this.navCollapsed) {
+        button.title = category.label;
+      }
 
       button.setAttribute("role", "tab");
       button.id = `tab-${category.id}`;
@@ -272,11 +314,10 @@ export class SettingsPanel {
     // Navigation click
     if (this.navElement) {
       const navClickHandler = (e: Event) => {
-        const target = e.target as HTMLElement;
-        if (
-          target.classList.contains("settings-nav-item") &&
-          !target.classList.contains("disabled")
-        ) {
+        const target = (e.target as HTMLElement).closest(
+          ".settings-nav-item",
+        ) as HTMLElement | null;
+        if (target && !target.classList.contains("disabled")) {
           const categoryId = target.dataset.categoryId;
           if (categoryId && categoryId !== this.activeCategory) {
             this.switchCategory(categoryId);
@@ -377,6 +418,38 @@ export class SettingsPanel {
     this.activeCategory = categoryId;
     this.renderNavigation();
     this.renderContent();
+  }
+
+  // ============================================================
+  // Nav Collapse Toggle
+  // ============================================================
+
+  private toggleNavCollapsed(): void {
+    this.navCollapsed = !this.navCollapsed;
+    this.container.classList.toggle("nav-collapsed", this.navCollapsed);
+
+    // Update aria-label on toggle button
+    const collapseBtn = this.navElement?.querySelector(".settings-nav-collapse-btn");
+    if (collapseBtn) {
+      collapseBtn.setAttribute(
+        "aria-label",
+        this.navCollapsed ? t("settings.nav.expand") : t("settings.nav.collapse"),
+      );
+    }
+
+    // Update title tooltips on nav items
+    const navItems = this.navElement?.querySelectorAll(".settings-nav-item");
+    if (navItems) {
+      for (const item of navItems) {
+        const el = item as HTMLElement;
+        if (this.navCollapsed) {
+          const label = el.querySelector(".settings-nav-label");
+          el.title = label?.textContent || "";
+        } else {
+          el.removeAttribute("title");
+        }
+      }
+    }
   }
 
   // ============================================================

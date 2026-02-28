@@ -2,10 +2,10 @@
  * Settings Panel Styles - Material Design 3
  * ============================================ */
 
-/* Panel layout: CSS Grid 2-column (nav 200px + content flex) */
+/* Panel layout: CSS Grid 2-column (nav 300px + content flex) */
 .settings-panel {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 300px 1fr;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -13,6 +13,12 @@
   color: var(--md-sys-color-on-surface);
   font-family: var(--ui-font-family, sans-serif), 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   font-size: 14px;
+  transition: grid-template-columns var(--md-motion-duration-medium2) var(--md-motion-easing-emphasized);
+}
+
+/* Collapsed state: icon-only rail */
+.settings-panel.nav-collapsed {
+  grid-template-columns: 56px 1fr;
 }
 
 /* Category Navigation (left side) - MD3 Navigation Drawer style */
@@ -24,13 +30,103 @@
   border-right: 1px solid var(--md-sys-color-outline-variant);
   padding: 12px;
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
+}
+
+/* Nav collapsed state: keep left padding for icon alignment */
+.nav-collapsed .settings-nav {
+  padding: 12px 4px;
+}
+
+/* Nav collapse toggle button */
+.settings-nav-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  margin-bottom: 4px;
+}
+
+.nav-collapsed .settings-nav-toggle-row {
+  justify-content: center;
+}
+
+.settings-nav-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 20px;
+  cursor: pointer;
+  position: relative;
+  transition: color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-nav-collapse-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--md-sys-shape-corner-full);
+  background-color: currentColor;
+  opacity: 0;
+  transition: opacity var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.settings-nav-collapse-btn:hover::before {
+  opacity: 0.08;
+}
+
+.settings-nav-collapse-btn:focus-visible {
+  outline: none;
+}
+
+.settings-nav-collapse-btn:focus-visible::before {
+  opacity: 0.12;
+}
+
+/* Nav item icon */
+.settings-nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.settings-nav-icon svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
+}
+
+/* Nav item label */
+.settings-nav-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Collapsed: hide labels, keep icon position stable */
+.nav-collapsed .settings-nav-item {
+  padding: 0 0 0 16px;
+}
+
+.nav-collapsed .settings-nav-label {
+  display: none;
 }
 
 /* Navigation Item - MD3 Navigation Drawer Item */
 .settings-nav-item {
   display: flex;
   align-items: center;
+  gap: 12px;
   height: 56px;
   padding: 0 24px 0 16px;
   background: transparent;
