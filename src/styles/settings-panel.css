@@ -1123,13 +1123,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 32px;
-  padding: 0 12px;
+  height: 36px;
+  padding: 0 16px;
   background-color: transparent;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-full);
   color: var(--md-sys-color-on-surface-variant);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
@@ -1274,8 +1274,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 40px;
-  padding: 0 24px;
+  height: 36px;
+  padding: 0 16px;
+  min-width: 64px;
   border: none;
   border-radius: var(--md-sys-shape-corner-full);
   font-size: 14px;

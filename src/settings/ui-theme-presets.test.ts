@@ -27,7 +27,7 @@ describe("UI_THEME_PRESETS", () => {
     }
   });
 
-  test("each color definition should have all 19 MD3 tokens", () => {
+  test("each color definition should have all 20 MD3 tokens", () => {
     const expectedKeys: (keyof ThemeColors)[] = [
       "primary", "onPrimary",
       "primaryContainer", "onPrimaryContainer",
@@ -35,7 +35,7 @@ describe("UI_THEME_PRESETS", () => {
       "secondaryContainer", "onSecondaryContainer",
       "surface", "surfaceContainer", "surfaceContainerLow",
       "surfaceContainerHigh", "surfaceContainerHighest",
-      "onSurface", "onSurfaceVariant",
+      "onSurface", "onSurfaceVariant", "surfaceVariant",
       "outline", "outlineVariant",
       "error", "onError",
     ];
@@ -101,9 +101,9 @@ describe("applyPresetColors", () => {
     globalThis.document = savedDocument;
   });
 
-  test("should set all 19 CSS variables", () => {
+  test("should set all 20 CSS variables", () => {
     applyPresetColors(UI_THEME_PRESETS.purple.dark);
-    expect(Object.keys(mockStyle.properties)).toHaveLength(19);
+    expect(Object.keys(mockStyle.properties)).toHaveLength(20);
   });
 
   test("should set correct CSS variable names", () => {

@@ -27,6 +27,7 @@ export interface ThemeColors {
   surfaceContainerHighest: string;
   onSurface: string;
   onSurfaceVariant: string;
+  surfaceVariant: string;
   outline: string;
   outlineVariant: string;
   error: string;
@@ -60,6 +61,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#36343B",
       onSurface: "#E6E0E9",
       onSurfaceVariant: "#CAC4D0",
+      surfaceVariant: "#49454F",
       outline: "#938F99",
       outlineVariant: "#49454F",
       error: "#F2B8B5",
@@ -81,6 +83,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#E6E0E9",
       onSurface: "#1D1B20",
       onSurfaceVariant: "#49454F",
+      surfaceVariant: "#E7E0EC",
       outline: "#79747E",
       outlineVariant: "#CAC4D0",
       error: "#B3261E",
@@ -104,6 +107,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#34363B",
       onSurface: "#E2E2E9",
       onSurfaceVariant: "#C4C6D0",
+      surfaceVariant: "#44464F",
       outline: "#8E909A",
       outlineVariant: "#44464F",
       error: "#F2B8B5",
@@ -125,6 +129,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#E2E2E9",
       onSurface: "#1A1C20",
       onSurfaceVariant: "#44464F",
+      surfaceVariant: "#E1E2EC",
       outline: "#75767F",
       outlineVariant: "#C4C6D0",
       error: "#B3261E",
@@ -148,6 +153,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#313633",
       onSurface: "#DEE4DF",
       onSurfaceVariant: "#BFC9C1",
+      surfaceVariant: "#404943",
       outline: "#8A938C",
       outlineVariant: "#404943",
       error: "#F2B8B5",
@@ -169,6 +175,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#DEE4DF",
       onSurface: "#181C1A",
       onSurfaceVariant: "#404943",
+      surfaceVariant: "#DBE5DD",
       outline: "#717972",
       outlineVariant: "#BFC9C1",
       error: "#B3261E",
@@ -192,6 +199,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#3B342D",
       onSurface: "#EFE0CF",
       onSurfaceVariant: "#D4C4B1",
+      surfaceVariant: "#524436",
       outline: "#9D8E7D",
       outlineVariant: "#524436",
       error: "#F2B8B5",
@@ -213,6 +221,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#E9E1DD",
       onSurface: "#211A13",
       onSurfaceVariant: "#524436",
+      surfaceVariant: "#F0E0CD",
       outline: "#847465",
       outlineVariant: "#D4C4B1",
       error: "#B3261E",
@@ -236,6 +245,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#3D333A",
       onSurface: "#F0DEE2",
       onSurfaceVariant: "#D4BFC5",
+      surfaceVariant: "#514349",
       outline: "#9D8A90",
       outlineVariant: "#514349",
       error: "#F2B8B5",
@@ -257,6 +267,7 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       surfaceContainerHighest: "#EBDEE2",
       onSurface: "#22191C",
       onSurfaceVariant: "#514349",
+      surfaceVariant: "#F0DBE1",
       outline: "#837379",
       outlineVariant: "#D4BFC5",
       error: "#B3261E",
@@ -286,6 +297,7 @@ const COLOR_TO_CSS_VAR: Record<keyof ThemeColors, string> = {
   surfaceContainerHighest: "--md-sys-color-surface-container-highest",
   onSurface: "--md-sys-color-on-surface",
   onSurfaceVariant: "--md-sys-color-on-surface-variant",
+  surfaceVariant: "--md-sys-color-surface-variant",
   outline: "--md-sys-color-outline",
   outlineVariant: "--md-sys-color-outline-variant",
   error: "--md-sys-color-error",
@@ -294,7 +306,7 @@ const COLOR_TO_CSS_VAR: Record<keyof ThemeColors, string> = {
 
 /**
  * Apply preset colors as CSS variables on :root.
- * Sets all 19 MD3 color tokens.
+ * Sets all 20 MD3 color tokens.
  */
 export function applyPresetColors(colors: ThemeColors): void {
   const root = document.documentElement;

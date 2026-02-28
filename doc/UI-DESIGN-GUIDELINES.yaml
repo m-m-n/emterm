@@ -1,0 +1,694 @@
+# eMterm UI Design Guidelines
+# Component-level design specifications based on Material Design 3
+
+# ==============================================================================
+# Design Tokens
+# ==============================================================================
+tokens:
+  shape:
+    corner-none: 0px
+    corner-extra-small: 4px
+    corner-small: 8px
+    corner-medium: 12px
+    corner-large: 16px
+    corner-extra-large: 28px
+    corner-full: 9999px
+
+  motion:
+    duration-short2: 100ms
+    duration-short4: 200ms
+    duration-medium2: 300ms
+    easing-standard: cubic-bezier(0.2, 0, 0, 1)
+    easing-emphasized: cubic-bezier(0.2, 0, 0, 1)
+    easing-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1)
+
+  color-roles:
+    primary: "Active states, focus borders, primary buttons, tab indicator"
+    on-primary: "Text on primary surfaces"
+    primary-container: "Slider track, keybind capture, default badge"
+    secondary-container: "Active nav, active list item, secondary button"
+    surface: "Main content background"
+    surface-container: "Tab bar, list item cards, color palette editor"
+    surface-container-low: "Settings nav background"
+    surface-container-high: "Modal dialog backgrounds"
+    surface-container-highest: "Hover states, color hex inputs"
+    on-surface: "Primary text"
+    on-surface-variant: "Secondary text, inactive icons"
+    outline: "Input borders (default)"
+    outline-variant: "Subtle borders (tab bar, list separators)"
+    error: "Danger button hover"
+    error-container: "Danger button, error messages"
+
+  typography:
+    title-large:
+      font-size: 22px
+      line-height: 28px
+      font-weight: 400
+      usage: "Section headers, dialog titles"
+    title-medium:
+      font-size: 16px
+      line-height: 24px
+      font-weight: 500
+      usage: "Subsection headers, font picker title"
+    body-large:
+      font-size: 16px
+      line-height: 24px
+      font-weight: 400
+      usage: "Field labels, input text, font list items"
+    body-medium:
+      font-size: 14px
+      line-height: 20px
+      font-weight: 400
+      usage: "Navigation items, tabs, buttons, slider values"
+    body-small:
+      font-size: 13px
+      line-height: 18px
+      font-weight: 400
+      usage: "Descriptions, hints, hex color inputs"
+    label-small:
+      font-size: 12px
+      line-height: 16px
+      font-weight: 500
+      usage: "Shell path (profile), search bar buttons"
+    label-extra-small:
+      font-size: 11px
+      line-height: 16px
+      font-weight: 500
+      usage: "Badges, match counter, color palette labels"
+
+  spacing:
+    xxs: 4px   # Nav gap, action button gap, color input gap
+    xs: 8px    # Settings row gap, font picker group gap, profile list gap
+    sm: 12px   # Profile list item gap, slider group gap, nav padding
+    md: 16px   # Settings row margin, dialog title margin, standard padding
+    lg: 24px   # Content padding, section margin, standard row margin
+    xl: 36px   # Subsection top margin (from previous section)
+
+# ==============================================================================
+# Components
+# ==============================================================================
+components:
+
+  # ============================================================================
+  # Buttons
+  # ============================================================================
+  buttons:
+    base:
+      class: .settings-button
+      description: "Standard button base. All buttons derive sizing from this."
+      properties:
+        display: inline-flex
+        align-items: center
+        justify-content: center
+        min-width: 64px
+        height: 36px
+        padding: 0 16px
+        border: none
+        border-radius: corner-full  # 9999px
+        font-size: 14px
+        font-weight: 500
+        transition: background-color duration-short4 easing-standard
+      states:
+        focus-visible:
+          outline: 2px solid primary
+          outline-offset: 2px
+
+    variants:
+      secondary:
+        class: .settings-button-secondary
+        extends: .settings-button
+        properties:
+          background-color: secondary-container
+          color: on-secondary-container
+        states:
+          hover:
+            background-color: secondary
+            color: on-secondary
+
+      danger:
+        class: .settings-button-danger
+        extends: .settings-button
+        properties:
+          background-color: error-container
+          color: on-error-container
+        states:
+          hover:
+            background-color: error
+            color: on-error
+
+      primary-filled:
+        class: .profile-add-btn
+        extends: .settings-button
+        description: "Primary filled button (e.g., Add Profile)"
+        properties:
+          background-color: primary
+          color: on-primary
+        states:
+          hover:
+            background-color: color-mix(in srgb, primary 85%, white)
+
+    outlined:
+      class: .profile-action-btn
+      description: "Outlined button for secondary actions in lists"
+      properties:
+        display: inline-flex
+        align-items: center
+        justify-content: center
+        height: 36px
+        padding: 0 16px
+        background-color: transparent
+        border: 1px solid outline-variant
+        border-radius: corner-full
+        color: on-surface-variant
+        font-size: 14px
+        font-weight: 500
+      states:
+        hover:
+          background-color: color-mix(in srgb, on-surface 8%, transparent)
+        focus-visible:
+          outline: 2px solid primary
+          outline-offset: 2px
+      modifiers:
+        active:
+          class: .profile-btn-active
+          background-color: secondary-container
+          color: on-secondary-container
+          border-color: transparent
+
+    modal-actions:
+      class: .profile-editor-btn
+      description: "Button in modal dialogs"
+      properties:
+        display: inline-flex
+        align-items: center
+        justify-content: center
+        height: 36px
+        padding: 0 16px
+        min-width: 64px
+        border: none
+        border-radius: corner-full
+        font-size: 14px
+        font-weight: 500
+      variants:
+        cancel:
+          class: .profile-editor-btn-cancel
+          background-color: transparent
+          color: primary
+          hover-background: color-mix(in srgb, primary 8%, transparent)
+        save:
+          class: .profile-editor-btn-save
+          background-color: primary
+          color: on-primary
+          hover-background: color-mix(in srgb, primary 85%, white)
+
+    icon-button:
+      description: "Square icon-only buttons"
+      variants:
+        large:
+          class: .tab-button, .font-picker-back
+          size: 40x40px
+          border-radius: corner-full
+          icon-size: 20px
+          hover: state-layer opacity 0.08
+        small:
+          class: .settings-font-picker-clear
+          size: 32x32px
+          border-radius: corner-full
+          icon-size: 16px
+          hover: color-mix(in srgb, on-surface-variant 8%, transparent)
+
+    font-picker-trigger:
+      class: .settings-font-picker-button
+      description: "Outlined button to open font picker"
+      note: "Uses 40px height — intentionally taller to align with input fields"
+      properties:
+        height: 40px
+        padding: 0 24px
+        background-color: transparent
+        border: 1px solid outline
+        border-radius: corner-full
+        color: primary
+        font-size: 14px
+        font-weight: 500
+
+    search-bar-button:
+      class: .search-bar-btn
+      description: "Compact buttons in terminal search bar (non-MD3)"
+      note: "Standalone dark theme, not using MD3 tokens"
+      properties:
+        size: 24x24px
+        border-radius: 3px
+        font-size: 12px
+        color: "#aaa"
+        hover-background: rgba(255,255,255,0.1)
+
+  # ============================================================================
+  # Text Fields
+  # ============================================================================
+  text-fields:
+    standard:
+      description: "MD3 Outlined Text Field — base pattern for all text inputs"
+      classes:
+        - .settings-text-input
+        - .settings-number-input
+        - .profile-editor-input
+        - .profile-editor-textarea
+        - .font-picker-search-input
+      properties:
+        padding: 12px 16px
+        background-color: transparent
+        border: 1px solid outline
+        border-radius: corner-extra-small  # 4px
+        color: on-surface
+        font-size: 16px
+        line-height: 24px
+      states:
+        hover:
+          border-color: on-surface
+        focus:
+          border-color: primary
+          border-width: 2px
+          padding: 11px 15px  # compensate for border growth
+        placeholder:
+          color: on-surface-variant
+      size-overrides:
+        number:
+          class: .settings-number-input
+          width: 80px
+          text-align: center
+          note: "Native spinner hidden"
+        text:
+          class: .settings-text-input
+          width: 100%
+          max-width: 320px
+        textarea:
+          class: .profile-editor-textarea
+          resize: vertical
+          min-height: 80px
+
+    readonly:
+      class: .settings-font-picker-input
+      description: "Non-editable display field"
+      properties:
+        padding: 12px 16px
+        background-color: surface-variant  # NOTE: token undefined, renders transparent
+        border: 1px solid outline-variant
+        border-radius: corner-extra-small
+        font-size: 16px
+        cursor: default
+
+    compact:
+      description: "Smaller inputs for inline editing"
+      variants:
+        rename:
+          class: .color-scheme-rename .settings-input
+          width: 180px
+          padding: 8px 12px
+          font-size: 14px
+          background-color: surface-container-highest
+          border-radius: corner-extra-small
+        hex-color:
+          class: .color-hex-input
+          width: 80px
+          padding: 8px 10px
+          font-size: 13px
+          font-family: monospace
+          background-color: surface-container-highest
+          border-radius: 4px
+        hex-color-compact:
+          class: .color-input-compact .color-hex-input
+          width: 72px
+          padding: 4px 6px
+          font-size: 12px
+          text-align: center
+
+    search:
+      class: .search-bar-input
+      description: "Terminal search input (non-MD3)"
+      properties:
+        width: 200px
+        padding: 3px 6px
+        background: rgba(255,255,255,0.08)
+        border: 1px solid rgba(255,255,255,0.12)
+        border-radius: 3px
+        color: "#eee"
+        font-size: 13px
+
+  # ============================================================================
+  # Select / Dropdown
+  # ============================================================================
+  select:
+    standard:
+      class: .settings-select
+      description: "MD3 Outlined Select"
+      properties:
+        width: 100%
+        max-width: 320px
+        padding: 12px 16px
+        padding-right: 36px  # space for chevron
+        background-color: transparent
+        border: 1px solid outline
+        border-radius: corner-extra-small
+        color: on-surface
+        font-size: 16px
+        line-height: 24px
+        appearance: none
+        chevron: "SVG background-image, right 8px center"
+      states:
+        hover:
+          border-color: on-surface
+        focus:
+          border-color: primary
+          border-width: 2px
+
+  # ============================================================================
+  # Color Picker
+  # ============================================================================
+  color-picker:
+    class: .color-picker
+    description: "Native color input swatch"
+    properties:
+      size: 32x32px
+      border: 1px solid outline-variant
+      border-radius: 4px
+    compact:
+      size: 28x28px
+
+  # ============================================================================
+  # Toggle Switch
+  # ============================================================================
+  toggle:
+    class: .settings-toggle
+    description: "MD3 Switch"
+    properties:
+      width: 52px
+      height: 32px
+      border-radius: corner-full
+    track:
+      off:
+        background: surface-variant  # NOTE: undefined token
+        border: 2px solid outline
+      on:
+        background: primary
+        border: none
+    handle:
+      class: .settings-toggle-slider::before
+      size-off: 16px
+      size-on: 24px
+      color-off: outline
+      color-on: on-primary
+      border-radius: corner-full
+
+  # ============================================================================
+  # Keybind Input
+  # ============================================================================
+  keybind-input:
+    class: .settings-keybind-input
+    description: "Key combination capture button"
+    properties:
+      min-width: 120px
+      min-height: 44px
+      padding: 10px 16px
+      background-color: surface-variant  # NOTE: undefined token
+      border: 1px solid outline-variant
+      border-radius: corner-small  # 8px
+      font-size: 14px
+      font-weight: 500
+    states:
+      hover:
+        background: surface-container-highest
+        border-color: outline
+      focus:
+        border-color: primary
+        border-width: 2px
+      capturing:
+        background: primary-container
+        border-color: primary
+        color: on-primary-container
+        animation: keybind-pulse 1.5s ease-in-out infinite
+
+  # ============================================================================
+  # Tabs
+  # ============================================================================
+  tabs:
+    bar:
+      class: .tab-bar
+      properties:
+        height: 48px
+        background: surface-container
+        border-bottom: 1px solid outline-variant
+
+    tab:
+      class: .tab
+      properties:
+        padding: 0 24px
+        min-width: 120px
+        max-width: 200px
+        height: 48px  # inherits from bar
+        font-size: 14px
+        font-weight: 500
+        letter-spacing: 0.1px
+        color: on-surface-variant
+      states:
+        hover:
+          state-layer-opacity: 0.08
+        active:
+          color: primary
+          indicator: "3px bottom bar, border-radius 3px 3px 0 0, width calc(100% - 32px)"
+
+    fixed-area:
+      class: .tab-fixed-area
+      properties:
+        padding: 0 8px
+        gap: 4px
+        border-left: 1px solid outline-variant
+
+    activity-dot:
+      class: .tab-activity-dot
+      properties:
+        size: 8x8px
+        border-radius: corner-full
+        background: primary
+        transition: 200ms
+
+  # ============================================================================
+  # Modals / Dialogs
+  # ============================================================================
+  modals:
+    overlay:
+      classes:
+        - .profile-editor-overlay
+        - .profile-selector-overlay
+      properties:
+        position: fixed
+        inset: 0
+        background-color: rgba(0,0,0,0.5)
+        display: flex
+        align-items: center
+        justify-content: center
+
+    dialog:
+      description: "MD3 Dialog"
+      properties:
+        background-color: surface-container-high
+        border-radius: corner-extra-large  # 28px
+        padding: 24px
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3)
+      variants:
+        standard:
+          class: .profile-editor-dialog
+          width: 90%
+          max-width: 480px
+          max-height: 80vh
+          overflow-y: auto
+        compact:
+          class: .profile-selector-dialog
+          width: 90%
+          max-width: 400px
+          max-height: 60vh
+
+    link-dialog:
+      class: .link-confirm-dialog
+      description: "Markdown link confirmation (standalone theme)"
+      properties:
+        background: var(--markdown-bg, #1e1e1e)
+        border: 1px solid var(--markdown-border, #404040)
+        border-radius: 8px
+        padding: 1.5rem
+        max-width: 500px
+        width: 90%
+
+  # ============================================================================
+  # Cards / List Items
+  # ============================================================================
+  cards:
+    list-item:
+      class: .profile-list-item
+      description: "Elevated list item card"
+      properties:
+        background-color: surface-container
+        border-radius: corner-medium  # 12px
+        padding: 12px 16px
+      states:
+        hover:
+          background-color: surface-container-high
+
+    palette-editor:
+      class: .color-palette-editor
+      description: "Grouped content card"
+      properties:
+        background-color: surface-container
+        border-radius: 8px
+        padding: 12px
+
+    error-box:
+      class: .profile-editor-error
+      properties:
+        padding: 8px 12px
+        background-color: error-container
+        color: on-error-container
+        border-radius: corner-small  # 8px
+        font-size: 13px
+
+    badge:
+      class: .profile-default-badge
+      description: "Small status badge"
+      properties:
+        padding: 2px 8px
+        border-radius: corner-full
+        font-size: 11px
+        font-weight: 500
+        background-color: primary-container
+        color: on-primary-container
+
+  # ============================================================================
+  # Navigation
+  # ============================================================================
+  navigation:
+    settings-nav:
+      class: .settings-nav
+      properties:
+        width: 200px  # grid column
+        padding: 12px
+        background: surface-container-low
+        border-right: 1px solid outline-variant
+        gap: 4px
+
+    nav-item:
+      class: .settings-nav-item
+      properties:
+        padding: 0 24px 0 16px
+        height: 48px
+        border-radius: corner-full
+        font-size: 14px
+        color: on-surface-variant
+      states:
+        hover:
+          background: color-mix(in srgb, on-surface 8%, transparent)
+        active:
+          class: .settings-nav-item.active
+          background: secondary-container
+          color: on-secondary-container
+
+  # ============================================================================
+  # Layouts
+  # ============================================================================
+  layouts:
+    settings-panel:
+      class: .settings-panel
+      description: "Master-detail settings layout"
+      properties:
+        display: grid
+        grid-template-columns: 200px 1fr
+        content-padding: 24px
+        font-size: 14px
+
+    settings-row:
+      class: .settings-row
+      description: "Standard form row"
+      properties:
+        display: flex
+        flex-direction: column
+        gap: 8px
+        margin-bottom: 24px
+
+    settings-row-toggle:
+      class: .settings-row-toggle
+      description: "Horizontal toggle row"
+      properties:
+        display: flex
+        justify-content: space-between
+        max-width: 480px
+
+    keybind-grid:
+      class: .settings-keybind-grid
+      properties:
+        display: grid
+        grid-template-columns: repeat(2, 1fr)
+        gap: 8px 24px
+        responsive: "single column at container max-width 599px"
+
+    color-palette-grid:
+      class: .color-palette-grid
+      properties:
+        display: grid
+        grid-template-columns: repeat(8, 1fr)
+        gap: 4px
+        responsive: "4 columns at container max-width 899px"
+
+  # ============================================================================
+  # Overlays (Fullscreen)
+  # ============================================================================
+  overlays:
+    image-viewer:
+      class: .image-viewer-overlay
+      z-index: 1000
+      background: rgba(0,0,0,0.95)
+      transition: opacity 0.15s ease
+
+    markdown-fullscreen:
+      class: .markdown-fullscreen-overlay
+      z-index: 1000
+      background: var(--markdown-bg, #1e1e1e)
+      content-max-width: 900px
+      content-padding: 2rem 3rem
+
+  # ============================================================================
+  # Search Bar (Terminal)
+  # ============================================================================
+  search-bar:
+    class: .search-bar
+    description: "Terminal search bar (standalone dark theme, not MD3)"
+    properties:
+      background: rgba(30,30,30,0.95)
+      border: 1px solid rgba(255,255,255,0.1)
+      border-radius: 6px
+      padding: 4px 8px
+      font-size: 13px
+      backdrop-filter: blur(8px)
+    match-counter:
+      class: .search-bar-count
+      font-size: 11px
+      color: "#888"
+
+# ==============================================================================
+# Z-Index Scale
+# ==============================================================================
+z-index:
+  image-viewer: 1000
+  markdown-fullscreen: 1000
+  link-dialog-embedded: 2000
+  profile-modal: 3000
+  link-dialog-standalone: 10000
+
+# ==============================================================================
+# Known Issues
+# ==============================================================================
+known-issues:
+  - token: --md-sys-color-surface-variant
+    status: "Referenced but never defined in :root or presets"
+    affected:
+      - .settings-toggle (track off state)
+      - .settings-keybind-input (default background)
+      - .settings-font-picker-input (readonly background)
+    behavior: "Resolves to empty string (transparent)"
