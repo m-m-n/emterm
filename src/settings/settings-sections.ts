@@ -1107,7 +1107,7 @@ export function renderProfilesSection(
 
   // Add Profile button
   const addBtn = document.createElement("button");
-  addBtn.className = "profile-action-btn profile-add-btn";
+  addBtn.className = "settings-button profile-add-btn";
   addBtn.textContent = t("settings.profiles.addProfile");
   ctx.addContentListener(addBtn, "click", () => {
     showProfileEditor({
