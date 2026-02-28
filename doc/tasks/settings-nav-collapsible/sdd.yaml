@@ -18,7 +18,8 @@ workflow:
     status: completed
     completed_at_commit: 203084a4afd9789617e2d31b98f2175b8de2038c
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: c55b0baf6e7bd512e667532a93521e90d65119be
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: pending
@@ -36,12 +37,12 @@ requirements:
     tests: []
   FR3:
     title: Hamburger toggle button left-aligned with icons
-    status: needs_update
+    status: ok
     tasks: []
     tests: []
   FR4:
     title: Collapsed state shows 80px icon-only rail
-    status: needs_update
+    status: ok
     tasks: []
     tests: []
   FR5:
@@ -76,6 +77,6 @@ requirements:
     tests: []
   NFR4:
     title: Nav items fill full width for correct highlight/active background
-    status: needs_update
+    status: ok
     tasks: []
     tests: []
