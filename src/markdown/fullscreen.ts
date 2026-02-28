@@ -9,6 +9,8 @@
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { LinkConfirmDialog } from "./link-dialog.ts";
+import { MermaidRenderer } from "./mermaid-renderer.ts";
+import { OutlinePanel } from "./outline.ts";
 import { ZoomController } from "../shared/zoom-controller.ts";
 import type { FullscreenConfig, FullscreenState, MarkdownBlock } from "./types.ts";
 import { t } from "../i18n/index.ts";
@@ -69,6 +71,12 @@ export class FullscreenMarkdownView {
 	/** Zoom controller */
 	private zoomController: ZoomController | null = null;
 
+	/** Outline panel */
+	private outlinePanel: OutlinePanel;
+
+	/** Mermaid renderer */
+	private mermaidRenderer: MermaidRenderer;
+
 	/** Lifecycle callbacks */
 	private onShowCallback: (() => void) | null = null;
 	private onHideCallback: (() => void) | null = null;
@@ -81,6 +89,8 @@ export class FullscreenMarkdownView {
 		this.boundHandleCopyClick = this.handleCopyClick.bind(this);
 		this.boundHandleLinkClick = this.handleLinkClick.bind(this);
 		this.linkDialog = new LinkConfirmDialog();
+		this.outlinePanel = new OutlinePanel();
+		this.mermaidRenderer = new MermaidRenderer();
 	}
 
 	/**
@@ -134,6 +144,16 @@ export class FullscreenMarkdownView {
 		this.overlay.appendChild(this.content);
 		this.container.appendChild(this.overlay);
 
+		// Render mermaid diagrams (async, non-blocking)
+		this.mermaidRenderer.renderAll(this.content);
+
+		// Build outline panel
+		const outlinePanelEl = this.outlinePanel.build(this.content);
+		if (outlinePanelEl) {
+			this.overlay.classList.add("has-outline");
+			this.overlay.insertBefore(outlinePanelEl, this.content);
+		}
+
 		// Set up event listeners
 		// Note: Use capture phase to intercept keyboard events before terminal KeyboardHandler
 		document.addEventListener("keydown", this.boundHandleKeydown, { capture: true });
@@ -186,6 +206,9 @@ export class FullscreenMarkdownView {
 			this.content.removeEventListener("click", this.boundHandleCopyClick);
 			this.content.removeEventListener("click", this.boundHandleLinkClick);
 		}
+
+		// Dispose outline panel
+		this.outlinePanel.dispose();
 
 		// Close link dialog if open
 		this.linkDialog.close();

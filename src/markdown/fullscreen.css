@@ -3,18 +3,23 @@
  */
 
 .markdown-fullscreen-overlay {
-	position: fixed;
+	position: absolute;
 	top: 0;
 	left: 0;
 	right: 0;
 	bottom: 0;
-	height: 100vh;
-	z-index: 9999;
+	height: 100%;
+	z-index: 1000;
 	background-color: var(--markdown-bg, #1e1e1e);
 	display: flex;
 	justify-content: center;
 	align-items: stretch;
 	overflow: hidden;
+}
+
+/* 2-column layout with outline panel */
+.markdown-fullscreen-overlay.has-outline {
+	justify-content: flex-start;
 }
 
 .markdown-fullscreen-content {
@@ -30,6 +35,19 @@
 	font-size: var(--markdown-body-font-size, 14pt);
 	line-height: 1.6;
 	box-sizing: border-box;
+}
+
+/* When outline is present, content fills remaining space and centers */
+.markdown-fullscreen-overlay.has-outline .markdown-fullscreen-content {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+}
+
+.markdown-fullscreen-overlay.has-outline .markdown-fullscreen-content > * {
+	width: 100%;
+	max-width: 900px;
 }
 
 /* Scrollbar styling */
@@ -293,4 +311,17 @@
 /* Task lists */
 .markdown-fullscreen-content input[type="checkbox"] {
 	margin-right: 0.5em;
+}
+
+/* Mermaid diagram containers */
+.mermaid-diagram {
+	display: flex;
+	justify-content: center;
+	margin: 16px 0;
+	overflow-x: auto;
+}
+
+.mermaid-diagram svg {
+	max-width: 100%;
+	height: auto;
 }

@@ -305,7 +305,8 @@
     "label": "Markdown\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8",
     "copyCode": "\u30b3\u30fc\u30c9\u3092\u30b3\u30d4\u30fc",
     "copySuccess": "\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f!",
-    "copyFailed": "\u5931\u6557"
+    "copyFailed": "\u5931\u6557",
+    "outline": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u30a2\u30a6\u30c8\u30e9\u30a4\u30f3"
   },
   "zoom": {
     "closeViewer": "\u30d3\u30e5\u30fc\u30a2\u3092\u9589\u3058\u308b",
