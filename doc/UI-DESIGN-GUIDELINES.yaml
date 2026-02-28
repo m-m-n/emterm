@@ -577,10 +577,10 @@ components:
         toggle-button:
           class: .settings-nav-collapse-btn
           container: .settings-nav-toggle-row
-          position: top of nav, right-aligned (expanded) / centered (collapsed)
+          position: top of nav, left-aligned with category icons (both states)
           icon: "\u2261"  # ≡ hamburger (same in both states)
           size: 40px
-        collapsed-width: 56px
+        collapsed-width: 80px  # MD3 Navigation Rail standard
         collapsed-padding: "12px 4px"  # keep left padding for icon alignment
         animation:
           property: grid-template-columns
@@ -593,6 +593,8 @@ components:
     nav-item:
       class: .settings-nav-item
       properties:
+        width: 100%
+        box-sizing: border-box
         padding: 0 24px 0 16px
         height: 48px
         gap: 12px

@@ -15,9 +15,10 @@ project:
 workflow:
   - id: create-spec
     artifacts: [SPEC.md]
-    status: in_progress
+    status: completed
+    completed_at_commit: 203084a4afd9789617e2d31b98f2175b8de2038c
   - id: implement
-    status: pending
+    status: in_progress
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: pending
