@@ -163,6 +163,18 @@ Keep in TypeScript when:
 - It requires **Tauri API access** (IPC commands, file dialogs, system tray)
 - The data **crosses the WASM boundary per-call** with no batching benefit (one-shot lookups)
 
+### UI Design Guidelines
+
+UI implementation MUST follow `doc/UI-DESIGN-GUIDELINES.yaml`. This file defines:
+- Design tokens (shape, motion, color-roles, typography, spacing)
+- Component specifications (classes, properties, states, variants)
+- Z-index scale
+- Known issues
+
+When implementing or modifying UI components, always refer to this file for correct token values, component dimensions, and state styles.
+
+When UI design changes are made (new components, modified styles, updated tokens), `doc/UI-DESIGN-GUIDELINES.yaml` MUST be updated to reflect the changes. Run `/gen-design-guidelines` to update.
+
 ### Logging
 
 Unified logging format with origin labels (`[LEVEL][ORIGIN]`):
