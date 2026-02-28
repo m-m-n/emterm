@@ -18,7 +18,7 @@
 
 /* Collapsed state: icon-only rail */
 .settings-panel.nav-collapsed {
-  grid-template-columns: 56px 1fr;
+  grid-template-columns: 80px 1fr;
 }
 
 /* Category Navigation (left side) - MD3 Navigation Drawer style */
@@ -42,13 +42,10 @@
 /* Nav collapse toggle button */
 .settings-nav-toggle-row {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   flex-shrink: 0;
   margin-bottom: 4px;
-}
-
-.nav-collapsed .settings-nav-toggle-row {
-  justify-content: center;
+  padding-left: 8px;
 }
 
 .settings-nav-collapse-btn {
@@ -127,6 +124,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
   height: 56px;
   padding: 0 24px 0 16px;
   background: transparent;
