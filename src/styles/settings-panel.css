@@ -36,7 +36,7 @@
 
 /* Nav collapsed state: keep left padding for icon alignment */
 .nav-collapsed .settings-nav {
-  padding: 12px 4px;
+  padding: 12px 4px 12px 12px;
 }
 
 /* Nav collapse toggle button */

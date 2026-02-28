@@ -581,7 +581,7 @@ components:
           icon: "\u2261"  # ≡ hamburger (same in both states)
           size: 40px
         collapsed-width: 80px  # MD3 Navigation Rail standard
-        collapsed-padding: "12px 4px"  # keep left padding for icon alignment
+        collapsed-padding: "12px 4px 12px 12px"  # shrink right, keep left for icon alignment
         animation:
           property: grid-template-columns
           duration: duration-medium2 (300ms)
