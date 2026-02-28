@@ -7,6 +7,9 @@
 import type { TabManager } from "./tab-manager";
 import type { Tab } from "./types";
 import { t } from "../i18n/index.ts";
+import { SettingsService } from "../settings/settings-service";
+import { showProfileSelector } from "../profile/profile-selector";
+import { parseEnvVars } from "../profile/types";
 
 /**
  * Options for creating TabBarUI
@@ -302,10 +305,58 @@ export class TabBarUI {
   }
 
   /**
-   * Handles new tab button click
+   * Handles new tab button click.
+   * - No profiles: create tab with global settings (current behavior)
+   * - Profiles with a default: create tab with default profile
+   * - Profiles without a default: show profile selector modal
    */
   private handleNewTabClick(): void {
-    this.tabManager.createTab();
+    const settings = SettingsService.getCached();
+    const profiles = settings?.profiles;
+
+    if (!profiles || profiles.length === 0) {
+      // No profiles - use global settings
+      this.tabManager.createTab();
+      return;
+    }
+
+    const defaultProfile = profiles.find((p) => p.is_default);
+    if (defaultProfile) {
+      // Default profile exists - use it directly
+      this.createTabWithProfile(defaultProfile);
+      return;
+    }
+
+    // No default - show profile selector
+    this.showProfileSelector(profiles);
+  }
+
+  /**
+   * Creates a tab using a profile's settings
+   */
+  createTabWithProfile(profile: import("../settings/types").Profile): void {
+    const envVars = profile.env_vars ? parseEnvVars(profile.env_vars) : undefined;
+    this.tabManager.createTab({
+      profileSpawn: {
+        shell_path: profile.shell_path || undefined,
+        shell_args: profile.shell_args?.length ? profile.shell_args : undefined,
+        env_vars: envVars && Object.keys(envVars).length > 0 ? envVars : undefined,
+        working_directory: profile.working_directory || undefined,
+      },
+    });
+  }
+
+  /**
+   * Shows the profile selector modal and creates a tab with the selected profile
+   */
+  showProfileSelector(profiles: import("../settings/types").Profile[]): void {
+    showProfileSelector({
+      profiles,
+      onSelect: (profile) => {
+        this.createTabWithProfile(profile);
+      },
+      onCancel: () => {},
+    });
   }
 
   /**

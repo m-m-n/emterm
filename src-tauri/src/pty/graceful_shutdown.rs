@@ -183,7 +183,7 @@ mod tests {
         // Create a manager and session (atomic sets up writer channel)
         let manager = PtyManager::new();
         let result = manager
-            .create_session_atomic(None, None, 80, 24)
+            .create_session_atomic(None, None, 80, 24, None, None)
             .await
             .unwrap();
         let session_id = result.session_id;
@@ -211,7 +211,7 @@ mod tests {
         // Create a manager and session with a long-running command (atomic sets up writer channel)
         let manager = PtyManager::new();
         let created = manager
-            .create_session_atomic(None, None, 80, 24)
+            .create_session_atomic(None, None, 80, 24, None, None)
             .await
             .unwrap();
         let session_id = created.session_id;
@@ -237,7 +237,7 @@ mod tests {
     async fn test_wait_for_exit_timeout() {
         let manager = PtyManager::new();
         let created = manager
-            .create_session_atomic(None, None, 80, 24)
+            .create_session_atomic(None, None, 80, 24, None, None)
             .await
             .unwrap();
         let session_id = created.session_id;
@@ -294,7 +294,7 @@ mod tests {
     async fn test_shutdown_with_custom_config() {
         let manager = PtyManager::new();
         let created = manager
-            .create_session_atomic(None, None, 80, 24)
+            .create_session_atomic(None, None, 80, 24, None, None)
             .await
             .unwrap();
         let session_id = created.session_id;

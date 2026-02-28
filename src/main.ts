@@ -70,8 +70,10 @@ async function main(): Promise<void> {
   // Use a temporary variable to allow callback closure to reference it
   const manager = new TabManager({
     container: contentContainer,
-    createTerminalApp: async (tabContainer) => {
-      const app = new TerminalApp(tabContainer);
+    createTerminalApp: async (tabContainer, spawnOptions) => {
+      const app = new TerminalApp(tabContainer, {
+        spawnOverrides: spawnOptions,
+      });
       await app.init();
 
       // Connect PTY exit event to TabManager
@@ -124,6 +126,7 @@ async function main(): Promise<void> {
   // Create keyboard handler with toggle callback
   const tabBarUIRef = tabBarUI;
   keyboardHandler = new TabKeyboardHandler(tabManager, {
+    tabBarUI: tabBarUIRef,
     onToggleTabBar: async () => {
       const newVisible = !tabBarUIRef.isVisible();
       tabBarUIRef.setVisible(newVisible);
@@ -145,6 +148,11 @@ async function main(): Promise<void> {
     },
   });
   keyboardHandler.attach(document);
+
+  // Listen for profile launch events from settings UI
+  document.addEventListener("profile:launch", ((event: CustomEvent) => {
+    tabBarUIRef.createTabWithProfile(event.detail);
+  }) as EventListener);
 
   // Create activity tracker and notification manager
   activityTracker = new TabActivityTracker(manager);

@@ -40,8 +40,14 @@ impl WriterRegistry {
     ///
     /// * `session_id` - The session ID to register
     /// * `sender` - The unbounded sender for the write channel
-    pub fn register(&self, session_id: SessionId, sender: mpsc::UnboundedSender<Vec<u8>>) -> Result<(), PtyError> {
-        let mut senders = self.senders.write()
+    pub fn register(
+        &self,
+        session_id: SessionId,
+        sender: mpsc::UnboundedSender<Vec<u8>>,
+    ) -> Result<(), PtyError> {
+        let mut senders = self
+            .senders
+            .write()
             .map_err(|_| PtyError::Pty("WriterRegistry lock poisoned".into()))?;
         senders.insert(session_id, sender);
         Ok(())
@@ -57,7 +63,9 @@ impl WriterRegistry {
     /// * `session_id` - The target session ID
     /// * `data` - Bytes to write to the PTY
     pub fn send(&self, session_id: &str, data: Vec<u8>) -> Result<(), PtyError> {
-        let senders = self.senders.read()
+        let senders = self
+            .senders
+            .read()
             .map_err(|_| PtyError::Pty("WriterRegistry lock poisoned".into()))?;
         let sender = senders
             .get(session_id)
@@ -75,8 +83,13 @@ impl WriterRegistry {
     /// # Arguments
     ///
     /// * `session_id` - The session ID to remove
-    pub fn remove(&self, session_id: &str) -> Result<Option<mpsc::UnboundedSender<Vec<u8>>>, PtyError> {
-        let mut senders = self.senders.write()
+    pub fn remove(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<mpsc::UnboundedSender<Vec<u8>>>, PtyError> {
+        let mut senders = self
+            .senders
+            .write()
             .map_err(|_| PtyError::Pty("WriterRegistry lock poisoned".into()))?;
         Ok(senders.remove(session_id))
     }

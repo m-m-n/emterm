@@ -22,6 +22,7 @@
     "padding": "padding must be between %{min} and %{max}",
     "scrollbackLines": "scrollback_lines must be between %{min} and %{max}",
     "scrollSpeed": "scroll_speed must be between %{min} and %{max}",
-    "markdownFontSize": "markdown_font_size must be between %{min} and %{max}"
+    "markdownFontSize": "markdown_font_size must be between %{min} and %{max}",
+    "profileNameEmpty": "Profile #%{index}: name must not be empty"
   }
 }

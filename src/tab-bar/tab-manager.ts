@@ -15,6 +15,7 @@ import type {
   SettingsTab,
   TabOperationState,
   CreateTabOptions,
+  ProfileSpawnOptions,
   TabEventType,
   TabEventPayloads,
   TabEventHandler,
@@ -31,7 +32,7 @@ export interface TabManagerOptions {
   /** Container element for tab content */
   container: HTMLElement;
   /** Factory function to create TerminalApp instances */
-  createTerminalApp: (container: HTMLElement) => Promise<TerminalApp>;
+  createTerminalApp: (container: HTMLElement, spawnOptions?: ProfileSpawnOptions) => Promise<TerminalApp>;
 }
 
 /**
@@ -98,7 +99,7 @@ export class TabManager {
   private lastTabClosedCallback: (() => void) | null = null;
 
   private container: HTMLElement;
-  private createTerminalApp: (container: HTMLElement) => Promise<TerminalApp>;
+  private createTerminalApp: (container: HTMLElement, spawnOptions?: ProfileSpawnOptions) => Promise<TerminalApp>;
 
   constructor(options: TabManagerOptions) {
     this.container = options.container;
@@ -129,7 +130,7 @@ export class TabManager {
         return await this.createSettingsTab(tabId, options.title);
       }
 
-      return await this.createTerminalTabInternal(tabId, options.title);
+      return await this.createTerminalTabInternal(tabId, options.title, options.profileSpawn);
     } finally {
       // Reset state to idle
       this.operationState = { status: "idle" };
@@ -142,6 +143,7 @@ export class TabManager {
   private async createTerminalTabInternal(
     tabId: string,
     title?: string,
+    profileSpawn?: ProfileSpawnOptions,
   ): Promise<TerminalTab | null> {
     try {
       // Create container for this tab
@@ -152,8 +154,8 @@ export class TabManager {
       this.container.appendChild(tabContainer);
       this.tabContainers.set(tabId, tabContainer);
 
-      // Create TerminalApp
-      const terminalApp = await this.createTerminalApp(tabContainer);
+      // Create TerminalApp (pass profile spawn options if provided)
+      const terminalApp = await this.createTerminalApp(tabContainer, profileSpawn);
       this.terminalApps.set(tabId, terminalApp);
 
       // Connect title change callback

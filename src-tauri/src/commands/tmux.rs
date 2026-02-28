@@ -9,7 +9,6 @@
 /// where every ESC (0x1B) byte inside the sequence is doubled.
 ///
 /// Requires `set -g allow-passthrough on` in tmux configuration.
-
 /// Check if the current process is running inside tmux.
 pub fn is_inside_tmux() -> bool {
     std::env::var_os("TMUX").is_some()

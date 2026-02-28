@@ -1,0 +1,104 @@
+schema_version: 1
+feature: terminal-profiles
+scale: standard
+created: 2026-02-28
+
+project:
+  components:
+    main:
+      language: rust+typescript
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 8056ba523bd7576f95cdda2a1abb3f3e136c8a6a
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 8056ba523bd7576f95cdda2a1abb3f3e136c8a6a
+  - id: implement
+    status: completed
+    completed_at_commit: 8056ba523bd7576f95cdda2a1abb3f3e136c8a6a
+  - id: check
+    status: completed
+    completed_at_commit: 8056ba523bd7576f95cdda2a1abb3f3e136c8a6a
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 8056ba523bd7576f95cdda2a1abb3f3e136c8a6a
+  - id: review
+    status: completed
+    completed_at_commit: 8056ba523bd7576f95cdda2a1abb3f3e136c8a6a
+
+requirements:
+  FR1:
+    title: Profile Data Model
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Profile CRUD
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Profile Duplication
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Profile Reordering
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Default Profile Flag
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Profile Selector Modal
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Tab Creation Integration
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Environment Variable Parsing
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: New Keybind for Selector
+    status: assumed
+    assumed_value: "Ctrl+Shift+P"
+    tasks: []
+    tests: []
+  FR10:
+    title: Settings UI Launch Button
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Performance (selector < 100ms)
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Backward Compatibility
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Code Pattern Consistency
+    status: ok
+    tasks: []
+    tests: []

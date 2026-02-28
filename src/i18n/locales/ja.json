@@ -8,7 +8,8 @@
       "terminalAppearance": "ターミナル外観",
       "terminalBehavior": "ターミナル動作",
       "notification": "通知",
-      "markdownViewer": "Markdownビューアー"
+      "markdownViewer": "Markdownビューアー",
+      "profiles": "プロファイル"
     },
     "appearance": {
       "title": "\u5916\u89b3",
@@ -143,6 +144,7 @@
       "zoomOut": "\u7e2e\u5c0f",
       "zoomReset": "\u30ba\u30fc\u30e0\u30ea\u30bb\u30c3\u30c8",
       "toggleFullscreen": "\u5168\u753b\u9762\u5207\u66ff",
+      "profileSelector": "\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u9078\u629e",
       "settingsSection": "\u8a2d\u5b9a",
       "openSettings": "\u8a2d\u5b9a\u3092\u958b\u304f",
       "pressKey": "\u30ad\u30fc\u3092\u62bc\u3057\u3066\u304f\u3060\u3055\u3044..."
@@ -233,6 +235,39 @@
       "themeDark": "ダーク",
       "preset": "プリセット",
       "presetDesc": "Markdownビューアーのカラープリセット"
+    },
+    "profiles": {
+      "title": "プロファイル",
+      "addProfile": "プロファイルを追加",
+      "editProfile": "プロファイルを編集",
+      "noProfiles": "プロファイルが設定されていません。プロファイルを追加してタブごとにシェル設定をカスタマイズできます。",
+      "name": "名前",
+      "namePlaceholder": "プロファイル名",
+      "shellPath": "シェルパス",
+      "shellPathPlaceholder": "デフォルトシェル",
+      "shellPathHint": "空欄でシステムデフォルトを使用",
+      "shellArgs": "シェル引数",
+      "shellArgsPlaceholder": "--login, -i",
+      "shellArgsHint": "カンマ区切りの引数",
+      "envVars": "環境変数",
+      "envVarsPlaceholder": "KEY=value\nANOTHER=value",
+      "envVarsHint": "1行に1つのKEY=VALUE",
+      "workingDirectory": "作業ディレクトリ",
+      "workingDirectoryPlaceholder": "デフォルトディレクトリ",
+      "workingDirectoryHint": "空欄でデフォルトを使用",
+      "isDefault": "デフォルトプロファイル",
+      "isDefaultDesc": "新しいタブ作成時にこのプロファイルを使用",
+      "save": "保存",
+      "cancel": "キャンセル",
+      "edit": "編集",
+      "duplicate": "複製",
+      "delete": "削除",
+      "setDefault": "デフォルトに設定",
+      "unsetDefault": "デフォルトを解除",
+      "launch": "起動",
+      "defaultBadge": "デフォルト",
+      "nameRequired": "プロファイル名は必須です",
+      "dragHandle": "ドラッグで並び替え"
     }
   },
   "tabBar": {

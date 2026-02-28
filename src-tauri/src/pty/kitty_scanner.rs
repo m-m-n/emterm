@@ -48,6 +48,12 @@ pub struct KittyScanner {
     is_kitty: bool,
 }
 
+impl Default for KittyScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KittyScanner {
     pub fn new() -> Self {
         Self {
@@ -315,9 +321,8 @@ mod tests {
         let mut buf = vec![0u8; 4096];
         let mut result = Vec::new();
         loop {
-            let n = unsafe {
-                libc::read(read_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
-            };
+            let n =
+                unsafe { libc::read(read_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n <= 0 {
                 break;
             }
@@ -639,19 +644,13 @@ mod tests {
 
     #[test]
     fn test_build_ok_response() {
-        assert_eq!(
-            build_ok_response(Some(42), None),
-            b"\x1b_Gi=42;OK\x1b\\"
-        );
+        assert_eq!(build_ok_response(Some(42), None), b"\x1b_Gi=42;OK\x1b\\");
         assert_eq!(
             build_ok_response(Some(42), Some(7)),
             b"\x1b_Gi=42,p=7;OK\x1b\\"
         );
         assert_eq!(build_ok_response(None, None), b"\x1b_G;OK\x1b\\");
-        assert_eq!(
-            build_ok_response(None, Some(3)),
-            b"\x1b_Gp=3;OK\x1b\\"
-        );
+        assert_eq!(build_ok_response(None, Some(3)), b"\x1b_Gp=3;OK\x1b\\");
     }
 
     #[test]

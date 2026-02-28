@@ -23,6 +23,7 @@ import {
   renderTerminalBehaviorSection,
   renderNotificationSection,
   renderMarkdownViewerSection,
+  renderProfilesSection,
 } from "./settings-sections";
 import { filterFontList } from "./font-picker";
 
@@ -69,6 +70,7 @@ export class SettingsPanel {
       { id: "terminal-behavior", label: t("settings.categories.terminalBehavior"), enabled: true },
       { id: "notification", label: t("settings.categories.notification"), enabled: true },
       { id: "markdown-viewer", label: t("settings.categories.markdownViewer"), enabled: true },
+      { id: "profiles", label: t("settings.categories.profiles"), enabled: true },
     ];
   }
 
@@ -181,6 +183,9 @@ export class SettingsPanel {
         break;
       case "markdown-viewer":
         renderMarkdownViewerSection(panel, ctx);
+        break;
+      case "profiles":
+        renderProfilesSection(panel, ctx);
         break;
     }
   }

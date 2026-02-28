@@ -341,11 +341,16 @@ export class TerminalApp {
 
     // Spawn PTY session (non-blocking UI)
     try {
-      // Read shell settings from cached settings (reuse from above)
-      const shell = cachedSettings?.shell_path || undefined;
-      const args = cachedSettings?.shell_args?.length ? cachedSettings.shell_args : undefined;
+      // Use profile-specific spawn overrides if provided, otherwise fall back to global settings
+      const overrides = this.options.spawnOverrides;
+      const shell = (overrides?.shell_path || cachedSettings?.shell_path) || undefined;
+      const args = overrides?.shell_args?.length
+        ? overrides.shell_args
+        : cachedSettings?.shell_args?.length ? cachedSettings.shell_args : undefined;
+      const env_vars = overrides?.env_vars;
+      const working_directory = overrides?.working_directory || undefined;
 
-      await this.ptyClient.spawn({ shell, args, cols, rows });
+      await this.ptyClient.spawn({ shell, args, cols, rows, env_vars, working_directory });
 
       // Force render after spawn completes (data may have arrived via onData)
       if (this.state && this.renderer) {

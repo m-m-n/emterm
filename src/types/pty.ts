@@ -60,6 +60,18 @@ export interface PtySpawnOptions {
 	 * @default 24
 	 */
 	rows?: number;
+
+	/**
+	 * Environment variables to set for the shell session.
+	 * Keys are variable names, values are their values.
+	 */
+	env_vars?: Record<string, string>;
+
+	/**
+	 * Working directory for the shell session.
+	 * If not specified or invalid, the default is used.
+	 */
+	working_directory?: string;
 }
 
 /**

@@ -3,6 +3,7 @@
 //! This module provides the `PtySession` struct for managing individual
 //! PTY sessions, including process spawning, I/O operations, and lifecycle.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -38,6 +39,8 @@ impl PtySession {
     /// * `args` - Optional arguments to pass to the shell
     /// * `cols` - Number of columns for the terminal
     /// * `rows` - Number of rows for the terminal
+    /// * `env_vars` - Optional environment variables to merge into the shell environment
+    /// * `working_directory` - Optional working directory for the shell
     ///
     /// # Returns
     ///
@@ -53,6 +56,8 @@ impl PtySession {
         args: Option<Vec<String>>,
         cols: u16,
         rows: u16,
+        env_vars: Option<HashMap<String, String>>,
+        working_directory: Option<String>,
     ) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
@@ -83,6 +88,36 @@ impl PtySession {
         // and skip response handling, leading to garbage text on screen.
         cmd.env_remove("TMUX");
         cmd.env_remove("TMUX_PANE");
+
+        // Apply profile-specific environment variables
+        if let Some(ref vars) = env_vars {
+            for (key, value) in vars {
+                cmd.env(key, value);
+            }
+        }
+
+        // Apply profile-specific working directory
+        if let Some(ref dir) = working_directory {
+            if !dir.is_empty() {
+                let path = std::path::Path::new(dir);
+                if path.is_dir() {
+                    cmd.cwd(path);
+                } else {
+                    log::warn!(
+                        "Working directory does not exist, falling back to home: {:?}",
+                        dir
+                    );
+                    #[cfg(unix)]
+                    if let Ok(home) = std::env::var("HOME") {
+                        cmd.cwd(std::path::Path::new(&home));
+                    }
+                    #[cfg(windows)]
+                    if let Ok(home) = std::env::var("USERPROFILE") {
+                        cmd.cwd(std::path::Path::new(&home));
+                    }
+                }
+            }
+        }
 
         let child = pair.slave.spawn_command(cmd)?;
         let writer = Arc::new(StdMutex::new(pair.master.take_writer()?));
@@ -201,7 +236,7 @@ mod tests {
     fn test_session_creation() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let result = PtySession::new(id.clone(), &shell, None, 80, 24);
+        let result = PtySession::new(id.clone(), &shell, None, 80, 24, None, None);
 
         assert!(result.is_ok(), "Session creation should succeed");
 
@@ -216,7 +251,7 @@ mod tests {
     fn test_session_resize() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24, None, None).unwrap();
 
         let resize_result = session.resize(120, 40);
         assert!(resize_result.is_ok(), "Resize should succeed");
@@ -229,7 +264,7 @@ mod tests {
     fn test_session_take_reader() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24, None, None).unwrap();
 
         let reader_result = session.take_reader();
         assert!(reader_result.is_ok(), "Taking reader should succeed");
@@ -242,7 +277,7 @@ mod tests {
     fn test_session_kill() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24, None, None).unwrap();
 
         let kill_result = session.kill();
         assert!(kill_result.is_ok(), "Kill should succeed");
@@ -260,7 +295,7 @@ mod tests {
 
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24, None, None).unwrap();
 
         // Get a reader to drain output
         let mut reader = session.take_reader().unwrap();
@@ -332,13 +367,110 @@ mod tests {
     fn test_session_write() {
         let id = generate_session_id();
         let shell = detect_default_shell();
-        let mut session = PtySession::new(id, &shell, None, 80, 24).unwrap();
+        let mut session = PtySession::new(id, &shell, None, 80, 24, None, None).unwrap();
 
         // Write some data
         let write_result = session.write(b"echo hello\n");
         assert!(write_result.is_ok(), "Write should succeed");
 
         // Cleanup
+        let _ = session.kill();
+    }
+
+    #[test]
+    fn test_session_creation_with_env_vars() {
+        let id = generate_session_id();
+        let shell = detect_default_shell();
+        let mut env = HashMap::new();
+        env.insert("MY_TEST_VAR".to_string(), "hello".to_string());
+        env.insert("ANOTHER_VAR".to_string(), "world".to_string());
+
+        let result = PtySession::new(id, &shell, None, 80, 24, Some(env), None);
+        assert!(
+            result.is_ok(),
+            "Session creation with env vars should succeed"
+        );
+
+        let mut session = result.unwrap();
+        let _ = session.kill();
+    }
+
+    #[test]
+    fn test_session_creation_with_working_directory() {
+        let id = generate_session_id();
+        let shell = detect_default_shell();
+
+        let result = PtySession::new(id, &shell, None, 80, 24, None, Some("/tmp".to_string()));
+        assert!(
+            result.is_ok(),
+            "Session creation with valid working directory should succeed"
+        );
+
+        let mut session = result.unwrap();
+        let _ = session.kill();
+    }
+
+    #[test]
+    fn test_session_creation_with_invalid_working_directory() {
+        let id = generate_session_id();
+        let shell = detect_default_shell();
+
+        // Non-existent directory should fall back to default (not error)
+        let result = PtySession::new(
+            id,
+            &shell,
+            None,
+            80,
+            24,
+            None,
+            Some("/nonexistent/path/that/does/not/exist".to_string()),
+        );
+        assert!(
+            result.is_ok(),
+            "Session creation with invalid working directory should succeed (fallback)"
+        );
+
+        let mut session = result.unwrap();
+        let _ = session.kill();
+    }
+
+    #[test]
+    fn test_session_creation_with_empty_working_directory() {
+        let id = generate_session_id();
+        let shell = detect_default_shell();
+
+        let result = PtySession::new(id, &shell, None, 80, 24, None, Some(String::new()));
+        assert!(
+            result.is_ok(),
+            "Session creation with empty working directory should succeed"
+        );
+
+        let mut session = result.unwrap();
+        let _ = session.kill();
+    }
+
+    #[test]
+    fn test_session_creation_with_all_profile_options() {
+        let id = generate_session_id();
+        let shell = detect_default_shell();
+        let mut env = HashMap::new();
+        env.insert("NODE_ENV".to_string(), "development".to_string());
+
+        let result = PtySession::new(
+            id,
+            &shell,
+            Some(vec![]),
+            80,
+            24,
+            Some(env),
+            Some("/tmp".to_string()),
+        );
+        assert!(
+            result.is_ok(),
+            "Session creation with all profile options should succeed"
+        );
+
+        let mut session = result.unwrap();
         let _ = session.kill();
     }
 }
