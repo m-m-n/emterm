@@ -440,7 +440,7 @@ impl TerminalCore {
             let copy_len = line.cells.len().min(cols);
             for c in 0..copy_len {
                 new_grid[base + c] = line.cells[c];
-                if let Some(Some(ref s)) = line.overflow_data.get(c) {
+                if let Some(Some(s)) = line.overflow_data.get(c) {
                     new_overflow.insert((c as u32, i as u32), s.clone());
                 }
             }
@@ -534,7 +534,7 @@ impl TerminalCore {
             let copy_len = line.cells.len().min(new_cols_usize);
             for c in 0..copy_len {
                 new_grid[base + c] = line.cells[c];
-                if let Some(Some(ref s)) = line.overflow_data.get(c) {
+                if let Some(Some(s)) = line.overflow_data.get(c) {
                     new_overflow.insert((c as u32, i as u32), s.clone());
                 }
             }

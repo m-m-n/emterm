@@ -1,7 +1,8 @@
 [package]
 name = "emterm-wasm"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85"
 description = "WASM module for eMterm terminal emulator"
 repository = "https://github.com/m-m-n/emterm"
 license = "MIT"
