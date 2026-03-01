@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Get version from tag
         id: get-version
@@ -36,12 +38,24 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Extract tag message
+        id: tag-message
+        run: |
+          TAG_NAME="${{ steps.get-version.outputs.version }}"
+          TAG_MESSAGE=$(git tag -l --format='%(contents)' "$TAG_NAME")
+          {
+            echo 'message<<EOF'
+            echo "$TAG_MESSAGE"
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
       - name: Create Release
         id: create-release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get-version.outputs.version }}
           name: Release ${{ steps.get-version.outputs.version }}
+          body: ${{ steps.tag-message.outputs.message }}
           draft: true
           prerelease: false
           generate_release_notes: true
