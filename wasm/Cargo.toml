@@ -2,6 +2,9 @@
 name = "emterm-wasm"
 version = "0.1.0"
 edition = "2021"
+description = "WASM module for eMterm terminal emulator"
+repository = "https://github.com/m-m-n/emterm"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib"]
@@ -12,9 +15,9 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console"] }
 
 [package.metadata.wasm-pack.profile.release]
-# Disable wasm-opt: wasm-pack 0.12.x ships wasm-opt v111 which lacks
-# --enable-bulk-memory support required by Rust 1.84+ wasm32 target.
-# opt-level="z" + lto already handle size optimization.
+# Disable wasm-opt: bundled wasm-opt lacks --enable-bulk-memory support
+# required by recent Rust wasm32 targets. opt-level="z" + lto already
+# handle size optimization.
 wasm-opt = false
 
 [profile.release]

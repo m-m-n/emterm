@@ -51,7 +51,7 @@ RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 
 # Install wasm-pack (for WASM build)
-RUN curl --proto '=https' --tlsv1.2 -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+RUN cargo install wasm-pack@0.14.0
 
 # Install tauri-cli and tauri-driver
 RUN cargo install tauri-cli tauri-driver

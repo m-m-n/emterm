@@ -1174,6 +1174,7 @@ dependencies = [
  "png 0.17.16",
  "portable-pty",
  "predicates",
+ "raw-window-handle",
  "rust-i18n",
  "serde",
  "serde_json",
