@@ -604,8 +604,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Ensure font is set
 		this.ctx.font = `${this.fontSize}px ${this.fontFamily}`;
 
-		// Measure width using 'W' (widest common character)
-		const metrics = this.ctx.measureText("W");
+		// Measure width using 'M' (consistent with size.ts measureCharacterSize)
+		const metrics = this.ctx.measureText("M");
 		this.charWidth = metrics.width;
 
 		// Calculate height from font metrics
