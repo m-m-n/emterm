@@ -1,5 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), feature = "gui"),
+    windows_subsystem = "windows"
+)]
 
 rust_i18n::i18n!("locales", fallback = "en");
 
@@ -94,9 +97,18 @@ fn main() {
             }
         }
         _ => {
-            // No subcommand provided, run the Tauri GUI application
-            #[cfg(not(test))]
-            app_lib::run();
+            // No subcommand provided
+            #[cfg(feature = "gui")]
+            {
+                #[cfg(not(test))]
+                app_lib::run();
+            }
+            #[cfg(not(feature = "gui"))]
+            {
+                // CLI-only build: show help when no subcommand provided
+                build_cli().print_help().ok();
+                std::process::exit(0);
+            }
         }
     }
 }

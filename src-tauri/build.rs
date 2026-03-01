@@ -9,6 +9,7 @@ fn main() {
     println!("cargo::rerun-if-changed=../.git/refs/tags");
     println!("cargo::rerun-if-changed=../.git/refs/heads");
 
+    #[cfg(feature = "gui")]
     tauri_build::build()
 }
 

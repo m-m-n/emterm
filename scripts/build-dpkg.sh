@@ -8,7 +8,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}Building dpkg package for emterm...${NC}"
+# Detect CLI-only build mode
+CLI_ONLY="${EMTERM_CLI_ONLY:-}"
+
+if [ -n "$CLI_ONLY" ]; then
+    echo -e "${GREEN}Building CLI-only dpkg package for emterm...${NC}"
+else
+    echo -e "${GREEN}Building dpkg package for emterm...${NC}"
+fi
 
 # Get project information
 PROJECT_NAME="emterm"
@@ -40,7 +47,12 @@ case "$ARCH" in
         ;;
 esac
 
-PACKAGE_NAME="${PROJECT_NAME}_${VERSION}_${DEB_ARCH}"
+if [ -n "$CLI_ONLY" ]; then
+    DEB_PACKAGE="emterm-cli"
+else
+    DEB_PACKAGE="${PROJECT_NAME}"
+fi
+PACKAGE_NAME="${DEB_PACKAGE}_${VERSION}_${DEB_ARCH}"
 BUILD_DIR="build/dpkg/${PACKAGE_NAME}"
 BINARY_PATH="src-tauri/target/release/${PROJECT_NAME}"
 
@@ -50,6 +62,9 @@ echo -e "${YELLOW}Package: ${PACKAGE_NAME}${NC}"
 echo -e "${YELLOW}Version: ${VERSION}${NC}"
 echo -e "${YELLOW}Architecture: ${DEB_ARCH}${NC}"
 echo -e "${YELLOW}Maintainer: ${MAINTAINER}${NC}"
+if [ -n "$CLI_ONLY" ]; then
+    echo -e "${YELLOW}Build Mode: CLI-only${NC}"
+fi
 echo -e "${BLUE}═══════════════════════════════════════${NC}"
 echo ""
 
@@ -71,16 +86,26 @@ echo "Creating package directory structure..."
 mkdir -p "${BUILD_DIR}/DEBIAN"
 mkdir -p "${BUILD_DIR}/usr/bin"
 mkdir -p "${BUILD_DIR}/usr/share/doc/${PROJECT_NAME}"
-mkdir -p "${BUILD_DIR}/usr/share/applications"
-mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/32x32/apps"
-mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/128x128/apps"
-mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/256x256/apps"
+if [ -z "$CLI_ONLY" ]; then
+    mkdir -p "${BUILD_DIR}/usr/share/applications"
+    mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/32x32/apps"
+    mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/128x128/apps"
+    mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/256x256/apps"
+fi
 
-# Build the binary using Tauri
-echo "Building Tauri application..."
-if ! bun tauri build --no-bundle; then
-    echo -e "${RED}Failed to build Tauri application${NC}"
-    exit 1
+# Build the binary
+if [ -n "$CLI_ONLY" ]; then
+    echo "Building CLI-only binary..."
+    if ! cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features; then
+        echo -e "${RED}Failed to build CLI-only binary${NC}"
+        exit 1
+    fi
+else
+    echo "Building Tauri application..."
+    if ! bun tauri build --no-bundle; then
+        echo -e "${RED}Failed to build Tauri application${NC}"
+        exit 1
+    fi
 fi
 
 # Verify binary exists
@@ -115,21 +140,22 @@ elif [ -f "LICENCE" ]; then
     chmod 644 "${BUILD_DIR}/usr/share/doc/${PROJECT_NAME}/copyright"
 fi
 
-# Copy icons
-echo "Copying icons..."
-if [ -f "src-tauri/icons/32x32.png" ]; then
-    cp "src-tauri/icons/32x32.png" "${BUILD_DIR}/usr/share/icons/hicolor/32x32/apps/${PROJECT_NAME}.png"
-fi
-if [ -f "src-tauri/icons/128x128.png" ]; then
-    cp "src-tauri/icons/128x128.png" "${BUILD_DIR}/usr/share/icons/hicolor/128x128/apps/${PROJECT_NAME}.png"
-fi
-if [ -f "src-tauri/icons/128x128@2x.png" ]; then
-    cp "src-tauri/icons/128x128@2x.png" "${BUILD_DIR}/usr/share/icons/hicolor/256x256/apps/${PROJECT_NAME}.png"
-fi
+if [ -z "$CLI_ONLY" ]; then
+    # Copy icons (GUI only)
+    echo "Copying icons..."
+    if [ -f "src-tauri/icons/32x32.png" ]; then
+        cp "src-tauri/icons/32x32.png" "${BUILD_DIR}/usr/share/icons/hicolor/32x32/apps/${PROJECT_NAME}.png"
+    fi
+    if [ -f "src-tauri/icons/128x128.png" ]; then
+        cp "src-tauri/icons/128x128.png" "${BUILD_DIR}/usr/share/icons/hicolor/128x128/apps/${PROJECT_NAME}.png"
+    fi
+    if [ -f "src-tauri/icons/128x128@2x.png" ]; then
+        cp "src-tauri/icons/128x128@2x.png" "${BUILD_DIR}/usr/share/icons/hicolor/256x256/apps/${PROJECT_NAME}.png"
+    fi
 
-# Create desktop file
-echo "Creating desktop file..."
-cat > "${BUILD_DIR}/usr/share/applications/${PROJECT_NAME}.desktop" << EOF
+    # Create desktop file (GUI only)
+    echo "Creating desktop file..."
+    cat > "${BUILD_DIR}/usr/share/applications/${PROJECT_NAME}.desktop" << EOF
 [Desktop Entry]
 Name=eMterm
 Comment=Cross-platform terminal emulator with rich rendering capabilities
@@ -141,7 +167,8 @@ Categories=System;TerminalEmulator;
 Keywords=terminal;console;shell;
 StartupWMClass=emterm
 EOF
-chmod 644 "${BUILD_DIR}/usr/share/applications/${PROJECT_NAME}.desktop"
+    chmod 644 "${BUILD_DIR}/usr/share/applications/${PROJECT_NAME}.desktop"
+fi
 
 # Create changelog
 echo "Creating changelog..."
@@ -162,7 +189,25 @@ fi
 
 # Create DEBIAN/control file
 echo "Creating control file..."
-cat > "${BUILD_DIR}/DEBIAN/control" << 'EOF'
+if [ -n "$CLI_ONLY" ]; then
+    cat > "${BUILD_DIR}/DEBIAN/control" << 'EOF'
+Package: emterm-cli
+Version: ${VERSION}
+Section: utils
+Priority: optional
+Architecture: ${DEB_ARCH}
+Maintainer: m-m-n <51132276+m-m-n@users.noreply.github.com>
+Depends: libc6
+Description: CLI tools for eMterm terminal emulator
+ Command-line tools for displaying images and Markdown in
+ compatible terminal emulators.
+ .
+ Commands:
+  - emterm image: Display images via Kitty/SIXEL protocol
+  - emterm markdown: Display Markdown via OSC extension
+EOF
+else
+    cat > "${BUILD_DIR}/DEBIAN/control" << 'EOF'
 Package: emterm
 Version: ${VERSION}
 Section: x11
@@ -181,14 +226,16 @@ Description: Cross-platform terminal emulator with rich rendering
   - WebView-based rich content display
   - Low-latency typing performance
 EOF
+fi
 
 # Substitute variables in control file
 sed -i "s/\${VERSION}/${VERSION}/g" "${BUILD_DIR}/DEBIAN/control"
 sed -i "s/\${DEB_ARCH}/${DEB_ARCH}/g" "${BUILD_DIR}/DEBIAN/control"
 
-# Create postinst script
-echo "Creating postinst script..."
-cat > "${BUILD_DIR}/DEBIAN/postinst" << 'EOF'
+if [ -z "$CLI_ONLY" ]; then
+    # Create postinst script (GUI only)
+    echo "Creating postinst script..."
+    cat > "${BUILD_DIR}/DEBIAN/postinst" << 'EOF'
 #!/bin/bash
 set -e
 
@@ -207,11 +254,11 @@ echo "Run 'emterm' to start the terminal emulator."
 
 exit 0
 EOF
-chmod 755 "${BUILD_DIR}/DEBIAN/postinst"
+    chmod 755 "${BUILD_DIR}/DEBIAN/postinst"
 
-# Create prerm script
-echo "Creating prerm script..."
-cat > "${BUILD_DIR}/DEBIAN/prerm" << 'EOF'
+    # Create prerm script (GUI only)
+    echo "Creating prerm script..."
+    cat > "${BUILD_DIR}/DEBIAN/prerm" << 'EOF'
 #!/bin/bash
 set -e
 
@@ -219,11 +266,11 @@ set -e
 
 exit 0
 EOF
-chmod 755 "${BUILD_DIR}/DEBIAN/prerm"
+    chmod 755 "${BUILD_DIR}/DEBIAN/prerm"
 
-# Create postrm script
-echo "Creating postrm script..."
-cat > "${BUILD_DIR}/DEBIAN/postrm" << 'EOF'
+    # Create postrm script (GUI only)
+    echo "Creating postrm script..."
+    cat > "${BUILD_DIR}/DEBIAN/postrm" << 'EOF'
 #!/bin/bash
 set -e
 
@@ -241,14 +288,17 @@ echo "emterm has been removed."
 
 exit 0
 EOF
-chmod 755 "${BUILD_DIR}/DEBIAN/postrm"
+    chmod 755 "${BUILD_DIR}/DEBIAN/postrm"
+fi
 
 # Set proper permissions
 echo "Setting file permissions..."
 find "${BUILD_DIR}/usr/share/doc" -type f -exec chmod 644 {} \;
 find "${BUILD_DIR}/usr/share/doc" -type d -exec chmod 755 {} \;
-find "${BUILD_DIR}/usr/share/icons" -type f -exec chmod 644 {} \;
-find "${BUILD_DIR}/usr/share/icons" -type d -exec chmod 755 {} \;
+if [ -z "$CLI_ONLY" ]; then
+    find "${BUILD_DIR}/usr/share/icons" -type f -exec chmod 644 {} \;
+    find "${BUILD_DIR}/usr/share/icons" -type d -exec chmod 755 {} \;
+fi
 
 # Calculate installed size (in KB)
 INSTALLED_SIZE=$(du -sk "${BUILD_DIR}" | cut -f1)
@@ -281,9 +331,9 @@ if dpkg-deb --build --root-owner-group "${BUILD_DIR}"; then
     echo ""
     echo -e "${GREEN}Installation Commands:${NC}"
     echo -e "  ${YELLOW}sudo dpkg -i build/${PACKAGE_NAME}.deb${NC}     - Install package"
-    echo -e "  ${YELLOW}dpkg -L emterm${NC}                        - List installed files"
-    echo -e "  ${YELLOW}sudo dpkg -r emterm${NC}                   - Remove package"
-    echo -e "  ${YELLOW}sudo dpkg -P emterm${NC}                   - Purge package completely"
+    echo -e "  ${YELLOW}dpkg -L ${DEB_PACKAGE}${NC}                        - List installed files"
+    echo -e "  ${YELLOW}sudo dpkg -r ${DEB_PACKAGE}${NC}                   - Remove package"
+    echo -e "  ${YELLOW}sudo dpkg -P ${DEB_PACKAGE}${NC}                   - Purge package completely"
     echo ""
 else
     echo -e "${RED}Failed to build package${NC}"
