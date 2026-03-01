@@ -184,6 +184,7 @@ export class TerminalApp {
       cols,
       rows,
       getTerminalState: () => this.state!,
+      getScrollOffset: () => this.renderer?.getScrollOffset() ?? 0,
     });
 
     // Create PTY client

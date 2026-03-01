@@ -5,6 +5,7 @@
  */
 
 import type { TerminalState } from "../terminal/state";
+import type { LineAccessor } from "../terminal/grid";
 import { isMouseTrackingEnabled } from "../terminal/mouse";
 import { SettingsService } from "../settings/settings-service";
 import { ClipboardBridge } from "./ClipboardBridge";
@@ -29,6 +30,8 @@ export interface SelectionControllerOptions {
 	rows: number;
 	/** Function to get current terminal state */
 	getTerminalState: () => TerminalState;
+	/** Function to get current scroll offset (0 = at bottom) */
+	getScrollOffset: () => number;
 }
 
 /**
@@ -71,6 +74,7 @@ export class SelectionController {
 	private cols: number;
 	private rows: number;
 	private getTerminalState: () => TerminalState;
+	private getScrollOffset: () => number;
 
 	private model: SelectionModel;
 	private renderer: SelectionRenderer;
@@ -102,6 +106,7 @@ export class SelectionController {
 		this.cols = options.cols;
 		this.rows = options.rows;
 		this.getTerminalState = options.getTerminalState;
+		this.getScrollOffset = options.getScrollOffset;
 
 		this.model = new SelectionModel();
 		this.renderer = new SelectionRenderer(this.container);
@@ -123,14 +128,35 @@ export class SelectionController {
 	}
 
 	/**
+	 * Get a visible line at the given screen row, accounting for scroll offset.
+	 * Uses the same logic as canvas-renderer's getVisibleLines().
+	 */
+	private getVisibleLine(row: number): LineAccessor | null {
+		const state = this.getTerminalState();
+		if (!state) return null;
+
+		const scrollOffset = this.getScrollOffset();
+		const buffer = state.getActiveBuffer();
+
+		if (scrollOffset === 0) {
+			return buffer.getLine(row);
+		}
+
+		const scrollbackLength = state.getScrollbackLength();
+		const startIndex = Math.max(0, scrollbackLength - scrollOffset);
+		const lineIndex = startIndex + row;
+
+		if (lineIndex < scrollbackLength) {
+			return state.getScrollbackLine(lineIndex);
+		}
+		return buffer.getLine(lineIndex - scrollbackLength);
+	}
+
+	/**
 	 * Get text content of a line.
 	 */
 	private getLineText(row: number): string {
-		const state = this.getTerminalState();
-		if (!state) return "";
-
-		const buffer = state.getActiveBuffer();
-		const line = buffer.getLine(row);
+		const line = this.getVisibleLine(row);
 		if (!line) return "";
 
 		let text = "";
@@ -358,17 +384,40 @@ export class SelectionController {
 			return "";
 		}
 
-		const state = this.getTerminalState();
-		if (!state) {
-			return "";
+		const { start, end } = range;
+		const lines: string[] = [];
+
+		for (let row = start.row; row <= end.row; row++) {
+			const line = this.getVisibleLine(row);
+			if (!line) continue;
+
+			const lineLength = line.length;
+			let rowStartCol: number;
+			let rowEndCol: number;
+
+			if (row === start.row && row === end.row) {
+				rowStartCol = start.col;
+				rowEndCol = end.col;
+			} else if (row === start.row) {
+				rowStartCol = start.col;
+				rowEndCol = lineLength - 1;
+			} else if (row === end.row) {
+				rowStartCol = 0;
+				rowEndCol = end.col;
+			} else {
+				rowStartCol = 0;
+				rowEndCol = lineLength - 1;
+			}
+
+			let rowText = "";
+			for (let col = rowStartCol; col <= rowEndCol && col < lineLength; col++) {
+				const cell = line.getCell(col);
+				rowText += cell.char;
+			}
+			lines.push(rowText.replace(/\s+$/, ""));
 		}
 
-		return state.extractText(
-			range.start.col,
-			range.start.row,
-			range.end.col,
-			range.end.row,
-		);
+		return lines.join("\n");
 	}
 
 	/**
