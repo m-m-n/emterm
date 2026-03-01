@@ -118,14 +118,11 @@ export class TerminalApp {
     // Measure character size from container's computed styles
     this.charSize = measureCharacterSize(this.container);
 
-    // Calculate initial terminal size
-    const cols = Math.max(
-      1,
-      Math.floor(this.container.clientWidth / this.charSize.width),
-    );
-    const rows = Math.max(
-      1,
-      Math.floor(this.container.clientHeight / this.charSize.height),
+    // Calculate initial terminal size (consistent with ResizeObserver)
+    const { cols, rows } = calculateTerminalSize(
+      this.container,
+      this.charSize.width,
+      this.charSize.height,
     );
 
     // Get font configuration from computed styles
