@@ -234,15 +234,17 @@ A fullscreen overlay viewer for rendered Markdown content.
 
 #### Mermaid Diagram Rendering
 
-Mermaid code blocks in Markdown documents render as SVG diagrams.
+Mermaid code blocks in Markdown documents render as SVG diagrams with an interactive toolbar.
 
 **Key Functionality:**
 - Detects `mermaid` fenced code blocks and renders them as SVG using mermaid.js
 - All Mermaid diagram types are supported (flowchart, sequence, Gantt, class, etc.)
-- Dark theme is used for diagram rendering
+- Dark theme applied via `themeVariables` for correct colors in the dark viewer
 - On syntax error, the original source is shown as a regular code block
 - mermaid.js is loaded only when mermaid blocks are present (lazy loading)
 - Security: mermaid.js `securityLevel` set to `strict`; user-authored SVG in Markdown remains blocked by DOMPurify
+- Chart/Code toggle toolbar: switch between rendered SVG diagram and original source code view
+- Copy button copies the Mermaid source code to clipboard (available in both diagram and code views)
 
 ---
 
