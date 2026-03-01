@@ -1,0 +1,83 @@
+schema_version: 1
+feature: cli-only-build
+scale: standard
+created: 2026-03-01
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: b0705a6e367677ea23c44ffbb6b0c63c1192d2c7
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: b0705a6e367677ea23c44ffbb6b0c63c1192d2c7
+  - id: implement
+    status: completed
+    completed_at_commit: b0705a6e367677ea23c44ffbb6b0c63c1192d2c7
+  - id: check
+    status: completed
+    completed_at_commit: b0705a6e367677ea23c44ffbb6b0c63c1192d2c7
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: b0705a6e367677ea23c44ffbb6b0c63c1192d2c7
+  - id: review
+    status: completed
+    completed_at_commit: b0705a6e367677ea23c44ffbb6b0c63c1192d2c7
+
+requirements:
+  FR1:
+    title: Cargo gui feature flag with GUI deps optional
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Gate GUI modules in lib.rs with cfg(feature = "gui")
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Gate tauri_build::build() in build.rs
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Gate app_lib::run() in main.rs
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Gate GUI-only command submodules (config, font, editor)
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Modify build-dpkg.sh for EMTERM_CLI_ONLY env var
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Show help when CLI-only binary run without subcommand
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Backward compatibility for default GUI build
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Minimal cfg gate invasiveness
+    status: ok
+    tasks: []
+    tests: []

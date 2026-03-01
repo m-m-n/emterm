@@ -5,9 +5,13 @@
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+#[cfg(feature = "gui")]
 pub mod ansi;
+#[cfg(feature = "gui")]
 pub mod image;
+#[cfg(feature = "gui")]
 pub mod logging;
+#[cfg(feature = "gui")]
 pub mod pty;
 
 // CLI command modules
@@ -17,19 +21,21 @@ pub mod error;
 pub mod protocols;
 pub mod validation;
 
-use std::collections::HashMap;
-use std::io::Read;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+#[cfg(feature = "gui")]
+use {
+    pty::{PtyError, PtyManager},
+    serde::{Deserialize, Serialize},
+    std::collections::HashMap,
+    std::io::Read,
+    std::sync::Arc,
+    std::sync::atomic::{AtomicBool, Ordering},
+    std::time::Duration,
+    tauri::ipc::Channel,
+    tauri::{AppHandle, Emitter, State},
+    tokio::sync::Mutex,
+};
 
-use serde::{Deserialize, Serialize};
-use tauri::ipc::Channel;
-use tauri::{AppHandle, Emitter, State};
-use tokio::sync::Mutex;
-
-use pty::{PtyError, PtyManager};
-
+#[cfg(feature = "gui")]
 /// Per-session image processor state.
 ///
 /// Maintains `ImageProcessor` instances per PTY session to preserve
@@ -40,6 +46,7 @@ pub struct ImageProcessorState {
     processors: Mutex<HashMap<String, image::ImageProcessor>>,
 }
 
+#[cfg(feature = "gui")]
 impl ImageProcessorState {
     pub fn new() -> Self {
         Self {
@@ -53,6 +60,7 @@ impl ImageProcessorState {
     }
 }
 
+#[cfg(feature = "gui")]
 /// Threshold above which image data is sent via on-demand fetch instead of events.
 ///
 /// Tauri's event system broadcasts payloads through webview eval/postMessage,
@@ -64,6 +72,7 @@ impl ImageProcessorState {
 /// 2 MB of base64 ≈ 1.5 MB of raw pixel data ≈ ~600×600 RGBA image.
 const LARGE_IMAGE_DATA_THRESHOLD: usize = 2_000_000;
 
+#[cfg(feature = "gui")]
 /// Temporary storage for image data too large for Tauri events.
 ///
 /// When `rgba_base64` exceeds [`LARGE_IMAGE_DATA_THRESHOLD`], it is moved
@@ -75,6 +84,7 @@ pub struct LargeImageDataStore {
     data: Mutex<HashMap<(String, u32), String>>,
 }
 
+#[cfg(feature = "gui")]
 impl LargeImageDataStore {
     pub fn new() -> Self {
         Self {
@@ -84,15 +94,17 @@ impl LargeImageDataStore {
 }
 
 // ============================================================================
-// Payload Types
+// Payload Types (GUI only)
 // ============================================================================
 
+#[cfg(feature = "gui")]
 /// Result returned from pty_spawn command.
 #[derive(Serialize, Deserialize)]
 pub struct SpawnResult {
     session_id: String,
 }
 
+#[cfg(feature = "gui")]
 /// Payload for pty_exit event.
 #[derive(Serialize, Clone)]
 pub struct PtyExitPayload {
@@ -103,6 +115,7 @@ pub struct PtyExitPayload {
     remaining_sessions: usize,
 }
 
+#[cfg(feature = "gui")]
 /// Payload for pty_error event.
 #[derive(Serialize, Clone)]
 pub struct PtyErrorPayload {
@@ -110,12 +123,14 @@ pub struct PtyErrorPayload {
     message: String,
 }
 
+#[cfg(feature = "gui")]
 /// Payload for tab_created event.
 #[derive(Serialize, Clone)]
 pub struct TabCreatedPayload {
     session_id: String,
 }
 
+#[cfg(feature = "gui")]
 /// Payload for tab_closed event.
 #[derive(Serialize, Clone)]
 pub struct TabClosedPayload {
@@ -123,12 +138,14 @@ pub struct TabClosedPayload {
     exit_code: i32,
 }
 
+#[cfg(feature = "gui")]
 /// Payload for tab_count_changed event.
 #[derive(Serialize, Clone)]
 pub struct TabCountChangedPayload {
     count: usize,
 }
 
+#[cfg(feature = "gui")]
 /// Payload for image_event IPC channel.
 ///
 /// Wraps an `ImageEvent` with the associated session ID for routing
@@ -144,9 +161,10 @@ pub struct ImageEventPayload {
 }
 
 // ============================================================================
-// Tauri Commands
+// Tauri Commands (GUI only)
 // ============================================================================
 
+#[cfg(feature = "gui")]
 /// Spawns a new PTY session with the specified shell and dimensions.
 ///
 /// # Arguments
@@ -199,6 +217,7 @@ async fn pty_spawn(
     Ok(SpawnResult { session_id })
 }
 
+#[cfg(feature = "gui")]
 /// Writes data to a PTY session via the dedicated writer channel.
 ///
 /// This is a synchronous (non-async) command that performs a single read-lock
@@ -213,6 +232,7 @@ async fn pty_spawn(
 /// Maximum allowed write size per call (1 MB).
 const PTY_WRITE_MAX_SIZE: usize = 1024 * 1024;
 
+#[cfg(feature = "gui")]
 #[tauri::command]
 fn pty_write(
     state: State<'_, PtyManager>,
@@ -232,6 +252,7 @@ fn pty_write(
         .map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "gui")]
 /// Resizes a PTY session.
 ///
 /// # Arguments
@@ -255,6 +276,7 @@ async fn pty_resize(
     session.resize(cols, rows).map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "gui")]
 /// Kills a PTY session.
 ///
 /// # Arguments
@@ -288,36 +310,42 @@ async fn pty_kill(
     Ok(())
 }
 
+#[cfg(feature = "gui")]
 /// Console log command - prints message to stdout with [LOG][FRONTEND] prefix.
 #[tauri::command]
 fn console_log(message: String) {
     println!("{}", logging::format_frontend_log("log", &message));
 }
 
+#[cfg(feature = "gui")]
 /// Console warn command - prints message to stderr with [WARN][FRONTEND] prefix.
 #[tauri::command]
 fn console_warn(message: String) {
     eprintln!("{}", logging::format_frontend_log("warn", &message));
 }
 
+#[cfg(feature = "gui")]
 /// Console error command - prints message to stderr with [ERROR][FRONTEND] prefix.
 #[tauri::command]
 fn console_error(message: String) {
     eprintln!("{}", logging::format_frontend_log("error", &message));
 }
 
+#[cfg(feature = "gui")]
 /// Console info command - prints message to stdout with [INFO][FRONTEND] prefix.
 #[tauri::command]
 fn console_info(message: String) {
     println!("{}", logging::format_frontend_log("info", &message));
 }
 
+#[cfg(feature = "gui")]
 /// Console debug command - prints message to stdout with [DEBUG][FRONTEND] prefix.
 #[tauri::command]
 fn console_debug(message: String) {
     println!("{}", logging::format_frontend_log("debug", &message));
 }
 
+#[cfg(feature = "gui")]
 /// Sets the backend locale at runtime.
 ///
 /// Called from the frontend to synchronize language settings.
@@ -340,6 +368,7 @@ fn set_language(language: String) -> Result<(), String> {
     }
 }
 
+#[cfg(feature = "gui")]
 /// Processes image data (Kitty/SIXEL) from the frontend WASM parser.
 ///
 /// Called when the WASM APC or DCS callback fires with image protocol data.
@@ -420,6 +449,7 @@ async fn process_image_data(
     Ok(())
 }
 
+#[cfg(feature = "gui")]
 /// Fetches large image data that was omitted from the `image_event` payload.
 ///
 /// When an image's `rgba_base64` exceeds [`LARGE_IMAGE_DATA_THRESHOLD`],
@@ -439,6 +469,7 @@ async fn fetch_image_data(
         .ok_or_else(|| format!("No deferred image data for id={}", image_id))
 }
 
+#[cfg(feature = "gui")]
 /// Processes a batch of Kitty Graphics Protocol APC sequences in a single IPC call.
 ///
 /// Instead of sending 600+ individual `process_image_data` calls for a chunked
@@ -501,6 +532,7 @@ async fn process_kitty_batch(
     Ok(())
 }
 
+#[cfg(feature = "gui")]
 /// Returns the number of active PTY sessions.
 ///
 /// This command exposes the existing `PtyManager::session_count()` method
@@ -510,6 +542,7 @@ async fn session_count(state: State<'_, PtyManager>) -> Result<usize, String> {
     Ok(state.session_count().await)
 }
 
+#[cfg(feature = "gui")]
 /// Gracefully closes a PTY session using a 3-stage shutdown sequence.
 ///
 /// # Stages
@@ -537,9 +570,10 @@ async fn tab_close_graceful(
 }
 
 // ============================================================================
-// Reader Thread
+// Reader Thread (GUI only)
 // ============================================================================
 
+#[cfg(feature = "gui")]
 /// Spawns a dedicated thread to read output from a PTY session.
 ///
 /// This thread continuously reads from the PTY and sends raw bytes via Channel:
@@ -793,7 +827,7 @@ fn spawn_reader_thread(
 }
 
 // ============================================================================
-// Application Entry Point
+// Application Entry Point (GUI only)
 // ============================================================================
 
 /// Set the taskbar icon from the embedded ICO resource on Windows.
@@ -802,7 +836,7 @@ fn spawn_reader_thread(
 /// 1 byte per pixel instead of 1 bit per pixel, causing alpha transparency to be
 /// lost. By loading the icon directly from the embedded resource via `LoadImageW`,
 /// Windows handles the ICO's alpha channel correctly.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "gui"))]
 fn set_taskbar_icon(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::Error>> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -841,6 +875,7 @@ fn set_taskbar_icon(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+#[cfg(feature = "gui")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg(not(test))]
 pub fn run() {
@@ -910,7 +945,7 @@ pub fn run() {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gui"))]
 #[allow(deprecated)]
 mod tests {
     use super::*;

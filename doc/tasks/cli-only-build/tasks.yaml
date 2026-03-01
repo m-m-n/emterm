@@ -1,0 +1,33 @@
+tasks:
+  - id: phase-1
+    title: "Cargo Feature Flag Configuration"
+    phase: 1
+    description: "Add gui feature flag to Cargo.toml, make GUI dependencies optional"
+    files:
+      - src-tauri/Cargo.toml
+    status: completed
+    effort: small
+    depends_on: []
+
+  - id: phase-2
+    title: "Conditional Compilation Gates"
+    phase: 2
+    description: "Add #[cfg(feature = \"gui\")] gates to build.rs, lib.rs, commands/mod.rs, main.rs"
+    files:
+      - src-tauri/build.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/commands/mod.rs
+      - src-tauri/src/main.rs
+    status: completed
+    effort: medium
+    depends_on: [phase-1]
+
+  - id: phase-3
+    title: "Build Script CLI-Only Support"
+    phase: 3
+    description: "Modify build-dpkg.sh to detect EMTERM_CLI_ONLY and produce CLI-only dpkg"
+    files:
+      - scripts/build-dpkg.sh
+    status: completed
+    effort: medium
+    depends_on: [phase-1, phase-2]

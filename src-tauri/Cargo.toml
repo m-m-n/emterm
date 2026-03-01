@@ -10,28 +10,44 @@ rust-version = "1.85"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["gui"]
+gui = [
+    "tauri",
+    "tauri-plugin-clipboard-manager",
+    "tauri-plugin-notification",
+    "tauri-plugin-shell",
+    "portable-pty",
+    "tokio",
+    "futures",
+    "font-kit",
+    "tauri-build",
+    "raw-window-handle",
+    "windows",
+]
+
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.5.3", features = [] }
+tauri-build = { version = "2.5.3", features = [], optional = true }
 
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = { version = "0.4", features = ["std"] }
-tauri = { version = "2.9.5", features = [] }
-tauri-plugin-clipboard-manager = "2"
-tauri-plugin-notification = "2"
-tauri-plugin-shell = "2"
+tauri = { version = "2.9.5", features = [], optional = true }
+tauri-plugin-clipboard-manager = { version = "2", optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
+tauri-plugin-shell = { version = "2", optional = true }
 
 # PTY dependencies
-portable-pty = "0.8"
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"] }
+portable-pty = { version = "0.8", optional = true }
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"], optional = true }
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
-futures = "0.3"
+futures = { version = "0.3", optional = true }
 anyhow = "1"
 
 # Image processing dependencies
@@ -43,13 +59,13 @@ clap = { version = "4.5.54", features = ["derive"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 rust-i18n = "3"
 sys-locale = "0.3"
-font-kit = "0.14"
+font-kit = { version = "0.14", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-raw-window-handle = "0.6"
+raw-window-handle = { version = "0.6", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
@@ -57,6 +73,7 @@ features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_LibraryLoader",
 ]
+optional = true
 
 [dev-dependencies]
 tempfile = "3.24.0"

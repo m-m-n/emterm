@@ -1,5 +1,8 @@
+#[cfg(feature = "gui")]
 pub mod config;
+#[cfg(feature = "gui")]
 pub mod editor;
+#[cfg(feature = "gui")]
 pub mod font;
 pub mod image;
 pub mod markdown;
