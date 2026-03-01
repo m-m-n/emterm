@@ -215,6 +215,10 @@ A fullscreen overlay viewer for rendered Markdown content.
 - Zoom control: Ctrl+= / Ctrl+- / Ctrl+0 to adjust font size
 - ESC or click outside to close
 - Smooth scroll animation
+- Outline (table of contents) panel on the left when viewport width is 1200px or wider
+- Outline lists h1-h3 headings in a tree structure with indentation; clicking a heading scrolls to it
+- Currently visible heading is highlighted in the outline (IntersectionObserver-based)
+- Outline panel is hidden when no h1-h3 headings exist in the document
 
 **Keyboard Shortcuts:**
 | Key | Action |
@@ -225,6 +229,20 @@ A fullscreen overlay viewer for rendered Markdown content.
 | `Home / End` | Jump to top/bottom |
 | `Ctrl+=` / `Ctrl+-` | Zoom in/out |
 | `Ctrl+0` | Reset zoom |
+
+---
+
+#### Mermaid Diagram Rendering
+
+Mermaid code blocks in Markdown documents render as SVG diagrams.
+
+**Key Functionality:**
+- Detects `mermaid` fenced code blocks and renders them as SVG using mermaid.js
+- All Mermaid diagram types are supported (flowchart, sequence, Gantt, class, etc.)
+- Dark theme is used for diagram rendering
+- On syntax error, the original source is shown as a regular code block
+- mermaid.js is loaded only when mermaid blocks are present (lazy loading)
+- Security: mermaid.js `securityLevel` set to `strict`; user-authored SVG in Markdown remains blocked by DOMPurify
 
 ---
 
@@ -265,6 +283,13 @@ Inline image rendering supporting two standard protocols.
 - SIXEL palette: up to 256 colors per image
 - Images stored in memory for the session duration
 - Images scroll with terminal content
+
+**Kitty Protocol Compatibility:**
+- Kitty query responses (`a=q`) are synchronous, delivered in the same PTY data processing pass
+- XTWINOPS device responses: CSI 14t (text area pixel size), CSI 16t (cell size), CSI 18t (text area in characters)
+- Cell size is synchronized to WASM on init, resize, and alternate buffer switch
+- External tools using ratatui-image, crossterm capability detection, and kitten icat work correctly
+- Animation frame commands (`a=f`, `a=a`) are handled by the image pipeline
 
 ---
 
@@ -430,6 +455,33 @@ Double-click selects a word; continuing to hold and drag extends the selection w
 
 ---
 
+#### Middle-Click Paste
+
+Middle mouse button (wheel click) pastes clipboard contents into the terminal.
+
+**Key Functionality:**
+- Middle-click in the terminal area reads from the system clipboard and pastes
+- Single-line text is pasted immediately; multi-line text shows the existing confirmation dialog
+- Text is sent via the existing chunked paste mechanism (identical to Ctrl+Shift+V)
+- Middle-click paste takes priority over PTY mouse tracking mode
+- `middle_click_paste` boolean setting (default: `true`) enables or disables the feature
+
+---
+
+#### Shift+Enter as Alt+Enter
+
+`Shift+Enter` can be remapped to send the same escape sequence as `Alt+Enter` (ESC + CR: `0x1b 0x0d`).
+
+**Key Functionality:**
+- `shift_enter_as_alt_enter` setting (default: `true`)
+- When enabled, Shift+Enter (without Ctrl or Alt) sends `[0x1b, 0x0d]`
+- When disabled, Shift+Enter sends `[0x0d]` (CR) as normal
+- The remapping does not apply when Ctrl is held (Ctrl+Shift+Enter is unaffected)
+- `Alt+Enter` always sends `[0x1b, 0x0d]` regardless of the setting
+- Additional mappings: Shift+Backspace sends `[0x7f]` (DEL); Shift+Escape sends `[0x1b]`
+
+---
+
 ### Category 5: Navigation
 
 #### Semantic Scroll and Search
@@ -485,17 +537,22 @@ URLs detected in terminal output open in the system browser via `Ctrl+click`.
 
 #### Settings Panel
 
-A full settings panel with multiple categories.
+A full settings panel with multiple categories and a collapsible navigation rail.
 
 **Categories:**
-1. **UI Settings** - Theme, color presets, tab bar, window behavior
+1. **UI Settings** - Theme, color presets, UI font, tab bar, window behavior
 2. **Keybinds** - All configurable keyboard shortcuts
 3. **Terminal Appearance** - Font, colors, cursor, scrollbar, padding, opacity, line height
-4. **Terminal Behavior** - Shell, scrollback, scroll speed, bell, URL detection, copy-on-select
-5. **Markdown Viewer** - Body font, code font, font size, color theme
+4. **Terminal Behavior** - Shell, scrollback, scroll speed, bell, URL detection, copy-on-select, middle-click paste, Shift+Enter behavior
+5. **Notifications** - Desktop notifications and tab activity indicators
+6. **Markdown Viewer** - Body font, code font, font size, color theme
+7. **Profiles** - Named shell configurations for tab creation
 
 **Key Functionality:**
 - Material Design 3 list-detail layout (category nav on left, settings on right)
+- Collapsible navigation: hamburger toggle shrinks nav column to an 80px icon-only rail; clicking an icon in collapsed state switches category without expanding
+- SVG icons on each category navigation item (24px, Material Design 3 style)
+- Description texts for each setting item (MD3 supporting text pattern)
 - All settings persisted to TOML configuration file
 - Live preview for most appearance settings
 - Validation with localized error messages
@@ -555,6 +612,18 @@ Three-field font configuration to handle multi-script text correctly.
 
 ---
 
+#### UI Font
+
+A separate font family setting for the application UI (settings panel and other UI elements).
+
+**Key Functionality:**
+- Configurable in UI Settings category
+- Default: Roboto (system fallback: system-ui, sans-serif)
+- Applied via `--ui-font-family` CSS custom property on `.settings-panel`
+- Independent from terminal fonts
+
+---
+
 #### Additional Appearance Settings
 
 **Cursor:**
@@ -595,7 +664,35 @@ All keyboard shortcuts are configurable in the Settings panel.
 
 ---
 
-### Category 7: Performance and Architecture
+### Category 7: Terminal Profiles
+
+#### Terminal Profiles
+
+Named shell configurations that can be selected when creating new tabs.
+
+**Key Functionality:**
+- Each profile defines: name, shell path, shell arguments, environment variables (KEY=VALUE per line), working directory, and default flag
+- CRUD operations: create, edit, delete, duplicate profiles
+- Drag-and-drop reordering in the settings UI
+- Exactly one profile can be marked as default at a time
+- Profile selector modal with keyboard navigation (arrow keys, Enter, Escape)
+- Launch button per profile in the settings UI opens a new tab with that profile
+- Configurable keybind to open the profile selector modal
+
+**Tab Creation Logic:**
+- No profiles defined: creates tab using global shell settings (existing behavior)
+- Default profile set: `+` button and `Ctrl+Shift+T` use the default profile
+- No default set but profiles exist: `+` button shows the profile selector modal
+- Profile-specific `shell_path`, `shell_args`, `env_vars`, and `working_directory` are passed to the PTY for that session
+- Empty `shell_path` in a profile uses the system default shell
+
+**Backward Compatibility:**
+- Existing settings files without the `profiles` field load without error
+- Global `shell_path` and `shell_args` settings remain available and are used when no profiles are defined
+
+---
+
+### Category 8: Performance and Architecture
 
 #### WASM Optimization
 
@@ -626,7 +723,7 @@ The terminal state machine is refactored into a handler-based architecture.
 
 ---
 
-### Category 8: Internationalization
+### Category 9: Internationalization
 
 #### English and Japanese Support
 
@@ -674,6 +771,7 @@ opacity = 100             # 0-100%
 cursor_shape = "block"    # "block" | "underline" | "bar"
 cursor_blink = true
 scrollbar = "auto"        # "visible" | "hidden" | "auto"
+ui_font_family = "Roboto" # font used in settings panel and UI elements
 
 [terminal]
 shell = ""                # empty = system default
@@ -683,6 +781,15 @@ bell = true
 url_detection = true
 copy_on_select = false
 color_scheme = "emterm"   # "emterm" | "solarized-dark" | ... | "custom"
+middle_click_paste = true
+shift_enter_as_alt_enter = true
+
+[notifications]
+notification_enabled = true
+tab_activity_indicator = true
+notify_on_process_exit = true
+notify_on_output = false
+notify_on_bell = true
 
 [tab_bar]
 visible = true
@@ -700,6 +807,14 @@ color_theme = "default-dark"
 new_tab = "Ctrl+Shift+T"
 close_tab = "Ctrl+Shift+W"
 # ... additional keybinds
+
+[[profiles]]
+name = "Default Shell"
+shell_path = ""
+shell_args = []
+env_vars = ""
+working_directory = ""
+is_default = true
 ```
 
 ## Dependencies
@@ -715,14 +830,16 @@ close_tab = "Ctrl+Shift+W"
 | `serde` / `serde_json` | Serialization |
 | `base64` | Base64 encoding for image/markdown transfer |
 | `log` | Logging |
+| `tauri-plugin-notification` | OS native desktop notifications |
 
 ### TypeScript/npm
 | Package | Purpose |
 |---------|---------|
 | `@tauri-apps/api` | Tauri frontend API |
+| `@tauri-apps/plugin-notification` | Desktop notification frontend API |
 | `marked` | Markdown parsing |
 | `highlight.js` | Syntax highlighting |
-| `mermaid` | Diagram rendering |
+| `mermaid` | Diagram rendering (lazy loaded) |
 | `dompurify` | XSS sanitization |
 
 ## Technical Notes

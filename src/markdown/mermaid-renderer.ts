@@ -1,11 +1,13 @@
 /**
  * Mermaid diagram renderer for fullscreen Markdown view.
  *
- * Lazy-loads mermaid.js and renders mermaid code blocks as SVG diagrams.
- * Only loads the library when mermaid blocks are detected.
+ * Lazy-loads mermaid.js and renders mermaid code blocks as SVG diagrams
+ * with a Code/Chart toggle UI. Source code is preserved for copy functionality.
  *
  * @module markdown/mermaid-renderer
  */
+
+import { t } from "../i18n/index.ts";
 
 /** Mermaid API interface for dynamic import */
 interface MermaidAPI {
@@ -13,10 +15,17 @@ interface MermaidAPI {
 	render: (id: string, source: string) => Promise<{ svg: string }>;
 }
 
+/** Chart icon SVG (flowchart nodes) */
+const CHART_ICON = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1" width="6" height="3.5" rx="1"/><rect x="4" y="9.5" width="6" height="3.5" rx="1"/><line x1="7" y1="4.5" x2="7" y2="9.5"/><polyline points="4.5,7.5 7,9.5 9.5,7.5"/></svg>`;
+
+/** Code icon SVG (angle brackets) */
+const CODE_ICON = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5,3 1.5,7 5,11"/><polyline points="9,3 12.5,7 9,11"/></svg>`;
+
 /**
- * Renders mermaid code blocks as SVG diagrams.
+ * Renders mermaid code blocks as SVG diagrams with toggle support.
  *
  * Uses lazy loading to avoid loading mermaid.js when no mermaid blocks exist.
+ * Provides Code/Chart toggle to switch between source code and rendered diagram.
  */
 export class MermaidRenderer {
 	/** Cached mermaid instance */
@@ -29,7 +38,7 @@ export class MermaidRenderer {
 	 * Render all mermaid code blocks in the given container.
 	 *
 	 * Scans for `pre > code.language-mermaid` elements, lazy-loads mermaid.js
-	 * if any are found, and replaces them with SVG diagrams.
+	 * if any are found, and replaces them with SVG diagrams with toggle UI.
 	 *
 	 * @param container - DOM element containing rendered Markdown
 	 */
@@ -53,7 +62,7 @@ export class MermaidRenderer {
 	}
 
 	/**
-	 * Lazy-load and initialize mermaid.js.
+	 * Lazy-load and initialize mermaid.js with dark theme.
 	 */
 	private async ensureInitialized(): Promise<void> {
 		if (this.mermaid) return;
@@ -65,13 +74,39 @@ export class MermaidRenderer {
 			startOnLoad: false,
 			theme: "dark",
 			securityLevel: "strict",
+			fontFamily: "sans-serif",
+			themeVariables: {
+				darkMode: true,
+				background: "#2d2d2d",
+				primaryColor: "#3b3b5c",
+				primaryTextColor: "#d4d4d4",
+				primaryBorderColor: "#6c6c9c",
+				lineColor: "#808080",
+				secondaryColor: "#2d2d4d",
+				tertiaryColor: "#1e1e3e",
+				noteBkgColor: "#2d2d2d",
+				noteTextColor: "#d4d4d4",
+				noteBorderColor: "#505050",
+				actorBkg: "#2d2d4d",
+				actorTextColor: "#d4d4d4",
+				actorBorder: "#6c6c9c",
+				signalColor: "#d4d4d4",
+				signalTextColor: "#d4d4d4",
+			},
+			sequence: {
+				mirrorActors: false,
+				useMaxWidth: true,
+			},
 		});
 	}
 
 	/**
-	 * Render a single mermaid code block to SVG.
+	 * Render a single mermaid code block with toolbar (Chart/Code/Copy).
 	 *
-	 * On success, replaces the code block's parent `<pre>` with an SVG container.
+	 * Creates a structure within the existing code-block-wrapper:
+	 * - mermaid-block: contains diagram view and source view
+	 * - mermaid-toolbar: Chart icon, Code icon, Copy text button (top-right on hover)
+	 *
 	 * On failure, leaves the original code block unchanged.
 	 */
 	private async renderBlock(codeElement: HTMLElement): Promise<void> {
@@ -86,11 +121,96 @@ export class MermaidRenderer {
 		try {
 			const { svg } = await this.mermaid.render(id, source);
 
-			const wrapper = document.createElement("div");
-			wrapper.className = "mermaid-diagram";
-			wrapper.innerHTML = svg;
+			// Find the code-block-wrapper created by addCopyButtons()
+			const existingWrapper = pre.parentElement?.classList.contains("code-block-wrapper")
+				? pre.parentElement
+				: null;
 
-			pre.parentNode?.replaceChild(wrapper, pre);
+			// Build mermaid block structure
+			const block = document.createElement("div");
+			block.className = "mermaid-block";
+			block.dataset.view = "diagram";
+			block.setAttribute("data-mermaid-source", source);
+
+			// Diagram container
+			const diagramContainer = document.createElement("div");
+			diagramContainer.className = "mermaid-diagram";
+			diagramContainer.innerHTML = svg;
+
+			// Source code container (clone original pre)
+			const sourceContainer = document.createElement("div");
+			sourceContainer.className = "mermaid-source";
+			sourceContainer.style.display = "none";
+			sourceContainer.appendChild(pre.cloneNode(true));
+
+			block.appendChild(diagramContainer);
+			block.appendChild(sourceContainer);
+
+			// Build toolbar (Chart icon | Code icon | Copy text)
+			const toolbar = document.createElement("div");
+			toolbar.className = "mermaid-toolbar";
+
+			const chartBtn = document.createElement("button");
+			chartBtn.className = "mermaid-view-btn active";
+			chartBtn.dataset.mode = "diagram";
+			chartBtn.type = "button";
+			chartBtn.setAttribute("aria-label", t("markdown.mermaidChart"));
+			chartBtn.innerHTML = CHART_ICON;
+
+			const codeBtn = document.createElement("button");
+			codeBtn.className = "mermaid-view-btn";
+			codeBtn.dataset.mode = "code";
+			codeBtn.type = "button";
+			codeBtn.setAttribute("aria-label", t("markdown.mermaidCode"));
+			codeBtn.innerHTML = CODE_ICON;
+
+			const copyBtn = document.createElement("button");
+			copyBtn.className = "copy-code-button mermaid-copy-btn";
+			copyBtn.type = "button";
+			copyBtn.setAttribute("aria-label", t("markdown.copyCode"));
+			const copyIcon = document.createElement("span");
+			copyIcon.className = "copy-icon";
+			copyIcon.textContent = t("markdown.copyCode");
+			copyBtn.appendChild(copyIcon);
+
+			toolbar.appendChild(chartBtn);
+			toolbar.appendChild(codeBtn);
+			toolbar.appendChild(copyBtn);
+
+			// Replace in DOM
+			if (existingWrapper) {
+				// Remove the old standalone copy button
+				const oldCopyBtn = existingWrapper.querySelector(":scope > .copy-code-button");
+				oldCopyBtn?.remove();
+				existingWrapper.replaceChild(block, pre);
+				existingWrapper.appendChild(toolbar);
+				existingWrapper.classList.add("mermaid-block-wrapper");
+			} else {
+				// Create wrapper if none exists
+				const wrapper = document.createElement("div");
+				wrapper.className = "code-block-wrapper mermaid-block-wrapper";
+				pre.parentNode?.insertBefore(wrapper, pre);
+				wrapper.appendChild(block);
+				wrapper.appendChild(toolbar);
+				pre.remove();
+			}
+
+			// Toggle event handler
+			toolbar.addEventListener("click", (e) => {
+				const target = (e.target as HTMLElement).closest(".mermaid-view-btn");
+				if (!target) return;
+				const mode = (target as HTMLElement).dataset.mode;
+				if (!mode) return;
+
+				block.dataset.view = mode;
+
+				toolbar.querySelectorAll(".mermaid-view-btn").forEach(btn =>
+					btn.classList.toggle("active", btn === target),
+				);
+
+				diagramContainer.style.display = mode === "diagram" ? "" : "none";
+				sourceContainer.style.display = mode === "code" ? "" : "none";
+			});
 		} catch (err) {
 			console.warn("[WARN][FRONTEND] MermaidRenderer: failed to render block", err);
 		}

@@ -306,7 +306,9 @@
     "copyCode": "Copy code",
     "copySuccess": "Copied!",
     "copyFailed": "Failed",
-    "outline": "Document Outline"
+    "outline": "Document Outline",
+    "mermaidChart": "Chart",
+    "mermaidCode": "Code"
   },
   "zoom": {
     "closeViewer": "Close viewer",
