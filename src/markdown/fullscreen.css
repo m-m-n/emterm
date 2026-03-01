@@ -40,6 +40,7 @@
 /* When outline is present, content fills remaining space and centers */
 .markdown-fullscreen-overlay.has-outline .markdown-fullscreen-content {
 	flex: 1;
+	max-width: none;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -313,15 +314,116 @@
 	margin-right: 0.5em;
 }
 
-/* Mermaid diagram containers */
-.mermaid-diagram {
+/* Mermaid block */
+.mermaid-block {
+	background: var(--markdown-pre-bg, #2d2d2d);
+	border-radius: 6px;
+	overflow: hidden;
+}
+
+/* Mermaid diagram container */
+.mermaid-block .mermaid-diagram {
 	display: flex;
 	justify-content: center;
-	margin: 16px 0;
+	padding: 1rem;
 	overflow-x: auto;
 }
 
-.mermaid-diagram svg {
+.mermaid-block .mermaid-diagram svg {
 	max-width: 100%;
 	height: auto;
+}
+
+/* Source code view inside mermaid block */
+.mermaid-source pre {
+	margin: 0 !important;
+	border-radius: 0 0 6px 6px !important;
+}
+
+/* Mermaid toolbar - top-right, shown on hover (same pattern as copy button) */
+.mermaid-toolbar {
+	position: absolute;
+	top: 0.5rem;
+	right: 0.5rem;
+	display: flex;
+	gap: 4px;
+	align-items: center;
+	z-index: 1;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.2s;
+}
+
+.code-block-wrapper.mermaid-block-wrapper:hover .mermaid-toolbar {
+	opacity: 0.7;
+	pointer-events: auto;
+}
+
+.mermaid-toolbar:hover {
+	opacity: 1 !important;
+}
+
+/* View toggle icon buttons (Chart / Code) */
+.mermaid-view-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: 4px;
+	background: var(--markdown-border, #404040);
+	color: var(--markdown-fg, #d4d4d4);
+	cursor: pointer;
+	transition: background-color 0.15s;
+}
+
+.mermaid-view-btn:hover {
+	background: var(--markdown-link, #569cd6);
+	color: #ffffff;
+}
+
+.mermaid-view-btn.active {
+	background: var(--markdown-link, #569cd6);
+	color: #ffffff;
+}
+
+.mermaid-view-btn svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* Copy button inside mermaid toolbar (reuse base style but match icon button height) */
+.mermaid-toolbar .copy-code-button {
+	position: static;
+	height: 28px;
+	display: flex;
+	align-items: center;
+	opacity: 1;
+	pointer-events: auto;
+}
+
+/* Hide the standalone copy button for mermaid wrappers (toolbar has its own) */
+.code-block-wrapper.mermaid-block-wrapper > .copy-code-button {
+	display: none;
+}
+
+/* Mermaid SVG dark theme overrides */
+.mermaid-diagram .actor-man line,
+.mermaid-diagram .actor-man circle {
+	stroke: #808080;
+}
+
+.mermaid-diagram text {
+	fill: #d4d4d4 !important;
+}
+
+.mermaid-diagram .messageText {
+	fill: #d4d4d4 !important;
+}
+
+.mermaid-diagram .loopText,
+.mermaid-diagram .loopText > tspan {
+	fill: #b0b0b0 !important;
 }

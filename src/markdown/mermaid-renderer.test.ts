@@ -88,16 +88,43 @@ describe("MermaidRenderer", () => {
 	});
 
 	describe("rendering", () => {
-		test("should render mermaid block as SVG", async () => {
+		test("should render mermaid block with toolbar", async () => {
 			container.innerHTML =
 				'<pre><code class="hljs language-mermaid">graph TD\n  A--&gt;B</code></pre>';
 			const renderer = new MermaidRenderer();
 			await renderer.renderAll(container);
 
-			// Original code block should be replaced
+			// Should create mermaid-block
+			const mermaidBlock = container.querySelector(".mermaid-block");
+			expect(mermaidBlock).not.toBeNull();
+
+			// Diagram should be rendered
 			const mermaidDiagram = container.querySelector(".mermaid-diagram");
 			expect(mermaidDiagram).not.toBeNull();
 			expect(mermaidDiagram?.querySelector("svg")).not.toBeNull();
+
+			// Source should be preserved
+			const mermaidSource = container.querySelector(".mermaid-source");
+			expect(mermaidSource).not.toBeNull();
+			expect(mermaidSource?.querySelector("pre > code")).not.toBeNull();
+
+			// Toolbar with Chart/Code icon buttons and Copy text button
+			const toolbar = container.querySelector(".mermaid-toolbar");
+			expect(toolbar).not.toBeNull();
+			const viewBtns = container.querySelectorAll(".mermaid-view-btn");
+			expect(viewBtns.length).toBe(2);
+			const copyBtn = toolbar?.querySelector(".copy-code-button");
+			expect(copyBtn).not.toBeNull();
+		});
+
+		test("should store source as data attribute for copy", async () => {
+			container.innerHTML =
+				'<pre><code class="hljs language-mermaid">graph TD\n  A--&gt;B</code></pre>';
+			const renderer = new MermaidRenderer();
+			await renderer.renderAll(container);
+
+			const mermaidBlock = container.querySelector(".mermaid-block");
+			expect(mermaidBlock?.getAttribute("data-mermaid-source")).toContain("graph TD");
 		});
 
 		test("should apply dark theme and strict security (TS-10)", async () => {
@@ -110,6 +137,9 @@ describe("MermaidRenderer", () => {
 				expect.objectContaining({
 					theme: "dark",
 					securityLevel: "strict",
+					themeVariables: expect.objectContaining({
+						darkMode: true,
+					}),
 				}),
 			);
 		});
@@ -122,6 +152,8 @@ describe("MermaidRenderer", () => {
 			const renderer = new MermaidRenderer();
 			await renderer.renderAll(container);
 
+			const blocks = container.querySelectorAll(".mermaid-block");
+			expect(blocks.length).toBe(2);
 			const diagrams = container.querySelectorAll(".mermaid-diagram");
 			expect(diagrams.length).toBe(2);
 		});
@@ -135,6 +167,30 @@ describe("MermaidRenderer", () => {
 			await renderer.renderAll(container);
 
 			expect(mockInitialize).toHaveBeenCalledTimes(1);
+		});
+
+		test("should toggle between diagram and code views", async () => {
+			container.innerHTML =
+				'<pre><code class="hljs language-mermaid">graph TD\n  A--&gt;B</code></pre>';
+			const renderer = new MermaidRenderer();
+			await renderer.renderAll(container);
+
+			const block = container.querySelector(".mermaid-block") as HTMLElement;
+			const codeBtn = container.querySelector('.mermaid-view-btn[data-mode="code"]') as HTMLElement;
+			const diagramContainer = container.querySelector(".mermaid-diagram") as HTMLElement;
+			const sourceContainer = container.querySelector(".mermaid-source") as HTMLElement;
+
+			// Default: diagram visible, source hidden
+			expect(block.dataset.view).toBe("diagram");
+			expect(diagramContainer.style.display).toBe("");
+			expect(sourceContainer.style.display).toBe("none");
+
+			// Click code button
+			codeBtn.click();
+
+			expect(block.dataset.view).toBe("code");
+			expect(diagramContainer.style.display).toBe("none");
+			expect(sourceContainer.style.display).toBe("");
 		});
 	});
 
@@ -150,16 +206,15 @@ describe("MermaidRenderer", () => {
 			const renderer = new MermaidRenderer();
 			await renderer.renderAll(container);
 
-			// Original code block should remain
+			// Original code block should remain (no mermaid-block wrapper)
+			const mermaidBlock = container.querySelector(".mermaid-block");
+			expect(mermaidBlock).toBeNull();
+
 			const codeBlock = container.querySelector(
 				"pre > code.language-mermaid, pre > code.hljs.language-mermaid",
 			);
 			expect(codeBlock).not.toBeNull();
 			expect(codeBlock?.textContent).toContain("invalid mermaid syntax");
-
-			// No mermaid diagram should be created
-			const diagram = container.querySelector(".mermaid-diagram");
-			expect(diagram).toBeNull();
 		});
 
 		test("should continue rendering other blocks after one fails", async () => {
@@ -181,13 +236,11 @@ describe("MermaidRenderer", () => {
 			const renderer = new MermaidRenderer();
 			await renderer.renderAll(container);
 
-			// First block should remain as code
-			const codeBlocks = container.querySelectorAll(
-				"pre > code.language-mermaid, pre > code.hljs.language-mermaid",
-			);
-			expect(codeBlocks.length).toBe(1);
+			// First block should remain as code (no wrapper)
+			const mermaidBlocks = container.querySelectorAll(".mermaid-block");
+			expect(mermaidBlocks.length).toBe(1);
 
-			// Second block should be rendered
+			// Second block should be rendered with toggle
 			const diagrams = container.querySelectorAll(".mermaid-diagram");
 			expect(diagrams.length).toBe(1);
 		});

@@ -14,8 +14,10 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
 - **Rich Content Display**
   - Inline Markdown rendering via custom OSC 777 extension (CommonMark, GFM, syntax highlighting, Mermaid diagrams)
   - Large document support: no file size limit, session timeout resets per chunk
-  - Fullscreen Markdown viewer with zoom and keyboard navigation
+  - Fullscreen Markdown viewer with outline panel (table of contents), zoom, and keyboard navigation
+  - Mermaid diagram rendering in Markdown (flowcharts, sequence diagrams, etc.)
   - Inline image rendering (Kitty Graphics Protocol and SIXEL)
+  - Kitty protocol compatibility: works with kitten icat, ratatui-image, treemd, and other external tools
   - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll)
   - CLI commands: `emterm markdown` and `emterm image` (work over SSH)
 
@@ -23,6 +25,8 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - High-throughput key input (event-based binary IPC, zero JSON serialization)
   - Full IME support: EditContext API (Chromium) and hidden textarea fallback (WebKit)
   - Capture-phase clipboard shortcuts (Ctrl+Shift+C/V) compatible with IME
+  - Middle-click paste (configurable)
+  - Shift+Enter as Alt+Enter for multiline input in AI interfaces (configurable, default ON)
   - Word selection drag (double-click and drag to extend by word)
 
 - **Navigation**
@@ -33,12 +37,19 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - URL Ctrl+click to open in browser
 
 - **Settings and Appearance**
-  - Settings panel with five categories (UI, Keybinds, Terminal Appearance, Terminal Behavior, Markdown Viewer)
+  - Settings panel with collapsible icon-rail navigation and seven categories
   - Dark/light/system theme with four accent color presets (Purple, Blue, Green, Orange)
   - Terminal color schemes: built-in presets plus fully user-customizable palette
   - Three-field font configuration (primary, CJK/secondary, emoji) with system font picker
+  - Separate UI font setting for the settings panel
+  - Terminal profiles: named shell configurations with shell, args, env vars, and working directory
   - Configurable cursor shape, scrollbar, opacity, line height, scrollback, shell, and more
   - All keyboard shortcuts configurable
+
+- **Notifications**
+  - Activity dot indicator on inactive tabs when new output or process events occur
+  - OS desktop notifications when the window is not focused (configurable)
+  - Notification throttling to prevent spam during high-frequency output
 
 - **Internationalization**
   - English and Japanese UI (auto-detected from OS locale)

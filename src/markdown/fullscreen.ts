@@ -455,6 +455,7 @@ export class FullscreenMarkdownView {
 
 	/**
 	 * Handle copy button clicks.
+	 * Supports both regular code blocks and mermaid blocks (via data attribute).
 	 */
 	private async handleCopyClick(e: MouseEvent): Promise<void> {
 		const target = e.target as HTMLElement;
@@ -465,10 +466,19 @@ export class FullscreenMarkdownView {
 		e.stopPropagation();
 
 		const wrapper = button.closest(".code-block-wrapper");
-		const code = wrapper?.querySelector("pre > code");
-		if (!code) return;
+		if (!wrapper) return;
 
-		const text = code.textContent || "";
+		// Try mermaid source first (stored as data attribute), then regular code block
+		const mermaidSource = wrapper.querySelector(".mermaid-block")
+			?.getAttribute("data-mermaid-source");
+		let text: string;
+		if (mermaidSource) {
+			text = mermaidSource;
+		} else {
+			const code = wrapper.querySelector("pre > code");
+			if (!code) return;
+			text = code.textContent || "";
+		}
 
 		try {
 			await writeText(text);

@@ -144,17 +144,19 @@ function configureMarked(format: MarkdownFormat): void {
 const renderer = new marked.Renderer();
 
 renderer.code = ({ text, lang }: { text: string; lang?: string }): string => {
-	const language = lang && hljs.getLanguage(lang) ? lang : "plaintext";
+	const highlightLang =
+		lang && hljs.getLanguage(lang) ? lang : "plaintext";
 	let highlighted: string;
 
 	try {
-		highlighted = hljs.highlight(text, { language }).value;
+		highlighted = hljs.highlight(text, { language: highlightLang }).value;
 	} catch {
 		// Fallback to escaped text if highlighting fails
 		highlighted = escapeHtml(text);
 	}
 
-	const langClass = language ? ` language-${language}` : "";
+	// Preserve original lang for class (e.g. "language-mermaid" for post-processing)
+	const langClass = lang ? ` language-${lang}` : "";
 	return `<pre><code class="hljs${langClass}">${highlighted}</code></pre>`;
 };
 
