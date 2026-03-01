@@ -15,7 +15,7 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Inline Markdown rendering via custom OSC 777 extension (CommonMark, GFM, syntax highlighting, Mermaid diagrams)
   - Large document support: no file size limit, session timeout resets per chunk
   - Fullscreen Markdown viewer with outline panel (table of contents), zoom, and keyboard navigation
-  - Mermaid diagram rendering in Markdown (flowcharts, sequence diagrams, etc.)
+  - Mermaid diagram rendering in Markdown (flowcharts, sequence diagrams, etc.) with Chart/Code toggle toolbar
   - Inline image rendering (Kitty Graphics Protocol and SIXEL)
   - Kitty protocol compatibility: works with kitten icat, ratatui-image, treemd, and other external tools
   - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll)
