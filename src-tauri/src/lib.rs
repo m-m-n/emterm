@@ -833,8 +833,8 @@ fn set_taskbar_icon(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::er
         SendMessageW(
             hwnd,
             WM_SETICON,
-            windows::Win32::Foundation::WPARAM(ICON_BIG),
-            windows::Win32::Foundation::LPARAM(hicon.0 as isize),
+            Some(windows::Win32::Foundation::WPARAM(ICON_BIG)),
+            Some(windows::Win32::Foundation::LPARAM(hicon.0 as isize)),
         );
     }
 
