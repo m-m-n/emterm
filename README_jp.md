@@ -93,11 +93,31 @@ bun run tauri:dev
 ## ビルド
 
 ```bash
-# プロダクションビルド
-bun run tauri:build
+# プロダクションビルド（Linux: deb/rpm, Windows: nsis）
+make build
 ```
 
-ビルドされたアプリケーションは `src-tauri/target/release/` に出力されます。
+ビルドされたアプリケーションは `src-tauri/target/release/bundle/` に出力されます。
+
+### CLI単体ビルド
+
+GUIアプリケーションなしで、CLIコマンド（`emterm markdown`、`emterm image`）のみをビルドします：
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features
+```
+
+`gui` featureフラグがデフォルトで有効になっています。`--no-default-features` を指定するとGUI依存（Tauri、WebViewなど）を除外し、軽量なCLIバイナリを生成します。
+
+### Windowsクロスコンパイル（Linuxから）
+
+[cargo-xwin](https://github.com/rust-cross/cargo-xwin) を使用してLinuxからWindows向けにクロスコンパイルします：
+
+```bash
+make win-build
+```
+
+内部で `bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc` を実行します。事前に `cargo-xwin` のインストールが必要です（`cargo install cargo-xwin`）。
 
 ## CLIコマンド
 

@@ -21,6 +21,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ImageEventPayload } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
+import { buildFontFamilyChain } from "../settings/settings-applier";
 import { showPasteDialog, sendTextInChunks } from "../clipboard";
 import { findUrlAtPosition, findFilePathAtPosition, getLogicalLine, physicalToLogicalCol } from "../terminal/url-detector";
 import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/osc_handlers";
@@ -167,6 +168,14 @@ export class TerminalApp {
       }
       if (cachedSettings.bold_brightens_ansi_colors !== undefined) {
         this.renderer.applySetting("boldBrightensAnsiColors", cachedSettings.bold_brightens_ansi_colors);
+      }
+      const fontChain = buildFontFamilyChain(
+        cachedSettings.font_family_primary || "",
+        cachedSettings.font_family_emoji || "",
+        cachedSettings.font_family_secondary || "",
+      );
+      if (fontChain) {
+        this.renderer.applySetting("fontFamily", fontChain);
       }
     }
 
