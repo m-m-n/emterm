@@ -4,10 +4,15 @@ ifeq ($(findstring .,$(VERSION)),)
   VERSION := 0.0.0-$(VERSION)
 endif
 
-.PHONY: dev build dpkg install clean help
+.PHONY: dev build dpkg install clean help setup
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+
+setup: ## Install required tools and dependencies
+	rustup target add wasm32-unknown-unknown
+	cargo install wasm-pack
+	bun install
 
 dev: ## Run in development mode
 	bun tauri dev
@@ -16,7 +21,7 @@ build: ## Build release (deb/rpm/nsis) with git version
 	@echo "Building version: $(VERSION)"
 	bun tauri build --config '{"version":"$(VERSION)"}'
 
-dpkg: ## Build custom dpkg package
+dpkg: setup ## Build custom dpkg package
 	bash scripts/build-dpkg.sh
 
 install: build ## Build and install deb package
