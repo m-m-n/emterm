@@ -10,6 +10,7 @@ import { t } from "../i18n/index.ts";
 import { SettingsService } from "../settings/settings-service";
 import { showProfileSelector } from "../profile/profile-selector";
 import { parseEnvVars } from "../profile/types";
+import { showTabContextMenu, showTabBarContextMenu } from "../context-menu";
 
 /**
  * Options for creating TabBarUI
@@ -78,6 +79,9 @@ export class TabBarUI {
     // Create scroll area for tabs
     this.scrollArea = document.createElement("div");
     this.scrollArea.className = "tab-scroll-area";
+    this.scrollArea.addEventListener("contextmenu", (e) => {
+      this.handleContextMenu(e);
+    });
     this.container.appendChild(this.scrollArea);
 
     // Create fixed area for buttons
@@ -357,6 +361,27 @@ export class TabBarUI {
       },
       onCancel: () => {},
     });
+  }
+
+  /**
+   * Handles context menu on the tab scroll area.
+   * Dispatches to tab or tab-bar menu based on click target.
+   */
+  private handleContextMenu(e: MouseEvent): void {
+    const target = e.target as HTMLElement;
+    const tabElement = target.closest(".tab") as HTMLElement | null;
+
+    if (tabElement) {
+      const tabId = tabElement.dataset.tabId;
+      if (tabId) {
+        showTabContextMenu(e, tabId, this.tabManager);
+      }
+    } else {
+      showTabBarContextMenu(e, {
+        tabManager: this.tabManager,
+        tabBarUI: this,
+      });
+    }
   }
 
   /**

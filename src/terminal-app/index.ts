@@ -28,6 +28,7 @@ import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/os
 import type { DecodedImage, ImageEvent } from "../image/types";
 import { SearchStateManager } from "../terminal/search/search-state";
 import { SearchBar } from "../terminal/search/search-bar";
+import { showTerminalContextMenu } from "../context-menu";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -276,6 +277,11 @@ export class TerminalApp {
       },
     );
     this.mouseHandler.attach();
+
+    // Add context menu handler for terminal right-click
+    terminalContainer.addEventListener('contextmenu', (e) => {
+      showTerminalContextMenu(e, { app: this });
+    });
 
     // Attach selection controller
     this.selectionController.attach();
@@ -944,7 +950,7 @@ export class TerminalApp {
   /**
    * Exit scrollback mode by resetting scroll offset to bottom.
    */
-  private exitScrollback(): void {
+  exitScrollback(): void {
     if (this.renderer && this.renderer.getScrollOffset() > 0) {
       this.renderer.setScrollOffset(0);
       if (this.state) {
@@ -1555,6 +1561,27 @@ export class TerminalApp {
       throw new Error("Terminal not initialized");
     }
     return this.renderer;
+  }
+
+  /**
+   * Gets the selection controller
+   */
+  get selection(): SelectionController | null {
+    return this.selectionController;
+  }
+
+  /**
+   * Gets the terminal root element
+   */
+  get root(): HTMLElement | null {
+    return this.terminalRoot;
+  }
+
+  /**
+   * Gets the character cell dimensions
+   */
+  get cellSize(): CharSize {
+    return this.charSize;
   }
 
   /**

@@ -315,5 +315,14 @@
     "zoomOut": "Zoom out",
     "zoomIn": "Zoom in",
     "resetZoom": "Reset zoom to {level}%"
+  },
+  "contextMenu": {
+    "copy": "Copy",
+    "paste": "Paste",
+    "copyUrl": "Copy URL",
+    "openUrl": "Open URL",
+    "closeTab": "Close",
+    "newTab": "New Tab",
+    "openProfile": "Open Profile"
   }
 }

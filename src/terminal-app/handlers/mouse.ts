@@ -211,13 +211,13 @@ export class MouseHandler {
   }
 
   /**
-   * Handles context menu events
-   * Prevents context menu when mouse tracking is enabled
+   * Handles context menu events.
+   * Always allows the event to propagate so the terminal's
+   * contextmenu handler can show the native context menu,
+   * even when PTY mouse tracking is active (FR12).
    */
-  private onContextMenu(e: MouseEvent): void {
-    const state = this.getState();
-    if (state && isMouseTrackingEnabled(state.getModes().mouseTracking)) {
-      e.preventDefault();
-    }
+  private onContextMenu(_e: MouseEvent): void {
+    // Do not preventDefault — let the contextmenu event
+    // propagate to the terminal root handler.
   }
 }
