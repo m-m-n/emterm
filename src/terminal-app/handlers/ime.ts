@@ -222,6 +222,12 @@ export class ImeHandler {
 	 * Update IME position based on cursor position
 	 */
 	updatePosition(): void {
+		// Handle EditContext mode (Windows/WebView2)
+		if (this.useEditContext && this.editContext) {
+			this.updateEditContextBounds();
+			return;
+		}
+
 		if (!this.imeInput) {
 			return;
 		}
@@ -233,7 +239,6 @@ export class ImeHandler {
 
 		const cursorCol = terminalState.cursorCol;
 		const cursorRow = terminalState.cursorRow;
-		const rows = terminalState.rows;
 
 		const rect = this.container.getBoundingClientRect();
 
@@ -245,23 +250,25 @@ export class ImeHandler {
 		// Get scroll offset if available
 		const scrollOffset = (terminalState as any).getScrollOffset?.() ?? 0;
 
-		// Calculate pixel position
+		// Calculate pixel position at the cursor
 		const x = cursorCol * this.charSize.width + paddingLeft;
 		const y = cursorRow * this.charSize.height + paddingTop - scrollOffset;
 
-		// Determine vertical position (handle bottom row)
-		let top: number;
-		if (cursorRow === rows - 1) {
-			// Bottom row - position above cursor
-			top = rect.top + y - this.charSize.height;
-		} else {
-			// Other rows - position below cursor
-			top = rect.top + y + this.charSize.height;
-		}
-
-		// Apply position
+		// Position textarea at cursor location for accurate IME candidate window placement
 		this.imeInput.style.left = `${rect.left + x}px`;
-		this.imeInput.style.top = `${top}px`;
+		this.imeInput.style.top = `${rect.top + y}px`;
+		this.imeInput.style.width = `${this.charSize.width}px`;
+		this.imeInput.style.height = `${this.charSize.height}px`;
+		this.imeInput.style.fontSize = `${this.charSize.height}px`;
+		this.imeInput.style.lineHeight = `${this.charSize.height}px`;
+	}
+
+	/**
+	 * Update character size (called when font size changes)
+	 */
+	updateCharSize(width: number, height: number): void {
+		this.charSize = { width, height };
+		this.updatePosition();
 	}
 
 	/**
