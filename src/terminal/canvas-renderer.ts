@@ -802,6 +802,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			state.cursorVisible,
 			state.cursorStyle,
 			state.cursorBlink,
+			state,
 		);
 
 		// Save current cursor position for next render
@@ -1229,6 +1230,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		visible: boolean,
 		style: CursorStyle,
 		blink: boolean = true,
+		state?: TerminalState,
 	): void {
 		// Check if cursor should be visible (considering blink state)
 		if (!visible || (blink && !this.cursorBlinkVisible)) {
@@ -1246,6 +1248,25 @@ export class CanvasRenderer implements ITerminalRenderer {
 		switch (style) {
 			case "block":
 				this.ctx.fillRect(x, y, this.charWidth, this.charHeight);
+				// Draw the character underneath with inverted color
+				if (state) {
+					const buffer = state.getActiveBuffer();
+					const line = buffer.getLine(row);
+					const cell = line.getCell(col);
+					if (cell.char !== " " && cell.char !== "") {
+						const bg = getEffectiveBackground(cell.attrs, this.currentForeground, this.currentPalette256);
+						this.ctx.fillStyle = rgbToCSS(bg ?? this.currentBackground);
+						this.ctx.font = this.buildFontStringInternal(cell.attrs);
+						const textY = y + (this.charHeight + this.fontAscent - this.fontDescent) / 2;
+						if (cell.width >= 2) {
+							this.drawWideCharacter(cell.char, x, textY, cell.width);
+						} else if (cell.char.charCodeAt(0) > 0x7F) {
+							this.drawFittedCharacter(cell.char, x, textY);
+						} else {
+							this.ctx.fillText(cell.char, x, textY);
+						}
+					}
+				}
 				break;
 			case "underline":
 				this.ctx.fillRect(x, y + this.charHeight - 2, this.charWidth, 2);
@@ -1323,6 +1344,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			state.cursorVisible,
 			state.cursorStyle,
 			state.cursorBlink,
+			state,
 		);
 	}
 
@@ -1435,6 +1457,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 				state.cursorVisible,
 				state.cursorStyle,
 				state.cursorBlink,
+				state,
 			);
 
 			// Save current cursor position for next render
