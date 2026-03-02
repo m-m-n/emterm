@@ -259,8 +259,6 @@ export class ImeHandler {
 		this.imeInput.style.top = `${rect.top + y}px`;
 		this.imeInput.style.width = `${this.charSize.width}px`;
 		this.imeInput.style.height = `${this.charSize.height}px`;
-		this.imeInput.style.fontSize = `${this.charSize.height}px`;
-		this.imeInput.style.lineHeight = `${this.charSize.height}px`;
 	}
 
 	/**
