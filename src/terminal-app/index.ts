@@ -1685,6 +1685,7 @@ export class TerminalApp {
     this.renderer.forceRender(this.state);
 
     this.mouseHandler?.updateCharSize(newWidth, newHeight);
+    this.imeHandler?.updateCharSize(newWidth, newHeight);
     this.selectionController?.resize(cols, rows, newWidth, newHeight);
 
     // Reconnect ResizeObserver with new character dimensions
