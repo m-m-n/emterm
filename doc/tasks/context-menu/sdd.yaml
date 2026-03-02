@@ -1,0 +1,118 @@
+schema_version: 1
+feature: context-menu
+scale: standard
+created: 2026-03-02
+
+project:
+  components:
+    main:
+      language: typescript/rust
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 71e1a4ed46f80c22e3c917a04d481d213038ed3a
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 71e1a4ed46f80c22e3c917a04d481d213038ed3a
+  - id: implement
+    status: completed
+    completed_at_commit: 71e1a4ed46f80c22e3c917a04d481d213038ed3a
+  - id: check
+    status: completed
+    completed_at_commit: 71e1a4ed46f80c22e3c917a04d481d213038ed3a
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 71e1a4ed46f80c22e3c917a04d481d213038ed3a
+  - id: review
+    status: completed
+    completed_at_commit: 71e1a4ed46f80c22e3c917a04d481d213038ed3a
+
+requirements:
+  FR1:
+    title: Terminal context menu
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Menu item dynamic states
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Copy action
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Paste action
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Copy URL action
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Open URL action
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Tab context menu
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Tab close action
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: Tab bar context menu
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: New tab action
+    status: ok
+    tasks: []
+    tests: []
+  FR11:
+    title: Open profile action
+    status: ok
+    tasks: []
+    tests: []
+  FR12:
+    title: Mouse tracking override
+    status: ok
+    tasks: []
+    tests: []
+  FR13:
+    title: i18n support
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Performance - instant menu display
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Platform - Linux and Windows
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Maintainability - structured menu definitions
+    status: ok
+    tasks: []
+    tests: []

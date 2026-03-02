@@ -14,6 +14,7 @@
 		"notification:allow-is-permission-granted",
 		"notification:allow-request-permission",
 		"notification:allow-notify",
-		"shell:allow-open"
+		"shell:allow-open",
+		"core:menu:default"
 	]
 }

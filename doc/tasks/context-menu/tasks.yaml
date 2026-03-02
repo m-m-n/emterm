@@ -1,0 +1,13 @@
+tasks:
+  - - id: phase-1
+      title: "Infrastructure and Context Menu Module"
+      status: completed
+  - - id: phase-2
+      title: "Terminal Context Menu"
+      status: completed
+  - - id: phase-3
+      title: "Tab and Tab Bar Context Menus"
+      status: completed
+  - - id: phase-4
+      title: "Integration and Polish"
+      status: completed
