@@ -6,6 +6,7 @@
  */
 
 import type { CellAttributes, Color } from "./attributes.ts";
+import type { Cell } from "./grid.ts";
 import {
 	attributesEqual,
 	getEffectiveBackground,
@@ -1246,28 +1247,35 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.ctx.strokeStyle = cursorColorCSS;
 
 		switch (style) {
-			case "block":
-				this.ctx.fillRect(x, y, this.charWidth, this.charHeight);
-				// Draw the character underneath with inverted color
+			case "block": {
+				// Determine cursor width based on character at cursor position
+				let cursorPixelWidth = this.charWidth;
+				let cell: Cell | undefined;
 				if (state) {
 					const buffer = state.getActiveBuffer();
 					const line = buffer.getLine(row);
-					const cell = line.getCell(col);
-					if (cell.char !== " " && cell.char !== "") {
-						const bg = getEffectiveBackground(cell.attrs, this.currentForeground, this.currentPalette256);
-						this.ctx.fillStyle = rgbToCSS(bg ?? this.currentBackground);
-						this.ctx.font = this.buildFontStringInternal(cell.attrs);
-						const textY = y + (this.charHeight + this.fontAscent - this.fontDescent) / 2;
-						if (cell.width >= 2) {
-							this.drawWideCharacter(cell.char, x, textY, cell.width);
-						} else if (cell.char.charCodeAt(0) > 0x7F) {
-							this.drawFittedCharacter(cell.char, x, textY);
-						} else {
-							this.ctx.fillText(cell.char, x, textY);
-						}
+					cell = line.getCell(col);
+					if (cell.width >= 2) {
+						cursorPixelWidth = cell.width * this.charWidth;
+					}
+				}
+				this.ctx.fillRect(x, y, cursorPixelWidth, this.charHeight);
+				// Draw the character underneath with inverted color
+				if (cell && cell.char !== " " && cell.char !== "") {
+					const bg = getEffectiveBackground(cell.attrs, this.currentForeground, this.currentPalette256);
+					this.ctx.fillStyle = rgbToCSS(bg ?? this.currentBackground);
+					this.ctx.font = this.buildFontStringInternal(cell.attrs);
+					const textY = y + (this.charHeight + this.fontAscent - this.fontDescent) / 2;
+					if (cell.width >= 2) {
+						this.drawWideCharacter(cell.char, x, textY, cell.width);
+					} else if (cell.char.charCodeAt(0) > 0x7F) {
+						this.drawFittedCharacter(cell.char, x, textY);
+					} else {
+						this.ctx.fillText(cell.char, x, textY);
 					}
 				}
 				break;
+			}
 			case "underline":
 				this.ctx.fillRect(x, y + this.charHeight - 2, this.charWidth, 2);
 				break;
@@ -1315,14 +1323,15 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 		// Clear just the cursor cell with current background
 		// Use integer-aligned Y to match renderLine
+		const cell = line.getCell(col);
+		const cellPixelWidth = cell.width >= 2 ? cell.width * this.charWidth : this.charWidth;
 		const fillY = Math.floor(y);
 		const fillNextY = Math.ceil((row + 1) * this.charHeight);
 		const fillHeight = fillNextY - fillY;
 		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
-		this.ctx.fillRect(x, fillY, this.charWidth, fillHeight);
+		this.ctx.fillRect(x, fillY, cellPixelWidth, fillHeight);
 
 		// Re-draw the character at cursor position if any
-		const cell = line.getCell(col);
 		if (cell.char !== " " && cell.char !== "") {
 			const fg = getEffectiveForeground(cell.attrs, this.currentForeground, this.currentBackground, this.currentPalette256, this.boldBrightensAnsiColors);
 			this.ctx.fillStyle = rgbToCSS(fg);
