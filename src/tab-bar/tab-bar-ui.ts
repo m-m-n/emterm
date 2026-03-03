@@ -87,6 +87,9 @@ export class TabBarUI {
     // Create fixed area for buttons
     this.fixedArea = document.createElement("div");
     this.fixedArea.className = "tab-fixed-area";
+    this.fixedArea.addEventListener("contextmenu", (e) => {
+      this.handleContextMenu(e);
+    });
     this.container.appendChild(this.fixedArea);
 
     // Create new tab button
