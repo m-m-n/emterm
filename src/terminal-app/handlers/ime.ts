@@ -240,6 +240,11 @@ export class ImeHandler {
 		const cursorCol = terminalState.cursorCol;
 		const cursorRow = terminalState.cursorRow;
 
+		if (IME_DEBUG) {
+			const visible = terminalState.cursorVisible;
+			console.log(`[IME Debug] updatePosition: cursor=(${cursorCol},${cursorRow}) visible=${visible}`);
+		}
+
 		const rect = this.container.getBoundingClientRect();
 
 		// Get computed styles for accurate padding
@@ -247,14 +252,24 @@ export class ImeHandler {
 		const paddingLeft = parseFloat(styles.paddingLeft) || 0;
 		const paddingTop = parseFloat(styles.paddingTop) || 0;
 
-		// Get scroll offset if available
-		const scrollOffset = (terminalState as any).getScrollOffset?.() ?? 0;
+		let x: number;
+		let y: number;
 
-		// Calculate pixel position at the cursor
-		const x = cursorCol * this.charSize.width + paddingLeft;
-		const y = cursorRow * this.charSize.height + paddingTop - scrollOffset;
+		if (terminalState.cursorVisible === false) {
+			// TUI mode: position at last row of terminal grid
+			// Use rows from terminal state to calculate exact grid bottom
+			const lastRow = terminalState.rows - 1;
+			x = paddingLeft;
+			y = lastRow * this.charSize.height + paddingTop;
+		} else {
+			// Normal mode: position at cursor location
+			// Get scroll offset if available
+			const scrollOffset = (terminalState as any).getScrollOffset?.() ?? 0;
+			x = cursorCol * this.charSize.width + paddingLeft;
+			y = cursorRow * this.charSize.height + paddingTop - scrollOffset;
+		}
 
-		// Position textarea at cursor location for accurate IME candidate window placement
+		// Position textarea at calculated location for IME candidate window placement
 		this.imeInput.style.left = `${rect.left + x}px`;
 		this.imeInput.style.top = `${rect.top + y}px`;
 		this.imeInput.style.width = `${this.charSize.width}px`;
@@ -504,6 +519,11 @@ export class ImeHandler {
 		const cursorCol = terminalState.cursorCol;
 		const cursorRow = terminalState.cursorRow;
 
+		if (IME_DEBUG) {
+			const visible = terminalState.cursorVisible;
+			console.log(`[IME Debug] updateEditContextBounds: cursor=(${cursorCol},${cursorRow}) visible=${visible}`);
+		}
+
 		const rect = this.container.getBoundingClientRect();
 
 		// Get computed styles for accurate padding
@@ -511,12 +531,21 @@ export class ImeHandler {
 		const paddingLeft = parseFloat(styles.paddingLeft) || 0;
 		const paddingTop = parseFloat(styles.paddingTop) || 0;
 
-		// Get scroll offset if available
-		const scrollOffset = (terminalState as any).getScrollOffset?.() ?? 0;
+		let x: number;
+		let y: number;
 
-		// Calculate pixel position (including padding and scroll offset)
-		const x = rect.left + cursorCol * this.charSize.width + paddingLeft;
-		const y = rect.top + cursorRow * this.charSize.height + paddingTop - scrollOffset;
+		if (terminalState.cursorVisible === false) {
+			// TUI mode: position at last row of terminal grid
+			const lastRow = terminalState.rows - 1;
+			x = rect.left + paddingLeft;
+			y = rect.top + lastRow * this.charSize.height + paddingTop;
+		} else {
+			// Normal mode: position at cursor location
+			// Get scroll offset if available
+			const scrollOffset = (terminalState as any).getScrollOffset?.() ?? 0;
+			x = rect.left + cursorCol * this.charSize.width + paddingLeft;
+			y = rect.top + cursorRow * this.charSize.height + paddingTop - scrollOffset;
+		}
 
 		// Set control bounds (the editable area)
 		this.editContext.updateControlBounds(
@@ -577,13 +606,21 @@ export class ImeHandler {
 		const paddingLeft = parseFloat(styles.paddingLeft) || 0;
 		const paddingTop = parseFloat(styles.paddingTop) || 0;
 
-		// Get scroll offset if available
-		const scrollOffset = (terminalState as any).getScrollOffset?.() ?? 0;
+		let x: number;
+		let y: number;
 
-		// Position at cursor (use fixed positioning relative to viewport, including padding and scroll offset)
-		const x = rect.left + cursorCol * this.charSize.width + paddingLeft;
-		const y =
-			rect.top + cursorRow * this.charSize.height + paddingTop - scrollOffset;
+		if (terminalState.cursorVisible === false) {
+			// TUI mode: position at last row of terminal grid
+			const lastRow = terminalState.rows - 1;
+			x = rect.left + paddingLeft;
+			y = rect.top + lastRow * this.charSize.height + paddingTop;
+		} else {
+			// Normal mode: position at cursor location
+			// Get scroll offset if available
+			const scrollOffset = (terminalState as any).getScrollOffset?.() ?? 0;
+			x = rect.left + cursorCol * this.charSize.width + paddingLeft;
+			y = rect.top + cursorRow * this.charSize.height + paddingTop - scrollOffset;
+		}
 
 		if (IME_DEBUG) {
 			console.log("[IME Debug] positioning compositionView at:", {
@@ -591,11 +628,11 @@ export class ImeHandler {
 				y,
 				cursorCol,
 				cursorRow,
+				cursorVisible: terminalState.cursorVisible,
 				rectLeft: rect.left,
 				rectTop: rect.top,
 				paddingLeft,
 				paddingTop,
-				scrollOffset,
 			});
 		}
 
