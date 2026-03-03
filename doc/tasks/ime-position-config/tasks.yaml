@@ -1,0 +1,42 @@
+schema_version: 1
+feature: ime-position-config
+
+phases:
+  - id: phase-1
+    name: "IME Position Conditional Branching"
+    goal: "Add cursor-visibility-aware positioning to all three IME position methods"
+    status: completed
+    estimated_effort: small
+    tasks:
+      - id: task-1-1
+        title: "Add visibility check to updatePosition()"
+        description: "Read cursorVisible from terminal state; when false, compute bottom-left coordinates instead of cursor-based coordinates"
+        file: "src/terminal-app/handlers/ime.ts"
+        method: "updatePosition"
+        status: completed
+        requirements: [FR1, FR2, NFR1]
+      - id: task-1-2
+        title: "Add visibility check to updateEditContextBounds()"
+        description: "Same conditional for EditContext selection bounds and character bounds positioning"
+        file: "src/terminal-app/handlers/ime.ts"
+        method: "updateEditContextBounds"
+        status: completed
+        requirements: [FR1, FR2, NFR2]
+      - id: task-1-3
+        title: "Add visibility check to updateCompositionView()"
+        description: "Same conditional for composition overlay positioning"
+        file: "src/terminal-app/handlers/ime.ts"
+        method: "updateCompositionView"
+        status: completed
+        requirements: [FR1, FR3]
+      - id: task-1-4
+        title: "Add unit tests for position calculation"
+        description: "Verify bottom-left output when cursorVisible === false, verify unchanged cursor-following output when cursorVisible === true"
+        file: "src/terminal-app/handlers/ime.test.ts"
+        status: completed
+        requirements: [FR1, FR2, FR3, NFR1]
+      - id: task-1-5
+        title: "Verify no regression"
+        description: "Run existing E2E test suite to confirm no regression"
+        status: completed
+        requirements: [NFR1]
