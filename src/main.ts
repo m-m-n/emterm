@@ -34,6 +34,10 @@ async function main(): Promise<void> {
   // Initialize console bridge to forward logs to stdout/stderr
   initConsoleBridge();
 
+  // Suppress browser default context menu globally.
+  // Custom context menus are shown by specific handlers on terminal, tab, and tab bar areas.
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
+
   // Initialize WASM module before any terminal processing (fail-fast on error)
   await initWasm();
 

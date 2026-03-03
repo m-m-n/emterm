@@ -279,7 +279,9 @@ export class TerminalApp {
     this.mouseHandler.attach();
 
     // Add context menu handler for terminal right-click
-    terminalContainer.addEventListener('contextmenu', (e) => {
+    // Use this.container (.tab-content) instead of terminalContainer (.terminal-root)
+    // so the handler also covers the padding area around the terminal
+    this.container.addEventListener('contextmenu', (e) => {
       showTerminalContextMenu(e, { app: this });
     });
 
