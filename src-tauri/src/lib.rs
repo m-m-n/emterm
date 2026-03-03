@@ -29,6 +29,7 @@ use {
     std::io::Read,
     std::sync::Arc,
     std::sync::atomic::{AtomicBool, Ordering},
+    std::sync::mpsc,
     std::time::Duration,
     tauri::ipc::Channel,
     tauri::{AppHandle, Emitter, State},
@@ -656,85 +657,94 @@ fn spawn_reader_thread(
         let master_fd = session_guard.master_fd();
         drop(session_guard);
 
-        // Set non-blocking mode on the PTY master (Unix only)
-        #[cfg(unix)]
-        if let Some(fd) = master_fd {
-            unsafe {
-                let flags = libc::fcntl(fd, libc::F_GETFL);
-                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-            }
-        }
-
-        // Set up Kitty APC scanner for immediate protocol response delivery.
-        // This scans raw PTY output for Kitty Graphics Protocol sequences and
-        // writes OK responses directly to the master fd via libc::write(),
-        // bypassing ALL intermediate layers (writer channel, writer thread,
-        // WebView, WASM, Tauri IPC) for true zero-latency response delivery.
-        #[cfg(unix)]
-        let mut kitty_scanner = pty::kitty_scanner::KittyScanner::new();
-
-        let mut buf = [0u8; 4096];
-
         log::trace!("PTY reader: starting read loop for session {}", session_id);
 
-        loop {
-            // Check if process has exited (signaled by monitoring thread)
-            if process_exited.load(Ordering::SeqCst) {
-                log::debug!(
-                    "PTY reader: process exit detected for session {}",
-                    session_id
-                );
-                break;
-            }
+        // Use a helper thread for blocking read + mpsc channel so that
+        // the main reader loop can periodically check process_exited.
+        // This fixes Windows PTY exit detection where read() blocks
+        // indefinitely after the shell exits.
+        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(16);
+        let helper_session_id = session_id.clone();
 
-            match reader.read(&mut buf) {
-                Ok(0) => {
-                    log::debug!("PTY reader: EOF received for session {}", session_id);
-                    break;
-                }
-                Ok(n) => {
-                    // Scan for Kitty APC sequences and write responses directly
-                    // to the master fd via libc::write() (zero latency).
-                    #[cfg(unix)]
-                    if let Some(fd) = master_fd {
-                        kitty_scanner.process(&buf[..n], fd);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            #[cfg(unix)]
+            let mut kitty_scanner = pty::kitty_scanner::KittyScanner::new();
+
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        log::debug!(
+                            "PTY reader helper: EOF received for session {}",
+                            helper_session_id
+                        );
+                        break;
                     }
+                    Ok(n) => {
+                        // Scan for Kitty APC sequences and write responses directly
+                        // to the master fd via libc::write() (zero latency).
+                        #[cfg(unix)]
+                        if let Some(fd) = master_fd {
+                            kitty_scanner.process(&buf[..n], fd);
+                        }
 
-                    // Send raw bytes via Channel for WASM processing
-                    if let Err(e) = channel.send(buf[..n].to_vec()) {
+                        if tx.send(buf[..n].to_vec()).is_err() {
+                            // Receiver dropped (main loop exited)
+                            break;
+                        }
+                    }
+                    #[cfg(unix)]
+                    Err(e) if e.raw_os_error() == Some(libc::EIO) => {
+                        log::debug!(
+                            "PTY reader helper: EIO (slave closed) for session {}",
+                            helper_session_id
+                        );
+                        break;
+                    }
+                    Err(e) => {
                         log::warn!(
-                            "PTY reader: channel.send failed for session {} ({} bytes lost): {}",
-                            session_id,
-                            n,
+                            "PTY reader helper: read error for session {}: {}",
+                            helper_session_id,
                             e
                         );
                         break;
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // No data available, check if process exited then sleep briefly
+            }
+        });
+
+        // Main reader loop: receive data from helper thread, check process_exited on timeout
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(data) => {
+                    // Send raw bytes via Channel for WASM processing
+                    let len = data.len();
+                    if let Err(e) = channel.send(data) {
+                        log::warn!(
+                            "PTY reader: channel.send failed for session {} ({} bytes lost): {}",
+                            session_id,
+                            len,
+                            e
+                        );
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Check if process has exited (signaled by monitoring thread)
                     if process_exited.load(Ordering::SeqCst) {
                         log::debug!(
-                            "PTY reader: process exit detected (no data) for session {}",
+                            "PTY reader: process exit detected for session {}",
                             session_id
                         );
                         break;
                     }
-                    std::thread::sleep(Duration::from_millis(10));
                 }
-                #[cfg(unix)]
-                Err(e) if e.raw_os_error() == Some(libc::EIO) => {
-                    // EIO typically means the PTY slave was closed (shell exited)
-                    log::debug!("PTY reader: EIO (slave closed) for session {}", session_id);
-                    break;
-                }
-                Err(e) => {
-                    log::warn!("PTY reader: read error for session {}: {}", session_id, e);
-                    let payload = PtyErrorPayload {
-                        session_id: session_id.clone(),
-                        message: e.to_string(),
-                    };
-                    let _ = app.emit("pty_error", payload);
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // Helper thread exited (EOF, EIO, or read error)
+                    log::debug!(
+                        "PTY reader: helper thread exited for session {}",
+                        session_id
+                    );
                     break;
                 }
             }
