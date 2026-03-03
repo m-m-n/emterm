@@ -1,13 +1,11 @@
 /**
  * Context menu builder for terminal, tab, and tab bar areas.
  *
- * Creates native Tauri menus dynamically on each right-click
- * to reflect current state (selection, URL, profiles).
+ * Uses HTML-based custom context menus positioned at the click location.
+ * Replaces Tauri native Menu.popup() which does not position correctly
+ * on Linux (GTK/muda).
  */
 
-import { Menu } from "@tauri-apps/api/menu/menu";
-import { MenuItem } from "@tauri-apps/api/menu/menuItem";
-import { PredefinedMenuItem } from "@tauri-apps/api/menu/predefinedMenuItem";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
 import { t } from "../i18n/index.ts";
@@ -17,6 +15,7 @@ import type { TerminalApp } from "../terminal-app";
 import type { TabManager } from "../tab-bar/tab-manager";
 import type { TabBarUI } from "../tab-bar/tab-bar-ui";
 import { SettingsService } from "../settings/settings-service";
+import { showContextMenu, type ContextMenuItem } from "./context-menu";
 
 /**
  * Context for building the terminal context menu.
@@ -73,123 +72,114 @@ export async function showTerminalContextMenu(
     console.debug("URL detection failed:", e);
   }
 
-  // Build menu items in parallel (each MenuItem.new() is an IPC call)
-  const [copyItem, pasteItem, separator, copyUrlItem, openUrlItem] =
-    await Promise.all([
-      MenuItem.new({
-        text: t("contextMenu.copy"),
-        enabled: hasSelection,
-        action: () => {
-          selection?.copy();
-        },
-      }),
-      MenuItem.new({
-        text: t("contextMenu.paste"),
-        enabled: true,
-        action: async () => {
-          if (!ptyClient) return;
+  const items: ContextMenuItem[] = [
+    {
+      type: "item",
+      label: t("contextMenu.copy"),
+      enabled: hasSelection,
+      action: () => {
+        selection?.copy();
+      },
+    },
+    {
+      type: "item",
+      label: t("contextMenu.paste"),
+      action: async () => {
+        if (!ptyClient) return;
+        try {
+          const text = await readText();
+          if (!text) return;
+
+          // Auto-scroll to bottom when user pastes during scrollback
+          app.exitScrollback();
+
+          const hasNewlines = /[\r\n]/.test(text);
+          if (hasNewlines) {
+            const lineCount = text.split(/\r\n|\r|\n/).length;
+            const result = await showPasteDialog({ text, lineCount });
+            if (result.confirmed) {
+              await sendTextInChunks(text, (data: Uint8Array) =>
+                ptyClient.write(data),
+              );
+            }
+          } else {
+            const bytes = new TextEncoder().encode(text);
+            await ptyClient.write(bytes);
+          }
+        } catch (error) {
+          console.error("Failed to paste from context menu:", error);
+        } finally {
+          // Restore focus to IME input after paste completes
+          app.focus();
+        }
+      },
+    },
+    { type: "separator" },
+    {
+      type: "item",
+      label: t("contextMenu.copyUrl"),
+      enabled: detectedUrl !== null,
+      action: async () => {
+        if (detectedUrl) {
           try {
-            const text = await readText();
-            if (!text) return;
-
-            // Auto-scroll to bottom when user pastes during scrollback
-            app.exitScrollback();
-
-            const hasNewlines = /[\r\n]/.test(text);
-            if (hasNewlines) {
-              const lineCount = text.split(/\r\n|\r|\n/).length;
-              const result = await showPasteDialog({ text, lineCount });
-              if (result.confirmed) {
-                await sendTextInChunks(text, (data: Uint8Array) =>
-                  ptyClient.write(data),
-                );
-              }
-            } else {
-              const bytes = new TextEncoder().encode(text);
-              await ptyClient.write(bytes);
-            }
+            await writeText(detectedUrl);
           } catch (error) {
-            console.error("Failed to paste from context menu:", error);
-          } finally {
-            // Restore focus to IME input after paste completes
-            app.focus();
+            console.error("Failed to copy URL:", error);
           }
-        },
-      }),
-      PredefinedMenuItem.new({ item: "Separator" }),
-      MenuItem.new({
-        text: t("contextMenu.copyUrl"),
-        enabled: detectedUrl !== null,
-        action: async () => {
-          if (detectedUrl) {
-            try {
-              await writeText(detectedUrl);
-            } catch (error) {
-              console.error("Failed to copy URL:", error);
-            }
+        }
+      },
+    },
+    {
+      type: "item",
+      label: t("contextMenu.openUrl"),
+      enabled: detectedUrl !== null,
+      action: async () => {
+        if (detectedUrl) {
+          try {
+            await shellOpen(detectedUrl);
+          } catch (error) {
+            console.error("Failed to open URL:", error);
           }
-        },
-      }),
-      MenuItem.new({
-        text: t("contextMenu.openUrl"),
-        enabled: detectedUrl !== null,
-        action: async () => {
-          if (detectedUrl) {
-            try {
-              await shellOpen(detectedUrl);
-            } catch (error) {
-              console.error("Failed to open URL:", error);
-            }
-          }
-        },
-      }),
-    ]);
+        }
+      },
+    },
+  ];
 
-  const menu = await Menu.new({
-    items: [copyItem, pasteItem, separator, copyUrlItem, openUrlItem],
-  });
-
-  try {
-    await menu.popup();
-  } finally {
-    await menu.close();
-  }
+  showContextMenu({ event, items });
 }
 
 /**
  * Build and show the tab context menu (Close).
  */
-export async function showTabContextMenu(
+export function showTabContextMenu(
   event: MouseEvent,
   tabId: string,
   tabManager: TabManager,
-): Promise<void> {
+): void {
   event.preventDefault();
   event.stopPropagation();
 
-  const closeItem = await MenuItem.new({
-    text: t("contextMenu.closeTab"),
-    enabled: true,
-    action: () => {
-      tabManager.closeTab(tabId);
-    },
+  showContextMenu({
+    event,
+    items: [
+      {
+        type: "item",
+        label: t("contextMenu.closeTab"),
+        action: () => {
+          tabManager.closeTab(tabId);
+        },
+      },
+    ],
   });
-
-  const menu = await Menu.new({ items: [closeItem] });
-  try {
-    await menu.popup();
-  } finally {
-    await menu.close();
-  }
 }
 
 /**
  * Build and show the tab bar context menu (New Tab, Open Profile).
  */
-export async function showTabBarContextMenu(
+export function showTabBarContextMenu(
   event: MouseEvent,
   ctx: TabBarMenuContext,
-): Promise<void> {
+): void {
   event.preventDefault();
 
   const { tabManager, tabBarUI } = ctx;
@@ -197,29 +187,26 @@ export async function showTabBarContextMenu(
   const profiles = settings?.profiles ?? [];
   const hasProfiles = profiles.length > 0;
 
-  const [newTabItem, openProfileItem] = await Promise.all([
-    MenuItem.new({
-      text: t("contextMenu.newTab"),
-      enabled: true,
-      action: () => {
-        tabManager.createTab();
+  showContextMenu({
+    event,
+    items: [
+      {
+        type: "item",
+        label: t("contextMenu.newTab"),
+        action: () => {
+          tabManager.createTab();
+        },
       },
-    }),
-    MenuItem.new({
-      text: t("contextMenu.openProfile"),
-      enabled: hasProfiles,
-      action: () => {
-        if (hasProfiles) {
-          tabBarUI.showProfileSelector(profiles);
-        }
+      {
+        type: "item",
+        label: t("contextMenu.openProfile"),
+        enabled: hasProfiles,
+        action: () => {
+          if (hasProfiles) {
+            tabBarUI.showProfileSelector(profiles);
+          }
+        },
       },
-    }),
-  ]);
-
-  const menu = await Menu.new({ items: [newTabItem, openProfileItem] });
-  try {
-    await menu.popup();
-  } finally {
-    await menu.close();
-  }
+    ],
+  });
 }

@@ -1,6 +1,9 @@
 /* Tab Bar Styles */
 @import "./styles/tab-bar.css";
 
+/* Context Menu Styles */
+@import "./context-menu/context-menu.css";
+
 /* Settings Panel Styles */
 @import "./styles/settings-panel.css";
 
