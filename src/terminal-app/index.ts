@@ -3,7 +3,6 @@
  */
 
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   calculateTerminalSize,
   measureCharacterSize,
@@ -13,21 +12,14 @@ import {
 import { TerminalState } from "../terminal/state";
 import { createRendererAsync, type ITerminalRenderer } from "../terminal";
 import { SelectionController } from "../selection-v2";
-import { ImageViewer } from "../image-viewer";
 import type { TerminalAppOptions, CharSize } from "./types";
-import { KeyboardHandler, MouseHandler, ImeHandler } from "./handlers";
+import { KeyboardHandler, MouseHandler, ImeHandler, FoldHandler, SearchHandler, ImageHandler, LinkHandler } from "./handlers";
 import type { KeyboardHandlerContext } from "./handlers/keyboard";
-import { invoke } from "@tauri-apps/api/core";
-import type { ImageEventPayload } from "../types/terminal";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
 import { buildFontFamilyChain } from "../settings/settings-applier";
 import { showPasteDialog, sendTextInChunks } from "../clipboard";
-import { findUrlAtPosition, findFilePathAtPosition, getLogicalLine, physicalToLogicalCol } from "../terminal/url-detector";
 import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/osc_handlers";
-import type { DecodedImage, ImageEvent } from "../image/types";
-import { SearchStateManager } from "../terminal/search/search-state";
-import { SearchBar } from "../terminal/search/search-bar";
 import { showTerminalContextMenu } from "../context-menu";
 
 /**
@@ -42,12 +34,11 @@ export class TerminalApp {
   private keyboardHandler: KeyboardHandler | null = null;
   private mouseHandler: MouseHandler | null = null;
   private imeHandler: ImeHandler | null = null;
+  private foldHandler: FoldHandler | null = null;
   private state: TerminalState | null = null;
   private renderer: ITerminalRenderer | null = null;
   private selectionController: SelectionController | null = null;
-  private imageViewer: ImageViewer | null = null;
-  private imageEventUnlisten: UnlistenFn | null = null;
-  private pendingImages: Map<number, DecodedImage> = new Map();
+  private imageHandler: ImageHandler | null = null;
   private charSize: CharSize = { width: 8, height: 16 };
   private disconnectResizeObserver: (() => void) | null = null;
   private lastWindowTitle = "";
@@ -55,22 +46,8 @@ export class TerminalApp {
   private titleChangeCallback: ((title: string) => void) | null = null;
   private bellActivityCallback: (() => void) | null = null;
   private outputActivityCallback: (() => void) | null = null;
-  private searchStateManager: SearchStateManager = new SearchStateManager();
-  private searchBar: SearchBar | null = null;
-  private pendingApcQueue: Uint8Array[] = [];
-  private pendingDcsQueue: Uint8Array[] = [];
-  private imageInvokeChain: Promise<void> = Promise.resolve();
-  /** Tracks async fetches for large image data deferred from events. */
-  private fetchingImages: Map<number, Promise<DecodedImage>> = new Map();
-  /** Placements waiting for deferred image data to arrive. */
-  private pendingPlacements: Map<number, import("../image/types").ImagePlacement> = new Map();
-  /** Accumulated Kitty transfer state for batch sending (reduces 600 IPC calls to 1). */
-  private kittyTransfer: {
-    firstChunk: string;          // Full first chunk body (contains params like f=100,a=T,i=<id>)
-    accumulatedPayload: string;  // Concatenated base64 payloads from all chunks
-  } | null = null;
-  private lastMouseEvent: MouseEvent | null = null;
-  private ctrlKeyHandler: ((e: KeyboardEvent) => void) | null = null;
+  private searchHandler: SearchHandler | null = null;
+  private linkHandler: LinkHandler | null = null;
 
   /**
    * Creates a new TerminalApp instance
@@ -235,13 +212,13 @@ export class TerminalApp {
     // This allows keyboard input to work even when focus is elsewhere in the window
     this.keyboardHandler.attach(document);
 
-    // Initialize search bar
-    this.searchBar = new SearchBar(this.terminalRoot!, {
-      onSearch: (query, options) => this.handleSearch(query, options),
-      onNextMatch: () => this.handleSearchNext(),
-      onPrevMatch: () => this.handleSearchPrev(),
-      onClose: () => this.handleSearchClose(),
+    // Initialize search handler
+    this.searchHandler = new SearchHandler({
+      getState: () => this.state,
+      getRenderer: () => this.renderer,
+      getImeHandler: () => this.imeHandler,
     });
+    this.searchHandler.init(this.terminalRoot!);
 
     // Add middle-click paste handler (registered before MouseHandler so stopImmediatePropagation
     // prevents PTY mouse tracking from seeing middle button events when paste is enabled)
@@ -291,50 +268,41 @@ export class TerminalApp {
     // Add mouse wheel handler for scrollback
     terminalContainer.addEventListener('wheel', (e) => this.handleWheel(e));
 
+    // Create fold handler
+    this.foldHandler = new FoldHandler({
+      getState: () => this.state,
+      getRenderer: () => this.renderer,
+      getTerminalRoot: () => this.terminalRoot,
+      getCharSize: () => this.charSize,
+    });
+
+    // Create link handler for URL/file path detection and hover cursor
+    this.linkHandler = new LinkHandler({
+      getState: () => this.state,
+      getRenderer: () => this.renderer,
+      getTerminalRoot: () => this.terminalRoot,
+      getCharSize: () => this.charSize,
+    });
+    this.linkHandler.attach(terminalContainer);
+
     // Add click handler for fold toggle (plain click) and URL opening (Ctrl+click)
     terminalContainer.addEventListener('click', (e) => {
       if (e.ctrlKey || e.metaKey) {
-        this.handleUrlClick(e);
+        this.linkHandler?.handleUrlClick(e);
       } else {
-        this.handleFoldClick(e);
+        this.foldHandler?.handleFoldClick(e);
       }
     });
 
-    // Add mousemove handler for hover cursor feedback (folds, URLs, file paths)
-    terminalContainer.addEventListener('mousemove', (e) => this.handleHover(e));
-
-    // Clear hover underline when mouse leaves the terminal area
-    terminalContainer.addEventListener('mouseleave', () => {
-      if (this.renderer) {
-        this.renderer.setHoverPosition(-1, -1);
-      }
+    // Initialize image handler (ImageViewer + Kitty/SIXEL event listener)
+    this.imageHandler = new ImageHandler({
+      getPtyClient: () => this.ptyClient,
+      getState: () => this.state,
+      getRenderer: () => this.renderer,
+      getImeHandler: () => this.imeHandler,
+      getOverlayRoot: () => this.overlayRoot,
     });
-
-    // Add keydown/keyup handler for Ctrl key to update cursor over URLs/file paths
-    this.ctrlKeyHandler = (e: KeyboardEvent) => {
-      if (e.key === 'Control' || e.key === 'Meta') {
-        this.updateHoverCursor();
-      }
-    };
-    window.addEventListener('keydown', this.ctrlKeyHandler);
-    window.addEventListener('keyup', this.ctrlKeyHandler);
-
-    // Initialize ImageViewer with overlay-root container
-    this.imageViewer = new ImageViewer(this.overlayRoot!);
-    this.imageViewer.onShow(() => {
-      // Blur IME input to prevent EditContext/textarea from intercepting keyboard events.
-      // Without this, the IME input mechanism consumes keys like '1', '0', 'f'
-      // before DisplayModeController's capture-phase handler can process them.
-      this.imeHandler?.blur();
-    });
-    this.imageViewer.onHide(() => {
-      // Force re-render after image viewer closes (e.g. via Escape key)
-      if (this.state && this.renderer) {
-        this.renderer.forceRender(this.state);
-      }
-      // Restore IME focus for terminal input
-      this.imeHandler?.focus();
-    });
+    await this.imageHandler.init();
 
     // Set markdown session manager's container for fullscreen view
     this.state.getMarkdownManager().setContainer(this.overlayRoot!);
@@ -347,9 +315,6 @@ export class TerminalApp {
     fullscreenView.onHide(() => {
       this.imeHandler?.focus();
     });
-
-    // Set up image event listener
-    await this.setupImageEventListener();
 
     // Make terminal focusable and set up resize observer before PTY spawn
     terminalContainer.tabIndex = 0;
@@ -396,12 +361,12 @@ export class TerminalApp {
 
     core.set_apc_callback((data: Uint8Array) => {
       // Queue data - do NOT access core here (recursive borrow error)
-      this.pendingApcQueue.push(new Uint8Array(data));
+      this.imageHandler!.queueApc(data);
     });
 
     core.set_dcs_callback((data: Uint8Array) => {
       // Queue data - do NOT access core here (recursive borrow error)
-      this.pendingDcsQueue.push(new Uint8Array(data));
+      this.imageHandler!.queueDcs(data);
     });
 
     core.set_bell_callback(() => {
@@ -459,20 +424,8 @@ export class TerminalApp {
         const consumed = core.process_pty_data(remaining);
 
         // Process queued APC/DCS events (safe: process_pty_data has returned)
-        if (this.pendingApcQueue.length > 0) {
-          const apcEvents = this.pendingApcQueue;
-          this.pendingApcQueue = [];
-          for (const apcData of apcEvents) {
-            this.handleApcCallback(apcData);
-          }
-        }
-        if (this.pendingDcsQueue.length > 0) {
-          const dcsEvents = this.pendingDcsQueue;
-          this.pendingDcsQueue = [];
-          for (const dcsData of dcsEvents) {
-            this.handleDcsCallback(dcsData);
-          }
-        }
+        this.imageHandler!.processPendingApcQueue();
+        this.imageHandler!.processPendingDcsQueue();
 
         // Sync boolean modes from WASM to TS BEFORE processing mode actions.
         // This ensures WASM-managed mode bits (e.g., cursorVisible set by
@@ -610,267 +563,6 @@ export class TerminalApp {
 
     if (this.titleChangeCallback) {
       this.titleChangeCallback(title || "Terminal");
-    }
-  }
-
-  /**
-   * Handle APC callback from WASM parser (Kitty Graphics Protocol).
-   *
-   * Accumulates Kitty APC chunks and sends them as a single batch invoke
-   * when the final chunk (m=0) arrives. This reduces ~600 IPC round-trips
-   * to 1 for a typical large image transfer, preventing CLI timeout.
-   */
-  private handleApcCallback(data: Uint8Array): void {
-    const core = this.state?.getActiveCore();
-    if (!core || !this.ptyClient) return;
-
-    // APC body is ASCII text: "G<params>;<payload>"
-    const body = new TextDecoder().decode(data);
-
-    // Only process Kitty Graphics APC (starts with 'G')
-    if (body.length === 0 || body[0] !== "G") {
-      return;
-    }
-
-    // Split into params and payload at first semicolon
-    const semicolonIdx = body.indexOf(";");
-    const params = semicolonIdx >= 0 ? body.substring(0, semicolonIdx) : body;
-    const payload = semicolonIdx >= 0 ? body.substring(semicolonIdx + 1) : "";
-    const isMore = /(?:^|,)m=1(?:,|$)/.test(params);
-
-    if (isMore) {
-      // Continuation chunk: accumulate base64 payload
-      if (!this.kittyTransfer) {
-        // First chunk of a multi-chunk transfer
-        this.kittyTransfer = { firstChunk: body, accumulatedPayload: payload };
-      } else {
-        // Middle chunk: just append payload
-        this.kittyTransfer.accumulatedPayload += payload;
-      }
-      return;
-    }
-
-    // Final chunk (m=0 or single-chunk transfer)
-    const sessionId = this.ptyClient.getSessionId();
-    const cursorRow = core.get_cursor_row();
-    const cursorCol = core.get_cursor_col();
-
-    if (this.kittyTransfer) {
-      // Multi-chunk transfer: assemble first chunk + accumulated payload + final payload
-      this.kittyTransfer.accumulatedPayload += payload;
-      const assembled = this.kittyTransfer;
-      this.kittyTransfer = null;
-
-      // Build two-chunk representation: first chunk (with params) + final chunk (with full payload)
-      // The first chunk provides format, image_id, etc.
-      // We replace its payload with the full accumulated payload.
-      const firstSemicolon = assembled.firstChunk.indexOf(";");
-      const firstParams = firstSemicolon >= 0
-        ? assembled.firstChunk.substring(0, firstSemicolon)
-        : assembled.firstChunk;
-
-      // Change m=1 to m=0 in first chunk params (since we're sending all data at once)
-      const fixedParams = firstParams.replace(/,m=1(?:,|$)/, (m) =>
-        m.endsWith(",") ? ",m=0," : ",m=0",
-      );
-
-      // Send as a single chunk with all data
-      const fullChunk = fixedParams + ";" + assembled.accumulatedPayload;
-
-      this.imageInvokeChain = this.imageInvokeChain.then(() =>
-        invoke("process_kitty_batch", {
-          sessionId,
-          chunks: [fullChunk],
-          cursorRow,
-          cursorCol,
-        }) as Promise<void>,
-      ).catch((error) => {
-        console.error("Failed to process Kitty batch:", error);
-      });
-    } else {
-      // Single-chunk transfer: send directly
-      this.imageInvokeChain = this.imageInvokeChain.then(() =>
-        invoke("process_kitty_batch", {
-          sessionId,
-          chunks: [body],
-          cursorRow,
-          cursorCol,
-        }) as Promise<void>,
-      ).catch((error) => {
-        console.error("Failed to process Kitty batch:", error);
-      });
-    }
-  }
-
-  /**
-   * Handle DCS callback from WASM parser (SIXEL graphics).
-   */
-  private handleDcsCallback(data: Uint8Array): void {
-    const core = this.state?.getActiveCore();
-    if (!core || !this.ptyClient) return;
-
-    const sessionId = this.ptyClient.getSessionId();
-    const cursorRow = core.get_cursor_row();
-    const cursorCol = core.get_cursor_col();
-
-    // Share the same invoke chain as APC to serialize all image processing
-    this.imageInvokeChain = this.imageInvokeChain.then(() =>
-      invoke("process_image_data", {
-        sessionId,
-        protocol: "sixel",
-        data: Array.from(data),
-        cursorRow,
-        cursorCol,
-      }) as Promise<void>,
-    ).catch((error) => {
-      console.error("Failed to process SIXEL image data:", error);
-    });
-  }
-
-  /**
-   * Sets up image event listener for Kitty Graphics and SIXEL support
-   */
-  private async setupImageEventListener(): Promise<void> {
-    this.imageEventUnlisten = await listen<ImageEventPayload>(
-      "image_event",
-      (event: { payload: ImageEventPayload }) => {
-        // Only process events for the current session
-        if (
-          this.ptyClient &&
-          event.payload.session_id === this.ptyClient.getSessionId()
-        ) {
-          this.handleImageEvent(event.payload);
-        }
-      },
-    );
-  }
-
-  /**
-   * Handles image events from the backend
-   */
-  private handleImageEvent(payload: ImageEventPayload): void {
-    const eventType = payload.type;
-
-    switch (eventType) {
-      case "ImageReady": {
-        const image = payload.image as DecodedImage;
-        if (!image.rgba_base64) {
-          // Large image: data deferred to fetch_image_data command
-          const fetchPromise = this.fetchDeferredImageData(image);
-          this.fetchingImages.set(image.id, fetchPromise);
-        } else {
-          this.pendingImages.set(image.id, image);
-        }
-        break;
-      }
-
-      case "Place": {
-        // Display the image at the specified position
-        const placement = payload.placement;
-        if (!placement) {
-          console.warn("[WARN][FRONTEND] Place event without placement data");
-          break;
-        }
-        const image = this.pendingImages.get(placement.image_id);
-        if (image && this.imageViewer) {
-          // For fullscreen display mode
-          this.imageViewer.show(image);
-        } else {
-          // Image data may still be fetching (large image deferred load)
-          const fetchPromise = this.fetchingImages.get(placement.image_id);
-          if (fetchPromise) {
-            this.pendingPlacements.set(placement.image_id, placement);
-          } else {
-            console.warn(
-              `[WARN][FRONTEND] Image not found for placement: ${placement.image_id}`,
-            );
-          }
-        }
-        break;
-      }
-
-      case "Delete": {
-        // Handle image deletion
-        const target = payload.target;
-        if (!target) {
-          console.warn("[WARN][FRONTEND] Delete event without target data");
-          break;
-        }
-        if (target.type === "All" || target.type === "AllIncludingHidden") {
-          this.pendingImages.clear();
-          this.imageViewer?.hide();
-          // Force re-render after closing image viewer to show correct state
-          if (this.state && this.renderer) {
-            this.renderer.forceRender(this.state);
-          }
-        } else if (target.type === "ById" && target.id !== undefined) {
-          this.pendingImages.delete(target.id);
-        }
-        break;
-      }
-
-      case "QueryResponse": {
-        // Handle query response (graphics protocol supported)
-        console.info(
-          `[INFO][FRONTEND] Graphics supported: ${payload.supported}`,
-        );
-        break;
-      }
-
-      case "Animation": {
-        // Handle animation events
-        if (this.imageViewer && payload.data) {
-          this.imageViewer.handleAnimationEvent(
-            payload.data as import("../image/types").AnimationEvent,
-          );
-        }
-        break;
-      }
-
-      case "Response": {
-        // Synchronous response is now generated by WASM during
-        // process_pty_data(), ensuring the response reaches the PTY
-        // while the originating process still has raw mode active.
-        // Backend Response events are no longer written to PTY.
-        break;
-      }
-
-    }
-  }
-
-  /**
-   * Fetches large image data deferred from the event payload.
-   *
-   * When rgba_base64 exceeds the backend threshold, it is stored separately
-   * and must be retrieved via the fetch_image_data command. After fetching,
-   * the image is added to pendingImages and any deferred placement is executed.
-   */
-  private async fetchDeferredImageData(image: DecodedImage): Promise<DecodedImage> {
-    try {
-      const sessionId = this.ptyClient?.getSessionId();
-      if (!sessionId) throw new Error("No active PTY session");
-
-      const data = await invoke<string>("fetch_image_data", {
-        sessionId,
-        imageId: image.id,
-      });
-      image.rgba_base64 = data;
-      this.pendingImages.set(image.id, image);
-      this.fetchingImages.delete(image.id);
-
-      // Execute deferred placement if any
-      const placement = this.pendingPlacements.get(image.id);
-      if (placement && this.imageViewer) {
-        this.pendingPlacements.delete(image.id);
-        this.imageViewer.show(image);
-      }
-
-      return image;
-    } catch (error) {
-      console.error(`Failed to fetch deferred image data for id=${image.id}:`, error);
-      this.fetchingImages.delete(image.id);
-      this.pendingPlacements.delete(image.id);
-      throw error;
     }
   }
 
@@ -1068,418 +760,10 @@ export class TerminalApp {
   }
 
   /**
-   * Handle Ctrl+click to open URLs or file paths
-   */
-  private handleUrlClick(e: MouseEvent): void {
-    if (!this.state) return;
-
-    const cachedSettings = SettingsService.getCached();
-
-    // Calculate grid position from click coordinates
-    const rect = this.terminalRoot?.getBoundingClientRect();
-    if (!rect) return;
-
-    const col = Math.floor((e.clientX - rect.left) / this.charSize.width);
-    const row = Math.floor((e.clientY - rect.top) / this.charSize.height);
-
-    // Get the text content by joining soft-wrapped lines into a logical line
-    const buffer = this.state.getActiveBuffer();
-    if (row < 0 || row >= this.state.rows) return;
-
-    const logical = getLogicalLine((r) => buffer.getLine(r), row, this.state.rows);
-    const logicalCol = physicalToLogicalCol(row, col, logical);
-
-    // Check URL first (existing behavior)
-    if (!cachedSettings || cachedSettings.url_detection) {
-      const url = findUrlAtPosition(logical.text, logicalCol);
-      if (url) {
-        e.preventDefault();
-        import("@tauri-apps/plugin-shell").then(({ open }) => {
-          open(url).catch(console.error);
-        }).catch(console.error);
-        return;
-      }
-    }
-
-    // Check file path (new behavior)
-    if (!cachedSettings || cachedSettings.file_path_detection) {
-      const match = findFilePathAtPosition(logical.text, logicalCol);
-      if (match) {
-        e.preventDefault();
-        this.openFileInEditor(match.path, match.line, match.col);
-      }
-    }
-  }
-
-  /**
-   * Resolve a file path and open it in the configured editor.
-   */
-  private async openFileInEditor(filePath: string, line: number, col: number): Promise<void> {
-    const cachedSettings = SettingsService.getCached();
-    const editorCommand = cachedSettings?.editor_command ?? "";
-    if (!editorCommand.trim()) return;
-
-    // Resolve relative paths using shell's CWD (from OSC 7)
-    let resolvedPath = filePath;
-    if (!filePath.startsWith("/")) {
-      const cwd = this.state?.workingDirectory ?? "";
-      if (cwd) {
-        // Parse file:// URL properly to handle hostname and percent-encoding
-        let cleanCwd: string;
-        if (cwd.startsWith("file://")) {
-          try {
-            cleanCwd = decodeURIComponent(new URL(cwd).pathname);
-          } catch {
-            cleanCwd = cwd.replace(/^file:\/\//, "");
-          }
-        } else {
-          cleanCwd = cwd;
-        }
-        resolvedPath = `${cleanCwd}/${filePath}`;
-      }
-    }
-
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-
-      // Check file existence
-      const exists = await invoke<boolean>("check_file_exists", { path: resolvedPath });
-      if (!exists) {
-        const { sendNotification, isPermissionGranted } = await import("@tauri-apps/plugin-notification");
-        const permitted = await isPermissionGranted();
-        if (permitted) {
-          sendNotification({ title: "eMterm", body: `File not found: ${resolvedPath}` });
-        } else {
-          console.warn(`File not found: ${resolvedPath}`);
-        }
-        return;
-      }
-
-      // Split template into tokens BEFORE expanding placeholders,
-      // so that spaces in file paths don't break argument boundaries.
-      const tokens = editorCommand.split(/\s+/).filter(Boolean);
-      if (tokens.length === 0) return;
-
-      const program = tokens[0]!;
-      const args = tokens.slice(1).map(token =>
-        token
-          .replace(/\{file\}/g, resolvedPath)
-          .replace(/\{line\}/g, String(line))
-          .replace(/\{col\}/g, String(col)),
-      );
-
-      await invoke("open_file_in_editor", { program, args });
-    } catch (error) {
-      console.error("Failed to open file in editor:", error);
-    }
-  }
-
-  /**
-   * Handle click on fold region to toggle fold/unfold.
-   * Only triggers on plain left-click (no modifiers, no text selection).
-   */
-  private handleFoldClick(e: MouseEvent): void {
-    if (!this.state || !this.renderer) return;
-
-    const cachedSettings = SettingsService.getCached();
-    if (cachedSettings && !cachedSettings.fold_enabled) return;
-
-    const foldManager = this.state.getFoldManager();
-    if (!foldManager.isEnabled()) return;
-    if (foldManager.getCollapsedRegions().length === 0 && !this.hasFoldableRegions()) return;
-
-    // Don't toggle if user is selecting text
-    const selection = window.getSelection();
-    if (selection && selection.toString().length > 0) return;
-
-    // Calculate display row from click coordinates
-    const rect = this.terminalRoot?.getBoundingClientRect();
-    if (!rect) return;
-
-    const displayRow = Math.floor((e.clientY - rect.top) / this.charSize.height);
-    if (displayRow < 0 || displayRow >= this.state.rows) return;
-
-    // Calculate actual display line index
-    const scrollbackLength = this.state.getScrollbackLength();
-    const totalActualLines = scrollbackLength + this.state.rows;
-    const totalDisplayLines = foldManager.getTotalDisplayLines(totalActualLines);
-    const displayStart = Math.max(0, totalDisplayLines - this.state.rows - this.renderer.getScrollOffset());
-    const displayLine = displayStart + displayRow;
-
-    // Check if clicking on a summary line (expand)
-    const summaryRegion = foldManager.getSummaryRegion(displayLine);
-    if (summaryRegion) {
-      foldManager.expandRegionContaining(summaryRegion.startLine);
-      this.renderer.forceRender(this.state);
-      return;
-    }
-
-    // Check if clicking on a foldable region (collapse)
-    const actualLine = foldManager.displayLineToActual(displayLine);
-    const region = foldManager.getRegionAtLine(actualLine);
-    if (region && !region.collapsed) {
-      // Calculate scroll adjustment: if fold is above or at viewport top, adjust scroll
-      const regionDisplayLine = foldManager.actualLineToDisplay(region.startLine);
-      foldManager.toggleFold(actualLine);
-      // Adjust scroll if the fold causes viewport shift
-      if (regionDisplayLine < displayStart) {
-        const delta = region.lineCount - 1;
-        this.renderer.setScrollOffset(Math.max(0, this.renderer.getScrollOffset() - delta));
-      }
-      this.renderer.forceRender(this.state);
-    }
-  }
-
-  /**
-   * Check if there are any foldable regions (even if not collapsed).
-   */
-  private hasFoldableRegions(): boolean {
-    if (!this.state) return false;
-    const foldManager = this.state.getFoldManager();
-    // Quick check: if there are any regions registered
-    return foldManager.getRegionAtLine(0) !== null ||
-      foldManager.getCollapsedRegions().length > 0;
-  }
-
-  /**
-   * Handle mousemove for hover cursor feedback (folds, URLs, file paths).
-   */
-  private handleHover(e: MouseEvent): void {
-    this.lastMouseEvent = e;
-    this.updateHoverCursor();
-
-    // Pass hover position to renderer for link underline drawing
-    if (this.renderer && this.terminalRoot) {
-      const rect = this.terminalRoot.getBoundingClientRect();
-      const row = Math.floor((e.clientY - rect.top) / this.charSize.height);
-      const col = Math.floor((e.clientX - rect.left) / this.charSize.width);
-      this.renderer.setHoverPosition(row, col);
-    }
-  }
-
-  /**
-   * Update hover cursor based on current mouse position and modifier keys.
-   */
-  private updateHoverCursor(): void {
-    const e = this.lastMouseEvent;
-    if (!e || !this.state || !this.renderer || !this.terminalRoot) return;
-
-    const rect = this.terminalRoot.getBoundingClientRect();
-    const displayRow = Math.floor((e.clientY - rect.top) / this.charSize.height);
-    if (displayRow < 0 || displayRow >= this.state.rows) {
-      this.terminalRoot.style.cursor = "";
-      return;
-    }
-
-    // Fold hover detection
-    const cachedSettings = SettingsService.getCached();
-    const foldEnabled = !cachedSettings || cachedSettings.fold_enabled;
-    if (foldEnabled) {
-      const foldManager = this.state.getFoldManager();
-      if (foldManager.isEnabled()) {
-        const scrollbackLength = this.state.getScrollbackLength();
-        const totalActualLines = scrollbackLength + this.state.rows;
-        const totalDisplayLines = foldManager.getTotalDisplayLines(totalActualLines);
-        const displayStart = Math.max(0, totalDisplayLines - this.state.rows - this.renderer.getScrollOffset());
-        const displayLine = displayStart + displayRow;
-
-        const summaryRegion = foldManager.getSummaryRegion(displayLine);
-        if (summaryRegion) {
-          this.terminalRoot.style.cursor = "pointer";
-          return;
-        }
-
-        const actualLine = foldManager.displayLineToActual(displayLine);
-        const region = foldManager.getRegionAtLine(actualLine);
-        if (region && !region.collapsed) {
-          this.terminalRoot.style.cursor = "pointer";
-          return;
-        }
-      }
-    }
-
-    // URL/file path hover detection (Ctrl or Meta held)
-    if (e.ctrlKey || e.metaKey) {
-      const col = Math.floor((e.clientX - rect.left) / this.charSize.width);
-      const buffer = this.state.getActiveBuffer();
-      if (displayRow >= 0 && displayRow < this.state.rows) {
-        const logical = getLogicalLine((r) => buffer.getLine(r), displayRow, this.state.rows);
-        const logicalCol = physicalToLogicalCol(displayRow, col, logical);
-
-        if ((!cachedSettings || cachedSettings.url_detection) && findUrlAtPosition(logical.text, logicalCol)) {
-          this.terminalRoot.style.cursor = "pointer";
-          return;
-        }
-        if ((!cachedSettings || cachedSettings.file_path_detection) && findFilePathAtPosition(logical.text, logicalCol)) {
-          this.terminalRoot.style.cursor = "pointer";
-          return;
-        }
-      }
-    }
-
-    this.terminalRoot.style.cursor = "";
-  }
-
-  /**
    * Toggle the search bar open/closed.
    */
   toggleSearch(): void {
-    if (!this.searchBar) return;
-
-    if (this.searchBar.isVisible()) {
-      this.handleSearchClose();
-    } else {
-      this.searchBar.show();
-    }
-  }
-
-  /**
-   * Handle search query/options change from search bar.
-   */
-  private handleSearch(query: string, options: { isRegex: boolean; caseSensitive: boolean }): void {
-    if (!this.state || !this.renderer) return;
-
-    this.searchStateManager.setQuery(query);
-    this.searchStateManager.setOptions(options);
-
-    // Collect all line texts (scrollback + screen)
-    const lines = this.getAllLineTexts();
-    this.searchStateManager.executeSearch(lines);
-
-    // Update search bar UI
-    this.searchBar?.updateCount(
-      this.searchStateManager.currentMatchIndex,
-      this.searchStateManager.matches.length,
-    );
-    this.searchBar?.setError(this.searchStateManager.error !== null);
-
-    // Update highlight rendering
-    this.renderer.setSearchHighlights(
-      this.searchStateManager.matches,
-      this.searchStateManager.currentMatchIndex,
-    );
-    this.renderer.forceRender(this.state);
-
-    // Scroll to first match if found
-    if (this.searchStateManager.matches.length > 0) {
-      this.scrollToCurrentMatch();
-    }
-  }
-
-  /**
-   * Handle next match navigation.
-   */
-  private handleSearchNext(): void {
-    if (!this.state || !this.renderer) return;
-
-    const match = this.searchStateManager.nextMatch();
-    if (match) {
-      this.renderer.setSearchHighlights(
-        this.searchStateManager.matches,
-        this.searchStateManager.currentMatchIndex,
-      );
-      this.searchBar?.updateCount(
-        this.searchStateManager.currentMatchIndex,
-        this.searchStateManager.matches.length,
-      );
-      this.scrollToCurrentMatch();
-      this.renderer.forceRender(this.state);
-    }
-  }
-
-  /**
-   * Handle previous match navigation.
-   */
-  private handleSearchPrev(): void {
-    if (!this.state || !this.renderer) return;
-
-    const match = this.searchStateManager.prevMatch();
-    if (match) {
-      this.renderer.setSearchHighlights(
-        this.searchStateManager.matches,
-        this.searchStateManager.currentMatchIndex,
-      );
-      this.searchBar?.updateCount(
-        this.searchStateManager.currentMatchIndex,
-        this.searchStateManager.matches.length,
-      );
-      this.scrollToCurrentMatch();
-      this.renderer.forceRender(this.state);
-    }
-  }
-
-  /**
-   * Handle search bar close.
-   */
-  private handleSearchClose(): void {
-    this.searchBar?.hide();
-    this.searchStateManager.clear();
-    this.renderer?.clearSearchHighlights();
-    if (this.state && this.renderer) {
-      this.renderer.forceRender(this.state);
-    }
-    // Return focus to terminal
-    this.imeHandler?.focus();
-  }
-
-  /**
-   * Scroll to make the current search match visible.
-   */
-  private scrollToCurrentMatch(): void {
-    if (!this.state || !this.renderer) return;
-
-    const match = this.searchStateManager.getCurrentMatch();
-    if (!match) return;
-
-    // Auto-expand fold region if match is inside a collapsed region
-    const foldManager = this.state.getFoldManager();
-    foldManager.expandRegionContaining(match.lineIndex);
-
-    const scrollbackLength = this.state.getScrollbackLength();
-    const currentScrollOffset = this.renderer.getScrollOffset();
-    const visibleStartLine = scrollbackLength - currentScrollOffset;
-    const visibleEndLine = visibleStartLine + this.state.rows;
-
-    // Check if match is visible
-    if (match.lineIndex >= visibleStartLine && match.lineIndex < visibleEndLine) {
-      return; // Already visible
-    }
-
-    // Scroll so the match is roughly centered in view
-    const targetOffset = Math.max(0, scrollbackLength - match.lineIndex + Math.floor(this.state.rows / 2));
-    this.renderer.setScrollOffset(targetOffset);
-  }
-
-  /**
-   * Get all line texts (scrollback + screen buffer) for search.
-   */
-  private getAllLineTexts(): string[] {
-    if (!this.state) return [];
-
-    const lines: string[] = [];
-    const scrollback = this.state.getScrollbackBuffer();
-    const buffer = this.state.getActiveBuffer();
-
-    // Scrollback lines
-    for (const line of scrollback) {
-      const chars: string[] = [];
-      for (let c = 0; c < line.length; c++) {
-        chars.push(line.getCell(c).char || " ");
-      }
-      lines.push(chars.join(""));
-    }
-
-    // Screen buffer lines
-    for (let row = 0; row < this.state.rows; row++) {
-      const line = buffer.getLine(row);
-      const chars: string[] = [];
-      for (let c = 0; c < line.length; c++) {
-        chars.push(line.getCell(c).char || " ");
-      }
-      lines.push(chars.join(""));
-    }
-
-    return lines;
+    this.searchHandler?.toggleSearch();
   }
 
   /**
@@ -1493,32 +777,18 @@ export class TerminalApp {
     }
 
     // Clean up handlers
-    if (this.ctrlKeyHandler) {
-      window.removeEventListener('keydown', this.ctrlKeyHandler);
-      window.removeEventListener('keyup', this.ctrlKeyHandler);
-      this.ctrlKeyHandler = null;
-    }
-    this.lastMouseEvent = null;
+    this.linkHandler?.dispose();
+    this.linkHandler = null;
     this.keyboardHandler?.detach();
     this.mouseHandler?.detach();
     this.imeHandler?.dispose();
     this.selectionController?.dispose();
-    this.searchBar?.dispose();
-    this.searchBar = null;
+    this.searchHandler?.dispose();
+    this.searchHandler = null;
 
-    // Clean up image viewer and listener
-    if (this.imageEventUnlisten) {
-      this.imageEventUnlisten();
-      this.imageEventUnlisten = null;
-    }
-    this.imageViewer?.dispose();
-    this.imageViewer = null;
-    this.pendingImages.clear();
-    this.fetchingImages.clear();
-    this.pendingPlacements.clear();
-    this.kittyTransfer = null;
-    this.pendingApcQueue = [];
-    this.pendingDcsQueue = [];
+    // Clean up image handler (ImageViewer, event listener, queues)
+    this.imageHandler?.dispose();
+    this.imageHandler = null;
 
     // Clean up PTY
     if (this.ptyClient) {
