@@ -3,7 +3,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::cell::{overflow_ridx_insert, overflow_ridx_remove};
-use crate::terminal_core::{TerminalCore, MODE_AUTO_WRAP};
+use crate::terminal_core::{MODE_AUTO_WRAP, TerminalCore};
 
 impl TerminalCore {
     /// Apply active charset translation to a codepoint.
@@ -378,7 +378,7 @@ mod tests {
         // Next print scrolls internally
         let scroll = core.handle_print(0x4B); // 'K'
         assert_eq!(scroll, 0); // Scroll handled internally
-                               // Row 0 should now have old row 1 content (FGHIJ)
+        // Row 0 should now have old row 1 content (FGHIJ)
         assert_eq!(core.get_cell_char(0, 0), "F");
     }
 
@@ -570,7 +570,7 @@ mod tests {
         let mut core = TerminalCore::new(10, 3, 0);
         core.handle_print(0x1F1EF); // J
         core.handle_print(0x1F1F5); // P → auto-flushed
-                                    // Already flushed by auto-flush
+        // Already flushed by auto-flush
         assert_eq!(core.get_cell_char(0, 0), "🇯🇵");
     }
 
@@ -598,8 +598,8 @@ mod tests {
         core.set_scroll_region(2, 7);
         core.set_cursor(0, 4);
         let scroll = core.handle_print(0x0A as u32); // LF via print? No...
-                                                     // Actually LF is handled by handle_execute, not handle_print.
-                                                     // But line_feed() is tested via handle_print scroll behavior
+        // Actually LF is handled by handle_execute, not handle_print.
+        // But line_feed() is tested via handle_print scroll behavior
         assert_eq!(scroll, 0);
     }
 
@@ -608,7 +608,7 @@ mod tests {
         let mut core = TerminalCore::new(5, 5, 0);
         core.set_scroll_region(1, 3);
         core.set_cursor(0, 3); // At scroll region bottom
-                               // Fill row to trigger wrap_pending
+        // Fill row to trigger wrap_pending
         for c in b'A'..=b'E' {
             core.handle_print(c as u32);
         }
@@ -790,16 +790,16 @@ mod tests {
         // kitten icat uses Arabic combining marks (U+0610-061A, U+064B-065F)
         // for encoding row/column in placeholder cells
         core.handle_print(0x10EEEE); // placeholder
-        core.handle_print(0x0651);   // Arabic shadda (row encoding)
-        core.handle_print(0x0615);   // Arabic small high tah (col encoding)
+        core.handle_print(0x0651); // Arabic shadda (row encoding)
+        core.handle_print(0x0615); // Arabic small high tah (col encoding)
         // All should be suppressed
         assert_eq!(core.get_cursor_col(), 0);
         assert_eq!(core.get_cell_char(0, 0), " ");
 
         // Second cell with different Arabic marks
         core.handle_print(0x10EEEE); // placeholder
-        core.handle_print(0x0652);   // Arabic sukun
-        core.handle_print(0x0615);   // Arabic small high tah
+        core.handle_print(0x0652); // Arabic sukun
+        core.handle_print(0x0615); // Arabic small high tah
         assert_eq!(core.get_cursor_col(), 0);
 
         // Normal character prints after placeholders
@@ -814,16 +814,16 @@ mod tests {
         // Mix of Latin combining marks (0x0300-0x036F) and Arabic marks
         // as kitten icat uses diacritics from many Unicode blocks
         core.handle_print(0x10EEEE);
-        core.handle_print(0x0305);   // combining overline (Latin)
-        core.handle_print(0x0610);   // Arabic combining mark
+        core.handle_print(0x0305); // combining overline (Latin)
+        core.handle_print(0x0610); // Arabic combining mark
 
         core.handle_print(0x10EEEE);
-        core.handle_print(0x064B);   // Arabic fathatan
-        core.handle_print(0x065F);   // Arabic wavy hamza below
+        core.handle_print(0x064B); // Arabic fathatan
+        core.handle_print(0x065F); // Arabic wavy hamza below
 
         core.handle_print(0x10EEEE);
-        core.handle_print(0x0483);   // Cyrillic titlo
-        core.handle_print(0x0711);   // Syriac superscript alaph
+        core.handle_print(0x0483); // Cyrillic titlo
+        core.handle_print(0x0711); // Syriac superscript alaph
 
         // All suppressed
         assert_eq!(core.get_cursor_col(), 0);

@@ -324,5 +324,4 @@ mod tests {
         core.handle_cursor_vertical_absolute(1);
         assert!(!core.get_wrap_pending());
     }
-
 }

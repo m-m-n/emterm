@@ -265,5 +265,4 @@ mod tests {
         assert_eq!(core.get_cursor_col(), 5);
         assert_eq!(core.get_cursor_row(), 5);
     }
-
 }
