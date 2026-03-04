@@ -38,7 +38,7 @@ import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
 import type { SearchMatch } from "./search/search-state.ts";
 import type { FoldRegion } from "./fold-manager.ts";
-import { detectUrls, detectFilePaths, getLogicalLine, type LogicalLine, type UrlMatch, type FilePathMatch } from "./url-detector.ts";
+import { detectUrls, detectFilePaths, getLogicalLine, physicalToLogicalCol, type LogicalLine, type UrlMatch, type FilePathMatch } from "./url-detector.ts";
 import { SettingsService } from "../settings/settings-service.ts";
 import { isExtendedPictographic, hasVariationSelector } from "./unicode.ts";
 
@@ -530,6 +530,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Visible lines resolved for the current render pass (scroll-aware). */
 	private renderVisibleLines: (LineAccessor | null)[] | null = null;
 
+	/** Hover position for link underline (display row). -1 = no hover. */
+	private hoverRow: number = -1;
+
+	/** Hover position for link underline (display col). -1 = no hover. */
+	private hoverCol: number = -1;
+
 	/** Search matches to highlight (set externally). */
 	private searchMatches: SearchMatch[] = [];
 
@@ -989,15 +995,31 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.detectionCache.set(logical.startRow, cached);
 		}
 
-		const y = Math.floor(rowIndex * this.charHeight);
-		const underlineColor = this.currentForeground;
+		// Only draw underline for the link under the hover position
+		if (this.hoverRow < 0 || this.hoverCol < 0) return;
+		// Check if hover row is part of this logical line
+		if (this.hoverRow < logical.startRow || this.hoverRow >= logical.startRow + logical.rowCount) return;
 
+		const hoverLogicalCol = physicalToLogicalCol(this.hoverRow, this.hoverCol, logical);
+
+		let hoveredMatch: { startCol: number; endCol: number } | null = null;
 		for (const match of cached.urls) {
-			this.drawClippedUnderline(match.startCol, match.endCol, rowIndex, cached.logical, y, underlineColor);
+			if (hoverLogicalCol >= match.startCol && hoverLogicalCol < match.endCol) {
+				hoveredMatch = match;
+				break;
+			}
 		}
-		for (const match of cached.fps) {
-			this.drawClippedUnderline(match.startCol, match.endCol, rowIndex, cached.logical, y, underlineColor);
+		if (!hoveredMatch) {
+			for (const match of cached.fps) {
+				if (hoverLogicalCol >= match.startCol && hoverLogicalCol < match.endCol) {
+					hoveredMatch = match;
+					break;
+				}
+			}
 		}
+		if (!hoveredMatch) return;
+
+		this.drawClippedUnderlineWithCellColors(hoveredMatch.startCol, hoveredMatch.endCol, rowIndex, cached.logical, getLine);
 	}
 
 	/**
@@ -1024,6 +1046,36 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const x = physStartCol * this.charWidth;
 		const width = (physEndCol - physStartCol) * this.charWidth;
 		this.drawUnderline(x, y, width, color);
+	}
+
+	/**
+	 * Draw underline for a hovered link with per-cell foreground colors.
+	 * Clips the match to the current physical row and resolves each cell's color.
+	 */
+	private drawClippedUnderlineWithCellColors(
+		matchStart: number,
+		matchEnd: number,
+		rowIndex: number,
+		logical: LogicalLine,
+		getLine: (r: number) => LineAccessor | null,
+	): void {
+		const rowStartLogical = (rowIndex - logical.startRow) * logical.cols;
+		const rowEndLogical = rowStartLogical + logical.cols;
+		const clippedStart = Math.max(matchStart, rowStartLogical);
+		const clippedEnd = Math.min(matchEnd, rowEndLogical);
+		if (clippedStart >= clippedEnd) return;
+
+		const y = Math.floor(rowIndex * this.charHeight);
+		const line = getLine(rowIndex);
+		if (!line) return;
+
+		for (let logCol = clippedStart; logCol < clippedEnd; logCol++) {
+			const physCol = logCol - rowStartLogical;
+			const cell = line.getCell(physCol);
+			const fg = getEffectiveForeground(cell.attrs, this.currentForeground, this.currentBackground, this.currentPalette256, this.boldBrightensAnsiColors);
+			const x = physCol * this.charWidth;
+			this.drawUnderline(x, y, this.charWidth, fg);
+		}
 	}
 
 	/**
@@ -1988,6 +2040,19 @@ export class CanvasRenderer implements ITerminalRenderer {
 	clearSearchHighlights(): void {
 		this.searchMatches = [];
 		this.searchCurrentIndex = -1;
+	}
+
+	/**
+	 * Set the hover position for link underline rendering.
+	 * Triggers a re-render only when the cell position changes.
+	 */
+	setHoverPosition(row: number, col: number): void {
+		if (row === this.hoverRow && col === this.hoverCol) return;
+		this.hoverRow = row;
+		this.hoverCol = col;
+		if (this.pendingState) {
+			this.scheduleRender(this.pendingState);
+		}
 	}
 
 	/**

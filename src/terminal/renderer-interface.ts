@@ -138,6 +138,14 @@ export interface ITerminalRenderer {
 	 * Clear all search highlights.
 	 */
 	clearSearchHighlights(): void;
+
+	/**
+	 * Set the hover position for link underline rendering.
+	 * Pass (-1, -1) to clear hover state.
+	 * @param row - Display row
+	 * @param col - Display column
+	 */
+	setHoverPosition(row: number, col: number): void;
 }
 
 /**
