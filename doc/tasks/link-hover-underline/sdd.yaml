@@ -1,0 +1,63 @@
+schema_version: 1
+feature: link-hover-underline
+scale: light
+created: 2026-03-04
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 0f97a7627d6b0123154433c1106592c6f2457e29
+  - id: implement
+    status: completed
+    completed_at_commit: 0f97a7627d6b0123154433c1106592c6f2457e29
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 0f97a7627d6b0123154433c1106592c6f2457e29
+
+requirements:
+  FR1:
+    title: Remove always-on underline rendering
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Hover-only underline for link under mouse cursor
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Per-character foreground color for underline
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Re-render on hover state change
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: No perceptible lag on mousemove
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Existing Ctrl+click behavior unchanged
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Pointer cursor on Ctrl+hover unchanged
+    status: ok
+    tasks: []
+    tests: []

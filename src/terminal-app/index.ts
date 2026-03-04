@@ -303,6 +303,13 @@ export class TerminalApp {
     // Add mousemove handler for hover cursor feedback (folds, URLs, file paths)
     terminalContainer.addEventListener('mousemove', (e) => this.handleHover(e));
 
+    // Clear hover underline when mouse leaves the terminal area
+    terminalContainer.addEventListener('mouseleave', () => {
+      if (this.renderer) {
+        this.renderer.setHoverPosition(-1, -1);
+      }
+    });
+
     // Add keydown/keyup handler for Ctrl key to update cursor over URLs/file paths
     this.ctrlKeyHandler = (e: KeyboardEvent) => {
       if (e.key === 'Control' || e.key === 'Meta') {
@@ -1240,6 +1247,14 @@ export class TerminalApp {
   private handleHover(e: MouseEvent): void {
     this.lastMouseEvent = e;
     this.updateHoverCursor();
+
+    // Pass hover position to renderer for link underline drawing
+    if (this.renderer && this.terminalRoot) {
+      const rect = this.terminalRoot.getBoundingClientRect();
+      const row = Math.floor((e.clientY - rect.top) / this.charSize.height);
+      const col = Math.floor((e.clientX - rect.left) / this.charSize.width);
+      this.renderer.setHoverPosition(row, col);
+    }
   }
 
   /**
