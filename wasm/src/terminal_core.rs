@@ -355,16 +355,26 @@ impl TerminalCore {
         self.pack_row_abs(abs)
     }
 
+    // ── BCE (Background Color Erase) ────────────────────
+
+    /// Create a blank cell with the cursor's current background color (BCE).
+    pub(crate) fn bce_cell(&self) -> Cell {
+        let mut cell = Cell::EMPTY;
+        cell.bg = self.cursor.bg;
+        cell
+    }
+
     // ── Line operations ──────────────────────────────────
 
     pub fn clear_line(&mut self, row: u16) {
         if row >= self.rows {
             return;
         }
+        let bce = self.bce_cell();
         let abs = self.viewport_abs(row);
         let base = abs * self.cols as usize;
         for i in base..base + self.cols as usize {
-            self.ring_cells[i] = Cell::EMPTY;
+            self.ring_cells[i] = bce;
         }
         self.ring_wrapped[abs] = false;
         let abs32 = abs as u32;
@@ -377,12 +387,13 @@ impl TerminalCore {
         if row >= self.rows {
             return;
         }
+        let bce = self.bce_cell();
         let start = start_col.min(self.cols) as usize;
         let end = end_col.min(self.cols) as usize;
         let abs = self.viewport_abs(row);
         let base = abs * self.cols as usize;
         for i in base + start..base + end {
-            self.ring_cells[i] = Cell::EMPTY;
+            self.ring_cells[i] = bce;
         }
         let abs32 = abs as u32;
         overflow_clear_range(&mut self.overflow, abs32, start_col as u32, end_col as u32);
@@ -481,11 +492,12 @@ impl TerminalCore {
             }
         }
         // Clear vacated rows at bottom
+        let bce = self.bce_cell();
         for row in (end_row + 1 - count)..=end_row {
             let abs = self.viewport_abs(row);
             let base = abs * cols;
             for i in base..base + cols {
-                self.ring_cells[i] = Cell::EMPTY;
+                self.ring_cells[i] = bce;
             }
             self.ring_wrapped[abs] = false;
             let abs32 = abs as u32;
@@ -537,11 +549,12 @@ impl TerminalCore {
             }
         }
         // Clear vacated rows at top
+        let bce = self.bce_cell();
         for row in start_row..start_row + count {
             let abs = self.viewport_abs(row);
             let base = abs * cols;
             for i in base..base + cols {
-                self.ring_cells[i] = Cell::EMPTY;
+                self.ring_cells[i] = bce;
             }
             self.ring_wrapped[abs] = false;
             let abs32 = abs as u32;
@@ -1654,7 +1667,11 @@ mod tests {
         let fg = PackedColor::from_u32(core.get_cell_fg(0, 0));
         let bg = PackedColor::from_u32(core.get_cell_bg(0, 0));
         assert_eq!(fg, PackedColor::rgb(200, 200, 200));
-        assert_eq!(bg, PackedColor::rgb(43, 48, 59), "bg should be rgb(43,48,59), not indexed(3)");
+        assert_eq!(
+            bg,
+            PackedColor::rgb(43, 48, 59),
+            "bg should be rgb(43,48,59), not indexed(3)"
+        );
     }
 
     // ── Grapheme buffer flush on non-Print dispatch ──────
@@ -1786,5 +1803,133 @@ mod tests {
         core.handle_xtwinops_cell_size();
         let bytes = core.get_response_bytes();
         assert_eq!(&bytes, b"\x1b[6;20;10t");
+    }
+
+    // ── BCE (Background Color Erase) tests ──────────────
+
+    /// Helper: set cursor bg to green (indexed color 2)
+    fn set_cursor_bg_green(core: &mut TerminalCore) {
+        core.set_cursor_bg(1, 2, 0, 0); // tag=1 (indexed), index=2 (green)
+    }
+
+    #[test]
+    fn test_bce_clear_line() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        set_cursor_bg_green(&mut core);
+        core.clear_line(0);
+        for col in 0..10 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 0));
+            assert_eq!(
+                bg,
+                PackedColor::indexed(2),
+                "col {col} should have green bg"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bce_clear_line_range() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        set_cursor_bg_green(&mut core);
+        core.clear_line_range(0, 3, 7);
+        for col in 3..7 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 0));
+            assert_eq!(
+                bg,
+                PackedColor::indexed(2),
+                "col {col} should have green bg"
+            );
+        }
+        // Cols outside range should still be default
+        let bg0 = PackedColor::from_u32(core.get_cell_bg(0, 0));
+        assert_eq!(bg0, PackedColor::DEFAULT);
+        let bg9 = PackedColor::from_u32(core.get_cell_bg(9, 0));
+        assert_eq!(bg9, PackedColor::DEFAULT);
+    }
+
+    #[test]
+    fn test_bce_default_bg_unchanged() {
+        // When cursor.bg is DEFAULT, erased cells should have DEFAULT bg
+        let mut core = TerminalCore::new(10, 3, 0);
+        // cursor.bg is already DEFAULT
+        core.clear_line(0);
+        for col in 0..10 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 0));
+            assert_eq!(bg, PackedColor::DEFAULT);
+        }
+    }
+
+    #[test]
+    fn test_bce_sgr_reset_then_erase() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        // Set green bg
+        set_cursor_bg_green(&mut core);
+        // Reset cursor attrs (simulates ESC[0m)
+        core.reset_cursor_attrs();
+        core.clear_line(0);
+        for col in 0..10 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 0));
+            assert_eq!(
+                bg,
+                PackedColor::DEFAULT,
+                "After reset, bg should be DEFAULT"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bce_256_color() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.set_cursor_bg(1, 196, 0, 0); // indexed color 196
+        core.clear_line(0);
+        let bg = PackedColor::from_u32(core.get_cell_bg(0, 0));
+        assert_eq!(bg, PackedColor::indexed(196));
+    }
+
+    #[test]
+    fn test_bce_rgb_color() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        core.set_cursor_bg(2, 100, 200, 50); // RGB
+        core.clear_line(0);
+        let bg = PackedColor::from_u32(core.get_cell_bg(0, 0));
+        assert_eq!(bg, PackedColor::rgb(100, 200, 50));
+    }
+
+    #[test]
+    fn test_bce_shift_rows_up() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        for row in 0..5 {
+            for col in 0..10 {
+                core.set_cell_ascii(col, row, b'A', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        set_cursor_bg_green(&mut core);
+        core.shift_rows_up(0, 4, 2);
+        // Vacated bottom rows (3, 4) should have green bg
+        for row in 3..5 {
+            for col in 0..10 {
+                let bg = PackedColor::from_u32(core.get_cell_bg(col, row));
+                assert_eq!(bg, PackedColor::indexed(2), "row {row} col {col}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_bce_shift_rows_down() {
+        let mut core = TerminalCore::new(10, 5, 0);
+        for row in 0..5 {
+            for col in 0..10 {
+                core.set_cell_ascii(col, row, b'A', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        set_cursor_bg_green(&mut core);
+        core.shift_rows_down(0, 4, 2);
+        // Vacated top rows (0, 1) should have green bg
+        for row in 0..2 {
+            for col in 0..10 {
+                let bg = PackedColor::from_u32(core.get_cell_bg(col, row));
+                assert_eq!(bg, PackedColor::indexed(2), "row {row} col {col}");
+            }
+        }
     }
 }

@@ -49,9 +49,10 @@ impl TerminalCore {
         for c in (col + count..self.cols).rev() {
             self.ring_cells[base + c as usize] = self.ring_cells[base + (c - count) as usize];
         }
-        // Clear inserted cells
+        // Clear inserted cells with BCE
+        let bce = self.bce_cell();
         for c in col..col + count {
-            self.ring_cells[base + c as usize] = Cell::EMPTY;
+            self.ring_cells[base + c as usize] = bce;
         }
         // Handle overflow entries for this row
         let abs = self.viewport_abs(row) as u32;
@@ -78,9 +79,10 @@ impl TerminalCore {
         for c in col..self.cols - count {
             self.ring_cells[base + c as usize] = self.ring_cells[base + (c + count) as usize];
         }
-        // Clear trailing cells
+        // Clear trailing cells with BCE
+        let bce = self.bce_cell();
         for c in self.cols - count..self.cols {
-            self.ring_cells[base + c as usize] = Cell::EMPTY;
+            self.ring_cells[base + c as usize] = bce;
         }
         // Handle overflow entries for this row
         let abs = self.viewport_abs(row) as u32;
@@ -138,7 +140,7 @@ mod tests {
         core.set_scroll_region(0, 4);
         core.set_cursor(0, 3);
         core.handle_insert_lines(100); // Much more than available
-                                       // Should not panic
+        // Should not panic
         assert_eq!(core.get_cell_char(0, 3), " ");
     }
 
@@ -273,5 +275,55 @@ mod tests {
         core.set_cursor(0, 0);
         core.handle_delete_characters(1);
         assert!(core.is_row_dirty(0));
+    }
+
+    // ── BCE tests for ICH/DCH ───────────────────────────────
+
+    use crate::cell::PackedColor;
+
+    #[test]
+    fn test_bce_insert_characters() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        for (c, ch) in (b'A'..=b'J').enumerate() {
+            core.set_cell_ascii(c as u16, 0, ch, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cursor(3, 0);
+        core.set_cursor_bg(1, 2, 0, 0); // indexed green
+        core.handle_insert_characters(2);
+        // Inserted cells at col 3, 4 should have green bg
+        for col in 3..5 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 0));
+            assert_eq!(
+                bg,
+                PackedColor::indexed(2),
+                "col {col} should have green bg"
+            );
+        }
+        // Non-inserted cells should retain original bg (DEFAULT)
+        let bg0 = PackedColor::from_u32(core.get_cell_bg(0, 0));
+        assert_eq!(bg0, PackedColor::DEFAULT);
+    }
+
+    #[test]
+    fn test_bce_delete_characters() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        for (c, ch) in (b'A'..=b'J').enumerate() {
+            core.set_cell_ascii(c as u16, 0, ch, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.set_cursor(3, 0);
+        core.set_cursor_bg(1, 2, 0, 0); // indexed green
+        core.handle_delete_characters(2);
+        // Trailing cells at col 8, 9 should have green bg
+        for col in 8..10 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 0));
+            assert_eq!(
+                bg,
+                PackedColor::indexed(2),
+                "col {col} should have green bg"
+            );
+        }
+        // Shifted cells should retain original bg
+        let bg3 = PackedColor::from_u32(core.get_cell_bg(3, 0));
+        assert_eq!(bg3, PackedColor::DEFAULT);
     }
 }

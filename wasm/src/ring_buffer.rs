@@ -86,13 +86,16 @@ impl TerminalCore {
     /// Push a blank line at the end of the ring buffer.
     /// If below capacity, ring_size grows (scrollback expands).
     /// If at capacity, ring_head advances (oldest scrollback evicted).
-    pub(crate) fn ring_push_blank(&mut self) {
+    /// The `bg` parameter specifies the background color for new cells (BCE).
+    pub(crate) fn ring_push_blank(&mut self, bg: PackedColor) {
         let cols = self.cols as usize;
+        let mut bce = Cell::EMPTY;
+        bce.bg = bg;
         if self.ring_size < self.ring_capacity {
             let new_abs = (self.ring_head + self.ring_size) % self.ring_capacity;
             let base = new_abs * cols;
             for i in base..base + cols {
-                self.ring_cells[i] = Cell::EMPTY;
+                self.ring_cells[i] = bce;
             }
             self.ring_wrapped[new_abs] = false;
             let abs32 = new_abs as u32;
@@ -105,7 +108,7 @@ impl TerminalCore {
             self.ring_head = (self.ring_head + 1) % self.ring_capacity;
             let base = new_abs * cols;
             for i in base..base + cols {
-                self.ring_cells[i] = Cell::EMPTY;
+                self.ring_cells[i] = bce;
             }
             self.ring_wrapped[new_abs] = false;
             let abs32 = new_abs as u32;
@@ -129,8 +132,9 @@ impl TerminalCore {
         let count = count.min(bottom - top + 1);
 
         if is_full_screen {
+            let bg = self.cursor.bg;
             for _ in 0..count {
-                self.ring_push_blank();
+                self.ring_push_blank(bg);
             }
             // TODO: Scroll optimization disabled for diagnosis.
             // Always fall back to full redraw to isolate rendering issues.
@@ -823,6 +827,7 @@ impl TerminalCore {
 
 #[cfg(test)]
 mod tests {
+    use crate::cell::PackedColor;
     use crate::terminal_core::TerminalCore;
 
     // ── Ring buffer index mapping tests ──────────────────
@@ -931,7 +936,7 @@ mod tests {
         // capacity=8, initial size=3
         assert_eq!(core.scrollback_count(), 0);
         core.set_cell(0, 0, "A", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-        core.ring_push_blank();
+        core.ring_push_blank(PackedColor::DEFAULT);
         assert_eq!(core.scrollback_count(), 1);
         assert_eq!(core.ring_size, 4);
         // Old row 0 ("A") is now in scrollback, viewport row 0 is old row 1
@@ -942,12 +947,12 @@ mod tests {
     fn test_ring_push_blank_at_capacity_evicts() {
         let mut core = TerminalCore::new(10, 3, 2);
         // capacity=5, fill to capacity
-        core.ring_push_blank(); // size=4, scrollback=1
-        core.ring_push_blank(); // size=5, scrollback=2 (at capacity)
+        core.ring_push_blank(PackedColor::DEFAULT); // size=4, scrollback=1
+        core.ring_push_blank(PackedColor::DEFAULT); // size=5, scrollback=2 (at capacity)
         assert_eq!(core.ring_size, 5);
         assert_eq!(core.scrollback_count(), 2);
         // Next push should evict oldest
-        core.ring_push_blank();
+        core.ring_push_blank(PackedColor::DEFAULT);
         assert_eq!(core.ring_size, 5); // stays at capacity
         assert_eq!(core.scrollback_count(), 2); // still 2 (oldest evicted, newest added)
     }
@@ -1365,7 +1370,7 @@ mod tests {
 
         // Push enough blanks to evict the overflow row
         for _ in 0..5 {
-            core.ring_push_blank();
+            core.ring_push_blank(PackedColor::DEFAULT);
         }
         // The original row should have been evicted
         assert!(core.overflow.is_empty());
@@ -1489,7 +1494,71 @@ mod tests {
         core.shift_dirty_down_by_one();
 
         // Should shift to row 63 (last bit of first word)
-        assert!(core.is_row_dirty(63), "row 63 should be dirty (shifted from 64)");
-        assert!(!core.is_row_dirty(64), "row 64 should not be dirty (shifted to 63)");
+        assert!(
+            core.is_row_dirty(63),
+            "row 63 should be dirty (shifted from 64)"
+        );
+        assert!(
+            !core.is_row_dirty(64),
+            "row 64 should not be dirty (shifted to 63)"
+        );
+    }
+
+    // ── BCE scroll tests ────────────────────────────────────
+
+    #[test]
+    fn test_bce_ring_push_blank() {
+        let mut core = TerminalCore::new(10, 3, 5);
+        let green = PackedColor::indexed(2);
+        core.ring_push_blank(green);
+        // The new blank line is now the last viewport row (row 2)
+        for col in 0..10 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 2));
+            assert_eq!(bg, green, "col {col}");
+        }
+    }
+
+    #[test]
+    fn test_bce_scroll_up_full_screen() {
+        let mut core = TerminalCore::new(10, 3, 5);
+        for r in 0..3 {
+            for c in 0..10 {
+                core.set_cell_ascii(c, r, b'A', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        core.set_cursor_bg(1, 2, 0, 0); // green
+        core.scroll_up_internal(1);
+        // New bottom row (row 2) should have green bg
+        for col in 0..10 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 2));
+            assert_eq!(bg, PackedColor::indexed(2), "col {col}");
+        }
+    }
+
+    #[test]
+    fn test_bce_scroll_down() {
+        let mut core = TerminalCore::new(10, 3, 0);
+        for r in 0..3 {
+            for c in 0..10 {
+                core.set_cell_ascii(c, r, b'A', 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        }
+        core.set_cursor_bg(1, 2, 0, 0); // green
+        core.scroll_down_internal(1);
+        // New top row (row 0) should have green bg (via shift_rows_down BCE)
+        for col in 0..10 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 0));
+            assert_eq!(bg, PackedColor::indexed(2), "col {col}");
+        }
+    }
+
+    #[test]
+    fn test_bce_ring_push_blank_default() {
+        let mut core = TerminalCore::new(10, 3, 5);
+        core.ring_push_blank(PackedColor::DEFAULT);
+        for col in 0..10 {
+            let bg = PackedColor::from_u32(core.get_cell_bg(col, 2));
+            assert_eq!(bg, PackedColor::DEFAULT);
+        }
     }
 }

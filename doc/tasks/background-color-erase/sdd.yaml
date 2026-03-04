@@ -1,0 +1,68 @@
+schema_version: 1
+feature: background-color-erase
+scale: standard
+created: 2026-03-04
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 1ae145b43952ea588ce9bd58bbecda19762b4a18
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 1ae145b43952ea588ce9bd58bbecda19762b4a18
+  - id: implement
+    status: completed
+    completed_at_commit: 1ae145b43952ea588ce9bd58bbecda19762b4a18
+  - id: check
+    status: completed
+    completed_at_commit: 1ae145b43952ea588ce9bd58bbecda19762b4a18
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 1ae145b43952ea588ce9bd58bbecda19762b4a18
+  - id: review
+    status: completed
+    completed_at_commit: 1ae145b43952ea588ce9bd58bbecda19762b4a18
+
+requirements:
+  FR1:
+    title: Erase operations inherit cursor background color
+    status: ok
+    tasks: [Phase 1]
+    tests: [TS-01, TS-02, TS-03, TS-04, TS-05, TS-06, TS-13, TS-14]
+  FR2:
+    title: Character insert/delete inherit cursor background color
+    status: ok
+    tasks: [Phase 2]
+    tests: [TS-07, TS-08]
+  FR3:
+    title: Scroll and line operations inherit cursor background color
+    status: ok
+    tasks: [Phase 3]
+    tests: [TS-09, TS-10, TS-11, TS-12]
+  FR4:
+    title: Reset and resize use default background
+    status: ok
+    tasks: [Phase 1]
+    tests: [TS-13]
+  NFR1:
+    title: No performance regression
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: xterm/kitty/alacritty compatibility
+    status: ok
+    tasks: []
+    tests: []

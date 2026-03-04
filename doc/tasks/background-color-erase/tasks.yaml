@@ -1,0 +1,10 @@
+tasks:
+  - - id: phase1
+      title: "Phase 1: BCE Cell Helper and Core Erase Methods"
+      status: completed
+  - - id: phase2
+      title: "Phase 2: Character Insert/Delete BCE"
+      status: completed
+  - - id: phase3
+      title: "Phase 3: Scroll and Line Operations BCE"
+      status: completed
