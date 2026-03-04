@@ -1,5 +1,7 @@
 mod cell;
 mod terminal_core;
+mod terminal_cursor;
+mod terminal_modes;
 mod unicode;
 
 // Parser modules
@@ -21,6 +23,7 @@ mod csi_scroll;
 mod esc_handler;
 mod osc_handler;
 mod print_handler;
+mod reflow;
 mod ring_buffer;
 mod sgr;
 
