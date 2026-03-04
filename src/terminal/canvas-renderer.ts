@@ -536,6 +536,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Hover position for link underline (display col). -1 = no hover. */
 	private hoverCol: number = -1;
 
+	/** Previous hover position for differential redraw. */
+	private prevHoverRow: number = -1;
+	private prevHoverCol: number = -1;
+
 	/** Search matches to highlight (set externally). */
 	private searchMatches: SearchMatch[] = [];
 
@@ -771,9 +775,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 			}
 		}
 
-		// Clear per-frame detection cache
-		this.detectionCache.clear();
-
 		// Clear dirty flags
 		state.clearDirty();
 
@@ -816,6 +817,44 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.prevCursorCol = state.cursorCol;
 		this.prevCursorRow = state.cursorRow;
 		this.prevCursorVisible = state.cursorVisible;
+
+		// Hover underline pass: redraw rows affected by hover position change.
+		// Must redraw all physical rows of the logical lines involved,
+		// because a link may span multiple wrapped rows.
+		const hoverChanged = this.hoverRow !== this.prevHoverRow || this.hoverCol !== this.prevHoverCol;
+		if (hoverChanged) {
+			const hoverRedrawRows = new Set<number>();
+			const getLineForHover = (r: number): LineAccessor | null =>
+				(r >= 0 && r < this.rows) ? buffer.getLine(r) : null;
+
+			// Collect all physical rows of the logical line for prev and current hover
+			for (const seedRow of [this.prevHoverRow, this.hoverRow]) {
+				if (seedRow < 0 || seedRow >= this.rows) continue;
+				const logical = getLogicalLine(getLineForHover, seedRow, this.rows);
+				for (let r = logical.startRow; r < logical.startRow + logical.rowCount; r++) {
+					hoverRedrawRows.add(r);
+				}
+			}
+
+			for (const row of hoverRedrawRows) {
+				if (dirtyRows.includes(row)) continue;
+				const packed = state.getRowPacked(row);
+				if (packed) {
+					const spans = groupPackedCellsIntoSpans(packed, this.cols);
+					this.renderLineBackgroundFromSpans(row, spans);
+					this.renderLineTextFromSpans(row, spans);
+				} else {
+					const line = buffer.getLine(row);
+					this.renderLineBackground(row, line);
+					this.renderLineText(row, line);
+				}
+			}
+			this.prevHoverRow = this.hoverRow;
+			this.prevHoverCol = this.hoverCol;
+		}
+
+		// Clear per-frame detection cache
+		this.detectionCache.clear();
 
 		// Record performance metrics
 		const duration = this.renderTimer.end();
