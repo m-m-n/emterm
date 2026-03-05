@@ -38,7 +38,7 @@ import type { SearchMatch } from "./search/search-state.ts";
 import type { FoldRegion } from "./fold-manager.ts";
 import { detectUrls, detectFilePaths, getLogicalLine, physicalToLogicalCol, type LogicalLine, type UrlMatch, type FilePathMatch } from "./url-detector.ts";
 import { SettingsService } from "../settings/settings-service.ts";
-import { isExtendedPictographic, hasVariationSelector } from "./unicode.ts";
+import { isExtendedPictographic, hasVariationSelector } from "./wasm/unicode.ts";
 import {
 	type TextSpan,
 	groupCellsIntoSpans,

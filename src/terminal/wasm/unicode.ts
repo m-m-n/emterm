@@ -98,3 +98,14 @@ export function isCombiningChar(cp: number): boolean {
 export function isAmbiguousWidth(cp: number): boolean {
 	return wasm_is_ambiguous_width(cp);
 }
+
+/**
+ * Check if a string contains a variation selector (VS15 U+FE0E or VS16 U+FE0F).
+ */
+export function hasVariationSelector(s: string): boolean {
+	for (let i = 0; i < s.length; i++) {
+		const c = s.charCodeAt(i);
+		if (c === 0xfe0e || c === 0xfe0f) return true;
+	}
+	return false;
+}
