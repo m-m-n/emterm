@@ -1,6 +1,9 @@
 /// PTY data dispatch: process_pty_data, dispatch_action, and buffer switch detection.
+use wasm_bindgen::prelude::*;
+
 use crate::terminal_core::TerminalCore;
 
+#[wasm_bindgen]
 impl TerminalCore {
     /// Process raw PTY data through the WASM parser and dispatch internally.
     ///
