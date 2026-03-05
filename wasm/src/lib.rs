@@ -1,8 +1,11 @@
 mod cell;
 mod terminal_core;
 mod terminal_cursor;
+mod terminal_dispatch;
 mod terminal_modes;
 mod unicode;
+mod unicode_emoji;
+mod unicode_width;
 
 // Parser modules
 mod parser;
