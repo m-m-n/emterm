@@ -149,9 +149,8 @@ export class TabDragHandler {
       return;
     }
 
-    // Check if this is a settings tab (not draggable)
     const tab = this.tabManager.getTab(tabId);
-    if (!tab || tab.type === "settings") {
+    if (!tab) {
       event.preventDefault();
       return;
     }
