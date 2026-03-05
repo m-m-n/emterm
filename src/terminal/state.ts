@@ -19,10 +19,6 @@ import { WasmGrid } from "./wasm/terminal-core.ts";
 
 // Import handlers from the handlers module
 import {
-  handlePrint,
-  handleExecute,
-  handleCsi,
-  handleEsc,
   handleOsc,
   handleApc,
   handleDcs,
@@ -766,20 +762,15 @@ export class TerminalState implements TerminalStateAccessor {
     switch (action.type) {
       case "Print": {
         const grid = this.getActiveWasmGrid();
-        if (grid) {
-          // WASM fast path: delegate single codepoint to WASM handle_print
-          const cp = action.value.codePointAt(0);
-          if (cp !== undefined) {
-            const scrollCount = grid.core.handle_print(cp);
-            if (scrollCount > 0) {
-              const buffer = this.getActiveBuffer();
-              for (let i = 0; i < scrollCount; i++) {
-                buffer.scrollUp();
-              }
+        const cp = action.value.codePointAt(0);
+        if (grid && cp !== undefined) {
+          const scrollCount = grid.core.handle_print(cp);
+          if (scrollCount > 0) {
+            const buffer = this.getActiveBuffer();
+            for (let i = 0; i < scrollCount; i++) {
+              buffer.scrollUp();
             }
           }
-        } else {
-          handlePrint(this, action.value);
         }
         break;
       }
@@ -795,26 +786,21 @@ export class TerminalState implements TerminalStateAccessor {
               buffer.scrollUp();
             }
           }
-        } else {
-          handleExecute(this, action.value);
         }
         break;
       }
       case "Csi": {
         const grid = this.getActiveWasmGrid();
-        if (grid && this.handleCsiWasm(grid, action.value)) {
-          break; // Handled by WASM
+        if (grid) {
+          this.handleCsiWasm(grid, action.value);
         }
-        handleCsi(this, action.value); // Fallback to TS
         break;
       }
       case "Esc": {
         const grid = this.getActiveWasmGrid();
         if (grid) {
           this.handleEscWasm(grid, action.value);
-          break;
         }
-        handleEsc(this, action.value);
         break;
       }
       case "Osc":

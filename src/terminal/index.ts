@@ -69,8 +69,6 @@ export {
 export { CanvasRenderer } from "./canvas-renderer.ts";
 export type { ITerminalRenderer, RendererType } from "./renderer-interface.ts";
 export { createRenderer, createRendererAsync } from "./renderer-factory.ts";
-// SGR parsing
-export { parseSgrParams } from "./sgr.ts";
 // Core types and state
 export { TerminalState } from "./state.ts";
 export type { StyleCacheMetrics } from "./style-cache.ts";
