@@ -19,19 +19,20 @@ pub mod commands;
 pub mod encoding;
 pub mod error;
 pub mod protocols;
+pub mod ssh;
 pub mod validation;
 
 // GUI modules (split from lib.rs)
 #[cfg(feature = "gui")]
+mod app;
+#[cfg(feature = "gui")]
 pub mod payloads;
+#[cfg(feature = "gui")]
+pub mod reader;
 #[cfg(feature = "gui")]
 pub mod state;
 #[cfg(feature = "gui")]
 pub mod tauri_commands;
-#[cfg(feature = "gui")]
-pub mod reader;
-#[cfg(feature = "gui")]
-mod app;
 
 #[cfg(all(feature = "gui", not(test)))]
 pub use app::run;
@@ -45,9 +46,9 @@ pub use app::run;
 mod tests {
     use crate::image;
     use crate::payloads::ImageEventPayload;
-    use crate::state::{LargeImageDataStore, LARGE_IMAGE_DATA_THRESHOLD};
     use crate::pty::PtyManager;
-    use crate::{ansi, protocols, commands};
+    use crate::state::{LARGE_IMAGE_DATA_THRESHOLD, LargeImageDataStore};
+    use crate::{ansi, commands, protocols};
 
     #[tokio::test]
     async fn test_session_count_command() {

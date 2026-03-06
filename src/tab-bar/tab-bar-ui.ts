@@ -6,6 +6,7 @@
 
 import type { TabManager } from "./tab-manager";
 import type { Tab } from "./types";
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "../i18n/index.ts";
 import { SettingsService } from "../settings/settings-service";
 import { showProfileSelector } from "../profile/profile-selector";
@@ -343,6 +344,13 @@ export class TabBarUI {
    */
   createTabWithProfile(profile: import("../settings/types").Profile): void {
     const envVars = profile.env_vars ? parseEnvVars(profile.env_vars) : undefined;
+
+    // SSH connection handling
+    if (profile.ssh_connection_name) {
+      this.launchSshProfile(profile, envVars);
+      return;
+    }
+
     this.tabManager.createTab({
       profileSpawn: {
         shell_path: profile.shell_path || undefined,
@@ -351,6 +359,53 @@ export class TabBarUI {
         working_directory: profile.working_directory || undefined,
       },
     });
+  }
+
+  private async launchSshProfile(
+    profile: import("../settings/types").Profile,
+    envVars: Record<string, string> | undefined,
+  ): Promise<void> {
+    try {
+      const settings = SettingsService.getCached() ?? await SettingsService.load();
+      const conn = settings.ssh_connections.find(
+        (c) => c.name === profile.ssh_connection_name,
+      );
+
+      if (!conn) {
+        const msg = t("settings.ssh.connectionNotFound", { name: profile.ssh_connection_name });
+        console.error(msg);
+        alert(msg);
+        return;
+      }
+
+      if (!settings.ssh_command_path) {
+        const msg = t("settings.ssh.sshNotConfigured");
+        console.error(msg);
+        alert(msg);
+        return;
+      }
+
+      // Build SSH args via backend (handles tilde expansion, consistent logic)
+      const args = await invoke<string[]>("build_ssh_args", {
+        hostname: conn.hostname,
+        port: conn.port,
+        username: conn.username,
+        identityFile: conn.identity_file,
+        sshOptions: conn.ssh_options ?? [],
+      });
+
+      this.tabManager.createTab({
+        profileSpawn: {
+          shell_path: settings.ssh_command_path,
+          shell_args: args,
+          env_vars:
+            envVars && Object.keys(envVars).length > 0 ? envVars : undefined,
+          working_directory: profile.working_directory || undefined,
+        },
+      });
+    } catch (err) {
+      console.error("Failed to launch SSH session:", err);
+    }
   }
 
   /**

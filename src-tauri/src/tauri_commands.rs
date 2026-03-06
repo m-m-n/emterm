@@ -1,10 +1,10 @@
 #[cfg(feature = "gui")]
 use {
     crate::payloads::*,
-    crate::reader::spawn_reader_thread,
-    crate::state::{ImageProcessorState, LargeImageDataStore, LARGE_IMAGE_DATA_THRESHOLD},
-    crate::{ansi, image, logging},
     crate::pty::{PtyError, PtyManager},
+    crate::reader::spawn_reader_thread,
+    crate::state::{ImageProcessorState, LARGE_IMAGE_DATA_THRESHOLD, LargeImageDataStore},
+    crate::{ansi, image, logging},
     std::collections::HashMap,
     tauri::ipc::Channel,
     tauri::{AppHandle, Emitter, State},

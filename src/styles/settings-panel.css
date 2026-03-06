@@ -1246,6 +1246,119 @@
 }
 
 /* ============================================
+ * SSH Settings
+ * ============================================ */
+
+.ssh-path-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ssh-path-row .settings-text-input {
+  flex: 1;
+}
+
+.ssh-detect-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ssh-config-desc {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+  margin: 0 0 8px 0;
+}
+
+.ssh-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 16px;
+}
+
+.ssh-config-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background-color: color-mix(in srgb, var(--md-sys-color-surface-variant) 40%, transparent);
+}
+
+.ssh-config-item-name {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface);
+  font-family: var(--md-typescale-body-medium-font, inherit);
+}
+
+.ssh-empty-state {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface-variant);
+  margin: 8px 0 16px;
+  padding: 0;
+}
+
+/* ============================================
+ * SSH Options Key-Value List
+ * ============================================ */
+
+.ssh-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ssh-option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ssh-option-key {
+  flex: 2;
+  min-width: 0;
+}
+
+.ssh-option-eq {
+  flex-shrink: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.ssh-option-value {
+  flex: 3;
+  min-width: 0;
+}
+
+.ssh-option-remove-btn {
+  flex-shrink: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  background-color: transparent;
+  border-color: var(--md-sys-color-outline-variant);
+}
+
+.ssh-option-remove-btn:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-error) 20%, transparent);
+}
+
+.ssh-option-add-btn {
+  flex-shrink: 0;
+  color: var(--md-sys-color-on-primary);
+  background-color: var(--md-sys-color-primary);
+  border-color: var(--md-sys-color-primary);
+}
+
+.ssh-option-add-btn:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 80%, black);
+}
+
+/* ============================================
  * Profile Editor Modal
  * ============================================ */
 
