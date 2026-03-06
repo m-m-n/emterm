@@ -55,5 +55,54 @@ pub(super) fn validate_settings(settings: &AppSettings) -> Result<(), String> {
         }
     }
 
+    for (i, conn) in settings.ssh_connections.iter().enumerate() {
+        if conn.name.trim().is_empty() {
+            return Err(t!("validation.sshConnectionNameEmpty", index = i + 1).to_string());
+        }
+        let hostname = conn.hostname.trim();
+        if hostname.is_empty() {
+            return Err(t!("validation.sshHostnameEmpty", index = i + 1).to_string());
+        }
+        // Reject hostnames with control characters, spaces, or shell metacharacters
+        if hostname
+            .chars()
+            .any(|c| c.is_control() || c == ' ' || c == '\t')
+        {
+            return Err(t!("validation.sshHostnameInvalid", index = i + 1).to_string());
+        }
+        // Port range: u16 caps at 65535, so only check lower bound
+        if conn.port == 0 {
+            return Err(t!(
+                "validation.sshPortRange",
+                index = i + 1,
+                min = 1,
+                max = 65535
+            )
+            .to_string());
+        }
+        // Reject dangerous SSH options that allow arbitrary command execution
+        for opt in &conn.ssh_options {
+            if is_dangerous_ssh_option(&opt.key) {
+                return Err(t!(
+                    "validation.sshOptionDangerous",
+                    index = i + 1,
+                    key = opt.key
+                )
+                .to_string());
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// SSH option keys that allow arbitrary command execution.
+fn is_dangerous_ssh_option(key: &str) -> bool {
+    const DANGEROUS_KEYS: &[&str] = &[
+        "proxycommand",
+        "localcommand",
+        "remotecommand",
+        "permitlocalcommand",
+    ];
+    DANGEROUS_KEYS.contains(&key.to_ascii_lowercase().as_str())
 }

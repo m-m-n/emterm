@@ -78,6 +78,10 @@ pub fn run() {
             commands::editor::check_file_exists,
             commands::editor::open_file_in_editor,
             commands::font::list_fonts,
+            commands::ssh::detect_ssh_command,
+            commands::ssh::load_ssh_config_hosts,
+            commands::ssh::build_ssh_args,
+            commands::ssh::validate_identity_file,
             tauri_commands::set_language,
         ])
         .setup(|app| {

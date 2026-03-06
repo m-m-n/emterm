@@ -95,6 +95,10 @@ export interface AppSettings {
   markdown_code_font_family: string;
   markdown_emoji_font_family: string;
   markdown_font_size: number;
+
+  // SSH
+  ssh_command_path: string;
+  ssh_connections: SshConnection[];
 }
 
 export interface KeybindSettings {
@@ -140,6 +144,34 @@ export interface Profile {
   env_vars: string;
   working_directory: string;
   is_default: boolean;
+  ssh_connection_name: string;
+}
+
+// ============================================================
+// SSH Connection
+// ============================================================
+
+export interface SshOption {
+  key: string;
+  value: string;
+}
+
+export interface SshConnection {
+  name: string;
+  hostname: string;
+  port: number;
+  username: string;
+  identity_file: string;
+  ssh_options: SshOption[];
+}
+
+/** Parsed host entry from ~/.ssh/config */
+export interface SshConfigHost {
+  host: string;
+  hostname: string;
+  port: number;
+  user: string;
+  identity_file: string;
 }
 
 // ============================================================

@@ -1,0 +1,98 @@
+schema_version: 1
+feature: ssh-connection
+scale: standard
+created: 2026-03-05
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'cargo test --manifest-path src-tauri/Cargo.toml'"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+    frontend:
+      language: typescript
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'bun test'"
+      format_command: ""
+      typecheck_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'bun run typecheck'"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: a81f1998f2fd82fa543295ca0063eb30f5d0d283
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: a81f1998f2fd82fa543295ca0063eb30f5d0d283
+  - id: implement
+    status: completed
+    completed_at_commit: a81f1998f2fd82fa543295ca0063eb30f5d0d283
+  - id: check
+    status: completed
+    completed_at_commit: a81f1998f2fd82fa543295ca0063eb30f5d0d283
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: a81f1998f2fd82fa543295ca0063eb30f5d0d283
+  - id: review
+    status: completed
+    completed_at_commit: a81f1998f2fd82fa543295ca0063eb30f5d0d283
+
+requirements:
+  FR1:
+    title: SSH Command Detection
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: SSH Config Parsing
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: SSH Connection CRUD
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: SSH Connection Duplication
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Profile SSH Reference
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: SSH PTY Session Launch
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: SSH Settings UI
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Performance
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Security
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Platform Compatibility
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: Usability
+    status: ok
+    tasks: []
+    tests: []

@@ -54,6 +54,24 @@ async function main(): Promise<void> {
     invoke("set_language", { language: resolvedLocale }).catch((err) => {
       console.warn("Failed to sync backend language:", err);
     });
+
+    // Auto-detect SSH command path on startup if empty (fire-and-forget)
+    if (!settings.ssh_command_path) {
+      invoke<string>("detect_ssh_command").then(async (detected) => {
+        if (detected) {
+          try {
+            const current = SettingsService.getCached() ?? await SettingsService.load();
+            if (!current.ssh_command_path) {
+              await SettingsService.save({ ...current, ssh_command_path: detected });
+            }
+          } catch (e) {
+            console.warn("Failed to save detected SSH path:", e);
+          }
+        }
+      }).catch((err) => {
+        console.warn("SSH auto-detection failed:", err);
+      });
+    }
   } catch (error) {
     console.error("Failed to load settings at startup:", error);
     // Continue with defaults - initialize i18n with auto-detected locale

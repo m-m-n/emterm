@@ -6,4 +6,6 @@ pub mod editor;
 pub mod font;
 pub mod image;
 pub mod markdown;
+#[cfg(feature = "gui")]
+pub mod ssh;
 pub mod tmux;

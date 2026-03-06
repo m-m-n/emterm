@@ -6,9 +6,10 @@
  * working_directory with save/cancel actions.
  */
 
-import type { Profile } from "../settings/types";
+import type { AppSettings, Profile } from "../settings/types";
 import { t } from "../i18n/index.ts";
 import { createEmptyProfile } from "./types";
+import { SettingsService } from "../settings/settings-service";
 
 export interface ProfileEditorOptions {
 	profile?: Profile;
@@ -106,6 +107,30 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 		hint: t("settings.profiles.workingDirectoryHint"),
 	});
 
+	// SSH Connection dropdown
+	const sshSelect = createSelectField(form, {
+		id: "profile-ssh-connection",
+		label: t("settings.profiles.sshConnection"),
+		value: profile.ssh_connection_name,
+		hint: t("settings.profiles.sshConnectionHint"),
+		options: [{ value: "", label: t("settings.profiles.sshConnectionNone") }],
+	});
+
+	// Load SSH connections asynchronously and populate dropdown
+	SettingsService.load().then((settings: AppSettings) => {
+		for (const conn of settings.ssh_connections) {
+			const opt = document.createElement("option");
+			opt.value = conn.name;
+			opt.textContent = conn.name;
+			if (conn.name === profile.ssh_connection_name) {
+				opt.selected = true;
+			}
+			sshSelect.appendChild(opt);
+		}
+	}).catch(() => {
+		// Settings load failed - dropdown stays with just "None"
+	});
+
 	// Buttons
 	const btnRow = document.createElement("div");
 	btnRow.className = "profile-editor-buttons";
@@ -177,6 +202,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 			env_vars: envVarsTextarea.value,
 			working_directory: workDirInput.value.trim(),
 			is_default: profile.is_default,
+			ssh_connection_name: sshSelect.value,
 		};
 
 		cleanup();
@@ -271,4 +297,48 @@ function createTextareaField(
 
 	form.appendChild(row);
 	return textarea;
+}
+
+interface SelectFieldOptions {
+	id: string;
+	label: string;
+	value: string;
+	hint?: string;
+	options: Array<{ value: string; label: string }>;
+}
+
+function createSelectField(
+	form: HTMLFormElement,
+	opts: SelectFieldOptions,
+): HTMLSelectElement {
+	const row = document.createElement("div");
+	row.className = "profile-editor-field";
+
+	const label = document.createElement("label");
+	label.className = "profile-editor-label";
+	label.htmlFor = opts.id;
+	label.textContent = opts.label;
+	row.appendChild(label);
+
+	const select = document.createElement("select");
+	select.id = opts.id;
+	select.className = "profile-editor-input";
+	for (const opt of opts.options) {
+		const option = document.createElement("option");
+		option.value = opt.value;
+		option.textContent = opt.label;
+		if (opt.value === opts.value) option.selected = true;
+		select.appendChild(option);
+	}
+	row.appendChild(select);
+
+	if (opts.hint) {
+		const hint = document.createElement("span");
+		hint.className = "profile-editor-hint";
+		hint.textContent = opts.hint;
+		row.appendChild(hint);
+	}
+
+	form.appendChild(row);
+	return select;
 }

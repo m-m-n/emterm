@@ -62,6 +62,7 @@ export function duplicateProfile(profile: Profile): Profile {
 		env_vars: profile.env_vars,
 		working_directory: profile.working_directory,
 		is_default: false,
+		ssh_connection_name: profile.ssh_connection_name,
 	};
 }
 
@@ -76,5 +77,6 @@ export function createEmptyProfile(): Profile {
 		env_vars: "",
 		working_directory: "",
 		is_default: false,
+		ssh_connection_name: "",
 	};
 }

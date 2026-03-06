@@ -1,0 +1,16 @@
+tasks:
+  - - id: phase-1
+      name: "Config Parser Enhancement"
+      status: completed
+  - - id: phase-2
+      name: "SshConnection Schema Migration"
+      status: completed
+  - - id: phase-3
+      name: "Import Enhancement"
+      status: completed
+  - - id: phase-4
+      name: "SSH Session Launch"
+      status: completed
+  - - id: phase-5
+      name: "Startup Auto-Detection"
+      status: completed

@@ -1,9 +1,9 @@
 use crate::payloads::*;
 use crate::pty::PtyManager;
 use std::io::Read;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};

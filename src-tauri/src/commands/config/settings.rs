@@ -227,6 +227,44 @@ define_keybinds! {
 }
 
 // ============================================================
+// SSH Connection
+// ============================================================
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+deserialize_null_with!(deserialize_null_ssh_port, u16, default_ssh_port);
+
+/// Key-value pair for SSH -o options.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SshOption {
+    pub key: String,
+    pub value: String,
+}
+
+/// SSH connection entry for remote host connections.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SshConnection {
+    pub name: String,
+    pub hostname: String,
+    #[serde(
+        default = "default_ssh_port",
+        deserialize_with = "deserialize_null_ssh_port"
+    )]
+    pub port: u16,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub username: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub identity_file: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub ssh_options: Vec<SshOption>,
+    /// Legacy field for backward compatibility. Read during deserialization but never serialized.
+    #[serde(default, skip_serializing)]
+    pub extra_options: String,
+}
+
+// ============================================================
 // Profile
 // ============================================================
 
@@ -244,6 +282,8 @@ pub struct Profile {
     pub working_directory: String,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub is_default: bool,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub ssh_connection_name: String,
 }
 
 // ============================================================
@@ -379,6 +419,12 @@ pub struct AppSettings {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub profiles: Vec<Profile>,
 
+    // SSH
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub ssh_command_path: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub ssh_connections: Vec<SshConnection>,
+
     // Markdown Viewer
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub markdown_theme_follow_ui: bool,
@@ -437,6 +483,8 @@ impl Default for AppSettings {
             ui_font_family: default_ui_font_family(),
             custom_color_schemes: Vec::new(),
             profiles: Vec::new(),
+            ssh_command_path: String::new(),
+            ssh_connections: Vec::new(),
             markdown_theme_follow_ui: default_true(),
             markdown_theme: UiTheme::default(),
             markdown_theme_preset: UiThemePreset::default(),
