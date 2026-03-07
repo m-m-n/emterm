@@ -10,39 +10,46 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - WASM-based terminal core for high-performance grid rendering
   - Unified ring buffer with full-buffer reflow on resize
   - Canvas 2D renderer with dirty-row tracking
+  - Background Color Erase (BCE) support
 
 - **Rich Content Display**
   - Inline Markdown rendering via custom OSC 777 extension (CommonMark, GFM, syntax highlighting, Mermaid diagrams)
   - Large document support: no file size limit, session timeout resets per chunk
-  - Fullscreen Markdown viewer with outline panel (table of contents), zoom, and keyboard navigation
+  - Fullscreen Markdown viewer with outline panel (table of contents), zoom, Space/Shift+Space scrolling, and keyboard navigation
   - Mermaid diagram rendering in Markdown (flowcharts, sequence diagrams, etc.) with Chart/Code toggle toolbar
   - Inline image rendering (Kitty Graphics Protocol and SIXEL)
   - Kitty protocol compatibility: works with kitten icat, ratatui-image, treemd, and other external tools
-  - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll)
-  - CLI commands: `emterm markdown` and `emterm image` (work over SSH)
+  - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll, Space/Shift+Space scrolling)
+  - Viewers render within the terminal content area; tab bar remains accessible during viewing
+  - CLI commands: `emterm markdown` and `emterm image` (work over SSH, CLI-only build available)
 
 - **Input and IME**
   - High-throughput key input (event-based binary IPC, zero JSON serialization)
   - Full IME support: EditContext API (Chromium) and hidden textarea fallback (WebKit)
+  - IME position auto-adjustment for TUI applications (cursor-hidden mode positions IME at bottom-left)
   - Capture-phase clipboard shortcuts (Ctrl+Shift+C/V) compatible with IME
   - Middle-click paste (configurable)
   - Shift+Enter as Alt+Enter for multiline input in AI interfaces (configurable, default ON)
   - Word selection drag (double-click and drag to extend by word)
+  - Comprehensive special key mapping (Ctrl+symbols, modified arrow keys, F-keys, Shift+Tab)
 
 - **Navigation**
   - OSC 133 semantic prompt jump (Ctrl+Up / Ctrl+Down)
   - Incremental text search with match highlighting (Ctrl+F)
   - Command output folding (collapse/expand)
-  - File path Ctrl+click to open in editor
-  - URL Ctrl+click to open in browser
+  - File path Ctrl+click to open in editor (hover-only underline)
+  - URL Ctrl+click to open in browser (hover-only underline)
+  - Right-click context menu for terminal area, tabs, and tab bar
 
 - **Settings and Appearance**
   - Settings panel with collapsible icon-rail navigation and seven categories
-  - Dark/light/system theme with four accent color presets (Purple, Blue, Green, Orange)
-  - Terminal color schemes: built-in presets plus fully user-customizable palette
-  - Three-field font configuration (primary, CJK/secondary, emoji) with system font picker
+  - Dark/light/system theme with five accent color presets (Purple, Blue, Green, Orange, Pink)
+  - Terminal color schemes: built-in presets plus fully user-customizable palette with horizontal layout
+  - ANSI bold-brightens-color behavior (bold + color 0-7 uses bright variant, configurable)
+  - Three-field font configuration (primary, CJK/secondary, emoji) with system font picker and clear button
   - Separate UI font setting for the settings panel
   - Terminal profiles: named shell configurations with shell, args, env vars, and working directory
+  - SSH connection management: auto-detect ssh command, import from ~/.ssh/config, manage connections
   - Configurable cursor shape, scrollbar, opacity, line height, scrollback, shell, and more
   - All keyboard shortcuts configurable
 
@@ -54,6 +61,8 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
 - **Internationalization**
   - English and Japanese UI (auto-detected from OS locale)
   - Unicode 17.0 and Emoji 17.0 character width support
+  - Correct ambiguous-width (EAW=A) character rendering for TUI compatibility
+  - Text presentation mode forced for non-emoji Extended_Pictographic characters
 
 ## Requirements
 
