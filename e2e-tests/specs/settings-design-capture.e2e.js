@@ -21,7 +21,7 @@ describe("Settings Panel Design Capture", () => {
 		const activeNav = await browser.execute(() => {
 			return document.querySelector(".settings-nav-item.active")?.textContent || "";
 		});
-		expect(activeNav).toBe("Appearance");
+		expect(activeNav).toBe("UI Settings");
 
 		await browser.saveScreenshot("./screenshots/design-01-appearance-full.png");
 	});
@@ -58,15 +58,10 @@ describe("Settings Panel Design Capture", () => {
 		});
 		await browser.pause(500);
 
-		// Click Terminal nav item
+		// Click Terminal Appearance nav item
 		await browser.execute(() => {
-			const items = document.querySelectorAll(".settings-nav-item");
-			for (const item of items) {
-				if (item.textContent === "Terminal") {
-					item.click();
-					break;
-				}
-			}
+			const navItem = document.querySelector('.settings-nav-item[data-category-id="terminal-appearance"]');
+			if (navItem) navItem.click();
 		});
 		await browser.pause(1000);
 
@@ -94,13 +89,8 @@ describe("Settings Panel Design Capture", () => {
 	it("should capture Keybinds category", async () => {
 		// Click Keybinds nav item
 		await browser.execute(() => {
-			const items = document.querySelectorAll(".settings-nav-item");
-			for (const item of items) {
-				if (item.textContent === "Keybinds") {
-					item.click();
-					break;
-				}
-			}
+			const navItem = document.querySelector('.settings-nav-item[data-category-id="keybinds"]');
+			if (navItem) navItem.click();
 		});
 		await browser.pause(1000);
 
@@ -126,15 +116,10 @@ describe("Settings Panel Design Capture", () => {
 	});
 
 	it("should capture input focus state", async () => {
-		// Switch back to Appearance
+		// Switch to Terminal Appearance (font-size is there)
 		await browser.execute(() => {
-			const items = document.querySelectorAll(".settings-nav-item");
-			for (const item of items) {
-				if (item.textContent === "Appearance") {
-					item.click();
-					break;
-				}
-			}
+			const navItem = document.querySelector('.settings-nav-item[data-category-id="terminal-appearance"]');
+			if (navItem) navItem.click();
 		});
 		await browser.pause(1000);
 
@@ -151,15 +136,10 @@ describe("Settings Panel Design Capture", () => {
 	});
 
 	it("should capture toggle states", async () => {
-		// Switch to Appearance, scroll to Rich Content section with toggles
+		// Switch to Terminal Behavior, which has toggles
 		await browser.execute(() => {
-			const items = document.querySelectorAll(".settings-nav-item");
-			for (const item of items) {
-				if (item.textContent === "Appearance") {
-					item.click();
-					break;
-				}
-			}
+			const navItem = document.querySelector('.settings-nav-item[data-category-id="terminal-behavior"]');
+			if (navItem) navItem.click();
 		});
 		await browser.pause(1000);
 

@@ -389,6 +389,7 @@ export function renderColorSchemeEditor(
 
   // Select box
   const select = document.createElement("select");
+  select.id = "settings-terminal-color-scheme";
   select.className = "settings-select";
   const options = buildSelectOptions(settings.custom_color_schemes);
   for (const opt of options) {

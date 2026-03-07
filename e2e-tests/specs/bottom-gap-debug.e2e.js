@@ -53,7 +53,7 @@ describe("Bottom gap debug", () => {
     // Apply solarized-dark color scheme via settings UI
     await openSettings();
     await browser.pause(500);
-    await switchCategory("terminal");
+    await switchCategory("terminal-appearance");
     await browser.pause(500);
     await setSelect("settings-terminal-color-scheme", "solarized-dark");
     await browser.pause(1000);
