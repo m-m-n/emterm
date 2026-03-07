@@ -5,6 +5,21 @@
  */
 
 describe("eMterm Markdown Rendering", () => {
+	before(async () => {
+		// Inject console interceptor to capture logs (WebKitWebDriver doesn't support getLogs)
+		await browser.execute(() => {
+			if (window.__capturedLogs) return;
+			window.__capturedLogs = [];
+			["log", "warn", "error", "info", "debug"].forEach((level) => {
+				const original = console[level];
+				console[level] = function (...args) {
+					window.__capturedLogs.push({ level, message: args.join(" ") });
+					original.apply(console, args);
+				};
+			});
+		});
+	});
+
 	// Helper to type a command
 	async function typeCommand(command) {
 		const terminal = await $('[data-testid="terminal"]');
@@ -146,7 +161,12 @@ describe("eMterm Markdown Rendering", () => {
 	});
 
 	it("should capture console logs for debugging", async () => {
-		const logs = await browser.getLogs("browser");
+		// Collect captured console logs
+		const logs = await browser.execute(() => {
+			const captured = window.__capturedLogs || [];
+			window.__capturedLogs = [];
+			return captured;
+		});
 		console.log("=== Browser Console Logs ===");
 		for (const log of logs) {
 			if (
