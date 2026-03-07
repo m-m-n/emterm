@@ -153,10 +153,28 @@ pub fn spawn_reader_thread(
                     // Drain all available chunks and concatenate to reduce IPC calls.
                     // Larger batches reduce IPC overhead at the cost of latency.
                     // For bulk output (e.g., seq 10M), fewer IPC messages is critical.
+                    //
+                    // Minimum batch size (A10b): ensure batches are large enough to
+                    // reduce webview.eval() call frequency. Small batches cause WebView
+                    // overload when using InvokeResponseBody::Raw (1KB sync threshold).
+                    const MIN_BATCH_SIZE: usize = 32 * 1024;
+                    const MAX_BATCH_SIZE: usize = 1024 * 1024;
                     let mut batch = first;
+                    while batch.len() < MIN_BATCH_SIZE {
+                        match rx.recv_timeout(Duration::from_millis(2)) {
+                            Ok(more) => {
+                                batch.extend_from_slice(&more);
+                                if batch.len() >= MAX_BATCH_SIZE {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    // Continue draining any immediately available data
                     while let Ok(more) = rx.try_recv() {
                         batch.extend_from_slice(&more);
-                        if batch.len() >= 1024 * 1024 {
+                        if batch.len() >= MAX_BATCH_SIZE {
                             break;
                         }
                     }
