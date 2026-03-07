@@ -1,7 +1,7 @@
 /**
  * PTY Client - Manages communication with the Tauri PTY backend.
  *
- * Uses Tauri Channel for binary IPC (raw PTY data sent as Vec<u8>).
+ * Uses Tauri Channel for binary IPC (raw PTY data sent as InvokeResponseBody::Raw).
  * WASM parser processes the raw data in the frontend.
  */
 
@@ -11,34 +11,6 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 /** Reusable TextEncoder instance to avoid per-call allocation. */
 const textEncoder = new TextEncoder();
 
-/** Base64 decode lookup table (6-bit value for each ASCII char). */
-const B64_LOOKUP = new Uint8Array(128);
-{
-	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	for (let i = 0; i < chars.length; i++) B64_LOOKUP[chars.charCodeAt(i)] = i;
-}
-
-/** Decode base64 string to Uint8Array using lookup table (faster than atob + charCodeAt loop). */
-function decodeBase64(b64: string): Uint8Array {
-	// Strip padding
-	let len = b64.length;
-	while (len > 0 && b64.charCodeAt(len - 1) === 0x3D) len--;
-
-	const outLen = (len * 3) >>> 2;
-	const out = new Uint8Array(outLen);
-	let j = 0;
-	for (let i = 0; i < len; ) {
-		const a = B64_LOOKUP[b64.charCodeAt(i++)]!;
-		const b = i < len ? B64_LOOKUP[b64.charCodeAt(i++)]! : 0;
-		const c = i < len ? B64_LOOKUP[b64.charCodeAt(i++)]! : 0;
-		const d = i < len ? B64_LOOKUP[b64.charCodeAt(i++)]! : 0;
-		const triplet = (a << 18) | (b << 12) | (c << 6) | d;
-		if (j < outLen) out[j++] = (triplet >> 16) & 0xFF;
-		if (j < outLen) out[j++] = (triplet >> 8) & 0xFF;
-		if (j < outLen) out[j++] = triplet & 0xFF;
-	}
-	return out;
-}
 import type {
 	PtyErrorCallback,
 	PtyErrorPayload,
@@ -93,8 +65,8 @@ export class PtyClient {
 	/** Flag to prevent duplicate exit event processing */
 	private exitHandled = false;
 
-	/** Tauri Channel for binary PTY data (base64-encoded) */
-	private channel: Channel<string> | null = null;
+	/** Tauri Channel for binary PTY data (raw ArrayBuffer) */
+	private channel: Channel<ArrayBuffer> | null = null;
 
 	/** Callback for raw PTY data */
 	private dataCallback: PtyDataCallback | null = null;
@@ -134,12 +106,11 @@ export class PtyClient {
 		// Reset exitHandled flag for new session
 		this.exitHandled = false;
 
-		// Create Channel for binary data transfer (base64-encoded for efficiency)
-		this.channel = new Channel<string>();
-		this.channel.onmessage = (data: string) => {
+		// Create Channel for binary data transfer (raw ArrayBuffer via InvokeResponseBody::Raw)
+		this.channel = new Channel<ArrayBuffer>();
+		this.channel.onmessage = (data: ArrayBuffer) => {
 			if (this.dataCallback) {
-				// Decode base64 using optimized lookup table (avoids charCodeAt loop)
-				this.dataCallback(decodeBase64(data));
+				this.dataCallback(new Uint8Array(data));
 			}
 		};
 

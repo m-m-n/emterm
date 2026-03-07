@@ -5,14 +5,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
-use base64::Engine;
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
 
 /// Spawns a dedicated thread to read output from a PTY session.
 ///
 /// This thread continuously reads from the PTY and sends raw bytes via Channel:
-/// - Binary data is sent via `Channel<String>` as base64-encoded for WASM processing
+/// - Binary data is sent via `Channel<InvokeResponseBody>` as raw bytes for WASM processing
 /// - `pty_error`: When an error occurs
 /// - `pty_exit`: When the process exits
 ///
@@ -22,7 +21,7 @@ pub fn spawn_reader_thread(
     app: AppHandle,
     manager: PtyManager,
     session_id: String,
-    channel: Channel<String>,
+    channel: Channel<InvokeResponseBody>,
 ) {
     // Shared flag to signal reader to stop when process exits
     let process_exited = Arc::new(AtomicBool::new(false));
@@ -162,8 +161,7 @@ pub fn spawn_reader_thread(
                         }
                     }
                     let len = batch.len();
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(&batch);
-                    if let Err(e) = channel.send(encoded) {
+                    if let Err(e) = channel.send(InvokeResponseBody::Raw(batch)) {
                         log::warn!(
                             "PTY reader: channel.send failed for session {} ({} bytes lost): {}",
                             session_id,
