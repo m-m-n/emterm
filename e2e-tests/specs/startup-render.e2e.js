@@ -31,48 +31,40 @@ describe("Startup Render Test", () => {
 		const rendererState = await browser.execute(() => {
 			const tr = window.terminalRenderer;
 			if (!tr) return null;
+			const canvas = document.querySelector("canvas");
 			return {
-				lineElementCount: tr.lineElements?.length || 0,
-				useOptimizedRendering: tr.useOptimizedRendering,
-				hashCacheSize: tr.lastRowHash?.size || 0,
+				canvasExists: !!canvas,
+				canvasWidth: canvas?.width || 0,
+				canvasHeight: canvas?.height || 0,
+				charWidth: tr["charWidth"] || 0,
+				charHeight: tr["charHeight"] || 0,
 			};
 		});
 		console.log("Renderer state:", JSON.stringify(rendererState));
 
-		// Get DOM line count
-		const lineCount = await browser.execute(() => {
-			const terminal = document.querySelector('[data-testid="terminal"]');
-			return terminal?.querySelectorAll(".terminal-line").length || 0;
+		// Verify canvas exists (Canvas renderer, no DOM line elements)
+		const canvasExists = await browser.execute(() => {
+			return !!document.querySelector("canvas");
 		});
-		console.log("DOM line elements:", lineCount);
+		console.log("Canvas exists:", canvasExists);
 
-		// Get first 5 lines content from buffer and DOM
+		// Get first 5 lines content from buffer
 		for (let i = 0; i < 5; i++) {
 			const content = await browser.execute((row) => {
 				const ts = window.terminalState;
-				if (!ts) return { buffer: null, dom: null };
+				if (!ts) return null;
 				const buffer = ts.getActiveBuffer?.();
-				if (!buffer) return { buffer: null, dom: null };
+				if (!buffer) return null;
 
-				// Get buffer content
 				const line = buffer.getLine(row);
 				let bufferText = "";
 				for (let j = 0; j < line.length; j++) {
 					bufferText += line.getCell(j).char;
 				}
 
-				// Get DOM content
-				const terminal = document.querySelector('[data-testid="terminal"]');
-				const lines = terminal?.querySelectorAll(".terminal-line");
-				const domText =
-					lines && row < lines.length ? lines[row].textContent : null;
-
-				return {
-					buffer: bufferText.trim(),
-					dom: domText?.trim() || null,
-				};
+				return bufferText.trim();
 			}, i);
-			console.log(`Row ${i}: buffer="${content.buffer}" dom="${content.dom}"`);
+			console.log(`Row ${i}: buffer="${content}"`);
 		}
 
 		// Take screenshot
@@ -101,9 +93,9 @@ describe("Startup Render Test", () => {
 		const cursorRow = afterTyping?.cursorRow || 0;
 		const rowContent = await browser.execute((row) => {
 			const ts = window.terminalState;
-			if (!ts) return { buffer: null, dom: null };
+			if (!ts) return null;
 			const buffer = ts.getActiveBuffer?.();
-			if (!buffer) return { buffer: null, dom: null };
+			if (!buffer) return null;
 
 			const line = buffer.getLine(row);
 			let bufferText = "";
@@ -111,19 +103,9 @@ describe("Startup Render Test", () => {
 				bufferText += line.getCell(j).char;
 			}
 
-			const terminal = document.querySelector('[data-testid="terminal"]');
-			const lines = terminal?.querySelectorAll(".terminal-line");
-			const domText =
-				lines && row < lines.length ? lines[row].textContent : null;
-
-			return {
-				buffer: bufferText.trim(),
-				dom: domText?.trim() || null,
-			};
+			return bufferText.trim();
 		}, cursorRow);
-		console.log(
-			`Cursor row ${cursorRow}: buffer="${rowContent.buffer}" dom="${rowContent.dom}"`,
-		);
+		console.log(`Cursor row ${cursorRow}: buffer="${rowContent}"`);
 
 		await browser.saveScreenshot("./screenshots/startup-02-after-a.png");
 
@@ -146,6 +128,6 @@ describe("Startup Render Test", () => {
 
 		// Verify terminal is responsive
 		expect(state).not.toBeNull();
-		expect(lineCount).toBeGreaterThan(0);
+		expect(canvasExists).toBe(true);
 	});
 });
