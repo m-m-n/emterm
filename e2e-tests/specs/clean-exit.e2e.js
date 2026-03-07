@@ -1,5 +1,8 @@
 /**
- * Clean Exit E2E Test - Tests exit behavior without test interference
+ * Clean Exit E2E Test - Tests exit behavior with console capture
+ *
+ * The "exit" command closes the Tauri window, which invalidates the
+ * WebDriver session. Post-exit checks use try/catch to handle this.
  */
 
 async function typeSlowly(text, delay = 150) {
@@ -24,7 +27,6 @@ describe("Clean Exit Test", () => {
 			console.log = (...args) => {
 				const msg = args.join(" ");
 				window.consoleLogs.push(msg);
-				// Also track pty_exit specific logs
 				if (msg.includes("pty_exit") || msg.includes("onExit")) {
 					window.ptyExitEvents.push(msg);
 				}
@@ -37,13 +39,15 @@ describe("Clean Exit Test", () => {
 		await browser.pause(2000);
 
 		// Get initial session ID
-		const initialState = await browser.execute(() => {
-			return {
-				sessionId: window.ptyClient?.getSessionId?.() || null,
-				ptyExists: !!window.ptyClient,
-			};
+		const initialSessionId = await browser.execute(() => {
+			const tabs = window.tabManager?.getTabs() || [];
+			const terminalTab = tabs.find((t) => t.type === "terminal");
+			if (!terminalTab) return null;
+			const app = window.tabManager?.getTerminalApp(terminalTab.id);
+			return app?.pty?.getSessionId() || null;
 		});
-		console.log("Initial state:", JSON.stringify(initialState, null, 2));
+		console.log("Initial sessionId:", initialSessionId);
+		expect(initialSessionId).not.toBeNull();
 		await browser.saveScreenshot("./screenshots/clean-exit-01-initial.png");
 
 		// Type "exit" slowly and clearly
@@ -60,62 +64,36 @@ describe("Clean Exit Test", () => {
 		console.log("Waiting for shell to exit...");
 		await browser.pause(3000);
 
-		// Get final state and captured logs
-		const finalState = await browser.execute(() => {
-			return {
-				sessionId: window.ptyClient?.getSessionId?.() || null,
-				ptyExists: !!window.ptyClient,
-				ptyExitEvents: window.ptyExitEvents || [],
-				allLogs: (window.consoleLogs || []).filter(
-					(log) =>
-						log.includes("pty_exit") ||
-						log.includes("onExit") ||
-						log.includes("PTY") ||
-						log.includes("DEBUG"),
-				),
-			};
-		});
-
-		console.log(
-			"Final state:",
-			JSON.stringify(
-				{
-					sessionId: finalState.sessionId,
-					ptyExists: finalState.ptyExists,
-				},
-				null,
-				2,
-			),
-		);
-
-		console.log("=== PTY Exit Events ===");
-		for (const evt of finalState.ptyExitEvents) {
-			console.log(evt);
-		}
-		console.log("=== End PTY Exit Events ===");
-
-		console.log("=== Relevant Logs ===");
-		for (const log of finalState.allLogs.slice(-20)) {
-			console.log(log);
-		}
-		console.log("=== End Relevant Logs ===");
-
-		await browser.saveScreenshot("./screenshots/clean-exit-03-final.png");
-
-		// Check if window is still open
+		// After exit, the window may have closed, invalidating the session.
+		// Try to get final state, but accept session invalidation as success.
 		try {
-			const title = await browser.getTitle();
-			console.log("Window still open, title:", title);
-		} catch (e) {
-			console.log("Window closed:", e.message);
-		}
+			const finalState = await browser.execute(() => {
+				return {
+					ptyExitEvents: window.ptyExitEvents || [],
+					allLogs: (window.consoleLogs || []).filter(
+						(log) =>
+							log.includes("pty_exit") ||
+							log.includes("onExit") ||
+							log.includes("PTY") ||
+							log.includes("DEBUG"),
+					),
+				};
+			});
 
-		// Get terminal content
-		try {
-			const terminalText = await terminal.getText();
-			console.log("Terminal content:", terminalText.slice(0, 300));
+			console.log("=== PTY Exit Events ===");
+			for (const evt of finalState.ptyExitEvents) {
+				console.log(evt);
+			}
+
+			console.log("=== Relevant Logs ===");
+			for (const log of finalState.allLogs.slice(-20)) {
+				console.log(log);
+			}
+
+			await browser.saveScreenshot("./screenshots/clean-exit-03-final.png");
 		} catch (e) {
-			console.log("Could not get terminal text:", e.message);
+			// Session invalidated = window closed = exit succeeded
+			console.log("Window closed after exit command (session invalidated):", e.message);
 		}
 	});
 });
