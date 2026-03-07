@@ -11,7 +11,7 @@ async function typeSlowly(text, delay = 100) {
 
 describe("Exit Command Test", () => {
 	it("should close window when typing exit command", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Wait for prompt
@@ -47,7 +47,7 @@ describe("Exit Command Test", () => {
 	});
 
 	it("should check Ctrl+D key event handling", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 
@@ -98,7 +98,7 @@ describe("Exit Command Test", () => {
 	});
 
 	it("should check pty_exit event listener", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 
@@ -131,7 +131,7 @@ describe("Exit Command Test", () => {
 	});
 
 	it("should test exit with debug logging", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 

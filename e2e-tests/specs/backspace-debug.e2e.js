@@ -36,7 +36,7 @@ describe("Backspace Debug Test", () => {
 
 	async function getDOMContent(row) {
 		return await browser.execute((r) => {
-			const terminal = document.getElementById("terminal");
+			const terminal = document.querySelector('[data-testid="terminal"]');
 			const lines = terminal?.querySelectorAll(".terminal-line");
 			if (!lines || r >= lines.length) return null;
 			return lines[r].textContent?.trim();
@@ -44,7 +44,7 @@ describe("Backspace Debug Test", () => {
 	}
 
 	it("should test backspace functionality", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(1000);
 
@@ -144,7 +144,7 @@ describe("Backspace Debug Test", () => {
 	});
 
 	it("should test Enter key", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 

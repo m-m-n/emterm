@@ -14,6 +14,10 @@ case "${1:-}" in
     echo "Building Docker image..."
     $COMPOSE build
     ;;
+  build-app)
+    echo "Rebuilding Tauri app in Docker..."
+    $COMPOSE run --rm --no-deps build --rebuild echo "Build complete"
+    ;;
   test)
     # Collect environment variables to pass through to the container
     ENV_ARGS=""
@@ -45,13 +49,14 @@ case "${1:-}" in
     $COMPOSE run --rm e2e-test
     ;;
   *)
-    echo "Usage: $0 [build|test [spec]|clean]"
+    echo "Usage: $0 [build|test [spec]|build-app|clean]"
     echo ""
-    echo "  (no args)  Full cycle: build image → test"
-    echo "  build      Rebuild Docker image"
-    echo "  test       Run all E2E tests"
-    echo "  test foo   Run specific spec file"
-    echo "  clean      Remove containers, volumes, and images"
+    echo "  (no args)   Full cycle: build image → test"
+    echo "  build       Rebuild Docker image"
+    echo "  build-app   Rebuild Tauri app (force rebuild)"
+    echo "  test        Run all E2E tests"
+    echo "  test foo    Run specific spec file"
+    echo "  clean       Remove containers, volumes, and images"
     exit 1
     ;;
 esac

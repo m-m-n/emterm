@@ -12,7 +12,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 	const imagePath = "/tmp/test.png";
 
 	it("should display the terminal and wait for shell prompt", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.waitForDisplayed({ timeout: 10000 });
 
 		// Wait for shell prompt to be ready
@@ -21,7 +21,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 	});
 
 	it("should open image viewer and verify keyboard is blocked", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Type the emterm image command
@@ -51,7 +51,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 
 		// Get terminal text BEFORE typing
 		const textBefore = await browser.execute(() => {
-			const terminal = document.querySelector("#terminal");
+			const terminal = document.querySelector('[data-testid="terminal"]');
 			return terminal ? terminal.textContent : "";
 		});
 		console.log("Text before typing:", textBefore.slice(-200));
@@ -67,7 +67,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 
 		// Get terminal text AFTER typing (while viewer still open)
 		const textAfter = await browser.execute(() => {
-			const terminal = document.querySelector("#terminal");
+			const terminal = document.querySelector('[data-testid="terminal"]');
 			return terminal ? terminal.textContent : "";
 		});
 		console.log("Text after typing (viewer open):", textAfter.slice(-200));
@@ -99,7 +99,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 		expect(overlayInfo.visible).toBe(false);
 
 		// Click terminal to ensure focus
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(200);
 
@@ -114,7 +114,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 
 		// Verify the marker appears in terminal
 		const terminalText = await browser.execute(() => {
-			const terminal = document.querySelector("#terminal");
+			const terminal = document.querySelector('[data-testid="terminal"]');
 			return terminal ? terminal.textContent : "";
 		});
 		console.log("Terminal text after typing marker:", terminalText.slice(-200));
@@ -130,7 +130,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 
 	it("should verify no stray characters from blocked input", async () => {
 		// Type 'echo check' to verify no leftover characters
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(200);
 
@@ -144,7 +144,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 		await browser.saveScreenshot("./screenshots/kb-06-final-check.png");
 
 		const terminalText = await browser.execute(() => {
-			const terminal = document.querySelector("#terminal");
+			const terminal = document.querySelector('[data-testid="terminal"]');
 			return terminal ? terminal.textContent : "";
 		});
 		console.log("Final terminal text:", terminalText.slice(-300));

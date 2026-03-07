@@ -40,8 +40,8 @@ describe("Bottom gap debug", () => {
         body: {
           computedBg: window.getComputedStyle(document.body).backgroundColor,
         },
-        terminal: document.querySelector("#terminal") ? {
-          computedBg: window.getComputedStyle(document.querySelector("#terminal")).backgroundColor,
+        terminal: document.querySelector('[data-testid="terminal"]') ? {
+          computedBg: window.getComputedStyle(document.querySelector('[data-testid="terminal"]')).backgroundColor,
         } : null,
         cssVarBackground: getComputedStyle(document.documentElement).getPropertyValue("--terminal-background"),
       };

@@ -62,7 +62,7 @@ describe("Render Debug Test", () => {
 
 	async function getDOMContent(row) {
 		return await browser.execute((r) => {
-			const terminal = document.getElementById("terminal");
+			const terminal = document.querySelector('[data-testid="terminal"]');
 			const lines = terminal?.querySelectorAll(".terminal-line");
 			if (!lines || r >= lines.length) return null;
 			return lines[r].textContent;
@@ -70,7 +70,7 @@ describe("Render Debug Test", () => {
 	}
 
 	it("should verify initial render works", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(1000);
 
@@ -103,7 +103,7 @@ describe("Render Debug Test", () => {
 	});
 
 	it("should track render after single keystroke", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 
@@ -153,7 +153,7 @@ describe("Render Debug Test", () => {
 	});
 
 	it("should verify render with optimized mode disabled", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 
@@ -214,7 +214,7 @@ describe("Render Debug Test", () => {
 	});
 
 	it("should test hash cache invalidation", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 
@@ -259,7 +259,7 @@ describe("Render Debug Test", () => {
 	});
 
 	it("should trace full render cycle", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 

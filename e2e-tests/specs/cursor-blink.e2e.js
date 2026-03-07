@@ -10,7 +10,7 @@ describe("Cursor Blink Test", () => {
 		await browser.pause(2000);
 
 		// Check if terminal exists
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		const exists = await terminal.isExisting();
 		console.log("Terminal element exists:", exists);
 
@@ -104,7 +104,7 @@ describe("Cursor Blink Test", () => {
 		// Wait for terminal to initialize
 		await browser.pause(1000);
 
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(200);
 

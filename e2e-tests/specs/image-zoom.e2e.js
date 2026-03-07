@@ -13,7 +13,7 @@ describe("eMterm Image Viewer Zoom", () => {
 	const imagePath = "/tmp/test.png";
 
 	it("should display the terminal and wait for shell prompt", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.waitForDisplayed({ timeout: 10000 });
 
 		// Wait for shell prompt to be ready
@@ -22,7 +22,7 @@ describe("eMterm Image Viewer Zoom", () => {
 	});
 
 	it("should open image viewer and verify initial fit level", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Type the emterm image command

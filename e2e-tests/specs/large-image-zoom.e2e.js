@@ -8,13 +8,13 @@ describe("Large Image Zoom Test", () => {
 	const imagePath = "/tmp/large-test.png";
 
 	it("should display terminal", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.waitForDisplayed({ timeout: 10000 });
 		await browser.pause(2000);
 	});
 
 	it("should display large image with correct fit level", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Display the large image

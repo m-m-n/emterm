@@ -7,7 +7,7 @@
 describe("eMterm Markdown Rendering", () => {
 	// Helper to type a command
 	async function typeCommand(command) {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(100);
 

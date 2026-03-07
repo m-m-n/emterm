@@ -20,7 +20,7 @@ describe("eMterm Terminal", () => {
 
 	it("should have terminal element", async () => {
 		// ターミナル要素が存在するか
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		const isDisplayed = await terminal.isDisplayed();
 		console.log("Terminal element displayed:", isDisplayed);
 		expect(isDisplayed).toBe(true);
@@ -30,7 +30,7 @@ describe("eMterm Terminal", () => {
 
 	it("should accept keyboard input", async () => {
 		// ターミナルにフォーカス
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// エコーコマンドを入力
@@ -58,7 +58,7 @@ describe("eMterm Terminal", () => {
 	});
 
 	it("should test Ctrl+D behavior", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// 現在の状態をスクリーンショット
@@ -84,7 +84,7 @@ describe("eMterm Terminal", () => {
 
 describe("eMterm SSH Test", () => {
 	it("should test SSH-like alternate buffer behavior", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// 代替バッファに切り替えるコマンド（例: less や vim）
