@@ -89,28 +89,39 @@ impl TerminalCore {
     /// The `bg` parameter specifies the background color for new cells (BCE).
     pub(crate) fn ring_push_blank(&mut self, bg: PackedColor) {
         let cols = self.cols as usize;
-        let mut bce = Cell::EMPTY;
-        bce.bg = bg;
-        if self.ring_size < self.ring_capacity {
-            let new_abs = (self.ring_head + self.ring_size) % self.ring_capacity;
-            let base = new_abs * cols;
-            for i in base..base + cols {
-                self.ring_cells[i] = bce;
-            }
-            self.ring_wrapped[new_abs] = false;
-            let abs32 = new_abs as u32;
-            overflow_clear_row(&mut self.overflow, abs32);
-            overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);
+
+        let new_abs = if self.ring_size < self.ring_capacity {
+            let abs = (self.ring_head + self.ring_size) % self.ring_capacity;
             self.ring_size += 1;
+            abs
         } else {
-            // Reuse oldest line's slot
-            let new_abs = self.ring_head;
+            let abs = self.ring_head;
             self.ring_head = (self.ring_head + 1) % self.ring_capacity;
-            let base = new_abs * cols;
-            for i in base..base + cols {
-                self.ring_cells[i] = bce;
+            abs
+        };
+
+        let base = new_abs * cols;
+        let slice = &mut self.ring_cells[base..base + cols];
+
+        // Fast path: default bg → zero memory then set only the 3 non-zero bytes per cell.
+        // WASM memory.fill is very efficient for bulk zeroing.
+        if bg == PackedColor::DEFAULT {
+            unsafe {
+                std::ptr::write_bytes(slice.as_mut_ptr(), 0, cols);
             }
-            self.ring_wrapped[new_abs] = false;
+            for cell in slice.iter_mut() {
+                cell.char_data[0] = b' ';
+                cell.char_len = 1;
+                cell.width = 1;
+            }
+        } else {
+            let mut bce = Cell::EMPTY;
+            bce.bg = bg;
+            slice.fill(bce);
+        }
+
+        self.ring_wrapped[new_abs] = false;
+        if !self.overflow.is_empty() {
             let abs32 = new_abs as u32;
             overflow_clear_row(&mut self.overflow, abs32);
             overflow_ridx_clear_row(&mut self.overflow_ridx, abs32);

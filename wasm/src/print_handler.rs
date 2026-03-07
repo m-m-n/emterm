@@ -92,7 +92,7 @@ impl TerminalCore {
             if cell.is_overflow() {
                 self.overflow.insert((col32, abs), char_str.to_string());
                 overflow_ridx_insert(&mut self.overflow_ridx, abs, col32);
-            } else {
+            } else if !self.overflow.is_empty() {
                 if self.overflow.remove(&(col32, abs)).is_some() {
                     overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
                 }
@@ -115,9 +115,11 @@ impl TerminalCore {
                 ph.fg = self.cursor.fg;
                 ph.bg = self.cursor.bg;
                 ph.flags = self.cursor.flags;
-                let col1_32 = (col + 1) as u32;
-                if self.overflow.remove(&(col1_32, abs)).is_some() {
-                    overflow_ridx_remove(&mut self.overflow_ridx, abs, col1_32);
+                if !self.overflow.is_empty() {
+                    let col1_32 = (col + 1) as u32;
+                    if self.overflow.remove(&(col1_32, abs)).is_some() {
+                        overflow_ridx_remove(&mut self.overflow_ridx, abs, col1_32);
+                    }
                 }
             }
         }
@@ -142,20 +144,19 @@ impl TerminalCore {
         if let Some(idx) = self.cell_index(col, row) {
             let cell = &mut self.ring_cells[idx];
             cell.char_data[0] = byte;
-            for b in &mut cell.char_data[1..] {
-                *b = 0;
-            }
+            // Skip zeroing char_data[1..]: char_len=1 ensures only byte 0 is read
             cell.char_len = 1;
             cell.width = 1;
             cell.fg = self.cursor.fg;
             cell.bg = self.cursor.bg;
             cell.flags = self.cursor.flags;
-            // Always remove overflow entry (char_len is already set to 1 above,
-            // so is_overflow() would be false -- must remove unconditionally)
-            let abs = self.viewport_abs(row) as u32;
-            let col32 = col as u32;
-            if self.overflow.remove(&(col32, abs)).is_some() {
-                overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+            // Only check overflow table when it has entries (common case: empty)
+            if !self.overflow.is_empty() {
+                let abs = self.viewport_abs(row) as u32;
+                let col32 = col as u32;
+                if self.overflow.remove(&(col32, abs)).is_some() {
+                    overflow_ridx_remove(&mut self.overflow_ridx, abs, col32);
+                }
             }
             self.mark_row_dirty(row);
         }

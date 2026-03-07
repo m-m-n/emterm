@@ -338,6 +338,22 @@ export class CanvasRenderer implements ITerminalRenderer {
 	}
 
 	/**
+	 * Render immediately (synchronously) using dirty-row differential path.
+	 * Used by frame-budgeted processing to render within the same rAF frame.
+	 */
+	renderImmediate(state: TerminalState): void {
+		this.pendingState = state;
+		try {
+			this.render();
+		} catch (error) {
+			console.error("[ERROR][FRONTEND] Render failed:", error);
+			this.detectionCache.clear();
+		}
+		// Cancel any pending scheduled render since we just rendered
+		this.renderPending = false;
+	}
+
+	/**
 	 * Perform the actual render.
 	 */
 	private render(): void {

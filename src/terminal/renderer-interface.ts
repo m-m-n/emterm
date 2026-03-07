@@ -32,6 +32,14 @@ export interface ITerminalRenderer {
 	forceRender(state: TerminalState): void;
 
 	/**
+	 * Render immediately (synchronously) using dirty-row differential path.
+	 * Used by frame-budgeted processing to render within the same rAF frame.
+	 *
+	 * @param state - Terminal state to render
+	 */
+	renderImmediate(state: TerminalState): void;
+
+	/**
 	 * Resize the renderer.
 	 *
 	 * @param cols - New number of columns

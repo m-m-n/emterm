@@ -10,6 +10,35 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Reusable TextEncoder instance to avoid per-call allocation. */
 const textEncoder = new TextEncoder();
+
+/** Base64 decode lookup table (6-bit value for each ASCII char). */
+const B64_LOOKUP = new Uint8Array(128);
+{
+	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	for (let i = 0; i < chars.length; i++) B64_LOOKUP[chars.charCodeAt(i)] = i;
+}
+
+/** Decode base64 string to Uint8Array using lookup table (faster than atob + charCodeAt loop). */
+function decodeBase64(b64: string): Uint8Array {
+	// Strip padding
+	let len = b64.length;
+	while (len > 0 && b64.charCodeAt(len - 1) === 0x3D) len--;
+
+	const outLen = (len * 3) >>> 2;
+	const out = new Uint8Array(outLen);
+	let j = 0;
+	for (let i = 0; i < len; ) {
+		const a = B64_LOOKUP[b64.charCodeAt(i++)]!;
+		const b = i < len ? B64_LOOKUP[b64.charCodeAt(i++)]! : 0;
+		const c = i < len ? B64_LOOKUP[b64.charCodeAt(i++)]! : 0;
+		const d = i < len ? B64_LOOKUP[b64.charCodeAt(i++)]! : 0;
+		const triplet = (a << 18) | (b << 12) | (c << 6) | d;
+		if (j < outLen) out[j++] = (triplet >> 16) & 0xFF;
+		if (j < outLen) out[j++] = (triplet >> 8) & 0xFF;
+		if (j < outLen) out[j++] = triplet & 0xFF;
+	}
+	return out;
+}
 import type {
 	PtyErrorCallback,
 	PtyErrorPayload,
@@ -109,12 +138,8 @@ export class PtyClient {
 		this.channel = new Channel<string>();
 		this.channel.onmessage = (data: string) => {
 			if (this.dataCallback) {
-				const binary = atob(data);
-				const bytes = new Uint8Array(binary.length);
-				for (let i = 0; i < binary.length; i++) {
-					bytes[i] = binary.charCodeAt(i);
-				}
-				this.dataCallback(bytes);
+				// Decode base64 using optimized lookup table (avoids charCodeAt loop)
+				this.dataCallback(decodeBase64(data));
 			}
 		};
 
