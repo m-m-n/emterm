@@ -2,7 +2,7 @@
  * E2E test: Cursor visibility (DECTCEM CSI ?25l / ?25h)
  *
  * Tests each layer of the cursor visibility pipeline:
- * - Layer 0-4: Direct WASM core processing and TS mode sync
+ * - Layers 0-4: Direct WASM core processing and TS mode sync (single test)
  * - Layer 5: PTY flow with printf
  * - Layer 6: Canvas pixel verification
  * - Layer 7: tput smcup/civis via PTY
@@ -24,8 +24,9 @@ describe("Cursor Visibility", () => {
 		await browser.pause(3000);
 	});
 
-	it("Layer 0: initial state should have cursor visible", async () => {
-		const state = await browser.execute(() => {
+	it("Layers 0-4: WASM core cursor visibility pipeline", async () => {
+		// Layer 0: initial state should have cursor visible
+		const initial = await browser.execute(() => {
 			const ts = window.terminalState;
 			const core = ts.getActiveCore();
 			return {
@@ -34,43 +35,38 @@ describe("Cursor Visibility", () => {
 				wasmBit: core.get_mode(2),
 			};
 		});
-		console.log("Layer 0 - Initial:", JSON.stringify(state));
-		expect(state.tsVisible).toBe(true);
-		expect(state.tsModes).toBe(true);
-		expect(state.wasmBit).toBe(true);
-	});
+		console.log("Layer 0 - Initial:", JSON.stringify(initial));
+		expect(initial.tsVisible).toBe(true);
+		expect(initial.tsModes).toBe(true);
+		expect(initial.wasmBit).toBe(true);
 
-	it("Layer 1: WASM core should process CSI ?25l correctly", async () => {
-		const result = await browser.execute(() => {
+		// Layer 1: WASM core should process CSI ?25l correctly
+		const layer1 = await browser.execute(() => {
 			const ts = window.terminalState;
 			const core = ts.getActiveCore();
-
 			const before = core.get_mode(2);
 			const data = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x6c]);
 			const consumed = core.process_pty_data(data);
 			const after = core.get_mode(2);
 			const actions = core.take_mode_actions();
-
 			return { before, after, consumed, actionsLength: actions.length };
 		});
-		console.log("Layer 1 - WASM core:", JSON.stringify(result));
-		expect(result.before).toBe(true);
-		expect(result.after).toBe(false);
-	});
+		console.log("Layer 1 - WASM core:", JSON.stringify(layer1));
+		expect(layer1.before).toBe(true);
+		expect(layer1.after).toBe(false);
 
-	it("Layer 2: syncModesFromWasm should propagate to TS", async () => {
-		const result = await browser.execute(() => {
+		// Layer 2: syncModesFromWasm should propagate to TS
+		const layer2 = await browser.execute(() => {
 			const ts = window.terminalState;
 			const beforeSync = ts.modes.cursorVisible;
 			ts.syncModesFromWasm();
 			const afterSync = ts.modes.cursorVisible;
 			return { beforeSync, afterSync, getter: ts.cursorVisible };
 		});
-		console.log("Layer 2 - Sync:", JSON.stringify(result));
-		expect(result.afterSync).toBe(false);
-	});
+		console.log("Layer 2 - Sync:", JSON.stringify(layer2));
+		expect(layer2.afterSync).toBe(false);
 
-	it("Layer 3: renderer should update prevCursorVisible after render", async () => {
+		// Layer 3: renderer should update prevCursorVisible after render
 		await browser.execute(() => {
 			const ts = window.terminalState;
 			const r = window.terminalRenderer;
@@ -78,16 +74,15 @@ describe("Cursor Visibility", () => {
 		});
 		await browser.pause(200);
 
-		const after = await browser.execute(() => {
+		const layer3 = await browser.execute(() => {
 			const r = window.terminalRenderer;
 			return { prevCursorVisible: r.prevCursorVisible };
 		});
-		console.log("Layer 3 - After render:", JSON.stringify(after));
-		expect(after.prevCursorVisible).toBe(false);
-	});
+		console.log("Layer 3 - After render:", JSON.stringify(layer3));
+		expect(layer3.prevCursorVisible).toBe(false);
 
-	it("Layer 4: restore cursor with CSI ?25h", async () => {
-		const result = await browser.execute(() => {
+		// Layer 4: restore cursor with CSI ?25h
+		const layer4 = await browser.execute(() => {
 			const ts = window.terminalState;
 			const core = ts.getActiveCore();
 			const data = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x68]);
@@ -96,11 +91,20 @@ describe("Cursor Visibility", () => {
 			ts.syncModesFromWasm();
 			return { wasmBit: core.get_mode(2), tsVisible: ts.cursorVisible };
 		});
-		console.log("Layer 4 - Restore:", JSON.stringify(result));
-		expect(result.tsVisible).toBe(true);
+		console.log("Layer 4 - Restore:", JSON.stringify(layer4));
+		expect(layer4.tsVisible).toBe(true);
 	});
 
 	it("Layer 5: PTY flow - send printf via pty.write()", async () => {
+		// Ensure cursor is visible before starting
+		await browser.execute(() => {
+			const ts = window.terminalState;
+			const core = ts.getActiveCore();
+			core.process_pty_data(new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x68]));
+			core.take_mode_actions();
+			ts.syncModesFromWasm();
+		});
+
 		const initial = await browser.execute(() => {
 			return {
 				cursorVisible: window.terminalState.cursorVisible,
@@ -206,6 +210,13 @@ describe("Cursor Visibility", () => {
 	});
 
 	it("Layer 7: tput smcup/civis via PTY triggers mode changes", async () => {
+		// Ensure we're in normal buffer with cursor visible
+		await browser.execute(() => {
+			const encoder = new TextEncoder();
+			window.terminalApp.pty.write(encoder.encode("tput rmcup 2>/dev/null; printf '\\e[?25h'\n"));
+		});
+		await browser.pause(1000);
+
 		await browser.execute(() => {
 			const encoder = new TextEncoder();
 			window.terminalApp.pty.write(encoder.encode("tput smcup\n"));
@@ -250,16 +261,11 @@ describe("Cursor Visibility", () => {
 	});
 
 	it("Layer 8: top command hides cursor via CSI ?25l", async () => {
-		// Regression test: top sends CSI ?1h (DECCKM) + CSI ?25l (civis) in
-		// the same PTY chunk. Previously, setDecPrivateMode's syncModesToWasm
-		// overwrote the WASM cursorVisible bit before syncModesFromWasm could
-		// read it, causing cursor to remain visible during TUI programs.
 		await browser.execute(() => {
 			const encoder = new TextEncoder();
 			window.terminalApp.pty.write(encoder.encode("top\n"));
 		});
 
-		// Wait for top to start and send its initialization sequences
 		await browser.waitUntil(
 			async () => {
 				const visible = await browser.execute(() => {
@@ -279,7 +285,6 @@ describe("Cursor Visibility", () => {
 		});
 		console.log("Layer 8 - During top:", JSON.stringify(state));
 
-		// Quit top
 		await browser.execute(() => {
 			const encoder = new TextEncoder();
 			window.terminalApp.pty.write(encoder.encode("q"));
