@@ -8,31 +8,23 @@
  */
 
 describe("eMterm Image Viewer Keyboard Blocking", () => {
-	// Use short path for Docker environment (symlinked in Dockerfile)
 	const imagePath = "/tmp/test.png";
 
-	it("should display the terminal and wait for shell prompt", async () => {
+	it("should block keyboard while viewer is open and restore after close", async () => {
 		const terminal = await $('[data-testid="terminal"]');
 		await terminal.waitForDisplayed({ timeout: 10000 });
-
-		// Wait for shell prompt to be ready
 		await browser.pause(2000);
 		await browser.saveScreenshot("./screenshots/kb-01-initial.png");
-	});
 
-	it("should open image viewer and verify keyboard is blocked", async () => {
-		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
-		// Type the emterm image command
+		// Open image viewer
 		const command = `emterm image ${imagePath}`;
 		for (const char of command) {
 			await browser.keys([char]);
 			await browser.pause(20);
 		}
 		await browser.keys(["Enter"]);
-
-		// Wait for image viewer to open
 		await browser.pause(2000);
 		await browser.saveScreenshot("./screenshots/kb-02-viewer-open.png");
 
@@ -40,10 +32,7 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 		const overlayInfo = await browser.execute(() => {
 			const overlay = document.querySelector(".image-viewer-overlay");
 			return overlay
-				? {
-						exists: true,
-						visible: overlay.classList.contains("visible"),
-					}
+				? { exists: true, visible: overlay.classList.contains("visible") }
 				: { exists: false };
 		});
 		console.log("Overlay info:", JSON.stringify(overlayInfo));
@@ -57,7 +46,6 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 		console.log("Text before typing:", textBefore.slice(-200));
 
 		// Type several characters while viewer is open
-		// These should NOT appear in the terminal
 		const testChars = ["a", "b", "c", "d", "e"];
 		for (const char of testChars) {
 			await browser.keys([char]);
@@ -72,34 +60,27 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 		});
 		console.log("Text after typing (viewer open):", textAfter.slice(-200));
 
-		// The text should NOT have changed (no new characters at the prompt)
-		// We check that the typed characters don't appear at the end
+		// The text should NOT have changed
 		const endsWithTyped = textAfter.trim().endsWith("abcde");
 		console.log("Text ends with typed chars:", endsWithTyped);
 		expect(endsWithTyped).toBe(false);
-	});
 
-	it("should close viewer with Escape and then accept keyboard input", async () => {
-		// Close the viewer with Escape
+		// --- Close viewer with Escape ---
 		await browser.keys(["Escape"]);
 		await browser.pause(500);
 		await browser.saveScreenshot("./screenshots/kb-04-after-escape.png");
 
 		// Verify viewer is closed
-		const overlayInfo = await browser.execute(() => {
+		const overlayAfterClose = await browser.execute(() => {
 			const overlay = document.querySelector(".image-viewer-overlay");
 			return overlay
-				? {
-						exists: true,
-						visible: overlay.classList.contains("visible"),
-					}
+				? { exists: true, visible: overlay.classList.contains("visible") }
 				: { exists: false };
 		});
-		console.log("Overlay after Escape:", JSON.stringify(overlayInfo));
-		expect(overlayInfo.visible).toBe(false);
+		console.log("Overlay after Escape:", JSON.stringify(overlayAfterClose));
+		expect(overlayAfterClose.visible).toBe(false);
 
 		// Click terminal to ensure focus
-		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(200);
 
@@ -123,14 +104,14 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 		console.log("Has marker text:", hasMarker);
 		expect(hasMarker).toBe(true);
 
-		// Clean up - press Ctrl+C to cancel the marker input, then newline
+		// Clean up
 		await browser.keys(["Control", "c"]);
 		await browser.pause(300);
 	});
 
 	it("should verify no stray characters from blocked input", async () => {
-		// Type 'echo check' to verify no leftover characters
 		const terminal = await $('[data-testid="terminal"]');
+		await terminal.waitForDisplayed({ timeout: 5000 });
 		await terminal.click();
 		await browser.pause(200);
 
@@ -149,7 +130,6 @@ describe("eMterm Image Viewer Keyboard Blocking", () => {
 		});
 		console.log("Final terminal text:", terminalText.slice(-300));
 
-		// Verify CLEAN_CHECK appears (clean prompt)
 		const hasCleanCheck = terminalText.includes("CLEAN_CHECK");
 		console.log("Has CLEAN_CHECK:", hasCleanCheck);
 		expect(hasCleanCheck).toBe(true);
