@@ -6,7 +6,7 @@ use {
     crate::state::{ImageProcessorState, LARGE_IMAGE_DATA_THRESHOLD, LargeImageDataStore},
     crate::{ansi, image, logging},
     std::collections::HashMap,
-    tauri::ipc::Channel,
+    tauri::ipc::{Channel, InvokeResponseBody},
     tauri::{AppHandle, Emitter, State},
 };
 
@@ -28,7 +28,7 @@ use {
 pub async fn pty_spawn(
     app: AppHandle,
     state: State<'_, PtyManager>,
-    channel: Channel<String>,
+    channel: Channel<InvokeResponseBody>,
     shell: Option<String>,
     args: Option<Vec<String>>,
     cols: Option<u16>,
