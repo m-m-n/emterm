@@ -8,6 +8,21 @@
  */
 
 describe("eMterm Terminal", () => {
+	before(async () => {
+		// Inject console interceptor to capture logs (WebKitWebDriver doesn't support getLogs)
+		await browser.execute(() => {
+			if (window.__capturedLogs) return;
+			window.__capturedLogs = [];
+			["log", "warn", "error", "info", "debug"].forEach((level) => {
+				const original = console[level];
+				console[level] = function (...args) {
+					window.__capturedLogs.push({ level, message: args.join(" ") });
+					original.apply(console, args);
+				};
+			});
+		});
+	});
+
 	it("should display the terminal window", async () => {
 		// ウィンドウが表示されるか
 		const title = await browser.getTitle();
@@ -49,8 +64,12 @@ describe("eMterm Terminal", () => {
 	});
 
 	it("should check console logs for events", async () => {
-		// ブラウザのコンソールログを取得
-		const logs = await browser.getLogs("browser");
+		// Collect captured console logs
+		const logs = await browser.execute(() => {
+			const captured = window.__capturedLogs || [];
+			window.__capturedLogs = [];
+			return captured;
+		});
 		console.log("=== Console Logs ===");
 		for (const log of logs) {
 			console.log(`[${log.level}] ${log.message}`);
@@ -129,15 +148,16 @@ describe("eMterm SSH Test", () => {
 	it("should get JavaScript console state", async () => {
 		// JavaScript を実行してターミナル状態を取得
 		const state = await browser.execute(() => {
-			// グローバル変数からターミナル状態を取得
 			const terminalState = window.terminalState;
-			const ptyClient = window.ptyClient;
+			const tabManager = window.tabManager;
+			const activeTabId = tabManager?.getActiveTabId?.();
+			const app = activeTabId ? tabManager?.getTerminalApp?.(activeTabId) : null;
 
 			return {
 				terminalStateExists: !!terminalState,
-				ptyClientExists: !!ptyClient,
-				sessionId: ptyClient?.getSessionId?.() || null,
-				isAlternateBuffer: terminalState?.isAlternateBuffer || false,
+				tabManagerExists: !!tabManager,
+				sessionId: app?.pty?.getSessionId?.() || null,
+				isAlternateBuffer: terminalState?.useAlternate || false,
 			};
 		});
 
