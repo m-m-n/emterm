@@ -71,7 +71,10 @@ ENV PATH="/root/.cargo/bin:/root/.bun/bin:/app/src-tauri/target/debug:${PATH}"
 
 WORKDIR /app
 
-# -- Layer cache optimization: copy dependency files first --
+# -- Pre-install dependencies for volume pre-population --
+# These are copied separately for Docker layer cache optimization.
+# At runtime, bind mount (.:/app) provides the actual source,
+# and named volumes preserve these pre-installed dependencies.
 COPY package.json bun.lock ./
 COPY wasm/Cargo.toml ./wasm/
 COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./src-tauri/
@@ -81,11 +84,5 @@ COPY e2e-tests/package.json e2e-tests/package-lock.json ./e2e-tests/
 RUN mkdir -p src-tauri/icons && bun install
 RUN cd e2e-tests && npm ci --legacy-peer-deps
 
-# -- Copy full source code (.dockerignore excludes unnecessary files) --
-COPY . .
-
-# -- WASM build --
-RUN cd wasm && wasm-pack build --target web --out-dir pkg
-
-# -- Tauri app build --
-RUN bun tauri build --debug --no-bundle
+# Source code and app builds are handled at runtime by docker-entrypoint.sh
+# using bind-mounted source, so changes are always reflected without image rebuild.

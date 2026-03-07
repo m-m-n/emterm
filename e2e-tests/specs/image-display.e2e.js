@@ -13,7 +13,7 @@ describe("eMterm Image Display", () => {
 	const imagePath = "/tmp/test.png";
 
 	it("should display the terminal and wait for shell prompt", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.waitForDisplayed({ timeout: 10000 });
 
 		// Wait for shell prompt to be ready
@@ -22,7 +22,7 @@ describe("eMterm Image Display", () => {
 	});
 
 	it("should display an image using emterm image command", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Type the emterm image command with delay between keys
@@ -83,7 +83,7 @@ describe("eMterm Image Display", () => {
 	});
 
 	it("should verify no response string in prompt", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 
 		// Get terminal text content
 		const terminalText = await terminal.getText();
@@ -125,7 +125,7 @@ describe("eMterm Image Display", () => {
 
 	it("should verify terminal text does not contain Kitty response", async () => {
 		// WebKitWebDriver doesn't support getLogs, so we check terminal text instead
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		const terminalText = await terminal.getText();
 
 		// Check for Kitty response patterns that should NOT appear
@@ -142,7 +142,7 @@ describe("eMterm Image Display", () => {
 	});
 
 	it("should type a command after image to verify prompt is clean", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Type a simple command to verify prompt is functional

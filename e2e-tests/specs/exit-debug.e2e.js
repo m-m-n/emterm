@@ -11,7 +11,7 @@ async function typeSlowly(text, delay = 150) {
 
 describe("Exit Debug Test", () => {
 	it("should test exit command with long wait", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Wait for shell to be ready

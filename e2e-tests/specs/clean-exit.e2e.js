@@ -11,7 +11,8 @@ async function typeSlowly(text, delay = 150) {
 
 describe("Clean Exit Test", () => {
 	it("should test exit command with full console capture", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
+		await terminal.waitForExist({ timeout: 10000 });
 		await terminal.click();
 
 		// Set up console capture FIRST

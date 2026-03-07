@@ -13,7 +13,7 @@ describe("eMterm Reflow", () => {
 	});
 
 	it("should accept text input", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// 長い文字列を入力（後でリサイズテストに使用）
@@ -33,7 +33,7 @@ describe("eMterm Reflow", () => {
 	});
 
 	it("should handle window resize and reflow text", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// 現在のウィンドウサイズを取得
@@ -100,7 +100,7 @@ describe("eMterm Reflow", () => {
 	});
 
 	it("should verify wrapped lines unwrap on resize", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// 改行なしで長い出力を出すコマンド
@@ -167,7 +167,7 @@ describe("eMterm Reflow", () => {
 	});
 
 	it("should clean up and exit", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// exit コマンドで終了

@@ -18,7 +18,7 @@ async function typeSlowly(text, delay = 150) {
 
 describe("Tab Lifecycle Tests", () => {
 	it("should capture tab lifecycle events on session creation", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Set up event capture
@@ -62,7 +62,7 @@ describe("Tab Lifecycle Tests", () => {
 	});
 
 	it("should query session count via invoke", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(1000);
 
@@ -90,7 +90,7 @@ describe("Tab Lifecycle Tests", () => {
 	});
 
 	it("should emit tab_closed when shell exits", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// Set up tab_closed event capture
@@ -148,7 +148,7 @@ describe("Tab Lifecycle Tests", () => {
 	});
 
 	it("should test graceful shutdown via tab_close_graceful", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(2000);
 

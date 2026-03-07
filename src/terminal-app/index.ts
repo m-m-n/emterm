@@ -76,6 +76,7 @@ export class TerminalApp {
     // Create terminal-root for terminal renderer
     this.terminalRoot = document.createElement("div");
     this.terminalRoot.className = "terminal-root";
+    this.terminalRoot.dataset.testid = "terminal";
     this.container.appendChild(this.terminalRoot);
 
     // Create overlay-root for viewers and dialogs

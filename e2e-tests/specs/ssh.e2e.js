@@ -14,7 +14,7 @@ async function typeSlowly(text, delay = 50) {
 
 describe("SSH Connection Test", () => {
 	it("should connect to ssh laser5.net and display output", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 
 		// 初期状態をスクリーンショット

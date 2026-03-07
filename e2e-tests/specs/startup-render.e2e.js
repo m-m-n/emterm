@@ -10,7 +10,7 @@ describe("Startup Render Test", () => {
 		await browser.pause(2000);
 
 		// Check if terminal exists
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		const exists = await terminal.isExisting();
 		console.log("Terminal element exists:", exists);
 
@@ -41,7 +41,7 @@ describe("Startup Render Test", () => {
 
 		// Get DOM line count
 		const lineCount = await browser.execute(() => {
-			const terminal = document.getElementById("terminal");
+			const terminal = document.querySelector('[data-testid="terminal"]');
 			return terminal?.querySelectorAll(".terminal-line").length || 0;
 		});
 		console.log("DOM line elements:", lineCount);
@@ -62,7 +62,7 @@ describe("Startup Render Test", () => {
 				}
 
 				// Get DOM content
-				const terminal = document.getElementById("terminal");
+				const terminal = document.querySelector('[data-testid="terminal"]');
 				const lines = terminal?.querySelectorAll(".terminal-line");
 				const domText =
 					lines && row < lines.length ? lines[row].textContent : null;
@@ -111,7 +111,7 @@ describe("Startup Render Test", () => {
 				bufferText += line.getCell(j).char;
 			}
 
-			const terminal = document.getElementById("terminal");
+			const terminal = document.querySelector('[data-testid="terminal"]');
 			const lines = terminal?.querySelectorAll(".terminal-line");
 			const domText =
 				lines && row < lines.length ? lines[row].textContent : null;

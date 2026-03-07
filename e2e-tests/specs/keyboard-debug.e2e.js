@@ -11,7 +11,7 @@ async function typeSlowly(text, delay = 100) {
 
 describe("Keyboard Debug Test", () => {
 	it("should capture keyboard event logs", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 
@@ -57,7 +57,7 @@ describe("Keyboard Debug Test", () => {
 	});
 
 	it("should test exit command with log capture", async () => {
-		const terminal = await $("#terminal");
+		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(500);
 
