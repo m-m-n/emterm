@@ -151,11 +151,13 @@ pub fn spawn_reader_thread(
         loop {
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(first) => {
-                    // Drain all available chunks and concatenate to reduce IPC calls
+                    // Drain all available chunks and concatenate to reduce IPC calls.
+                    // Larger batches reduce IPC overhead at the cost of latency.
+                    // For bulk output (e.g., seq 10M), fewer IPC messages is critical.
                     let mut batch = first;
                     while let Ok(more) = rx.try_recv() {
                         batch.extend_from_slice(&more);
-                        if batch.len() >= 256 * 1024 {
+                        if batch.len() >= 1024 * 1024 {
                             break;
                         }
                     }

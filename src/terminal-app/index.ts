@@ -401,9 +401,12 @@ export class TerminalApp {
     // Track which core has callbacks registered
     let registeredCore = this.state.getWasmCore();
 
-    // Buffer for incoming PTY data — processed in rAF to prevent main thread starvation
+    // Buffer for incoming PTY data — processed in rAF with frame budgeting
+    // "Video approach": process data within time budget, render at 60fps
     let pendingChunks: Uint8Array[] = [];
+    let leftoverData: Uint8Array | null = null;
     let rafScheduled = false;
+    const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
 
     const processPendingData = () => {
       rafScheduled = false;
@@ -412,6 +415,12 @@ export class TerminalApp {
       // Take all pending chunks
       const chunks = pendingChunks;
       pendingChunks = [];
+
+      // Include leftover from previous frame
+      if (leftoverData) {
+        chunks.unshift(leftoverData);
+        leftoverData = null;
+      }
 
       if (chunks.length === 0) return;
 
@@ -430,8 +439,10 @@ export class TerminalApp {
         }
       }
 
-      // Process merged data with buffer switch support
+      // Process data with frame budget — stop when time is up
       let remaining = merged;
+      const deadline = performance.now() + FRAME_BUDGET_MS;
+      let processed = false;
 
       while (remaining.length > 0) {
         const core = this.state.getActiveCore();
@@ -470,13 +481,29 @@ export class TerminalApp {
         }
 
         remaining = remaining.subarray(consumed);
+        processed = true;
 
         if (consumed === 0) break;
+
+        // Check frame budget — defer remaining data to next frame
+        if (remaining.length > 0 && performance.now() >= deadline) {
+          leftoverData = remaining;
+          break;
+        }
       }
 
-      this.outputActivityCallback?.();
-      this.renderer.scheduleRender(this.state);
-      this.imeHandler?.updatePosition();
+      if (processed) {
+        this.outputActivityCallback?.();
+        // Render immediately in this frame (no extra rAF delay)
+        this.renderer.renderImmediate(this.state);
+        this.imeHandler?.updatePosition();
+      }
+
+      // If there's leftover data, schedule next frame to continue
+      if (leftoverData && !rafScheduled) {
+        rafScheduled = true;
+        requestAnimationFrame(processPendingData);
+      }
     };
 
     // Register binary data handler — just buffer and schedule rAF

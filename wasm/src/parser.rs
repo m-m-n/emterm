@@ -63,6 +63,11 @@ impl Parser {
         }
     }
 
+    /// Check if parser is in Ground state with no pending UTF-8 bytes.
+    pub fn is_ground_clean(&self) -> bool {
+        self.state == State::Ground && self.utf8_buffer.is_empty()
+    }
+
     pub fn reset(&mut self) {
         self.state = State::Ground;
         self.params.reset();
