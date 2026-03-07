@@ -28,7 +28,7 @@ use {
 pub async fn pty_spawn(
     app: AppHandle,
     state: State<'_, PtyManager>,
-    channel: Channel<Vec<u8>>,
+    channel: Channel<String>,
     shell: Option<String>,
     args: Option<Vec<String>>,
     cols: Option<u16>,

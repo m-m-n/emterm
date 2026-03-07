@@ -5,13 +5,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
+use base64::Engine;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 
 /// Spawns a dedicated thread to read output from a PTY session.
 ///
 /// This thread continuously reads from the PTY and sends raw bytes via Channel:
-/// - Binary data is sent via `Channel<Vec<u8>>` for WASM processing
+/// - Binary data is sent via `Channel<String>` as base64-encoded for WASM processing
 /// - `pty_error`: When an error occurs
 /// - `pty_exit`: When the process exits
 ///
@@ -21,7 +22,7 @@ pub fn spawn_reader_thread(
     app: AppHandle,
     manager: PtyManager,
     session_id: String,
-    channel: Channel<Vec<u8>>,
+    channel: Channel<String>,
 ) {
     // Shared flag to signal reader to stop when process exits
     let process_exited = Arc::new(AtomicBool::new(false));
@@ -100,7 +101,7 @@ pub fn spawn_reader_thread(
         let helper_session_id = session_id.clone();
 
         std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 65536];
             #[cfg(unix)]
             let mut kitty_scanner = crate::pty::kitty_scanner::KittyScanner::new();
 
@@ -149,10 +150,18 @@ pub fn spawn_reader_thread(
         // Main reader loop: receive data from helper thread, check process_exited on timeout
         loop {
             match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(data) => {
-                    // Send raw bytes via Channel for WASM processing
-                    let len = data.len();
-                    if let Err(e) = channel.send(data) {
+                Ok(first) => {
+                    // Drain all available chunks and concatenate to reduce IPC calls
+                    let mut batch = first;
+                    while let Ok(more) = rx.try_recv() {
+                        batch.extend_from_slice(&more);
+                        if batch.len() >= 256 * 1024 {
+                            break;
+                        }
+                    }
+                    let len = batch.len();
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&batch);
+                    if let Err(e) = channel.send(encoded) {
                         log::warn!(
                             "PTY reader: channel.send failed for session {} ({} bytes lost): {}",
                             session_id,

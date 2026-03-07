@@ -401,17 +401,41 @@ export class TerminalApp {
     // Track which core has callbacks registered
     let registeredCore = this.state.getWasmCore();
 
-    // Register binary data handler
-    this.ptyClient.onData((data: Uint8Array) => {
+    // Buffer for incoming PTY data — processed in rAF to prevent main thread starvation
+    let pendingChunks: Uint8Array[] = [];
+    let rafScheduled = false;
+
+    const processPendingData = () => {
+      rafScheduled = false;
       if (!this.state || !this.renderer) return;
 
-      let remaining = data;
+      // Take all pending chunks
+      const chunks = pendingChunks;
+      pendingChunks = [];
+
+      if (chunks.length === 0) return;
+
+      // Merge chunks into a single buffer
+      let merged: Uint8Array;
+      if (chunks.length === 1) {
+        merged = chunks[0]!;
+      } else {
+        let totalLen = 0;
+        for (const c of chunks) totalLen += c.length;
+        merged = new Uint8Array(totalLen);
+        let offset = 0;
+        for (const chunk of chunks) {
+          merged.set(chunk, offset);
+          offset += chunk.length;
+        }
+      }
+
+      // Process merged data with buffer switch support
+      let remaining = merged;
 
       while (remaining.length > 0) {
-        // Get the active core (may change after buffer switch)
         const core = this.state.getActiveCore();
 
-        // Register callbacks and propagate cell size if core changed (e.g., after buffer switch)
         if (core !== registeredCore) {
           this.registerCoreCallbacks(core);
           this.state.setCellSizePx(
@@ -423,24 +447,17 @@ export class TerminalApp {
 
         const consumed = core.process_pty_data(remaining);
 
-        // Process queued APC/DCS events (safe: process_pty_data has returned)
         this.imageHandler!.processPendingApcQueue();
         this.imageHandler!.processPendingDcsQueue();
 
-        // Sync boolean modes from WASM to TS BEFORE processing mode actions.
-        // This ensures WASM-managed mode bits (e.g., cursorVisible set by
-        // CSI ?25l) are read into TS before setDecPrivateMode's syncModesToWasm
-        // can overwrite them with stale TS values.
         this.state.syncModesFromWasm();
 
-        // Process mode actions (variable-length encoding)
         const modeActions = core.take_mode_actions();
         if (modeActions.length > 0) {
           let i = 0;
           while (i < modeActions.length) {
             const action = modeActions[i]!;
             if (action === 0xFF || action === 0xFE) {
-              // TS_FALLBACK: 3 bytes [marker, mode_lo, mode_hi]
               const mode = modeActions[i + 1]! | (modeActions[i + 2]! << 8);
               const isSet = action === 0xFF;
               this.state.setDecPrivateMode(mode, isSet);
@@ -454,18 +471,22 @@ export class TerminalApp {
 
         remaining = remaining.subarray(consumed);
 
-        // Safety: break if no progress to prevent infinite loop
         if (consumed === 0) break;
       }
 
-      // Notify activity tracker of output
       this.outputActivityCallback?.();
-
-      // Schedule render
       this.renderer.scheduleRender(this.state);
-
-      // Update IME position after terminal state changes
       this.imeHandler?.updatePosition();
+    };
+
+    // Register binary data handler — just buffer and schedule rAF
+    this.ptyClient.onData((data: Uint8Array) => {
+      pendingChunks.push(data);
+
+      if (!rafScheduled) {
+        rafScheduled = true;
+        requestAnimationFrame(processPendingData);
+      }
     });
 
     // Handle exit event

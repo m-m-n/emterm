@@ -64,8 +64,8 @@ export class PtyClient {
 	/** Flag to prevent duplicate exit event processing */
 	private exitHandled = false;
 
-	/** Tauri Channel for binary PTY data */
-	private channel: Channel<number[]> | null = null;
+	/** Tauri Channel for binary PTY data (base64-encoded) */
+	private channel: Channel<string> | null = null;
 
 	/** Callback for raw PTY data */
 	private dataCallback: PtyDataCallback | null = null;
@@ -105,11 +105,16 @@ export class PtyClient {
 		// Reset exitHandled flag for new session
 		this.exitHandled = false;
 
-		// Create Channel for binary data transfer
-		this.channel = new Channel<number[]>();
-		this.channel.onmessage = (data: number[]) => {
+		// Create Channel for binary data transfer (base64-encoded for efficiency)
+		this.channel = new Channel<string>();
+		this.channel.onmessage = (data: string) => {
 			if (this.dataCallback) {
-				this.dataCallback(new Uint8Array(data));
+				const binary = atob(data);
+				const bytes = new Uint8Array(binary.length);
+				for (let i = 0; i < binary.length; i++) {
+					bytes[i] = binary.charCodeAt(i);
+				}
+				this.dataCallback(bytes);
 			}
 		};
 
