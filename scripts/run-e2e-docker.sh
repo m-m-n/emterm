@@ -15,15 +15,23 @@ case "${1:-}" in
     $COMPOSE build
     ;;
   test)
+    # Collect environment variables to pass through to the container
+    ENV_ARGS=""
+    for var in BENCHMARK_LINES BENCHMARK_TIMEOUT; do
+      if [ -n "${!var:-}" ]; then
+        ENV_ARGS="$ENV_ARGS -e $var=${!var}"
+      fi
+    done
+
     if [ -n "$2" ]; then
       echo "Running E2E test: $2"
-      $COMPOSE run --rm e2e-test \
+      $COMPOSE run --rm $ENV_ARGS e2e-test \
         sh -c "cp -n src-tauri/icons/128x128.png /tmp/test.png 2>/dev/null || true \
         && Xvfb :99 -screen 0 1280x720x24 & sleep 2 \
         && cd e2e-tests && npx wdio run wdio.docker.conf.js --spec specs/$2"
     else
       echo "Running all E2E tests..."
-      $COMPOSE run --rm e2e-test
+      $COMPOSE run --rm $ENV_ARGS e2e-test
     fi
     ;;
   clean)
