@@ -273,9 +273,14 @@
       "defaultBadge": "デフォルト",
       "nameRequired": "プロファイル名は必須です",
       "dragHandle": "ドラッグで並び替え",
+      "tabShell": "Shell",
+      "tabSsh": "SSH",
       "sshConnection": "SSH接続",
       "sshConnectionHint": "ローカルシェルの代わりにSSHで接続",
-      "sshConnectionNone": "なし（ローカルシェル）"
+      "sshConnectionNone": "なし（ローカルシェル）",
+      "sshConnectionSelect": "-- SSH接続を選択 --",
+      "sshConnectionRequired": "SSH接続を選択してください",
+      "sshTabDisabled": "SSH接続が登録されていません。SSH設定で接続を追加してください。"
     },
     "ssh": {
       "title": "SSH接続",

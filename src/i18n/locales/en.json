@@ -273,9 +273,14 @@
       "defaultBadge": "Default",
       "nameRequired": "Profile name is required",
       "dragHandle": "Drag to reorder",
+      "tabShell": "Shell",
+      "tabSsh": "SSH",
       "sshConnection": "SSH Connection",
       "sshConnectionHint": "Connect via SSH instead of local shell",
-      "sshConnectionNone": "None (Local Shell)"
+      "sshConnectionNone": "None (Local Shell)",
+      "sshConnectionSelect": "-- Select SSH connection --",
+      "sshConnectionRequired": "Please select an SSH connection",
+      "sshTabDisabled": "No SSH connections registered. Add connections in SSH settings."
     },
     "ssh": {
       "title": "SSH Connections",

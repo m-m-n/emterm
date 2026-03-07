@@ -1515,6 +1515,64 @@
   background-color: color-mix(in srgb, var(--md-sys-color-primary) 85%, white);
 }
 
+/* Profile Editor Tabs */
+
+.profile-editor-tabs {
+  display: flex;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.profile-editor-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background-color: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+              border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+              background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+}
+
+.profile-editor-tab:hover:not(.disabled) {
+  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  color: var(--md-sys-color-on-surface);
+}
+
+.profile-editor-tab.active {
+  color: var(--md-sys-color-primary);
+  border-bottom-color: var(--md-sys-color-primary);
+}
+
+.profile-editor-tab.disabled {
+  color: var(--md-sys-color-on-surface);
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.profile-editor-tab:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.profile-editor-tab-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-editor-tab-panel[hidden] {
+  display: none;
+}
+
 /* ============================================
  * Profile Selector Modal
  * ============================================ */

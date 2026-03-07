@@ -2,8 +2,7 @@
  * Profile Editor
  *
  * Modal dialog for creating and editing terminal profiles.
- * Provides form fields for name, shell_path, shell_args, env_vars,
- * working_directory with save/cancel actions.
+ * Provides SHELL/SSH tab UI for mutually exclusive shell vs SSH configuration.
  */
 
 import type { AppSettings, Profile } from "../settings/types";
@@ -61,17 +60,51 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 	errorEl.hidden = true;
 	form.appendChild(errorEl);
 
-	// Name field
-	const nameInput = createTextField(form, {
+	// === Tab bar (above all fields) ===
+	const tabBar = document.createElement("div");
+	tabBar.className = "profile-editor-tabs";
+	tabBar.setAttribute("role", "tablist");
+
+	const shellTab = document.createElement("button");
+	shellTab.type = "button";
+	shellTab.className = "profile-editor-tab active";
+	shellTab.setAttribute("role", "tab");
+	shellTab.setAttribute("aria-selected", "true");
+	shellTab.setAttribute("aria-controls", "profile-tab-panel-shell");
+	shellTab.id = "profile-tab-shell";
+	shellTab.tabIndex = 0;
+	shellTab.textContent = t("settings.profiles.tabShell");
+
+	const sshTab = document.createElement("button");
+	sshTab.type = "button";
+	sshTab.className = "profile-editor-tab";
+	sshTab.setAttribute("role", "tab");
+	sshTab.setAttribute("aria-selected", "false");
+	sshTab.setAttribute("aria-controls", "profile-tab-panel-ssh");
+	sshTab.id = "profile-tab-ssh";
+	sshTab.tabIndex = -1;
+	sshTab.textContent = t("settings.profiles.tabSsh");
+
+	tabBar.appendChild(shellTab);
+	tabBar.appendChild(sshTab);
+	form.appendChild(tabBar);
+
+	// === SHELL tab panel ===
+	const shellPanel = document.createElement("div");
+	shellPanel.className = "profile-editor-tab-panel";
+	shellPanel.setAttribute("role", "tabpanel");
+	shellPanel.setAttribute("aria-labelledby", "profile-tab-shell");
+	shellPanel.id = "profile-tab-panel-shell";
+
+	// Name field (inside SHELL tab)
+	const nameInput = createTextField(shellPanel, {
 		id: "profile-name",
 		label: t("settings.profiles.name"),
 		value: profile.name,
 		placeholder: t("settings.profiles.namePlaceholder"),
-		required: true,
 	});
 
-	// Shell path field
-	const shellPathInput = createTextField(form, {
+	const shellPathInput = createTextField(shellPanel, {
 		id: "profile-shell-path",
 		label: t("settings.profiles.shellPath"),
 		value: profile.shell_path,
@@ -79,8 +112,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 		hint: t("settings.profiles.shellPathHint"),
 	});
 
-	// Shell args field
-	const shellArgsInput = createTextField(form, {
+	const shellArgsInput = createTextField(shellPanel, {
 		id: "profile-shell-args",
 		label: t("settings.profiles.shellArgs"),
 		value: profile.shell_args.join(", "),
@@ -88,8 +120,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 		hint: t("settings.profiles.shellArgsHint"),
 	});
 
-	// Env vars field (textarea)
-	const envVarsTextarea = createTextareaField(form, {
+	const envVarsTextarea = createTextareaField(shellPanel, {
 		id: "profile-env-vars",
 		label: t("settings.profiles.envVars"),
 		value: profile.env_vars,
@@ -98,8 +129,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 		rows: 4,
 	});
 
-	// Working directory field
-	const workDirInput = createTextField(form, {
+	const workDirInput = createTextField(shellPanel, {
 		id: "profile-working-directory",
 		label: t("settings.profiles.workingDirectory"),
 		value: profile.working_directory,
@@ -107,29 +137,105 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 		hint: t("settings.profiles.workingDirectoryHint"),
 	});
 
-	// SSH Connection dropdown
-	const sshSelect = createSelectField(form, {
+	form.appendChild(shellPanel);
+
+	// === SSH tab panel ===
+	const sshPanel = document.createElement("div");
+	sshPanel.className = "profile-editor-tab-panel";
+	sshPanel.setAttribute("role", "tabpanel");
+	sshPanel.setAttribute("aria-labelledby", "profile-tab-ssh");
+	sshPanel.id = "profile-tab-panel-ssh";
+	sshPanel.hidden = true;
+
+	const sshSelect = createSelectField(sshPanel, {
 		id: "profile-ssh-connection",
 		label: t("settings.profiles.sshConnection"),
 		value: profile.ssh_connection_name,
 		hint: t("settings.profiles.sshConnectionHint"),
-		options: [{ value: "", label: t("settings.profiles.sshConnectionNone") }],
+		options: [{ value: "", label: t("settings.profiles.sshConnectionSelect") }],
 	});
 
-	// Load SSH connections asynchronously and populate dropdown
-	SettingsService.load().then((settings: AppSettings) => {
-		for (const conn of settings.ssh_connections) {
-			const opt = document.createElement("option");
-			opt.value = conn.name;
-			opt.textContent = conn.name;
-			if (conn.name === profile.ssh_connection_name) {
-				opt.selected = true;
-			}
-			sshSelect.appendChild(opt);
+	form.appendChild(sshPanel);
+
+	// Tab switching logic
+	let activeTab: "shell" | "ssh" = "shell";
+
+	function switchTab(target: "shell" | "ssh") {
+		if (target === activeTab) return;
+		if (target === "ssh" && sshTab.classList.contains("disabled")) return;
+
+		activeTab = target;
+
+		if (target === "shell") {
+			shellTab.classList.add("active");
+			shellTab.setAttribute("aria-selected", "true");
+			shellTab.tabIndex = 0;
+			sshTab.classList.remove("active");
+			sshTab.setAttribute("aria-selected", "false");
+			sshTab.tabIndex = -1;
+			shellPanel.hidden = false;
+			sshPanel.hidden = true;
+			// Clear SSH value
+			sshSelect.value = "";
+		} else {
+			sshTab.classList.add("active");
+			sshTab.setAttribute("aria-selected", "true");
+			sshTab.tabIndex = 0;
+			shellTab.classList.remove("active");
+			shellTab.setAttribute("aria-selected", "false");
+			shellTab.tabIndex = -1;
+			sshPanel.hidden = false;
+			shellPanel.hidden = true;
+			// Clear shell values
+			shellPathInput.value = "";
+			shellArgsInput.value = "";
+			envVarsTextarea.value = "";
+			workDirInput.value = "";
 		}
-	}).catch(() => {
-		// Settings load failed - dropdown stays with just "None"
+	}
+
+	shellTab.addEventListener("click", () => switchTab("shell"));
+	sshTab.addEventListener("click", () => switchTab("ssh"));
+
+	// Keyboard navigation (arrow keys between tabs)
+	tabBar.addEventListener("keydown", (e) => {
+		if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+			e.preventDefault();
+			const target = activeTab === "shell" ? "ssh" : "shell";
+			switchTab(target);
+			if (target === "shell") shellTab.focus();
+			else sshTab.focus();
+		}
 	});
+
+	// Load SSH connections and determine initial tab
+	SettingsService.load()
+		.then((settings: AppSettings) => {
+			for (const conn of settings.ssh_connections) {
+				const opt = document.createElement("option");
+				opt.value = conn.name;
+				opt.textContent = conn.name;
+				if (conn.name === profile.ssh_connection_name) {
+					opt.selected = true;
+				}
+				sshSelect.appendChild(opt);
+			}
+
+			if (settings.ssh_connections.length === 0) {
+				// Disable SSH tab
+				sshTab.classList.add("disabled");
+				sshTab.setAttribute("aria-disabled", "true");
+				sshTab.title = t("settings.profiles.sshTabDisabled");
+			} else if (profile.ssh_connection_name) {
+				// Auto-select SSH tab for existing SSH profiles
+				switchTab("ssh");
+			}
+		})
+		.catch(() => {
+			// Settings load failed - disable SSH tab
+			sshTab.classList.add("disabled");
+			sshTab.setAttribute("aria-disabled", "true");
+		});
 
 	// Buttons
 	const btnRow = document.createElement("div");
@@ -182,27 +288,41 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 	form.addEventListener("submit", (e) => {
 		e.preventDefault();
 
-		const name = nameInput.value.trim();
-		if (!name) {
-			errorEl.textContent = t("settings.profiles.nameRequired");
-			errorEl.hidden = false;
-			nameInput.focus();
-			return;
+		let name: string;
+		if (activeTab === "shell") {
+			name = nameInput.value.trim();
+			if (!name) {
+				errorEl.textContent = t("settings.profiles.nameRequired");
+				errorEl.hidden = false;
+				nameInput.focus();
+				return;
+			}
+		} else {
+			// SSH tab: use SSH connection name as profile name
+			name = sshSelect.value;
+			if (!name) {
+				errorEl.textContent = t("settings.profiles.sshConnectionRequired");
+				errorEl.hidden = false;
+				sshSelect.focus();
+				return;
+			}
 		}
-
-		const shellArgs = shellArgsInput.value
-			.split(",")
-			.map((s) => s.trim())
-			.filter((s) => s !== "");
 
 		const result: Profile = {
 			name,
-			shell_path: shellPathInput.value.trim(),
-			shell_args: shellArgs,
-			env_vars: envVarsTextarea.value,
-			working_directory: workDirInput.value.trim(),
+			shell_path: activeTab === "shell" ? shellPathInput.value.trim() : "",
+			shell_args:
+				activeTab === "shell"
+					? shellArgsInput.value
+							.split(",")
+							.map((s) => s.trim())
+							.filter((s) => s !== "")
+					: [],
+			env_vars: activeTab === "shell" ? envVarsTextarea.value : "",
+			working_directory:
+				activeTab === "shell" ? workDirInput.value.trim() : "",
 			is_default: profile.is_default,
-			ssh_connection_name: sshSelect.value,
+			ssh_connection_name: activeTab === "ssh" ? sshSelect.value : "",
 		};
 
 		cleanup();
@@ -226,7 +346,7 @@ interface TextFieldOptions {
 }
 
 function createTextField(
-	form: HTMLFormElement,
+	container: HTMLElement,
 	opts: TextFieldOptions,
 ): HTMLInputElement {
 	const row = document.createElement("div");
@@ -254,7 +374,7 @@ function createTextField(
 		row.appendChild(hint);
 	}
 
-	form.appendChild(row);
+	container.appendChild(row);
 	return input;
 }
 
@@ -268,7 +388,7 @@ interface TextareaFieldOptions {
 }
 
 function createTextareaField(
-	form: HTMLFormElement,
+	container: HTMLElement,
 	opts: TextareaFieldOptions,
 ): HTMLTextAreaElement {
 	const row = document.createElement("div");
@@ -295,7 +415,7 @@ function createTextareaField(
 		row.appendChild(hint);
 	}
 
-	form.appendChild(row);
+	container.appendChild(row);
 	return textarea;
 }
 
@@ -308,7 +428,7 @@ interface SelectFieldOptions {
 }
 
 function createSelectField(
-	form: HTMLFormElement,
+	container: HTMLElement,
 	opts: SelectFieldOptions,
 ): HTMLSelectElement {
 	const row = document.createElement("div");
@@ -339,6 +459,6 @@ function createSelectField(
 		row.appendChild(hint);
 	}
 
-	form.appendChild(row);
+	container.appendChild(row);
 	return select;
 }

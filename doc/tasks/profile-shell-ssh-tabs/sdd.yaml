@@ -1,0 +1,83 @@
+schema_version: 1
+feature: profile-shell-ssh-tabs
+scale: standard
+created: 2026-03-06
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'bun test'"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: a6a7c15a7b02cd2e8b44441fbaf05a65710dabb3
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: a6a7c15a7b02cd2e8b44441fbaf05a65710dabb3
+  - id: implement
+    status: completed
+    completed_at_commit: a6a7c15a7b02cd2e8b44441fbaf05a65710dabb3
+  - id: check
+    status: completed
+    completed_at_commit: a6a7c15a7b02cd2e8b44441fbaf05a65710dabb3
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: a6a7c15a7b02cd2e8b44441fbaf05a65710dabb3
+  - id: review
+    status: completed
+    completed_at_commit: a6a7c15a7b02cd2e8b44441fbaf05a65710dabb3
+
+requirements:
+  FR1:
+    title: Add SHELL/SSH tab bar inside profile editor modal
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: SHELL tab displays shell_path, shell_args, env_vars, working_directory fields
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: SSH tab displays dropdown to select registered SSH connections
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Tab switching clears the other mode's values
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Disable SSH tab when ssh_connections array is empty
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Auto-select tab based on existing profile's ssh_connection_name
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: ARIA tablist/tab/tabpanel roles with keyboard navigation
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Tab styling follows UI-DESIGN-GUIDELINES.yaml tokens
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: All new labels have en/ja translations
+    status: ok
+    tasks: []
+    tests: []
