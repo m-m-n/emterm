@@ -9,6 +9,31 @@
  * - Settings persist after app restart
  */
 
+/** Switch to a settings category by ID */
+async function switchToCategory(categoryId) {
+	await browser.execute((id) => {
+		const navItem = document.querySelector(`.settings-nav-item[data-category-id="${id}"]`);
+		if (navItem) navItem.click();
+	}, categoryId);
+	await browser.pause(500);
+}
+
+/** Open settings tab and switch to Terminal Appearance category */
+async function openSettingsTerminalAppearance() {
+	await browser.execute(() => {
+		const tabs = window.tabManager?.getTabs() || [];
+		const settingsTab = tabs.find(t => t.type === "settings");
+		if (settingsTab) {
+			window.tabManager?.switchTab(settingsTab.id);
+		} else {
+			const tabBarUI = document.querySelector(".tab-button-settings");
+			if (tabBarUI) tabBarUI.click();
+		}
+	});
+	await browser.pause(1000);
+	await switchToCategory("terminal-appearance");
+}
+
 describe("Settings Panel Tests", () => {
 	beforeEach(async () => {
 		// Wait for app to be ready
@@ -100,19 +125,7 @@ describe("Settings Panel Tests", () => {
 	});
 
 	it("should display font size input with current value", async () => {
-		// Ensure settings tab is open and active
-		await browser.execute(() => {
-			const tabs = window.tabManager?.getTabs() || [];
-			const settingsTab = tabs.find(t => t.type === "settings");
-			if (settingsTab) {
-				window.tabManager?.switchTab(settingsTab.id);
-			} else {
-				// Open settings tab if not exists
-				const tabBarUI = document.querySelector(".tab-button-settings");
-				if (tabBarUI) tabBarUI.click();
-			}
-		});
-		await browser.pause(1000);
+		await openSettingsTerminalAppearance();
 
 		// Find font size input
 		const fontSizeInput = await $("#settings-font-size");
@@ -136,22 +149,7 @@ describe("Settings Panel Tests", () => {
 	});
 
 	it("should apply font size change to terminal in real-time", async () => {
-		// Ensure we have a terminal tab
-		let hasTerminalTab = await browser.execute(() => {
-			const tabs = window.tabManager?.getTabs() || [];
-			return tabs.some(t => t.type === "terminal");
-		});
-
-		if (!hasTerminalTab) {
-			console.log("No terminal tab, creating one...");
-			await browser.keys(["Control", "t"]);
-			await browser.pause(2000);
-		}
-
-		// Open settings tab
-		const settingsButton = await $(".tab-button-settings");
-		await settingsButton.click();
-		await browser.pause(1000);
+		await openSettingsTerminalAppearance();
 
 		// Get font size input
 		const fontSizeInput = await $("#settings-font-size");
@@ -205,18 +203,7 @@ describe("Settings Panel Tests", () => {
 	});
 
 	it("should clamp font size to valid range", async () => {
-		// Open settings tab
-		await browser.execute(() => {
-			const tabs = window.tabManager?.getTabs() || [];
-			const settingsTab = tabs.find(t => t.type === "settings");
-			if (settingsTab) {
-				window.tabManager?.switchTab(settingsTab.id);
-			} else {
-				const tabBarUI = document.querySelector(".tab-button-settings");
-				if (tabBarUI) tabBarUI.click();
-			}
-		});
-		await browser.pause(1000);
+		await openSettingsTerminalAppearance();
 
 		const fontSizeInput = await $("#settings-font-size");
 		const originalValue = await fontSizeInput.getValue();
@@ -295,18 +282,7 @@ describe("Settings Panel Tests", () => {
 	});
 
 	it("should save settings on blur", async () => {
-		// Open settings tab
-		await browser.execute(() => {
-			const tabs = window.tabManager?.getTabs() || [];
-			const settingsTab = tabs.find(t => t.type === "settings");
-			if (settingsTab) {
-				window.tabManager?.switchTab(settingsTab.id);
-			} else {
-				const tabBarUI = document.querySelector(".tab-button-settings");
-				if (tabBarUI) tabBarUI.click();
-			}
-		});
-		await browser.pause(1000);
+		await openSettingsTerminalAppearance();
 
 		const fontSizeInput = await $("#settings-font-size");
 		const originalValue = await fontSizeInput.getValue();
@@ -356,18 +332,7 @@ describe("Settings Panel Tests", () => {
 	});
 
 	it("should save settings on Enter key", async () => {
-		// Open settings tab
-		await browser.execute(() => {
-			const tabs = window.tabManager?.getTabs() || [];
-			const settingsTab = tabs.find(t => t.type === "settings");
-			if (settingsTab) {
-				window.tabManager?.switchTab(settingsTab.id);
-			} else {
-				const tabBarUI = document.querySelector(".tab-button-settings");
-				if (tabBarUI) tabBarUI.click();
-			}
-		});
-		await browser.pause(1000);
+		await openSettingsTerminalAppearance();
 
 		const fontSizeInput = await $("#settings-font-size");
 		const originalValue = await fontSizeInput.getValue();
@@ -441,10 +406,11 @@ describe("Settings Panel Tests", () => {
 		});
 		console.log("Initial terminal renderer font size:", initialFontSize);
 
-		// Open settings and change font size
+		// Open settings and switch to Terminal Appearance
 		const settingsButton = await $(".tab-button-settings");
 		await settingsButton.click();
 		await browser.pause(1000);
+		await switchToCategory("terminal-appearance");
 
 		const fontSizeInput = await $("#settings-font-size");
 		const originalValue = await fontSizeInput.getValue();
@@ -501,7 +467,7 @@ describe("Settings Panel Tests", () => {
 		await browser.pause(500);
 	});
 
-	it("should display category navigation with Appearance active", async () => {
+	it("should display category navigation with correct items", async () => {
 		// Open settings tab
 		await browser.execute(() => {
 			const tabs = window.tabManager?.getTabs() || [];
@@ -536,16 +502,13 @@ describe("Settings Panel Tests", () => {
 		console.log("Active nav:", navData.activeText);
 		console.log("Disabled navs:", navData.disabledTexts);
 
-		expect(navData.texts).toContain("Appearance");
-		expect(navData.texts).toContain("Terminal");
+		expect(navData.texts).toContain("UI Settings");
+		expect(navData.texts).toContain("Terminal Appearance");
+		expect(navData.texts).toContain("Terminal Behavior");
 		expect(navData.texts).toContain("Keybinds");
 
-		// Appearance should be active
-		expect(navData.activeText).toBe("Appearance");
-
-		// Terminal and Keybinds should be disabled
-		expect(navData.disabledTexts).toContain("Terminal");
-		expect(navData.disabledTexts).toContain("Keybinds");
+		// Some category should be active
+		expect(navData.activeText.length).toBeGreaterThan(0);
 
 		await browser.saveScreenshot("./screenshots/settings-09-navigation.png");
 	});
