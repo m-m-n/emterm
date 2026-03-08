@@ -434,114 +434,136 @@ export class TerminalApp {
     let pendingChunks: Uint8Array[] = [];
     let leftoverData: Uint8Array | null = null;
     let rafScheduled = false;
+    let rafWatchdog: ReturnType<typeof setTimeout> | null = null;
     const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
+    const RAF_WATCHDOG_MS = 500; // Fallback if rAF stops being delivered
 
     const processPendingData = () => {
       rafScheduled = false;
+      if (rafWatchdog !== null) {
+        clearTimeout(rafWatchdog);
+        rafWatchdog = null;
+      }
       if (!this.state || !this.renderer) return;
 
-      // Take all pending chunks
-      const chunks = pendingChunks;
-      pendingChunks = [];
+      try {
+        // Take all pending chunks
+        const chunks = pendingChunks;
+        pendingChunks = [];
 
-      // Include leftover from previous frame
-      if (leftoverData) {
-        chunks.unshift(leftoverData);
-        leftoverData = null;
-      }
-
-      if (chunks.length === 0) return;
-
-      // Merge chunks into a single buffer
-      let merged: Uint8Array;
-      if (chunks.length === 1) {
-        merged = chunks[0]!;
-      } else {
-        let totalLen = 0;
-        for (const c of chunks) totalLen += c.length;
-        merged = new Uint8Array(totalLen);
-        let offset = 0;
-        for (const chunk of chunks) {
-          merged.set(chunk, offset);
-          offset += chunk.length;
-        }
-      }
-
-      // Process data with frame budget — stop when time is up
-      let remaining = merged;
-      const deadline = performance.now() + FRAME_BUDGET_MS;
-      let processed = false;
-
-      while (remaining.length > 0) {
-        const core = this.state.getActiveCore();
-
-        if (core !== registeredCore) {
-          this.registerCoreCallbacks(core);
-          this.state.setCellSizePx(
-            Math.round(this.charSize.width),
-            Math.round(this.charSize.height),
-          );
-          registeredCore = core;
+        // Include leftover from previous frame
+        if (leftoverData) {
+          chunks.unshift(leftoverData);
+          leftoverData = null;
         }
 
-        const consumed = core.process_pty_data(remaining);
+        if (chunks.length === 0) return;
 
-        this.imageHandler!.processPendingApcQueue();
-        this.imageHandler!.processPendingDcsQueue();
-
-        this.state.syncModesFromWasm();
-
-        const modeActions = core.take_mode_actions();
-        if (modeActions.length > 0) {
-          let i = 0;
-          while (i < modeActions.length) {
-            const action = modeActions[i]!;
-            if (action === 0xFF || action === 0xFE) {
-              const mode = modeActions[i + 1]! | (modeActions[i + 2]! << 8);
-              const isSet = action === 0xFF;
-              this.state.setDecPrivateMode(mode, isSet);
-              i += 3;
-            } else {
-              this.state.handleModeAction(action);
-              i += 1;
-            }
+        // Merge chunks into a single buffer
+        let merged: Uint8Array;
+        if (chunks.length === 1) {
+          merged = chunks[0]!;
+        } else {
+          let totalLen = 0;
+          for (const c of chunks) totalLen += c.length;
+          merged = new Uint8Array(totalLen);
+          let offset = 0;
+          for (const chunk of chunks) {
+            merged.set(chunk, offset);
+            offset += chunk.length;
           }
         }
 
-        remaining = remaining.subarray(consumed);
-        processed = true;
+        // Process data with frame budget — stop when time is up
+        let remaining = merged;
+        const deadline = performance.now() + FRAME_BUDGET_MS;
+        let processed = false;
 
-        if (consumed === 0) break;
+        while (remaining.length > 0) {
+          const core = this.state.getActiveCore();
 
-        // Check frame budget — defer remaining data to next frame
-        if (remaining.length > 0 && performance.now() >= deadline) {
-          leftoverData = remaining;
-          break;
+          if (core !== registeredCore) {
+            this.registerCoreCallbacks(core);
+            this.state.setCellSizePx(
+              Math.round(this.charSize.width),
+              Math.round(this.charSize.height),
+            );
+            registeredCore = core;
+          }
+
+          const consumed = core.process_pty_data(remaining);
+
+          this.imageHandler!.processPendingApcQueue();
+          this.imageHandler!.processPendingDcsQueue();
+
+          this.state.syncModesFromWasm();
+
+          const modeActions = core.take_mode_actions();
+          if (modeActions.length > 0) {
+            let i = 0;
+            while (i < modeActions.length) {
+              const action = modeActions[i]!;
+              if (action === 0xFF || action === 0xFE) {
+                const mode = modeActions[i + 1]! | (modeActions[i + 2]! << 8);
+                const isSet = action === 0xFF;
+                this.state.setDecPrivateMode(mode, isSet);
+                i += 3;
+              } else {
+                this.state.handleModeAction(action);
+                i += 1;
+              }
+            }
+          }
+
+          remaining = remaining.subarray(consumed);
+          processed = true;
+
+          if (consumed === 0) break;
+
+          // Check frame budget — defer remaining data to next frame
+          if (remaining.length > 0 && performance.now() >= deadline) {
+            leftoverData = remaining;
+            break;
+          }
         }
-      }
 
-      if (processed) {
-        this.outputActivityCallback?.();
-        // Render immediately in this frame (no extra rAF delay)
-        this.renderer.renderImmediate(this.state);
-        this.imeHandler?.updatePosition();
-      }
+        if (processed) {
+          this.outputActivityCallback?.();
+          // Render immediately in this frame (no extra rAF delay)
+          this.renderer.renderImmediate(this.state);
+          this.imeHandler?.updatePosition();
+        }
 
-      // If there's leftover data, schedule next frame to continue
-      if (leftoverData && !rafScheduled) {
-        rafScheduled = true;
-        requestAnimationFrame(processPendingData);
+        // If there's leftover data, schedule next frame to continue
+        if (leftoverData && !rafScheduled) {
+          scheduleProcessing();
+        }
+      } catch (error) {
+        console.error("[ERROR][FRONTEND] processPendingData failed:", error);
+        leftoverData = null;
       }
+    };
+
+    const scheduleProcessing = () => {
+      if (rafScheduled) return;
+      rafScheduled = true;
+      requestAnimationFrame(processPendingData);
+      // Watchdog: fallback if rAF callback is not delivered (e.g. WebKitGTK bug)
+      if (rafWatchdog !== null) clearTimeout(rafWatchdog);
+      rafWatchdog = setTimeout(() => {
+        if (rafScheduled) {
+          console.warn(
+            "[WARN][FRONTEND] rAF watchdog triggered — forcing data processing",
+          );
+          processPendingData();
+        }
+      }, RAF_WATCHDOG_MS);
     };
 
     // Register binary data handler — just buffer and schedule rAF
     this.ptyClient.onData((data: Uint8Array) => {
       pendingChunks.push(data);
-
-      if (!rafScheduled) {
-        rafScheduled = true;
-        requestAnimationFrame(processPendingData);
-      }
+      scheduleProcessing();
     });
 
     // Handle exit event
