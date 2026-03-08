@@ -313,6 +313,7 @@ mod tests {
             }],
             ssh_command_path: String::new(),
             ssh_connections: Vec::new(),
+            sftp_max_concurrent_uploads: 4,
             markdown_theme_follow_ui: false,
             markdown_theme: UiTheme::Light,
             markdown_theme_preset: UiThemePreset::Green,

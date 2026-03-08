@@ -97,6 +97,7 @@ export class TabManager {
   private eventUnlistens: Map<string, UnlistenFn> = new Map();
   private eventEmitter: TypedEventEmitter = new TypedEventEmitter();
   private lastTabClosedCallback: (() => void) | null = null;
+  private beforeCloseGuards: Array<(tabId: string) => Promise<boolean>> = [];
 
   private container: HTMLElement;
   private createTerminalApp: (container: HTMLElement, spawnOptions?: ProfileSpawnOptions) => Promise<TerminalApp>;
@@ -294,6 +295,15 @@ export class TabManager {
     this.operationState = { status: "closing", tabId };
 
     try {
+      // Run before-close guards
+      for (const guard of this.beforeCloseGuards) {
+        const allowed = await guard(tabId);
+        if (!allowed) {
+          this.operationState = { status: "idle" };
+          return false;
+        }
+      }
+
       const tab = this.tabs[tabIndex];
       const wasActive = this.activeTabId === tabId;
 
@@ -610,6 +620,14 @@ export class TabManager {
    */
   onLastTabClosed(callback: () => void): void {
     this.lastTabClosedCallback = callback;
+  }
+
+  /**
+   * Registers a guard function called before tab close.
+   * If the guard returns false, the tab close is blocked.
+   */
+  addBeforeCloseGuard(guard: (tabId: string) => Promise<boolean>): void {
+    this.beforeCloseGuards.push(guard);
   }
 
   /**

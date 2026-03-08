@@ -73,6 +73,11 @@ deserialize_null_with!(
     String,
     default_editor_command
 );
+deserialize_null_with!(
+    deserialize_null_sftp_max_concurrent_uploads,
+    u16,
+    default_sftp_max_concurrent_uploads
+);
 
 // ============================================================
 // Default Value Functions
@@ -114,6 +119,9 @@ fn default_markdown_font_size() -> u32 {
 }
 fn default_editor_command() -> String {
     "code --goto {file}:{line}:{col}".to_string()
+}
+fn default_sftp_max_concurrent_uploads() -> u16 {
+    4
 }
 
 // ============================================================
@@ -425,6 +433,13 @@ pub struct AppSettings {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub ssh_connections: Vec<SshConnection>,
 
+    // SFTP
+    #[serde(
+        default = "default_sftp_max_concurrent_uploads",
+        deserialize_with = "deserialize_null_sftp_max_concurrent_uploads"
+    )]
+    pub sftp_max_concurrent_uploads: u16,
+
     // Markdown Viewer
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub markdown_theme_follow_ui: bool,
@@ -485,6 +500,7 @@ impl Default for AppSettings {
             profiles: Vec::new(),
             ssh_command_path: String::new(),
             ssh_connections: Vec::new(),
+            sftp_max_concurrent_uploads: default_sftp_max_concurrent_uploads(),
             markdown_theme_follow_ui: default_true(),
             markdown_theme: UiTheme::default(),
             markdown_theme_preset: UiThemePreset::default(),

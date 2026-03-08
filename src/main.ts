@@ -16,7 +16,7 @@ import { TabActivityTracker } from "./tab-bar/tab-activity-tracker";
 import { NotificationManager } from "./notification/notification-manager";
 import { initConsoleBridge } from "./utils/console-bridge";
 import { SettingsService, applySettingsToCSS } from "./settings";
-import { initI18n, resolveLocale } from "./i18n/index.ts";
+import { initI18n, resolveLocale, t } from "./i18n/index.ts";
 import { isTerminalTab } from "./tab-bar/types";
 import { initWasm } from "./terminal/wasm/loader.ts";
 
@@ -95,6 +95,7 @@ async function main(): Promise<void> {
     createTerminalApp: async (tabContainer, spawnOptions) => {
       const app = new TerminalApp(tabContainer, {
         spawnOverrides: spawnOptions,
+        sshConnectionName: spawnOptions?.sshConnectionName,
       });
       await app.init();
 
@@ -117,6 +118,19 @@ async function main(): Promise<void> {
     },
   });
   tabManager = manager;
+
+  // Register before-close guard for active SFTP uploads
+  manager.addBeforeCloseGuard(async (tabId: string) => {
+    const app = manager.getTerminalApp(tabId);
+    if (!app?.uploadManager?.hasActiveUploads()) return true;
+
+    const message = t("sftp.tabClose.message");
+    if (!confirm(message)) return false;
+
+    // User confirmed - cancel all uploads before closing
+    await app.uploadManager.cancelAllUploads();
+    return true;
+  });
 
   // Handle last tab closed - exit application
   tabManager.onLastTabClosed(async () => {

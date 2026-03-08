@@ -21,6 +21,8 @@ import { buildFontFamilyChain } from "../settings/settings-applier";
 import { showPasteDialog, sendTextInChunks } from "../clipboard";
 import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/osc_handlers";
 import { showTerminalContextMenu } from "../context-menu";
+import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
+import { UploadManager } from "../sftp/upload-manager";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -48,6 +50,8 @@ export class TerminalApp {
   private outputActivityCallback: (() => void) | null = null;
   private searchHandler: SearchHandler | null = null;
   private linkHandler: LinkHandler | null = null;
+  private fileDropHandler: FileDropHandler | null = null;
+  private _uploadManager: UploadManager | null = null;
 
   /**
    * Creates a new TerminalApp instance
@@ -304,6 +308,29 @@ export class TerminalApp {
       getOverlayRoot: () => this.overlayRoot,
     });
     await this.imageHandler.init();
+
+    // Initialize SFTP file drop handler and upload manager
+    this._uploadManager = new UploadManager();
+    await this._uploadManager.init();
+
+    this.fileDropHandler = new FileDropHandler({
+      container: this.container,
+      isActiveTab: () => this.container.style.display !== "none",
+      getSshConnectionName: () => this.options.sshConnectionName || "",
+      onSshDrop: (files: FileDropInfo[]) => {
+        const destination = extractRemotePath(this.state?._workingDirectory || "");
+        const sshConnectionName = this.options.sshConnectionName || "";
+        this._uploadManager?.handleSshDrop(files, sshConnectionName, destination);
+      },
+      onLocalDrop: (paths: string[]) => {
+        const text = formatPathsForPaste(paths);
+        if (text && this.ptyClient) {
+          const bytes = new TextEncoder().encode(text);
+          this.ptyClient.write(bytes);
+        }
+      },
+    });
+    await this.fileDropHandler.attach();
 
     // Set markdown session manager's container for fullscreen view
     this.state.getMarkdownManager().setContainer(this.overlayRoot!);
@@ -835,6 +862,12 @@ export class TerminalApp {
     this.searchHandler?.dispose();
     this.searchHandler = null;
 
+    // Clean up SFTP handlers
+    this.fileDropHandler?.detach();
+    this.fileDropHandler = null;
+    this._uploadManager?.dispose();
+    this._uploadManager = null;
+
     // Clean up image handler (ImageViewer, event listener, queues)
     this.imageHandler?.dispose();
     this.imageHandler = null;
@@ -918,6 +951,13 @@ export class TerminalApp {
    */
   get cellSize(): CharSize {
     return this.charSize;
+  }
+
+  /**
+   * Gets the upload manager (for tab close guard checks)
+   */
+  get uploadManager(): UploadManager | null {
+    return this._uploadManager;
   }
 
   /**

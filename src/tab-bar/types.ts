@@ -89,6 +89,8 @@ export interface ProfileSpawnOptions {
   env_vars?: Record<string, string>;
   /** Working directory */
   working_directory?: string;
+  /** SSH connection name (non-empty means SSH tab, enables SFTP drop) */
+  sshConnectionName?: string;
 }
 
 /**

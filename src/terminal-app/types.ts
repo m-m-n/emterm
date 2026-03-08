@@ -17,6 +17,8 @@ export interface TerminalAppOptions {
     env_vars?: Record<string, string>;
     working_directory?: string;
   };
+  /** SSH connection name (non-empty means SSH tab) */
+  sshConnectionName?: string;
 }
 
 /**

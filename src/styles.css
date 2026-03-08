@@ -16,6 +16,9 @@
 /* Outline Panel Styles */
 @import "./markdown/outline.css";
 
+/* SFTP Upload Styles */
+@import "./sftp/sftp.css";
+
 * {
   margin: 0;
   padding: 0;

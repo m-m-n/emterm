@@ -800,6 +800,45 @@ SSH connections can be managed within eMterm and associated with terminal profil
 - SSH connections associated with profiles via the profile editor SSH tab
 - SSH sessions launch as PTY sessions using the configured `ssh` command
 
+#### SFTP File Upload
+
+Files can be uploaded to the remote host by dragging and dropping them onto an SSH-connected terminal tab.
+
+**Key Functionality:**
+- Drag & drop files onto an SSH tab to upload via the system `sftp` command
+- Upload confirmation dialog with editable remote destination path
+- Duplicate file detection with overwrite confirmation
+- Progress display in the terminal area (top-right corner)
+- Upload cancellation support
+- Non-SSH tabs: dropped files paste their local paths into the terminal
+
+**Remote Destination Default:**
+- The upload dialog pre-fills the remote current working directory if available
+- Remote CWD is detected via OSC 7 (`\e]7;file://hostname/path\a`) emitted by the remote shell
+- If OSC 7 is not configured on the remote host, the destination defaults to the user's home directory
+
+**Configuring OSC 7 on the Remote Host:**
+
+To have the upload dialog default to the current working directory, configure the remote shell to emit OSC 7:
+
+For **zsh** (`~/.zshrc`):
+```zsh
+autoload -Uz add-zsh-hook
+_emterm_osc7() {
+  printf '\e]7;file://%s%s\a' "${HOST}" "${PWD}"
+}
+add-zsh-hook chpwd _emterm_osc7
+_emterm_osc7
+```
+
+For **bash** (`~/.bashrc`):
+```bash
+_emterm_osc7() {
+  printf '\e]7;file://%s%s\a' "${HOSTNAME}" "${PWD}"
+}
+PROMPT_COMMAND="_emterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+```
+
 ---
 
 ### Category 8: Performance and Architecture

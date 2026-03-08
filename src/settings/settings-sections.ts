@@ -1165,6 +1165,26 @@ export function renderSshSection(
     unavailable.textContent = t("settings.ssh.configHostsUnavailable");
     panel.appendChild(unavailable);
   }
+
+  // -- SFTP Settings --
+  renderSubsectionHeader(panel, "SFTP");
+
+  renderNumberInput(
+    panel,
+    {
+      key: "sftp-max-concurrent-uploads",
+      label: t("sftp.settings.maxConcurrentUploads"),
+      value: settings.sftp_max_concurrent_uploads,
+      min: 1,
+      max: 16,
+      step: 1,
+      unit: "",
+      hint: t("sftp.settings.maxConcurrentUploadsHint"),
+      onInput: () => {},
+      onSave: (v) => ctx.saveSetting("sftp_max_concurrent_uploads", v),
+    },
+    ctx.addContentListener,
+  );
 }
 
 function createSshActionButton(
