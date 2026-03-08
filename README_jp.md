@@ -127,7 +127,22 @@ cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features
 make win-build
 ```
 
-内部で `bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc` を実行します。事前に `cargo-xwin` のインストールが必要です（`cargo install cargo-xwin`）。
+内部で `bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc` を実行します。
+
+**前提条件:**
+
+```bash
+# cargo-xwinのインストール
+cargo install cargo-xwin
+
+# システム依存パッケージのインストール (Ubuntu/Debian)
+sudo apt install clang lld llvm nsis librsvg2-bin
+```
+
+- `clang`, `lld` — C/C++クロスコンパイラおよびリンカー（`clang-cl`, `lld-link`）
+- `llvm` — リソースコンパイラ（`llvm-rc`）
+- `nsis` — NSISインストーラ生成（`makensis`）
+- `librsvg2-bin` — SVGからPNGへのアイコン変換（`rsvg-convert`）
 
 ## CLIコマンド
 
