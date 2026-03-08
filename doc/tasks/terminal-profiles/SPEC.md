@@ -28,9 +28,9 @@ As a user, I want to create named shell profiles with different shell paths, arg
 As a user, I want to open new tabs using a specific profile, so that each tab starts with the correct shell environment.
 
 **Acceptance Criteria:**
-- [ ] + button opens default profile directly when default is set
-- [ ] + button shows selector modal when no default is set (but profiles exist)
 - [ ] + button opens tab with global settings when no profiles exist
+- [ ] + button shows selection dialog (MD3 select with "Global Settings" + profiles) when profiles exist
+- [ ] + button dialog pre-selects default profile if set, otherwise "Global Settings"
 - [ ] Ctrl+Shift+T always opens default profile (or global settings if none)
 - [ ] New keybind opens profile selector modal
 - [ ] Settings page launch button opens tab with that profile
@@ -169,10 +169,10 @@ profiles: Profile[];
 ```
 if profiles.length === 0:
     createTab()  // current behavior, global settings
-else if profiles.some(p => p.is_default):
-    createTab(defaultProfile)
 else:
-    showProfileSelectorModal()
+    showSelectionDialog()  // MD3 select with "Global Settings" + profiles
+    // Pre-selects default profile if set, otherwise "Global Settings"
+    // User confirms with "Open" button
 ```
 
 **Ctrl+Shift+T behavior:**
@@ -269,7 +269,7 @@ src/profile/types.ts                # Profile-specific types (if needed)
 
 ### Edge Cases
 - [ ] Zero profiles: all creation paths use global settings
-- [ ] Single profile marked as default: + button skips selector
+- [ ] Single profile marked as default: + button dialog pre-selects it
 - [ ] All profiles deleted while selector is open: modal closes gracefully
 - [ ] Profile with empty shell_path: uses system default shell
 - [ ] Profile with non-existent shell_path: PTY spawn error handling

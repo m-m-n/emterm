@@ -13,7 +13,10 @@ export interface ContextMenuItem {
 }
 
 export interface ContextMenuOptions {
-  event: MouseEvent;
+  /** Mouse event for cursor-positioned menus */
+  event?: MouseEvent;
+  /** Anchor element for dropdown-positioned menus (shows below the element) */
+  anchor?: HTMLElement;
   items: ContextMenuItem[];
   onClose?: () => void;
 }
@@ -31,7 +34,7 @@ export function showContextMenu(options: ContextMenuOptions): () => void {
     activeCleanup();
   }
 
-  const { event, items, onClose } = options;
+  const { event, anchor, items, onClose } = options;
 
   const menu = document.createElement("div");
   menu.className = "context-menu";
@@ -78,18 +81,39 @@ export function showContextMenu(options: ContextMenuOptions): () => void {
   document.body.appendChild(menu);
 
   // Position with overflow handling
-  const rect = menu.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
-  let left = event.clientX + 4;
-  let top = event.clientY + 4;
+  let left: number;
+  let top: number;
 
-  if (left + rect.width > vw) {
-    left = event.clientX - rect.width - 4;
-  }
-  if (top + rect.height > vh) {
-    top = event.clientY - rect.height - 4;
+  if (anchor) {
+    // Anchor-based positioning: show below the anchor element
+    const anchorRect = anchor.getBoundingClientRect();
+    left = anchorRect.left;
+    top = anchorRect.bottom + 4;
+
+    if (left + menuRect.width > vw) {
+      left = anchorRect.right - menuRect.width;
+    }
+    if (top + menuRect.height > vh) {
+      top = anchorRect.top - menuRect.height - 4;
+    }
+  } else if (event) {
+    // Cursor-based positioning
+    left = event.clientX + 4;
+    top = event.clientY + 4;
+
+    if (left + menuRect.width > vw) {
+      left = event.clientX - menuRect.width - 4;
+    }
+    if (top + menuRect.height > vh) {
+      top = event.clientY - menuRect.height - 4;
+    }
+  } else {
+    left = 0;
+    top = 0;
   }
 
   left = Math.max(0, left);

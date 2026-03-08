@@ -16,6 +16,7 @@ import {
 import { applyTerminalColorScheme } from "./settings-applier";
 import type { AddListenerFn } from "./settings-components";
 import { t } from "../i18n/index.ts";
+import { createMd3Select } from "../components/md3-select";
 
 // ============================================================
 // Types
@@ -387,21 +388,21 @@ export function renderColorSchemeEditor(
   controlDiv.className = "settings-control color-scheme-editor";
   container.appendChild(controlDiv);
 
-  // Select box
-  const select = document.createElement("select");
-  select.id = "settings-terminal-color-scheme";
-  select.className = "settings-select";
-  const options = buildSelectOptions(settings.custom_color_schemes);
-  for (const opt of options) {
-    const optEl = document.createElement("option");
-    optEl.value = opt.value;
-    optEl.textContent = opt.label;
-    if (opt.value === currentScheme) {
-      optEl.selected = true;
-    }
-    select.appendChild(optEl);
-  }
-  controlDiv.appendChild(select);
+  // Select box (MD3 custom dropdown)
+  const selectOptions = buildSelectOptions(settings.custom_color_schemes);
+  const md3Select = createMd3Select({
+    id: "settings-terminal-color-scheme",
+    options: selectOptions,
+    value: currentScheme,
+    onChange: () => handleSelectChange(),
+  });
+  controlDiv.appendChild(md3Select.element);
+
+  // Proxy object for compatibility with existing code
+  const select = {
+    get value() { return md3Select.getValue(); },
+    set value(v: string) { md3Select.setValue(v); },
+  };
 
   // Action buttons container
   const actionsDiv = document.createElement("div");
@@ -719,14 +720,8 @@ export function renderColorSchemeEditor(
   };
 
   const refreshSelectOptions = () => {
-    select.innerHTML = "";
     const options = buildSelectOptions(settings.custom_color_schemes);
-    for (const opt of options) {
-      const optEl = document.createElement("option");
-      optEl.value = opt.value;
-      optEl.textContent = opt.label;
-      select.appendChild(optEl);
-    }
+    md3Select.updateOptions(options);
   };
 
   const debouncedSave = () => {
@@ -738,9 +733,6 @@ export function renderColorSchemeEditor(
       ctx.saveSetting("terminal_color_scheme", settings.terminal_color_scheme);
     }, 300);
   };
-
-  // Wire up select change (use addContentListener for proper cleanup)
-  ctx.addContentListener(select, "change", handleSelectChange);
 
   // Initial render
   renderActions();

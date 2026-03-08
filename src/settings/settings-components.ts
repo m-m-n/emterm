@@ -5,6 +5,8 @@
  * Each renderer creates DOM elements and attaches event listeners.
  */
 
+import { createMd3Select } from "../components/md3-select";
+
 // ============================================================
 // Option Types
 // ============================================================
@@ -223,7 +225,7 @@ export function renderTextInput(
 export function renderSelect(
   panel: HTMLElement,
   opts: SelectOptions,
-  addListener: AddListenerFn,
+  _addListener: AddListenerFn,
 ): void {
   const row = document.createElement("div");
   row.className = "settings-row";
@@ -242,28 +244,16 @@ export function renderSelect(
     row.appendChild(desc);
   }
 
-  const select = document.createElement("select");
-  select.id = `settings-${opts.key}`;
-  select.className = "settings-select";
-  if (opts.description) {
-    select.setAttribute("aria-describedby", `settings-${opts.key}-desc`);
-  }
-
-  for (const opt of opts.options) {
-    const option = document.createElement("option");
-    option.value = opt.value;
-    option.textContent = opt.label;
-    if (opt.value === opts.value) option.selected = true;
-    select.appendChild(option);
-  }
-  row.appendChild(select);
+  const select = createMd3Select({
+    id: `settings-${opts.key}`,
+    options: opts.options,
+    value: opts.value,
+    ariaDescribedBy: opts.description ? `settings-${opts.key}-desc` : undefined,
+    onChange: (value) => opts.onSave(value),
+  });
+  row.appendChild(select.element);
 
   panel.appendChild(row);
-
-  // Save on change
-  addListener(select, "change", () => {
-    opts.onSave(select.value);
-  });
 }
 
 export function renderToggle(

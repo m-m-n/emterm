@@ -12,6 +12,7 @@ import { SettingsService } from "../settings/settings-service";
 import { showProfileSelector } from "../profile/profile-selector";
 import { parseEnvVars } from "../profile/types";
 import { showTabContextMenu, showTabBarContextMenu } from "../context-menu";
+import { createMd3Select } from "../components/md3-select";
 
 /**
  * Options for creating TabBarUI
@@ -314,29 +315,103 @@ export class TabBarUI {
 
   /**
    * Handles new tab button click.
-   * - No profiles: create tab with global settings (current behavior)
-   * - Profiles with a default: create tab with default profile
-   * - Profiles without a default: show profile selector modal
+   * - No profiles: create tab with global settings (same as Ctrl+Shift+T)
+   * - Profiles exist: show dialog with MD3 select to choose profile
    */
   private handleNewTabClick(): void {
     const settings = SettingsService.getCached();
     const profiles = settings?.profiles;
 
     if (!profiles || profiles.length === 0) {
-      // No profiles - use global settings
+      // No profiles - use global settings directly
       this.tabManager.createTab();
       return;
     }
 
-    const defaultProfile = profiles.find((p) => p.is_default);
-    if (defaultProfile) {
-      // Default profile exists - use it directly
-      this.createTabWithProfile(defaultProfile);
-      return;
-    }
+    // Build options: "Global Settings" + each profile
+    const options = [
+      { value: "__global__", label: t("tabBar.globalSettings") },
+      ...profiles.map((p) => ({
+        value: p.name,
+        label: p.name + (p.is_default ? ` (${t("settings.profiles.defaultBadge")})` : ""),
+      })),
+    ];
 
-    // No default - show profile selector
-    this.showProfileSelector(profiles);
+    // Find default selection
+    const defaultProfile = profiles.find((p) => p.is_default);
+    const initialValue = defaultProfile ? defaultProfile.name : "__global__";
+
+    // Create modal dialog
+    const overlay = document.createElement("div");
+    overlay.className = "profile-selector-overlay";
+
+    const dialog = document.createElement("div");
+    dialog.className = "profile-selector-dialog";
+
+    const title = document.createElement("h2");
+    title.className = "profile-selector-title";
+    title.textContent = t("tabBar.newTab");
+    dialog.appendChild(title);
+
+    const md3Select = createMd3Select({
+      options,
+      value: initialValue,
+      onChange: () => {},
+    });
+    md3Select.element.style.maxWidth = "none";
+    dialog.appendChild(md3Select.element);
+
+    // Action buttons
+    const actions = document.createElement("div");
+    actions.className = "profile-selector-actions";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "profile-editor-btn profile-editor-btn-cancel";
+    // Cleanup function to remove overlay and event listener
+    const closeDialog = () => {
+      overlay.remove();
+      document.removeEventListener("keydown", handleKeydown, { capture: true });
+    };
+
+    cancelBtn.textContent = t("settings.profiles.cancel");
+    cancelBtn.addEventListener("click", () => closeDialog());
+
+    const openBtn = document.createElement("button");
+    openBtn.className = "profile-editor-btn profile-editor-btn-save";
+    openBtn.textContent = t("tabBar.open");
+    openBtn.addEventListener("click", () => {
+      const selected = md3Select.getValue();
+      closeDialog();
+      if (selected === "__global__") {
+        this.tabManager.createTab();
+      } else {
+        const profile = profiles.find((p) => p.name === selected);
+        if (profile) this.createTabWithProfile(profile);
+      }
+    });
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(openBtn);
+    dialog.appendChild(actions);
+
+    overlay.appendChild(dialog);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeDialog();
+    });
+
+    document.body.appendChild(overlay);
+
+    // Focus the open button
+    openBtn.focus();
+
+    // Escape to close
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeDialog();
+      }
+    };
+    document.addEventListener("keydown", handleKeydown, { capture: true });
   }
 
   /**

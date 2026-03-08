@@ -4,6 +4,9 @@
 /* Context Menu Styles */
 @import "./context-menu/context-menu.css";
 
+/* MD3 Custom Select */
+@import "./components/md3-select.css";
+
 /* Settings Panel Styles */
 @import "./styles/settings-panel.css";
 
