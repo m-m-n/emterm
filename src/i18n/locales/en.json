@@ -331,6 +331,8 @@
     "terminalTabs": "Terminal tabs",
     "newTab": "New Tab",
     "newTabShortcut": "New Tab (Ctrl+T)",
+    "globalSettings": "Global Settings",
+    "open": "Open",
     "settings": "Settings",
     "openSettings": "Open settings",
     "createNewTab": "Create new tab"

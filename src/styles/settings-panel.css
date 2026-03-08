@@ -1666,3 +1666,10 @@
 .profile-selector-item.active .profile-selector-item-shell {
   color: color-mix(in srgb, var(--md-sys-color-on-secondary-container) 70%, transparent);
 }
+
+.profile-selector-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}

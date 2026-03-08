@@ -331,6 +331,8 @@
     "terminalTabs": "\u30bf\u30fc\u30df\u30ca\u30eb\u30bf\u30d6",
     "newTab": "\u65b0\u3057\u3044\u30bf\u30d6",
     "newTabShortcut": "\u65b0\u3057\u3044\u30bf\u30d6 (Ctrl+T)",
+    "globalSettings": "グローバル設定",
+    "open": "開く",
     "settings": "\u8a2d\u5b9a",
     "openSettings": "\u8a2d\u5b9a\u3092\u958b\u304f",
     "createNewTab": "\u65b0\u3057\u3044\u30bf\u30d6\u3092\u4f5c\u6210"

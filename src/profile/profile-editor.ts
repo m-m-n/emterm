@@ -9,6 +9,7 @@ import type { AppSettings, Profile } from "../settings/types";
 import { t } from "../i18n/index.ts";
 import { createEmptyProfile } from "./types";
 import { SettingsService } from "../settings/settings-service";
+import { createMd3Select, type Md3SelectOption } from "../components/md3-select";
 
 export interface ProfileEditorOptions {
 	profile?: Profile;
@@ -427,10 +428,20 @@ interface SelectFieldOptions {
 	options: Array<{ value: string; label: string }>;
 }
 
+interface Md3SelectFieldProxy {
+	get value(): string;
+	set value(v: string);
+	focus(): void;
+	appendChild(opt: { value: string; textContent: string | null; selected?: boolean }): void;
+	/** Access to underlying md3 select for option updates */
+	_md3: ReturnType<typeof createMd3Select>;
+	_options: Md3SelectOption[];
+}
+
 function createSelectField(
 	container: HTMLElement,
 	opts: SelectFieldOptions,
-): HTMLSelectElement {
+): Md3SelectFieldProxy {
 	const row = document.createElement("div");
 	row.className = "profile-editor-field";
 
@@ -440,17 +451,18 @@ function createSelectField(
 	label.textContent = opts.label;
 	row.appendChild(label);
 
-	const select = document.createElement("select");
-	select.id = opts.id;
-	select.className = "profile-editor-input";
-	for (const opt of opts.options) {
-		const option = document.createElement("option");
-		option.value = opt.value;
-		option.textContent = opt.label;
-		if (opt.value === opts.value) option.selected = true;
-		select.appendChild(option);
-	}
-	row.appendChild(select);
+	const currentOptions: Md3SelectOption[] = opts.options.map(o => ({
+		value: o.value,
+		label: o.label,
+	}));
+
+	const md3 = createMd3Select({
+		id: opts.id,
+		options: currentOptions,
+		value: opts.value,
+		onChange: () => {},
+	});
+	row.appendChild(md3.element);
 
 	if (opts.hint) {
 		const hint = document.createElement("span");
@@ -460,5 +472,20 @@ function createSelectField(
 	}
 
 	container.appendChild(row);
-	return select;
+
+	return {
+		get value() { return md3.getValue(); },
+		set value(v: string) { md3.setValue(v); },
+		focus() {
+			const trigger = md3.element.querySelector(".md3-select-trigger") as HTMLElement | null;
+			trigger?.focus();
+		},
+		appendChild(opt) {
+			currentOptions.push({ value: opt.value, label: opt.textContent ?? "" });
+			const newValue = opt.selected ? opt.value : md3.getValue();
+			md3.updateOptions(currentOptions, newValue);
+		},
+		_md3: md3,
+		_options: currentOptions,
+	};
 }
