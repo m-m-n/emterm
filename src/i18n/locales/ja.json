@@ -10,7 +10,8 @@
       "notification": "通知",
       "markdownViewer": "Markdownビューアー",
       "profiles": "プロファイル",
-      "ssh": "SSH接続"
+      "ssh": "SSH接続",
+      "log": "ログ"
     },
     "nav": {
       "collapse": "ナビゲーションを閉じる",
@@ -325,6 +326,19 @@
       "dragHandle": "ドラッグで並び替え",
       "sshNotConfigured": "SSHコマンドが設定されていません。SSH接続を起動できません。",
       "connectionNotFound": "SSH接続「{name}」が見つかりません"
+    },
+    "log": {
+      "title": "ログ",
+      "logFile": "ログファイル",
+      "logFileDesc": "リリースビルドではWARN・ERRORレベルのログがファイルに保存されます",
+      "logFilePath": "ログファイルパス",
+      "noLogFile": "ログファイルは利用できません（デバッグビルド）",
+      "copy": "ログをコピー",
+      "clear": "ログをクリア",
+      "copied": "クリップボードにコピーしました",
+      "cleared": "ログをクリアしました",
+      "empty": "ログエントリーなし",
+      "reload": "再読み込み"
     }
   },
   "tabBar": {

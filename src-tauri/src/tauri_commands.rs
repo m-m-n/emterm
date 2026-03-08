@@ -191,6 +191,27 @@ pub fn console_debug(message: String) {
     println!("{}", logging::format_frontend_log("debug", &message));
 }
 
+/// Read the contents of the log file.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn get_log_contents() -> Result<String, String> {
+    logging::read_log_file()
+}
+
+/// Clear the log file.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn clear_log() -> Result<(), String> {
+    logging::clear_log_file()
+}
+
+/// Get the log file path.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn get_log_path() -> Option<String> {
+    logging::get_log_file_path()
+}
+
 /// Sets the backend locale at runtime.
 ///
 /// Called from the frontend to synchronize language settings.
