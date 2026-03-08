@@ -50,6 +50,7 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Separate UI font setting for the settings panel
   - Terminal profiles: named shell configurations with shell, args, env vars, and working directory
   - SSH connection management: auto-detect ssh command, import from ~/.ssh/config, manage connections
+  - SFTP file upload: drag and drop files onto SSH tabs to upload; non-SSH tabs paste file paths
   - Configurable cursor shape, scrollbar, opacity, line height, scrollback, shell, and more
   - All keyboard shortcuts configurable
 

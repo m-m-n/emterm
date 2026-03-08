@@ -256,12 +256,14 @@ fn validate_remote_path(path: &str) -> Result<(), String> {
     if path.contains('\0') {
         return Err("Invalid remote path: contains null bytes".to_string());
     }
-    // Reject shell metacharacters that could be used for command injection via sftp stdin
+    // Reject characters dangerous in sftp batch mode:
+    // - Shell metacharacters that could be used for command injection
+    // - Double quotes and newlines that could escape sftp command quoting
     if path
         .chars()
-        .any(|c| matches!(c, ';' | '|' | '&' | '`' | '$' | '(' | ')'))
+        .any(|c| matches!(c, ';' | '|' | '&' | '`' | '$' | '(' | ')' | '"' | '\\' | '\n' | '\r'))
     {
-        return Err("Invalid remote path: contains shell metacharacters".to_string());
+        return Err("Invalid remote path: contains unsafe characters".to_string());
     }
     Ok(())
 }
@@ -270,6 +272,13 @@ fn validate_remote_path(path: &str) -> Result<(), String> {
 fn validate_local_path(path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("Local path is empty".to_string());
+    }
+    if path.contains('\0') {
+        return Err("Invalid local path: contains null bytes".to_string());
+    }
+    // Reject characters that could escape sftp batch command quoting
+    if path.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r')) {
+        return Err("Invalid local path: contains unsafe characters".to_string());
     }
     if !std::path::Path::new(path).exists() {
         return Err(format!("Local path does not exist: {}", path));

@@ -169,6 +169,18 @@ impl SftpProcessManager {
     }
 }
 
+impl Drop for SftpProcessManager {
+    fn drop(&mut self) {
+        let mut processes = self.processes.lock().unwrap_or_else(|e| e.into_inner());
+        for (_, mut child) in processes.drain() {
+            if let Err(e) = child.kill() {
+                log::warn!("Failed to kill sftp process on drop: {}", e);
+            }
+            let _ = child.wait();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
