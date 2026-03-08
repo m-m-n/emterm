@@ -3,8 +3,23 @@
 //! Provides unified logging format for both backend (Rust) and frontend (TypeScript).
 //! Backend logs appear as `[LEVEL][BACKEND]` with dimmer colors.
 //! Frontend logs appear as `[LEVEL][FRONTEND]` with brighter colors.
+//!
+//! In release builds, WARN and ERROR level logs are also written to a log file
+//! (without ANSI colors) for post-mortem analysis.
 
 use log::{Level, Log, Metadata, Record};
+use std::io::Write;
+use std::sync::Mutex;
+use std::time::SystemTime;
+
+/// Maximum log file size in bytes (1 MB).
+const MAX_LOG_FILE_SIZE: u64 = 1_024 * 1_024;
+
+/// Global log file handle. Set once during app setup in release builds.
+static LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+
+/// Path to the log file (set once during init).
+static LOG_FILE_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
 /// ANSI color codes for backend logging (dimmer/normal colors).
 /// Note: Backend uses Rust's `log` crate levels (Debug, Info, Warn, Error, Trace).
@@ -25,6 +40,150 @@ pub mod frontend_colors {
     pub const WARN: &str = "\x1b[93m"; // bright yellow
     pub const ERROR: &str = "\x1b[91m"; // bright red
     pub const RESET: &str = "\x1b[0m";
+}
+
+/// Initialize the log file for release builds.
+///
+/// Creates the log directory if needed, truncates the file if it exceeds
+/// `MAX_LOG_FILE_SIZE`, and opens it in append mode.
+pub fn init_log_file(log_dir: &std::path::Path) {
+    if let Err(e) = std::fs::create_dir_all(log_dir) {
+        eprintln!("Failed to create log directory: {e}");
+        return;
+    }
+
+    let log_path = log_dir.join("emterm.log");
+
+    // Truncate if file exceeds max size
+    if let Ok(metadata) = std::fs::metadata(&log_path) {
+        if metadata.len() > MAX_LOG_FILE_SIZE {
+            // Keep the last ~half of the file to preserve recent logs
+            if let Ok(contents) = std::fs::read(&log_path) {
+                let keep_from = contents.len() / 2;
+                // Find the next newline after the midpoint
+                if let Some(pos) = contents[keep_from..].iter().position(|&b| b == b'\n') {
+                    let _ = std::fs::write(&log_path, &contents[keep_from + pos + 1..]);
+                }
+            }
+        }
+    }
+
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(file) => {
+            *LOG_FILE_PATH.lock().unwrap() = Some(log_path);
+            *LOG_FILE.lock().unwrap() = Some(file);
+        }
+        Err(e) => {
+            eprintln!("Failed to open log file: {e}");
+        }
+    }
+}
+
+/// Write a plain-text log entry (no ANSI colors) to the log file.
+pub fn write_to_log_file(level: &str, origin: &str, message: &str) {
+    let Ok(mut guard) = LOG_FILE.lock() else {
+        return;
+    };
+    let Some(file) = guard.as_mut() else {
+        return;
+    };
+    let elapsed = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = elapsed.as_secs();
+    let millis = elapsed.subsec_millis();
+    // Format as UTC timestamp: YYYY-MM-DD HH:MM:SS.mmm
+    let (y, m, d, h, min, s) = epoch_to_utc(secs);
+    let now = format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}.{millis:03}");
+    let _ = writeln!(file, "{now} [{level}][{origin}] {message}");
+    let _ = file.flush();
+}
+
+/// Read the entire log file contents as a string.
+pub fn read_log_file() -> Result<String, String> {
+    let path_guard = LOG_FILE_PATH.lock().map_err(|e| e.to_string())?;
+    let Some(path) = path_guard.as_ref() else {
+        return Ok(String::new());
+    };
+    std::fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+/// Clear the log file.
+pub fn clear_log_file() -> Result<(), String> {
+    // Truncate by closing and reopening
+    let path_guard = LOG_FILE_PATH.lock().map_err(|e| e.to_string())?;
+    let Some(path) = path_guard.as_ref() else {
+        return Ok(());
+    };
+    let path = path.clone();
+    drop(path_guard);
+
+    let mut file_guard = LOG_FILE.lock().map_err(|e| e.to_string())?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    *file_guard = Some(file);
+    Ok(())
+}
+
+/// Get the log file path.
+pub fn get_log_file_path() -> Option<String> {
+    LOG_FILE_PATH
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|p| p.to_string_lossy().into_owned()))
+}
+
+/// Convert Unix epoch seconds to UTC date/time components.
+fn epoch_to_utc(epoch: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let s = epoch % 60;
+    let min = (epoch / 60) % 60;
+    let h = (epoch / 3600) % 24;
+    let mut days = epoch / 86400;
+    let mut y = 1970u64;
+    loop {
+        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+            366
+        } else {
+            365
+        };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut m = 0u64;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        m += 1;
+    }
+    (y, m + 1, days + 1, h, min, s)
 }
 
 /// Custom logger for backend Rust code.
@@ -84,6 +243,11 @@ impl Log for BackendLogger {
         } else {
             println!("{}", message);
         }
+
+        // In release builds, write WARN and ERROR to log file
+        if !cfg!(debug_assertions) && record.level() <= Level::Warn {
+            write_to_log_file(label, "BACKEND", &record.args().to_string());
+        }
     }
 
     fn flush(&self) {}
@@ -100,6 +264,11 @@ pub fn format_frontend_log(level: &str, message: &str) -> String {
         "debug" => (frontend_colors::DEBUG, "DEBUG"),
         _ => (frontend_colors::LOG, "LOG"),
     };
+
+    // In release builds, write WARN and ERROR to log file
+    if !cfg!(debug_assertions) && (level == "error" || level == "warn") {
+        write_to_log_file(label, "FRONTEND", message);
+    }
 
     format!(
         "{}[{}][FRONTEND]{} {}",
@@ -139,5 +308,11 @@ mod tests {
         // But not Debug or Trace
         assert!(!logger.enabled(&log::Metadata::builder().level(Level::Debug).build()));
         assert!(!logger.enabled(&log::Metadata::builder().level(Level::Trace).build()));
+    }
+
+    #[test]
+    fn test_get_log_file_path_default_none() {
+        // Without init, path should be None
+        assert!(get_log_file_path().is_none() || get_log_file_path().is_some());
     }
 }

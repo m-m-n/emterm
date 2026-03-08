@@ -1673,3 +1673,71 @@
   gap: 8px;
   margin-top: 24px;
 }
+
+/* ============================================================
+   Log Section
+   ============================================================ */
+
+.settings-log-path {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--md-sys-color-on-surface) 65%, transparent);
+  background: color-mix(in srgb, var(--md-sys-color-surface-variant) 50%, transparent);
+  padding: 4px 8px;
+  border-radius: 4px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.settings-log-content {
+  max-height: 400px;
+  overflow: auto;
+  font-family: var(--terminal-font-family, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--md-sys-color-surface-variant) 40%, transparent);
+  color: var(--md-sys-color-on-surface);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
+
+.settings-log-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 20px;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  transition: background-color 200ms;
+}
+
+.settings-btn:hover {
+  background: color-mix(in srgb, var(--md-sys-color-secondary-container) 85%, var(--md-sys-color-on-secondary-container));
+}
+
+.settings-btn-danger {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.settings-btn-danger:hover {
+  background: color-mix(in srgb, var(--md-sys-color-error-container) 85%, var(--md-sys-color-on-error-container));
+}
+
+.settings-log-status {
+  font-size: 12px;
+  color: var(--md-sys-color-primary);
+  margin-left: 4px;
+}

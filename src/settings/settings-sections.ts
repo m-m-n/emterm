@@ -1723,3 +1723,118 @@ function setupDragReorder(list: HTMLElement, ctx: SectionContext): void {
     ctx.reRender();
   }) as EventListener);
 }
+
+// ============================================================
+// Log Section
+// ============================================================
+
+export function renderLogSection(
+  panel: HTMLElement,
+  ctx: SectionContext,
+): void {
+  const header = document.createElement("h2");
+  header.className = "settings-section-header";
+  header.textContent = t("settings.log.title");
+  panel.appendChild(header);
+
+  renderSubsectionHeader(panel, t("settings.log.logFile"));
+
+  // Description
+  const desc = document.createElement("p");
+  desc.className = "settings-description";
+  desc.textContent = t("settings.log.logFileDesc");
+  panel.appendChild(desc);
+
+  // Log file path display
+  const pathRow = document.createElement("div");
+  pathRow.className = "settings-row";
+  const pathLabel = document.createElement("span");
+  pathLabel.className = "settings-label";
+  pathLabel.textContent = t("settings.log.logFilePath");
+  pathRow.appendChild(pathLabel);
+  const pathValue = document.createElement("code");
+  pathValue.className = "settings-log-path";
+  pathValue.textContent = "...";
+  pathRow.appendChild(pathValue);
+  panel.appendChild(pathRow);
+
+  // Log content area
+  const logArea = document.createElement("pre");
+  logArea.className = "settings-log-content";
+  logArea.textContent = "...";
+  panel.appendChild(logArea);
+
+  // Button row
+  const btnRow = document.createElement("div");
+  btnRow.className = "settings-log-actions";
+
+  const reloadBtn = document.createElement("button");
+  reloadBtn.className = "settings-btn";
+  reloadBtn.textContent = t("settings.log.reload");
+  btnRow.appendChild(reloadBtn);
+
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "settings-btn";
+  copyBtn.textContent = t("settings.log.copy");
+  btnRow.appendChild(copyBtn);
+
+  const clearBtn = document.createElement("button");
+  clearBtn.className = "settings-btn settings-btn-danger";
+  clearBtn.textContent = t("settings.log.clear");
+  btnRow.appendChild(clearBtn);
+
+  const statusSpan = document.createElement("span");
+  statusSpan.className = "settings-log-status";
+  btnRow.appendChild(statusSpan);
+
+  panel.appendChild(btnRow);
+
+  // Load log data
+  const loadLog = async () => {
+    try {
+      const path = await invoke<string | null>("get_log_path");
+      pathValue.textContent = path || t("settings.log.noLogFile");
+
+      const contents = await invoke<string>("get_log_contents");
+      if (contents.trim()) {
+        logArea.textContent = contents;
+        logArea.scrollTop = logArea.scrollHeight;
+      } else {
+        logArea.textContent = t("settings.log.empty");
+      }
+    } catch (e) {
+      logArea.textContent = String(e);
+    }
+  };
+
+  loadLog();
+
+  // Reload button
+  ctx.addContentListener(reloadBtn, "click", () => {
+    loadLog();
+  });
+
+  // Copy button
+  ctx.addContentListener(copyBtn, "click", async () => {
+    try {
+      const contents = await invoke<string>("get_log_contents");
+      await navigator.clipboard.writeText(contents);
+      statusSpan.textContent = t("settings.log.copied");
+      setTimeout(() => { statusSpan.textContent = ""; }, 2000);
+    } catch (e) {
+      statusSpan.textContent = String(e);
+    }
+  });
+
+  // Clear button
+  ctx.addContentListener(clearBtn, "click", async () => {
+    try {
+      await invoke("clear_log");
+      logArea.textContent = t("settings.log.empty");
+      statusSpan.textContent = t("settings.log.cleared");
+      setTimeout(() => { statusSpan.textContent = ""; }, 2000);
+    } catch (e) {
+      statusSpan.textContent = String(e);
+    }
+  });
+}

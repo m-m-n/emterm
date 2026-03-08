@@ -90,6 +90,9 @@ pub fn run() {
             commands::sftp::sftp_upload,
             commands::sftp::sftp_cancel_upload,
             tauri_commands::set_language,
+            tauri_commands::get_log_contents,
+            tauri_commands::clear_log,
+            tauri_commands::get_log_path,
         ])
         .setup(|app| {
             // Initialize custom logger for backend
@@ -101,22 +104,30 @@ pub fn run() {
             };
             logging::BackendLogger::init(level);
 
-            // On Windows, set ICON_BIG from the embedded ICO resource to fix
-            // taskbar icon transparency. tao's CreateIcon() has a bug where the
-            // AND mask format is incorrect, causing alpha transparency to be lost.
-            // Loading directly from the resource via LoadImageW bypasses this.
-            #[cfg(windows)]
+            // Initialize log file for release builds
             {
                 use tauri::Manager;
+
+                if !cfg!(debug_assertions) {
+                    if let Ok(log_dir) = app.path().app_log_dir() {
+                        logging::init_log_file(&log_dir);
+                    }
+                }
+
+                // On Windows, set ICON_BIG from the embedded ICO resource to fix
+                // taskbar icon transparency. tao's CreateIcon() has a bug where the
+                // AND mask format is incorrect, causing alpha transparency to be lost.
+                // Loading directly from the resource via LoadImageW bypasses this.
+                #[cfg(windows)]
                 if let Some(window) = app.get_webview_window("main") {
                     if let Err(e) = set_taskbar_icon(&window) {
                         log::warn!("Failed to set taskbar icon: {e}");
                     }
                 }
-            }
 
-            #[cfg(not(windows))]
-            let _ = app;
+                #[cfg(not(windows))]
+                let _ = app;
+            }
 
             Ok(())
         })

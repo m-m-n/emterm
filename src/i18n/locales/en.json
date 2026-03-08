@@ -10,7 +10,8 @@
       "notification": "Notifications",
       "markdownViewer": "Markdown Viewer",
       "profiles": "Profiles",
-      "ssh": "SSH Connections"
+      "ssh": "SSH Connections",
+      "log": "Log"
     },
     "nav": {
       "collapse": "Collapse navigation",
@@ -325,6 +326,19 @@
       "dragHandle": "Drag to reorder",
       "sshNotConfigured": "SSH command not configured. Cannot launch SSH connection.",
       "connectionNotFound": "SSH connection \"{name}\" not found"
+    },
+    "log": {
+      "title": "Log",
+      "logFile": "Log File",
+      "logFileDesc": "WARN and ERROR level logs are saved to a file in release builds",
+      "logFilePath": "Log File Path",
+      "noLogFile": "Log file is not available (debug build)",
+      "copy": "Copy Log",
+      "clear": "Clear Log",
+      "copied": "Copied to clipboard",
+      "cleared": "Log cleared",
+      "empty": "No log entries",
+      "reload": "Reload"
     }
   },
   "tabBar": {
