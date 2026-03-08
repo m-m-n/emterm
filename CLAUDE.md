@@ -36,6 +36,14 @@ A modern terminal emulator that combines traditional terminal reliability with r
 bun install
 ```
 
+### Icon Generation
+
+Requires `rsvg-convert` or `magick` (ImageMagick):
+```bash
+bun run icons
+```
+Generates all platform icons from `assets/eMterm.svg`. Also runs automatically via `postinstall` and `prebuild` hooks.
+
 ### Running the Project
 
 **Development:**

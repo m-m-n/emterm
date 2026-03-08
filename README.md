@@ -127,7 +127,22 @@ Cross-compile for Windows using [cargo-xwin](https://github.com/rust-cross/cargo
 make win-build
 ```
 
-This runs `bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc`. Requires `cargo-xwin` installed (`cargo install cargo-xwin`).
+This runs `bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc`.
+
+**Prerequisites:**
+
+```bash
+# Install cargo-xwin
+cargo install cargo-xwin
+
+# Install system dependencies (Ubuntu/Debian)
+sudo apt install clang lld llvm nsis librsvg2-bin
+```
+
+- `clang`, `lld` — C/C++ cross-compiler and linker (`clang-cl`, `lld-link`)
+- `llvm` — Resource compiler (`llvm-rc`)
+- `nsis` — NSIS installer generator (`makensis`)
+- `librsvg2-bin` — SVG to PNG icon conversion (`rsvg-convert`)
 
 ## CLI Commands
 
