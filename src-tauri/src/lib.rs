@@ -19,6 +19,7 @@ pub mod commands;
 pub mod encoding;
 pub mod error;
 pub mod protocols;
+pub mod sftp;
 pub mod ssh;
 pub mod validation;
 

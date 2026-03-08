@@ -1,0 +1,274 @@
+/* SFTP Upload - Drop Overlay, Dialogs, Progress */
+
+/* Drop Overlay */
+.sftp-drop-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(var(--md-sys-color-primary-rgb, 208, 188, 255), 0.15);
+  border: 2px dashed var(--md-sys-color-primary, #D0BCFF);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.sftp-drop-overlay-message {
+  padding: 16px 32px;
+  background: var(--md-sys-color-surface-container-high, #2b2930);
+  color: var(--md-sys-color-on-surface, #E6E1E5);
+  border-radius: 12px;
+  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+/* Dialog Overlay */
+.sftp-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+/* Dialog Container */
+.sftp-dialog {
+  background: var(--md-sys-color-surface-container-high, #2b2930);
+  color: var(--md-sys-color-on-surface, #E6E1E5);
+  border: 1px solid var(--md-sys-color-outline-variant, #49454f);
+  border-radius: 16px;
+  padding: 24px;
+  min-width: 400px;
+  max-width: 560px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+}
+
+.sftp-dialog-title {
+  margin: 0 0 16px 0;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 400;
+  color: var(--md-sys-color-on-surface, #E6E1E5);
+}
+
+.sftp-dialog-label {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+}
+
+/* File List */
+.sftp-dialog-file-list {
+  list-style: none;
+  margin: 0 0 16px 0;
+  padding: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--md-sys-color-surface, #1c1b1f);
+  border-radius: 8px;
+  border: 1px solid var(--md-sys-color-outline-variant, #49454f);
+}
+
+.sftp-dialog-file-item {
+  padding: 4px 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface, #E6E1E5);
+  word-break: break-all;
+}
+
+.sftp-dialog-file-conflict {
+  color: var(--md-sys-color-error, #F2B8B5);
+}
+
+/* Input */
+.sftp-dialog-input {
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface, #E6E1E5);
+  background: var(--md-sys-color-surface, #1c1b1f);
+  border: 1px solid var(--md-sys-color-outline, #938F99);
+  border-radius: 4px;
+  outline: none;
+  font-family: monospace;
+}
+
+.sftp-dialog-input:focus {
+  border-color: var(--md-sys-color-primary, #D0BCFF);
+}
+
+/* Buttons */
+.sftp-dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.sftp-dialog-btn {
+  padding: 8px 24px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+  transition: background-color 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.sftp-dialog-btn-cancel {
+  background: transparent;
+  color: var(--md-sys-color-primary, #D0BCFF);
+  border: 1px solid var(--md-sys-color-outline, #938F99);
+}
+
+.sftp-dialog-btn-cancel:hover {
+  background: var(--md-sys-color-surface-container-highest, #36343b);
+}
+
+.sftp-dialog-btn-confirm {
+  background: var(--md-sys-color-primary, #D0BCFF);
+  color: var(--md-sys-color-on-primary, #381E72);
+}
+
+.sftp-dialog-btn-confirm:hover {
+  opacity: 0.9;
+}
+
+.sftp-dialog-btn-danger {
+  background: var(--md-sys-color-error-container, #8C1D18);
+  color: var(--md-sys-color-on-error-container, #F9DEDC);
+}
+
+.sftp-dialog-btn-danger:hover {
+  opacity: 0.9;
+}
+
+/* Progress Toast */
+.sftp-progress-container {
+  position: fixed;
+  top: 48px;
+  right: 16px;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+  max-width: 320px;
+}
+
+.sftp-progress-item {
+  background: var(--md-sys-color-surface-container-high, #2b2930);
+  border: 1px solid var(--md-sys-color-outline-variant, #49454f);
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+  animation: sftp-slide-in 200ms cubic-bezier(0.05, 0.7, 0.1, 1);
+}
+
+.sftp-progress-item-done {
+  animation: sftp-fade-out 300ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+.sftp-progress-filename {
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface, #E6E1E5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sftp-progress-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.sftp-progress-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--md-sys-color-surface-container-highest, #36343b);
+  border-top-color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+  flex-shrink: 0;
+}
+
+.sftp-progress-spinner-preparing {
+  animation: sftp-spin 1.2s linear infinite;
+  border-top-color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+}
+
+.sftp-progress-spinner-uploading {
+  animation: sftp-spin 0.8s linear infinite;
+  border-top-color: var(--md-sys-color-primary, #D0BCFF);
+}
+
+.sftp-progress-status {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+}
+
+.sftp-progress-status-success {
+  color: var(--md-sys-color-primary, #D0BCFF);
+}
+
+.sftp-progress-status-error {
+  color: var(--md-sys-color-error, #F2B8B5);
+}
+
+.sftp-progress-cancel-btn {
+  background: none;
+  border: none;
+  color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+
+.sftp-progress-cancel-btn:hover {
+  color: var(--md-sys-color-error, #F2B8B5);
+  background: var(--md-sys-color-surface-container-highest, #36343b);
+}
+
+@keyframes sftp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sftp-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes sftp-fade-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}

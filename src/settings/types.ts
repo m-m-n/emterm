@@ -99,6 +99,9 @@ export interface AppSettings {
   // SSH
   ssh_command_path: string;
   ssh_connections: SshConnection[];
+
+  // SFTP
+  sftp_max_concurrent_uploads: number;
 }
 
 export interface KeybindSettings {

@@ -1,0 +1,10 @@
+tasks:
+  - - id: phase1-backend-sftp
+      title: "Backend SFTP Infrastructure"
+      status: completed
+  - - id: phase2-frontend-drag-drop
+      title: "Frontend Drag & Drop and Dialogs"
+      status: completed
+  - - id: phase3-progress-coordination
+      title: "Progress Display and Upload Coordination"
+      status: completed

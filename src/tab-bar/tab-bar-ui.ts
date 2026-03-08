@@ -401,6 +401,7 @@ export class TabBarUI {
           env_vars:
             envVars && Object.keys(envVars).length > 0 ? envVars : undefined,
           working_directory: profile.working_directory || undefined,
+          sshConnectionName: profile.ssh_connection_name,
         },
       });
     } catch (err) {

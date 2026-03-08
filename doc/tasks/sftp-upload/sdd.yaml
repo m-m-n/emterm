@@ -1,0 +1,130 @@
+schema_version: 1
+feature: sftp-upload
+scale: standard
+created: 2026-03-08
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+    frontend:
+      language: typescript
+      test_command: "bun test"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 79d5ec1861c4b8ac048ea88694a132790f0ee496
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 79d5ec1861c4b8ac048ea88694a132790f0ee496
+  - id: implement
+    status: completed
+    completed_at_commit: 79d5ec1861c4b8ac048ea88694a132790f0ee496
+  - id: check
+    status: completed
+    completed_at_commit: 79d5ec1861c4b8ac048ea88694a132790f0ee496
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+  - id: review
+    status: pending
+
+requirements:
+  FR1:
+    title: File Drop Detection
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Drag Overlay
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: SSH Tab Detection
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Upload Confirmation Dialog
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Remote CWD Detection (OSC 7)
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Duplicate File Check
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: SFTP Upload Execution
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: SFTP Argument Construction
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: Parallel Upload Control
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: Progress Display
+    status: ok
+    tasks: []
+    tests: []
+  FR11:
+    title: Non-SSH Tab File Path Paste
+    status: ok
+    tasks: []
+    tests: []
+  FR12:
+    title: Tab Close Upload Guard
+    status: ok
+    tasks: []
+    tests: []
+  FR13:
+    title: Recursive Directory Upload
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Performance
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Security
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Usability
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: Platform Compatibility
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: Logging
+    status: ok
+    tasks: []
+    tests: []

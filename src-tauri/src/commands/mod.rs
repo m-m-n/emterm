@@ -7,5 +7,7 @@ pub mod font;
 pub mod image;
 pub mod markdown;
 #[cfg(feature = "gui")]
+pub mod sftp;
+#[cfg(feature = "gui")]
 pub mod ssh;
 pub mod tmux;

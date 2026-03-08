@@ -377,5 +377,47 @@
     "closeTab": "Close",
     "newTab": "New Tab",
     "openProfile": "Open Profile"
+  },
+  "sftp": {
+    "dropOverlay": {
+      "upload": "Drop to upload via SFTP",
+      "paste": "Drop to paste file path"
+    },
+    "uploadDialog": {
+      "title": "Upload Files",
+      "fileList": "{count} file(s) to upload:",
+      "destination": "Destination path",
+      "destinationPlaceholder": "Remote directory (default: home)",
+      "confirm": "Upload",
+      "cancel": "Cancel"
+    },
+    "overwriteDialog": {
+      "title": "Files Already Exist",
+      "message": "{count} file(s) already exist on the remote host:",
+      "overwrite": "Overwrite",
+      "cancel": "Cancel"
+    },
+    "progress": {
+      "preparing": "Preparing...",
+      "uploading": "Transferring...",
+      "completed": "Transfer complete",
+      "failed": "Transfer failed",
+      "cancelled": "Transfer cancelled",
+      "cancel": "Cancel"
+    },
+    "tabClose": {
+      "title": "Active Uploads",
+      "message": "There are active uploads on this tab. Cancel uploads and close?",
+      "cancelUploads": "Cancel & Close",
+      "keepOpen": "Keep Open"
+    },
+    "settings": {
+      "maxConcurrentUploads": "Max Concurrent Uploads",
+      "maxConcurrentUploadsHint": "Maximum number of parallel SFTP uploads (1-16)"
+    },
+    "error": {
+      "sftpNotFound": "sftp command not found. Ensure openssh is installed.",
+      "connectionNotFound": "SSH connection '{name}' not found"
+    }
   }
 }

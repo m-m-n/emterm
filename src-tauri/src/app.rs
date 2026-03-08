@@ -48,6 +48,8 @@ fn set_taskbar_icon(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::er
 pub fn run() {
     use crate::logging;
     use crate::pty::PtyManager;
+    use crate::sftp::pool::ConcurrentUploadPool;
+    use crate::sftp::upload::SftpProcessManager;
     use crate::state::{ImageProcessorState, LargeImageDataStore};
     use crate::{commands, tauri_commands};
 
@@ -58,6 +60,8 @@ pub fn run() {
         .manage(PtyManager::new())
         .manage(ImageProcessorState::new())
         .manage(LargeImageDataStore::new())
+        .manage(SftpProcessManager::new())
+        .manage(ConcurrentUploadPool::new(4))
         .invoke_handler(tauri::generate_handler![
             tauri_commands::pty_spawn,
             tauri_commands::pty_write,
@@ -82,6 +86,9 @@ pub fn run() {
             commands::ssh::load_ssh_config_hosts,
             commands::ssh::build_ssh_args,
             commands::ssh::validate_identity_file,
+            commands::sftp::sftp_check_duplicates,
+            commands::sftp::sftp_upload,
+            commands::sftp::sftp_cancel_upload,
             tauri_commands::set_language,
         ])
         .setup(|app| {
