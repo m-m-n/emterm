@@ -496,10 +496,28 @@ export class TerminalApp {
           this.imageHandler!.processPendingApcQueue();
           this.imageHandler!.processPendingDcsQueue();
 
+          // Debug: track cursor visibility changes
+          const prevCursorVisible = this.state.cursorVisible;
+
           this.state.syncModesFromWasm();
+
+          if (prevCursorVisible !== this.state.cursorVisible) {
+            const processedChunk = remaining.subarray(0, consumed);
+            // Show the data that caused the change (escape sequences as hex for non-printable)
+            const chunkPreview = Array.from(processedChunk.slice(-64)).map(b =>
+              b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : `\\x${b.toString(16).padStart(2, "0")}`,
+            ).join("");
+            console.warn(
+              `[DEBUG][CURSOR] cursorVisible changed: ${prevCursorVisible} → ${this.state.cursorVisible}`,
+              `| chunk size=${consumed}, tail="${chunkPreview}"`,
+              `| isAlt=${this.state.isAlternateBuffer}`,
+              `| cursor=(${this.state.cursorCol},${this.state.cursorRow})`,
+            );
+          }
 
           const modeActions = core.take_mode_actions();
           if (modeActions.length > 0) {
+            const preActionCursorVisible = this.state.cursorVisible;
             let i = 0;
             while (i < modeActions.length) {
               const action = modeActions[i]!;
@@ -512,6 +530,13 @@ export class TerminalApp {
                 this.state.handleModeAction(action);
                 i += 1;
               }
+            }
+            if (preActionCursorVisible !== this.state.cursorVisible) {
+              console.warn(
+                `[DEBUG][CURSOR] cursorVisible changed by modeAction: ${preActionCursorVisible} → ${this.state.cursorVisible}`,
+                `| actions=[${Array.from(modeActions)}]`,
+                `| isAlt=${this.state.isAlternateBuffer}`,
+              );
             }
           }
 
