@@ -10,7 +10,6 @@
 use log::{Level, Log, Metadata, Record};
 use std::io::Write;
 use std::sync::Mutex;
-use std::time::SystemTime;
 
 /// Maximum log file size in bytes (1 MB).
 const MAX_LOG_FILE_SIZE: u64 = 1_024 * 1_024;
@@ -91,14 +90,7 @@ pub fn write_to_log_file(level: &str, origin: &str, message: &str) {
     let Some(file) = guard.as_mut() else {
         return;
     };
-    let elapsed = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = elapsed.as_secs();
-    let millis = elapsed.subsec_millis();
-    // Format as UTC timestamp: YYYY-MM-DD HH:MM:SS.mmm
-    let (y, m, d, h, min, s) = epoch_to_utc(secs);
-    let now = format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}:{s:02}.{millis:03}");
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
     let _ = writeln!(file, "{now} [{level}][{origin}] {message}");
     let _ = file.flush();
 }
@@ -139,51 +131,6 @@ pub fn get_log_file_path() -> Option<String> {
         .lock()
         .ok()
         .and_then(|guard| guard.as_ref().map(|p| p.to_string_lossy().into_owned()))
-}
-
-/// Convert Unix epoch seconds to UTC date/time components.
-fn epoch_to_utc(epoch: u64) -> (u64, u64, u64, u64, u64, u64) {
-    let s = epoch % 60;
-    let min = (epoch / 60) % 60;
-    let h = (epoch / 3600) % 24;
-    let mut days = epoch / 86400;
-    let mut y = 1970u64;
-    loop {
-        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
-            366
-        } else {
-            365
-        };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        y += 1;
-    }
-    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
-    let month_days = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut m = 0u64;
-    for &md in &month_days {
-        if days < md {
-            break;
-        }
-        days -= md;
-        m += 1;
-    }
-    (y, m + 1, days + 1, h, min, s)
 }
 
 /// Custom logger for backend Rust code.
