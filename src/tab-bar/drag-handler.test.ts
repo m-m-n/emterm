@@ -1,8 +1,8 @@
 /**
- * TabDragHandler Unit Tests
+ * TabDragHandler Unit Tests (pointer-event based)
  */
 
-import { describe, test, expect, beforeEach, mock } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 
 // Mock Tauri API before importing modules that depend on it
 mock.module("@tauri-apps/api/core", () => ({
@@ -47,37 +47,36 @@ const mockTerminalApp = () => ({
   },
 });
 
-// Create mock DragEvent
-function createDragEvent(
-  type: string,
-  options: Partial<{
-    dataTransfer: DataTransfer | null;
-    clientX: number;
-    target: EventTarget | null;
-    relatedTarget: EventTarget | null;
-  }> = {},
-): DragEvent {
-  const mockDataTransfer: Partial<DataTransfer> = {
-    setData: mock(() => {}),
-    getData: mock(() => ""),
-    effectAllowed: "move",
-    dropEffect: "none",
-    types: [],
-    files: [] as unknown as FileList,
-    items: [] as unknown as DataTransferItemList,
-    clearData: mock(() => {}),
-    setDragImage: mock(() => {}),
+// Polyfill PointerEvent for happy-dom (which doesn't have it)
+if (typeof globalThis.PointerEvent === "undefined") {
+  (globalThis as any).PointerEvent = class PointerEvent extends Event {
+    readonly clientX: number;
+    readonly clientY: number;
+    readonly button: number;
+    constructor(type: string, init: PointerEventInit & { clientX?: number; clientY?: number; button?: number } = {}) {
+      super(type, init);
+      this.clientX = init.clientX ?? 0;
+      this.clientY = init.clientY ?? 0;
+      this.button = init.button ?? 0;
+    }
   };
+}
 
-  return {
-    type,
+function createPointerEvent(
+  type: string,
+  options: {
+    clientX?: number;
+    clientY?: number;
+    button?: number;
+  } = {},
+): PointerEvent {
+  return new PointerEvent(type, {
     clientX: options.clientX ?? 0,
-    target: options.target ?? null,
-    relatedTarget: options.relatedTarget ?? null,
-    dataTransfer: (options.dataTransfer ?? mockDataTransfer) as DataTransfer,
-    preventDefault: mock(() => {}),
-    stopPropagation: mock(() => {}),
-  } as unknown as DragEvent;
+    clientY: options.clientY ?? 0,
+    button: options.button ?? 0,
+    bubbles: true,
+    cancelable: true,
+  });
 }
 
 describe("TabDragHandler", () => {
@@ -108,12 +107,16 @@ describe("TabDragHandler", () => {
     });
   });
 
+  afterEach(() => {
+    dragHandler.dispose();
+  });
+
   describe("initialization", () => {
     test("creates drag handler with tabManager and tabBarUI", () => {
       expect(dragHandler).toBeDefined();
     });
 
-    test("init attaches drag listeners", async () => {
+    test("init attaches pointer listeners", async () => {
       await tabManager.createTab();
       dragHandler.init();
 
@@ -122,106 +125,96 @@ describe("TabDragHandler", () => {
     });
   });
 
-  describe("drag start", () => {
-    test("sets drag data on dragstart", async () => {
+  describe("pointer drag start", () => {
+    test("adds dragging class after threshold exceeded", async () => {
       const tab = await tabManager.createTab();
       dragHandler.init();
 
       const tabElement = tabBarUI.getTabElement(tab!.id)!;
-      const mockDataTransfer = {
-        setData: mock(() => {}),
-        getData: mock(() => ""),
-        effectAllowed: "move",
-        dropEffect: "none",
-      };
 
-      const event = createDragEvent("dragstart", {
-        target: tabElement,
-        dataTransfer: mockDataTransfer as unknown as DataTransfer,
-      });
-
-      dragHandler.handleDragStart(event);
-
-      expect(mockDataTransfer.setData).toHaveBeenCalledWith(
-        "text/plain",
-        tab!.id,
+      // Pointer down on tab element
+      tabElement.dispatchEvent(
+        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 0 }),
       );
+
+      // Move past threshold on document
+      document.dispatchEvent(
+        createPointerEvent("pointermove", { clientX: 60, clientY: 10 }),
+      );
+
       expect(tabElement.classList.contains("dragging")).toBe(true);
     });
 
-    test("settings tab cannot be dragged", async () => {
-      const settingsTab = await tabManager.createTab({ type: "settings" });
+    test("does not start drag before threshold", async () => {
+      const tab = await tabManager.createTab();
       dragHandler.init();
 
-      const tabElement = tabBarUI.getTabElement(settingsTab!.id)!;
-      const mockDataTransfer = {
-        setData: mock(() => {}),
-        getData: mock(() => ""),
-        effectAllowed: "none",
-        dropEffect: "none",
-      };
+      const tabElement = tabBarUI.getTabElement(tab!.id)!;
 
-      const event = createDragEvent("dragstart", {
-        target: tabElement,
-        dataTransfer: mockDataTransfer as unknown as DataTransfer,
-      });
+      tabElement.dispatchEvent(
+        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 0 }),
+      );
 
-      dragHandler.handleDragStart(event);
+      // Move less than threshold
+      document.dispatchEvent(
+        createPointerEvent("pointermove", { clientX: 52, clientY: 10 }),
+      );
 
-      // Settings tab should not trigger drag
-      expect(mockDataTransfer.setData).not.toHaveBeenCalled();
-      expect(event.preventDefault).toHaveBeenCalled();
+      expect(tabElement.classList.contains("dragging")).toBe(false);
+    });
+
+    test("does not start drag on right click", async () => {
+      const tab = await tabManager.createTab();
+      dragHandler.init();
+
+      const tabElement = tabBarUI.getTabElement(tab!.id)!;
+
+      // Right-click
+      tabElement.dispatchEvent(
+        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 2 }),
+      );
+
+      document.dispatchEvent(
+        createPointerEvent("pointermove", { clientX: 60, clientY: 10 }),
+      );
+
+      expect(tabElement.classList.contains("dragging")).toBe(false);
     });
   });
 
-  describe("drag over", () => {
-    test("allows drop on terminal tabs", async () => {
+  describe("drag over (pointer move)", () => {
+    test("shows drop indicator when dragging over another tab", async () => {
       const tab1 = await tabManager.createTab();
       const tab2 = await tabManager.createTab();
       dragHandler.init();
 
-      const tabElement = tabBarUI.getTabElement(tab2!.id)!;
-      const event = createDragEvent("dragover", {
-        target: tabElement,
-        clientX: 100,
-      });
-
-      dragHandler.handleDragOver(event);
-
-      expect(event.preventDefault).toHaveBeenCalled();
-    });
-
-    test("shows drop indicator", async () => {
-      const tab1 = await tabManager.createTab();
-      const tab2 = await tabManager.createTab();
-      dragHandler.init();
-
-      // Start dragging tab1
       const tab1Element = tabBarUI.getTabElement(tab1!.id)!;
-      const dragStartEvent = createDragEvent("dragstart", {
-        target: tab1Element,
-        dataTransfer: {
-          setData: mock(() => {}),
-          getData: mock(() => tab1!.id),
-          effectAllowed: "move",
-        } as unknown as DataTransfer,
-      });
-      dragHandler.handleDragStart(dragStartEvent);
-
-      // Drag over tab2
       const tab2Element = tabBarUI.getTabElement(tab2!.id)!;
-      const dragOverEvent = createDragEvent("dragover", {
-        target: tab2Element,
-        clientX: 100,
+
+      // Mock getBoundingClientRect for tab2
+      tab2Element.getBoundingClientRect = () => ({
+        left: 100, right: 200, width: 100,
+        top: 0, bottom: 32, height: 32,
+        x: 100, y: 0, toJSON: () => {},
       });
-      dragHandler.handleDragOver(dragOverEvent);
+
+      // Start drag on tab1
+      tab1Element.dispatchEvent(
+        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 0 }),
+      );
+
+      // Move over tab2 (past threshold, within tab2 bounds)
+      document.dispatchEvent(
+        createPointerEvent("pointermove", { clientX: 120, clientY: 10 }),
+      );
 
       expect(dragHandler.getDropIndicatorPosition()).toBeDefined();
+      expect(dragHandler.getDropIndicatorPosition()?.targetTabId).toBe(tab2!.id);
     });
   });
 
-  describe("drop", () => {
-    test("reorders tabs on drop", async () => {
+  describe("drop (pointer up)", () => {
+    test("reorders tabs on pointer up", async () => {
       const tab1 = await tabManager.createTab();
       const tab2 = await tabManager.createTab();
       const tab3 = await tabManager.createTab();
@@ -233,52 +226,30 @@ describe("TabDragHandler", () => {
       expect(initialTabs[1]!.id).toBe(tab2!.id);
       expect(initialTabs[2]!.id).toBe(tab3!.id);
 
-      // Start dragging tab3
       const tab3Element = tabBarUI.getTabElement(tab3!.id)!;
-      const mockDataTransfer = {
-        setData: mock(() => {}),
-        getData: mock(() => tab3!.id),
-        effectAllowed: "move",
-        dropEffect: "move",
-      };
-      const dragStartEvent = createDragEvent("dragstart", {
-        target: tab3Element,
-        dataTransfer: mockDataTransfer as unknown as DataTransfer,
-      });
-      dragHandler.handleDragStart(dragStartEvent);
-
-      // Drag over tab1 to set drop indicator position
       const tab1Element = tabBarUI.getTabElement(tab1!.id)!;
-      // Mock getBoundingClientRect for tab1Element
-      const origGetBoundingClientRect = tab1Element.getBoundingClientRect;
+
+      // Mock getBoundingClientRect for tab1
       tab1Element.getBoundingClientRect = () => ({
-        left: 0,
-        right: 100,
-        width: 100,
-        top: 0,
-        bottom: 32,
-        height: 32,
-        x: 0,
-        y: 0,
-        toJSON: () => {},
+        left: 0, right: 100, width: 100,
+        top: 0, bottom: 32, height: 32,
+        x: 0, y: 0, toJSON: () => {},
       });
 
-      const dragOverEvent = createDragEvent("dragover", {
-        target: tab1Element,
-        clientX: 10, // left side = before
-      });
-      dragHandler.handleDragOver(dragOverEvent);
+      // Start drag on tab3
+      tab3Element.dispatchEvent(
+        createPointerEvent("pointerdown", { clientX: 250, clientY: 10, button: 0 }),
+      );
 
-      // Drop on tab1 (before position)
-      const dropEvent = createDragEvent("drop", {
-        target: tab1Element,
-        clientX: 10,
-        dataTransfer: mockDataTransfer as unknown as DataTransfer,
-      });
-      dragHandler.handleDrop(dropEvent);
+      // Move to tab1 (before position - clientX=10 < midpoint=50)
+      document.dispatchEvent(
+        createPointerEvent("pointermove", { clientX: 10, clientY: 10 }),
+      );
 
-      // Restore
-      tab1Element.getBoundingClientRect = origGetBoundingClientRect;
+      // Release
+      document.dispatchEvent(
+        createPointerEvent("pointerup", { clientX: 10, clientY: 10 }),
+      );
 
       // New order should be: tab3, tab1, tab2
       const finalTabs = tabManager.getTabs();
@@ -287,106 +258,30 @@ describe("TabDragHandler", () => {
       expect(finalTabs[2]!.id).toBe(tab2!.id);
     });
 
-    test("clears dragging state on drop", async () => {
+    test("clears dragging state on pointer up", async () => {
       const tab1 = await tabManager.createTab();
       const tab2 = await tabManager.createTab();
       dragHandler.init();
 
       const tab1Element = tabBarUI.getTabElement(tab1!.id)!;
-      const mockDataTransfer = {
-        setData: mock(() => {}),
-        getData: mock(() => tab1!.id),
-        effectAllowed: "move",
-        dropEffect: "move",
-      };
-
-      // Drag start
-      const dragStartEvent = createDragEvent("dragstart", {
-        target: tab1Element,
-        dataTransfer: mockDataTransfer as unknown as DataTransfer,
-      });
-      dragHandler.handleDragStart(dragStartEvent);
-      expect(tab1Element.classList.contains("dragging")).toBe(true);
-
-      // Drop
-      const dropEvent = createDragEvent("drop", {
-        target: tabBarUI.getTabElement(tab2!.id)!,
-        dataTransfer: mockDataTransfer as unknown as DataTransfer,
-      });
-      dragHandler.handleDrop(dropEvent);
-
-      expect(tab1Element.classList.contains("dragging")).toBe(false);
-    });
-  });
-
-  describe("drag end", () => {
-    test("clears dragging state on dragend", async () => {
-      const tab = await tabManager.createTab();
-      dragHandler.init();
-
-      const tabElement = tabBarUI.getTabElement(tab!.id)!;
-      const mockDataTransfer = {
-        setData: mock(() => {}),
-        getData: mock(() => ""),
-        effectAllowed: "move",
-      };
 
       // Start drag
-      const dragStartEvent = createDragEvent("dragstart", {
-        target: tabElement,
-        dataTransfer: mockDataTransfer as unknown as DataTransfer,
-      });
-      dragHandler.handleDragStart(dragStartEvent);
-      expect(tabElement.classList.contains("dragging")).toBe(true);
-
-      // End drag
-      const dragEndEvent = createDragEvent("dragend", {
-        target: tabElement,
-      });
-      dragHandler.handleDragEnd(dragEndEvent);
-
-      expect(tabElement.classList.contains("dragging")).toBe(false);
-    });
-  });
-
-  describe("drag leave", () => {
-    test("hides drop indicator on dragleave", async () => {
-      const tab1 = await tabManager.createTab();
-      const tab2 = await tabManager.createTab();
-      dragHandler.init();
-
-      // Start drag and drag over
-      const tab1Element = tabBarUI.getTabElement(tab1!.id)!;
-      const tab2Element = tabBarUI.getTabElement(tab2!.id)!;
-      const mockDataTransfer = {
-        setData: mock(() => {}),
-        getData: mock(() => tab1!.id),
-        effectAllowed: "move",
-      };
-
-      dragHandler.handleDragStart(
-        createDragEvent("dragstart", {
-          target: tab1Element,
-          dataTransfer: mockDataTransfer as unknown as DataTransfer,
-        }),
+      tab1Element.dispatchEvent(
+        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 0 }),
       );
 
-      dragHandler.handleDragOver(
-        createDragEvent("dragover", {
-          target: tab2Element,
-          clientX: 100,
-        }),
+      // Move past threshold
+      document.dispatchEvent(
+        createPointerEvent("pointermove", { clientX: 60, clientY: 10 }),
+      );
+      expect(tab1Element.classList.contains("dragging")).toBe(true);
+
+      // Pointer up
+      document.dispatchEvent(
+        createPointerEvent("pointerup", { clientX: 60, clientY: 10 }),
       );
 
-      // Drag leave
-      dragHandler.handleDragLeave(
-        createDragEvent("dragleave", {
-          target: tab2Element,
-          relatedTarget: null, // leaving the tab bar
-        }),
-      );
-
-      expect(dragHandler.getDropIndicatorPosition()).toBeNull();
+      expect(tab1Element.classList.contains("dragging")).toBe(false);
     });
   });
 
@@ -396,7 +291,6 @@ describe("TabDragHandler", () => {
       const tab2 = await tabManager.createTab();
       const tab3 = await tabManager.createTab();
 
-      // Move tab3 before tab1
       tabManager.reorderTabs(tab3!.id, tab1!.id, "before");
 
       const tabs = tabManager.getTabs();
@@ -410,7 +304,6 @@ describe("TabDragHandler", () => {
       const tab2 = await tabManager.createTab();
       const tab3 = await tabManager.createTab();
 
-      // Move tab1 after tab3
       tabManager.reorderTabs(tab1!.id, tab3!.id, "after");
 
       const tabs = tabManager.getTabs();
@@ -438,7 +331,6 @@ describe("TabDragHandler", () => {
     test("does nothing if dragged tab not found", async () => {
       const tab1 = await tabManager.createTab();
 
-      // Try to reorder non-existent tab
       tabManager.reorderTabs("non-existent", tab1!.id, "before");
 
       const tabs = tabManager.getTabs();
@@ -449,7 +341,6 @@ describe("TabDragHandler", () => {
     test("does nothing if target tab not found", async () => {
       const tab1 = await tabManager.createTab();
 
-      // Try to reorder to non-existent target
       tabManager.reorderTabs(tab1!.id, "non-existent", "before");
 
       const tabs = tabManager.getTabs();
@@ -475,7 +366,6 @@ describe("TabDragHandler", () => {
       dragHandler.init();
       dragHandler.dispose();
 
-      // Should not throw after dispose
       expect(true).toBe(true);
     });
   });
