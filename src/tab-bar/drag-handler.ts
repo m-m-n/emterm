@@ -1,12 +1,13 @@
 /**
  * Tab Drag Handler
  *
- * Implements HTML5 drag and drop for tab reordering.
+ * Implements pointer-event-based drag and drop for tab reordering.
+ * Uses pointerdown/pointermove/pointerup instead of HTML5 Drag and Drop API
+ * to avoid Tauri's dragDropEnabled conflict on Windows.
  */
 
 import type { TabManager } from "./tab-manager";
 import type { TabBarUI } from "./tab-bar-ui";
-import type { Tab } from "./types";
 
 /**
  * Options for creating TabDragHandler
@@ -27,8 +28,11 @@ interface DropIndicatorPosition {
   x: number;
 }
 
+/** Minimum drag distance (px) before drag is recognized */
+const DRAG_THRESHOLD = 5;
+
 /**
- * TabDragHandler - Manages drag and drop operations for tabs
+ * TabDragHandler - Manages pointer-based drag operations for tab reordering
  */
 export class TabDragHandler {
   private tabManager: TabManager;
@@ -40,13 +44,27 @@ export class TabDragHandler {
   private unsubscribers: (() => void)[] = [];
   private boundHandlers: Map<string, EventListener> = new Map();
 
+  // Pointer drag state
+  private pointerStartX = 0;
+  private pointerStartY = 0;
+  private isDragging = false;
+  private pendingTabId: string | null = null;
+  private ghostElement: HTMLElement | null = null;
+  private ghostOffsetX = 0;
+  private ghostOffsetY = 0;
+
+  // Document-level handlers (bound once during drag)
+  private onPointerMoveBound = this.onPointerMove.bind(this);
+  private onPointerUpBound = this.onPointerUp.bind(this);
+  private onSelectStartBound = (e: Event) => e.preventDefault();
+
   constructor(options: TabDragHandlerOptions) {
     this.tabManager = options.tabManager;
     this.tabBarUI = options.tabBarUI;
   }
 
   /**
-   * Initializes drag and drop handlers
+   * Initializes drag handlers
    */
   init(): void {
     this.createDropIndicator();
@@ -64,7 +82,7 @@ export class TabDragHandler {
   }
 
   /**
-   * Attaches drag event listeners to existing tabs
+   * Attaches pointer event listeners to existing tabs
    */
   private attachListeners(): void {
     const tabs = this.tabManager.getTabs();
@@ -74,48 +92,31 @@ export class TabDragHandler {
   }
 
   /**
-   * Attaches drag listeners to a specific tab element
+   * Attaches pointer listeners to a specific tab element
    */
   private attachTabListeners(tabId: string): void {
     const element = this.tabBarUI.getTabElement(tabId);
     if (!element) return;
 
-    const dragStartHandler = (e: Event) =>
-      this.handleDragStart(e as DragEvent);
-    const dragEndHandler = (e: Event) => this.handleDragEnd(e as DragEvent);
-    const dragOverHandler = (e: Event) => this.handleDragOver(e as DragEvent);
-    const dragLeaveHandler = (e: Event) =>
-      this.handleDragLeave(e as DragEvent);
-    const dropHandler = (e: Event) => this.handleDrop(e as DragEvent);
+    const pointerDownHandler = (e: Event) =>
+      this.onPointerDown(e as PointerEvent);
 
-    element.addEventListener("dragstart", dragStartHandler);
-    element.addEventListener("dragend", dragEndHandler);
-    element.addEventListener("dragover", dragOverHandler);
-    element.addEventListener("dragleave", dragLeaveHandler);
-    element.addEventListener("drop", dropHandler);
+    element.addEventListener("pointerdown", pointerDownHandler);
 
-    // Store handlers for cleanup
-    this.boundHandlers.set(`${tabId}-dragstart`, dragStartHandler);
-    this.boundHandlers.set(`${tabId}-dragend`, dragEndHandler);
-    this.boundHandlers.set(`${tabId}-dragover`, dragOverHandler);
-    this.boundHandlers.set(`${tabId}-dragleave`, dragLeaveHandler);
-    this.boundHandlers.set(`${tabId}-drop`, dropHandler);
+    this.boundHandlers.set(`${tabId}-pointerdown`, pointerDownHandler);
   }
 
   /**
-   * Removes drag listeners from a tab element
+   * Removes pointer listeners from a tab element
    */
   private detachTabListeners(tabId: string): void {
     const element = this.tabBarUI.getTabElement(tabId);
     if (!element) return;
 
-    const events = ["dragstart", "dragend", "dragover", "dragleave", "drop"];
-    for (const eventName of events) {
-      const handler = this.boundHandlers.get(`${tabId}-${eventName}`);
-      if (handler) {
-        element.removeEventListener(eventName, handler);
-        this.boundHandlers.delete(`${tabId}-${eventName}`);
-      }
+    const handler = this.boundHandlers.get(`${tabId}-pointerdown`);
+    if (handler) {
+      element.removeEventListener("pointerdown", handler);
+      this.boundHandlers.delete(`${tabId}-pointerdown`);
     }
   }
 
@@ -124,7 +125,6 @@ export class TabDragHandler {
    */
   private subscribeToTabEvents(): void {
     const unsubCreated = this.tabManager.on("tab:created", ({ tab }) => {
-      // Attach listeners after a short delay to ensure DOM is ready
       requestAnimationFrame(() => {
         this.attachTabListeners(tab.id);
       });
@@ -138,108 +138,169 @@ export class TabDragHandler {
   }
 
   /**
-   * Handles dragstart event
+   * Handles pointerdown on a tab element
    */
-  handleDragStart(event: DragEvent): void {
-    const target = event.target as HTMLElement;
-    const tabId = target.dataset?.tabId;
-
-    if (!tabId) {
-      event.preventDefault();
-      return;
-    }
-
-    const tab = this.tabManager.getTab(tabId);
-    if (!tab) {
-      event.preventDefault();
-      return;
-    }
-
-    this.draggedTabId = tabId;
-
-    // Set drag data
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", tabId);
-    }
-
-    // Add dragging class
-    target.classList.add("dragging");
-  }
-
-  /**
-   * Handles dragend event
-   */
-  handleDragEnd(event: DragEvent): void {
-    const target = event.target as HTMLElement;
-    target.classList.remove("dragging");
-
-    this.clearDragState();
-    this.restoreFocusToTerminal();
-  }
-
-  /**
-   * Handles dragover event
-   */
-  handleDragOver(event: DragEvent): void {
-    event.preventDefault();
-
-    if (!this.draggedTabId) return;
+  private onPointerDown(event: PointerEvent): void {
+    // Only respond to primary button (left click)
+    if (event.button !== 0) return;
 
     const target = this.findTabElement(event.target as HTMLElement);
     if (!target) return;
 
     const tabId = target.dataset?.tabId;
-    if (!tabId || tabId === this.draggedTabId) return;
+    if (!tabId) return;
 
-    // Calculate position (before or after)
-    const rect = target.getBoundingClientRect();
-    const midpoint = rect.left + rect.width / 2;
-    const position: "before" | "after" =
-      event.clientX < midpoint ? "before" : "after";
+    const tab = this.tabManager.getTab(tabId);
+    if (!tab) return;
 
-    // Update drop indicator
-    this.dropIndicatorPosition = {
-      targetTabId: tabId,
-      position,
-      x: position === "before" ? rect.left : rect.right,
-    };
+    // Store start position for threshold check
+    this.pendingTabId = tabId;
+    this.pointerStartX = event.clientX;
+    this.pointerStartY = event.clientY;
+    this.isDragging = false;
 
-    this.showDropIndicator();
+    // Listen for move/up on document to handle drag outside tab
+    document.addEventListener("pointermove", this.onPointerMoveBound);
+    document.addEventListener("pointerup", this.onPointerUpBound);
   }
 
   /**
-   * Handles dragleave event
+   * Handles pointermove on document during drag
    */
-  handleDragLeave(event: DragEvent): void {
-    // Only hide if leaving the tab bar entirely
-    const relatedTarget = event.relatedTarget as HTMLElement | null;
-    if (
-      !relatedTarget ||
-      !this.findTabElement(relatedTarget) ||
-      relatedTarget.closest(".tab-scroll-area") === null
-    ) {
+  private onPointerMove(event: PointerEvent): void {
+    if (!this.pendingTabId) return;
+
+    const dx = event.clientX - this.pointerStartX;
+    const dy = event.clientY - this.pointerStartY;
+
+    if (!this.isDragging) {
+      // Check threshold
+      if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) {
+        return;
+      }
+      // Start dragging
+      this.isDragging = true;
+      this.draggedTabId = this.pendingTabId;
+
+      const element = this.tabBarUI.getTabElement(this.draggedTabId);
+      if (element) {
+        element.classList.add("dragging");
+        this.createGhostElement(element, event.clientX, event.clientY);
+      }
+      // Prevent text selection during drag
+      document.addEventListener("selectstart", this.onSelectStartBound);
+      window.getSelection()?.removeAllRanges();
+    }
+
+    // Update ghost position and drop indicator
+    this.updateGhostPosition(event.clientX, event.clientY);
+    this.updateDropPosition(event.clientX);
+  }
+
+  /**
+   * Handles pointerup on document
+   */
+  private onPointerUp(_event: PointerEvent): void {
+    document.removeEventListener("pointermove", this.onPointerMoveBound);
+    document.removeEventListener("pointerup", this.onPointerUpBound);
+
+    if (this.isDragging && this.draggedTabId && this.dropIndicatorPosition) {
+      const { targetTabId, position } = this.dropIndicatorPosition;
+      this.tabManager.reorderTabs(this.draggedTabId, targetTabId, position);
+    }
+
+    this.clearDragState();
+    this.restoreFocusToTerminal();
+
+    this.pendingTabId = null;
+    this.isDragging = false;
+  }
+
+  /**
+   * Updates drop indicator position based on current pointer X coordinate
+   */
+  private updateDropPosition(clientX: number): void {
+    if (!this.draggedTabId) return;
+
+    const tabs = this.tabManager.getTabs();
+    let bestTarget: DropIndicatorPosition | null = null;
+
+    for (const tab of tabs) {
+      if (tab.id === this.draggedTabId) continue;
+
+      const element = this.tabBarUI.getTabElement(tab.id);
+      if (!element) continue;
+
+      const rect = element.getBoundingClientRect();
+      const midpoint = rect.left + rect.width / 2;
+      const position: "before" | "after" =
+        clientX < midpoint ? "before" : "after";
+
+      // Check if pointer is within the tab's horizontal bounds (with some tolerance)
+      if (clientX >= rect.left - 10 && clientX <= rect.right + 10) {
+        bestTarget = {
+          targetTabId: tab.id,
+          position,
+          x: position === "before" ? rect.left : rect.right,
+        };
+        break;
+      }
+    }
+
+    if (bestTarget) {
+      this.dropIndicatorPosition = bestTarget;
+      this.showDropIndicator();
+    } else {
       this.hideDropIndicator();
     }
   }
 
   /**
-   * Handles drop event
+   * Creates a ghost element that follows the cursor during drag
    */
-  handleDrop(event: DragEvent): void {
-    event.preventDefault();
+  private createGhostElement(
+    sourceElement: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ): void {
+    const ghost = sourceElement.cloneNode(true) as HTMLElement;
+    const rect = sourceElement.getBoundingClientRect();
 
-    if (!this.draggedTabId || !this.dropIndicatorPosition) {
-      this.clearDragState();
-      return;
+    ghost.className = "tab tab-drag-ghost";
+    ghost.style.position = "fixed";
+    ghost.style.zIndex = "10000";
+    ghost.style.pointerEvents = "none";
+    ghost.style.opacity = "0.7";
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    ghost.style.margin = "0";
+
+    this.ghostOffsetX = clientX - rect.left;
+    this.ghostOffsetY = clientY - rect.top;
+    ghost.style.left = `${clientX - this.ghostOffsetX}px`;
+    ghost.style.top = `${clientY - this.ghostOffsetY}px`;
+
+    document.body.appendChild(ghost);
+    this.ghostElement = ghost;
+  }
+
+  /**
+   * Updates ghost element position to follow cursor
+   */
+  private updateGhostPosition(clientX: number, clientY: number): void {
+    if (!this.ghostElement) return;
+    this.ghostElement.style.left = `${clientX - this.ghostOffsetX}px`;
+    this.ghostElement.style.top = `${clientY - this.ghostOffsetY}px`;
+  }
+
+  /**
+   * Removes the ghost element
+   */
+  private removeGhostElement(): void {
+    if (this.ghostElement) {
+      this.ghostElement.remove();
+      this.ghostElement = null;
     }
-
-    const { targetTabId, position } = this.dropIndicatorPosition;
-
-    // Perform the reorder
-    this.tabManager.reorderTabs(this.draggedTabId, targetTabId, position);
-
-    this.clearDragState();
   }
 
   /**
@@ -260,12 +321,10 @@ export class TabDragHandler {
     const scrollArea = document.querySelector(".tab-scroll-area");
     if (!scrollArea) return;
 
-    // Ensure indicator is in DOM
     if (!this.dropIndicatorElement.parentElement) {
       scrollArea.appendChild(this.dropIndicatorElement);
     }
 
-    // Position the indicator
     const scrollRect = scrollArea.getBoundingClientRect();
     this.dropIndicatorElement.style.display = "block";
     this.dropIndicatorElement.style.left = `${this.dropIndicatorPosition.x - scrollRect.left}px`;
@@ -286,7 +345,6 @@ export class TabDragHandler {
    * Clears all drag state
    */
   private clearDragState(): void {
-    // Remove dragging class from dragged element
     if (this.draggedTabId) {
       const element = this.tabBarUI.getTabElement(this.draggedTabId);
       if (element) {
@@ -295,7 +353,9 @@ export class TabDragHandler {
     }
 
     this.draggedTabId = null;
+    this.removeGhostElement();
     this.hideDropIndicator();
+    document.removeEventListener("selectstart", this.onSelectStartBound);
   }
 
   /**
@@ -320,24 +380,28 @@ export class TabDragHandler {
    * Disposes the drag handler
    */
   dispose(): void {
-    // Unsubscribe from events
+    // Remove document-level listeners if still active
+    document.removeEventListener("pointermove", this.onPointerMoveBound);
+    document.removeEventListener("pointerup", this.onPointerUpBound);
+    document.removeEventListener("selectstart", this.onSelectStartBound);
+
     for (const unsubscribe of this.unsubscribers) {
       unsubscribe();
     }
     this.unsubscribers = [];
 
-    // Remove all tab listeners
     const tabs = this.tabManager.getTabs();
     for (const tab of tabs) {
       this.detachTabListeners(tab.id);
     }
 
-    // Remove drop indicator
     if (this.dropIndicatorElement?.parentElement) {
       this.dropIndicatorElement.remove();
     }
     this.dropIndicatorElement = null;
 
     this.clearDragState();
+    this.pendingTabId = null;
+    this.isDragging = false;
   }
 }

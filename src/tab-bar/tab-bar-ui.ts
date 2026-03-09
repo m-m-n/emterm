@@ -196,8 +196,6 @@ export class TabBarUI {
     const tabElement = document.createElement("div");
     tabElement.className = "tab";
     tabElement.dataset.tabId = tab.id;
-    tabElement.draggable = true;
-
     // Accessibility attributes
     tabElement.setAttribute("role", "tab");
     tabElement.setAttribute("tabindex", "0");
