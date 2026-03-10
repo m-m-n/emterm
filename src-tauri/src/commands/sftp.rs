@@ -277,7 +277,12 @@ fn validate_local_path(path: &str) -> Result<(), String> {
         return Err("Invalid local path: contains null bytes".to_string());
     }
     // Reject characters that could escape sftp batch command quoting
-    if path.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r')) {
+    // On Windows, backslash is a valid path separator and must be allowed
+    #[cfg(windows)]
+    let has_unsafe = path.chars().any(|c| matches!(c, '"' | '\n' | '\r'));
+    #[cfg(not(windows))]
+    let has_unsafe = path.chars().any(|c| matches!(c, '"' | '\\' | '\n' | '\r'));
+    if has_unsafe {
         return Err("Invalid local path: contains unsafe characters".to_string());
     }
     if !std::path::Path::new(path).exists() {
