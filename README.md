@@ -156,6 +156,44 @@ emterm markdown <file.md>
 emterm image <image.png>
 ```
 
+## tmux Usage Notes
+
+### CLI Commands in tmux
+
+Inside tmux, CLI commands (`emterm markdown`, `emterm image`) automatically wrap control sequences in DCS passthrough. Requires `allow-passthrough` enabled in tmux config:
+
+```bash
+set -g allow-passthrough on
+```
+
+### SFTP Upload Destination in tmux
+
+When uploading files via drag & drop to an SSH tab, eMterm uses [OSC 7](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands) (working directory notification) to determine the remote upload destination. However, tmux intercepts OSC 7 from inner panes and does not forward it to the outer terminal. This causes the upload destination to default to the home directory.
+
+To get the correct working directory in tmux, add the following to your remote shell configuration:
+
+**bash** (`~/.bashrc`):
+```bash
+if [ -n "$TMUX" ]; then
+  _osc7_dcs() {
+    printf '\ePtmux;\e\e]7;%s\e\e\\\e\\' "$PWD"
+  }
+  PROMPT_COMMAND="_osc7_dcs${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+fi
+```
+
+**zsh** (`~/.zshrc`):
+```zsh
+if [[ -n "$TMUX" ]]; then
+  _osc7_dcs() {
+    printf '\ePtmux;\e\e]7;%s\e\e\\\e\\' "$PWD"
+  }
+  precmd_functions+=(_osc7_dcs)
+fi
+```
+
+This wraps OSC 7 in a DCS passthrough sequence so tmux forwards it to eMterm.
+
 ## Markdown Display
 
 eMterm supports inline Markdown rendering via a custom OSC 777 extension protocol.

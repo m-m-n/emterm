@@ -156,6 +156,44 @@ emterm markdown <file.md>
 emterm image <image.png>
 ```
 
+## tmux利用時の注意事項
+
+### tmux内でのCLIコマンド
+
+tmux内では、CLIコマンド（`emterm markdown`、`emterm image`）が制御シーケンスを自動的にDCSパススルーでラップします。tmux設定で`allow-passthrough`を有効にしてください：
+
+```bash
+set -g allow-passthrough on
+```
+
+### tmux内でのSFTPアップロード先ディレクトリ
+
+SSHタブへのドラッグ&ドロップによるファイルアップロード時、eMtermは[OSC 7](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Operating-System-Commands)（作業ディレクトリ通知）を使用してリモートのアップロード先を決定します。しかし、tmuxは内部ペインのOSC 7をインターセプトし、外側のターミナルに転送しません。そのため、アップロード先が常にホームディレクトリになります。
+
+tmux内で正しい作業ディレクトリを取得するには、リモートサーバーのシェル設定に以下を追加してください：
+
+**bash** (`~/.bashrc`):
+```bash
+if [ -n "$TMUX" ]; then
+  _osc7_dcs() {
+    printf '\ePtmux;\e\e]7;%s\e\e\\\e\\' "$PWD"
+  }
+  PROMPT_COMMAND="_osc7_dcs${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+fi
+```
+
+**zsh** (`~/.zshrc`):
+```zsh
+if [[ -n "$TMUX" ]]; then
+  _osc7_dcs() {
+    printf '\ePtmux;\e\e]7;%s\e\e\\\e\\' "$PWD"
+  }
+  precmd_functions+=(_osc7_dcs)
+fi
+```
+
+OSC 7をDCSパススルーでラップすることで、tmuxがeMtermに転送するようになります。
+
 ## プロジェクト構成
 
 ```
