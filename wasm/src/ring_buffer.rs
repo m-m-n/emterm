@@ -62,17 +62,28 @@ impl TerminalCore {
     pub(crate) fn viewport_cell_offset(&self, col: u16, row: u16) -> Option<usize> {
         if col < self.cols && row < self.rows {
             let abs = self.viewport_abs(row);
-            Some(abs * self.cols as usize + col as usize)
+            let offset = abs * self.cols as usize + col as usize;
+            // Defensive: verify offset is within ring_cells bounds
+            if offset < self.ring_cells.len() {
+                Some(offset)
+            } else {
+                None
+            }
         } else {
             None
         }
     }
 
     /// Get the base offset for a viewport row in ring_cells.
+    /// Returns 0 as fallback if the computed offset exceeds ring_cells bounds.
     #[inline]
     pub(crate) fn viewport_row_base(&self, row: u16) -> usize {
         let abs = self.viewport_abs(row);
-        abs * self.cols as usize
+        let base = abs * self.cols as usize;
+        if base + (self.cols as usize) > self.ring_cells.len() {
+            return 0;
+        }
+        base
     }
 
     /// Get the number of scrollback lines.
@@ -90,17 +101,27 @@ impl TerminalCore {
     pub(crate) fn ring_push_blank(&mut self, bg: PackedColor) {
         let cols = self.cols as usize;
 
-        let new_abs = if self.ring_size < self.ring_capacity {
-            let abs = (self.ring_head + self.ring_size) % self.ring_capacity;
-            self.ring_size += 1;
-            abs
+        // Compute new_abs speculatively before mutating state
+        let (new_abs, grow) = if self.ring_size < self.ring_capacity {
+            ((self.ring_head + self.ring_size) % self.ring_capacity, true)
         } else {
-            let abs = self.ring_head;
-            self.ring_head = (self.ring_head + 1) % self.ring_capacity;
-            abs
+            (self.ring_head, false)
         };
 
+        // Defensive: verify bounds BEFORE committing state changes
         let base = new_abs * cols;
+        if base + cols > self.ring_cells.len() {
+            // Invariant violation: ring_cells is too small for the computed index.
+            // Do NOT mutate ring_size/ring_head to keep state consistent.
+            return;
+        }
+
+        // Commit state mutation only after bounds check passes
+        if grow {
+            self.ring_size += 1;
+        } else {
+            self.ring_head = (self.ring_head + 1) % self.ring_capacity;
+        }
         let slice = &mut self.ring_cells[base..base + cols];
 
         // Fast path: default bg → zero memory then set only the 3 non-zero bytes per cell.
@@ -171,6 +192,10 @@ impl TerminalCore {
     pub(crate) fn pack_row_abs(&self, abs: usize) -> Vec<u8> {
         let cols = self.cols as usize;
         let base = abs * cols;
+        if base + cols > self.ring_cells.len() {
+            // Invariant violation: return empty row data
+            return Vec::new();
+        }
         let mut buf = Vec::with_capacity(cols * 12);
         for col in 0..self.cols {
             let cell = &self.ring_cells[base + col as usize];

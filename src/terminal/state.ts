@@ -1230,6 +1230,75 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Recreate WASM core after a crash (e.g., memory access out of bounds).
+   * This creates a fresh TerminalCore, losing current terminal content
+   * but recovering the ability to process new data.
+   * Returns true if recovery was successful.
+   */
+  recreateWasmCore(): boolean {
+    const cols = this.cols;
+    const rows = this.rows;
+
+    try {
+      // Dispose broken grids
+      try { this.primaryWasmGrid?.dispose(); } catch { /* already broken */ }
+      try { this.alternateWasmGrid?.dispose(); } catch { /* already broken */ }
+      this.alternateWasmGrid = null;
+
+      // Create fresh WASM grid
+      this.primaryWasmGrid = new WasmGrid(cols, rows, this.maxScrollbackLines);
+
+      // Rebuild primary buffer with new grid
+      this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, this.primaryWasmGrid);
+      this.primaryBuffer.onEvict = (count: number) => {
+        this.semanticZoneTracker.pruneBeforeLine(count);
+        this.foldManager.pruneBeforeLine(count);
+      };
+
+      // Reset cursors
+      this.primaryCursor = new CursorState(cols, rows, this.primaryWasmGrid.core);
+      this.alternateCursor = null;
+      this.cursor = this.primaryCursor;
+      this.savedCursorForAlt = null;
+
+      // Reset alternate buffer state
+      this.alternateBuffer = null;
+      this.useAlternate = false;
+
+      // Reset modes and sync to WASM
+      this.modes = createDefaultModes();
+      syncModesToWasm(this.modes, this.primaryWasmGrid.core);
+
+      // Propagate cell size
+      this.primaryWasmGrid.core.set_cell_size_px(this.cellWidthPx, this.cellHeightPx);
+
+      // Reset other state (matching reset() coverage)
+      this.wrapPending = false;
+      this.tabStops = this.createDefaultTabStops(cols);
+      this.graphemeBuffer = [];
+      this._g0CharSet = "Ascii";
+      this._g1CharSet = "Ascii";
+      this._activeCharSet = "G0";
+      this._title = "";
+      this._iconName = "";
+      this._workingDirectory = "";
+      this._pendingResponses = [];
+      this._activeHyperlink = null;
+      this.markdownManager.dispose();
+      this.markdownManager = new MarkdownSessionManager();
+      this.semanticZoneTracker.clear();
+      this.foldManager.unfoldAll();
+
+      console.warn("[WARN][FRONTEND] WASM core recreated after crash — terminal content lost");
+      return true;
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Failed to recreate WASM core:", e);
+      this.primaryWasmGrid = null;
+      return false;
+    }
+  }
+
+  /**
    * Extract plain text from a grid range for copy operations.
    *
    * Coordinates are automatically normalized (start comes before end).
