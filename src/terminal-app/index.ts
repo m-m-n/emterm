@@ -566,6 +566,28 @@ export class TerminalApp {
       } catch (error) {
         console.error("[ERROR][FRONTEND] processPendingData failed:", error);
         leftoverData = null;
+
+        // Detect WASM crash: after "memory access out of bounds", the wasm-bindgen
+        // borrow flag stays set, causing "recursive use of an object" on subsequent
+        // calls. Recreate the WASM core to recover.
+        const isWasmCrash = error instanceof WebAssembly.RuntimeError;
+        const msg = error instanceof Error ? error.message : String(error);
+        const isBorrowError = msg.includes("recursive use of an object");
+        if (isWasmCrash || isBorrowError) {
+          console.warn("[WARN][FRONTEND] WASM crash detected — attempting recovery");
+          if (this.state?.recreateWasmCore()) {
+            // Re-register callbacks on the new core
+            const newCore = this.state.getWasmCore();
+            this.registerCoreCallbacks(newCore);
+            registeredCore = newCore;
+            this.state.setCellSizePx(
+              Math.round(this.charSize.width),
+              Math.round(this.charSize.height),
+            );
+            // Force re-render to show recovered (blank) terminal
+            this.renderer?.forceRender(this.state);
+          }
+        }
       }
     };
 
