@@ -194,6 +194,13 @@ impl TerminalCore {
         let base = abs * cols;
         if base + cols > self.ring_cells.len() {
             // Invariant violation: return empty row data
+            web_sys::console::warn_1(
+                &format!(
+                    "[WARN][WASM] pack_row_abs invariant violation: abs={}, cols={}, base+cols={}, ring_cells.len={}, capacity={}, ring_head={}",
+                    abs, cols, base + cols, self.ring_cells.len(), self.ring_cells.len() / cols, self.ring_head
+                )
+                .into(),
+            );
             return Vec::new();
         }
         let mut buf = Vec::with_capacity(cols * 12);
