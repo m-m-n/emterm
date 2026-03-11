@@ -170,15 +170,15 @@ describe("SettingsPanel render methods - description feature", () => {
     });
 
     test("should set aria-describedby on select elements", () => {
-      const languageSelect = container.querySelector("#settings-language") as HTMLSelectElement;
-      expect(languageSelect).not.toBeNull();
-      expect(languageSelect?.getAttribute("aria-describedby")).toBe("settings-language-desc");
+      const languageTrigger = container.querySelector("#settings-language .md3-select-trigger");
+      expect(languageTrigger).not.toBeNull();
+      expect(languageTrigger?.getAttribute("aria-describedby")).toBe("settings-language-desc");
     });
 
     test("should set aria-describedby on select elements (ui-theme)", () => {
-      const uiThemeSelect = container.querySelector("#settings-ui-theme") as HTMLSelectElement;
-      expect(uiThemeSelect).not.toBeNull();
-      expect(uiThemeSelect?.getAttribute("aria-describedby")).toBe("settings-ui-theme-desc");
+      const uiThemeTrigger = container.querySelector("#settings-ui-theme .md3-select-trigger");
+      expect(uiThemeTrigger).not.toBeNull();
+      expect(uiThemeTrigger?.getAttribute("aria-describedby")).toBe("settings-ui-theme-desc");
     });
 
     test("should set aria-describedby on slider inputs", () => {
@@ -242,9 +242,9 @@ describe("SettingsPanel render methods - description feature", () => {
     });
 
     test("should set aria-describedby on cursor style select", () => {
-      const cursorStyleSelect = container.querySelector("#settings-cursor-style") as HTMLSelectElement;
-      expect(cursorStyleSelect).not.toBeNull();
-      expect(cursorStyleSelect?.getAttribute("aria-describedby")).toBe("settings-cursor-style-desc");
+      const cursorStyleTrigger = container.querySelector("#settings-cursor-style .md3-select-trigger");
+      expect(cursorStyleTrigger).not.toBeNull();
+      expect(cursorStyleTrigger?.getAttribute("aria-describedby")).toBe("settings-cursor-style-desc");
     });
 
     test("should set aria-describedby on cursor blink toggle", () => {
