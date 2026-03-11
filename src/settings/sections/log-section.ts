@@ -22,7 +22,9 @@ export function renderLogSection(
       value: settings.log_recording_enabled,
       description: t("settings.log.recordingDesc"),
       onSave: (v) => {
-        invoke("set_log_recording", { enabled: v });
+        invoke("set_log_recording", { enabled: v }).catch((err) => {
+          console.warn("Failed to set log recording:", err);
+        });
         ctx.saveSetting("log_recording_enabled", v);
       },
     },
@@ -120,8 +122,7 @@ export function renderLogSection(
   // Copy button
   ctx.addContentListener(copyBtn, "click", async () => {
     try {
-      const contents = await invoke<string>("get_log_tail", { lines: 500 });
-      await navigator.clipboard.writeText(contents);
+      await navigator.clipboard.writeText(logArea.textContent || "");
       statusSpan.textContent = t("settings.log.copied");
       setTimeout(() => { statusSpan.textContent = ""; }, 2000);
     } catch (e) {
