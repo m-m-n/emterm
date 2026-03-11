@@ -52,6 +52,7 @@ export class TerminalApp {
   private linkHandler: LinkHandler | null = null;
   private fileDropHandler: FileDropHandler | null = null;
   private _uploadManager: UploadManager | null = null;
+  private pendingOscQueue: { actionType: number; data: string }[] = [];
 
   /**
    * Creates a new TerminalApp instance
@@ -384,7 +385,10 @@ export class TerminalApp {
    */
   private registerCoreCallbacks(core: ReturnType<TerminalState["getActiveCore"]>): void {
     core.set_osc_callback((actionType: number, data: string) => {
-      this.handleOscCallback(actionType, data);
+      // Queue data - do NOT access core here (recursive borrow error)
+      // OSC 133 (SemanticPrompt) and OSC 777 (EmtermExtension) call
+      // getScrollbackLength() which re-enters WASM during process_pty_data.
+      this.pendingOscQueue.push({ actionType, data });
     });
 
     core.set_apc_callback((data: Uint8Array) => {
@@ -493,6 +497,7 @@ export class TerminalApp {
 
           const consumed = core.process_pty_data(remaining);
 
+          this.processPendingOscQueue();
           this.imageHandler!.processPendingApcQueue();
           this.imageHandler!.processPendingDcsQueue();
 
@@ -622,6 +627,19 @@ export class TerminalApp {
       }
       // Note: Window close is now handled by TabManager.onLastTabClosed()
     });
+  }
+
+  /**
+   * Process all queued OSC events.
+   * Safe to call after process_pty_data has returned (borrow released).
+   */
+  private processPendingOscQueue(): void {
+    if (this.pendingOscQueue.length === 0) return;
+    const events = this.pendingOscQueue;
+    this.pendingOscQueue = [];
+    for (const { actionType, data } of events) {
+      this.handleOscCallback(actionType, data);
+    }
   }
 
   /**
