@@ -409,9 +409,16 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const parsedRows: { rowIndex: number; spans: TextSpan[] | null; line: LineAccessor | null }[] = [];
 		for (const rowIndex of dirtyRows) {
 			const packed = state.getRowPacked(rowIndex);
-			if (packed) {
-				parsedRows.push({ rowIndex, spans: groupPackedCellsIntoSpans(packed, this.cols), line: null });
+			if (packed && packed.length > 0) {
+				const spans = groupPackedCellsIntoSpans(packed, this.cols);
+				if (spans.length === 0) {
+					console.warn(`[WARN][RENDERER] Empty spans from non-empty packed data for row ${rowIndex}, packed.length=${packed.length}`);
+				}
+				parsedRows.push({ rowIndex, spans, line: null });
 			} else {
+				if (packed && packed.length === 0) {
+					console.warn(`[WARN][RENDERER] Empty packed data for dirty row ${rowIndex}, falling back to LineAccessor`);
+				}
 				parsedRows.push({ rowIndex, spans: null, line: buffer.getLine(rowIndex) });
 			}
 		}
@@ -451,7 +458,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (prevRowNeedsRedraw) {
 			// Two-pass rendering consistent with dirty-row path above
 			const prevPacked = state.getRowPacked(this.prevCursorRow);
-			if (prevPacked) {
+			if (prevPacked && prevPacked.length > 0) {
 				const prevSpans = groupPackedCellsIntoSpans(prevPacked, this.cols);
 				this.renderLineBackgroundFromSpans(this.prevCursorRow, prevSpans);
 				this.renderLineTextFromSpans(this.prevCursorRow, prevSpans);
@@ -498,7 +505,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			for (const row of hoverRedrawRows) {
 				if (dirtyRows.includes(row)) continue;
 				const packed = state.getRowPacked(row);
-				if (packed) {
+				if (packed && packed.length > 0) {
 					const spans = groupPackedCellsIntoSpans(packed, this.cols);
 					this.renderLineBackgroundFromSpans(row, spans);
 					this.renderLineTextFromSpans(row, spans);
