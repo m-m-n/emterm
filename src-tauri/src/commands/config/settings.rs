@@ -440,6 +440,10 @@ pub struct AppSettings {
     )]
     pub sftp_max_concurrent_uploads: u16,
 
+    // Log Recording
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub log_recording_enabled: bool,
+
     // Markdown Viewer
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
     pub markdown_theme_follow_ui: bool,
@@ -521,6 +525,7 @@ impl Default for AppSettings {
             notify_on_process_exit: default_true(),
             notify_on_output: false,
             notify_on_bell: default_true(),
+            log_recording_enabled: false,
         }
     }
 }

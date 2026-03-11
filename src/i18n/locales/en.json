@@ -329,6 +329,8 @@
     },
     "log": {
       "title": "Log",
+      "recording": "Log Recording",
+      "recordingDesc": "Record WARN and ERROR logs to file",
       "logFile": "Log File",
       "logFileDesc": "WARN and ERROR level logs are saved to a file in release builds",
       "logFilePath": "Log File Path",
@@ -338,7 +340,8 @@
       "copied": "Copied to clipboard",
       "cleared": "Log cleared",
       "empty": "No log entries",
-      "reload": "Reload"
+      "reload": "Reload",
+      "loading": "Loading..."
     }
   },
   "tabBar": {

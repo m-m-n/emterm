@@ -205,11 +205,25 @@ pub fn clear_log() -> Result<(), String> {
     logging::clear_log_file()
 }
 
+/// Read the last N lines from the log file.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn get_log_tail(lines: usize) -> Result<String, String> {
+    logging::read_log_tail(lines)
+}
+
 /// Get the log file path.
 #[cfg(feature = "gui")]
 #[tauri::command]
 pub fn get_log_path() -> Option<String> {
     logging::get_log_file_path()
+}
+
+/// Set the log recording enabled flag at runtime.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn set_log_recording(enabled: bool) {
+    logging::set_log_recording_enabled(enabled);
 }
 
 /// Sets the backend locale at runtime.

@@ -10,15 +10,26 @@
 use log::{Level, Log, Metadata, Record};
 use std::io::Write;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Maximum log file size in bytes (1 MB).
-const MAX_LOG_FILE_SIZE: u64 = 1_024 * 1_024;
+/// Whether log recording to file is enabled.
+static LOG_RECORDING_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Global log file handle. Set once during app setup in release builds.
 static LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
 /// Path to the log file (set once during init).
 static LOG_FILE_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+/// Set the log recording enabled flag.
+pub fn set_log_recording_enabled(enabled: bool) {
+    LOG_RECORDING_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Get the current log recording enabled flag.
+pub fn is_log_recording_enabled() -> bool {
+    LOG_RECORDING_ENABLED.load(Ordering::Relaxed)
+}
 
 /// ANSI color codes for backend logging (dimmer/normal colors).
 /// Note: Backend uses Rust's `log` crate levels (Debug, Info, Warn, Error, Trace).
@@ -43,8 +54,8 @@ pub mod frontend_colors {
 
 /// Initialize the log file for release builds.
 ///
-/// Creates the log directory if needed, truncates the file if it exceeds
-/// `MAX_LOG_FILE_SIZE`, and opens it in append mode.
+/// Creates the log directory if needed and opens the file in append mode.
+/// The file accumulates until explicitly cleared by the user.
 pub fn init_log_file(log_dir: &std::path::Path) {
     if let Err(e) = std::fs::create_dir_all(log_dir) {
         eprintln!("Failed to create log directory: {e}");
@@ -52,20 +63,6 @@ pub fn init_log_file(log_dir: &std::path::Path) {
     }
 
     let log_path = log_dir.join("emterm.log");
-
-    // Truncate if file exceeds max size
-    if let Ok(metadata) = std::fs::metadata(&log_path) {
-        if metadata.len() > MAX_LOG_FILE_SIZE {
-            // Keep the last ~half of the file to preserve recent logs
-            if let Ok(contents) = std::fs::read(&log_path) {
-                let keep_from = contents.len() / 2;
-                // Find the next newline after the midpoint
-                if let Some(pos) = contents[keep_from..].iter().position(|&b| b == b'\n') {
-                    let _ = std::fs::write(&log_path, &contents[keep_from + pos + 1..]);
-                }
-            }
-        }
-    }
 
     match std::fs::OpenOptions::new()
         .create(true)
@@ -83,7 +80,12 @@ pub fn init_log_file(log_dir: &std::path::Path) {
 }
 
 /// Write a plain-text log entry (no ANSI colors) to the log file.
+///
+/// Does nothing if log recording is disabled.
 pub fn write_to_log_file(level: &str, origin: &str, message: &str) {
+    if !LOG_RECORDING_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     let Ok(mut guard) = LOG_FILE.lock() else {
         return;
     };
@@ -102,6 +104,18 @@ pub fn read_log_file() -> Result<String, String> {
         return Ok(String::new());
     };
     std::fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+/// Read the last `max_lines` lines from the log file.
+pub fn read_log_tail(max_lines: usize) -> Result<String, String> {
+    let path_guard = LOG_FILE_PATH.lock().map_err(|e| e.to_string())?;
+    let Some(path) = path_guard.as_ref() else {
+        return Ok(String::new());
+    };
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let lines: Vec<&str> = contents.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    Ok(lines[start..].join("\n"))
 }
 
 /// Clear the log file.
