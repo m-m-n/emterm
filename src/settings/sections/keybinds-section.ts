@@ -90,6 +90,9 @@ export function renderKeybindsSection(
   );
 }
 
+/**
+ * Creates a keybind grid container and appends it to the panel
+ */
 function createKeybindGrid(panel: HTMLElement): HTMLElement {
   const grid = document.createElement("div");
   grid.className = "settings-keybind-grid";
