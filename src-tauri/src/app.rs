@@ -91,8 +91,10 @@ pub fn run() {
             commands::sftp::sftp_cancel_upload,
             tauri_commands::set_language,
             tauri_commands::get_log_contents,
+            tauri_commands::get_log_tail,
             tauri_commands::clear_log,
             tauri_commands::get_log_path,
+            tauri_commands::set_log_recording,
         ])
         .setup(|app| {
             // Initialize custom logger for backend
@@ -104,7 +106,7 @@ pub fn run() {
             };
             logging::BackendLogger::init(level);
 
-            // Initialize log file for release builds
+            // Initialize log file for release builds and sync log recording flag
             {
                 use tauri::Manager;
 
@@ -112,6 +114,11 @@ pub fn run() {
                     if let Ok(log_dir) = app.path().app_log_dir() {
                         logging::init_log_file(&log_dir);
                     }
+                }
+
+                // Sync log recording flag from settings
+                if let Ok(settings) = commands::config::io::load_settings(app.handle().clone()) {
+                    logging::set_log_recording_enabled(settings.log_recording_enabled);
                 }
 
                 // On Windows, set ICON_BIG from the embedded ICO resource to fix

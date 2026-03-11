@@ -102,6 +102,9 @@ export interface AppSettings {
 
   // SFTP
   sftp_max_concurrent_uploads: number;
+
+  // Log Recording
+  log_recording_enabled: boolean;
 }
 
 export interface KeybindSettings {

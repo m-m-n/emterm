@@ -1732,10 +1732,27 @@ export function renderLogSection(
   panel: HTMLElement,
   ctx: SectionContext,
 ): void {
+  const { currentSettings: settings } = ctx;
   const header = document.createElement("h2");
   header.className = "settings-section-header";
   header.textContent = t("settings.log.title");
   panel.appendChild(header);
+
+  // Log Recording toggle
+  renderToggle(
+    panel,
+    {
+      key: "log-recording-enabled",
+      label: t("settings.log.recording"),
+      value: settings.log_recording_enabled,
+      description: t("settings.log.recordingDesc"),
+      onSave: (v) => {
+        invoke("set_log_recording", { enabled: v });
+        ctx.saveSetting("log_recording_enabled", v);
+      },
+    },
+    ctx.addContentListener,
+  );
 
   renderSubsectionHeader(panel, t("settings.log.logFile"));
 
@@ -1761,7 +1778,7 @@ export function renderLogSection(
   // Log content area
   const logArea = document.createElement("pre");
   logArea.className = "settings-log-content";
-  logArea.textContent = "...";
+  logArea.textContent = t("settings.log.loading");
   panel.appendChild(logArea);
 
   // Button row
@@ -1770,16 +1787,19 @@ export function renderLogSection(
 
   const reloadBtn = document.createElement("button");
   reloadBtn.className = "settings-btn";
+  reloadBtn.disabled = true;
   reloadBtn.textContent = t("settings.log.reload");
   btnRow.appendChild(reloadBtn);
 
   const copyBtn = document.createElement("button");
   copyBtn.className = "settings-btn";
+  copyBtn.disabled = true;
   copyBtn.textContent = t("settings.log.copy");
   btnRow.appendChild(copyBtn);
 
   const clearBtn = document.createElement("button");
   clearBtn.className = "settings-btn settings-btn-danger";
+  clearBtn.disabled = true;
   clearBtn.textContent = t("settings.log.clear");
   btnRow.appendChild(clearBtn);
 
@@ -1789,13 +1809,17 @@ export function renderLogSection(
 
   panel.appendChild(btnRow);
 
-  // Load log data
+  // Load log data (tail 500 lines, async)
   const loadLog = async () => {
+    reloadBtn.disabled = true;
+    copyBtn.disabled = true;
+    clearBtn.disabled = true;
+    logArea.textContent = t("settings.log.loading");
     try {
       const path = await invoke<string | null>("get_log_path");
       pathValue.textContent = path || t("settings.log.noLogFile");
 
-      const contents = await invoke<string>("get_log_contents");
+      const contents = await invoke<string>("get_log_tail", { lines: 500 });
       if (contents.trim()) {
         logArea.textContent = contents;
         logArea.scrollTop = logArea.scrollHeight;
@@ -1804,6 +1828,10 @@ export function renderLogSection(
       }
     } catch (e) {
       logArea.textContent = String(e);
+    } finally {
+      reloadBtn.disabled = false;
+      copyBtn.disabled = false;
+      clearBtn.disabled = false;
     }
   };
 
@@ -1817,7 +1845,7 @@ export function renderLogSection(
   // Copy button
   ctx.addContentListener(copyBtn, "click", async () => {
     try {
-      const contents = await invoke<string>("get_log_contents");
+      const contents = await invoke<string>("get_log_tail", { lines: 500 });
       await navigator.clipboard.writeText(contents);
       statusSpan.textContent = t("settings.log.copied");
       setTimeout(() => { statusSpan.textContent = ""; }, 2000);
