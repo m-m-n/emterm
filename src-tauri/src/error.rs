@@ -19,6 +19,10 @@ pub enum CommandError {
     InvalidProtocol(String),
 
     EncodingError(String),
+
+    NameRequired,
+
+    PermissionDenied(PathBuf),
 }
 
 impl fmt::Display for CommandError {
@@ -59,6 +63,12 @@ impl fmt::Display for CommandError {
             CommandError::EncodingError(msg) => {
                 write!(f, "{}", t!("error.encodingError", error = msg))
             }
+            CommandError::NameRequired => {
+                write!(f, "{}", t!("error.nameRequired"))
+            }
+            CommandError::PermissionDenied(path) => {
+                write!(f, "{}", t!("error.permissionDenied", path = path.display()))
+            }
         }
     }
 }
@@ -89,7 +99,7 @@ impl CommandError {
     /// Maps error to exit code following Unix convention
     /// - 0: Success
     /// - 1: General errors (validation, unsupported format, etc.)
-    /// - 2: I/O errors (file not found, read errors)
+    /// - 2: I/O errors (file not found, read errors, permission denied, usage errors)
     pub fn exit_code(&self) -> i32 {
         match self {
             CommandError::FileNotFound(_) => 2,
@@ -100,6 +110,8 @@ impl CommandError {
             CommandError::ImageDecodeError(_) => 1,
             CommandError::InvalidProtocol(_) => 1,
             CommandError::EncodingError(_) => 1,
+            CommandError::NameRequired => 2,
+            CommandError::PermissionDenied(_) => 2,
         }
     }
 }

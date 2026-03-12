@@ -5,7 +5,10 @@
     "markdownFile": "Path to Markdown file",
     "imageAbout": "Display image file in eMterm",
     "imageFile": "Path to image file",
-    "imageProtocol": "Image protocol to use"
+    "imageProtocol": "Image protocol to use",
+    "downloadAbout": "Download a file to the local machine via eMterm",
+    "downloadFile": "Path to the file to download",
+    "downloadName": "Filename for the saved file (required when reading from stdin)"
   },
   "error": {
     "fileNotFound": "File not found: %{path}",
@@ -15,7 +18,9 @@
     "unsupportedImageFormat": "Unsupported image format: %{format}",
     "imageDecodeError": "Failed to decode image: %{error}",
     "invalidProtocol": "Invalid protocol: %{protocol}",
-    "encodingError": "Encoding error: %{error}"
+    "encodingError": "Encoding error: %{error}",
+    "nameRequired": "--name is required when reading from stdin",
+    "permissionDenied": "Permission denied: %{path}"
   },
   "validation": {
     "fontSize": "font_size must be between %{min} and %{max}",

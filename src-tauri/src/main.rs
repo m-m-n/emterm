@@ -59,6 +59,21 @@ fn build_cli() -> Command {
                         .default_value("kitty"),
                 ),
         )
+        .subcommand(
+            Command::new("download")
+                .about(t!("cli.downloadAbout").to_string())
+                .arg(
+                    Arg::new("file")
+                        .help(t!("cli.downloadFile").to_string())
+                        .value_name("FILE"),
+                )
+                .arg(
+                    Arg::new("name")
+                        .long("name")
+                        .help(t!("cli.downloadName").to_string())
+                        .value_name("NAME"),
+                ),
+        )
 }
 
 fn main() {
@@ -92,6 +107,33 @@ fn main() {
             };
 
             if let Err(err) = app_lib::commands::image::execute_image_command(&file, proto) {
+                eprintln!("Error: {}", err);
+                std::process::exit(err.exit_code());
+            }
+        }
+        Some(("download", sub_matches)) => {
+            use std::io::IsTerminal;
+
+            let file = sub_matches.get_one::<String>("file");
+            let name = sub_matches.get_one::<String>("name");
+
+            let result = if let Some(file_path) = file {
+                app_lib::commands::download::execute_download_command(&PathBuf::from(file_path))
+            } else {
+                // stdin mode: --name is required, and stdin must not be a TTY
+                match name {
+                    Some(n) => {
+                        if std::io::stdin().is_terminal() {
+                            eprintln!("Error: stdin is a TTY. Provide a file path or pipe data.");
+                            std::process::exit(1);
+                        }
+                        app_lib::commands::download::execute_download_from_stdin(n)
+                    }
+                    None => Err(app_lib::error::CommandError::NameRequired),
+                }
+            };
+
+            if let Err(err) = result {
                 eprintln!("Error: {}", err);
                 std::process::exit(err.exit_code());
             }

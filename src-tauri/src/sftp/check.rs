@@ -80,13 +80,7 @@ mod tests {
             "/tmp/normal.txt                                                 \n",
         );
         let names = parse_ls_output(output);
-        assert_eq!(
-            names,
-            vec![
-                "My Document 2026.pdf",
-                "normal.txt"
-            ]
-        );
+        assert_eq!(names, vec!["My Document 2026.pdf", "normal.txt"]);
     }
 
     #[test]
@@ -176,13 +170,8 @@ mod tests {
             "/upload/other.txt                                               \n",
             "sftp> bye\n",
         );
-        let file_names = vec![
-            "My Document 2026.pdf".to_string(),
-        ];
+        let file_names = vec!["My Document 2026.pdf".to_string()];
         let duplicates = find_duplicates(output, &file_names);
-        assert_eq!(
-            duplicates,
-            vec!["My Document 2026.pdf"]
-        );
+        assert_eq!(duplicates, vec!["My Document 2026.pdf"]);
     }
 }

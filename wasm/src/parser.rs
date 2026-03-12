@@ -1216,6 +1216,52 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_osc_download_begin_sequence() {
+        let seq = b"\x1B]777;emterm;download;begin;id=550e8400-e29b-41d4-a716-446655440000;name=test.txt;size=1024;version=1.0\x1B\\";
+        let actions = parse_all(seq);
+        assert_eq!(actions.len(), 1);
+        if let ParsedAction::OscDispatch { param, data } = &actions[0] {
+            assert_eq!(*param, 777);
+            assert!(data.contains("download"));
+            assert!(data.contains("begin"));
+            assert!(data.contains("name=test.txt"));
+            assert!(data.contains("size=1024"));
+        } else {
+            panic!("Expected OscDispatch");
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_download_chunk_sequence() {
+        let seq = b"\x1B]777;emterm;download;chunk;id=550e8400-e29b-41d4-a716-446655440000;seq=0;data=SGVsbG8=\x1B\\";
+        let actions = parse_all(seq);
+        assert_eq!(actions.len(), 1);
+        if let ParsedAction::OscDispatch { param, data } = &actions[0] {
+            assert_eq!(*param, 777);
+            assert!(data.contains("download"));
+            assert!(data.contains("chunk"));
+            assert!(data.contains("seq=0"));
+            assert!(data.contains("data=SGVsbG8="));
+        } else {
+            panic!("Expected OscDispatch");
+        }
+    }
+
+    #[test]
+    fn test_parse_osc_download_end_sequence() {
+        let seq = b"\x1B]777;emterm;download;end;id=550e8400-e29b-41d4-a716-446655440000\x1B\\";
+        let actions = parse_all(seq);
+        assert_eq!(actions.len(), 1);
+        if let ParsedAction::OscDispatch { param, data } = &actions[0] {
+            assert_eq!(*param, 777);
+            assert!(data.contains("download"));
+            assert!(data.contains("end"));
+        } else {
+            panic!("Expected OscDispatch");
+        }
+    }
+
+    #[test]
     fn test_parse_osc_discards_bytes_beyond_16mb() {
         // Data beyond 16MB cap should be silently discarded
         let size = 16 * 1024 * 1024;
