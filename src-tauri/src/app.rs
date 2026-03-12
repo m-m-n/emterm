@@ -55,6 +55,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .manage(PtyManager::new())
@@ -95,6 +96,7 @@ pub fn run() {
             tauri_commands::clear_log,
             tauri_commands::get_log_path,
             tauri_commands::set_log_recording,
+            tauri_commands::write_download_file,
         ])
         .setup(|app| {
             // Initialize custom logger for backend

@@ -23,6 +23,7 @@ import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/os
 import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
 import { UploadManager } from "../sftp/upload-manager";
+import { DownloadSessionManager } from "../download";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -52,6 +53,7 @@ export class TerminalApp {
   private linkHandler: LinkHandler | null = null;
   private fileDropHandler: FileDropHandler | null = null;
   private _uploadManager: UploadManager | null = null;
+  private downloadManager: DownloadSessionManager | null = null;
   private pendingOscQueue: { actionType: number; data: string }[] = [];
 
   /**
@@ -335,6 +337,10 @@ export class TerminalApp {
 
     // Set markdown session manager's container for fullscreen view
     this.state.getMarkdownManager().setContainer(this.overlayRoot!);
+
+    // Initialize download session manager
+    this.downloadManager = new DownloadSessionManager();
+    this.downloadManager.setContainer(this.overlayRoot!);
 
     // Wire up IME blur/focus for fullscreen markdown view (same pattern as ImageViewer)
     const fullscreenView = this.state.getMarkdownManager().getFullscreenView();
@@ -694,6 +700,9 @@ export class TerminalApp {
         // Handle fold commands first
         if (verb === "emterm" && params.length > 0 && params[0] === "fold") {
           handleFoldCommand(this.state, params.slice(1));
+        } else if (verb === "emterm" && params.length > 0 && params[0] === "download") {
+          // Route to download manager
+          this.downloadManager?.handleCommand(verb, params);
         } else {
           // Route to markdown manager
           this.state.getMarkdownManager().handleCommand(verb, params);
@@ -948,6 +957,10 @@ export class TerminalApp {
     this.selectionController?.dispose();
     this.searchHandler?.dispose();
     this.searchHandler = null;
+
+    // Clean up download handler
+    this.downloadManager?.dispose();
+    this.downloadManager = null;
 
     // Clean up SFTP handlers
     this.fileDropHandler?.detach();

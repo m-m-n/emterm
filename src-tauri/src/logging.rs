@@ -92,7 +92,9 @@ pub fn write_to_log_file(level: &str, origin: &str, message: &str) {
     let Some(file) = guard.as_mut() else {
         return;
     };
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+    let now = chrono::Local::now()
+        .format("%Y-%m-%d %H:%M:%S%.3f")
+        .to_string();
     let _ = writeln!(file, "{now} [{level}][{origin}] {message}");
     let _ = file.flush();
 }

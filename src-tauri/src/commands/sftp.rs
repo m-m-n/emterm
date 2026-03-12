@@ -259,10 +259,12 @@ fn validate_remote_path(path: &str) -> Result<(), String> {
     // Reject characters dangerous in sftp batch mode:
     // - Shell metacharacters that could be used for command injection
     // - Double quotes and newlines that could escape sftp command quoting
-    if path
-        .chars()
-        .any(|c| matches!(c, ';' | '|' | '&' | '`' | '$' | '(' | ')' | '"' | '\\' | '\n' | '\r'))
-    {
+    if path.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '|' | '&' | '`' | '$' | '(' | ')' | '"' | '\\' | '\n' | '\r'
+        )
+    }) {
         return Err("Invalid remote path: contains unsafe characters".to_string());
     }
     Ok(())

@@ -1,0 +1,16 @@
+schema_version: 1
+feature: file-download
+
+tasks:
+  - - id: phase1-cli-osc
+      title: "Phase 1: CLI Command & OSC Generation"
+      status: completed
+      description: "emterm download コマンド、OSC生成、ファイル名サニタイズ"
+    - id: phase2-wasm-parser
+      title: "Phase 2: WASM Parser Extension"
+      status: completed
+      description: "WASM OSCパーサーにdownloadシーケンスの通過を確認"
+  - - id: phase3-frontend
+      title: "Phase 3: Frontend Download Handler & Save Dialog"
+      status: completed
+      description: "DownloadSessionManager、プログレス表示、保存ダイアログ"

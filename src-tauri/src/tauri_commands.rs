@@ -449,3 +449,42 @@ pub async fn tab_close_graceful(
     };
     crate::pty::graceful_shutdown::shutdown_with_config(&state, &session_id, config).await
 }
+
+/// Shows a save dialog and writes binary data to the user-selected path.
+/// The file path is never received from the frontend — the backend opens the
+/// native dialog itself, eliminating arbitrary-path-write via IPC.
+///
+/// Receives file data as a base64 string to avoid the overhead of JSON number
+/// array serialization (which would inflate a 10MB file to ~30MB of JSON).
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub async fn write_download_file(
+    app: AppHandle,
+    filename: String,
+    data_base64: String,
+) -> Result<Option<String>, String> {
+    use base64::{Engine as _, engine::general_purpose};
+    use tauri_plugin_dialog::DialogExt;
+
+    let data = general_purpose::STANDARD
+        .decode(&data_base64)
+        .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+    let dialog = app.dialog().file().set_file_name(&filename);
+    let path = tokio::task::spawn_blocking(move || dialog.blocking_save_file())
+        .await
+        .map_err(|e| format!("Dialog task failed: {}", e))?;
+
+    match path {
+        Some(p) => {
+            let file_path = p
+                .as_path()
+                .ok_or_else(|| format!("Save path is not a local filesystem path: {:?}", p))?;
+            tokio::fs::write(&file_path, &data)
+                .await
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+            Ok(Some(file_path.to_string_lossy().into_owned()))
+        }
+        None => Ok(None), // User cancelled
+    }
+}

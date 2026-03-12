@@ -1,0 +1,105 @@
+schema_version: 1
+feature: file-download
+scale: standard
+created: 2026-03-11
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+    wasm:
+      language: rust
+      test_command: "cd wasm && cargo test"
+    frontend:
+      language: typescript
+      test_command: "bun test"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 24283b5d7c77c1a392b4bb758716c2ad36af4f54
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 24283b5d7c77c1a392b4bb758716c2ad36af4f54
+  - id: implement
+    status: completed
+    completed_at_commit: 24283b5d7c77c1a392b4bb758716c2ad36af4f54
+  - id: check
+    status: completed
+    completed_at_commit: 24283b5d7c77c1a392b4bb758716c2ad36af4f54
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 24283b5d7c77c1a392b4bb758716c2ad36af4f54
+  - id: review
+    status: completed
+    completed_at_commit: 24283b5d7c77c1a392b4bb758716c2ad36af4f54
+
+requirements:
+  FR1:
+    title: CLI Command
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Stdin Input
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: OSC Sequence Generation
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: WASM Parser Extension
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: File Save Dialog
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Progress Display
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: tmux Passthrough
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Cancel/Discard
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Performance
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Security
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Compatibility
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: Reliability
+    status: ok
+    tasks: []
+    tests: []
