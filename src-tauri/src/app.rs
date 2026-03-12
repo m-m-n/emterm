@@ -46,8 +46,10 @@ fn set_taskbar_icon(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::er
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[cfg(not(test))]
 pub fn run() {
+    use crate::download_registry::DownloadRegistry;
     use crate::logging;
     use crate::pty::PtyManager;
+    use std::sync::Arc;
     use crate::sftp::pool::ConcurrentUploadPool;
     use crate::sftp::upload::SftpProcessManager;
     use crate::state::{ImageProcessorState, LargeImageDataStore};
@@ -63,6 +65,7 @@ pub fn run() {
         .manage(LargeImageDataStore::new())
         .manage(SftpProcessManager::new())
         .manage(ConcurrentUploadPool::new(4))
+        .manage(Arc::new(DownloadRegistry::new()))
         .invoke_handler(tauri::generate_handler![
             tauri_commands::pty_spawn,
             tauri_commands::pty_write,
@@ -96,7 +99,10 @@ pub fn run() {
             tauri_commands::clear_log,
             tauri_commands::get_log_path,
             tauri_commands::set_log_recording,
-            tauri_commands::write_download_file,
+            tauri_commands::start_download_file,
+            tauri_commands::append_download_chunk,
+            tauri_commands::finish_download_file,
+            tauri_commands::cancel_download_file,
         ])
         .setup(|app| {
             // Initialize custom logger for backend
@@ -136,6 +142,18 @@ pub fn run() {
 
                 #[cfg(not(windows))]
                 let _ = app;
+            }
+
+            // Spawn background thread for download registry cleanup (120s idle timeout)
+            {
+                use tauri::Manager;
+                let registry = Arc::clone(&app.state::<Arc<DownloadRegistry>>().inner());
+                std::thread::spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(30));
+                        registry.cleanup_expired();
+                    }
+                });
             }
 
             Ok(())

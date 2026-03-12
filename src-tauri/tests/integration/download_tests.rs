@@ -178,12 +178,12 @@ fn test_download_base64_roundtrip() {
     }
 }
 
-/// Test 9: Large file produces multiple chunks
+/// Test 9: Large file produces multiple chunks (8MiB chunk size)
 #[test]
 fn test_download_large_file_chunking() {
     let mut temp_file = NamedTempFile::new().unwrap();
-    // Create ~200KB file → base64 ~267KB → multiple 128KB chunks
-    let content = vec![b'A'; 200 * 1024];
+    // Create ~10MB file → exceeds 8MiB chunk size → multiple chunks
+    let content = vec![b'A'; 10 * 1024 * 1024];
     temp_file.write_all(&content).unwrap();
     temp_file.flush().unwrap();
 
@@ -200,9 +200,34 @@ fn test_download_large_file_chunking() {
     let chunk_count = stdout.matches("\x1b]777;emterm;download;chunk").count();
     assert!(
         chunk_count > 1,
-        "Expected multiple chunks for 200KB file, got {}",
+        "Expected multiple chunks for 10MB file, got {}",
         chunk_count
     );
     assert!(stdout.contains("seq=0"));
     assert!(stdout.contains("seq=1"));
+}
+
+/// Test 10: Small file (< 8MiB) produces exactly one chunk
+#[test]
+fn test_download_small_file_single_chunk() {
+    let mut temp_file = NamedTempFile::new().unwrap();
+    let content = vec![b'B'; 200 * 1024]; // 200KB → single chunk
+    temp_file.write_all(&content).unwrap();
+    temp_file.flush().unwrap();
+
+    let mut cmd = Command::cargo_bin("emterm").unwrap();
+    let output = cmd
+        .arg("download")
+        .arg(temp_file.path())
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let chunk_count = stdout.matches("\x1b]777;emterm;download;chunk").count();
+    assert_eq!(
+        chunk_count, 1,
+        "200KB file should produce 1 chunk with 8MiB chunk size"
+    );
 }

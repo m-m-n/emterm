@@ -1,0 +1,100 @@
+schema_version: 1
+feature: download-streaming
+scale: standard
+created: 2026-03-12
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+    wasm:
+      language: rust
+      test_command: "cd wasm && cargo test"
+    frontend:
+      language: typescript
+      test_command: "bun test"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: null
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: c8575ce404fcad785f7a042527321f27c682f6ea
+  - id: implement
+    status: completed
+    completed_at_commit: pending
+  - id: check
+    status: completed
+    completed_at_commit: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: pending
+  - id: review
+    status: completed
+    completed_at_commit: pending
+
+requirements:
+  FR1:
+    title: CLI Streaming Read & Encode
+    status: pending
+    tasks: []
+    tests: []
+  FR2:
+    title: Backend Streaming File Write
+    status: pending
+    tasks: []
+    tests: []
+  FR3:
+    title: Frontend Streaming Session
+    status: pending
+    tasks: []
+    tests: []
+  FR4:
+    title: Remove 500MB Limit
+    status: pending
+    tasks: []
+    tests: []
+  FR5:
+    title: Backend Session Registry & Cleanup
+    status: pending
+    tasks: []
+    tests: []
+  FR6:
+    title: Error Recovery
+    status: pending
+    tasks: []
+    tests: []
+  FR7:
+    title: Deprecate write_download_file
+    status: pending
+    tasks: []
+    tests: []
+  NFR1:
+    title: Memory O(chunk_size)
+    status: pending
+    tasks: []
+    tests: []
+  NFR2:
+    title: Throughput
+    status: pending
+    tasks: []
+    tests: []
+  NFR3:
+    title: Compatibility
+    status: pending
+    tasks: []
+    tests: []
+  NFR4:
+    title: UX
+    status: pending
+    tasks: []
+    tests: []
