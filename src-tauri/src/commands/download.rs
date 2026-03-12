@@ -5,8 +5,10 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use uuid::Uuid;
 
-/// Chunk size for base64 encoded download data (128KB)
-const DOWNLOAD_CHUNK_SIZE: usize = 128 * 1024;
+/// Chunk size for raw file reads (8 MiB).
+/// 8 MiB raw produces ~10.7 MiB base64, well within the WASM parser's
+/// MAX_OSC_LEN = 16 MiB limit.
+const DOWNLOAD_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
 /// Sanitize a filename by stripping path components and traversal sequences.
 ///
@@ -15,7 +17,7 @@ const DOWNLOAD_CHUNK_SIZE: usize = 128 * 1024;
 pub fn sanitize_filename(name: &str) -> String {
     // Take the last component after any path separator
     let basename = name
-        .rsplit(|c| c == '/' || c == '\\')
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or(name);
 
@@ -38,6 +40,7 @@ pub fn sanitize_filename(name: &str) -> String {
 }
 
 /// Executes the download command with a file path argument.
+/// Reads in fixed-size chunks for constant memory usage.
 pub fn execute_download_command(file_path: &Path) -> Result<(), CommandError> {
     let mut file = File::open(file_path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => CommandError::FileNotFound(file_path.to_owned()),
@@ -60,13 +63,39 @@ pub fn execute_download_command(file_path: &Path) -> Result<(), CommandError> {
             .unwrap_or("download"),
     );
 
-    let mut content = Vec::with_capacity(file_size as usize);
-    file.read_to_end(&mut content)?;
+    let session_id = Uuid::new_v4();
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
 
-    output_download_sequence(&filename, file_size, &content)
+    // Output begin sequence
+    let begin = osc::generate_download_osc_begin(&session_id, &filename, file_size);
+    write_osc_sequence(&mut handle, &begin)?;
+
+    // Read and output chunks
+    let mut buffer = vec![0u8; DOWNLOAD_CHUNK_SIZE];
+    let mut seq = 0;
+
+    loop {
+        let bytes_read = read_full_chunk(&mut file, &mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        let encoded = base64::encode_base64(&buffer[..bytes_read]);
+        let chunk = osc::generate_download_osc_chunk(&session_id, seq, &encoded);
+        write_osc_sequence(&mut handle, &chunk)?;
+        seq += 1;
+    }
+
+    // Output end sequence
+    let end = osc::generate_download_osc_end(&session_id);
+    write_osc_sequence(&mut handle, &end)?;
+
+    Ok(())
 }
 
 /// Executes the download command reading from stdin.
+/// stdin is fully buffered because size is unknown upfront.
 pub fn execute_download_from_stdin(name: &str) -> Result<(), CommandError> {
     let filename = sanitize_filename(name);
 
@@ -74,30 +103,51 @@ pub fn execute_download_from_stdin(name: &str) -> Result<(), CommandError> {
     io::stdin().read_to_end(&mut content)?;
 
     let file_size = content.len() as u64;
-    output_download_sequence(&filename, file_size, &content)
-}
-
-/// Generate and output download OSC sequences.
-fn output_download_sequence(
-    filename: &str,
-    file_size: u64,
-    content: &[u8],
-) -> Result<(), CommandError> {
     let session_id = Uuid::new_v4();
-
-    let encoded = base64::encode_base64(content);
-    let chunks = base64::chunk_data(&encoded, DOWNLOAD_CHUNK_SIZE);
-
-    let sequence = osc::generate_download_osc(&session_id, filename, file_size, chunks);
-
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    handle
-        .write_all(super::tmux::passthrough_if_needed(&sequence).as_bytes())
-        .map_err(CommandError::FileReadError)?;
-    handle.flush().map_err(CommandError::FileReadError)?;
+
+    // Output begin sequence
+    let begin = osc::generate_download_osc_begin(&session_id, &filename, file_size);
+    write_osc_sequence(&mut handle, &begin)?;
+
+    // Chunk base64 at the same size as the file path code path
+    let encoded = base64::encode_base64(&content);
+    let base64_chunk_size = DOWNLOAD_CHUNK_SIZE * 4 / 3;
+    let chunks = base64::chunk_data(&encoded, base64_chunk_size);
+    for (seq, data) in chunks.iter().enumerate() {
+        let chunk = osc::generate_download_osc_chunk(&session_id, seq, data);
+        write_osc_sequence(&mut handle, &chunk)?;
+    }
+
+    // Output end sequence
+    let end = osc::generate_download_osc_end(&session_id);
+    write_osc_sequence(&mut handle, &end)?;
 
     Ok(())
+}
+
+/// Write a single OSC sequence to stdout, applying tmux passthrough if needed.
+fn write_osc_sequence(handle: &mut io::StdoutLock, sequence: &str) -> Result<(), CommandError> {
+    handle
+        .write_all(super::tmux::passthrough_if_needed(sequence).as_bytes())
+        .map_err(CommandError::FileReadError)?;
+    handle.flush().map_err(CommandError::FileReadError)?;
+    Ok(())
+}
+
+/// Read a full chunk from the reader, handling partial reads.
+fn read_full_chunk<R: Read>(reader: &mut R, buffer: &mut [u8]) -> Result<usize, io::Error> {
+    let mut total = 0;
+    while total < buffer.len() {
+        match reader.read(&mut buffer[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -145,13 +195,15 @@ mod tests {
 
     #[test]
     fn test_sanitize_preserves_double_dot_in_name() {
-        // Legitimate filenames with ".." should be preserved
         assert_eq!(sanitize_filename("file..v2.txt"), "file..v2.txt");
     }
 
     #[test]
     fn test_sanitize_strips_semicolons() {
-        assert_eq!(sanitize_filename("evil;inject=val.txt"), "evilinject=val.txt");
+        assert_eq!(
+            sanitize_filename("evil;inject=val.txt"),
+            "evilinject=val.txt"
+        );
     }
 
     #[test]
@@ -190,7 +242,38 @@ mod tests {
     }
 
     #[test]
-    fn test_chunk_size_is_128kb() {
-        assert_eq!(DOWNLOAD_CHUNK_SIZE, 128 * 1024);
+    fn test_chunk_size_is_8mib() {
+        assert_eq!(DOWNLOAD_CHUNK_SIZE, 8 * 1024 * 1024);
+    }
+
+    // --- read_full_chunk tests ---
+
+    #[test]
+    fn test_read_full_chunk_complete() {
+        let data = vec![1u8; 100];
+        let mut cursor = io::Cursor::new(data.clone());
+        let mut buffer = vec![0u8; 100];
+        let n = read_full_chunk(&mut cursor, &mut buffer).unwrap();
+        assert_eq!(n, 100);
+        assert_eq!(&buffer[..n], &data[..]);
+    }
+
+    #[test]
+    fn test_read_full_chunk_partial_eof() {
+        let data = vec![42u8; 50];
+        let mut cursor = io::Cursor::new(data.clone());
+        let mut buffer = vec![0u8; 100];
+        let n = read_full_chunk(&mut cursor, &mut buffer).unwrap();
+        assert_eq!(n, 50);
+        assert_eq!(&buffer[..n], &data[..]);
+    }
+
+    #[test]
+    fn test_read_full_chunk_empty() {
+        let data: Vec<u8> = vec![];
+        let mut cursor = io::Cursor::new(data);
+        let mut buffer = vec![0u8; 100];
+        let n = read_full_chunk(&mut cursor, &mut buffer).unwrap();
+        assert_eq!(n, 0);
     }
 }

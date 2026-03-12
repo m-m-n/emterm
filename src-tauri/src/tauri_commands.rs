@@ -450,27 +450,20 @@ pub async fn tab_close_graceful(
     crate::pty::graceful_shutdown::shutdown_with_config(&state, &session_id, config).await
 }
 
-/// Shows a save dialog and writes binary data to the user-selected path.
-/// The file path is never received from the frontend — the backend opens the
-/// native dialog itself, eliminating arbitrary-path-write via IPC.
+/// Starts a streaming download: show save dialog, open file, register handle.
 ///
-/// Receives file data as a base64 string to avoid the overhead of JSON number
-/// array serialization (which would inflate a 10MB file to ~30MB of JSON).
+/// Returns `{ id, path }` on confirm, or `null` if user cancels.
 #[cfg(feature = "gui")]
 #[tauri::command]
-pub async fn write_download_file(
+pub async fn start_download_file(
     app: AppHandle,
+    registry: State<'_, std::sync::Arc<crate::download_registry::DownloadRegistry>>,
     filename: String,
-    data_base64: String,
-) -> Result<Option<String>, String> {
-    use base64::{Engine as _, engine::general_purpose};
+) -> Result<Option<serde_json::Value>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let data = general_purpose::STANDARD
-        .decode(&data_base64)
-        .map_err(|e| format!("Failed to decode base64: {}", e))?;
-
-    let dialog = app.dialog().file().set_file_name(&filename);
+    let safe_filename = crate::commands::download::sanitize_filename(&filename);
+    let dialog = app.dialog().file().set_file_name(&safe_filename);
     let path = tokio::task::spawn_blocking(move || dialog.blocking_save_file())
         .await
         .map_err(|e| format!("Dialog task failed: {}", e))?;
@@ -479,12 +472,59 @@ pub async fn write_download_file(
         Some(p) => {
             let file_path = p
                 .as_path()
-                .ok_or_else(|| format!("Save path is not a local filesystem path: {:?}", p))?;
-            tokio::fs::write(&file_path, &data)
-                .await
-                .map_err(|e| format!("Failed to write file: {}", e))?;
-            Ok(Some(file_path.to_string_lossy().into_owned()))
+                .ok_or_else(|| format!("Save path is not a local filesystem path: {:?}", p))?
+                .to_path_buf();
+
+            let file = std::fs::File::create(&file_path)
+                .map_err(|e| format!("Failed to create file: {}", e))?;
+
+            let id = uuid::Uuid::new_v4().to_string();
+            let path_str = file_path.to_string_lossy().into_owned();
+
+            registry
+                .insert(id.clone(), file, file_path)
+                .map_err(|e| e.to_string())?;
+
+            Ok(Some(serde_json::json!({ "id": id, "path": path_str })))
         }
         None => Ok(None), // User cancelled
     }
+}
+
+/// Appends a base64-encoded chunk to an open download session.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn append_download_chunk(
+    registry: State<'_, std::sync::Arc<crate::download_registry::DownloadRegistry>>,
+    id: String,
+    data_base64: String,
+) -> Result<(), String> {
+    use base64::{Engine as _, engine::general_purpose};
+
+    let data = general_purpose::STANDARD
+        .decode(&data_base64)
+        .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+    registry.write(&id, &data)
+}
+
+/// Finishes a download session: flush, close, remove from registry.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn finish_download_file(
+    registry: State<'_, std::sync::Arc<crate::download_registry::DownloadRegistry>>,
+    id: String,
+) -> Result<String, String> {
+    let path = registry.finish(&id)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Cancels a download session: close handle, delete partial file.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn cancel_download_file(
+    registry: State<'_, std::sync::Arc<crate::download_registry::DownloadRegistry>>,
+    id: String,
+) -> Result<(), String> {
+    registry.cancel(&id)
 }

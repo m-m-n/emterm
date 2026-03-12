@@ -2,7 +2,8 @@
  * Download session manager.
  *
  * Manages file download sessions for OSC 777 download extension.
- * Handles begin/chunk/end lifecycle, progress tracking, and save dialog.
+ * Handles begin/chunk/end lifecycle with streaming IPC to the backend.
+ * No chunk data is accumulated in memory.
  *
  * @module download/session
  */
@@ -15,16 +16,24 @@ interface DownloadSession {
 	id: string;
 	filename: string;
 	expectedSize: number;
-	chunks: Map<number, string>;
+	handleId: string | null;
+	nextSeq: number;
 	receivedBytes: number;
 	lastChunkAt: number;
+	/** Chunks received before save dialog resolved */
+	pendingChunks: string[];
+}
+
+interface StartDownloadResult {
+	id: string;
+	path: string;
 }
 
 export class DownloadSessionManager {
 	static readonly SESSION_TIMEOUT = 60 * 1000;
 	static readonly MAX_SESSIONS = 10;
-	/** Maximum download size in bytes (500MB) */
-	static readonly MAX_DOWNLOAD_SIZE = 500 * 1024 * 1024;
+	/** Max pending chunks buffered while save dialog is open */
+	static readonly MAX_PENDING_CHUNKS = 5;
 	private static readonly CLEANUP_INTERVAL = 10000;
 
 	private sessions = new Map<string, DownloadSession>();
@@ -87,24 +96,59 @@ export class DownloadSessionManager {
 		if (this.sessions.size >= DownloadSessionManager.MAX_SESSIONS) return;
 
 		const expectedSize = parseInt(params.size || "0", 10) || 0;
-		if (expectedSize > DownloadSessionManager.MAX_DOWNLOAD_SIZE) {
-			console.warn(
-				`[WARN][FRONTEND] Download: rejected, size ${expectedSize} exceeds limit`,
-			);
-			return;
-		}
 
 		const session: DownloadSession = {
 			id,
 			filename: this.sanitizeFilename(params.name || "download"),
 			expectedSize,
-			chunks: new Map(),
+			handleId: null,
+			nextSeq: 0,
 			receivedBytes: 0,
 			lastChunkAt: Date.now(),
+			pendingChunks: [],
 		};
 
 		this.sessions.set(id, session);
 		this.progressDisplay.show(session.filename, 0);
+
+		// Start the download asynchronously (show save dialog)
+		this.startDownload(session).catch((err) => {
+			console.error(
+				"[ERROR][FRONTEND] Download: startDownload failed",
+				err,
+			);
+			this.discardSession(id);
+		});
+	}
+
+	private async startDownload(session: DownloadSession): Promise<void> {
+		const result = await invoke<StartDownloadResult | null>(
+			"start_download_file",
+			{
+				filename: session.filename,
+			},
+		);
+
+		// Session may have been discarded while dialog was open
+		if (!this.sessions.has(session.id)) {
+			// Cancel the just-created backend handle to avoid orphaned files
+			if (result) {
+				invoke("cancel_download_file", { id: result.id }).catch(
+					() => {},
+				);
+			}
+			return;
+		}
+
+		if (result) {
+			session.handleId = result.id;
+			// Flush any chunks that arrived while the dialog was open
+			await this.flushPendingChunks(session);
+		} else {
+			// User cancelled save dialog
+			this.sessions.delete(session.id);
+			this.progressDisplay.showCancelled();
+		}
 	}
 
 	private handleChunk(params: Record<string, string>): void {
@@ -121,31 +165,41 @@ export class DownloadSessionManager {
 		if (!data) return;
 
 		// Validate sequential ordering
-		if (seq !== session.chunks.size) {
+		if (seq !== session.nextSeq) {
 			// Out-of-order: discard session
 			this.discardSession(id);
 			return;
 		}
 
-		session.chunks.set(seq, data);
+		session.nextSeq++;
 		session.receivedBytes += data.length;
 		session.lastChunkAt = Date.now();
 
-		// Guard against size=0 bypass: check accumulated size regardless of expectedSize
-		const maxEncodedSize = Math.ceil(
-			(DownloadSessionManager.MAX_DOWNLOAD_SIZE * 4) / 3,
-		);
-		if (session.receivedBytes > maxEncodedSize) {
-			console.warn(
-				"[WARN][FRONTEND] Download: accumulated size exceeds limit, discarding",
-			);
-			this.discardSession(id);
-			return;
+		if (session.handleId) {
+			this.appendChunk(session, data).catch((err) => {
+				console.error(
+					"[ERROR][FRONTEND] Download: appendChunk failed",
+					err,
+				);
+				this.discardSession(id);
+			});
+		} else {
+			// Buffer chunks until save dialog resolves (bounded)
+			if (
+				session.pendingChunks.length >=
+				DownloadSessionManager.MAX_PENDING_CHUNKS
+			) {
+				console.warn(
+					"[WARN][FRONTEND] Download: pending chunks limit reached, discarding session",
+				);
+				this.discardSession(id);
+				return;
+			}
+			session.pendingChunks.push(data);
 		}
 
 		// Update progress
 		if (session.expectedSize > 0) {
-			// Approximate: base64 encoded size is ~4/3 of original
 			const estimatedEncodedSize = Math.ceil(
 				(session.expectedSize * 4) / 3,
 			);
@@ -157,6 +211,24 @@ export class DownloadSessionManager {
 		}
 	}
 
+	private async flushPendingChunks(session: DownloadSession): Promise<void> {
+		const chunks = session.pendingChunks;
+		session.pendingChunks = [];
+		for (const chunk of chunks) {
+			await this.appendChunk(session, chunk);
+		}
+	}
+
+	private async appendChunk(
+		session: DownloadSession,
+		data: string,
+	): Promise<void> {
+		await invoke("append_download_chunk", {
+			id: session.handleId,
+			dataBase64: data,
+		});
+	}
+
 	private async handleEnd(params: Record<string, string>): Promise<void> {
 		const id = params.id;
 		if (!id) return;
@@ -166,48 +238,37 @@ export class DownloadSessionManager {
 
 		this.sessions.delete(id);
 
-		// Concatenate all base64 chunks (already base64 encoded)
-		const sortedSeqs = Array.from(session.chunks.keys()).sort(
-			(a, b) => a - b,
-		);
-		const base64Data = sortedSeqs
-			.map((seq) => session.chunks.get(seq)!)
-			.join("");
-
-		// Validate base64 is decodable
-		try {
-			atob(base64Data);
-		} catch {
-			console.error(
-				"[ERROR][FRONTEND] Download: invalid base64 data",
-			);
+		if (!session.handleId) {
+			// Handle not yet assigned (dialog may still be open or was cancelled)
 			this.progressDisplay.hide();
+			// Note: if dialog is still open and later confirms, startDownload
+			// will see the session was deleted and return early.
 			return;
 		}
 
-		this.progressDisplay.show(session.filename, 100);
+		// Flush any remaining pending chunks before finishing
+		if (session.pendingChunks.length > 0) {
+			await this.flushPendingChunks(session);
+		}
 
-		// Send base64 string directly to backend for decoding + save dialog
-		// (avoids Array.from(Uint8Array) which creates a huge JSON number array)
 		try {
-			const savedPath = await invoke<string | null>("write_download_file", {
-				filename: session.filename,
-				data_base64: base64Data,
+			await invoke("finish_download_file", {
+				id: session.handleId,
 			});
-
-			if (savedPath) {
-				this.progressDisplay.showCompleted(session.filename);
-			} else {
-				// User cancelled
-				this.progressDisplay.showCancelled();
-			}
+			this.progressDisplay.showCompleted(session.filename);
 		} catch (err) {
-			console.error("[ERROR][FRONTEND] Download: save failed", err);
+			console.error("[ERROR][FRONTEND] Download: finish failed", err);
 			this.progressDisplay.hide();
 		}
 	}
 
 	private discardSession(id: string): void {
+		const session = this.sessions.get(id);
+		if (session?.handleId) {
+			invoke("cancel_download_file", { id: session.handleId }).catch(
+				() => {},
+			);
+		}
 		this.sessions.delete(id);
 		this.progressDisplay.hide();
 	}
@@ -255,6 +316,15 @@ export class DownloadSessionManager {
 		if (this.cleanupTimer !== null) {
 			clearInterval(this.cleanupTimer);
 			this.cleanupTimer = null;
+		}
+		// Cancel all active sessions
+		for (const [id] of this.sessions) {
+			const session = this.sessions.get(id);
+			if (session?.handleId) {
+				invoke("cancel_download_file", {
+					id: session.handleId,
+				}).catch(() => {});
+			}
 		}
 		this.sessions.clear();
 		this.progressDisplay.dispose();

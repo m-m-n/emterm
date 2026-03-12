@@ -1,0 +1,192 @@
+schema_version: 1
+feature: download-streaming
+generated_from: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1
+    name: Backend Download Registry and Streaming Commands
+    goal: Create backend file handle registry and four new Tauri commands for streaming file writes
+    effort: medium
+    status: completed
+    depends_on: []
+    blocks: [phase-3]
+    files_to_create:
+      - path: src-tauri/src/download_registry.rs
+        purpose: File handle registry with session management, timeout, cleanup
+    files_to_modify:
+      - path: src-tauri/src/tauri_commands.rs
+        change: Add start/append/finish/cancel_download_file commands; remove write_download_file
+      - path: src-tauri/src/app.rs
+        change: Register new commands in invoke_handler, add DownloadRegistry to managed state
+      - path: src-tauri/src/lib.rs
+        change: Add download_registry module declaration
+    tasks:
+      - id: t1-1
+        title: Create DownloadRegistry
+        description: Session registry holding file handles, paths, timestamps. Max 10 sessions, 120s timeout.
+        requirements: [FR5]
+      - id: t1-2
+        title: Implement start_download_file command
+        description: Save dialog, file creation, registry insertion. Returns {id, path} or null.
+        requirements: [FR2]
+      - id: t1-3
+        title: Implement append_download_chunk command
+        description: Registry lookup, base64 decode, file write. Error cleanup.
+        requirements: [FR2]
+      - id: t1-4
+        title: Implement finish_download_file command
+        description: Flush, close, remove from registry.
+        requirements: [FR2]
+      - id: t1-5
+        title: Implement cancel_download_file command
+        description: Close handle, delete partial file, remove from registry.
+        requirements: [FR6]
+      - id: t1-6
+        title: Remove write_download_file
+        description: Delete old command from tauri_commands.rs and app.rs.
+        requirements: [FR7]
+      - id: t1-7
+        title: Register state and commands
+        description: Add DownloadRegistry as managed state, register commands in app.rs.
+        requirements: [FR2, FR5]
+    tests:
+      - id: test1-1
+        scenario: Registry insert/get/remove
+        type: unit
+        requirement: FR5
+      - id: test1-2
+        scenario: Registry timeout cleanup (120s)
+        type: unit
+        requirement: FR5
+      - id: test1-3
+        scenario: Registry max sessions limit (10)
+        type: unit
+        requirement: FR5
+
+  - id: phase-2
+    name: CLI Streaming Read and OSC Generation
+    goal: Modify CLI to read files in 8MiB chunks with constant memory, output OSC sequences incrementally
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: []
+    files_to_create: []
+    files_to_modify:
+      - path: src-tauri/src/commands/download.rs
+        change: Replace read_to_end with chunked read loop; change chunk size to 8MiB raw
+      - path: src-tauri/src/encoding/osc.rs
+        change: Add individual OSC begin/chunk/end generation functions
+    tasks:
+      - id: t2-1
+        title: Add individual OSC generators
+        description: Three functions for begin/chunk/end that return single OSC sequence strings.
+        requirements: [FR1, NFR3]
+      - id: t2-2
+        title: Change DOWNLOAD_CHUNK_SIZE
+        description: From 128KB base64 to 8MiB raw bytes.
+        requirements: [FR1]
+      - id: t2-3
+        title: Refactor execute_download_command
+        description: Replace read_to_end with fixed-buffer read loop. Output and flush per chunk.
+        requirements: [FR1, NFR1]
+      - id: t2-4
+        title: Keep stdin mode buffered
+        description: Refactor to use individual generators but keep full buffering for stdin.
+        requirements: [FR1]
+    tests:
+      - id: test2-1
+        scenario: Individual OSC begin/chunk/end generators produce correct format
+        type: unit
+        requirement: NFR3
+      - id: test2-2
+        scenario: Streaming read for small file produces correct sequence
+        type: unit
+        requirement: FR1
+      - id: test2-3
+        scenario: Streaming read for multi-chunk file has correct chunk count
+        type: unit
+        requirement: FR1
+      - id: test2-4
+        scenario: Empty file produces begin + end, no chunks
+        type: unit
+        requirement: FR1
+      - id: test2-5
+        scenario: stdin mode still works
+        type: integration
+        requirement: FR1
+      - id: test2-6
+        scenario: CLI output for known file matches expected format
+        type: integration
+        requirement: NFR3
+
+  - id: phase-3
+    name: Frontend Streaming Session
+    goal: Modify frontend to invoke streaming backend commands per chunk instead of accumulating in memory
+    effort: medium
+    status: completed
+    depends_on: [phase-1]
+    blocks: []
+    files_to_create: []
+    files_to_modify:
+      - path: src/download/session.ts
+        change: Remove chunk accumulation, call streaming IPC, remove MAX_DOWNLOAD_SIZE
+      - path: src/download/session.test.ts
+        change: Update tests for new streaming flow with mocked IPC
+    tasks:
+      - id: t3-1
+        title: Modify DownloadSession interface
+        description: Remove chunks Map, add handleId and nextSeq counter.
+        requirements: [FR3, NFR1]
+      - id: t3-2
+        title: Make handleBegin async
+        description: Invoke start_download_file, handle cancel/confirm, store handle ID.
+        requirements: [FR3, NFR4]
+      - id: t3-3
+        title: Make handleChunk async
+        description: Invoke append_download_chunk instead of storing in Map. Validate seq with counter.
+        requirements: [FR3, NFR1]
+      - id: t3-4
+        title: Simplify handleEnd
+        description: Invoke finish_download_file instead of joining chunks.
+        requirements: [FR3]
+      - id: t3-5
+        title: Update discardSession
+        description: Invoke cancel_download_file if handle ID exists.
+        requirements: [FR6]
+      - id: t3-6
+        title: Remove MAX_DOWNLOAD_SIZE
+        description: Remove constant and all size-limit checks.
+        requirements: [FR4]
+      - id: t3-7
+        title: Update tests
+        description: Mock four new IPC commands, verify streaming lifecycle and error handling.
+        requirements: [FR3, FR4, FR6]
+    tests:
+      - id: test3-1
+        scenario: Session lifecycle begin -> chunk -> end with correct IPC calls
+        type: unit
+        requirement: FR3
+      - id: test3-2
+        scenario: User cancel on save dialog discards session
+        type: unit
+        requirement: FR3
+      - id: test3-3
+        scenario: Out-of-order chunk detection with counter
+        type: unit
+        requirement: FR3
+      - id: test3-4
+        scenario: Session timeout triggers cancel_download_file
+        type: unit
+        requirement: FR6
+      - id: test3-5
+        scenario: Progress calculation without chunk accumulation
+        type: unit
+        requirement: NFR4
+      - id: test3-6
+        scenario: Multiple concurrent sessions
+        type: unit
+        requirement: FR3
+      - id: test3-7
+        scenario: append_download_chunk error triggers cancel and discard
+        type: unit
+        requirement: FR6

@@ -44,52 +44,46 @@ pub fn generate_markdown_osc(session_id: &Uuid, chunks: Vec<String>) -> String {
     output
 }
 
-/// Generates OSC 777 sequences for file download
-///
-/// # Format
-/// ```text
-/// ESC ] 777 ; emterm ; download ; begin ; id={uuid} ; name={filename} ; size={bytes} ; version=1.0 ESC \
-/// ESC ] 777 ; emterm ; download ; chunk ; id={uuid} ; seq=N ; data={base64} ESC \
-/// ESC ] 777 ; emterm ; download ; end ; id={uuid} ESC \
-/// ```
-pub fn generate_download_osc(
-    session_id: &Uuid,
-    filename: &str,
-    file_size: u64,
-    chunks: Vec<String>,
-) -> String {
-    let total_data: usize = chunks.iter().map(|c| c.len()).sum();
-    let header_overhead = 120;
-    let estimated = total_data + header_overhead * (chunks.len() + 2);
-    let mut output = String::with_capacity(estimated);
-    let id = session_id.to_string();
-
-    // Escape semicolons and control characters in filename to prevent OSC field injection
+/// Generate a single download begin OSC sequence.
+pub fn generate_download_osc_begin(session_id: &Uuid, filename: &str, file_size: u64) -> String {
     let safe_filename = sanitize_osc_value(filename);
-
-    // Begin sequence
-    output.push_str(&format!(
+    format!(
         "\x1b]777;emterm;download;begin;id={};name={};size={};version=1.0\x1b\\",
-        id, safe_filename, file_size
-    ));
+        session_id, safe_filename, file_size
+    )
+}
 
-    // Chunk sequences
-    for (seq, data) in chunks.iter().enumerate() {
-        output.push_str(&format!(
-            "\x1b]777;emterm;download;chunk;id={};seq={};data={}\x1b\\",
-            id, seq, data
-        ));
-    }
+/// Generate a single download chunk OSC sequence.
+pub fn generate_download_osc_chunk(session_id: &Uuid, seq: usize, data: &str) -> String {
+    format!(
+        "\x1b]777;emterm;download;chunk;id={};seq={};data={}\x1b\\",
+        session_id, seq, data
+    )
+}
 
-    // End sequence
-    output.push_str(&format!("\x1b]777;emterm;download;end;id={}\x1b\\", id));
-
-    output
+/// Generate a single download end OSC sequence.
+pub fn generate_download_osc_end(session_id: &Uuid) -> String {
+    format!("\x1b]777;emterm;download;end;id={}\x1b\\", session_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test helper: generate combined download OSC sequences (begin + chunks + end).
+    fn generate_download_osc(
+        session_id: &Uuid,
+        filename: &str,
+        file_size: u64,
+        chunks: Vec<String>,
+    ) -> String {
+        let mut output = generate_download_osc_begin(session_id, filename, file_size);
+        for (seq, data) in chunks.iter().enumerate() {
+            output.push_str(&generate_download_osc_chunk(session_id, seq, data));
+        }
+        output.push_str(&generate_download_osc_end(session_id));
+        output
+    }
 
     #[test]
     fn test_generate_markdown_osc_single_chunk() {
@@ -215,6 +209,64 @@ mod tests {
         // Semicolons should be stripped from the filename
         assert!(result.contains("name=evilinject=val.txt"));
         assert!(!result.contains("name=evil;inject=val.txt"));
+    }
+
+    // --- Individual download OSC generator tests ---
+
+    #[test]
+    fn test_generate_download_osc_begin_format() {
+        let session_id = Uuid::new_v4();
+        let result = generate_download_osc_begin(&session_id, "test.txt", 12345);
+        assert!(result.starts_with("\x1b]777;emterm;download;begin;"));
+        assert!(result.contains(&format!("id={}", session_id)));
+        assert!(result.contains("name=test.txt"));
+        assert!(result.contains("size=12345"));
+        assert!(result.contains("version=1.0"));
+        assert!(result.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn test_generate_download_osc_begin_sanitizes_filename() {
+        let session_id = Uuid::new_v4();
+        let result = generate_download_osc_begin(&session_id, "evil;inject.txt", 100);
+        assert!(result.contains("name=evilinject.txt"));
+        assert!(!result.contains("name=evil;inject.txt"));
+    }
+
+    #[test]
+    fn test_generate_download_osc_chunk_format() {
+        let session_id = Uuid::new_v4();
+        let result = generate_download_osc_chunk(&session_id, 5, "SGVsbG8=");
+        assert!(result.starts_with("\x1b]777;emterm;download;chunk;"));
+        assert!(result.contains(&format!("id={}", session_id)));
+        assert!(result.contains("seq=5"));
+        assert!(result.contains("data=SGVsbG8="));
+        assert!(result.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn test_generate_download_osc_end_format() {
+        let session_id = Uuid::new_v4();
+        let result = generate_download_osc_end(&session_id);
+        assert!(result.starts_with("\x1b]777;emterm;download;end;"));
+        assert!(result.contains(&format!("id={}", session_id)));
+        assert!(result.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn test_individual_generators_match_combined() {
+        let session_id = Uuid::new_v4();
+        let chunks = vec!["chunk0data".to_string(), "chunk1data".to_string()];
+        let combined = generate_download_osc(&session_id, "file.bin", 100, chunks.clone());
+
+        let mut individual = String::new();
+        individual.push_str(&generate_download_osc_begin(&session_id, "file.bin", 100));
+        for (i, data) in chunks.iter().enumerate() {
+            individual.push_str(&generate_download_osc_chunk(&session_id, i, data));
+        }
+        individual.push_str(&generate_download_osc_end(&session_id));
+
+        assert_eq!(combined, individual);
     }
 
     #[test]

@@ -27,6 +27,8 @@ pub mod validation;
 #[cfg(feature = "gui")]
 mod app;
 #[cfg(feature = "gui")]
+pub mod download_registry;
+#[cfg(feature = "gui")]
 pub mod payloads;
 #[cfg(feature = "gui")]
 pub mod reader;
