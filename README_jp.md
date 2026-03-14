@@ -202,6 +202,8 @@ tmux 3.4以降はOSC 8（ハイパーリンク）、OSC 52（クリップボー�
 set -ga terminal-features ",xterm-256color:hyperlinks"
 ```
 
+> **注意:** `terminal-features`はクライアント接続時に評価されます。設定変更後はデタッチ（`Ctrl+b d`）して再アタッチ（`tmux attach`）する必要があります。`tmux display -p '#{client_termfeatures}'`で確認でき、`hyperlinks`が含まれていれば有効です。
+
 eMterm独自の拡張（OSC 777のMarkdown/ダウンロード、OSC 1337のiTerm2画像）については、上記の`allow-passthrough`設定を使用してください。`emterm markdown`と`emterm image`コマンドはDCSラップを自動的に行います。
 
 ## OSCシーケンス対応状況
