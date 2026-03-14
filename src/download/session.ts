@@ -22,6 +22,8 @@ interface DownloadSession {
 	lastChunkAt: number;
 	/** Chunks received before save dialog resolved */
 	pendingChunks: string[];
+	/** True when "end" arrived before save dialog resolved */
+	endReceived: boolean;
 }
 
 interface StartDownloadResult {
@@ -106,6 +108,7 @@ export class DownloadSessionManager {
 			receivedBytes: 0,
 			lastChunkAt: Date.now(),
 			pendingChunks: [],
+			endReceived: false,
 		};
 
 		this.sessions.set(id, session);
@@ -144,6 +147,23 @@ export class DownloadSessionManager {
 			session.handleId = result.id;
 			// Flush any chunks that arrived while the dialog was open
 			await this.flushPendingChunks(session);
+
+			// If "end" arrived while dialog was open, finish now
+			if (session.endReceived) {
+				this.sessions.delete(session.id);
+				try {
+					await invoke("finish_download_file", {
+						id: session.handleId,
+					});
+					this.progressDisplay.showCompleted(session.filename);
+				} catch (err) {
+					console.error(
+						"[ERROR][FRONTEND] Download: finish failed",
+						err,
+					);
+					this.progressDisplay.hide();
+				}
+			}
 		} else {
 			// User cancelled save dialog
 			this.sessions.delete(session.id);
@@ -236,15 +256,13 @@ export class DownloadSessionManager {
 		const session = this.sessions.get(id);
 		if (!session) return;
 
-		this.sessions.delete(id);
-
 		if (!session.handleId) {
-			// Handle not yet assigned (dialog may still be open or was cancelled)
-			this.progressDisplay.hide();
-			// Note: if dialog is still open and later confirms, startDownload
-			// will see the session was deleted and return early.
+			// Dialog still open: defer end processing to startDownload
+			session.endReceived = true;
 			return;
 		}
+
+		this.sessions.delete(id);
 
 		// Flush any remaining pending chunks before finishing
 		if (session.pendingChunks.length > 0) {

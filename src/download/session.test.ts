@@ -482,6 +482,61 @@ describe("DownloadSessionManager", () => {
 		expect(cancelCalls.length).toBe(1);
 	});
 
+	test("end before dialog resolves completes download after dialog confirms", async () => {
+		// Simulate slow save dialog: resolve after manual trigger
+		let dialogResolve: ((v: { id: string; path: string }) => void) | null = null;
+		invokeResults.set(
+			"start_download_file",
+			new Promise<{ id: string; path: string }>((resolve) => {
+				dialogResolve = resolve;
+			}),
+		);
+
+		manager.handleCommand("emterm", [
+			"download",
+			"begin",
+			"id=race-test",
+			"name=test.txt",
+			"size=100",
+		]);
+
+		// Send chunk and end BEFORE dialog resolves (real-world race condition)
+		manager.handleCommand("emterm", [
+			"download",
+			"chunk",
+			"id=race-test",
+			"seq=0",
+			"data=SGVsbG8=",
+		]);
+		manager.handleCommand("emterm", ["download", "end", "id=race-test"]);
+
+		// Session should still exist (endReceived flag set, not deleted)
+		expect(manager.sessionCount).toBe(1);
+		const session = manager.getSession("race-test");
+		expect(session?.endReceived).toBe(true);
+
+		// Now resolve the dialog
+		dialogResolve!({ id: "handle-race", path: "/tmp/test.txt" });
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Session should be completed and removed
+		expect(manager.sessionCount).toBe(0);
+
+		// Verify finish was called
+		const finishCalls = invokeCalls.filter(
+			(c) => c.command === "finish_download_file",
+		);
+		expect(finishCalls.length).toBe(1);
+		expect(finishCalls[0].args.id).toBe("handle-race");
+
+		// Verify chunk was flushed
+		const appendCalls = invokeCalls.filter(
+			(c) => c.command === "append_download_chunk",
+		);
+		expect(appendCalls.length).toBe(1);
+		expect(appendCalls[0].args.dataBase64).toBe("SGVsbG8=");
+	});
+
 	test("multiple concurrent sessions work independently", async () => {
 		let handleCounter = 0;
 		invokeResults.set("start_download_file", undefined); // clear default
