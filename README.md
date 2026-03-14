@@ -202,6 +202,8 @@ tmux 3.4+ natively supports OSC 8 (hyperlinks), OSC 52 (clipboard), and other st
 set -ga terminal-features ",xterm-256color:hyperlinks"
 ```
 
+> **Note:** `terminal-features` is evaluated when a client connects. After changing this setting, you must detach (`Ctrl+b d`) and reattach (`tmux attach`) for it to take effect. You can verify with `tmux display -p '#{client_termfeatures}'` — it should include `hyperlinks`.
+
 For eMterm's custom extensions (OSC 777 for Markdown/download, OSC 1337 for iTerm2 images), use `allow-passthrough` as described above. The `emterm markdown` and `emterm image` CLI commands handle DCS wrapping automatically.
 
 ## OSC Sequence Support
