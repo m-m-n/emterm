@@ -99,6 +99,7 @@ pub fn run() {
             tauri_commands::clear_log,
             tauri_commands::get_log_path,
             tauri_commands::set_log_recording,
+            tauri_commands::decode_iterm2_image,
             tauri_commands::start_download_file,
             tauri_commands::append_download_chunk,
             tauri_commands::finish_download_file,

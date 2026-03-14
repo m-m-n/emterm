@@ -236,6 +236,9 @@ impl TerminalCore {
             // flags: 2 bytes (little-endian)
             buf.push(cell.flags as u8);
             buf.push((cell.flags >> 8) as u8);
+            // hyperlink_id: 2 bytes (little-endian)
+            buf.push(cell.hyperlink_id as u8);
+            buf.push((cell.hyperlink_id >> 8) as u8);
         }
         buf
     }

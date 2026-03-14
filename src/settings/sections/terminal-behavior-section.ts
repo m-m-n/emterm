@@ -257,4 +257,38 @@ export function renderTerminalBehaviorSection(
     },
     ctx.addContentListener,
   );
+
+  // -- Clipboard subsection --
+  renderSubsectionHeader(panel, t("settings.terminal.clipboard"));
+
+  // OSC 52 Clipboard Read (toggle)
+  renderToggle(
+    panel,
+    {
+      key: "clipboard-read-osc52",
+      label: t("settings.terminal.clipboardReadOsc52"),
+      value: settings.clipboard_read_osc52,
+      description: t("settings.terminal.clipboardReadOsc52Desc"),
+      onSave: (v) => ctx.saveSetting("clipboard_read_osc52", v),
+    },
+    ctx.addContentListener,
+  );
+
+  // OSC 52 Clipboard Max Size (slider)
+  renderSlider(
+    panel,
+    {
+      key: "clipboard-max-size-osc52",
+      label: t("settings.terminal.clipboardMaxSizeOsc52"),
+      value: settings.clipboard_max_size_osc52 / (1024 * 1024),
+      min: 1,
+      max: 50,
+      step: 1,
+      hint: t("settings.terminal.clipboardMaxSizeOsc52Hint"),
+      description: t("settings.terminal.clipboardMaxSizeOsc52Desc"),
+      onInput: () => {},
+      onSave: (v) => ctx.saveSetting("clipboard_max_size_osc52", v * 1024 * 1024),
+    },
+    ctx.addContentListener,
+  );
 }

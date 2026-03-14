@@ -84,6 +84,7 @@ pub struct Cell {
     pub flags: u16,
     pub underline_style: u8,
     pub underline_color: [u8; 3],
+    pub hyperlink_id: u16,
 }
 
 impl Cell {
@@ -96,6 +97,7 @@ impl Cell {
         flags: 0,
         underline_style: 0,
         underline_color: [0; 3],
+        hyperlink_id: 0,
     };
 
     /// Create a cell from a UTF-8 string slice. Returns true if inline, false if overflow.
@@ -250,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_cell_size() {
-        assert_eq!(std::mem::size_of::<Cell>(), 32);
+        assert_eq!(std::mem::size_of::<Cell>(), 34);
     }
 
     #[test]

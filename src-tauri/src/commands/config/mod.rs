@@ -314,6 +314,8 @@ mod tests {
             ssh_command_path: String::new(),
             ssh_connections: Vec::new(),
             sftp_max_concurrent_uploads: 4,
+            clipboard_read_osc52: true,
+            clipboard_max_size_osc52: 10 * 1024 * 1024,
             log_recording_enabled: false,
             markdown_theme_follow_ui: false,
             markdown_theme: UiTheme::Light,

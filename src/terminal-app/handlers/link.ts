@@ -79,7 +79,21 @@ export class LinkHandler {
     const logical = getLogicalLine((r) => buffer.getLine(r), row, state.rows);
     const logicalCol = physicalToLogicalCol(row, col, logical);
 
-    // Check URL first (existing behavior)
+    // Check OSC 8 hyperlink first (highest priority)
+    const core = state.getActiveCore();
+    const hlId = core.get_cell_hyperlink_id(col, row);
+    if (hlId > 0) {
+      const uri = core.get_hyperlink_uri(hlId);
+      if (uri && isSafeUri(uri)) {
+        e.preventDefault();
+        import("@tauri-apps/plugin-shell").then(({ open }) => {
+          open(uri).catch(console.error);
+        }).catch(console.error);
+        return;
+      }
+    }
+
+    // Check URL auto-detection
     if (!cachedSettings || cachedSettings.url_detection) {
       const url = findUrlAtPosition(logical.text, logicalCol);
       if (url) {
@@ -234,6 +248,14 @@ export class LinkHandler {
       const col = Math.floor((e.clientX - rect.left) / charSize.width);
       const buffer = state.getActiveBuffer();
       if (displayRow >= 0 && displayRow < state.rows) {
+        // Check OSC 8 hyperlink first
+        const core = state.getActiveCore();
+        const hlId = core.get_cell_hyperlink_id(col, displayRow);
+        if (hlId > 0) {
+          terminalRoot.style.cursor = "pointer";
+          return;
+        }
+
         const logical = getLogicalLine((r) => buffer.getLine(r), displayRow, state.rows);
         const logicalCol = physicalToLogicalCol(displayRow, col, logical);
 
@@ -261,5 +283,21 @@ export class LinkHandler {
       this.ctrlKeyHandler = null;
     }
     this.lastMouseEvent = null;
+  }
+}
+
+/**
+ * Check if a URI has a safe scheme for opening via shell.
+ * Only http(s), mailto, and ssh URIs are allowed.
+ * Blocks potentially dangerous schemes like javascript:, file:, data:, etc.
+ */
+function isSafeUri(uri: string): boolean {
+  const SAFE_SCHEMES = ["http:", "https:", "mailto:", "ssh:"];
+  try {
+    const parsed = new URL(uri);
+    return SAFE_SCHEMES.includes(parsed.protocol);
+  } catch {
+    // Not a valid URL (e.g. relative path) - block it
+    return false;
   }
 }

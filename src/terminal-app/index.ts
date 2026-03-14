@@ -24,6 +24,12 @@ import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
 import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
+import { OscColorHandler } from "../terminal/osc-colors";
+import { indexToRgb, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND } from "../terminal/colors";
+import { handleOsc52 } from "../terminal/osc-clipboard";
+import { parseOsc9, sendNotification } from "../terminal/osc-notification";
+import { parseOsc22, CursorShapeStack } from "../terminal/osc-cursor-shape";
+import { parseIterm2Command } from "../terminal/osc-iterm2";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -55,6 +61,8 @@ export class TerminalApp {
   private _uploadManager: UploadManager | null = null;
   private downloadManager: DownloadSessionManager | null = null;
   private pendingOscQueue: { actionType: number; data: string }[] = [];
+  private oscColorHandler: OscColorHandler = new OscColorHandler();
+  private cursorShapeStack: CursorShapeStack = new CursorShapeStack();
 
   /**
    * Creates a new TerminalApp instance
@@ -668,9 +676,17 @@ export class TerminalApp {
         this.state._title = data;
         this.updateWindowTitle(data);
         break;
-      case 4: // SetColorPalette
-        // Color palette customization - not yet implemented
+      case 4: { // SetColorPalette
+        const writeFn = (resp: string) => {
+          this.ptyClient?.write(new TextEncoder().encode(resp));
+        };
+        this.oscColorHandler.handleOsc4(data, writeFn, (index) => {
+          return indexToRgb(index);
+        });
+        // Notify renderer of palette change
+        this.renderer?.forceRender(this.state!);
         break;
+      }
       case 7: // SetWorkingDirectory
         this.state._workingDirectory = data;
         break;
@@ -690,8 +706,90 @@ export class TerminalApp {
       }
       case 10: // SetForegroundColor
       case 11: // SetBackgroundColor
-        // Color query/set - not yet implemented
+      case 12: { // SetCursorColor
+        const writeFn = (resp: string) => {
+          this.ptyClient?.write(new TextEncoder().encode(resp));
+        };
+        const lookupThemeDefault = (oscNum: number) => {
+          switch (oscNum) {
+            case 10: return DEFAULT_FOREGROUND;
+            case 11: return DEFAULT_BACKGROUND;
+            case 12: return DEFAULT_FOREGROUND; // cursor defaults to foreground
+            default: return null;
+          }
+        };
+        this.oscColorHandler.handleOscDefaultColor(actionType, data, writeFn, lookupThemeDefault);
+        this.renderer?.forceRender(this.state!);
         break;
+      }
+      case 104: // ResetColorPalette
+        this.oscColorHandler.handleOsc104(data);
+        this.renderer?.forceRender(this.state!);
+        break;
+      case 110: // ResetForegroundColor
+        this.oscColorHandler.resetForeground();
+        this.renderer?.forceRender(this.state!);
+        break;
+      case 111: // ResetBackgroundColor
+        this.oscColorHandler.resetBackground();
+        this.renderer?.forceRender(this.state!);
+        break;
+      case 112: // ResetCursorColor
+        this.oscColorHandler.resetCursorColor();
+        this.renderer?.forceRender(this.state!);
+        break;
+      case 9: { // Notification / Progress (OSC 9)
+        const action = parseOsc9(data);
+        if (!action) break;
+        if (action.type === "notification") {
+          sendNotification("eMterm", action.message);
+        } else {
+          // Progress: update state and notify tab bar
+          this.state._progressState = action.state;
+          this.state._progressPercentage = action.percentage;
+          this.titleChangeCallback?.(this.state.title || "Terminal");
+        }
+        break;
+      }
+      case 22: { // Cursor Shape (OSC 22)
+        const action = parseOsc22(data);
+        if (!action) break;
+        const terminalRoot = this.terminalRoot;
+        if (action.type === "set") {
+          this.cursorShapeStack.set(action.shape);
+        } else if (action.type === "push") {
+          this.cursorShapeStack.push(action.shape);
+        } else {
+          this.cursorShapeStack.pop();
+        }
+        if (terminalRoot) {
+          terminalRoot.style.cursor = this.cursorShapeStack.current();
+        }
+        break;
+      }
+      case 52: { // Clipboard (OSC 52)
+        const settings = SettingsService.getCached();
+        const config = {
+          readEnabled: settings?.clipboard_read_osc52 ?? true,
+          maxSize: settings?.clipboard_max_size_osc52 ?? 10 * 1024 * 1024,
+        };
+        handleOsc52(
+          data,
+          config,
+          async () => {
+            const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
+            return await readText();
+          },
+          async (text: string) => {
+            const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+            await writeText(text);
+          },
+          (resp: string) => {
+            this.ptyClient?.write(new TextEncoder().encode(resp));
+          },
+        );
+        break;
+      }
       case 100: { // EmtermExtension (OSC 777)
         // data format: "verb;param1;param2;..."
         const parts = data.split(";");
@@ -717,6 +815,22 @@ export class TerminalApp {
         handleSemanticPrompt(this.state, zoneType, exitCode);
         break;
       }
+      case 101: { // iTerm2 Protocol (OSC 1337)
+        const cmd = parseIterm2Command(data);
+        if (!cmd) break;
+        if (cmd.type === "file") {
+          if (cmd.inline && cmd.base64Data) {
+            // Inline image display: decode via backend and show
+            this.handleIterm2InlineImage(cmd.base64Data, cmd.name);
+          } else {
+            // Download mode: log for now (download infrastructure is backend-driven)
+            console.log(`[LOG][FRONTEND] OSC 1337;File download: ${cmd.name || "unnamed"}`);
+          }
+        } else if (cmd.type === "set_user_var") {
+          this.state._userVariables.set(cmd.key, cmd.value);
+        }
+        break;
+      }
       // Unknown (255) - ignored
     }
   }
@@ -724,6 +838,33 @@ export class TerminalApp {
   /**
    * Update window title and notify callbacks.
    */
+  /**
+   * Handle iTerm2 inline image (OSC 1337;File with inline=1).
+   * Decodes raw image data via Tauri backend and displays it.
+   */
+  private async handleIterm2InlineImage(base64Data: string, name: string): Promise<void> {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      // Send raw image data to backend for decoding into RGBA
+      const result = await invoke<{ width: number; height: number; rgba_base64: string }>(
+        "decode_iterm2_image",
+        { base64Data },
+      );
+      if (result && this.imageHandler) {
+        // Create a synthetic DecodedImage and display it
+        const image = {
+          id: Date.now(), // Use timestamp as unique ID
+          width: result.width,
+          height: result.height,
+          rgba_base64: result.rgba_base64,
+        };
+        this.imageHandler.showImage(image);
+      }
+    } catch (error) {
+      console.error(`[ERROR][FRONTEND] Failed to decode iTerm2 image "${name}":`, error);
+    }
+  }
+
   private updateWindowTitle(title: string): void {
     if (title === this.lastWindowTitle) return;
     this.lastWindowTitle = title;

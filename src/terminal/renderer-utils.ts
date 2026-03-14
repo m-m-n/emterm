@@ -110,18 +110,18 @@ export function groupCellsIntoSpans(line: LineAccessor): TextSpan[] {
 const utf8Decoder = new TextDecoder("utf-8");
 
 /**
- * Fast inline comparison of 10 packed attribute bytes.
+ * Fast inline comparison of 12 packed attribute bytes (fg4 + bg4 + flags2 + hyperlink_id2).
  */
 export function packedAttrsEqual(buf: Uint8Array, a: number, b: number): boolean {
 	return buf[a] === buf[b] && buf[a + 1] === buf[b + 1] && buf[a + 2] === buf[b + 2] &&
 		buf[a + 3] === buf[b + 3] && buf[a + 4] === buf[b + 4] && buf[a + 5] === buf[b + 5] &&
 		buf[a + 6] === buf[b + 6] && buf[a + 7] === buf[b + 7] && buf[a + 8] === buf[b + 8] &&
-		buf[a + 9] === buf[b + 9];
+		buf[a + 9] === buf[b + 9] && buf[a + 10] === buf[b + 10] && buf[a + 11] === buf[b + 11];
 }
 
 /**
- * Unpack CellAttributes from 10 binary bytes at the given offset.
- * Layout: fg(4: tag,r,g,b) + bg(4: tag,r,g,b) + flags(2: LE u16)
+ * Unpack CellAttributes from 12 binary bytes at the given offset.
+ * Layout: fg(4: tag,r,g,b) + bg(4: tag,r,g,b) + flags(2: LE u16) + hyperlink_id(2: LE u16)
  */
 export function unpackAttrsFromBinary(buf: Uint8Array, offset: number): CellAttributes {
 	const fgTag = buf[offset]!;
@@ -146,7 +146,11 @@ export function unpackAttrsFromBinary(buf: Uint8Array, offset: number): CellAttr
 	const flagsHi = buf[offset + 9]!;
 	const flags = flagsLo | (flagsHi << 8);
 
-	return { ...unpackStyleFlags(flags), fg, bg };
+	const hlLo = buf[offset + 10]!;
+	const hlHi = buf[offset + 11]!;
+	const hyperlinkId = hlLo | (hlHi << 8);
+
+	return { ...unpackStyleFlags(flags), fg, bg, hyperlinkId };
 }
 
 /**
@@ -154,8 +158,8 @@ export function unpackAttrsFromBinary(buf: Uint8Array, offset: number): CellAttr
  * Avoids creating Cell, CellAttributes, or Line objects except for span attributes.
  *
  * Binary format per cell:
- *   Inline: char_len(1) + char_data(char_len) + width(1) + fg(4) + bg(4) + flags(2 LE)
- *   Overflow: 0xFF(1) + len_hi(1) + len_lo(1) + utf8_data(len) + width(1) + fg(4) + bg(4) + flags(2 LE)
+ *   Inline: char_len(1) + char_data(char_len) + width(1) + fg(4) + bg(4) + flags(2 LE) + hyperlink_id(2 LE)
+ *   Overflow: 0xFF(1) + len_hi(1) + len_lo(1) + utf8_data(len) + width(1) + fg(4) + bg(4) + flags(2 LE) + hyperlink_id(2 LE)
  */
 export function groupPackedCellsIntoSpans(packed: Uint8Array, cols: number): TextSpan[] {
 	const spans: TextSpan[] = [];
@@ -169,7 +173,7 @@ export function groupPackedCellsIntoSpans(packed: Uint8Array, cols: number): Tex
 	let currentAttrs: CellAttributes | null = null;
 
 	for (let col = 0; col < cols; col++) {
-		if (offset + 12 > packed.length) break;
+		if (offset + 14 > packed.length) break;
 
 		// Parse character
 		const charLen = packed[offset++]!;
@@ -179,7 +183,7 @@ export function groupPackedCellsIntoSpans(packed: Uint8Array, cols: number): Tex
 			const lenHi = packed[offset++]!;
 			const lenLo = packed[offset++]!;
 			const byteLen = (lenHi << 8) | lenLo;
-			if (offset + byteLen + 11 > packed.length) break; // byteLen + width(1) + attrs(10)
+			if (offset + byteLen + 13 > packed.length) break; // byteLen + width(1) + attrs(12)
 			ch = utf8Decoder.decode(packed.subarray(offset, offset + byteLen));
 			offset += byteLen;
 		} else if (charLen === 0) {
@@ -194,9 +198,9 @@ export function groupPackedCellsIntoSpans(packed: Uint8Array, cols: number): Tex
 		// Read width
 		const width = packed[offset++]!;
 
-		// Attribute bytes start here (10 bytes)
+		// Attribute bytes start here (12 bytes: fg4 + bg4 + flags2 + hyperlink_id2)
 		const attrStart = offset;
-		offset += 10;
+		offset += 12;
 
 		// Handle zero-width cells
 		if (width === 0) {

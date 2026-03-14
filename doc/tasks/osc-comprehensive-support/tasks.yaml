@@ -1,0 +1,21 @@
+tasks:
+  - - id: phase-1
+      name: "Color Infrastructure (OSC 4/10/11/12 + Reset)"
+      status: completed
+      description: "WASM color_spec.rs + TS osc-colors.ts + routing for OSC 12/104/110/111/112"
+  - - id: phase-2
+      name: "Clipboard Operations (OSC 52)"
+      status: completed
+      description: "TS osc-clipboard.ts + settings for clipboard read/write"
+  - - id: phase-3
+      name: "Hyperlinks (OSC 8) Per-Cell Storage"
+      status: completed
+      description: "WASM cell/terminal_core hyperlink_id + TS renderer integration"
+  - - id: phase-4
+      name: "Notifications and UI (OSC 9, OSC 22)"
+      status: completed
+      description: "TS osc-notification.ts + osc-cursor-shape.ts"
+  - - id: phase-5
+      name: "iTerm2 Protocol (OSC 1337)"
+      status: completed
+      description: "TS osc-iterm2.ts for File and SetUserVar handlers"

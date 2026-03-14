@@ -388,6 +388,16 @@ export class ImageHandler {
   }
 
   /**
+   * Display a decoded image using the image viewer.
+   * Used by OSC 1337;File inline image handler.
+   */
+  showImage(image: DecodedImage): void {
+    if (this.imageViewer) {
+      this.imageViewer.show(image);
+    }
+  }
+
+  /**
    * Clean up all image-related resources.
    */
   dispose(): void {

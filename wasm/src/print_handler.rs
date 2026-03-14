@@ -101,6 +101,7 @@ impl TerminalCore {
             cell.fg = self.cursor.fg;
             cell.bg = self.cursor.bg;
             cell.flags = self.cursor.flags;
+            cell.hyperlink_id = self.active_hyperlink_id;
             self.mark_row_dirty(row);
         }
 
@@ -115,6 +116,7 @@ impl TerminalCore {
                 ph.fg = self.cursor.fg;
                 ph.bg = self.cursor.bg;
                 ph.flags = self.cursor.flags;
+                ph.hyperlink_id = self.active_hyperlink_id;
                 if !self.overflow.is_empty() {
                     let col1_32 = (col + 1) as u32;
                     if self.overflow.remove(&(col1_32, abs)).is_some() {

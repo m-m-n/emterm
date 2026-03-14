@@ -450,6 +450,50 @@ pub async fn tab_close_graceful(
     crate::pty::graceful_shutdown::shutdown_with_config(&state, &session_id, config).await
 }
 
+#[cfg(feature = "gui")]
+/// Decodes a base64-encoded image (any format supported by `image` crate) to RGBA.
+///
+/// Used by OSC 1337;File (iTerm2 inline image protocol).
+/// Returns width, height, and RGBA pixel data as base64.
+#[tauri::command]
+pub async fn decode_iterm2_image(
+    base64_data: String,
+) -> Result<serde_json::Value, String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let raw = STANDARD
+        .decode(&base64_data)
+        .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+    // Limit input size to 10MB to prevent memory abuse
+    if raw.len() > 10 * 1024 * 1024 {
+        return Err(format!("Image data too large: {} bytes (max 10MB)", raw.len()));
+    }
+
+    let img = ::image::load_from_memory(&raw)
+        .map_err(|e| format!("Image decode error: {}", e))?;
+
+    let rgba = img.to_rgba8();
+    let width = rgba.width();
+    let height = rgba.height();
+
+    // Dimension check to prevent decompression bombs
+    if width > 8192 || height > 8192 {
+        return Err(format!(
+            "Image too large: {}x{} (max 8192x8192)",
+            width, height
+        ));
+    }
+
+    let rgba_base64 = STANDARD.encode(rgba.as_raw());
+
+    Ok(serde_json::json!({
+        "width": width,
+        "height": height,
+        "rgba_base64": rgba_base64,
+    }))
+}
+
 /// Starts a streaming download: show save dialog, open file, register handle.
 ///
 /// Returns `{ id, path }` on confirm, or `null` if user cancels.

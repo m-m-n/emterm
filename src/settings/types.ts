@@ -103,6 +103,10 @@ export interface AppSettings {
   // SFTP
   sftp_max_concurrent_uploads: number;
 
+  // OSC 52 Clipboard
+  clipboard_read_osc52: boolean;
+  clipboard_max_size_osc52: number;
+
   // Log Recording
   log_recording_enabled: boolean;
 }

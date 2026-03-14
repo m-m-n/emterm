@@ -35,6 +35,8 @@ export interface CellAttributes {
 	strikethrough: boolean;
 	fg: Color | null;
 	bg: Color | null;
+	/** OSC 8 hyperlink ID. 0 = no hyperlink. */
+	hyperlinkId?: number;
 }
 
 /**
