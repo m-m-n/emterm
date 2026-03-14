@@ -123,6 +123,15 @@ export class TerminalState implements TerminalStateAccessor {
   /** Active hyperlink (from OSC 8, public for handler access). */
   _activeHyperlink: { params: string; uri: string } | null = null;
 
+  /** Progress bar state from OSC 9;4 (0=remove, 1=normal, 2=error, 3=indeterminate, 4=warning). */
+  _progressState: number = 0;
+
+  /** Progress bar percentage (0-100, or -1 for indeterminate). */
+  _progressPercentage: number = -1;
+
+  /** User variables set via OSC 1337;SetUserVar. */
+  _userVariables: Map<string, string> = new Map();
+
   /** Markdown session manager. */
   private markdownManager: MarkdownSessionManager;
 
@@ -1217,6 +1226,9 @@ export class TerminalState implements TerminalStateAccessor {
     this._workingDirectory = "";
     this._pendingResponses = [];
     this._activeHyperlink = null;
+    this._progressState = 0;
+    this._progressPercentage = -1;
+    this._userVariables.clear();
 
     // Reset markdown state
     this.markdownManager.dispose();
@@ -1284,6 +1296,9 @@ export class TerminalState implements TerminalStateAccessor {
       this._workingDirectory = "";
       this._pendingResponses = [];
       this._activeHyperlink = null;
+      this._progressState = 0;
+      this._progressPercentage = -1;
+      this._userVariables.clear();
       this.markdownManager.dispose();
       this.markdownManager = new MarkdownSessionManager();
       this.semanticZoneTracker.clear();

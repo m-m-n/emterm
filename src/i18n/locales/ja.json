@@ -128,7 +128,13 @@
       "shiftEnterAsAltEnter": "Shift+EnterをAlt+Enterとして送信",
       "shiftEnterAsAltEnterDesc": "Shift+EnterでAlt+Enterと同じエスケープシーケンスを送信し、マルチライン入力を可能にします",
       "skkMode": "SKKモード（Ctrl+Jブロック）",
-      "skkModeDesc": "Emacs系IME（SKK）との互換性のためCtrl+Jをブロックします。無効にするとCtrl+Jをターミナルに送信します"
+      "skkModeDesc": "Emacs系IME（SKK）との互換性のためCtrl+Jをブロックします。無効にするとCtrl+Jをターミナルに送信します",
+      "clipboard": "クリップボード",
+      "clipboardReadOsc52": "クリップボード読み取り許可 (OSC 52)",
+      "clipboardReadOsc52Desc": "OSC 52エスケープシーケンスによるクリップボード読み取りを許可します（vim、tmuxのSSH経由での使用に必要）",
+      "clipboardMaxSizeOsc52": "クリップボード最大サイズ (MB)",
+      "clipboardMaxSizeOsc52Hint": "OSC 52操作のクリップボードペイロード最大サイズ",
+      "clipboardMaxSizeOsc52Desc": "OSC 52でクリップボードに書き込めるデータの最大サイズ（メガバイト）"
     },
     "keybinds": {
       "title": "\u30ad\u30fc\u30d0\u30a4\u30f3\u30c9",

@@ -128,7 +128,13 @@
       "shiftEnterAsAltEnter": "Shift+Enter as Alt+Enter",
       "shiftEnterAsAltEnterDesc": "Make Shift+Enter send the same escape sequence as Alt+Enter for multiline input",
       "skkMode": "SKK Mode (Block Ctrl+J)",
-      "skkModeDesc": "Block Ctrl+J for Emacs-style IME (SKK) compatibility. Disable to send Ctrl+J to terminal"
+      "skkModeDesc": "Block Ctrl+J for Emacs-style IME (SKK) compatibility. Disable to send Ctrl+J to terminal",
+      "clipboard": "Clipboard",
+      "clipboardReadOsc52": "Allow Clipboard Read (OSC 52)",
+      "clipboardReadOsc52Desc": "Allow applications to read clipboard contents via OSC 52 escape sequences (used by vim, tmux over SSH)",
+      "clipboardMaxSizeOsc52": "Clipboard Max Size (MB)",
+      "clipboardMaxSizeOsc52Hint": "Maximum clipboard payload size for OSC 52 operations",
+      "clipboardMaxSizeOsc52Desc": "Maximum size of data that can be written to clipboard via OSC 52 (in megabytes)"
     },
     "keybinds": {
       "title": "Keybinds",

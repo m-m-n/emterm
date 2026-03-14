@@ -1,4 +1,5 @@
 mod cell;
+mod color_spec;
 mod terminal_core;
 mod terminal_cursor;
 mod terminal_dispatch;

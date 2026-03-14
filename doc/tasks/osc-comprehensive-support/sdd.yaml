@@ -1,0 +1,116 @@
+schema_version: 1
+feature: osc-comprehensive-support
+scale: full
+created: 2026-03-12
+
+project:
+  components:
+    main:
+      language: rust,typescript
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'cargo test --manifest-path src-tauri/Cargo.toml && bun test'"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 0db650e5adbf86c1a829119502253594498edfac
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 0db650e5adbf86c1a829119502253594498edfac
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 0db650e5adbf86c1a829119502253594498edfac
+  - id: implement
+    status: completed
+    completed_at_commit: 0db650e5adbf86c1a829119502253594498edfac
+  - id: check
+    status: completed
+    completed_at_commit: 0db650e5adbf86c1a829119502253594498edfac
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 0db650e5adbf86c1a829119502253594498edfac
+  - id: review
+    status: completed
+    completed_at_commit: 0db650e5adbf86c1a829119502253594498edfac
+
+requirements:
+  FR1:
+    title: "Color palette set/query (OSC 4)"
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: "Default foreground color set/query (OSC 10)"
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: "Default background color set/query (OSC 11)"
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: "Cursor color set/query (OSC 12)"
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: "Clipboard operations (OSC 52)"
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: "Hyperlink per-cell storage (OSC 8)"
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: "Desktop notification (OSC 9)"
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: "Mouse cursor shape (OSC 22)"
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: "Color reset (OSC 104/110/111/112)"
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: "iTerm2 inline image (OSC 1337;File)"
+    status: ok
+    tasks: []
+    tests: []
+  FR11:
+    title: "User variables (OSC 1337;SetUserVar)"
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Performance - no latency impact on hot path"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Security - configurable clipboard read, size limits"
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Compatibility - tmux passthrough, color formats"
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Platform - Linux and Windows"
+    status: ok
+    tasks: []
+    tests: []

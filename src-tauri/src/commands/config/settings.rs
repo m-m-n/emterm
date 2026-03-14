@@ -78,6 +78,11 @@ deserialize_null_with!(
     u16,
     default_sftp_max_concurrent_uploads
 );
+deserialize_null_with!(
+    deserialize_null_clipboard_max_size_osc52,
+    u32,
+    default_clipboard_max_size_osc52
+);
 
 // ============================================================
 // Default Value Functions
@@ -122,6 +127,9 @@ fn default_editor_command() -> String {
 }
 fn default_sftp_max_concurrent_uploads() -> u16 {
     4
+}
+fn default_clipboard_max_size_osc52() -> u32 {
+    10 * 1024 * 1024 // 10 MB
 }
 
 // ============================================================
@@ -440,6 +448,15 @@ pub struct AppSettings {
     )]
     pub sftp_max_concurrent_uploads: u16,
 
+    // OSC 52 Clipboard
+    #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
+    pub clipboard_read_osc52: bool,
+    #[serde(
+        default = "default_clipboard_max_size_osc52",
+        deserialize_with = "deserialize_null_clipboard_max_size_osc52"
+    )]
+    pub clipboard_max_size_osc52: u32,
+
     // Log Recording
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub log_recording_enabled: bool,
@@ -525,6 +542,8 @@ impl Default for AppSettings {
             notify_on_process_exit: default_true(),
             notify_on_output: false,
             notify_on_bell: default_true(),
+            clipboard_read_osc52: default_true(),
+            clipboard_max_size_osc52: default_clipboard_max_size_osc52(),
             log_recording_enabled: false,
         }
     }

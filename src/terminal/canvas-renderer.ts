@@ -844,8 +844,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 			col += cellWidth > 0 ? cellWidth : 1;
 		}
 
-		// Draw underline
-		if (styles.underline) {
+		// Draw underline (SGR underline or OSC 8 hyperlink)
+		if (styles.underline || (span.attrs.hyperlinkId && span.attrs.hyperlinkId > 0)) {
 			this.drawUnderline(x, y, width, fg);
 		}
 

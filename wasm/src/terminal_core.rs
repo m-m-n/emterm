@@ -110,6 +110,10 @@ pub struct TerminalCore {
     pub(crate) bell_callback: Option<crate::callbacks::Callback>,
     #[allow(dead_code)]
     pub(crate) device_response_callback: Option<crate::callbacks::Callback>,
+    // Hyperlink table: maps hyperlink_id -> (params, uri)
+    pub(crate) hyperlink_table: Vec<Option<(String, String)>>,
+    pub(crate) hyperlink_next_id: u16,
+    pub(crate) active_hyperlink_id: u16,
 }
 
 #[wasm_bindgen]
@@ -170,6 +174,10 @@ impl TerminalCore {
             dcs_callback: None,
             bell_callback: None,
             device_response_callback: None,
+            // Hyperlink
+            hyperlink_table: vec![None], // index 0 = no hyperlink
+            hyperlink_next_id: 1,
+            active_hyperlink_id: 0,
         };
         core.mark_all_dirty();
         core
@@ -343,6 +351,36 @@ impl TerminalCore {
         self.cell_index(col, row)
             .map(|i| self.ring_cells[i].flags)
             .unwrap_or(0)
+    }
+
+    pub fn get_cell_hyperlink_id(&self, col: u16, row: u16) -> u16 {
+        self.cell_index(col, row)
+            .map(|i| self.ring_cells[i].hyperlink_id)
+            .unwrap_or(0)
+    }
+
+    /// Get hyperlink URI by ID. Returns empty string if not found.
+    pub fn get_hyperlink_uri(&self, id: u16) -> String {
+        if id == 0 {
+            return String::new();
+        }
+        self.hyperlink_table
+            .get(id as usize)
+            .and_then(|entry| entry.as_ref())
+            .map(|(_, uri)| uri.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get hyperlink params by ID. Returns empty string if not found.
+    pub fn get_hyperlink_params(&self, id: u16) -> String {
+        if id == 0 {
+            return String::new();
+        }
+        self.hyperlink_table
+            .get(id as usize)
+            .and_then(|entry| entry.as_ref())
+            .map(|(params, _)| params.clone())
+            .unwrap_or_default()
     }
 
     // ── Batch cell read ──────────────────────────────────

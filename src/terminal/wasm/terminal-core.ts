@@ -374,16 +374,16 @@ const utf8Decoder = new TextDecoder("utf-8");
  * Parse packed binary row data into a JS Line object.
  *
  * Binary format per cell:
- *   Inline: char_len(1) + char_data(char_len) + width(1) + fg(4) + bg(4) + flags(2 LE)
- *   Overflow: 0xFF(1) + len_hi(1) + len_lo(1) + utf8_data(len) + width(1) + fg(4) + bg(4) + flags(2 LE)
+ *   Inline: char_len(1) + char_data(char_len) + width(1) + fg(4) + bg(4) + flags(2 LE) + hyperlink_id(2 LE)
+ *   Overflow: 0xFF(1) + len_hi(1) + len_lo(1) + utf8_data(len) + width(1) + fg(4) + bg(4) + flags(2 LE) + hyperlink_id(2 LE)
  */
 export function parsePackedRow(packed: Uint8Array, cols: number): Line {
 	const line = new Line(cols);
 	let offset = 0;
 
 	for (let col = 0; col < cols; col++) {
-		// Safety: ensure minimum bytes remain (1 charLen + 1 width + 8 colors + 2 flags = 12)
-		if (offset + 12 > packed.length) break;
+		// Safety: ensure minimum bytes remain (1 charLen + 1 width + 8 colors + 2 flags + 2 hyperlink_id = 14)
+		if (offset + 14 > packed.length) break;
 
 		// Read character data
 		const charLen = packed[offset++]!;
@@ -441,7 +441,12 @@ export function parsePackedRow(packed: Uint8Array, cols: number): Line {
 		const flagsHi = packed[offset++]!;
 		const flags = flagsLo | (flagsHi << 8);
 
-		const attrs: CellAttributes = { ...unpackStyleFlags(flags), fg, bg };
+		// Read hyperlink_id (2 bytes, little-endian)
+		const hlLo = packed[offset++]!;
+		const hlHi = packed[offset++]!;
+		const hyperlinkId = hlLo | (hlHi << 8);
+
+		const attrs: CellAttributes = { ...unpackStyleFlags(flags), fg, bg, hyperlinkId };
 		line.setCell(col, { char: ch, width, attrs, dirty: false });
 	}
 

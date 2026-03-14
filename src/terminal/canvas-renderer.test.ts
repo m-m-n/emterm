@@ -449,7 +449,7 @@ describe("Phase 3: Cursor and Selection", () => {
 
 /**
  * Helper: pack a single cell into bytes matching WASM packed format.
- * Binary: char_len(1) + char_data + width(1) + fg(4) + bg(4) + flags(2 LE)
+ * Binary: char_len(1) + char_data + width(1) + fg(4) + bg(4) + flags(2 LE) + hyperlink_id(2 LE)
  */
 function packCell(
 	ch: string,
@@ -485,6 +485,10 @@ function packCell(
 	const flags = packStyleFlags(attrs);
 	bytes.push(flags & 0xFF, (flags >> 8) & 0xFF);
 
+	// hyperlink_id (2 bytes LE)
+	const hlId = attrs.hyperlinkId ?? 0;
+	bytes.push(hlId & 0xFF, (hlId >> 8) & 0xFF);
+
 	return bytes;
 }
 
@@ -514,9 +518,9 @@ describe("Packed Binary Span Parser", () => {
 			);
 			// Attribute bytes start after char+width: A=1+1+1=3, B=1+1+1=3
 			// Cell A: charLen(1) + charData(1) + width(1) = offset 3 for attrs
-			// Cell B: offset 3+10 + charLen(1) + charData(1) + width(1) = offset 16
+			// Cell B: offset 3+12 + charLen(1) + charData(1) + width(1) = offset 18
 			const attrOffsetA = 3; // after "A" (charLen=1, charData=1, width=1)
-			const attrOffsetB = 3 + 10 + 3; // after 10 attr bytes of A, then B's header
+			const attrOffsetB = 3 + 12 + 3; // after 12 attr bytes of A, then B's header
 			expect(packedAttrsEqual(packed, attrOffsetA, attrOffsetB)).toBe(true);
 		});
 
@@ -526,7 +530,7 @@ describe("Packed Binary Span Parser", () => {
 				packCell("B", 1, boldAttrs),
 			);
 			const attrOffsetA = 3;
-			const attrOffsetB = 3 + 10 + 3;
+			const attrOffsetB = 3 + 12 + 3;
 			expect(packedAttrsEqual(packed, attrOffsetA, attrOffsetB)).toBe(false);
 		});
 	});
