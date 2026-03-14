@@ -91,3 +91,33 @@ impl TerminalCore {
         self.fire_osc_callback(action_type, data);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::terminal_core::TerminalCore;
+
+    #[test]
+    fn test_osc8_hyperlink_sets_cell_hyperlink_id() {
+        let mut core = TerminalCore::new(80, 24, 1000);
+        // OSC 8 open: \x1b]8;;http://example.com\x07
+        // Then print "Hi"
+        // Then OSC 8 close: \x1b]8;;\x07
+        // All in one chunk (realistic scenario)
+        let data = b"\x1b]8;;http://example.com\x07Hi\x1b]8;;\x07there";
+        core.process_pty_data(data);
+
+        // "H" at col 0, "i" at col 1 should have hyperlink_id > 0
+        let hl0 = core.get_cell_hyperlink_id(0, 0);
+        let hl1 = core.get_cell_hyperlink_id(1, 0);
+        // "t" at col 2 should have hyperlink_id == 0
+        let hl2 = core.get_cell_hyperlink_id(2, 0);
+        assert!(hl0 > 0, "H should have hyperlink");
+        assert!(hl1 > 0, "i should have hyperlink");
+        assert_eq!(hl0, hl1, "same hyperlink ID");
+        assert_eq!(hl2, 0, "t should not have hyperlink");
+
+        // Verify URI
+        let uri = core.get_hyperlink_uri(hl0);
+        assert_eq!(uri, "http://example.com");
+    }
+}

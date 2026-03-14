@@ -113,6 +113,7 @@ impl TerminalCore {
                                 cell.fg = self.cursor.fg;
                                 cell.bg = self.cursor.bg;
                                 cell.flags = self.cursor.flags;
+                                cell.hyperlink_id = self.active_hyperlink_id;
                                 self.mark_row_dirty(self.cursor.row);
                             }
                             let new_col = col + 1;

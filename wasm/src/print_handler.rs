@@ -152,6 +152,7 @@ impl TerminalCore {
             cell.fg = self.cursor.fg;
             cell.bg = self.cursor.bg;
             cell.flags = self.cursor.flags;
+            cell.hyperlink_id = self.active_hyperlink_id;
             // Only check overflow table when it has entries (common case: empty)
             if !self.overflow.is_empty() {
                 let abs = self.viewport_abs(row) as u32;

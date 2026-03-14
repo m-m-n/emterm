@@ -194,6 +194,42 @@ fi
 
 OSC 7をDCSパススルーでラップすることで、tmuxがeMtermに転送するようになります。
 
+### tmux内でのOSCシーケンス
+
+tmux 3.4以降はOSC 8（ハイパーリンク）、OSC 52（クリップボード）などの標準OSCシーケンスをネイティブサポートしています。これらの機能を有効にするには、`hyperlinks`ターミナルフィーチャーを追加してください：
+
+```bash
+set -ga terminal-features ",xterm-256color:hyperlinks"
+```
+
+eMterm独自の拡張（OSC 777のMarkdown/ダウンロード、OSC 1337のiTerm2画像）については、上記の`allow-passthrough`設定を使用してください。`emterm markdown`と`emterm image`コマンドはDCSラップを自動的に行います。
+
+## OSCシーケンス対応状況
+
+eMtermがサポートするOSC（Operating System Command）シーケンス一覧：
+
+| OSC | 名称 | 説明 |
+|-----|------|------|
+| 0 | SetTitleAndIcon | ウィンドウタイトルとアイコン名を設定 |
+| 1 | SetIconName | アイコン名を設定 |
+| 2 | SetTitle | ウィンドウタイトルを設定 |
+| 4 | SetColorPalette | カラーパレットの照会/設定 |
+| 7 | SetWorkingDirectory | 作業ディレクトリを設定（SFTPアップロード先の決定に使用） |
+| 8 | Hyperlink | クリック可能なハイパーリンク（`Ctrl+クリック`で開く） |
+| 9 | Notification / Progress | デスクトップ通知とプログレスインジケーター（ConEmu互換） |
+| 10 | SetForegroundColor | デフォルト前景色の照会/設定 |
+| 11 | SetBackgroundColor | デフォルト背景色の照会/設定 |
+| 12 | SetCursorColor | カーソル色の照会/設定 |
+| 22 | CursorShape | カーソル形状スタックのpush/pop |
+| 52 | Clipboard | システムクリップボードの読み書き（設定で切替可能） |
+| 104 | ResetColorPalette | カラーパレットをデフォルトにリセット |
+| 110 | ResetForegroundColor | デフォルト前景色をリセット |
+| 111 | ResetBackgroundColor | デフォルト背景色をリセット |
+| 112 | ResetCursorColor | カーソル色をリセット |
+| 133 | SemanticPrompt | プロンプト/コマンド/出力のゾーンマーカー（Ctrl+上/下ジャンプ、出力折りたたみに使用） |
+| 777 | eMterm拡張 | インラインMarkdown描画、ファイルダウンロード、出力折りたたみ |
+| 1337 | iTerm2プロトコル | インライン画像表示、ユーザー変数 |
+
 ## プロジェクト構成
 
 ```
