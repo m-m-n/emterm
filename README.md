@@ -194,6 +194,42 @@ fi
 
 This wraps OSC 7 in a DCS passthrough sequence so tmux forwards it to eMterm.
 
+### OSC Sequences in tmux
+
+tmux 3.4+ natively supports OSC 8 (hyperlinks), OSC 52 (clipboard), and other standard OSC sequences. To enable these features, add the `hyperlinks` terminal feature:
+
+```bash
+set -ga terminal-features ",xterm-256color:hyperlinks"
+```
+
+For eMterm's custom extensions (OSC 777 for Markdown/download, OSC 1337 for iTerm2 images), use `allow-passthrough` as described above. The `emterm markdown` and `emterm image` CLI commands handle DCS wrapping automatically.
+
+## OSC Sequence Support
+
+eMterm supports the following OSC (Operating System Command) sequences:
+
+| OSC | Name | Description |
+|-----|------|-------------|
+| 0 | SetTitleAndIcon | Set window title and icon name |
+| 1 | SetIconName | Set icon name |
+| 2 | SetTitle | Set window title |
+| 4 | SetColorPalette | Query/set color palette entries |
+| 7 | SetWorkingDirectory | Set current working directory (used for SFTP upload destination) |
+| 8 | Hyperlink | Clickable hyperlinks (`Ctrl+click` to open) |
+| 9 | Notification / Progress | Desktop notifications and progress indicator (ConEmu-compatible) |
+| 10 | SetForegroundColor | Query/set default foreground color |
+| 11 | SetBackgroundColor | Query/set default background color |
+| 12 | SetCursorColor | Query/set cursor color |
+| 22 | CursorShape | Push/pop cursor shape stack |
+| 52 | Clipboard | Read/write system clipboard (configurable) |
+| 104 | ResetColorPalette | Reset color palette entries to defaults |
+| 110 | ResetForegroundColor | Reset default foreground color |
+| 111 | ResetBackgroundColor | Reset default background color |
+| 112 | ResetCursorColor | Reset cursor color |
+| 133 | SemanticPrompt | Prompt/command/output zone markers (used for Ctrl+Up/Down jump, output folding) |
+| 777 | eMterm Extension | Inline Markdown rendering, file download, output folding |
+| 1337 | iTerm2 Protocol | Inline image display, user variables |
+
 ## Markdown Display
 
 eMterm supports inline Markdown rendering via a custom OSC 777 extension protocol.
