@@ -469,6 +469,11 @@ export class TerminalApp {
       if (fromWatchdog && !rafDegraded) {
         rafDegraded = true;
         console.warn("[WARN][FRONTEND] rAF not delivered — switching to degraded (setTimeout) mode");
+        // Force full re-render to recover from potential canvas buffer loss
+        // (WebKitGTK may discard canvas contents when rAF stops being delivered)
+        if (this.state && this.renderer) {
+          this.renderer.forceRender(this.state);
+        }
       }
       if (!this.state || !this.renderer) return;
 
@@ -627,13 +632,20 @@ export class TerminalApp {
       if (rafDegraded) {
         // In degraded mode, use setTimeout directly (rAF is not working)
         setTimeout(() => processPendingData(false), DEGRADED_INTERVAL_MS);
-        // Also try rAF to detect recovery
-        requestAnimationFrame(() => {
-          if (rafDegraded) {
+        // Try rAF to detect recovery — require multiple consecutive deliveries
+        // to avoid flapping between degraded/normal mode
+        let recoveryCount = 0;
+        const RAF_RECOVERY_THRESHOLD = 3;
+        const checkRecovery = () => {
+          recoveryCount++;
+          if (recoveryCount >= RAF_RECOVERY_THRESHOLD) {
             rafDegraded = false;
             console.info("[INFO][FRONTEND] rAF delivery resumed — switching back to normal mode");
+          } else {
+            requestAnimationFrame(checkRecovery);
           }
-        });
+        };
+        requestAnimationFrame(checkRecovery);
       } else {
         requestAnimationFrame(() => processPendingData(false));
         // Watchdog: fallback if rAF callback is not delivered (e.g. WebKitGTK bug)
