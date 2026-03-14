@@ -453,14 +453,22 @@ export class TerminalApp {
     let leftoverData: Uint8Array | null = null;
     let rafScheduled = false;
     let rafWatchdog: ReturnType<typeof setTimeout> | null = null;
+    let rafDegraded = false; // true when rAF is not being delivered
     const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
+    const DEGRADED_BUDGET_MS = 100; // Generous budget when rAF is broken
     const RAF_WATCHDOG_MS = 500; // Fallback if rAF stops being delivered
+    const DEGRADED_INTERVAL_MS = 50; // setTimeout interval in degraded mode
 
-    const processPendingData = () => {
+    const processPendingData = (fromWatchdog = false) => {
       rafScheduled = false;
       if (rafWatchdog !== null) {
         clearTimeout(rafWatchdog);
         rafWatchdog = null;
+      }
+
+      if (fromWatchdog && !rafDegraded) {
+        rafDegraded = true;
+        console.warn("[WARN][FRONTEND] rAF not delivered — switching to degraded (setTimeout) mode");
       }
       if (!this.state || !this.renderer) return;
 
@@ -493,8 +501,10 @@ export class TerminalApp {
         }
 
         // Process data with frame budget — stop when time is up
+        // In degraded mode (rAF broken), use a larger budget to avoid falling behind
         let remaining = merged;
-        const deadline = performance.now() + FRAME_BUDGET_MS;
+        const budget = rafDegraded ? DEGRADED_BUDGET_MS : FRAME_BUDGET_MS;
+        const deadline = performance.now() + budget;
         let processed = false;
 
         while (remaining.length > 0) {
@@ -613,17 +623,30 @@ export class TerminalApp {
     const scheduleProcessing = () => {
       if (rafScheduled) return;
       rafScheduled = true;
-      requestAnimationFrame(processPendingData);
-      // Watchdog: fallback if rAF callback is not delivered (e.g. WebKitGTK bug)
-      if (rafWatchdog !== null) clearTimeout(rafWatchdog);
-      rafWatchdog = setTimeout(() => {
-        if (rafScheduled) {
-          console.warn(
-            "[WARN][FRONTEND] rAF watchdog triggered — forcing data processing",
-          );
-          processPendingData();
-        }
-      }, RAF_WATCHDOG_MS);
+
+      if (rafDegraded) {
+        // In degraded mode, use setTimeout directly (rAF is not working)
+        setTimeout(() => processPendingData(false), DEGRADED_INTERVAL_MS);
+        // Also try rAF to detect recovery
+        requestAnimationFrame(() => {
+          if (rafDegraded) {
+            rafDegraded = false;
+            console.info("[INFO][FRONTEND] rAF delivery resumed — switching back to normal mode");
+          }
+        });
+      } else {
+        requestAnimationFrame(() => processPendingData(false));
+        // Watchdog: fallback if rAF callback is not delivered (e.g. WebKitGTK bug)
+        if (rafWatchdog !== null) clearTimeout(rafWatchdog);
+        rafWatchdog = setTimeout(() => {
+          if (rafScheduled) {
+            console.warn(
+              "[WARN][FRONTEND] rAF watchdog triggered — forcing data processing",
+            );
+            processPendingData(true);
+          }
+        }, RAF_WATCHDOG_MS);
+      }
     };
 
     // Register binary data handler — just buffer and schedule rAF
