@@ -213,6 +213,9 @@ export class ImageViewer {
   // Callback invoked before the viewer is shown
   private onShowCallback: (() => void) | null = null;
 
+  // Generation counter to cancel stale async show() operations
+  private showGeneration = 0;
+
   /**
    * Creates a new ImageViewer instance.
    *
@@ -281,6 +284,9 @@ export class ImageViewer {
    * @param image - Decoded image to display
    */
   async show(image: DecodedImage): Promise<void> {
+    // Increment generation to cancel any in-flight show() operations
+    const generation = ++this.showGeneration;
+
     this.currentImage = image;
 
     // Store original dimensions
@@ -292,8 +298,19 @@ export class ImageViewer {
     this.animationFrames.clear();
     this.currentFrameIndex = 0;
 
+    // Release previous bitmap to prevent resource leak
+    if (this.currentBitmap) {
+      this.currentBitmap.close();
+      this.currentBitmap = null;
+    }
+
     // Decode base64 RGBA to ImageBitmap
     await this.decodeAndRender(image);
+
+    // If hide() was called or another show() started during decode, abort
+    if (this.showGeneration !== generation) {
+      return;
+    }
 
     // Show overlay first so we can get viewport dimensions
     this.overlay.classList.add("visible");
@@ -593,6 +610,9 @@ export class ImageViewer {
    * Hides the viewer.
    */
   hide(): void {
+    // Invalidate any in-flight async show() operations
+    this.showGeneration++;
+
     // Remove event handlers
     this.removeResizeHandler();
     this.overlay.removeEventListener("wheel", this.boundHandleWheel);
@@ -629,6 +649,12 @@ export class ImageViewer {
     this.overlay.classList.remove("visible");
     this.stopAnimation();
     this.currentImage = null;
+
+    // Release bitmap to prevent resource leak
+    if (this.currentBitmap) {
+      this.currentBitmap.close();
+      this.currentBitmap = null;
+    }
 
     this.onHideCallback?.();
   }
