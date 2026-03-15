@@ -1,7 +1,7 @@
 /// CSI cursor handlers: CUU, CUD, CUF, CUB, CNL, CPL, CHA, CUP, VPA.
 use wasm_bindgen::prelude::*;
 
-use crate::terminal_core::TerminalCore;
+use crate::terminal_core::{TerminalCore, MODE_ORIGIN};
 
 impl TerminalCore {
     /// Convert 1-indexed ANSI col parameter to 0-indexed, clamped.
@@ -14,8 +14,17 @@ impl TerminalCore {
     }
 
     /// Convert 1-indexed ANSI row parameter to 0-indexed, clamped.
+    /// When origin mode (DECOM) is enabled, row is relative to scroll region.
     pub(crate) fn to_zero_indexed_row(&self, row: u16) -> u16 {
-        if row == 0 {
+        if self.get_mode(MODE_ORIGIN) {
+            let base = self.scroll_region_top;
+            let max = self.scroll_region_bottom;
+            if row == 0 {
+                base
+            } else {
+                base.saturating_add(row - 1).min(max)
+            }
+        } else if row == 0 {
             0
         } else {
             (row - 1).min(self.rows.saturating_sub(1))
@@ -26,18 +35,30 @@ impl TerminalCore {
 #[wasm_bindgen]
 impl TerminalCore {
     /// CSI A - Cursor Up by count rows.
+    /// Stops at scroll region top when cursor is within the scroll region.
     pub fn handle_cursor_up(&mut self, count: u16) {
-        self.cursor.row = self.cursor.row.saturating_sub(count);
+        let min_row = if self.cursor.row >= self.scroll_region_top
+            && self.cursor.row <= self.scroll_region_bottom
+        {
+            self.scroll_region_top
+        } else {
+            0
+        };
+        self.cursor.row = self.cursor.row.saturating_sub(count).max(min_row);
         self.wrap_pending = false;
     }
 
     /// CSI B - Cursor Down by count rows.
+    /// Stops at scroll region bottom when cursor is within the scroll region.
     pub fn handle_cursor_down(&mut self, count: u16) {
-        self.cursor.row = self
-            .cursor
-            .row
-            .saturating_add(count)
-            .min(self.rows.saturating_sub(1));
+        let max_row = if self.cursor.row >= self.scroll_region_top
+            && self.cursor.row <= self.scroll_region_bottom
+        {
+            self.scroll_region_bottom
+        } else {
+            self.rows.saturating_sub(1)
+        };
+        self.cursor.row = self.cursor.row.saturating_add(count).min(max_row);
         self.wrap_pending = false;
     }
 
@@ -58,19 +79,31 @@ impl TerminalCore {
     }
 
     /// CSI E - Cursor Next Line (down + col=0).
+    /// Stops at scroll region bottom when cursor is within the scroll region.
     pub fn handle_cursor_next_line(&mut self, count: u16) {
-        self.cursor.row = self
-            .cursor
-            .row
-            .saturating_add(count)
-            .min(self.rows.saturating_sub(1));
+        let max_row = if self.cursor.row >= self.scroll_region_top
+            && self.cursor.row <= self.scroll_region_bottom
+        {
+            self.scroll_region_bottom
+        } else {
+            self.rows.saturating_sub(1)
+        };
+        self.cursor.row = self.cursor.row.saturating_add(count).min(max_row);
         self.cursor.col = 0;
         self.wrap_pending = false;
     }
 
     /// CSI F - Cursor Previous Line (up + col=0).
+    /// Stops at scroll region top when cursor is within the scroll region.
     pub fn handle_cursor_previous_line(&mut self, count: u16) {
-        self.cursor.row = self.cursor.row.saturating_sub(count);
+        let min_row = if self.cursor.row >= self.scroll_region_top
+            && self.cursor.row <= self.scroll_region_bottom
+        {
+            self.scroll_region_top
+        } else {
+            0
+        };
+        self.cursor.row = self.cursor.row.saturating_sub(count).max(min_row);
         self.cursor.col = 0;
         self.wrap_pending = false;
     }
@@ -97,7 +130,7 @@ impl TerminalCore {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal_core::TerminalCore;
+    use crate::terminal_core::{TerminalCore, MODE_ORIGIN};
 
     // ── Sprint 3: CSI Cursor handler tests ──────────────────
 
@@ -323,5 +356,115 @@ mod tests {
         core.set_wrap_pending(true);
         core.handle_cursor_vertical_absolute(1);
         assert!(!core.get_wrap_pending());
+    }
+
+    // ── Origin mode (DECOM) tests ──────────────────────────
+
+    #[test]
+    fn test_origin_mode_cup_relative_to_scroll_region() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_mode(MODE_ORIGIN, true);
+        // CUP(1,1) with origin mode → scroll_region_top (row 5)
+        core.handle_cursor_position(1, 1);
+        assert_eq!(core.get_cursor_row(), 5);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_origin_mode_cup_clamped_to_scroll_region() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_mode(MODE_ORIGIN, true);
+        // CUP(100,1) with origin mode → clamped to scroll_region_bottom (row 15)
+        core.handle_cursor_position(100, 1);
+        assert_eq!(core.get_cursor_row(), 15);
+    }
+
+    #[test]
+    fn test_origin_mode_cup_zero_goes_to_region_top() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_mode(MODE_ORIGIN, true);
+        core.set_cursor(10, 10);
+        core.handle_cursor_position(0, 0);
+        assert_eq!(core.get_cursor_row(), 5);
+    }
+
+    #[test]
+    fn test_origin_mode_vpa_relative_to_scroll_region() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_mode(MODE_ORIGIN, true);
+        core.handle_cursor_vertical_absolute(3);
+        // Row 3 relative to region top 5 → absolute row 7
+        assert_eq!(core.get_cursor_row(), 7);
+    }
+
+    #[test]
+    fn test_no_origin_mode_cup_absolute() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        // Origin mode OFF (default)
+        core.handle_cursor_position(1, 1);
+        assert_eq!(core.get_cursor_row(), 0);
+    }
+
+    // ── Scroll region clamping tests ───────────────────────
+
+    #[test]
+    fn test_cursor_up_stops_at_scroll_region_top() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_cursor(0, 7); // Inside scroll region
+        core.handle_cursor_up(100);
+        assert_eq!(core.get_cursor_row(), 5); // Stops at region top
+    }
+
+    #[test]
+    fn test_cursor_up_outside_region_stops_at_zero() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_cursor(0, 3); // Outside scroll region (above)
+        core.handle_cursor_up(100);
+        assert_eq!(core.get_cursor_row(), 0); // Stops at row 0
+    }
+
+    #[test]
+    fn test_cursor_down_stops_at_scroll_region_bottom() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_cursor(0, 7); // Inside scroll region
+        core.handle_cursor_down(100);
+        assert_eq!(core.get_cursor_row(), 15); // Stops at region bottom
+    }
+
+    #[test]
+    fn test_cursor_down_outside_region_stops_at_last_row() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_cursor(0, 20); // Outside scroll region (below)
+        core.handle_cursor_down(100);
+        assert_eq!(core.get_cursor_row(), 23); // Stops at last row
+    }
+
+    #[test]
+    fn test_cursor_next_line_stops_at_scroll_region_bottom() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_cursor(10, 7);
+        core.handle_cursor_next_line(100);
+        assert_eq!(core.get_cursor_row(), 15);
+        assert_eq!(core.get_cursor_col(), 0);
+    }
+
+    #[test]
+    fn test_cursor_previous_line_stops_at_scroll_region_top() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_scroll_region(5, 15);
+        core.set_cursor(10, 7);
+        core.handle_cursor_previous_line(100);
+        assert_eq!(core.get_cursor_row(), 5);
+        assert_eq!(core.get_cursor_col(), 0);
     }
 }

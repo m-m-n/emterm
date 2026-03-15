@@ -406,6 +406,23 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const dirtyRows = state.getDirtyRows();
 		const bufferRows = buffer.rows;
 
+		// When many rows change at once (DL/IL/scroll operations), use full render
+		// to work around WebKitGTK canvas differential rendering issues.
+		if (dirtyRows.length > bufferRows * 0.4) {
+			console.warn(
+				`[WARN][RENDERER] Dirty rows exceed 40% threshold (${dirtyRows.length}/${bufferRows}), using forceRender` +
+				` | isAlt=${state.isAlternateBuffer}` +
+				` | cursor=(${state.cursorCol},${state.cursorRow})`,
+			);
+			this.forceRender(state);
+			const duration = this.renderTimer.end();
+			const monitor = getPerformanceMonitor();
+			if (monitor.isEnabled()) {
+				monitor.recordRender(duration);
+			}
+			return;
+		}
+
 		// Pre-parse packed data for dirty rows
 		const parsedRows: { rowIndex: number; spans: TextSpan[] | null; line: LineAccessor | null }[] = [];
 		for (const rowIndex of dirtyRows) {

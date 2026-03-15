@@ -33,7 +33,11 @@ impl TerminalCore {
         };
         self.set_scroll_region(t, b);
         self.cursor.col = 0;
-        self.cursor.row = 0;
+        self.cursor.row = if self.get_mode(crate::terminal_core::MODE_ORIGIN) {
+            self.scroll_region_top
+        } else {
+            0
+        };
         self.wrap_pending = false;
     }
 }
@@ -151,5 +155,17 @@ mod tests {
         // Cursor still homed
         assert_eq!(core.get_cursor_col(), 0);
         assert_eq!(core.get_cursor_row(), 0);
+    }
+
+    #[test]
+    fn test_decstbm_origin_mode_homes_to_region_top() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.set_mode(crate::terminal_core::MODE_ORIGIN, true);
+        core.handle_decstbm(5, 20);
+        assert_eq!(core.get_scroll_region_top(), 4);
+        assert_eq!(core.get_scroll_region_bottom(), 19);
+        // Origin mode: cursor homes to scroll region top
+        assert_eq!(core.get_cursor_row(), 4);
+        assert_eq!(core.get_cursor_col(), 0);
     }
 }
