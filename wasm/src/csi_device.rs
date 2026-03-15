@@ -24,13 +24,13 @@ impl TerminalCore {
     /// CSI c - Primary Device Attributes.
     /// Returns response length.
     pub fn handle_primary_device_attributes(&mut self) -> u8 {
-        self.write_response(b"\x1b[?64;1;2;6;22c")
+        self.write_response(b"\x1b[?65;1;4;22c")
     }
 
     /// CSI > c - Secondary Device Attributes.
     /// Returns response length.
     pub fn handle_secondary_device_attributes(&mut self) -> u8 {
-        self.write_response(b"\x1b[>41;1;0c")
+        self.write_response(b"\x1b[>65;1;0c")
     }
 
     /// Get pointer to response buffer in linear memory.
@@ -209,7 +209,7 @@ mod tests {
         let len = core.handle_primary_device_attributes();
         assert!(len > 0);
         let bytes = core.get_response_bytes();
-        assert_eq!(&bytes, b"\x1b[?64;1;2;6;22c");
+        assert_eq!(&bytes, b"\x1b[?65;1;4;22c");
     }
 
     #[test]
@@ -218,7 +218,7 @@ mod tests {
         let len = core.handle_secondary_device_attributes();
         assert!(len > 0);
         let bytes = core.get_response_bytes();
-        assert_eq!(&bytes, b"\x1b[>41;1;0c");
+        assert_eq!(&bytes, b"\x1b[>65;1;0c");
     }
 
     #[test]
