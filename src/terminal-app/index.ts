@@ -466,10 +466,12 @@ export class TerminalApp {
     let rafScheduled = false;
     let rafWatchdog: ReturnType<typeof setTimeout> | null = null;
     let rafDegraded = false; // true when rAF is not being delivered
+    let deferredRenderTimer: ReturnType<typeof setTimeout> | null = null;
     const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
     const DEGRADED_BUDGET_MS = 100; // Generous budget when rAF is broken
     const RAF_WATCHDOG_MS = 500; // Fallback if rAF stops being delivered
     const DEGRADED_INTERVAL_MS = 50; // setTimeout interval in degraded mode
+    const CURSOR_HIDDEN_RENDER_DELAY_MS = 32; // Max delay when cursor is hidden mid-update
 
     const processPendingData = (fromWatchdog = false) => {
       rafScheduled = false;
@@ -527,6 +529,7 @@ export class TerminalApp {
         const budget = rafDegraded ? DEGRADED_BUDGET_MS : FRAME_BUDGET_MS;
         const deadline = performance.now() + budget;
         let processed = false;
+        const cursorVisibleBefore = this.state.cursorVisible;
 
         while (remaining.length > 0) {
           const core = this.state.getActiveCore();
@@ -604,9 +607,29 @@ export class TerminalApp {
 
         if (processed) {
           this.outputActivityCallback?.();
-          // Render immediately in this frame (no extra rAF delay)
-          this.renderer.renderImmediate(this.state);
-          this.imeHandler?.updatePosition();
+
+          // If cursor just became hidden, the terminal is mid-update (e.g. vim redraw).
+          // Defer rendering to allow the rest of the update to arrive, avoiding
+          // a flash of intermediate state (e.g. search wrap message that gets
+          // immediately cleared by the subsequent full redraw).
+          if (!this.state.cursorVisible && cursorVisibleBefore) {
+            if (deferredRenderTimer === null) {
+              deferredRenderTimer = setTimeout(() => {
+                deferredRenderTimer = null;
+                if (this.state && this.renderer) {
+                  this.renderer.renderImmediate(this.state);
+                  this.imeHandler?.updatePosition();
+                }
+              }, CURSOR_HIDDEN_RENDER_DELAY_MS);
+            }
+          } else {
+            if (deferredRenderTimer !== null) {
+              clearTimeout(deferredRenderTimer);
+              deferredRenderTimer = null;
+            }
+            this.renderer.renderImmediate(this.state);
+            this.imeHandler?.updatePosition();
+          }
         }
 
         // If there's leftover data, schedule next frame to continue

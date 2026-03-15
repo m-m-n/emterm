@@ -111,8 +111,6 @@ impl TerminalCore {
     /// Shift dirty bits down by 1 position (row N's bit moves to row N-1).
     /// Row 0's dirty bit is discarded (scrolled into scrollback).
     /// Used when full-screen scroll optimization shifts the viewport mapping.
-    /// Currently unused: scroll optimization is disabled for diagnosis.
-    #[allow(dead_code)]
     pub(crate) fn shift_dirty_down_by_one(&mut self) {
         let len = self.dirty.len();
         if len == 0 {
