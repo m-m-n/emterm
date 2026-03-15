@@ -404,10 +404,16 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 		const buffer = state.getActiveBuffer();
 		const dirtyRows = state.getDirtyRows();
+		const bufferRows = buffer.rows;
 
 		// Pre-parse packed data for dirty rows
 		const parsedRows: { rowIndex: number; spans: TextSpan[] | null; line: LineAccessor | null }[] = [];
 		for (const rowIndex of dirtyRows) {
+			// Guard: skip rows that exceed buffer bounds (WASM/TS desync)
+			if (rowIndex < 0 || rowIndex >= bufferRows) {
+				console.warn(`[WARN][RENDERER] Dirty row ${rowIndex} out of bounds (buffer rows=${bufferRows}), skipping`);
+				continue;
+			}
 			const packed = state.getRowPacked(rowIndex);
 			if (packed && packed.length > 0) {
 				const spans = groupPackedCellsIntoSpans(packed, this.cols);

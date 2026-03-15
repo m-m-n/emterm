@@ -472,7 +472,11 @@ export class TerminalApp {
         // Force full re-render to recover from potential canvas buffer loss
         // (WebKitGTK may discard canvas contents when rAF stops being delivered)
         if (this.state && this.renderer) {
-          this.renderer.forceRender(this.state);
+          try {
+            this.renderer.forceRender(this.state);
+          } catch (error) {
+            console.error("[ERROR][FRONTEND] forceRender in degraded mode switch failed:", error);
+          }
         }
       }
       if (!this.state || !this.renderer) return;
@@ -926,7 +930,8 @@ export class TerminalApp {
         // Skip resize if container is hidden (tab not active)
         // This prevents buffer content from being lost when a tab becomes hidden
         // and ResizeObserver reports 0x0 dimensions (leading to 1x1 resize)
-        if (this.container.style.display === "none") {
+        if (this.container.style.display === "none" ||
+            this.container.clientWidth === 0 || this.container.clientHeight === 0) {
           return;
         }
 

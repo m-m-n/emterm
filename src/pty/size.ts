@@ -151,8 +151,11 @@ export function observeContainerResize(
 	const observer = new ResizeObserver(() => {
 		// Skip resize when container is hidden (e.g., inactive tab)
 		// ResizeObserver reports 0x0 dimensions for hidden elements,
-		// which would calculate cols=1, rows=1 and corrupt last values
-		if (container.style.display === "none") {
+		// which would calculate cols=1, rows=1 and corrupt last values.
+		// Check both inline style and actual client dimensions to catch
+		// containers hidden by parent CSS, visibility, or window minimize.
+		if (container.style.display === "none" ||
+			container.clientWidth === 0 || container.clientHeight === 0) {
 			return;
 		}
 
