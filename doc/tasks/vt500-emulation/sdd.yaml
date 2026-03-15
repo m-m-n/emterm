@@ -1,0 +1,63 @@
+schema_version: 1
+feature: vt500-emulation
+scale: standard
+created: 2026-03-16
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cd wasm && wasm-pack build --target web --out-dir pkg"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'cd wasm && cargo test'"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 2e22f0afbbacba1ef2c6ffe481abc41ba150228c
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 2e22f0afbbacba1ef2c6ffe481abc41ba150228c
+  - id: implement
+    status: completed
+    completed_at_commit: 2e22f0afbbacba1ef2c6ffe481abc41ba150228c
+  - id: check
+    status: completed
+    completed_at_commit: 2e22f0afbbacba1ef2c6ffe481abc41ba150228c
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 2e22f0afbbacba1ef2c6ffe481abc41ba150228c
+  - id: review
+    status: completed
+    completed_at_commit: 2e22f0afbbacba1ef2c6ffe481abc41ba150228c
+
+requirements:
+  FR1:
+    title: DA1 conformance level update (64 -> 65)
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: DA2 terminal type update (41 -> 65)
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: DA1 capability flags alignment
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Test updates
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Backward compatibility
+    status: ok
+    tasks: []
+    tests: []

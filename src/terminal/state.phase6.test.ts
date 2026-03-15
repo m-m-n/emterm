@@ -171,7 +171,7 @@ describe("TerminalState Phase 6", () => {
 	});
 
 	describe("Device Attributes", () => {
-		test("Primary DA returns VT420 response", () => {
+		test("Primary DA returns VT500 response", () => {
 			const state = new TerminalState(80, 24);
 			state.processAction({
 				type: "Csi",
@@ -184,8 +184,8 @@ describe("TerminalState Phase 6", () => {
 			const responseStr = new TextDecoder().decode(response!);
 			// Should start with CSI ? and end with c
 			expect(responseStr).toMatch(/^\x1b\[\?.*c$/);
-			// Should contain 64 (VT420)
-			expect(responseStr).toContain("64");
+			// Should contain 65 (VT500)
+			expect(responseStr).toContain("65");
 		});
 
 		test("Secondary DA returns terminal info", () => {
@@ -201,8 +201,8 @@ describe("TerminalState Phase 6", () => {
 			const responseStr = new TextDecoder().decode(response!);
 			// Should start with CSI > and end with c
 			expect(responseStr).toMatch(/^\x1b\[>.*c$/);
-			// Should contain 41 (VT420 type)
-			expect(responseStr).toContain("41");
+			// Should contain 65 (VT500 series)
+			expect(responseStr).toContain("65");
 		});
 	});
 

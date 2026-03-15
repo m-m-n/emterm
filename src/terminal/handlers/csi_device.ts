@@ -52,20 +52,19 @@ export function handleDeviceStatusReport(
  * Handle PrimaryDeviceAttributes (CSI c / CSI 0 c).
  *
  * Respond with device capabilities.
- * Response: CSI ? 64 ; 1 ; 2 ; 6 ; 22 c (VT420 with various capabilities)
+ * Response: CSI ? 65 ; 1 ; 4 ; 22 c (VT500 with 132-col, Sixel, ANSI color)
  *
  * @param state - Terminal state accessor
  */
 export function handlePrimaryDeviceAttributes(
   state: TerminalStateAccessor
 ): void {
-  // Report as VT420 with:
-  // 64 = VT420
+  // Report as VT500 with:
+  // 65 = VT500
   // 1 = 132 columns
-  // 2 = Printer port
-  // 6 = Selective erase
+  // 4 = Sixel graphics
   // 22 = ANSI color
-  const response = "\x1b[?64;1;2;6;22c";
+  const response = "\x1b[?65;1;4;22c";
   state.addPendingResponse(new TextEncoder().encode(response));
 }
 
@@ -73,15 +72,15 @@ export function handlePrimaryDeviceAttributes(
  * Handle SecondaryDeviceAttributes (CSI > c / CSI > 0 c).
  *
  * Respond with terminal identification.
- * Response: CSI > 41 ; 1 ; 0 c (VT420, version 1, no ROM cartridge)
+ * Response: CSI > 65 ; 1 ; 0 c (VT500 series, version 1, no ROM cartridge)
  *
  * @param state - Terminal state accessor
  */
 export function handleSecondaryDeviceAttributes(
   state: TerminalStateAccessor
 ): void {
-  // Report as VT420 (41), version 1, no ROM cartridge
-  const response = "\x1b[>41;1;0c";
+  // Report as VT500 series (65), version 1, no ROM cartridge
+  const response = "\x1b[>65;1;0c";
   state.addPendingResponse(new TextEncoder().encode(response));
 }
 
