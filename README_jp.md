@@ -206,6 +206,55 @@ set -ga terminal-features ",xterm-256color:hyperlinks"
 
 eMterm独自の拡張（OSC 777のMarkdown/ダウンロード、OSC 1337のiTerm2画像）については、上記の`allow-passthrough`設定を使用してください。`emterm markdown`と`emterm image`コマンドはDCSラップを自動的に行います。
 
+#### tmux内でのOSC 133セマンティックプロンプト
+
+tmux 3.4以降はOSC 133マーカーを内部で消費し（tmux自身の`next-prompt`/`previous-prompt`に使用）、外側のターミナルには転送しません。そのため、tmux内ではeMtermのCtrl+上/下プロンプトジャンプやコマンド出力の折りたたみがデフォルトでは動作しません。
+
+DCSパススルーでOSC 133マーカーをeMtermに転送するには、シェル設定に以下を追加してください。シェルが通常発行するOSC 133はそのまま動作し、tmux自身のプロンプトナビゲーションにも影響しません。
+
+**bash** (`~/.bashrc`):
+```bash
+if [ -n "$TMUX" ]; then
+  _emterm_osc133() { printf '\ePtmux;\e\e]133;%s\e\e\\\e\\' "$1"; }
+  _emterm_first=1
+  _emterm_precmd() {
+    local ec=$?
+    if [ -z "$_emterm_first" ]; then
+      _emterm_osc133 "D;$ec"
+    fi
+    _emterm_first=
+    _emterm_osc133 "A"
+  }
+  PROMPT_COMMAND="_emterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+  _emterm_b=$'\ePtmux;\e\e]133;B\e\e\\\e\\'
+  PS1="${PS1}\[${_emterm_b}\]"
+  _emterm_c=$'\ePtmux;\e\e]133;C\e\e\\\e\\'
+  PS0="${PS0}${_emterm_c}"
+fi
+```
+
+**zsh** (`~/.zshrc`):
+```zsh
+if [[ -n "$TMUX" ]]; then
+  _emterm_osc133() { printf '\ePtmux;\e\e]133;%s\e\e\\\e\\' "$1" }
+  _emterm_first=1
+  _emterm_precmd() {
+    local ec=$?
+    if [[ -z "$_emterm_first" ]]; then
+      _emterm_osc133 "D;$ec"
+    fi
+    _emterm_first=
+    _emterm_osc133 "A"
+  }
+  _emterm_preexec() { _emterm_osc133 "C" }
+  precmd_functions+=(_emterm_precmd)
+  preexec_functions+=(_emterm_preexec)
+  PS1="${PS1}%{$(printf '\ePtmux;\e\e]133;B\e\e\\\\\e\\\\')%}"
+fi
+```
+
+tmux設定で`allow-passthrough on`が必要です。
+
 ## OSCシーケンス対応状況
 
 eMtermがサポートするOSC（Operating System Command）シーケンス一覧：

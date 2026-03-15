@@ -206,6 +206,55 @@ set -ga terminal-features ",xterm-256color:hyperlinks"
 
 For eMterm's custom extensions (OSC 777 for Markdown/download, OSC 1337 for iTerm2 images), use `allow-passthrough` as described above. The `emterm markdown` and `emterm image` CLI commands handle DCS wrapping automatically.
 
+#### OSC 133 Semantic Prompt in tmux
+
+tmux 3.4+ consumes OSC 133 markers internally for its own prompt navigation (`next-prompt`/`previous-prompt`) and does not forward them to the outer terminal. This means eMterm's Ctrl+Up/Down prompt jump and command output folding do not work inside tmux by default.
+
+To pass OSC 133 markers through to eMterm via DCS passthrough, add the following to your shell configuration. The regular OSC 133 emitted by your shell continues to work for tmux's own prompt navigation.
+
+**bash** (`~/.bashrc`):
+```bash
+if [ -n "$TMUX" ]; then
+  _emterm_osc133() { printf '\ePtmux;\e\e]133;%s\e\e\\\e\\' "$1"; }
+  _emterm_first=1
+  _emterm_precmd() {
+    local ec=$?
+    if [ -z "$_emterm_first" ]; then
+      _emterm_osc133 "D;$ec"
+    fi
+    _emterm_first=
+    _emterm_osc133 "A"
+  }
+  PROMPT_COMMAND="_emterm_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+  _emterm_b=$'\ePtmux;\e\e]133;B\e\e\\\e\\'
+  PS1="${PS1}\[${_emterm_b}\]"
+  _emterm_c=$'\ePtmux;\e\e]133;C\e\e\\\e\\'
+  PS0="${PS0}${_emterm_c}"
+fi
+```
+
+**zsh** (`~/.zshrc`):
+```zsh
+if [[ -n "$TMUX" ]]; then
+  _emterm_osc133() { printf '\ePtmux;\e\e]133;%s\e\e\\\e\\' "$1" }
+  _emterm_first=1
+  _emterm_precmd() {
+    local ec=$?
+    if [[ -z "$_emterm_first" ]]; then
+      _emterm_osc133 "D;$ec"
+    fi
+    _emterm_first=
+    _emterm_osc133 "A"
+  }
+  _emterm_preexec() { _emterm_osc133 "C" }
+  precmd_functions+=(_emterm_precmd)
+  preexec_functions+=(_emterm_preexec)
+  PS1="${PS1}%{$(printf '\ePtmux;\e\e]133;B\e\e\\\\\e\\\\')%}"
+fi
+```
+
+Requires `allow-passthrough on` in tmux config.
+
 ## OSC Sequence Support
 
 eMterm supports the following OSC (Operating System Command) sequences:
