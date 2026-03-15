@@ -1,0 +1,181 @@
+/* Data Viewer (JSON/YAML) Styles */
+
+/* Fullscreen overlay */
+.dv-fullscreen-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--background-color, #1e1e1e);
+  color: var(--foreground-color, #d4d4d4);
+  font-family: var(--font-family, monospace);
+  font-size: var(--markdown-font-size, 13pt);
+  z-index: 1000;
+}
+
+/* Error banner */
+.dv-error-banner {
+  padding: 8px 16px;
+  background: #4a1c1c;
+  color: #f88;
+  border-bottom: 1px solid #6b2c2c;
+  font-size: 0.9em;
+  flex-shrink: 0;
+}
+
+/* Content area */
+.dv-content-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Status bar */
+.dv-status-bar {
+  padding: 4px 16px;
+  background: #252526;
+  color: #888;
+  border-top: 1px solid #333;
+  font-size: 0.85em;
+  flex-shrink: 0;
+}
+
+/* ── RAW View ── */
+
+.dv-raw-view {
+  position: relative;
+  height: 100%;
+}
+
+.dv-raw-content {
+  margin: 0;
+  padding: 16px;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: var(--font-family, monospace);
+  font-size: inherit;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+.dv-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  padding: 4px 12px;
+  background: #333;
+  color: #ccc;
+  border: 1px solid #555;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8em;
+  z-index: 10;
+}
+
+.dv-copy-btn:hover {
+  background: #444;
+}
+
+/* ── Outline View ── */
+
+.dv-outline-view {
+  display: flex;
+  height: 100%;
+}
+
+.dv-tree-panel {
+  width: 280px;
+  min-width: 200px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid #333;
+  flex-shrink: 0;
+}
+
+.dv-tree-item {
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9em;
+  line-height: 1.6;
+}
+
+.dv-tree-icon {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.dv-tree-item:hover {
+  background: #2a2d2e;
+}
+
+.dv-tree-item.selected {
+  background: #094771;
+  color: #fff;
+}
+
+.dv-tree-item-root {
+  font-style: italic;
+  color: #888;
+  padding-left: 8px;
+}
+
+.dv-detail-panel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.dv-detail-content {
+  margin: 0;
+  padding: 16px;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: auto;
+  white-space: pre;
+  font-family: var(--font-family, monospace);
+  font-size: inherit;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+/* ── Syntax Highlighting ── */
+
+.dv-key {
+  color: #9cdcfe;
+}
+
+.dv-string {
+  color: #ce9178;
+}
+
+.dv-number {
+  color: #b5cea8;
+}
+
+.dv-boolean {
+  color: #569cd6;
+}
+
+.dv-null {
+  color: #569cd6;
+  font-style: italic;
+}
+
+.dv-punct {
+  color: #808080;
+}
+
+.dv-comment {
+  color: #6a9955;
+  font-style: italic;
+}

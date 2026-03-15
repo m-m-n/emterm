@@ -346,6 +346,9 @@ export class TerminalApp {
     // Set markdown session manager's container for fullscreen view
     this.state.getMarkdownManager().setContainer(this.overlayRoot!);
 
+    // Set data viewer session manager's container
+    this.state.getDataViewerManager().setContainer(this.overlayRoot!);
+
     // Initialize download session manager
     this.downloadManager = new DownloadSessionManager();
     this.downloadManager.setContainer(this.overlayRoot!);
@@ -356,6 +359,15 @@ export class TerminalApp {
       this.imeHandler?.blur();
     });
     fullscreenView.onHide(() => {
+      this.imeHandler?.focus();
+    });
+
+    // Wire up IME blur/focus for data viewer
+    const dataViewerFullscreen = this.state.getDataViewerManager().getFullscreenView();
+    dataViewerFullscreen.onShow(() => {
+      this.imeHandler?.blur();
+    });
+    dataViewerFullscreen.onHide(() => {
       this.imeHandler?.focus();
     });
 
@@ -840,6 +852,9 @@ export class TerminalApp {
         } else if (verb === "emterm" && params.length > 0 && params[0] === "download") {
           // Route to download manager
           this.downloadManager?.handleCommand(verb, params);
+        } else if (verb === "emterm" && params.length > 0 && (params[0] === "json" || params[0] === "yaml")) {
+          // Route to data viewer manager
+          this.state.getDataViewerManager().handleCommand(verb, params);
         } else {
           // Route to markdown manager
           this.state.getMarkdownManager().handleCommand(verb, params);
