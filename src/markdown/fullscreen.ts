@@ -15,6 +15,7 @@ import { ZoomController } from "../shared/zoom-controller.ts";
 import type { FullscreenConfig, FullscreenState, MarkdownBlock } from "./types.ts";
 import { t } from "../i18n/index.ts";
 import { isAncestorHidden } from "../shared/dom-utils.ts";
+import { createResizeHandle } from "../ui/resize-handle.ts";
 
 /**
  * Default minimum zoom level.
@@ -147,11 +148,17 @@ export class FullscreenMarkdownView {
 		// Render mermaid diagrams (async, non-blocking)
 		this.mermaidRenderer.renderAll(this.content);
 
-		// Build outline panel
+		// Build outline panel with resize handle
 		const outlinePanelEl = this.outlinePanel.build(this.content);
 		if (outlinePanelEl) {
 			this.overlay.classList.add("has-outline");
 			this.overlay.insertBefore(outlinePanelEl, this.content);
+			const resizeHandle = createResizeHandle(outlinePanelEl, {
+				minWidth: 200,
+				maxWidth: 600,
+				storageKey: "emterm.markdown.outlineWidth",
+			});
+			this.overlay.insertBefore(resizeHandle, this.content);
 		}
 
 		// Set up event listeners
@@ -327,6 +334,30 @@ export class FullscreenMarkdownView {
 		// When tab is switched, the tab container becomes display:none
 		// but the isActive state remains true.
 		if (this.overlay && isAncestorHidden(this.overlay)) {
+			return;
+		}
+
+		// Handle Ctrl+C (copy) and Ctrl+A (select all) explicitly
+		if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+			e.preventDefault();
+			const sel = window.getSelection();
+			const text = sel?.toString();
+			if (text) {
+				writeText(text).catch(() => {
+					navigator.clipboard.writeText(text).catch(() => {});
+				});
+			}
+			return;
+		}
+		if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+			e.preventDefault();
+			if (this.content) {
+				const sel = window.getSelection();
+				const range = document.createRange();
+				range.selectNodeContents(this.content);
+				sel?.removeAllRanges();
+				sel?.addRange(range);
+			}
 			return;
 		}
 

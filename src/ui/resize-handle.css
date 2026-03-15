@@ -1,0 +1,14 @@
+/* Resize handle for resizable panels */
+
+.resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background-color 0.15s;
+}
+
+.resize-handle:hover,
+.resize-handle-active {
+  background: var(--markdown-link, #569cd6);
+}

@@ -9,6 +9,7 @@ import type { UnifiedBuffer } from "../unified-buffer.ts";
 import type { CursorState } from "../cursor.ts";
 import type { TerminalModes } from "../modes.ts";
 import type { CharSet } from "../../types/terminal.ts";
+import type { DataViewerSessionManager } from "../../data-viewer/session.ts";
 import type { MarkdownSessionManager } from "../../markdown/session.ts";
 import type { SemanticZoneTracker } from "../semantic-zone.ts";
 import type { FoldManager } from "../fold-manager.ts";
@@ -64,6 +65,7 @@ export interface TerminalStateAccessor {
   addPendingResponse(response: Uint8Array): void;
   switchToAlternateBuffer(saveCursor: boolean): void;
   switchToPrimaryBuffer(restoreCursor: boolean): void;
+  getDataViewerManager(): DataViewerSessionManager;
   getMarkdownManager(): MarkdownSessionManager;
   getSemanticZoneTracker(): SemanticZoneTracker;
   getFoldManager(): FoldManager;

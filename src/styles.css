@@ -25,6 +25,12 @@
 /* Download Toast Styles */
 @import "./download/download.css";
 
+/* Data Viewer (JSON/YAML) Styles */
+@import "./styles/data-viewer.css";
+
+/* Resize Handle Styles */
+@import "./ui/resize-handle.css";
+
 * {
   margin: 0;
   padding: 0;

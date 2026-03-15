@@ -41,5 +41,10 @@ export function isModalOverlayVisible(): boolean {
 	) as HTMLElement | null;
 	if (markdownOverlay && !isAncestorHidden(markdownOverlay)) return true;
 
+	const dataViewerOverlay = document.querySelector(
+		".dv-fullscreen-overlay",
+	) as HTMLElement | null;
+	if (dataViewerOverlay && !isAncestorHidden(dataViewerOverlay)) return true;
+
 	return false;
 }

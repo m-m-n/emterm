@@ -5,6 +5,7 @@
  * Handler implementations are delegated to the handlers module.
  */
 
+import { DataViewerSessionManager } from "../data-viewer/session.ts";
 import { MarkdownSessionManager } from "../markdown/session.ts";
 import type { CharSet, CsiAction, EscAction, EraseMode, TerminalAction } from "../types/terminal.ts";
 import { UnifiedBuffer } from "./unified-buffer.ts";
@@ -132,6 +133,9 @@ export class TerminalState implements TerminalStateAccessor {
   /** User variables set via OSC 1337;SetUserVar. */
   _userVariables: Map<string, string> = new Map();
 
+  /** Data viewer session manager (JSON/YAML). */
+  private dataViewerManager: DataViewerSessionManager;
+
   /** Markdown session manager. */
   private markdownManager: MarkdownSessionManager;
 
@@ -190,6 +194,7 @@ export class TerminalState implements TerminalStateAccessor {
     this.cursor = this.primaryCursor;
     this.modes = createDefaultModes();
     this.tabStops = this.createDefaultTabStops(cols);
+    this.dataViewerManager = new DataViewerSessionManager();
     this.markdownManager = new MarkdownSessionManager();
     this.semanticZoneTracker = new SemanticZoneTracker();
     this.foldManager = new FoldManager();
@@ -357,7 +362,8 @@ export class TerminalState implements TerminalStateAccessor {
       this.alternateWasmGrid = null;
     }
 
-    // Dispose markdown manager
+    // Dispose session managers
+    this.dataViewerManager.dispose();
     this.markdownManager.dispose();
   }
 
@@ -898,6 +904,10 @@ export class TerminalState implements TerminalStateAccessor {
    *
    * @returns The markdown session manager instance
    */
+  getDataViewerManager(): DataViewerSessionManager {
+    return this.dataViewerManager;
+  }
+
   getMarkdownManager(): MarkdownSessionManager {
     return this.markdownManager;
   }
@@ -1230,7 +1240,8 @@ export class TerminalState implements TerminalStateAccessor {
     this._progressPercentage = -1;
     this._userVariables.clear();
 
-    // Reset markdown state
+    // Reset session managers (preserve container/callbacks)
+    this.dataViewerManager.resetSessions();
     this.markdownManager.dispose();
     this.markdownManager = new MarkdownSessionManager();
 
@@ -1299,6 +1310,7 @@ export class TerminalState implements TerminalStateAccessor {
       this._progressState = 0;
       this._progressPercentage = -1;
       this._userVariables.clear();
+      this.dataViewerManager.resetSessions();
       this.markdownManager.dispose();
       this.markdownManager = new MarkdownSessionManager();
       this.semanticZoneTracker.clear();

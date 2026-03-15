@@ -291,6 +291,12 @@ export function handleEmtermExtension(
     return;
   }
 
+  // Route to data viewer manager for json/yaml
+  if (verb === "emterm" && params.length > 0 && (params[0] === "json" || params[0] === "yaml")) {
+    state.getDataViewerManager().handleCommand(verb, params);
+    return;
+  }
+
   // Route to markdown manager (handles verb="emterm", params=["markdown", ...])
   const manager = state.getMarkdownManager();
   manager.handleCommand(verb, params);

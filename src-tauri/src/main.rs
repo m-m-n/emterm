@@ -60,6 +60,26 @@ fn build_cli() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("json")
+                .about(t!("cli.jsonAbout").to_string())
+                .arg(
+                    Arg::new("file")
+                        .help(t!("cli.jsonFile").to_string())
+                        .value_name("FILE")
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            Command::new("yaml")
+                .about(t!("cli.yamlAbout").to_string())
+                .arg(
+                    Arg::new("file")
+                        .help(t!("cli.yamlFile").to_string())
+                        .value_name("FILE")
+                        .required(true),
+                ),
+        )
+        .subcommand(
             Command::new("download")
                 .about(t!("cli.downloadAbout").to_string())
                 .arg(
@@ -87,6 +107,20 @@ fn main() {
         Some(("markdown", sub_matches)) => {
             let file = PathBuf::from(sub_matches.get_one::<String>("file").unwrap());
             if let Err(err) = app_lib::commands::markdown::execute_markdown_command(&file) {
+                eprintln!("Error: {}", err);
+                std::process::exit(err.exit_code());
+            }
+        }
+        Some(("json", sub_matches)) => {
+            let file = PathBuf::from(sub_matches.get_one::<String>("file").unwrap());
+            if let Err(err) = app_lib::commands::json::execute_json_command(&file) {
+                eprintln!("Error: {}", err);
+                std::process::exit(err.exit_code());
+            }
+        }
+        Some(("yaml", sub_matches)) => {
+            let file = PathBuf::from(sub_matches.get_one::<String>("file").unwrap());
+            if let Err(err) = app_lib::commands::yaml::execute_yaml_command(&file) {
                 eprintln!("Error: {}", err);
                 std::process::exit(err.exit_code());
             }

@@ -1,0 +1,108 @@
+schema_version: 1
+feature: json-yaml-viewer
+scale: standard
+created: 2026-03-15
+
+project:
+  components:
+    main:
+      language: rust+typescript
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: a1882d2e647f73921b7eba25517183cda7bf49ad
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: a1882d2e647f73921b7eba25517183cda7bf49ad
+  - id: implement
+    status: completed
+    completed_at_commit: a1882d2e647f73921b7eba25517183cda7bf49ad
+  - id: check
+    status: completed
+    completed_at_commit: a1882d2e647f73921b7eba25517183cda7bf49ad
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: a1882d2e647f73921b7eba25517183cda7bf49ad
+  - id: review
+    status: completed
+    completed_at_commit: a1882d2e647f73921b7eba25517183cda7bf49ad
+
+requirements:
+  FR1:
+    title: CLI commands (emterm json / emterm yaml)
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-10, TS-11]
+  FR2:
+    title: OSC 777 sequences (separate json/yaml commands)
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-10, TS-11]
+  FR3:
+    title: Frontend JSON/YAML parsing and fullscreen overlay
+    status: ok
+    tasks: [Phase2, Phase5]
+    tests: [TS-01, TS-02, TS-03, TS-04, TS-12]
+  FR4:
+    title: Outline view (tree + detail pane)
+    status: ok
+    tasks: [Phase4]
+    tests: [TS-05, TS-06, TS-13, TS-14]
+  FR5:
+    title: RAW view with syntax highlighting and copy button
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-08, TS-09, TS-20]
+  FR6:
+    title: Toggle outline/RAW with r key
+    status: ok
+    tasks: [Phase5]
+    tests: []
+  FR7:
+    title: JSON pretty-print toggle with p key (RAW view only)
+    status: ok
+    tasks: [Phase3, Phase5]
+    tests: [TS-07]
+  FR8:
+    title: Syntax highlighting (keys, strings, numbers, booleans, null)
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-08, TS-09]
+  FR9:
+    title: Parse error handling (error banner + RAW fallback)
+    status: ok
+    tasks: [Phase2, Phase5]
+    tests: [TS-02, TS-04]
+  FR10:
+    title: Copy button in RAW view
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-20]
+  NFR1:
+    title: Performance (no file size limit)
+    status: ok
+    tasks: [Phase2, Phase4]
+    tests: [TS-16]
+  NFR2:
+    title: Security (DOMPurify sanitization)
+    status: ok
+    tasks: [Phase3]
+    tests: []
+  NFR3:
+    title: Platform support (Linux, Windows, tmux)
+    status: ok
+    tasks: [Phase1]
+    tests: []
+  NFR4:
+    title: Architecture consistency with Markdown viewer
+    status: ok
+    tasks: [Phase1, Phase2, Phase5]
+    tests: []
