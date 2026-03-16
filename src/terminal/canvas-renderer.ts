@@ -383,11 +383,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (scrollDir === 1) {
 			const scrollCount = state.getScrollEventCount();
 			state.clearScrollEvent();
-			console.debug(
-				`[DEBUG][RENDERER] scroll event: dir=Up, count=${scrollCount}` +
-				` | isAlt=${state.isAlternateBuffer}` +
-				` | cursor=(${state.cursorCol},${state.cursorRow})`,
-			);
 			const shiftPx = scrollCount * this.charHeight;
 			const canvasW = this.canvas.width / this.dpr;
 			const canvasH = this.canvas.height / this.dpr;
