@@ -139,7 +139,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.create-release.outputs.version }}
-          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }} \
+            --method PATCH \
+            -f draft=false
