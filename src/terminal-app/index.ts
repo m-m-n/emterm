@@ -466,12 +466,10 @@ export class TerminalApp {
     let rafScheduled = false;
     let rafWatchdog: ReturnType<typeof setTimeout> | null = null;
     let rafDegraded = false; // true when rAF is not being delivered
-    let deferredRenderTimer: ReturnType<typeof setTimeout> | null = null;
     const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
     const DEGRADED_BUDGET_MS = 100; // Generous budget when rAF is broken
     const RAF_WATCHDOG_MS = 500; // Fallback if rAF stops being delivered
     const DEGRADED_INTERVAL_MS = 50; // setTimeout interval in degraded mode
-    const CURSOR_HIDDEN_RENDER_DELAY_MS = 32; // Max delay when cursor is hidden mid-update
 
     const processPendingData = (fromWatchdog = false) => {
       rafScheduled = false;
@@ -529,7 +527,6 @@ export class TerminalApp {
         const budget = rafDegraded ? DEGRADED_BUDGET_MS : FRAME_BUDGET_MS;
         const deadline = performance.now() + budget;
         let processed = false;
-        const cursorVisibleBefore = this.state.cursorVisible;
 
         while (remaining.length > 0) {
           const core = this.state.getActiveCore();
@@ -549,28 +546,11 @@ export class TerminalApp {
           this.imageHandler!.processPendingApcQueue();
           this.imageHandler!.processPendingDcsQueue();
 
-          // Debug: track cursor visibility changes
           const prevCursorVisible = this.state.cursorVisible;
-
           this.state.syncModesFromWasm();
-
-          if (prevCursorVisible !== this.state.cursorVisible) {
-            const processedChunk = remaining.subarray(0, consumed);
-            // Show the data that caused the change (escape sequences as hex for non-printable)
-            const chunkPreview = Array.from(processedChunk.slice(-64)).map(b =>
-              b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : `\\x${b.toString(16).padStart(2, "0")}`,
-            ).join("");
-            console.warn(
-              `[DEBUG][CURSOR] cursorVisible changed: ${prevCursorVisible} → ${this.state.cursorVisible}`,
-              `| chunk size=${consumed}, tail="${chunkPreview}"`,
-              `| isAlt=${this.state.isAlternateBuffer}`,
-              `| cursor=(${this.state.cursorCol},${this.state.cursorRow})`,
-            );
-          }
 
           const modeActions = core.take_mode_actions();
           if (modeActions.length > 0) {
-            const preActionCursorVisible = this.state.cursorVisible;
             let i = 0;
             while (i < modeActions.length) {
               const action = modeActions[i]!;
@@ -584,19 +564,20 @@ export class TerminalApp {
                 i += 1;
               }
             }
-            if (preActionCursorVisible !== this.state.cursorVisible) {
-              console.warn(
-                `[DEBUG][CURSOR] cursorVisible changed by modeAction: ${preActionCursorVisible} → ${this.state.cursorVisible}`,
-                `| actions=[${Array.from(modeActions)}]`,
-                `| isAlt=${this.state.isAlternateBuffer}`,
-              );
-            }
           }
 
           remaining = remaining.subarray(consumed);
           processed = true;
 
           if (consumed === 0) break;
+
+          // When WASM interrupted at a cursor hidden→visible transition,
+          // break to render the current state (e.g., vim search wrap message)
+          // before processing the subsequent redraw that may clear it.
+          if (remaining.length > 0 && this.state.cursorVisible && !prevCursorVisible) {
+            leftoverData = remaining;
+            break;
+          }
 
           // Check frame budget — defer remaining data to next frame
           if (remaining.length > 0 && performance.now() >= deadline) {
@@ -608,28 +589,8 @@ export class TerminalApp {
         if (processed) {
           this.outputActivityCallback?.();
 
-          // If cursor just became hidden, the terminal is mid-update (e.g. vim redraw).
-          // Defer rendering to allow the rest of the update to arrive, avoiding
-          // a flash of intermediate state (e.g. search wrap message that gets
-          // immediately cleared by the subsequent full redraw).
-          if (!this.state.cursorVisible && cursorVisibleBefore) {
-            if (deferredRenderTimer === null) {
-              deferredRenderTimer = setTimeout(() => {
-                deferredRenderTimer = null;
-                if (this.state && this.renderer) {
-                  this.renderer.renderImmediate(this.state);
-                  this.imeHandler?.updatePosition();
-                }
-              }, CURSOR_HIDDEN_RENDER_DELAY_MS);
-            }
-          } else {
-            if (deferredRenderTimer !== null) {
-              clearTimeout(deferredRenderTimer);
-              deferredRenderTimer = null;
-            }
-            this.renderer.renderImmediate(this.state);
-            this.imeHandler?.updatePosition();
-          }
+          this.renderer.renderImmediate(this.state);
+          this.imeHandler?.updatePosition();
         }
 
         // If there's leftover data, schedule next frame to continue

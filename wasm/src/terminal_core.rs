@@ -114,6 +114,10 @@ pub struct TerminalCore {
     pub(crate) hyperlink_table: Vec<Option<(String, String)>>,
     pub(crate) hyperlink_next_id: u16,
     pub(crate) active_hyperlink_id: u16,
+    /// Set when cursor transitions hidden→visible (DECTCEM set while previously hidden).
+    /// Used by process_pty_data to interrupt parsing so the JS side can render
+    /// the intermediate state (e.g., vim's search wrap message).
+    pub(crate) cursor_just_shown: bool,
 }
 
 #[wasm_bindgen]
@@ -178,6 +182,7 @@ impl TerminalCore {
             hyperlink_table: vec![None], // index 0 = no hyperlink
             hyperlink_next_id: 1,
             active_hyperlink_id: 0,
+            cursor_just_shown: false,
         };
         core.mark_all_dirty();
         core
@@ -710,6 +715,7 @@ impl TerminalCore {
         // Sprint 6
         self.parser.reset();
         self.mode_actions.clear();
+        self.cursor_just_shown = false;
         // Note: callbacks are NOT cleared on reset (terminal reset != dispose)
         self.mark_all_dirty();
     }

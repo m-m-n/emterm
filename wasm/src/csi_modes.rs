@@ -40,6 +40,10 @@ impl TerminalCore {
                 MODE_ACTION_NONE
             }
             25 => {
+                // Track hidden→visible transition to allow render of intermediate state
+                if enable && !self.get_mode(MODE_CURSOR_VISIBLE) {
+                    self.cursor_just_shown = true;
+                }
                 self.set_mode(MODE_CURSOR_VISIBLE, enable);
                 MODE_ACTION_NONE
             }
