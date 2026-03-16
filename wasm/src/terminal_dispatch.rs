@@ -168,12 +168,19 @@ impl TerminalCore {
             let remaining = &data[pos..];
             let consumed = parser.parse_interruptible(remaining, |action| {
                 self.dispatch_action(action);
-                !self.has_pending_buffer_switch()
+                !self.has_pending_buffer_switch() && !self.cursor_just_shown
             });
             pos += consumed;
 
             // If parser stopped due to buffer switch, break
             if self.has_pending_buffer_switch() {
+                break;
+            }
+            // If cursor just became visible (hidden→visible transition),
+            // break to let JS render the current state before processing
+            // the next update pass (e.g., vim's search wrap message).
+            if self.cursor_just_shown {
+                self.cursor_just_shown = false;
                 break;
             }
             // If parser consumed 0 bytes, avoid infinite loop

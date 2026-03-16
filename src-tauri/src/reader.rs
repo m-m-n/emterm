@@ -150,28 +150,14 @@ pub fn spawn_reader_thread(
         loop {
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(first) => {
-                    // Drain all available chunks and concatenate to reduce IPC calls.
-                    // Larger batches reduce IPC overhead at the cost of latency.
-                    // For bulk output (e.g., seq 10M), fewer IPC messages is critical.
-                    //
-                    // Minimum batch size (A10b): ensure batches are large enough to
-                    // reduce webview.eval() call frequency. Small batches cause WebView
-                    // overload when using InvokeResponseBody::Raw (1KB sync threshold).
-                    const MIN_BATCH_SIZE: usize = 32 * 1024;
+                    // Drain all immediately available chunks to reduce IPC calls.
+                    // Uses non-blocking try_recv to batch data that's already buffered
+                    // without introducing artificial delay. This preserves intermediate
+                    // states (e.g., vim search wrap messages) while still batching
+                    // bulk output (e.g., seq 10M) where the helper thread fills the
+                    // channel faster than we drain it.
                     const MAX_BATCH_SIZE: usize = 1024 * 1024;
                     let mut batch = first;
-                    while batch.len() < MIN_BATCH_SIZE {
-                        match rx.recv_timeout(Duration::from_millis(2)) {
-                            Ok(more) => {
-                                batch.extend_from_slice(&more);
-                                if batch.len() >= MAX_BATCH_SIZE {
-                                    break;
-                                }
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    // Continue draining any immediately available data
                     while let Ok(more) = rx.try_recv() {
                         batch.extend_from_slice(&more);
                         if batch.len() >= MAX_BATCH_SIZE {

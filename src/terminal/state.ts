@@ -614,6 +614,13 @@ export class TerminalState implements TerminalStateAccessor {
     this.cursor = this.alternateCursor!;
     this.wrapPending = false;
 
+    // Sync current TS modes to the new alternate WASM core
+    // Without this, the alternate core starts with default modes (e.g. cursorVisible=true),
+    // and the next syncModesFromWasm() would overwrite TS modes with those defaults.
+    if (this.alternateWasmGrid) {
+      syncModesToWasm(this.modes, this.alternateWasmGrid.core);
+    }
+
     // Mark all lines as dirty to force redraw
     // Use markDirty() to propagate to WASM dirty bitset (not just local field)
     for (let row = 0; row < this.rows; row++) {
@@ -645,6 +652,12 @@ export class TerminalState implements TerminalStateAccessor {
     }
 
     this.wrapPending = false;
+
+    // Sync current TS modes to the primary WASM core
+    // Prevents stale defaults from overwriting TS modes on next syncModesFromWasm()
+    if (this.primaryWasmGrid) {
+      syncModesToWasm(this.modes, this.primaryWasmGrid.core);
+    }
 
     // Mark all lines as dirty to force redraw
     // Use markDirty() to propagate to WASM dirty bitset (not just local field)
