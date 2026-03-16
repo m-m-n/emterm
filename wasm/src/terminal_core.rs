@@ -118,6 +118,9 @@ pub struct TerminalCore {
     /// Used by process_pty_data to interrupt parsing so the JS side can render
     /// the intermediate state (e.g., vim's search wrap message).
     pub(crate) cursor_just_shown: bool,
+    /// When true, cursor hidden→visible transitions interrupt parsing.
+    /// Disable if it causes flicker in applications that frequently toggle cursor.
+    pub(crate) cursor_show_interrupt: bool,
 }
 
 #[wasm_bindgen]
@@ -183,6 +186,7 @@ impl TerminalCore {
             hyperlink_next_id: 1,
             active_hyperlink_id: 0,
             cursor_just_shown: false,
+            cursor_show_interrupt: false,
         };
         core.mark_all_dirty();
         core
@@ -723,6 +727,11 @@ impl TerminalCore {
     /// Take and clear the mode action queue.
     pub fn take_mode_actions(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.mode_actions)
+    }
+
+    /// Enable/disable cursor hidden→visible interrupt.
+    pub fn set_cursor_show_interrupt(&mut self, enable: bool) {
+        self.cursor_show_interrupt = enable;
     }
 
     // ── Sprint 2: Charset ───────────────────────────────
