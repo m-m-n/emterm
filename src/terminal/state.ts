@@ -534,6 +534,15 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Enable/disable cursor hidden→visible interrupt in WASM parser.
+   * When disabled, cursor show transitions won't interrupt data processing.
+   */
+  setCursorShowInterrupt(enable: boolean): void {
+    this.primaryWasmGrid?.core.set_cursor_show_interrupt(enable);
+    this.alternateWasmGrid?.core.set_cursor_show_interrupt(enable);
+  }
+
+  /**
    * Sync a tab stop addition to WASM core.
    * No-op when WASM is not active.
    */

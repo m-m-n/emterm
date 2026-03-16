@@ -41,7 +41,7 @@ impl TerminalCore {
             }
             25 => {
                 // Track hidden→visible transition to allow render of intermediate state
-                if enable && !self.get_mode(MODE_CURSOR_VISIBLE) {
+                if self.cursor_show_interrupt && enable && !self.get_mode(MODE_CURSOR_VISIBLE) {
                     self.cursor_just_shown = true;
                 }
                 self.set_mode(MODE_CURSOR_VISIBLE, enable);

@@ -212,8 +212,26 @@ export class ImageHandler {
 
   /**
    * Handle DCS callback from WASM parser (SIXEL graphics).
+   * Only processes SIXEL DCS (format: [params]q[data]).
+   * Non-SIXEL DCS (e.g., DECRQSS "$q...") are ignored.
    */
   handleDcsCallback(data: Uint8Array): void {
+    // SIXEL DCS body contains 'q' (0x71) as the command character.
+    // Format: optional params (digits/semicolons) followed by 'q' then pixel data.
+    // Skip non-SIXEL DCS sequences (e.g., DECRQSS, DECRPSS).
+    const Q = 0x71; // 'q'
+    let isSixel = false;
+    for (let i = 0; i < data.length; i++) {
+      const b = data[i]!;
+      if (b === Q) {
+        isSixel = true;
+        break;
+      }
+      // SIXEL params are digits (0-9) and semicolons only
+      if ((b < 0x30 || b > 0x39) && b !== 0x3B) break;
+    }
+    if (!isSixel) return;
+
     const state = this.context.getState();
     const ptyClient = this.context.getPtyClient();
     const core = state?.getActiveCore();
