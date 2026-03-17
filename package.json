@@ -5,7 +5,7 @@
 	"private": true,
 	"scripts": {
 		"postinstall": "bash scripts/generate-icons.sh || true",
-		"build:wasm": "cd wasm && wasm-pack build --target web --out-dir pkg",
+		"build:wasm": "cd wasm && wasm-pack build --target web --out-dir pkg && cd .. && bash scripts/patch-wasm-bindgen.sh",
 		"dev": "bun run build:wasm && bun run --hot serve.ts",
 		"icons": "bash scripts/generate-icons.sh",
 		"prebuild": "bash scripts/generate-icons.sh",

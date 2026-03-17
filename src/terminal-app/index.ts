@@ -27,6 +27,7 @@ import { DownloadSessionManager } from "../download";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { indexToRgb, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND } from "../terminal/colors";
 import { handleOsc52 } from "../terminal/osc-clipboard";
+import { reinitWasm } from "../terminal/wasm/loader";
 import { parseOsc9, sendNotification } from "../terminal/osc-notification";
 import { parseOsc22, CursorShapeStack } from "../terminal/osc-cursor-shape";
 import { parseIterm2Command } from "../terminal/osc-iterm2";
@@ -428,12 +429,12 @@ export class TerminalApp {
 
     core.set_apc_callback((data: Uint8Array) => {
       // Queue data - do NOT access core here (recursive borrow error)
-      this.imageHandler!.queueApc(data);
+      this.imageHandler?.queueApc(data);
     });
 
     core.set_dcs_callback((data: Uint8Array) => {
       // Queue data - do NOT access core here (recursive borrow error)
-      this.imageHandler!.queueDcs(data);
+      this.imageHandler?.queueDcs(data);
     });
 
     core.set_bell_callback(() => {
@@ -479,9 +480,18 @@ export class TerminalApp {
     const DEGRADED_BUDGET_MS = 100; // Generous budget when rAF is broken
     const RAF_WATCHDOG_MS = 500; // Fallback if rAF stops being delivered
     const DEGRADED_INTERVAL_MS = 50; // setTimeout interval in degraded mode
+    const MAX_WASM_RECOVERY_ATTEMPTS = 3;
+    const RECOVERY_WINDOW_MS = 60_000; // Reset attempt counter after 60s of stability
+    let wasmRecoveryAttempts = 0;
+    let lastRecoveryTimestamp = 0;
+    let wasmRecoveryInProgress = false;
+    let wasmUnrecoverable = false;
 
     const processPendingData = (fromWatchdog = false) => {
       rafScheduled = false;
+
+      // During async WASM reinitialization or after exhausting retries, skip processing
+      if (wasmRecoveryInProgress || wasmUnrecoverable) return;
       if (rafWatchdog !== null) {
         clearTimeout(rafWatchdog);
         rafWatchdog = null;
@@ -552,8 +562,8 @@ export class TerminalApp {
           const consumed = core.process_pty_data(remaining);
 
           this.processPendingOscQueue();
-          this.imageHandler!.processPendingApcQueue();
-          this.imageHandler!.processPendingDcsQueue();
+          this.imageHandler?.processPendingApcQueue();
+          this.imageHandler?.processPendingDcsQueue();
 
           const prevCursorVisible = this.state.cursorVisible;
           this.state.syncModesFromWasm();
@@ -610,16 +620,35 @@ export class TerminalApp {
         console.error("[ERROR][FRONTEND] processPendingData failed:", error);
         leftoverData = null;
 
-        // Detect WASM crash: after "memory access out of bounds", the wasm-bindgen
-        // borrow flag stays set, causing "recursive use of an object" on subsequent
-        // calls. Recreate the WASM core to recover.
+        // Detect WASM crash or uninitialized state:
+        // - RuntimeError: memory corruption (e.g., after long idle)
+        // - "recursive use of an object": wasm-bindgen borrow flag stuck after crash
+        // - "WASM not initialized": previous recovery failed, primaryWasmGrid is null
         const isWasmCrash = error instanceof WebAssembly.RuntimeError;
         const msg = error instanceof Error ? error.message : String(error);
         const isBorrowError = msg.includes("recursive use of an object");
-        if (isWasmCrash || isBorrowError) {
-          console.warn("[WARN][FRONTEND] WASM crash detected — attempting recovery");
-          if (this.state?.recreateWasmCore()) {
-            // Re-register callbacks on the new core
+        const isWasmUninitialized = msg.includes("WASM not initialized");
+        if (isWasmCrash || isBorrowError || isWasmUninitialized) {
+          const now = Date.now();
+          // Reset counter if enough time has passed since last recovery
+          if (now - lastRecoveryTimestamp > RECOVERY_WINDOW_MS) {
+            wasmRecoveryAttempts = 0;
+          }
+          lastRecoveryTimestamp = now;
+          wasmRecoveryAttempts++;
+          if (wasmRecoveryAttempts > MAX_WASM_RECOVERY_ATTEMPTS) {
+            wasmUnrecoverable = true;
+            console.error(
+              `[ERROR][FRONTEND] WASM recovery exhausted (${MAX_WASM_RECOVERY_ATTEMPTS} attempts within ${RECOVERY_WINDOW_MS / 1000}s) — terminal is unrecoverable`,
+            );
+            return;
+          }
+          console.warn(
+            `[WARN][FRONTEND] WASM crash detected — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS})`,
+          );
+
+          const finishRecovery = () => {
+            if (!this.state) return;
             const newCore = this.state.getWasmCore();
             this.registerCoreCallbacks(newCore);
             registeredCore = newCore;
@@ -627,8 +656,37 @@ export class TerminalApp {
               Math.round(this.charSize.width),
               Math.round(this.charSize.height),
             );
-            // Force re-render to show recovered (blank) terminal
             this.renderer?.forceRender(this.state);
+          };
+
+          // Step 1: Try recreating WASM core (works if WASM engine is healthy)
+          if (this.state?.recreateWasmCore()) {
+            finishRecovery();
+          } else if (this.state) {
+            // Step 2: WASM engine itself is corrupted — reinitialize the module
+            console.warn("[WARN][FRONTEND] WASM core recreation failed — reinitializing WASM module");
+            wasmRecoveryInProgress = true;
+            (async () => {
+              try {
+                await reinitWasm();
+                if (this.state?.recreateWasmCore()) {
+                  finishRecovery();
+                  console.warn("[WARN][FRONTEND] WASM module reinitialized — terminal recovered");
+                } else {
+                  wasmUnrecoverable = true;
+                  console.error("[ERROR][FRONTEND] WASM recovery failed after module reinit — terminal is unrecoverable");
+                }
+              } catch (reinitError) {
+                wasmUnrecoverable = true;
+                console.error("[ERROR][FRONTEND] WASM module reinit failed:", reinitError);
+              } finally {
+                wasmRecoveryInProgress = false;
+                // Process any data that arrived during recovery (only if recovered)
+                if (!wasmUnrecoverable && pendingChunks.length > 0) {
+                  scheduleProcessing();
+                }
+              }
+            })();
           }
         }
       }
