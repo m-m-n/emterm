@@ -871,9 +871,15 @@ mod tests {
 
         // Pre-existing dirty rows shifted down by 1
         assert!(!core.is_row_dirty(15), "row 15 should no longer be dirty");
-        assert!(core.is_row_dirty(14), "row 14 should be dirty (shifted from 15)");
+        assert!(
+            core.is_row_dirty(14),
+            "row 14 should be dirty (shifted from 15)"
+        );
         assert!(!core.is_row_dirty(20), "row 20 should no longer be dirty");
-        assert!(core.is_row_dirty(19), "row 19 should be dirty (shifted from 20)");
+        assert!(
+            core.is_row_dirty(19),
+            "row 19 should be dirty (shifted from 20)"
+        );
         // Last row is always dirty
         assert!(core.is_row_dirty(23), "last row should be dirty");
     }
@@ -890,9 +896,15 @@ mod tests {
         core.scroll_up_internal(1);
 
         // Row 0's dirty bit is discarded
-        assert!(!core.is_row_dirty(0), "row 0 should not be dirty (shifted away)");
+        assert!(
+            !core.is_row_dirty(0),
+            "row 0 should not be dirty (shifted away)"
+        );
         // Row 10 shifted to row 9
-        assert!(core.is_row_dirty(9), "row 9 should be dirty (shifted from 10)");
+        assert!(
+            core.is_row_dirty(9),
+            "row 9 should be dirty (shifted from 10)"
+        );
         // Last row is always dirty
         assert!(core.is_row_dirty(23), "last row should be dirty");
     }

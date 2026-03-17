@@ -3,65 +3,53 @@
  *
  * Processes terminal actions and maintains screen state.
  * Handler implementations are delegated to the handlers module.
+ * Buffer switching, WASM sync, action processing, and response management
+ * are delegated to extracted modules.
  */
 
 import { DataViewerSessionManager } from "../data-viewer/session.ts";
 import { MarkdownSessionManager } from "../markdown/session.ts";
-import type { CharSet, CsiAction, EscAction, EraseMode, TerminalAction } from "../types/terminal.ts";
+import type { CharSet, TerminalAction } from "../types/terminal.ts";
 import { UnifiedBuffer } from "./unified-buffer.ts";
 import { CursorState } from "./cursor.ts";
-import { cloneAttributes } from "./attributes.ts";
 import { FoldManager } from "./fold-manager.ts";
-import { Line, type Cell } from "./grid.ts";
+import { Line } from "./grid.ts";
 import { createDefaultModes, setDecPrivateMode, syncModesFromWasm, syncModesToWasm, type TerminalModes } from "./modes.ts";
 import { SemanticZoneTracker } from "./semantic-zone.ts";
-import { isEmojiPresentation } from "./wasm/unicode.ts";
 import { WasmGrid } from "./wasm/terminal-core.ts";
-
-// Import handlers from the handlers module
-import {
-  handleOsc,
-  handleApc,
-  handleDcs,
-} from "./handlers/index.ts";
 import type { TerminalStateAccessor, ActiveCharSet } from "./handlers/types.ts";
 
-// ── WASM Sentinel Constants ─────────────────────────────
-const WASM_BEL_SENTINEL = 0xFE;
-const WASM_SCROLLBACK_SENTINEL = 0xFF;
+// Extracted modules
+import {
+  takePendingResponse as takePendingResponseFn,
+  addPendingResponse as addPendingResponseFn,
+} from "./state-response.ts";
+import {
+  switchToAlternateBuffer as switchToAltFn,
+  switchToPrimaryBuffer as switchToPrimaryFn,
+  type BufferSwitchContext,
+} from "./state-buffer.ts";
+import {
+  syncModesToWasm as syncModesToWasmFn,
+  syncModesFromWasm as syncModesFromWasmFn,
+  setCellSizePxOnGrid,
+  setCursorShowInterrupt as setCursorShowInterruptFn,
+  syncTabStopToWasm as syncTabStopToWasmFn,
+  syncClearTabStopToWasm as syncClearTabStopToWasmFn,
+  syncClearAllTabStopsToWasm as syncClearAllTabStopsToWasmFn,
+} from "./state-wasm-sync.ts";
+import {
+  processAction as processActionFn,
+  flushGraphemeBuffer as flushGraphemeBufferFn,
+  type ActionContext,
+} from "./state-actions.ts";
 
 // ── WASM Mode Action Codes (mirror Rust constants) ──────
-const MODE_ACTION_NONE = 0;
 const MODE_ACTION_SWITCH_TO_ALT = 1;
 const MODE_ACTION_SAVE_AND_SWITCH_TO_ALT = 2;
 const MODE_ACTION_SWITCH_TO_MAIN = 3;
 const MODE_ACTION_SAVE_CURSOR = 4;
 const MODE_ACTION_RESTORE_CURSOR = 5;
-const MODE_ACTION_TS_FALLBACK = 0xFF;
-
-/**
- * Convert CharSet string to numeric byte for WASM ESC handler.
- */
-function charSetToByte(charset: CharSet): number {
-  switch (charset) {
-    case "Ascii": return 0;
-    case "DecLineDrawing": return 1;
-    case "Uk": return 2;
-    default: return 0;
-  }
-}
-
-/**
- * Convert EraseMode string to numeric mode byte for WASM.
- */
-function eraseModeToByte(mode: EraseMode): number {
-  switch (mode) {
-    case "Below": return 0;
-    case "Above": return 1;
-    case "All": return 2;
-    case "Scrollback": return 3;
-  }
-}
 
 /**
  * Terminal state manager.
@@ -399,40 +387,20 @@ export class TerminalState implements TerminalStateAccessor {
 
   /**
    * Get and clear pending response bytes.
-   * Call this after processing actions to get data that should be written back to PTY.
-   *
-   * Returns all buffered responses concatenated together to handle multiple DSRs.
+   * Delegates to state-response module.
    */
   takePendingResponse(): Uint8Array | null {
-    if (this._pendingResponses.length === 0) {
-      return null;
-    }
-
-    // Concatenate all pending responses
-    const totalLength = this._pendingResponses.reduce(
-      (sum, r) => sum + r.length,
-      0,
-    );
-    const combined = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const response of this._pendingResponses) {
-      combined.set(response, offset);
-      offset += response.length;
-    }
-
-    // Clear the buffer
-    this._pendingResponses = [];
-    return combined;
+    const { result, remaining } = takePendingResponseFn(this._pendingResponses);
+    this._pendingResponses = remaining;
+    return result;
   }
 
   /**
    * Add a response to the pending response buffer.
-   * Used by handlers to queue responses for PTY write-back.
-   *
-   * @param response - Response bytes to add
+   * Delegates to state-response module.
    */
   addPendingResponse(response: Uint8Array): void {
-    this._pendingResponses.push(response);
+    this._pendingResponses = addPendingResponseFn(this._pendingResponses, response);
   }
 
   /**
@@ -466,9 +434,6 @@ export class TerminalState implements TerminalStateAccessor {
    * Get a single scrollback line by index.
    * Returns a direct reference for performance (no clone).
    * Used by the renderer for index-based scrollback access.
-   *
-   * @param index - Scrollback index (0 = oldest)
-   * @returns Line at that scrollback position
    */
   getScrollbackLine(index: number): Line {
     return this.primaryBuffer.getScrollbackLine(index);
@@ -476,8 +441,6 @@ export class TerminalState implements TerminalStateAccessor {
 
   /**
    * Get number of lines in scrollback buffer.
-   *
-   * @returns Number of lines currently in scrollback
    */
   getScrollbackLength(): number {
     return this.primaryBuffer.scrollbackLength;
@@ -501,355 +464,156 @@ export class TerminalState implements TerminalStateAccessor {
 
   /**
    * Sync boolean modes to WASM bitfield.
-   * No-op when WASM is not active.
+   * Delegates to state-wasm-sync module.
    */
   syncModesToWasm(): void {
-    const grid = this.useAlternate ? this.alternateWasmGrid : this.primaryWasmGrid;
-    if (grid) {
-      syncModesToWasm(this.modes, grid.core);
-    }
+    syncModesToWasmFn(this.modes, this.getActiveWasmGrid());
   }
 
   /**
    * Sync boolean modes from WASM bitfield to TS TerminalModes.
-   * Call after process_pty_data() to pick up mode changes made inside WASM
-   * (e.g. DECTCEM cursor visibility, ATT160 cursor blink).
-   * No-op when WASM is not active.
+   * Delegates to state-wasm-sync module.
    */
   syncModesFromWasm(): void {
-    const grid = this.useAlternate ? this.alternateWasmGrid : this.primaryWasmGrid;
-    if (grid) {
-      syncModesFromWasm(this.modes, grid.core);
-    }
+    syncModesFromWasmFn(this.modes, this.getActiveWasmGrid());
   }
 
   /**
    * Set cell size in pixels and propagate to active WASM core.
-   * Stored locally so alternate buffer cores receive the correct size.
+   * Delegates to state-wasm-sync module.
    */
   setCellSizePx(width: number, height: number): void {
     this.cellWidthPx = width;
     this.cellHeightPx = height;
-    this.getActiveWasmGrid()?.core.set_cell_size_px(width, height);
+    setCellSizePxOnGrid(this.getActiveWasmGrid(), width, height);
   }
 
   /**
-   * Enable/disable cursor hidden→visible interrupt in WASM parser.
-   * When disabled, cursor show transitions won't interrupt data processing.
+   * Enable/disable cursor hidden->visible interrupt in WASM parser.
+   * Delegates to state-wasm-sync module.
    */
   setCursorShowInterrupt(enable: boolean): void {
-    this.primaryWasmGrid?.core.set_cursor_show_interrupt(enable);
-    this.alternateWasmGrid?.core.set_cursor_show_interrupt(enable);
+    setCursorShowInterruptFn(this.primaryWasmGrid, this.alternateWasmGrid, enable);
   }
 
   /**
    * Sync a tab stop addition to WASM core.
-   * No-op when WASM is not active.
+   * Delegates to state-wasm-sync module.
    */
   syncTabStopToWasm(col: number): void {
-    this.getActiveWasmGrid()?.core.set_tab_stop(col);
+    syncTabStopToWasmFn(this.getActiveWasmGrid(), col);
   }
 
   /**
    * Sync a tab stop removal to WASM core.
-   * No-op when WASM is not active.
+   * Delegates to state-wasm-sync module.
    */
   syncClearTabStopToWasm(col: number): void {
-    this.getActiveWasmGrid()?.core.clear_tab_stop(col);
+    syncClearTabStopToWasmFn(this.getActiveWasmGrid(), col);
   }
 
   /**
    * Sync clearing all tab stops to WASM core.
-   * No-op when WASM is not active.
+   * Delegates to state-wasm-sync module.
    */
   syncClearAllTabStopsToWasm(): void {
-    this.getActiveWasmGrid()?.core.clear_all_tab_stops();
+    syncClearAllTabStopsToWasmFn(this.getActiveWasmGrid());
   }
 
   /**
    * Switch to alternate screen buffer.
-   *
-   * @param saveCursor - Whether to save cursor before switching
-   *
-   * Ensures consistent state:
-   * - Cursor is saved before switching if requested
-   * - Alternate buffer is cleared on each switch
-   * - Cursor is reset to home position (0, 0)
+   * Delegates to state-buffer module.
    */
   switchToAlternateBuffer(saveCursor: boolean = false): void {
-    if (this.useAlternate) return;
-
-    if (saveCursor) {
-      // Save primary cursor for 1049 mode
-      this.savedCursorForAlt = this.primaryCursor.clone();
-    }
-
-    // Create or reset alternate buffer (no scrollback)
-    if (!this.alternateBuffer) {
-      // Create WASM grid for alternate buffer if primary uses WASM
-      if (this.primaryWasmGrid) {
-        try {
-          this.alternateWasmGrid = new WasmGrid(this.cols, this.rows);
-        } catch {
-          this.alternateWasmGrid = null;
-        }
-      }
-      this.alternateBuffer = new UnifiedBuffer(this.cols, this.rows, 0, this.alternateWasmGrid ?? undefined);
-      this.alternateCursor = new CursorState(this.cols, this.rows, this.alternateWasmGrid?.core);
-    } else {
-      // Clear alternate buffer on switch
-      this.alternateBuffer.clearAll();
-      if (this.alternateWasmGrid) {
-        this.alternateWasmGrid.reset();
-      }
-      // Reset alternate cursor to home position
-      if (!this.alternateCursor) {
-        this.alternateCursor = new CursorState(this.cols, this.rows, this.alternateWasmGrid?.core);
-      } else {
-        this.alternateCursor.moveTo(0, 0);
-      }
-    }
-
-    // Propagate cell size to alternate core
-    if (this.alternateWasmGrid) {
-      this.alternateWasmGrid.core.set_cell_size_px(
-        this.cellWidthPx,
-        this.cellHeightPx,
-      );
-    }
-
-    // Switch to alternate buffer
-    this.useAlternate = true;
-    this.cursor = this.alternateCursor!;
-    this.wrapPending = false;
-
-    // Sync current TS modes to the new alternate WASM core
-    // Without this, the alternate core starts with default modes (e.g. cursorVisible=true),
-    // and the next syncModesFromWasm() would overwrite TS modes with those defaults.
-    if (this.alternateWasmGrid) {
-      syncModesToWasm(this.modes, this.alternateWasmGrid.core);
-    }
-
-    // Mark all lines as dirty to force redraw
-    // Use markDirty() to propagate to WASM dirty bitset (not just local field)
-    for (let row = 0; row < this.rows; row++) {
-      this.alternateBuffer.getLine(row).markDirty();
-    }
+    const result = switchToAltFn(this.getBufferSwitchContext(), saveCursor);
+    this.applyBufferSwitchResult(result);
   }
 
   /**
    * Switch to primary screen buffer.
-   *
-   * @param restoreCursor - Whether to restore cursor after switching
-   *
-   * Ensures consistent state:
-   * - Cursor is restored if requested (mode 1049)
-   * - All lines marked dirty for redraw
-   * - Wrap state is cleared
+   * Delegates to state-buffer module.
    */
   switchToPrimaryBuffer(restoreCursor: boolean = false): void {
-    if (!this.useAlternate) return;
+    const result = switchToPrimaryFn(this.getBufferSwitchContext(), restoreCursor);
+    this.applyBufferSwitchResult(result);
+  }
 
-    // Switch to primary buffer
-    this.useAlternate = false;
-    this.cursor = this.primaryCursor;
+  /**
+   * Build the context object for buffer switch operations.
+   */
+  private getBufferSwitchContext(): BufferSwitchContext {
+    return {
+      primaryBuffer: this.primaryBuffer,
+      alternateBuffer: this.alternateBuffer,
+      useAlternate: this.useAlternate,
+      primaryCursor: this.primaryCursor,
+      alternateCursor: this.alternateCursor,
+      cursor: this.cursor,
+      savedCursorForAlt: this.savedCursorForAlt,
+      primaryWasmGrid: this.primaryWasmGrid,
+      alternateWasmGrid: this.alternateWasmGrid,
+      cols: this.cols,
+      rows: this.rows,
+      modes: this.modes,
+      cellWidthPx: this.cellWidthPx,
+      cellHeightPx: this.cellHeightPx,
+      wrapPending: this._wrapPending,
+    };
+  }
 
-    // Restore cursor if requested (for mode 1049)
-    if (restoreCursor && this.savedCursorForAlt) {
-      this.primaryCursor.restoreFrom(this.savedCursorForAlt);
-      this.savedCursorForAlt = null;
-    }
-
-    this.wrapPending = false;
-
-    // Sync current TS modes to the primary WASM core
-    // Prevents stale defaults from overwriting TS modes on next syncModesFromWasm()
-    if (this.primaryWasmGrid) {
-      syncModesToWasm(this.modes, this.primaryWasmGrid.core);
-    }
-
-    // Mark all lines as dirty to force redraw
-    // Use markDirty() to propagate to WASM dirty bitset (not just local field)
-    const buffer = this.getActiveBuffer();
-    for (let row = 0; row < this.rows; row++) {
-      buffer.getLine(row).markDirty();
-    }
+  /**
+   * Apply the result of a buffer switch operation to this state.
+   */
+  private applyBufferSwitchResult(result: import("./state-buffer.ts").BufferSwitchResult): void {
+    this.alternateBuffer = result.alternateBuffer;
+    this.alternateWasmGrid = result.alternateWasmGrid;
+    this.alternateCursor = result.alternateCursor;
+    this.useAlternate = result.useAlternate;
+    this.cursor = result.cursor;
+    this.savedCursorForAlt = result.savedCursorForAlt;
+    this.wrapPending = result.wrapPending;
   }
 
   /**
    * Flush the grapheme cluster buffer.
-   *
-   * Converts buffered codepoints to a cell string and places it on the grid.
-   * Called when a non-extending codepoint arrives or on non-Print actions.
+   * Delegates to state-actions module.
    */
   flushGraphemeBuffer(): void {
-    // WASM path: delegate to WASM core
-    const wasmGrid = this.getActiveWasmGrid();
-    if (wasmGrid) {
-      if (wasmGrid.core.get_grapheme_buffer_len() === 0) return;
-      const scrollCount = wasmGrid.core.flush_grapheme_buffer();
-      if (scrollCount > 0) {
-        const buffer = this.getActiveBuffer();
-        for (let i = 0; i < scrollCount; i++) {
-          buffer.scrollUp();
-        }
-      }
-      return;
-    }
-
-    // JS fallback path
-    if (this.graphemeBuffer.length === 0) return;
-
-    const clusterString = String.fromCodePoint(...this.graphemeBuffer);
-    // Determine width based on presentation properties
-    const hasFE0E = this.graphemeBuffer.includes(0xfe0e);
-    const hasFE0F = this.graphemeBuffer.includes(0xfe0f);
-    let width: number;
-    if (hasFE0E) {
-      // Explicit text presentation selector → narrow
-      width = 1;
-    } else if (hasFE0F) {
-      // Explicit emoji presentation selector → wide
-      width = 2;
-    } else if (this.graphemeBuffer.length === 1) {
-      // Single codepoint: only Emoji_Presentation=Yes characters are wide
-      width = isEmojiPresentation(this.graphemeBuffer[0]!) ? 2 : 1;
-    } else {
-      // Multi-codepoint cluster (ZWJ sequence, skin tone, RI pair) → wide
-      width = 2;
-    }
-
-    this.graphemeBuffer = [];
-
-    const buffer = this.getActiveBuffer();
-    const { bottom } = buffer.getEffectiveScrollRegion();
-
-    // Handle wrap pending
-    if (this.wrapPending) {
-      this.wrapPending = false;
-      this.cursor.carriageReturn();
-      if (this.cursor.lineFeed(bottom)) {
-        buffer.scrollUp();
-      }
-      buffer.getLine(this.cursor.row).wrapped = true;
-    }
-
-    // Wide char wrap: if width 2 and at last column, wrap first
-    if (width === 2 && this.cursor.col >= this.cols - 1) {
-      if (this.modes.autoWrap) {
-        this.cursor.carriageReturn();
-        if (this.cursor.lineFeed(bottom)) {
-          buffer.scrollUp();
-        }
-        buffer.getLine(this.cursor.row).wrapped = true;
-      }
-    }
-
-    // Create cell with cluster string
-    const cell: Cell = {
-      char: clusterString,
-      width: width,
-      attrs: cloneAttributes(this.cursor.attrs),
-      dirty: true,
-    };
-    buffer.setCell(this.cursor.col, this.cursor.row, cell);
-
-    // For wide characters, set placeholder in next cell
-    if (width === 2 && this.cursor.col < this.cols - 1) {
-      const placeholder: Cell = {
-        char: "",
-        width: 0,
-        attrs: cloneAttributes(this.cursor.attrs),
-        dirty: true,
-      };
-      buffer.setCell(this.cursor.col + 1, this.cursor.row, placeholder);
-    }
-
-    // Advance cursor
-    const newCol = this.cursor.col + width;
-    if (newCol >= this.cols) {
-      if (this.modes.autoWrap) {
-        this.cursor.col = this.cols - 1;
-        this.wrapPending = true;
-      }
-    } else {
-      this.cursor.col = newCol;
-    }
+    flushGraphemeBufferFn(this.getActionContext());
   }
 
   /**
    * Process a terminal action.
-   *
-   * Delegates to external handlers in the handlers module.
-   *
-   * @param action - The action to process
+   * Delegates to state-actions module.
    */
   processAction(action: TerminalAction): void {
-    // Flush grapheme buffer before non-Print actions
-    if (action.type !== "Print") {
-      const grid = this.getActiveWasmGrid();
-      const hasBufferedContent = grid
-        ? grid.core.get_grapheme_buffer_len() > 0
-        : this.graphemeBuffer.length > 0;
-      if (hasBufferedContent) {
-        this.flushGraphemeBuffer();
-      }
-    }
+    processActionFn(this, this.getActionContext(), action);
+  }
 
-    switch (action.type) {
-      case "Print": {
-        const grid = this.getActiveWasmGrid();
-        const cp = action.value.codePointAt(0);
-        if (grid && cp !== undefined) {
-          const scrollCount = grid.core.handle_print(cp);
-          if (scrollCount > 0) {
-            const buffer = this.getActiveBuffer();
-            for (let i = 0; i < scrollCount; i++) {
-              buffer.scrollUp();
-            }
-          }
-        }
-        break;
-      }
-      case "Execute": {
-        const grid = this.getActiveWasmGrid();
-        if (grid) {
-          const result = grid.core.handle_execute(action.value);
-          if (result === WASM_BEL_SENTINEL) {
-            this.onBell?.();
-          } else if (result > 0) {
-            const buffer = this.getActiveBuffer();
-            for (let i = 0; i < result; i++) {
-              buffer.scrollUp();
-            }
-          }
-        }
-        break;
-      }
-      case "Csi": {
-        const grid = this.getActiveWasmGrid();
-        if (grid) {
-          this.handleCsiWasm(grid, action.value);
-        }
-        break;
-      }
-      case "Esc": {
-        const grid = this.getActiveWasmGrid();
-        if (grid) {
-          this.handleEscWasm(grid, action.value);
-        }
-        break;
-      }
-      case "Osc":
-        handleOsc(this, action.value);
-        break;
-      case "Apc":
-        handleApc(this, action.value);
-        break;
-      case "Dcs":
-        handleDcs(this, action.value);
-        break;
-    }
+  /**
+   * Build the action context for action processing operations.
+   * Uses Object.defineProperty to proxy mutable properties back to this instance.
+   */
+  private getActionContext(): ActionContext {
+    const self = this;
+    const ctx: ActionContext = {
+      getActiveWasmGrid: () => self.getActiveWasmGrid(),
+      getActiveBuffer: () => self.getActiveBuffer(),
+      get cursor() { return self.cursor; },
+      get modes() { return self.modes; },
+      get cols() { return self.cols; },
+      get rows() { return self.rows; },
+      get graphemeBuffer() { return self.graphemeBuffer; },
+      set graphemeBuffer(v: number[]) { self.graphemeBuffer = v; },
+      get wrapPending() { return self.wrapPending; },
+      set wrapPending(v: boolean) { self.wrapPending = v; },
+      get onBell() { return self.onBell; },
+      switchToAlternateBuffer: (saveCursor: boolean) => self.switchToAlternateBuffer(saveCursor),
+      switchToPrimaryBuffer: (restoreCursor: boolean) => self.switchToPrimaryBuffer(restoreCursor),
+      addPendingResponse: (response: Uint8Array) => self.addPendingResponse(response),
+      reset: () => self.reset(),
+    };
+    return ctx;
   }
 
   /**
@@ -889,9 +653,6 @@ export class TerminalState implements TerminalStateAccessor {
 
   /**
    * Resize the terminal.
-   *
-   * @param cols - New number of columns
-   * @param rows - New number of rows
    */
   resize(cols: number, rows: number): void {
     // Primary buffer: full reflow with cursor tracking
@@ -922,9 +683,7 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
-   * Get the markdown session manager.
-   *
-   * @returns The markdown session manager instance
+   * Get the data viewer session manager.
    */
   getDataViewerManager(): DataViewerSessionManager {
     return this.dataViewerManager;
@@ -936,8 +695,6 @@ export class TerminalState implements TerminalStateAccessor {
 
   /**
    * Get the semantic zone tracker.
-   *
-   * @returns The semantic zone tracker instance
    */
   getSemanticZoneTracker(): SemanticZoneTracker {
     return this.semanticZoneTracker;
@@ -945,261 +702,9 @@ export class TerminalState implements TerminalStateAccessor {
 
   /**
    * Get the fold manager.
-   *
-   * @returns The fold manager instance
    */
   getFoldManager(): FoldManager {
     return this.foldManager;
-  }
-
-  /**
-   * Try to handle a CSI action via WASM.
-   * Returns true if handled, false if TS fallback needed.
-   */
-  private handleCsiWasm(grid: WasmGrid, action: CsiAction): boolean {
-    switch (action.action) {
-      case "CursorUp":
-        grid.core.handle_cursor_up(action.data || 1);
-        return true;
-      case "CursorDown":
-        grid.core.handle_cursor_down(action.data || 1);
-        return true;
-      case "CursorForward":
-        grid.core.handle_cursor_forward(action.data || 1);
-        return true;
-      case "CursorBack":
-        grid.core.handle_cursor_back(action.data || 1);
-        return true;
-      case "CursorNextLine":
-        grid.core.handle_cursor_next_line(action.data || 1);
-        return true;
-      case "CursorPreviousLine":
-        grid.core.handle_cursor_previous_line(action.data || 1);
-        return true;
-      case "CursorHorizontalAbsolute":
-        grid.core.handle_cursor_horizontal_absolute(action.data || 1);
-        return true;
-      case "CursorPosition":
-        grid.core.handle_cursor_position(
-          action.data.row || 1,
-          action.data.col || 1
-        );
-        return true;
-      case "CursorVerticalAbsolute":
-        grid.core.handle_cursor_vertical_absolute(action.data || 1);
-        return true;
-      case "EraseInDisplay": {
-        const mode = eraseModeToByte(action.data);
-        const result = grid.core.handle_erase_in_display(mode);
-        if (result === WASM_SCROLLBACK_SENTINEL) {
-          // Scrollback: call clearScrollback() directly
-          // (existing TS handler has a bug calling clearAll() instead)
-          const buffer = this.getActiveBuffer();
-          buffer.clearScrollback();
-        }
-        return true;
-      }
-      case "EraseInLine": {
-        const mode = eraseModeToByte(action.data);
-        grid.core.handle_erase_in_line(mode);
-        return true;
-      }
-      case "EraseCharacters":
-        grid.core.handle_erase_characters(action.data || 1);
-        return true;
-
-      // ── Sprint 4: SGR ───────────────────────────────
-      case "Sgr": {
-        const params = new Uint16Array(action.data);
-        grid.core.handle_sgr(params);
-        return true;
-      }
-
-      // ── Sprint 4: Edit operations ───────────────────
-      case "InsertLines":
-        grid.core.handle_insert_lines(action.data || 1);
-        return true;
-      case "DeleteLines":
-        grid.core.handle_delete_lines(action.data || 1);
-        return true;
-      case "InsertCharacters":
-        grid.core.handle_insert_characters(action.data || 1);
-        return true;
-      case "DeleteCharacters":
-        grid.core.handle_delete_characters(action.data || 1);
-        return true;
-
-      // ── Sprint 4: Scroll operations ─────────────────
-      case "ScrollUp": {
-        const scrollCount = grid.core.handle_scroll_up(action.data || 1);
-        if (scrollCount > 0) {
-          const buffer = this.getActiveBuffer();
-          for (let i = 0; i < scrollCount; i++) {
-            buffer.scrollUp();
-          }
-        }
-        return true;
-      }
-      case "ScrollDown":
-        grid.core.handle_scroll_down(action.data || 1);
-        return true;
-      case "SetScrollRegion": {
-        grid.core.handle_decstbm(action.data.top, action.data.bottom);
-        // Sync scroll region to UnifiedBuffer (WASM sets its own, buffer needs its copy)
-        const top = action.data.top === 0 ? 0 : action.data.top - 1;
-        const bottom = action.data.bottom === 0 ? this.rows - 1 : action.data.bottom - 1;
-        this.getActiveBuffer().setScrollRegion(top, bottom);
-        return true;
-      }
-
-      // ── Sprint 4: Mode handling ─────────────────────
-      case "SetMode":
-        return this.handleModesWasm(grid, action.data, true);
-      case "ResetMode":
-        return this.handleModesWasm(grid, action.data, false);
-
-      // ── Sprint 4: Device responses ──────────────────
-      case "DeviceStatusReport": {
-        const len = grid.core.handle_device_status_report(action.data);
-        if (len > 0) {
-          this.readAndSendResponse(grid);
-        }
-        return true;
-      }
-      case "PrimaryDeviceAttributes": {
-        const len = grid.core.handle_primary_device_attributes();
-        if (len > 0) {
-          this.readAndSendResponse(grid);
-        }
-        return true;
-      }
-      case "SecondaryDeviceAttributes": {
-        const len = grid.core.handle_secondary_device_attributes();
-        if (len > 0) {
-          this.readAndSendResponse(grid);
-        }
-        return true;
-      }
-      case "TertiaryDeviceAttributes":
-        return false; // No WASM handler, fallback to TS
-
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * Handle an ESC action via WASM.
-   * Maps ESC action names to WASM action codes and dispatches.
-   */
-  private handleEscWasm(grid: WasmGrid, action: EscAction): void {
-    let actionCode: number;
-    let data = 0;
-
-    switch (action.action) {
-      case "SaveCursor":
-        actionCode = 0;
-        break;
-      case "RestoreCursor":
-        actionCode = 1;
-        break;
-      case "Index":
-        actionCode = 2;
-        break;
-      case "NextLine":
-        actionCode = 3;
-        break;
-      case "ReverseIndex":
-        actionCode = 4;
-        break;
-      case "HorizontalTabSet":
-        actionCode = 5;
-        break;
-      case "ResetToInitialState":
-        actionCode = 6;
-        break;
-      case "SetG0CharSet":
-        actionCode = 7;
-        data = charSetToByte(action.data);
-        break;
-      case "SetG1CharSet":
-        actionCode = 8;
-        data = charSetToByte(action.data);
-        break;
-      case "Unknown":
-        return; // No-op for unknown ESC sequences
-    }
-
-    grid.core.handle_esc(actionCode, data);
-
-    // RIS: also reset TS-side state
-    if (actionCode === 6) {
-      this.reset();
-    }
-  }
-
-  /**
-   * Process SetMode/ResetMode via WASM with action code dispatch.
-   * Handles boolean modes in WASM, falls back to TS for multi-valued modes.
-   */
-  private handleModesWasm(grid: WasmGrid, modes: number[], enable: boolean): boolean {
-    const actions: number[] = [];
-
-    for (const mode of modes) {
-      const code = grid.core.handle_set_mode(mode, enable);
-      if (code === MODE_ACTION_TS_FALLBACK) {
-        // Multi-valued mode (mouse, cursor keys, etc.) - handle in TS
-        setDecPrivateMode(this.modes, mode, enable);
-      } else if (code !== MODE_ACTION_NONE) {
-        actions.push(code);
-      }
-    }
-
-    // Execute collected actions after all mode state is updated
-    for (const code of actions) {
-      this.executeModAction(code);
-    }
-
-    // Sync boolean modes from WASM to TS
-    syncModesFromWasm(this.modes, grid.core);
-
-    // Sync TS-only multi-valued modes back to WASM
-    syncModesToWasm(this.modes, grid.core);
-
-    return true;
-  }
-
-  /**
-   * Execute a mode action code from WASM.
-   */
-  private executeModAction(code: number): void {
-    switch (code) {
-      case MODE_ACTION_SWITCH_TO_ALT:
-        this.switchToAlternateBuffer(false);
-        break;
-      case MODE_ACTION_SAVE_AND_SWITCH_TO_ALT:
-        this.switchToAlternateBuffer(true);
-        break;
-      case MODE_ACTION_SWITCH_TO_MAIN:
-        this.switchToPrimaryBuffer(true);
-        break;
-      case MODE_ACTION_SAVE_CURSOR:
-        this.cursor.save();
-        break;
-      case MODE_ACTION_RESTORE_CURSOR:
-        this.cursor.restore();
-        break;
-    }
-  }
-
-  /**
-   * Read device response from WASM and add to pending responses.
-   */
-  private readAndSendResponse(grid: WasmGrid): void {
-    const bytes = grid.core.get_response_bytes();
-    if (bytes.length > 0) {
-      this.addPendingResponse(bytes);
-    }
   }
 
   /**
@@ -1343,15 +848,12 @@ export class TerminalState implements TerminalStateAccessor {
     } catch (e) {
       console.error("[ERROR][FRONTEND] Failed to recreate WASM core:", e);
       // Null out all WASM-dependent references to prevent dangling pointers.
-      // This converts "null pointer passed to rust" errors into
-      // "WASM not initialized" errors, which are safer and recoverable.
       this.primaryWasmGrid = null;
       this.alternateWasmGrid = null;
       this.alternateBuffer = null;
       this.alternateCursor = null;
       this.useAlternate = false;
       // Replace primary buffer/cursor with JS-only fallbacks (no WASM backing)
-      // to prevent "null pointer passed to rust" from stale WASM references.
       this.primaryBuffer = new UnifiedBuffer(cols, rows, 0);
       this.primaryCursor = new CursorState(cols, rows);
       this.cursor = this.primaryCursor;
@@ -1365,18 +867,6 @@ export class TerminalState implements TerminalStateAccessor {
    * Coordinates are automatically normalized (start comes before end).
    * Trailing spaces on each line are removed.
    * Lines are joined with '\n'.
-   *
-   * @param startCol - Start column (0-indexed)
-   * @param startRow - Start row (0-indexed)
-   * @param endCol - End column (0-indexed, inclusive)
-   * @param endRow - End row (0-indexed, inclusive)
-   * @returns Extracted text with newlines between rows
-   *
-   * @example
-   * ```ts
-   * // Extract "Hello" from cells (0,0) to (4,0)
-   * const text = state.extractText(0, 0, 4, 0);
-   * ```
    */
   extractText(
     startCol: number,

@@ -2,11 +2,9 @@
  * Terminal application main class
  */
 
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   calculateTerminalSize,
   measureCharacterSize,
-  observeContainerResize,
   PtyClient,
 } from "../pty";
 import { TerminalState } from "../terminal/state";
@@ -18,19 +16,16 @@ import type { KeyboardHandlerContext } from "./handlers/keyboard";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
 import { buildFontFamilyChain } from "../settings/settings-applier";
-import { showPasteDialog, sendTextInChunks } from "../clipboard";
-import { handleSemanticPrompt, handleFoldCommand } from "../terminal/handlers/osc_handlers";
 import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
 import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
 import { OscColorHandler } from "../terminal/osc-colors";
-import { indexToRgb, DEFAULT_FOREGROUND, DEFAULT_BACKGROUND } from "../terminal/colors";
-import { handleOsc52 } from "../terminal/osc-clipboard";
-import { reinitWasm } from "../terminal/wasm/loader";
-import { parseOsc9, sendNotification } from "../terminal/osc-notification";
-import { parseOsc22, CursorShapeStack } from "../terminal/osc-cursor-shape";
-import { parseIterm2Command } from "../terminal/osc-iterm2";
+import { CursorShapeStack } from "../terminal/osc-cursor-shape";
+import { setupPtyHandlers } from "./pty-handler";
+import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
+import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
+import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -454,295 +449,40 @@ export class TerminalApp {
 
   /**
    * Sets up PTY output handlers using WASM parser + binary Channel IPC.
-   *
-   * The onData handler uses a while loop to support buffer switch interruption:
-   * when process_pty_data encounters a mode 47/1047/1049 switch, it stops early
-   * so the TS side can perform the buffer switch, then the remaining data is
-   * routed to the correct (alternate or primary) core.
+   * Delegates to pty-handler module.
    */
   private async setupPtyHandlers(): Promise<void> {
-    if (!this.ptyClient || !this.state) return;
-
-    // Register callbacks on primary core
-    this.registerCoreCallbacks(this.state.getWasmCore());
-
-    // Track which core has callbacks registered
-    let registeredCore = this.state.getWasmCore();
-
-    // Buffer for incoming PTY data — processed in rAF with frame budgeting
-    // "Video approach": process data within time budget, render at 60fps
-    let pendingChunks: Uint8Array[] = [];
-    let leftoverData: Uint8Array | null = null;
-    let rafScheduled = false;
-    let rafWatchdog: ReturnType<typeof setTimeout> | null = null;
-    let rafDegraded = false; // true when rAF is not being delivered
-    const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
-    const DEGRADED_BUDGET_MS = 100; // Generous budget when rAF is broken
-    const RAF_WATCHDOG_MS = 500; // Fallback if rAF stops being delivered
-    const DEGRADED_INTERVAL_MS = 50; // setTimeout interval in degraded mode
-    const MAX_WASM_RECOVERY_ATTEMPTS = 3;
-    const RECOVERY_WINDOW_MS = 60_000; // Reset attempt counter after 60s of stability
-    let wasmRecoveryAttempts = 0;
-    let lastRecoveryTimestamp = 0;
-    let wasmRecoveryInProgress = false;
-    let wasmUnrecoverable = false;
-
-    const processPendingData = (fromWatchdog = false) => {
-      rafScheduled = false;
-
-      // During async WASM reinitialization or after exhausting retries, skip processing
-      if (wasmRecoveryInProgress || wasmUnrecoverable) return;
-      if (rafWatchdog !== null) {
-        clearTimeout(rafWatchdog);
-        rafWatchdog = null;
-      }
-
-      if (fromWatchdog && !rafDegraded) {
-        rafDegraded = true;
-        console.warn("[WARN][FRONTEND] rAF not delivered — switching to degraded (setTimeout) mode");
-        // Force full re-render to recover from potential canvas buffer loss
-        // (WebKitGTK may discard canvas contents when rAF stops being delivered)
-        if (this.state && this.renderer) {
-          try {
-            this.renderer.forceRender(this.state);
-          } catch (error) {
-            console.error("[ERROR][FRONTEND] forceRender in degraded mode switch failed:", error);
-          }
-        }
-      }
-      if (!this.state || !this.renderer) return;
-
-      try {
-        // Take all pending chunks
-        const chunks = pendingChunks;
-        pendingChunks = [];
-
-        // Include leftover from previous frame
-        if (leftoverData) {
-          chunks.unshift(leftoverData);
-          leftoverData = null;
-        }
-
-        if (chunks.length === 0) return;
-
-        // Merge chunks into a single buffer
-        let merged: Uint8Array;
-        if (chunks.length === 1) {
-          merged = chunks[0]!;
-        } else {
-          let totalLen = 0;
-          for (const c of chunks) totalLen += c.length;
-          merged = new Uint8Array(totalLen);
-          let offset = 0;
-          for (const chunk of chunks) {
-            merged.set(chunk, offset);
-            offset += chunk.length;
-          }
-        }
-
-        // Process data with frame budget — stop when time is up
-        // In degraded mode (rAF broken), use a larger budget to avoid falling behind
-        let remaining = merged;
-        const budget = rafDegraded ? DEGRADED_BUDGET_MS : FRAME_BUDGET_MS;
-        const deadline = performance.now() + budget;
-        let processed = false;
-
-        while (remaining.length > 0) {
-          const core = this.state.getActiveCore();
-
-          if (core !== registeredCore) {
-            this.registerCoreCallbacks(core);
-            this.state.setCellSizePx(
-              Math.round(this.charSize.width),
-              Math.round(this.charSize.height),
-            );
-            registeredCore = core;
-          }
-
-          const consumed = core.process_pty_data(remaining);
-
-          this.processPendingOscQueue();
-          this.imageHandler?.processPendingApcQueue();
-          this.imageHandler?.processPendingDcsQueue();
-
-          const prevCursorVisible = this.state.cursorVisible;
-          this.state.syncModesFromWasm();
-
-          const modeActions = core.take_mode_actions();
-          if (modeActions.length > 0) {
-            let i = 0;
-            while (i < modeActions.length) {
-              const action = modeActions[i]!;
-              if (action === 0xFF || action === 0xFE) {
-                const mode = modeActions[i + 1]! | (modeActions[i + 2]! << 8);
-                const isSet = action === 0xFF;
-                this.state.setDecPrivateMode(mode, isSet);
-                i += 3;
-              } else {
-                this.state.handleModeAction(action);
-                i += 1;
-              }
-            }
-          }
-
-          remaining = remaining.subarray(consumed);
-          processed = true;
-
-          if (consumed === 0) break;
-
-          // When WASM interrupted at a cursor hidden→visible transition,
-          // break to render the current state (e.g., vim search wrap message)
-          // before processing the subsequent redraw that may clear it.
-          if (remaining.length > 0 && this.state.cursorVisible && !prevCursorVisible) {
-            leftoverData = remaining;
-            break;
-          }
-
-          // Check frame budget — defer remaining data to next frame
-          if (remaining.length > 0 && performance.now() >= deadline) {
-            leftoverData = remaining;
-            break;
-          }
-        }
-
-        if (processed) {
-          this.outputActivityCallback?.();
-
-          this.renderer.renderImmediate(this.state);
-          this.imeHandler?.updatePosition();
-        }
-
-        // If there's leftover data, schedule next frame to continue
-        if (leftoverData && !rafScheduled) {
-          scheduleProcessing();
-        }
-      } catch (error) {
-        console.error("[ERROR][FRONTEND] processPendingData failed:", error);
-        leftoverData = null;
-
-        // Detect WASM crash or uninitialized state:
-        // - RuntimeError: memory corruption (e.g., after long idle)
-        // - "recursive use of an object": wasm-bindgen borrow flag stuck after crash
-        // - "WASM not initialized": previous recovery failed, primaryWasmGrid is null
-        const isWasmCrash = error instanceof WebAssembly.RuntimeError;
-        const msg = error instanceof Error ? error.message : String(error);
-        const isBorrowError = msg.includes("recursive use of an object");
-        const isWasmUninitialized = msg.includes("WASM not initialized");
-        if (isWasmCrash || isBorrowError || isWasmUninitialized) {
-          const now = Date.now();
-          // Reset counter if enough time has passed since last recovery
-          if (now - lastRecoveryTimestamp > RECOVERY_WINDOW_MS) {
-            wasmRecoveryAttempts = 0;
-          }
-          lastRecoveryTimestamp = now;
-          wasmRecoveryAttempts++;
-          if (wasmRecoveryAttempts > MAX_WASM_RECOVERY_ATTEMPTS) {
-            wasmUnrecoverable = true;
-            console.error(
-              `[ERROR][FRONTEND] WASM recovery exhausted (${MAX_WASM_RECOVERY_ATTEMPTS} attempts within ${RECOVERY_WINDOW_MS / 1000}s) — terminal is unrecoverable`,
-            );
-            return;
-          }
-          console.warn(
-            `[WARN][FRONTEND] WASM crash detected — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS})`,
-          );
-
-          const finishRecovery = () => {
-            if (!this.state) return;
-            const newCore = this.state.getWasmCore();
-            this.registerCoreCallbacks(newCore);
-            registeredCore = newCore;
-            this.state.setCellSizePx(
-              Math.round(this.charSize.width),
-              Math.round(this.charSize.height),
-            );
-            this.renderer?.forceRender(this.state);
-          };
-
-          // Step 1: Try recreating WASM core (works if WASM engine is healthy)
-          if (this.state?.recreateWasmCore()) {
-            finishRecovery();
-          } else if (this.state) {
-            // Step 2: WASM engine itself is corrupted — reinitialize the module
-            console.warn("[WARN][FRONTEND] WASM core recreation failed — reinitializing WASM module");
-            wasmRecoveryInProgress = true;
-            (async () => {
-              try {
-                await reinitWasm();
-                if (this.state?.recreateWasmCore()) {
-                  finishRecovery();
-                  console.warn("[WARN][FRONTEND] WASM module reinitialized — terminal recovered");
-                } else {
-                  wasmUnrecoverable = true;
-                  console.error("[ERROR][FRONTEND] WASM recovery failed after module reinit — terminal is unrecoverable");
-                }
-              } catch (reinitError) {
-                wasmUnrecoverable = true;
-                console.error("[ERROR][FRONTEND] WASM module reinit failed:", reinitError);
-              } finally {
-                wasmRecoveryInProgress = false;
-                // Process any data that arrived during recovery (only if recovered)
-                if (!wasmUnrecoverable && pendingChunks.length > 0) {
-                  scheduleProcessing();
-                }
-              }
-            })();
-          }
-        }
-      }
-    };
-
-    const scheduleProcessing = () => {
-      if (rafScheduled) return;
-      rafScheduled = true;
-
-      if (rafDegraded) {
-        // In degraded mode, use setTimeout directly (rAF is not working)
-        setTimeout(() => processPendingData(false), DEGRADED_INTERVAL_MS);
-        // Try rAF to detect recovery — require multiple consecutive deliveries
-        // to avoid flapping between degraded/normal mode
-        let recoveryCount = 0;
-        const RAF_RECOVERY_THRESHOLD = 3;
-        const checkRecovery = () => {
-          recoveryCount++;
-          if (recoveryCount >= RAF_RECOVERY_THRESHOLD) {
-            rafDegraded = false;
-            console.info("[INFO][FRONTEND] rAF delivery resumed — switching back to normal mode");
-          } else {
-            requestAnimationFrame(checkRecovery);
-          }
-        };
-        requestAnimationFrame(checkRecovery);
-      } else {
-        requestAnimationFrame(() => processPendingData(false));
-        // Watchdog: fallback if rAF callback is not delivered (e.g. WebKitGTK bug)
-        if (rafWatchdog !== null) clearTimeout(rafWatchdog);
-        rafWatchdog = setTimeout(() => {
-          if (rafScheduled) {
-            console.warn(
-              "[WARN][FRONTEND] rAF watchdog triggered — forcing data processing",
-            );
-            processPendingData(true);
-          }
-        }, RAF_WATCHDOG_MS);
-      }
-    };
-
-    // Register binary data handler — just buffer and schedule rAF
-    this.ptyClient.onData((data: Uint8Array) => {
-      pendingChunks.push(data);
-      scheduleProcessing();
+    await setupPtyHandlers({
+      getState: () => this.state,
+      getRenderer: () => this.renderer,
+      getPtyClient: () => this.ptyClient,
+      getImeHandler: () => this.imeHandler,
+      getImageHandler: () => this.imageHandler,
+      getCharSize: () => this.charSize,
+      registerCoreCallbacks: (core) => this.registerCoreCallbacks(core),
+      processPendingOscQueue: () => this.processPendingOscQueue(),
+      getOutputActivityCallback: () => this.outputActivityCallback,
+      getSessionExitCallback: () => this.sessionExitCallback,
     });
+  }
 
-    // Handle exit event
-    await this.ptyClient.onExit(async (_code, _remainingSessions) => {
-      // Notify session exit callback (for TabManager integration)
-      const sessionId = this.ptyClient?.getSessionId();
-      if (sessionId && this.sessionExitCallback) {
-        this.sessionExitCallback(sessionId);
-      }
-      // Note: Window close is now handled by TabManager.onLastTabClosed()
-    });
+  /**
+   * Build the OSC handler context from current state.
+   */
+  private getOscHandlerContext(): OscHandlerContext {
+    return {
+      state: this.state,
+      renderer: this.renderer,
+      ptyClient: this.ptyClient,
+      oscColorHandler: this.oscColorHandler,
+      cursorShapeStack: this.cursorShapeStack,
+      imageHandler: this.imageHandler,
+      downloadManager: this.downloadManager,
+      terminalRoot: this.terminalRoot,
+      titleChangeCallback: this.titleChangeCallback,
+      lastWindowTitle: this.lastWindowTitle,
+      setLastWindowTitle: (title: string) => { this.lastWindowTitle = title; },
+    };
   }
 
   /**
@@ -750,301 +490,34 @@ export class TerminalApp {
    * Safe to call after process_pty_data has returned (borrow released).
    */
   private processPendingOscQueue(): void {
-    if (this.pendingOscQueue.length === 0) return;
-    const events = this.pendingOscQueue;
-    this.pendingOscQueue = [];
-    for (const { actionType, data } of events) {
-      this.handleOscCallback(actionType, data);
-    }
+    processPendingOscQueue(this.pendingOscQueue, this.getOscHandlerContext());
   }
 
   /**
-   * Handle OSC callback from WASM parser.
-   * actionType maps to OSC number (0=SetTitleAndIcon, 2=SetTitle, etc.)
-   */
-  private handleOscCallback(actionType: number, data: string): void {
-    if (!this.state) return;
-
-    switch (actionType) {
-      case 0: // SetTitleAndIcon
-        this.state._title = data;
-        this.state._iconName = data;
-        this.updateWindowTitle(data);
-        break;
-      case 1: // SetIconName
-        this.state._iconName = data;
-        break;
-      case 2: // SetTitle
-        this.state._title = data;
-        this.updateWindowTitle(data);
-        break;
-      case 4: { // SetColorPalette
-        const writeFn = (resp: string) => {
-          this.ptyClient?.write(new TextEncoder().encode(resp));
-        };
-        this.oscColorHandler.handleOsc4(data, writeFn, (index) => {
-          return indexToRgb(index);
-        });
-        // Notify renderer of palette change
-        this.renderer?.forceRender(this.state!);
-        break;
-      }
-      case 7: // SetWorkingDirectory
-        this.state._workingDirectory = data;
-        break;
-      case 8: { // Hyperlink
-        // data format: "params;uri" (semicolon-separated)
-        const sepIdx = data.indexOf(";");
-        if (sepIdx >= 0) {
-          const params = data.substring(0, sepIdx);
-          const uri = data.substring(sepIdx + 1);
-          if (uri) {
-            this.state._activeHyperlink = { params, uri };
-          } else {
-            this.state._activeHyperlink = null;
-          }
-        }
-        break;
-      }
-      case 10: // SetForegroundColor
-      case 11: // SetBackgroundColor
-      case 12: { // SetCursorColor
-        const writeFn = (resp: string) => {
-          this.ptyClient?.write(new TextEncoder().encode(resp));
-        };
-        const lookupThemeDefault = (oscNum: number) => {
-          switch (oscNum) {
-            case 10: return DEFAULT_FOREGROUND;
-            case 11: return DEFAULT_BACKGROUND;
-            case 12: return DEFAULT_FOREGROUND; // cursor defaults to foreground
-            default: return null;
-          }
-        };
-        this.oscColorHandler.handleOscDefaultColor(actionType, data, writeFn, lookupThemeDefault);
-        this.renderer?.forceRender(this.state!);
-        break;
-      }
-      case 104: // ResetColorPalette
-        this.oscColorHandler.handleOsc104(data);
-        this.renderer?.forceRender(this.state!);
-        break;
-      case 110: // ResetForegroundColor
-        this.oscColorHandler.resetForeground();
-        this.renderer?.forceRender(this.state!);
-        break;
-      case 111: // ResetBackgroundColor
-        this.oscColorHandler.resetBackground();
-        this.renderer?.forceRender(this.state!);
-        break;
-      case 112: // ResetCursorColor
-        this.oscColorHandler.resetCursorColor();
-        this.renderer?.forceRender(this.state!);
-        break;
-      case 9: { // Notification / Progress (OSC 9)
-        const action = parseOsc9(data);
-        if (!action) break;
-        if (action.type === "notification") {
-          sendNotification("eMterm", action.message);
-        } else {
-          // Progress: update state and notify tab bar
-          this.state._progressState = action.state;
-          this.state._progressPercentage = action.percentage;
-          this.titleChangeCallback?.(this.state.title || "Terminal");
-        }
-        break;
-      }
-      case 22: { // Cursor Shape (OSC 22)
-        const action = parseOsc22(data);
-        if (!action) break;
-        const terminalRoot = this.terminalRoot;
-        if (action.type === "set") {
-          this.cursorShapeStack.set(action.shape);
-        } else if (action.type === "push") {
-          this.cursorShapeStack.push(action.shape);
-        } else {
-          this.cursorShapeStack.pop();
-        }
-        if (terminalRoot) {
-          terminalRoot.style.cursor = this.cursorShapeStack.current();
-        }
-        break;
-      }
-      case 52: { // Clipboard (OSC 52)
-        const settings = SettingsService.getCached();
-        const config = {
-          readEnabled: settings?.clipboard_read_osc52 ?? true,
-          maxSize: settings?.clipboard_max_size_osc52 ?? 10 * 1024 * 1024,
-        };
-        handleOsc52(
-          data,
-          config,
-          async () => {
-            const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
-            return await readText();
-          },
-          async (text: string) => {
-            const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-            await writeText(text);
-          },
-          (resp: string) => {
-            this.ptyClient?.write(new TextEncoder().encode(resp));
-          },
-        );
-        break;
-      }
-      case 100: { // EmtermExtension (OSC 777)
-        // data format: "verb;param1;param2;..."
-        const parts = data.split(";");
-        const verb = parts[0] || "";
-        const params = parts.slice(1);
-        // Handle fold commands first
-        if (verb === "emterm" && params.length > 0 && params[0] === "fold") {
-          handleFoldCommand(this.state, params.slice(1));
-        } else if (verb === "emterm" && params.length > 0 && params[0] === "download") {
-          // Route to download manager
-          this.downloadManager?.handleCommand(verb, params);
-        } else if (verb === "emterm" && params.length > 0 && (params[0] === "json" || params[0] === "yaml")) {
-          // Route to data viewer manager
-          this.state.getDataViewerManager().handleCommand(verb, params);
-        } else {
-          // Route to markdown manager
-          this.state.getMarkdownManager().handleCommand(verb, params);
-        }
-        break;
-      }
-      case 133: { // SemanticPrompt
-        // data format: "A" or "D;0" (zone_type[;exit_code])
-        const parts = data.split(";");
-        const zoneType = parts[0] || "";
-        const exitCode = parts.length > 1 ? parseInt(parts[1]!, 10) : null;
-        handleSemanticPrompt(this.state, zoneType, exitCode);
-        break;
-      }
-      case 101: { // iTerm2 Protocol (OSC 1337)
-        const cmd = parseIterm2Command(data);
-        if (!cmd) break;
-        if (cmd.type === "file") {
-          if (cmd.inline && cmd.base64Data) {
-            // Inline image display: decode via backend and show
-            this.handleIterm2InlineImage(cmd.base64Data, cmd.name);
-          } else {
-            // Download mode: log for now (download infrastructure is backend-driven)
-            console.log(`[LOG][FRONTEND] OSC 1337;File download: ${cmd.name || "unnamed"}`);
-          }
-        } else if (cmd.type === "set_user_var") {
-          this.state._userVariables.set(cmd.key, cmd.value);
-        }
-        break;
-      }
-      // Unknown (255) - ignored
-    }
-  }
-
-  /**
-   * Update window title and notify callbacks.
-   */
-  /**
-   * Handle iTerm2 inline image (OSC 1337;File with inline=1).
-   * Decodes raw image data via Tauri backend and displays it.
-   */
-  private async handleIterm2InlineImage(base64Data: string, name: string): Promise<void> {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      // Send raw image data to backend for decoding into RGBA
-      const result = await invoke<{ width: number; height: number; rgba_base64: string }>(
-        "decode_iterm2_image",
-        { base64Data },
-      );
-      if (result && this.imageHandler) {
-        // Create a synthetic DecodedImage and display it
-        const image = {
-          id: Date.now(), // Use timestamp as unique ID
-          width: result.width,
-          height: result.height,
-          rgba_base64: result.rgba_base64,
-        };
-        this.imageHandler.showImage(image);
-      }
-    } catch (error) {
-      console.error(`[ERROR][FRONTEND] Failed to decode iTerm2 image "${name}":`, error);
-    }
-  }
-
-  private updateWindowTitle(title: string): void {
-    if (title === this.lastWindowTitle) return;
-    this.lastWindowTitle = title;
-
-    const displayTitle = title || "eMterm";
-    getCurrentWebviewWindow().setTitle(displayTitle).catch((error) => {
-      console.error("Failed to set window title:", error);
-    });
-
-    if (this.titleChangeCallback) {
-      this.titleChangeCallback(title || "Terminal");
-    }
-  }
-
-  /**
-   * Sets up resize observer for the container
+   * Sets up resize observer for the container.
+   * Delegates to resize-handler module.
    */
   private setupResizeObserver(): void {
-    this.disconnectResizeObserver = observeContainerResize(
-      this.container,
-      this.charSize.width,
-      this.charSize.height,
-      async (newCols, newRows) => {
-        // Skip resize if container is hidden (tab not active)
-        // This prevents buffer content from being lost when a tab becomes hidden
-        // and ResizeObserver reports 0x0 dimensions (leading to 1x1 resize)
-        if (this.container.style.display === "none" ||
-            this.container.clientWidth === 0 || this.container.clientHeight === 0) {
-          return;
-        }
+    this.disconnectResizeObserver = setupResizeObserver(this.getResizeHandlerContext());
+  }
 
-        // Always update local terminal state/renderer (even if PTY not ready)
-        if (this.state && this.renderer) {
-          try {
-            this.state.resize(newCols, newRows);
-            // Update cell size for CSI 14t/16t XTWINOPS responses
-            this.state.setCellSizePx(
-              Math.round(this.charSize.width),
-              Math.round(this.charSize.height),
-            );
-            this.renderer.resize(newCols, newRows);
-            this.renderer.forceRender(this.state);
-          } catch (error) {
-            console.error("Failed to resize terminal:", error);
-            // Attempt recovery: force re-render with current state
-            try {
-              this.renderer.forceRender(this.state);
-            } catch {
-              // Rendering failed too - nothing we can do
-            }
-          }
-          this.imeHandler?.updatePosition();
-          this.mouseHandler?.updateCharSize(
-            this.charSize.width,
-            this.charSize.height,
-          );
-
-          // Update selection controller dimensions (clears selection)
-          this.selectionController?.resize(
-            newCols,
-            newRows,
-            this.charSize.width,
-            this.charSize.height,
-          );
-        }
-
-        // Resize PTY if session is active (returns false if not ready)
-        if (this.ptyClient) {
-          const resized = await this.ptyClient.resize(newCols, newRows);
-          if (!resized && import.meta.env?.DEV) {
-            console.debug("PTY resize skipped - session not yet started");
-          }
-        }
-      },
-    );
+  /**
+   * Build the resize handler context from current state.
+   */
+  private getResizeHandlerContext(): ResizeHandlerContext {
+    return {
+      container: this.container,
+      getState: () => this.state,
+      getRenderer: () => this.renderer,
+      getPtyClient: () => this.ptyClient,
+      getImeHandler: () => this.imeHandler,
+      getMouseHandler: () => this.mouseHandler,
+      getSelectionController: () => this.selectionController,
+      getCharSize: () => this.charSize,
+      getDisconnectResizeObserver: () => this.disconnectResizeObserver,
+      setDisconnectResizeObserver: (fn) => { this.disconnectResizeObserver = fn; },
+      setupResizeObserver: () => this.setupResizeObserver(),
+    };
   }
 
   /**
@@ -1080,102 +553,32 @@ export class TerminalApp {
   }
 
   /**
-   * Handle mouse wheel events for scrollback
+   * Handle mouse wheel events for scrollback.
+   * Delegates to ui-handler module.
    */
   private handleWheel(e: WheelEvent): void {
-    e.preventDefault();
-
-    if (!this.renderer || !this.state) return;
-
-    // Get scroll speed multiplier from settings (default: 3)
-    const cachedSettings = SettingsService.getCached();
-    const scrollSpeed = cachedSettings?.scroll_speed ?? 3;
-
-    // Calculate number of lines to scroll based on wheel delta and speed
-    const lines = Math.ceil(Math.abs(e.deltaY) / this.charSize.height * scrollSpeed);
-
-    if (e.deltaY < 0) {
-      // Scroll up (toward past)
-      this.renderer.scrollUp(lines);
-    } else {
-      // Scroll down (toward present)
-      this.renderer.scrollDown(lines);
-    }
-
-    // Force re-render with new scroll offset
-    this.renderer.forceRender(this.state);
+    handleWheel(e, this.renderer, this.state, this.charSize);
   }
 
   /**
-   * Handle middle-click paste from clipboard
+   * Handle middle-click paste from clipboard.
+   * Delegates to ui-handler module.
    */
   private async handleMiddleClickPaste(): Promise<void> {
-    if (!this.selectionController || !this.ptyClient) return;
-
-    try {
-      const text = await this.selectionController.paste();
-      if (!text) return;
-
-      // Auto-scroll to bottom when user pastes during scrollback
-      this.exitScrollback();
-
-      if (this.selectionController.isMultiLinePaste(text)) {
-        const lineCount = this.selectionController.countPasteLines(text);
-        const result = await showPasteDialog({ text, lineCount });
-        if (result.confirmed) {
-          await sendTextInChunks(text, (data: Uint8Array) =>
-            this.ptyClient!.write(data),
-          );
-        }
-      } else {
-        const bytes = new TextEncoder().encode(text);
-        await this.ptyClient.write(bytes);
-      }
-    } catch (error) {
-      console.error("Failed to paste from clipboard (middle-click):", error);
-    } finally {
-      this.imeHandler?.focus();
-    }
+    await handleMiddleClickPaste(
+      this.selectionController,
+      this.ptyClient,
+      this.imeHandler,
+      () => this.exitScrollback(),
+    );
   }
 
   /**
-   * Handle BEL character based on bell_action setting
+   * Handle BEL character based on bell_action setting.
+   * Delegates to ui-handler module.
    */
   private handleBell(): void {
-    const cachedSettings = SettingsService.getCached();
-    const bellAction = cachedSettings?.bell_action ?? "visual";
-
-    switch (bellAction) {
-      case "visual": {
-        const container = this.terminalRoot;
-        if (container) {
-          container.classList.add("terminal-bell-flash");
-          setTimeout(() => container.classList.remove("terminal-bell-flash"), 150);
-        }
-        break;
-      }
-      case "sound": {
-        try {
-          const ctx = new AudioContext();
-          const oscillator = ctx.createOscillator();
-          const gain = ctx.createGain();
-          oscillator.connect(gain);
-          gain.connect(ctx.destination);
-          oscillator.frequency.value = 800;
-          gain.gain.value = 0.1;
-          oscillator.start();
-          oscillator.stop(ctx.currentTime + 0.1);
-        } catch {
-          // Audio not available
-        }
-        break;
-      }
-      case "none":
-        break;
-    }
-
-    // Notify activity tracker
-    this.bellActivityCallback?.();
+    handleBell(this.terminalRoot, this.bellActivityCallback);
   }
 
   /**
@@ -1377,46 +780,14 @@ export class TerminalApp {
 
   /**
    * Recalculate terminal size after character dimensions change (e.g. font change).
-   * Updates charSize, resizes state/renderer/selection/PTY, and reconnects ResizeObserver.
+   * Delegates to resize-handler module.
    */
   private handleCharSizeChange(): void {
-    if (!this.renderer || !this.state) return;
-    // Skip resize if container is hidden (e.g. inactive tab) - dimensions would be 0x0
-    if (this.container.style.display === "none") return;
-
-    const newWidth = this.renderer.getCharWidth();
-    const newHeight = this.renderer.getCharHeight();
-
-    // Skip if dimensions didn't actually change
-    if (newWidth === this.charSize.width && newHeight === this.charSize.height) {
-      return;
+    const newCharSize = handleCharSizeChange(this.getResizeHandlerContext());
+    if (newCharSize) {
+      this.charSize = newCharSize;
+      this.setupResizeObserver();
     }
-
-    this.charSize = { width: newWidth, height: newHeight };
-
-    // Recalculate terminal dimensions with new character size
-    const { cols, rows } = calculateTerminalSize(
-      this.container,
-      newWidth,
-      newHeight,
-    );
-
-    // Resize state, renderer, and selection
-    this.state.resize(cols, rows);
-    this.state.setCellSizePx(Math.round(newWidth), Math.round(newHeight));
-    this.renderer.resize(cols, rows);
-    this.renderer.forceRender(this.state);
-
-    this.mouseHandler?.updateCharSize(newWidth, newHeight);
-    this.imeHandler?.updateCharSize(newWidth, newHeight);
-    this.selectionController?.resize(cols, rows, newWidth, newHeight);
-
-    // Reconnect ResizeObserver with new character dimensions
-    this.disconnectResizeObserver?.();
-    this.setupResizeObserver();
-
-    // Resize PTY
-    this.ptyClient?.resize(cols, rows);
   }
 }
 

@@ -7,22 +7,25 @@
  */
 import { type Cell, type LineAccessor, createEmptyCell, Line } from "./grid.ts";
 import { type WasmGrid, parsePackedRow } from "./wasm/terminal-core.ts";
+import {
+	type BufferScrollAccess,
+	type ScrollRegion,
+	setScrollRegion as _setScrollRegion,
+	clearScrollRegion as _clearScrollRegion,
+	getScrollRegion as _getScrollRegion,
+	getEffectiveScrollRegion as _getEffectiveScrollRegion,
+	scrollUp as _scrollUp,
+	scrollDown as _scrollDown,
+	insertLines as _insertLines,
+	deleteLines as _deleteLines,
+} from "./buffer-scroll.ts";
 
-/**
- * Scroll region definition.
- * Uses 0-indexed row numbers.
- */
-export interface ScrollRegion {
-	/** Top margin (inclusive, 0-indexed). */
-	top: number;
-	/** Bottom margin (inclusive, 0-indexed). */
-	bottom: number;
-}
+export type { ScrollRegion } from "./buffer-scroll.ts";
 
 /**
  * Unified buffer containing scrollback + screen lines in a ring buffer.
  */
-export class UnifiedBuffer {
+export class UnifiedBuffer implements BufferScrollAccess {
 	/** Ring buffer storage. */
 	private ring: (Line | null)[];
 
@@ -42,13 +45,13 @@ export class UnifiedBuffer {
 	private _rows: number;
 
 	/** Scroll region (null means full screen). */
-	private scrollRegion: ScrollRegion | null = null;
+	scrollRegion: ScrollRegion | null = null;
 
 	/** Whether this buffer allows scrollback (primary=true, alternate=false). */
 	private allowScrollback: boolean;
 
 	/** Optional WASM-backed viewport grid. When present, viewport data lives in WASM. */
-	private wasmGrid: WasmGrid | null = null;
+	wasmGrid: WasmGrid | null = null;
 
 	/** Callback when lines are evicted from ring buffer on capacity overflow. */
 	onEvict?: (count: number) => void;
@@ -137,11 +140,12 @@ export class UnifiedBuffer {
 
 	/**
 	 * Get a line by absolute index (0 = oldest line in buffer).
+	 * @internal Exposed for BufferScrollAccess; prefer getLine() for viewport access.
 	 *
 	 * @param index - Absolute index
 	 * @returns Line at that index
 	 */
-	private getAbsolute(index: number): Line {
+	getAbsolute(index: number): Line {
 		if (index < 0 || index >= this._size) {
 			throw new Error(`Absolute index ${index} out of bounds (0-${this._size - 1})`);
 		}
@@ -150,11 +154,12 @@ export class UnifiedBuffer {
 
 	/**
 	 * Set a line by absolute index.
+	 * @internal Exposed for BufferScrollAccess; prefer setCell() for viewport access.
 	 *
 	 * @param index - Absolute index
 	 * @param line - Line to set
 	 */
-	private setAbsolute(index: number, line: Line): void {
+	setAbsolute(index: number, line: Line): void {
 		if (index < 0 || index >= this._size) {
 			throw new Error(`Absolute index ${index} out of bounds (0-${this._size - 1})`);
 		}
@@ -274,56 +279,24 @@ export class UnifiedBuffer {
 
 	// ===== Scroll Region =====
 
-	/**
-	 * Set the scroll region.
-	 *
-	 * @param top - Top margin (0-indexed, inclusive)
-	 * @param bottom - Bottom margin (0-indexed, inclusive)
-	 */
+	/** Set the scroll region. */
 	setScrollRegion(top: number, bottom: number): void {
-		if (top < 0) top = 0;
-		if (bottom >= this._rows) bottom = this._rows - 1;
-
-		if (top === 0 && bottom === this._rows - 1) {
-			this.scrollRegion = null;
-		} else if (top < bottom) {
-			this.scrollRegion = { top, bottom };
-		}
-
-		// Sync to WASM scroll region (only valid regions)
-		if (this.wasmGrid && top < bottom) {
-			this.wasmGrid.core.set_scroll_region(top, bottom);
-		}
+		_setScrollRegion(this, top, bottom);
 	}
 
-	/**
-	 * Clear the scroll region (reset to full screen).
-	 */
+	/** Clear the scroll region (reset to full screen). */
 	clearScrollRegion(): void {
-		this.scrollRegion = null;
-
-		// Sync to WASM: full screen = (0, rows-1)
-		if (this.wasmGrid) {
-			this.wasmGrid.core.set_scroll_region(0, this._rows - 1);
-		}
+		_clearScrollRegion(this);
 	}
 
-	/**
-	 * Get the current scroll region.
-	 *
-	 * @returns Scroll region or null if full screen
-	 */
+	/** Get the current scroll region. */
 	getScrollRegion(): ScrollRegion | null {
-		return this.scrollRegion;
+		return _getScrollRegion(this);
 	}
 
-	/**
-	 * Get effective scroll region bounds.
-	 *
-	 * @returns Effective scroll region (full screen if none set)
-	 */
+	/** Get effective scroll region bounds. */
 	getEffectiveScrollRegion(): ScrollRegion {
-		return this.scrollRegion ?? { top: 0, bottom: this._rows - 1 };
+		return _getEffectiveScrollRegion(this);
 	}
 
 	// ===== Clear Operations =====
@@ -428,193 +401,26 @@ export class UnifiedBuffer {
 
 	// ===== Scroll Operations =====
 
-	/**
-	 * Scroll the buffer up by the specified number of lines.
-	 * Respects the scroll region if set.
-	 *
-	 * For full-screen scroll (top=0 AND bottom=rows-1): pushes blank lines
-	 * to the ring buffer, making old top lines become scrollback implicitly.
-	 *
-	 * For partial scroll region: rearranges lines in-place within the region.
-	 *
-	 * @param count - Number of lines to scroll (default: 1)
-	 */
+	/** Scroll the buffer up by the specified number of lines. */
 	scrollUp(count: number = 1): void {
-		if (count <= 0) return;
-
-		const { top, bottom } = this.getEffectiveScrollRegion();
-		const regionHeight = bottom - top + 1;
-		const actualCount = Math.min(count, regionHeight);
-
-		if (this.wasmGrid) {
-			// WASM Ring Buffer mode: scroll handled entirely within WASM
-			this.wasmGrid.core.handle_scroll_up(actualCount);
-			return;
-		}
-
-		// JS mode: original implementation
-		// Full-screen scroll: use ring buffer push (implicit scrollback)
-		if (top === 0 && bottom === this._rows - 1) {
-			for (let i = 0; i < actualCount; i++) {
-				this.push(new Line(this._cols));
-			}
-			// Mark all viewport lines as dirty
-			for (let r = 0; r < this._rows; r++) {
-				this.getLine(r).dirty = true;
-			}
-			return;
-		}
-
-		// Partial scroll region: rearrange viewport lines in-place
-		const sbLen = this.scrollbackLength;
-
-		// Shift remaining lines up within region
-		for (let i = top; i <= bottom - actualCount; i++) {
-			this.setAbsolute(sbLen + i, this.getAbsolute(sbLen + i + actualCount));
-		}
-
-		// Insert blank lines at bottom of region
-		for (let i = 0; i < actualCount; i++) {
-			this.setAbsolute(sbLen + bottom - actualCount + 1 + i, new Line(this._cols));
-		}
-
-		// Mark affected lines as dirty
-		for (let i = top; i <= bottom; i++) {
-			this.getLine(i).dirty = true;
-		}
+		_scrollUp(this, count);
 	}
 
-	/**
-	 * Scroll the buffer down by the specified number of lines.
-	 * Respects the scroll region if set.
-	 * New empty lines are added at the top of the region.
-	 *
-	 * @param count - Number of lines to scroll (default: 1)
-	 */
+	/** Scroll the buffer down by the specified number of lines. */
 	scrollDown(count: number = 1): void {
-		if (count <= 0) return;
-
-		const { top, bottom } = this.getEffectiveScrollRegion();
-		const regionHeight = bottom - top + 1;
-		const actualCount = Math.min(count, regionHeight);
-
-		if (this.wasmGrid) {
-			// WASM Ring Buffer mode: scroll handled entirely within WASM
-			this.wasmGrid.core.handle_scroll_down(actualCount);
-			return;
-		}
-
-		// JS mode: original implementation
-		const sbLen = this.scrollbackLength;
-
-		// Shift lines down within region
-		for (let i = bottom; i >= top + actualCount; i--) {
-			this.setAbsolute(sbLen + i, this.getAbsolute(sbLen + i - actualCount));
-		}
-
-		// Insert blank lines at top of region
-		for (let i = 0; i < actualCount; i++) {
-			this.setAbsolute(sbLen + top + i, new Line(this._cols));
-		}
-
-		// Mark affected lines as dirty
-		for (let i = top; i <= bottom; i++) {
-			this.getLine(i).dirty = true;
-		}
+		_scrollDown(this, count);
 	}
 
 	// ===== Line Manipulation =====
 
-	/**
-	 * Insert blank lines at the specified row.
-	 * Lines below are pushed down within the scroll region.
-	 *
-	 * @param row - Row to insert at
-	 * @param count - Number of lines to insert
-	 */
+	/** Insert blank lines at the specified row within the scroll region. */
 	insertLines(row: number, count: number = 1): void {
-		if (count <= 0) return;
-
-		const { top, bottom } = this.getEffectiveScrollRegion();
-		if (row < top || row > bottom) return;
-
-		const actualCount = Math.min(count, bottom - row + 1);
-
-		if (this.wasmGrid) {
-			// WASM mode: shift rows down from cursor, fill with defaults
-			this.wasmGrid.shiftRowsDown(row, bottom, actualCount);
-			for (let i = 0; i < actualCount; i++) {
-				this.wasmGrid.fillRowDefault(row + i);
-			}
-			for (let i = row; i <= bottom; i++) {
-				this.wasmGrid.markRowDirty(i);
-			}
-			return;
-		}
-
-		// JS mode
-		const sbLen = this.scrollbackLength;
-
-		// Shift lines down within region (from bottom up)
-		for (let i = bottom; i >= row + actualCount; i--) {
-			this.setAbsolute(sbLen + i, this.getAbsolute(sbLen + i - actualCount));
-		}
-
-		// Insert blank lines at cursor row
-		for (let i = 0; i < actualCount; i++) {
-			this.setAbsolute(sbLen + row + i, new Line(this._cols));
-		}
-
-		// Mark affected lines as dirty
-		for (let i = row; i <= bottom; i++) {
-			this.getLine(i).dirty = true;
-		}
+		_insertLines(this, row, count);
 	}
 
-	/**
-	 * Delete lines at the specified row.
-	 * Lines below are pulled up within the scroll region.
-	 *
-	 * @param row - Row to delete from
-	 * @param count - Number of lines to delete
-	 */
+	/** Delete lines at the specified row within the scroll region. */
 	deleteLines(row: number, count: number = 1): void {
-		if (count <= 0) return;
-
-		const { top, bottom } = this.getEffectiveScrollRegion();
-		if (row < top || row > bottom) return;
-
-		const actualCount = Math.min(count, bottom - row + 1);
-
-		if (this.wasmGrid) {
-			// WASM mode: shift rows up from cursor, fill bottom with defaults
-			this.wasmGrid.shiftRowsUp(row, bottom, actualCount);
-			for (let i = 0; i < actualCount; i++) {
-				this.wasmGrid.fillRowDefault(bottom - actualCount + 1 + i);
-			}
-			for (let i = row; i <= bottom; i++) {
-				this.wasmGrid.markRowDirty(i);
-			}
-			return;
-		}
-
-		// JS mode
-		const sbLen = this.scrollbackLength;
-
-		// Shift lines up within region
-		for (let i = row; i <= bottom - actualCount; i++) {
-			this.setAbsolute(sbLen + i, this.getAbsolute(sbLen + i + actualCount));
-		}
-
-		// Add blank lines at bottom of region
-		for (let i = 0; i < actualCount; i++) {
-			this.setAbsolute(sbLen + bottom - actualCount + 1 + i, new Line(this._cols));
-		}
-
-		// Mark affected lines as dirty
-		for (let i = row; i <= bottom; i++) {
-			this.getLine(i).dirty = true;
-		}
+		_deleteLines(this, row, count);
 	}
 
 	// ===== Character Manipulation =====

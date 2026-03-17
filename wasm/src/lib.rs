@@ -1,9 +1,11 @@
 mod cell;
 mod color_spec;
+mod terminal_cells;
 mod terminal_core;
 mod terminal_cursor;
 mod terminal_dispatch;
 mod terminal_modes;
+mod terminal_rows;
 mod unicode;
 mod unicode_emoji;
 mod unicode_width;

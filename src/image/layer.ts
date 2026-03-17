@@ -16,6 +16,14 @@
 
 import { AnimationController } from "./animation.ts";
 import { BitmapCache } from "./cache.ts";
+import {
+	deleteImages as deletePlacementImages,
+	getPlacementsAtPosition as queryPlacementsAtPosition,
+	getPlacementsForImage as queryPlacementsForImage,
+	placeImage as createPlacement,
+	scrollPlacements as scrollPlacementRows,
+} from "./layer-placement.ts";
+import type { PlacementContext } from "./layer-placement.ts";
 import { PerformanceMonitor } from "./performance.ts";
 import { ResizeHandler } from "./resize-handler.ts";
 import { decodeBase64ToBytes } from "./utils.ts";
@@ -486,60 +494,9 @@ export class ImageLayer {
 	 * @param placement - Placement specification
 	 */
 	placeImage(placement: ImagePlacement): void {
-		const stored = this.images.get(placement.image_id);
-		if (!stored) {
-			console.warn(`Image ${placement.image_id} not found for placement`);
-			return;
+		if (createPlacement(this.getPlacementContext(), placement)) {
+			this.render();
 		}
-
-		// Calculate pixel position
-		const x =
-			this.paddingX + placement.col * this.charWidth + placement.x_offset;
-		const y =
-			this.paddingY + placement.row * this.charHeight + placement.y_offset;
-
-		// Calculate display size
-		let displayWidth: number;
-		let displayHeight: number;
-
-		if (placement.columns > 0 && placement.rows > 0) {
-			displayWidth = placement.columns * this.charWidth;
-			displayHeight = placement.rows * this.charHeight;
-		} else if (placement.columns > 0) {
-			displayWidth = placement.columns * this.charWidth;
-			displayHeight = (stored.data.height / stored.data.width) * displayWidth;
-		} else if (placement.rows > 0) {
-			displayHeight = placement.rows * this.charHeight;
-			displayWidth = (stored.data.width / stored.data.height) * displayHeight;
-		} else {
-			displayWidth = stored.data.width;
-			displayHeight = stored.data.height;
-		}
-
-		const key = `${placement.image_id}:${placement.placement_id}`;
-		const activePlacement: ActivePlacement = {
-			placement,
-			x,
-			y,
-			displayWidth,
-			displayHeight,
-		};
-		this.placements.set(key, activePlacement);
-
-		// Add placement to WebGL layer if active
-		if (this.activeBackend === "webgl" && this.webglLayer) {
-			this.webglLayer.addPlacement({
-				textureId: placement.image_id,
-				x,
-				y,
-				width: displayWidth,
-				height: displayHeight,
-				zIndex: placement.z_index,
-				key,
-			});
-		}
-
-		this.render();
 	}
 
 	/**
@@ -548,101 +505,26 @@ export class ImageLayer {
 	 * @param target - Deletion target
 	 */
 	deleteImages(target: ImageDeleteTarget): void {
-		const deletedImageIds: number[] = [];
-
-		switch (target.type) {
-			case "All":
-				this.placements.clear();
-				if (this.webglLayer) this.webglLayer.clearPlacements();
-				break;
-
-			case "AllIncludingHidden":
-				for (const imageId of this.images.keys()) {
-					deletedImageIds.push(imageId);
-				}
-				this.placements.clear();
-				this.images.clear();
-				if (this.webglLayer) {
-					this.webglLayer.clearPlacements();
-					for (const id of deletedImageIds) {
-						this.webglLayer.deleteTexture(id);
-					}
-				}
-				break;
-
-			case "ById":
-				for (const [key, active] of this.placements) {
-					if (active.placement.image_id === target.id) {
-						this.placements.delete(key);
-						if (this.webglLayer) this.webglLayer.removePlacement(key);
-					}
-				}
-				this.images.delete(target.id);
-				if (this.webglLayer) this.webglLayer.deleteTexture(target.id);
-				deletedImageIds.push(target.id);
-				break;
-
-			case "ByPlacement":
-				{
-					const key = `${target.image_id}:${target.placement_id}`;
-					this.placements.delete(key);
-					if (this.webglLayer) this.webglLayer.removePlacement(key);
-				}
-				break;
-
-			case "AtCursor":
-				for (const [key, active] of this.placements) {
-					if (
-						active.placement.row === target.row &&
-						active.placement.col === target.col
-					) {
-						this.placements.delete(key);
-						if (this.webglLayer) this.webglLayer.removePlacement(key);
-					}
-				}
-				break;
-
-			case "ByZIndex":
-				for (const [key, active] of this.placements) {
-					if (active.placement.z_index === target.z_index) {
-						this.placements.delete(key);
-						if (this.webglLayer) this.webglLayer.removePlacement(key);
-					}
-				}
-				break;
-
-			case "ByRow":
-				for (const [key, active] of this.placements) {
-					if (active.placement.row === target.row) {
-						this.placements.delete(key);
-						if (this.webglLayer) this.webglLayer.removePlacement(key);
-					}
-				}
-				break;
-
-			case "ByColumn":
-				for (const [key, active] of this.placements) {
-					if (active.placement.col === target.col) {
-						this.placements.delete(key);
-						if (this.webglLayer) this.webglLayer.removePlacement(key);
-					}
-				}
-				break;
-		}
-
-		// Clear cache for deleted images
-		if (this.cache) {
-			for (const id of deletedImageIds) {
-				this.cache.deleteByImageId(id);
-			}
-		}
-
-		// Clean up progressive loading state
-		for (const id of deletedImageIds) {
-			this.progressiveImages.delete(id);
-		}
-
+		deletePlacementImages(this.getPlacementContext(), target);
 		this.render();
+	}
+
+	/**
+	 * Build the placement context for extracted placement functions.
+	 */
+	private getPlacementContext(): PlacementContext {
+		return {
+			images: this.images,
+			placements: this.placements,
+			charWidth: this.charWidth,
+			charHeight: this.charHeight,
+			paddingX: this.paddingX,
+			paddingY: this.paddingY,
+			webglLayer: this.webglLayer,
+			activeBackend: this.activeBackend,
+			cache: this.cache,
+			progressiveImages: this.progressiveImages,
+		};
 	}
 
 	/**
@@ -834,40 +716,7 @@ export class ImageLayer {
 	 * @param delta - Number of lines scrolled (positive = down, negative = up)
 	 */
 	scrollPlacements(delta: number): void {
-		const keysToDelete: string[] = [];
-
-		for (const [key, active] of this.placements) {
-			const newRow = active.placement.row + delta;
-			if (newRow < 0) {
-				keysToDelete.push(key);
-			} else {
-				active.placement.row = newRow;
-				active.y =
-					this.paddingY + newRow * this.charHeight + active.placement.y_offset;
-			}
-		}
-
-		for (const key of keysToDelete) {
-			this.placements.delete(key);
-			if (this.webglLayer) this.webglLayer.removePlacement(key);
-		}
-
-		// Update WebGL placements
-		if (this.webglLayer) {
-			this.webglLayer.clearPlacements();
-			for (const [key, active] of this.placements) {
-				this.webglLayer.addPlacement({
-					textureId: active.placement.image_id,
-					x: active.x,
-					y: active.y,
-					width: active.displayWidth,
-					height: active.displayHeight,
-					zIndex: active.placement.z_index,
-					key,
-				});
-			}
-		}
-
+		scrollPlacementRows(this.getPlacementContext(), delta);
 		this.render();
 	}
 
@@ -875,26 +724,14 @@ export class ImageLayer {
 	 * Get placements at a specific cell position.
 	 */
 	getPlacementsAtPosition(row: number, col: number): ActivePlacement[] {
-		const result: ActivePlacement[] = [];
-		for (const active of this.placements.values()) {
-			if (active.placement.row === row && active.placement.col === col) {
-				result.push(active);
-			}
-		}
-		return result;
+		return queryPlacementsAtPosition(this.placements, row, col);
 	}
 
 	/**
 	 * Get all placements for an image.
 	 */
 	getPlacementsForImage(imageId: number): ActivePlacement[] {
-		const result: ActivePlacement[] = [];
-		for (const active of this.placements.values()) {
-			if (active.placement.image_id === imageId) {
-				result.push(active);
-			}
-		}
-		return result;
+		return queryPlacementsForImage(this.placements, imageId);
 	}
 
 	/**
