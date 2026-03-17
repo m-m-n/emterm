@@ -104,6 +104,7 @@ pub fn run() {
             tauri_commands::append_download_chunk,
             tauri_commands::finish_download_file,
             tauri_commands::cancel_download_file,
+            tauri_commands::get_diagnostic_flags,
         ])
         .setup(|app| {
             // Initialize custom logger for backend

@@ -164,6 +164,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Whether bold attribute brightens standard ANSI colors (0-7 -> 8-15). */
 	private boldBrightensAnsiColors: boolean = true;
 
+	/** Diagnostic: bypass differential rendering, always forceRender.
+	 *  Set via EMTERM_FORCE_FULL_RENDER=1 environment variable. */
+	private forceFullRender: boolean = false;
+
 	/** Glyph width cache: outer key = ctx.font string, inner key = character. */
 	private glyphWidthCache: Map<string, Map<string, number>> = new Map();
 
@@ -364,6 +368,18 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.renderTimer.start();
 
 		const state = this.pendingState;
+
+		// Diagnostic: bypass all differential rendering.
+		// Enable via env var: EMTERM_FORCE_FULL_RENDER=1 bun tauri dev
+		if (this.forceFullRender) {
+			this.forceRender(state);
+			const duration = this.renderTimer.end();
+			const monitor = getPerformanceMonitor();
+			if (monitor.isEnabled()) {
+				monitor.recordRender(duration);
+			}
+			return;
+		}
 
 		// When scrolled back, always do a full render
 		if (this.scrollOffset > 0) {
@@ -1780,6 +1796,15 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.hoverCol = col;
 		if (this.pendingState) {
 			this.scheduleRender(this.pendingState);
+		}
+	}
+
+	setDiagnosticFlags(flags: { forceFullRender?: boolean }): void {
+		if (flags.forceFullRender !== undefined) {
+			this.forceFullRender = flags.forceFullRender;
+			if (flags.forceFullRender) {
+				console.info("[INFO][RENDERER] Diagnostic: forceFullRender enabled (EMTERM_FORCE_FULL_RENDER=1)");
+			}
 		}
 	}
 
