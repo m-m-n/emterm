@@ -1342,7 +1342,19 @@ export class TerminalState implements TerminalStateAccessor {
       return true;
     } catch (e) {
       console.error("[ERROR][FRONTEND] Failed to recreate WASM core:", e);
+      // Null out all WASM-dependent references to prevent dangling pointers.
+      // This converts "null pointer passed to rust" errors into
+      // "WASM not initialized" errors, which are safer and recoverable.
       this.primaryWasmGrid = null;
+      this.alternateWasmGrid = null;
+      this.alternateBuffer = null;
+      this.alternateCursor = null;
+      this.useAlternate = false;
+      // Replace primary buffer/cursor with JS-only fallbacks (no WASM backing)
+      // to prevent "null pointer passed to rust" from stale WASM references.
+      this.primaryBuffer = new UnifiedBuffer(cols, rows, 0);
+      this.primaryCursor = new CursorState(cols, rows);
+      this.cursor = this.primaryCursor;
       return false;
     }
   }
