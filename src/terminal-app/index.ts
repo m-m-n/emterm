@@ -134,6 +134,15 @@ export class TerminalApp {
     );
     this.renderer = await createRendererAsync(terminalContainer, fontFamily, fontSize);
 
+    // Apply diagnostic flags from environment variables
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const flags = await invoke<Record<string, boolean>>("get_diagnostic_flags");
+      this.renderer.setDiagnosticFlags(flags);
+    } catch {
+      // Non-fatal: diagnostic flags are optional
+    }
+
     // Apply cached settings to the newly created renderer
     // (applySettings runs before tabManager exists, so renderer notifications are dropped)
     const cachedSettings = SettingsService.getCached();

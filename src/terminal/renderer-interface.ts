@@ -154,6 +154,11 @@ export interface ITerminalRenderer {
 	 * @param col - Display column
 	 */
 	setHoverPosition(row: number, col: number): void;
+
+	/**
+	 * Set diagnostic flags for debugging rendering issues.
+	 */
+	setDiagnosticFlags(flags: { forceFullRender?: boolean }): void;
 }
 
 /**
