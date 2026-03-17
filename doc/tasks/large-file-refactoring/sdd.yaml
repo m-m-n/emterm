@@ -1,0 +1,96 @@
+schema_version: 1
+feature: large-file-refactoring
+scale: full
+created: 2026-03-17
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    rust-backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+    wasm:
+      language: rust
+      build_command: "cd wasm && wasm-pack build"
+      test_command: "cd wasm && cargo test"
+      format_command: "cd wasm && cargo fmt"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: d280e231c2edb637fad0421eeac3e46ca768da2c
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: d280e231c2edb637fad0421eeac3e46ca768da2c
+  - id: verify-plan
+    status: completed
+    completed_at_commit: d280e231c2edb637fad0421eeac3e46ca768da2c
+  - id: implement
+    status: completed
+    completed_at_commit: d280e231c2edb637fad0421eeac3e46ca768da2c
+  - id: check
+    status: completed
+    completed_at_commit: d280e231c2edb637fad0421eeac3e46ca768da2c
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: d280e231c2edb637fad0421eeac3e46ca768da2c
+  - id: review
+    status: completed
+    completed_at_commit: d280e231c2edb637fad0421eeac3e46ca768da2c
+
+requirements:
+  FR1:
+    title: terminal-app/index.ts decomposition
+    status: ok
+    tasks: [Phase 1]
+    tests: [TS-01, TS-02, TS-05]
+  FR2:
+    title: canvas-renderer.ts decomposition
+    status: ok
+    tasks: [Phase 2]
+    tests: [TS-01, TS-02, TS-05]
+  FR3:
+    title: state.ts decomposition
+    status: ok
+    tasks: [Phase 3]
+    tests: [TS-01, TS-02, TS-05]
+  FR4:
+    title: unified-buffer.ts decomposition
+    status: ok
+    tasks: [Phase 4]
+    tests: [TS-01, TS-02]
+  FR5:
+    title: layer.ts decomposition
+    status: ok
+    tasks: [Phase 5]
+    tests: [TS-01, TS-02]
+  FR6:
+    title: terminal_core.rs decomposition
+    status: ok
+    tasks: [Phase 6]
+    tests: [TS-03, TS-04]
+  NFR1:
+    title: Backward Compatibility
+    status: ok
+    tasks: [Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, Phase 6]
+    tests: [TS-07]
+  NFR2:
+    title: Performance
+    status: ok
+    tasks: []
+    tests: [TS-05]
+  NFR3:
+    title: Code Quality
+    status: ok
+    tasks: [Phase 1, Phase 2, Phase 3, Phase 4, Phase 5, Phase 6]
+    tests: [TS-06]

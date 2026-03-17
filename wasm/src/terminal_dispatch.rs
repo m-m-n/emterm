@@ -25,9 +25,8 @@ impl TerminalCore {
         let len = data.len();
 
         // Pre-check conditions for ASCII fast path eligibility
-        let can_fast_ascii = self.active_charset == 0
-            && self.g0_charset == 0
-            && !self.kitty_placeholder_active;
+        let can_fast_ascii =
+            self.active_charset == 0 && self.g0_charset == 0 && !self.kitty_placeholder_active;
 
         // === Bulk scroll skip-ahead ===
         // When data contains far more newlines than the ring capacity,
@@ -90,10 +89,7 @@ impl TerminalCore {
         while pos < len {
             // === ASCII fast path ===
             // Process runs of printable ASCII + CR/LF directly, bypassing parser
-            if can_fast_ascii
-                && parser.is_ground_clean()
-                && self.grapheme_buffer.is_empty()
-            {
+            if can_fast_ascii && parser.is_ground_clean() && self.grapheme_buffer.is_empty() {
                 let fast_start = pos;
                 while pos < len {
                     let b = data[pos];

@@ -38,7 +38,9 @@ impl TerminalCore {
 
         // Clear entries not referenced by any cell
         for (idx, entry) in self.hyperlink_table.iter_mut().enumerate() {
-            if idx == 0 { continue; } // index 0 is reserved (no hyperlink)
+            if idx == 0 {
+                continue;
+            } // index 0 is reserved (no hyperlink)
             if entry.is_some() && !live_ids.contains(&(idx as u16)) {
                 *entry = None;
             }
@@ -66,26 +68,26 @@ impl TerminalCore {
         }
 
         let action_type: u8 = match param {
-            0 => 0,       // SetTitleAndIcon
-            1 => 1,       // SetIconName
-            2 => 2,       // SetTitle
-            4 => 4,       // SetColorPalette
-            7 => 7,       // SetWorkingDirectory
-            8 => 8,       // Hyperlink
-            9 => 9,       // Notification
-            10 => 10,     // SetForegroundColor
-            11 => 11,     // SetBackgroundColor
-            12 => 12,     // SetCursorColor
-            22 => 22,     // CursorShape
-            52 => 52,     // Clipboard
-            104 => 104,   // ResetColorPalette
-            110 => 110,   // ResetForegroundColor
-            111 => 111,   // ResetBackgroundColor
-            112 => 112,   // ResetCursorColor
-            133 => 133,   // SemanticPrompt
-            777 => 100,   // EmtermExtension (mapped to 100)
-            1337 => 101,  // iTerm2 protocol (mapped to 101, >255)
-            _ => 255,     // Unknown
+            0 => 0,      // SetTitleAndIcon
+            1 => 1,      // SetIconName
+            2 => 2,      // SetTitle
+            4 => 4,      // SetColorPalette
+            7 => 7,      // SetWorkingDirectory
+            8 => 8,      // Hyperlink
+            9 => 9,      // Notification
+            10 => 10,    // SetForegroundColor
+            11 => 11,    // SetBackgroundColor
+            12 => 12,    // SetCursorColor
+            22 => 22,    // CursorShape
+            52 => 52,    // Clipboard
+            104 => 104,  // ResetColorPalette
+            110 => 110,  // ResetForegroundColor
+            111 => 111,  // ResetBackgroundColor
+            112 => 112,  // ResetCursorColor
+            133 => 133,  // SemanticPrompt
+            777 => 100,  // EmtermExtension (mapped to 100)
+            1337 => 101, // iTerm2 protocol (mapped to 101, >255)
+            _ => 255,    // Unknown
         };
 
         self.fire_osc_callback(action_type, data);
