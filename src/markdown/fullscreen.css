@@ -123,13 +123,14 @@
 }
 
 .copy-code-button.copy-success {
-	background: #4caf50;
+	background: var(--markdown-link, #569cd6);
 	opacity: 1;
 	pointer-events: auto;
 }
 
 .copy-code-button.copy-error {
-	background: #f44336;
+	background: var(--md-sys-color-error, #F2B8B5);
+	color: var(--md-sys-color-on-error, #601410);
 	opacity: 1;
 	pointer-events: auto;
 }
@@ -381,12 +382,12 @@
 
 .mermaid-view-btn:hover {
 	background: var(--markdown-link, #569cd6);
-	color: #ffffff;
+	color: var(--markdown-heading, #ffffff);
 }
 
 .mermaid-view-btn.active {
 	background: var(--markdown-link, #569cd6);
-	color: #ffffff;
+	color: var(--markdown-heading, #ffffff);
 }
 
 .mermaid-view-btn svg {
@@ -412,18 +413,29 @@
 /* Mermaid SVG dark theme overrides */
 .mermaid-diagram .actor-man line,
 .mermaid-diagram .actor-man circle {
-	stroke: #808080;
+	stroke: var(--markdown-blockquote, #808080);
 }
 
 .mermaid-diagram text {
-	fill: #d4d4d4 !important;
+	fill: var(--markdown-fg, #d4d4d4) !important;
 }
 
 .mermaid-diagram .messageText {
-	fill: #d4d4d4 !important;
+	fill: var(--markdown-fg, #d4d4d4) !important;
 }
 
 .mermaid-diagram .loopText,
 .mermaid-diagram .loopText > tspan {
-	fill: #b0b0b0 !important;
+	fill: var(--markdown-blockquote, #b0b0b0) !important;
+}
+
+/* Mermaid syntax error banner */
+.mermaid-error-banner {
+	padding: 6px 12px;
+	border-radius: var(--md-sys-shape-corner-small);
+	background: color-mix(in srgb, var(--md-sys-color-error, #F2B8B5) 15%, transparent);
+	border: 1px solid color-mix(in srgb, var(--md-sys-color-error, #F2B8B5) 40%, transparent);
+	color: var(--md-sys-color-error, #F2B8B5);
+	font-size: 0.85em;
+	margin-bottom: 8px;
 }
