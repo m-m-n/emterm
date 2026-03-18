@@ -97,10 +97,16 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Container element. */
 	private container: HTMLElement;
 
-	/** Canvas element. */
+	/** Canvas element (visible, front buffer). */
 	private canvas: HTMLCanvasElement;
 
-	/** 2D rendering context. */
+	/** Front buffer 2D context (used only for final blit from back buffer). */
+	private frontCtx: CanvasRenderingContext2D;
+
+	/** Back buffer canvas (off-screen, all rendering happens here). */
+	private backCanvas: HTMLCanvasElement;
+
+	/** 2D rendering context (points to back buffer). */
 	private ctx: CanvasRenderingContext2D;
 
 	/** Font family. */
@@ -234,17 +240,24 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.fontFamily = fontFamily;
 		this.fontSize = fontSize;
 
-		// Create canvas element
+		// Create visible (front) canvas element
 		this.canvas = document.createElement("canvas");
 		this.canvas.style.display = "block";
 		this.container.appendChild(this.canvas);
 
-		// Get 2D context
-		const ctx = this.canvas.getContext("2d");
-		if (!ctx) {
-			throw new Error("Failed to get 2D rendering context");
+		const frontCtx = this.canvas.getContext("2d");
+		if (!frontCtx) {
+			throw new Error("Failed to get 2D rendering context for front buffer");
 		}
-		this.ctx = ctx;
+		this.frontCtx = frontCtx;
+
+		// Create off-screen (back) canvas for double buffering
+		this.backCanvas = document.createElement("canvas");
+		const backCtx = this.backCanvas.getContext("2d");
+		if (!backCtx) {
+			throw new Error("Failed to get 2D rendering context for back buffer");
+		}
+		this.ctx = backCtx;
 
 		// Initialize canvas with DPR support
 		this.setupCanvas();
@@ -272,7 +285,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			fontSize: this.fontSize,
 			fontFamily: this.fontFamily,
 			dpr: this.dpr,
-			canvas: this.canvas,
+			canvas: this.backCanvas,
 			currentForeground: this.currentForeground,
 			currentBackground: this.currentBackground,
 			currentPalette256: this.currentPalette256,
@@ -384,12 +397,25 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const width = rect.width || 800;
 		const height = rect.height || 600;
 
-		this.canvas.width = Math.floor(width * this.dpr);
-		this.canvas.height = Math.floor(height * this.dpr);
+		const pxWidth = Math.floor(width * this.dpr);
+		const pxHeight = Math.floor(height * this.dpr);
+
+		// Resize back buffer FIRST so it's ready before the front buffer clears.
+		// Setting canvas.width/height clears the bitmap, so we want the front
+		// buffer (visible) to be cleared as late as possible — the next
+		// forceRender() + blitToFront() will repaint it immediately after.
+		this.backCanvas.width = pxWidth;
+		this.backCanvas.height = pxHeight;
+
+		// Apply DPR scaling to back buffer only (setTransform resets any prior transform).
+		// frontCtx must NOT have a transform — blitToFront() copies raw pixels 1:1.
+		this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+
+		// Front buffer (visible) — resized last to minimize blank-frame exposure
+		this.canvas.width = pxWidth;
+		this.canvas.height = pxHeight;
 		this.canvas.style.width = `${width}px`;
 		this.canvas.style.height = `${height}px`;
-
-		this.ctx.scale(this.dpr, this.dpr);
 
 		this.ctx.textBaseline = "alphabetic";
 		this.ctx.font = `${this.fontSize}px ${this.fontFamily}`;
@@ -534,8 +560,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 			const scrollCount = state.getScrollEventCount();
 			state.clearScrollEvent();
 			const shiftPx = scrollCount * this.charHeight;
-			const canvasW = this.canvas.width / this.dpr;
-			const canvasH = this.canvas.height / this.dpr;
+			const canvasW = this.backCanvas.width / this.dpr;
+			const canvasH = this.backCanvas.height / this.dpr;
 			if (this.flickerDebug) console.warn(
 				`[WARN][FRONTEND] flicker-debug: scroll-optimization` +
 				` | count=${scrollCount} shiftPx=${shiftPx} canvasH=${canvasH}` +
@@ -544,9 +570,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 			if (shiftPx > 0 && shiftPx < canvasH) {
 				const srcOffsetPx = Math.round(shiftPx * this.dpr);
 				this.ctx.drawImage(
-					this.canvas,
+					this.backCanvas,
 					0, srcOffsetPx,
-					this.canvas.width, this.canvas.height - srcOffsetPx,
+					this.backCanvas.width, this.backCanvas.height - srcOffsetPx,
 					0, 0,
 					canvasW, canvasH - shiftPx,
 				);
@@ -715,6 +741,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// Clear per-frame detection cache
 		this.detectionCache.clear();
 
+		// Blit back buffer to front buffer (atomic update)
+		this.blitToFront();
+
 		// Record performance metrics
 		const duration = this.renderTimer.end();
 		const monitor = getPerformanceMonitor();
@@ -764,6 +793,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 					` | cursor=(${this.pendingState.cursorCol},${this.pendingState.cursorRow}) visible=${this.pendingState.cursorVisible}`,
 				);
 				this.renderCursorArea(this.pendingState);
+				this.blitToFront();
 			}
 		});
 		this.cursorBlinkTimer = blinkState.cursorBlinkTimer;
@@ -848,8 +878,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.renderVisibleLines = visibleLines;
 
 		const rctx = this.getLineRenderContext();
-		const canvasWidth = this.canvas.width / this.dpr;
-		const canvasHeight = this.canvas.height / this.dpr;
+		const canvasWidth = this.backCanvas.width / this.dpr;
+		const canvasHeight = this.backCanvas.height / this.dpr;
 		const bgCSS = rgbToCSS(this.currentBackground);
 
 		// Pre-parse packed data
@@ -938,6 +968,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.prevCursorRow = state.cursorRow;
 			this.prevCursorVisible = state.cursorVisible;
 		}
+
+		// Blit back buffer to front buffer (atomic update)
+		this.blitToFront();
 	}
 
 	// ── Resize ────────────────────────────────────────────────
@@ -1153,6 +1186,17 @@ export class CanvasRenderer implements ITerminalRenderer {
 		}
 	}
 
+	// ── Double buffering ─────────────────────────────────────
+
+	/**
+	 * Blit back buffer to front buffer in a single drawImage call.
+	 * This makes the canvas update atomic from the compositor's perspective,
+	 * preventing intermediate render states from being visible.
+	 */
+	private blitToFront(): void {
+		this.frontCtx.drawImage(this.backCanvas, 0, 0);
+	}
+
 	// ── Dispose ───────────────────────────────────────────────
 
 	dispose(): void {
@@ -1170,6 +1214,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (this.canvas.parentNode) {
 			this.canvas.parentNode.removeChild(this.canvas);
 		}
+
+		// Release GPU memory for both canvas buffers
+		this.canvas.width = 0;
+		this.canvas.height = 0;
+		this.backCanvas.width = 0;
+		this.backCanvas.height = 0;
 
 		if (this.selectionState.selectionContainer?.parentNode) {
 			this.selectionState.selectionContainer.parentNode.removeChild(this.selectionState.selectionContainer);
