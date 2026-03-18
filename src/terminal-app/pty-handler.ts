@@ -141,14 +141,30 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
           registeredCore = core;
         }
 
+        const prevCursorCol = currentState.cursorCol;
+        const prevCursorRow = currentState.cursorRow;
+        const prevCursorVisible = currentState.cursorVisible;
+
         const consumed = core.process_pty_data(remaining);
 
         ctx.processPendingOscQueue();
         ctx.getImageHandler()?.processPendingApcQueue();
         ctx.getImageHandler()?.processPendingDcsQueue();
 
-        const prevCursorVisible = currentState.cursorVisible;
         currentState.syncModesFromWasm();
+
+        const postCursorCol = currentState.cursorCol;
+        const postCursorRow = currentState.cursorRow;
+        const postCursorVisible = currentState.cursorVisible;
+
+        if (currentRenderer.flickerDebug && prevCursorVisible !== postCursorVisible) {
+          console.warn(
+            `[WARN][FRONTEND] flicker-debug: pty-cursor-visibility-change` +
+            ` | before=${prevCursorVisible} after=${postCursorVisible}` +
+            ` | pos-before=(${prevCursorCol},${prevCursorRow}) pos-after=(${postCursorCol},${postCursorRow})` +
+            ` | consumed=${consumed}/${remaining.length} isAlt=${currentState.isAlternateBuffer}`,
+          );
+        }
 
         const modeActions = core.take_mode_actions();
         if (modeActions.length > 0) {
@@ -175,13 +191,29 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
         // When WASM interrupted at a cursor hidden->visible transition,
         // break to render the current state (e.g., vim search wrap message)
         // before processing the subsequent redraw that may clear it.
-        if (remaining.length > 0 && currentState.cursorVisible && !prevCursorVisible) {
+        if (remaining.length > 0 && postCursorVisible && !prevCursorVisible) {
+          if (currentRenderer.flickerDebug) console.warn(
+            `[WARN][FRONTEND] flicker-debug: cursor-show-interrupt` +
+            ` | remaining=${remaining.length} bytes` +
+            ` | cursor=(${postCursorCol},${postCursorRow})` +
+            ` | isAlt=${currentState.isAlternateBuffer}`,
+          );
           leftoverData = remaining;
           break;
         }
 
         // Check frame budget -- defer remaining data to next frame
         if (remaining.length > 0 && performance.now() >= deadline) {
+          if (currentRenderer.flickerDebug) {
+            const elapsed = performance.now() - (deadline - budget);
+            console.warn(
+              `[WARN][FRONTEND] flicker-debug: frame-budget-exceeded` +
+              ` | elapsed=${elapsed.toFixed(1)}ms budget=${budget}ms` +
+              ` | remaining=${remaining.length} bytes` +
+              ` | cursor=(${postCursorCol},${postCursorRow}) visible=${postCursorVisible}` +
+              ` | isAlt=${currentState.isAlternateBuffer}`,
+            );
+          }
           leftoverData = remaining;
           break;
         }
@@ -190,12 +222,23 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
       if (processed) {
         ctx.getOutputActivityCallback()?.();
 
+        if (currentRenderer.flickerDebug) console.warn(
+          `[WARN][FRONTEND] flicker-debug: renderImmediate` +
+          ` | cursor=(${currentState.cursorCol},${currentState.cursorRow}) visible=${currentState.cursorVisible}` +
+          ` | hasLeftover=${leftoverData !== null}` +
+          ` | isAlt=${currentState.isAlternateBuffer}`,
+        );
         currentRenderer.renderImmediate(currentState);
         ctx.getImeHandler()?.updatePosition();
       }
 
       // If there's leftover data, schedule next frame to continue
       if (leftoverData && !rafScheduled) {
+        if (currentRenderer.flickerDebug) console.warn(
+          `[WARN][FRONTEND] flicker-debug: scheduling-next-frame` +
+          ` | leftover=${leftoverData.length} bytes` +
+          ` | degraded=${rafDegraded}`,
+        );
         scheduleProcessing();
       }
     } catch (error) {

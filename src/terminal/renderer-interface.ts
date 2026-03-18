@@ -158,7 +158,10 @@ export interface ITerminalRenderer {
 	/**
 	 * Set diagnostic flags for debugging rendering issues.
 	 */
-	setDiagnosticFlags(flags: { forceFullRender?: boolean }): void;
+	setDiagnosticFlags(flags: { forceFullRender?: boolean; flickerDebug?: boolean }): void;
+
+	/** Diagnostic: flicker debug logging enabled (EMTERM_FLICKER_DEBUG=1). */
+	flickerDebug: boolean;
 }
 
 /**
