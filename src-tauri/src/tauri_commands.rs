@@ -578,17 +578,12 @@ pub fn cancel_download_file(
 ///
 /// Recognized env vars:
 /// - `EMTERM_FORCE_FULL_RENDER=1`: Bypass differential rendering
-/// - `EMTERM_FLICKER_DEBUG=1`: Enable flicker diagnostic logging
 #[tauri::command]
 pub fn get_diagnostic_flags() -> HashMap<String, bool> {
     let mut flags = HashMap::new();
     flags.insert(
         "forceFullRender".to_string(),
         std::env::var("EMTERM_FORCE_FULL_RENDER").map_or(false, |v| v == "1"),
-    );
-    flags.insert(
-        "flickerDebug".to_string(),
-        std::env::var("EMTERM_FLICKER_DEBUG").map_or(false, |v| v == "1"),
     );
     flags
 }

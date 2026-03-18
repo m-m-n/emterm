@@ -157,12 +157,19 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
         const postCursorRow = currentState.cursorRow;
         const postCursorVisible = currentState.cursorVisible;
 
-        if (currentRenderer.flickerDebug && prevCursorVisible !== postCursorVisible) {
+        // Diagnostic: log when cursor becomes visible unexpectedly (conpty investigation)
+        if (postCursorVisible && !prevCursorVisible) {
+          const chunkForLog = remaining.subarray(0, Math.min(consumed, 128));
+          const hex = Array.from(chunkForLog).map(b => b.toString(16).padStart(2, "0")).join(" ");
+          const printable = Array.from(chunkForLog).map(b =>
+            b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".",
+          ).join("");
           console.warn(
-            `[WARN][FRONTEND] flicker-debug: pty-cursor-visibility-change` +
-            ` | before=${prevCursorVisible} after=${postCursorVisible}` +
-            ` | pos-before=(${prevCursorCol},${prevCursorRow}) pos-after=(${postCursorCol},${postCursorRow})` +
-            ` | consumed=${consumed}/${remaining.length} isAlt=${currentState.isAlternateBuffer}`,
+            `[WARN][FRONTEND] cursor-visible-transition: false→true` +
+            ` | consumed=${consumed} remaining=${remaining.length}` +
+            ` | pos=(${postCursorCol},${postCursorRow})` +
+            ` | hex[0..${chunkForLog.length}]: ${hex}` +
+            ` | ascii: ${printable}`,
           );
         }
 
@@ -192,28 +199,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
         // break to render the current state (e.g., vim search wrap message)
         // before processing the subsequent redraw that may clear it.
         if (remaining.length > 0 && postCursorVisible && !prevCursorVisible) {
-          if (currentRenderer.flickerDebug) console.warn(
-            `[WARN][FRONTEND] flicker-debug: cursor-show-interrupt` +
-            ` | remaining=${remaining.length} bytes` +
-            ` | cursor=(${postCursorCol},${postCursorRow})` +
-            ` | isAlt=${currentState.isAlternateBuffer}`,
-          );
           leftoverData = remaining;
           break;
         }
 
         // Check frame budget -- defer remaining data to next frame
         if (remaining.length > 0 && performance.now() >= deadline) {
-          if (currentRenderer.flickerDebug) {
-            const elapsed = performance.now() - (deadline - budget);
-            console.warn(
-              `[WARN][FRONTEND] flicker-debug: frame-budget-exceeded` +
-              ` | elapsed=${elapsed.toFixed(1)}ms budget=${budget}ms` +
-              ` | remaining=${remaining.length} bytes` +
-              ` | cursor=(${postCursorCol},${postCursorRow}) visible=${postCursorVisible}` +
-              ` | isAlt=${currentState.isAlternateBuffer}`,
-            );
-          }
           leftoverData = remaining;
           break;
         }
@@ -222,23 +213,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
       if (processed) {
         ctx.getOutputActivityCallback()?.();
 
-        if (currentRenderer.flickerDebug) console.warn(
-          `[WARN][FRONTEND] flicker-debug: renderImmediate` +
-          ` | cursor=(${currentState.cursorCol},${currentState.cursorRow}) visible=${currentState.cursorVisible}` +
-          ` | hasLeftover=${leftoverData !== null}` +
-          ` | isAlt=${currentState.isAlternateBuffer}`,
-        );
         currentRenderer.renderImmediate(currentState);
         ctx.getImeHandler()?.updatePosition();
       }
 
       // If there's leftover data, schedule next frame to continue
       if (leftoverData && !rafScheduled) {
-        if (currentRenderer.flickerDebug) console.warn(
-          `[WARN][FRONTEND] flicker-debug: scheduling-next-frame` +
-          ` | leftover=${leftoverData.length} bytes` +
-          ` | degraded=${rafDegraded}`,
-        );
         scheduleProcessing();
       }
     } catch (error) {
