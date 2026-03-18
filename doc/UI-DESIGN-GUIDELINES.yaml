@@ -684,6 +684,18 @@ components:
       content-max-width: 900px
       content-padding: 2rem 3rem
 
+      mermaid-error-banner:
+        class: .mermaid-error-banner
+        description: "Mermaid syntax error notification above preserved code block"
+        properties:
+          padding: 6px 12px
+          border-radius: corner-small
+          background: color-mix(in srgb, error 15%, transparent)
+          border: 1px solid color-mix(in srgb, error 40%, transparent)
+          color: error
+          font-size: 0.85em
+          margin-bottom: 8px
+
   # ============================================================================
   # Search Bar (Terminal)
   # ============================================================================
