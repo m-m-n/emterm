@@ -194,6 +194,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 *  Set via EMTERM_FORCE_FULL_RENDER=1 environment variable. */
 	private forceFullRender: boolean = false;
 
+	/** Diagnostic: enable flicker debug logging.
+	 *  Set via EMTERM_FLICKER_DEBUG=1 environment variable. */
+	flickerDebug: boolean = false;
+
 	/** Glyph width cache: outer key = ctx.font string, inner key = character. */
 	private glyphWidthCache: Map<string, Map<string, number>> = new Map();
 
@@ -496,6 +500,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const state = this.pendingState;
 
 		if (this.forceFullRender) {
+			if (this.flickerDebug) console.warn(
+				`[WARN][FRONTEND] flicker-debug: forceFullRender triggered` +
+				` | cursor=(${state.cursorCol},${state.cursorRow}) visible=${state.cursorVisible}` +
+				` | isAlt=${state.isAlternateBuffer}`,
+			);
 			this.forceRender(state);
 			const duration = this.renderTimer.end();
 			const monitor = getPerformanceMonitor();
@@ -506,6 +515,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 		}
 
 		if (this.scrollOffset > 0) {
+			if (this.flickerDebug) console.warn(
+				`[WARN][FRONTEND] flicker-debug: scrollOffset>0 forceRender` +
+				` | offset=${this.scrollOffset}` +
+				` | cursor=(${state.cursorCol},${state.cursorRow}) visible=${state.cursorVisible}`,
+			);
 			this.forceRender(state);
 			const duration = this.renderTimer.end();
 			const monitor = getPerformanceMonitor();
@@ -522,6 +536,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 			const shiftPx = scrollCount * this.charHeight;
 			const canvasW = this.canvas.width / this.dpr;
 			const canvasH = this.canvas.height / this.dpr;
+			if (this.flickerDebug) console.warn(
+				`[WARN][FRONTEND] flicker-debug: scroll-optimization` +
+				` | count=${scrollCount} shiftPx=${shiftPx} canvasH=${canvasH}` +
+				` | cursor=(${state.cursorCol},${state.cursorRow}) visible=${state.cursorVisible}`,
+			);
 			if (shiftPx > 0 && shiftPx < canvasH) {
 				const srcOffsetPx = Math.round(shiftPx * this.dpr);
 				this.ctx.drawImage(
@@ -539,6 +558,16 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const buffer = state.getActiveBuffer();
 		const dirtyRows = state.getDirtyRows();
 		const bufferRows = buffer.rows;
+
+		if (this.flickerDebug && dirtyRows.length > 0) {
+			console.warn(
+				`[WARN][FRONTEND] flicker-debug: diff-render` +
+				` | dirty=${dirtyRows.length}/${bufferRows}` +
+				` | rows=[${dirtyRows.length <= 10 ? dirtyRows.join(",") : dirtyRows.slice(0, 5).join(",") + "..." + dirtyRows.slice(-5).join(",")}]` +
+				` | cursor=(${state.cursorCol},${state.cursorRow}) visible=${state.cursorVisible}` +
+				` | isAlt=${state.isAlternateBuffer}`,
+			);
+		}
 
 		if (dirtyRows.length > bufferRows * 0.4) {
 			console.warn(
@@ -606,10 +635,22 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.prevCursorRow !== state.cursorRow;
 		const cursorBecameInvisible =
 			this.prevCursorVisible && !state.cursorVisible;
+		const cursorBecameVisible =
+			!this.prevCursorVisible && state.cursorVisible;
 		const prevRowNeedsRedraw =
 			this.prevCursorRow >= 0 &&
 			(cursorMoved || cursorBecameInvisible) &&
 			!dirtyRows.includes(this.prevCursorRow);
+
+		if (this.flickerDebug && (cursorMoved || cursorBecameInvisible || cursorBecameVisible)) {
+			console.warn(
+				`[WARN][FRONTEND] flicker-debug: cursor-state-change` +
+				` | prev=(${this.prevCursorCol},${this.prevCursorRow}) prevVis=${this.prevCursorVisible}` +
+				` | now=(${state.cursorCol},${state.cursorRow}) nowVis=${state.cursorVisible}` +
+				` | moved=${cursorMoved} becameInvis=${cursorBecameInvisible} becameVis=${cursorBecameVisible}` +
+				` | prevRowRedraw=${prevRowNeedsRedraw} dirtyCount=${dirtyRows.length}`,
+			);
+		}
 
 		if (prevRowNeedsRedraw) {
 			const prevPacked = state.getRowPacked(this.prevCursorRow);
@@ -717,6 +758,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 		startCursorBlinkImpl(blinkState, () => {
 			this.cursorBlinkVisible = blinkState.cursorBlinkVisible;
 			if (this.pendingState) {
+				if (this.flickerDebug) console.warn(
+					`[WARN][FRONTEND] flicker-debug: blink-tick` +
+					` | blinkVisible=${this.cursorBlinkVisible}` +
+					` | cursor=(${this.pendingState.cursorCol},${this.pendingState.cursorRow}) visible=${this.pendingState.cursorVisible}`,
+				);
 				this.renderCursorArea(this.pendingState);
 			}
 		});
@@ -784,6 +830,12 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	forceRender(state: TerminalState): void {
 		this.pendingState = state;
+
+		if (this.flickerDebug) console.warn(
+			`[WARN][FRONTEND] flicker-debug: forceRender-entry` +
+			` | cursor=(${state.cursorCol},${state.cursorRow}) visible=${state.cursorVisible}` +
+			` | scrollOffset=${this.scrollOffset} isAlt=${state.isAlternateBuffer}`,
+		);
 
 		const foldManager = state.getFoldManager();
 		const collapsedRegions = foldManager.getCollapsedRegions();
@@ -1076,11 +1128,17 @@ export class CanvasRenderer implements ITerminalRenderer {
 		}
 	}
 
-	setDiagnosticFlags(flags: { forceFullRender?: boolean }): void {
+	setDiagnosticFlags(flags: { forceFullRender?: boolean; flickerDebug?: boolean }): void {
 		if (flags.forceFullRender !== undefined) {
 			this.forceFullRender = flags.forceFullRender;
 			if (flags.forceFullRender) {
 				console.info("[INFO][RENDERER] Diagnostic: forceFullRender enabled (EMTERM_FORCE_FULL_RENDER=1)");
+			}
+		}
+		if (flags.flickerDebug !== undefined) {
+			this.flickerDebug = flags.flickerDebug;
+			if (flags.flickerDebug) {
+				console.info("[INFO][RENDERER] Diagnostic: flickerDebug enabled (EMTERM_FLICKER_DEBUG=1)");
 			}
 		}
 	}
