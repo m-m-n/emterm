@@ -847,13 +847,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 		this.renderVisibleLines = visibleLines;
 
-		// Clear entire canvas
-		this.ctx.fillStyle = rgbToCSS(this.currentBackground);
+		const rctx = this.getLineRenderContext();
 		const canvasWidth = this.canvas.width / this.dpr;
 		const canvasHeight = this.canvas.height / this.dpr;
-		this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
-		const rctx = this.getLineRenderContext();
+		const bgCSS = rgbToCSS(this.currentBackground);
 
 		// Pre-parse packed data
 		const packedSpans: (TextSpan[] | null)[] = new Array(visibleLines.length).fill(null);
@@ -867,13 +864,19 @@ export class CanvasRenderer implements ITerminalRenderer {
 			}
 		}
 
-		// Two-pass rendering
-		// Pass 1: backgrounds
+		// Two-pass rendering (no full-canvas clear to avoid flicker)
+		// Pass 1: backgrounds — each row fills its full width, overwriting old content.
+		// Null/undefined rows get a default background fill to prevent stale content.
 		for (let row = 0; row < visibleLines.length; row++) {
 			const line = visibleLines[row];
-			if (line === null) {
-				// Summary line placeholder
-			} else if (line) {
+			if (line === null || !line) {
+				// Null (fold summary placeholder) or undefined: fill with default background
+				const y = row * this.charHeight;
+				const fillY = Math.floor(y);
+				const fillNextY = Math.ceil((row + 1) * this.charHeight);
+				this.ctx.fillStyle = bgCSS;
+				this.ctx.fillRect(0, fillY, canvasWidth, fillNextY - fillY);
+			} else {
 				const spans = packedSpans[row];
 				if (spans) {
 					renderLineBackgroundFromSpansImpl(rctx, row, spans);
@@ -881,6 +884,13 @@ export class CanvasRenderer implements ITerminalRenderer {
 					renderLineBackgroundImpl(rctx, row, line);
 				}
 			}
+		}
+
+		// Clear area below the last visible row
+		const lastRowBottom = Math.ceil(visibleLines.length * this.charHeight);
+		if (lastRowBottom < canvasHeight) {
+			this.ctx.fillStyle = bgCSS;
+			this.ctx.fillRect(0, lastRowBottom, canvasWidth, canvasHeight - lastRowBottom);
 		}
 
 		// Pass 2: text
