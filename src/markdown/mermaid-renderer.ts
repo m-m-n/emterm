@@ -12,7 +12,7 @@ import { t } from "../i18n/index.ts";
 /** Mermaid API interface for dynamic import */
 interface MermaidAPI {
 	initialize: (config: Record<string, unknown>) => void;
-	render: (id: string, source: string) => Promise<{ svg: string }>;
+	render: (id: string, source: string, container?: HTMLElement) => Promise<{ svg: string }>;
 }
 
 /** Chart icon SVG (flowchart nodes) */
@@ -72,6 +72,7 @@ export class MermaidRenderer {
 
 		this.mermaid.initialize({
 			startOnLoad: false,
+			suppressErrorRendering: true,
 			theme: "dark",
 			securityLevel: "strict",
 			fontFamily: "sans-serif",
@@ -118,8 +119,13 @@ export class MermaidRenderer {
 		const source = codeElement.textContent || "";
 		const id = `mermaid-${++this.renderCounter}`;
 
+		// Use a hidden container to prevent mermaid from polluting document.body
+		const hiddenContainer = document.createElement("div");
+		hiddenContainer.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:800px;height:600px;overflow:hidden;visibility:hidden";
+		document.body.appendChild(hiddenContainer);
+
 		try {
-			const { svg } = await this.mermaid.render(id, source);
+			const { svg } = await this.mermaid.render(id, source, hiddenContainer);
 
 			// Find the code-block-wrapper created by addCopyButtons()
 			const existingWrapper = pre.parentElement?.classList.contains("code-block-wrapper")
@@ -213,6 +219,26 @@ export class MermaidRenderer {
 			});
 		} catch (err) {
 			console.warn("[WARN][FRONTEND] MermaidRenderer: failed to render block", err);
+
+			// Clean up any mermaid-injected elements that leaked into document.body
+			// Mermaid creates a temporary div with id "d" + renderId in document.body
+			const leakedEl = document.getElementById(`d${id}`);
+			if (leakedEl) {
+				leakedEl.remove();
+			}
+
+			// Show error banner above the preserved code block
+			const wrapper = pre.parentElement?.classList.contains("code-block-wrapper")
+				? pre.parentElement
+				: pre.parentNode;
+			if (wrapper) {
+				const banner = document.createElement("div");
+				banner.className = "mermaid-error-banner";
+				banner.textContent = t("markdown.mermaidSyntaxError");
+				wrapper.insertBefore(banner, pre);
+			}
+		} finally {
+			hiddenContainer.remove();
 		}
 	}
 }

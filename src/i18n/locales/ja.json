@@ -386,7 +386,8 @@
     "copyFailed": "\u5931\u6557",
     "outline": "\u30c9\u30ad\u30e5\u30e1\u30f3\u30c8\u30a2\u30a6\u30c8\u30e9\u30a4\u30f3",
     "mermaidChart": "\u30c1\u30e3\u30fc\u30c8",
-    "mermaidCode": "\u30b3\u30fc\u30c9"
+    "mermaidCode": "\u30b3\u30fc\u30c9",
+    "mermaidSyntaxError": "Mermaid: \u69cb\u6587\u30a8\u30e9\u30fc"
   },
   "zoom": {
     "closeViewer": "\u30d3\u30e5\u30fc\u30a2\u3092\u9589\u3058\u308b",
