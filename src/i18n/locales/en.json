@@ -386,7 +386,8 @@
     "copyFailed": "Failed",
     "outline": "Document Outline",
     "mermaidChart": "Chart",
-    "mermaidCode": "Code"
+    "mermaidCode": "Code",
+    "mermaidSyntaxError": "Mermaid: syntax error"
   },
   "zoom": {
     "closeViewer": "Close viewer",
