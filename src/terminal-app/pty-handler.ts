@@ -159,17 +159,25 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
 
         // Diagnostic: log when cursor becomes visible unexpectedly (conpty investigation)
         if (postCursorVisible && !prevCursorVisible) {
-          const chunkForLog = remaining.subarray(0, Math.min(consumed, 128));
-          const hex = Array.from(chunkForLog).map(b => b.toString(16).padStart(2, "0")).join(" ");
-          const printable = Array.from(chunkForLog).map(b =>
-            b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".",
-          ).join("");
+          const chunk = remaining.subarray(0, consumed);
+          // Search for \e[?25h (1b 5b 3f 32 35 68) in entire chunk
+          const showSeq = [0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x68];
+          const hideSeq = [0x1b, 0x5b, 0x3f, 0x32, 0x35, 0x6c];
+          const showPositions: number[] = [];
+          const hidePositions: number[] = [];
+          for (let i = 0; i <= chunk.length - 6; i++) {
+            if (chunk[i] === 0x1b && chunk[i+1] === 0x5b && chunk[i+2] === 0x3f &&
+                chunk[i+3] === 0x32 && chunk[i+4] === 0x35) {
+              if (chunk[i+5] === 0x68) showPositions.push(i);
+              else if (chunk[i+5] === 0x6c) hidePositions.push(i);
+            }
+          }
           console.warn(
             `[WARN][FRONTEND] cursor-visible-transition: false→true` +
-            ` | consumed=${consumed} remaining=${remaining.length}` +
+            ` | consumed=${consumed}` +
             ` | pos=(${postCursorCol},${postCursorRow})` +
-            ` | hex[0..${chunkForLog.length}]: ${hex}` +
-            ` | ascii: ${printable}`,
+            ` | ?25h=${showPositions.length > 0 ? showPositions.join(",") : "NONE"}` +
+            ` | ?25l=${hidePositions.length > 0 ? hidePositions.join(",") : "NONE"}`,
           );
         }
 
