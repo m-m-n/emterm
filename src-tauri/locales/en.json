@@ -37,6 +37,8 @@
     "sshHostnameEmpty": "SSH Connection #%{index}: hostname must not be empty",
     "sshHostnameInvalid": "SSH Connection #%{index}: hostname contains invalid characters",
     "sshPortRange": "SSH Connection #%{index}: port must be between %{min} and %{max}",
-    "sshOptionDangerous": "SSH Connection #%{index}: option \"%{key}\" is not allowed for security reasons"
+    "sshOptionDangerous": "SSH Connection #%{index}: option \"%{key}\" is not allowed for security reasons",
+    "wslDistroNameEmpty": "WSL Distribution #%{index}: name must not be empty",
+    "wslDistroNameInvalid": "WSL Distribution #%{index}: name contains invalid characters"
   }
 }

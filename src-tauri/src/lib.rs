@@ -22,6 +22,7 @@ pub mod protocols;
 pub mod sftp;
 pub mod ssh;
 pub mod validation;
+pub mod wsl;
 
 // GUI modules (split from lib.rs)
 #[cfg(feature = "gui")]

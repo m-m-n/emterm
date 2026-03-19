@@ -49,11 +49,11 @@ pub fn run() {
     use crate::download_registry::DownloadRegistry;
     use crate::logging;
     use crate::pty::PtyManager;
-    use std::sync::Arc;
     use crate::sftp::pool::ConcurrentUploadPool;
     use crate::sftp::upload::SftpProcessManager;
     use crate::state::{ImageProcessorState, LargeImageDataStore};
     use crate::{commands, tauri_commands};
+    use std::sync::Arc;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -90,6 +90,8 @@ pub fn run() {
             commands::ssh::load_ssh_config_hosts,
             commands::ssh::build_ssh_args,
             commands::ssh::validate_identity_file,
+            commands::wsl::get_platform,
+            commands::wsl::detect_wsl_distributions,
             commands::sftp::sftp_check_duplicates,
             commands::sftp::sftp_upload,
             commands::sftp::sftp_cancel_upload,

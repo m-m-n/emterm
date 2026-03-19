@@ -11,6 +11,7 @@
       "markdownViewer": "Markdown Viewer",
       "profiles": "Profiles",
       "ssh": "SSH Connections",
+      "wsl": "WSL",
       "log": "Log"
     },
     "nav": {
@@ -287,7 +288,13 @@
       "sshConnectionNone": "None (Local Shell)",
       "sshConnectionSelect": "-- Select SSH connection --",
       "sshConnectionRequired": "Please select an SSH connection",
-      "sshTabDisabled": "No SSH connections registered. Add connections in SSH settings."
+      "sshTabDisabled": "No SSH connections registered. Add connections in SSH settings.",
+      "tabWsl": "WSL",
+      "wslDistribution": "WSL Distribution",
+      "wslDistributionHint": "Connect to a WSL distribution",
+      "wslDistributionSelect": "-- Select WSL distribution --",
+      "wslDistributionRequired": "Please select a WSL distribution",
+      "wslTabDisabled": "No WSL distributions imported. Import distributions in WSL settings."
     },
     "ssh": {
       "title": "SSH Connections",
@@ -332,6 +339,18 @@
       "dragHandle": "Drag to reorder",
       "sshNotConfigured": "SSH command not configured. Cannot launch SSH connection.",
       "connectionNotFound": "SSH connection \"{name}\" not found"
+    },
+    "wsl": {
+      "title": "WSL Distributions",
+      "detected": "Detected Distributions",
+      "detectedDesc": "WSL distributions installed on this system",
+      "detectedEmpty": "No WSL distributions detected",
+      "imported": "Imported Distributions",
+      "noDistributions": "No WSL distributions imported. Import from the detected list above.",
+      "import": "Import",
+      "alreadyImported": "Already imported",
+      "delete": "Delete",
+      "distributionNotFound": "WSL distribution \"{name}\" not found in imported list"
     },
     "log": {
       "title": "Log",

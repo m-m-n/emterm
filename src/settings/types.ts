@@ -100,6 +100,9 @@ export interface AppSettings {
   ssh_command_path: string;
   ssh_connections: SshConnection[];
 
+  // WSL
+  wsl_distributions: WslDistribution[];
+
   // SFTP
   sftp_max_concurrent_uploads: number;
 
@@ -155,6 +158,15 @@ export interface Profile {
   working_directory: string;
   is_default: boolean;
   ssh_connection_name: string;
+  wsl_distro_name: string;
+}
+
+// ============================================================
+// WSL Distribution
+// ============================================================
+
+export interface WslDistribution {
+  name: string;
 }
 
 // ============================================================

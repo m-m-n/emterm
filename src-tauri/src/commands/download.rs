@@ -16,10 +16,7 @@ const DOWNLOAD_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 /// Also strips semicolons (OSC field delimiter) and control characters.
 pub fn sanitize_filename(name: &str) -> String {
     // Take the last component after any path separator
-    let basename = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name);
+    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
 
     // Reject pure traversal/dot names
     if basename.is_empty() || basename == "." || basename == ".." {

@@ -8,9 +8,11 @@ pub mod font;
 pub mod image;
 pub mod json;
 pub mod markdown;
-pub mod yaml;
 #[cfg(feature = "gui")]
 pub mod sftp;
 #[cfg(feature = "gui")]
 pub mod ssh;
 pub mod tmux;
+#[cfg(feature = "gui")]
+pub mod wsl;
+pub mod yaml;

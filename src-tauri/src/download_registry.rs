@@ -115,7 +115,11 @@ impl DownloadRegistry {
         if let Some(handle) = sessions.remove(id) {
             drop(handle.file);
             if let Err(e) = fs::remove_file(&handle.path) {
-                log::warn!("Failed to delete partial download file {:?}: {}", handle.path, e);
+                log::warn!(
+                    "Failed to delete partial download file {:?}: {}",
+                    handle.path,
+                    e
+                );
             }
         }
         Ok(())
@@ -139,7 +143,11 @@ impl DownloadRegistry {
             if let Some(handle) = sessions.remove(&id) {
                 drop(handle.file);
                 if let Err(e) = fs::remove_file(&handle.path) {
-                    log::warn!("Failed to delete expired download file {:?}: {}", handle.path, e);
+                    log::warn!(
+                        "Failed to delete expired download file {:?}: {}",
+                        handle.path,
+                        e
+                    );
                 }
             }
         }
