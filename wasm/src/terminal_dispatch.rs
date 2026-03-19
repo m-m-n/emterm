@@ -29,9 +29,12 @@ impl TerminalCore {
             self.active_charset == 0 && self.g0_charset == 0 && !self.kitty_placeholder_active;
 
         // === Bulk scroll skip-ahead ===
-        // When data contains far more newlines than the ring capacity,
-        // skip processing lines that will be evicted from scrollback anyway.
-        // This reduces 10M lines of `seq` to ~10K lines of actual processing.
+        // When data contains far more newlines than the viewport,
+        // skip processing lines that would scroll off-screen anyway.
+        // Keep only `rows` trailing lines to fill the viewport, avoiding
+        // expensive per-line scroll_up_internal calls for scrollback.
+        // This reduces 10M lines of `seq` to ~40 lines of actual processing.
+        let rows_usize = self.rows as usize;
         if can_fast_ascii
             && parser.is_ground_clean()
             && self.grapheme_buffer.is_empty()
@@ -54,9 +57,10 @@ impl TerminalCore {
                 }
             }
 
-            if all_fast && newline_count > self.ring_capacity {
-                // Find the byte position of the (newline_count - ring_capacity)th newline
-                let skip_lines = newline_count - self.ring_capacity;
+            if all_fast && newline_count > rows_usize {
+                // Skip to leave only viewport rows for fast-path processing.
+                // Scrollback is cleared (acceptable during high-throughput output).
+                let skip_lines = newline_count - rows_usize;
                 let mut lines_seen = 0usize;
                 let mut skip_pos = 0usize;
                 for (i, &b) in data.iter().enumerate() {
@@ -72,6 +76,7 @@ impl TerminalCore {
                 // Bulk-reset the ring buffer: clear everything, push fresh viewport rows
                 self.ring_head = 0;
                 self.ring_size = 0;
+                self.scroll_event = None;
                 self.overflow.clear();
                 self.overflow_ridx.clear();
                 let bg = self.cursor.bg;

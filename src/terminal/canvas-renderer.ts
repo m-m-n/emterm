@@ -544,11 +544,6 @@ export class CanvasRenderer implements ITerminalRenderer {
 		const bufferRows = buffer.rows;
 
 		if (dirtyRows.length > bufferRows * 0.4) {
-			console.warn(
-				`[WARN][RENDERER] Dirty rows exceed 40% threshold (${dirtyRows.length}/${bufferRows}), using forceRender` +
-				` | isAlt=${state.isAlternateBuffer}` +
-				` | cursor=(${state.cursorCol},${state.cursorRow})`,
-			);
 			this.forceRender(state);
 			const duration = this.renderTimer.end();
 			const monitor = getPerformanceMonitor();
