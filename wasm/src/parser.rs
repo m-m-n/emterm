@@ -353,8 +353,8 @@ impl Parser {
             b';' => {
                 self.params.finish_param();
             }
-            // Valid intermediate bytes (after params)
-            b' ' => {
+            // Valid intermediate bytes (0x20-0x2F, after params)
+            0x20..=0x2F => {
                 self.params.add_intermediate(byte);
             }
             // Final bytes (0x40-0x7E)

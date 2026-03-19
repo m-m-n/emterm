@@ -51,6 +51,45 @@ impl TerminalCore {
 }
 
 impl TerminalCore {
+    /// CSI ? Ps $ p - DECRPM (DEC Private Mode Report).
+    /// Reports whether a DEC private mode is set, reset, or not recognized.
+    /// Response: CSI ? Ps ; Pm $ y
+    ///   Pm=0: not recognized, Pm=1: set, Pm=2: reset
+    pub fn handle_decrpm(&mut self, mode: u16) -> u8 {
+        let pm: u8 = match mode {
+            // Known modes tracked in WASM bitfield
+            3 => if self.get_mode(crate::terminal_core::MODE_COLUMN_132) { 1 } else { 2 },
+            5 => if self.get_mode(crate::terminal_core::MODE_REVERSE_SCREEN) { 1 } else { 2 },
+            6 => if self.get_mode(crate::terminal_core::MODE_ORIGIN) { 1 } else { 2 },
+            7 => if self.get_mode(crate::terminal_core::MODE_AUTO_WRAP) { 1 } else { 2 },
+            12 => if self.get_mode(crate::terminal_core::MODE_CURSOR_BLINK) { 1 } else { 2 },
+            25 => if self.get_mode(crate::terminal_core::MODE_CURSOR_VISIBLE) { 1 } else { 2 },
+            1004 => if self.get_mode(crate::terminal_core::MODE_FOCUS_TRACKING) { 1 } else { 2 },
+            2004 => if self.get_mode(crate::terminal_core::MODE_BRACKETED_PASTE) { 1 } else { 2 },
+            2026 => if self.get_mode(crate::terminal_core::MODE_SYNCHRONIZED_OUTPUT) { 1 } else { 2 },
+            // Known modes tracked in TS (report as recognized but defer to TS)
+            1 | 47 | 1000 | 1002 | 1003 | 1005 | 1006 | 1047 | 1048 | 1049 => 2,
+            // Unknown modes
+            _ => 0,
+        };
+        // Format: ESC [ ? <mode> ; <pm> $ y
+        let mut buf = [0u8; 20];
+        buf[0] = b'\x1b';
+        buf[1] = b'[';
+        buf[2] = b'?';
+        let mut pos = 3;
+        pos = Self::write_u16_decimal(&mut buf, pos, mode);
+        buf[pos] = b';';
+        pos += 1;
+        buf[pos] = pm + b'0';
+        pos += 1;
+        buf[pos] = b'$';
+        pos += 1;
+        buf[pos] = b'y';
+        pos += 1;
+        self.write_response(&buf[..pos])
+    }
+
     /// Write bytes to response buffer. Returns length.
     fn write_response(&mut self, data: &[u8]) -> u8 {
         let len = data.len().min(self.response_buffer.len());
@@ -281,6 +320,56 @@ mod tests {
         assert!(len > 0);
         let bytes = core.get_response_bytes();
         assert_eq!(&bytes, b"\x1b[6;16;8t");
+    }
+
+    // ── DECRPM Tests ──────────────────────────────────────
+
+    #[test]
+    fn test_decrpm_mode_2026_reset() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let len = core.handle_decrpm(2026);
+        assert!(len > 0);
+        let bytes = core.get_response_bytes();
+        assert_eq!(&bytes, b"\x1b[?2026;2$y"); // Pm=2 (reset)
+    }
+
+    #[test]
+    fn test_decrpm_mode_2026_set() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_set_mode(2026, true);
+        let len = core.handle_decrpm(2026);
+        assert!(len > 0);
+        let bytes = core.get_response_bytes();
+        assert_eq!(&bytes, b"\x1b[?2026;1$y"); // Pm=1 (set)
+    }
+
+    #[test]
+    fn test_decrpm_known_mode_autowrap() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // autoWrap defaults to true
+        let len = core.handle_decrpm(7);
+        assert!(len > 0);
+        let bytes = core.get_response_bytes();
+        assert_eq!(&bytes, b"\x1b[?7;1$y"); // Pm=1 (set)
+    }
+
+    #[test]
+    fn test_decrpm_unknown_mode() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let len = core.handle_decrpm(9999);
+        assert!(len > 0);
+        let bytes = core.get_response_bytes();
+        assert_eq!(&bytes, b"\x1b[?9999;0$y"); // Pm=0 (not recognized)
+    }
+
+    #[test]
+    fn test_decrpm_ts_tracked_mode() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // Mode 1 (DECCKM) is tracked in TS, reported as reset (2)
+        let len = core.handle_decrpm(1);
+        assert!(len > 0);
+        let bytes = core.get_response_bytes();
+        assert_eq!(&bytes, b"\x1b[?1;2$y"); // Pm=2 (reset)
     }
 
     #[test]

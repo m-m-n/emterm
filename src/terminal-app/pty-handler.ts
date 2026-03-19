@@ -221,8 +221,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
       if (processed) {
         ctx.getOutputActivityCallback()?.();
 
-        currentRenderer.renderImmediate(currentState);
-        ctx.getImeHandler()?.updatePosition();
+        // Synchronized Output (mode 2026): suppress rendering while active.
+        // Dirty rows accumulate in WASM; flush happens when mode is cleared.
+        if (!currentState.modes.synchronizedOutput) {
+          currentRenderer.renderImmediate(currentState);
+          ctx.getImeHandler()?.updatePosition();
+        }
       }
 
       // If there's leftover data, schedule next frame to continue

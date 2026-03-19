@@ -64,6 +64,9 @@ export interface TerminalModes {
 
 	// Bracketed paste (2004)
 	bracketedPaste: boolean;
+
+	// Synchronized output (2026)
+	synchronizedOutput: boolean;
 }
 
 /**
@@ -82,6 +85,7 @@ export function createDefaultModes(): TerminalModes {
 		mouseEncoding: "default",
 		focusTracking: false,
 		bracketedPaste: false,
+		synchronizedOutput: false,
 	};
 }
 
@@ -114,6 +118,7 @@ export const DECPrivateMode = {
 	XTERM_SAVE: 1048, // Save cursor
 	XTERM_ALTBUF_1049: 1049, // Alternate buffer + save cursor
 	BRACKETED_PASTE: 2004, // Bracketed paste mode
+	SYNCHRONIZED_OUTPUT: 2026, // Synchronized output
 } as const;
 
 /**
@@ -261,6 +266,11 @@ export function setDecPrivateMode(
 			changed = modes.bracketedPaste !== value;
 			modes.bracketedPaste = value;
 			break;
+
+		case DECPrivateMode.SYNCHRONIZED_OUTPUT:
+			changed = modes.synchronizedOutput !== value;
+			modes.synchronizedOutput = value;
+			break;
 	}
 
 	return { changed, action };
@@ -282,6 +292,7 @@ export const WASM_MODE_BITS = {
 	bracketedPaste: 5,
 	focusTracking: 6,
 	column132: 7,
+	synchronizedOutput: 8,
 } as const;
 
 /**
@@ -306,6 +317,7 @@ export function syncModesToWasm(modes: TerminalModes, core: WasmModeCore): void 
 	core.set_mode(WASM_MODE_BITS.bracketedPaste, modes.bracketedPaste);
 	core.set_mode(WASM_MODE_BITS.focusTracking, modes.focusTracking);
 	core.set_mode(WASM_MODE_BITS.column132, modes.column132);
+	core.set_mode(WASM_MODE_BITS.synchronizedOutput, modes.synchronizedOutput);
 }
 
 /**
@@ -321,4 +333,5 @@ export function syncModesFromWasm(modes: TerminalModes, core: WasmModeCore): voi
 	modes.bracketedPaste = core.get_mode(WASM_MODE_BITS.bracketedPaste);
 	modes.focusTracking = core.get_mode(WASM_MODE_BITS.focusTracking);
 	modes.column132 = core.get_mode(WASM_MODE_BITS.column132);
+	modes.synchronizedOutput = core.get_mode(WASM_MODE_BITS.synchronizedOutput);
 }
