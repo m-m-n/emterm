@@ -63,6 +63,7 @@ export function duplicateProfile(profile: Profile): Profile {
 		working_directory: profile.working_directory,
 		is_default: false,
 		ssh_connection_name: profile.ssh_connection_name,
+		wsl_distro_name: profile.wsl_distro_name,
 	};
 }
 
@@ -78,5 +79,6 @@ export function createEmptyProfile(): Profile {
 		working_directory: "",
 		is_default: false,
 		ssh_connection_name: "",
+		wsl_distro_name: "",
 	};
 }

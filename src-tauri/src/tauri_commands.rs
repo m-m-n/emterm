@@ -456,9 +456,7 @@ pub async fn tab_close_graceful(
 /// Used by OSC 1337;File (iTerm2 inline image protocol).
 /// Returns width, height, and RGBA pixel data as base64.
 #[tauri::command]
-pub async fn decode_iterm2_image(
-    base64_data: String,
-) -> Result<serde_json::Value, String> {
+pub async fn decode_iterm2_image(base64_data: String) -> Result<serde_json::Value, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
 
     let raw = STANDARD
@@ -467,11 +465,13 @@ pub async fn decode_iterm2_image(
 
     // Limit input size to 10MB to prevent memory abuse
     if raw.len() > 10 * 1024 * 1024 {
-        return Err(format!("Image data too large: {} bytes (max 10MB)", raw.len()));
+        return Err(format!(
+            "Image data too large: {} bytes (max 10MB)",
+            raw.len()
+        ));
     }
 
-    let img = ::image::load_from_memory(&raw)
-        .map_err(|e| format!("Image decode error: {}", e))?;
+    let img = ::image::load_from_memory(&raw).map_err(|e| format!("Image decode error: {}", e))?;
 
     let rgba = img.to_rgba8();
     let width = rgba.width();

@@ -360,10 +360,7 @@ mod tests {
     #[test]
     fn test_generate_json_osc_multiple_chunks() {
         let session_id = Uuid::new_v4();
-        let chunks = vec![
-            "chunk0".to_string(),
-            "chunk1".to_string(),
-        ];
+        let chunks = vec!["chunk0".to_string(), "chunk1".to_string()];
 
         let result = generate_json_osc(&session_id, chunks);
 

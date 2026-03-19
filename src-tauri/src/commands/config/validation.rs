@@ -93,6 +93,19 @@ pub(super) fn validate_settings(settings: &AppSettings) -> Result<(), String> {
         }
     }
 
+    for (i, dist) in settings.wsl_distributions.iter().enumerate() {
+        if dist.name.trim().is_empty() {
+            return Err(
+                t!("validation.wslDistroNameEmpty", index = i + 1).to_string(),
+            );
+        }
+        if dist.name.chars().any(|c| c.is_control()) {
+            return Err(
+                t!("validation.wslDistroNameInvalid", index = i + 1).to_string(),
+            );
+        }
+    }
+
     Ok(())
 }
 

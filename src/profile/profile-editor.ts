@@ -5,6 +5,7 @@
  * Provides SHELL/SSH tab UI for mutually exclusive shell vs SSH configuration.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, Profile } from "../settings/types";
 import { t } from "../i18n/index.ts";
 import { createEmptyProfile } from "./types";
@@ -86,8 +87,21 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 	sshTab.tabIndex = -1;
 	sshTab.textContent = t("settings.profiles.tabSsh");
 
+	// WSL tab (added conditionally after platform detection)
+	const wslTab = document.createElement("button");
+	wslTab.type = "button";
+	wslTab.className = "profile-editor-tab";
+	wslTab.setAttribute("role", "tab");
+	wslTab.setAttribute("aria-selected", "false");
+	wslTab.setAttribute("aria-controls", "profile-tab-panel-wsl");
+	wslTab.id = "profile-tab-wsl";
+	wslTab.tabIndex = -1;
+	wslTab.textContent = t("settings.profiles.tabWsl");
+	wslTab.hidden = true; // Hidden until platform detected as Windows
+
 	tabBar.appendChild(shellTab);
 	tabBar.appendChild(sshTab);
+	tabBar.appendChild(wslTab);
 	form.appendChild(tabBar);
 
 	// === SHELL tab panel ===
@@ -158,60 +172,89 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 
 	form.appendChild(sshPanel);
 
-	// Tab switching logic
-	let activeTab: "shell" | "ssh" = "shell";
+	// === WSL tab panel ===
+	const wslPanel = document.createElement("div");
+	wslPanel.className = "profile-editor-tab-panel";
+	wslPanel.setAttribute("role", "tabpanel");
+	wslPanel.setAttribute("aria-labelledby", "profile-tab-wsl");
+	wslPanel.id = "profile-tab-panel-wsl";
+	wslPanel.hidden = true;
 
-	function switchTab(target: "shell" | "ssh") {
+	const wslSelect = createSelectField(wslPanel, {
+		id: "profile-wsl-distro",
+		label: t("settings.profiles.wslDistribution"),
+		value: profile.wsl_distro_name,
+		hint: t("settings.profiles.wslDistributionHint"),
+		options: [{ value: "", label: t("settings.profiles.wslDistributionSelect") }],
+	});
+
+	form.appendChild(wslPanel);
+
+	// Tab switching logic
+	let activeTab: "shell" | "ssh" | "wsl" = "shell";
+
+	function switchTab(target: "shell" | "ssh" | "wsl") {
 		if (target === activeTab) return;
 		if (target === "ssh" && sshTab.classList.contains("disabled")) return;
+		if (target === "wsl" && wslTab.classList.contains("disabled")) return;
 
 		activeTab = target;
 
-		if (target === "shell") {
-			shellTab.classList.add("active");
-			shellTab.setAttribute("aria-selected", "true");
-			shellTab.tabIndex = 0;
-			sshTab.classList.remove("active");
-			sshTab.setAttribute("aria-selected", "false");
-			sshTab.tabIndex = -1;
-			shellPanel.hidden = false;
-			sshPanel.hidden = true;
-			// Clear SSH value
-			sshSelect.value = "";
-		} else {
-			sshTab.classList.add("active");
-			sshTab.setAttribute("aria-selected", "true");
-			sshTab.tabIndex = 0;
-			shellTab.classList.remove("active");
-			shellTab.setAttribute("aria-selected", "false");
-			shellTab.tabIndex = -1;
-			sshPanel.hidden = false;
-			shellPanel.hidden = true;
-			// Clear shell values
+		// Deactivate all tabs
+		for (const tab of [shellTab, sshTab, wslTab]) {
+			tab.classList.remove("active");
+			tab.setAttribute("aria-selected", "false");
+			tab.tabIndex = -1;
+		}
+		shellPanel.hidden = true;
+		sshPanel.hidden = true;
+		wslPanel.hidden = true;
+
+		// Activate target
+		const tabMap = { shell: shellTab, ssh: sshTab, wsl: wslTab };
+		const panelMap = { shell: shellPanel, ssh: sshPanel, wsl: wslPanel };
+		tabMap[target].classList.add("active");
+		tabMap[target].setAttribute("aria-selected", "true");
+		tabMap[target].tabIndex = 0;
+		panelMap[target].hidden = false;
+
+		// Clear inactive values
+		if (target !== "shell") {
 			shellPathInput.value = "";
 			shellArgsInput.value = "";
 			envVarsTextarea.value = "";
 			workDirInput.value = "";
 		}
+		if (target !== "ssh") sshSelect.value = "";
+		if (target !== "wsl") wslSelect.value = "";
 	}
 
 	shellTab.addEventListener("click", () => switchTab("shell"));
 	sshTab.addEventListener("click", () => switchTab("ssh"));
+	wslTab.addEventListener("click", () => switchTab("wsl"));
 
-	// Keyboard navigation (arrow keys between tabs)
+	// Keyboard navigation (arrow keys between visible tabs)
+	const tabElements = { shell: shellTab, ssh: sshTab, wsl: wslTab };
 	tabBar.addEventListener("keydown", (e) => {
 		if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
 			e.preventDefault();
-			const target = activeTab === "shell" ? "ssh" : "shell";
-			switchTab(target);
-			if (target === "shell") shellTab.focus();
-			else sshTab.focus();
+			const visibleTabs: Array<"shell" | "ssh" | "wsl"> = ["shell", "ssh"];
+			if (!wslTab.hidden) visibleTabs.push("wsl");
+			const idx = visibleTabs.indexOf(activeTab);
+			const dir = e.key === "ArrowRight" ? 1 : -1;
+			const next = visibleTabs[(idx + dir + visibleTabs.length) % visibleTabs.length]!;
+			switchTab(next);
+			tabElements[next].focus();
 		}
 	});
 
-	// Load SSH connections and determine initial tab
-	SettingsService.load()
-		.then((settings: AppSettings) => {
+	// Load settings, platform, and determine initial tab
+	Promise.all([
+		SettingsService.load(),
+		invoke<string>("get_platform").catch(() => "linux"),
+	])
+		.then(([settings, platform]: [AppSettings, string]) => {
+			// SSH connections
 			for (const conn of settings.ssh_connections) {
 				const opt = document.createElement("option");
 				opt.value = conn.name;
@@ -223,17 +266,40 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 			}
 
 			if (settings.ssh_connections.length === 0) {
-				// Disable SSH tab
 				sshTab.classList.add("disabled");
 				sshTab.setAttribute("aria-disabled", "true");
 				sshTab.title = t("settings.profiles.sshTabDisabled");
+			}
+
+			// WSL distributions (Windows only)
+			if (platform === "windows") {
+				wslTab.hidden = false;
+
+				for (const dist of settings.wsl_distributions) {
+					const opt = document.createElement("option");
+					opt.value = dist.name;
+					opt.textContent = dist.name;
+					if (dist.name === profile.wsl_distro_name) {
+						opt.selected = true;
+					}
+					wslSelect.appendChild(opt);
+				}
+
+				if (settings.wsl_distributions.length === 0) {
+					wslTab.classList.add("disabled");
+					wslTab.setAttribute("aria-disabled", "true");
+					wslTab.title = t("settings.profiles.wslTabDisabled");
+				}
+			}
+
+			// Auto-select tab based on existing profile
+			if (profile.wsl_distro_name && platform === "windows") {
+				switchTab("wsl");
 			} else if (profile.ssh_connection_name) {
-				// Auto-select SSH tab for existing SSH profiles
 				switchTab("ssh");
 			}
 		})
 		.catch(() => {
-			// Settings load failed - disable SSH tab
 			sshTab.classList.add("disabled");
 			sshTab.setAttribute("aria-disabled", "true");
 		});
@@ -298,13 +364,21 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 				nameInput.focus();
 				return;
 			}
-		} else {
-			// SSH tab: use SSH connection name as profile name
+		} else if (activeTab === "ssh") {
 			name = sshSelect.value;
 			if (!name) {
 				errorEl.textContent = t("settings.profiles.sshConnectionRequired");
 				errorEl.hidden = false;
 				sshSelect.focus();
+				return;
+			}
+		} else {
+			// WSL tab: use distro name as profile name
+			name = wslSelect.value;
+			if (!name) {
+				errorEl.textContent = t("settings.profiles.wslDistributionRequired");
+				errorEl.hidden = false;
+				wslSelect.focus();
 				return;
 			}
 		}
@@ -324,6 +398,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 				activeTab === "shell" ? workDirInput.value.trim() : "",
 			is_default: profile.is_default,
 			ssh_connection_name: activeTab === "ssh" ? sshSelect.value : "",
+			wsl_distro_name: activeTab === "wsl" ? wslSelect.value : "",
 		};
 
 		cleanup();

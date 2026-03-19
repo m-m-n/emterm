@@ -11,6 +11,7 @@
       "markdownViewer": "Markdownビューアー",
       "profiles": "プロファイル",
       "ssh": "SSH接続",
+      "wsl": "WSL",
       "log": "ログ"
     },
     "nav": {
@@ -287,7 +288,13 @@
       "sshConnectionNone": "なし（ローカルシェル）",
       "sshConnectionSelect": "-- SSH接続を選択 --",
       "sshConnectionRequired": "SSH接続を選択してください",
-      "sshTabDisabled": "SSH接続が登録されていません。SSH設定で接続を追加してください。"
+      "sshTabDisabled": "SSH接続が登録されていません。SSH設定で接続を追加してください。",
+      "tabWsl": "WSL",
+      "wslDistribution": "WSLディストリビューション",
+      "wslDistributionHint": "WSLディストリビューションに接続します",
+      "wslDistributionSelect": "-- WSLディストリビューションを選択 --",
+      "wslDistributionRequired": "WSLディストリビューションを選択してください",
+      "wslTabDisabled": "WSLディストリビューションがインポートされていません。WSL設定でインポートしてください。"
     },
     "ssh": {
       "title": "SSH接続",
@@ -332,6 +339,18 @@
       "dragHandle": "ドラッグで並び替え",
       "sshNotConfigured": "SSHコマンドが設定されていません。SSH接続を起動できません。",
       "connectionNotFound": "SSH接続「{name}」が見つかりません"
+    },
+    "wsl": {
+      "title": "WSLディストリビューション",
+      "detected": "検出されたディストリビューション",
+      "detectedDesc": "このシステムにインストールされているWSLディストリビューション",
+      "detectedEmpty": "WSLディストリビューションが検出されませんでした",
+      "imported": "インポート済みディストリビューション",
+      "noDistributions": "WSLディストリビューションがインポートされていません。上のリストからインポートしてください。",
+      "import": "インポート",
+      "alreadyImported": "インポート済み",
+      "delete": "削除",
+      "distributionNotFound": "WSLディストリビューション「{name}」がインポートリストに見つかりません"
     },
     "log": {
       "title": "ログ",
