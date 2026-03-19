@@ -4,7 +4,7 @@ use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
 
@@ -96,7 +96,7 @@ pub fn spawn_reader_thread(
         // the main reader loop can periodically check process_exited.
         // This fixes Windows PTY exit detection where read() blocks
         // indefinitely after the shell exits.
-        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(16);
+        let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(256);
         let helper_session_id = session_id.clone();
 
         std::thread::spawn(move || {
@@ -152,16 +152,48 @@ pub fn spawn_reader_thread(
                 Ok(first) => {
                     // Drain all immediately available chunks to reduce IPC calls.
                     // Uses non-blocking try_recv to batch data that's already buffered
-                    // without introducing artificial delay. This preserves intermediate
-                    // states (e.g., vim search wrap messages) while still batching
-                    // bulk output (e.g., seq 10M) where the helper thread fills the
-                    // channel faster than we drain it.
-                    const MAX_BATCH_SIZE: usize = 1024 * 1024;
+                    // without introducing artificial delay for interactive output.
+                    //
+                    // For high-throughput output (e.g., seq 10M), adaptive batching
+                    // accumulates data for up to 4ms to produce larger batches,
+                    // drastically reducing Tauri Channel IPC round-trips.
+                    const MAX_BATCH_SIZE: usize = 16 * 1024 * 1024;
+                    const ACCUMULATION_WINDOW: Duration = Duration::from_millis(4);
                     let mut batch = first;
+                    let mut has_more = false;
                     while let Ok(more) = rx.try_recv() {
                         batch.extend_from_slice(&more);
+                        has_more = true;
                         if batch.len() >= MAX_BATCH_SIZE {
                             break;
+                        }
+                    }
+                    // Adaptive accumulation: when high throughput is detected
+                    // (try_recv returned data), wait briefly to build larger batches.
+                    // This reduces IPC round-trips from hundreds to tens.
+                    // No delay for interactive output (has_more is false).
+                    if has_more && batch.len() < MAX_BATCH_SIZE {
+                        let deadline = Instant::now() + ACCUMULATION_WINDOW;
+                        loop {
+                            match rx.recv_timeout(Duration::from_millis(1)) {
+                                Ok(more) => {
+                                    batch.extend_from_slice(&more);
+                                    while let Ok(more) = rx.try_recv() {
+                                        batch.extend_from_slice(&more);
+                                        if batch.len() >= MAX_BATCH_SIZE {
+                                            break;
+                                        }
+                                    }
+                                    if batch.len() >= MAX_BATCH_SIZE {
+                                        break;
+                                    }
+                                }
+                                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                            }
+                            if Instant::now() >= deadline {
+                                break;
+                            }
                         }
                     }
                     let len = batch.len();
