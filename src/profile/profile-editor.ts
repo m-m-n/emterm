@@ -248,12 +248,17 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 		}
 	});
 
-	// Load settings, platform, and determine initial tab
+	// Load settings, platform, and WSL distributions in parallel
+	let disposed = false;
+
 	Promise.all([
 		SettingsService.load(),
 		invoke<string>("get_platform").catch(() => "linux"),
+		invoke<string[]>("detect_wsl_distributions").catch(() => [] as string[]),
 	])
-		.then(([settings, platform]: [AppSettings, string]) => {
+		.then(([settings, platform, wslDistros]: [AppSettings, string, string[]]) => {
+			if (disposed) return;
+
 			// SSH connections
 			for (const conn of settings.ssh_connections) {
 				const opt = document.createElement("option");
@@ -275,17 +280,17 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 			if (platform === "windows") {
 				wslTab.hidden = false;
 
-				for (const dist of settings.wsl_distributions) {
+				for (const distro of wslDistros) {
 					const opt = document.createElement("option");
-					opt.value = dist.name;
-					opt.textContent = dist.name;
-					if (dist.name === profile.wsl_distro_name) {
+					opt.value = distro;
+					opt.textContent = distro;
+					if (distro === profile.wsl_distro_name) {
 						opt.selected = true;
 					}
 					wslSelect.appendChild(opt);
 				}
 
-				if (settings.wsl_distributions.length === 0) {
+				if (wslDistros.length === 0) {
 					wslTab.classList.add("disabled");
 					wslTab.setAttribute("aria-disabled", "true");
 					wslTab.title = t("settings.profiles.wslTabDisabled");
@@ -330,6 +335,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 
 	// Handlers
 	const cleanup = () => {
+		disposed = true;
 		overlay.remove();
 	};
 

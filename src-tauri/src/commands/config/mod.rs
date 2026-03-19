@@ -15,7 +15,7 @@ pub use types::*;
 #[cfg(test)]
 mod tests {
     use super::settings::{
-        AppSettings, KeybindSettings, Profile, SshConnection, SshOption, WslDistribution,
+        AppSettings, KeybindSettings, Profile, SshConnection, SshOption,
     };
     use super::types::*;
     use super::validation::validate_settings;
@@ -316,7 +316,6 @@ mod tests {
             }],
             ssh_command_path: String::new(),
             ssh_connections: Vec::new(),
-            wsl_distributions: Vec::new(),
             sftp_max_concurrent_uploads: 4,
             clipboard_read_osc52: true,
             clipboard_max_size_osc52: 10 * 1024 * 1024,
@@ -1311,26 +1310,7 @@ mod tests {
         assert!(validate_settings(&settings).is_ok());
     }
 
-    // TS-07: WslDistribution serialization round-trip
-    #[test]
-    fn test_wsl_distribution_round_trip() {
-        let dist = WslDistribution {
-            name: "Ubuntu-22.04".to_string(),
-        };
-        let json = serde_json::to_string(&dist).unwrap();
-        let restored: WslDistribution = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.name, "Ubuntu-22.04");
-    }
-
-    // TS-07: WslDistribution null handling
-    #[test]
-    fn test_wsl_distribution_null_name() {
-        let json = r#"{"name": null}"#;
-        let dist: WslDistribution = serde_json::from_str(json).unwrap();
-        assert_eq!(dist.name, "");
-    }
-
-    // TS-08: Profile with wsl_distro_name round-trip
+    // Profile with wsl_distro_name round-trip
     #[test]
     fn test_profile_wsl_distro_name_round_trip() {
         let profile = Profile {
@@ -1349,38 +1329,11 @@ mod tests {
         assert_eq!(restored.ssh_connection_name, "");
     }
 
-    // TS-08: Profile wsl_distro_name defaults to empty
+    // Profile wsl_distro_name defaults to empty
     #[test]
     fn test_profile_wsl_distro_name_default() {
         let json = r#"{"name": "Test"}"#;
         let profile: Profile = serde_json::from_str(json).unwrap();
         assert_eq!(profile.wsl_distro_name, "");
-    }
-
-    // TS-09: Settings without wsl_distributions defaults to empty
-    #[test]
-    fn test_settings_wsl_distributions_default() {
-        let json = r#"{}"#;
-        let settings: AppSettings = serde_json::from_str(json).unwrap();
-        assert!(settings.wsl_distributions.is_empty());
-    }
-
-    // TS-09: Settings with wsl_distributions round-trip
-    #[test]
-    fn test_settings_wsl_distributions_round_trip() {
-        let mut settings = AppSettings::default();
-        settings.wsl_distributions = vec![
-            WslDistribution {
-                name: "Ubuntu".to_string(),
-            },
-            WslDistribution {
-                name: "Debian".to_string(),
-            },
-        ];
-        let json = serde_json::to_string(&settings).unwrap();
-        let restored: AppSettings = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.wsl_distributions.len(), 2);
-        assert_eq!(restored.wsl_distributions[0].name, "Ubuntu");
-        assert_eq!(restored.wsl_distributions[1].name, "Debian");
     }
 }

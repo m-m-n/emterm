@@ -11,7 +11,6 @@ export { renderTerminalBehaviorSection } from "./sections/terminal-behavior-sect
 export { renderKeybindsSection } from "./sections/keybinds-section";
 export { renderNotificationSection } from "./sections/notification-section";
 export { renderSshSection } from "./sections/ssh-section";
-export { renderWslSection } from "./sections/wsl-section";
 export { renderMarkdownViewerSection } from "./sections/markdown-viewer-section";
 export { renderProfilesSection } from "./sections/profiles-section";
 export { renderLogSection } from "./sections/log-section";

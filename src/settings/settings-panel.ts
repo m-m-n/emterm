@@ -6,7 +6,6 @@
  * editing to dedicated modules.
  */
 
-import { invoke } from "@tauri-apps/api/core";
 import { SettingsService } from "./settings-service";
 import type { AppSettings } from "./types";
 import { t } from "../i18n/index.ts";
@@ -26,7 +25,6 @@ import {
   renderMarkdownViewerSection,
   renderProfilesSection,
   renderSshSection,
-  renderWslSection,
   renderLogSection,
 } from "./settings-sections";
 import { filterFontList } from "./font-picker";
@@ -58,7 +56,6 @@ const CATEGORY_ICONS: Record<string, string> = {
   "markdown-viewer": '<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>',
   profiles: '<svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>',
   ssh: '<svg viewBox="0 0 24 24"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7l-2 3v1h8v-1l-2-3h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/><path d="M7 8l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  wsl: '<svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v12z"/><text x="12" y="15.5" font-size="7" font-weight="bold" text-anchor="middle" fill="currentColor">W</text></svg>',
   log: '<svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>',
 };
 
@@ -80,7 +77,6 @@ export class SettingsPanel {
 
   /** Keybind capture state (shared with keybind-editor module) */
   private keybindState: KeybindCaptureState = createKeybindCaptureState();
-  private platform = "linux";
 
   private get categories(): Category[] {
     return [
@@ -92,7 +88,6 @@ export class SettingsPanel {
       { id: "markdown-viewer", label: t("settings.categories.markdownViewer"), enabled: true },
       { id: "profiles", label: t("settings.categories.profiles"), enabled: true },
       { id: "ssh", label: t("settings.categories.ssh"), enabled: true },
-      ...(this.platform === "windows" ? [{ id: "wsl", label: t("settings.categories.wsl"), enabled: true }] : []),
       { id: "log", label: t("settings.categories.log"), enabled: true },
     ];
   }
@@ -106,11 +101,6 @@ export class SettingsPanel {
    */
   async init(): Promise<void> {
     this.currentSettings = await SettingsService.load();
-    try {
-      this.platform = await invoke<string>("get_platform");
-    } catch {
-      this.platform = "linux";
-    }
     this.render();
     this.attachEventListeners();
   }
@@ -247,9 +237,6 @@ export class SettingsPanel {
         break;
       case "ssh":
         renderSshSection(panel, ctx);
-        break;
-      case "wsl":
-        renderWslSection(panel, ctx);
         break;
       case "log":
         renderLogSection(panel, ctx);

@@ -11,7 +11,6 @@
       "markdownViewer": "Markdown Viewer",
       "profiles": "Profiles",
       "ssh": "SSH Connections",
-      "wsl": "WSL",
       "log": "Log"
     },
     "nav": {
@@ -339,18 +338,6 @@
       "dragHandle": "Drag to reorder",
       "sshNotConfigured": "SSH command not configured. Cannot launch SSH connection.",
       "connectionNotFound": "SSH connection \"{name}\" not found"
-    },
-    "wsl": {
-      "title": "WSL Distributions",
-      "detected": "Detected Distributions",
-      "detectedDesc": "WSL distributions installed on this system",
-      "detectedEmpty": "No WSL distributions detected",
-      "imported": "Imported Distributions",
-      "noDistributions": "No WSL distributions imported. Import from the detected list above.",
-      "import": "Import",
-      "alreadyImported": "Already imported",
-      "delete": "Delete",
-      "distributionNotFound": "WSL distribution \"{name}\" not found in imported list"
     },
     "log": {
       "title": "Log",
