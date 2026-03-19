@@ -154,6 +154,16 @@ impl TerminalCore {
                 }
             }
 
+            // DECRPM - DEC Private Mode Report: CSI ? Ps $ p
+            // intermediates: [b'?', b'$'], final: b'p'
+            (Some(b'?'), b'p') if intermediates.get(1) == Some(&b'$') => {
+                let mode = ParamParser::get_first_or_zero(params);
+                let len = self.handle_decrpm(mode);
+                if len > 0 {
+                    self.fire_device_response_callback();
+                }
+            }
+
             _ => { /* Unknown CSI - ignore */ }
         }
     }
@@ -279,6 +289,24 @@ mod tests {
         core.handle_csi_internal(&[5, 20], &[], b'r');
         assert_eq!(core.get_scroll_region_top(), 4); // 1-indexed → 0-indexed
         assert_eq!(core.get_scroll_region_bottom(), 19);
+    }
+
+    #[test]
+    fn test_csi_internal_decrpm_mode_2026() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // CSI ? 2026 $ p
+        core.handle_csi_internal(&[2026], &[b'?', b'$'], b'p');
+        assert!(core.response_len > 0);
+        let bytes = core.get_response_bytes();
+        assert_eq!(&bytes, b"\x1b[?2026;2$y"); // reset
+    }
+
+    #[test]
+    fn test_csi_internal_decrpm_without_dollar_ignored() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        // CSI ? 2026 p (without $) - should not match DECRPM
+        core.handle_csi_internal(&[2026], &[b'?'], b'p');
+        assert_eq!(core.response_len, 0); // No response
     }
 
     #[test]

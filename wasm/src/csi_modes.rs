@@ -49,7 +49,9 @@ impl TerminalCore {
             }
 
             // Buffer switch modes: return action code
+            // Also reset synchronized output to prevent orphaned suppression
             47 | 1047 => {
+                self.set_mode(MODE_SYNCHRONIZED_OUTPUT, false);
                 if enable {
                     MODE_ACTION_SWITCH_TO_ALT
                 } else {
@@ -71,6 +73,7 @@ impl TerminalCore {
                 MODE_ACTION_NONE
             }
             1049 => {
+                self.set_mode(MODE_SYNCHRONIZED_OUTPUT, false);
                 if enable {
                     MODE_ACTION_SAVE_AND_SWITCH_TO_ALT
                 } else {
@@ -85,6 +88,10 @@ impl TerminalCore {
             }
             2004 => {
                 self.set_mode(MODE_BRACKETED_PASTE, enable);
+                MODE_ACTION_NONE
+            }
+            2026 => {
+                self.set_mode(MODE_SYNCHRONIZED_OUTPUT, enable);
                 MODE_ACTION_NONE
             }
 
@@ -178,5 +185,53 @@ mod tests {
     fn test_mode_unknown() {
         let mut core = TerminalCore::new(80, 24, 0);
         assert_eq!(core.handle_set_mode(9999, true), 0);
+    }
+
+    // ── Synchronized Output (Mode 2026) Tests ─────────────
+
+    #[test]
+    fn test_mode_synchronized_output_set_reset() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        assert!(!core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+        let code = core.handle_set_mode(2026, true);
+        assert_eq!(code, 0); // MODE_ACTION_NONE
+        assert!(core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+        let code = core.handle_set_mode(2026, false);
+        assert_eq!(code, 0);
+        assert!(!core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+    }
+
+    #[test]
+    fn test_mode_synchronized_output_default_off() {
+        let core = TerminalCore::new(80, 24, 0);
+        assert!(!core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+    }
+
+    #[test]
+    fn test_mode_synchronized_output_reset_on_buffer_switch_47() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_set_mode(2026, true);
+        assert!(core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+        core.handle_set_mode(47, true); // switch to alt
+        assert!(!core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+    }
+
+    #[test]
+    fn test_mode_synchronized_output_reset_on_buffer_switch_1049() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_set_mode(2026, true);
+        assert!(core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+        core.handle_set_mode(1049, true); // save + switch to alt
+        assert!(!core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+    }
+
+    #[test]
+    fn test_mode_synchronized_output_nested_set() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        core.handle_set_mode(2026, true);
+        core.handle_set_mode(2026, true); // second set is no-op
+        assert!(core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+        core.handle_set_mode(2026, false); // single reset clears
+        assert!(!core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
     }
 }

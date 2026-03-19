@@ -16,9 +16,10 @@ pub const MODE_REVERSE_SCREEN: u8 = 4;
 pub const MODE_BRACKETED_PASTE: u8 = 5;
 pub const MODE_FOCUS_TRACKING: u8 = 6;
 pub const MODE_COLUMN_132: u8 = 7;
-// Bits 8-9: cursor keys (2 bits)
-// Bits 10-11: mouse tracking (2 bits)
-// Bits 12-13: mouse encoding (2 bits)
+pub const MODE_SYNCHRONIZED_OUTPUT: u8 = 8;
+// Bits 9-10: cursor keys (2 bits)
+// Bits 11-12: mouse tracking (2 bits)
+// Bits 13-14: mouse encoding (2 bits)
 
 // ── CursorState ──────────────────────────────────────────
 
