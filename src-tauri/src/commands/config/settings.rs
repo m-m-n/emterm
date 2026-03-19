@@ -281,17 +281,6 @@ pub struct SshConnection {
 }
 
 // ============================================================
-// WSL Distribution
-// ============================================================
-
-/// WSL distribution entry for imported distributions.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct WslDistribution {
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub name: String,
-}
-
-// ============================================================
 // Profile
 // ============================================================
 
@@ -454,9 +443,6 @@ pub struct AppSettings {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub ssh_connections: Vec<SshConnection>,
 
-    // WSL
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub wsl_distributions: Vec<WslDistribution>,
 
     // SFTP
     #[serde(
@@ -538,7 +524,6 @@ impl Default for AppSettings {
             profiles: Vec::new(),
             ssh_command_path: String::new(),
             ssh_connections: Vec::new(),
-            wsl_distributions: Vec::new(),
             sftp_max_concurrent_uploads: default_sftp_max_concurrent_uploads(),
             markdown_theme_follow_ui: default_true(),
             markdown_theme: UiTheme::default(),

@@ -488,30 +488,15 @@ export class TabBarUI {
     }
   }
 
-  private async launchWslProfile(
+  private launchWslProfile(
     profile: import("../settings/types").Profile,
-  ): Promise<void> {
-    try {
-      const settings = SettingsService.getCached() ?? await SettingsService.load();
-      const dist = settings.wsl_distributions.find(
-        (d) => d.name === profile.wsl_distro_name,
-      );
-      if (!dist) {
-        const msg = t("settings.wsl.distributionNotFound", { name: profile.wsl_distro_name });
-        console.error(msg);
-        alert(msg);
-        return;
-      }
-
-      this.tabManager.createTab({
-        profileSpawn: {
-          shell_path: "wsl.exe",
-          shell_args: ["-d", profile.wsl_distro_name],
-        },
-      });
-    } catch (err) {
-      console.error("Failed to launch WSL session:", err);
-    }
+  ): void {
+    this.tabManager.createTab({
+      profileSpawn: {
+        shell_path: "wsl.exe",
+        shell_args: ["-d", profile.wsl_distro_name, "--cd", "~"],
+      },
+    });
   }
 
   /**

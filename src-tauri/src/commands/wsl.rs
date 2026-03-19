@@ -4,12 +4,15 @@
 ///
 /// Executes `wsl.exe --list --quiet` and returns a list of distribution names.
 /// Returns an empty list on Linux or if WSL is not installed.
+/// Failures from wsl.exe are returned as an empty list, not as errors.
 #[cfg(feature = "gui")]
 #[tauri::command]
-pub fn detect_wsl_distributions() -> Result<Vec<String>, String> {
+pub async fn detect_wsl_distributions() -> Result<Vec<String>, String> {
     #[cfg(windows)]
     {
-        Ok(crate::wsl::detect::list_distributions())
+        tokio::task::spawn_blocking(|| crate::wsl::detect::list_distributions())
+            .await
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(windows))]
     {
@@ -23,9 +26,5 @@ pub fn detect_wsl_distributions() -> Result<Vec<String>, String> {
 #[cfg(feature = "gui")]
 #[tauri::command]
 pub fn get_platform() -> String {
-    if cfg!(windows) {
-        "windows".to_string()
-    } else {
-        "linux".to_string()
-    }
+    std::env::consts::OS.to_string()
 }
