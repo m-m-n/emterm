@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use bincode::Options;
 use serde::{Deserialize, Serialize};
 
-use crate::cell::{Cell, PackedColor};
+use crate::cell::Cell;
 use crate::terminal_core::{CursorState, TerminalCore};
 
 /// Current snapshot format version. Increment when fields change.

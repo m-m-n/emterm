@@ -4,7 +4,6 @@
 //! Supports: set, bind-key, unbind-key.
 //! Ignores: if-shell, run-shell, format strings, hooks, plugins.
 
-use std::collections::HashMap;
 
 /// A parsed tmux.conf directive.
 #[derive(Debug, Clone, PartialEq)]
