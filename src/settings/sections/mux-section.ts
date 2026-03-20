@@ -143,17 +143,19 @@ function renderMuxPrefixInput(
   ctx.addContentListener(button, "click", () => {
     button.classList.add("capturing");
     button.textContent = t("settings.keybinds.pressKey");
-    button.focus();
 
+    let captured = false;
     const keydownHandler = (e: Event) => {
       const ke = e as KeyboardEvent;
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
 
       if (ke.key === "Escape") {
         button.textContent = currentValue;
         button.classList.remove("capturing");
         document.removeEventListener("keydown", keydownHandler, true);
+        captured = true;
         return;
       }
 
@@ -180,15 +182,23 @@ function renderMuxPrefixInput(
       button.textContent = combo;
       button.classList.remove("capturing");
       document.removeEventListener("keydown", keydownHandler, true);
+      captured = true;
 
       ctx.saveSetting("mux", { ...ctx.currentSettings.mux, prefix: combo });
     };
 
     document.addEventListener("keydown", keydownHandler, true);
 
-    // Cleanup if button is removed from DOM (e.g., panel closed during capture)
     const cleanup = () => {
-      document.removeEventListener("keydown", keydownHandler, true);
+      if (!captured) {
+        setTimeout(() => {
+          if (!captured) {
+            button.textContent = currentValue;
+            button.classList.remove("capturing");
+            document.removeEventListener("keydown", keydownHandler, true);
+          }
+        }, 100);
+      }
     };
     button.addEventListener("blur", cleanup, { once: true });
   });
@@ -223,17 +233,20 @@ function renderMuxKeybindInput(
   ctx.addContentListener(button, "click", () => {
     button.classList.add("capturing");
     button.textContent = t("settings.keybinds.pressKey");
-    button.focus();
 
+    let captured = false;
     const keydownHandler = (e: Event) => {
       const ke = e as KeyboardEvent;
+      // Prevent browser shortcuts (Ctrl+N, Ctrl+P, etc.) from firing
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
 
       if (ke.key === "Escape") {
         button.textContent = currentKey;
         button.classList.remove("capturing");
         document.removeEventListener("keydown", keydownHandler, true);
+        captured = true;
         return;
       }
 
@@ -260,6 +273,7 @@ function renderMuxKeybindInput(
       button.textContent = combo;
       button.classList.remove("capturing");
       document.removeEventListener("keydown", keydownHandler, true);
+      captured = true;
 
       const newKeybinds = { ...ctx.currentSettings.mux.keybinds, [action]: combo };
       ctx.saveSetting("mux", { ...ctx.currentSettings.mux, keybinds: newKeybinds });
@@ -267,9 +281,19 @@ function renderMuxKeybindInput(
 
     document.addEventListener("keydown", keydownHandler, true);
 
-    // Cleanup if button is removed from DOM (e.g., panel closed during capture)
+    // Cleanup on blur only if no key was captured yet
+    // (prevents premature removal when focus shifts during key press)
     const cleanup = () => {
-      document.removeEventListener("keydown", keydownHandler, true);
+      if (!captured) {
+        // Delay cleanup to allow keydown to fire first
+        setTimeout(() => {
+          if (!captured) {
+            button.textContent = currentKey;
+            button.classList.remove("capturing");
+            document.removeEventListener("keydown", keydownHandler, true);
+          }
+        }, 100);
+      }
     };
     button.addEventListener("blur", cleanup, { once: true });
   });
