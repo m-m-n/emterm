@@ -31,7 +31,7 @@ pub struct SnapshotEnvelope {
 /// Excludes runtime-only fields: callbacks, pixel metrics, dirty tracking,
 /// scroll events, mode action queue, and parser buffers.
 #[derive(Serialize, Deserialize)]
-pub struct TerminalSnapshot {
+pub(crate) struct TerminalSnapshot {
     // Grid dimensions
     pub cols: u16,
     pub rows: u16,
@@ -67,7 +67,7 @@ pub struct TerminalSnapshot {
 
 impl TerminalCore {
     /// Extract persistent state into a serializable snapshot.
-    pub fn to_snapshot(&self) -> TerminalSnapshot {
+    pub(crate) fn to_snapshot(&self) -> TerminalSnapshot {
         TerminalSnapshot {
             cols: self.cols,
             rows: self.rows,
@@ -100,7 +100,7 @@ impl TerminalCore {
     /// Returns None if the snapshot fails structural invariant checks.
     /// Callbacks are NOT set — caller must re-register them before
     /// processing further data.
-    pub fn from_snapshot(snapshot: TerminalSnapshot) -> Option<Self> {
+    pub(crate) fn from_snapshot(snapshot: TerminalSnapshot) -> Option<Self> {
         // Validate structural invariants
         let s = &snapshot;
         if s.cols == 0 || s.rows == 0 {
