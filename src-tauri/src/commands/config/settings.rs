@@ -490,6 +490,45 @@ pub struct AppSettings {
         deserialize_with = "deserialize_null_markdown_font_size"
     )]
     pub markdown_font_size: u32,
+
+    // Mux (multiplexer) settings
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub mux: MuxSettings,
+}
+
+/// Multiplexer settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MuxSettings {
+    #[serde(default = "default_mux_prefix")]
+    pub prefix: String,
+    #[serde(default)]
+    pub base_index: u32,
+    #[serde(default = "default_true")]
+    pub mouse: bool,
+    #[serde(default = "default_mux_status_position")]
+    pub status_position: String,
+    #[serde(default)]
+    pub tab_always_expand: bool,
+}
+
+fn default_mux_prefix() -> String {
+    "ctrl+b".to_string()
+}
+
+fn default_mux_status_position() -> String {
+    "bottom".to_string()
+}
+
+impl Default for MuxSettings {
+    fn default() -> Self {
+        Self {
+            prefix: default_mux_prefix(),
+            base_index: 0,
+            mouse: true,
+            status_position: default_mux_status_position(),
+            tab_always_expand: false,
+        }
+    }
 }
 
 impl Default for AppSettings {
@@ -547,6 +586,7 @@ impl Default for AppSettings {
             clipboard_read_osc52: default_true(),
             clipboard_max_size_osc52: default_clipboard_max_size_osc52(),
             log_recording_enabled: false,
+            mux: MuxSettings::default(),
         }
     }
 }
