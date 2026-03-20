@@ -35,6 +35,10 @@ export interface OscHandlerContext {
   titleChangeCallback: ((title: string) => void) | null;
   lastWindowTitle: string;
   setLastWindowTitle: (title: string) => void;
+  /** Callback for mux attach OSC sequence */
+  muxAttachCallback: ((socketPath: string, sessionId: number) => void) | null;
+  /** Callback for mux detach OSC sequence */
+  muxDetachCallback: (() => void) | null;
 }
 
 /**
@@ -195,8 +199,10 @@ export function handleOscCallback(
       const parts = data.split(";");
       const verb = parts[0] || "";
       const params = parts.slice(1);
-      // Handle fold commands first
-      if (verb === "emterm" && params.length > 0 && params[0] === "fold") {
+      // Handle mux commands (emterm;mux;action;...)
+      if (verb === "emterm" && params.length > 0 && params[0] === "mux") {
+        handleMuxOsc(ctx, params);
+      } else if (verb === "emterm" && params.length > 0 && params[0] === "fold") {
         handleFoldCommand(ctx.state, params.slice(1));
       } else if (verb === "emterm" && params.length > 0 && params[0] === "download") {
         // Route to download manager
@@ -283,5 +289,43 @@ export function updateWindowTitle(ctx: OscHandlerContext, title: string): void {
 
   if (ctx.titleChangeCallback) {
     ctx.titleChangeCallback(title || "Terminal");
+  }
+}
+
+/**
+ * Handle mux OSC commands (emterm;mux;action;...).
+ * Dispatched from the OSC 777 handler when params[0] === "mux".
+ */
+function handleMuxOsc(ctx: OscHandlerContext, params: string[]): void {
+  const action = params[1];
+  if (action === "attach" && params.length >= 4) {
+    const socketPath = params[2]!;
+    const sessionId = parseInt(params[3]!, 10);
+
+    // Validate socket path
+    if (socketPath.includes("../") || socketPath.includes("..\\")) {
+      console.error("[ERROR][FRONTEND] Mux attach: path traversal in socket path");
+      return;
+    }
+    if (!socketPath.includes("emterm")) {
+      console.error("[ERROR][FRONTEND] Mux attach: socket path not in emterm directory");
+      return;
+    }
+
+    console.info(
+      `[INFO][FRONTEND] Mux attach: socket=${socketPath}, session=${sessionId}`,
+    );
+
+    // Emit mux:attach event for TerminalApp to handle mode switch
+    if (ctx.muxAttachCallback) {
+      ctx.muxAttachCallback(socketPath, isNaN(sessionId) ? 0 : sessionId);
+    }
+  } else if (action === "detach") {
+    console.info("[INFO][FRONTEND] Mux detach");
+    if (ctx.muxDetachCallback) {
+      ctx.muxDetachCallback();
+    }
+  } else {
+    console.warn("[WARN][FRONTEND] Unknown mux action:", action);
   }
 }
