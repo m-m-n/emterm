@@ -295,6 +295,8 @@ export class SettingsPanel {
     this.currentSettings[key] = value;
     try {
       await SettingsService.save(this.currentSettings);
+      // Notify listeners (e.g., TerminalApp for mux keybind changes)
+      window.dispatchEvent(new CustomEvent("emterm-settings-changed", { detail: { key } }));
     } catch (error) {
       console.error("Failed to save setting:", error);
     }

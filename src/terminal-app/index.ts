@@ -224,6 +224,13 @@ export class TerminalApp {
       this.exitMuxMode();
     };
 
+    // Listen for settings changes to update mux keybinds in real-time
+    window.addEventListener("emterm-settings-changed", ((e: CustomEvent) => {
+      if (e.detail?.key === "mux") {
+        this.reloadMuxSettings();
+      }
+    }) as EventListener);
+
     // Set up PTY output handler
     await this.setupPtyHandlers();
 
@@ -629,6 +636,29 @@ export class TerminalApp {
     }
   }
 
+  /** Switch to the current activeMuxWindowIndex: clear screen, trigger PTY redraw, update UI. */
+  private switchMuxWindow(): void {
+    this.clearMuxScreen();
+    this.emitMuxStateChange();
+    // Send Ctrl+L to the active pane to trigger shell redraw
+    const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
+    if (this.muxClient && activePaneId != null) {
+      this.muxClient.sendInput(activePaneId, new Uint8Array([0x0c])).catch(() => {});
+    }
+  }
+
+  /** Re-apply mux keybind settings (call when settings change at runtime). */
+  reloadMuxSettings(): void {
+    if (!this.inMuxMode || !this.keyboardHandler) return;
+    const muxSettings = SettingsService.getCached()?.mux;
+    if (muxSettings) {
+      this.keyboardHandler.updateMuxSettings(
+        muxSettings.prefix ?? "Ctrl+B",
+        muxSettings.keybinds ?? {},
+      );
+    }
+  }
+
   /** Notify listeners of mux window state changes. */
   private emitMuxStateChange(): void {
     this.onMuxStateChange?.({
@@ -778,16 +808,14 @@ export class TerminalApp {
       case "next-window": {
         if (this.muxWindows.length > 1) {
           this.activeMuxWindowIndex = (this.activeMuxWindowIndex + 1) % this.muxWindows.length;
-          this.clearMuxScreen();
-          this.emitMuxStateChange();
+          this.switchMuxWindow();
         }
         break;
       }
       case "prev-window": {
         if (this.muxWindows.length > 1) {
           this.activeMuxWindowIndex = (this.activeMuxWindowIndex - 1 + this.muxWindows.length) % this.muxWindows.length;
-          this.clearMuxScreen();
-          this.emitMuxStateChange();
+          this.switchMuxWindow();
         }
         break;
       }
