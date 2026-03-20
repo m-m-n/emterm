@@ -1,7 +1,7 @@
 /**
  * Mux status bar component.
  *
- * HTML-rendered status bar showing session name, window list, and time.
+ * DOM-rendered status bar showing session name, window list, and time.
  * Event-driven updates from daemon (no polling).
  */
 
@@ -93,23 +93,40 @@ export class MuxStatusBar {
   }
 
   private render(): void {
-    const left = this.renderLeft();
-    const right = this.renderRight();
-    this.element.innerHTML = `<span>${left}</span><span>${right}</span>`;
+    // Clear existing children
+    while (this.element.firstChild) {
+      this.element.removeChild(this.element.firstChild);
+    }
+
+    const leftSpan = document.createElement("span");
+    this.renderLeft(leftSpan);
+
+    const rightSpan = document.createElement("span");
+    rightSpan.textContent = this.renderRight();
+
+    this.element.appendChild(leftSpan);
+    this.element.appendChild(rightSpan);
   }
 
-  private renderLeft(): string {
-    const session = this.escapeHtml(this.data.sessionName || "mux");
-    const windows = this.data.windowNames
-      .map((name, i) => {
-        const escaped = this.escapeHtml(name);
-        if (i === this.data.activeWindowIndex) {
-          return `<span style="color:var(--md-sys-color-primary,#D0BCFF)">${i}:${escaped}*</span>`;
-        }
-        return `${i}:${escaped}`;
-      })
-      .join(" ");
-    return `[${session}] ${windows}`;
+  private renderLeft(container: HTMLElement): void {
+    const sessionName = this.data.sessionName || "mux";
+    container.appendChild(document.createTextNode(`[${sessionName}] `));
+
+    this.data.windowNames.forEach((name, i) => {
+      if (i > 0) {
+        container.appendChild(document.createTextNode(" "));
+      }
+
+      const label = `${i}:${name}`;
+      if (i === this.data.activeWindowIndex) {
+        const activeSpan = document.createElement("span");
+        activeSpan.style.color = "var(--md-sys-color-primary, #D0BCFF)";
+        activeSpan.textContent = `${label}*`;
+        container.appendChild(activeSpan);
+      } else {
+        container.appendChild(document.createTextNode(label));
+      }
+    });
   }
 
   private renderRight(): string {
@@ -123,13 +140,5 @@ export class MuxStatusBar {
     this.timeInterval = setInterval(() => {
       this.render();
     }, 60_000); // Update every minute
-  }
-
-  private escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
   }
 }

@@ -71,18 +71,27 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to daemon for detach notification
     // (blocking until detached or daemon exits)
-    let stream = std::os::unix::net::UnixStream::connect(&sock_path)?;
-    stream.set_read_timeout(None)?;
+    #[cfg(unix)]
+    {
+        let stream = std::os::unix::net::UnixStream::connect(&sock_path)?;
+        stream.set_read_timeout(None)?;
 
-    // Simple blocking read — daemon will close our connection on detach
-    let mut reader = std::io::BufReader::new(stream);
-    let mut buf = [0u8; 1024];
-    loop {
-        match std::io::Read::read(&mut reader, &mut buf) {
-            Ok(0) => break, // Connection closed (detach or daemon exit)
-            Ok(_) => {}     // Ignore data (CLI doesn't process it)
-            Err(_) => break,
+        // Simple blocking read — daemon will close our connection on detach
+        let mut reader = std::io::BufReader::new(stream);
+        let mut buf = [0u8; 1024];
+        loop {
+            match std::io::Read::read(&mut reader, &mut buf) {
+                Ok(0) => break, // Connection closed (detach or daemon exit)
+                Ok(_) => {}     // Ignore data (CLI doesn't process it)
+                Err(_) => break,
+            }
         }
+    }
+
+    #[cfg(windows)]
+    {
+        // TODO: Windows named pipe support for mux daemon connection
+        return Err("Mux is not yet supported on Windows".into());
     }
 
     Ok(())
