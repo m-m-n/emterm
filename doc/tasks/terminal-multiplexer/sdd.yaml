@@ -34,17 +34,16 @@ workflow:
     completed_at_commit: f58b80401266dd4c5c49d7facadc2a5bf3a43173
   - id: implement
     status: completed
-    completed_at_commit: cd32dc6e5d8281ff7542a2f68596ef7adff9b633
   - id: check
     status: completed
-    completed_at_commit: 539ab437f35aaf9d22236ae86760f5276f1f73f8
+    completed_at_commit: 9330db3801ffa5fa8dce72f7047caa98ab78ec8f
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: completed
-    completed_at_commit: 8fae8db0436892dccf28b026065a0565ae460a4c
+    completed_at_commit: 9330db3801ffa5fa8dce72f7047caa98ab78ec8f
   - id: review
     status: completed
-    completed_at_commit: 5d937322bf26b11b7cd493b7584ad6440eb93876
+    completed_at_commit: 9330db3801ffa5fa8dce72f7047caa98ab78ec8f
 
 requirements:
   FR1:

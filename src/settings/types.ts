@@ -121,6 +121,8 @@ export interface MuxSettings {
   mouse: boolean;
   status_position: string;
   tab_always_expand: boolean;
+  tmux_conf_imported: boolean;
+  keybinds: Record<string, string>;
 }
 
 export interface KeybindSettings {

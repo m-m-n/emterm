@@ -61,9 +61,10 @@ As an eMterm user, I want to enter copy mode to select and copy text using vi/em
 As a tmux user, I want to import my tmux.conf settings, so that my keybindings and preferences carry over.
 
 **Acceptance Criteria:**
-- [ ] Supported settings are converted to `settings.json` `mux` section
-- [ ] Unsupported settings produce warnings
+- [ ] On first mux startup, `~/.tmux.conf` is automatically parsed and settings imported to `settings.json` `mux` section
+- [ ] Unsupported settings produce warnings (logged)
 - [ ] Prefix key, keybindings, base-index, mouse, status-position are converted
+- [ ] Imported keybindings are editable in the settings panel
 
 ## Technical Requirements
 
@@ -484,9 +485,10 @@ Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirr
 ### Phase 7: tmux.conf Conversion
 **Goals:** Settings migration from tmux
 **Deliverables:**
-- Regex-based tmux.conf parser
-- Settings mapping to `mux` section
-- Warning display for unsupported directives
+- Tokenizer-based tmux.conf parser
+- Auto-import on first mux startup (`~/.tmux.conf` → `settings.json` mux section)
+- Warning display for unsupported directives (backend log)
+- Mux keybinding editor in settings panel
 
 ## References
 

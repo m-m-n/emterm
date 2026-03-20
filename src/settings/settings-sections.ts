@@ -14,3 +14,4 @@ export { renderSshSection } from "./sections/ssh-section";
 export { renderMarkdownViewerSection } from "./sections/markdown-viewer-section";
 export { renderProfilesSection } from "./sections/profiles-section";
 export { renderLogSection } from "./sections/log-section";
+export { renderMuxSection } from "./sections/mux-section";
