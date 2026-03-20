@@ -647,6 +647,36 @@ export class TerminalApp {
     }
   }
 
+  /** Handle a mux pane exiting (shell closed). Remove the window and switch if needed. */
+  private handleMuxPaneExited(paneId: number): void {
+    const windowIdx = this.muxPaneIds.indexOf(paneId);
+    if (windowIdx === -1) return;
+
+    console.info(`[INFO][FRONTEND] Mux pane ${paneId} exited (window ${windowIdx})`);
+
+    // Remove the window
+    this.muxWindows.splice(windowIdx, 1);
+    this.muxPaneIds.splice(windowIdx, 1);
+
+    // If no windows left, exit mux mode
+    if (this.muxWindows.length === 0) {
+      this.exitMuxMode();
+      return;
+    }
+
+    // Adjust active window index
+    if (this.activeMuxWindowIndex >= this.muxWindows.length) {
+      this.activeMuxWindowIndex = this.muxWindows.length - 1;
+    }
+
+    // Renumber window names
+    for (let i = 0; i < this.muxWindows.length; i++) {
+      this.muxWindows[i]!.name = `${i}:shell`;
+    }
+
+    this.switchMuxWindow();
+  }
+
   /** Re-apply mux keybind settings (call when settings change at runtime). */
   reloadMuxSettings(): void {
     if (!this.inMuxMode || !this.keyboardHandler) return;
@@ -693,6 +723,11 @@ export class TerminalApp {
       if (paneId === activePaneId && this.ptyHandlerHandle) {
         this.ptyHandlerHandle.injectData(data);
       }
+    });
+
+    // Set up PTY exit handler -- remove window when its pane exits
+    this.muxClient.setOnPtyExited((paneId: number) => {
+      this.handleMuxPaneExited(paneId);
     });
 
     // Start output stream

@@ -74,7 +74,9 @@ export class MuxClient {
   private _state: MuxConnectionState = "disconnected";
   private onStateChange: ((state: MuxConnectionState) => void) | null = null;
   private outputUnlisten: UnlistenFn | null = null;
+  private exitedUnlisten: UnlistenFn | null = null;
   private onPtyOutput: ((paneId: number, data: Uint8Array) => void) | null = null;
+  private onPtyExited: ((paneId: number) => void) | null = null;
 
   get state(): MuxConnectionState {
     return this._state;
@@ -111,6 +113,11 @@ export class MuxClient {
     this.onPtyOutput = callback;
   }
 
+  /** Set callback for PTY exit notification. */
+  setOnPtyExited(callback: (paneId: number) => void): void {
+    this.onPtyExited = callback;
+  }
+
   /** Start the output stream -- calls mux_start_output_stream and listens for events. */
   async startOutputStream(): Promise<void> {
     if (!this.connId) throw new Error("Not connected");
@@ -125,6 +132,16 @@ export class MuxClient {
       },
     );
 
+    // Listen for mux-pty-exited events
+    this.exitedUnlisten = await listen<{ pane_id: number; exit_code: number | null }>(
+      "mux-pty-exited",
+      (event) => {
+        if (this.onPtyExited) {
+          this.onPtyExited(event.payload.pane_id);
+        }
+      },
+    );
+
     // Tell backend to start reading output from daemon
     await invoke("mux_start_output_stream", { connId: this.connId });
   }
@@ -134,6 +151,10 @@ export class MuxClient {
     if (this.outputUnlisten) {
       this.outputUnlisten();
       this.outputUnlisten = null;
+    }
+    if (this.exitedUnlisten) {
+      this.exitedUnlisten();
+      this.exitedUnlisten = null;
     }
     if (this.connId) {
       try {
