@@ -5,6 +5,7 @@
 /// a versioned envelope for forward compatibility.
 use std::collections::HashMap;
 
+use bincode::Options;
 use serde::{Deserialize, Serialize};
 
 use crate::cell::{Cell, PackedColor};
@@ -12,6 +13,10 @@ use crate::terminal_core::{CursorState, TerminalCore};
 
 /// Current snapshot format version. Increment when fields change.
 pub const SNAPSHOT_VERSION: u32 = 1;
+
+/// Maximum snapshot size for deserialization (64MB).
+/// Prevents OOM from crafted inputs with inflated length prefixes.
+const MAX_SNAPSHOT_SIZE: u64 = 64 * 1024 * 1024;
 
 /// Versioned envelope for terminal snapshots.
 #[derive(Serialize, Deserialize)]
@@ -90,12 +95,37 @@ impl TerminalCore {
         }
     }
 
-    /// Restore a TerminalCore from a snapshot.
+    /// Restore a TerminalCore from a validated snapshot.
     ///
-    /// Creates a new instance with all persistent state restored.
+    /// Returns None if the snapshot fails structural invariant checks.
     /// Callbacks are NOT set — caller must re-register them before
     /// processing further data.
-    pub fn from_snapshot(snapshot: TerminalSnapshot) -> Self {
+    pub fn from_snapshot(snapshot: TerminalSnapshot) -> Option<Self> {
+        // Validate structural invariants
+        let s = &snapshot;
+        if s.cols == 0 || s.rows == 0 {
+            return None;
+        }
+        let expected_cells = s.ring_capacity.checked_mul(s.cols as usize)?;
+        if s.ring_cells.len() != expected_cells {
+            return None;
+        }
+        if s.ring_wrapped.len() != s.ring_capacity {
+            return None;
+        }
+        if s.ring_capacity > 0 && s.ring_head >= s.ring_capacity {
+            return None;
+        }
+        if s.ring_size > s.ring_capacity || s.ring_size < s.rows as usize {
+            return None;
+        }
+        if s.cursor.row >= s.rows || s.cursor.col > s.cols {
+            return None;
+        }
+        if s.scroll_region_bottom > s.rows || s.scroll_region_top >= s.scroll_region_bottom {
+            return None;
+        }
+
         let dirty_words = (snapshot.rows as usize + 63) / 64;
         let mut dirty = vec![0u64; dirty_words];
         // Mark all rows dirty so first render draws everything
@@ -103,7 +133,7 @@ impl TerminalCore {
             *word = u64::MAX;
         }
 
-        Self {
+        Some(Self {
             cols: snapshot.cols,
             rows: snapshot.rows,
             ring_cells: snapshot.ring_cells,
@@ -143,7 +173,7 @@ impl TerminalCore {
             active_hyperlink_id: snapshot.active_hyperlink_id,
             cursor_just_shown: false,
             cursor_show_interrupt: snapshot.cursor_show_interrupt,
-        }
+        })
     }
 
     /// Serialize terminal state to bytes with version envelope.
@@ -162,15 +192,20 @@ impl TerminalCore {
 
     /// Restore terminal state from versioned bytes.
     ///
-    /// Returns None if the version is incompatible or data is corrupted.
+    /// Returns None if the version is incompatible, data is corrupted,
+    /// data exceeds size limit, or structural invariants fail.
     /// Callbacks are NOT set on the restored instance.
     pub fn restore_from_bytes(bytes: &[u8]) -> Option<Self> {
-        let envelope: SnapshotEnvelope = bincode::deserialize(bytes).ok()?;
+        let opts = bincode::DefaultOptions::new()
+            .with_limit(MAX_SNAPSHOT_SIZE)
+            .with_fixint_encoding()
+            .with_little_endian();
+        let envelope: SnapshotEnvelope = opts.deserialize(bytes).ok()?;
         if envelope.version != SNAPSHOT_VERSION {
             return None;
         }
-        let snapshot: TerminalSnapshot = bincode::deserialize(&envelope.payload).ok()?;
-        Some(Self::from_snapshot(snapshot))
+        let snapshot: TerminalSnapshot = opts.deserialize(&envelope.payload).ok()?;
+        Self::from_snapshot(snapshot)
     }
 }
 
@@ -358,5 +393,61 @@ mod tests {
         assert_eq!(link.1, "https://example.com");
         assert_eq!(restored.hyperlink_next_id, 2);
         assert_eq!(restored.active_hyperlink_id, 1);
+    }
+
+    #[test]
+    fn test_from_snapshot_rejects_invalid_ring_cells_len() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let mut snapshot = core.to_snapshot();
+        snapshot.ring_cells.push(Cell::EMPTY); // wrong length
+        assert!(
+            TerminalCore::from_snapshot(snapshot).is_none(),
+            "Should reject mismatched ring_cells length"
+        );
+    }
+
+    #[test]
+    fn test_from_snapshot_rejects_invalid_ring_head() {
+        let core = TerminalCore::new(80, 24, 0);
+        let mut snapshot = core.to_snapshot();
+        snapshot.ring_head = snapshot.ring_capacity; // out of bounds
+        assert!(
+            TerminalCore::from_snapshot(snapshot).is_none(),
+            "Should reject ring_head >= ring_capacity"
+        );
+    }
+
+    #[test]
+    fn test_from_snapshot_rejects_invalid_cursor() {
+        let core = TerminalCore::new(80, 24, 0);
+        let mut snapshot = core.to_snapshot();
+        snapshot.cursor.row = 24; // row >= rows
+        assert!(
+            TerminalCore::from_snapshot(snapshot).is_none(),
+            "Should reject cursor.row >= rows"
+        );
+    }
+
+    #[test]
+    fn test_from_snapshot_rejects_zero_dimensions() {
+        let core = TerminalCore::new(80, 24, 0);
+        let mut snapshot = core.to_snapshot();
+        snapshot.cols = 0;
+        assert!(
+            TerminalCore::from_snapshot(snapshot).is_none(),
+            "Should reject zero cols"
+        );
+    }
+
+    #[test]
+    fn test_from_snapshot_rejects_bad_scroll_region() {
+        let core = TerminalCore::new(80, 24, 0);
+        let mut snapshot = core.to_snapshot();
+        snapshot.scroll_region_top = 20;
+        snapshot.scroll_region_bottom = 10; // top >= bottom
+        assert!(
+            TerminalCore::from_snapshot(snapshot).is_none(),
+            "Should reject scroll_region_top >= scroll_region_bottom"
+        );
     }
 }
