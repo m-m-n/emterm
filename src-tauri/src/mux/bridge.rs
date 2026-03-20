@@ -222,6 +222,102 @@ pub async fn mux_send_control(
     }
 }
 
+/// Start a background task that continuously reads PTY output from the daemon
+/// and emits Tauri events to the frontend.
+///
+/// The task reads length-prefixed frames from the connection, filters for
+/// PtyOutput messages, and emits `mux-pty-output` events with the pane ID
+/// and raw data. The task runs until the connection closes or an error occurs.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub async fn mux_start_output_stream(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, MuxBridgeState>,
+    conn_id: String,
+) -> Result<(), String> {
+    let conns = state.connections.lock().await;
+    let stream = conns
+        .get(&conn_id)
+        .ok_or_else(|| "Connection not found".to_string())?
+        .clone();
+    drop(conns);
+
+    tokio::spawn(async move {
+        let mut stream = stream.lock().await;
+        loop {
+            let mut len_buf = [0u8; 4];
+            if AsyncReadExt::read_exact(&mut *stream, &mut len_buf)
+                .await
+                .is_err()
+            {
+                break;
+            }
+            let frame_len = u32::from_be_bytes(len_buf) as usize;
+            if frame_len > MAX_FRAME_LENGTH || frame_len == 0 {
+                break;
+            }
+
+            let mut frame_buf = vec![0u8; frame_len];
+            if AsyncReadExt::read_exact(&mut *stream, &mut frame_buf)
+                .await
+                .is_err()
+            {
+                break;
+            }
+
+            if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
+                match msg.msg_type {
+                    MessageType::PtyOutput => {
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "mux-pty-output",
+                            MuxPtyOutputEvent {
+                                pane_id: msg.pane_id,
+                                data: msg.payload,
+                            },
+                        );
+                    }
+                    MessageType::PtyExited => {
+                        use tauri::Emitter;
+                        let exit_msg: Option<PtyExitedMsg> = msg.decode_payload();
+                        let _ = app.emit(
+                            "mux-pty-exited",
+                            MuxPtyExitedEvent {
+                                pane_id: msg.pane_id,
+                                exit_code: exit_msg.and_then(|m| m.exit_code),
+                            },
+                        );
+                    }
+                    _ => {
+                        log::debug!(
+                            "Output stream ignoring {:?} for pane {}",
+                            msg.msg_type,
+                            msg.pane_id
+                        );
+                    }
+                }
+            }
+        }
+        log::info!("Mux output stream ended for connection");
+    });
+
+    Ok(())
+}
+
+/// PTY output event emitted to the frontend.
+#[derive(Clone, serde::Serialize)]
+struct MuxPtyOutputEvent {
+    pane_id: u32,
+    data: Vec<u8>,
+}
+
+/// PTY exit event emitted to the frontend.
+#[derive(Clone, serde::Serialize)]
+struct MuxPtyExitedEvent {
+    pane_id: u32,
+    exit_code: Option<u32>,
+}
+
 /// Read a single length-prefixed frame from the stream.
 async fn read_one_frame(stream: &mut UnixStream) -> Result<Vec<u8>, String> {
     let mut len_buf = [0u8; 4];

@@ -6,6 +6,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** IPC message type constants (must match protocol.rs MessageType). */
 export const MuxMessageType = {
@@ -72,6 +73,8 @@ export class MuxClient {
   private connId: string | null = null;
   private _state: MuxConnectionState = "disconnected";
   private onStateChange: ((state: MuxConnectionState) => void) | null = null;
+  private outputUnlisten: UnlistenFn | null = null;
+  private onPtyOutput: ((paneId: number, data: Uint8Array) => void) | null = null;
 
   get state(): MuxConnectionState {
     return this._state;
@@ -103,8 +106,35 @@ export class MuxClient {
     }
   }
 
+  /** Set callback for PTY output from daemon panes. */
+  setOnPtyOutput(callback: (paneId: number, data: Uint8Array) => void): void {
+    this.onPtyOutput = callback;
+  }
+
+  /** Start the output stream -- calls mux_start_output_stream and listens for events. */
+  async startOutputStream(): Promise<void> {
+    if (!this.connId) throw new Error("Not connected");
+
+    // Listen for mux-pty-output events
+    this.outputUnlisten = await listen<{ pane_id: number; data: number[] }>(
+      "mux-pty-output",
+      (event) => {
+        if (this.onPtyOutput) {
+          this.onPtyOutput(event.payload.pane_id, new Uint8Array(event.payload.data));
+        }
+      },
+    );
+
+    // Tell backend to start reading output from daemon
+    await invoke("mux_start_output_stream", { connId: this.connId });
+  }
+
   /** Disconnect from the daemon. */
   async disconnect(): Promise<void> {
+    if (this.outputUnlisten) {
+      this.outputUnlisten();
+      this.outputUnlisten = null;
+    }
     if (this.connId) {
       try {
         await invoke("mux_disconnect", { connId: this.connId });

@@ -114,6 +114,7 @@ pub fn run() {
             crate::mux::bridge::mux_handshake,
             crate::mux::bridge::mux_send_input,
             crate::mux::bridge::mux_send_control,
+            crate::mux::bridge::mux_start_output_stream,
         ])
         .setup(|app| {
             // Initialize custom logger for backend

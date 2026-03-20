@@ -24,7 +24,7 @@ import { MuxClient, MuxMessageType } from "../terminal/mux/mux-client";
 import type { MuxAction } from "../terminal/mux/prefix-key";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
-import { setupPtyHandlers } from "./pty-handler";
+import { setupPtyHandlers, type PtyHandlerHandle } from "./pty-handler";
 import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
@@ -68,6 +68,7 @@ export class TerminalApp {
   private pendingOscQueue: { actionType: number; data: string }[] = [];
   private oscColorHandler: OscColorHandler = new OscColorHandler();
   private cursorShapeStack: CursorShapeStack = new CursorShapeStack();
+  private ptyHandlerHandle: PtyHandlerHandle | null = null;
 
   /**
    * Creates a new TerminalApp instance
@@ -469,7 +470,7 @@ export class TerminalApp {
    * Delegates to pty-handler module.
    */
   private async setupPtyHandlers(): Promise<void> {
-    await setupPtyHandlers({
+    this.ptyHandlerHandle = await setupPtyHandlers({
       getState: () => this.state,
       getRenderer: () => this.renderer,
       getPtyClient: () => this.ptyClient,
@@ -626,13 +627,40 @@ export class TerminalApp {
       return;
     }
 
-    // Enable prefix key handling
+    // Set up PTY output handler -- feed daemon output into existing WASM pipeline
+    this.muxClient.setOnPtyOutput((_paneId: number, data: Uint8Array) => {
+      if (this.ptyHandlerHandle) {
+        this.ptyHandlerHandle.injectData(data);
+      }
+    });
+
+    // Start output stream
+    try {
+      await this.muxClient.startOutputStream();
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Mux start output stream failed:", e);
+    }
+
+    // Create initial window (spawns a shell in daemon)
+    try {
+      await this.muxClient.sendControl(MuxMessageType.CreateWindow, 0);
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Mux create window failed:", e);
+    }
+
+    // Enable prefix key handling with input routing
     const muxSettings = SettingsService.getCached()?.mux;
     if (this.keyboardHandler) {
       this.keyboardHandler.enableMuxMode(
         muxSettings?.prefix ?? "Ctrl+B",
         muxSettings?.keybinds ?? {},
         (action) => this.handleMuxAction(action),
+        (data: Uint8Array) => {
+          // Route keyboard input through daemon
+          if (this.muxClient) {
+            this.muxClient.sendInput(0, data).catch(() => {});
+          }
+        },
       );
     }
 
