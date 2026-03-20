@@ -12,6 +12,10 @@ import { showPasteDialog, sendTextInChunks } from "../../clipboard";
 import { SettingsService } from "../../settings/settings-service";
 import { matchKeybindStr } from "../../keybind/matcher";
 import { isModalOverlayVisible } from "../../shared/dom-utils";
+import {
+  PrefixKeyHandler,
+  type MuxAction,
+} from "../../terminal/mux/prefix-key";
 
 /**
  * Extended options for keyboard handler including IME integration
@@ -39,6 +43,10 @@ export interface KeyboardHandlerContext {
   onRestoreFocus?: () => void;
   /** Callback to exit scrollback mode (scroll to bottom) */
   onExitScrollback?: () => void;
+  /** Whether mux mode is active */
+  muxMode?: boolean;
+  /** Callback when a mux action is triggered via prefix key */
+  onMuxAction?: (action: MuxAction) => void;
 }
 
 /**
@@ -56,6 +64,8 @@ export class KeyboardHandler {
   private onToggleSearch: (() => void) | null;
   private onRestoreFocus: (() => void) | null;
   private onExitScrollback: (() => void) | null;
+  private prefixKeyHandler: PrefixKeyHandler | null = null;
+  private onMuxAction: ((action: MuxAction) => void) | null;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -77,6 +87,18 @@ export class KeyboardHandler {
     this.onToggleSearch = context.onToggleSearch || null;
     this.onRestoreFocus = context.onRestoreFocus || null;
     this.onExitScrollback = context.onExitScrollback || null;
+    this.onMuxAction = context.onMuxAction ?? null;
+
+    if (context.muxMode) {
+      const muxSettings = SettingsService.getCached()?.mux;
+      this.prefixKeyHandler = new PrefixKeyHandler(
+        muxSettings?.prefix ?? "Ctrl+B",
+        muxSettings?.keybinds ?? {},
+      );
+      if (this.onMuxAction) {
+        this.prefixKeyHandler.setOnAction(this.onMuxAction);
+      }
+    }
   }
 
   /**
@@ -84,6 +106,16 @@ export class KeyboardHandler {
    */
   setSelectionController(controller: SelectionController | null): void {
     this.selectionController = controller;
+  }
+
+  /** Update mux prefix key handler with new settings. */
+  updateMuxSettings(prefix: string, keybinds: Record<string, string>): void {
+    if (this.prefixKeyHandler) {
+      this.prefixKeyHandler = new PrefixKeyHandler(prefix, keybinds);
+      if (this.onMuxAction) {
+        this.prefixKeyHandler.setOnAction(this.onMuxAction);
+      }
+    }
   }
 
   /**
@@ -175,6 +207,14 @@ export class KeyboardHandler {
     if (event.key === "Escape" && this.selectionController) {
       if (this.selectionController.hasSelection()) {
         this.selectionController.clearSelection();
+        event.preventDefault();
+        return;
+      }
+    }
+
+    // Mux prefix key handling
+    if (this.prefixKeyHandler) {
+      if (this.prefixKeyHandler.handleKeyEvent(event)) {
         event.preventDefault();
         return;
       }

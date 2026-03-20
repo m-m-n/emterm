@@ -1,10 +1,12 @@
 /**
  * Prefix key state machine for mux operations.
  *
- * States: idle → waiting (prefix pressed) → dispatch (action key pressed)
+ * States: idle -> waiting (prefix pressed) -> dispatch (action key pressed)
  *
- * Default prefix: Ctrl+b (tmux compatible)
+ * Default prefix: Ctrl+B (tmux compatible)
  */
+
+import { matchKeybindStr, parseKeybind } from "../../keybind/matcher";
 
 /** Mux action dispatched after prefix + key. */
 export type MuxAction =
@@ -26,38 +28,56 @@ export type MuxAction =
 /** Prefix key handler state. */
 export type PrefixKeyState = "idle" | "waiting";
 
-/** Default key bindings (tmux-compatible). */
-const DEFAULT_BINDINGS: Record<string, MuxAction> = {
-  "%": { type: "split-vertical" },
-  '"': { type: "split-horizontal" },
-  o: { type: "next-pane" },
-  ";": { type: "prev-pane" },
-  x: { type: "close-pane" },
-  z: { type: "zoom-toggle" },
-  d: { type: "detach" },
-  c: { type: "new-window" },
-  n: { type: "next-window" },
-  p: { type: "prev-window" },
-  ",": { type: "rename-window" },
-  "[": { type: "copy-mode" },
-  "]": { type: "paste" },
+/** Default action bindings (action -> keybind string, tmux-compatible). */
+export const DEFAULT_ACTION_BINDINGS: Record<string, string> = {
+  "split-vertical": "%",
+  "split-horizontal": '"',
+  "next-pane": "o",
+  "prev-pane": ";",
+  "close-pane": "x",
+  "zoom-toggle": "z",
+  "detach": "d",
+  "new-window": "c",
+  "next-window": "n",
+  "prev-window": "p",
+  "rename-window": ",",
+  "copy-mode": "[",
+  "paste": "]",
 };
 
 /**
+ * Check if a keybind string contains modifiers (Ctrl, Shift, Alt, Meta).
+ * Single characters like "c" or "%" have no modifiers.
+ */
+function hasModifiers(keybindStr: string): boolean {
+  const parsed = parseKeybind(keybindStr);
+  return parsed.ctrlKey || parsed.shiftKey || parsed.altKey || parsed.metaKey;
+}
+
+/**
  * Prefix key handler for mux mode.
+ *
+ * Accepts keybind strings in settings format (e.g., "Ctrl+B", "Ctrl+Z").
+ * Action bindings can be single chars ("c", "%") or key combos ("Ctrl+N").
  */
 export class PrefixKeyHandler {
   private _state: PrefixKeyState = "idle";
-  private prefixKey: string;
-  private prefixCtrl: boolean;
-  private bindings: Record<string, MuxAction>;
+  private prefixKeybind: string;
+  private actionBindings: Record<string, string>;
   private onAction: ((action: MuxAction) => void) | null = null;
   private timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(prefix = "b", prefixCtrl = true, customBindings?: Record<string, MuxAction>) {
-    this.prefixKey = prefix;
-    this.prefixCtrl = prefixCtrl;
-    this.bindings = { ...DEFAULT_BINDINGS, ...customBindings };
+  constructor(
+    prefixKeybind = "Ctrl+B",
+    customBindings?: Record<string, string>,
+  ) {
+    this.prefixKeybind = prefixKeybind;
+    this.actionBindings = { ...DEFAULT_ACTION_BINDINGS };
+    if (customBindings) {
+      for (const [action, key] of Object.entries(customBindings)) {
+        if (key) this.actionBindings[action] = key;
+      }
+    }
   }
 
   get state(): PrefixKeyState {
@@ -75,16 +95,15 @@ export class PrefixKeyHandler {
    */
   handleKeyEvent(event: KeyboardEvent): boolean {
     if (this._state === "idle") {
-      // Check for prefix key
-      if (this.isPrefix(event)) {
+      if (matchKeybindStr(event, this.prefixKeybind)) {
         this._state = "waiting";
         // Auto-reset after 2 seconds if no action key pressed
         this.timeoutId = setTimeout(() => {
           this._state = "idle";
         }, 2000);
-        return true; // Consume prefix key
+        return true;
       }
-      return false; // Not consumed
+      return false;
     }
 
     // State: waiting for action key
@@ -92,19 +111,19 @@ export class PrefixKeyHandler {
     this._state = "idle";
 
     // Check if it's the prefix key again (send prefix to PTY)
-    if (this.isPrefix(event)) {
+    if (matchKeybindStr(event, this.prefixKeybind)) {
       this.onAction?.({ type: "prefix-passthrough" });
       return true;
     }
 
-    // Look up binding
-    const action = this.bindings[event.key];
+    // Look up binding by iterating action bindings
+    const action = this.matchActionBinding(event);
     if (action) {
-      this.onAction?.(action);
+      this.onAction?.({ type: action } as MuxAction);
       return true;
     }
 
-    // Unknown key after prefix — ignore
+    // Unknown key after prefix -- ignore
     return true;
   }
 
@@ -114,10 +133,26 @@ export class PrefixKeyHandler {
     this._state = "idle";
   }
 
-  private isPrefix(event: KeyboardEvent): boolean {
-    if (this.prefixCtrl && !event.ctrlKey) return false;
-    if (!this.prefixCtrl && event.ctrlKey) return false;
-    return event.key === this.prefixKey;
+  /**
+   * Match an event against action bindings.
+   * For single-char bindings (no modifiers), match event.key directly.
+   * For modifier bindings (e.g., "Ctrl+N"), use matchKeybindStr.
+   */
+  private matchActionBinding(event: KeyboardEvent): string | null {
+    for (const [action, binding] of Object.entries(this.actionBindings)) {
+      if (hasModifiers(binding)) {
+        if (matchKeybindStr(event, binding)) {
+          return action;
+        }
+      } else {
+        // Single-char binding: match event.key directly (no modifier check)
+        const parsed = parseKeybind(binding);
+        if (event.key === parsed.key) {
+          return action;
+        }
+      }
+    }
+    return null;
   }
 
   private clearTimeout(): void {

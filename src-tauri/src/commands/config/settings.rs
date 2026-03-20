@@ -509,6 +509,10 @@ pub struct MuxSettings {
     pub status_position: String,
     #[serde(default)]
     pub tab_always_expand: bool,
+    #[serde(default)]
+    pub tmux_conf_imported: bool,
+    #[serde(default)]
+    pub keybinds: std::collections::HashMap<String, String>,
 }
 
 fn default_mux_prefix() -> String {
@@ -527,6 +531,8 @@ impl Default for MuxSettings {
             mouse: true,
             status_position: default_mux_status_position(),
             tab_always_expand: false,
+            tmux_conf_imported: false,
+            keybinds: std::collections::HashMap::new(),
         }
     }
 }

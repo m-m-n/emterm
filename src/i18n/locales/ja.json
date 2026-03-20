@@ -11,7 +11,8 @@
       "markdownViewer": "Markdownビューアー",
       "profiles": "プロファイル",
       "ssh": "SSH接続",
-      "log": "ログ"
+      "log": "ログ",
+      "mux": "マルチプレクサ"
     },
     "nav": {
       "collapse": "ナビゲーションを閉じる",
@@ -338,6 +339,30 @@
       "dragHandle": "ドラッグで並び替え",
       "sshNotConfigured": "SSHコマンドが設定されていません。SSH接続を起動できません。",
       "connectionNotFound": "SSH接続「{name}」が見つかりません"
+    },
+    "mux": {
+      "title": "ターミナルマルチプレクサ",
+      "general": "一般",
+      "prefix": "プレフィックスキー",
+      "baseIndex": "ベースインデックス",
+      "mouse": "マウスサポート",
+      "statusPosition": "ステータスバー位置",
+      "keybinds": "キーバインド",
+      "keybind": {
+        "splitVertical": "垂直分割",
+        "splitHorizontal": "水平分割",
+        "nextPane": "次のペイン",
+        "prevPane": "前のペイン",
+        "closePane": "ペインを閉じる",
+        "zoomToggle": "ズームトグル",
+        "detach": "デタッチ",
+        "newWindow": "新規ウィンドウ",
+        "nextWindow": "次のウィンドウ",
+        "prevWindow": "前のウィンドウ",
+        "renameWindow": "ウィンドウ名変更",
+        "copyMode": "コピーモード",
+        "paste": "ペースト"
+      }
     },
     "log": {
       "title": "ログ",

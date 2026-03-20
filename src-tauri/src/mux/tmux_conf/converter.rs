@@ -21,14 +21,14 @@ pub fn convert_directives(directives: &[TmuxDirective]) -> ConversionResult {
                 convert_set_option(&mut result, option, value);
             }
             TmuxDirective::BindKey { key, command } => {
-                result
-                    .settings
-                    .push((format!("keybind.{}", key), command.clone()));
+                convert_bind_key(&mut result, key, command);
             }
             TmuxDirective::UnbindKey { key } => {
-                result.settings.push((
-                    format!("keybind.{}", key),
-                    String::new(), // empty = unbound
+                // Convert key notation but can't determine action without context
+                let converted = convert_key_notation(key);
+                result.warnings.push(format!(
+                    "Skipped: unbind {} (unbind not supported, rebind in settings)",
+                    converted
                 ));
             }
             TmuxDirective::Unsupported { line, reason } => {
@@ -45,7 +45,7 @@ pub fn convert_directives(directives: &[TmuxDirective]) -> ConversionResult {
 fn convert_set_option(result: &mut ConversionResult, option: &str, value: &str) {
     match option {
         "prefix" | "prefix2" => {
-            let converted = convert_prefix_key(value);
+            let converted = convert_key_notation(value);
             result.settings.push(("prefix".to_string(), converted));
         }
         "base-index" => {
@@ -98,15 +98,87 @@ fn convert_set_option(result: &mut ConversionResult, option: &str, value: &str) 
     }
 }
 
-/// Convert tmux prefix notation (C-a, M-b) to eMterm notation (ctrl+a, alt+b).
-fn convert_prefix_key(tmux_key: &str) -> String {
-    if tmux_key.starts_with("C-") {
-        format!("ctrl+{}", &tmux_key[2..])
-    } else if tmux_key.starts_with("M-") {
-        format!("alt+{}", &tmux_key[2..])
+/// Convert tmux key notation (C-a, M-b) to eMterm notation (ctrl+a, alt+b).
+fn convert_key_notation(tmux_key: &str) -> String {
+    if let Some(suffix) = tmux_key.strip_prefix("C-") {
+        format!("Ctrl+{}", suffix.to_uppercase())
+    } else if let Some(suffix) = tmux_key.strip_prefix("M-") {
+        format!("Alt+{}", suffix.to_uppercase())
     } else {
         tmux_key.to_string()
     }
+}
+
+/// Map tmux command string to eMterm mux action name.
+/// Returns None for unsupported commands.
+fn tmux_command_to_action(command: &str) -> Option<&'static str> {
+    let trimmed = command.trim();
+    if trimmed.starts_with("split-window -h") || trimmed.starts_with("split-window -bh") {
+        Some("split-vertical")
+    } else if trimmed.starts_with("split-window") {
+        Some("split-horizontal")
+    } else if trimmed.starts_with("select-pane") {
+        Some("next-pane")
+    } else if trimmed.starts_with("last-pane") {
+        Some("prev-pane")
+    } else if trimmed.starts_with("kill-pane")
+        || (trimmed.starts_with("confirm-before") && trimmed.contains("kill-pane"))
+    {
+        Some("close-pane")
+    } else if trimmed.starts_with("resize-pane -Z") {
+        Some("zoom-toggle")
+    } else if trimmed.starts_with("detach-client") || trimmed == "detach" {
+        Some("detach")
+    } else if trimmed.starts_with("new-window") {
+        Some("new-window")
+    } else if trimmed.starts_with("next-window") || trimmed == "next" {
+        Some("next-window")
+    } else if trimmed.starts_with("previous-window") || trimmed == "prev" {
+        Some("prev-window")
+    } else if trimmed.starts_with("rename-window")
+        || (trimmed.starts_with("command-prompt") && trimmed.contains("rename-window"))
+    {
+        Some("rename-window")
+    } else if trimmed.starts_with("copy-mode") {
+        Some("copy-mode")
+    } else if trimmed.starts_with("paste-buffer") {
+        Some("paste")
+    } else {
+        None
+    }
+}
+
+/// Convert a bind-key directive to eMterm action → key mapping.
+fn convert_bind_key(result: &mut ConversionResult, key: &str, command: &str) {
+    match tmux_command_to_action(command) {
+        Some(action) => {
+            let converted_key = convert_key_notation(key);
+            result
+                .settings
+                .push((format!("keybind.{}", action), converted_key));
+        }
+        None => {
+            result.warnings.push(format!(
+                "Skipped: bind {} {} (unsupported command)",
+                key, command
+            ));
+        }
+    }
+}
+
+/// Auto-import tmux.conf from the user's home directory.
+/// Returns None if the file doesn't exist or HOME is not set.
+/// Returns Some(result) if the file was found and parsed.
+pub fn auto_import_tmux_conf() -> Option<ConversionResult> {
+    let home = std::env::var("HOME").ok()?;
+    let conf_path = std::path::PathBuf::from(home).join(".tmux.conf");
+    if !conf_path.exists() {
+        return None;
+    }
+    let contents = std::fs::read_to_string(&conf_path).ok()?;
+    let directives = super::parser::parse_tmux_conf(&contents);
+    let result = convert_directives(&directives);
+    Some(result)
 }
 
 #[cfg(test)]
@@ -121,7 +193,7 @@ mod tests {
         assert_eq!(result.settings.len(), 1);
         assert_eq!(
             result.settings[0],
-            ("prefix".to_string(), "ctrl+a".to_string())
+            ("prefix".to_string(), "Ctrl+A".to_string())
         );
     }
 
@@ -156,20 +228,49 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_bind_key() {
+    fn test_convert_bind_key_known_action() {
+        let directives = parse_tmux_conf("bind c new-window");
+        let result = convert_directives(&directives);
+        assert_eq!(
+            result.settings[0],
+            ("keybind.new-window".to_string(), "c".to_string())
+        );
+    }
+
+    #[test]
+    fn test_convert_bind_key_with_modifier() {
+        let directives = parse_tmux_conf("bind C-n new-window");
+        let result = convert_directives(&directives);
+        assert_eq!(
+            result.settings[0],
+            ("keybind.new-window".to_string(), "Ctrl+N".to_string())
+        );
+    }
+
+    #[test]
+    fn test_convert_bind_key_unknown_command() {
         let directives = parse_tmux_conf("bind r source-file ~/.tmux.conf");
         let result = convert_directives(&directives);
-        assert_eq!(result.settings[0].0, "keybind.r");
+        assert!(result.settings.is_empty());
+        assert!(result.warnings.iter().any(|w| w.contains("unsupported command")));
+    }
+
+    #[test]
+    fn test_convert_bind_key_split() {
+        let directives = parse_tmux_conf("bind | split-window -h");
+        let result = convert_directives(&directives);
+        assert_eq!(
+            result.settings[0],
+            ("keybind.split-vertical".to_string(), "|".to_string())
+        );
     }
 
     #[test]
     fn test_convert_unbind_key() {
         let directives = parse_tmux_conf("unbind C-b");
         let result = convert_directives(&directives);
-        assert_eq!(
-            result.settings[0],
-            ("keybind.C-b".to_string(), String::new())
-        );
+        assert!(result.settings.is_empty());
+        assert!(result.warnings.iter().any(|w| w.contains("unbind")));
     }
 
     #[test]
@@ -188,10 +289,11 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_prefix_key_notation() {
-        assert_eq!(convert_prefix_key("C-a"), "ctrl+a");
-        assert_eq!(convert_prefix_key("M-b"), "alt+b");
-        assert_eq!(convert_prefix_key("F12"), "F12");
+    fn test_convert_key_notation() {
+        assert_eq!(convert_key_notation("C-a"), "Ctrl+A");
+        assert_eq!(convert_key_notation("M-b"), "Alt+B");
+        assert_eq!(convert_key_notation("F12"), "F12");
+        assert_eq!(convert_key_notation("n"), "n");
     }
 
     #[test]
@@ -204,14 +306,55 @@ set -g mouse on
 set -g base-index 1
 set -g status-position top
 bind r source-file ~/.tmux.conf
+bind c new-window
 if-shell 'test -f ~/.local.conf' 'source ~/.local.conf'
 ";
         let directives = parse_tmux_conf(conf);
         let result = convert_directives(&directives);
 
-        // 5 settings: prefix, unbind C-b, mouse, base-index, status-position, bind r
-        assert_eq!(result.settings.len(), 6);
-        // 1 warning: if-shell
-        assert_eq!(result.warnings.len(), 1);
+        // 5 settings: prefix, mouse, base-index, status-position, keybind.new-window
+        assert_eq!(result.settings.len(), 5);
+        // 3 warnings: unbind C-b, bind r (unsupported command), if-shell
+        assert_eq!(result.warnings.len(), 3);
+    }
+
+    #[test]
+    fn test_auto_import_no_home() {
+        unsafe { std::env::remove_var("HOME") };
+        assert!(auto_import_tmux_conf().is_none());
+        unsafe { std::env::set_var("HOME", "/tmp") };
+    }
+
+    #[test]
+    fn test_auto_import_no_file() {
+        unsafe { std::env::set_var("HOME", "/tmp/nonexistent_test_dir_auto_import") };
+        assert!(auto_import_tmux_conf().is_none());
+        unsafe { std::env::set_var("HOME", "/tmp") };
+    }
+
+    #[test]
+    fn test_auto_import_with_file() {
+        let dir = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("HOME", dir.path().to_str().unwrap()) };
+        let conf_path = dir.path().join(".tmux.conf");
+        std::fs::write(&conf_path, "set -g prefix C-a\nset -g mouse on\n").unwrap();
+
+        let result = auto_import_tmux_conf();
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert!(
+            result
+                .settings
+                .iter()
+                .any(|(k, v)| k == "prefix" && v == "Ctrl+A")
+        );
+        assert!(
+            result
+                .settings
+                .iter()
+                .any(|(k, v)| k == "mouse" && v == "true")
+        );
+
+        unsafe { std::env::set_var("HOME", "/tmp") };
     }
 }
