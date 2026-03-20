@@ -21,7 +21,6 @@ import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropI
 import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
 import { MuxClient } from "../terminal/mux/mux-client";
-import { MuxStatusBar } from "../terminal/mux/status-bar";
 import type { MuxAction } from "../terminal/mux/prefix-key";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
@@ -57,7 +56,7 @@ export class TerminalApp {
   public muxAttachCallback: ((socketPath: string, sessionId: number) => void) | null = null;
   public muxDetachCallback: (() => void) | null = null;
   private muxClient: MuxClient | null = null;
-  private muxStatusBar: MuxStatusBar | null = null;
+  // Status bar will be implemented as an eMterm application-level feature
   private inMuxMode = false;
   private bellActivityCallback: (() => void) | null = null;
   private outputActivityCallback: (() => void) | null = null;
@@ -637,12 +636,7 @@ export class TerminalApp {
       );
     }
 
-    // Show status bar
-    const terminalRoot = this.terminalRoot ?? this.container;
-    this.muxStatusBar = new MuxStatusBar(terminalRoot, (muxSettings?.status_position as "top" | "bottom") ?? "bottom");
-    this.muxStatusBar.update({
-      sessionName: "default",
-    });
+    // TODO: Status bar will be an eMterm application-level feature
   }
 
   /** Exit mux mode -- disconnect, disable prefix key, hide status bar. */
@@ -655,12 +649,6 @@ export class TerminalApp {
     // Disable prefix key handling
     if (this.keyboardHandler) {
       this.keyboardHandler.disableMuxMode();
-    }
-
-    // Remove status bar
-    if (this.muxStatusBar) {
-      this.muxStatusBar.destroy();
-      this.muxStatusBar = null;
     }
 
     // Disconnect
