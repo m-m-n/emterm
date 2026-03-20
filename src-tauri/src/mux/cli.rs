@@ -51,15 +51,19 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
             .stderr(std::process::Stdio::null())
             .spawn()?;
 
-        // Wait for daemon to start
-        for _ in 0..50 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        // Wait for daemon to start (check first, then sleep with backoff)
+        let mut started = false;
+        for i in 0..50 {
             if daemon::is_daemon_running(&sock_path) {
+                started = true;
                 break;
             }
+            // Exponential backoff: 10ms, 10ms, 20ms, 40ms, 80ms, 100ms cap
+            let delay = std::cmp::min(10 * (1 << i.min(4)), 100);
+            std::thread::sleep(std::time::Duration::from_millis(delay));
         }
 
-        if !daemon::is_daemon_running(&sock_path) {
+        if !started {
             return Err("Failed to start mux daemon".into());
         }
     }
@@ -71,6 +75,9 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     let sock_str = sock_path.to_string_lossy();
     // session_id 0 = create/attach default session
     print!("\x1b]777;emterm;mux;attach;{};0\x1b\\", sock_str);
+    // Flush immediately — print! without newline stays in stdout buffer
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
 
     // Connect to daemon for detach notification
     // (blocking until detached or daemon exits)
