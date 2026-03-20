@@ -3,6 +3,8 @@
 //! Manages per-client connection state machine:
 //! handshake → authenticated (GUI streaming or CLI control).
 
+use std::time::Duration;
+
 use futures::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
 use tokio_util::codec::Framed;
@@ -10,13 +12,17 @@ use tokio_util::codec::Framed;
 use super::codec::MuxCodec;
 use super::protocol::*;
 
+/// Handshake timeout: client must send Hello within this duration.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Handle a new client connection through handshake and message loop.
 pub async fn handle_connection(stream: UnixStream) {
     let mut framed = Framed::new(stream, MuxCodec::new());
 
-    // Wait for Hello
-    let hello = match framed.next().await {
-        Some(Ok(msg)) if msg.msg_type == MessageType::Hello => {
+    // Wait for Hello with timeout to prevent idle connection DoS
+    let hello_result = tokio::time::timeout(HANDSHAKE_TIMEOUT, framed.next()).await;
+    let hello = match hello_result {
+        Ok(Some(Ok(msg))) if msg.msg_type == MessageType::Hello => {
             match msg.decode_payload::<HelloMsg>() {
                 Some(h) => h,
                 None => {
@@ -25,8 +31,12 @@ pub async fn handle_connection(stream: UnixStream) {
                 }
             }
         }
-        _ => {
+        Ok(_) => {
             log::warn!("Expected Hello message, disconnecting");
+            return;
+        }
+        Err(_) => {
+            log::warn!("Handshake timeout, disconnecting");
             return;
         }
     };
