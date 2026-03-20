@@ -20,6 +20,9 @@ import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
 import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
+import { MuxClient } from "../terminal/mux/mux-client";
+import { MuxStatusBar } from "../terminal/mux/status-bar";
+import type { MuxAction } from "../terminal/mux/prefix-key";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
 import { setupPtyHandlers } from "./pty-handler";
@@ -50,9 +53,12 @@ export class TerminalApp {
   private sessionExitCallback: ((sessionId: string) => void) | null = null;
   private titleChangeCallback: ((title: string) => void) | null = null;
 
-  // Mux mode callbacks (set by TabManager when mux support is needed)
+  // Mux mode callbacks (set internally in init() to wire enterMuxMode/exitMuxMode)
   public muxAttachCallback: ((socketPath: string, sessionId: number) => void) | null = null;
   public muxDetachCallback: (() => void) | null = null;
+  private muxClient: MuxClient | null = null;
+  private muxStatusBar: MuxStatusBar | null = null;
+  private inMuxMode = false;
   private bellActivityCallback: (() => void) | null = null;
   private outputActivityCallback: (() => void) | null = null;
   private searchHandler: SearchHandler | null = null;
@@ -198,6 +204,14 @@ export class TerminalApp {
 
     // Create PTY client
     this.ptyClient = new PtyClient();
+
+    // Wire mux mode callbacks so OSC handler can trigger enterMuxMode/exitMuxMode
+    this.muxAttachCallback = (socketPath, sessionId) => {
+      this.enterMuxMode(socketPath, sessionId);
+    };
+    this.muxDetachCallback = () => {
+      this.exitMuxMode();
+    };
 
     // Set up PTY output handler
     await this.setupPtyHandlers();
@@ -594,6 +608,85 @@ export class TerminalApp {
     this.searchHandler?.toggleSearch();
   }
 
+  /** Enter mux mode -- connect to daemon, enable prefix key, show status bar. */
+  async enterMuxMode(socketPath: string, sessionId: number): Promise<void> {
+    if (this.inMuxMode) return;
+    this.inMuxMode = true;
+
+    console.info(`[INFO][FRONTEND] Entering mux mode: socket=${socketPath}, session=${sessionId}`);
+
+    // Connect to daemon
+    try {
+      this.muxClient = new MuxClient();
+      const sessions = await this.muxClient.connect(socketPath);
+      console.info(`[INFO][FRONTEND] Mux connected: ${sessions.length} session(s)`);
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Mux connect failed:", e);
+      this.inMuxMode = false;
+      this.muxClient = null;
+      return;
+    }
+
+    // Enable prefix key handling
+    const muxSettings = SettingsService.getCached()?.mux;
+    if (this.keyboardHandler) {
+      this.keyboardHandler.enableMuxMode(
+        muxSettings?.prefix ?? "Ctrl+B",
+        muxSettings?.keybinds ?? {},
+        (action) => this.handleMuxAction(action),
+      );
+    }
+
+    // Show status bar
+    const terminalRoot = this.terminalRoot ?? this.container;
+    this.muxStatusBar = new MuxStatusBar(terminalRoot, (muxSettings?.status_position as "top" | "bottom") ?? "bottom");
+    this.muxStatusBar.update({
+      sessionName: "default",
+    });
+  }
+
+  /** Exit mux mode -- disconnect, disable prefix key, hide status bar. */
+  exitMuxMode(): void {
+    if (!this.inMuxMode) return;
+    this.inMuxMode = false;
+
+    console.info("[INFO][FRONTEND] Exiting mux mode");
+
+    // Disable prefix key handling
+    if (this.keyboardHandler) {
+      this.keyboardHandler.disableMuxMode();
+    }
+
+    // Remove status bar
+    if (this.muxStatusBar) {
+      this.muxStatusBar.destroy();
+      this.muxStatusBar = null;
+    }
+
+    // Disconnect
+    if (this.muxClient) {
+      this.muxClient.disconnect().catch(() => {});
+      this.muxClient = null;
+    }
+  }
+
+  /** Handle mux action dispatched by PrefixKeyHandler. */
+  private handleMuxAction(action: MuxAction): void {
+    console.info(`[INFO][FRONTEND] Mux action: ${action.type}`);
+
+    switch (action.type) {
+      case "detach":
+        this.exitMuxMode();
+        break;
+      case "prefix-passthrough":
+        console.info("[INFO][FRONTEND] Prefix passthrough (not yet implemented)");
+        break;
+      default:
+        console.info(`[INFO][FRONTEND] Mux action not yet implemented: ${action.type}`);
+        break;
+    }
+  }
+
   /**
    * Cleans up resources and event listeners
    */
@@ -603,6 +696,9 @@ export class TerminalApp {
       this.disconnectResizeObserver();
       this.disconnectResizeObserver = null;
     }
+
+    // Clean up mux mode
+    this.exitMuxMode();
 
     // Clean up handlers
     this.linkHandler?.dispose();

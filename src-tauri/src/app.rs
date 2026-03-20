@@ -52,6 +52,7 @@ pub fn run() {
     use crate::sftp::pool::ConcurrentUploadPool;
     use crate::sftp::upload::SftpProcessManager;
     use crate::state::{ImageProcessorState, LargeImageDataStore};
+    use crate::mux::bridge::MuxBridgeState;
     use crate::{commands, tauri_commands};
     use std::sync::Arc;
 
@@ -66,6 +67,7 @@ pub fn run() {
         .manage(SftpProcessManager::new())
         .manage(ConcurrentUploadPool::new(4))
         .manage(Arc::new(DownloadRegistry::new()))
+        .manage(MuxBridgeState::new())
         .invoke_handler(tauri::generate_handler![
             tauri_commands::pty_spawn,
             tauri_commands::pty_write,
@@ -107,6 +109,10 @@ pub fn run() {
             tauri_commands::finish_download_file,
             tauri_commands::cancel_download_file,
             tauri_commands::get_diagnostic_flags,
+            crate::mux::bridge::mux_connect,
+            crate::mux::bridge::mux_disconnect,
+            crate::mux::bridge::mux_handshake,
+            crate::mux::bridge::mux_send_input,
         ])
         .setup(|app| {
             // Initialize custom logger for backend
