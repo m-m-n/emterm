@@ -221,6 +221,24 @@ async function main(): Promise<void> {
     app.onOutputActivity(() => {
       activityTracker?.markActivity(tab.id, "output");
     });
+
+    // Wire mux state change to tab bar sub-tab rendering
+    app.onMuxStateChange = (info) => {
+      if (info.windowCount === 0) {
+        // Mux mode exited -- clear sub-tabs and restore original title
+        tabBarUI?.clearMuxSubTabs(tab.id);
+        manager.updateTabTitle(tab.id, "Terminal");
+      } else {
+        // Update tab title to show mux session
+        manager.updateTabTitle(tab.id, `[mux] ${info.windowCount} windows`);
+        // Render sub-tabs for each mux window
+        const windows = info.windowNames.map((name, i) => ({
+          name,
+          active: i === info.activeWindow,
+        }));
+        tabBarUI?.renderMuxSubTabs(tab.id, windows);
+      }
+    };
   });
 
   // Clean up notification throttle when tab closes

@@ -58,6 +58,16 @@ export class TerminalApp {
   private muxClient: MuxClient | null = null;
   // Status bar will be implemented as an eMterm application-level feature
   private inMuxMode = false;
+  private muxWindows: { id: number; name: string }[] = [];
+  private activeMuxWindowIndex = 0;
+  private muxPaneIds: number[] = [];
+
+  /** Callback to update tab UI when mux window state changes */
+  public onMuxStateChange: ((info: {
+    windowCount: number;
+    activeWindow: number;
+    windowNames: string[];
+  }) => void) | null = null;
   private bellActivityCallback: (() => void) | null = null;
   private outputActivityCallback: (() => void) | null = null;
   private searchHandler: SearchHandler | null = null;
@@ -608,6 +618,15 @@ export class TerminalApp {
     this.searchHandler?.toggleSearch();
   }
 
+  /** Notify listeners of mux window state changes. */
+  private emitMuxStateChange(): void {
+    this.onMuxStateChange?.({
+      windowCount: this.muxWindows.length,
+      activeWindow: this.activeMuxWindowIndex,
+      windowNames: this.muxWindows.map((w) => w.name),
+    });
+  }
+
   /** Enter mux mode -- connect to daemon, enable prefix key, show status bar. */
   async enterMuxMode(socketPath: string, sessionId: number): Promise<void> {
     if (this.inMuxMode) return;
@@ -641,9 +660,26 @@ export class TerminalApp {
       console.error("[ERROR][FRONTEND] Mux start output stream failed:", e);
     }
 
+    // Clear screen for mux mode — reset WASM grid and re-render
+    if (this.state) {
+      this.state.getWasmCore().reset();
+      if (this.renderer) {
+        this.renderer.forceRender(this.state);
+      }
+    }
+
+    // Initialize mux window tracking
+    this.muxWindows = [];
+    this.activeMuxWindowIndex = 0;
+    this.muxPaneIds = [];
+
     // Create initial window (spawns a shell in daemon)
     try {
       await this.muxClient.sendControl(MuxMessageType.CreateWindow, 0);
+      // Optimistically track the first window
+      this.muxWindows.push({ id: 0, name: "0:shell" });
+      this.muxPaneIds.push(1);
+      this.emitMuxStateChange();
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux create window failed:", e);
     }
@@ -656,9 +692,10 @@ export class TerminalApp {
         muxSettings?.keybinds ?? {},
         (action) => this.handleMuxAction(action),
         (data: Uint8Array) => {
-          // Route keyboard input through daemon
+          // Route keyboard input to active window's pane
           if (this.muxClient) {
-            this.muxClient.sendInput(0, data).catch(() => {});
+            const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex] ?? 1;
+            this.muxClient.sendInput(activePaneId, data).catch(() => {});
           }
         },
       );
@@ -673,6 +710,12 @@ export class TerminalApp {
     this.inMuxMode = false;
 
     console.info("[INFO][FRONTEND] Exiting mux mode");
+
+    // Reset mux window tracking
+    this.muxWindows = [];
+    this.activeMuxWindowIndex = 0;
+    this.muxPaneIds = [];
+    this.emitMuxStateChange();
 
     // Disable prefix key handling
     if (this.keyboardHandler) {
@@ -695,9 +738,16 @@ export class TerminalApp {
         this.sendMuxControl(MuxMessageType.Detach, 0);
         this.exitMuxMode();
         break;
-      case "new-window":
+      case "new-window": {
         this.sendMuxControl(MuxMessageType.CreateWindow, 0);
+        // Optimistically add window
+        const newIdx = this.muxWindows.length;
+        this.muxWindows.push({ id: newIdx, name: `${newIdx}:shell` });
+        this.muxPaneIds.push(newIdx + 1);
+        this.activeMuxWindowIndex = newIdx;
+        this.emitMuxStateChange();
         break;
+      }
       case "split-vertical":
         this.sendMuxControl(MuxMessageType.SplitPane, 0, new Uint8Array([0x01])); // 0x01 = vertical
         break;
@@ -707,12 +757,22 @@ export class TerminalApp {
       case "close-pane":
         this.sendMuxControl(MuxMessageType.DestroyPane, 0);
         break;
-      case "next-window":
+      case "next-window": {
         this.sendMuxControl(MuxMessageType.SwitchWindow, 0, new Uint8Array([0x01])); // next
+        if (this.muxWindows.length > 0) {
+          this.activeMuxWindowIndex = (this.activeMuxWindowIndex + 1) % this.muxWindows.length;
+          this.emitMuxStateChange();
+        }
         break;
-      case "prev-window":
+      }
+      case "prev-window": {
         this.sendMuxControl(MuxMessageType.SwitchWindow, 0, new Uint8Array([0x00])); // prev
+        if (this.muxWindows.length > 0) {
+          this.activeMuxWindowIndex = (this.activeMuxWindowIndex - 1 + this.muxWindows.length) % this.muxWindows.length;
+          this.emitMuxStateChange();
+        }
         break;
+      }
       case "rename-window":
         // TODO: prompt for new name
         console.info("[INFO][FRONTEND] Rename window: prompt not yet implemented");
@@ -810,6 +870,7 @@ export class TerminalApp {
     this.titleChangeCallback = null;
     this.bellActivityCallback = null;
     this.outputActivityCallback = null;
+    this.onMuxStateChange = null;
 
     // Remove container structure elements
     if (this.terminalRoot) {
