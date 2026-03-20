@@ -166,6 +166,81 @@ pub async fn mux_send_input(
     Ok(())
 }
 
+/// Send a control message to the daemon and optionally read a response.
+///
+/// Builds a `MuxMessage` from the given type, pane ID, and raw payload,
+/// then sends it over the framed connection. Attempts to read a response
+/// with a short timeout -- returns `Some(bytes)` if data arrives, `None`
+/// if the timeout expires (fire-and-forget messages like Detach).
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub async fn mux_send_control(
+    state: tauri::State<'_, MuxBridgeState>,
+    conn_id: String,
+    msg_type: u8,
+    pane_id: u32,
+    payload: Vec<u8>,
+) -> Result<Option<Vec<u8>>, String> {
+    let mt = MessageType::from_u8(msg_type)
+        .ok_or_else(|| format!("Unknown message type: 0x{:02X}", msg_type))?;
+
+    let conns = state.connections.lock().await;
+    let stream = conns
+        .get(&conn_id)
+        .ok_or_else(|| "Connection not found".to_string())?
+        .clone();
+    drop(conns);
+
+    let msg = MuxMessage {
+        msg_type: mt,
+        pane_id,
+        payload,
+    };
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    let mut stream = stream.lock().await;
+    stream
+        .write_all(&len)
+        .await
+        .map_err(|e| format!("Write error: {}", e))?;
+    stream
+        .write_all(&body)
+        .await
+        .map_err(|e| format!("Write error: {}", e))?;
+
+    // Try to read a response with a short timeout
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        read_one_frame(&mut stream),
+    )
+    .await
+    {
+        Ok(Ok(frame_body)) => Ok(Some(frame_body)),
+        Ok(Err(e)) => Err(format!("Read error: {}", e)),
+        Err(_) => Ok(None), // Timeout: fire-and-forget
+    }
+}
+
+/// Read a single length-prefixed frame from the stream.
+async fn read_one_frame(stream: &mut UnixStream) -> Result<Vec<u8>, String> {
+    let mut len_buf = [0u8; 4];
+    stream
+        .read_exact(&mut len_buf)
+        .await
+        .map_err(|e| format!("Read error: {}", e))?;
+    let frame_len = u32::from_be_bytes(len_buf) as usize;
+    if frame_len > MAX_FRAME_LENGTH {
+        return Err("Frame too large".to_string());
+    }
+    let mut frame_buf = vec![0u8; frame_len];
+    stream
+        .read_exact(&mut frame_buf)
+        .await
+        .map_err(|e| format!("Read error: {}", e))?;
+    Ok(frame_buf)
+}
+
 /// Validate that a socket path is in an allowed directory using canonicalization.
 fn validate_socket_path(path: &str) -> Result<(), String> {
     // Reject null bytes (could bypass C-level path operations)
