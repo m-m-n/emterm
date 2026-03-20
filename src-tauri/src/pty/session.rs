@@ -82,7 +82,16 @@ impl PtySession {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
 
+        // Apply profile-specific environment variables first, then enforce
+        // reserved keys so they cannot be overridden by user profiles.
+        if let Some(ref vars) = env_vars {
+            for (key, value) in vars {
+                cmd.env(key, value);
+            }
+        }
+
         // Identify eMterm to child processes (de facto standard, used by iTerm2, WezTerm, VS Code)
+        // Set AFTER env_vars to prevent profile overrides.
         cmd.env("TERM_PROGRAM", "emterm");
         cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
 
@@ -92,13 +101,6 @@ impl PtySession {
         // and skip response handling, leading to garbage text on screen.
         cmd.env_remove("TMUX");
         cmd.env_remove("TMUX_PANE");
-
-        // Apply profile-specific environment variables
-        if let Some(ref vars) = env_vars {
-            for (key, value) in vars {
-                cmd.env(key, value);
-            }
-        }
 
         // Apply profile-specific working directory
         if let Some(ref dir) = working_directory {
