@@ -166,19 +166,37 @@ pub async fn mux_send_input(
     Ok(())
 }
 
-/// Validate that a socket path is in an allowed directory and contains no path traversal.
+/// Validate that a socket path is in an allowed directory using canonicalization.
 fn validate_socket_path(path: &str) -> Result<(), String> {
-    // Reject path traversal
-    if path.contains("../") || path.contains("..\\") {
-        return Err("Socket path contains path traversal".to_string());
+    // Reject null bytes (could bypass C-level path operations)
+    if path.as_bytes().contains(&0) {
+        return Err("Socket path contains null byte".to_string());
     }
 
-    // Check allowed directories
-    let allowed = allowed_socket_dirs();
-    let path_normalized = std::path::Path::new(path);
+    let path = std::path::Path::new(path);
 
+    // Canonicalize: if the path exists, canonicalize it directly.
+    // Otherwise, canonicalize the parent directory and append the file name.
+    let canonical = if path.exists() {
+        path.canonicalize()
+            .map_err(|e| format!("Failed to canonicalize socket path: {}", e))?
+    } else {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "Socket path has no parent directory".to_string())?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| "Socket path has no file name".to_string())?;
+        let canonical_parent = parent
+            .canonicalize()
+            .map_err(|e| format!("Failed to canonicalize parent directory: {}", e))?;
+        canonical_parent.join(file_name)
+    };
+
+    // Check canonicalized path against allowed directories
+    let allowed = allowed_socket_dirs();
     for dir in &allowed {
-        if path_normalized.starts_with(dir) {
+        if canonical.starts_with(dir) {
             return Ok(());
         }
     }
@@ -224,20 +242,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_socket_path_traversal_rejected() {
-        assert!(validate_socket_path("/tmp/emterm/../etc/passwd").is_err());
-        assert!(validate_socket_path("../../../etc/passwd").is_err());
+    fn test_validate_socket_path_null_byte_rejected() {
+        assert!(validate_socket_path("/tmp/emterm/foo\0bar.sock").is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_socket_path_traversal_rejected() {
+        // Create the /tmp/emterm directory so canonicalization works
+        let _ = std::fs::create_dir_all("/tmp/emterm");
+        // Path traversal that resolves outside allowed dirs should be rejected
+        assert!(validate_socket_path("/tmp/emterm/../etc/passwd").is_err());
+    }
+
+    #[cfg(unix)]
     #[test]
     fn test_validate_socket_path_allowed() {
         // /tmp/emterm is always in allowed dirs on Unix
-        #[cfg(unix)]
+        let _ = std::fs::create_dir_all("/tmp/emterm");
         assert!(validate_socket_path("/tmp/emterm/mux-default.sock").is_ok());
     }
 
     #[test]
     fn test_validate_socket_path_disallowed_dir() {
+        // /var/run/other likely doesn't exist, so canonicalize will fail
         assert!(validate_socket_path("/var/run/other/socket.sock").is_err());
     }
 
