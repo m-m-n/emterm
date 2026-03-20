@@ -1,5 +1,6 @@
 mod cell;
 mod color_spec;
+pub mod snapshot;
 mod terminal_cells;
 mod terminal_core;
 mod terminal_cursor;

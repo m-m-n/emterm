@@ -110,6 +110,17 @@ export interface AppSettings {
 
   // Log Recording
   log_recording_enabled: boolean;
+
+  // Mux (multiplexer) settings
+  mux: MuxSettings;
+}
+
+export interface MuxSettings {
+  prefix: string;
+  base_index: number;
+  mouse: boolean;
+  status_position: string;
+  tab_always_expand: boolean;
 }
 
 export interface KeybindSettings {
