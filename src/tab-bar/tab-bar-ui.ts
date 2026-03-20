@@ -590,6 +590,43 @@ export class TabBarUI {
   }
 
   /**
+   * Renders mux window sub-tabs inside a tab element.
+   * Called when mux state changes (window created, switched, etc.)
+   */
+  renderMuxSubTabs(tabId: string, windows: { name: string; active: boolean }[]): void {
+    const tabEl = this.tabElements.get(tabId);
+    if (!tabEl) return;
+
+    // Find or create sub-tab container
+    let subTabContainer = tabEl.querySelector(".mux-sub-tabs") as HTMLElement;
+    if (!subTabContainer) {
+      subTabContainer = document.createElement("div");
+      subTabContainer.className = "mux-sub-tabs";
+      tabEl.appendChild(subTabContainer);
+    }
+
+    // Clear and re-render
+    subTabContainer.innerHTML = "";
+    for (const win of windows) {
+      const subTab = document.createElement("span");
+      subTab.className = `mux-sub-tab${win.active ? " mux-sub-tab-active" : ""}`;
+      subTab.textContent = win.name;
+      subTabContainer.appendChild(subTab);
+    }
+  }
+
+  /**
+   * Removes mux sub-tabs from a tab element.
+   * Called when mux mode is exited.
+   */
+  clearMuxSubTabs(tabId: string): void {
+    const tabEl = this.tabElements.get(tabId);
+    if (!tabEl) return;
+    const subTabContainer = tabEl.querySelector(".mux-sub-tabs");
+    if (subTabContainer) subTabContainer.remove();
+  }
+
+  /**
    * Sets the visibility of the tab bar
    * @param visible - true to show, false to hide
    */
