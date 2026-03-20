@@ -257,9 +257,9 @@ async fn handle_create_window(
                 }
             };
 
+            let pane_id = mgr.alloc_pane_id();
             let session = mgr.get_session_mut(1).unwrap();
             let window = session.windows.get_mut(&window_id).unwrap();
-            let pane_id = window.alloc_pane_id();
 
             let output_tx = pane_output_tx.clone();
             let pane = MuxPane::new(pane_id, 80, 24, output_tx.clone(), writer);

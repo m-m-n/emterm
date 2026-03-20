@@ -15,6 +15,7 @@ use crate::mux::ipc::protocol::SessionInfo;
 pub struct SessionManager {
     sessions: HashMap<SessionId, MuxSession>,
     next_session_id: SessionId,
+    next_pane_id: u32,
 }
 
 impl SessionManager {
@@ -22,7 +23,15 @@ impl SessionManager {
         Self {
             sessions: HashMap::new(),
             next_session_id: 1,
+            next_pane_id: 1,
         }
+    }
+
+    /// Allocate a globally unique pane ID.
+    pub fn alloc_pane_id(&mut self) -> u32 {
+        let id = self.next_pane_id;
+        self.next_pane_id += 1;
+        id
     }
 
     /// Create a new session with the given name.
