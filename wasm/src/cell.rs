@@ -19,7 +19,7 @@ pub const STYLE_STRIKETHROUGH: u16 = 0x0080;
 
 /// Color packed into 4 bytes: tag + 3 payload bytes.
 ///   tag=0: Default, tag=1: Indexed(index), tag=2: RGB(r,g,b)
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct PackedColor {
     pub tag: u8,
@@ -73,7 +73,7 @@ impl PackedColor {
 /// char_data stores UTF-8 inline (up to 16 bytes). For graphemes exceeding
 /// 16 bytes, char_len is set to 0xFF and the data is stored in the
 /// TerminalCore overflow side table.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct Cell {
     pub char_data: [u8; 16],

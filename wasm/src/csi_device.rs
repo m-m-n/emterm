@@ -58,15 +58,69 @@ impl TerminalCore {
     pub fn handle_decrpm(&mut self, mode: u16) -> u8 {
         let pm: u8 = match mode {
             // Known modes tracked in WASM bitfield
-            3 => if self.get_mode(crate::terminal_core::MODE_COLUMN_132) { 1 } else { 2 },
-            5 => if self.get_mode(crate::terminal_core::MODE_REVERSE_SCREEN) { 1 } else { 2 },
-            6 => if self.get_mode(crate::terminal_core::MODE_ORIGIN) { 1 } else { 2 },
-            7 => if self.get_mode(crate::terminal_core::MODE_AUTO_WRAP) { 1 } else { 2 },
-            12 => if self.get_mode(crate::terminal_core::MODE_CURSOR_BLINK) { 1 } else { 2 },
-            25 => if self.get_mode(crate::terminal_core::MODE_CURSOR_VISIBLE) { 1 } else { 2 },
-            1004 => if self.get_mode(crate::terminal_core::MODE_FOCUS_TRACKING) { 1 } else { 2 },
-            2004 => if self.get_mode(crate::terminal_core::MODE_BRACKETED_PASTE) { 1 } else { 2 },
-            2026 => if self.get_mode(crate::terminal_core::MODE_SYNCHRONIZED_OUTPUT) { 1 } else { 2 },
+            3 => {
+                if self.get_mode(crate::terminal_core::MODE_COLUMN_132) {
+                    1
+                } else {
+                    2
+                }
+            }
+            5 => {
+                if self.get_mode(crate::terminal_core::MODE_REVERSE_SCREEN) {
+                    1
+                } else {
+                    2
+                }
+            }
+            6 => {
+                if self.get_mode(crate::terminal_core::MODE_ORIGIN) {
+                    1
+                } else {
+                    2
+                }
+            }
+            7 => {
+                if self.get_mode(crate::terminal_core::MODE_AUTO_WRAP) {
+                    1
+                } else {
+                    2
+                }
+            }
+            12 => {
+                if self.get_mode(crate::terminal_core::MODE_CURSOR_BLINK) {
+                    1
+                } else {
+                    2
+                }
+            }
+            25 => {
+                if self.get_mode(crate::terminal_core::MODE_CURSOR_VISIBLE) {
+                    1
+                } else {
+                    2
+                }
+            }
+            1004 => {
+                if self.get_mode(crate::terminal_core::MODE_FOCUS_TRACKING) {
+                    1
+                } else {
+                    2
+                }
+            }
+            2004 => {
+                if self.get_mode(crate::terminal_core::MODE_BRACKETED_PASTE) {
+                    1
+                } else {
+                    2
+                }
+            }
+            2026 => {
+                if self.get_mode(crate::terminal_core::MODE_SYNCHRONIZED_OUTPUT) {
+                    1
+                } else {
+                    2
+                }
+            }
             // Known modes tracked in TS (report as recognized but defer to TS)
             1 | 47 | 1000 | 1002 | 1003 | 1005 | 1006 | 1047 | 1048 | 1049 => 2,
             // Unknown modes

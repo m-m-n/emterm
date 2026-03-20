@@ -82,6 +82,10 @@ impl PtySession {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
 
+        // Identify eMterm to child processes (de facto standard, used by iTerm2, WezTerm, VS Code)
+        cmd.env("TERM_PROGRAM", "emterm");
+        cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+
         // Clear tmux variables: the shell inside eMterm's PTY is directly
         // connected to eMterm, not to tmux. Inheriting TMUX causes CLI commands
         // (e.g. `emterm image`) to incorrectly apply DCS passthrough wrapping
@@ -374,6 +378,47 @@ mod tests {
         assert!(write_result.is_ok(), "Write should succeed");
 
         // Cleanup
+        let _ = session.kill();
+    }
+
+    #[test]
+    fn test_session_sets_term_program_env() {
+        // TERM_PROGRAM=emterm and TERM_PROGRAM_VERSION should be set for all PTY sessions
+        // We verify by spawning a shell that prints the env var
+        let id = generate_session_id();
+        let shell = detect_default_shell();
+        let mut session = PtySession::new(id, &shell, None, 80, 24, None, None).unwrap();
+
+        // Write command to print TERM_PROGRAM
+        session.write(b"echo TERM_PROGRAM=$TERM_PROGRAM\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // Read output
+        let mut reader = session.take_reader().unwrap();
+        #[cfg(unix)]
+        if let Some(fd) = session.master_fd() {
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+        let mut buf = [0u8; 4096];
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut output = String::new();
+        loop {
+            match std::io::Read::read(&mut reader, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => output.push_str(&String::from_utf8_lossy(&buf[..n])),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            output.contains("TERM_PROGRAM=emterm"),
+            "PTY should have TERM_PROGRAM=emterm set. Output: {}",
+            output
+        );
+
         let _ = session.kill();
     }
 
