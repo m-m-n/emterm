@@ -61,6 +61,7 @@ export class TerminalApp {
   private muxWindows: { id: number; name: string }[] = [];
   private activeMuxWindowIndex = 0;
   private muxPaneIds: number[] = [];
+  private muxNextPaneId = 1; // Mirrors daemon's global pane ID counter
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -618,6 +619,16 @@ export class TerminalApp {
     this.searchHandler?.toggleSearch();
   }
 
+  /** Clear the terminal screen for mux window switching. */
+  private clearMuxScreen(): void {
+    if (this.state) {
+      this.state.getWasmCore().reset();
+      if (this.renderer) {
+        this.renderer.forceRender(this.state);
+      }
+    }
+  }
+
   /** Notify listeners of mux window state changes. */
   private emitMuxStateChange(): void {
     this.onMuxStateChange?.({
@@ -646,9 +657,10 @@ export class TerminalApp {
       return;
     }
 
-    // Set up PTY output handler -- feed daemon output into existing WASM pipeline
-    this.muxClient.setOnPtyOutput((_paneId: number, data: Uint8Array) => {
-      if (this.ptyHandlerHandle) {
+    // Set up PTY output handler -- only show output from active pane
+    this.muxClient.setOnPtyOutput((paneId: number, data: Uint8Array) => {
+      const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
+      if (paneId === activePaneId && this.ptyHandlerHandle) {
         this.ptyHandlerHandle.injectData(data);
       }
     });
@@ -672,13 +684,15 @@ export class TerminalApp {
     this.muxWindows = [];
     this.activeMuxWindowIndex = 0;
     this.muxPaneIds = [];
+    this.muxNextPaneId = 1;
 
     // Create initial window (spawns a shell in daemon)
     try {
       await this.muxClient.sendControl(MuxMessageType.CreateWindow, 0);
-      // Optimistically track the first window
+      // Track window with globally unique pane ID (matching daemon)
+      const paneId = this.muxNextPaneId++;
       this.muxWindows.push({ id: 0, name: "0:shell" });
-      this.muxPaneIds.push(1);
+      this.muxPaneIds.push(paneId);
       this.emitMuxStateChange();
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux create window failed:", e);
@@ -715,6 +729,7 @@ export class TerminalApp {
     this.muxWindows = [];
     this.activeMuxWindowIndex = 0;
     this.muxPaneIds = [];
+    this.muxNextPaneId = 1;
     this.emitMuxStateChange();
 
     // Disable prefix key handling
@@ -740,11 +755,14 @@ export class TerminalApp {
         break;
       case "new-window": {
         this.sendMuxControl(MuxMessageType.CreateWindow, 0);
-        // Optimistically add window
+        // Track window with globally unique pane ID (matching daemon)
         const newIdx = this.muxWindows.length;
+        const paneId = this.muxNextPaneId++;
         this.muxWindows.push({ id: newIdx, name: `${newIdx}:shell` });
-        this.muxPaneIds.push(newIdx + 1);
+        this.muxPaneIds.push(paneId);
         this.activeMuxWindowIndex = newIdx;
+        // Clear screen for new window
+        this.clearMuxScreen();
         this.emitMuxStateChange();
         break;
       }
@@ -758,17 +776,17 @@ export class TerminalApp {
         this.sendMuxControl(MuxMessageType.DestroyPane, 0);
         break;
       case "next-window": {
-        this.sendMuxControl(MuxMessageType.SwitchWindow, 0, new Uint8Array([0x01])); // next
-        if (this.muxWindows.length > 0) {
+        if (this.muxWindows.length > 1) {
           this.activeMuxWindowIndex = (this.activeMuxWindowIndex + 1) % this.muxWindows.length;
+          this.clearMuxScreen();
           this.emitMuxStateChange();
         }
         break;
       }
       case "prev-window": {
-        this.sendMuxControl(MuxMessageType.SwitchWindow, 0, new Uint8Array([0x00])); // prev
-        if (this.muxWindows.length > 0) {
+        if (this.muxWindows.length > 1) {
           this.activeMuxWindowIndex = (this.activeMuxWindowIndex - 1 + this.muxWindows.length) % this.muxWindows.length;
+          this.clearMuxScreen();
           this.emitMuxStateChange();
         }
         break;
