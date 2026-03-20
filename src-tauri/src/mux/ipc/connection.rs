@@ -3,17 +3,20 @@
 //! Manages per-client connection state machine:
 //! handshake -> authenticated (GUI streaming or CLI control).
 
+use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
+use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
 use super::protocol::*;
 use crate::mux::session::manager::SessionManager;
+use crate::mux::session::pane::{MuxPane, PtyOutputChunk};
 
 /// Handshake timeout: client must send Hello within this duration.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -79,19 +82,41 @@ pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<Se
         hello.protocol_version
     );
 
-    // Message loop
-    while let Some(result) = framed.next().await {
-        match result {
-            Ok(msg) => {
-                if let Err(should_break) = route_message(msg, &session_manager, &mut framed).await {
-                    if should_break {
+    // Shared channel: all pane reader threads send output here,
+    // and the select! loop forwards it to the client.
+    let (pane_output_tx, mut pane_output_rx) = mpsc::channel::<PtyOutputChunk>(1024);
+
+    // Message + output loop using select! to handle both directions concurrently
+    loop {
+        tokio::select! {
+            msg = framed.next() => {
+                match msg {
+                    Some(Ok(msg)) => {
+                        if let Err(should_break) = route_message(
+                            msg,
+                            &session_manager,
+                            &mut framed,
+                            &pane_output_tx,
+                        ).await {
+                            if should_break {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        log::warn!("Connection error: {}", e);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            chunk = pane_output_rx.recv() => {
+                if let Some(chunk) = chunk {
+                    let msg = MuxMessage::pty_output(chunk.pane_id, chunk.data);
+                    if framed.send(msg).await.is_err() {
                         break;
                     }
                 }
-            }
-            Err(e) => {
-                log::warn!("Connection error: {}", e);
-                break;
             }
         }
     }
@@ -107,18 +132,11 @@ async fn route_message(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
     framed: &mut Framed<UnixStream, MuxCodec>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
 ) -> Result<(), bool> {
     match msg.msg_type {
         MessageType::CreateWindow => {
-            let mut mgr = session_manager.lock().await;
-            // Create window in session 1 (default) for now
-            if let Some(window_id) = mgr.create_window(1, "shell".to_string()) {
-                log::info!("Created window {} in session 1", window_id);
-                let resp = MuxMessage::control(MessageType::PaneCreated, 0, &window_id);
-                if framed.send(resp).await.is_err() {
-                    return Err(true);
-                }
-            }
+            handle_create_window(session_manager, framed, pane_output_tx).await?;
         }
         MessageType::SplitPane => {
             log::info!("SplitPane requested for pane {}", msg.pane_id);
@@ -171,4 +189,138 @@ async fn route_message(
         }
     }
     Ok(())
+}
+
+/// Spawn a PTY, create a pane, and start a reader thread for output streaming.
+async fn handle_create_window(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+) -> Result<(), bool> {
+    let pty_system = portable_pty::native_pty_system();
+    let pty_size = portable_pty::PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
+
+    let pair = match pty_system.openpty(pty_size) {
+        Ok(pair) => pair,
+        Err(e) => {
+            log::error!("Failed to open PTY: {}", e);
+            return Ok(());
+        }
+    };
+
+    let shell = crate::pty::detect_default_shell();
+    let mut cmd = portable_pty::CommandBuilder::new(&shell);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("TERM_PROGRAM", "emterm");
+    cmd.env("EMTERM_MUX", "1");
+    cmd.env_remove("TMUX");
+    cmd.env_remove("TMUX_PANE");
+
+    #[cfg(unix)]
+    if let Ok(home) = std::env::var("HOME") {
+        cmd.cwd(&home);
+    }
+    #[cfg(windows)]
+    if let Ok(home) = std::env::var("USERPROFILE") {
+        cmd.cwd(&home);
+    }
+
+    match pair.slave.spawn_command(cmd) {
+        Ok(_child) => {
+            let writer = match pair.master.take_writer() {
+                Ok(w) => w,
+                Err(e) => {
+                    log::error!("Failed to take PTY writer: {}", e);
+                    return Ok(());
+                }
+            };
+            let reader = match pair.master.try_clone_reader() {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("Failed to clone PTY reader: {}", e);
+                    return Ok(());
+                }
+            };
+
+            let mut mgr = session_manager.lock().await;
+            let window_id = match mgr.create_window(1, "shell".to_string()) {
+                Some(id) => id,
+                None => {
+                    log::error!("Failed to create window in session 1");
+                    return Ok(());
+                }
+            };
+
+            let session = mgr.get_session_mut(1).unwrap();
+            let window = session.windows.get_mut(&window_id).unwrap();
+            let pane_id = window.alloc_pane_id();
+
+            let output_tx = pane_output_tx.clone();
+            let pane = MuxPane::new(pane_id, 80, 24, output_tx.clone(), writer);
+            window.add_pane(pane);
+
+            // Release lock before sending response and spawning reader
+            drop(mgr);
+
+            // Start PTY reader thread (blocking I/O, must be std::thread)
+            let tx = output_tx;
+            std::thread::spawn(move || {
+                pty_reader_loop(pane_id, reader, tx);
+            });
+
+            log::info!(
+                "Created window {} with pane {} (PTY spawned)",
+                window_id,
+                pane_id
+            );
+
+            let resp = MuxMessage::control(MessageType::PaneCreated, pane_id, &pane_id);
+            if framed.send(resp).await.is_err() {
+                return Err(true);
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to spawn shell: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Read PTY output in a blocking loop and forward to the channel.
+/// Runs in a dedicated std::thread since PTY reads are blocking I/O.
+fn pty_reader_loop(
+    pane_id: u32,
+    mut reader: Box<dyn Read + Send>,
+    tx: mpsc::Sender<PtyOutputChunk>,
+) {
+    let mut buf = [0u8; 65536];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                log::info!("PTY reader EOF for pane {}", pane_id);
+                break;
+            }
+            Ok(n) => {
+                let chunk = PtyOutputChunk {
+                    pane_id,
+                    data: buf[..n].to_vec(),
+                };
+                if tx.blocking_send(chunk).is_err() {
+                    log::info!("PTY output channel closed for pane {}", pane_id);
+                    break;
+                }
+            }
+            Err(e) => {
+                log::info!("PTY reader error for pane {}: {}", pane_id, e);
+                break;
+            }
+        }
+    }
 }

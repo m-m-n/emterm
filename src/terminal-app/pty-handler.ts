@@ -36,10 +36,17 @@ export interface PtyHandlerContext {
  * so the TS side can perform the buffer switch, then the remaining data is
  * routed to the correct (alternate or primary) core.
  */
-export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
+/** Handle returned by setupPtyHandlers for injecting external data into the pipeline. */
+export interface PtyHandlerHandle {
+  /** Inject data into the PTY processing pipeline (same path as onData). */
+  injectData: (data: Uint8Array) => void;
+}
+
+export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandlerHandle> {
   const ptyClient = ctx.getPtyClient();
   const state = ctx.getState();
-  if (!ptyClient || !state) return;
+  const noopHandle: PtyHandlerHandle = { injectData: () => {} };
+  if (!ptyClient || !state) return noopHandle;
 
   // Register callbacks on primary core
   ctx.registerCoreCallbacks(state.getWasmCore());
@@ -365,4 +372,11 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<void> {
     }
     // Note: Window close is now handled by TabManager.onLastTabClosed()
   });
+
+  return {
+    injectData: (data: Uint8Array) => {
+      pendingChunks.push(data);
+      scheduleProcessing();
+    },
+  };
 }

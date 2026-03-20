@@ -66,6 +66,7 @@ export class KeyboardHandler {
   private onExitScrollback: (() => void) | null;
   private prefixKeyHandler: PrefixKeyHandler | null = null;
   private onMuxAction: ((action: MuxAction) => void) | null;
+  private muxInputCallback: ((data: Uint8Array) => void) | null = null;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -109,10 +110,16 @@ export class KeyboardHandler {
   }
 
   /** Enable mux mode at runtime (e.g., when mux attach OSC is received). */
-  enableMuxMode(prefix: string, keybinds: Record<string, string>, onAction: (action: MuxAction) => void): void {
+  enableMuxMode(
+    prefix: string,
+    keybinds: Record<string, string>,
+    onAction: (action: MuxAction) => void,
+    onInput?: (data: Uint8Array) => void,
+  ): void {
     this.prefixKeyHandler = new PrefixKeyHandler(prefix, keybinds);
     this.onMuxAction = onAction;
     this.prefixKeyHandler.setOnAction(onAction);
+    this.muxInputCallback = onInput ?? null;
   }
 
   /** Disable mux mode at runtime (e.g., on detach). */
@@ -122,6 +129,7 @@ export class KeyboardHandler {
       this.prefixKeyHandler = null;
     }
     this.onMuxAction = null;
+    this.muxInputCallback = null;
   }
 
   /** Update mux prefix key handler with new settings. */
@@ -341,10 +349,15 @@ export class KeyboardHandler {
       // Auto-scroll to bottom when user types during scrollback
       this.onExitScrollback?.();
 
-      // Fire-and-forget: don't await to avoid blocking key repeat
-      this.ptyClient.write(bytes).catch((error) => {
-        console.error("Failed to write to PTY:", error);
-      });
+      if (this.muxInputCallback) {
+        // In mux mode: send to daemon instead of local PTY
+        this.muxInputCallback(bytes);
+      } else {
+        // Fire-and-forget: don't await to avoid blocking key repeat
+        this.ptyClient.write(bytes).catch((error) => {
+          console.error("Failed to write to PTY:", error);
+        });
+      }
     }
   }
 
