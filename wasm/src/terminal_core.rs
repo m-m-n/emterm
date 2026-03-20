@@ -23,7 +23,7 @@ pub const MODE_SYNCHRONIZED_OUTPUT: u8 = 8;
 
 // ── CursorState ──────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CursorState {
     pub(crate) col: u16,
     pub(crate) row: u16,

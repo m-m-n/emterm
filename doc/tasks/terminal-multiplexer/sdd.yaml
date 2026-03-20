@@ -1,0 +1,149 @@
+schema_version: 1
+feature: terminal-multiplexer
+scale: full
+created: 2026-03-20
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'cargo test --manifest-path src-tauri/Cargo.toml'"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+    frontend:
+      language: typescript
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'bun test'"
+      format_command: ""
+    wasm:
+      language: rust
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'cd wasm && cargo test'"
+      format_command: "cargo fmt --manifest-path wasm/Cargo.toml"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: f58b80401266dd4c5c49d7facadc2a5bf3a43173
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: f58b80401266dd4c5c49d7facadc2a5bf3a43173
+  - id: verify-plan
+    status: completed
+    completed_at_commit: f58b80401266dd4c5c49d7facadc2a5bf3a43173
+  - id: implement
+    status: completed
+    completed_at_commit: cd32dc6e5d8281ff7542a2f68596ef7adff9b633
+  - id: check
+    status: completed
+    completed_at_commit: 539ab437f35aaf9d22236ae86760f5276f1f73f8
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 8fae8db0436892dccf28b026065a0565ae460a4c
+  - id: review
+    status: completed
+    completed_at_commit: 5d937322bf26b11b7cd493b7584ad6440eb93876
+
+requirements:
+  FR1:
+    title: Daemon Process
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-08, TS-11, TS-13, TS-14]
+  FR2:
+    title: IPC Protocol
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-01, TS-09, TS-10]
+  FR3:
+    title: Session Management
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-11, TS-25]
+  FR4:
+    title: OSC Signaling
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-05, TS-15]
+  FR5:
+    title: GUI Mode Switching
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-15, TS-19]
+  FR6:
+    title: Detach/Reattach
+    status: ok
+    tasks: [Phase0, Phase2]
+    tests: [TS-04, TS-15, TS-23, TS-24]
+  FR7:
+    title: Pane Layout
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-02, TS-16, TS-22]
+  FR8:
+    title: Window Management
+    status: ok
+    tasks: [Phase4]
+    tests: [TS-17]
+  FR9:
+    title: Status Bar
+    status: ok
+    tasks: [Phase5]
+    tests: []
+  FR10:
+    title: Copy Mode
+    status: ok
+    tasks: [Phase6]
+    tests: [TS-18]
+  FR11:
+    title: tmux.conf Conversion
+    status: ok
+    tasks: [Phase7]
+    tests: [TS-07]
+  FR12:
+    title: Prefix Key
+    status: ok
+    tasks: [Phase3]
+    tests: [TS-06]
+  FR13:
+    title: Flow Control
+    status: ok
+    tasks: [Phase1]
+    tests: [TS-12]
+  FR14:
+    title: Environment Variables
+    status: ok
+    tasks: [Phase0]
+    tests: [TS-20, TS-21]
+  FR15:
+    title: WASM Instance Management
+    status: ok
+    tasks: [Phase2, Phase3]
+    tests: [TS-04]
+  NFR1:
+    title: Performance
+    status: ok
+    tasks: [Phase1, Phase2]
+    tests: [TS-27, TS-28, TS-29]
+  NFR2:
+    title: Security
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-05]
+  NFR3:
+    title: Reliability
+    status: ok
+    tasks: [Phase2]
+    tests: [TS-19, TS-24, TS-25]
+  NFR4:
+    title: Compatibility
+    status: ok
+    tasks: [Phase1]
+    tests: []
+  NFR5:
+    title: Resource Usage
+    status: ok
+    tasks: [Phase1, Phase2]
+    tests: [TS-03, TS-23]

@@ -80,6 +80,32 @@ fn build_cli() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("mux")
+                .about("Terminal multiplexer")
+                .arg(
+                    Arg::new("daemon")
+                        .long("daemon")
+                        .help("Run as daemon process (internal)")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .subcommand(Command::new("ls").about("List sessions"))
+                .subcommand(
+                    Command::new("kill")
+                        .about("Kill a session")
+                        .arg(Arg::new("session").help("Session name or ID")),
+                )
+                .subcommand(
+                    Command::new("attach")
+                        .about("Attach to a session")
+                        .arg(Arg::new("session").help("Session name or ID")),
+                )
+                .subcommand(
+                    Command::new("new")
+                        .about("Create a new session")
+                        .arg(Arg::new("name").help("Session name")),
+                ),
+        )
+        .subcommand(
             Command::new("download")
                 .about(t!("cli.downloadAbout").to_string())
                 .arg(
@@ -143,6 +169,38 @@ fn main() {
             if let Err(err) = app_lib::commands::image::execute_image_command(&file, proto) {
                 eprintln!("Error: {}", err);
                 std::process::exit(err.exit_code());
+            }
+        }
+        #[cfg(feature = "gui")]
+        Some(("mux", sub_matches)) => {
+            if sub_matches.get_flag("daemon") {
+                if let Err(e) = app_lib::mux::cli::execute_daemon() {
+                    eprintln!("Daemon error: {}", e);
+                    std::process::exit(1);
+                }
+            } else {
+                match sub_matches.subcommand() {
+                    Some(("ls", _)) => {
+                        if let Err(e) = app_lib::mux::cli::execute_ls() {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    Some(("kill", sub)) => {
+                        let session = sub.get_one::<String>("session").map(|s| s.as_str());
+                        if let Err(e) = app_lib::mux::cli::execute_kill(session) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    _ => {
+                        // Default: start/attach
+                        if let Err(e) = app_lib::mux::cli::execute_mux() {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
             }
         }
         Some(("download", sub_matches)) => {

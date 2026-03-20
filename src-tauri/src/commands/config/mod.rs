@@ -15,7 +15,7 @@ pub use types::*;
 #[cfg(test)]
 mod tests {
     use super::settings::{
-        AppSettings, KeybindSettings, Profile, SshConnection, SshOption,
+        AppSettings, KeybindSettings, MuxSettings, Profile, SshConnection, SshOption,
     };
     use super::types::*;
     use super::validation::validate_settings;
@@ -340,6 +340,7 @@ mod tests {
             notify_on_process_exit: false,
             notify_on_output: true,
             notify_on_bell: false,
+            mux: MuxSettings::default(),
         };
 
         let json = serde_json::to_string(&settings).unwrap();

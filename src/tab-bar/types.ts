@@ -34,10 +34,28 @@ export interface SettingsTab extends BaseTab {
 }
 
 /**
+ * Mux tab group — a multiplexer session displayed as a tab group.
+ * Contains sub-tabs for each mux window.
+ */
+export interface MuxTab extends BaseTab {
+  type: "mux";
+  /** Socket path for the daemon connection */
+  socketPath: string;
+  /** Session ID on the daemon */
+  sessionId: number;
+  /** Whether the tab group is expanded (showing window sub-tabs) */
+  expanded: boolean;
+  /** Mux window names (sub-tabs) */
+  windowNames: string[];
+  /** Active window index */
+  activeWindowIndex: number;
+}
+
+/**
  * Tab type - discriminated union for type-safe handling
  * Note: Tab is data-only; TerminalApp instances are managed by TabManager
  */
-export type Tab = TerminalTab | SettingsTab;
+export type Tab = TerminalTab | SettingsTab | MuxTab;
 
 /**
  * Type guard for terminal tabs
@@ -51,6 +69,13 @@ export function isTerminalTab(tab: Tab): tab is TerminalTab {
  */
 export function isSettingsTab(tab: Tab): tab is SettingsTab {
   return tab.type === "settings";
+}
+
+/**
+ * Type guard for mux tab
+ */
+export function isMuxTab(tab: Tab): tab is MuxTab {
+  return tab.type === "mux";
 }
 
 /**
