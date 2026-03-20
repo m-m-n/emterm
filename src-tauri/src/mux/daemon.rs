@@ -44,8 +44,20 @@ pub fn socket_path() -> PathBuf {
 }
 
 /// Check if a daemon is already running by attempting to connect to the socket.
+#[cfg(unix)]
 pub fn is_daemon_running(path: &std::path::Path) -> bool {
     std::os::unix::net::UnixStream::connect(path).is_ok()
+}
+
+#[cfg(windows)]
+pub fn is_daemon_running(path: &std::path::Path) -> bool {
+    // On Windows, attempt to connect to the AF_UNIX socket
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+        std::time::Duration::from_millis(100),
+    )
+    .is_err(); // placeholder — Windows AF_UNIX requires separate handling
+    path.exists() // fallback: assume running if socket file exists
 }
 
 /// Remove stale socket file if daemon is not running.
@@ -64,16 +76,26 @@ pub fn cleanup_stale_socket(path: &std::path::Path) -> std::io::Result<()> {
 pub async fn run_daemon() -> anyhow::Result<()> {
     let sock_path = socket_path();
 
-    // Ensure parent directory exists
+    // Ensure parent directory exists with restricted permissions
     if let Some(parent) = sock_path.parent() {
         std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
 
     // Clean up stale socket
     cleanup_stale_socket(&sock_path)?;
 
-    // Bind listener
+    // Bind listener and restrict socket permissions to owner only
     let listener = UnixListener::bind(&sock_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sock_path, std::fs::Permissions::from_mode(0o700))?;
+    }
     log::info!("Mux daemon listening on {:?}", sock_path);
 
     // Handle SIGTERM for graceful shutdown

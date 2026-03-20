@@ -28,14 +28,15 @@ pub struct MuxPane {
     pub output_tx: mpsc::Sender<PtyOutputChunk>,
     /// Writer handle for sending input to the PTY.
     writer: Option<Arc<StdMutex<Box<dyn Write + Send>>>>,
-    /// Ring buffer for detached PTY output.
-    pub ring_buffer: DetachRingBuffer,
+    /// Ring buffer for detached PTY output. Lazily allocated on first detach.
+    pub ring_buffer: Option<DetachRingBuffer>,
     /// Whether this pane's PTY has exited.
     pub exited: bool,
 }
 
 impl MuxPane {
     /// Create a new pane (PTY spawn handled by caller).
+    /// Ring buffer is NOT allocated until detach (lazy allocation).
     pub fn new(
         id: PaneId,
         cols: u16,
@@ -49,9 +50,17 @@ impl MuxPane {
             rows,
             output_tx,
             writer: Some(Arc::new(StdMutex::new(writer))),
-            ring_buffer: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+            ring_buffer: None, // Lazy: allocated on first detach
             exited: false,
         }
+    }
+
+    /// Get or create the ring buffer (lazy allocation).
+    /// Called when entering detached state to start accumulating PTY output.
+    pub fn ensure_ring_buffer(&mut self) -> &mut DetachRingBuffer {
+        self.ring_buffer.get_or_insert_with(|| {
+            DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY)
+        })
     }
 
     /// Write input data to the PTY.
