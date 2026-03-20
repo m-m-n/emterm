@@ -33,6 +33,13 @@ pub enum MessageType {
     SessionList = 0x0E,
     Error = 0x0F,
     PtyExited = 0x10,
+    // Phase 3+ message types
+    SplitPane = 0x11,
+    CreateWindow = 0x12,
+    SwitchWindow = 0x13,
+    RenameWindow = 0x14,
+    DestroyWindow = 0x15,
+    StatusUpdate = 0x16,
 }
 
 impl MessageType {
@@ -54,6 +61,12 @@ impl MessageType {
             0x0E => Some(Self::SessionList),
             0x0F => Some(Self::Error),
             0x10 => Some(Self::PtyExited),
+            0x11 => Some(Self::SplitPane),
+            0x12 => Some(Self::CreateWindow),
+            0x13 => Some(Self::SwitchWindow),
+            0x14 => Some(Self::RenameWindow),
+            0x15 => Some(Self::DestroyWindow),
+            0x16 => Some(Self::StatusUpdate),
             _ => None,
         }
     }
@@ -119,6 +132,26 @@ pub struct ErrorMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachMsg {
     pub session_id: u32,
+}
+
+/// Split pane request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SplitPaneMsg {
+    pub direction: String, // "horizontal" or "vertical"
+}
+
+/// Status update pushed from daemon to GUI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusUpdateMsg {
+    pub session_name: String,
+    pub window_names: Vec<String>,
+    pub active_window_index: u32,
+}
+
+/// Rename window request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameWindowMsg {
+    pub name: String,
 }
 
 /// A complete IPC message with header and payload.
@@ -194,12 +227,12 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x10u8 {
+        for i in 0x01..=0x16u8 {
             let mt = MessageType::from_u8(i).unwrap();
             assert_eq!(mt as u8, i);
         }
         assert!(MessageType::from_u8(0x00).is_none());
-        assert!(MessageType::from_u8(0x11).is_none());
+        assert!(MessageType::from_u8(0x17).is_none());
     }
 
     #[test]
