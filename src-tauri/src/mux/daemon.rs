@@ -4,10 +4,13 @@
 //! and manages PTY sessions. Auto-exits when all sessions end.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::net::UnixListener;
+use tokio::sync::Mutex;
 
 use super::ipc::connection::handle_connection;
+use super::session::manager::SessionManager;
 
 /// Get the socket path for the mux daemon.
 ///
@@ -98,6 +101,8 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     }
     log::info!("Mux daemon listening on {:?}", sock_path);
 
+    let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+
     // Handle SIGTERM for graceful shutdown
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
@@ -108,7 +113,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream));
+                        tokio::spawn(handle_connection(stream, session_manager.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
@@ -125,7 +130,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
         {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
-                    tokio::spawn(handle_connection(stream));
+                    tokio::spawn(handle_connection(stream, session_manager.clone()));
                 }
                 Err(e) => {
                     log::error!("Accept error: {}", e);
