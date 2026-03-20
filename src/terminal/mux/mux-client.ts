@@ -7,6 +7,19 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+/** IPC message type constants (must match protocol.rs MessageType). */
+export const MuxMessageType = {
+  CreatePane: 0x05,
+  DestroyPane: 0x07,
+  Resize: 0x08,
+  Detach: 0x0a,
+  SplitPane: 0x11,
+  CreateWindow: 0x12,
+  SwitchWindow: 0x13,
+  RenameWindow: 0x14,
+  DestroyWindow: 0x15,
+} as const;
+
 /** Connection state for the mux client. */
 export type MuxConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
@@ -111,6 +124,22 @@ export class MuxClient {
       paneId,
       data: Array.from(data),
     });
+  }
+
+  /** Send a control message to the daemon and optionally receive a response. */
+  async sendControl(
+    msgType: number,
+    paneId: number,
+    payload: Uint8Array = new Uint8Array(),
+  ): Promise<Uint8Array | null> {
+    if (!this.connId) throw new Error("Not connected");
+    const result = await invoke<number[] | null>("mux_send_control", {
+      connId: this.connId,
+      msgType,
+      paneId,
+      payload: Array.from(payload),
+    });
+    return result ? new Uint8Array(result) : null;
   }
 
   /** Check if connected. */

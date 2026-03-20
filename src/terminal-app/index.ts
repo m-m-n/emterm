@@ -20,7 +20,7 @@ import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
 import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
-import { MuxClient } from "../terminal/mux/mux-client";
+import { MuxClient, MuxMessageType } from "../terminal/mux/mux-client";
 import type { MuxAction } from "../terminal/mux/prefix-key";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
@@ -664,15 +664,67 @@ export class TerminalApp {
 
     switch (action.type) {
       case "detach":
+        this.sendMuxControl(MuxMessageType.Detach, 0);
         this.exitMuxMode();
         break;
-      case "prefix-passthrough":
-        console.info("[INFO][FRONTEND] Prefix passthrough (not yet implemented)");
+      case "new-window":
+        this.sendMuxControl(MuxMessageType.CreateWindow, 0);
         break;
-      default:
-        console.info(`[INFO][FRONTEND] Mux action not yet implemented: ${action.type}`);
+      case "split-vertical":
+        this.sendMuxControl(MuxMessageType.SplitPane, 0, new Uint8Array([0x01])); // 0x01 = vertical
+        break;
+      case "split-horizontal":
+        this.sendMuxControl(MuxMessageType.SplitPane, 0, new Uint8Array([0x00])); // 0x00 = horizontal
+        break;
+      case "close-pane":
+        this.sendMuxControl(MuxMessageType.DestroyPane, 0);
+        break;
+      case "next-window":
+        this.sendMuxControl(MuxMessageType.SwitchWindow, 0, new Uint8Array([0x01])); // next
+        break;
+      case "prev-window":
+        this.sendMuxControl(MuxMessageType.SwitchWindow, 0, new Uint8Array([0x00])); // prev
+        break;
+      case "rename-window":
+        // TODO: prompt for new name
+        console.info("[INFO][FRONTEND] Rename window: prompt not yet implemented");
+        break;
+      case "prefix-passthrough":
+        // Send the prefix key itself to PTY
+        if (this.ptyClient) {
+          const muxSettings = SettingsService.getCached()?.mux;
+          const prefix = muxSettings?.prefix ?? "Ctrl+B";
+          const byte = this.prefixKeyToByte(prefix);
+          if (byte !== null) {
+            this.ptyClient.write(new Uint8Array([byte])).catch(() => {});
+          }
+        }
+        break;
+      case "zoom-toggle":
+      case "next-pane":
+      case "prev-pane":
+      case "copy-mode":
+      case "paste":
+        console.info(`[INFO][FRONTEND] Mux action not yet routed: ${action.type}`);
         break;
     }
+  }
+
+  /** Send a control message to the mux daemon. */
+  private sendMuxControl(msgType: number, paneId: number, payload?: Uint8Array): void {
+    if (!this.muxClient) return;
+    this.muxClient.sendControl(msgType, paneId, payload).catch((e) => {
+      console.error(`[ERROR][FRONTEND] Mux control failed (type=0x${msgType.toString(16)}):`, e);
+    });
+  }
+
+  /** Convert a prefix keybind string to a control byte (e.g., "Ctrl+B" → 0x02). */
+  private prefixKeyToByte(prefix: string): number | null {
+    const match = prefix.match(/^Ctrl\+([A-Z])$/i);
+    if (match) {
+      return match[1]!.toUpperCase().charCodeAt(0) - 0x40; // Ctrl+A=1, Ctrl+B=2, etc.
+    }
+    return null;
   }
 
   /**
