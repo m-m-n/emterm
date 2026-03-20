@@ -49,6 +49,10 @@ export class TerminalApp {
   private lastWindowTitle = "";
   private sessionExitCallback: ((sessionId: string) => void) | null = null;
   private titleChangeCallback: ((title: string) => void) | null = null;
+
+  // Mux mode callbacks (set by TabManager when mux support is needed)
+  public muxAttachCallback: ((socketPath: string, sessionId: number) => void) | null = null;
+  public muxDetachCallback: (() => void) | null = null;
   private bellActivityCallback: (() => void) | null = null;
   private outputActivityCallback: (() => void) | null = null;
   private searchHandler: SearchHandler | null = null;
@@ -482,6 +486,8 @@ export class TerminalApp {
       titleChangeCallback: this.titleChangeCallback,
       lastWindowTitle: this.lastWindowTitle,
       setLastWindowTitle: (title: string) => { this.lastWindowTitle = title; },
+      muxAttachCallback: this.muxAttachCallback,
+      muxDetachCallback: this.muxDetachCallback,
     };
   }
 
