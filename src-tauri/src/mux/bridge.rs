@@ -1,4 +1,4 @@
-//! Tauri IPC commands bridging GUI ↔ daemon IPC socket.
+//! Tauri IPC commands bridging GUI <-> daemon IPC socket.
 //!
 //! The GUI cannot directly access Unix sockets from WebView JavaScript.
 //! These Tauri commands act as a bridge, forwarding messages between
@@ -7,22 +7,26 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 
 use super::ipc::protocol::*;
 
 /// State for managing mux daemon connections from the GUI.
+///
+/// Stores split read/write halves separately so the background output
+/// reader task does not block write operations (input, control messages).
 pub struct MuxBridgeState {
-    /// Active connections keyed by a connection ID.
-    connections: Mutex<HashMap<String, Arc<Mutex<UnixStream>>>>,
+    writers: Mutex<HashMap<String, Arc<Mutex<WriteHalf<UnixStream>>>>>,
+    readers: Mutex<HashMap<String, Arc<Mutex<ReadHalf<UnixStream>>>>>,
 }
 
 impl MuxBridgeState {
     pub fn new() -> Self {
         Self {
-            connections: Mutex::new(HashMap::new()),
+            writers: Mutex::new(HashMap::new()),
+            readers: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -41,16 +45,25 @@ pub async fn mux_connect(
     state: tauri::State<'_, MuxBridgeState>,
     socket_path: String,
 ) -> Result<String, String> {
-    // Validate socket path
     validate_socket_path(&socket_path)?;
 
     let stream = UnixStream::connect(&socket_path)
         .await
         .map_err(|e| format!("Failed to connect to daemon: {}", e))?;
 
+    let (read_half, write_half) = tokio::io::split(stream);
     let conn_id = uuid::Uuid::new_v4().to_string();
-    let mut conns = state.connections.lock().await;
-    conns.insert(conn_id.clone(), Arc::new(Mutex::new(stream)));
+
+    state
+        .writers
+        .lock()
+        .await
+        .insert(conn_id.clone(), Arc::new(Mutex::new(write_half)));
+    state
+        .readers
+        .lock()
+        .await
+        .insert(conn_id.clone(), Arc::new(Mutex::new(read_half)));
 
     Ok(conn_id)
 }
@@ -62,47 +75,60 @@ pub async fn mux_disconnect(
     state: tauri::State<'_, MuxBridgeState>,
     conn_id: String,
 ) -> Result<(), String> {
-    let mut conns = state.connections.lock().await;
-    conns.remove(&conn_id);
+    state.writers.lock().await.remove(&conn_id);
+    state.readers.lock().await.remove(&conn_id);
     Ok(())
 }
 
 /// Send a handshake Hello message and receive Welcome response.
+///
+/// Must be called before `mux_start_output_stream`, which takes
+/// ownership of the reader half.
 #[cfg(feature = "gui")]
 #[tauri::command]
 pub async fn mux_handshake(
     state: tauri::State<'_, MuxBridgeState>,
     conn_id: String,
 ) -> Result<Vec<SessionInfo>, String> {
-    let conns = state.connections.lock().await;
-    let stream = conns
+    // Send Hello via writer
+    {
+        let writers = state.writers.lock().await;
+        let writer = writers
+            .get(&conn_id)
+            .ok_or_else(|| "Connection not found".to_string())?
+            .clone();
+        drop(writers);
+
+        let mut writer = writer.lock().await;
+        let hello = HelloMsg {
+            client_type: ClientType::Gui,
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
+        let body = msg.to_frame_body();
+        let len = (body.len() as u32).to_be_bytes();
+        writer
+            .write_all(&len)
+            .await
+            .map_err(|e| format!("Write error: {}", e))?;
+        writer
+            .write_all(&body)
+            .await
+            .map_err(|e| format!("Write error: {}", e))?;
+    }
+
+    // Read Welcome via reader
+    let readers = state.readers.lock().await;
+    let reader = readers
         .get(&conn_id)
-        .ok_or_else(|| "Connection not found".to_string())?
+        .ok_or_else(|| "Reader not found".to_string())?
         .clone();
-    drop(conns);
+    drop(readers);
 
-    let mut stream = stream.lock().await;
+    let mut reader = reader.lock().await;
 
-    // Send Hello
-    let hello = HelloMsg {
-        client_type: ClientType::Gui,
-        protocol_version: PROTOCOL_VERSION,
-    };
-    let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
-    let body = msg.to_frame_body();
-    let len = (body.len() as u32).to_be_bytes();
-    stream
-        .write_all(&len)
-        .await
-        .map_err(|e| format!("Write error: {}", e))?;
-    stream
-        .write_all(&body)
-        .await
-        .map_err(|e| format!("Write error: {}", e))?;
-
-    // Read Welcome response
     let mut len_buf = [0u8; 4];
-    stream
+    reader
         .read_exact(&mut len_buf)
         .await
         .map_err(|e| format!("Read error: {}", e))?;
@@ -112,7 +138,7 @@ pub async fn mux_handshake(
     }
 
     let mut frame_buf = vec![0u8; frame_len];
-    stream
+    reader
         .read_exact(&mut frame_buf)
         .await
         .map_err(|e| format!("Read error: {}", e))?;
@@ -142,23 +168,23 @@ pub async fn mux_send_input(
     pane_id: u32,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    let conns = state.connections.lock().await;
-    let stream = conns
+    let writers = state.writers.lock().await;
+    let writer = writers
         .get(&conn_id)
         .ok_or_else(|| "Connection not found".to_string())?
         .clone();
-    drop(conns);
+    drop(writers);
 
     let msg = MuxMessage::pty_input(pane_id, data);
     let body = msg.to_frame_body();
     let len = (body.len() as u32).to_be_bytes();
 
-    let mut stream = stream.lock().await;
-    stream
+    let mut writer = writer.lock().await;
+    writer
         .write_all(&len)
         .await
         .map_err(|e| format!("Write error: {}", e))?;
-    stream
+    writer
         .write_all(&body)
         .await
         .map_err(|e| format!("Write error: {}", e))?;
@@ -166,12 +192,11 @@ pub async fn mux_send_input(
     Ok(())
 }
 
-/// Send a control message to the daemon and optionally read a response.
+/// Send a control message to the daemon (fire-and-forget).
 ///
 /// Builds a `MuxMessage` from the given type, pane ID, and raw payload,
-/// then sends it over the framed connection. Attempts to read a response
-/// with a short timeout -- returns `Some(bytes)` if data arrives, `None`
-/// if the timeout expires (fire-and-forget messages like Detach).
+/// then sends it over the write half. Does not attempt to read a response
+/// because the read half is owned by the output stream background task.
 #[cfg(feature = "gui")]
 #[tauri::command]
 pub async fn mux_send_control(
@@ -184,12 +209,12 @@ pub async fn mux_send_control(
     let mt = MessageType::from_u8(msg_type)
         .ok_or_else(|| format!("Unknown message type: 0x{:02X}", msg_type))?;
 
-    let conns = state.connections.lock().await;
-    let stream = conns
+    let writers = state.writers.lock().await;
+    let writer = writers
         .get(&conn_id)
         .ok_or_else(|| "Connection not found".to_string())?
         .clone();
-    drop(conns);
+    drop(writers);
 
     let msg = MuxMessage {
         msg_type: mt,
@@ -199,35 +224,30 @@ pub async fn mux_send_control(
     let body = msg.to_frame_body();
     let len = (body.len() as u32).to_be_bytes();
 
-    let mut stream = stream.lock().await;
-    stream
+    let mut writer = writer.lock().await;
+    writer
         .write_all(&len)
         .await
         .map_err(|e| format!("Write error: {}", e))?;
-    stream
+    writer
         .write_all(&body)
         .await
         .map_err(|e| format!("Write error: {}", e))?;
 
-    // Try to read a response with a short timeout
-    match tokio::time::timeout(
-        std::time::Duration::from_millis(500),
-        read_one_frame(&mut stream),
-    )
-    .await
-    {
-        Ok(Ok(frame_body)) => Ok(Some(frame_body)),
-        Ok(Err(e)) => Err(format!("Read error: {}", e)),
-        Err(_) => Ok(None), // Timeout: fire-and-forget
-    }
+    // NOTE: Response reading is handled by the output stream background task.
+    // Control responses arrive as events via mux_start_output_stream.
+    Ok(None)
 }
 
 /// Start a background task that continuously reads PTY output from the daemon
 /// and emits Tauri events to the frontend.
 ///
-/// The task reads length-prefixed frames from the connection, filters for
-/// PtyOutput messages, and emits `mux-pty-output` events with the pane ID
-/// and raw data. The task runs until the connection closes or an error occurs.
+/// Takes ownership of the reader half for this connection. The handshake
+/// must be completed before calling this function.
+///
+/// The task reads length-prefixed frames, filters for PtyOutput and
+/// PtyExited messages, and emits corresponding Tauri events. The task
+/// runs until the connection closes or an error occurs.
 #[cfg(feature = "gui")]
 #[tauri::command]
 pub async fn mux_start_output_stream(
@@ -235,18 +255,19 @@ pub async fn mux_start_output_stream(
     state: tauri::State<'_, MuxBridgeState>,
     conn_id: String,
 ) -> Result<(), String> {
-    let conns = state.connections.lock().await;
-    let stream = conns
-        .get(&conn_id)
-        .ok_or_else(|| "Connection not found".to_string())?
-        .clone();
-    drop(conns);
+    // Take ownership of the reader -- only the background task will use it
+    let reader = {
+        let mut readers = state.readers.lock().await;
+        readers
+            .remove(&conn_id)
+            .ok_or_else(|| "Reader not found".to_string())?
+    };
 
     tokio::spawn(async move {
-        let mut stream = stream.lock().await;
+        let mut reader = reader.lock().await;
         loop {
             let mut len_buf = [0u8; 4];
-            if AsyncReadExt::read_exact(&mut *stream, &mut len_buf)
+            if AsyncReadExt::read_exact(&mut *reader, &mut len_buf)
                 .await
                 .is_err()
             {
@@ -258,7 +279,7 @@ pub async fn mux_start_output_stream(
             }
 
             let mut frame_buf = vec![0u8; frame_len];
-            if AsyncReadExt::read_exact(&mut *stream, &mut frame_buf)
+            if AsyncReadExt::read_exact(&mut *reader, &mut frame_buf)
                 .await
                 .is_err()
             {
@@ -316,25 +337,6 @@ struct MuxPtyOutputEvent {
 struct MuxPtyExitedEvent {
     pane_id: u32,
     exit_code: Option<u32>,
-}
-
-/// Read a single length-prefixed frame from the stream.
-async fn read_one_frame(stream: &mut UnixStream) -> Result<Vec<u8>, String> {
-    let mut len_buf = [0u8; 4];
-    stream
-        .read_exact(&mut len_buf)
-        .await
-        .map_err(|e| format!("Read error: {}", e))?;
-    let frame_len = u32::from_be_bytes(len_buf) as usize;
-    if frame_len > MAX_FRAME_LENGTH {
-        return Err("Frame too large".to_string());
-    }
-    let mut frame_buf = vec![0u8; frame_len];
-    stream
-        .read_exact(&mut frame_buf)
-        .await
-        .map_err(|e| format!("Read error: {}", e))?;
-    Ok(frame_buf)
 }
 
 /// Validate that a socket path is in an allowed directory using canonicalization.
