@@ -10,3 +10,4 @@ pub mod ipc;
 pub mod ring_buffer;
 pub mod session;
 pub mod snapshot;
+pub mod tmux_conf;
