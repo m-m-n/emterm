@@ -309,6 +309,20 @@ pub async fn mux_start_output_stream(
                             },
                         );
                     }
+                    MessageType::PaneCreated => {
+                        use tauri::Emitter;
+                        let _ = app.emit(
+                            "mux-pane-created",
+                            MuxPaneCreatedEvent {
+                                pane_id: msg.pane_id,
+                            },
+                        );
+                    }
+                    MessageType::Detached => {
+                        use tauri::Emitter;
+                        let _ = app.emit("mux-detached", ());
+                        break; // Daemon closed connection
+                    }
                     _ => {
                         log::debug!(
                             "Output stream ignoring {:?} for pane {}",
@@ -323,6 +337,12 @@ pub async fn mux_start_output_stream(
     });
 
     Ok(())
+}
+
+/// Pane created event emitted to the frontend.
+#[derive(Clone, serde::Serialize)]
+struct MuxPaneCreatedEvent {
+    pane_id: u32,
 }
 
 /// PTY output event emitted to the frontend.

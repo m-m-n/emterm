@@ -75,8 +75,10 @@ export class MuxClient {
   private onStateChange: ((state: MuxConnectionState) => void) | null = null;
   private outputUnlisten: UnlistenFn | null = null;
   private exitedUnlisten: UnlistenFn | null = null;
+  private createdUnlisten: UnlistenFn | null = null;
   private onPtyOutput: ((paneId: number, data: Uint8Array) => void) | null = null;
   private onPtyExited: ((paneId: number) => void) | null = null;
+  private onPaneCreated: ((paneId: number) => void) | null = null;
 
   get state(): MuxConnectionState {
     return this._state;
@@ -118,6 +120,11 @@ export class MuxClient {
     this.onPtyExited = callback;
   }
 
+  /** Set callback for pane creation (receives actual pane ID from daemon). */
+  setOnPaneCreated(callback: (paneId: number) => void): void {
+    this.onPaneCreated = callback;
+  }
+
   /** Start the output stream -- calls mux_start_output_stream and listens for events. */
   async startOutputStream(): Promise<void> {
     if (!this.connId) throw new Error("Not connected");
@@ -142,6 +149,16 @@ export class MuxClient {
       },
     );
 
+    // Listen for mux-pane-created events (actual pane ID from daemon)
+    this.createdUnlisten = await listen<{ pane_id: number }>(
+      "mux-pane-created",
+      (event) => {
+        if (this.onPaneCreated) {
+          this.onPaneCreated(event.payload.pane_id);
+        }
+      },
+    );
+
     // Tell backend to start reading output from daemon
     await invoke("mux_start_output_stream", { connId: this.connId });
   }
@@ -155,6 +172,10 @@ export class MuxClient {
     if (this.exitedUnlisten) {
       this.exitedUnlisten();
       this.exitedUnlisten = null;
+    }
+    if (this.createdUnlisten) {
+      this.createdUnlisten();
+      this.createdUnlisten = null;
     }
     if (this.connId) {
       try {
