@@ -108,6 +108,22 @@ export class KeyboardHandler {
     this.selectionController = controller;
   }
 
+  /** Enable mux mode at runtime (e.g., when mux attach OSC is received). */
+  enableMuxMode(prefix: string, keybinds: Record<string, string>, onAction: (action: MuxAction) => void): void {
+    this.prefixKeyHandler = new PrefixKeyHandler(prefix, keybinds);
+    this.onMuxAction = onAction;
+    this.prefixKeyHandler.setOnAction(onAction);
+  }
+
+  /** Disable mux mode at runtime (e.g., on detach). */
+  disableMuxMode(): void {
+    if (this.prefixKeyHandler) {
+      this.prefixKeyHandler.reset();
+      this.prefixKeyHandler = null;
+    }
+    this.onMuxAction = null;
+  }
+
   /** Update mux prefix key handler with new settings. */
   updateMuxSettings(prefix: string, keybinds: Record<string, string>): void {
     if (this.prefixKeyHandler) {
