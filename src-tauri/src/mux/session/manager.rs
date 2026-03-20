@@ -67,7 +67,39 @@ impl SessionManager {
             .collect()
     }
 
-    /// Find a pane across all sessions. Returns (session_id, window_id, &pane).
+    /// Create a new window in a session.
+    pub fn create_window(&mut self, session_id: SessionId, name: String) -> Option<WindowId> {
+        let session = self.sessions.get_mut(&session_id)?;
+        let window_id = session.alloc_window_id();
+        let window = super::window::MuxWindow::new(window_id, name);
+        session.add_window(window);
+        Some(window_id)
+    }
+
+    /// Remove a window from a session. Returns true if session became empty.
+    pub fn remove_window(&mut self, session_id: SessionId, window_id: WindowId) -> Option<bool> {
+        let session = self.sessions.get_mut(&session_id)?;
+        session.remove_window(window_id);
+        Some(session.is_empty())
+    }
+
+    /// Rename a window.
+    pub fn rename_window(
+        &mut self,
+        session_id: SessionId,
+        window_id: WindowId,
+        name: String,
+    ) -> bool {
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            if let Some(window) = session.windows.get_mut(&window_id) {
+                window.name = name;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Find a pane across all sessions. Returns (session_id, window_id).
     pub fn find_pane(&self, pane_id: PaneId) -> Option<(SessionId, WindowId)> {
         for session in self.sessions.values() {
             for window in session.windows.values() {
