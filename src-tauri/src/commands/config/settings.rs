@@ -443,7 +443,6 @@ pub struct AppSettings {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub ssh_connections: Vec<SshConnection>,
 
-
     // SFTP
     #[serde(
         default = "default_sftp_max_concurrent_uploads",

@@ -14,9 +14,7 @@ pub use types::*;
 
 #[cfg(test)]
 mod tests {
-    use super::settings::{
-        AppSettings, KeybindSettings, Profile, SshConnection, SshOption,
-    };
+    use super::settings::{AppSettings, KeybindSettings, Profile, SshConnection, SshOption};
     use super::types::*;
     use super::validation::validate_settings;
 
