@@ -112,9 +112,19 @@ pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<Se
             }
             chunk = pane_output_rx.recv() => {
                 if let Some(chunk) = chunk {
-                    let msg = MuxMessage::pty_output(chunk.pane_id, chunk.data);
-                    if framed.send(msg).await.is_err() {
-                        break;
+                    if chunk.data.is_empty() {
+                        // Empty chunk = PTY exited signal
+                        log::info!("PTY exited for pane {}", chunk.pane_id);
+                        let exit_msg = PtyExitedMsg { exit_code: Some(0) };
+                        let msg = MuxMessage::control(MessageType::PtyExited, chunk.pane_id, &exit_msg);
+                        if framed.send(msg).await.is_err() {
+                            break;
+                        }
+                    } else {
+                        let msg = MuxMessage::pty_output(chunk.pane_id, chunk.data);
+                        if framed.send(msg).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
@@ -323,4 +333,9 @@ fn pty_reader_loop(
             }
         }
     }
+    // Send empty chunk to signal PTY exit to the connection handler
+    let _ = tx.blocking_send(PtyOutputChunk {
+        pane_id,
+        data: Vec::new(), // empty = exit signal
+    });
 }
