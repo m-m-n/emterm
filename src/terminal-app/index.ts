@@ -9,7 +9,7 @@ import {
 } from "../pty";
 import { TerminalState } from "../terminal/state";
 import { WasmGrid } from "../terminal/wasm/terminal-core";
-import { createRendererAsync, type ITerminalRenderer } from "../terminal";
+import { createRenderer, createRendererAsync, type ITerminalRenderer } from "../terminal";
 import { SelectionController } from "../selection-v2";
 import type { TerminalAppOptions, CharSize } from "./types";
 import { KeyboardHandler, MouseHandler, ImeHandler, FoldHandler, SearchHandler, ImageHandler, LinkHandler } from "./handlers";
@@ -23,6 +23,15 @@ import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
 import { MuxClient, MuxMessageType } from "../terminal/mux/mux-client";
 import type { MuxAction } from "../terminal/mux/prefix-key";
+import {
+  calculateLayout,
+  splitPane as splitLayoutPane,
+  removePane as removeLayoutPane,
+  getAllPaneIds,
+  type LayoutNode,
+  type SplitDirection,
+} from "../terminal/mux/layout";
+import { applyLayoutToContainer } from "../terminal/mux/pane-border";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
 import { setupPtyHandlers, type PtyHandlerHandle } from "./pty-handler";
@@ -66,6 +75,20 @@ export class TerminalApp {
   private muxPaneGrids: Map<number, WasmGrid> = new Map(); // WASM grids per pane
   private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
   private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
+
+  // Multi-pane state (within active window)
+  private muxLayoutRoot: LayoutNode | null = null;
+  private muxActivePaneId: number | null = null;
+  private muxPaneCanvases: Map<number, {
+    container: HTMLElement;
+    canvas: HTMLCanvasElement;
+    grid: WasmGrid;
+    state: TerminalState;
+    renderer: ITerminalRenderer;
+  }> = new Map();
+  private muxPaneContainer: HTMLElement | null = null;
+  private muxPendingSplitCount = 0;
+  private muxPendingSplitDirection: SplitDirection = "vertical";
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -690,6 +713,13 @@ export class TerminalApp {
 
   /** Handle PaneCreated from daemon — register actual pane ID and update UI. */
   private handleMuxPaneCreated(paneId: number): void {
+    // Check if this is a split pane response
+    if (this.muxPendingSplitCount > 0) {
+      this.muxPendingSplitCount--;
+      this.handleMuxSplitPaneCreated(paneId, this.muxPendingSplitDirection);
+      return;
+    }
+
     if (this.muxPendingWindowCount <= 0) return;
     this.muxPendingWindowCount--;
 
@@ -730,6 +760,12 @@ export class TerminalApp {
 
   /** Handle a mux pane exiting (shell closed). Remove the window and switch if needed. */
   private handleMuxPaneExited(paneId: number): void {
+    // Multi-pane mode: remove from layout
+    if (this.muxLayoutRoot && this.muxPaneCanvases.has(paneId)) {
+      this.removeMuxPane(paneId);
+      return;
+    }
+
     const windowIdx = this.muxPaneIds.indexOf(paneId);
     if (windowIdx === -1) return;
 
@@ -811,11 +847,18 @@ export class TerminalApp {
       return;
     }
 
-    // Set up PTY output handler -- only show output from active pane
+    // Set up PTY output handler -- route to correct pane
     this.muxClient.setOnPtyOutput((paneId: number, data: Uint8Array) => {
+      // Multi-pane mode: route to specific pane's canvas/grid
+      if (this.muxLayoutRoot && this.muxPaneCanvases.has(paneId)) {
+        this.renderMuxPaneOutput(paneId, data);
+        return;
+      }
+
+      // Single-pane mode: route to main renderer
       const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
       if (activePaneId === undefined) {
-        // PaneCreated hasn't arrived yet — accept all output during init
+        // PaneCreated hasn't arrived yet -- accept all output during init
         if (this.ptyHandlerHandle) {
           this.ptyHandlerHandle.injectData(data);
         }
@@ -851,7 +894,7 @@ export class TerminalApp {
     if (this.ptyClient) {
       this.ptyClient.setWriteProxy((data: Uint8Array) => {
         if (!this.muxClient) return Promise.resolve();
-        const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex] ?? 1;
+        const activePaneId = this.getActiveMuxPaneId() ?? this.muxPaneIds[this.activeMuxWindowIndex] ?? 1;
         return this.muxClient.sendInput(activePaneId, data);
       });
     }
@@ -947,11 +990,17 @@ export class TerminalApp {
       this.muxOriginalGrid = null;
     }
 
+    // Clean up multi-pane state
+    if (this.muxLayoutRoot) {
+      this.exitMultiPaneMode(null);
+    }
+
     // Reset mux window tracking
     this.muxWindows = [];
     this.activeMuxWindowIndex = 0;
     this.muxPaneIds = [];
     this.muxPendingWindowCount = 0;
+    this.muxPendingSplitCount = 0;
     this.muxPaneGrids.clear();
     this.emitMuxStateChange();
 
@@ -987,15 +1036,31 @@ export class TerminalApp {
         this.sendMuxControl(MuxMessageType.CreateWindow, 0);
         break;
       }
-      case "split-vertical":
-        this.sendMuxControl(MuxMessageType.SplitPane, 0, new Uint8Array([0x01])); // 0x01 = vertical
+      case "split-vertical": {
+        const activePaneId = this.getActiveMuxPaneId();
+        if (activePaneId != null) {
+          this.muxPendingSplitCount++;
+          this.muxPendingSplitDirection = "vertical";
+          this.sendMuxControl(MuxMessageType.SplitPane, activePaneId, new Uint8Array([0x01]));
+        }
         break;
-      case "split-horizontal":
-        this.sendMuxControl(MuxMessageType.SplitPane, 0, new Uint8Array([0x00])); // 0x00 = horizontal
+      }
+      case "split-horizontal": {
+        const activePaneId = this.getActiveMuxPaneId();
+        if (activePaneId != null) {
+          this.muxPendingSplitCount++;
+          this.muxPendingSplitDirection = "horizontal";
+          this.sendMuxControl(MuxMessageType.SplitPane, activePaneId, new Uint8Array([0x00]));
+        }
         break;
-      case "close-pane":
-        this.sendMuxControl(MuxMessageType.DestroyPane, 0);
+      }
+      case "close-pane": {
+        const activePaneId = this.getActiveMuxPaneId();
+        if (activePaneId != null) {
+          this.sendMuxControl(MuxMessageType.DestroyPane, activePaneId);
+        }
         break;
+      }
       case "next-window": {
         if (this.muxWindows.length > 1) {
           const prev = this.activeMuxWindowIndex;
@@ -1027,9 +1092,25 @@ export class TerminalApp {
           }
         }
         break;
+      case "next-pane": {
+        if (this.muxLayoutRoot) {
+          const paneIds = getAllPaneIds(this.muxLayoutRoot);
+          const currentIdx = paneIds.indexOf(this.muxActivePaneId!);
+          const nextIdx = (currentIdx + 1) % paneIds.length;
+          this.setActiveMuxPane(paneIds[nextIdx]!);
+        }
+        break;
+      }
+      case "prev-pane": {
+        if (this.muxLayoutRoot) {
+          const paneIds = getAllPaneIds(this.muxLayoutRoot);
+          const currentIdx = paneIds.indexOf(this.muxActivePaneId!);
+          const prevIdx = (currentIdx - 1 + paneIds.length) % paneIds.length;
+          this.setActiveMuxPane(paneIds[prevIdx]!);
+        }
+        break;
+      }
       case "zoom-toggle":
-      case "next-pane":
-      case "prev-pane":
       case "copy-mode":
       case "paste":
         console.info(`[INFO][FRONTEND] Mux action not yet routed: ${action.type}`);
@@ -1052,6 +1133,314 @@ export class TerminalApp {
       return match[1]!.toUpperCase().charCodeAt(0) - 0x40; // Ctrl+A=1, Ctrl+B=2, etc.
     }
     return null;
+  }
+
+  /** Get the active mux pane ID (multi-pane or single-pane mode). */
+  private getActiveMuxPaneId(): number | null {
+    if (this.muxActivePaneId != null) return this.muxActivePaneId;
+    return this.muxPaneIds[this.activeMuxWindowIndex] ?? null;
+  }
+
+  /** Handle a split pane creation from the daemon. */
+  private handleMuxSplitPaneCreated(newPaneId: number, direction: SplitDirection): void {
+    if (!this.state || !this.terminalRoot) return;
+
+    const activePaneId = this.getActiveMuxPaneId();
+    if (activePaneId == null) return;
+
+    // First split: transition from single-canvas to multi-canvas mode
+    if (!this.muxLayoutRoot) {
+      this.initMultiPaneMode(activePaneId);
+    }
+
+    // Split the active pane in the layout tree
+    const containerWidth = this.terminalRoot.clientWidth;
+    const containerHeight = this.terminalRoot.clientHeight;
+    const newLayout = splitLayoutPane(
+      this.muxLayoutRoot!, activePaneId, newPaneId, direction,
+      containerWidth, containerHeight,
+      this.charSize.width, this.charSize.height,
+    );
+    if (!newLayout) {
+      console.warn("[WARN][FRONTEND] Split refused: pane too small");
+      return;
+    }
+    this.muxLayoutRoot = newLayout;
+
+    // Create canvas and renderer for the new pane
+    this.createPaneCanvas(newPaneId);
+
+    // Set new pane as active
+    this.setActiveMuxPane(newPaneId);
+
+    // Apply layout to all pane canvases
+    this.applyMuxLayout();
+
+    // Send resize messages for all panes based on new layout
+    this.sendPaneResizes();
+
+    console.info(`[INFO][FRONTEND] Split pane created: id=${newPaneId}, direction=${direction}`);
+  }
+
+  /** Initialize multi-pane mode from single-pane mode. */
+  private initMultiPaneMode(existingPaneId: number): void {
+    if (!this.terminalRoot || !this.state) return;
+
+    // Create overlay container for pane canvases
+    if (!this.muxPaneContainer) {
+      this.muxPaneContainer = document.createElement("div");
+      this.muxPaneContainer.className = "mux-pane-container";
+      this.muxPaneContainer.style.position = "absolute";
+      this.muxPaneContainer.style.inset = "0";
+      this.terminalRoot.appendChild(this.muxPaneContainer);
+    }
+    this.muxPaneContainer.style.display = "block";
+
+    // Initialize layout tree with existing pane as single leaf
+    this.muxLayoutRoot = { type: "leaf", paneId: existingPaneId };
+
+    // Get the current grid and renderer for the existing pane
+    const existingGrid = this.state.getPrimaryGrid();
+    if (!existingGrid) return;
+
+    // Create a pane canvas for the existing pane
+    this.createPaneCanvas(existingPaneId);
+
+    // Move the existing grid into the pane canvas state
+    const paneEntry = this.muxPaneCanvases.get(existingPaneId);
+    if (paneEntry) {
+      // Dispose the auto-created grid and replace with the existing one
+      paneEntry.grid.dispose();
+      paneEntry.grid = existingGrid;
+      paneEntry.state.swapPrimaryGrid(existingGrid);
+    }
+
+    // Hide the main canvas (renderer manages it)
+    const mainCanvas = this.terminalRoot.querySelector("canvas:not(.mux-pane-canvas)") as HTMLCanvasElement | null;
+    if (mainCanvas) {
+      mainCanvas.style.display = "none";
+    }
+
+    this.muxActivePaneId = existingPaneId;
+  }
+
+  /** Create a canvas element and renderer for a new pane. */
+  private createPaneCanvas(paneId: number): void {
+    if (!this.muxPaneContainer || !this.state) return;
+
+    const container = document.createElement("div");
+    container.className = "mux-pane";
+    container.dataset.paneId = String(paneId);
+    container.style.position = "absolute";
+    container.style.overflow = "hidden";
+    container.style.boxSizing = "border-box";
+
+    this.muxPaneContainer.appendChild(container);
+
+    // Create a WASM grid and TerminalState for this pane
+    const cols = this.state.getWasmCore().cols();
+    const rows = this.state.getWasmCore().rows();
+    const grid = new WasmGrid(cols, rows, 10000);
+    const paneState = new TerminalState(cols, rows);
+    paneState.swapPrimaryGrid(grid);
+
+    // Create a renderer inside this pane container
+    const computedStyle = window.getComputedStyle(this.container);
+    const fontFamily = computedStyle.fontFamily || "monospace";
+    const fontSize = parseFloat(computedStyle.fontSize) || 14;
+    const paneRenderer = createRenderer(container, fontFamily, fontSize);
+
+    // Apply cached settings to the pane renderer
+    const cachedSettings = SettingsService.getCached();
+    if (cachedSettings?.terminal_color_scheme) {
+      const userScheme = cachedSettings.custom_color_schemes?.find(
+        (s) => s.name === cachedSettings.terminal_color_scheme,
+      );
+      if (userScheme) {
+        paneRenderer.setUserColorScheme(userScheme);
+      } else {
+        paneRenderer.applySetting("colorScheme", cachedSettings.terminal_color_scheme);
+      }
+    }
+    if (cachedSettings?.cursor_style) {
+      paneRenderer.applySetting("cursorStyle", cachedSettings.cursor_style);
+    }
+    if (cachedSettings?.bold_brightens_ansi_colors !== undefined) {
+      paneRenderer.applySetting("boldBrightensAnsiColors", cachedSettings.bold_brightens_ansi_colors);
+    }
+
+    const canvas = container.querySelector("canvas") as HTMLCanvasElement;
+    this.muxPaneCanvases.set(paneId, { container, canvas, grid, state: paneState, renderer: paneRenderer });
+  }
+
+  /** Set the active pane and update visual indicators. */
+  private setActiveMuxPane(paneId: number): void {
+    this.muxActivePaneId = paneId;
+
+    // Update active pane border styling
+    if (this.muxPaneContainer && this.muxLayoutRoot) {
+      const layoutResults = calculateLayout(
+        this.muxLayoutRoot,
+        this.muxPaneContainer.clientWidth || this.terminalRoot!.clientWidth,
+        this.muxPaneContainer.clientHeight || this.terminalRoot!.clientHeight,
+        this.charSize.width,
+        this.charSize.height,
+      );
+      applyLayoutToContainer(this.muxPaneContainer, layoutResults, paneId);
+    }
+  }
+
+  /** Apply the current layout tree to position all pane canvases. */
+  private applyMuxLayout(): void {
+    if (!this.muxLayoutRoot || !this.muxPaneContainer || !this.terminalRoot) return;
+
+    const containerWidth = this.muxPaneContainer.clientWidth || this.terminalRoot.clientWidth;
+    const containerHeight = this.muxPaneContainer.clientHeight || this.terminalRoot.clientHeight;
+
+    const results = calculateLayout(
+      this.muxLayoutRoot,
+      containerWidth,
+      containerHeight,
+      this.charSize.width,
+      this.charSize.height,
+    );
+
+    applyLayoutToContainer(this.muxPaneContainer, results, this.muxActivePaneId);
+
+    // Update each pane's canvas dimensions, grid size, and state
+    for (const result of results) {
+      const paneEntry = this.muxPaneCanvases.get(result.paneId);
+      if (!paneEntry) continue;
+
+      // Resize the renderer canvas
+      paneEntry.renderer.resize(result.cols, result.rows);
+
+      // Resize the WASM grid and terminal state to match
+      if (paneEntry.grid.cols !== result.cols || paneEntry.grid.rows !== result.rows) {
+        paneEntry.state.resize(result.cols, result.rows);
+      }
+    }
+  }
+
+  /** Send resize messages to daemon for all panes in the current layout. */
+  private sendPaneResizes(): void {
+    if (!this.muxLayoutRoot || !this.muxPaneContainer || !this.terminalRoot) return;
+
+    const containerWidth = this.muxPaneContainer.clientWidth || this.terminalRoot.clientWidth;
+    const containerHeight = this.muxPaneContainer.clientHeight || this.terminalRoot.clientHeight;
+
+    const results = calculateLayout(
+      this.muxLayoutRoot,
+      containerWidth,
+      containerHeight,
+      this.charSize.width,
+      this.charSize.height,
+    );
+
+    for (const result of results) {
+      // Encode cols/rows as bincode-compatible u16 LE pairs
+      const payload = new Uint8Array(4);
+      payload[0] = result.cols & 0xFF;
+      payload[1] = (result.cols >> 8) & 0xFF;
+      payload[2] = result.rows & 0xFF;
+      payload[3] = (result.rows >> 8) & 0xFF;
+      this.sendMuxControl(MuxMessageType.Resize, result.paneId, payload);
+    }
+  }
+
+  /** Remove a pane from the multi-pane layout. */
+  private removeMuxPane(paneId: number): void {
+    // Remove from layout tree
+    if (this.muxLayoutRoot) {
+      const newRoot = removeLayoutPane(this.muxLayoutRoot, paneId);
+      if (newRoot === null) {
+        // Last pane removed -- this shouldn't happen here, handled by handleMuxPaneExited
+        return;
+      }
+      this.muxLayoutRoot = newRoot;
+    }
+
+    // Clean up pane canvas and state (state.dispose() also frees the WASM grid)
+    const paneEntry = this.muxPaneCanvases.get(paneId);
+    if (paneEntry) {
+      paneEntry.state.dispose();
+      paneEntry.container.remove();
+      this.muxPaneCanvases.delete(paneId);
+    }
+
+    // If only one pane left, exit multi-pane mode
+    const remainingPanes = this.muxLayoutRoot ? getAllPaneIds(this.muxLayoutRoot) : [];
+    if (remainingPanes.length <= 1) {
+      this.exitMultiPaneMode(remainingPanes[0] ?? null);
+      return;
+    }
+
+    // Select new active pane if needed
+    if (this.muxActivePaneId === paneId) {
+      this.setActiveMuxPane(remainingPanes[0]!);
+    }
+
+    this.applyMuxLayout();
+    this.sendPaneResizes();
+  }
+
+  /** Exit multi-pane mode, returning to single-canvas rendering. */
+  private exitMultiPaneMode(remainingPaneId: number | null): void {
+    // Restore the remaining pane's grid as the main grid
+    if (remainingPaneId != null) {
+      const paneEntry = this.muxPaneCanvases.get(remainingPaneId);
+      if (paneEntry && this.state) {
+        this.state.swapPrimaryGrid(paneEntry.grid);
+        this.registerCoreCallbacks(this.state.getActiveCore());
+        // Swap a dummy grid into the pane state before disposing to avoid
+        // double-freeing the grid we just moved into this.state
+        const dummyGrid = new WasmGrid(1, 1, 0);
+        paneEntry.state.swapPrimaryGrid(dummyGrid);
+        paneEntry.state.dispose();
+        paneEntry.container.remove();
+        this.muxPaneCanvases.delete(remainingPaneId);
+      }
+    }
+
+    // Clean up any remaining pane canvases (state.dispose() also frees the WASM grid)
+    for (const [, paneEntry] of this.muxPaneCanvases) {
+      paneEntry.state.dispose();
+      paneEntry.container.remove();
+    }
+    this.muxPaneCanvases.clear();
+
+    // Remove pane container
+    if (this.muxPaneContainer) {
+      this.muxPaneContainer.remove();
+      this.muxPaneContainer = null;
+    }
+
+    // Show the main canvas again
+    if (this.terminalRoot) {
+      const mainCanvas = this.terminalRoot.querySelector("canvas:not(.mux-pane-canvas)") as HTMLCanvasElement | null;
+      if (mainCanvas) {
+        mainCanvas.style.display = "block";
+      }
+    }
+
+    this.muxLayoutRoot = null;
+    this.muxActivePaneId = null;
+
+    if (this.state && this.renderer) {
+      this.renderer.forceRender(this.state);
+    }
+  }
+
+  /** Render PTY output for a specific pane in multi-pane mode. */
+  private renderMuxPaneOutput(paneId: number, data: Uint8Array): void {
+    const pane = this.muxPaneCanvases.get(paneId);
+    if (!pane) return;
+
+    // Process data through the pane's WASM grid
+    pane.grid.core.process_pty_data(data);
+
+    // Render using the pane's own TerminalState and renderer
+    pane.renderer.forceRender(pane.state);
   }
 
   /**

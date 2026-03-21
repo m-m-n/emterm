@@ -159,6 +159,24 @@ body {
   outline: none;
 }
 
+/* Mux multi-pane container */
+.mux-pane-container {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.mux-pane {
+  position: absolute;
+  overflow: hidden;
+  box-sizing: border-box;
+  border: 1px solid var(--md-sys-color-outline-variant, #49454F);
+}
+
+.mux-pane-border-active {
+  border-color: var(--md-sys-color-primary, #6750A4);
+}
+
 /* Visual bell flash animation */
 .terminal-bell-flash {
   animation: bell-flash 150ms ease-out;

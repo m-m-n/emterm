@@ -77,8 +77,8 @@ requirements:
     tests: [TS-04, TS-15, TS-23, TS-24]
   FR7:
     title: Pane Layout
-    status: partial
-    note: "Daemon SplitPane/DestroyPane/Resize handlers implemented. Layout engine exists. Frontend multi-pane rendering not yet wired."
+    status: ok
+    note: "Daemon handlers + frontend multi-pane rendering implemented. Split/close/resize/next-pane/prev-pane work. Drag-resize and zoom-toggle not yet wired."
     tasks: [Phase3]
     tests: [TS-02, TS-16, TS-22]
   FR8:
@@ -123,7 +123,8 @@ requirements:
   FR15:
     title: WASM Instance Management
     status: partial
-    note: "Per-pane WasmGrid swap works for window switching. Per-pane Canvas for split panes not implemented."
+    status: ok
+    note: "Per-pane WasmGrid swap for window switching + per-pane Canvas/TerminalState/Renderer for split panes implemented."
     tasks: [Phase2, Phase3]
     tests: [TS-04]
   NFR1:
