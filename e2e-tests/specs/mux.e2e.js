@@ -63,7 +63,7 @@ describe("Mux Terminal Multiplexer", () => {
 			// Tab title should contain [mux] after entering mux mode
 			const tabTitle = await browser.execute(() => {
 				const tabManager = window.tabManager;
-				const activeTabId = tabManager?.getActiveTabId?.();
+				const activeTabId = tabManager?.getActiveTab?.()?.id;
 				if (!activeTabId) return "";
 				const tabs = tabManager?.getTabs?.() || [];
 				const activeTab = tabs.find((t) => t.id === activeTabId);
@@ -181,7 +181,7 @@ describe("Mux Terminal Multiplexer", () => {
 			// Tab title should no longer contain [mux]
 			const tabTitle = await browser.execute(() => {
 				const tabManager = window.tabManager;
-				const activeTabId = tabManager?.getActiveTabId?.();
+				const activeTabId = tabManager?.getActiveTab?.()?.id;
 				if (!activeTabId) return "";
 				const tabs = tabManager?.getTabs?.() || [];
 				const activeTab = tabs.find((t) => t.id === activeTabId);
@@ -256,7 +256,7 @@ describe("Mux Terminal Multiplexer", () => {
 			// Tab title should be normal (not [mux])
 			const tabTitle = await browser.execute(() => {
 				const tabManager = window.tabManager;
-				const activeTabId = tabManager?.getActiveTabId?.();
+				const activeTabId = tabManager?.getActiveTab?.()?.id;
 				if (!activeTabId) return "";
 				const tabs = tabManager?.getTabs?.() || [];
 				const activeTab = tabs.find((t) => t.id === activeTabId);
