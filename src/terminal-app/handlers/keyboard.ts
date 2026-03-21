@@ -313,28 +313,31 @@ export class KeyboardHandler {
       return;
     }
 
-    // If using EditContext API, let it handle most input
-    if (this.isEditContextActive()) {
-      // Only process special keys that EditContext doesn't handle
-      // Note: Enter key is NOT handled by EditContext's textupdate event
-      // (see: https://developer.mozilla.org/en-US/docs/Web/API/EditContext_API/Guide)
-      // So we must process Enter here explicitly
-      if (!this.isSpecialKey(event) && event.key !== "Enter") {
-        return; // Let EditContext handle regular input
+    // In mux mode, bypass EditContext/IME — all input goes through muxInputCallback
+    if (!this.prefixKeyHandler) {
+      // If using EditContext API, let it handle most input
+      if (this.isEditContextActive()) {
+        // Only process special keys that EditContext doesn't handle
+        // Note: Enter key is NOT handled by EditContext's textupdate event
+        // (see: https://developer.mozilla.org/en-US/docs/Web/API/EditContext_API/Guide)
+        // So we must process Enter here explicitly
+        if (!this.isSpecialKey(event) && event.key !== "Enter") {
+          return; // Let EditContext handle regular input
+        }
+        // Special keys (Ctrl+C, arrows, Enter, etc.) fall through to be processed
       }
-      // Special keys (Ctrl+C, arrows, Enter, etc.) fall through to be processed
-    }
 
-    // Skip if hidden textarea has focus (IME is active) - fallback mode
-    if (this.isImeInputFocused()) {
-      // Only allow special keys to pass through
-      // Note: event.isComposing is already checked above (line 173),
-      // so if we reach here, IME composition is not in progress.
-      // Enter key must be processed here since IME textarea doesn't handle it.
-      if (!this.isSpecialKey(event) && event.key !== "Enter") {
-        return; // Let IME handler process regular keys
+      // Skip if hidden textarea has focus (IME is active) - fallback mode
+      if (this.isImeInputFocused()) {
+        // Only allow special keys to pass through
+        // Note: event.isComposing is already checked above (line 173),
+        // so if we reach here, IME composition is not in progress.
+        // Enter key must be processed here since IME textarea doesn't handle it.
+        if (!this.isSpecialKey(event) && event.key !== "Enter") {
+          return; // Let IME handler process regular keys
+        }
+        // Navigation, function keys, and Enter fall through
       }
-      // Navigation, function keys, and Enter fall through
     }
 
     // Get cursor keys mode from terminal state for DECCKM support
