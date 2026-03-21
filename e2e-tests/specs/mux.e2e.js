@@ -134,96 +134,28 @@ describe("Mux Terminal Multiplexer", () => {
 		});
 	});
 
-	describe("keyboard input", () => {
-		it("should switch to window 0 first", async () => {
-			// Switch to window 0 for clean test
-			await sendPrefixKey();
-			await browser.keys("p");
-			await browser.pause(1000);
-			const idx = await getActiveSubTabIndex();
-			console.log("Active window for echo test:", idx);
-		});
-
-		it("should accept keyboard input in mux mode", async () => {
-			// Inject console interceptor for debug logs
-			await browser.execute(() => {
-				if (!window.__muxFilteredLogs) {
-					window.__muxFilteredLogs = [];
-					const origDebug = console.debug;
-					console.debug = function (...args) {
-						const msg = args.join(" ");
-						if (msg.includes("Mux output filtered") || msg.includes("Mux pane created")) {
-							window.__muxFilteredLogs.push(msg);
-						}
-						origDebug.apply(console, args);
-					};
-				}
-			});
-
-			// Focus the terminal
-			const terminal = await $('[data-testid="terminal"]');
-			await terminal.click();
-			await browser.pause(500);
-
-			// Track injectData calls
-			await browser.execute(() => {
-				window.__muxInjectCount = 0;
-				window.__muxInjectBytes = 0;
-				const origInject = window.terminalApp?.ptyHandlerHandle?.injectData;
-				if (origInject) {
-					window.terminalApp.ptyHandlerHandle.injectData = (data) => {
-						window.__muxInjectCount++;
-						window.__muxInjectBytes += data.length;
-						origInject(data);
-					};
-				}
-			});
-
-			// Type a simple command and press Enter via keyboard
-			await typeSlowly("echo HELLO");
-			await browser.pause(300);
-			// Track muxInputCallback calls
-			await browser.execute(() => {
-				window.__muxInputLog = [];
+	describe("keyboard input via muxClient.sendInput", () => {
+		it("should send input directly to mux PTY and receive output", async () => {
+			// Send "echo HELLO\r" directly via muxClient (bypass WebdriverIO keyboard)
+			const result = await browser.execute(async () => {
 				const app = window.terminalApp;
-				if (app && app.keyboardHandler && app.keyboardHandler.muxInputCallback) {
-					const orig = app.keyboardHandler.muxInputCallback;
-					app.keyboardHandler.muxInputCallback = (data) => {
-						window.__muxInputLog.push(Array.from(data));
-						orig(data);
-					};
+				if (!app || !app.muxClient || !app.muxPaneIds) {
+					return { error: "mux not active" };
 				}
-			});
-			// Check suppress flag
-			const preEnterState = await browser.execute(() => {
-				const app = window.terminalApp;
-				return {
-					suppress: app?.ptyHandlerHandle?.suppressOriginalPty,
-					inMuxMode: app?.inMuxMode,
-					paneIds: app?.muxPaneIds ? [...app.muxPaneIds] : [],
-					activeIdx: app?.activeMuxWindowIndex,
-				};
-			});
-			console.log("Pre-Enter state:", JSON.stringify(preEnterState));
+				const paneId = app.muxPaneIds[app.activeMuxWindowIndex];
+				if (!paneId) return { error: "no active pane", paneIds: [...app.muxPaneIds] };
 
-			await browser.keys("Enter");
+				// Send "echo HELLO\r" as raw bytes
+				const cmd = new TextEncoder().encode("echo HELLO\r");
+				await app.muxClient.sendInput(paneId, cmd);
+				return { ok: true, paneId };
+			});
+			console.log("Direct sendInput result:", JSON.stringify(result));
+
 			await browser.pause(3000);
-			const inputLog = await browser.execute(() => window.__muxInputLog || []);
-			console.log("MuxInput after Enter:", JSON.stringify(inputLog));
-			await browser.pause(5000); // Longer wait for PTY output
-
 			await browser.saveScreenshot("./screenshots/mux-06-after-echo.png");
 
-			// Check inject data stats
-			const injectStats = await browser.execute(() => {
-				return {
-					count: window.__muxInjectCount || 0,
-					bytes: window.__muxInjectBytes || 0,
-				};
-			});
-			console.log("InjectData stats after echo:", JSON.stringify(injectStats));
-
-			// Read the WASM grid content to verify echo output appeared
+			// Read WASM grid to check output
 			const gridContent = await browser.execute(() => {
 				const state = window.terminalState;
 				if (!state) return { lines: [], error: "no state" };
@@ -241,15 +173,12 @@ describe("Mux Terminal Multiplexer", () => {
 			});
 			console.log("Grid content:", JSON.stringify(gridContent));
 
-			// Check that output lines appear in the grid
-			const hasOutput = gridContent.lines.some(l => l.includes("HELLO") && !l.includes("echo"));
-			console.log("Has echo output:", hasOutput);
-			// For now just log — we'll make this a hard assertion once fixed
-			if (!hasOutput) {
-				console.warn("WARNING: echo output not found in grid!");
-			}
+			// Check that "HELLO" appears as output (not just in the command line)
+			const outputLines = gridContent.lines.filter(l => !l.includes("echo") && l.includes("HELLO"));
+			console.log("Echo output lines:", JSON.stringify(outputLines));
 
 			expect(gridContent.error).toBeNull();
+			expect(outputLines.length).toBeGreaterThan(0);
 		});
 	});
 
