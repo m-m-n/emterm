@@ -58,7 +58,8 @@ requirements:
     tests: [TS-01, TS-09, TS-10]
   FR3:
     title: Session Management
-    status: ok
+    status: partial
+    note: "Single session only. Multiple sessions not supported."
     tasks: [Phase1]
     tests: [TS-11, TS-25]
   FR4:
@@ -74,26 +75,31 @@ requirements:
   FR6:
     title: Detach/Reattach
     status: ok
+    note: "Daemon-side ring buffer replay implemented. Frontend grid swap on reattach."
     tasks: [Phase0, Phase2]
     tests: [TS-04, TS-15, TS-23, TS-24]
   FR7:
     title: Pane Layout
-    status: ok
+    status: not_started
+    note: "Binary tree layout engine exists but not wired. No per-pane Canvas, no split, no resize."
     tasks: [Phase3]
     tests: [TS-02, TS-16, TS-22]
   FR8:
     title: Window Management
-    status: ok
+    status: partial
+    note: "Create/switch/close works. Rename (prefix+,) not implemented. Tab group expand/compact not implemented."
     tasks: [Phase4]
     tests: [TS-17]
   FR9:
     title: Status Bar
-    status: ok
+    status: not_started
+    note: "Removed from mux. Planned as eMterm application-level feature."
     tasks: [Phase5]
     tests: []
   FR10:
     title: Copy Mode
-    status: ok
+    status: not_started
+    note: "vi/emacs keybind handlers exist but not wired. No selection highlight, no clipboard."
     tasks: [Phase6]
     tests: [TS-18]
   FR11:
@@ -108,7 +114,8 @@ requirements:
     tests: [TS-06]
   FR13:
     title: Flow Control
-    status: ok
+    status: partial
+    note: "Bounded channel exists. Backpressure chain not fully tested under high throughput."
     tasks: [Phase1]
     tests: [TS-12]
   FR14:
@@ -118,12 +125,14 @@ requirements:
     tests: [TS-20, TS-21]
   FR15:
     title: WASM Instance Management
-    status: ok
+    status: partial
+    note: "Per-pane WasmGrid swap works for window switching. Per-pane Canvas for split panes not implemented."
     tasks: [Phase2, Phase3]
     tests: [TS-04]
   NFR1:
     title: Performance
-    status: ok
+    status: partial
+    note: "Grid swap is fast. Snapshot serialization removed. No performance benchmarks run yet."
     tasks: [Phase1, Phase2]
     tests: [TS-27, TS-28, TS-29]
   NFR2:
@@ -133,16 +142,19 @@ requirements:
     tests: [TS-05]
   NFR3:
     title: Reliability
-    status: ok
+    status: partial
+    note: "Daemon crash recovery not implemented. No graceful shutdown of pane PTYs."
     tasks: [Phase2]
     tests: [TS-19, TS-24, TS-25]
   NFR4:
     title: Compatibility
-    status: ok
+    status: partial
+    note: "Linux only. Windows mux not implemented."
     tasks: [Phase1]
     tests: []
   NFR5:
     title: Resource Usage
-    status: ok
+    status: partial
+    note: "Ring buffer cap exists. No resource limit enforcement tested."
     tasks: [Phase1, Phase2]
     tests: [TS-03, TS-23]
