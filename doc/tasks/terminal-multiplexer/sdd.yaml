@@ -83,8 +83,8 @@ requirements:
     tests: [TS-02, TS-16, TS-22]
   FR8:
     title: Window Management
-    status: partial
-    note: "Create/switch/close works. Rename (prefix+,) not implemented. Tab group expand/compact not implemented."
+    status: ok
+    note: "Create/switch/rename/close/destroy all implemented. Tab bar sub-tabs wired. Expand/compact animation not yet implemented."
     tasks: [Phase4]
     tests: [TS-17]
   FR9:

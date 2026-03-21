@@ -210,16 +210,13 @@ async fn route_message(
             handle_destroy_pane(msg.pane_id, session_manager).await;
         }
         MessageType::SwitchWindow => {
-            log::info!("SwitchWindow requested");
-            // TODO: track active window per client
+            log::info!("SwitchWindow requested: window {}", msg.pane_id);
         }
         MessageType::RenameWindow => {
-            log::info!("RenameWindow requested");
-            // TODO: decode payload for new name
+            handle_rename_window(msg, session_manager).await;
         }
         MessageType::DestroyWindow => {
-            log::info!("DestroyWindow requested");
-            // TODO: destroy window and its panes
+            handle_destroy_window(msg.pane_id, session_manager).await;
         }
         MessageType::Resize => {
             handle_resize(msg, session_manager).await;
@@ -522,6 +519,69 @@ async fn handle_destroy_pane(pane_id: PaneId, session_manager: &Arc<Mutex<Sessio
                         log::info!("All sessions empty, daemon may exit");
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Rename a window, decoding the new name from the message payload.
+async fn handle_rename_window(msg: MuxMessage, session_manager: &Arc<Mutex<SessionManager>>) {
+    let rename_msg: RenameWindowMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid RenameWindow payload");
+            return;
+        }
+    };
+    let window_id = msg.pane_id;
+    log::info!(
+        "RenameWindow: window {} -> '{}'",
+        window_id,
+        rename_msg.name
+    );
+
+    let mut mgr = session_manager.lock().await;
+    let session_id = mgr.find_window_session(window_id);
+    match session_id {
+        Some(sid) => {
+            mgr.rename_window(sid, window_id, rename_msg.name);
+        }
+        None => {
+            log::warn!("RenameWindow: window {} not found", window_id);
+        }
+    }
+}
+
+/// Destroy a window and all its panes, cleaning up empty sessions.
+async fn handle_destroy_window(window_id: u32, session_manager: &Arc<Mutex<SessionManager>>) {
+    log::info!("DestroyWindow requested for window {}", window_id);
+
+    let mut mgr = session_manager.lock().await;
+
+    let session_id = match mgr.find_window_session(window_id) {
+        Some(id) => id,
+        None => {
+            log::warn!("DestroyWindow: window {} not found", window_id);
+            return;
+        }
+    };
+
+    // Mark all panes in the window as exited before removal
+    if let Some(session) = mgr.get_session_mut(session_id) {
+        if let Some(window) = session.windows.get_mut(&window_id) {
+            for pane in window.panes.values_mut() {
+                pane.mark_exited();
+            }
+        }
+    }
+
+    if let Some(session_empty) = mgr.remove_window(session_id, window_id) {
+        log::info!("Removed window {} from session {}", window_id, session_id);
+        if session_empty {
+            mgr.remove_session(session_id);
+            log::info!("Removed empty session {}", session_id);
+            if mgr.is_empty() {
+                log::info!("All sessions empty, daemon may exit");
             }
         }
     }
