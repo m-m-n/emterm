@@ -71,6 +71,9 @@ export class PtyClient {
 	/** Callback for raw PTY data */
 	private dataCallback: PtyDataCallback | null = null;
 
+	/** Optional proxy that intercepts all write() calls (used for mux I/O routing) */
+	private writeProxy: ((data: Uint8Array) => Promise<void>) | null = null;
+
 	/**
 	 * Returns the current session ID, or null if no session is active.
 	 */
@@ -130,6 +133,16 @@ export class PtyClient {
 	}
 
 	/**
+	 * Set a proxy that intercepts all write() calls.
+	 * Pass null to restore direct PTY writes.
+	 *
+	 * Used by mux mode to route input to the daemon instead of the local PTY.
+	 */
+	setWriteProxy(proxy: ((data: Uint8Array) => Promise<void>) | null): void {
+		this.writeProxy = proxy;
+	}
+
+	/**
 	 * Writes data to the PTY session.
 	 *
 	 * Non-async to minimize overhead on the key repeat hot path.
@@ -146,6 +159,10 @@ export class PtyClient {
 
 		const bytes =
 			typeof data === "string" ? textEncoder.encode(data) : data;
+
+		if (this.writeProxy) {
+			return this.writeProxy(bytes);
+		}
 
 		// Array.from() is required: Tauri v2 invoke uses JSON serialization,
 		// and JSON.stringify(Uint8Array) produces an object, not an array.

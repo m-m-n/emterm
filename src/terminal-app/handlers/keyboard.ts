@@ -66,7 +66,6 @@ export class KeyboardHandler {
   private onExitScrollback: (() => void) | null;
   private prefixKeyHandler: PrefixKeyHandler | null = null;
   private onMuxAction: ((action: MuxAction) => void) | null;
-  private muxInputCallback: ((data: Uint8Array) => void) | null = null;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -114,12 +113,10 @@ export class KeyboardHandler {
     prefix: string,
     keybinds: Record<string, string>,
     onAction: (action: MuxAction) => void,
-    onInput?: (data: Uint8Array) => void,
   ): void {
     this.prefixKeyHandler = new PrefixKeyHandler(prefix, keybinds);
     this.onMuxAction = onAction;
     this.prefixKeyHandler.setOnAction(onAction);
-    this.muxInputCallback = onInput ?? null;
   }
 
   /** Disable mux mode at runtime (e.g., on detach). */
@@ -129,7 +126,6 @@ export class KeyboardHandler {
       this.prefixKeyHandler = null;
     }
     this.onMuxAction = null;
-    this.muxInputCallback = null;
   }
 
   /** Update mux prefix key handler with new settings. */
@@ -313,31 +309,28 @@ export class KeyboardHandler {
       return;
     }
 
-    // In mux mode, bypass EditContext/IME — all input goes through muxInputCallback
-    if (!this.prefixKeyHandler) {
-      // If using EditContext API, let it handle most input
-      if (this.isEditContextActive()) {
-        // Only process special keys that EditContext doesn't handle
-        // Note: Enter key is NOT handled by EditContext's textupdate event
-        // (see: https://developer.mozilla.org/en-US/docs/Web/API/EditContext_API/Guide)
-        // So we must process Enter here explicitly
-        if (!this.isSpecialKey(event) && event.key !== "Enter") {
-          return; // Let EditContext handle regular input
-        }
-        // Special keys (Ctrl+C, arrows, Enter, etc.) fall through to be processed
+    // If using EditContext API, let it handle most input
+    if (this.isEditContextActive()) {
+      // Only process special keys that EditContext doesn't handle
+      // Note: Enter key is NOT handled by EditContext's textupdate event
+      // (see: https://developer.mozilla.org/en-US/docs/Web/API/EditContext_API/Guide)
+      // So we must process Enter here explicitly
+      if (!this.isSpecialKey(event) && event.key !== "Enter") {
+        return; // Let EditContext handle regular input
       }
+      // Special keys (Ctrl+C, arrows, Enter, etc.) fall through to be processed
+    }
 
-      // Skip if hidden textarea has focus (IME is active) - fallback mode
-      if (this.isImeInputFocused()) {
-        // Only allow special keys to pass through
-        // Note: event.isComposing is already checked above (line 173),
-        // so if we reach here, IME composition is not in progress.
-        // Enter key must be processed here since IME textarea doesn't handle it.
-        if (!this.isSpecialKey(event) && event.key !== "Enter") {
-          return; // Let IME handler process regular keys
-        }
-        // Navigation, function keys, and Enter fall through
+    // Skip if hidden textarea has focus (IME is active) - fallback mode
+    if (this.isImeInputFocused()) {
+      // Only allow special keys to pass through
+      // Note: event.isComposing is already checked above (line 173),
+      // so if we reach here, IME composition is not in progress.
+      // Enter key must be processed here since IME textarea doesn't handle it.
+      if (!this.isSpecialKey(event) && event.key !== "Enter") {
+        return; // Let IME handler process regular keys
       }
+      // Navigation, function keys, and Enter fall through
     }
 
     // Get cursor keys mode from terminal state for DECCKM support
@@ -352,15 +345,11 @@ export class KeyboardHandler {
       // Auto-scroll to bottom when user types during scrollback
       this.onExitScrollback?.();
 
-      if (this.muxInputCallback) {
-        // In mux mode: send to daemon instead of local PTY
-        this.muxInputCallback(bytes);
-      } else {
-        // Fire-and-forget: don't await to avoid blocking key repeat
-        this.ptyClient.write(bytes).catch((error) => {
-          console.error("Failed to write to PTY:", error);
-        });
-      }
+      // Fire-and-forget: don't await to avoid blocking key repeat
+      // In mux mode, PtyClient's writeProxy routes input to daemon automatically.
+      this.ptyClient.write(bytes).catch((error) => {
+        console.error("Failed to write to PTY:", error);
+      });
     }
   }
 
