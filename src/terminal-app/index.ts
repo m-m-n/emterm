@@ -1077,10 +1077,27 @@ export class TerminalApp {
         }
         break;
       }
-      case "rename-window":
-        // TODO: prompt for new name
-        console.info("[INFO][FRONTEND] Rename window: prompt not yet implemented");
+      case "rename-window": {
+        const currentName = this.muxWindows[this.activeMuxWindowIndex]?.name ?? "";
+        const newName = prompt("Rename window:", currentName);
+        if (newName != null && newName !== "") {
+          const win = this.muxWindows[this.activeMuxWindowIndex];
+          if (win) {
+            win.name = newName;
+            this.emitMuxStateChange();
+          }
+          // Notify daemon: RenameWindowMsg { name: String }
+          // bincode for String = u64 length (LE) + UTF-8 bytes
+          const nameBytes = new TextEncoder().encode(newName);
+          const payload = new Uint8Array(8 + nameBytes.length);
+          const view = new DataView(payload.buffer);
+          view.setBigUint64(0, BigInt(nameBytes.length), true);
+          payload.set(nameBytes, 8);
+          const windowId = win?.id ?? 0;
+          this.sendMuxControl(MuxMessageType.RenameWindow, windowId, payload);
+        }
         break;
+      }
       case "prefix-passthrough":
         // Send the prefix key itself to PTY
         if (this.ptyClient) {

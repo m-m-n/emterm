@@ -108,6 +108,16 @@ impl SessionManager {
         false
     }
 
+    /// Find which session contains a window. Returns the session_id.
+    pub fn find_window_session(&self, window_id: WindowId) -> Option<SessionId> {
+        for session in self.sessions.values() {
+            if session.windows.contains_key(&window_id) {
+                return Some(session.id);
+            }
+        }
+        None
+    }
+
     /// Find a pane across all sessions. Returns (session_id, window_id).
     pub fn find_pane(&self, pane_id: PaneId) -> Option<(SessionId, WindowId)> {
         for session in self.sessions.values() {
@@ -268,6 +278,75 @@ mod tests {
         // Remove empty session
         mgr.remove_session(sid);
         assert!(mgr.is_empty());
+    }
+
+    #[test]
+    fn test_find_window_session_found() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+        assert_eq!(mgr.find_window_session(wid), Some(sid));
+    }
+
+    #[test]
+    fn test_find_window_session_not_found() {
+        let mgr = SessionManager::new();
+        assert_eq!(mgr.find_window_session(999), None);
+    }
+
+    #[test]
+    fn test_find_window_session_across_sessions() {
+        let mut mgr = SessionManager::new();
+        let sid1 = mgr.create_session("s1".to_string());
+        let sid2 = mgr.create_session("s2".to_string());
+        let _wid1 = mgr.create_window(sid1, "w1".to_string()).unwrap();
+        let wid2 = mgr.create_window(sid2, "w2".to_string()).unwrap();
+        assert_eq!(mgr.find_window_session(wid2), Some(sid2));
+    }
+
+    #[test]
+    fn test_rename_window_valid() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "old".to_string()).unwrap();
+        assert!(mgr.rename_window(sid, wid, "new".to_string()));
+        let window = mgr.get_session(sid).unwrap().windows.get(&wid).unwrap();
+        assert_eq!(window.name, "new");
+    }
+
+    #[test]
+    fn test_rename_window_not_found() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        assert!(!mgr.rename_window(sid, 999, "new".to_string()));
+    }
+
+    #[test]
+    fn test_destroy_window_removes_panes_and_window() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+        let pane1 = make_test_pane(10);
+        let pane2 = make_test_pane(20);
+        {
+            let session = mgr.get_session_mut(sid).unwrap();
+            let window = session.windows.get_mut(&wid).unwrap();
+            window.add_pane(pane1);
+            window.add_pane(pane2);
+        }
+
+        // Mark panes exited then remove window (mirrors handle_destroy_window logic)
+        if let Some(session) = mgr.get_session_mut(sid) {
+            if let Some(window) = session.windows.get_mut(&wid) {
+                for pane in window.panes.values_mut() {
+                    pane.mark_exited();
+                }
+            }
+        }
+        let session_empty = mgr.remove_window(sid, wid);
+        assert_eq!(session_empty, Some(true));
+        assert!(mgr.find_pane(10).is_none());
+        assert!(mgr.find_pane(20).is_none());
     }
 
     #[test]
