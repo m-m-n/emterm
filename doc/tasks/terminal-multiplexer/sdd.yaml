@@ -78,7 +78,7 @@ requirements:
   FR7:
     title: Pane Layout
     status: ok
-    note: "Daemon handlers + frontend multi-pane rendering implemented. Split/close/resize/next-pane/prev-pane work. Drag-resize and zoom-toggle not yet wired."
+    note: "Complete: split/close/resize/next-pane/prev-pane/drag-resize/zoom-toggle all implemented."
     tasks: [Phase3]
     tests: [TS-02, TS-16, TS-22]
   FR8:
