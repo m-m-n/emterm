@@ -64,6 +64,7 @@ export class TerminalApp {
   private muxPaneIds: number[] = []; // Actual pane IDs from daemon
   private muxPendingWindowCount = 0; // Windows waiting for PaneCreated response
   private muxPaneGrids: Map<number, WasmGrid> = new Map(); // WASM grids per pane
+  private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -845,9 +846,14 @@ export class TerminalApp {
       this.ptyHandlerHandle.suppressOriginalPty = true;
     }
 
-    // Clear screen for mux mode — reset WASM grid and re-render
+    // Save the original grid and create a fresh one for mux mode
     if (this.state) {
-      this.state.getWasmCore().reset();
+      this.muxOriginalGrid = this.state.getPrimaryGrid();
+      const cols = this.state.getWasmCore().cols();
+      const rows = this.state.getWasmCore().rows();
+      const freshGrid = new WasmGrid(cols, rows, 10000);
+      this.state.swapPrimaryGrid(freshGrid);
+      this.registerCoreCallbacks(this.state.getActiveCore());
       if (this.renderer) {
         this.renderer.forceRender(this.state);
       }
@@ -891,6 +897,16 @@ export class TerminalApp {
     // Re-enable original PTY output
     if (this.ptyHandlerHandle) {
       this.ptyHandlerHandle.suppressOriginalPty = false;
+    }
+
+    // Restore original grid
+    if (this.muxOriginalGrid && this.state) {
+      this.state.swapPrimaryGrid(this.muxOriginalGrid);
+      this.registerCoreCallbacks(this.state.getActiveCore());
+      if (this.renderer) {
+        this.renderer.forceRender(this.state);
+      }
+      this.muxOriginalGrid = null;
     }
 
     // Reset mux window tracking
