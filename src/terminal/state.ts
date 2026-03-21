@@ -275,6 +275,47 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Swap the primary WASM grid with a different one (for mux window switching).
+   * Returns the old grid so the caller can store it.
+   * This is much faster than snapshot serialization/deserialization.
+   */
+  swapPrimaryGrid(newGrid: WasmGrid): WasmGrid | null {
+    const oldGrid = this.primaryWasmGrid;
+    this.primaryWasmGrid = newGrid;
+
+    const cols = newGrid.core.cols();
+    const rows = newGrid.core.rows();
+
+    // Rebuild buffer and cursor around the new grid
+    this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, newGrid);
+    this.primaryBuffer.onEvict = (count: number) => {
+      this.semanticZoneTracker.pruneBeforeLine(count);
+      this.foldManager.pruneBeforeLine(count);
+    };
+    this.primaryCursor = new CursorState(cols, rows, newGrid.core);
+    this.primaryCursor.moveTo(newGrid.core.get_cursor_col(), newGrid.core.get_cursor_row());
+    this.cursor = this.primaryCursor;
+
+    // Sync modes from the new core
+    syncModesFromWasm(this.modes, newGrid.core);
+
+    // Propagate cell size
+    setCellSizePxOnGrid(newGrid, this.cellWidthPx, this.cellHeightPx);
+
+    // Mark all rows dirty for full repaint
+    newGrid.core.mark_all_dirty();
+
+    return oldGrid;
+  }
+
+  /**
+   * Get the current primary WASM grid (for mux pane storage).
+   */
+  getPrimaryGrid(): WasmGrid | null {
+    return this.primaryWasmGrid;
+  }
+
+  /**
    * Get the primary WASM TerminalCore for process_pty_data().
    * The parser lives in the primary core and is used for all data processing.
    */
