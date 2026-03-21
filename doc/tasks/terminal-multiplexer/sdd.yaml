@@ -55,8 +55,8 @@ requirements:
     tests: [TS-01, TS-09, TS-10]
   FR3:
     title: Session Management
-    status: partial
-    note: "Single session only. Multiple sessions not supported."
+    status: ok
+    note: "Multi-session supported. Per-client active session tracking, Attach handler for session switching, session-scoped reattach."
     tasks: [Phase1]
     tests: [TS-11, TS-25]
   FR4:

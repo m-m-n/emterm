@@ -86,52 +86,33 @@ pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<Se
         hello.protocol_version
     );
 
+    // Determine active session: use first session (auto-created "default")
+    let mut active_session_id: u32 = {
+        let mgr = session_manager.lock().await;
+        mgr.sessions_iter().next().map(|s| s.id).unwrap_or(1)
+    };
+
     // Shared channel: all pane reader threads send output here,
     // and the select! loop forwards it to the client.
     let (pane_output_tx, mut pane_output_rx) = mpsc::channel::<PtyOutputChunk>(1024);
 
-    // Reattach existing panes: replay buffered output and reconnect output targets
+    // Reattach existing panes from active session: replay buffered output and reconnect
     {
-        let reattach_data = {
-            let mgr = session_manager.lock().await;
-            let mut data: Vec<(PaneId, Vec<u8>)> = Vec::new();
-            for session in mgr.sessions_iter() {
-                for window in session.windows.values() {
-                    for pane in window.panes.values() {
-                        if pane.exited {
-                            continue;
-                        }
-                        let mut target = pane.output_target.lock().unwrap();
-                        let buffered = if let PaneOutputTarget::Detached(ref mut ring) = *target {
-                            let buf = ring.read_all();
-                            ring.clear();
-                            buf
-                        } else {
-                            Vec::new()
-                        };
-                        // Switch to connected mode with the new channel
-                        *target = PaneOutputTarget::Connected(pane_output_tx.clone());
-                        data.push((pane.id, buffered));
-                    }
-                }
-            }
-            data
-        };
+        let reattach_data =
+            collect_reattach_data(&session_manager, active_session_id, &pane_output_tx).await;
         // Send reattach messages outside the session manager lock
-        for (pane_id, buffered) in &reattach_data {
-            let resp = MuxMessage::control(MessageType::PaneCreated, *pane_id, pane_id);
-            if framed.send(resp).await.is_err() {
-                return;
-            }
-            if !buffered.is_empty() {
-                let msg = MuxMessage::pty_output(*pane_id, buffered.clone());
-                if framed.send(msg).await.is_err() {
-                    return;
-                }
-            }
+        if send_reattach_data(&mut framed, &reattach_data)
+            .await
+            .is_err()
+        {
+            return;
         }
         if !reattach_data.is_empty() {
-            log::info!("Reattached {} existing pane(s)", reattach_data.len());
+            log::info!(
+                "Reattached {} existing pane(s) from session {}",
+                reattach_data.len(),
+                active_session_id
+            );
         }
     }
 
@@ -146,6 +127,7 @@ pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<Se
                             &session_manager,
                             &mut framed,
                             &pane_output_tx,
+                            &mut active_session_id,
                         ).await {
                             if should_break {
                                 break;
@@ -192,10 +174,22 @@ async fn route_message(
     session_manager: &Arc<Mutex<SessionManager>>,
     framed: &mut Framed<UnixStream, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    active_session_id: &mut u32,
 ) -> Result<(), bool> {
     match msg.msg_type {
         MessageType::CreateWindow => {
-            handle_create_window(session_manager, framed, pane_output_tx).await?;
+            handle_create_window(session_manager, framed, pane_output_tx, *active_session_id)
+                .await?;
+        }
+        MessageType::Attach => {
+            handle_attach(
+                msg,
+                session_manager,
+                framed,
+                pane_output_tx,
+                active_session_id,
+            )
+            .await?;
         }
         MessageType::SplitPane => {
             handle_split_pane(msg, session_manager, framed, pane_output_tx).await?;
@@ -355,6 +349,7 @@ async fn handle_create_window(
     session_manager: &Arc<Mutex<SessionManager>>,
     framed: &mut Framed<UnixStream, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    active_session_id: u32,
 ) -> Result<(), bool> {
     let spawned = match spawn_pty(80, 24) {
         Ok(s) => s,
@@ -365,17 +360,17 @@ async fn handle_create_window(
     };
 
     let mut mgr = session_manager.lock().await;
-    let window_id = match mgr.create_window(1, "shell".to_string()) {
+    let window_id = match mgr.create_window(active_session_id, "shell".to_string()) {
         Some(id) => id,
         None => {
-            log::error!("Failed to create window in session 1");
+            log::error!("Failed to create window in session {}", active_session_id);
             return Ok(());
         }
     };
 
     let pane_id = match register_pane_and_start_reader(
         &mut mgr,
-        1,
+        active_session_id,
         window_id,
         80,
         24,
@@ -623,6 +618,136 @@ async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<SessionManag
             }
         }
     }
+}
+
+/// Collect reattach data for panes in the given session.
+///
+/// Drains buffered output from detached panes and switches them to connected mode.
+async fn collect_reattach_data(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    session_id: u32,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+) -> Vec<(PaneId, Vec<u8>)> {
+    let mgr = session_manager.lock().await;
+    let mut data: Vec<(PaneId, Vec<u8>)> = Vec::new();
+    if let Some(session) = mgr.get_session(session_id) {
+        for window in session.windows.values() {
+            for pane in window.panes.values() {
+                if pane.exited {
+                    continue;
+                }
+                let mut target = pane.output_target.lock().unwrap();
+                let buffered = if let PaneOutputTarget::Detached(ref mut ring) = *target {
+                    let buf = ring.read_all();
+                    ring.clear();
+                    buf
+                } else {
+                    Vec::new()
+                };
+                *target = PaneOutputTarget::Connected(pane_output_tx.clone());
+                data.push((pane.id, buffered));
+            }
+        }
+    }
+    data
+}
+
+/// Send reattach data (PaneCreated + buffered output) to the client.
+async fn send_reattach_data(
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    reattach_data: &[(PaneId, Vec<u8>)],
+) -> Result<(), ()> {
+    for (pane_id, buffered) in reattach_data {
+        let resp = MuxMessage::control(MessageType::PaneCreated, *pane_id, pane_id);
+        if framed.send(resp).await.is_err() {
+            return Err(());
+        }
+        if !buffered.is_empty() {
+            let msg = MuxMessage::pty_output(*pane_id, buffered.clone());
+            if framed.send(msg).await.is_err() {
+                return Err(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Switch panes in a session to detached buffering mode.
+async fn detach_session_panes(session_manager: &Arc<Mutex<SessionManager>>, session_id: u32) {
+    let mgr = session_manager.lock().await;
+    if let Some(session) = mgr.get_session(session_id) {
+        for window in session.windows.values() {
+            for pane in window.panes.values() {
+                if pane.exited {
+                    continue;
+                }
+                let mut target = pane.output_target.lock().unwrap();
+                if let PaneOutputTarget::Connected(_) = &*target {
+                    *target = PaneOutputTarget::Detached(DetachRingBuffer::new(
+                        crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Handle Attach message: switch the client to a different session.
+///
+/// Detaches panes from the current session, updates the active session,
+/// and reattaches panes from the new session with buffered output replay.
+async fn handle_attach(
+    msg: MuxMessage,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    active_session_id: &mut u32,
+) -> Result<(), bool> {
+    let attach_msg: AttachMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid Attach payload");
+            return Ok(());
+        }
+    };
+
+    let new_session_id = attach_msg.session_id;
+    log::info!("Client attaching to session {}", new_session_id);
+
+    // Verify session exists
+    {
+        let mgr = session_manager.lock().await;
+        if mgr.get_session(new_session_id).is_none() {
+            log::warn!("Attach: session {} not found", new_session_id);
+            let err = ErrorMsg {
+                message: format!("Session {} not found", new_session_id),
+            };
+            let resp = MuxMessage::control(MessageType::Error, 0, &err);
+            let _ = framed.send(resp).await;
+            return Ok(());
+        }
+    }
+
+    // Detach from current session
+    detach_session_panes(session_manager, *active_session_id).await;
+
+    // Update active session
+    *active_session_id = new_session_id;
+
+    // Reattach to new session's panes
+    let reattach_data =
+        collect_reattach_data(session_manager, new_session_id, pane_output_tx).await;
+
+    if send_reattach_data(framed, &reattach_data).await.is_err() {
+        return Err(true);
+    }
+
+    log::info!(
+        "Attached to session {} with {} pane(s)",
+        new_session_id,
+        reattach_data.len()
+    );
+    Ok(())
 }
 
 /// Read PTY output in a blocking loop and forward to the output target.
