@@ -17,6 +17,7 @@ import { Line } from "./grid.ts";
 import { createDefaultModes, setDecPrivateMode, syncModesFromWasm, syncModesToWasm, type TerminalModes } from "./modes.ts";
 import { SemanticZoneTracker } from "./semantic-zone.ts";
 import { WasmGrid } from "./wasm/terminal-core.ts";
+import { TerminalCore } from "../../wasm/pkg/emterm_wasm.js";
 import type { TerminalStateAccessor, ActiveCharSet } from "./handlers/types.ts";
 
 // Extracted modules
@@ -857,6 +858,66 @@ export class TerminalState implements TerminalStateAccessor {
       this.primaryBuffer = new UnifiedBuffer(cols, rows, 0);
       this.primaryCursor = new CursorState(cols, rows);
       this.cursor = this.primaryCursor;
+      return false;
+    }
+  }
+
+  /**
+   * Restore terminal state from a binary snapshot.
+   * Replaces the primary WASM grid with the restored core.
+   * Returns true if restoration was successful.
+   */
+  restoreFromSnapshot(bytes: Uint8Array): boolean {
+    try {
+      const restoredCore = TerminalCore.wasm_restore_from_bytes(bytes);
+      if (!restoredCore) {
+        console.warn("[WARN][FRONTEND] Snapshot restore returned null (version mismatch or corruption)");
+        return false;
+      }
+
+      const cols = restoredCore.cols();
+      const rows = restoredCore.rows();
+
+      // Dispose old grids
+      try { this.primaryWasmGrid?.dispose(); } catch { /* ignore */ }
+      try { this.alternateWasmGrid?.dispose(); } catch { /* ignore */ }
+      this.alternateWasmGrid = null;
+      this.alternateBuffer = null;
+      this.useAlternate = false;
+
+      // Wrap restored core in WasmGrid
+      this.primaryWasmGrid = WasmGrid.fromCore(restoredCore);
+
+      // Rebuild primary buffer with restored grid
+      this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, this.primaryWasmGrid);
+      this.primaryBuffer.onEvict = (count: number) => {
+        this.semanticZoneTracker.pruneBeforeLine(count);
+        this.foldManager.pruneBeforeLine(count);
+      };
+
+      // Restore cursor from WASM core state
+      this.primaryCursor = new CursorState(cols, rows, restoredCore);
+      this.primaryCursor.moveTo(restoredCore.get_cursor_col(), restoredCore.get_cursor_row());
+      this.alternateCursor = null;
+      this.cursor = this.primaryCursor;
+      this.savedCursorForAlt = null;
+
+      // Sync modes from restored WASM core
+      syncModesFromWasm(this.modes, this.primaryWasmGrid.core);
+
+      // Propagate cell size to restored core
+      restoredCore.set_cell_size_px(this.cellWidthPx, this.cellHeightPx);
+
+      // Mark all rows dirty so renderer repaints everything
+      this.primaryWasmGrid.markAllDirty();
+
+      // Reset TS-side state that isn't part of snapshot
+      this.wrapPending = false;
+      this.graphemeBuffer = [];
+
+      return true;
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Failed to restore from snapshot:", e);
       return false;
     }
   }
