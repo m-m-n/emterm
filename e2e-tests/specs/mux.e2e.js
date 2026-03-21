@@ -191,4 +191,81 @@ describe("Mux Terminal Multiplexer", () => {
 			expect(tabTitle).not.toContain("[mux]");
 		});
 	});
+
+	describe("last window close exits mux", () => {
+		it("should re-enter mux mode for window close test", async () => {
+			// Kill any leftover daemon from previous tests
+			await typeSlowly("pkill -f 'emterm mux --daemon' 2>/dev/null; true");
+			await browser.keys("Enter");
+			await browser.pause(1000);
+
+			// Enter mux mode fresh
+			await typeSlowly("emterm mux");
+			await browser.keys("Enter");
+			await browser.pause(5000);
+
+			const count = await getSubTabCount();
+			console.log("Sub-tab count after re-enter mux:", count);
+			expect(count).toBe(1);
+
+			await browser.saveScreenshot("./screenshots/mux-08-re-entered-mux.png");
+		});
+
+		it("should close window with Ctrl+D and return to normal mode", async () => {
+			// Close the only window with Ctrl+D (exit shell)
+			await browser.keys(["Control", "d"]);
+			await browser.pause(3000);
+
+			await browser.saveScreenshot("./screenshots/mux-09-after-last-window-close.png");
+
+			// Sub-tabs should be gone (mux mode exited)
+			const count = await getSubTabCount();
+			console.log("Sub-tab count after Ctrl+D:", count);
+			expect(count).toBe(0);
+		});
+
+		it("should accept normal terminal input after mux exit", async () => {
+			// Terminal should be back in normal mode
+			// Type a command to verify input works
+			await browser.pause(1000);
+			await typeSlowly("echo normal-mode-restored");
+			await browser.keys("Enter");
+			await browser.pause(1500);
+
+			await browser.saveScreenshot("./screenshots/mux-10-normal-mode-input.png");
+
+			// The terminal should still be functional (state exists)
+			const state = await browser.execute(() => {
+				return {
+					terminalStateExists: !!window.terminalState,
+					appExists: !!window.terminalApp,
+				};
+			});
+			expect(state.terminalStateExists).toBe(true);
+			expect(state.appExists).toBe(true);
+		});
+
+		it("should not have mux sub-tabs in tab bar", async () => {
+			// Verify no mux artifacts remain
+			const hasSubTabs = await browser.execute(() => {
+				const subTabs = document.querySelector(".mux-sub-tabs");
+				return subTabs !== null && subTabs.children.length > 0;
+			});
+			expect(hasSubTabs).toBe(false);
+
+			// Tab title should be normal (not [mux])
+			const tabTitle = await browser.execute(() => {
+				const tabManager = window.tabManager;
+				const activeTabId = tabManager?.getActiveTabId?.();
+				if (!activeTabId) return "";
+				const tabs = tabManager?.getTabs?.() || [];
+				const activeTab = tabs.find((t) => t.id === activeTabId);
+				return activeTab?.title || "";
+			});
+			console.log("Tab title after full mux exit:", tabTitle);
+			expect(tabTitle).not.toContain("[mux]");
+
+			await browser.saveScreenshot("./screenshots/mux-11-clean-state.png");
+		});
+	});
 });
