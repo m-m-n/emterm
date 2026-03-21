@@ -120,6 +120,11 @@ impl SessionManager {
         None
     }
 
+    /// Iterate over all sessions.
+    pub fn sessions_iter(&self) -> impl Iterator<Item = &MuxSession> {
+        self.sessions.values()
+    }
+
     /// Get session count.
     pub fn session_count(&self) -> usize {
         self.sessions.len()
