@@ -9,14 +9,17 @@ use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use tokio::net::UnixStream;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
 use super::protocol::*;
+use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{MuxPane, PtyOutputChunk};
+use crate::mux::session::pane::{
+    MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget,
+};
 
 /// Handshake timeout: client must send Hello within this duration.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -85,6 +88,51 @@ pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<Se
     // Shared channel: all pane reader threads send output here,
     // and the select! loop forwards it to the client.
     let (pane_output_tx, mut pane_output_rx) = mpsc::channel::<PtyOutputChunk>(1024);
+
+    // Reattach existing panes: replay buffered output and reconnect output targets
+    {
+        let reattach_data = {
+            let mgr = session_manager.lock().await;
+            let mut data: Vec<(PaneId, Vec<u8>)> = Vec::new();
+            for session in mgr.sessions_iter() {
+                for window in session.windows.values() {
+                    for pane in window.panes.values() {
+                        if pane.exited {
+                            continue;
+                        }
+                        let mut target = pane.output_target.lock().unwrap();
+                        let buffered = if let PaneOutputTarget::Detached(ref mut ring) = *target {
+                            let buf = ring.read_all();
+                            ring.clear();
+                            buf
+                        } else {
+                            Vec::new()
+                        };
+                        // Switch to connected mode with the new channel
+                        *target = PaneOutputTarget::Connected(pane_output_tx.clone());
+                        data.push((pane.id, buffered));
+                    }
+                }
+            }
+            data
+        };
+        // Send reattach messages outside the session manager lock
+        for (pane_id, buffered) in &reattach_data {
+            let resp = MuxMessage::control(MessageType::PaneCreated, *pane_id, pane_id);
+            if framed.send(resp).await.is_err() {
+                return;
+            }
+            if !buffered.is_empty() {
+                let msg = MuxMessage::pty_output(*pane_id, buffered.clone());
+                if framed.send(msg).await.is_err() {
+                    return;
+                }
+            }
+        }
+        if !reattach_data.is_empty() {
+            log::info!("Reattached {} existing pane(s)", reattach_data.len());
+        }
+    }
 
     // Message + output loop using select! to handle both directions concurrently
     loop {
@@ -271,17 +319,18 @@ async fn handle_create_window(
             let session = mgr.get_session_mut(1).unwrap();
             let window = session.windows.get_mut(&window_id).unwrap();
 
-            let output_tx = pane_output_tx.clone();
-            let pane = MuxPane::new(pane_id, 80, 24, output_tx.clone(), writer);
+            let output_target: SharedOutputTarget = Arc::new(std::sync::Mutex::new(
+                PaneOutputTarget::Connected(pane_output_tx.clone()),
+            ));
+            let pane = MuxPane::new(pane_id, 80, 24, output_target.clone(), writer);
             window.add_pane(pane);
 
             // Release lock before sending response and spawning reader
             drop(mgr);
 
             // Start PTY reader thread (blocking I/O, must be std::thread)
-            let tx = output_tx;
             std::thread::spawn(move || {
-                pty_reader_loop(pane_id, reader, tx);
+                pty_reader_loop(pane_id, reader, output_target);
             });
 
             log::info!(
@@ -303,28 +352,54 @@ async fn handle_create_window(
     Ok(())
 }
 
-/// Read PTY output in a blocking loop and forward to the channel.
+/// Read PTY output in a blocking loop and forward to the output target.
 /// Runs in a dedicated std::thread since PTY reads are blocking I/O.
+///
+/// When the connected channel fails (GUI disconnected), the reader automatically
+/// switches to buffering mode using a ring buffer. The reader thread stays alive
+/// so the PTY process output is never lost.
 fn pty_reader_loop(
     pane_id: u32,
     mut reader: Box<dyn Read + Send>,
-    tx: mpsc::Sender<PtyOutputChunk>,
+    output_target: SharedOutputTarget,
 ) {
     let mut buf = [0u8; 65536];
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
                 log::info!("PTY reader EOF for pane {}", pane_id);
+                // Signal exit to connected client if any
+                let target = output_target.lock().unwrap();
+                if let PaneOutputTarget::Connected(ref tx) = *target {
+                    let _ = tx.blocking_send(PtyOutputChunk {
+                        pane_id,
+                        data: Vec::new(),
+                    });
+                }
                 break;
             }
             Ok(n) => {
-                let chunk = PtyOutputChunk {
-                    pane_id,
-                    data: buf[..n].to_vec(),
-                };
-                if tx.blocking_send(chunk).is_err() {
-                    log::info!("PTY output channel closed for pane {}", pane_id);
-                    break;
+                let data = buf[..n].to_vec();
+                let mut target = output_target.lock().unwrap();
+                match &mut *target {
+                    PaneOutputTarget::Connected(tx) => {
+                        let chunk = PtyOutputChunk {
+                            pane_id,
+                            data: data.clone(),
+                        };
+                        if tx.blocking_send(chunk).is_err() {
+                            // Channel closed — GUI disconnected, switch to buffering
+                            log::info!("Pane {} switching to detached buffering mode", pane_id);
+                            let mut ring = DetachRingBuffer::new(
+                                crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
+                            );
+                            ring.write(&data);
+                            *target = PaneOutputTarget::Detached(ring);
+                        }
+                    }
+                    PaneOutputTarget::Detached(ring) => {
+                        ring.write(&data);
+                    }
                 }
             }
             Err(e) => {
@@ -333,9 +408,4 @@ fn pty_reader_loop(
             }
         }
     }
-    // Send empty chunk to signal PTY exit to the connection handler
-    let _ = tx.blocking_send(PtyOutputChunk {
-        pane_id,
-        data: Vec::new(), // empty = exit signal
-    });
 }

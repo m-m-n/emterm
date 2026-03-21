@@ -252,7 +252,12 @@ mod tests {
         let directives = parse_tmux_conf("bind r source-file ~/.tmux.conf");
         let result = convert_directives(&directives);
         assert!(result.settings.is_empty());
-        assert!(result.warnings.iter().any(|w| w.contains("unsupported command")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("unsupported command"))
+        );
     }
 
     #[test]

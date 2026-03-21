@@ -48,11 +48,11 @@ fn set_taskbar_icon(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::er
 pub fn run() {
     use crate::download_registry::DownloadRegistry;
     use crate::logging;
+    use crate::mux::bridge::MuxBridgeState;
     use crate::pty::PtyManager;
     use crate::sftp::pool::ConcurrentUploadPool;
     use crate::sftp::upload::SftpProcessManager;
     use crate::state::{ImageProcessorState, LargeImageDataStore};
-    use crate::mux::bridge::MuxBridgeState;
     use crate::{commands, tauri_commands};
     use std::sync::Arc;
 

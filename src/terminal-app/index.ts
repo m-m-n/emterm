@@ -799,10 +799,11 @@ export class TerminalApp {
     console.info(`[INFO][FRONTEND] Entering mux mode: socket=${socketPath}, session=${sessionId}`);
 
     // Connect to daemon
+    let muxSessions: import("../terminal/mux/mux-client").MuxSessionInfo[] = [];
     try {
       this.muxClient = new MuxClient();
-      const sessions = await this.muxClient.connect(socketPath);
-      console.info(`[INFO][FRONTEND] Mux connected: ${sessions.length} session(s)`);
+      muxSessions = await this.muxClient.connect(socketPath);
+      console.info(`[INFO][FRONTEND] Mux connected: ${muxSessions.length} session(s)`);
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux connect failed:", e);
       this.inMuxMode = false;
@@ -879,13 +880,21 @@ export class TerminalApp {
     this.muxPaneIds = [];
     this.muxPendingWindowCount = 0;
 
-    // Create initial window (spawns a shell in daemon)
-    // Actual pane ID will arrive via PaneCreated event
-    try {
-      this.muxPendingWindowCount++;
-      await this.muxClient.sendControl(MuxMessageType.CreateWindow, 0);
-    } catch (e) {
-      console.error("[ERROR][FRONTEND] Mux create window failed:", e);
+    // Check if daemon has existing panes (reattach case)
+    const existingPanes = muxSessions.reduce((sum, s) => sum + s.pane_count, 0);
+
+    if (existingPanes > 0) {
+      // Reattach: daemon will send PaneCreated + buffered output for existing panes
+      this.muxPendingWindowCount = existingPanes;
+      console.info(`[INFO][FRONTEND] Reattaching to ${existingPanes} existing pane(s)`);
+    } else {
+      // Fresh start: create initial window
+      try {
+        this.muxPendingWindowCount++;
+        await this.muxClient.sendControl(MuxMessageType.CreateWindow, 0);
+      } catch (e) {
+        console.error("[ERROR][FRONTEND] Mux create window failed:", e);
+      }
     }
 
     // Enable prefix key handling
