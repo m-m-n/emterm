@@ -140,6 +140,15 @@ impl Default for SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+    use std::sync::{Arc, Mutex as StdMutex};
+    use tokio::sync::mpsc;
+
+    fn make_test_pane(id: u32) -> MuxPane {
+        let (tx, _rx) = mpsc::channel(1);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+        MuxPane::new_test(id, 80, 24, target)
+    }
 
     #[test]
     fn test_create_session() {
@@ -174,5 +183,101 @@ mod tests {
         mgr.create_session("second".to_string());
         let list = mgr.session_list();
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_find_pane_returns_session_and_window() {
+        let mut mgr = SessionManager::new();
+        let session_id = mgr.create_session("test".to_string());
+        let window_id = mgr.create_window(session_id, "win1".to_string()).unwrap();
+        let pane = make_test_pane(100);
+        let session = mgr.get_session_mut(session_id).unwrap();
+        session.windows.get_mut(&window_id).unwrap().add_pane(pane);
+
+        let result = mgr.find_pane(100);
+        assert_eq!(result, Some((session_id, window_id)));
+    }
+
+    #[test]
+    fn test_find_pane_not_found() {
+        let mgr = SessionManager::new();
+        assert_eq!(mgr.find_pane(999), None);
+    }
+
+    #[test]
+    fn test_find_pane_across_windows() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid1 = mgr.create_window(sid, "w1".to_string()).unwrap();
+        let wid2 = mgr.create_window(sid, "w2".to_string()).unwrap();
+
+        let pane1 = make_test_pane(10);
+        let pane2 = make_test_pane(20);
+
+        let session = mgr.get_session_mut(sid).unwrap();
+        session.windows.get_mut(&wid1).unwrap().add_pane(pane1);
+        session.windows.get_mut(&wid2).unwrap().add_pane(pane2);
+
+        assert_eq!(mgr.find_pane(10), Some((sid, wid1)));
+        assert_eq!(mgr.find_pane(20), Some((sid, wid2)));
+    }
+
+    #[test]
+    fn test_remove_window_returns_true_when_session_empty() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+
+        let result = mgr.remove_window(sid, wid);
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn test_remove_window_returns_false_when_session_has_more() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid1 = mgr.create_window(sid, "w1".to_string()).unwrap();
+        let _wid2 = mgr.create_window(sid, "w2".to_string()).unwrap();
+
+        let result = mgr.remove_window(sid, wid1);
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
+    fn test_cascading_cleanup_removes_empty_session() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("s".to_string());
+        let wid = mgr.create_window(sid, "w".to_string()).unwrap();
+        let pane = make_test_pane(1);
+
+        let session = mgr.get_session_mut(sid).unwrap();
+        session.windows.get_mut(&wid).unwrap().add_pane(pane);
+
+        // Remove the pane, making window empty
+        {
+            let session = mgr.get_session_mut(sid).unwrap();
+            let window = session.windows.get_mut(&wid).unwrap();
+            window.remove_pane(1);
+            assert!(window.is_empty());
+        }
+
+        // Remove empty window, making session empty
+        let session_empty = mgr.remove_window(sid, wid);
+        assert_eq!(session_empty, Some(true));
+
+        // Remove empty session
+        mgr.remove_session(sid);
+        assert!(mgr.is_empty());
+    }
+
+    #[test]
+    fn test_alloc_pane_id_increments() {
+        let mut mgr = SessionManager::new();
+        let id1 = mgr.alloc_pane_id();
+        let id2 = mgr.alloc_pane_id();
+        let id3 = mgr.alloc_pane_id();
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
     }
 }
