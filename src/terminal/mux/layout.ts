@@ -211,6 +211,94 @@ function containsPane(node: LayoutNode, paneId: number): boolean {
 }
 
 /**
+ * Resize the split that separates paneA from paneB.
+ * The newRatio is the fraction allocated to the side containing paneA.
+ */
+export function resizeSplitBetween(
+  root: LayoutNode,
+  paneA: number,
+  paneB: number,
+  newRatio: number,
+): LayoutNode {
+  if (root.type === "leaf") return root;
+
+  const aInFirst = containsPane(root.first, paneA);
+  const bInFirst = containsPane(root.first, paneB);
+  const aInSecond = containsPane(root.second, paneA);
+  const bInSecond = containsPane(root.second, paneB);
+
+  // paneA and paneB are on opposite sides of this split
+  if (aInFirst && bInSecond) {
+    return { ...root, ratio: Math.max(0.1, Math.min(0.9, newRatio)) };
+  }
+  if (bInFirst && aInSecond) {
+    return { ...root, ratio: Math.max(0.1, Math.min(0.9, 1 - newRatio)) };
+  }
+
+  // Both in the same subtree -- recurse
+  if (aInFirst && bInFirst) {
+    return { ...root, first: resizeSplitBetween(root.first, paneA, paneB, newRatio) };
+  }
+  if (aInSecond && bInSecond) {
+    return { ...root, second: resizeSplitBetween(root.second, paneA, paneB, newRatio) };
+  }
+
+  return root;
+}
+
+/**
+ * Get the bounds of the split node that separates paneA from paneB.
+ * Returns the rectangle that the parent split occupies, so drag ratios
+ * can be computed relative to it.
+ */
+export function getSplitBounds(
+  root: LayoutNode,
+  paneA: number,
+  paneB: number,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  cellWidth: number,
+  cellHeight: number,
+): { x: number; y: number; width: number; height: number } | null {
+  if (root.type === "leaf") return null;
+
+  const aInFirst = containsPane(root.first, paneA);
+  const bInSecond = containsPane(root.second, paneB);
+  const bInFirst = containsPane(root.first, paneB);
+  const aInSecond = containsPane(root.second, paneA);
+
+  // This is the split that separates them
+  if ((aInFirst && bInSecond) || (bInFirst && aInSecond)) {
+    return { x, y, width, height };
+  }
+
+  // Both in the same subtree -- recurse with that subtree's bounds
+  const { direction, ratio, first, second } = root;
+  if (aInFirst && containsPane(root.first, paneB)) {
+    if (direction === "vertical") {
+      const firstWidth = Math.floor((width - PANE_BORDER_WIDTH) * ratio);
+      return getSplitBounds(first, paneA, paneB, x, y, firstWidth, height, cellWidth, cellHeight);
+    }
+    const firstHeight = Math.floor((height - PANE_BORDER_WIDTH) * ratio);
+    return getSplitBounds(first, paneA, paneB, x, y, width, firstHeight, cellWidth, cellHeight);
+  }
+  if (aInSecond && containsPane(root.second, paneB)) {
+    if (direction === "vertical") {
+      const firstWidth = Math.floor((width - PANE_BORDER_WIDTH) * ratio);
+      const secondWidth = width - firstWidth - PANE_BORDER_WIDTH;
+      return getSplitBounds(second, paneA, paneB, x + firstWidth + PANE_BORDER_WIDTH, y, secondWidth, height, cellWidth, cellHeight);
+    }
+    const firstHeight = Math.floor((height - PANE_BORDER_WIDTH) * ratio);
+    const secondHeight = height - firstHeight - PANE_BORDER_WIDTH;
+    return getSplitBounds(second, paneA, paneB, x, y + firstHeight + PANE_BORDER_WIDTH, width, secondHeight, cellWidth, cellHeight);
+  }
+
+  return null;
+}
+
+/**
  * Get all pane IDs in the tree.
  */
 export function getAllPaneIds(root: LayoutNode): number[] {

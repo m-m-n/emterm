@@ -34,10 +34,12 @@ import {
   splitPane as splitLayoutPane,
   removePane as removeLayoutPane,
   getAllPaneIds,
+  resizeSplitBetween,
+  getSplitBounds,
   type LayoutNode,
   type SplitDirection,
 } from "../terminal/mux/layout";
-import { applyLayoutToContainer } from "../terminal/mux/pane-border";
+import { applyLayoutToContainer, detectBorderHit } from "../terminal/mux/pane-border";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
 import { setupPtyHandlers, type PtyHandlerHandle } from "./pty-handler";
@@ -97,6 +99,12 @@ export class TerminalApp {
   private muxPaneContainer: HTMLElement | null = null;
   private muxPendingSplitCount = 0;
   private muxPendingSplitDirection: SplitDirection = "vertical";
+  private muxDragState: {
+    direction: "horizontal" | "vertical";
+    paneA: number;
+    paneB: number;
+  } | null = null;
+  private muxPreZoomLayout: LayoutNode | null = null;
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -1250,7 +1258,7 @@ export class TerminalApp {
         break;
       }
       case "zoom-toggle":
-        console.info(`[INFO][FRONTEND] Mux action not yet routed: ${action.type}`);
+        this.toggleMuxZoom();
         break;
       case "copy-mode":
         this.enterCopyMode();
@@ -1365,6 +1373,9 @@ export class TerminalApp {
     }
 
     this.muxActivePaneId = existingPaneId;
+
+    // Wire up drag-resize for pane borders
+    this.initMuxDragResize();
   }
 
   /** Create a canvas element and renderer for a new pane. */
@@ -1493,6 +1504,15 @@ export class TerminalApp {
 
   /** Remove a pane from the multi-pane layout. */
   private removeMuxPane(paneId: number): void {
+    // If zoomed and removing the zoomed pane, unzoom first
+    if (this.muxPreZoomLayout && paneId === this.muxActivePaneId) {
+      this.muxLayoutRoot = this.muxPreZoomLayout;
+      this.muxPreZoomLayout = null;
+      for (const [, p] of this.muxPaneCanvases) {
+        p.container.style.display = "";
+      }
+    }
+
     // Remove from layout tree
     if (this.muxLayoutRoot) {
       const newRoot = removeLayoutPane(this.muxLayoutRoot, paneId);
@@ -1568,10 +1588,150 @@ export class TerminalApp {
 
     this.muxLayoutRoot = null;
     this.muxActivePaneId = null;
+    this.muxPreZoomLayout = null;
 
     if (this.state && this.renderer) {
       this.renderer.forceRender(this.state);
     }
+  }
+
+  /** Initialize drag-resize listeners on the mux pane container. */
+  private initMuxDragResize(): void {
+    if (!this.muxPaneContainer) return;
+
+    this.muxPaneContainer.addEventListener("mousedown", (e) => {
+      if (!this.muxLayoutRoot || !this.muxPaneContainer) return;
+      const rect = this.muxPaneContainer.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      const results = calculateLayout(
+        this.muxLayoutRoot,
+        this.muxPaneContainer.clientWidth,
+        this.muxPaneContainer.clientHeight,
+        this.charSize.width,
+        this.charSize.height,
+      );
+
+      const hit = detectBorderHit(x, y, results);
+      if (!hit) return;
+
+      e.preventDefault();
+
+      this.muxDragState = {
+        direction: hit.direction,
+        paneA: hit.paneA,
+        paneB: hit.paneB,
+      };
+
+      document.addEventListener("mousemove", this.handleMuxDragMove);
+      document.addEventListener("mouseup", this.handleMuxDragEnd);
+    });
+
+    // Cursor change on hover
+    this.muxPaneContainer.addEventListener("mousemove", (e) => {
+      if (this.muxDragState) return;
+      if (!this.muxLayoutRoot || !this.muxPaneContainer) return;
+
+      const rect = this.muxPaneContainer.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      const results = calculateLayout(
+        this.muxLayoutRoot,
+        this.muxPaneContainer.clientWidth,
+        this.muxPaneContainer.clientHeight,
+        this.charSize.width,
+        this.charSize.height,
+      );
+
+      const hit = detectBorderHit(x, y, results);
+      this.muxPaneContainer.style.cursor = hit
+        ? (hit.direction === "vertical" ? "col-resize" : "row-resize")
+        : "";
+    });
+  }
+
+  private handleMuxDragMove = (e: MouseEvent): void => {
+    if (!this.muxDragState || !this.muxLayoutRoot || !this.muxPaneContainer) return;
+
+    const containerRect = this.muxPaneContainer.getBoundingClientRect();
+    const containerWidth = this.muxPaneContainer.clientWidth;
+    const containerHeight = this.muxPaneContainer.clientHeight;
+
+    // Find the bounds of the parent split that contains both panes
+    const splitBounds = getSplitBounds(
+      this.muxLayoutRoot,
+      this.muxDragState.paneA,
+      this.muxDragState.paneB,
+      0, 0,
+      containerWidth,
+      containerHeight,
+      this.charSize.width,
+      this.charSize.height,
+    );
+    if (!splitBounds) return;
+
+    // Calculate ratio relative to the parent split's bounds
+    const mousePos = this.muxDragState.direction === "vertical"
+      ? e.clientX - containerRect.left
+      : e.clientY - containerRect.top;
+
+    const splitStart = this.muxDragState.direction === "vertical"
+      ? splitBounds.x
+      : splitBounds.y;
+
+    const splitSize = this.muxDragState.direction === "vertical"
+      ? splitBounds.width
+      : splitBounds.height;
+
+    const newRatio = Math.max(0.1, Math.min(0.9, (mousePos - splitStart) / splitSize));
+
+    this.muxLayoutRoot = resizeSplitBetween(
+      this.muxLayoutRoot,
+      this.muxDragState.paneA,
+      this.muxDragState.paneB,
+      newRatio,
+    );
+    this.applyMuxLayout();
+  };
+
+  private handleMuxDragEnd = (_e: MouseEvent): void => {
+    document.removeEventListener("mousemove", this.handleMuxDragMove);
+    document.removeEventListener("mouseup", this.handleMuxDragEnd);
+    this.muxDragState = null;
+
+    // Send resize messages for all panes after drag completes
+    this.sendPaneResizes();
+  };
+
+  /** Toggle zoom on the active pane. */
+  private toggleMuxZoom(): void {
+    if (!this.muxLayoutRoot || !this.muxPaneContainer || !this.muxActivePaneId) return;
+
+    if (this.muxPreZoomLayout) {
+      // Unzoom: restore saved layout
+      this.muxLayoutRoot = this.muxPreZoomLayout;
+      this.muxPreZoomLayout = null;
+
+      // Show all pane canvases
+      for (const [, pane] of this.muxPaneCanvases) {
+        pane.container.style.display = "";
+      }
+    } else {
+      // Zoom: save current layout, show only active pane
+      this.muxPreZoomLayout = this.muxLayoutRoot;
+      this.muxLayoutRoot = { type: "leaf", paneId: this.muxActivePaneId };
+
+      // Hide non-active pane canvases
+      for (const [paneId, pane] of this.muxPaneCanvases) {
+        pane.container.style.display = paneId === this.muxActivePaneId ? "" : "none";
+      }
+    }
+
+    this.applyMuxLayout();
+    this.sendPaneResizes();
+    console.info(`[INFO][FRONTEND] Mux zoom: ${this.muxPreZoomLayout ? "zoomed" : "restored"}`);
   }
 
   /** Render PTY output for a specific pane in multi-pane mode. */
