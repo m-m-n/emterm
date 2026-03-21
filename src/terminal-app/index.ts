@@ -24,6 +24,12 @@ import { DownloadSessionManager } from "../download";
 import { MuxClient, MuxMessageType } from "../terminal/mux/mux-client";
 import type { MuxAction } from "../terminal/mux/prefix-key";
 import {
+  CopyModeManager,
+  ViKeybinds,
+  EmacsKeybinds,
+  type CopyModeSelection,
+} from "../terminal/mux-copy-mode";
+import {
   calculateLayout,
   splitPane as splitLayoutPane,
   removePane as removeLayoutPane,
@@ -75,6 +81,8 @@ export class TerminalApp {
   private muxPaneGrids: Map<number, WasmGrid> = new Map(); // WASM grids per pane
   private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
   private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
+  private copyModeManager: CopyModeManager | null = null;
+  private copyModeKeybinds: ViKeybinds | EmacsKeybinds | null = null;
 
   // Multi-pane state (within active window)
   private muxLayoutRoot: LayoutNode | null = null;
@@ -290,6 +298,7 @@ export class TerminalApp {
       onToggleSearch: () => this.toggleSearch(),
       onRestoreFocus: () => this.imeHandler?.focus(),
       onExitScrollback: () => this.exitScrollback(),
+      onCopyModeKey: (event: KeyboardEvent) => this.handleCopyModeKey(event),
     };
     this.keyboardHandler = new KeyboardHandler(keyboardContext);
     // Attach to document but check if this tab's container is visible
@@ -960,6 +969,13 @@ export class TerminalApp {
 
     console.info("[INFO][FRONTEND] Exiting mux mode");
 
+    // Exit copy mode if active
+    if (this.copyModeManager) {
+      this.copyModeManager.exit();
+      this.copyModeManager = null;
+      this.copyModeKeybinds = null;
+    }
+
     // Re-enable original PTY output
     if (this.ptyHandlerHandle) {
       this.ptyHandlerHandle.suppressOriginalPty = false;
@@ -1018,6 +1034,112 @@ export class TerminalApp {
     if (this.muxClient) {
       this.muxClient.disconnect().catch(() => {});
       this.muxClient = null;
+    }
+  }
+
+  /** Enter mux copy mode with vi or emacs keybindings. */
+  private enterCopyMode(): void {
+    if (!this.state || !this.inMuxMode) return;
+
+    const core = this.state.getWasmCore();
+    const cols = core.cols();
+    const rows = core.rows();
+
+    this.copyModeManager = new CopyModeManager();
+
+    // Default to vi keybindings (no copy_mode setting exists yet)
+    const muxSettings = SettingsService.getCached()?.mux;
+    const mode = (muxSettings as unknown as Record<string, unknown> | undefined)?.copy_mode as string | undefined ?? "vi";
+
+    if (mode === "emacs") {
+      this.copyModeKeybinds = new EmacsKeybinds(this.copyModeManager, cols, rows);
+    } else {
+      this.copyModeKeybinds = new ViKeybinds(this.copyModeManager, cols, rows);
+    }
+
+    this.copyModeManager.setOnStateChange((state) => {
+      if (state === "inactive") {
+        this.exitCopyMode();
+      }
+    });
+
+    this.copyModeManager.setOnSelectionChange(() => {
+      if (this.renderer && this.state) {
+        this.renderer.forceRender(this.state);
+      }
+    });
+
+    this.copyModeManager.enter();
+    console.info("[INFO][FRONTEND] Entered mux copy mode");
+  }
+
+  /** Exit mux copy mode. */
+  private exitCopyMode(): void {
+    this.copyModeManager = null;
+    this.copyModeKeybinds = null;
+    if (this.renderer && this.state) {
+      this.renderer.forceRender(this.state);
+    }
+    console.info("[INFO][FRONTEND] Exited mux copy mode");
+  }
+
+  /** Handle keyboard input during copy mode. Returns true if the key was consumed. */
+  private handleCopyModeKey(event: KeyboardEvent): boolean {
+    if (!this.copyModeManager || !this.copyModeKeybinds) return false;
+    if (!this.copyModeManager.isActive) return false;
+
+    // Save selection before handling key (yank clears it and exits copy mode)
+    const preYankSelection = this.copyModeManager.getSelection();
+
+    let consumed: boolean;
+    if (this.copyModeKeybinds instanceof EmacsKeybinds) {
+      consumed = this.copyModeKeybinds.handleKeyEvent(event);
+    } else {
+      consumed = (this.copyModeKeybinds as ViKeybinds).handleKey(event.key);
+    }
+
+    if (!consumed) return false;
+
+    // If copy mode just exited and we had a selection, it was a yank/copy action
+    if (!this.copyModeManager.isActive && preYankSelection) {
+      this.copySelectionToClipboard(preYankSelection);
+    }
+
+    return true;
+  }
+
+  /** Extract text from the terminal grid for the given selection and copy to clipboard. */
+  private async copySelectionToClipboard(selection: CopyModeSelection): Promise<void> {
+    if (!this.state) return;
+
+    const text = this.state.extractText(
+      selection.startCol,
+      selection.startRow,
+      selection.endCol,
+      selection.endRow,
+    );
+
+    if (!text) return;
+
+    try {
+      await navigator.clipboard.writeText(text);
+      console.info(`[INFO][FRONTEND] Copy mode: copied ${text.length} chars to clipboard`);
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Copy mode clipboard write failed:", e);
+    }
+  }
+
+  /** Paste clipboard text into the active PTY (mux paste action). */
+  private async pasteFromClipboard(): Promise<void> {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && this.ptyClient) {
+        const data = new TextEncoder().encode(text);
+        await this.ptyClient.write(data);
+        console.info(`[INFO][FRONTEND] Mux paste: ${text.length} chars`);
+      }
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Mux paste failed:", e);
     }
   }
 
@@ -1128,9 +1250,13 @@ export class TerminalApp {
         break;
       }
       case "zoom-toggle":
-      case "copy-mode":
-      case "paste":
         console.info(`[INFO][FRONTEND] Mux action not yet routed: ${action.type}`);
+        break;
+      case "copy-mode":
+        this.enterCopyMode();
+        break;
+      case "paste":
+        this.pasteFromClipboard();
         break;
     }
   }
