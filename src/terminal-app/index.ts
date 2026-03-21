@@ -737,8 +737,19 @@ export class TerminalApp {
     // Set up PTY output handler -- only show output from active pane
     this.muxClient.setOnPtyOutput((paneId: number, data: Uint8Array) => {
       const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
-      if (paneId === activePaneId && this.ptyHandlerHandle) {
-        this.ptyHandlerHandle.injectData(data);
+      if (activePaneId === undefined) {
+        // PaneCreated hasn't arrived yet — accept all output during init
+        if (this.ptyHandlerHandle) {
+          this.ptyHandlerHandle.injectData(data);
+        }
+        return;
+      }
+      if (paneId === activePaneId) {
+        if (this.ptyHandlerHandle) {
+          this.ptyHandlerHandle.injectData(data);
+        }
+      } else {
+        console.debug(`[DEBUG][FRONTEND] Mux output filtered: pane=${paneId} (active=${activePaneId}, paneIds=${JSON.stringify(this.muxPaneIds)}, activeIdx=${this.activeMuxWindowIndex})`);
       }
     });
 
@@ -757,6 +768,11 @@ export class TerminalApp {
       await this.muxClient.startOutputStream();
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux start output stream failed:", e);
+    }
+
+    // Suppress original PTY output during mux mode
+    if (this.ptyHandlerHandle) {
+      this.ptyHandlerHandle.suppressOriginalPty = true;
     }
 
     // Clear screen for mux mode — reset WASM grid and re-render
@@ -808,6 +824,11 @@ export class TerminalApp {
     this.inMuxMode = false;
 
     console.info("[INFO][FRONTEND] Exiting mux mode");
+
+    // Re-enable original PTY output
+    if (this.ptyHandlerHandle) {
+      this.ptyHandlerHandle.suppressOriginalPty = false;
+    }
 
     // Reset mux window tracking
     this.muxWindows = [];

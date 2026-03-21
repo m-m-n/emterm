@@ -40,12 +40,14 @@ export interface PtyHandlerContext {
 export interface PtyHandlerHandle {
   /** Inject data into the PTY processing pipeline (same path as onData). */
   injectData: (data: Uint8Array) => void;
+  /** Suppress original PTY output (set true during mux mode). */
+  suppressOriginalPty: boolean;
 }
 
 export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandlerHandle> {
   const ptyClient = ctx.getPtyClient();
   const state = ctx.getState();
-  const noopHandle: PtyHandlerHandle = { injectData: () => {} };
+  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false };
   if (!ptyClient || !state) return noopHandle;
 
   // Register callbacks on primary core
@@ -355,8 +357,18 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     }
   };
 
+  const handle: PtyHandlerHandle = {
+    injectData: (data: Uint8Array) => {
+      pendingChunks.push(data);
+      scheduleProcessing();
+    },
+    suppressOriginalPty: false,
+  };
+
   // Register binary data handler -- just buffer and schedule rAF
   ptyClient.onData((data: Uint8Array) => {
+    // Suppress original PTY output during mux mode
+    if (handle.suppressOriginalPty) return;
     pendingChunks.push(data);
     scheduleProcessing();
   });
@@ -373,10 +385,5 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     // Note: Window close is now handled by TabManager.onLastTabClosed()
   });
 
-  return {
-    injectData: (data: Uint8Array) => {
-      pendingChunks.push(data);
-      scheduleProcessing();
-    },
-  };
+  return handle;
 }
