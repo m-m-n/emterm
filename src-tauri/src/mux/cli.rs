@@ -79,30 +79,9 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
     let _ = std::io::stdout().flush();
 
-    // Connect to daemon for detach notification
-    // (blocking until detached or daemon exits)
-    #[cfg(unix)]
-    {
-        let stream = std::os::unix::net::UnixStream::connect(&sock_path)?;
-        stream.set_read_timeout(None)?;
-
-        // Simple blocking read — daemon will close our connection on detach
-        let mut reader = std::io::BufReader::new(stream);
-        let mut buf = [0u8; 1024];
-        loop {
-            match std::io::Read::read(&mut reader, &mut buf) {
-                Ok(0) => break, // Connection closed (detach or daemon exit)
-                Ok(_) => {}     // Ignore data (CLI doesn't process it)
-                Err(_) => break,
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        // TODO: Windows named pipe support for mux daemon connection
-        return Err("Mux is not yet supported on Windows".into());
-    }
+    // CLI exits immediately after emitting OSC.
+    // The GUI handles mux mode lifecycle (attach/detach) independently.
+    // The daemon keeps running in the background.
 
     Ok(())
 }
