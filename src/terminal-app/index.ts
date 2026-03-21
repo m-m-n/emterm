@@ -8,6 +8,7 @@ import {
   PtyClient,
 } from "../pty";
 import { TerminalState } from "../terminal/state";
+import { WasmGrid } from "../terminal/wasm/terminal-core";
 import { createRendererAsync, type ITerminalRenderer } from "../terminal";
 import { SelectionController } from "../selection-v2";
 import type { TerminalAppOptions, CharSize } from "./types";
@@ -62,7 +63,7 @@ export class TerminalApp {
   private activeMuxWindowIndex = 0;
   private muxPaneIds: number[] = []; // Actual pane IDs from daemon
   private muxPendingWindowCount = 0; // Windows waiting for PaneCreated response
-  private muxPaneSnapshots: Map<number, Uint8Array> = new Map(); // WASM snapshots per pane
+  private muxPaneGrids: Map<number, WasmGrid> = new Map(); // WASM grids per pane
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -637,43 +638,51 @@ export class TerminalApp {
     }
   }
 
-  /** Switch to the current activeMuxWindowIndex: save old pane snapshot, restore new pane, update UI. */
+  /** Create a fresh WASM grid for a new mux pane and swap it in. */
+  private createFreshMuxGrid(): void {
+    if (!this.state) return;
+    const cols = this.state.getWasmCore().cols();
+    const rows = this.state.getWasmCore().rows();
+    const newGrid = new WasmGrid(cols, rows, 10000);
+    this.state.swapPrimaryGrid(newGrid);
+    this.registerCoreCallbacks(this.state.getActiveCore());
+    if (this.renderer) {
+      this.renderer.forceRender(this.state);
+    }
+  }
+
+  /** Switch to the current activeMuxWindowIndex: swap WASM grids and update UI. */
   private switchMuxWindow(previousIndex?: number): void {
-    // Save snapshot of the pane we're switching away from
+    if (!this.state) return;
+
+    // Save current pane's grid (swap out)
     if (previousIndex != null) {
       const prevPaneId = this.muxPaneIds[previousIndex];
-      if (prevPaneId != null && this.state) {
-        try {
-          const snapshot = this.state.getWasmCore().wasm_snapshot_to_bytes();
-          this.muxPaneSnapshots.set(prevPaneId, snapshot);
-        } catch (e) {
-          console.warn("[WARN][FRONTEND] Failed to snapshot pane:", e);
+      if (prevPaneId != null) {
+        const currentGrid = this.state.getPrimaryGrid();
+        if (currentGrid) {
+          this.muxPaneGrids.set(prevPaneId, currentGrid);
         }
       }
     }
 
-    // Restore the new pane's snapshot (or clear if none exists)
+    // Restore the target pane's grid (swap in)
     const newPaneId = this.muxPaneIds[this.activeMuxWindowIndex];
-    if (newPaneId != null && this.state) {
-      const snapshot = this.muxPaneSnapshots.get(newPaneId);
-      if (snapshot) {
-        const restored = this.state.restoreFromSnapshot(snapshot);
-        if (restored) {
-          // Re-register WASM callbacks on the new core
-          this.registerCoreCallbacks(this.state.getActiveCore());
-        } else {
-          // Fallback: clear screen if restore failed
-          this.state.getWasmCore().reset();
-        }
+    if (newPaneId != null) {
+      const savedGrid = this.muxPaneGrids.get(newPaneId);
+      if (savedGrid) {
+        this.muxPaneGrids.delete(newPaneId);
+        this.state.swapPrimaryGrid(savedGrid);
+        this.registerCoreCallbacks(this.state.getActiveCore());
       } else {
-        // No snapshot (first visit) -- clear screen
+        // No saved grid (first visit) — just clear
         this.state.getWasmCore().reset();
       }
-      if (this.renderer) {
-        this.renderer.forceRender(this.state);
-      }
     }
 
+    if (this.renderer) {
+      this.renderer.forceRender(this.state);
+    }
     this.emitMuxStateChange();
   }
 
@@ -682,15 +691,13 @@ export class TerminalApp {
     if (this.muxPendingWindowCount <= 0) return;
     this.muxPendingWindowCount--;
 
-    // Save snapshot of the current pane before switching
+    // Save current pane's grid before switching
     const previousIndex = this.activeMuxWindowIndex;
     const prevPaneId = this.muxPaneIds[previousIndex];
     if (prevPaneId != null && this.state) {
-      try {
-        const snapshot = this.state.getWasmCore().wasm_snapshot_to_bytes();
-        this.muxPaneSnapshots.set(prevPaneId, snapshot);
-      } catch (e) {
-        console.warn("[WARN][FRONTEND] Failed to snapshot pane before new window:", e);
+      const currentGrid = this.state.getPrimaryGrid();
+      if (currentGrid) {
+        this.muxPaneGrids.set(prevPaneId, currentGrid);
       }
     }
 
@@ -701,8 +708,8 @@ export class TerminalApp {
 
     console.info(`[INFO][FRONTEND] Mux pane created: id=${paneId}, window=${newIdx}`);
 
-    // Clear screen for the new window (no snapshot to restore)
-    this.clearMuxScreen();
+    // Create a fresh grid for the new pane
+    this.createFreshMuxGrid();
     this.emitMuxStateChange();
   }
 
@@ -714,7 +721,7 @@ export class TerminalApp {
     console.info(`[INFO][FRONTEND] Mux pane ${paneId} exited (window ${windowIdx})`);
 
     // Clean up snapshot for the exited pane
-    this.muxPaneSnapshots.delete(paneId);
+    this.muxPaneGrids.delete(paneId);
 
     // If the exited pane is NOT the active one, save current pane's snapshot
     // before the index adjustment that follows
@@ -891,7 +898,7 @@ export class TerminalApp {
     this.activeMuxWindowIndex = 0;
     this.muxPaneIds = [];
     this.muxPendingWindowCount = 0;
-    this.muxPaneSnapshots.clear();
+    this.muxPaneGrids.clear();
     this.emitMuxStateChange();
 
     // Disable prefix key handling
