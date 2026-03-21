@@ -162,6 +162,16 @@ export class WasmGrid {
 		this.core = new TerminalCore(cols, rows, scrollbackLines);
 	}
 
+	/**
+	 * Create a WasmGrid wrapping an existing TerminalCore.
+	 * Used for restoring from snapshots where the core is already created.
+	 */
+	static fromCore(core: TerminalCore): WasmGrid {
+		const grid = Object.create(WasmGrid.prototype) as WasmGrid;
+		(grid as { core: TerminalCore }).core = core;
+		return grid;
+	}
+
 	get cols(): number {
 		return this.core.cols();
 	}

@@ -62,6 +62,7 @@ export class TerminalApp {
   private activeMuxWindowIndex = 0;
   private muxPaneIds: number[] = []; // Actual pane IDs from daemon
   private muxPendingWindowCount = 0; // Windows waiting for PaneCreated response
+  private muxPaneSnapshots: Map<number, Uint8Array> = new Map(); // WASM snapshots per pane
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -636,21 +637,62 @@ export class TerminalApp {
     }
   }
 
-  /** Switch to the current activeMuxWindowIndex: clear screen, trigger PTY redraw, update UI. */
-  private switchMuxWindow(): void {
-    this.clearMuxScreen();
-    this.emitMuxStateChange();
-    // Send Ctrl+L to the active pane to trigger shell redraw
-    const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
-    if (this.muxClient && activePaneId != null) {
-      this.muxClient.sendInput(activePaneId, new Uint8Array([0x0c])).catch(() => {});
+  /** Switch to the current activeMuxWindowIndex: save old pane snapshot, restore new pane, update UI. */
+  private switchMuxWindow(previousIndex?: number): void {
+    // Save snapshot of the pane we're switching away from
+    if (previousIndex != null) {
+      const prevPaneId = this.muxPaneIds[previousIndex];
+      if (prevPaneId != null && this.state) {
+        try {
+          const snapshot = this.state.getWasmCore().wasm_snapshot_to_bytes();
+          this.muxPaneSnapshots.set(prevPaneId, snapshot);
+        } catch (e) {
+          console.warn("[WARN][FRONTEND] Failed to snapshot pane:", e);
+        }
+      }
     }
+
+    // Restore the new pane's snapshot (or clear if none exists)
+    const newPaneId = this.muxPaneIds[this.activeMuxWindowIndex];
+    if (newPaneId != null && this.state) {
+      const snapshot = this.muxPaneSnapshots.get(newPaneId);
+      if (snapshot) {
+        const restored = this.state.restoreFromSnapshot(snapshot);
+        if (restored) {
+          // Re-register WASM callbacks on the new core
+          this.registerCoreCallbacks(this.state.getActiveCore());
+        } else {
+          // Fallback: clear screen if restore failed
+          this.state.getWasmCore().reset();
+        }
+      } else {
+        // No snapshot (first visit) -- clear screen
+        this.state.getWasmCore().reset();
+      }
+      if (this.renderer) {
+        this.renderer.forceRender(this.state);
+      }
+    }
+
+    this.emitMuxStateChange();
   }
 
   /** Handle PaneCreated from daemon — register actual pane ID and update UI. */
   private handleMuxPaneCreated(paneId: number): void {
     if (this.muxPendingWindowCount <= 0) return;
     this.muxPendingWindowCount--;
+
+    // Save snapshot of the current pane before switching
+    const previousIndex = this.activeMuxWindowIndex;
+    const prevPaneId = this.muxPaneIds[previousIndex];
+    if (prevPaneId != null && this.state) {
+      try {
+        const snapshot = this.state.getWasmCore().wasm_snapshot_to_bytes();
+        this.muxPaneSnapshots.set(prevPaneId, snapshot);
+      } catch (e) {
+        console.warn("[WARN][FRONTEND] Failed to snapshot pane before new window:", e);
+      }
+    }
 
     const newIdx = this.muxWindows.length;
     this.muxWindows.push({ id: newIdx, name: `${newIdx}:shell` });
@@ -659,7 +701,7 @@ export class TerminalApp {
 
     console.info(`[INFO][FRONTEND] Mux pane created: id=${paneId}, window=${newIdx}`);
 
-    // Clear screen for the new window
+    // Clear screen for the new window (no snapshot to restore)
     this.clearMuxScreen();
     this.emitMuxStateChange();
   }
@@ -670,6 +712,13 @@ export class TerminalApp {
     if (windowIdx === -1) return;
 
     console.info(`[INFO][FRONTEND] Mux pane ${paneId} exited (window ${windowIdx})`);
+
+    // Clean up snapshot for the exited pane
+    this.muxPaneSnapshots.delete(paneId);
+
+    // If the exited pane is NOT the active one, save current pane's snapshot
+    // before the index adjustment that follows
+    const wasActive = windowIdx === this.activeMuxWindowIndex;
 
     // Remove the window
     this.muxWindows.splice(windowIdx, 1);
@@ -691,7 +740,12 @@ export class TerminalApp {
       this.muxWindows[i]!.name = `${i}:shell`;
     }
 
-    this.switchMuxWindow();
+    // Only switch if the active pane was the one that exited
+    if (wasActive) {
+      this.switchMuxWindow();
+    } else {
+      this.emitMuxStateChange();
+    }
   }
 
   /** Re-apply mux keybind settings (call when settings change at runtime). */
@@ -837,6 +891,7 @@ export class TerminalApp {
     this.activeMuxWindowIndex = 0;
     this.muxPaneIds = [];
     this.muxPendingWindowCount = 0;
+    this.muxPaneSnapshots.clear();
     this.emitMuxStateChange();
 
     // Disable prefix key handling
@@ -882,15 +937,17 @@ export class TerminalApp {
         break;
       case "next-window": {
         if (this.muxWindows.length > 1) {
+          const prev = this.activeMuxWindowIndex;
           this.activeMuxWindowIndex = (this.activeMuxWindowIndex + 1) % this.muxWindows.length;
-          this.switchMuxWindow();
+          this.switchMuxWindow(prev);
         }
         break;
       }
       case "prev-window": {
         if (this.muxWindows.length > 1) {
+          const prev = this.activeMuxWindowIndex;
           this.activeMuxWindowIndex = (this.activeMuxWindowIndex - 1 + this.muxWindows.length) % this.muxWindows.length;
-          this.switchMuxWindow();
+          this.switchMuxWindow(prev);
         }
         break;
       }
