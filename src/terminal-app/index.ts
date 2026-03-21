@@ -65,6 +65,7 @@ export class TerminalApp {
   private muxPendingWindowCount = 0; // Windows waiting for PaneCreated response
   private muxPaneGrids: Map<number, WasmGrid> = new Map(); // WASM grids per pane
   private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
+  private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -709,8 +710,21 @@ export class TerminalApp {
 
     console.info(`[INFO][FRONTEND] Mux pane created: id=${paneId}, window=${newIdx}`);
 
-    // Create a fresh grid for the new pane
-    this.createFreshMuxGrid();
+    // Try to restore from detached snapshot, otherwise create fresh grid
+    const detachedKey = newIdx === 0 ? "last-session" : null;
+    const detachedSnapshot = detachedKey ? this.muxDetachedGrids.get(detachedKey) : null;
+    if (detachedSnapshot && this.state) {
+      const restored = this.state.restoreFromSnapshot(detachedSnapshot);
+      if (restored) {
+        this.registerCoreCallbacks(this.state.getActiveCore());
+        console.info(`[INFO][FRONTEND] Restored detached grid for window ${newIdx}`);
+      } else {
+        this.createFreshMuxGrid();
+      }
+      this.muxDetachedGrids.delete(detachedKey!);
+    } else {
+      this.createFreshMuxGrid();
+    }
     this.emitMuxStateChange();
   }
 
@@ -897,6 +911,21 @@ export class TerminalApp {
     // Re-enable original PTY output
     if (this.ptyHandlerHandle) {
       this.ptyHandlerHandle.suppressOriginalPty = false;
+    }
+
+    // Save current active pane's grid snapshot for potential reattach
+    if (this.state && this.muxPaneIds.length > 0) {
+      try {
+        const snapshot = this.state.getWasmCore().wasm_snapshot_to_bytes();
+        this.muxDetachedGrids.set("last-session", snapshot);
+        // Also save any stored pane grids
+        for (const [paneId, grid] of this.muxPaneGrids) {
+          try {
+            const s = grid.core.wasm_snapshot_to_bytes();
+            this.muxDetachedGrids.set(`pane-${paneId}`, s);
+          } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
     }
 
     // Restore original grid
