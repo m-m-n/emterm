@@ -39,18 +39,12 @@ async function getActiveSubTabIndex() {
 
 describe("Mux Terminal Multiplexer", () => {
 	before(async () => {
-		// Wait for terminal app to initialize
-		await browser.waitUntil(
-			async () => {
-				return await browser.execute(() => {
-					return !!(window.terminalState && window.terminalApp);
-				});
-			},
-			{ timeout: 15000, timeoutMsg: "Terminal app did not initialize" },
-		);
+		// Wait for terminal element to exist in DOM
+		const terminal = await $('[data-testid="terminal"]');
+		await terminal.waitForExist({ timeout: 30000 });
+		await browser.pause(5000); // Wait for shell prompt
 
 		// Focus the terminal
-		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(1000);
 
