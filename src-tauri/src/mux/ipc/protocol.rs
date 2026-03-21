@@ -137,7 +137,7 @@ pub struct AttachMsg {
 /// Split pane request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SplitPaneMsg {
-    pub direction: String, // "horizontal" or "vertical"
+    pub direction: u8, // 0 = horizontal, 1 = vertical
 }
 
 /// Status update pushed from daemon to GUI.
