@@ -33,17 +33,14 @@ workflow:
     status: completed
     completed_at_commit: f58b80401266dd4c5c49d7facadc2a5bf3a43173
   - id: implement
-    status: completed
+    status: in_progress
   - id: check
-    status: completed
-    completed_at_commit: 9330db3801ffa5fa8dce72f7047caa98ab78ec8f
+    status: not_started
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
-    status: completed
-    completed_at_commit: 9330db3801ffa5fa8dce72f7047caa98ab78ec8f
+    status: not_started
   - id: review
-    status: completed
-    completed_at_commit: 9330db3801ffa5fa8dce72f7047caa98ab78ec8f
+    status: not_started
 
 requirements:
   FR1:
@@ -80,8 +77,8 @@ requirements:
     tests: [TS-04, TS-15, TS-23, TS-24]
   FR7:
     title: Pane Layout
-    status: not_started
-    note: "Binary tree layout engine exists but not wired. No per-pane Canvas, no split, no resize."
+    status: partial
+    note: "Daemon SplitPane/DestroyPane/Resize handlers implemented. Layout engine exists. Frontend multi-pane rendering not yet wired."
     tasks: [Phase3]
     tests: [TS-02, TS-16, TS-22]
   FR8:

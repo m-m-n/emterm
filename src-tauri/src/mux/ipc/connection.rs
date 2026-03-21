@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
+use portable_pty::MasterPty;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -197,8 +198,7 @@ async fn route_message(
             handle_create_window(session_manager, framed, pane_output_tx).await?;
         }
         MessageType::SplitPane => {
-            log::info!("SplitPane requested for pane {}", msg.pane_id);
-            // TODO: implement pane splitting with PTY spawn
+            handle_split_pane(msg, session_manager, framed, pane_output_tx).await?;
         }
         MessageType::Detach => {
             log::info!("Client requested detach");
@@ -207,8 +207,7 @@ async fn route_message(
             return Err(true);
         }
         MessageType::DestroyPane => {
-            log::info!("DestroyPane requested for pane {}", msg.pane_id);
-            // TODO: kill pane PTY
+            handle_destroy_pane(msg.pane_id, session_manager).await;
         }
         MessageType::SwitchWindow => {
             log::info!("SwitchWindow requested");
@@ -221,6 +220,9 @@ async fn route_message(
         MessageType::DestroyWindow => {
             log::info!("DestroyWindow requested");
             // TODO: destroy window and its panes
+        }
+        MessageType::Resize => {
+            handle_resize(msg, session_manager).await;
         }
         MessageType::PtyInput => {
             let pane_id = msg.pane_id;
@@ -249,27 +251,26 @@ async fn route_message(
     Ok(())
 }
 
-/// Spawn a PTY, create a pane, and start a reader thread for output streaming.
-async fn handle_create_window(
-    session_manager: &Arc<Mutex<SessionManager>>,
-    framed: &mut Framed<UnixStream, MuxCodec>,
-    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
-) -> Result<(), bool> {
+/// Result of spawning a PTY with shell process.
+struct SpawnedPty {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn std::io::Write + Send>,
+    reader: Box<dyn std::io::Read + Send>,
+}
+
+/// Spawn a PTY with a shell process at the given size.
+fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
     let pty_system = portable_pty::native_pty_system();
     let pty_size = portable_pty::PtySize {
-        rows: 24,
-        cols: 80,
+        rows,
+        cols,
         pixel_width: 0,
         pixel_height: 0,
     };
 
-    let pair = match pty_system.openpty(pty_size) {
-        Ok(pair) => pair,
-        Err(e) => {
-            log::error!("Failed to open PTY: {}", e);
-            return Ok(());
-        }
-    };
+    let pair = pty_system
+        .openpty(pty_size)
+        .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
     let shell = crate::pty::detect_default_shell();
     let mut cmd = portable_pty::CommandBuilder::new(&shell);
@@ -289,67 +290,279 @@ async fn handle_create_window(
         cmd.cwd(&home);
     }
 
-    match pair.slave.spawn_command(cmd) {
-        Ok(_child) => {
-            let writer = match pair.master.take_writer() {
-                Ok(w) => w,
-                Err(e) => {
-                    log::error!("Failed to take PTY writer: {}", e);
-                    return Ok(());
-                }
-            };
-            let reader = match pair.master.try_clone_reader() {
-                Ok(r) => r,
-                Err(e) => {
-                    log::error!("Failed to clone PTY reader: {}", e);
-                    return Ok(());
-                }
-            };
+    pair.slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("Failed to spawn shell: {}", e))?;
 
-            let mut mgr = session_manager.lock().await;
-            let window_id = match mgr.create_window(1, "shell".to_string()) {
-                Some(id) => id,
-                None => {
-                    log::error!("Failed to create window in session 1");
-                    return Ok(());
-                }
-            };
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("Failed to take PTY writer: {}", e))?;
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("Failed to clone PTY reader: {}", e))?;
 
-            let pane_id = mgr.alloc_pane_id();
-            let session = mgr.get_session_mut(1).unwrap();
-            let window = session.windows.get_mut(&window_id).unwrap();
+    Ok(SpawnedPty {
+        master: pair.master,
+        writer,
+        reader,
+    })
+}
 
-            let output_target: SharedOutputTarget = Arc::new(std::sync::Mutex::new(
-                PaneOutputTarget::Connected(pane_output_tx.clone()),
-            ));
-            let pane = MuxPane::new(pane_id, 80, 24, output_target.clone(), writer);
-            window.add_pane(pane);
+/// Register a new pane in the session manager and start its reader thread.
+///
+/// Returns the new pane_id and its output target (for the reader thread).
+fn register_pane_and_start_reader(
+    mgr: &mut SessionManager,
+    session_id: u32,
+    window_id: u32,
+    cols: u16,
+    rows: u16,
+    spawned: SpawnedPty,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+) -> Option<PaneId> {
+    // Verify session/window exist before allocating pane ID
+    {
+        let session = mgr.get_session(session_id)?;
+        session.windows.get(&window_id)?;
+    }
 
-            // Release lock before sending response and spawning reader
-            drop(mgr);
+    let pane_id = mgr.alloc_pane_id();
+    let session = mgr.get_session_mut(session_id)?;
+    let window = session.windows.get_mut(&window_id)?;
 
-            // Start PTY reader thread (blocking I/O, must be std::thread)
-            std::thread::spawn(move || {
-                pty_reader_loop(pane_id, reader, output_target);
-            });
+    let output_target: SharedOutputTarget = Arc::new(std::sync::Mutex::new(
+        PaneOutputTarget::Connected(pane_output_tx.clone()),
+    ));
+    let pane = MuxPane::new(
+        pane_id,
+        cols,
+        rows,
+        output_target.clone(),
+        spawned.writer,
+        spawned.master,
+    );
+    window.add_pane(pane);
 
-            log::info!(
-                "Created window {} with pane {} (PTY spawned)",
-                window_id,
-                pane_id
-            );
+    let reader = spawned.reader;
+    std::thread::spawn(move || {
+        pty_reader_loop(pane_id, reader, output_target);
+    });
 
-            let resp = MuxMessage::control(MessageType::PaneCreated, pane_id, &pane_id);
-            if framed.send(resp).await.is_err() {
-                return Err(true);
-            }
-        }
+    Some(pane_id)
+}
+
+/// Spawn a PTY, create a pane, and start a reader thread for output streaming.
+async fn handle_create_window(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+) -> Result<(), bool> {
+    let spawned = match spawn_pty(80, 24) {
+        Ok(s) => s,
         Err(e) => {
-            log::error!("Failed to spawn shell: {}", e);
+            log::error!("{}", e);
+            return Ok(());
         }
+    };
+
+    let mut mgr = session_manager.lock().await;
+    let window_id = match mgr.create_window(1, "shell".to_string()) {
+        Some(id) => id,
+        None => {
+            log::error!("Failed to create window in session 1");
+            return Ok(());
+        }
+    };
+
+    let pane_id = match register_pane_and_start_reader(
+        &mut mgr,
+        1,
+        window_id,
+        80,
+        24,
+        spawned,
+        pane_output_tx,
+    ) {
+        Some(id) => id,
+        None => {
+            log::error!("Failed to register pane in window {}", window_id);
+            return Ok(());
+        }
+    };
+
+    drop(mgr);
+
+    log::info!(
+        "Created window {} with pane {} (PTY spawned)",
+        window_id,
+        pane_id
+    );
+
+    let resp = MuxMessage::control(MessageType::PaneCreated, pane_id, &pane_id);
+    if framed.send(resp).await.is_err() {
+        return Err(true);
     }
 
     Ok(())
+}
+
+/// Split an existing pane by spawning a new PTY in the same window.
+async fn handle_split_pane(
+    msg: MuxMessage,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+) -> Result<(), bool> {
+    let _split_msg: SplitPaneMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid SplitPane payload");
+            return Ok(());
+        }
+    };
+
+    let source_pane_id = msg.pane_id;
+    log::info!("SplitPane requested for pane {}", source_pane_id);
+
+    // Find which session/window contains the source pane
+    let (session_id, window_id, cols, rows) = {
+        let mgr = session_manager.lock().await;
+        match mgr.find_pane(source_pane_id) {
+            Some((sid, wid)) => {
+                let session = mgr.get_session(sid).unwrap();
+                let window = session.windows.get(&wid).unwrap();
+                let pane = window.panes.get(&source_pane_id).unwrap();
+                (sid, wid, pane.cols, pane.rows)
+            }
+            None => {
+                log::warn!("SplitPane: pane {} not found", source_pane_id);
+                return Ok(());
+            }
+        }
+    };
+
+    let spawned = match spawn_pty(cols, rows) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("SplitPane: {}", e);
+            return Ok(());
+        }
+    };
+
+    let mut mgr = session_manager.lock().await;
+    let new_pane_id = match register_pane_and_start_reader(
+        &mut mgr,
+        session_id,
+        window_id,
+        cols,
+        rows,
+        spawned,
+        pane_output_tx,
+    ) {
+        Some(id) => id,
+        None => {
+            log::error!("SplitPane: failed to register pane in window {}", window_id);
+            return Ok(());
+        }
+    };
+
+    drop(mgr);
+
+    log::info!(
+        "Split pane {}: created new pane {} in window {}",
+        source_pane_id,
+        new_pane_id,
+        window_id
+    );
+
+    let resp = MuxMessage::control(MessageType::PaneCreated, new_pane_id, &new_pane_id);
+    if framed.send(resp).await.is_err() {
+        return Err(true);
+    }
+
+    Ok(())
+}
+
+/// Destroy a pane, removing it from its window. Cleans up empty windows and sessions.
+async fn handle_destroy_pane(pane_id: PaneId, session_manager: &Arc<Mutex<SessionManager>>) {
+    log::info!("DestroyPane requested for pane {}", pane_id);
+
+    let mut mgr = session_manager.lock().await;
+    let (session_id, window_id) = match mgr.find_pane(pane_id) {
+        Some(ids) => ids,
+        None => {
+            log::warn!("DestroyPane: pane {} not found", pane_id);
+            return;
+        }
+    };
+
+    // Remove pane from window (drops writer/master, closing PTY)
+    if let Some(session) = mgr.get_session_mut(session_id) {
+        if let Some(window) = session.windows.get_mut(&window_id) {
+            if let Some(mut pane) = window.remove_pane(pane_id) {
+                pane.mark_exited();
+                log::info!("Destroyed pane {}", pane_id);
+            }
+
+            if window.is_empty() {
+                session.remove_window(window_id);
+                log::info!(
+                    "Removed empty window {} from session {}",
+                    window_id,
+                    session_id
+                );
+
+                if session.is_empty() {
+                    mgr.remove_session(session_id);
+                    log::info!("Removed empty session {}", session_id);
+
+                    if mgr.is_empty() {
+                        log::info!("All sessions empty, daemon may exit");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Resize a pane's PTY to the requested dimensions.
+async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<SessionManager>>) {
+    let resize_msg: ResizeMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid Resize payload");
+            return;
+        }
+    };
+
+    let pane_id = msg.pane_id;
+    let mut mgr = session_manager.lock().await;
+    let (session_id, window_id) = match mgr.find_pane(pane_id) {
+        Some(ids) => ids,
+        None => {
+            log::warn!("Resize: pane {} not found", pane_id);
+            return;
+        }
+    };
+
+    if let Some(session) = mgr.get_session_mut(session_id) {
+        if let Some(window) = session.windows.get_mut(&window_id) {
+            if let Some(pane) = window.panes.get_mut(&pane_id) {
+                if let Err(e) = pane.resize(resize_msg.cols, resize_msg.rows) {
+                    log::warn!("Resize pane {}: {}", pane_id, e);
+                } else {
+                    log::info!(
+                        "Resized pane {} to {}x{}",
+                        pane_id,
+                        resize_msg.cols,
+                        resize_msg.rows
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Read PTY output in a blocking loop and forward to the output target.
