@@ -770,6 +770,15 @@ export class TerminalApp {
       console.error("[ERROR][FRONTEND] Mux start output stream failed:", e);
     }
 
+    // Route all PTY writes to mux daemon via proxy
+    if (this.ptyClient) {
+      this.ptyClient.setWriteProxy((data: Uint8Array) => {
+        if (!this.muxClient) return Promise.resolve();
+        const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex] ?? 1;
+        return this.muxClient.sendInput(activePaneId, data);
+      });
+    }
+
     // Suppress original PTY output during mux mode
     if (this.ptyHandlerHandle) {
       this.ptyHandlerHandle.suppressOriginalPty = true;
@@ -798,20 +807,13 @@ export class TerminalApp {
       console.error("[ERROR][FRONTEND] Mux create window failed:", e);
     }
 
-    // Enable prefix key handling with input routing
+    // Enable prefix key handling
     const muxSettings = SettingsService.getCached()?.mux;
     if (this.keyboardHandler) {
       this.keyboardHandler.enableMuxMode(
         muxSettings?.prefix ?? "Ctrl+B",
         muxSettings?.keybinds ?? {},
         (action) => this.handleMuxAction(action),
-        (data: Uint8Array) => {
-          // Route keyboard input to active window's pane
-          if (this.muxClient) {
-            const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex] ?? 1;
-            this.muxClient.sendInput(activePaneId, data).catch(() => {});
-          }
-        },
       );
     }
 
@@ -840,6 +842,11 @@ export class TerminalApp {
     // Disable prefix key handling
     if (this.keyboardHandler) {
       this.keyboardHandler.disableMuxMode();
+    }
+
+    // Restore direct PTY writes
+    if (this.ptyClient) {
+      this.ptyClient.setWriteProxy(null);
     }
 
     // Disconnect

@@ -44,11 +44,15 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     if !sock_path.exists() || !daemon::is_daemon_running(&sock_path) {
         // Spawn daemon as background process
         let exe = std::env::current_exe()?;
+        // Redirect daemon stderr to a log file for debugging
+        let log_path = sock_path.with_file_name("mux-daemon.log");
+        let log_file = std::fs::File::create(&log_path)
+            .unwrap_or_else(|_| std::fs::File::create("/tmp/emterm-mux-daemon.log").unwrap());
         let _child = std::process::Command::new(exe)
             .args(["mux", "--daemon"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::from(log_file))
             .spawn()?;
 
         // Wait for daemon to start (check first, then sleep with backoff)
