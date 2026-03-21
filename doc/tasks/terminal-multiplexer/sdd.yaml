@@ -95,8 +95,8 @@ requirements:
     tests: []
   FR10:
     title: Copy Mode
-    status: not_started
-    note: "vi/emacs keybind handlers exist but not wired. No selection highlight, no clipboard."
+    status: ok
+    note: "Copy mode wired: prefix+[ enters, vi/emacs keybinds route, yank copies to clipboard, prefix+] pastes. Scrollback search not yet implemented."
     tasks: [Phase6]
     tests: [TS-18]
   FR11:
@@ -122,7 +122,6 @@ requirements:
     tests: [TS-20, TS-21]
   FR15:
     title: WASM Instance Management
-    status: partial
     status: ok
     note: "Per-pane WasmGrid swap for window switching + per-pane Canvas/TerminalState/Renderer for split panes implemented."
     tasks: [Phase2, Phase3]
