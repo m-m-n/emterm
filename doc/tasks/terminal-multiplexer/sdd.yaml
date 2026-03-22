@@ -33,18 +33,14 @@ workflow:
     status: completed
     completed_at_commit: f58b80401266dd4c5c49d7facadc2a5bf3a43173
   - id: implement
-    status: completed
-    completed_at_commit: 51bcd053e78c2069bb97fc87287c01a8483bddbb
+    status: in_progress
   - id: check
-    status: completed
-    completed_at_commit: 86904340dda2395fd4474ae71561d31a15c4568a
+    status: not_started
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
-    status: completed
-    completed_at_commit: 6e03216e093e6c49fc8a9b0eb9439e7b1f030358
+    status: not_started
   - id: review
-    status: completed
-    completed_at_commit: 5d105d398c2a6d933c774b81d4fa8848da3ec4c7
+    status: not_started
 
 requirements:
   FR1:
