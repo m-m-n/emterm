@@ -43,7 +43,8 @@ workflow:
     status: completed
     completed_at_commit: 6e03216e093e6c49fc8a9b0eb9439e7b1f030358
   - id: review
-    status: not_started
+    status: completed
+    completed_at_commit: 5d105d398c2a6d933c774b81d4fa8848da3ec4c7
 
 requirements:
   FR1:
