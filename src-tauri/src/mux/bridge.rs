@@ -355,7 +355,7 @@ pub async fn mux_start_output_stream(
                 }
 
                 if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
-                    log::info!(
+                    log::debug!(
                         "Bridge output stream: received {:?} for pane {} ({} bytes)",
                         msg.msg_type,
                         msg.pane_id,
