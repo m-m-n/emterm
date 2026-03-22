@@ -62,33 +62,103 @@ flowchart TB
     PTY --> ReaderThread
 ```
 
-## 2. PTY Data Flow
+## 2. PTY Data Flow — Normal Mode vs Mux Mode
+
+### 2a. Normal Mode (direct PTY)
+
+Shell → Rust reader thread → Tauri Channel (binary) → WASM → Canvas.
+VT100 パースは WASM で **1回だけ**。中間レイヤーなし。
+
+```mermaid
+sequenceDiagram
+    participant Shell as Shell Process
+    participant RustPTY as Rust PTY reader<br>(std#58;#58;thread)
+    participant TauriCh as Tauri Channel<br>(binary ArrayBuffer)
+    participant PtyClient as PtyClient (TS)
+    participant WASM as WasmGrid<br>process_pty_data()
+    participant Canvas as Canvas Renderer
+
+    Shell->>RustPTY: PTY read (raw bytes)
+    RustPTY->>TauriCh: channel.send(raw bytes)
+    TauriCh->>PtyClient: onmessage(ArrayBuffer)
+    PtyClient->>WASM: process_pty_data(data)
+    Note over WASM: VT100 parse (1回だけ)
+    WASM->>Canvas: dirty rows → render
+```
+
+### 2b. tmux 経由 (問題のあるパターン)
+
+Shell → tmux 仮想端末 → **VT100 再パース + 再生成** → ホスト PTY → eMterm。
+tmux 内部で VT100 を解釈し再構築するため、高スループット時にちらつきが発生する。
+
+```mermaid
+sequenceDiagram
+    participant Shell as Shell Process
+    participant tmuxPTY as tmux 内部 PTY
+    participant tmuxVT as tmux VT100 Engine<br>(parse + re-generate)
+    participant HostPTY as Host PTY
+    participant RustPTY as Rust PTY reader
+    participant WASM as WasmGrid<br>process_pty_data()
+    participant Canvas as Canvas Renderer
+
+    Shell->>tmuxPTY: PTY output (raw bytes)
+    tmuxPTY->>tmuxVT: VT100 parse (1回目)
+    Note over tmuxVT: 仮想端末グリッド更新<br>差分検出<br>VT100 シーケンス再生成
+    tmuxVT->>HostPTY: 再生成された VT100 bytes
+    Note over tmuxVT,HostPTY: ボトルネック#58;<br>再生成が追いつかず<br>ちらつき発生
+    HostPTY->>RustPTY: PTY read
+    RustPTY->>WASM: process_pty_data(data)
+    Note over WASM: VT100 parse (2回目)
+    WASM->>Canvas: render
+```
+
+### 2c. eMterm Mux Mode (解決策)
+
+Shell → daemon reader → Unix socket → Tauri bridge → WASM → Canvas。
+daemon は raw bytes をそのまま中継。**VT100 パースは WASM で1回だけ**。
+tmux の二重パースボトルネックを完全に排除。
 
 ```mermaid
 sequenceDiagram
     participant Shell as Shell Process
     participant Reader as pty_reader_loop<br>(std#58;#58;thread)
-    participant Channel as mpsc#58;#58;channel<br>(capacity 256)
+    participant Channel as mpsc channel<br>(capacity 256)
     participant ConnLoop as select! loop<br>(tokio)
     participant Socket as Unix Socket
     participant BridgeTask as output_stream<br>(tokio#58;#58;spawn)
     participant TauriEvent as Tauri Event
     participant MuxClient as MuxClient (TS)
-    participant WASM as WasmGrid
+    participant WASM as WasmGrid<br>process_pty_data()
     participant Canvas as Canvas Renderer
 
-    Shell->>Reader: PTY read (65536 bytes)
+    Shell->>Reader: PTY read (raw bytes)
+    Note over Reader: raw bytes をそのまま転送<br>VT100 パースしない
     Reader->>Channel: try_send(PtyOutputChunk)
-    Note over Reader,Channel: Backpressure#58;<br>Full → blocking_send<br>Closed → DetachRingBuffer
-
-    Channel->>ConnLoop: pane_output_rx.recv()
-    ConnLoop->>Socket: MuxMessage#58;#58;pty_output(pane_id, data)
-
+    Channel->>ConnLoop: recv()
+    ConnLoop->>Socket: raw bytes + pane_id header
     Socket->>BridgeTask: read frame
     BridgeTask->>TauriEvent: emit("mux-pty-output")
     TauriEvent->>MuxClient: onPtyOutput(pane_id, data)
     MuxClient->>WASM: process_pty_data(data)
-    WASM->>Canvas: forceRender()
+    Note over WASM: VT100 parse (1回だけ)
+    WASM->>Canvas: dirty rows → render
+```
+
+### 2d. レイテンシ比較
+
+```mermaid
+flowchart LR
+    subgraph Normal["Normal Mode"]
+        N1["Shell"] --> N2["Rust reader"] --> N3["Tauri Channel"] --> N4["WASM parse"] --> N5["Canvas"]
+    end
+
+    subgraph tmux["tmux Mode (問題)"]
+        T1["Shell"] --> T2["tmux parse"] --> T3["tmux re-gen"] --> T4["Host PTY"] --> T5["Rust reader"] --> T6["WASM parse"] --> T7["Canvas"]
+    end
+
+    subgraph Mux["eMterm Mux Mode"]
+        M1["Shell"] --> M2["daemon reader"] --> M3["Unix socket"] --> M4["Bridge"] --> M5["WASM parse"] --> M6["Canvas"]
+    end
 ```
 
 ## 3. IPC Protocol Messages
