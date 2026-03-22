@@ -28,6 +28,13 @@ fn check_nesting() -> Result<(), String> {
 
 /// Execute the `emterm mux --daemon` command (runs the daemon).
 pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logger for daemon process (Tauri's logger is not available here).
+    // Daemon stderr is redirected to mux-daemon.log by the spawning process.
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Info)
+        .format_timestamp_millis()
+        .init();
+
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(daemon::run_daemon())?;
     Ok(())
@@ -40,8 +47,8 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
 
     let sock_path = daemon::socket_path();
 
-    // Start daemon if not running
-    if !sock_path.exists() || !daemon::is_daemon_running(&sock_path) {
+    // Start daemon if not running (check socket file only, avoid ghost connections)
+    if !sock_path.exists() {
         // Spawn daemon as background process
         let exe = std::env::current_exe()?;
         // Redirect daemon stderr to a log file for debugging
