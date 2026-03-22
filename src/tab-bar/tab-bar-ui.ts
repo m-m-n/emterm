@@ -51,6 +51,9 @@ export class TabBarUI {
   private fixedArea: HTMLElement | null = null;
   private tabElements: Map<string, HTMLElement> = new Map();
   private dotElements: Map<string, HTMLElement> = new Map();
+  private muxOriginalTabs: Map<string, HTMLElement> = new Map();
+  /** Callback when a mux window tab is clicked */
+  public onMuxWindowClick: ((tabId: string, windowIndex: number) => void) | null = null;
   private unsubscribers: (() => void)[] = [];
 
   constructor(options: TabBarUIOptions) {
@@ -594,34 +597,101 @@ export class TabBarUI {
    * Called when mux state changes (window created, switched, etc.)
    */
   renderMuxSubTabs(tabId: string, windows: { name: string; active: boolean }[]): void {
-    const tabEl = this.tabElements.get(tabId);
-    if (!tabEl) return;
+    if (!this.scrollArea) return;
 
-    // Find or create compact label (shown when tab is inactive)
-    let compactLabel = tabEl.querySelector(".mux-compact-label") as HTMLElement;
-    if (!compactLabel) {
-      compactLabel = document.createElement("span");
-      compactLabel.className = "mux-compact-label";
-      tabEl.appendChild(compactLabel);
-    }
-    compactLabel.textContent = `(${windows.length})`;
-
-    // Find or create sub-tab container (shown when tab is active via CSS)
-    let subTabContainer = tabEl.querySelector(".mux-sub-tabs") as HTMLElement;
-    if (!subTabContainer) {
-      subTabContainer = document.createElement("div");
-      subTabContainer.className = "mux-sub-tabs";
-      tabEl.appendChild(subTabContainer);
+    // Single window — keep as regular tab, just update title
+    if (windows.length <= 1) {
+      this.restoreMuxOriginalTab(tabId);
+      return;
     }
 
-    // Clear and re-render
-    subTabContainer.innerHTML = "";
-    for (const win of windows) {
-      const subTab = document.createElement("span");
-      subTab.className = `mux-sub-tab${win.active ? " mux-sub-tab-active" : ""}`;
-      subTab.textContent = win.name;
-      subTabContainer.appendChild(subTab);
+    // Multiple windows — create/update tab group
+    const currentEl = this.tabElements.get(tabId);
+    if (!currentEl) return;
+
+    let group: HTMLElement;
+    if (currentEl.classList.contains('mux-tab-group')) {
+      // Already transformed — reuse existing group
+      group = currentEl;
+    } else {
+      // First transformation — create group wrapper
+      group = document.createElement('div');
+      group.className = 'mux-tab-group';
+      group.dataset.tabId = tabId;
+      group.setAttribute('role', 'group');
+
+      // Copy active class from original tab
+      if (currentEl.classList.contains('active')) {
+        group.classList.add('active');
+      }
+      // Copy aria-selected
+      if (currentEl.getAttribute('aria-selected') === 'true') {
+        group.setAttribute('aria-selected', 'true');
+      }
+
+      // Replace original in DOM
+      currentEl.replaceWith(group);
+
+      // Save original for later restoration
+      this.muxOriginalTabs.set(tabId, currentEl);
+
+      // Update tabElements to point to group
+      this.tabElements.set(tabId, group);
     }
+
+    // Clear and rebuild window tabs
+    group.innerHTML = '';
+    for (let i = 0; i < windows.length; i++) {
+      const win = windows[i]!;
+      const winTab = document.createElement('div');
+      winTab.className = 'tab mux-window-tab';
+      if (win.active) {
+        winTab.classList.add('mux-window-active');
+      }
+      winTab.setAttribute('role', 'tab');
+      winTab.setAttribute('title', win.name);
+
+      const title = document.createElement('span');
+      title.className = 'tab-title';
+      title.textContent = win.name;
+      winTab.appendChild(title);
+
+      // Click handler: activate this tab + switch to this window
+      const windowIndex = i;
+      winTab.addEventListener('click', () => {
+        this.tabManager.switchTab(tabId);
+        this.onMuxWindowClick?.(tabId, windowIndex);
+      });
+
+      group.appendChild(winTab);
+    }
+  }
+
+  /**
+   * Restores the original tab element from a mux tab group transformation.
+   */
+  private restoreMuxOriginalTab(tabId: string): void {
+    const savedOriginal = this.muxOriginalTabs.get(tabId);
+    if (!savedOriginal) return;
+
+    const currentEl = this.tabElements.get(tabId);
+    if (!currentEl || !currentEl.classList.contains('mux-tab-group')) return;
+
+    // Copy active class back to original
+    if (currentEl.classList.contains('active')) {
+      savedOriginal.classList.add('active');
+      savedOriginal.setAttribute('aria-selected', 'true');
+    } else {
+      savedOriginal.classList.remove('active');
+      savedOriginal.setAttribute('aria-selected', 'false');
+    }
+
+    // Replace group with original in DOM
+    currentEl.replaceWith(savedOriginal);
+
+    // Update tabElements
+    this.tabElements.set(tabId, savedOriginal);
+    this.muxOriginalTabs.delete(tabId);
   }
 
   /**
@@ -629,11 +699,15 @@ export class TabBarUI {
    * Called when mux mode is exited.
    */
   clearMuxSubTabs(tabId: string): void {
+    // Restore original tab if it was transformed into a group
+    this.restoreMuxOriginalTab(tabId);
+
+    // Also clean up any legacy sub-tab elements
     const tabEl = this.tabElements.get(tabId);
     if (!tabEl) return;
-    const subTabContainer = tabEl.querySelector(".mux-sub-tabs");
+    const subTabContainer = tabEl.querySelector('.mux-sub-tabs');
     if (subTabContainer) subTabContainer.remove();
-    const compactLabel = tabEl.querySelector(".mux-compact-label");
+    const compactLabel = tabEl.querySelector('.mux-compact-label');
     if (compactLabel) compactLabel.remove();
   }
 
@@ -670,6 +744,7 @@ export class TabBarUI {
     this.container.innerHTML = "";
     this.tabElements.clear();
     this.dotElements.clear();
+    this.muxOriginalTabs.clear();
     this.scrollArea = null;
     this.fixedArea = null;
   }

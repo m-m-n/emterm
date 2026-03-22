@@ -153,7 +153,9 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   }
 
   const newIdx = muxWindows.length;
-  muxWindows.push({ id: newIdx, name: `${newIdx}:shell` });
+  // Use current terminal title (set by OSC from initial PTY output) as initial window name
+  const initialName = state?.title || "Terminal";
+  muxWindows.push({ id: newIdx, name: initialName });
   muxPaneIds.push(paneId);
   ctx.setActiveMuxWindowIndex(newIdx);
 
@@ -256,11 +258,6 @@ export function handleMuxPaneExited(ctx: MuxWindowManagerContext, paneId: number
   // Adjust active window index
   if (ctx.getActiveMuxWindowIndex() >= muxWindows.length) {
     ctx.setActiveMuxWindowIndex(muxWindows.length - 1);
-  }
-
-  // Renumber window names
-  for (let i = 0; i < muxWindows.length; i++) {
-    muxWindows[i]!.name = `${i}:shell`;
   }
 
   // Only switch if the active pane was the one that exited

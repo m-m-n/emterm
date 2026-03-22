@@ -228,10 +228,12 @@ async function main(): Promise<void> {
         // Mux mode exited -- clear sub-tabs and restore original title
         tabBarUI?.clearMuxSubTabs(tab.id);
         manager.updateTabTitle(tab.id, "Terminal");
+      } else if (info.windowCount === 1) {
+        // Single window — show as regular tab with window name
+        tabBarUI?.clearMuxSubTabs(tab.id);
+        manager.updateTabTitle(tab.id, info.windowNames[0]!);
       } else {
-        // Update tab title to show mux session
-        manager.updateTabTitle(tab.id, `[mux] ${info.windowCount} windows`);
-        // Render sub-tabs for each mux window
+        // Multiple windows — render as tab group
         const windows = info.windowNames.map((name, i) => ({
           name,
           active: i === info.activeWindow,
@@ -239,6 +241,16 @@ async function main(): Promise<void> {
         tabBarUI?.renderMuxSubTabs(tab.id, windows);
       }
     };
+
+    // Wire mux window tab clicks to window switching
+    if (tabBarUI) {
+      tabBarUI.onMuxWindowClick = (clickedTabId, windowIndex) => {
+        const clickedApp = manager.getTerminalApp(clickedTabId);
+        if (clickedApp) {
+          clickedApp.switchToMuxWindow(windowIndex);
+        }
+      };
+    }
   });
 
   // Clean up notification throttle when tab closes
