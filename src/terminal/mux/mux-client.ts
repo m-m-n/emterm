@@ -13,6 +13,7 @@ export const MuxMessageType = {
   CreatePane: 0x05,
   DestroyPane: 0x07,
   Resize: 0x08,
+  Attach: 0x09,
   Detach: 0x0a,
   SplitPane: 0x11,
   CreateWindow: 0x12,
