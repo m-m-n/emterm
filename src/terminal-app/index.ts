@@ -308,6 +308,15 @@ export class TerminalApp {
       onRestoreFocus: () => this.imeHandler?.focus(),
       onExitScrollback: () => this.exitScrollback(),
       onCopyModeKey: (event: KeyboardEvent) => this.handleCopyModeKey(event),
+      onMuxToggle: () => {
+        if (this.inMuxMode) {
+          this.muxClient?.sendControl(MuxMessageType.Detach, 0)
+            .catch(() => {})
+            .finally(() => this.exitMuxMode());
+        } else {
+          this.startMuxDirect();
+        }
+      },
     };
     this.keyboardHandler = new KeyboardHandler(keyboardContext);
     // Attach to document but check if this tab's container is visible
