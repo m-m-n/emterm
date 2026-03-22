@@ -808,10 +808,7 @@ fn pty_reader_loop(
                             }
                             Err(mpsc::error::TrySendError::Closed(_)) => {
                                 // Channel closed — GUI disconnected
-                                log::info!(
-                                    "Pane {} switching to detached buffering mode",
-                                    pane_id
-                                );
+                                log::info!("Pane {} switching to detached buffering mode", pane_id);
                                 let mut ring = DetachRingBuffer::new(
                                     crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
                                 );

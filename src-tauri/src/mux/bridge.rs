@@ -4,11 +4,16 @@
 //! These Tauri commands act as a bridge, forwarding messages between
 //! the frontend and the daemon's Unix domain socket.
 
+#[cfg(unix)]
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::sync::Arc;
 
+#[cfg(unix)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+#[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(unix)]
 use tokio::sync::Mutex;
 
 use super::ipc::protocol::*;
@@ -17,11 +22,13 @@ use super::ipc::protocol::*;
 ///
 /// Stores split read/write halves separately so the background output
 /// reader task does not block write operations (input, control messages).
+#[cfg(unix)]
 pub struct MuxBridgeState {
     writers: Mutex<HashMap<String, Arc<Mutex<WriteHalf<UnixStream>>>>>,
     readers: Mutex<HashMap<String, Arc<Mutex<ReadHalf<UnixStream>>>>>,
 }
 
+#[cfg(unix)]
 impl MuxBridgeState {
     pub fn new() -> Self {
         Self {
@@ -31,6 +38,25 @@ impl MuxBridgeState {
     }
 }
 
+#[cfg(unix)]
+impl Default for MuxBridgeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Stub state for platforms where mux is not supported.
+#[cfg(not(unix))]
+pub struct MuxBridgeState;
+
+#[cfg(not(unix))]
+impl MuxBridgeState {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(not(unix))]
 impl Default for MuxBridgeState {
     fn default() -> Self {
         Self::new()
@@ -45,27 +71,35 @@ pub async fn mux_connect(
     state: tauri::State<'_, MuxBridgeState>,
     socket_path: String,
 ) -> Result<String, String> {
-    validate_socket_path(&socket_path)?;
+    #[cfg(unix)]
+    {
+        validate_socket_path(&socket_path)?;
 
-    let stream = UnixStream::connect(&socket_path)
-        .await
-        .map_err(|e| format!("Failed to connect to daemon: {}", e))?;
+        let stream = UnixStream::connect(&socket_path)
+            .await
+            .map_err(|e| format!("Failed to connect to daemon: {}", e))?;
 
-    let (read_half, write_half) = tokio::io::split(stream);
-    let conn_id = uuid::Uuid::new_v4().to_string();
+        let (read_half, write_half) = tokio::io::split(stream);
+        let conn_id = uuid::Uuid::new_v4().to_string();
 
-    state
-        .writers
-        .lock()
-        .await
-        .insert(conn_id.clone(), Arc::new(Mutex::new(write_half)));
-    state
-        .readers
-        .lock()
-        .await
-        .insert(conn_id.clone(), Arc::new(Mutex::new(read_half)));
+        state
+            .writers
+            .lock()
+            .await
+            .insert(conn_id.clone(), Arc::new(Mutex::new(write_half)));
+        state
+            .readers
+            .lock()
+            .await
+            .insert(conn_id.clone(), Arc::new(Mutex::new(read_half)));
 
-    Ok(conn_id)
+        Ok(conn_id)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (&state, &socket_path);
+        Err("Mux is not supported on this platform".to_string())
+    }
 }
 
 /// Disconnect from the mux daemon.
@@ -75,9 +109,17 @@ pub async fn mux_disconnect(
     state: tauri::State<'_, MuxBridgeState>,
     conn_id: String,
 ) -> Result<(), String> {
-    state.writers.lock().await.remove(&conn_id);
-    state.readers.lock().await.remove(&conn_id);
-    Ok(())
+    #[cfg(unix)]
+    {
+        state.writers.lock().await.remove(&conn_id);
+        state.readers.lock().await.remove(&conn_id);
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (&state, &conn_id);
+        Err("Mux is not supported on this platform".to_string())
+    }
 }
 
 /// Send a handshake Hello message and receive Welcome response.
@@ -90,72 +132,80 @@ pub async fn mux_handshake(
     state: tauri::State<'_, MuxBridgeState>,
     conn_id: String,
 ) -> Result<Vec<SessionInfo>, String> {
-    // Send Hello via writer
+    #[cfg(unix)]
     {
-        let writers = state.writers.lock().await;
-        let writer = writers
+        // Send Hello via writer
+        {
+            let writers = state.writers.lock().await;
+            let writer = writers
+                .get(&conn_id)
+                .ok_or_else(|| "Connection not found".to_string())?
+                .clone();
+            drop(writers);
+
+            let mut writer = writer.lock().await;
+            let hello = HelloMsg {
+                client_type: ClientType::Gui,
+                protocol_version: PROTOCOL_VERSION,
+            };
+            let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
+            let body = msg.to_frame_body();
+            let len = (body.len() as u32).to_be_bytes();
+            writer
+                .write_all(&len)
+                .await
+                .map_err(|e| format!("Write error: {}", e))?;
+            writer
+                .write_all(&body)
+                .await
+                .map_err(|e| format!("Write error: {}", e))?;
+        }
+
+        // Read Welcome via reader
+        let readers = state.readers.lock().await;
+        let reader = readers
             .get(&conn_id)
-            .ok_or_else(|| "Connection not found".to_string())?
+            .ok_or_else(|| "Reader not found".to_string())?
             .clone();
-        drop(writers);
+        drop(readers);
 
-        let mut writer = writer.lock().await;
-        let hello = HelloMsg {
-            client_type: ClientType::Gui,
-            protocol_version: PROTOCOL_VERSION,
-        };
-        let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
-        let body = msg.to_frame_body();
-        let len = (body.len() as u32).to_be_bytes();
-        writer
-            .write_all(&len)
+        let mut reader = reader.lock().await;
+
+        let mut len_buf = [0u8; 4];
+        reader
+            .read_exact(&mut len_buf)
             .await
-            .map_err(|e| format!("Write error: {}", e))?;
-        writer
-            .write_all(&body)
+            .map_err(|e| format!("Read error: {}", e))?;
+        let frame_len = u32::from_be_bytes(len_buf) as usize;
+        if frame_len > MAX_FRAME_LENGTH {
+            return Err("Frame too large".to_string());
+        }
+
+        let mut frame_buf = vec![0u8; frame_len];
+        reader
+            .read_exact(&mut frame_buf)
             .await
-            .map_err(|e| format!("Write error: {}", e))?;
+            .map_err(|e| format!("Read error: {}", e))?;
+
+        let welcome_msg =
+            MuxMessage::from_frame_body(&frame_buf).ok_or_else(|| "Invalid frame".to_string())?;
+        if welcome_msg.msg_type != MessageType::Welcome {
+            return Err(format!("Expected Welcome, got {:?}", welcome_msg.msg_type));
+        }
+
+        let welcome: WelcomeMsg = welcome_msg
+            .decode_payload()
+            .ok_or_else(|| "Invalid Welcome payload".to_string())?;
+
+        match welcome {
+            WelcomeMsg::Accepted { sessions, .. } => Ok(sessions),
+            WelcomeMsg::Rejected { reason } => Err(format!("Connection rejected: {}", reason)),
+        }
     }
-
-    // Read Welcome via reader
-    let readers = state.readers.lock().await;
-    let reader = readers
-        .get(&conn_id)
-        .ok_or_else(|| "Reader not found".to_string())?
-        .clone();
-    drop(readers);
-
-    let mut reader = reader.lock().await;
-
-    let mut len_buf = [0u8; 4];
-    reader
-        .read_exact(&mut len_buf)
-        .await
-        .map_err(|e| format!("Read error: {}", e))?;
-    let frame_len = u32::from_be_bytes(len_buf) as usize;
-    if frame_len > MAX_FRAME_LENGTH {
-        return Err("Frame too large".to_string());
-    }
-
-    let mut frame_buf = vec![0u8; frame_len];
-    reader
-        .read_exact(&mut frame_buf)
-        .await
-        .map_err(|e| format!("Read error: {}", e))?;
-
-    let welcome_msg =
-        MuxMessage::from_frame_body(&frame_buf).ok_or_else(|| "Invalid frame".to_string())?;
-    if welcome_msg.msg_type != MessageType::Welcome {
-        return Err(format!("Expected Welcome, got {:?}", welcome_msg.msg_type));
-    }
-
-    let welcome: WelcomeMsg = welcome_msg
-        .decode_payload()
-        .ok_or_else(|| "Invalid Welcome payload".to_string())?;
-
-    match welcome {
-        WelcomeMsg::Accepted { sessions, .. } => Ok(sessions),
-        WelcomeMsg::Rejected { reason } => Err(format!("Connection rejected: {}", reason)),
+    #[cfg(not(unix))]
+    {
+        let _ = (&state, &conn_id);
+        Err("Mux is not supported on this platform".to_string())
     }
 }
 
@@ -168,28 +218,36 @@ pub async fn mux_send_input(
     pane_id: u32,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    let writers = state.writers.lock().await;
-    let writer = writers
-        .get(&conn_id)
-        .ok_or_else(|| "Connection not found".to_string())?
-        .clone();
-    drop(writers);
+    #[cfg(unix)]
+    {
+        let writers = state.writers.lock().await;
+        let writer = writers
+            .get(&conn_id)
+            .ok_or_else(|| "Connection not found".to_string())?
+            .clone();
+        drop(writers);
 
-    let msg = MuxMessage::pty_input(pane_id, data);
-    let body = msg.to_frame_body();
-    let len = (body.len() as u32).to_be_bytes();
+        let msg = MuxMessage::pty_input(pane_id, data);
+        let body = msg.to_frame_body();
+        let len = (body.len() as u32).to_be_bytes();
 
-    let mut writer = writer.lock().await;
-    writer
-        .write_all(&len)
-        .await
-        .map_err(|e| format!("Write error: {}", e))?;
-    writer
-        .write_all(&body)
-        .await
-        .map_err(|e| format!("Write error: {}", e))?;
+        let mut writer = writer.lock().await;
+        writer
+            .write_all(&len)
+            .await
+            .map_err(|e| format!("Write error: {}", e))?;
+        writer
+            .write_all(&body)
+            .await
+            .map_err(|e| format!("Write error: {}", e))?;
 
-    Ok(())
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (&state, &conn_id, pane_id, &data);
+        Err("Mux is not supported on this platform".to_string())
+    }
 }
 
 /// Send a control message to the daemon (fire-and-forget).
@@ -206,37 +264,45 @@ pub async fn mux_send_control(
     pane_id: u32,
     payload: Vec<u8>,
 ) -> Result<Option<Vec<u8>>, String> {
-    let mt = MessageType::from_u8(msg_type)
-        .ok_or_else(|| format!("Unknown message type: 0x{:02X}", msg_type))?;
+    #[cfg(unix)]
+    {
+        let mt = MessageType::from_u8(msg_type)
+            .ok_or_else(|| format!("Unknown message type: 0x{:02X}", msg_type))?;
 
-    let writers = state.writers.lock().await;
-    let writer = writers
-        .get(&conn_id)
-        .ok_or_else(|| "Connection not found".to_string())?
-        .clone();
-    drop(writers);
+        let writers = state.writers.lock().await;
+        let writer = writers
+            .get(&conn_id)
+            .ok_or_else(|| "Connection not found".to_string())?
+            .clone();
+        drop(writers);
 
-    let msg = MuxMessage {
-        msg_type: mt,
-        pane_id,
-        payload,
-    };
-    let body = msg.to_frame_body();
-    let len = (body.len() as u32).to_be_bytes();
+        let msg = MuxMessage {
+            msg_type: mt,
+            pane_id,
+            payload,
+        };
+        let body = msg.to_frame_body();
+        let len = (body.len() as u32).to_be_bytes();
 
-    let mut writer = writer.lock().await;
-    writer
-        .write_all(&len)
-        .await
-        .map_err(|e| format!("Write error: {}", e))?;
-    writer
-        .write_all(&body)
-        .await
-        .map_err(|e| format!("Write error: {}", e))?;
+        let mut writer = writer.lock().await;
+        writer
+            .write_all(&len)
+            .await
+            .map_err(|e| format!("Write error: {}", e))?;
+        writer
+            .write_all(&body)
+            .await
+            .map_err(|e| format!("Write error: {}", e))?;
 
-    // NOTE: Response reading is handled by the output stream background task.
-    // Control responses arrive as events via mux_start_output_stream.
-    Ok(None)
+        // NOTE: Response reading is handled by the output stream background task.
+        // Control responses arrive as events via mux_start_output_stream.
+        Ok(None)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (&state, &conn_id, msg_type, pane_id, &payload);
+        Err("Mux is not supported on this platform".to_string())
+    }
 }
 
 /// Start a background task that continuously reads PTY output from the daemon
@@ -255,88 +321,96 @@ pub async fn mux_start_output_stream(
     state: tauri::State<'_, MuxBridgeState>,
     conn_id: String,
 ) -> Result<(), String> {
-    // Take ownership of the reader -- only the background task will use it
-    let reader = {
-        let mut readers = state.readers.lock().await;
-        readers
-            .remove(&conn_id)
-            .ok_or_else(|| "Reader not found".to_string())?
-    };
+    #[cfg(unix)]
+    {
+        // Take ownership of the reader -- only the background task will use it
+        let reader = {
+            let mut readers = state.readers.lock().await;
+            readers
+                .remove(&conn_id)
+                .ok_or_else(|| "Reader not found".to_string())?
+        };
 
-    tokio::spawn(async move {
-        let mut reader = reader.lock().await;
-        loop {
-            let mut len_buf = [0u8; 4];
-            if AsyncReadExt::read_exact(&mut *reader, &mut len_buf)
-                .await
-                .is_err()
-            {
-                break;
-            }
-            let frame_len = u32::from_be_bytes(len_buf) as usize;
-            if frame_len > MAX_FRAME_LENGTH || frame_len == 0 {
-                break;
-            }
+        tokio::spawn(async move {
+            let mut reader = reader.lock().await;
+            loop {
+                let mut len_buf = [0u8; 4];
+                if AsyncReadExt::read_exact(&mut *reader, &mut len_buf)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                let frame_len = u32::from_be_bytes(len_buf) as usize;
+                if frame_len > MAX_FRAME_LENGTH || frame_len == 0 {
+                    break;
+                }
 
-            let mut frame_buf = vec![0u8; frame_len];
-            if AsyncReadExt::read_exact(&mut *reader, &mut frame_buf)
-                .await
-                .is_err()
-            {
-                break;
-            }
+                let mut frame_buf = vec![0u8; frame_len];
+                if AsyncReadExt::read_exact(&mut *reader, &mut frame_buf)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
 
-            if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
-                match msg.msg_type {
-                    MessageType::PtyOutput => {
-                        use tauri::Emitter;
-                        let _ = app.emit(
-                            "mux-pty-output",
-                            MuxPtyOutputEvent {
-                                pane_id: msg.pane_id,
-                                data: msg.payload,
-                            },
-                        );
-                    }
-                    MessageType::PtyExited => {
-                        use tauri::Emitter;
-                        let exit_msg: Option<PtyExitedMsg> = msg.decode_payload();
-                        let _ = app.emit(
-                            "mux-pty-exited",
-                            MuxPtyExitedEvent {
-                                pane_id: msg.pane_id,
-                                exit_code: exit_msg.and_then(|m| m.exit_code),
-                            },
-                        );
-                    }
-                    MessageType::PaneCreated => {
-                        use tauri::Emitter;
-                        let _ = app.emit(
-                            "mux-pane-created",
-                            MuxPaneCreatedEvent {
-                                pane_id: msg.pane_id,
-                            },
-                        );
-                    }
-                    MessageType::Detached => {
-                        use tauri::Emitter;
-                        let _ = app.emit("mux-detached", ());
-                        break; // Daemon closed connection
-                    }
-                    _ => {
-                        log::debug!(
-                            "Output stream ignoring {:?} for pane {}",
-                            msg.msg_type,
-                            msg.pane_id
-                        );
+                if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
+                    match msg.msg_type {
+                        MessageType::PtyOutput => {
+                            use tauri::Emitter;
+                            let _ = app.emit(
+                                "mux-pty-output",
+                                MuxPtyOutputEvent {
+                                    pane_id: msg.pane_id,
+                                    data: msg.payload,
+                                },
+                            );
+                        }
+                        MessageType::PtyExited => {
+                            use tauri::Emitter;
+                            let exit_msg: Option<PtyExitedMsg> = msg.decode_payload();
+                            let _ = app.emit(
+                                "mux-pty-exited",
+                                MuxPtyExitedEvent {
+                                    pane_id: msg.pane_id,
+                                    exit_code: exit_msg.and_then(|m| m.exit_code),
+                                },
+                            );
+                        }
+                        MessageType::PaneCreated => {
+                            use tauri::Emitter;
+                            let _ = app.emit(
+                                "mux-pane-created",
+                                MuxPaneCreatedEvent {
+                                    pane_id: msg.pane_id,
+                                },
+                            );
+                        }
+                        MessageType::Detached => {
+                            use tauri::Emitter;
+                            let _ = app.emit("mux-detached", ());
+                            break; // Daemon closed connection
+                        }
+                        _ => {
+                            log::debug!(
+                                "Output stream ignoring {:?} for pane {}",
+                                msg.msg_type,
+                                msg.pane_id
+                            );
+                        }
                     }
                 }
             }
-        }
-        log::info!("Mux output stream ended for connection");
-    });
+            log::info!("Mux output stream ended for connection");
+        });
 
-    Ok(())
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (&app, &state, &conn_id);
+        Err("Mux is not supported on this platform".to_string())
+    }
 }
 
 /// Pane created event emitted to the frontend.
@@ -407,7 +481,7 @@ fn allowed_socket_dirs() -> Vec<std::path::PathBuf> {
     #[cfg(unix)]
     {
         if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-            dirs.push(std::path::PathBuf::from(runtime_dir).join("emterm").into());
+            dirs.push(std::path::PathBuf::from(runtime_dir).join("emterm"));
         }
         if let Ok(home) = std::env::var("HOME") {
             dirs.push(

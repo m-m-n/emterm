@@ -4,12 +4,18 @@
 //! and manages PTY sessions. Auto-exits when all sessions end.
 
 use std::path::PathBuf;
+
+#[cfg(unix)]
 use std::sync::Arc;
 
+#[cfg(unix)]
 use tokio::net::UnixListener;
+#[cfg(unix)]
 use tokio::sync::Mutex;
 
+#[cfg(unix)]
 use super::ipc::connection::handle_connection;
+#[cfg(unix)]
 use super::session::manager::SessionManager;
 
 /// Get the socket path for the mux daemon.
@@ -76,6 +82,7 @@ pub fn cleanup_stale_socket(path: &std::path::Path) -> std::io::Result<()> {
 ///
 /// This is the main entry point for `emterm mux --daemon`.
 /// It blocks until all sessions end or SIGTERM is received.
+#[cfg(unix)]
 pub async fn run_daemon() -> anyhow::Result<()> {
     let sock_path = socket_path();
 
@@ -160,7 +167,16 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run the mux daemon.
+///
+/// Not yet supported on Windows. Returns an error with a clear message.
+#[cfg(not(unix))]
+pub async fn run_daemon() -> anyhow::Result<()> {
+    anyhow::bail!("Mux daemon is not yet supported on this platform. Linux is required.");
+}
+
 /// Close all PTYs in all sessions for graceful daemon shutdown.
+#[cfg(unix)]
 async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager>>) {
     let mut mgr = session_manager.lock().await;
     let mut pane_count = 0u32;
@@ -183,6 +199,8 @@ async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[allow(unused_imports)]
+    use std::path::PathBuf;
 
     #[test]
     fn test_socket_path_not_empty() {
@@ -204,6 +222,7 @@ mod tests {
         assert!(cleanup_stale_socket(&path).is_ok());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_graceful_shutdown_marks_all_panes_exited() {
         use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
@@ -259,6 +278,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_graceful_shutdown_skips_already_exited() {
         use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
@@ -296,6 +316,7 @@ mod tests {
         assert!(window.panes.get(&11).unwrap().exited);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_graceful_shutdown_empty_manager() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
