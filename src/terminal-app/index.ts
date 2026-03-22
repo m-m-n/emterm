@@ -784,18 +784,11 @@ export class TerminalApp {
     // Try to restore from detached snapshot, otherwise create fresh grid
     const detachedKey = `pane-${paneId}`;
     const detachedSnapshot = this.muxDetachedGrids.get(detachedKey);
-    if (detachedSnapshot && this.state) {
-      const restored = this.state.restoreFromSnapshot(detachedSnapshot);
-      if (restored) {
-        this.registerCoreCallbacks(this.state.getActiveCore());
-        console.info(`[INFO][FRONTEND] Restored detached grid for window ${newIdx} (key=${detachedKey})`);
-      } else {
-        this.createFreshMuxGrid();
-      }
-      this.muxDetachedGrids.delete(detachedKey);
-    } else {
-      this.createFreshMuxGrid();
-    }
+    // Shadow parser on the daemon side now handles screen restoration via PtyOutput.
+    // Skip slow frontend snapshot restore (WASM deserialization takes ~3s in debug).
+    // Just create a fresh grid — the daemon's screen data will populate it.
+    this.createFreshMuxGrid();
+    this.muxDetachedGrids.delete(detachedKey);
 
     // Send initial resize so daemon PTY matches actual terminal dimensions
     this.sendMuxPaneResize(paneId);
@@ -930,7 +923,6 @@ export class TerminalApp {
     if (this.inMuxMode) return;
     this.inMuxMode = true;
 
-    const t0 = performance.now();
     console.info(`[INFO][FRONTEND] Entering mux mode: socket=${socketPath}, session=${sessionId}`);
 
     // Connect to daemon
@@ -938,7 +930,7 @@ export class TerminalApp {
     try {
       this.muxClient = new MuxClient();
       muxSessions = await this.muxClient.connect(socketPath);
-      console.info(`[INFO][FRONTEND] Mux connected: ${muxSessions.length} session(s) [${(performance.now() - t0).toFixed(0)}ms]`);
+      console.info(`[INFO][FRONTEND] Mux connected: ${muxSessions.length} session(s)`);
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux connect failed:", e);
       this.inMuxMode = false;
@@ -989,7 +981,7 @@ export class TerminalApp {
     // Start output stream
     try {
       await this.muxClient.startOutputStream();
-      console.info(`[INFO][FRONTEND] Mux output stream started [${(performance.now() - t0).toFixed(0)}ms]`);
+      // Output stream ready
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux start output stream failed:", e);
     }
@@ -1034,7 +1026,7 @@ export class TerminalApp {
       // Reattach: send Attach message to daemon AFTER output stream is ready.
       // Daemon will respond with PaneCreated + buffered output for existing panes.
       this.muxPendingWindowCount = existingPanes;
-      console.info(`[INFO][FRONTEND] Reattaching to ${existingPanes} existing pane(s) [${(performance.now() - t0).toFixed(0)}ms]`);
+      console.info(`[INFO][FRONTEND] Reattaching to ${existingPanes} existing pane(s)`);
       const sessionId = muxSessions[0]?.id ?? 1;
       // AttachMsg payload: session_id as u32 LE (bincode serializes u32 as 4 bytes LE)
       const attachPayload = new Uint8Array(4);
@@ -1083,24 +1075,8 @@ export class TerminalApp {
       this.ptyHandlerHandle.suppressOriginalPty = false;
     }
 
-    // Save ALL pane grid snapshots for potential reattach (keyed by pane-{id})
-    if (this.state && this.muxPaneIds.length > 0) {
-      // Save the active pane's grid (currently in state)
-      const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
-      if (activePaneId != null) {
-        try {
-          const snapshot = this.state.getWasmCore().wasm_snapshot_to_bytes();
-          this.muxDetachedGrids.set(`pane-${activePaneId}`, snapshot);
-        } catch { /* ignore */ }
-      }
-      // Save inactive panes' grids (stored in muxPaneGrids)
-      for (const [paneId, grid] of this.muxPaneGrids) {
-        try {
-          const s = grid.core.wasm_snapshot_to_bytes();
-          this.muxDetachedGrids.set(`pane-${paneId}`, s);
-        } catch { /* ignore */ }
-      }
-    }
+    // Screen restoration is now handled by the daemon's shadow VT100 parser.
+    // No need to save frontend snapshots (WASM serialization/deserialization is slow).
 
     // Restore original grid
     if (this.muxOriginalGrid && this.state) {

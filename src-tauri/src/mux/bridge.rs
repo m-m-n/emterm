@@ -355,6 +355,12 @@ pub async fn mux_start_output_stream(
                 }
 
                 if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
+                    log::info!(
+                        "Bridge output stream: received {:?} for pane {} ({} bytes)",
+                        msg.msg_type,
+                        msg.pane_id,
+                        msg.payload.len()
+                    );
                     match msg.msg_type {
                         MessageType::PtyOutput => {
                             use tauri::Emitter;
