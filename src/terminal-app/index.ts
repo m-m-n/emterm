@@ -2,6 +2,7 @@
  * Terminal application main class
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import {
   calculateTerminalSize,
   measureCharacterSize,
@@ -903,11 +904,24 @@ export class TerminalApp {
     });
   }
 
+  /** Start or attach to mux session directly via Tauri command.
+   *  Bypasses the CLI → OSC → PTY parser roundtrip for instant response. */
+  async startMuxDirect(): Promise<void> {
+    if (this.inMuxMode) return;
+    try {
+      const socketPath = await invoke<string>("mux_start_daemon");
+      await this.enterMuxMode(socketPath, 0);
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Direct mux start failed:", e);
+    }
+  }
+
   /** Enter mux mode -- connect to daemon, enable prefix key, show status bar. */
   async enterMuxMode(socketPath: string, sessionId: number): Promise<void> {
     if (this.inMuxMode) return;
     this.inMuxMode = true;
 
+    const t0 = performance.now();
     console.info(`[INFO][FRONTEND] Entering mux mode: socket=${socketPath}, session=${sessionId}`);
 
     // Connect to daemon
@@ -915,7 +929,7 @@ export class TerminalApp {
     try {
       this.muxClient = new MuxClient();
       muxSessions = await this.muxClient.connect(socketPath);
-      console.info(`[INFO][FRONTEND] Mux connected: ${muxSessions.length} session(s)`);
+      console.info(`[INFO][FRONTEND] Mux connected: ${muxSessions.length} session(s) [${(performance.now() - t0).toFixed(0)}ms]`);
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux connect failed:", e);
       this.inMuxMode = false;
@@ -966,6 +980,7 @@ export class TerminalApp {
     // Start output stream
     try {
       await this.muxClient.startOutputStream();
+      console.info(`[INFO][FRONTEND] Mux output stream started [${(performance.now() - t0).toFixed(0)}ms]`);
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux start output stream failed:", e);
     }
@@ -1010,7 +1025,7 @@ export class TerminalApp {
       // Reattach: send Attach message to daemon AFTER output stream is ready.
       // Daemon will respond with PaneCreated + buffered output for existing panes.
       this.muxPendingWindowCount = existingPanes;
-      console.info(`[INFO][FRONTEND] Reattaching to ${existingPanes} existing pane(s)`);
+      console.info(`[INFO][FRONTEND] Reattaching to ${existingPanes} existing pane(s) [${(performance.now() - t0).toFixed(0)}ms]`);
       const sessionId = muxSessions[0]?.id ?? 1;
       // AttachMsg payload: session_id as u32 LE (bincode serializes u32 as 4 bytes LE)
       const attachPayload = new Uint8Array(4);
