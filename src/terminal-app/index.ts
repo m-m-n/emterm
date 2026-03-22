@@ -772,17 +772,17 @@ export class TerminalApp {
     console.info(`[INFO][FRONTEND] Mux pane created: id=${paneId}, window=${newIdx}`);
 
     // Try to restore from detached snapshot, otherwise create fresh grid
-    const detachedKey = newIdx === 0 ? "last-session" : null;
-    const detachedSnapshot = detachedKey ? this.muxDetachedGrids.get(detachedKey) : null;
+    const detachedKey = newIdx === 0 ? "last-session" : `pane-${paneId}`;
+    const detachedSnapshot = this.muxDetachedGrids.get(detachedKey);
     if (detachedSnapshot && this.state) {
       const restored = this.state.restoreFromSnapshot(detachedSnapshot);
       if (restored) {
         this.registerCoreCallbacks(this.state.getActiveCore());
-        console.info(`[INFO][FRONTEND] Restored detached grid for window ${newIdx}`);
+        console.info(`[INFO][FRONTEND] Restored detached grid for window ${newIdx} (key=${detachedKey})`);
       } else {
         this.createFreshMuxGrid();
       }
-      this.muxDetachedGrids.delete(detachedKey!);
+      this.muxDetachedGrids.delete(detachedKey);
     } else {
       this.createFreshMuxGrid();
     }
@@ -793,6 +793,13 @@ export class TerminalApp {
     // Ensure canvas reflects restored/fresh grid (without this, canvas stays blank)
     if (this.renderer && this.state) {
       this.renderer.forceRender(this.state);
+    }
+
+    // After all pending windows are received during reattach, switch to first window
+    if (this.muxPendingWindowCount === 0 && this.muxWindows.length > 1 && this.activeMuxWindowIndex !== 0) {
+      const prev = this.activeMuxWindowIndex;
+      this.activeMuxWindowIndex = 0;
+      this.switchMuxWindow(prev);
     }
 
     this.emitMuxStateChange();
@@ -925,7 +932,11 @@ export class TerminalApp {
           this.ptyHandlerHandle.injectData(data);
         }
       } else {
-        console.debug(`[DEBUG][FRONTEND] Mux output filtered: pane=${paneId} (active=${activePaneId}, paneIds=${JSON.stringify(this.muxPaneIds)}, activeIdx=${this.activeMuxWindowIndex})`);
+        // Route to inactive pane's saved grid (preserves ring buffer replay data)
+        const savedGrid = this.muxPaneGrids.get(paneId);
+        if (savedGrid) {
+          savedGrid.core.process_pty_data(data);
+        }
       }
     });
 
