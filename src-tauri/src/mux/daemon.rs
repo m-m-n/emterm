@@ -103,9 +103,10 @@ pub async fn run_daemon() -> anyhow::Result<()> {
 
     let session_manager = Arc::new(Mutex::new(SessionManager::new()));
 
-    // Handle SIGTERM for graceful shutdown
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    #[cfg(unix)]
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
     loop {
         #[cfg(unix)]
@@ -124,26 +125,59 @@ pub async fn run_daemon() -> anyhow::Result<()> {
                 log::info!("SIGTERM received, shutting down");
                 break;
             }
+            _ = sigint.recv() => {
+                log::info!("SIGINT received, shutting down");
+                break;
+            }
         }
 
         #[cfg(windows)]
-        {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    tokio::spawn(handle_connection(stream, session_manager.clone()));
+        tokio::select! {
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, _addr)) => {
+                        tokio::spawn(handle_connection(stream, session_manager.clone()));
+                    }
+                    Err(e) => {
+                        log::error!("Accept error: {}", e);
+                    }
                 }
-                Err(e) => {
-                    log::error!("Accept error: {}", e);
-                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                log::info!("Ctrl+C received, shutting down");
+                break;
             }
         }
     }
+
+    // Graceful shutdown: close all PTYs so shell processes terminate
+    graceful_shutdown(&session_manager).await;
 
     // Cleanup socket file
     let _ = std::fs::remove_file(&sock_path);
     log::info!("Daemon shutdown complete");
 
     Ok(())
+}
+
+/// Close all PTYs in all sessions for graceful daemon shutdown.
+async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager>>) {
+    let mut mgr = session_manager.lock().await;
+    let mut pane_count = 0u32;
+    let session_ids: Vec<u32> = mgr.sessions_iter().map(|s| s.id).collect();
+    for session_id in session_ids {
+        if let Some(session) = mgr.get_session_mut(session_id) {
+            for window in session.windows.values_mut() {
+                for pane in window.panes.values_mut() {
+                    if !pane.exited {
+                        pane.mark_exited();
+                        pane_count += 1;
+                    }
+                }
+            }
+        }
+    }
+    log::info!("Graceful shutdown: closed {} PTY(s)", pane_count);
 }
 
 #[cfg(test)]
@@ -168,5 +202,104 @@ mod tests {
     fn test_cleanup_stale_nonexistent() {
         let path = PathBuf::from("/tmp/emterm-test-nonexistent.sock");
         assert!(cleanup_stale_socket(&path).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_marks_all_panes_exited() {
+        use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        use tokio::sync::mpsc;
+
+        fn make_test_pane(id: u32) -> MuxPane {
+            let (tx, _rx) = mpsc::channel(1);
+            let target: SharedOutputTarget =
+                StdArc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+            MuxPane::new_test(id, 80, 24, target)
+        }
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        // Set up two sessions with panes
+        {
+            let mut m = mgr.lock().await;
+            let s1 = m.create_session("s1".to_string());
+            let w1 = m.create_window(s1, "w1".to_string()).unwrap();
+            let session = m.get_session_mut(s1).unwrap();
+            session
+                .windows
+                .get_mut(&w1)
+                .unwrap()
+                .add_pane(make_test_pane(10));
+            session
+                .windows
+                .get_mut(&w1)
+                .unwrap()
+                .add_pane(make_test_pane(11));
+
+            let s2 = m.create_session("s2".to_string());
+            let w2 = m.create_window(s2, "w2".to_string()).unwrap();
+            let session2 = m.get_session_mut(s2).unwrap();
+            session2
+                .windows
+                .get_mut(&w2)
+                .unwrap()
+                .add_pane(make_test_pane(20));
+        }
+
+        graceful_shutdown(&mgr).await;
+
+        // Verify all panes are marked exited
+        let m = mgr.lock().await;
+        for session in m.sessions_iter() {
+            for window in session.windows.values() {
+                for pane in window.panes.values() {
+                    assert!(pane.exited, "pane {} should be exited", pane.id);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_skips_already_exited() {
+        use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        use tokio::sync::mpsc;
+
+        fn make_test_pane(id: u32) -> MuxPane {
+            let (tx, _rx) = mpsc::channel(1);
+            let target: SharedOutputTarget =
+                StdArc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+            MuxPane::new_test(id, 80, 24, target)
+        }
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        {
+            let mut m = mgr.lock().await;
+            let s1 = m.create_session("s1".to_string());
+            let w1 = m.create_window(s1, "w1".to_string()).unwrap();
+            let session = m.get_session_mut(s1).unwrap();
+            let window = session.windows.get_mut(&w1).unwrap();
+            window.add_pane(make_test_pane(10));
+            window.add_pane(make_test_pane(11));
+            // Mark one pane as already exited
+            window.panes.get_mut(&10).unwrap().mark_exited();
+        }
+
+        // Should not panic; should handle already-exited panes gracefully
+        graceful_shutdown(&mgr).await;
+
+        let m = mgr.lock().await;
+        let session = m.sessions_iter().next().unwrap();
+        let window = session.windows.values().next().unwrap();
+        assert!(window.panes.get(&10).unwrap().exited);
+        assert!(window.panes.get(&11).unwrap().exited);
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_empty_manager() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        // Should not panic on empty manager
+        graceful_shutdown(&mgr).await;
     }
 }
