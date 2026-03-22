@@ -193,8 +193,15 @@ fn main() {
                             std::process::exit(1);
                         }
                     }
+                    Some(("attach", sub)) => {
+                        let session = sub.get_one::<String>("session").map(|s| s.as_str());
+                        if let Err(e) = app_lib::mux::cli::execute_attach(session) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
                     _ => {
-                        // Default: start/attach
+                        // Default: start new session
                         if let Err(e) = app_lib::mux::cli::execute_mux() {
                             eprintln!("Error: {}", e);
                             std::process::exit(1);
