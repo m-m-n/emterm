@@ -110,6 +110,9 @@ pub async fn run_daemon() -> anyhow::Result<()> {
 
     let session_manager = Arc::new(Mutex::new(SessionManager::new()));
 
+    // Shutdown signal: sent by handle_destroy_pane/handle_destroy_window when all sessions empty
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     #[cfg(unix)]
@@ -121,7 +124,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone()));
+                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
@@ -136,6 +139,12 @@ pub async fn run_daemon() -> anyhow::Result<()> {
                 log::info!("SIGINT received, shutting down");
                 break;
             }
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    log::info!("All sessions empty, auto-shutting down");
+                    break;
+                }
+            }
         }
 
         #[cfg(windows)]
@@ -143,7 +152,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone()));
+                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
