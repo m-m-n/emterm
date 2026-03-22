@@ -597,7 +597,16 @@ export class TabBarUI {
     const tabEl = this.tabElements.get(tabId);
     if (!tabEl) return;
 
-    // Find or create sub-tab container
+    // Find or create compact label (shown when tab is inactive)
+    let compactLabel = tabEl.querySelector(".mux-compact-label") as HTMLElement;
+    if (!compactLabel) {
+      compactLabel = document.createElement("span");
+      compactLabel.className = "mux-compact-label";
+      tabEl.appendChild(compactLabel);
+    }
+    compactLabel.textContent = `(${windows.length})`;
+
+    // Find or create sub-tab container (shown when tab is active via CSS)
     let subTabContainer = tabEl.querySelector(".mux-sub-tabs") as HTMLElement;
     if (!subTabContainer) {
       subTabContainer = document.createElement("div");
@@ -624,6 +633,8 @@ export class TabBarUI {
     if (!tabEl) return;
     const subTabContainer = tabEl.querySelector(".mux-sub-tabs");
     if (subTabContainer) subTabContainer.remove();
+    const compactLabel = tabEl.querySelector(".mux-compact-label");
+    if (compactLabel) compactLabel.remove();
   }
 
   /**

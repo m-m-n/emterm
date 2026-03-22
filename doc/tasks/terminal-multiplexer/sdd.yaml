@@ -84,7 +84,7 @@ requirements:
   FR8:
     title: Window Management
     status: ok
-    note: "Create/switch/rename/close/destroy all implemented. Tab bar sub-tabs wired. Expand/compact animation not yet implemented."
+    note: "Complete: CRUD, sub-tabs, expand/compact CSS transition animation."
     tasks: [Phase4]
     tests: [TS-17]
   FR9:

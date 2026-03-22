@@ -239,6 +239,31 @@
   margin-left: 8px;
   position: relative;
   z-index: 1;
+  overflow: hidden;
+  max-width: 0;
+  opacity: 0;
+  transition: max-width 0.3s ease, opacity 0.2s ease;
+}
+
+/* Expand sub-tabs when parent tab is active */
+.active .mux-sub-tabs {
+  max-width: 600px;
+  opacity: 1;
+}
+
+/* Compact label shown when tab is inactive */
+.mux-compact-label {
+  font-size: 11px;
+  margin-left: 4px;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+
+/* Hide compact label when tab is active (sub-tabs shown instead) */
+.active .mux-compact-label {
+  opacity: 0;
+  width: 0;
+  overflow: hidden;
 }
 
 .mux-sub-tab {
