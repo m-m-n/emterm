@@ -814,7 +814,6 @@ fn pty_reader_loop(
                 // Feed shadow parser for screen state tracking (for restoration on reattach)
                 shadow_parser.lock().unwrap().process(data);
 
-                let data = data.to_vec();
                 // Lock briefly to try non-blocking send or clone the sender.
                 // IMPORTANT: release lock before blocking_send to avoid deadlock
                 // with session_manager lock held by collect_reattach_data.
@@ -822,9 +821,10 @@ fn pty_reader_loop(
                     let mut target = output_target.lock().unwrap();
                     match &mut *target {
                         PaneOutputTarget::Connected(tx) => {
+                            // Single allocation: data owned by PtyOutputChunk
                             let chunk = PtyOutputChunk {
                                 pane_id,
-                                data: data.clone(),
+                                data: data.to_vec(),
                             };
                             match tx.try_send(chunk) {
                                 Ok(()) => None, // sent successfully
@@ -837,14 +837,14 @@ fn pty_reader_loop(
                                     let mut ring = DetachRingBuffer::new(
                                         crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
                                     );
-                                    ring.write(&data);
+                                    ring.write(data);
                                     *target = PaneOutputTarget::Detached(ring);
                                     Some(Err(()))
                                 }
                             }
                         }
                         PaneOutputTarget::Detached(ring) => {
-                            ring.write(&data);
+                            ring.write(data);
                             None
                         }
                     }
@@ -858,7 +858,7 @@ fn pty_reader_loop(
                         let mut target = output_target.lock().unwrap();
                         let mut ring =
                             DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-                        ring.write(&data);
+                        ring.write(data);
                         *target = PaneOutputTarget::Detached(ring);
                     }
                 }
