@@ -175,6 +175,11 @@ pub async fn handle_connection(
         }
     }
 
+    // Switch all panes in the active session to detached buffering mode.
+    // This prevents pty_reader_loop from racing with the next connection's
+    // collect_reattach_data when the output_target is still Connected(dead_tx).
+    detach_session_panes(&session_manager, active_session_id).await;
+
     log::info!("Client disconnected");
 }
 
@@ -857,6 +862,180 @@ fn pty_reader_loop(
                 log::info!("PTY reader error for pane {}: {}", pane_id, e);
                 break;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+    use std::sync::Mutex as StdMutex;
+
+    fn make_test_pane_with_target(
+        id: u32,
+        output_target: SharedOutputTarget,
+    ) -> MuxPane {
+        MuxPane::new_test(id, 80, 24, output_target)
+    }
+
+    /// Test: collect_reattach_data returns entries for 2 panes in 2 windows.
+    /// Simulates the reattach scenario where both panes are in Connected(dead_tx) state.
+    #[tokio::test]
+    async fn test_collect_reattach_data_two_windows_connected_dead() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        // Set up: 1 session, 2 windows, each with 1 pane (Connected to dead channels)
+        let (dead_tx1, _dead_rx1) = mpsc::channel::<PtyOutputChunk>(1);
+        let (dead_tx2, _dead_rx2) = mpsc::channel::<PtyOutputChunk>(1);
+
+        // Drop receivers to simulate dead channels
+        drop(_dead_rx1);
+        drop(_dead_rx2);
+
+        let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx1)));
+        let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx2)));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let w1 = m.create_window(session_id, "shell".to_string()).unwrap();
+            let w2 = m.create_window(session_id, "shell".to_string()).unwrap();
+
+            let pane1 = make_test_pane_with_target(1, target1);
+            let pane2 = make_test_pane_with_target(2, target2);
+
+            let session = m.get_session_mut(session_id).unwrap();
+            session.windows.get_mut(&w1).unwrap().add_pane(pane1);
+            session.windows.get_mut(&w2).unwrap().add_pane(pane2);
+        }
+
+        // Verify session has 2 panes
+        {
+            let m = mgr.lock().await;
+            let session = m.get_session(session_id).unwrap();
+            assert_eq!(session.pane_count(), 2, "Session should have 2 panes");
+            assert_eq!(session.window_count(), 2, "Session should have 2 windows");
+        }
+
+        // Create new channel for reattach
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+
+        // Call collect_reattach_data
+        let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
+
+        // CRITICAL: Must return 2 entries
+        assert_eq!(data.len(), 2, "collect_reattach_data should return 2 entries for 2 panes");
+
+        // Verify pane IDs
+        let mut pane_ids: Vec<u32> = data.iter().map(|(id, _)| *id).collect();
+        pane_ids.sort();
+        assert_eq!(pane_ids, vec![1, 2], "Should contain pane IDs 1 and 2");
+
+        // Verify both have empty buffers (were Connected, not Detached)
+        for (_, buf) in &data {
+            assert!(buf.is_empty(), "Connected panes should have empty buffers");
+        }
+    }
+
+    /// Test: collect_reattach_data returns entries for panes in Detached state.
+    #[tokio::test]
+    async fn test_collect_reattach_data_two_windows_detached() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        let mut ring1 = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
+        ring1.write(b"hello from pane 1");
+        let mut ring2 = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
+        ring2.write(b"hello from pane 2");
+
+        let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring1)));
+        let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring2)));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let w1 = m.create_window(session_id, "shell".to_string()).unwrap();
+            let w2 = m.create_window(session_id, "shell".to_string()).unwrap();
+
+            let pane1 = make_test_pane_with_target(1, target1);
+            let pane2 = make_test_pane_with_target(2, target2);
+
+            let session = m.get_session_mut(session_id).unwrap();
+            session.windows.get_mut(&w1).unwrap().add_pane(pane1);
+            session.windows.get_mut(&w2).unwrap().add_pane(pane2);
+        }
+
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+        let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
+
+        assert_eq!(data.len(), 2, "collect_reattach_data should return 2 entries");
+
+        // Verify both have buffered data
+        for (_, buf) in &data {
+            assert!(!buf.is_empty(), "Detached panes should have buffered data");
+        }
+    }
+
+    /// Test: collect_reattach_data skips exited panes.
+    #[tokio::test]
+    async fn test_collect_reattach_data_skips_exited() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        let (dead_tx, _) = mpsc::channel::<PtyOutputChunk>(1);
+        let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx.clone())));
+        let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx)));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let w1 = m.create_window(session_id, "shell".to_string()).unwrap();
+            let w2 = m.create_window(session_id, "shell".to_string()).unwrap();
+
+            let pane1 = make_test_pane_with_target(1, target1);
+            let mut pane2 = make_test_pane_with_target(2, target2);
+            pane2.mark_exited(); // Mark pane 2 as exited
+
+            let session = m.get_session_mut(session_id).unwrap();
+            session.windows.get_mut(&w1).unwrap().add_pane(pane1);
+            session.windows.get_mut(&w2).unwrap().add_pane(pane2);
+        }
+
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+        let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
+
+        assert_eq!(data.len(), 1, "Should only return 1 entry (pane 2 is exited)");
+        assert_eq!(data[0].0, 1, "Only pane 1 should be included");
+    }
+
+    /// Test: session_list reports correct pane_count for multi-window session.
+    #[tokio::test]
+    async fn test_session_list_pane_count_multi_window() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        {
+            let mut m = mgr.lock().await;
+            let session_id = m.create_session("default".to_string());
+            let w1 = m.create_window(session_id, "shell".to_string()).unwrap();
+            let w2 = m.create_window(session_id, "shell".to_string()).unwrap();
+
+            let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+            let t1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx.clone())));
+            let t2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+
+            let pane1 = make_test_pane_with_target(1, t1);
+            let pane2 = make_test_pane_with_target(2, t2);
+
+            let session = m.get_session_mut(session_id).unwrap();
+            session.windows.get_mut(&w1).unwrap().add_pane(pane1);
+            session.windows.get_mut(&w2).unwrap().add_pane(pane2);
+
+            let list = m.session_list();
+            assert_eq!(list.len(), 1);
+            assert_eq!(list[0].pane_count, 2, "Session should report 2 panes");
+            assert_eq!(list[0].window_count, 2, "Session should report 2 windows");
         }
     }
 }

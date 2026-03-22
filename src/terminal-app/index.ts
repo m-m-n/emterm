@@ -1211,8 +1211,10 @@ export class TerminalApp {
 
     switch (action.type) {
       case "detach":
-        this.sendMuxControl(MuxMessageType.Detach, 0);
-        this.exitMuxMode();
+        // Await Detach send before disconnecting to avoid race with disconnect()
+        this.muxClient?.sendControl(MuxMessageType.Detach, 0)
+          .catch(() => {})
+          .finally(() => this.exitMuxMode());
         break;
       case "new-window": {
         // Actual pane ID will arrive via PaneCreated event
