@@ -19,7 +19,7 @@ use super::protocol::*;
 use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget,
+    MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget, SharedShadowParser,
 };
 
 /// Handshake timeout: client must send Hello within this duration.
@@ -337,11 +337,12 @@ fn register_pane_and_start_reader(
         spawned.writer,
         spawned.master,
     );
+    let shadow_parser = pane.shadow_parser.clone();
     window.add_pane(pane);
 
     let reader = spawned.reader;
     std::thread::spawn(move || {
-        pty_reader_loop(pane_id, reader, output_target);
+        pty_reader_loop(pane_id, reader, output_target, shadow_parser);
     });
 
     Some(pane_id)
@@ -651,8 +652,16 @@ async fn collect_reattach_data(
                 if pane.exited {
                     continue;
                 }
+
+                // Get screen restoration data from shadow parser
+                let screen_data = {
+                    let parser = pane.shadow_parser.lock().unwrap();
+                    parser.screen().contents_formatted()
+                };
+
+                // Get ring buffer data from detached panes
                 let mut target = pane.output_target.lock().unwrap();
-                let buffered = if let PaneOutputTarget::Detached(ref mut ring) = *target {
+                let ring_data = if let PaneOutputTarget::Detached(ref mut ring) = *target {
                     let buf = ring.read_all();
                     ring.clear();
                     buf
@@ -660,7 +669,15 @@ async fn collect_reattach_data(
                     Vec::new()
                 };
                 *target = PaneOutputTarget::Connected(pane_output_tx.clone());
-                data.push((pane.id, buffered));
+
+                // Combine: reset screen + shadow parser contents + ring buffer replay
+                let mut combined = Vec::with_capacity(screen_data.len() + ring_data.len() + 10);
+                // Reset: clear screen + home cursor
+                combined.extend_from_slice(b"\x1b[H\x1b[2J");
+                combined.extend_from_slice(&screen_data);
+                combined.extend_from_slice(&ring_data);
+
+                data.push((pane.id, combined));
             }
         }
     }
@@ -775,6 +792,7 @@ fn pty_reader_loop(
     pane_id: u32,
     mut reader: Box<dyn Read + Send>,
     output_target: SharedOutputTarget,
+    shadow_parser: SharedShadowParser,
 ) {
     let mut buf = [0u8; 65536];
     loop {
@@ -792,7 +810,11 @@ fn pty_reader_loop(
                 break;
             }
             Ok(n) => {
-                let data = buf[..n].to_vec();
+                let data = &buf[..n];
+                // Feed shadow parser for screen state tracking (for restoration on reattach)
+                shadow_parser.lock().unwrap().process(data);
+
+                let data = data.to_vec();
                 // Lock briefly to try non-blocking send or clone the sender.
                 // IMPORTANT: release lock before blocking_send to avoid deadlock
                 // with session_manager lock held by collect_reattach_data.
@@ -834,9 +856,8 @@ fn pty_reader_loop(
                     if tx.blocking_send(chunk).is_err() {
                         log::info!("Pane {} switching to detached buffering mode", pane_id);
                         let mut target = output_target.lock().unwrap();
-                        let mut ring = DetachRingBuffer::new(
-                            crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-                        );
+                        let mut ring =
+                            DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
                         ring.write(&data);
                         *target = PaneOutputTarget::Detached(ring);
                     }
@@ -856,10 +877,7 @@ mod tests {
     use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
     use std::sync::Mutex as StdMutex;
 
-    fn make_test_pane_with_target(
-        id: u32,
-        output_target: SharedOutputTarget,
-    ) -> MuxPane {
+    fn make_test_pane_with_target(id: u32, output_target: SharedOutputTarget) -> MuxPane {
         MuxPane::new_test(id, 80, 24, output_target)
     }
 
@@ -877,8 +895,10 @@ mod tests {
         drop(_dead_rx1);
         drop(_dead_rx2);
 
-        let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx1)));
-        let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx2)));
+        let target1: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx1)));
+        let target2: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx2)));
 
         let session_id;
         {
@@ -910,16 +930,27 @@ mod tests {
         let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
 
         // CRITICAL: Must return 2 entries
-        assert_eq!(data.len(), 2, "collect_reattach_data should return 2 entries for 2 panes");
+        assert_eq!(
+            data.len(),
+            2,
+            "collect_reattach_data should return 2 entries for 2 panes"
+        );
 
         // Verify pane IDs
         let mut pane_ids: Vec<u32> = data.iter().map(|(id, _)| *id).collect();
         pane_ids.sort();
         assert_eq!(pane_ids, vec![1, 2], "Should contain pane IDs 1 and 2");
 
-        // Verify both have empty buffers (were Connected, not Detached)
+        // Verify all buffers start with the reset sequence (screen restoration)
         for (_, buf) in &data {
-            assert!(buf.is_empty(), "Connected panes should have empty buffers");
+            assert!(
+                !buf.is_empty(),
+                "Reattach data should include screen restoration"
+            );
+            assert!(
+                buf.starts_with(b"\x1b[H\x1b[2J"),
+                "Reattach data should start with reset sequence"
+            );
         }
     }
 
@@ -933,8 +964,10 @@ mod tests {
         let mut ring2 = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
         ring2.write(b"hello from pane 2");
 
-        let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring1)));
-        let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring2)));
+        let target1: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring1)));
+        let target2: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring2)));
 
         let session_id;
         {
@@ -954,7 +987,11 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
         let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
 
-        assert_eq!(data.len(), 2, "collect_reattach_data should return 2 entries");
+        assert_eq!(
+            data.len(),
+            2,
+            "collect_reattach_data should return 2 entries"
+        );
 
         // Verify both have buffered data
         for (_, buf) in &data {
@@ -968,8 +1005,10 @@ mod tests {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
 
         let (dead_tx, _) = mpsc::channel::<PtyOutputChunk>(1);
-        let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx.clone())));
-        let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx)));
+        let target1: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx.clone())));
+        let target2: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx)));
 
         let session_id;
         {
@@ -990,7 +1029,11 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
         let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
 
-        assert_eq!(data.len(), 1, "Should only return 1 entry (pane 2 is exited)");
+        assert_eq!(
+            data.len(),
+            1,
+            "Should only return 1 entry (pane 2 is exited)"
+        );
         assert_eq!(data[0].0, 1, "Only pane 1 should be included");
     }
 
@@ -1006,7 +1049,8 @@ mod tests {
             let w2 = m.create_window(session_id, "shell".to_string()).unwrap();
 
             let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
-            let t1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx.clone())));
+            let t1: SharedOutputTarget =
+                Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx.clone())));
             let t2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
 
             let pane1 = make_test_pane_with_target(1, t1);

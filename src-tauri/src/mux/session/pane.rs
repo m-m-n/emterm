@@ -11,6 +11,9 @@ use crate::mux::ring_buffer::DetachRingBuffer;
 /// Pane identifier.
 pub type PaneId = u32;
 
+/// Thread-safe shared reference to a shadow VT100 parser.
+pub type SharedShadowParser = Arc<StdMutex<vt100::Parser>>;
+
 /// PTY output chunk sent from the reader thread to the mux writer.
 pub struct PtyOutputChunk {
     pub pane_id: PaneId,
@@ -47,6 +50,8 @@ pub struct MuxPane {
     master: Option<Box<dyn MasterPty + Send>>,
     /// Whether this pane's PTY has exited.
     pub exited: bool,
+    /// Shadow VT100 parser for screen state tracking (used for reattach restoration).
+    pub shadow_parser: SharedShadowParser,
 }
 
 impl MuxPane {
@@ -67,6 +72,7 @@ impl MuxPane {
             writer: Some(Arc::new(StdMutex::new(writer))),
             master: Some(master),
             exited: false,
+            shadow_parser: Arc::new(StdMutex::new(vt100::Parser::new(rows, cols, 0))),
         }
     }
 
@@ -99,6 +105,7 @@ impl MuxPane {
             .map_err(|e| format!("PTY resize failed: {}", e))?;
         self.cols = cols;
         self.rows = rows;
+        self.shadow_parser.lock().unwrap().set_size(rows, cols);
         Ok(())
     }
 
@@ -121,6 +128,7 @@ impl MuxPane {
             writer: Some(Arc::new(StdMutex::new(writer))),
             master: None,
             exited: false,
+            shadow_parser: Arc::new(StdMutex::new(vt100::Parser::new(rows, cols, 0))),
         }
     }
 }
