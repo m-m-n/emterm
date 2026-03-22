@@ -625,7 +625,7 @@ async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<SessionManag
                 if let Err(e) = pane.resize(resize_msg.cols, resize_msg.rows) {
                     log::warn!("Resize pane {}: {}", pane_id, e);
                 } else {
-                    log::info!(
+                    log::debug!(
                         "Resized pane {} to {}x{}",
                         pane_id,
                         resize_msg.cols,
