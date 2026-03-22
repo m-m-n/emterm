@@ -790,6 +790,11 @@ export class TerminalApp {
     // Send initial resize so daemon PTY matches actual terminal dimensions
     this.sendMuxPaneResize(paneId);
 
+    // Ensure canvas reflects restored/fresh grid (without this, canvas stays blank)
+    if (this.renderer && this.state) {
+      this.renderer.forceRender(this.state);
+    }
+
     this.emitMuxStateChange();
   }
 
