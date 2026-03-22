@@ -22,6 +22,15 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll, Space/Shift+Space scrolling)
   - Viewers render within the terminal content area; tab bar remains accessible during viewing
   - CLI commands: `emterm markdown` and `emterm image` (work over SSH, CLI-only build available)
+  - File download via OSC 777: streaming I/O with no file size limit, save dialog at transfer start
+
+- **Terminal Multiplexer**
+  - `emterm mux` starts a native multiplexer daemon; GUI receives raw PTY bytes (no double-parse overhead)
+  - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
+  - Pane split (`prefix+%` vertical, `prefix+"` horizontal), resize, and zoom (`prefix+z`)
+  - Multiple windows per session with tab group UI
+  - Copy mode with vi/emacs keybindings and WASM-based search
+  - tmux.conf import: prefix key, keybindings, base-index, mouse, status-position
 
 - **Input and IME**
   - High-throughput key input (event-based binary IPC, zero JSON serialization)
@@ -51,6 +60,7 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Terminal profiles: named shell configurations with shell, args, env vars, and working directory
   - SSH connection management: auto-detect ssh command, import from ~/.ssh/config, manage connections
   - SFTP file upload: drag and drop files onto SSH tabs to upload; non-SSH tabs paste file paths
+  - WSL distribution detection, import, and profile integration (Windows only)
   - Configurable cursor shape, scrollbar, opacity, line height, scrollback, shell, and more
   - All keyboard shortcuts configurable
 

@@ -841,7 +841,58 @@ PROMPT_COMMAND="_emterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 
 ---
 
-### Category 8: Performance and Architecture
+### Category 8: Terminal Multiplexer
+
+#### Terminal Multiplexer
+
+Native terminal multiplexer integrated into eMterm, eliminating the VT100 double-parse bottleneck present when using external multiplexers (tmux, Zellij). A background daemon manages PTY sessions over a Unix domain socket; the GUI receives raw PTY bytes and processes them through the existing WASM parser.
+
+**Architecture:**
+- Daemon process manages Session > Window > Pane hierarchy
+- GUI communicates with daemon via Unix domain socket (binary framing)
+- Independent WASM instance per pane (~2-4MB each, module compilation cached)
+- GUI handles prefix key, pane layout, and OSC sequences
+
+**Key Functionality:**
+- `emterm mux` starts the daemon (if not running) and switches the GUI to mux mode
+- Detach (`prefix+d`) returns to host shell; daemon and PTYs survive
+- `emterm mux attach` restores session with full screen state replay
+- Pane split: `prefix+%` (vertical), `prefix+"` (horizontal)
+- Pane resize via drag; `prefix+z` zoom/unzoom
+- Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename)
+- Copy mode: vi/emacs keybindings, WASM-based search, system clipboard
+- tmux.conf import: prefix key, keybindings, base-index, mouse, status-position
+- Nesting prevention via `EMTERM_MUX=1` environment variable
+
+**IPC Protocol:**
+- Frame format: `[length: u32][type: u8][pane_id: u32][payload: variable]`
+- PTY data transferred as raw bytes (no serialization)
+- Control messages via bincode
+- 16 message types (PtyOutput, PtyInput, Hello/Welcome, CreatePane, Resize, Attach/Detach, Snapshot, etc.)
+
+**Reliability:**
+- Automatic recovery on daemon crash (GUI returns to normal mode)
+- Per-pane ring buffer (64MB) accumulates output while detached
+- Snapshot-based grid state save/restore on detach/reattach
+
+---
+
+### Category 9: WSL Support (Windows)
+
+#### WSL Profile Support
+
+Windows Subsystem for Linux (WSL) distribution detection and profile integration. All WSL-related UI is hidden on Linux.
+
+**Key Functionality:**
+- Detect installed WSL distributions via `wsl.exe --list --quiet`
+- Import distributions into eMterm settings with CRUD management
+- Profile editor gains a WSL tab (Shell | SSH | WSL) on Windows
+- WSL profiles launch `wsl.exe -d <distro>` as a PTY session
+- `wsl_distro_name` field on Profile struct; mutually exclusive with shell/SSH settings
+
+---
+
+### Category 10: Performance and Architecture
 
 #### WASM Optimization
 
@@ -908,7 +959,26 @@ The CLI commands (`emterm image`, `emterm markdown`) can be built without GUI de
 
 ---
 
-### Category 9: Internationalization
+#### Download Streaming
+
+File download via the OSC 777 download protocol uses streaming I/O, eliminating the memory requirement to hold the entire file at once. Files of arbitrary size can be downloaded with constant memory usage.
+
+**Architecture:**
+- CLI sender: reads file in 8MiB chunks, base64-encodes each chunk individually, outputs OSC chunk immediately
+- Frontend receiver: on `begin` invokes `start_download_file` (save dialog, returns handle ID); on `chunk` invokes `append_download_chunk` (backend decodes + writes); on `end` invokes `finish_download_file`
+- Backend: maintains a handle registry (max 10 concurrent, 120s idle timeout); decodes and writes each chunk to disk without buffering
+
+**Key Functionality:**
+- No file size limit (removed the previous 500MB frontend cap)
+- Save dialog appears at transfer start (`begin` event), not at completion
+- Backend session registry with cleanup on app exit
+- Error recovery: on write failure, partial file is deleted and frontend is notified
+- OSC sequence format unchanged (`begin` / `chunk` / `end` verbs)
+- stdin input still buffers fully (size is unknown upfront)
+
+---
+
+### Category 11: Internationalization
 
 #### English and Japanese Support
 
