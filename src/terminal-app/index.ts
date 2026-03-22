@@ -813,6 +813,9 @@ export class TerminalApp {
 
   /** Handle a mux pane exiting (shell closed). Remove the window and switch if needed. */
   private handleMuxPaneExited(paneId: number): void {
+    // Notify daemon to clean up the exited pane (cascade: pane→window→session)
+    this.sendMuxControl(MuxMessageType.DestroyPane, paneId);
+
     // Multi-pane mode: remove from layout
     if (this.muxLayoutRoot && this.muxPaneCanvases.has(paneId)) {
       this.removeMuxPane(paneId);

@@ -26,7 +26,11 @@ use crate::mux::session::pane::{
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Handle a new client connection through handshake and message loop.
-pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<SessionManager>>) {
+pub async fn handle_connection(
+    stream: UnixStream,
+    session_manager: Arc<Mutex<SessionManager>>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+) {
     let mut framed = Framed::new(stream, MuxCodec::new());
 
     // Wait for Hello with timeout to prevent idle connection DoS
@@ -136,6 +140,7 @@ pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<Se
                             &mut framed,
                             &pane_output_tx,
                             &mut active_session_id,
+                            &shutdown_tx,
                         ).await {
                             if should_break {
                                 break;
@@ -183,6 +188,7 @@ async fn route_message(
     framed: &mut Framed<UnixStream, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
+    shutdown_tx: &tokio::sync::watch::Sender<bool>,
 ) -> Result<(), bool> {
     match msg.msg_type {
         MessageType::CreateWindow => {
@@ -209,7 +215,7 @@ async fn route_message(
             return Err(true);
         }
         MessageType::DestroyPane => {
-            handle_destroy_pane(msg.pane_id, session_manager).await;
+            handle_destroy_pane(msg.pane_id, session_manager, shutdown_tx).await;
         }
         MessageType::SwitchWindow => {
             log::info!("SwitchWindow requested: window {}", msg.pane_id);
@@ -218,7 +224,7 @@ async fn route_message(
             handle_rename_window(msg, session_manager).await;
         }
         MessageType::DestroyWindow => {
-            handle_destroy_window(msg.pane_id, session_manager).await;
+            handle_destroy_window(msg.pane_id, session_manager, shutdown_tx).await;
         }
         MessageType::Resize => {
             handle_resize(msg, session_manager).await;
@@ -486,7 +492,12 @@ async fn handle_split_pane(
 }
 
 /// Destroy a pane, removing it from its window. Cleans up empty windows and sessions.
-async fn handle_destroy_pane(pane_id: PaneId, session_manager: &Arc<Mutex<SessionManager>>) {
+/// Signals daemon shutdown when all sessions become empty.
+async fn handle_destroy_pane(
+    pane_id: PaneId,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    shutdown_tx: &tokio::sync::watch::Sender<bool>,
+) {
     log::info!("DestroyPane requested for pane {}", pane_id);
 
     let mut mgr = session_manager.lock().await;
@@ -519,7 +530,8 @@ async fn handle_destroy_pane(pane_id: PaneId, session_manager: &Arc<Mutex<Sessio
                     log::info!("Removed empty session {}", session_id);
 
                     if mgr.is_empty() {
-                        log::info!("All sessions empty, daemon may exit");
+                        log::info!("All sessions empty, daemon shutting down");
+                        let _ = shutdown_tx.send(true);
                     }
                 }
             }
@@ -556,7 +568,12 @@ async fn handle_rename_window(msg: MuxMessage, session_manager: &Arc<Mutex<Sessi
 }
 
 /// Destroy a window and all its panes, cleaning up empty sessions.
-async fn handle_destroy_window(window_id: u32, session_manager: &Arc<Mutex<SessionManager>>) {
+/// Signals daemon shutdown when all sessions become empty.
+async fn handle_destroy_window(
+    window_id: u32,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    shutdown_tx: &tokio::sync::watch::Sender<bool>,
+) {
     log::info!("DestroyWindow requested for window {}", window_id);
 
     let mut mgr = session_manager.lock().await;
@@ -584,7 +601,8 @@ async fn handle_destroy_window(window_id: u32, session_manager: &Arc<Mutex<Sessi
             mgr.remove_session(session_id);
             log::info!("Removed empty session {}", session_id);
             if mgr.is_empty() {
-                log::info!("All sessions empty, daemon may exit");
+                log::info!("All sessions empty, daemon shutting down");
+                let _ = shutdown_tx.send(true);
             }
         }
     }
