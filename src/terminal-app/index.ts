@@ -81,6 +81,7 @@ export class TerminalApp {
   private activeMuxWindowIndex = 0;
   private muxPaneIds: number[] = []; // Actual pane IDs from daemon
   private muxPendingWindowCount = 0; // Windows waiting for PaneCreated response
+  private muxIsReattaching = false; // True during reattach (receiving existing panes)
   private muxPaneGrids: Map<number, WasmGrid> = new Map(); // WASM grids per pane
   private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
   private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
@@ -790,10 +791,11 @@ export class TerminalApp {
     }
 
     // After all pending windows are received during reattach, switch to first window
-    if (this.muxPendingWindowCount === 0 && this.muxWindows.length > 1 && this.activeMuxWindowIndex !== 0) {
+    if (this.muxIsReattaching && this.muxPendingWindowCount === 0 && this.muxWindows.length > 1 && this.activeMuxWindowIndex !== 0) {
       const prev = this.activeMuxWindowIndex;
       this.activeMuxWindowIndex = 0;
       this.switchMuxWindow(prev);
+      this.muxIsReattaching = false;
     }
 
     this.emitMuxStateChange();
@@ -1009,6 +1011,7 @@ export class TerminalApp {
     this.activeMuxWindowIndex = 0;
     this.muxPaneIds = [];
     this.muxPendingWindowCount = 0;
+    this.muxIsReattaching = false;
 
     // Check if daemon has existing panes (reattach case)
     const existingPanes = muxSessions.reduce((sum, s) => sum + s.pane_count, 0);
@@ -1017,6 +1020,7 @@ export class TerminalApp {
       // Reattach: send Attach message to daemon AFTER output stream is ready.
       // Daemon will respond with PaneCreated + buffered output for existing panes.
       this.muxPendingWindowCount = existingPanes;
+      this.muxIsReattaching = true;
       console.info(`[INFO][FRONTEND] Reattaching to ${existingPanes} existing pane(s)`);
       const sessionId = muxSessions[0]?.id ?? 1;
       // AttachMsg payload: session_id as u32 LE (bincode serializes u32 as 4 bytes LE)
@@ -1089,6 +1093,7 @@ export class TerminalApp {
     this.activeMuxWindowIndex = 0;
     this.muxPaneIds = [];
     this.muxPendingWindowCount = 0;
+    this.muxIsReattaching = false;
     this.muxPendingSplitCount = 0;
     this.muxPaneGrids.clear();
     this.emitMuxStateChange();
