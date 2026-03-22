@@ -518,8 +518,8 @@ pub fn mux_start_daemon() -> Result<String, String> {
 
         let sock_path = daemon::socket_path();
 
-        // Start daemon if not running
-        if !sock_path.exists() || !daemon::is_daemon_running(&sock_path) {
+        // Start daemon if not running (check socket file only, avoid ghost connections)
+        if !sock_path.exists() {
             // Ensure parent directory exists
             if let Some(parent) = sock_path.parent() {
                 std::fs::create_dir_all(parent)

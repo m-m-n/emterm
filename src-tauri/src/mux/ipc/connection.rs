@@ -162,9 +162,10 @@ pub async fn handle_connection(
     // Switch all panes in the active session to detached buffering mode.
     // This prevents pty_reader_loop from racing with the next connection's
     // collect_reattach_data when the output_target is still Connected(dead_tx).
+    log::info!("Client disconnecting, detaching panes for session {}", active_session_id);
     detach_session_panes(&session_manager, active_session_id).await;
 
-    log::info!("Client disconnected");
+    log::info!("Client disconnected, session {} panes detached", active_session_id);
 }
 
 /// Route a single message to the appropriate handler.
@@ -661,6 +662,10 @@ async fn collect_reattach_data(
 
                 // Get ring buffer data from detached panes
                 let mut target = pane.output_target.lock().unwrap();
+                let target_was = match &*target {
+                    PaneOutputTarget::Connected(_) => "Connected",
+                    PaneOutputTarget::Detached(_) => "Detached",
+                };
                 let ring_data = if let PaneOutputTarget::Detached(ref mut ring) = *target {
                     let buf = ring.read_all();
                     ring.clear();
@@ -669,6 +674,15 @@ async fn collect_reattach_data(
                     Vec::new()
                 };
                 *target = PaneOutputTarget::Connected(pane_output_tx.clone());
+                log::info!(
+                    "collect_reattach: pane {} was={}, screen={}B, ring={}B, total={}B, exited={}",
+                    pane.id,
+                    target_was,
+                    screen_data.len(),
+                    ring_data.len(),
+                    screen_data.len() + ring_data.len(),
+                    pane.exited
+                );
 
                 // Combine: reset screen + shadow parser contents + ring buffer replay
                 let mut combined = Vec::with_capacity(screen_data.len() + ring_data.len() + 10);
@@ -711,13 +725,32 @@ async fn detach_session_panes(session_manager: &Arc<Mutex<SessionManager>>, sess
         for window in session.windows.values() {
             for pane in window.panes.values() {
                 if pane.exited {
+                    log::info!(
+                        "detach_session_panes: pane {} already exited, skipping",
+                        pane.id
+                    );
                     continue;
                 }
                 let mut target = pane.output_target.lock().unwrap();
+                let was = match &*target {
+                    PaneOutputTarget::Connected(_) => "Connected",
+                    PaneOutputTarget::Detached(_) => "Detached",
+                };
                 if let PaneOutputTarget::Connected(_) = &*target {
                     *target = PaneOutputTarget::Detached(DetachRingBuffer::new(
                         crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
                     ));
+                    log::info!(
+                        "detach_session_panes: pane {} switched {} -> Detached",
+                        pane.id,
+                        was
+                    );
+                } else {
+                    log::info!(
+                        "detach_session_panes: pane {} already {}, no change",
+                        pane.id,
+                        was
+                    );
                 }
             }
         }
@@ -798,7 +831,18 @@ fn pty_reader_loop(
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
-                log::info!("PTY reader EOF for pane {}", pane_id);
+                let target_state = {
+                    let t = output_target.lock().unwrap();
+                    match &*t {
+                        PaneOutputTarget::Connected(_) => "Connected",
+                        PaneOutputTarget::Detached(_) => "Detached",
+                    }
+                };
+                log::info!(
+                    "PTY reader EOF for pane {} (output_target={})",
+                    pane_id,
+                    target_state
+                );
                 // Signal exit to connected client if any
                 let target = output_target.lock().unwrap();
                 if let PaneOutputTarget::Connected(ref tx) = *target {
@@ -864,7 +908,7 @@ fn pty_reader_loop(
                 }
             }
             Err(e) => {
-                log::info!("PTY reader error for pane {}: {}", pane_id, e);
+                log::info!("PTY reader error for pane {}: {} (kind={:?})", pane_id, e, e.kind());
                 break;
             }
         }
