@@ -22,7 +22,7 @@ import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
 import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
-import { MuxClient, MuxMessageType } from "../terminal/mux/mux-client";
+import type { MuxClient } from "../terminal/mux/mux-client";
 import type { MuxAction } from "../terminal/mux/prefix-key";
 import {
   CopyModeManager,
@@ -31,16 +31,57 @@ import {
   type CopyModeSelection,
 } from "../terminal/mux-copy-mode";
 import {
-  calculateLayout,
-  splitPane as splitLayoutPane,
-  removePane as removeLayoutPane,
-  getAllPaneIds,
-  resizeSplitBetween,
-  getSplitBounds,
+  enterCopyMode as enterCopyModeImpl,
+  exitCopyMode as exitCopyModeImpl,
+  handleCopyModeKey as handleCopyModeKeyImpl,
+  copySelectionToClipboard as copySelectionToClipboardImpl,
+  pasteFromClipboard as pasteFromClipboardImpl,
+  type MuxCopyModeContext,
+} from "./mux/mux-copy-mode";
+import {
+  handleMuxSplitPaneCreated as handleMuxSplitPaneCreatedImpl,
+  initMultiPaneMode as initMultiPaneModeImpl,
+  createPaneCanvas as createPaneCanvasImpl,
+  setActiveMuxPane as setActiveMuxPaneImpl,
+  applyMuxLayout as applyMuxLayoutImpl,
+  sendPaneResizes as sendPaneResizesImpl,
+  removeMuxPane as removeMuxPaneImpl,
+  exitMultiPaneMode as exitMultiPaneModeImpl,
+  type MuxMultiPaneContext,
+} from "./mux/mux-multi-pane";
+import {
+  clearMuxScreen as clearMuxScreenImpl,
+  createFreshMuxGrid as createFreshMuxGridImpl,
+  switchMuxWindow as switchMuxWindowImpl,
+  handleMuxPaneCreated as handleMuxPaneCreatedImpl,
+  sendMuxPaneResize as sendMuxPaneResizeImpl,
+  handleMuxPaneExited as handleMuxPaneExitedImpl,
+  emitMuxStateChange as emitMuxStateChangeImpl,
+  reloadMuxSettings as reloadMuxSettingsImpl,
+  startMuxDirect as startMuxDirectImpl,
+  type MuxWindowManagerContext,
+} from "./mux/mux-window-manager";
+import {
+  initMuxDragResize as initMuxDragResizeImpl,
+  toggleMuxZoom as toggleMuxZoomImpl,
+  type MuxDragResizeContext,
+  type MuxDragState,
+} from "./mux/mux-drag-resize";
+import {
+  handleMuxAction as handleMuxActionImpl,
+  sendMuxControl as sendMuxControlImpl,
+  getActiveMuxPaneId as getActiveMuxPaneIdImpl,
+  type MuxActionContext,
+} from "./mux/mux-action-handler";
+import {
+  enterMuxMode as enterMuxModeImpl,
+  exitMuxMode as exitMuxModeImpl,
+  type MuxSessionContext,
+} from "./mux/mux-session";
+import {
   type LayoutNode,
   type SplitDirection,
 } from "../terminal/mux/layout";
-import { applyLayoutToContainer, detectBorderHit } from "../terminal/mux/pane-border";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
 import { setupPtyHandlers, type PtyHandlerHandle } from "./pty-handler";
@@ -101,11 +142,7 @@ export class TerminalApp {
   private muxPaneContainer: HTMLElement | null = null;
   private muxPendingSplitCount = 0;
   private muxPendingSplitDirection: SplitDirection = "vertical";
-  private muxDragState: {
-    direction: "horizontal" | "vertical";
-    paneA: number;
-    paneB: number;
-  } | null = null;
+  private muxDragState: MuxDragState | null = null;
   private muxPreZoomLayout: LayoutNode | null = null;
 
   /** Callback to update tab UI when mux window state changes */
@@ -686,1134 +723,340 @@ export class TerminalApp {
     this.searchHandler?.toggleSearch();
   }
 
+  /** Build the context object for mux session management functions. */
+  private getMuxSessionContext(): MuxSessionContext {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      getState: () => self.state,
+      getRenderer: () => self.renderer,
+      getPtyClient: () => self.ptyClient,
+      getKeyboardHandler: () => self.keyboardHandler,
+      getPtyHandlerHandle: () => self.ptyHandlerHandle,
+      getInMuxMode: () => self.inMuxMode,
+      setInMuxMode: (value) => { self.inMuxMode = value; },
+      getMuxClient: () => self.muxClient,
+      setMuxClient: (client) => { self.muxClient = client; },
+      getMuxWindows: () => self.muxWindows,
+      setMuxWindows: (windows) => { self.muxWindows = windows; },
+      getActiveMuxWindowIndex: () => self.activeMuxWindowIndex,
+      setActiveMuxWindowIndex: (index) => { self.activeMuxWindowIndex = index; },
+      getMuxPaneIds: () => self.muxPaneIds,
+      setMuxPaneIds: (ids) => { self.muxPaneIds = ids; },
+      getMuxPendingWindowCount: () => self.muxPendingWindowCount,
+      setMuxPendingWindowCount: (count) => { self.muxPendingWindowCount = count; },
+      getMuxIsReattaching: () => self.muxIsReattaching,
+      setMuxIsReattaching: (value) => { self.muxIsReattaching = value; },
+      getMuxOriginalGrid: () => self.muxOriginalGrid,
+      setMuxOriginalGrid: (grid) => { self.muxOriginalGrid = grid; },
+      getMuxPaneGrids: () => self.muxPaneGrids,
+      getMuxLayoutRoot: () => self.muxLayoutRoot,
+      getMuxPaneCanvases: () => self.muxPaneCanvases,
+      getMuxPendingSplitCount: () => self.muxPendingSplitCount,
+      setMuxPendingSplitCount: (count) => { self.muxPendingSplitCount = count; },
+      getCopyModeManager: () => self.copyModeManager,
+      setCopyModeManager: (manager) => { self.copyModeManager = manager; },
+      getCopyModeKeybinds: () => self.copyModeKeybinds,
+      setCopyModeKeybinds: (keybinds) => { self.copyModeKeybinds = keybinds; },
+      registerCoreCallbacks: (core) => self.registerCoreCallbacks(core),
+      handleMuxPaneCreated: (paneId) => self.handleMuxPaneCreated(paneId),
+      handleMuxPaneExited: (paneId) => self.handleMuxPaneExited(paneId),
+      handleMuxAction: (action) => self.handleMuxAction(action),
+      sendMuxControl: (msgType, paneId, payload) => self.sendMuxControl(msgType, paneId, payload),
+      renderMuxPaneOutput: (paneId, data) => self.renderMuxPaneOutput(paneId, data),
+      getActiveMuxPaneId: () => self.getActiveMuxPaneId(),
+      emitMuxStateChange: () => self.emitMuxStateChange(),
+      exitMultiPaneMode: (remainingPaneId) => self.exitMultiPaneMode(remainingPaneId),
+    };
+  }
+
+  /** Build the context object for mux window manager functions. */
+  private getMuxWindowManagerContext(): MuxWindowManagerContext {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      getState: () => self.state,
+      getRenderer: () => self.renderer,
+      getMuxClient: () => self.muxClient,
+      getKeyboardHandler: () => self.keyboardHandler,
+      getInMuxMode: () => self.inMuxMode,
+      getMuxWindows: () => self.muxWindows,
+      getActiveMuxWindowIndex: () => self.activeMuxWindowIndex,
+      setActiveMuxWindowIndex: (index) => { self.activeMuxWindowIndex = index; },
+      getMuxPaneIds: () => self.muxPaneIds,
+      getMuxPaneGrids: () => self.muxPaneGrids,
+      getMuxDetachedGrids: () => self.muxDetachedGrids,
+      getMuxPendingWindowCount: () => self.muxPendingWindowCount,
+      setMuxPendingWindowCount: (count) => { self.muxPendingWindowCount = count; },
+      getMuxIsReattaching: () => self.muxIsReattaching,
+      setMuxIsReattaching: (value) => { self.muxIsReattaching = value; },
+      getMuxPendingSplitCount: () => self.muxPendingSplitCount,
+      setMuxPendingSplitCount: (count) => { self.muxPendingSplitCount = count; },
+      getMuxPendingSplitDirection: () => self.muxPendingSplitDirection,
+      getMuxLayoutRoot: () => self.muxLayoutRoot,
+      getMuxPaneCanvases: () => self.muxPaneCanvases,
+      get onMuxStateChange() { return self.onMuxStateChange; },
+      registerCoreCallbacks: (core) => self.registerCoreCallbacks(core),
+      sendMuxControl: (msgType, paneId, payload) => self.sendMuxControl(msgType, paneId, payload),
+      handleMuxSplitPaneCreated: (paneId, direction) => self.handleMuxSplitPaneCreated(paneId, direction),
+      removeMuxPane: (paneId) => self.removeMuxPane(paneId),
+      exitMuxMode: () => self.exitMuxMode(),
+      enterMuxMode: (socketPath, sessionId) => self.enterMuxMode(socketPath, sessionId),
+    };
+  }
+
   /** Clear the terminal screen for mux window switching. */
   private clearMuxScreen(): void {
-    if (this.state) {
-      this.state.getWasmCore().reset();
-      if (this.renderer) {
-        this.renderer.forceRender(this.state);
-      }
-    }
+    clearMuxScreenImpl(this.getMuxWindowManagerContext());
   }
 
   /** Create a fresh WASM grid for a new mux pane and swap it in. */
   private createFreshMuxGrid(): void {
-    if (!this.state) return;
-    const cols = this.state.getWasmCore().cols();
-    const rows = this.state.getWasmCore().rows();
-    const newGrid = new WasmGrid(cols, rows, 10000);
-    this.state.swapPrimaryGrid(newGrid);
-    this.registerCoreCallbacks(this.state.getActiveCore());
-    if (this.renderer) {
-      this.renderer.forceRender(this.state);
-    }
+    createFreshMuxGridImpl(this.getMuxWindowManagerContext());
   }
 
   /** Switch to the current activeMuxWindowIndex: swap WASM grids and update UI. */
   private switchMuxWindow(previousIndex?: number): void {
-    if (!this.state) return;
-
-    // Save current pane's grid (swap out)
-    if (previousIndex != null) {
-      const prevPaneId = this.muxPaneIds[previousIndex];
-      if (prevPaneId != null) {
-        const currentGrid = this.state.getPrimaryGrid();
-        if (currentGrid) {
-          this.muxPaneGrids.set(prevPaneId, currentGrid);
-        }
-      }
-    }
-
-    // Restore the target pane's grid (swap in)
-    const newPaneId = this.muxPaneIds[this.activeMuxWindowIndex];
-    if (newPaneId != null) {
-      const savedGrid = this.muxPaneGrids.get(newPaneId);
-      if (savedGrid) {
-        this.muxPaneGrids.delete(newPaneId);
-        this.state.swapPrimaryGrid(savedGrid);
-        this.registerCoreCallbacks(this.state.getActiveCore());
-      } else {
-        // No saved grid (first visit) — just clear
-        this.state.getWasmCore().reset();
-      }
-    }
-
-    if (this.renderer) {
-      this.renderer.forceRender(this.state);
-    }
-    this.emitMuxStateChange();
+    switchMuxWindowImpl(this.getMuxWindowManagerContext(), previousIndex);
   }
 
   /** Handle PaneCreated from daemon — register actual pane ID and update UI. */
   private handleMuxPaneCreated(paneId: number): void {
-    // Check if this is a split pane response
-    if (this.muxPendingSplitCount > 0) {
-      this.muxPendingSplitCount--;
-      this.handleMuxSplitPaneCreated(paneId, this.muxPendingSplitDirection);
-      return;
-    }
-
-    if (this.muxPendingWindowCount <= 0) return;
-    this.muxPendingWindowCount--;
-
-    // Save current pane's grid before switching
-    const previousIndex = this.activeMuxWindowIndex;
-    const prevPaneId = this.muxPaneIds[previousIndex];
-    if (prevPaneId != null && this.state) {
-      const currentGrid = this.state.getPrimaryGrid();
-      if (currentGrid) {
-        this.muxPaneGrids.set(prevPaneId, currentGrid);
-      }
-    }
-
-    const newIdx = this.muxWindows.length;
-    this.muxWindows.push({ id: newIdx, name: `${newIdx}:shell` });
-    this.muxPaneIds.push(paneId);
-    this.activeMuxWindowIndex = newIdx;
-
-    console.info(`[INFO][FRONTEND] Mux pane created: id=${paneId}, window=${newIdx}`);
-
-    // Try to restore from detached snapshot, otherwise create fresh grid
-    const detachedKey = `pane-${paneId}`;
-    const detachedSnapshot = this.muxDetachedGrids.get(detachedKey);
-    // Shadow parser on the daemon side now handles screen restoration via PtyOutput.
-    // Skip slow frontend snapshot restore (WASM deserialization takes ~3s in debug).
-    // Just create a fresh grid — the daemon's screen data will populate it.
-    this.createFreshMuxGrid();
-    this.muxDetachedGrids.delete(detachedKey);
-
-    // Send initial resize so daemon PTY matches actual terminal dimensions
-    this.sendMuxPaneResize(paneId);
-
-    // Ensure canvas reflects restored/fresh grid (without this, canvas stays blank)
-    if (this.renderer && this.state) {
-      this.renderer.forceRender(this.state);
-    }
-
-    // After all pending windows are received during reattach, switch to first window
-    if (this.muxIsReattaching && this.muxPendingWindowCount === 0 && this.muxWindows.length > 1 && this.activeMuxWindowIndex !== 0) {
-      const prev = this.activeMuxWindowIndex;
-      this.activeMuxWindowIndex = 0;
-      this.switchMuxWindow(prev);
-      this.muxIsReattaching = false;
-    }
-
-    this.emitMuxStateChange();
+    handleMuxPaneCreatedImpl(this.getMuxWindowManagerContext(), paneId);
   }
 
-  /** Send a Resize message to the daemon for a single pane using current terminal dimensions.
-   *  Forces SIGWINCH by first sending a slightly smaller size, then the actual size.
-   *  This ensures the shell redraws even if the PTY was already at the same dimensions. */
+  /** Send a Resize message to the daemon for a single pane using current terminal dimensions. */
   private sendMuxPaneResize(paneId: number): void {
-    if (!this.state || !this.muxClient) return;
-    const cols = this.state.getWasmCore().cols();
-    const rows = this.state.getWasmCore().rows();
-
-    // Send a slightly different size first to guarantee SIGWINCH
-    const kickCols = Math.max(1, cols - 1);
-    const kickPayload = new Uint8Array(4);
-    kickPayload[0] = kickCols & 0xFF;
-    kickPayload[1] = (kickCols >> 8) & 0xFF;
-    kickPayload[2] = rows & 0xFF;
-    kickPayload[3] = (rows >> 8) & 0xFF;
-    this.sendMuxControl(MuxMessageType.Resize, paneId, kickPayload);
-
-    // Then send the actual size to restore correct dimensions
-    const payload = new Uint8Array(4);
-    payload[0] = cols & 0xFF;
-    payload[1] = (cols >> 8) & 0xFF;
-    payload[2] = rows & 0xFF;
-    payload[3] = (rows >> 8) & 0xFF;
-    this.sendMuxControl(MuxMessageType.Resize, paneId, payload);
+    sendMuxPaneResizeImpl(this.getMuxWindowManagerContext(), paneId);
   }
 
   /** Handle a mux pane exiting (shell closed). Remove the window and switch if needed. */
   private handleMuxPaneExited(paneId: number): void {
-    // Notify daemon to clean up the exited pane (cascade: pane→window→session)
-    this.sendMuxControl(MuxMessageType.DestroyPane, paneId);
-
-    // Multi-pane mode: remove from layout
-    if (this.muxLayoutRoot && this.muxPaneCanvases.has(paneId)) {
-      this.removeMuxPane(paneId);
-      return;
-    }
-
-    const windowIdx = this.muxPaneIds.indexOf(paneId);
-    if (windowIdx === -1) return;
-
-    console.info(`[INFO][FRONTEND] Mux pane ${paneId} exited (window ${windowIdx})`);
-
-    // Clean up snapshot for the exited pane
-    this.muxPaneGrids.delete(paneId);
-
-    // If the exited pane is NOT the active one, save current pane's snapshot
-    // before the index adjustment that follows
-    const wasActive = windowIdx === this.activeMuxWindowIndex;
-
-    // Remove the window
-    this.muxWindows.splice(windowIdx, 1);
-    this.muxPaneIds.splice(windowIdx, 1);
-
-    // If no windows left, exit mux mode
-    if (this.muxWindows.length === 0) {
-      this.exitMuxMode();
-      return;
-    }
-
-    // Adjust active window index
-    if (this.activeMuxWindowIndex >= this.muxWindows.length) {
-      this.activeMuxWindowIndex = this.muxWindows.length - 1;
-    }
-
-    // Renumber window names
-    for (let i = 0; i < this.muxWindows.length; i++) {
-      this.muxWindows[i]!.name = `${i}:shell`;
-    }
-
-    // Only switch if the active pane was the one that exited
-    if (wasActive) {
-      this.switchMuxWindow();
-    } else {
-      this.emitMuxStateChange();
-    }
+    handleMuxPaneExitedImpl(this.getMuxWindowManagerContext(), paneId);
   }
 
   /** Re-apply mux keybind settings (call when settings change at runtime). */
   reloadMuxSettings(): void {
-    if (!this.inMuxMode || !this.keyboardHandler) return;
-    const muxSettings = SettingsService.getCached()?.mux;
-    if (muxSettings) {
-      this.keyboardHandler.updateMuxSettings(
-        muxSettings.prefix ?? "Ctrl+B",
-        muxSettings.keybinds ?? {},
-      );
-    }
+    reloadMuxSettingsImpl(this.getMuxWindowManagerContext());
   }
 
   /** Notify listeners of mux window state changes. */
   private emitMuxStateChange(): void {
-    this.onMuxStateChange?.({
-      windowCount: this.muxWindows.length,
-      activeWindow: this.activeMuxWindowIndex,
-      windowNames: this.muxWindows.map((w) => w.name),
-    });
+    emitMuxStateChangeImpl(this.getMuxWindowManagerContext());
   }
 
   /** Start or attach to mux session directly via Tauri command.
    *  Bypasses the CLI → OSC → PTY parser roundtrip for instant response. */
   async startMuxDirect(): Promise<void> {
-    if (this.inMuxMode) return;
-    try {
-      const socketPath = await invoke<string>("mux_start_daemon");
-      await this.enterMuxMode(socketPath, 0);
-    } catch (e) {
-      console.error("[ERROR][FRONTEND] Direct mux start failed:", e);
-    }
+    await startMuxDirectImpl(this.getMuxWindowManagerContext());
   }
 
   /** Enter mux mode -- connect to daemon, enable prefix key, show status bar. */
   async enterMuxMode(socketPath: string, sessionId: number): Promise<void> {
-    if (this.inMuxMode) return;
-    this.inMuxMode = true;
-
-    console.info(`[INFO][FRONTEND] Entering mux mode: socket=${socketPath}, session=${sessionId}`);
-
-    // Connect to daemon
-    let muxSessions: import("../terminal/mux/mux-client").MuxSessionInfo[] = [];
-    try {
-      this.muxClient = new MuxClient();
-      muxSessions = await this.muxClient.connect(socketPath);
-      console.info(`[INFO][FRONTEND] Mux connected: ${muxSessions.length} session(s)`);
-    } catch (e) {
-      console.error("[ERROR][FRONTEND] Mux connect failed:", e);
-      this.inMuxMode = false;
-      this.muxClient = null;
-      return;
-    }
-
-    // Set up PTY output handler -- route to correct pane
-    this.muxClient.setOnPtyOutput((paneId: number, data: Uint8Array) => {
-      // Multi-pane mode: route to specific pane's canvas/grid
-      if (this.muxLayoutRoot && this.muxPaneCanvases.has(paneId)) {
-        this.renderMuxPaneOutput(paneId, data);
-        return;
-      }
-
-      // Single-pane mode: route to main renderer
-      const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
-      if (activePaneId === undefined) {
-        // PaneCreated hasn't arrived yet -- accept all output during init
-        if (this.ptyHandlerHandle) {
-          this.ptyHandlerHandle.injectData(data);
-        }
-        return;
-      }
-      if (paneId === activePaneId) {
-        if (this.ptyHandlerHandle) {
-          this.ptyHandlerHandle.injectData(data);
-        }
-      } else {
-        // Route to inactive pane's saved grid (preserves ring buffer replay data)
-        const savedGrid = this.muxPaneGrids.get(paneId);
-        if (savedGrid) {
-          savedGrid.core.process_pty_data(data);
-        }
-      }
-    });
-
-    // Set up PTY exit handler -- remove window when its pane exits
-    this.muxClient.setOnPtyExited((paneId: number) => {
-      this.handleMuxPaneExited(paneId);
-    });
-
-    // Set up pane created handler -- receive actual pane ID from daemon
-    this.muxClient.setOnPaneCreated((paneId: number) => {
-      this.handleMuxPaneCreated(paneId);
-    });
-
-    // Start output stream
-    try {
-      await this.muxClient.startOutputStream();
-      // Output stream ready
-    } catch (e) {
-      console.error("[ERROR][FRONTEND] Mux start output stream failed:", e);
-    }
-
-    // Route all PTY writes to mux daemon via proxy
-    if (this.ptyClient) {
-      this.ptyClient.setWriteProxy((data: Uint8Array) => {
-        if (!this.muxClient) return Promise.resolve();
-        const activePaneId = this.getActiveMuxPaneId() ?? this.muxPaneIds[this.activeMuxWindowIndex] ?? 1;
-        return this.muxClient.sendInput(activePaneId, data);
-      });
-    }
-
-    // Suppress original PTY output during mux mode
-    if (this.ptyHandlerHandle) {
-      this.ptyHandlerHandle.suppressOriginalPty = true;
-    }
-
-    // Save the original grid and create a fresh one for mux mode
-    if (this.state) {
-      this.muxOriginalGrid = this.state.getPrimaryGrid();
-      const cols = this.state.getWasmCore().cols();
-      const rows = this.state.getWasmCore().rows();
-      const freshGrid = new WasmGrid(cols, rows, 10000);
-      this.state.swapPrimaryGrid(freshGrid);
-      this.registerCoreCallbacks(this.state.getActiveCore());
-      if (this.renderer) {
-        this.renderer.forceRender(this.state);
-      }
-    }
-
-    // Initialize mux window tracking
-    this.muxWindows = [];
-    this.activeMuxWindowIndex = 0;
-    this.muxPaneIds = [];
-    this.muxPendingWindowCount = 0;
-    this.muxIsReattaching = false;
-
-    // Check if daemon has existing panes (reattach case)
-    const existingPanes = muxSessions.reduce((sum, s) => sum + s.pane_count, 0);
-
-    if (existingPanes > 0) {
-      // Reattach: send Attach message to daemon AFTER output stream is ready.
-      // Daemon will respond with PaneCreated + buffered output for existing panes.
-      this.muxPendingWindowCount = existingPanes;
-      this.muxIsReattaching = true;
-      console.info(`[INFO][FRONTEND] Reattaching to ${existingPanes} existing pane(s)`);
-      const sessionId = muxSessions[0]?.id ?? 1;
-      // AttachMsg payload: session_id as u32 LE (bincode serializes u32 as 4 bytes LE)
-      const attachPayload = new Uint8Array(4);
-      const view = new DataView(attachPayload.buffer);
-      view.setUint32(0, sessionId, true);
-      this.sendMuxControl(MuxMessageType.Attach, 0, attachPayload);
-    } else {
-      // Fresh start: create initial window
-      try {
-        this.muxPendingWindowCount++;
-        await this.muxClient.sendControl(MuxMessageType.CreateWindow, 0);
-      } catch (e) {
-        console.error("[ERROR][FRONTEND] Mux create window failed:", e);
-      }
-    }
-
-    // Enable prefix key handling
-    const muxSettings = SettingsService.getCached()?.mux;
-    if (this.keyboardHandler) {
-      this.keyboardHandler.enableMuxMode(
-        muxSettings?.prefix ?? "Ctrl+B",
-        muxSettings?.keybinds ?? {},
-        (action) => this.handleMuxAction(action),
-      );
-    }
-
-    // TODO: Status bar will be an eMterm application-level feature
+    await enterMuxModeImpl(this.getMuxSessionContext(), socketPath, sessionId);
   }
 
   /** Exit mux mode -- disconnect, disable prefix key, hide status bar. */
   exitMuxMode(): void {
-    if (!this.inMuxMode) return;
-    this.inMuxMode = false;
+    exitMuxModeImpl(this.getMuxSessionContext());
+  }
 
-    console.info("[INFO][FRONTEND] Exiting mux mode");
-
-    // Exit copy mode if active
-    if (this.copyModeManager) {
-      this.copyModeManager.exit();
-      this.copyModeManager = null;
-      this.copyModeKeybinds = null;
-    }
-
-    // Re-enable original PTY output
-    if (this.ptyHandlerHandle) {
-      this.ptyHandlerHandle.suppressOriginalPty = false;
-    }
-
-    // Screen restoration is now handled by the daemon's shadow VT100 parser.
-    // No need to save frontend snapshots (WASM serialization/deserialization is slow).
-
-    // Restore original grid
-    if (this.muxOriginalGrid && this.state) {
-      this.state.swapPrimaryGrid(this.muxOriginalGrid);
-      this.registerCoreCallbacks(this.state.getActiveCore());
-      if (this.renderer) {
-        this.renderer.forceRender(this.state);
-      }
-      this.muxOriginalGrid = null;
-    }
-
-    // Clean up multi-pane state
-    if (this.muxLayoutRoot) {
-      this.exitMultiPaneMode(null);
-    }
-
-    // Reset mux window tracking
-    this.muxWindows = [];
-    this.activeMuxWindowIndex = 0;
-    this.muxPaneIds = [];
-    this.muxPendingWindowCount = 0;
-    this.muxIsReattaching = false;
-    this.muxPendingSplitCount = 0;
-    this.muxPaneGrids.clear();
-    this.emitMuxStateChange();
-
-    // Disable prefix key handling
-    if (this.keyboardHandler) {
-      this.keyboardHandler.disableMuxMode();
-    }
-
-    // Restore direct PTY writes
-    if (this.ptyClient) {
-      this.ptyClient.setWriteProxy(null);
-    }
-
-    // Disconnect
-    if (this.muxClient) {
-      this.muxClient.disconnect().catch(() => {});
-      this.muxClient = null;
-    }
-
-    // Trigger host shell prompt redraw via SIGWINCH.
-    // During mux mode, the host shell's prompt output was suppressed.
-    // A resize kick forces the shell to redraw its prompt line.
-    if (this.ptyClient && this.state) {
-      const cols = this.state.getWasmCore().cols();
-      const rows = this.state.getWasmCore().rows();
-      this.ptyClient.resize(cols - 1, rows);
-      this.ptyClient.resize(cols, rows);
-    }
+  /** Build the context object for mux copy mode functions. */
+  private getMuxCopyModeContext(): MuxCopyModeContext {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      get state() { return self.state; },
+      get renderer() { return self.renderer; },
+      get ptyClient() { return self.ptyClient; },
+      get inMuxMode() { return self.inMuxMode; },
+      get copyModeManager() { return self.copyModeManager; },
+      set copyModeManager(v) { self.copyModeManager = v; },
+      get copyModeKeybinds() { return self.copyModeKeybinds; },
+      set copyModeKeybinds(v) { self.copyModeKeybinds = v; },
+    };
   }
 
   /** Enter mux copy mode with vi or emacs keybindings. */
   private enterCopyMode(): void {
-    if (!this.state || !this.inMuxMode) return;
-
-    const core = this.state.getWasmCore();
-    const cols = core.cols();
-    const rows = core.rows();
-
-    this.copyModeManager = new CopyModeManager();
-
-    // Default to vi keybindings (no copy_mode setting exists yet)
-    const muxSettings = SettingsService.getCached()?.mux;
-    const mode = (muxSettings as unknown as Record<string, unknown> | undefined)?.copy_mode as string | undefined ?? "vi";
-
-    if (mode === "emacs") {
-      this.copyModeKeybinds = new EmacsKeybinds(this.copyModeManager, cols, rows);
-    } else {
-      this.copyModeKeybinds = new ViKeybinds(this.copyModeManager, cols, rows);
-    }
-
-    this.copyModeManager.setOnStateChange((state) => {
-      if (state === "inactive") {
-        this.exitCopyMode();
-      }
-    });
-
-    this.copyModeManager.setOnSelectionChange(() => {
-      if (this.renderer && this.state) {
-        this.renderer.forceRender(this.state);
-      }
-    });
-
-    this.copyModeManager.enter();
-    console.info("[INFO][FRONTEND] Entered mux copy mode");
+    enterCopyModeImpl(this.getMuxCopyModeContext());
   }
 
   /** Exit mux copy mode. */
   private exitCopyMode(): void {
-    this.copyModeManager = null;
-    this.copyModeKeybinds = null;
-    if (this.renderer && this.state) {
-      this.renderer.forceRender(this.state);
-    }
-    console.info("[INFO][FRONTEND] Exited mux copy mode");
+    exitCopyModeImpl(this.getMuxCopyModeContext());
   }
 
   /** Handle keyboard input during copy mode. Returns true if the key was consumed. */
   private handleCopyModeKey(event: KeyboardEvent): boolean {
-    if (!this.copyModeManager || !this.copyModeKeybinds) return false;
-    if (!this.copyModeManager.isActive) return false;
-
-    // Save selection before handling key (yank clears it and exits copy mode)
-    const preYankSelection = this.copyModeManager.getSelection();
-
-    let consumed: boolean;
-    if (this.copyModeKeybinds instanceof EmacsKeybinds) {
-      consumed = this.copyModeKeybinds.handleKeyEvent(event);
-    } else {
-      consumed = (this.copyModeKeybinds as ViKeybinds).handleKey(event.key);
-    }
-
-    if (!consumed) return false;
-
-    // If copy mode just exited and we had a selection, it was a yank/copy action
-    if (!this.copyModeManager.isActive && preYankSelection) {
-      this.copySelectionToClipboard(preYankSelection);
-    }
-
-    return true;
+    return handleCopyModeKeyImpl(this.getMuxCopyModeContext(), event);
   }
 
   /** Extract text from the terminal grid for the given selection and copy to clipboard. */
   private async copySelectionToClipboard(selection: CopyModeSelection): Promise<void> {
-    if (!this.state) return;
-
-    const text = this.state.extractText(
-      selection.startCol,
-      selection.startRow,
-      selection.endCol,
-      selection.endRow,
-    );
-
-    if (!text) return;
-
-    try {
-      await navigator.clipboard.writeText(text);
-      console.info(`[INFO][FRONTEND] Copy mode: copied ${text.length} chars to clipboard`);
-    } catch (e) {
-      console.error("[ERROR][FRONTEND] Copy mode clipboard write failed:", e);
-    }
+    await copySelectionToClipboardImpl(this.getMuxCopyModeContext(), selection);
   }
 
   /** Paste clipboard text into the active PTY (mux paste action). */
   private async pasteFromClipboard(): Promise<void> {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text && this.ptyClient) {
-        const data = new TextEncoder().encode(text);
-        await this.ptyClient.write(data);
-        console.info(`[INFO][FRONTEND] Mux paste: ${text.length} chars`);
-      }
-    } catch (e) {
-      console.error("[ERROR][FRONTEND] Mux paste failed:", e);
-    }
+    await pasteFromClipboardImpl(this.getMuxCopyModeContext());
   }
 
   /** Handle mux action dispatched by PrefixKeyHandler. */
   private handleMuxAction(action: MuxAction): void {
-    console.info(`[INFO][FRONTEND] Mux action: ${action.type}`);
-
-    switch (action.type) {
-      case "detach":
-        // Await Detach send before disconnecting to avoid race with disconnect()
-        this.muxClient?.sendControl(MuxMessageType.Detach, 0)
-          .catch(() => {})
-          .finally(() => this.exitMuxMode());
-        break;
-      case "new-window": {
-        // Actual pane ID will arrive via PaneCreated event
-        this.muxPendingWindowCount++;
-        this.sendMuxControl(MuxMessageType.CreateWindow, 0);
-        break;
-      }
-      case "split-vertical": {
-        const activePaneId = this.getActiveMuxPaneId();
-        if (activePaneId != null) {
-          this.muxPendingSplitCount++;
-          this.muxPendingSplitDirection = "vertical";
-          this.sendMuxControl(MuxMessageType.SplitPane, activePaneId, new Uint8Array([0x01]));
-        }
-        break;
-      }
-      case "split-horizontal": {
-        const activePaneId = this.getActiveMuxPaneId();
-        if (activePaneId != null) {
-          this.muxPendingSplitCount++;
-          this.muxPendingSplitDirection = "horizontal";
-          this.sendMuxControl(MuxMessageType.SplitPane, activePaneId, new Uint8Array([0x00]));
-        }
-        break;
-      }
-      case "close-pane": {
-        const activePaneId = this.getActiveMuxPaneId();
-        if (activePaneId != null) {
-          this.sendMuxControl(MuxMessageType.DestroyPane, activePaneId);
-        }
-        break;
-      }
-      case "next-window": {
-        if (this.muxWindows.length > 1) {
-          const prev = this.activeMuxWindowIndex;
-          this.activeMuxWindowIndex = (this.activeMuxWindowIndex + 1) % this.muxWindows.length;
-          this.switchMuxWindow(prev);
-        }
-        break;
-      }
-      case "prev-window": {
-        if (this.muxWindows.length > 1) {
-          const prev = this.activeMuxWindowIndex;
-          this.activeMuxWindowIndex = (this.activeMuxWindowIndex - 1 + this.muxWindows.length) % this.muxWindows.length;
-          this.switchMuxWindow(prev);
-        }
-        break;
-      }
-      case "rename-window": {
-        const currentName = this.muxWindows[this.activeMuxWindowIndex]?.name ?? "";
-        const newName = prompt("Rename window:", currentName);
-        if (newName != null && newName !== "") {
-          const win = this.muxWindows[this.activeMuxWindowIndex];
-          if (win) {
-            win.name = newName;
-            this.emitMuxStateChange();
-          }
-          // Notify daemon: RenameWindowMsg { name: String }
-          // bincode for String = u64 length (LE) + UTF-8 bytes
-          const nameBytes = new TextEncoder().encode(newName);
-          const payload = new Uint8Array(8 + nameBytes.length);
-          const view = new DataView(payload.buffer);
-          view.setBigUint64(0, BigInt(nameBytes.length), true);
-          payload.set(nameBytes, 8);
-          const windowId = win?.id ?? 0;
-          this.sendMuxControl(MuxMessageType.RenameWindow, windowId, payload);
-        }
-        break;
-      }
-      case "prefix-passthrough":
-        // Send the prefix key itself to PTY
-        if (this.ptyClient) {
-          const muxSettings = SettingsService.getCached()?.mux;
-          const prefix = muxSettings?.prefix ?? "Ctrl+B";
-          const byte = this.prefixKeyToByte(prefix);
-          if (byte !== null) {
-            this.ptyClient.write(new Uint8Array([byte])).catch(() => {});
-          }
-        }
-        break;
-      case "next-pane": {
-        if (this.muxLayoutRoot) {
-          const paneIds = getAllPaneIds(this.muxLayoutRoot);
-          const currentIdx = paneIds.indexOf(this.muxActivePaneId!);
-          const nextIdx = (currentIdx + 1) % paneIds.length;
-          this.setActiveMuxPane(paneIds[nextIdx]!);
-        }
-        break;
-      }
-      case "prev-pane": {
-        if (this.muxLayoutRoot) {
-          const paneIds = getAllPaneIds(this.muxLayoutRoot);
-          const currentIdx = paneIds.indexOf(this.muxActivePaneId!);
-          const prevIdx = (currentIdx - 1 + paneIds.length) % paneIds.length;
-          this.setActiveMuxPane(paneIds[prevIdx]!);
-        }
-        break;
-      }
-      case "zoom-toggle":
-        this.toggleMuxZoom();
-        break;
-      case "copy-mode":
-        this.enterCopyMode();
-        break;
-      case "paste":
-        this.pasteFromClipboard();
-        break;
-    }
+    handleMuxActionImpl(this.getMuxActionContext(), action);
   }
 
   /** Send a control message to the mux daemon. */
   private sendMuxControl(msgType: number, paneId: number, payload?: Uint8Array): void {
-    if (!this.muxClient) return;
-    this.muxClient.sendControl(msgType, paneId, payload).catch((e) => {
-      console.error(`[ERROR][FRONTEND] Mux control failed (type=0x${msgType.toString(16)}):`, e);
-    });
-  }
-
-  /** Convert a prefix keybind string to a control byte (e.g., "Ctrl+B" → 0x02). */
-  private prefixKeyToByte(prefix: string): number | null {
-    const match = prefix.match(/^Ctrl\+([A-Z])$/i);
-    if (match) {
-      return match[1]!.toUpperCase().charCodeAt(0) - 0x40; // Ctrl+A=1, Ctrl+B=2, etc.
-    }
-    return null;
+    sendMuxControlImpl(this.getMuxActionContext(), msgType, paneId, payload);
   }
 
   /** Get the active mux pane ID (multi-pane or single-pane mode). */
   private getActiveMuxPaneId(): number | null {
-    if (this.muxActivePaneId != null) return this.muxActivePaneId;
-    return this.muxPaneIds[this.activeMuxWindowIndex] ?? null;
+    return getActiveMuxPaneIdImpl(this.getMuxActionContext());
+  }
+
+  /** Build the context object for mux action handler functions. */
+  private getMuxActionContext(): MuxActionContext {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      getMuxClient: () => self.muxClient,
+      getPtyClient: () => self.ptyClient,
+      getMuxWindows: () => self.muxWindows,
+      getActiveMuxWindowIndex: () => self.activeMuxWindowIndex,
+      setActiveMuxWindowIndex: (index) => { self.activeMuxWindowIndex = index; },
+      getMuxPaneIds: () => self.muxPaneIds,
+      getMuxPendingWindowCount: () => self.muxPendingWindowCount,
+      setMuxPendingWindowCount: (count) => { self.muxPendingWindowCount = count; },
+      getMuxPendingSplitCount: () => self.muxPendingSplitCount,
+      setMuxPendingSplitCount: (count) => { self.muxPendingSplitCount = count; },
+      setMuxPendingSplitDirection: (direction) => { self.muxPendingSplitDirection = direction; },
+      getMuxActivePaneId: () => self.muxActivePaneId,
+      getMuxLayoutRoot: () => self.muxLayoutRoot,
+      switchMuxWindow: (previousIndex?) => self.switchMuxWindow(previousIndex),
+      emitMuxStateChange: () => self.emitMuxStateChange(),
+      setActiveMuxPane: (paneId) => self.setActiveMuxPane(paneId),
+      toggleMuxZoom: () => self.toggleMuxZoom(),
+      enterCopyMode: () => self.enterCopyMode(),
+      pasteFromClipboard: () => self.pasteFromClipboard(),
+      exitMuxMode: () => self.exitMuxMode(),
+    };
+  }
+
+  /** Build the context object for multi-pane functions. */
+  private getMuxMultiPaneContext(): MuxMultiPaneContext {
+    return {
+      terminalRoot: this.terminalRoot,
+      container: this.container,
+      state: this.state,
+      renderer: this.renderer,
+      charSize: this.charSize,
+      muxLayoutRoot: this.muxLayoutRoot,
+      muxActivePaneId: this.muxActivePaneId,
+      muxPaneCanvases: this.muxPaneCanvases,
+      muxPaneContainer: this.muxPaneContainer,
+      muxPreZoomLayout: this.muxPreZoomLayout,
+      getActiveMuxPaneId: () => this.getActiveMuxPaneId(),
+      sendMuxControl: (msgType, paneId, payload) => this.sendMuxControl(msgType, paneId, payload),
+      registerCoreCallbacks: (core) => this.registerCoreCallbacks(core),
+      initMuxDragResize: () => this.initMuxDragResize(),
+    };
+  }
+
+  /** Sync mutable context fields back after a multi-pane function call. */
+  private syncMuxMultiPaneContext(ctx: MuxMultiPaneContext): void {
+    this.muxLayoutRoot = ctx.muxLayoutRoot;
+    this.muxActivePaneId = ctx.muxActivePaneId;
+    this.muxPaneContainer = ctx.muxPaneContainer;
+    this.muxPreZoomLayout = ctx.muxPreZoomLayout;
   }
 
   /** Handle a split pane creation from the daemon. */
   private handleMuxSplitPaneCreated(newPaneId: number, direction: SplitDirection): void {
-    if (!this.state || !this.terminalRoot) return;
-
-    const activePaneId = this.getActiveMuxPaneId();
-    if (activePaneId == null) return;
-
-    // First split: transition from single-canvas to multi-canvas mode
-    if (!this.muxLayoutRoot) {
-      this.initMultiPaneMode(activePaneId);
-    }
-
-    // Split the active pane in the layout tree
-    const containerWidth = this.terminalRoot.clientWidth;
-    const containerHeight = this.terminalRoot.clientHeight;
-    const newLayout = splitLayoutPane(
-      this.muxLayoutRoot!, activePaneId, newPaneId, direction,
-      containerWidth, containerHeight,
-      this.charSize.width, this.charSize.height,
-    );
-    if (!newLayout) {
-      console.warn("[WARN][FRONTEND] Split refused: pane too small");
-      return;
-    }
-    this.muxLayoutRoot = newLayout;
-
-    // Create canvas and renderer for the new pane
-    this.createPaneCanvas(newPaneId);
-
-    // Set new pane as active
-    this.setActiveMuxPane(newPaneId);
-
-    // Apply layout to all pane canvases
-    this.applyMuxLayout();
-
-    // Send resize messages for all panes based on new layout
-    this.sendPaneResizes();
-
-    console.info(`[INFO][FRONTEND] Split pane created: id=${newPaneId}, direction=${direction}`);
+    const ctx = this.getMuxMultiPaneContext();
+    handleMuxSplitPaneCreatedImpl(ctx, newPaneId, direction);
+    this.syncMuxMultiPaneContext(ctx);
   }
 
   /** Initialize multi-pane mode from single-pane mode. */
   private initMultiPaneMode(existingPaneId: number): void {
-    if (!this.terminalRoot || !this.state) return;
-
-    // Create overlay container for pane canvases
-    if (!this.muxPaneContainer) {
-      this.muxPaneContainer = document.createElement("div");
-      this.muxPaneContainer.className = "mux-pane-container";
-      this.muxPaneContainer.style.position = "absolute";
-      this.muxPaneContainer.style.inset = "0";
-      this.terminalRoot.appendChild(this.muxPaneContainer);
-    }
-    this.muxPaneContainer.style.display = "block";
-
-    // Initialize layout tree with existing pane as single leaf
-    this.muxLayoutRoot = { type: "leaf", paneId: existingPaneId };
-
-    // Get the current grid and renderer for the existing pane
-    const existingGrid = this.state.getPrimaryGrid();
-    if (!existingGrid) return;
-
-    // Create a pane canvas for the existing pane
-    this.createPaneCanvas(existingPaneId);
-
-    // Move the existing grid into the pane canvas state
-    const paneEntry = this.muxPaneCanvases.get(existingPaneId);
-    if (paneEntry) {
-      // Dispose the auto-created grid and replace with the existing one
-      paneEntry.grid.dispose();
-      paneEntry.grid = existingGrid;
-      paneEntry.state.swapPrimaryGrid(existingGrid);
-    }
-
-    // Hide the main canvas (renderer manages it)
-    const mainCanvas = this.terminalRoot.querySelector("canvas:not(.mux-pane-canvas)") as HTMLCanvasElement | null;
-    if (mainCanvas) {
-      mainCanvas.style.display = "none";
-    }
-
-    this.muxActivePaneId = existingPaneId;
-
-    // Wire up drag-resize for pane borders
-    this.initMuxDragResize();
+    const ctx = this.getMuxMultiPaneContext();
+    initMultiPaneModeImpl(ctx, existingPaneId);
+    this.syncMuxMultiPaneContext(ctx);
   }
 
   /** Create a canvas element and renderer for a new pane. */
   private createPaneCanvas(paneId: number): void {
-    if (!this.muxPaneContainer || !this.state) return;
-
-    const container = document.createElement("div");
-    container.className = "mux-pane";
-    container.dataset.paneId = String(paneId);
-    container.style.position = "absolute";
-    container.style.overflow = "hidden";
-    container.style.boxSizing = "border-box";
-
-    this.muxPaneContainer.appendChild(container);
-
-    // Create a WASM grid and TerminalState for this pane
-    const cols = this.state.getWasmCore().cols();
-    const rows = this.state.getWasmCore().rows();
-    const grid = new WasmGrid(cols, rows, 10000);
-    const paneState = new TerminalState(cols, rows);
-    paneState.swapPrimaryGrid(grid);
-
-    // Create a renderer inside this pane container
-    const computedStyle = window.getComputedStyle(this.container);
-    const fontFamily = computedStyle.fontFamily || "monospace";
-    const fontSize = parseFloat(computedStyle.fontSize) || 14;
-    const paneRenderer = createRenderer(container, fontFamily, fontSize);
-
-    // Apply cached settings to the pane renderer
-    const cachedSettings = SettingsService.getCached();
-    if (cachedSettings?.terminal_color_scheme) {
-      const userScheme = cachedSettings.custom_color_schemes?.find(
-        (s) => s.name === cachedSettings.terminal_color_scheme,
-      );
-      if (userScheme) {
-        paneRenderer.setUserColorScheme(userScheme);
-      } else {
-        paneRenderer.applySetting("colorScheme", cachedSettings.terminal_color_scheme);
-      }
-    }
-    if (cachedSettings?.cursor_style) {
-      paneRenderer.applySetting("cursorStyle", cachedSettings.cursor_style);
-    }
-    if (cachedSettings?.bold_brightens_ansi_colors !== undefined) {
-      paneRenderer.applySetting("boldBrightensAnsiColors", cachedSettings.bold_brightens_ansi_colors);
-    }
-
-    const canvas = container.querySelector("canvas") as HTMLCanvasElement;
-    this.muxPaneCanvases.set(paneId, { container, canvas, grid, state: paneState, renderer: paneRenderer });
+    const ctx = this.getMuxMultiPaneContext();
+    createPaneCanvasImpl(ctx, paneId);
+    this.syncMuxMultiPaneContext(ctx);
   }
 
   /** Set the active pane and update visual indicators. */
   private setActiveMuxPane(paneId: number): void {
-    this.muxActivePaneId = paneId;
-
-    // Update active pane border styling
-    if (this.muxPaneContainer && this.muxLayoutRoot) {
-      const layoutResults = calculateLayout(
-        this.muxLayoutRoot,
-        this.muxPaneContainer.clientWidth || this.terminalRoot!.clientWidth,
-        this.muxPaneContainer.clientHeight || this.terminalRoot!.clientHeight,
-        this.charSize.width,
-        this.charSize.height,
-      );
-      applyLayoutToContainer(this.muxPaneContainer, layoutResults, paneId);
-    }
+    const ctx = this.getMuxMultiPaneContext();
+    setActiveMuxPaneImpl(ctx, paneId);
+    this.syncMuxMultiPaneContext(ctx);
   }
 
   /** Apply the current layout tree to position all pane canvases. */
   private applyMuxLayout(): void {
-    if (!this.muxLayoutRoot || !this.muxPaneContainer || !this.terminalRoot) return;
-
-    const containerWidth = this.muxPaneContainer.clientWidth || this.terminalRoot.clientWidth;
-    const containerHeight = this.muxPaneContainer.clientHeight || this.terminalRoot.clientHeight;
-
-    const results = calculateLayout(
-      this.muxLayoutRoot,
-      containerWidth,
-      containerHeight,
-      this.charSize.width,
-      this.charSize.height,
-    );
-
-    applyLayoutToContainer(this.muxPaneContainer, results, this.muxActivePaneId);
-
-    // Update each pane's canvas dimensions, grid size, and state
-    for (const result of results) {
-      const paneEntry = this.muxPaneCanvases.get(result.paneId);
-      if (!paneEntry) continue;
-
-      // Resize the renderer canvas
-      paneEntry.renderer.resize(result.cols, result.rows);
-
-      // Resize the WASM grid and terminal state to match
-      if (paneEntry.grid.cols !== result.cols || paneEntry.grid.rows !== result.rows) {
-        paneEntry.state.resize(result.cols, result.rows);
-      }
-    }
+    const ctx = this.getMuxMultiPaneContext();
+    applyMuxLayoutImpl(ctx);
+    this.syncMuxMultiPaneContext(ctx);
   }
 
   /** Send resize messages to daemon for all panes in the current layout. */
   private sendPaneResizes(): void {
-    if (!this.muxLayoutRoot || !this.muxPaneContainer || !this.terminalRoot) return;
-
-    const containerWidth = this.muxPaneContainer.clientWidth || this.terminalRoot.clientWidth;
-    const containerHeight = this.muxPaneContainer.clientHeight || this.terminalRoot.clientHeight;
-
-    const results = calculateLayout(
-      this.muxLayoutRoot,
-      containerWidth,
-      containerHeight,
-      this.charSize.width,
-      this.charSize.height,
-    );
-
-    for (const result of results) {
-      // Encode cols/rows as bincode-compatible u16 LE pairs
-      const payload = new Uint8Array(4);
-      payload[0] = result.cols & 0xFF;
-      payload[1] = (result.cols >> 8) & 0xFF;
-      payload[2] = result.rows & 0xFF;
-      payload[3] = (result.rows >> 8) & 0xFF;
-      this.sendMuxControl(MuxMessageType.Resize, result.paneId, payload);
-    }
+    const ctx = this.getMuxMultiPaneContext();
+    sendPaneResizesImpl(ctx);
+    this.syncMuxMultiPaneContext(ctx);
   }
 
   /** Remove a pane from the multi-pane layout. */
   private removeMuxPane(paneId: number): void {
-    // If zoomed and removing the zoomed pane, unzoom first
-    if (this.muxPreZoomLayout && paneId === this.muxActivePaneId) {
-      this.muxLayoutRoot = this.muxPreZoomLayout;
-      this.muxPreZoomLayout = null;
-      for (const [, p] of this.muxPaneCanvases) {
-        p.container.style.display = "";
-      }
-    }
-
-    // Remove from layout tree
-    if (this.muxLayoutRoot) {
-      const newRoot = removeLayoutPane(this.muxLayoutRoot, paneId);
-      if (newRoot === null) {
-        // Last pane removed -- this shouldn't happen here, handled by handleMuxPaneExited
-        return;
-      }
-      this.muxLayoutRoot = newRoot;
-    }
-
-    // Clean up pane canvas and state (state.dispose() also frees the WASM grid)
-    const paneEntry = this.muxPaneCanvases.get(paneId);
-    if (paneEntry) {
-      paneEntry.state.dispose();
-      paneEntry.container.remove();
-      this.muxPaneCanvases.delete(paneId);
-    }
-
-    // If only one pane left, exit multi-pane mode
-    const remainingPanes = this.muxLayoutRoot ? getAllPaneIds(this.muxLayoutRoot) : [];
-    if (remainingPanes.length <= 1) {
-      this.exitMultiPaneMode(remainingPanes[0] ?? null);
-      return;
-    }
-
-    // Select new active pane if needed
-    if (this.muxActivePaneId === paneId) {
-      this.setActiveMuxPane(remainingPanes[0]!);
-    }
-
-    this.applyMuxLayout();
-    this.sendPaneResizes();
+    const ctx = this.getMuxMultiPaneContext();
+    removeMuxPaneImpl(ctx, paneId);
+    this.syncMuxMultiPaneContext(ctx);
   }
 
   /** Exit multi-pane mode, returning to single-canvas rendering. */
   private exitMultiPaneMode(remainingPaneId: number | null): void {
-    // Restore the remaining pane's grid as the main grid
-    if (remainingPaneId != null) {
-      const paneEntry = this.muxPaneCanvases.get(remainingPaneId);
-      if (paneEntry && this.state) {
-        this.state.swapPrimaryGrid(paneEntry.grid);
-        this.registerCoreCallbacks(this.state.getActiveCore());
-        // Swap a dummy grid into the pane state before disposing to avoid
-        // double-freeing the grid we just moved into this.state
-        const dummyGrid = new WasmGrid(1, 1, 0);
-        paneEntry.state.swapPrimaryGrid(dummyGrid);
-        paneEntry.state.dispose();
-        paneEntry.container.remove();
-        this.muxPaneCanvases.delete(remainingPaneId);
-      }
-    }
+    const ctx = this.getMuxMultiPaneContext();
+    exitMultiPaneModeImpl(ctx, remainingPaneId);
+    this.syncMuxMultiPaneContext(ctx);
+  }
 
-    // Clean up any remaining pane canvases (state.dispose() also frees the WASM grid)
-    for (const [, paneEntry] of this.muxPaneCanvases) {
-      paneEntry.state.dispose();
-      paneEntry.container.remove();
-    }
-    this.muxPaneCanvases.clear();
-
-    // Remove pane container
-    if (this.muxPaneContainer) {
-      this.muxPaneContainer.remove();
-      this.muxPaneContainer = null;
-    }
-
-    // Show the main canvas again
-    if (this.terminalRoot) {
-      const mainCanvas = this.terminalRoot.querySelector("canvas:not(.mux-pane-canvas)") as HTMLCanvasElement | null;
-      if (mainCanvas) {
-        mainCanvas.style.display = "block";
-      }
-    }
-
-    this.muxLayoutRoot = null;
-    this.muxActivePaneId = null;
-    this.muxPreZoomLayout = null;
-
-    if (this.state && this.renderer) {
-      this.renderer.forceRender(this.state);
-    }
+  /** Build the context object for drag-resize functions. */
+  private getMuxDragResizeContext(): MuxDragResizeContext {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    return {
+      getMuxPaneContainer: () => self.muxPaneContainer,
+      getMuxLayoutRoot: () => self.muxLayoutRoot,
+      setMuxLayoutRoot: (layout) => { self.muxLayoutRoot = layout; },
+      getCharSize: () => self.charSize,
+      getMuxDragState: () => self.muxDragState,
+      setMuxDragState: (state) => { self.muxDragState = state; },
+      getMuxActivePaneId: () => self.muxActivePaneId,
+      getMuxPaneCanvases: () => self.muxPaneCanvases,
+      getMuxPreZoomLayout: () => self.muxPreZoomLayout,
+      setMuxPreZoomLayout: (layout) => { self.muxPreZoomLayout = layout; },
+      applyMuxLayout: () => self.applyMuxLayout(),
+      sendPaneResizes: () => self.sendPaneResizes(),
+    };
   }
 
   /** Initialize drag-resize listeners on the mux pane container. */
   private initMuxDragResize(): void {
-    if (!this.muxPaneContainer) return;
-
-    this.muxPaneContainer.addEventListener("mousedown", (e) => {
-      if (!this.muxLayoutRoot || !this.muxPaneContainer) return;
-      const rect = this.muxPaneContainer.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      const results = calculateLayout(
-        this.muxLayoutRoot,
-        this.muxPaneContainer.clientWidth,
-        this.muxPaneContainer.clientHeight,
-        this.charSize.width,
-        this.charSize.height,
-      );
-
-      const hit = detectBorderHit(x, y, results);
-      if (!hit) return;
-
-      e.preventDefault();
-
-      this.muxDragState = {
-        direction: hit.direction,
-        paneA: hit.paneA,
-        paneB: hit.paneB,
-      };
-
-      document.addEventListener("mousemove", this.handleMuxDragMove);
-      document.addEventListener("mouseup", this.handleMuxDragEnd);
-    });
-
-    // Cursor change on hover
-    this.muxPaneContainer.addEventListener("mousemove", (e) => {
-      if (this.muxDragState) return;
-      if (!this.muxLayoutRoot || !this.muxPaneContainer) return;
-
-      const rect = this.muxPaneContainer.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      const results = calculateLayout(
-        this.muxLayoutRoot,
-        this.muxPaneContainer.clientWidth,
-        this.muxPaneContainer.clientHeight,
-        this.charSize.width,
-        this.charSize.height,
-      );
-
-      const hit = detectBorderHit(x, y, results);
-      this.muxPaneContainer.style.cursor = hit
-        ? (hit.direction === "vertical" ? "col-resize" : "row-resize")
-        : "";
-    });
+    initMuxDragResizeImpl(this.getMuxDragResizeContext());
   }
-
-  private handleMuxDragMove = (e: MouseEvent): void => {
-    if (!this.muxDragState || !this.muxLayoutRoot || !this.muxPaneContainer) return;
-
-    const containerRect = this.muxPaneContainer.getBoundingClientRect();
-    const containerWidth = this.muxPaneContainer.clientWidth;
-    const containerHeight = this.muxPaneContainer.clientHeight;
-
-    // Find the bounds of the parent split that contains both panes
-    const splitBounds = getSplitBounds(
-      this.muxLayoutRoot,
-      this.muxDragState.paneA,
-      this.muxDragState.paneB,
-      0, 0,
-      containerWidth,
-      containerHeight,
-      this.charSize.width,
-      this.charSize.height,
-    );
-    if (!splitBounds) return;
-
-    // Calculate ratio relative to the parent split's bounds
-    const mousePos = this.muxDragState.direction === "vertical"
-      ? e.clientX - containerRect.left
-      : e.clientY - containerRect.top;
-
-    const splitStart = this.muxDragState.direction === "vertical"
-      ? splitBounds.x
-      : splitBounds.y;
-
-    const splitSize = this.muxDragState.direction === "vertical"
-      ? splitBounds.width
-      : splitBounds.height;
-
-    const newRatio = Math.max(0.1, Math.min(0.9, (mousePos - splitStart) / splitSize));
-
-    this.muxLayoutRoot = resizeSplitBetween(
-      this.muxLayoutRoot,
-      this.muxDragState.paneA,
-      this.muxDragState.paneB,
-      newRatio,
-    );
-    this.applyMuxLayout();
-  };
-
-  private handleMuxDragEnd = (_e: MouseEvent): void => {
-    document.removeEventListener("mousemove", this.handleMuxDragMove);
-    document.removeEventListener("mouseup", this.handleMuxDragEnd);
-    this.muxDragState = null;
-
-    // Send resize messages for all panes after drag completes
-    this.sendPaneResizes();
-  };
 
   /** Toggle zoom on the active pane. */
   private toggleMuxZoom(): void {
-    if (!this.muxLayoutRoot || !this.muxPaneContainer || !this.muxActivePaneId) return;
-
-    if (this.muxPreZoomLayout) {
-      // Unzoom: restore saved layout
-      this.muxLayoutRoot = this.muxPreZoomLayout;
-      this.muxPreZoomLayout = null;
-
-      // Show all pane canvases
-      for (const [, pane] of this.muxPaneCanvases) {
-        pane.container.style.display = "";
-      }
-    } else {
-      // Zoom: save current layout, show only active pane
-      this.muxPreZoomLayout = this.muxLayoutRoot;
-      this.muxLayoutRoot = { type: "leaf", paneId: this.muxActivePaneId };
-
-      // Hide non-active pane canvases
-      for (const [paneId, pane] of this.muxPaneCanvases) {
-        pane.container.style.display = paneId === this.muxActivePaneId ? "" : "none";
-      }
-    }
-
-    this.applyMuxLayout();
-    this.sendPaneResizes();
-    console.info(`[INFO][FRONTEND] Mux zoom: ${this.muxPreZoomLayout ? "zoomed" : "restored"}`);
+    toggleMuxZoomImpl(this.getMuxDragResizeContext());
   }
 
   /** Render PTY output for a specific pane in multi-pane mode. */
