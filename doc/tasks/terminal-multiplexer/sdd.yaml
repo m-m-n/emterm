@@ -40,7 +40,8 @@ workflow:
     completed_at_commit: 86904340dda2395fd4474ae71561d31a15c4568a
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
-    status: not_started
+    status: completed
+    completed_at_commit: 6e03216e093e6c49fc8a9b0eb9439e7b1f030358
   - id: review
     status: not_started
 
