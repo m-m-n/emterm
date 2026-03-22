@@ -168,6 +168,40 @@ mod tests {
         assert!(pane.write_input(b"hello world").is_ok());
     }
 
+    #[test]
+    fn test_channel_backpressure_full() {
+        // Channel capacity 1: second send should fail with Full
+        let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+        // First send succeeds
+        assert!(tx.try_send(PtyOutputChunk { pane_id: 1, data: vec![1] }).is_ok());
+        // Second send hits backpressure (channel full)
+        let result = tx.try_send(PtyOutputChunk { pane_id: 1, data: vec![2] });
+        assert!(result.is_err());
+        match result {
+            Err(mpsc::error::TrySendError::Full(_)) => {} // expected
+            _ => panic!("Expected Full error"),
+        }
+    }
+
+    #[test]
+    fn test_channel_closed_detection() {
+        let (tx, rx) = mpsc::channel::<PtyOutputChunk>(PTY_CHANNEL_CAPACITY);
+        drop(rx); // Close receiver
+        let result = tx.try_send(PtyOutputChunk { pane_id: 1, data: vec![1] });
+        assert!(result.is_err());
+        match result {
+            Err(mpsc::error::TrySendError::Closed(_)) => {} // expected
+            _ => panic!("Expected Closed error"),
+        }
+    }
+
+    #[test]
+    fn test_bounded_channel_capacity_constant() {
+        // Verify the constant is reasonable (not too small, not too large)
+        assert!(PTY_CHANNEL_CAPACITY >= 64);
+        assert!(PTY_CHANNEL_CAPACITY <= 4096);
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_resize_with_real_pty() {

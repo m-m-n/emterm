@@ -94,7 +94,8 @@ pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<Se
 
     // Shared channel: all pane reader threads send output here,
     // and the select! loop forwards it to the client.
-    let (pane_output_tx, mut pane_output_rx) = mpsc::channel::<PtyOutputChunk>(1024);
+    let (pane_output_tx, mut pane_output_rx) =
+        mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
 
     // Reattach existing panes from active session: replay buffered output and reconnect
     {
@@ -785,14 +786,38 @@ fn pty_reader_loop(
                             pane_id,
                             data: data.clone(),
                         };
-                        if tx.blocking_send(chunk).is_err() {
-                            // Channel closed — GUI disconnected, switch to buffering
-                            log::info!("Pane {} switching to detached buffering mode", pane_id);
-                            let mut ring = DetachRingBuffer::new(
-                                crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-                            );
-                            ring.write(&data);
-                            *target = PaneOutputTarget::Detached(ring);
+                        // Try non-blocking send first; fall back to blocking on backpressure
+                        match tx.try_send(chunk) {
+                            Ok(()) => {}
+                            Err(mpsc::error::TrySendError::Full(chunk)) => {
+                                log::debug!(
+                                    "Pane {} backpressure: channel full, blocking",
+                                    pane_id
+                                );
+                                if tx.blocking_send(chunk).is_err() {
+                                    log::info!(
+                                        "Pane {} switching to detached buffering mode",
+                                        pane_id
+                                    );
+                                    let mut ring = DetachRingBuffer::new(
+                                        crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
+                                    );
+                                    ring.write(&data);
+                                    *target = PaneOutputTarget::Detached(ring);
+                                }
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => {
+                                // Channel closed — GUI disconnected
+                                log::info!(
+                                    "Pane {} switching to detached buffering mode",
+                                    pane_id
+                                );
+                                let mut ring = DetachRingBuffer::new(
+                                    crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
+                                );
+                                ring.write(&data);
+                                *target = PaneOutputTarget::Detached(ring);
+                            }
                         }
                     }
                     PaneOutputTarget::Detached(ring) => {

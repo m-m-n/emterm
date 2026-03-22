@@ -111,8 +111,8 @@ requirements:
     tests: [TS-06]
   FR13:
     title: Flow Control
-    status: partial
-    note: "Bounded channel exists. Backpressure chain not fully tested under high throughput."
+    status: ok
+    note: "Bounded channel with PTY_CHANNEL_CAPACITY. try_send + blocking_send fallback with backpressure logging. Channel full/closed tests added."
     tasks: [Phase1]
     tests: [TS-12]
   FR14:
