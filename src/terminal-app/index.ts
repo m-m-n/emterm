@@ -599,6 +599,20 @@ export class TerminalApp {
       getDisconnectResizeObserver: () => this.disconnectResizeObserver,
       setDisconnectResizeObserver: (fn) => { this.disconnectResizeObserver = fn; },
       setupResizeObserver: () => this.setupResizeObserver(),
+      onMuxResize: (cols, rows) => {
+        if (!this.inMuxMode || !this.muxClient) return;
+        if (this.muxLayoutRoot) {
+          // Multi-pane: recalculate layout and send all pane resizes
+          this.applyMuxLayout();
+          this.sendPaneResizes();
+        } else {
+          // Single-pane: send resize for the active pane
+          const activePaneId = this.getActiveMuxPaneId();
+          if (activePaneId != null) {
+            this.sendMuxPaneResize(activePaneId);
+          }
+        }
+      },
     };
   }
 
@@ -772,7 +786,24 @@ export class TerminalApp {
     } else {
       this.createFreshMuxGrid();
     }
+
+    // Send initial resize so daemon PTY matches actual terminal dimensions
+    this.sendMuxPaneResize(paneId);
+
     this.emitMuxStateChange();
+  }
+
+  /** Send a Resize message to the daemon for a single pane using current terminal dimensions. */
+  private sendMuxPaneResize(paneId: number): void {
+    if (!this.state || !this.muxClient) return;
+    const cols = this.state.getWasmCore().cols();
+    const rows = this.state.getWasmCore().rows();
+    const payload = new Uint8Array(4);
+    payload[0] = cols & 0xFF;
+    payload[1] = (cols >> 8) & 0xFF;
+    payload[2] = rows & 0xFF;
+    payload[3] = (rows >> 8) & 0xFF;
+    this.sendMuxControl(MuxMessageType.Resize, paneId, payload);
   }
 
   /** Handle a mux pane exiting (shell closed). Remove the window and switch if needed. */
