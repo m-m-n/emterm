@@ -520,56 +520,7 @@ fn allowed_socket_dirs() -> Vec<std::path::PathBuf> {
 pub fn mux_start_daemon() -> Result<String, String> {
     #[cfg(unix)]
     {
-        use super::daemon;
-
-        let sock_path = daemon::socket_path();
-
-        // Start daemon if not running (check socket file only, avoid ghost connections)
-        if !sock_path.exists() {
-            // Ensure parent directory exists
-            if let Some(parent) = sock_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create socket directory: {}", e))?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        parent,
-                        std::fs::Permissions::from_mode(0o700),
-                    );
-                }
-            }
-
-            let exe = std::env::current_exe()
-                .map_err(|e| format!("Failed to get executable path: {}", e))?;
-
-            let log_path = sock_path.with_file_name("mux-daemon.log");
-            let log_file = std::fs::File::create(&log_path)
-                .unwrap_or_else(|_| std::fs::File::create("/tmp/emterm-mux-daemon.log").unwrap());
-
-            std::process::Command::new(&exe)
-                .args(["mux", "--daemon"])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::from(log_file))
-                .spawn()
-                .map_err(|e| format!("Failed to spawn daemon: {}", e))?;
-
-            // Wait for daemon to start with exponential backoff
-            let mut started = false;
-            for i in 0..50 {
-                if daemon::is_daemon_running(&sock_path) {
-                    started = true;
-                    break;
-                }
-                let delay = std::cmp::min(10 * (1 << i.min(4)), 100);
-                std::thread::sleep(std::time::Duration::from_millis(delay));
-            }
-            if !started {
-                return Err("Failed to start mux daemon".to_string());
-            }
-        }
-
+        let sock_path = super::daemon::ensure_daemon_running()?;
         Ok(sock_path.to_string_lossy().to_string())
     }
     #[cfg(not(unix))]

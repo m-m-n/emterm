@@ -1,0 +1,368 @@
+//! Message handlers for mux IPC commands.
+
+use std::sync::Arc;
+
+use futures::SinkExt;
+use tokio::net::UnixStream;
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+use tokio_util::codec::Framed;
+
+use super::codec::MuxCodec;
+use super::protocol::*;
+use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
+use super::reattach::{collect_reattach_data, detach_session_panes, send_reattach_data};
+use crate::mux::session::manager::SessionManager;
+use crate::mux::session::pane::{PaneId, PtyOutputChunk};
+
+/// Spawn a PTY, create a pane, and start a reader thread for output streaming.
+pub(super) async fn handle_create_window(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    active_session_id: u32,
+) -> Result<(), bool> {
+    let spawned = match spawn_pty(80, 24) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("{}", e);
+            return Ok(());
+        }
+    };
+
+    let mut mgr = session_manager.lock().await;
+    let window_id = match mgr.create_window(active_session_id, "shell".to_string()) {
+        Some(id) => id,
+        None => {
+            log::error!("Failed to create window in session {}", active_session_id);
+            return Ok(());
+        }
+    };
+
+    let pane_id = match register_pane_and_start_reader(
+        &mut mgr,
+        active_session_id,
+        window_id,
+        80,
+        24,
+        spawned,
+        pane_output_tx,
+    ) {
+        Some(id) => id,
+        None => {
+            log::error!("Failed to register pane in window {}", window_id);
+            return Ok(());
+        }
+    };
+
+    drop(mgr);
+
+    log::info!(
+        "Created window {} with pane {} (PTY spawned)",
+        window_id,
+        pane_id
+    );
+
+    let resp = MuxMessage::control(MessageType::PaneCreated, pane_id, &pane_id);
+    if framed.send(resp).await.is_err() {
+        return Err(true);
+    }
+
+    Ok(())
+}
+
+/// Split an existing pane by spawning a new PTY in the same window.
+pub(super) async fn handle_split_pane(
+    msg: MuxMessage,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+) -> Result<(), bool> {
+    let _split_msg: SplitPaneMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid SplitPane payload");
+            return Ok(());
+        }
+    };
+
+    let source_pane_id = msg.pane_id;
+    log::info!("SplitPane requested for pane {}", source_pane_id);
+
+    // Find which session/window contains the source pane
+    let (session_id, window_id, cols, rows) = {
+        let mgr = session_manager.lock().await;
+        match mgr.find_pane(source_pane_id) {
+            Some((sid, wid)) => {
+                let session = mgr.get_session(sid).unwrap();
+                let window = session.windows.get(&wid).unwrap();
+                let pane = window.panes.get(&source_pane_id).unwrap();
+                (sid, wid, pane.cols, pane.rows)
+            }
+            None => {
+                log::warn!("SplitPane: pane {} not found", source_pane_id);
+                return Ok(());
+            }
+        }
+    };
+
+    let spawned = match spawn_pty(cols, rows) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("SplitPane: {}", e);
+            return Ok(());
+        }
+    };
+
+    let mut mgr = session_manager.lock().await;
+    let new_pane_id = match register_pane_and_start_reader(
+        &mut mgr,
+        session_id,
+        window_id,
+        cols,
+        rows,
+        spawned,
+        pane_output_tx,
+    ) {
+        Some(id) => id,
+        None => {
+            log::error!("SplitPane: failed to register pane in window {}", window_id);
+            return Ok(());
+        }
+    };
+
+    drop(mgr);
+
+    log::info!(
+        "Split pane {}: created new pane {} in window {}",
+        source_pane_id,
+        new_pane_id,
+        window_id
+    );
+
+    let resp = MuxMessage::control(MessageType::PaneCreated, new_pane_id, &new_pane_id);
+    if framed.send(resp).await.is_err() {
+        return Err(true);
+    }
+
+    Ok(())
+}
+
+/// Destroy a pane, removing it from its window. Cleans up empty windows and sessions.
+/// Signals daemon shutdown when all sessions become empty.
+pub(super) async fn handle_destroy_pane(
+    pane_id: PaneId,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    shutdown_tx: &tokio::sync::watch::Sender<bool>,
+) {
+    log::info!("DestroyPane requested for pane {}", pane_id);
+
+    let mut mgr = session_manager.lock().await;
+    let (session_id, window_id) = match mgr.find_pane(pane_id) {
+        Some(ids) => ids,
+        None => {
+            log::warn!("DestroyPane: pane {} not found", pane_id);
+            return;
+        }
+    };
+
+    // Remove pane from window (drops writer/master, closing PTY)
+    if let Some(session) = mgr.get_session_mut(session_id) {
+        if let Some(window) = session.windows.get_mut(&window_id) {
+            if let Some(mut pane) = window.remove_pane(pane_id) {
+                pane.mark_exited();
+                log::info!("Destroyed pane {}", pane_id);
+            }
+
+            if window.is_empty() {
+                session.remove_window(window_id);
+                log::info!(
+                    "Removed empty window {} from session {}",
+                    window_id,
+                    session_id
+                );
+
+                if session.is_empty() {
+                    mgr.remove_session(session_id);
+                    log::info!("Removed empty session {}", session_id);
+
+                    if mgr.is_empty() {
+                        log::info!("All sessions empty, daemon shutting down");
+                        let _ = shutdown_tx.send(true);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Rename a window, decoding the new name from the message payload.
+pub(super) async fn handle_rename_window(
+    msg: MuxMessage,
+    session_manager: &Arc<Mutex<SessionManager>>,
+) {
+    let rename_msg: RenameWindowMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid RenameWindow payload");
+            return;
+        }
+    };
+    let window_id = msg.pane_id;
+    log::info!(
+        "RenameWindow: window {} -> '{}'",
+        window_id,
+        rename_msg.name
+    );
+
+    let mut mgr = session_manager.lock().await;
+    let session_id = mgr.find_window_session(window_id);
+    match session_id {
+        Some(sid) => {
+            mgr.rename_window(sid, window_id, rename_msg.name);
+        }
+        None => {
+            log::warn!("RenameWindow: window {} not found", window_id);
+        }
+    }
+}
+
+/// Destroy a window and all its panes, cleaning up empty sessions.
+/// Signals daemon shutdown when all sessions become empty.
+pub(super) async fn handle_destroy_window(
+    window_id: u32,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    shutdown_tx: &tokio::sync::watch::Sender<bool>,
+) {
+    log::info!("DestroyWindow requested for window {}", window_id);
+
+    let mut mgr = session_manager.lock().await;
+
+    let session_id = match mgr.find_window_session(window_id) {
+        Some(id) => id,
+        None => {
+            log::warn!("DestroyWindow: window {} not found", window_id);
+            return;
+        }
+    };
+
+    // Mark all panes in the window as exited before removal
+    if let Some(session) = mgr.get_session_mut(session_id) {
+        if let Some(window) = session.windows.get_mut(&window_id) {
+            for pane in window.panes.values_mut() {
+                pane.mark_exited();
+            }
+        }
+    }
+
+    if let Some(session_empty) = mgr.remove_window(session_id, window_id) {
+        log::info!("Removed window {} from session {}", window_id, session_id);
+        if session_empty {
+            mgr.remove_session(session_id);
+            log::info!("Removed empty session {}", session_id);
+            if mgr.is_empty() {
+                log::info!("All sessions empty, daemon shutting down");
+                let _ = shutdown_tx.send(true);
+            }
+        }
+    }
+}
+
+/// Resize a pane's PTY to the requested dimensions.
+pub(super) async fn handle_resize(
+    msg: MuxMessage,
+    session_manager: &Arc<Mutex<SessionManager>>,
+) {
+    let resize_msg: ResizeMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid Resize payload");
+            return;
+        }
+    };
+
+    let pane_id = msg.pane_id;
+    let mut mgr = session_manager.lock().await;
+    let (session_id, window_id) = match mgr.find_pane(pane_id) {
+        Some(ids) => ids,
+        None => {
+            log::warn!("Resize: pane {} not found", pane_id);
+            return;
+        }
+    };
+
+    if let Some(session) = mgr.get_session_mut(session_id) {
+        if let Some(window) = session.windows.get_mut(&window_id) {
+            if let Some(pane) = window.panes.get_mut(&pane_id) {
+                if let Err(e) = pane.resize(resize_msg.cols, resize_msg.rows) {
+                    log::warn!("Resize pane {}: {}", pane_id, e);
+                } else {
+                    log::debug!(
+                        "Resized pane {} to {}x{}",
+                        pane_id,
+                        resize_msg.cols,
+                        resize_msg.rows
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Handle Attach message: switch the client to a different session.
+///
+/// Detaches panes from the current session, updates the active session,
+/// and reattaches panes from the new session with buffered output replay.
+pub(super) async fn handle_attach(
+    msg: MuxMessage,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    active_session_id: &mut u32,
+) -> Result<(), bool> {
+    let attach_msg: AttachMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid Attach payload");
+            return Ok(());
+        }
+    };
+
+    let new_session_id = attach_msg.session_id;
+    log::info!("Client attaching to session {}", new_session_id);
+
+    // Verify session exists
+    {
+        let mgr = session_manager.lock().await;
+        if mgr.get_session(new_session_id).is_none() {
+            log::warn!("Attach: session {} not found", new_session_id);
+            let err = ErrorMsg {
+                message: format!("Session {} not found", new_session_id),
+            };
+            let resp = MuxMessage::control(MessageType::Error, 0, &err);
+            let _ = framed.send(resp).await;
+            return Ok(());
+        }
+    }
+
+    // Detach from current session
+    detach_session_panes(session_manager, *active_session_id).await;
+
+    // Update active session
+    *active_session_id = new_session_id;
+
+    // Reattach to new session's panes
+    let reattach_data =
+        collect_reattach_data(session_manager, new_session_id, pane_output_tx).await;
+
+    if send_reattach_data(framed, &reattach_data).await.is_err() {
+        return Err(true);
+    }
+
+    log::info!(
+        "Attached to session {} with {} pane(s)",
+        new_session_id,
+        reattach_data.len()
+    );
+    Ok(())
+}
