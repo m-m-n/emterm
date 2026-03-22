@@ -30,6 +30,8 @@ export interface ResizeHandlerContext {
   getDisconnectResizeObserver: () => (() => void) | null;
   setDisconnectResizeObserver: (fn: (() => void) | null) => void;
   setupResizeObserver: () => void;
+  /** Optional callback to propagate resize to mux daemon panes. */
+  onMuxResize?: (cols: number, rows: number) => void;
 }
 
 /**
@@ -98,6 +100,9 @@ export function setupResizeObserver(ctx: ResizeHandlerContext): (() => void) | n
           console.debug("PTY resize skipped - session not yet started");
         }
       }
+
+      // Propagate resize to mux daemon panes if in mux mode
+      ctx.onMuxResize?.(newCols, newRows);
     },
   );
 }
@@ -147,6 +152,9 @@ export function handleCharSizeChange(ctx: ResizeHandlerContext): CharSize | null
 
   // Resize PTY
   ctx.getPtyClient()?.resize(cols, rows);
+
+  // Propagate resize to mux daemon panes if in mux mode
+  ctx.onMuxResize?.(cols, rows);
 
   return newCharSize;
 }
