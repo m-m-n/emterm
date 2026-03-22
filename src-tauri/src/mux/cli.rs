@@ -90,6 +90,55 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Execute the `emterm mux attach` command.
+///
+/// Attaches to an existing session. If no daemon is running or no sessions
+/// exist, prints an error instead of creating a new session.
+pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    check_emterm_environment().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    let sock_path = daemon::socket_path();
+
+    if !sock_path.exists() || !daemon::is_daemon_running(&sock_path) {
+        eprintln!("No mux sessions to attach to (daemon not running)");
+        eprintln!("Use 'emterm mux' to start a new session.");
+        return Ok(());
+    }
+
+    // Check if there are existing sessions with panes
+    #[cfg(unix)]
+    {
+        match cli_handshake() {
+            Ok((_stream, sessions)) => {
+                let has_panes = sessions.iter().any(|s| s.pane_count > 0);
+                if !has_panes {
+                    eprintln!("No active mux sessions to attach to");
+                    eprintln!("Use 'emterm mux' to start a new session.");
+                    return Ok(());
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to connect to daemon: {}", e);
+                return Ok(());
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        eprintln!("Mux is not supported on this platform");
+        return Ok(());
+    }
+
+    // Output OSC sequence to signal GUI
+    let sock_str = sock_path.to_string_lossy();
+    print!("\x1b]777;emterm;mux;attach;{};0\x1b\\", sock_str);
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+
+    Ok(())
+}
+
 /// Connect to the daemon, perform handshake, and return session list.
 /// Uses blocking I/O since CLI commands run in a synchronous context.
 #[cfg(unix)]
