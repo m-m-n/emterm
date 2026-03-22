@@ -232,53 +232,38 @@
   color: var(--md-sys-color-on-surface-variant);
 }
 
-/* Mux Sub-Tabs */
-.mux-sub-tabs {
-  display: flex;
-  gap: 2px;
-  margin-left: 8px;
-  position: relative;
-  z-index: 1;
-  overflow: hidden;
-  max-width: 0;
-  opacity: 0;
-  transition: max-width 0.3s ease, opacity 0.2s ease;
+/* Mux Tab Group — display:contents so window tabs join parent flex layout */
+.mux-tab-group {
+  display: contents;
 }
 
-/* Expand sub-tabs when parent tab is active */
-.active .mux-sub-tabs {
-  max-width: 600px;
-  opacity: 1;
+/* L-shape: vertical left line on first window tab */
+.mux-window-tab:first-child {
+  border-left: 2px solid var(--md-sys-color-outline-variant);
 }
 
-/* Compact label shown when tab is inactive */
-.mux-compact-label {
-  font-size: 11px;
-  margin-left: 4px;
-  opacity: 0.5;
-  transition: opacity 0.2s ease;
+/* L-shape: horizontal bottom line on all window tabs */
+.mux-window-tab {
+  box-shadow: inset 0 -1px 0 var(--md-sys-color-outline-variant);
 }
 
-/* Hide compact label when tab is active (sub-tabs shown instead) */
-.active .mux-compact-label {
-  opacity: 0;
-  width: 0;
-  overflow: hidden;
-}
-
-.mux-sub-tab {
-  font-size: 11px;
-  padding: 2px 6px;
-  border-radius: var(--md-sys-shape-corner-extra-small);
-  opacity: 0.6;
-  white-space: nowrap;
-}
-
-.mux-sub-tab-active {
+/* Active window text color (only when group is the active tab) */
+.mux-tab-group.active .mux-window-active {
   color: var(--md-sys-color-primary);
-  font-weight: bold;
-  opacity: 1;
-  background: color-mix(in srgb, var(--md-sys-color-primary) 12%, transparent);
+}
+
+/* Active window indicator: 3px primary bar (only when group is active) */
+.mux-tab-group.active .mux-window-active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 32px);
+  height: 3px;
+  background-color: var(--md-sys-color-primary);
+  border-radius: 3px 3px 0 0;
+  z-index: 3;
 }
 
 /* Tab Content Container */

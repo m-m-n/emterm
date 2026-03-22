@@ -815,6 +815,17 @@ export class TerminalApp {
     createFreshMuxGridImpl(this.getMuxWindowManagerContext());
   }
 
+  /** Switch to a specific mux window by index (called from tab bar UI). */
+  public switchToMuxWindow(windowIndex: number): void {
+    if (!this.inMuxMode) return;
+    if (windowIndex < 0 || windowIndex >= this.muxWindows.length) return;
+    if (windowIndex === this.activeMuxWindowIndex) return;
+
+    const previousIndex = this.activeMuxWindowIndex;
+    this.activeMuxWindowIndex = windowIndex;
+    this.switchMuxWindow(previousIndex);
+  }
+
   /** Switch to the current activeMuxWindowIndex: swap WASM grids and update UI. */
   private switchMuxWindow(previousIndex?: number): void {
     switchMuxWindowImpl(this.getMuxWindowManagerContext(), previousIndex);
@@ -1210,7 +1221,17 @@ export class TerminalApp {
    * Used by TabManager to update the tab title
    */
   onTitleChange(callback: (title: string) => void): void {
-    this.titleChangeCallback = callback;
+    this.titleChangeCallback = (title: string) => {
+      // In mux mode, also update the active window's name
+      if (this.inMuxMode && this.muxWindows.length > 0) {
+        const activeWin = this.muxWindows[this.activeMuxWindowIndex];
+        if (activeWin && activeWin.name !== title) {
+          activeWin.name = title;
+          this.emitMuxStateChange();
+        }
+      }
+      callback(title);
+    };
   }
 
   /**
