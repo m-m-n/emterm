@@ -86,6 +86,13 @@ pub async fn handle_connection(stream: UnixStream, session_manager: Arc<Mutex<Se
         hello.protocol_version
     );
 
+    // CLI clients only need the session list from Welcome.
+    // Skip reattach and message loop to avoid stealing panes from GUI.
+    if hello.client_type == ClientType::Cli {
+        log::info!("CLI client served, disconnecting");
+        return;
+    }
+
     // Determine active session: use first session (auto-created "default")
     let mut active_session_id: u32 = {
         let mgr = session_manager.lock().await;
@@ -779,46 +786,52 @@ fn pty_reader_loop(
             }
             Ok(n) => {
                 let data = buf[..n].to_vec();
-                let mut target = output_target.lock().unwrap();
-                match &mut *target {
-                    PaneOutputTarget::Connected(tx) => {
-                        let chunk = PtyOutputChunk {
-                            pane_id,
-                            data: data.clone(),
-                        };
-                        // Try non-blocking send first; fall back to blocking on backpressure
-                        match tx.try_send(chunk) {
-                            Ok(()) => {}
-                            Err(mpsc::error::TrySendError::Full(chunk)) => {
-                                log::debug!(
-                                    "Pane {} backpressure: channel full, blocking",
-                                    pane_id
-                                );
-                                if tx.blocking_send(chunk).is_err() {
-                                    log::info!(
-                                        "Pane {} switching to detached buffering mode",
-                                        pane_id
-                                    );
+                // Lock briefly to try non-blocking send or clone the sender.
+                // IMPORTANT: release lock before blocking_send to avoid deadlock
+                // with session_manager lock held by collect_reattach_data.
+                let send_result = {
+                    let mut target = output_target.lock().unwrap();
+                    match &mut *target {
+                        PaneOutputTarget::Connected(tx) => {
+                            let chunk = PtyOutputChunk {
+                                pane_id,
+                                data: data.clone(),
+                            };
+                            match tx.try_send(chunk) {
+                                Ok(()) => None, // sent successfully
+                                Err(mpsc::error::TrySendError::Full(chunk)) => {
+                                    // Channel full — need blocking send outside lock
+                                    Some(Ok((tx.clone(), chunk)))
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    // Channel closed — switch to detached
                                     let mut ring = DetachRingBuffer::new(
                                         crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
                                     );
                                     ring.write(&data);
                                     *target = PaneOutputTarget::Detached(ring);
+                                    Some(Err(()))
                                 }
                             }
-                            Err(mpsc::error::TrySendError::Closed(_)) => {
-                                // Channel closed — GUI disconnected
-                                log::info!("Pane {} switching to detached buffering mode", pane_id);
-                                let mut ring = DetachRingBuffer::new(
-                                    crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-                                );
-                                ring.write(&data);
-                                *target = PaneOutputTarget::Detached(ring);
-                            }
+                        }
+                        PaneOutputTarget::Detached(ring) => {
+                            ring.write(&data);
+                            None
                         }
                     }
-                    PaneOutputTarget::Detached(ring) => {
+                }; // output_target lock released here
+
+                // Handle backpressure outside the lock to avoid deadlock
+                if let Some(Ok((tx, chunk))) = send_result {
+                    log::debug!("Pane {} backpressure: channel full, blocking", pane_id);
+                    if tx.blocking_send(chunk).is_err() {
+                        log::info!("Pane {} switching to detached buffering mode", pane_id);
+                        let mut target = output_target.lock().unwrap();
+                        let mut ring = DetachRingBuffer::new(
+                            crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
+                        );
                         ring.write(&data);
+                        *target = PaneOutputTarget::Detached(ring);
                     }
                 }
             }
