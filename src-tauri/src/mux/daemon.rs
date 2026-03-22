@@ -78,6 +78,62 @@ pub fn cleanup_stale_socket(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Ensure the mux daemon is running, spawning it if necessary.
+///
+/// If the socket file does not exist, spawns the daemon as a background
+/// process and waits for it to become ready with exponential backoff.
+/// Returns the socket path on success.
+pub fn ensure_daemon_running() -> Result<PathBuf, String> {
+    let sock_path = socket_path();
+
+    if !sock_path.exists() {
+        // Ensure parent directory exists with restricted permissions
+        if let Some(parent) = sock_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create socket directory: {}", e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    parent,
+                    std::fs::Permissions::from_mode(0o700),
+                );
+            }
+        }
+
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to get executable path: {}", e))?;
+
+        let log_path = sock_path.with_file_name("mux-daemon.log");
+        let log_file = std::fs::File::create(&log_path)
+            .unwrap_or_else(|_| std::fs::File::create("/tmp/emterm-mux-daemon.log").unwrap());
+
+        std::process::Command::new(&exe)
+            .args(["mux", "--daemon"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::from(log_file))
+            .spawn()
+            .map_err(|e| format!("Failed to spawn daemon: {}", e))?;
+
+        // Wait for daemon to start with exponential backoff
+        let mut started = false;
+        for i in 0..50 {
+            if is_daemon_running(&sock_path) {
+                started = true;
+                break;
+            }
+            let delay = std::cmp::min(10 * (1 << i.min(4)), 100);
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
+        if !started {
+            return Err("Failed to start mux daemon".to_string());
+        }
+    }
+
+    Ok(sock_path)
+}
+
 /// Run the mux daemon.
 ///
 /// This is the main entry point for `emterm mux --daemon`.

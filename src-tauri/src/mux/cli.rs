@@ -45,39 +45,8 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     check_emterm_environment().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    let sock_path = daemon::socket_path();
-
-    // Start daemon if not running (check socket file only, avoid ghost connections)
-    if !sock_path.exists() {
-        // Spawn daemon as background process
-        let exe = std::env::current_exe()?;
-        // Redirect daemon stderr to a log file for debugging
-        let log_path = sock_path.with_file_name("mux-daemon.log");
-        let log_file = std::fs::File::create(&log_path)
-            .unwrap_or_else(|_| std::fs::File::create("/tmp/emterm-mux-daemon.log").unwrap());
-        let _child = std::process::Command::new(exe)
-            .args(["mux", "--daemon"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::from(log_file))
-            .spawn()?;
-
-        // Wait for daemon to start (check first, then sleep with backoff)
-        let mut started = false;
-        for i in 0..50 {
-            if daemon::is_daemon_running(&sock_path) {
-                started = true;
-                break;
-            }
-            // Exponential backoff: 10ms, 10ms, 20ms, 40ms, 80ms, 100ms cap
-            let delay = std::cmp::min(10 * (1 << i.min(4)), 100);
-            std::thread::sleep(std::time::Duration::from_millis(delay));
-        }
-
-        if !started {
-            return Err("Failed to start mux daemon".into());
-        }
-    }
+    let sock_path = daemon::ensure_daemon_running()
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     // Auto-import tmux.conf on first mux startup
     import_tmux_conf_if_needed();
