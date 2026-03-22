@@ -313,7 +313,12 @@ mod tests {
         assert!(found.is_some());
         // Verify the session actually contains this window
         let found_sid = found.unwrap();
-        assert!(mgr.get_session(found_sid).unwrap().windows.contains_key(&wid2));
+        assert!(
+            mgr.get_session(found_sid)
+                .unwrap()
+                .windows
+                .contains_key(&wid2)
+        );
     }
 
     #[test]
