@@ -49,8 +49,6 @@ export interface KeyboardHandlerContext {
   onMuxAction?: (action: MuxAction) => void;
   /** Callback to intercept keys in mux copy mode. Returns true if consumed. */
   onCopyModeKey?: (event: KeyboardEvent) => boolean;
-  /** Callback to toggle mux mode (start or detach). */
-  onMuxToggle?: () => void;
 }
 
 /**
@@ -71,7 +69,6 @@ export class KeyboardHandler {
   private prefixKeyHandler: PrefixKeyHandler | null = null;
   private onMuxAction: ((action: MuxAction) => void) | null;
   private onCopyModeKey: ((event: KeyboardEvent) => boolean) | null;
-  private onMuxToggle: (() => void) | null;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -95,7 +92,6 @@ export class KeyboardHandler {
     this.onExitScrollback = context.onExitScrollback || null;
     this.onMuxAction = context.onMuxAction ?? null;
     this.onCopyModeKey = context.onCopyModeKey ?? null;
-    this.onMuxToggle = context.onMuxToggle ?? null;
 
     if (context.muxMode) {
       const muxSettings = SettingsService.getCached()?.mux;
@@ -288,13 +284,6 @@ export class KeyboardHandler {
       )
     ) {
       this.handlePromptJump("next");
-      event.preventDefault();
-      return;
-    }
-
-    // Handle mux toggle shortcut (Ctrl+Shift+M)
-    if (matchKeybindStr(event, "Ctrl+Shift+M")) {
-      this.onMuxToggle?.();
       event.preventDefault();
       return;
     }
