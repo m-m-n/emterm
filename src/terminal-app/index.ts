@@ -1108,6 +1108,16 @@ export class TerminalApp {
       this.muxClient.disconnect().catch(() => {});
       this.muxClient = null;
     }
+
+    // Trigger host shell prompt redraw via SIGWINCH.
+    // During mux mode, the host shell's prompt output was suppressed.
+    // A resize kick forces the shell to redraw its prompt line.
+    if (this.ptyClient && this.state) {
+      const cols = this.state.getWasmCore().cols();
+      const rows = this.state.getWasmCore().rows();
+      this.ptyClient.resize(cols - 1, rows);
+      this.ptyClient.resize(cols, rows);
+    }
   }
 
   /** Enter mux copy mode with vi or emacs keybindings. */
