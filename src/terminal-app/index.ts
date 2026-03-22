@@ -805,11 +805,24 @@ export class TerminalApp {
     this.emitMuxStateChange();
   }
 
-  /** Send a Resize message to the daemon for a single pane using current terminal dimensions. */
+  /** Send a Resize message to the daemon for a single pane using current terminal dimensions.
+   *  Forces SIGWINCH by first sending a slightly smaller size, then the actual size.
+   *  This ensures the shell redraws even if the PTY was already at the same dimensions. */
   private sendMuxPaneResize(paneId: number): void {
     if (!this.state || !this.muxClient) return;
     const cols = this.state.getWasmCore().cols();
     const rows = this.state.getWasmCore().rows();
+
+    // Send a slightly different size first to guarantee SIGWINCH
+    const kickCols = Math.max(1, cols - 1);
+    const kickPayload = new Uint8Array(4);
+    kickPayload[0] = kickCols & 0xFF;
+    kickPayload[1] = (kickCols >> 8) & 0xFF;
+    kickPayload[2] = rows & 0xFF;
+    kickPayload[3] = (rows >> 8) & 0xFF;
+    this.sendMuxControl(MuxMessageType.Resize, paneId, kickPayload);
+
+    // Then send the actual size to restore correct dimensions
     const payload = new Uint8Array(4);
     payload[0] = cols & 0xFF;
     payload[1] = (cols >> 8) & 0xFF;
