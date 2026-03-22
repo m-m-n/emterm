@@ -108,25 +108,9 @@ pub async fn handle_connection(
     let (pane_output_tx, mut pane_output_rx) =
         mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
 
-    // Reattach existing panes from active session: replay buffered output and reconnect
-    {
-        let reattach_data =
-            collect_reattach_data(&session_manager, active_session_id, &pane_output_tx).await;
-        // Send reattach messages outside the session manager lock
-        if send_reattach_data(&mut framed, &reattach_data)
-            .await
-            .is_err()
-        {
-            return;
-        }
-        if !reattach_data.is_empty() {
-            log::info!(
-                "Reattached {} existing pane(s) from session {}",
-                reattach_data.len(),
-                active_session_id
-            );
-        }
-    }
+    // NOTE: Reattach data is NOT sent here. The client must send an Attach
+    // message after its output stream is ready. This eliminates the timing
+    // dependency where reattach data could arrive before the client is listening.
 
     // Message + output loop using select! to handle both directions concurrently
     loop {

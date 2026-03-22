@@ -1007,9 +1007,16 @@ export class TerminalApp {
     const existingPanes = muxSessions.reduce((sum, s) => sum + s.pane_count, 0);
 
     if (existingPanes > 0) {
-      // Reattach: daemon will send PaneCreated + buffered output for existing panes
+      // Reattach: send Attach message to daemon AFTER output stream is ready.
+      // Daemon will respond with PaneCreated + buffered output for existing panes.
       this.muxPendingWindowCount = existingPanes;
       console.info(`[INFO][FRONTEND] Reattaching to ${existingPanes} existing pane(s)`);
+      const sessionId = muxSessions[0]?.id ?? 1;
+      // AttachMsg payload: session_id as u32 LE (bincode serializes u32 as 4 bytes LE)
+      const attachPayload = new Uint8Array(4);
+      const view = new DataView(attachPayload.buffer);
+      view.setUint32(0, sessionId, true);
+      this.sendMuxControl(MuxMessageType.Attach, 0, attachPayload);
     } else {
       // Fresh start: create initial window
       try {
