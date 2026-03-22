@@ -100,33 +100,9 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
 
     let sock_path = daemon::socket_path();
 
-    if !sock_path.exists() || !daemon::is_daemon_running(&sock_path) {
+    if !sock_path.exists() {
         eprintln!("No mux sessions to attach to (daemon not running)");
         eprintln!("Use 'emterm mux' to start a new session.");
-        return Ok(());
-    }
-
-    // Check if there are existing sessions with panes
-    #[cfg(unix)]
-    {
-        match cli_handshake() {
-            Ok((_stream, sessions)) => {
-                let has_panes = sessions.iter().any(|s| s.pane_count > 0);
-                if !has_panes {
-                    eprintln!("No active mux sessions to attach to");
-                    eprintln!("Use 'emterm mux' to start a new session.");
-                    return Ok(());
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to connect to daemon: {}", e);
-                return Ok(());
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        eprintln!("Mux is not supported on this platform");
         return Ok(());
     }
 
@@ -142,8 +118,7 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
 /// Connect to the daemon, perform handshake, and return session list.
 /// Uses blocking I/O since CLI commands run in a synchronous context.
 #[cfg(unix)]
-fn cli_handshake(
-) -> Result<
+fn cli_handshake() -> Result<
     (
         std::os::unix::net::UnixStream,
         Vec<super::ipc::protocol::SessionInfo>,
@@ -165,8 +140,11 @@ fn cli_handshake(
         client_type: super::ipc::protocol::ClientType::Cli,
         protocol_version: super::ipc::protocol::PROTOCOL_VERSION,
     };
-    let msg =
-        super::ipc::protocol::MuxMessage::control(super::ipc::protocol::MessageType::Hello, 0, &hello);
+    let msg = super::ipc::protocol::MuxMessage::control(
+        super::ipc::protocol::MessageType::Hello,
+        0,
+        &hello,
+    );
     let body = msg.to_frame_body();
     let len = (body.len() as u32).to_be_bytes();
 
