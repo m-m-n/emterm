@@ -139,8 +139,8 @@ requirements:
     tests: [TS-05]
   NFR3:
     title: Reliability
-    status: partial
-    note: "Daemon crash recovery not implemented. No graceful shutdown of pane PTYs."
+    status: ok
+    note: "Graceful shutdown on SIGTERM/SIGINT/Ctrl+C: all PTYs mark_exited, socket cleanup. Stale socket detection on startup."
     tasks: [Phase2]
     tests: [TS-19, TS-24, TS-25]
   NFR4:
