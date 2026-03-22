@@ -90,7 +90,69 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Connect to the daemon, perform handshake, and return session list.
+/// Uses blocking I/O since CLI commands run in a synchronous context.
+#[cfg(unix)]
+fn cli_handshake(
+) -> Result<
+    (
+        std::os::unix::net::UnixStream,
+        Vec<super::ipc::protocol::SessionInfo>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    use std::io::{Read, Write};
+
+    let sock_path = daemon::socket_path();
+    if !daemon::is_daemon_running(&sock_path) {
+        return Err("No mux daemon running".into());
+    }
+
+    let mut stream = std::os::unix::net::UnixStream::connect(&sock_path)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+
+    // Send Hello
+    let hello = super::ipc::protocol::HelloMsg {
+        client_type: super::ipc::protocol::ClientType::Cli,
+        protocol_version: super::ipc::protocol::PROTOCOL_VERSION,
+    };
+    let msg =
+        super::ipc::protocol::MuxMessage::control(super::ipc::protocol::MessageType::Hello, 0, &hello);
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    stream.write_all(&len)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    // Read Welcome
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf)?;
+    let frame_len = u32::from_be_bytes(len_buf) as usize;
+    if frame_len > super::ipc::protocol::MAX_FRAME_LENGTH {
+        return Err("Frame too large".into());
+    }
+
+    let mut frame_buf = vec![0u8; frame_len];
+    stream.read_exact(&mut frame_buf)?;
+
+    let welcome_msg =
+        super::ipc::protocol::MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid frame")?;
+
+    let welcome: super::ipc::protocol::WelcomeMsg = welcome_msg
+        .decode_payload()
+        .ok_or("Invalid Welcome payload")?;
+
+    match welcome {
+        super::ipc::protocol::WelcomeMsg::Accepted { sessions, .. } => Ok((stream, sessions)),
+        super::ipc::protocol::WelcomeMsg::Rejected { reason } => {
+            Err(format!("Connection rejected: {}", reason).into())
+        }
+    }
+}
+
 /// Execute the `emterm mux ls` command.
+#[cfg(unix)]
 pub fn execute_ls() -> Result<(), Box<dyn std::error::Error>> {
     let sock_path = daemon::socket_path();
     if !daemon::is_daemon_running(&sock_path) {
@@ -98,15 +160,60 @@ pub fn execute_ls() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // TODO: Connect and request session list
-    println!("(session listing not yet implemented)");
+    let (_stream, sessions) = cli_handshake()?;
+
+    if sessions.is_empty() {
+        println!("No sessions");
+        return Ok(());
+    }
+
+    for session in &sessions {
+        println!(
+            "{}: {} ({} windows, {} panes)",
+            session.id, session.name, session.window_count, session.pane_count
+        );
+    }
+
+    Ok(())
+}
+
+/// Execute the `emterm mux ls` command.
+#[cfg(not(unix))]
+pub fn execute_ls() -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Mux is not supported on this platform");
     Ok(())
 }
 
 /// Execute the `emterm mux kill` command.
+///
+/// Removes the daemon socket file to prevent new connections.
+/// A proper daemon shutdown with PID tracking can be added later.
+#[cfg(unix)]
 pub fn execute_kill(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    // TODO: Connect and send kill request
-    println!("(kill not yet implemented)");
+    let sock_path = daemon::socket_path();
+    if !daemon::is_daemon_running(&sock_path) {
+        println!("No mux daemon running");
+        return Ok(());
+    }
+
+    if _session.is_some() {
+        eprintln!(
+            "Killing specific sessions is not yet supported. Use 'emterm mux kill' to kill the daemon."
+        );
+        return Ok(());
+    }
+
+    let _ = std::fs::remove_file(&sock_path);
+    println!("Mux daemon socket removed. Active sessions will continue until shells exit.");
+    println!("To force stop, use: pkill -f 'emterm mux --daemon'");
+
+    Ok(())
+}
+
+/// Execute the `emterm mux kill` command.
+#[cfg(not(unix))]
+pub fn execute_kill(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Mux is not supported on this platform");
     Ok(())
 }
 
