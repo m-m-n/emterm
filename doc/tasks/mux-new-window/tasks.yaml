@@ -1,0 +1,11 @@
+feature: mux-new-window
+tasks:
+  - - id: phase1
+      name: "IPC Protocol Extension"
+      status: completed
+  - - id: phase2
+      name: "Daemon Handler Extension"
+      status: completed
+  - - id: phase3
+      name: "CLI Client Extension"
+      status: completed

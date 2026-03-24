@@ -123,7 +123,7 @@ export class TerminalApp {
   private muxPaneIds: number[] = []; // Actual pane IDs from daemon
   private muxPendingWindowCount = 0; // Windows waiting for PaneCreated response
   private muxIsReattaching = false; // True during reattach (receiving existing panes)
-  private muxPaneGrids: Map<number, WasmGrid> = new Map(); // WASM grids per pane
+  private muxPaneGrids: Map<number, import("../terminal/state").MuxPaneGridState> = new Map(); // Full pane state per pane
   private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
   private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
   private copyModeManager: CopyModeManager | null = null;
@@ -142,6 +142,7 @@ export class TerminalApp {
   private muxPaneContainer: HTMLElement | null = null;
   private muxPendingSplitCount = 0;
   private muxPendingSplitDirection: SplitDirection = "vertical";
+  private muxLastActiveIndex = 0;
   private muxDragState: MuxDragState | null = null;
   private muxPreZoomLayout: LayoutNode | null = null;
 
@@ -754,6 +755,8 @@ export class TerminalApp {
       getMuxPaneCanvases: () => self.muxPaneCanvases,
       getMuxPendingSplitCount: () => self.muxPendingSplitCount,
       setMuxPendingSplitCount: (count) => { self.muxPendingSplitCount = count; },
+      getMuxLastActiveIndex: () => self.muxLastActiveIndex,
+      setMuxLastActiveIndex: (index) => { self.muxLastActiveIndex = index; },
       getCopyModeManager: () => self.copyModeManager,
       setCopyModeManager: (manager) => { self.copyModeManager = manager; },
       getCopyModeKeybinds: () => self.copyModeKeybinds,
@@ -793,9 +796,12 @@ export class TerminalApp {
       getMuxPendingSplitCount: () => self.muxPendingSplitCount,
       setMuxPendingSplitCount: (count) => { self.muxPendingSplitCount = count; },
       getMuxPendingSplitDirection: () => self.muxPendingSplitDirection,
+      getMuxLastActiveIndex: () => self.muxLastActiveIndex,
       getMuxLayoutRoot: () => self.muxLayoutRoot,
       getMuxPaneCanvases: () => self.muxPaneCanvases,
       get onMuxStateChange() { return self.onMuxStateChange; },
+      flushPtyPendingData: () => { self.ptyHandlerHandle?.flushPendingData(); },
+      processPtyPendingDataNow: () => { self.ptyHandlerHandle?.processNow(); },
       registerCoreCallbacks: (core) => self.registerCoreCallbacks(core),
       sendMuxControl: (msgType, paneId, payload) => self.sendMuxControl(msgType, paneId, payload),
       handleMuxSplitPaneCreated: (paneId, direction) => self.handleMuxSplitPaneCreated(paneId, direction),

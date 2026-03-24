@@ -45,8 +45,8 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     check_emterm_environment().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    let sock_path = daemon::ensure_daemon_running()
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let sock_path =
+        daemon::ensure_daemon_running().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     // Auto-import tmux.conf on first mux startup
     import_tmux_conf_if_needed();
@@ -152,6 +152,79 @@ fn cli_handshake() -> Result<
             Err(format!("Connection rejected: {}", reason).into())
         }
     }
+}
+
+/// Execute the `emterm mux new-window` command.
+///
+/// Connects to the daemon, performs handshake, sends CreateWindow with
+/// optional name and command, and waits for PaneCreated response.
+#[cfg(unix)]
+pub fn execute_new_window(
+    name: Option<&str>,
+    command: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+
+    let (mut stream, _sessions) = cli_handshake()?;
+
+    // Build CreateWindowPayload
+    let payload = super::ipc::protocol::CreateWindowPayload {
+        name: name.map(|s| s.to_string()),
+        command: command.map(|s| s.to_string()),
+    };
+
+    // Send CreateWindow message (session_id in pane_id field = 0, daemon uses active session)
+    let msg = super::ipc::protocol::MuxMessage::control(
+        super::ipc::protocol::MessageType::CreateWindow,
+        0,
+        &payload,
+    );
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    stream.write_all(&len)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    // Read response
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf)?;
+    let frame_len = u32::from_be_bytes(len_buf) as usize;
+    if frame_len > super::ipc::protocol::MAX_FRAME_LENGTH {
+        return Err("Frame too large".into());
+    }
+
+    let mut frame_buf = vec![0u8; frame_len];
+    stream.read_exact(&mut frame_buf)?;
+
+    let resp =
+        super::ipc::protocol::MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid frame")?;
+
+    match resp.msg_type {
+        super::ipc::protocol::MessageType::PaneCreated => {
+            // Success - window created
+            Ok(())
+        }
+        super::ipc::protocol::MessageType::Error => {
+            let err: super::ipc::protocol::ErrorMsg =
+                resp.decode_payload()
+                    .unwrap_or(super::ipc::protocol::ErrorMsg {
+                        message: "Unknown error".to_string(),
+                    });
+            Err(format!("Failed to create window: {}", err.message).into())
+        }
+        _ => Err(format!("Unexpected response: {:?}", resp.msg_type).into()),
+    }
+}
+
+/// Execute the `emterm mux new-window` command (Windows stub).
+#[cfg(not(unix))]
+pub fn execute_new_window(
+    _name: Option<&str>,
+    _command: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Mux is not supported on this platform");
+    std::process::exit(1);
 }
 
 /// Execute the `emterm mux ls` command.

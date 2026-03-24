@@ -46,6 +46,16 @@ import {
 } from "./state-actions.ts";
 
 // ── WASM Mode Action Codes (mirror Rust constants) ──────
+/**
+ * Snapshot of a mux pane's grid state (primary + alternate screen).
+ * Used by mux window manager to save/restore pane state on window switch.
+ */
+export interface MuxPaneGridState {
+  primaryGrid: WasmGrid;
+  alternateGrid: WasmGrid | null;
+  useAlternate: boolean;
+}
+
 const MODE_ACTION_SWITCH_TO_ALT = 1;
 const MODE_ACTION_SAVE_AND_SWITCH_TO_ALT = 2;
 const MODE_ACTION_SWITCH_TO_MAIN = 3;
@@ -275,13 +285,94 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
-   * Swap the primary WASM grid with a different one (for mux window switching).
-   * Returns the old grid so the caller can store it.
-   * This is much faster than snapshot serialization/deserialization.
+   * Save the current pane's full grid state (primary + alternate) for mux switching.
+   * Returns a snapshot that can be restored later via restoreMuxPaneState.
+   */
+  saveMuxPaneState(): MuxPaneGridState {
+    // Return references to current grids. The caller will immediately replace
+    // them via swapPrimaryGrid or restoreMuxPaneState, so shared references
+    // are safe (no concurrent mutation).
+    return {
+      primaryGrid: this.primaryWasmGrid!,
+      alternateGrid: this.alternateWasmGrid,
+      useAlternate: this.useAlternate,
+    };
+  }
+
+  /**
+   * Restore a previously saved mux pane state (primary + alternate).
+   * Rebuilds buffers and cursors around the restored grids.
+   */
+  restoreMuxPaneState(paneState: MuxPaneGridState): void {
+    // Note: we do NOT dispose existing grids here — they may be shared
+    // references saved by saveMuxPaneState for another pane.
+
+    // Restore grids
+    this.primaryWasmGrid = paneState.primaryGrid;
+    this.alternateWasmGrid = paneState.alternateGrid;
+    this.useAlternate = paneState.useAlternate;
+
+    // Rebuild primary buffer and cursor
+    const cols = paneState.primaryGrid.core.cols();
+    const rows = paneState.primaryGrid.core.rows();
+    this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, paneState.primaryGrid);
+    this.primaryBuffer.onEvict = (count: number) => {
+      this.semanticZoneTracker.pruneBeforeLine(count);
+      this.foldManager.pruneBeforeLine(count);
+    };
+    this.primaryCursor = new CursorState(cols, rows, paneState.primaryGrid.core);
+    this.primaryCursor.moveTo(paneState.primaryGrid.core.get_cursor_col(), paneState.primaryGrid.core.get_cursor_row());
+
+    // Rebuild alternate buffer and cursor if alternate screen was active
+    if (paneState.alternateGrid) {
+      const altCols = paneState.alternateGrid.core.cols();
+      const altRows = paneState.alternateGrid.core.rows();
+      this.alternateBuffer = new UnifiedBuffer(altCols, altRows, 0, paneState.alternateGrid);
+      this.alternateCursor = new CursorState(altCols, altRows, paneState.alternateGrid.core);
+      this.alternateCursor.moveTo(paneState.alternateGrid.core.get_cursor_col(), paneState.alternateGrid.core.get_cursor_row());
+    } else {
+      this.alternateBuffer = null;
+      this.alternateCursor = null;
+    }
+
+    // Set active cursor
+    this.cursor = this.useAlternate && this.alternateCursor
+      ? this.alternateCursor
+      : this.primaryCursor;
+
+    // Sync modes from the active core
+    const activeCore = this.useAlternate && paneState.alternateGrid
+      ? paneState.alternateGrid.core
+      : paneState.primaryGrid.core;
+    syncModesFromWasm(this.modes, activeCore);
+
+    // Propagate cell size to all grids
+    setCellSizePxOnGrid(paneState.primaryGrid, this.cellWidthPx, this.cellHeightPx);
+    if (paneState.alternateGrid) {
+      setCellSizePxOnGrid(paneState.alternateGrid, this.cellWidthPx, this.cellHeightPx);
+    }
+
+    // Mark all rows dirty for full repaint
+    activeCore.mark_all_dirty();
+  }
+
+  /**
+   * Swap the primary WASM grid with a fresh one (for new mux pane creation).
+   * Resets alternate screen state. Returns the old primary grid.
    */
   swapPrimaryGrid(newGrid: WasmGrid): WasmGrid | null {
     const oldGrid = this.primaryWasmGrid;
     this.primaryWasmGrid = newGrid;
+
+    // Reset alternate screen state — new pane starts fresh.
+    if (this.alternateWasmGrid) {
+      this.alternateWasmGrid.dispose();
+      this.alternateWasmGrid = null;
+    }
+    this.alternateBuffer = null;
+    this.alternateCursor = null;
+    this.savedCursorForAlt = null;
+    this.useAlternate = false;
 
     const cols = newGrid.core.cols();
     const rows = newGrid.core.rows();

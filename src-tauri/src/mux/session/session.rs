@@ -1,6 +1,6 @@
 //! Session state: contains windows, tracks active window.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use super::window::{MuxWindow, WindowId};
 
@@ -11,7 +11,7 @@ pub type SessionId = u32;
 pub struct MuxSession {
     pub id: SessionId,
     pub name: String,
-    pub windows: HashMap<WindowId, MuxWindow>,
+    pub windows: BTreeMap<WindowId, MuxWindow>,
     pub active_window_id: Option<WindowId>,
     next_window_id: WindowId,
 }
@@ -21,7 +21,7 @@ impl MuxSession {
         Self {
             id,
             name,
-            windows: HashMap::new(),
+            windows: BTreeMap::new(),
             active_window_id: None,
             next_window_id: 1,
         }

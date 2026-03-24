@@ -1,3 +1,6 @@
+# Increase rustc stack size to avoid SIGSEGV during full release builds
+export RUST_MIN_STACK := 67108864
+
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo "0.0.0")
 # Hash-only (no tags) -> prefix with 0.0.0
 ifeq ($(findstring .,$(VERSION)),)

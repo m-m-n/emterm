@@ -1,0 +1,68 @@
+schema_version: 1
+feature: mux-new-window
+scale: standard
+created: 2026-03-23
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 0352cd5d6cb4486f0416fb05a9a45999ee881fb1
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 0352cd5d6cb4486f0416fb05a9a45999ee881fb1
+  - id: implement
+    status: completed
+    completed_at_commit: 0352cd5d6cb4486f0416fb05a9a45999ee881fb1
+  - id: check
+    status: completed
+    completed_at_commit: 0352cd5d6cb4486f0416fb05a9a45999ee881fb1
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 0352cd5d6cb4486f0416fb05a9a45999ee881fb1
+  - id: review
+    status: completed
+    completed_at_commit: 0352cd5d6cb4486f0416fb05a9a45999ee881fb1
+
+requirements:
+  FR1:
+    title: Add new-window subcommand with -n/--name and -c/--command options
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Extend IPC CreateWindow message payload with name and command fields
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Daemon writes command string + newline to PTY after window creation
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: CLI connects via cli_handshake, sends CreateWindow, waits for PaneCreated
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Command completes within 1 second
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Linux and Windows platform support
+    status: ok
+    tasks: []
+    tests: []

@@ -16,25 +16,53 @@ use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{PaneId, PtyOutputChunk};
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
+///
+/// Decodes optional `CreateWindowPayload` from the message to set window name
+/// and execute an initial command. Empty or missing payload defaults to
+/// name="shell" with no command (backward compatible with GUI).
 pub(super) async fn handle_create_window(
+    msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
     framed: &mut Framed<UnixStream, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: u32,
 ) -> Result<(), bool> {
+    // Decode payload; empty/invalid payload -> defaults (backward compat)
+    let payload = msg
+        .decode_payload::<CreateWindowPayload>()
+        .unwrap_or_default();
+
+    let window_name = payload
+        .name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("shell")
+        .to_string();
+
     let spawned = match spawn_pty(80, 24) {
         Ok(s) => s,
         Err(e) => {
             log::error!("{}", e);
+            let err = ErrorMsg {
+                message: format!("Failed to spawn PTY: {}", e),
+            };
+            let resp = MuxMessage::control(MessageType::Error, 0, &err);
+            let _ = framed.send(resp).await;
             return Ok(());
         }
     };
 
     let mut mgr = session_manager.lock().await;
-    let window_id = match mgr.create_window(active_session_id, "shell".to_string()) {
+    let window_id = match mgr.create_window(active_session_id, window_name.clone()) {
         Some(id) => id,
         None => {
             log::error!("Failed to create window in session {}", active_session_id);
+            drop(mgr);
+            let err = ErrorMsg {
+                message: "Failed to create window".to_string(),
+            };
+            let resp = MuxMessage::control(MessageType::Error, 0, &err);
+            let _ = framed.send(resp).await;
             return Ok(());
         }
     };
@@ -55,12 +83,35 @@ pub(super) async fn handle_create_window(
         }
     };
 
+    let command = payload.command.filter(|s| !s.is_empty());
     drop(mgr);
 
+    // Write initial command to PTY after short delay for shell readiness
+    if let Some(ref cmd) = command {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let mgr = session_manager.lock().await;
+        if let Some(session) = mgr.get_session(active_session_id) {
+            if let Some(window) = session.windows.get(&window_id) {
+                if let Some(pane) = window.panes.get(&pane_id) {
+                    let cmd_with_newline = format!("{}\n", cmd);
+                    if let Err(e) = pane.write_input(cmd_with_newline.as_bytes()) {
+                        log::warn!("Failed to write initial command to pane {}: {}", pane_id, e);
+                    }
+                }
+            }
+        }
+    }
+
     log::info!(
-        "Created window {} with pane {} (PTY spawned)",
+        "Created window {} '{}' with pane {} (PTY spawned{})",
         window_id,
-        pane_id
+        window_name,
+        pane_id,
+        if command.is_some() {
+            ", command sent"
+        } else {
+            ""
+        }
     );
 
     let resp = MuxMessage::control(MessageType::PaneCreated, pane_id, &pane_id);
@@ -269,10 +320,7 @@ pub(super) async fn handle_destroy_window(
 }
 
 /// Resize a pane's PTY to the requested dimensions.
-pub(super) async fn handle_resize(
-    msg: MuxMessage,
-    session_manager: &Arc<Mutex<SessionManager>>,
-) {
+pub(super) async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<SessionManager>>) {
     let resize_msg: ResizeMsg = match msg.decode_payload() {
         Some(m) => m,
         None => {
