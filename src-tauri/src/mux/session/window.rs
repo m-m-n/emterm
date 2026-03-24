@@ -1,6 +1,6 @@
 //! Window state: contains panes, tracks active pane.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use super::pane::{MuxPane, PaneId};
 
@@ -11,7 +11,7 @@ pub type WindowId = u32;
 pub struct MuxWindow {
     pub id: WindowId,
     pub name: String,
-    pub panes: HashMap<PaneId, MuxPane>,
+    pub panes: BTreeMap<PaneId, MuxPane>,
     pub active_pane_id: Option<PaneId>,
     next_pane_id: PaneId,
 }
@@ -21,7 +21,7 @@ impl MuxWindow {
         Self {
             id,
             name,
-            panes: HashMap::new(),
+            panes: BTreeMap::new(),
             active_pane_id: None,
             next_pane_id: 1,
         }

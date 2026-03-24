@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { WasmGrid } from "../../terminal/wasm/terminal-core";
 import { MuxMessageType } from "../../terminal/mux/mux-client";
 import type { MuxClient } from "../../terminal/mux/mux-client";
-import type { TerminalState } from "../../terminal/state";
+import type { TerminalState, MuxPaneGridState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import type { KeyboardHandler } from "../handlers/keyboard";
 import type { LayoutNode } from "../../terminal/mux/layout";
@@ -30,7 +30,7 @@ export interface MuxWindowManagerContext {
   getActiveMuxWindowIndex: () => number;
   setActiveMuxWindowIndex: (index: number) => void;
   getMuxPaneIds: () => number[];
-  getMuxPaneGrids: () => Map<number, WasmGrid>;
+  getMuxPaneGrids: () => Map<number, MuxPaneGridState>;
   getMuxDetachedGrids: () => Map<string, Uint8Array>;
   getMuxPendingWindowCount: () => number;
   setMuxPendingWindowCount: (count: number) => void;
@@ -38,6 +38,7 @@ export interface MuxWindowManagerContext {
   setMuxIsReattaching: (value: boolean) => void;
   getMuxPendingSplitCount: () => number;
   setMuxPendingSplitCount: (count: number) => void;
+  getMuxLastActiveIndex: () => number;
   getMuxPendingSplitDirection: () => SplitDirection;
   getMuxLayoutRoot: () => LayoutNode | null;
   getMuxPaneCanvases: () => Map<number, unknown>;
@@ -48,6 +49,10 @@ export interface MuxWindowManagerContext {
     activeWindow: number;
     windowNames: string[];
   }) => void) | null;
+
+  // PTY handler
+  flushPtyPendingData: () => void;
+  processPtyPendingDataNow: () => void;
 
   // Delegate methods that remain on TerminalApp
   registerCoreCallbacks: (core: ReturnType<TerminalState["getActiveCore"]>) => void;
@@ -74,6 +79,9 @@ export function clearMuxScreen(ctx: MuxWindowManagerContext): void {
 export function createFreshMuxGrid(ctx: MuxWindowManagerContext): void {
   const state = ctx.getState();
   if (!state) return;
+  // Discard any buffered PTY data from the previous pane to prevent
+  // stale output (e.g. TUI app frames) from bleeding into the new grid.
+  ctx.flushPtyPendingData();
   const cols = state.getWasmCore().cols();
   const rows = state.getWasmCore().rows();
   const newGrid = new WasmGrid(cols, rows, 10000);
@@ -92,27 +100,27 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
   const muxPaneIds = ctx.getMuxPaneIds();
   const muxPaneGrids = ctx.getMuxPaneGrids();
 
-  // Save current pane's grid (swap out)
+  // Save current pane's full state (primary + alternate)
   if (previousIndex != null) {
     const prevPaneId = muxPaneIds[previousIndex];
     if (prevPaneId != null) {
-      const currentGrid = state.getPrimaryGrid();
-      if (currentGrid) {
-        muxPaneGrids.set(prevPaneId, currentGrid);
-      }
+      muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
     }
   }
 
-  // Restore the target pane's grid (swap in)
+  // Discard any buffered PTY data from the previous pane
+  ctx.flushPtyPendingData();
+
+  // Restore the target pane's state
   const newPaneId = muxPaneIds[ctx.getActiveMuxWindowIndex()];
   if (newPaneId != null) {
-    const savedGrid = muxPaneGrids.get(newPaneId);
-    if (savedGrid) {
+    const savedState = muxPaneGrids.get(newPaneId);
+    if (savedState) {
       muxPaneGrids.delete(newPaneId);
-      state.swapPrimaryGrid(savedGrid);
+      state.restoreMuxPaneState(savedState);
       ctx.registerCoreCallbacks(state.getActiveCore());
     } else {
-      // No saved grid (first visit) — just clear
+      // No saved state (first visit) — just clear
       state.getWasmCore().reset();
     }
   }
@@ -142,14 +150,16 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   const muxWindows = ctx.getMuxWindows();
   const muxDetachedGrids = ctx.getMuxDetachedGrids();
 
-  // Save current pane's grid before switching
+  // Save current pane's full state (primary + alternate) before switching.
+  // During reattach, process pending PTY data synchronously first so the
+  // alternate screen state from the daemon's replay is captured in the save.
   const previousIndex = ctx.getActiveMuxWindowIndex();
   const prevPaneId = muxPaneIds[previousIndex];
   if (prevPaneId != null && state) {
-    const currentGrid = state.getPrimaryGrid();
-    if (currentGrid) {
-      muxPaneGrids.set(prevPaneId, currentGrid);
+    if (ctx.getMuxIsReattaching()) {
+      ctx.processPtyPendingDataNow();
     }
+    muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
   }
 
   const newIdx = muxWindows.length;
@@ -180,10 +190,14 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   }
 
   // After all pending windows are received during reattach, switch to first window
-  if (ctx.getMuxIsReattaching() && ctx.getMuxPendingWindowCount() === 0 && muxWindows.length > 1 && ctx.getActiveMuxWindowIndex() !== 0) {
-    const prev = ctx.getActiveMuxWindowIndex();
-    ctx.setActiveMuxWindowIndex(0);
-    switchMuxWindow(ctx, prev);
+  if (ctx.getMuxIsReattaching() && ctx.getMuxPendingWindowCount() === 0) {
+    // Restore the active window from before detach (clamped to valid range)
+    const targetIndex = Math.min(ctx.getMuxLastActiveIndex(), muxWindows.length - 1);
+    if (targetIndex !== ctx.getActiveMuxWindowIndex()) {
+      const prev = ctx.getActiveMuxWindowIndex();
+      ctx.setActiveMuxWindowIndex(targetIndex);
+      switchMuxWindow(ctx, prev);
+    }
     ctx.setMuxIsReattaching(false);
   }
 
@@ -238,8 +252,13 @@ export function handleMuxPaneExited(ctx: MuxWindowManagerContext, paneId: number
 
   console.info(`[INFO][FRONTEND] Mux pane ${paneId} exited (window ${windowIdx})`);
 
-  // Clean up snapshot for the exited pane
-  muxPaneGrids.delete(paneId);
+  // Clean up snapshot for the exited pane — dispose WASM grids to free memory
+  const savedState = muxPaneGrids.get(paneId);
+  if (savedState) {
+    savedState.primaryGrid.dispose();
+    savedState.alternateGrid?.dispose();
+    muxPaneGrids.delete(paneId);
+  }
 
   // If the exited pane is NOT the active one, save current pane's snapshot
   // before the index adjustment that follows

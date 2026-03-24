@@ -42,12 +42,16 @@ export interface PtyHandlerHandle {
   injectData: (data: Uint8Array) => void;
   /** Suppress original PTY output (set true during mux mode). */
   suppressOriginalPty: boolean;
+  /** Discard all buffered data (pending chunks + leftover). Call on mux window switch. */
+  flushPendingData: () => void;
+  /** Process all buffered data synchronously (for reattach: process before saving state). */
+  processNow: () => void;
 }
 
 export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandlerHandle> {
   const ptyClient = ctx.getPtyClient();
   const state = ctx.getState();
-  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false };
+  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {} };
   if (!ptyClient || !state) return noopHandle;
 
   // Register callbacks on primary core
@@ -363,6 +367,13 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       scheduleProcessing();
     },
     suppressOriginalPty: false,
+    flushPendingData: () => {
+      pendingChunks.length = 0;
+      leftoverData = null;
+    },
+    processNow: () => {
+      processPendingData();
+    },
   };
 
   // Register binary data handler -- just buffer and schedule rAF

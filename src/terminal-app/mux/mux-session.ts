@@ -14,6 +14,7 @@ import type { KeyboardHandler } from "../handlers/keyboard";
 import type { PtyHandlerHandle } from "../pty-handler";
 import type { LayoutNode } from "../../terminal/mux/layout";
 import { WasmGrid } from "../../terminal/wasm/terminal-core";
+import type { MuxPaneGridState } from "../../terminal/state";
 import { SettingsService } from "../../settings/settings-service";
 import type { CopyModeManager, ViKeybinds, EmacsKeybinds } from "../../terminal/mux-copy-mode";
 
@@ -47,11 +48,13 @@ export interface MuxSessionContext {
   setMuxIsReattaching: (value: boolean) => void;
   getMuxOriginalGrid: () => WasmGrid | null;
   setMuxOriginalGrid: (grid: WasmGrid | null) => void;
-  getMuxPaneGrids: () => Map<number, WasmGrid>;
+  getMuxPaneGrids: () => Map<number, MuxPaneGridState>;
   getMuxLayoutRoot: () => LayoutNode | null;
   getMuxPaneCanvases: () => Map<number, unknown>;
   getMuxPendingSplitCount: () => number;
   setMuxPendingSplitCount: (count: number) => void;
+  getMuxLastActiveIndex: () => number;
+  setMuxLastActiveIndex: (index: number) => void;
 
   // Copy mode state
   getCopyModeManager: () => CopyModeManager | null;
@@ -118,10 +121,16 @@ export async function enterMuxMode(ctx: MuxSessionContext, socketPath: string, s
         handle.injectData(data);
       }
     } else {
-      // Route to inactive pane's saved grid (preserves ring buffer replay data)
-      const savedGrid = ctx.getMuxPaneGrids().get(paneId);
-      if (savedGrid) {
-        savedGrid.core.process_pty_data(data);
+      // Route to inactive pane's saved state (preserves ring buffer replay data)
+      const savedState = ctx.getMuxPaneGrids().get(paneId);
+      if (savedState) {
+        // Process on the active core (alternate if alternate screen was active)
+        const core = savedState.useAlternate && savedState.alternateGrid
+          ? savedState.alternateGrid.core
+          : savedState.primaryGrid.core;
+        core.process_pty_data(data);
+      } else {
+        // No saved state for this pane — data dropped
       }
     }
   });
@@ -263,6 +272,9 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   if (ctx.getMuxLayoutRoot()) {
     ctx.exitMultiPaneMode(null);
   }
+
+  // Save active window index for reattach
+  ctx.setMuxLastActiveIndex(ctx.getActiveMuxWindowIndex());
 
   // Reset mux window tracking
   ctx.setMuxWindows([]);

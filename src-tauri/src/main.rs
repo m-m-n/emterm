@@ -103,6 +103,24 @@ fn build_cli() -> Command {
                     Command::new("new")
                         .about("Create a new session")
                         .arg(Arg::new("name").help("Session name")),
+                )
+                .subcommand(
+                    Command::new("new-window")
+                        .about("Create a new window in the active session")
+                        .arg(
+                            Arg::new("name")
+                                .short('n')
+                                .long("name")
+                                .help("Window name (displayed in tab bar)")
+                                .value_name("NAME"),
+                        )
+                        .arg(
+                            Arg::new("command")
+                                .short('c')
+                                .long("command")
+                                .help("Initial command to run")
+                                .value_name("COMMAND"),
+                        ),
                 ),
         )
         .subcommand(
@@ -196,6 +214,14 @@ fn main() {
                     Some(("attach", sub)) => {
                         let session = sub.get_one::<String>("session").map(|s| s.as_str());
                         if let Err(e) = app_lib::mux::cli::execute_attach(session) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    Some(("new-window", sub)) => {
+                        let name = sub.get_one::<String>("name").map(|s| s.as_str());
+                        let command = sub.get_one::<String>("command").map(|s| s.as_str());
+                        if let Err(e) = app_lib::mux::cli::execute_new_window(name, command) {
                             eprintln!("Error: {}", e);
                             std::process::exit(1);
                         }

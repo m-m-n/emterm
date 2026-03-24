@@ -90,10 +90,10 @@ pub async fn handle_connection(
         hello.protocol_version
     );
 
-    // CLI clients only need the session list from Welcome.
-    // Skip reattach and message loop to avoid stealing panes from GUI.
+    // CLI clients: serve session list + optionally process one control message.
+    // Skip reattach and full message loop to avoid stealing panes from GUI.
     if hello.client_type == ClientType::Cli {
-        log::info!("CLI client served, disconnecting");
+        handle_cli_client(&mut framed, &session_manager, &shutdown_tx).await;
         return;
     }
 
@@ -162,10 +162,98 @@ pub async fn handle_connection(
     // Switch all panes in the active session to detached buffering mode.
     // This prevents pty_reader_loop from racing with the next connection's
     // collect_reattach_data when the output_target is still Connected(dead_tx).
-    log::info!("Client disconnecting, detaching panes for session {}", active_session_id);
+    log::info!(
+        "Client disconnecting, detaching panes for session {}",
+        active_session_id
+    );
     detach_session_panes(&session_manager, active_session_id).await;
 
-    log::info!("Client disconnected, session {} panes detached", active_session_id);
+    log::info!(
+        "Client disconnected, session {} panes detached",
+        active_session_id
+    );
+}
+
+/// Handle a CLI client after handshake.
+///
+/// Reads at most one control message (e.g., CreateWindow), processes it,
+/// sends a response, and disconnects. If no message arrives within 5 seconds,
+/// disconnects gracefully (this is the normal `mux ls` path).
+async fn handle_cli_client(
+    framed: &mut Framed<UnixStream, MuxCodec>,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    _shutdown_tx: &tokio::sync::watch::Sender<bool>,
+) {
+    // Wait for one optional control message with timeout
+    let msg_result = tokio::time::timeout(Duration::from_secs(5), framed.next()).await;
+
+    let msg = match msg_result {
+        Ok(Some(Ok(msg))) => msg,
+        Ok(Some(Err(e))) => {
+            log::warn!("CLI client read error: {}", e);
+            return;
+        }
+        Ok(None) | Err(_) => {
+            // Connection closed or timeout - normal for ls/kill commands
+            log::info!("CLI client served (no control message), disconnecting");
+            return;
+        }
+    };
+
+    log::info!("CLI client control message: {:?}", msg.msg_type);
+
+    // Determine active session for the control message
+    let active_session_id = {
+        let mgr = session_manager.lock().await;
+        mgr.sessions_iter().next().map(|s| s.id).unwrap_or(1)
+    };
+
+    // Create a temporary pane output channel (CLI doesn't stream PTY output)
+    let (pane_output_tx, _pane_output_rx) =
+        mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
+
+    match msg.msg_type {
+        MessageType::CreateWindow => {
+            let _ = handle_create_window(
+                &msg,
+                session_manager,
+                framed,
+                &pane_output_tx,
+                active_session_id,
+            )
+            .await;
+
+            // Log the CLI-initiated window creation
+            log_cli_window_creation(session_manager, active_session_id).await;
+        }
+        _ => {
+            log::warn!(
+                "CLI client sent unsupported message type: {:?}",
+                msg.msg_type
+            );
+            let err = ErrorMsg {
+                message: "Unsupported CLI control message".to_string(),
+            };
+            let resp = MuxMessage::control(MessageType::Error, 0, &err);
+            let _ = framed.send(resp).await;
+        }
+    }
+
+    log::info!("CLI client control message processed, disconnecting");
+}
+
+/// Log CLI-initiated window creation for debugging.
+async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, session_id: u32) {
+    let mgr = session_manager.lock().await;
+    if let Some(session) = mgr.get_session(session_id) {
+        let window_names: Vec<String> = session.windows.values().map(|w| w.name.clone()).collect();
+        log::info!(
+            "CLI created window in session {} '{}': windows = {:?}",
+            session_id,
+            session.name,
+            window_names
+        );
+    }
 }
 
 /// Route a single message to the appropriate handler.
@@ -182,8 +270,14 @@ async fn route_message(
 ) -> Result<(), bool> {
     match msg.msg_type {
         MessageType::CreateWindow => {
-            handle_create_window(session_manager, framed, pane_output_tx, *active_session_id)
-                .await?;
+            handle_create_window(
+                &msg,
+                session_manager,
+                framed,
+                pane_output_tx,
+                *active_session_id,
+            )
+            .await?;
         }
         MessageType::Attach => {
             handle_attach(

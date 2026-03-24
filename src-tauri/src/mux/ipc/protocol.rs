@@ -95,6 +95,9 @@ pub struct SessionInfo {
     pub name: String,
     pub window_count: u32,
     pub pane_count: u32,
+    /// Index of the active window (0-based) within the ordered window list.
+    #[serde(default)]
+    pub active_window_index: u32,
 }
 
 /// Handshake response from daemon.
@@ -152,6 +155,14 @@ pub struct StatusUpdateMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameWindowMsg {
     pub name: String,
+}
+
+/// Payload for CreateWindow message.
+/// Carries optional window name and initial command.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CreateWindowPayload {
+    pub name: Option<String>,
+    pub command: Option<String>,
 }
 
 /// A complete IPC message with header and payload.
@@ -268,6 +279,7 @@ mod tests {
                 name: "main".to_string(),
                 window_count: 2,
                 pane_count: 3,
+                active_window_index: 0,
             }],
         };
         let msg = MuxMessage::control(MessageType::Welcome, 0, &welcome);
@@ -286,6 +298,79 @@ mod tests {
             }
             _ => panic!("Expected Accepted"),
         }
+    }
+
+    #[test]
+    fn test_create_window_payload_both_none() {
+        let payload = CreateWindowPayload {
+            name: None,
+            command: None,
+        };
+        let msg = MuxMessage::control(MessageType::CreateWindow, 0, &payload);
+        let parsed = MuxMessage::from_frame_body(&msg.to_frame_body()).unwrap();
+        let decoded: CreateWindowPayload = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.name, None);
+        assert_eq!(decoded.command, None);
+    }
+
+    #[test]
+    fn test_create_window_payload_name_only() {
+        let payload = CreateWindowPayload {
+            name: Some("editor".to_string()),
+            command: None,
+        };
+        let msg = MuxMessage::control(MessageType::CreateWindow, 0, &payload);
+        let parsed = MuxMessage::from_frame_body(&msg.to_frame_body()).unwrap();
+        let decoded: CreateWindowPayload = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.name, Some("editor".to_string()));
+        assert_eq!(decoded.command, None);
+    }
+
+    #[test]
+    fn test_create_window_payload_command_only() {
+        let payload = CreateWindowPayload {
+            name: None,
+            command: Some("nvim".to_string()),
+        };
+        let msg = MuxMessage::control(MessageType::CreateWindow, 0, &payload);
+        let parsed = MuxMessage::from_frame_body(&msg.to_frame_body()).unwrap();
+        let decoded: CreateWindowPayload = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.name, None);
+        assert_eq!(decoded.command, Some("nvim".to_string()));
+    }
+
+    #[test]
+    fn test_create_window_payload_both_present() {
+        let payload = CreateWindowPayload {
+            name: Some("editor".to_string()),
+            command: Some("nvim".to_string()),
+        };
+        let msg = MuxMessage::control(MessageType::CreateWindow, 0, &payload);
+        let parsed = MuxMessage::from_frame_body(&msg.to_frame_body()).unwrap();
+        let decoded: CreateWindowPayload = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.name, Some("editor".to_string()));
+        assert_eq!(decoded.command, Some("nvim".to_string()));
+    }
+
+    #[test]
+    fn test_create_window_payload_empty_payload_backward_compat() {
+        // Empty payload (from GUI) should fail to decode as CreateWindowPayload
+        // Handler should use defaults in this case
+        let msg = MuxMessage {
+            msg_type: MessageType::CreateWindow,
+            pane_id: 0,
+            payload: vec![],
+        };
+        let decoded: Option<CreateWindowPayload> = msg.decode_payload();
+        // Empty payload cannot be deserialized - handler uses defaults
+        assert!(decoded.is_none());
+    }
+
+    #[test]
+    fn test_create_window_payload_default() {
+        let payload = CreateWindowPayload::default();
+        assert_eq!(payload.name, None);
+        assert_eq!(payload.command, None);
     }
 
     #[test]

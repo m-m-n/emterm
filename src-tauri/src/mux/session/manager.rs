@@ -67,11 +67,17 @@ impl SessionManager {
     pub fn session_list(&self) -> Vec<SessionInfo> {
         self.sessions
             .values()
-            .map(|s| SessionInfo {
-                id: s.id,
-                name: s.name.clone(),
-                window_count: s.window_count() as u32,
-                pane_count: s.pane_count() as u32,
+            .map(|s| {
+                let active_idx = s.active_window_id
+                    .and_then(|aid| s.windows.keys().position(|&wid| wid == aid))
+                    .unwrap_or(0) as u32;
+                SessionInfo {
+                    id: s.id,
+                    name: s.name.clone(),
+                    window_count: s.window_count() as u32,
+                    pane_count: s.pane_count() as u32,
+                    active_window_index: active_idx,
+                }
             })
             .collect()
     }

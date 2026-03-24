@@ -32,9 +32,10 @@ pub(super) async fn collect_reattach_data(
                 }
 
                 // Get screen restoration data from shadow parser
-                let screen_data = {
+                let (screen_data, is_alternate_screen) = {
                     let parser = pane.shadow_parser.lock().unwrap();
-                    parser.screen().contents_formatted()
+                    let screen = parser.screen();
+                    (screen.contents_formatted(), screen.alternate_screen())
                 };
 
                 // Get ring buffer data from detached panes
@@ -52,12 +53,13 @@ pub(super) async fn collect_reattach_data(
                 };
                 *target = PaneOutputTarget::Connected(pane_output_tx.clone());
                 log::info!(
-                    "collect_reattach: pane {} was={}, screen={}B, ring={}B, total={}B, exited={}",
+                    "collect_reattach: pane {} was={}, screen={}B, ring={}B, total={}B, alt_screen={}, exited={}",
                     pane.id,
                     target_was,
                     screen_data.len(),
                     ring_data.len(),
                     screen_data.len() + ring_data.len(),
+                    is_alternate_screen,
                     pane.exited
                 );
 

@@ -208,7 +208,12 @@ fn pty_reader_loop(
                 }
             }
             Err(e) => {
-                log::info!("PTY reader error for pane {}: {} (kind={:?})", pane_id, e, e.kind());
+                log::info!(
+                    "PTY reader error for pane {}: {} (kind={:?})",
+                    pane_id,
+                    e,
+                    e.kind()
+                );
                 break;
             }
         }
