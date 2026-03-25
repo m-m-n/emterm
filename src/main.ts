@@ -19,6 +19,8 @@ import { SettingsService, applySettingsToCSS } from "./settings";
 import { initI18n, resolveLocale, t } from "./i18n/index.ts";
 import { isTerminalTab } from "./tab-bar/types";
 import { initWasm } from "./terminal/wasm/loader.ts";
+import { StatusBarUI } from "./status-bar";
+import { OscLayerController } from "./status-bar/osc-controller";
 
 let tabManager: TabManager | null = null;
 let tabBarUI: TabBarUI | null = null;
@@ -26,6 +28,8 @@ let keyboardHandler: TabKeyboardHandler | null = null;
 let dragHandler: TabDragHandler | null = null;
 let activityTracker: TabActivityTracker | null = null;
 let notificationManager: NotificationManager | null = null;
+let statusBarUI: StatusBarUI | null = null;
+let oscLayerController: OscLayerController | null = null;
 
 /**
  * Initialize the terminal application with tab support
@@ -99,6 +103,13 @@ async function main(): Promise<void> {
       });
       await app.init();
 
+      // Wire status bar OSC callback
+      if (oscLayerController) {
+        app.statusBarOscCallback = (command, param1, param2) => {
+          oscLayerController?.handleCommand(command, param1, param2);
+        };
+      }
+
       // Connect PTY exit event to TabManager
       const sessionId = app.pty?.getSessionId();
       if (sessionId) {
@@ -149,11 +160,55 @@ async function main(): Promise<void> {
   });
   tabBarUI.init();
 
+  // Initialize Status Bar
+  const statusBarContainer = document.getElementById("status-bar");
+  if (statusBarContainer) {
+    statusBarUI = new StatusBarUI(statusBarContainer);
+    statusBarUI.init();
+
+    // Wire OSC layer controller
+    const renderer = statusBarUI.getRenderer();
+    if (renderer) {
+      oscLayerController = new OscLayerController(renderer);
+    }
+
+    // Wire CWD source from active tab's terminal state
+    statusBarUI.setCwdSource(() => {
+      const activeTab = manager.getActiveTab();
+      if (!activeTab) return "";
+      const app = manager.getTerminalApp(activeTab.id);
+      if (!app) return "";
+      try {
+        return app.terminalState.workingDirectory || "";
+      } catch {
+        return "";
+      }
+    });
+
+    // Wire command executor via Tauri backend
+    statusBarUI.setCommandExecutor(async (cmd: string, args: string[], cwd: string) => {
+      return await invoke<string>("run_statusbar_shell_command", {
+        program: cmd,
+        args,
+        cwd,
+      });
+    });
+
+    // Listen for settings changes to update status bar
+    window.addEventListener("emterm-statusbar-settings", ((e: CustomEvent) => {
+      statusBarUI?.applySettings(e.detail);
+    }) as EventListener);
+  }
+
   // Apply initial tab bar visibility from settings
   try {
     const settings = await SettingsService.load();
     if (settings.show_tab_bar === false) {
       tabBarUI.setVisible(false);
+    }
+    // Apply initial status bar settings
+    if (statusBarUI) {
+      statusBarUI.applySettings(settings);
     }
   } catch (error) {
     console.warn("Failed to apply initial tab bar visibility:", error);
@@ -322,10 +377,13 @@ function cleanup(): void {
   activityTracker?.dispose();
   notificationManager?.dispose();
   tabBarUI?.dispose();
+  statusBarUI?.dispose();
   tabManager?.dispose();
 
   tabManager = null;
   tabBarUI = null;
+  statusBarUI = null;
+  oscLayerController = null;
   keyboardHandler = null;
   dragHandler = null;
   activityTracker = null;

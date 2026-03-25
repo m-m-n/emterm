@@ -28,6 +28,9 @@
 /* Data Viewer (JSON/YAML) Styles */
 @import "./styles/data-viewer.css";
 
+/* Status Bar Styles */
+@import "./styles/status-bar.css";
+
 /* Resize Handle Styles */
 @import "./ui/resize-handle.css";
 

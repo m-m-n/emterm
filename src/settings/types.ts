@@ -113,6 +113,20 @@ export interface AppSettings {
 
   // Mux (multiplexer) settings
   mux: MuxSettings;
+
+  // Status Bar
+  statusbar_enabled: boolean;
+  statusbar_app_line1_left: string;
+  statusbar_app_line1_right: string;
+  statusbar_app_line2_left: string;
+  statusbar_app_line2_right: string;
+  statusbar_time_format: string;
+  statusbar_custom_commands: Record<string, StatusbarCustomCommand>;
+  statusbar_font_size: number | null;
+  statusbar_bg_color: string;
+  statusbar_fg_color: string;
+  statusbar_opacity: number;
+  statusbar_refresh_rates: Record<string, number>;
 }
 
 export interface MuxSettings {
@@ -220,6 +234,15 @@ export interface UserColorScheme {
 // ============================================================
 // Validation Constants
 // ============================================================
+
+// ============================================================
+// Status Bar Types
+// ============================================================
+
+export interface StatusbarCustomCommand {
+  executable: string;
+  interval_ms: number;
+}
 
 export const MIN_FONT_SIZE = 8;
 export const MAX_FONT_SIZE = 32;

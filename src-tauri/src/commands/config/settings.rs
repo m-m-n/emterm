@@ -494,6 +494,44 @@ pub struct AppSettings {
     // Mux (multiplexer) settings
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub mux: MuxSettings,
+
+    // Status Bar
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub statusbar_enabled: bool,
+    #[serde(
+        default = "default_statusbar_app_line1_left",
+        deserialize_with = "deserialize_null_statusbar_app_line1_left"
+    )]
+    pub statusbar_app_line1_left: String,
+    #[serde(
+        default = "default_statusbar_app_line1_right",
+        deserialize_with = "deserialize_null_statusbar_app_line1_right"
+    )]
+    pub statusbar_app_line1_right: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub statusbar_app_line2_left: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub statusbar_app_line2_right: String,
+    #[serde(
+        default = "default_statusbar_time_format",
+        deserialize_with = "deserialize_null_statusbar_time_format"
+    )]
+    pub statusbar_time_format: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub statusbar_custom_commands: std::collections::HashMap<String, StatusbarCustomCommand>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub statusbar_font_size: Option<f32>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub statusbar_bg_color: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub statusbar_fg_color: String,
+    #[serde(
+        default = "default_statusbar_opacity",
+        deserialize_with = "deserialize_null_statusbar_opacity"
+    )]
+    pub statusbar_opacity: f32,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub statusbar_refresh_rates: std::collections::HashMap<String, u64>,
 }
 
 /// Multiplexer settings.
@@ -513,6 +551,57 @@ pub struct MuxSettings {
     pub tmux_conf_imported: bool,
     #[serde(default)]
     pub keybinds: std::collections::HashMap<String, String>,
+}
+
+// ============================================================
+// Status Bar
+// ============================================================
+
+fn default_statusbar_app_line1_left() -> String {
+    "{time}".to_string()
+}
+fn default_statusbar_app_line1_right() -> String {
+    "{cwd}".to_string()
+}
+fn default_statusbar_time_format() -> String {
+    "HH:mm:ss".to_string()
+}
+fn default_statusbar_opacity() -> f32 {
+    1.0
+}
+fn default_statusbar_custom_command_interval() -> u64 {
+    1000
+}
+
+deserialize_null_with!(
+    deserialize_null_statusbar_app_line1_left,
+    String,
+    default_statusbar_app_line1_left
+);
+deserialize_null_with!(
+    deserialize_null_statusbar_app_line1_right,
+    String,
+    default_statusbar_app_line1_right
+);
+deserialize_null_with!(
+    deserialize_null_statusbar_time_format,
+    String,
+    default_statusbar_time_format
+);
+deserialize_null_with!(
+    deserialize_null_statusbar_opacity,
+    f32,
+    default_statusbar_opacity
+);
+
+/// Custom command definition for status bar variables.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StatusbarCustomCommand {
+    /// Single executable path only (no arguments, no shell expansion).
+    pub executable: String,
+    /// Polling interval in milliseconds.
+    #[serde(default = "default_statusbar_custom_command_interval")]
+    pub interval_ms: u64,
 }
 
 fn default_mux_prefix() -> String {
@@ -593,6 +682,18 @@ impl Default for AppSettings {
             clipboard_max_size_osc52: default_clipboard_max_size_osc52(),
             log_recording_enabled: false,
             mux: MuxSettings::default(),
+            statusbar_enabled: false,
+            statusbar_app_line1_left: default_statusbar_app_line1_left(),
+            statusbar_app_line1_right: default_statusbar_app_line1_right(),
+            statusbar_app_line2_left: String::new(),
+            statusbar_app_line2_right: String::new(),
+            statusbar_time_format: default_statusbar_time_format(),
+            statusbar_custom_commands: std::collections::HashMap::new(),
+            statusbar_font_size: None,
+            statusbar_bg_color: String::new(),
+            statusbar_fg_color: String::new(),
+            statusbar_opacity: default_statusbar_opacity(),
+            statusbar_refresh_rates: std::collections::HashMap::new(),
         }
     }
 }

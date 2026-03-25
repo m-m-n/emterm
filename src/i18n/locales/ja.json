@@ -12,7 +12,8 @@
       "profiles": "プロファイル",
       "ssh": "SSH接続",
       "log": "ログ",
-      "mux": "マルチプレクサ"
+      "mux": "マルチプレクサ",
+      "statusBar": "ステータスバー"
     },
     "nav": {
       "collapse": "ナビゲーションを閉じる",
@@ -379,6 +380,27 @@
       "empty": "ログエントリーなし",
       "reload": "再読み込み",
       "loading": "読み込み中..."
+    },
+    "statusBar": {
+      "title": "\u30b9\u30c6\u30fc\u30bf\u30b9\u30d0\u30fc",
+      "enabled": "\u30b9\u30c6\u30fc\u30bf\u30b9\u30d0\u30fc\u3092\u6709\u52b9\u306b\u3059\u308b",
+      "enabledDesc": "\u30a6\u30a3\u30f3\u30c9\u30a6\u4e0b\u90e8\u306b\u30b9\u30c6\u30fc\u30bf\u30b9\u30d0\u30fc\u3092\u8868\u793a",
+      "templates": "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8",
+      "appLine1Left": "\u30e9\u30a4\u30f31 \u5de6",
+      "appLine1Right": "\u30e9\u30a4\u30f31 \u53f3",
+      "appLine2Left": "\u30e9\u30a4\u30f32 \u5de6",
+      "appLine2Right": "\u30e9\u30a4\u30f32 \u53f3",
+      "templateHint": "\u5909\u6570: {time}, {cwd}, {git_branch}, {cmd:name}",
+      "line2Hint": "\u7a7a\u306b\u3059\u308b\u3068\u30e9\u30a4\u30f32\u3092\u975e\u8868\u793a",
+      "timeFormat": "\u6642\u523b\u30d5\u30a9\u30fc\u30de\u30c3\u30c8",
+      "timeFormatHint": "\u4f8b: HH:mm:ss, hh:mm A",
+      "appearance": "\u5916\u89b3",
+      "bgColor": "\u80cc\u666f\u8272",
+      "fgColor": "\u524d\u666f\u8272",
+      "colorDefault": "\u30c6\u30fc\u30de\u65e2\u5b9a\u5024\u3092\u4f7f\u7528",
+      "fontSize": "\u30d5\u30a9\u30f3\u30c8\u30b5\u30a4\u30ba",
+      "fontSizeHint": "\u7bc4\u56f2: 8-32pt",
+      "opacity": "\u4e0d\u900f\u660e\u5ea6"
     }
   },
   "tabBar": {

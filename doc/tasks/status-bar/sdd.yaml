@@ -1,0 +1,108 @@
+schema_version: 1
+feature: status-bar
+scale: standard
+created: 2026-03-25
+
+project:
+  components:
+    main:
+      language: "rust, typescript, wasm"
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: bf7cec94fa837fb963b98ae39b201cb069c1fbb3
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: bf7cec94fa837fb963b98ae39b201cb069c1fbb3
+  - id: implement
+    status: completed
+    completed_at_commit: bf7cec94fa837fb963b98ae39b201cb069c1fbb3
+  - id: check
+    status: completed
+    completed_at_commit: bf7cec94fa837fb963b98ae39b201cb069c1fbb3
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: bf7cec94fa837fb963b98ae39b201cb069c1fbb3
+  - id: review
+    status: completed
+    completed_at_commit: bf7cec94fa837fb963b98ae39b201cb069c1fbb3
+
+requirements:
+  FR1:
+    title: "Layer Structure"
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: "Template Variable System"
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: "Time Variable"
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: "CWD Variable"
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: "Git Branch Variable"
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: "Custom Command Variable"
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: "OSC Protocol"
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: "Settings UI"
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: "Default Display"
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: "Mux Mode Compatibility"
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Performance"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Security"
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Platform"
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Consistency"
+    status: ok
+    tasks: []
+    tests: []

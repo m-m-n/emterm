@@ -115,8 +115,9 @@ export class TerminalApp {
   // Mux mode callbacks (set internally in init() to wire enterMuxMode/exitMuxMode)
   public muxAttachCallback: ((socketPath: string, sessionId: number) => void) | null = null;
   public muxDetachCallback: (() => void) | null = null;
+  /** Callback for status bar OSC commands (set from main.ts) */
+  public statusBarOscCallback: ((command: string, param1?: string, param2?: string) => void) | null = null;
   private muxClient: MuxClient | null = null;
-  // Status bar will be implemented as an eMterm application-level feature
   private inMuxMode = false;
   private muxWindows: { id: number; name: string }[] = [];
   private activeMuxWindowIndex = 0;
@@ -604,6 +605,7 @@ export class TerminalApp {
       setLastWindowTitle: (title: string) => { this.lastWindowTitle = title; },
       muxAttachCallback: this.muxAttachCallback,
       muxDetachCallback: this.muxDetachCallback,
+      statusBarOscCallback: this.statusBarOscCallback,
     };
   }
 

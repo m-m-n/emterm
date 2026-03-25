@@ -15,3 +15,4 @@ export { renderMarkdownViewerSection } from "./sections/markdown-viewer-section"
 export { renderProfilesSection } from "./sections/profiles-section";
 export { renderLogSection } from "./sections/log-section";
 export { renderMuxSection } from "./sections/mux-section";
+export { renderStatusBarSection } from "./sections/status-bar-section";

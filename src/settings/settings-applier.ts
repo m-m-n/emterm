@@ -71,6 +71,19 @@ export function applySettings(settings: AppSettings): void {
   });
   applyFoldEnabled(settings.fold_enabled);
   applyBoldBrightensAnsiColors(settings.bold_brightens_ansi_colors);
+  applyStatusBar(settings);
+}
+
+/**
+ * Apply status bar settings.
+ * Dispatches a custom event that StatusBarUI listens for.
+ */
+export function applyStatusBar(settings: AppSettings): void {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(
+      new CustomEvent("emterm-statusbar-settings", { detail: settings }),
+    );
+  }
 }
 
 /**

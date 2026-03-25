@@ -12,6 +12,8 @@ pub mod markdown;
 pub mod sftp;
 #[cfg(feature = "gui")]
 pub mod ssh;
+#[cfg(feature = "gui")]
+pub mod statusbar;
 pub mod tmux;
 #[cfg(feature = "gui")]
 pub mod wsl;
