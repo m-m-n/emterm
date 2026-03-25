@@ -121,13 +121,15 @@ The built application will be in `src-tauri/target/release/bundle/`.
 
 ### CLI-Only Build
 
+The CLI-only build is useful for installing on remote servers. For example, running `emterm markdown` or `emterm image` over SSH outputs control sequences that the eMterm client renders as rich content — no GUI dependencies needed on the server side.
+
 Build only the CLI commands (`emterm markdown`, `emterm image`) without the GUI application:
 
 ```bash
 cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features
 ```
 
-The `gui` feature flag is enabled by default. Using `--no-default-features` excludes all GUI dependencies (Tauri, WebView, etc.) and produces a lightweight CLI binary.
+The `gui` feature flag is enabled by default. Using `--no-default-features` excludes all GUI dependencies (Tauri, WebView, etc.) and produces a lightweight CLI binary. A pre-built `emterm-cli` deb package is also available in [Releases](https://github.com/m-m-n/emterm/releases).
 
 ### Windows Cross-Compilation (from Linux)
 
