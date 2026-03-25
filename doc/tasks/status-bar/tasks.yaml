@@ -1,0 +1,10 @@
+tasks:
+  - - id: phase1
+      title: "Core Infrastructure and Settings"
+      status: completed
+  - - id: phase2
+      title: "Template Variables and Providers"
+      status: completed
+  - - id: phase3
+      title: "OSC Protocol and Custom Commands"
+      status: completed

@@ -1,0 +1,67 @@
+/**
+ * Status Bar Styles
+ *
+ * Styles for the status bar component, following UI design tokens.
+ * The status bar is positioned at the bottom of the application window,
+ * below the terminal content area.
+ */
+
+/* Status Bar Container */
+.status-bar {
+  display: flex;
+  flex-direction: column;
+  background: var(--status-bar-bg, var(--md-sys-color-surface-container));
+  color: var(--status-bar-fg, var(--md-sys-color-on-surface));
+  font-family: var(--ui-font-family, "Roboto", system-ui, sans-serif);
+  font-size: var(--status-bar-font-size, 11pt);
+  line-height: 1.4;
+  opacity: var(--status-bar-opacity, 1);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  -webkit-user-select: none;
+  user-select: none;
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: height var(--md-motion-duration-short4, 200ms) var(--md-motion-easing-standard, ease);
+}
+
+/* Hidden state */
+.status-bar.hidden {
+  display: none;
+}
+
+/* Layer row */
+.status-bar-layer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 8px;
+  min-height: 22px;
+  gap: 8px;
+}
+
+/* Hidden layer (empty content) */
+.status-bar-layer.hidden {
+  display: none;
+}
+
+/* Section (left/right) */
+.status-bar-section {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+
+.status-bar-section--left {
+  text-align: left;
+}
+
+.status-bar-section--right {
+  text-align: right;
+  margin-left: auto;
+}
+
+/* OSC layer styling - slightly different appearance */
+.status-bar-layer--osc {
+  background: var(--md-sys-color-surface-container-high, rgba(255, 255, 255, 0.05));
+}

@@ -93,6 +93,35 @@ pub(super) fn validate_settings(settings: &AppSettings) -> Result<(), String> {
         }
     }
 
+    // Status bar validation
+    if let Some(font_size) = settings.statusbar_font_size {
+        if font_size < MIN_FONT_SIZE as f32 || font_size > MAX_FONT_SIZE as f32 {
+            return Err(t!(
+                "validation.statusbarFontSize",
+                min = MIN_FONT_SIZE,
+                max = MAX_FONT_SIZE
+            )
+            .to_string());
+        }
+    }
+
+    if settings.statusbar_opacity < 0.0 || settings.statusbar_opacity > 1.0 {
+        return Err(t!("validation.statusbarOpacity").to_string());
+    }
+
+    for (name, cmd) in &settings.statusbar_custom_commands {
+        if name.trim().is_empty() {
+            return Err(t!("validation.statusbarCommandNameEmpty").to_string());
+        }
+        if cmd.executable.trim().is_empty() {
+            return Err(t!("validation.statusbarCommandExecutableEmpty", name = name).to_string());
+        }
+        // Reject executable paths with arguments (spaces after trimming suggest arguments)
+        if cmd.executable.trim().contains(' ') {
+            return Err(t!("validation.statusbarCommandNoArgs", name = name).to_string());
+        }
+    }
+
     Ok(())
 }
 

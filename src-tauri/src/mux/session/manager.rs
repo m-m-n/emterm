@@ -68,7 +68,8 @@ impl SessionManager {
         self.sessions
             .values()
             .map(|s| {
-                let active_idx = s.active_window_id
+                let active_idx = s
+                    .active_window_id
                     .and_then(|aid| s.windows.keys().position(|&wid| wid == aid))
                     .unwrap_or(0) as u32;
                 SessionInfo {

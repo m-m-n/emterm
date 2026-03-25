@@ -39,6 +39,8 @@ export interface OscHandlerContext {
   muxAttachCallback: ((socketPath: string, sessionId: number) => void) | null;
   /** Callback for mux detach OSC sequence */
   muxDetachCallback: (() => void) | null;
+  /** Callback for status bar OSC commands */
+  statusBarOscCallback: ((command: string, param1?: string, param2?: string) => void) | null;
 }
 
 /**
@@ -202,6 +204,12 @@ export function handleOscCallback(
       // Handle mux commands (emterm;mux;action;...)
       if (verb === "emterm" && params.length > 0 && params[0] === "mux") {
         handleMuxOsc(ctx, params);
+      } else if (verb === "emterm" && params.length > 0 && params[0] === "statusbar") {
+        // Route to status bar OSC handler
+        if (ctx.statusBarOscCallback) {
+          const sbParams = params.slice(1); // Remove "statusbar" prefix
+          ctx.statusBarOscCallback(sbParams[0] ?? "", sbParams[1], sbParams[2]);
+        }
       } else if (verb === "emterm" && params.length > 0 && params[0] === "fold") {
         handleFoldCommand(ctx.state, params.slice(1));
       } else if (verb === "emterm" && params.length > 0 && params[0] === "download") {

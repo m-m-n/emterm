@@ -12,7 +12,8 @@
       "profiles": "Profiles",
       "ssh": "SSH Connections",
       "log": "Log",
-      "mux": "Multiplexer"
+      "mux": "Multiplexer",
+      "statusBar": "Status Bar"
     },
     "nav": {
       "collapse": "Collapse navigation",
@@ -379,6 +380,27 @@
       "empty": "No log entries",
       "reload": "Reload",
       "loading": "Loading..."
+    },
+    "statusBar": {
+      "title": "Status Bar",
+      "enabled": "Enable Status Bar",
+      "enabledDesc": "Display a status bar at the bottom of the window",
+      "templates": "Templates",
+      "appLine1Left": "Line 1 Left",
+      "appLine1Right": "Line 1 Right",
+      "appLine2Left": "Line 2 Left",
+      "appLine2Right": "Line 2 Right",
+      "templateHint": "Variables: {time}, {cwd}, {git_branch}, {cmd:name}",
+      "line2Hint": "Leave empty to hide line 2",
+      "timeFormat": "Time Format",
+      "timeFormatHint": "e.g. HH:mm:ss, hh:mm A",
+      "appearance": "Appearance",
+      "bgColor": "Background Color",
+      "fgColor": "Foreground Color",
+      "colorDefault": "Use theme default",
+      "fontSize": "Font Size",
+      "fontSizeHint": "Range: 8-32pt",
+      "opacity": "Opacity"
     }
   },
   "tabBar": {
