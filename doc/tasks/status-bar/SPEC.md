@@ -64,7 +64,7 @@ As a power user, I want to define custom commands that periodically execute and 
 
 - **FR7: OSC Protocol** - OSC 777;statusbar;... protocol with commands: `set;left;content`, `set;right;content`, `clear`, `clear;left`, `clear;right`, `show`, `hide`. show/hide controls OSC layer only.
 
-- **FR8: Settings UI** - New "Status Bar" category in settings panel with: enable/disable toggle, template strings for each app layer line (left/right), time format, custom command definitions, appearance customization (colors, font size, transparency).
+- **FR8: Settings UI** - "Status Bar" subsection under UI settings with: enable/disable toggle, template strings for each app layer line (left/right), time format, custom command definitions (inline add/edit/delete), font size.
 
 - **FR9: Default Display** - When enabled with default settings: 1 line (app layer line 1), left = `{time}`, right = `{cwd}`.
 
@@ -178,9 +178,6 @@ statusbar_app_line2_right: String,          // default: ""
 statusbar_time_format: String,              // default: "HH:mm:ss"
 statusbar_custom_commands: HashMap<String, CustomCommand>,  // default: {}
 statusbar_font_size: Option<f32>,           // default: None (use UI default)
-statusbar_bg_color: String,                 // default: "" (use UI default)
-statusbar_fg_color: String,                 // default: "" (use UI default)
-statusbar_opacity: f32,                     // default: 1.0
 statusbar_refresh_rates: HashMap<String, u64>,  // per-variable rates in ms
 ```
 
@@ -204,9 +201,6 @@ statusbar_app_line2_right: string;
 statusbar_time_format: string;
 statusbar_custom_commands: Record<string, { executable: string; interval_ms: number }>;
 statusbar_font_size: number | null;
-statusbar_bg_color: string;
-statusbar_fg_color: string;
-statusbar_opacity: number;
 statusbar_refresh_rates: Record<string, number>;
 ```
 

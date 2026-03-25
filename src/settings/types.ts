@@ -121,11 +121,8 @@ export interface AppSettings {
   statusbar_app_line2_left: string;
   statusbar_app_line2_right: string;
   statusbar_time_format: string;
-  statusbar_custom_commands: Record<string, StatusbarCustomCommand>;
   statusbar_font_size: number | null;
-  statusbar_bg_color: string;
-  statusbar_fg_color: string;
-  statusbar_opacity: number;
+  statusbar_custom_commands: Record<string, StatusbarCustomCommand>;
   statusbar_refresh_rates: Record<string, number>;
 }
 

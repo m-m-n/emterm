@@ -518,18 +518,9 @@ pub struct AppSettings {
     )]
     pub statusbar_time_format: String,
     #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub statusbar_custom_commands: std::collections::HashMap<String, StatusbarCustomCommand>,
-    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub statusbar_font_size: Option<f32>,
     #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub statusbar_bg_color: String,
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub statusbar_fg_color: String,
-    #[serde(
-        default = "default_statusbar_opacity",
-        deserialize_with = "deserialize_null_statusbar_opacity"
-    )]
-    pub statusbar_opacity: f32,
+    pub statusbar_custom_commands: std::collections::HashMap<String, StatusbarCustomCommand>,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub statusbar_refresh_rates: std::collections::HashMap<String, u64>,
 }
@@ -566,9 +557,6 @@ fn default_statusbar_app_line1_right() -> String {
 fn default_statusbar_time_format() -> String {
     "HH:mm:ss".to_string()
 }
-fn default_statusbar_opacity() -> f32 {
-    1.0
-}
 fn default_statusbar_custom_command_interval() -> u64 {
     1000
 }
@@ -588,12 +576,6 @@ deserialize_null_with!(
     String,
     default_statusbar_time_format
 );
-deserialize_null_with!(
-    deserialize_null_statusbar_opacity,
-    f32,
-    default_statusbar_opacity
-);
-
 /// Custom command definition for status bar variables.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatusbarCustomCommand {
@@ -688,11 +670,8 @@ impl Default for AppSettings {
             statusbar_app_line2_left: String::new(),
             statusbar_app_line2_right: String::new(),
             statusbar_time_format: default_statusbar_time_format(),
-            statusbar_custom_commands: std::collections::HashMap::new(),
             statusbar_font_size: None,
-            statusbar_bg_color: String::new(),
-            statusbar_fg_color: String::new(),
-            statusbar_opacity: default_statusbar_opacity(),
+            statusbar_custom_commands: std::collections::HashMap::new(),
             statusbar_refresh_rates: std::collections::HashMap::new(),
         }
     }

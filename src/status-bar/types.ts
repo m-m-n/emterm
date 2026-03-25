@@ -28,7 +28,4 @@ export interface StatusBarConfig {
   appLine2Right: string;
   timeFormat: string;
   fontSize: number | null;
-  bgColor: string;
-  fgColor: string;
-  opacity: number;
 }

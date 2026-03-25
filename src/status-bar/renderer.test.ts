@@ -77,45 +77,6 @@ describe("StatusBarRenderer", () => {
     expect(line2.classList.contains("hidden")).toBe(false);
   });
 
-  test("should apply config with custom colors", () => {
-    renderer.applyConfig({
-      enabled: true,
-      appLine1Left: "",
-      appLine1Right: "",
-      appLine2Left: "",
-      appLine2Right: "",
-      timeFormat: "HH:mm:ss",
-      fontSize: 12,
-      bgColor: "#1a1a1a",
-      fgColor: "#e0e0e0",
-      opacity: 0.8,
-    });
-
-    expect(container.style.getPropertyValue("--status-bar-bg")).toBe("#1a1a1a");
-    expect(container.style.getPropertyValue("--status-bar-fg")).toBe("#e0e0e0");
-    expect(container.style.getPropertyValue("--status-bar-font-size")).toBe("12pt");
-    expect(container.style.getPropertyValue("--status-bar-opacity")).toBe("0.8");
-  });
-
-  test("should remove color properties when empty", () => {
-    renderer.applyConfig({
-      enabled: true,
-      appLine1Left: "",
-      appLine1Right: "",
-      appLine2Left: "",
-      appLine2Right: "",
-      timeFormat: "HH:mm:ss",
-      fontSize: null,
-      bgColor: "",
-      fgColor: "",
-      opacity: 1.0,
-    });
-
-    expect(container.style.getPropertyValue("--status-bar-bg")).toBe("");
-    expect(container.style.getPropertyValue("--status-bar-fg")).toBe("");
-    expect(container.style.getPropertyValue("--status-bar-font-size")).toBe("");
-  });
-
   test("should not update DOM when content is unchanged (differential rendering)", () => {
     renderer.setContent("app-line1", "left", "Same");
     const el = renderer.getSection("app-line1", "left")!;

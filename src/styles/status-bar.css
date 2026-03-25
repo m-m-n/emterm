@@ -10,12 +10,11 @@
 .status-bar {
   display: flex;
   flex-direction: column;
-  background: var(--status-bar-bg, var(--md-sys-color-surface-container));
-  color: var(--status-bar-fg, var(--md-sys-color-on-surface));
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
   font-family: var(--ui-font-family, "Roboto", system-ui, sans-serif);
   font-size: var(--status-bar-font-size, 11pt);
   line-height: 1.4;
-  opacity: var(--status-bar-opacity, 1);
   border-top: 1px solid var(--md-sys-color-outline-variant);
   -webkit-user-select: none;
   user-select: none;
@@ -64,4 +63,33 @@
 /* OSC layer styling - slightly different appearance */
 .status-bar-layer--osc {
   background: var(--md-sys-color-surface-container-high, rgba(255, 255, 255, 0.05));
+}
+
+/* Settings: custom command inline form */
+.statusbar-cmd-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.statusbar-cmd-form .settings-text-input {
+  flex: 1;
+  min-width: 80px;
+}
+
+.statusbar-cmd-interval-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.statusbar-cmd-interval-group .settings-number-input {
+  width: 80px;
+}
+
+.statusbar-cmd-interval-label {
+  font-size: 0.85em;
+  opacity: 0.7;
+  white-space: nowrap;
 }

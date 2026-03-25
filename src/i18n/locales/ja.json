@@ -394,13 +394,17 @@
       "line2Hint": "\u7a7a\u306b\u3059\u308b\u3068\u30e9\u30a4\u30f32\u3092\u975e\u8868\u793a",
       "timeFormat": "\u6642\u523b\u30d5\u30a9\u30fc\u30de\u30c3\u30c8",
       "timeFormatHint": "\u4f8b: HH:mm:ss, hh:mm A",
+      "customCommands": "\u30ab\u30b9\u30bf\u30e0\u30b3\u30de\u30f3\u30c9",
+      "addCommand": "\u30b3\u30de\u30f3\u30c9\u3092\u8ffd\u52a0",
+      "noCommands": "\u30ab\u30b9\u30bf\u30e0\u30b3\u30de\u30f3\u30c9\u304c\u672a\u5b9a\u7fa9\u3067\u3059\u3002\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8\u3067 {cmd:\u540d\u524d} \u3068\u3057\u3066\u4f7f\u7528\u3057\u307e\u3059\u3002",
+      "deleteCommand": "\u524a\u9664",
+      "commandNamePlaceholder": "\u540d\u524d",
+      "commandExecutablePlaceholder": "\u5b9f\u884c\u30d5\u30a1\u30a4\u30eb\u30d1\u30b9",
+      "commandIntervalUnit": "\u30df\u30ea\u79d2",
+      "commandIntervalHint": "\u66f4\u65b0\u9593\u9694\uff08\u30df\u30ea\u79d2\uff09",
       "appearance": "\u5916\u89b3",
-      "bgColor": "\u80cc\u666f\u8272",
-      "fgColor": "\u524d\u666f\u8272",
-      "colorDefault": "\u30c6\u30fc\u30de\u65e2\u5b9a\u5024\u3092\u4f7f\u7528",
       "fontSize": "\u30d5\u30a9\u30f3\u30c8\u30b5\u30a4\u30ba",
-      "fontSizeHint": "\u7bc4\u56f2: 8-32pt",
-      "opacity": "\u4e0d\u900f\u660e\u5ea6"
+      "fontSizeHint": "\u7bc4\u56f2: 8-32pt"
     }
   },
   "tabBar": {

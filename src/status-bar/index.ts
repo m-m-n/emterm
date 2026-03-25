@@ -91,9 +91,6 @@ export class StatusBarUI {
       appLine2Right: settings.statusbar_app_line2_right,
       timeFormat: settings.statusbar_time_format,
       fontSize: settings.statusbar_font_size,
-      bgColor: settings.statusbar_bg_color,
-      fgColor: settings.statusbar_fg_color,
-      opacity: settings.statusbar_opacity,
     };
 
     this.lastConfig = config;

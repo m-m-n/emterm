@@ -394,13 +394,17 @@
       "line2Hint": "Leave empty to hide line 2",
       "timeFormat": "Time Format",
       "timeFormatHint": "e.g. HH:mm:ss, hh:mm A",
+      "customCommands": "Custom Commands",
+      "addCommand": "Add Command",
+      "noCommands": "No custom commands defined. Use {cmd:name} in templates.",
+      "deleteCommand": "Delete",
+      "commandNamePlaceholder": "Name",
+      "commandExecutablePlaceholder": "Executable path",
+      "commandIntervalUnit": "ms",
+      "commandIntervalHint": "Refresh interval in milliseconds",
       "appearance": "Appearance",
-      "bgColor": "Background Color",
-      "fgColor": "Foreground Color",
-      "colorDefault": "Use theme default",
       "fontSize": "Font Size",
-      "fontSizeHint": "Range: 8-32pt",
-      "opacity": "Opacity"
+      "fontSizeHint": "Range: 8-32pt"
     }
   },
   "tabBar": {
