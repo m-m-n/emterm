@@ -350,11 +350,8 @@ mod tests {
             statusbar_app_line2_left: "line2".to_string(),
             statusbar_app_line2_right: "right2".to_string(),
             statusbar_time_format: "HH:mm".to_string(),
-            statusbar_custom_commands: std::collections::HashMap::new(),
             statusbar_font_size: Some(11.0),
-            statusbar_bg_color: "#000000".to_string(),
-            statusbar_fg_color: "#ffffff".to_string(),
-            statusbar_opacity: 0.9,
+            statusbar_custom_commands: std::collections::HashMap::new(),
             statusbar_refresh_rates: std::collections::HashMap::new(),
         };
 
@@ -1365,10 +1362,6 @@ mod tests {
         assert_eq!(settings.statusbar_app_line2_right, "");
         assert_eq!(settings.statusbar_time_format, "HH:mm:ss");
         assert!(settings.statusbar_custom_commands.is_empty());
-        assert_eq!(settings.statusbar_font_size, None);
-        assert_eq!(settings.statusbar_bg_color, "");
-        assert_eq!(settings.statusbar_fg_color, "");
-        assert_eq!(settings.statusbar_opacity, 1.0);
         assert!(settings.statusbar_refresh_rates.is_empty());
     }
 
@@ -1379,7 +1372,6 @@ mod tests {
         assert!(!settings.statusbar_enabled);
         assert_eq!(settings.statusbar_app_line1_left, "{time}");
         assert_eq!(settings.statusbar_app_line1_right, "{cwd}");
-        assert_eq!(settings.statusbar_opacity, 1.0);
     }
 
     #[test]
@@ -1388,15 +1380,13 @@ mod tests {
             "statusbar_enabled": null,
             "statusbar_app_line1_left": null,
             "statusbar_app_line1_right": null,
-            "statusbar_time_format": null,
-            "statusbar_opacity": null
+            "statusbar_time_format": null
         }"#;
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert!(!settings.statusbar_enabled);
         assert_eq!(settings.statusbar_app_line1_left, "{time}");
         assert_eq!(settings.statusbar_app_line1_right, "{cwd}");
         assert_eq!(settings.statusbar_time_format, "HH:mm:ss");
-        assert_eq!(settings.statusbar_opacity, 1.0);
     }
 
     #[test]
@@ -1404,14 +1394,12 @@ mod tests {
         let json = r#"{
             "statusbar_enabled": true,
             "statusbar_app_line1_left": "{git_branch}",
-            "statusbar_app_line1_right": "{time} | {cwd}",
-            "statusbar_opacity": 0.8
+            "statusbar_app_line1_right": "{time} | {cwd}"
         }"#;
         let settings: AppSettings = serde_json::from_str(json).unwrap();
         assert!(settings.statusbar_enabled);
         assert_eq!(settings.statusbar_app_line1_left, "{git_branch}");
         assert_eq!(settings.statusbar_app_line1_right, "{time} | {cwd}");
-        assert_eq!(settings.statusbar_opacity, 0.8);
     }
 
     #[test]
@@ -1430,27 +1418,6 @@ mod tests {
         let load = settings.statusbar_custom_commands.get("load").unwrap();
         assert_eq!(load.executable, "/usr/local/bin/load");
         assert_eq!(load.interval_ms, 1000); // default
-    }
-
-    #[test]
-    fn test_statusbar_validation_opacity_out_of_range() {
-        let mut settings = AppSettings::default();
-        settings.statusbar_opacity = 1.5;
-        assert!(validate_settings(&settings).is_err());
-    }
-
-    #[test]
-    fn test_statusbar_validation_opacity_negative() {
-        let mut settings = AppSettings::default();
-        settings.statusbar_opacity = -0.1;
-        assert!(validate_settings(&settings).is_err());
-    }
-
-    #[test]
-    fn test_statusbar_validation_font_size_out_of_range() {
-        let mut settings = AppSettings::default();
-        settings.statusbar_font_size = Some(100.0);
-        assert!(validate_settings(&settings).is_err());
     }
 
     #[test]
@@ -1480,11 +1447,16 @@ mod tests {
     }
 
     #[test]
+    fn test_statusbar_validation_font_size_out_of_range() {
+        let mut settings = AppSettings::default();
+        settings.statusbar_font_size = Some(100.0);
+        assert!(validate_settings(&settings).is_err());
+    }
+
+    #[test]
     fn test_statusbar_validation_valid() {
         let mut settings = AppSettings::default();
         settings.statusbar_enabled = true;
-        settings.statusbar_opacity = 0.5;
-        settings.statusbar_font_size = Some(12.0);
         settings.statusbar_custom_commands.insert(
             "uptime".to_string(),
             StatusbarCustomCommand {

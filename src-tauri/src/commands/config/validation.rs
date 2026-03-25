@@ -105,10 +105,6 @@ pub(super) fn validate_settings(settings: &AppSettings) -> Result<(), String> {
         }
     }
 
-    if settings.statusbar_opacity < 0.0 || settings.statusbar_opacity > 1.0 {
-        return Err(t!("validation.statusbarOpacity").to_string());
-    }
-
     for (name, cmd) in &settings.statusbar_custom_commands {
         if name.trim().is_empty() {
             return Err(t!("validation.statusbarCommandNameEmpty").to_string());

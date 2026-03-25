@@ -120,30 +120,15 @@ export class StatusBarRenderer {
   }
 
   /**
-   * Apply appearance settings (colors, font size, opacity).
+   * Apply configuration settings (font size).
    */
   applyConfig(config: StatusBarConfig): void {
     const style = this.container.style;
-
-    if (config.bgColor) {
-      style.setProperty("--status-bar-bg", config.bgColor);
-    } else {
-      style.removeProperty("--status-bar-bg");
-    }
-
-    if (config.fgColor) {
-      style.setProperty("--status-bar-fg", config.fgColor);
-    } else {
-      style.removeProperty("--status-bar-fg");
-    }
-
     if (config.fontSize != null) {
       style.setProperty("--status-bar-font-size", `${config.fontSize}pt`);
     } else {
       style.removeProperty("--status-bar-font-size");
     }
-
-    style.setProperty("--status-bar-opacity", String(config.opacity));
   }
 
   /**

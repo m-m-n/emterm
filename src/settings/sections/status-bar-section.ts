@@ -11,7 +11,6 @@ import {
   renderToggle,
   renderTextInput,
   renderNumberInput,
-  renderSlider,
 } from "../settings-components";
 import { applyStatusBar } from "../settings-applier";
 import type { SectionContext } from "./types";
@@ -113,36 +112,147 @@ export function renderStatusBarSection(
     ctx.addContentListener,
   );
 
+  // Custom Commands subsection
+  renderSubsectionHeader(panel, t("settings.statusBar.customCommands"));
+
+  const commands = settings.statusbar_custom_commands;
+  const commandEntries = Object.entries(commands);
+
+  // Existing command list (editable inline)
+  if (commandEntries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "ssh-empty-state";
+    empty.textContent = t("settings.statusBar.noCommands");
+    panel.appendChild(empty);
+  } else {
+    for (const [name, cmd] of commandEntries) {
+      const row = document.createElement("div");
+      row.className = "statusbar-cmd-form";
+
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.className = "settings-text-input";
+      nameInput.value = name;
+      ctx.addContentListener(nameInput, "change", () => {
+        const newName = nameInput.value.trim();
+        if (!newName || newName === name) return;
+        // Rename: remove old key, add new key
+        const { [name]: cmdVal, ...rest } = ctx.currentSettings.statusbar_custom_commands;
+        if (!cmdVal) return;
+        ctx.currentSettings.statusbar_custom_commands = { ...rest, [newName]: cmdVal };
+        ctx.saveSetting("statusbar_custom_commands", ctx.currentSettings.statusbar_custom_commands);
+        applyStatusBar(ctx.currentSettings);
+        ctx.reRender();
+      });
+
+      const execInput = document.createElement("input");
+      execInput.type = "text";
+      execInput.className = "settings-text-input";
+      execInput.value = cmd.executable;
+      ctx.addContentListener(execInput, "change", () => {
+        const val = execInput.value.trim();
+        if (!val) return;
+        ctx.currentSettings.statusbar_custom_commands[name]!.executable = val;
+        ctx.saveSetting("statusbar_custom_commands", { ...ctx.currentSettings.statusbar_custom_commands });
+        applyStatusBar(ctx.currentSettings);
+      });
+
+      const intervalInput = document.createElement("input");
+      intervalInput.type = "number";
+      intervalInput.className = "settings-number-input";
+      intervalInput.value = String(cmd.interval_ms);
+      intervalInput.min = "100";
+      intervalInput.title = t("settings.statusBar.commandIntervalHint");
+      ctx.addContentListener(intervalInput, "change", () => {
+        const val = parseInt(intervalInput.value, 10) || 1000;
+        ctx.currentSettings.statusbar_custom_commands[name]!.interval_ms = val;
+        ctx.saveSetting("statusbar_custom_commands", { ...ctx.currentSettings.statusbar_custom_commands });
+        applyStatusBar(ctx.currentSettings);
+      });
+
+      const intervalLabel = document.createElement("span");
+      intervalLabel.className = "statusbar-cmd-interval-label";
+      intervalLabel.textContent = t("settings.statusBar.commandIntervalUnit");
+
+      const intervalGroup = document.createElement("span");
+      intervalGroup.className = "statusbar-cmd-interval-group";
+      intervalGroup.appendChild(intervalInput);
+      intervalGroup.appendChild(intervalLabel);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "profile-action-btn";
+      deleteBtn.textContent = t("settings.statusBar.deleteCommand");
+      ctx.addContentListener(deleteBtn, "click", () => {
+        const { [name]: _, ...rest } = ctx.currentSettings.statusbar_custom_commands;
+        ctx.currentSettings.statusbar_custom_commands = rest;
+        ctx.saveSetting("statusbar_custom_commands", rest);
+        applyStatusBar(ctx.currentSettings);
+        ctx.reRender();
+      });
+
+      row.appendChild(nameInput);
+      row.appendChild(execInput);
+      row.appendChild(intervalGroup);
+      row.appendChild(deleteBtn);
+      panel.appendChild(row);
+    }
+  }
+
+  // Inline add form
+  const form = document.createElement("div");
+  form.className = "statusbar-cmd-form";
+
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.className = "settings-text-input";
+  nameInput.placeholder = t("settings.statusBar.commandNamePlaceholder");
+
+  const execInput = document.createElement("input");
+  execInput.type = "text";
+  execInput.className = "settings-text-input";
+  execInput.placeholder = t("settings.statusBar.commandExecutablePlaceholder");
+
+  const intervalLabel = document.createElement("span");
+  intervalLabel.className = "statusbar-cmd-interval-label";
+  intervalLabel.textContent = t("settings.statusBar.commandIntervalUnit");
+
+  const intervalInput = document.createElement("input");
+  intervalInput.type = "number";
+  intervalInput.className = "settings-number-input";
+  intervalInput.placeholder = "1000";
+  intervalInput.min = "100";
+  intervalInput.title = t("settings.statusBar.commandIntervalHint");
+
+  const addBtn = document.createElement("button");
+  addBtn.className = "profile-action-btn";
+  addBtn.textContent = t("settings.statusBar.addCommand");
+  ctx.addContentListener(addBtn, "click", () => {
+    const name = nameInput.value.trim();
+    const executable = execInput.value.trim();
+    const interval = parseInt(intervalInput.value, 10) || 1000;
+    if (!name || !executable) return;
+
+    ctx.currentSettings.statusbar_custom_commands = {
+      ...ctx.currentSettings.statusbar_custom_commands,
+      [name]: { executable, interval_ms: interval },
+    };
+    ctx.saveSetting("statusbar_custom_commands", ctx.currentSettings.statusbar_custom_commands);
+    applyStatusBar(ctx.currentSettings);
+    ctx.reRender();
+  });
+
+  form.appendChild(nameInput);
+  form.appendChild(execInput);
+  const intervalGroup = document.createElement("span");
+  intervalGroup.className = "statusbar-cmd-interval-group";
+  intervalGroup.appendChild(intervalInput);
+  intervalGroup.appendChild(intervalLabel);
+  form.appendChild(intervalGroup);
+  form.appendChild(addBtn);
+  panel.appendChild(form);
+
   // Appearance subsection
   renderSubsectionHeader(panel, t("settings.statusBar.appearance"));
-
-  // Background color
-  renderTextInput(
-    panel,
-    {
-      key: "statusbar-bg-color",
-      label: t("settings.statusBar.bgColor"),
-      value: settings.statusbar_bg_color,
-      placeholder: t("settings.statusBar.colorDefault"),
-      hint: "",
-      onSave: (v) => { ctx.saveSetting("statusbar_bg_color", v); applyStatusBar(ctx.currentSettings); },
-    },
-    ctx.addContentListener,
-  );
-
-  // Foreground color
-  renderTextInput(
-    panel,
-    {
-      key: "statusbar-fg-color",
-      label: t("settings.statusBar.fgColor"),
-      value: settings.statusbar_fg_color,
-      placeholder: t("settings.statusBar.colorDefault"),
-      hint: "",
-      onSave: (v) => { ctx.saveSetting("statusbar_fg_color", v); applyStatusBar(ctx.currentSettings); },
-    },
-    ctx.addContentListener,
-  );
 
   // Font size
   renderNumberInput(
@@ -158,23 +268,6 @@ export function renderStatusBarSection(
       hint: t("settings.statusBar.fontSizeHint"),
       onInput: () => {},
       onSave: (v) => { ctx.saveSetting("statusbar_font_size", v); applyStatusBar(ctx.currentSettings); },
-    },
-    ctx.addContentListener,
-  );
-
-  // Opacity
-  renderSlider(
-    panel,
-    {
-      key: "statusbar-opacity",
-      label: t("settings.statusBar.opacity"),
-      value: settings.statusbar_opacity,
-      min: 0,
-      max: 1,
-      step: 0.05,
-      hint: `${Math.round(settings.statusbar_opacity * 100)}%`,
-      onInput: () => {},
-      onSave: (v) => { ctx.saveSetting("statusbar_opacity", v); applyStatusBar(ctx.currentSettings); },
     },
     ctx.addContentListener,
   );

@@ -58,7 +58,6 @@ const CATEGORY_ICONS: Record<string, string> = {
   notification: '<svg viewBox="0 0 24 24"><path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>',
   "markdown-viewer": '<svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>',
   profiles: '<svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>',
-  "status-bar": '<svg viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm1 11h12v2H6v-2z"/></svg>',
   ssh: '<svg viewBox="0 0 24 24"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7l-2 3v1h8v-1l-2-3h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/><path d="M7 8l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   log: '<svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>',
 };
@@ -92,7 +91,6 @@ export class SettingsPanel {
       { id: "notification", label: t("settings.categories.notification"), enabled: true },
       { id: "markdown-viewer", label: t("settings.categories.markdownViewer"), enabled: true },
       { id: "profiles", label: t("settings.categories.profiles"), enabled: true },
-      { id: "status-bar", label: t("settings.categories.statusBar"), enabled: true },
       { id: "ssh", label: t("settings.categories.ssh"), enabled: true },
       { id: "log", label: t("settings.categories.log"), enabled: true },
     ];
@@ -222,6 +220,7 @@ export class SettingsPanel {
     switch (this.activeCategory) {
       case "ui":
         renderUiSection(panel, ctx);
+        renderStatusBarSection(panel, ctx);
         break;
       case "keybinds":
         renderKeybindsSection(panel, ctx);
@@ -243,9 +242,6 @@ export class SettingsPanel {
         break;
       case "profiles":
         renderProfilesSection(panel, ctx);
-        break;
-      case "status-bar":
-        renderStatusBarSection(panel, ctx);
         break;
       case "ssh":
         renderSshSection(panel, ctx);
@@ -282,9 +278,13 @@ export class SettingsPanel {
         currentSettings: this.currentSettings,
       },
       reRender: () => {
+        const scrollTop = this.contentElement?.scrollTop ?? 0;
         this.detachContentListeners();
         this.render();
         this.attachEventListeners();
+        if (this.contentElement) {
+          this.contentElement.scrollTop = scrollTop;
+        }
       },
     };
   }
