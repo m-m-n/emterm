@@ -134,8 +134,43 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: --target ${{ matrix.target }}
 
+  build-cli:
+    needs: create-release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          VERSION="${VERSION#v}"
+          sed -i "s/^version = \"0.0.0\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+
+      - name: Build CLI deb package
+        run: EMTERM_CLI_ONLY=1 bash scripts/build-dpkg.sh
+
+      - name: Upload CLI deb to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.create-release.outputs.version }}" \
+            build/emterm-cli_*.deb \
+            --repo "${{ github.repository }}"
+
   publish-release:
-    needs: [create-release, build]
+    needs: [create-release, build, build-cli]
     runs-on: ubuntu-latest
     steps:
       - name: Publish release
