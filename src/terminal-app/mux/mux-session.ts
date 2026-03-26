@@ -4,7 +4,7 @@
  * grid management, and state lifecycle.
  */
 
-import { MuxClient, MuxMessageType } from "../../terminal/mux/mux-client";
+import { MuxClient, MuxMessageType, decodeWelcomeMsg } from "../../terminal/mux/mux-client";
 import type { MuxSessionInfo } from "../../terminal/mux/mux-client";
 import type { MuxAction } from "../../terminal/mux/prefix-key";
 import type { PtyClient } from "../../pty/client";
@@ -83,7 +83,16 @@ export interface MuxSessionContext {
  * It connects to the daemon, performs handshake, and writes the Welcome APC
  * to stdout (PTY output). The GUI receives it via the WASM APC callback.
  */
-export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, _sessionId: number): Promise<void> {
+/**
+ * Options for enterMuxMode.
+ * When welcomeData is provided, the bridge is already running and we skip launching it.
+ */
+export interface EnterMuxOptions {
+  /** Pre-received Welcome APC data (bridge already running, user typed `emterm mux` manually). */
+  welcomeData?: { msgType: number; paneId: number; data: Uint8Array };
+}
+
+export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, _sessionId: number, options?: EnterMuxOptions): Promise<void> {
   if (ctx.getInMuxMode()) return;
   ctx.setInMuxMode(true);
 
@@ -165,28 +174,48 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     ptyHandlerHandle.suppressOriginalPty = true;
   }
 
-  // Start listening for Welcome before launching bridge
-  const welcomePromise = client.waitForWelcome();
-
-  // Launch the bridge process by writing the command to the PTY
-  // The bridge will connect to the daemon and send Welcome APC back
-  const muxCommand = "emterm mux\n";
-  await ptyClient.write(new TextEncoder().encode(muxCommand));
-
-  // Wait for Welcome APC from bridge
   let muxSessions: MuxSessionInfo[] = [];
-  try {
-    muxSessions = await welcomePromise;
-    console.info(`[INFO][FRONTEND] Mux bridge connected: ${muxSessions.length} session(s)`);
-  } catch (e) {
-    console.error("[ERROR][FRONTEND] Mux bridge handshake failed:", e);
-    if (ptyHandlerHandle) {
-      ptyHandlerHandle.suppressOriginalPty = false;
+
+  if (options?.welcomeData) {
+    // Bridge is already running (user typed `emterm mux` manually).
+    // Decode the Welcome data directly without launching bridge.
+    const sessions = decodeWelcomeMsg(options.welcomeData.data);
+    if (sessions) {
+      client.handleWelcome(sessions);
+      muxSessions = sessions;
+      console.info(`[INFO][FRONTEND] Mux bridge already running: ${muxSessions.length} session(s)`);
+    } else {
+      console.error("[ERROR][FRONTEND] Failed to decode pre-received Welcome");
+      if (ptyHandlerHandle) {
+        ptyHandlerHandle.suppressOriginalPty = false;
+      }
+      setMuxApcContext(null);
+      ctx.setInMuxMode(false);
+      ctx.setMuxClient(null);
+      return;
     }
-    setMuxApcContext(null);
-    ctx.setInMuxMode(false);
-    ctx.setMuxClient(null);
-    return;
+  } else {
+    // Start listening for Welcome before launching bridge
+    const welcomePromise = client.waitForWelcome();
+
+    // Launch the bridge process by writing the command to the PTY
+    const muxCommand = "emterm mux\n";
+    await ptyClient.write(new TextEncoder().encode(muxCommand));
+
+    // Wait for Welcome APC from bridge
+    try {
+      muxSessions = await welcomePromise;
+      console.info(`[INFO][FRONTEND] Mux bridge connected: ${muxSessions.length} session(s)`);
+    } catch (e) {
+      console.error("[ERROR][FRONTEND] Mux bridge handshake failed:", e);
+      if (ptyHandlerHandle) {
+        ptyHandlerHandle.suppressOriginalPty = false;
+      }
+      setMuxApcContext(null);
+      ctx.setInMuxMode(false);
+      ctx.setMuxClient(null);
+      return;
+    }
   }
 
   // Route all PTY writes to mux daemon via APC proxy
