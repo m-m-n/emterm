@@ -1,13 +1,14 @@
 //! CLI subcommands for the mux multiplexer.
 //!
-//! - `emterm mux` — Start/attach to default session
-//! - `emterm mux --daemon` — Run as daemon process (internal)
-//! - `emterm mux attach [session]` — Attach to existing session
-//! - `emterm mux ls` — List sessions
-//! - `emterm mux kill [session]` — Kill a session
-//! - `emterm mux new [name]` — Create a new session
+//! - `emterm mux` -- Start/attach to default session (long-running bridge)
+//! - `emterm mux --daemon` -- Run as daemon process (internal)
+//! - `emterm mux attach [session]` -- Attach to existing session (long-running bridge)
+//! - `emterm mux ls` -- List sessions
+//! - `emterm mux kill [session]` -- Kill a session
+//! - `emterm mux new [name]` -- Create a new session
 
 use super::daemon;
+use super::ipc::protocol::*;
 
 /// Check if running inside eMterm (TERM_PROGRAM=emterm).
 fn check_emterm_environment() -> Result<(), String> {
@@ -40,7 +41,7 @@ pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Execute the `emterm mux` command (start/attach).
+/// Execute the `emterm mux` command (start/attach as long-running bridge).
 pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     check_emterm_environment().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -51,25 +52,15 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     // Auto-import tmux.conf on first mux startup
     import_tmux_conf_if_needed();
 
-    // Output OSC sequence to signal GUI
-    let sock_str = sock_path.to_string_lossy();
-    // session_id 0 = create/attach default session
-    print!("\x1b]777;emterm;mux;attach;{};0\x1b\\", sock_str);
-    // Flush immediately — print! without newline stays in stdout buffer
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-
-    // CLI exits immediately after emitting OSC.
-    // The GUI handles mux mode lifecycle (attach/detach) independently.
-    // The daemon keeps running in the background.
+    // Run the long-running bridge process
+    run_bridge(&sock_path)?;
 
     Ok(())
 }
 
-/// Execute the `emterm mux attach` command.
+/// Execute the `emterm mux attach` command (long-running bridge).
 ///
-/// Attaches to an existing session. If no daemon is running or no sessions
-/// exist, prints an error instead of creating a new session.
+/// Attaches to an existing session. If no daemon is running, prints an error.
 pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     check_emterm_environment().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -82,25 +73,292 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
         return Ok(());
     }
 
-    // Output OSC sequence to signal GUI
-    let sock_str = sock_path.to_string_lossy();
-    print!("\x1b]777;emterm;mux;attach;{};0\x1b\\", sock_str);
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
+    // Run the long-running bridge process
+    run_bridge(&sock_path)?;
 
     Ok(())
+}
+
+/// Run the long-running bridge process.
+///
+/// Connects to the daemon via Unix socket, performs handshake, then
+/// translates between APC on stdin/stdout and MuxMessage on the socket.
+#[cfg(unix)]
+fn run_bridge(sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    rt.block_on(async { bridge_main_loop(sock_path).await })
+}
+
+#[cfg(not(unix))]
+fn run_bridge(_sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Mux bridge is not supported on this platform");
+    std::process::exit(1);
+}
+
+/// Async bridge main loop: handshake, then bidirectional APC/socket forwarding.
+#[cfg(unix)]
+async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixStream;
+
+    // Connect to daemon
+    let stream = UnixStream::connect(sock_path)
+        .await
+        .map_err(|e| format!("Failed to connect to daemon at {:?}: {}", sock_path, e))?;
+
+    let (mut sock_reader, mut sock_writer) = tokio::io::split(stream);
+
+    // Perform handshake
+    let hello = HelloMsg {
+        client_type: ClientType::Gui,
+        protocol_version: PROTOCOL_VERSION,
+    };
+    let hello_msg = MuxMessage::control(MessageType::Hello, 0, &hello);
+    let body = hello_msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+    sock_writer.write_all(&len).await?;
+    sock_writer.write_all(&body).await?;
+    sock_writer.flush().await?;
+
+    // Read Welcome
+    let mut len_buf = [0u8; 4];
+    sock_reader.read_exact(&mut len_buf).await?;
+    let frame_len = u32::from_be_bytes(len_buf) as usize;
+    if frame_len > MAX_FRAME_LENGTH {
+        return Err("Frame too large during handshake".into());
+    }
+    let mut frame_buf = vec![0u8; frame_len];
+    sock_reader.read_exact(&mut frame_buf).await?;
+
+    let welcome_msg = MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid Welcome frame")?;
+    if welcome_msg.msg_type != MessageType::Welcome {
+        return Err(format!("Expected Welcome, got {:?}", welcome_msg.msg_type).into());
+    }
+
+    // Write Welcome as APC to stdout so GUI receives it
+    let welcome_apc = welcome_msg.to_apc();
+    {
+        use std::io::Write;
+        let stdout = std::io::stdout();
+        let mut stdout = stdout.lock();
+        stdout.write_all(welcome_apc.as_bytes())?;
+        stdout.flush()?;
+    }
+
+    // Bidirectional forwarding: stdin -> daemon, daemon -> stdout
+    let stdin_to_daemon = async {
+        let mut stdin = tokio::io::stdin();
+        let mut parser = StdinApcParser::new();
+        let mut buf = [0u8; 8192];
+
+        loop {
+            let n = match stdin.read(&mut buf).await {
+                Ok(0) => break, // stdin EOF
+                Ok(n) => n,
+                Err(_) => break,
+            };
+
+            let actions = parser.feed(&buf[..n]);
+            for action in actions {
+                match action {
+                    StdinAction::MuxMessage(msg) => {
+                        let body = msg.to_frame_body();
+                        let len = (body.len() as u32).to_be_bytes();
+                        if sock_writer.write_all(&len).await.is_err() {
+                            return;
+                        }
+                        if sock_writer.write_all(&body).await.is_err() {
+                            return;
+                        }
+                        let _ = sock_writer.flush().await;
+                    }
+                    StdinAction::Passthrough(data) => {
+                        // Passthrough data is NOT forwarded as PtyInput.
+                        // The bridge only handles APC mux messages.
+                        // Normal keyboard input goes directly from GUI to PTY stdin;
+                        // it does not flow through APC encoding.
+                        // Any non-APC data arriving on bridge stdin is unexpected
+                        // and is silently dropped.
+                        let _ = data;
+                    }
+                }
+            }
+        }
+    };
+
+    let daemon_to_stdout = async {
+        let mut len_buf = [0u8; 4];
+        loop {
+            if sock_reader.read_exact(&mut len_buf).await.is_err() {
+                break;
+            }
+            let frame_len = u32::from_be_bytes(len_buf) as usize;
+            if frame_len > MAX_FRAME_LENGTH || frame_len == 0 {
+                break;
+            }
+            let mut frame_buf = vec![0u8; frame_len];
+            if sock_reader.read_exact(&mut frame_buf).await.is_err() {
+                break;
+            }
+
+            if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
+                let apc = msg.to_apc();
+                use std::io::Write;
+                let stdout = std::io::stdout();
+                let mut stdout = stdout.lock();
+                if stdout.write_all(apc.as_bytes()).is_err() {
+                    break;
+                }
+                let _ = stdout.flush();
+            }
+        }
+    };
+
+    // Run both directions concurrently; exit when either ends
+    tokio::select! {
+        _ = stdin_to_daemon => {}
+        _ = daemon_to_stdout => {}
+    }
+
+    Ok(())
+}
+
+/// Actions produced by the stdin APC parser.
+#[derive(Debug)]
+pub enum StdinAction {
+    /// A decoded mux APC message to forward to the daemon.
+    MuxMessage(MuxMessage),
+    /// Passthrough data (non-APC bytes).
+    Passthrough(Vec<u8>),
+}
+
+/// Maximum APC payload size (matches MAX_FRAME_LENGTH after Base64 expansion).
+/// Base64 expands by ~4/3, so 22MB covers the 16MB frame limit.
+const MAX_APC_PAYLOAD: usize = 22 * 1024 * 1024;
+
+/// State machine that separates APC sequences from passthrough data on stdin.
+///
+/// Handles partial reads across buffer boundaries.
+pub struct StdinApcParser {
+    state: ParserState,
+    apc_buf: Vec<u8>,
+    passthrough_buf: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParserState {
+    /// Normal text / passthrough mode.
+    Ground,
+    /// Seen ESC, waiting for _ (APC start) or \ (APC end inside accumulation).
+    EscSeen,
+    /// Inside APC body accumulation.
+    InApc,
+    /// Inside APC body, seen ESC (could be ST = ESC \).
+    InApcEsc,
+}
+
+impl StdinApcParser {
+    pub fn new() -> Self {
+        Self {
+            state: ParserState::Ground,
+            apc_buf: Vec::new(),
+            passthrough_buf: Vec::new(),
+        }
+    }
+
+    /// Feed bytes into the parser and return resulting actions.
+    pub fn feed(&mut self, data: &[u8]) -> Vec<StdinAction> {
+        let mut actions = Vec::new();
+
+        for &byte in data {
+            match self.state {
+                ParserState::Ground => {
+                    if byte == 0x1B {
+                        self.state = ParserState::EscSeen;
+                    } else {
+                        self.passthrough_buf.push(byte);
+                    }
+                }
+                ParserState::EscSeen => {
+                    if byte == b'_' {
+                        // APC start: flush passthrough first
+                        if !self.passthrough_buf.is_empty() {
+                            actions.push(StdinAction::Passthrough(std::mem::take(
+                                &mut self.passthrough_buf,
+                            )));
+                        }
+                        self.state = ParserState::InApc;
+                        self.apc_buf.clear();
+                    } else {
+                        // Not APC start: treat ESC + byte as passthrough
+                        self.passthrough_buf.push(0x1B);
+                        self.passthrough_buf.push(byte);
+                        self.state = ParserState::Ground;
+                    }
+                }
+                ParserState::InApc => {
+                    if byte == 0x1B {
+                        self.state = ParserState::InApcEsc;
+                    } else if self.apc_buf.len() < MAX_APC_PAYLOAD {
+                        self.apc_buf.push(byte);
+                    } else {
+                        // APC payload too large: discard and reset to ground
+                        eprintln!("Bridge: APC payload exceeds {} bytes, discarding", MAX_APC_PAYLOAD);
+                        self.apc_buf.clear();
+                        self.state = ParserState::Ground;
+                    }
+                }
+                ParserState::InApcEsc => {
+                    if byte == b'\\' {
+                        // APC ST found: decode the APC payload
+                        let payload = String::from_utf8_lossy(&self.apc_buf).to_string();
+                        self.apc_buf.clear();
+                        self.state = ParserState::Ground;
+
+                        if payload.starts_with(APC_PREFIX) {
+                            match MuxMessage::from_apc(&payload) {
+                                Ok(msg) => actions.push(StdinAction::MuxMessage(msg)),
+                                Err(e) => {
+                                    eprintln!("Bridge: APC decode error: {}", e);
+                                }
+                            }
+                        } else {
+                            // Non-mux APC: forward as passthrough (ESC_ + body + ESC\)
+                            let mut pdata = Vec::with_capacity(2 + payload.len() + 2);
+                            pdata.extend_from_slice(b"\x1b_");
+                            pdata.extend_from_slice(payload.as_bytes());
+                            pdata.extend_from_slice(b"\x1b\\");
+                            actions.push(StdinAction::Passthrough(pdata));
+                        }
+                    } else {
+                        // ESC inside APC but not followed by \: keep accumulating
+                        self.apc_buf.push(0x1B);
+                        self.apc_buf.push(byte);
+                        self.state = ParserState::InApc;
+                    }
+                }
+            }
+        }
+
+        // Flush remaining passthrough
+        if !self.passthrough_buf.is_empty() && self.state == ParserState::Ground {
+            actions.push(StdinAction::Passthrough(std::mem::take(
+                &mut self.passthrough_buf,
+            )));
+        }
+
+        actions
+    }
 }
 
 /// Connect to the daemon, perform handshake, and return session list.
 /// Uses blocking I/O since CLI commands run in a synchronous context.
 #[cfg(unix)]
-fn cli_handshake() -> Result<
-    (
-        std::os::unix::net::UnixStream,
-        Vec<super::ipc::protocol::SessionInfo>,
-    ),
-    Box<dyn std::error::Error>,
-> {
+fn cli_handshake()
+-> Result<(std::os::unix::net::UnixStream, Vec<SessionInfo>), Box<dyn std::error::Error>> {
     use std::io::{Read, Write};
 
     let sock_path = daemon::socket_path();
@@ -112,15 +370,11 @@ fn cli_handshake() -> Result<
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
 
     // Send Hello
-    let hello = super::ipc::protocol::HelloMsg {
-        client_type: super::ipc::protocol::ClientType::Cli,
-        protocol_version: super::ipc::protocol::PROTOCOL_VERSION,
+    let hello = HelloMsg {
+        client_type: ClientType::Cli,
+        protocol_version: PROTOCOL_VERSION,
     };
-    let msg = super::ipc::protocol::MuxMessage::control(
-        super::ipc::protocol::MessageType::Hello,
-        0,
-        &hello,
-    );
+    let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
     let body = msg.to_frame_body();
     let len = (body.len() as u32).to_be_bytes();
 
@@ -132,25 +386,22 @@ fn cli_handshake() -> Result<
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf)?;
     let frame_len = u32::from_be_bytes(len_buf) as usize;
-    if frame_len > super::ipc::protocol::MAX_FRAME_LENGTH {
+    if frame_len > MAX_FRAME_LENGTH {
         return Err("Frame too large".into());
     }
 
     let mut frame_buf = vec![0u8; frame_len];
     stream.read_exact(&mut frame_buf)?;
 
-    let welcome_msg =
-        super::ipc::protocol::MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid frame")?;
+    let welcome_msg = MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid frame")?;
 
-    let welcome: super::ipc::protocol::WelcomeMsg = welcome_msg
+    let welcome: WelcomeMsg = welcome_msg
         .decode_payload()
         .ok_or("Invalid Welcome payload")?;
 
     match welcome {
-        super::ipc::protocol::WelcomeMsg::Accepted { sessions, .. } => Ok((stream, sessions)),
-        super::ipc::protocol::WelcomeMsg::Rejected { reason } => {
-            Err(format!("Connection rejected: {}", reason).into())
-        }
+        WelcomeMsg::Accepted { sessions, .. } => Ok((stream, sessions)),
+        WelcomeMsg::Rejected { reason } => Err(format!("Connection rejected: {}", reason).into()),
     }
 }
 
@@ -168,17 +419,13 @@ pub fn execute_new_window(
     let (mut stream, _sessions) = cli_handshake()?;
 
     // Build CreateWindowPayload
-    let payload = super::ipc::protocol::CreateWindowPayload {
+    let payload = CreateWindowPayload {
         name: name.map(|s| s.to_string()),
         command: command.map(|s| s.to_string()),
     };
 
     // Send CreateWindow message (session_id in pane_id field = 0, daemon uses active session)
-    let msg = super::ipc::protocol::MuxMessage::control(
-        super::ipc::protocol::MessageType::CreateWindow,
-        0,
-        &payload,
-    );
+    let msg = MuxMessage::control(MessageType::CreateWindow, 0, &payload);
     let body = msg.to_frame_body();
     let len = (body.len() as u32).to_be_bytes();
 
@@ -190,27 +437,24 @@ pub fn execute_new_window(
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf)?;
     let frame_len = u32::from_be_bytes(len_buf) as usize;
-    if frame_len > super::ipc::protocol::MAX_FRAME_LENGTH {
+    if frame_len > MAX_FRAME_LENGTH {
         return Err("Frame too large".into());
     }
 
     let mut frame_buf = vec![0u8; frame_len];
     stream.read_exact(&mut frame_buf)?;
 
-    let resp =
-        super::ipc::protocol::MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid frame")?;
+    let resp = MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid frame")?;
 
     match resp.msg_type {
-        super::ipc::protocol::MessageType::PaneCreated => {
+        MessageType::PaneCreated => {
             // Success - window created
             Ok(())
         }
-        super::ipc::protocol::MessageType::Error => {
-            let err: super::ipc::protocol::ErrorMsg =
-                resp.decode_payload()
-                    .unwrap_or(super::ipc::protocol::ErrorMsg {
-                        message: "Unknown error".to_string(),
-                    });
+        MessageType::Error => {
+            let err: ErrorMsg = resp.decode_payload().unwrap_or(ErrorMsg {
+                message: "Unknown error".to_string(),
+            });
             Err(format!("Failed to create window: {}", err.message).into())
         }
         _ => Err(format!("Unexpected response: {:?}", resp.msg_type).into()),
@@ -456,5 +700,160 @@ mod tests {
             std::path::PathBuf::from("/tmp/xdg_config/net.laser5.app.emterm/settings.json")
         );
         unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+    }
+
+    // ---- StdinApcParser tests ----
+
+    #[test]
+    fn test_stdin_parser_passthrough_only() {
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(b"hello world");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            StdinAction::Passthrough(data) => assert_eq!(data, b"hello world"),
+            _ => panic!("Expected Passthrough"),
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_apc_mux_message() {
+        let msg = MuxMessage::pty_input(1, vec![0x41, 0x42]);
+        let apc = msg.to_apc();
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(apc.as_bytes());
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            StdinAction::MuxMessage(decoded) => {
+                assert_eq!(decoded.msg_type, MessageType::PtyInput);
+                assert_eq!(decoded.pane_id, 1);
+                assert_eq!(decoded.payload, vec![0x41, 0x42]);
+            }
+            _ => panic!("Expected MuxMessage"),
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_passthrough_then_apc() {
+        let msg = MuxMessage::pty_input(1, vec![0x41]);
+        let apc = msg.to_apc();
+        let mut input = b"before".to_vec();
+        input.extend_from_slice(apc.as_bytes());
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(&input);
+        assert_eq!(actions.len(), 2);
+        match &actions[0] {
+            StdinAction::Passthrough(data) => assert_eq!(data, b"before"),
+            _ => panic!("Expected Passthrough"),
+        }
+        match &actions[1] {
+            StdinAction::MuxMessage(decoded) => {
+                assert_eq!(decoded.msg_type, MessageType::PtyInput);
+            }
+            _ => panic!("Expected MuxMessage"),
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_split_across_boundaries() {
+        let msg = MuxMessage::pty_input(5, vec![0xFF]);
+        let apc = msg.to_apc();
+        let bytes = apc.as_bytes();
+        let mid = bytes.len() / 2;
+
+        let mut parser = StdinApcParser::new();
+
+        // Feed first half
+        let actions1 = parser.feed(&bytes[..mid]);
+        // Should not produce MuxMessage yet (APC not complete)
+        for a in &actions1 {
+            assert!(
+                !matches!(a, StdinAction::MuxMessage(_)),
+                "Should not decode incomplete APC"
+            );
+        }
+
+        // Feed second half
+        let actions2 = parser.feed(&bytes[mid..]);
+        let has_msg = actions2
+            .iter()
+            .any(|a| matches!(a, StdinAction::MuxMessage(_)));
+        assert!(has_msg, "Should decode APC after second half");
+    }
+
+    #[test]
+    fn test_stdin_parser_non_mux_apc() {
+        // A non-mux APC sequence (e.g., Kitty graphics) should be passed through
+        let input = b"\x1b_Gf=32;data\x1b\\";
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(input);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            StdinAction::Passthrough(data) => {
+                assert_eq!(data, input);
+            }
+            _ => panic!("Expected Passthrough for non-mux APC"),
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_esc_not_apc() {
+        // ESC followed by something other than _ should be passthrough
+        let input = b"\x1b[31m";
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(input);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            StdinAction::Passthrough(data) => {
+                assert_eq!(data, &b"\x1b[31m".to_vec());
+            }
+            _ => panic!("Expected Passthrough"),
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_multiple_apc_in_one_feed() {
+        let msg1 = MuxMessage::pty_input(1, vec![0x01]);
+        let msg2 = MuxMessage::pty_input(2, vec![0x02]);
+        let mut input = msg1.to_apc().into_bytes();
+        input.extend_from_slice(msg2.to_apc().as_bytes());
+
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(&input);
+        let msgs: Vec<_> = actions
+            .iter()
+            .filter_map(|a| match a {
+                StdinAction::MuxMessage(m) => Some(m),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].pane_id, 1);
+        assert_eq!(msgs[1].pane_id, 2);
+    }
+
+    #[test]
+    fn test_stdin_parser_empty_input() {
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(b"");
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn test_stdin_parser_esc_inside_apc_not_st() {
+        // ESC inside APC body but not followed by \ should continue accumulation
+        // Use a crafted payload that has ESC followed by a non-\ byte
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b_emterm-mux;");
+        input.push(0x1B); // ESC
+        input.push(b'X'); // Not \, so should be added to APC buf
+        // Now send the real ST
+        // But since the APC content is now "emterm-mux;\x1bX", it won't decode correctly
+        // That's fine - we test the parser state machine, not decode success
+        input.extend_from_slice(b"\x1b\\");
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(&input);
+        // Should get 1 action (either MuxMessage error printed to stderr, or decoded)
+        // The APC body is "emterm-mux;\x1bX" which is invalid base64
+        assert_eq!(actions.len(), 0); // decode error is printed, no action produced
     }
 }

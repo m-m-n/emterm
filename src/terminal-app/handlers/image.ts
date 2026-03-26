@@ -12,6 +12,7 @@ import type { ImageEventPayload } from "../../types/terminal";
 import type { PtyClient } from "../../pty/client";
 import type { TerminalState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
+import { handleMuxApc } from "../../terminal/handlers/apc_handlers";
 
 /**
  * Context interface for ImageHandler dependencies.
@@ -80,8 +81,13 @@ export class ImageHandler {
   /**
    * Queue an APC data chunk for deferred processing.
    * Called from WASM callback context where core cannot be accessed.
+   *
+   * Mux APC messages (emterm-mux; prefix) are handled immediately
+   * since they don't interact with the WASM core.
    */
   queueApc(data: Uint8Array): void {
+    // Intercept mux APC messages before queuing
+    if (handleMuxApc(data)) return;
     this.pendingApcQueue.push(new Uint8Array(data));
   }
 

@@ -18,17 +18,10 @@ gui = [
     "tauri-plugin-dialog",
     "tauri-plugin-notification",
     "tauri-plugin-shell",
-    "portable-pty",
-    "tokio",
-    "futures",
     "font-kit",
     "tauri-build",
     "raw-window-handle",
     "windows",
-    "tokio-util",
-    "bytes",
-    "bincode",
-    "vt100",
 ]
 
 [lib]
@@ -51,16 +44,16 @@ tauri-plugin-shell = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 
 # PTY dependencies
-portable-pty = { version = "0.8", optional = true }
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net", "io-util", "signal"], optional = true }
-tokio-util = { version = "0.7", features = ["codec"], optional = true }
-bytes = { version = "1", optional = true }
+portable-pty = "0.8"
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net", "io-util", "io-std", "signal"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
-futures = { version = "0.3", optional = true }
+futures = "0.3"
 anyhow = "1"
-bincode = { version = "1.3", optional = true }
-vt100 = { version = "0.15", optional = true }
+bincode = "1.3"
+vt100 = "0.15"
 
 # Image processing dependencies
 png = "0.17"

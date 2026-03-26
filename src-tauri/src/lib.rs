@@ -11,7 +11,6 @@ pub mod ansi;
 pub mod image;
 #[cfg(feature = "gui")]
 pub mod logging;
-#[cfg(feature = "gui")]
 pub mod mux;
 #[cfg(feature = "gui")]
 pub mod pty;

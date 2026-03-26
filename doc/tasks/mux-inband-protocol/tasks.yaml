@@ -1,0 +1,13 @@
+tasks:
+  - - id: phase1-protocol-layer
+      title: "Protocol Layer (APC Encode/Decode)"
+      status: completed
+  - - id: phase2-bridge-process
+      title: "Bridge Process (stdin/stdout APC Translation)"
+      status: completed
+  - - id: phase3-gui-integration
+      title: "GUI Integration (Replace Tauri IPC with PTY APC)"
+      status: completed
+  - - id: phase4-testing-polish
+      title: "Testing and Polish"
+      status: completed
