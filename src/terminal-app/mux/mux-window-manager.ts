@@ -3,7 +3,6 @@
  * Handles mux window/pane lifecycle: creation, switching, resizing, and cleanup.
  */
 
-import { invoke } from "@tauri-apps/api/core";
 import { WasmGrid } from "../../terminal/wasm/terminal-core";
 import { MuxMessageType } from "../../terminal/mux/mux-client";
 import type { MuxClient } from "../../terminal/mux/mux-client";
@@ -309,14 +308,10 @@ export function reloadMuxSettings(ctx: MuxWindowManagerContext): void {
   }
 }
 
-/** Start or attach to mux session directly via Tauri command.
- *  Bypasses the CLI -> OSC -> PTY parser roundtrip for instant response. */
+/** Start or attach to mux session via inband protocol.
+ *  Launches bridge process in the PTY and communicates via APC. */
 export async function startMuxDirect(ctx: MuxWindowManagerContext): Promise<void> {
   if (ctx.getInMuxMode()) return;
-  try {
-    const socketPath = await invoke<string>("mux_start_daemon");
-    await ctx.enterMuxMode(socketPath, 0);
-  } catch (e) {
-    console.error("[ERROR][FRONTEND] Direct mux start failed:", e);
-  }
+  // enterMuxMode launches the bridge process and waits for Welcome APC
+  await ctx.enterMuxMode("", 0);
 }

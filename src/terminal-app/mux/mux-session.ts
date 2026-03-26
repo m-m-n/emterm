@@ -17,6 +17,7 @@ import { WasmGrid } from "../../terminal/wasm/terminal-core";
 import type { MuxPaneGridState } from "../../terminal/state";
 import { SettingsService } from "../../settings/settings-service";
 import type { CopyModeManager, ViKeybinds, EmacsKeybinds } from "../../terminal/mux-copy-mode";
+import { setMuxApcContext } from "../../terminal/handlers/apc_handlers";
 
 /**
  * Subset of TerminalApp state needed by mux session management functions.
@@ -74,31 +75,39 @@ export interface MuxSessionContext {
   exitMultiPaneMode: (remainingPaneId: number | null) => void;
 }
 
-/** Enter mux mode -- connect to daemon, enable prefix key, show status bar. */
-export async function enterMuxMode(ctx: MuxSessionContext, socketPath: string, sessionId: number): Promise<void> {
+/**
+ * Enter mux mode -- launch bridge process, wait for Welcome APC,
+ * enable prefix key, show status bar.
+ *
+ * The bridge process (`emterm mux`) is launched as a shell command in the PTY.
+ * It connects to the daemon, performs handshake, and writes the Welcome APC
+ * to stdout (PTY output). The GUI receives it via the WASM APC callback.
+ */
+export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, _sessionId: number): Promise<void> {
   if (ctx.getInMuxMode()) return;
   ctx.setInMuxMode(true);
 
-  console.info(`[INFO][FRONTEND] Entering mux mode: socket=${socketPath}, session=${sessionId}`);
+  console.info("[INFO][FRONTEND] Entering mux mode via inband protocol");
 
-  // Connect to daemon
-  let muxSessions: MuxSessionInfo[] = [];
-  try {
-    const client = new MuxClient();
-    ctx.setMuxClient(client);
-    muxSessions = await client.connect(socketPath);
-    console.info(`[INFO][FRONTEND] Mux connected: ${muxSessions.length} session(s)`);
-  } catch (e) {
-    console.error("[ERROR][FRONTEND] Mux connect failed:", e);
+  const ptyClient = ctx.getPtyClient();
+  if (!ptyClient) {
+    console.error("[ERROR][FRONTEND] No PTY client available for mux mode");
     ctx.setInMuxMode(false);
-    ctx.setMuxClient(null);
     return;
   }
 
-  const muxClient = ctx.getMuxClient()!;
+  // Create MuxClient and register it for APC callbacks
+  const client = new MuxClient();
+  client.setPtyClient(ptyClient);
+  ctx.setMuxClient(client);
+
+  // Register mux APC context so incoming APCs are routed to MuxClient
+  setMuxApcContext({
+    getMuxClient: () => ctx.getMuxClient(),
+  });
 
   // Set up PTY output handler -- route to correct pane
-  muxClient.setOnPtyOutput((paneId: number, data: Uint8Array) => {
+  client.setOnPtyOutput((paneId: number, data: Uint8Array) => {
     // Multi-pane mode: route to specific pane's canvas/grid
     if (ctx.getMuxLayoutRoot() && (ctx.getMuxPaneCanvases() as Map<number, unknown>).has(paneId)) {
       ctx.renderMuxPaneOutput(paneId, data);
@@ -130,45 +139,63 @@ export async function enterMuxMode(ctx: MuxSessionContext, socketPath: string, s
           : savedState.primaryGrid.core;
         core.process_pty_data(data);
       } else {
-        // No saved state for this pane — data dropped
+        // No saved state for this pane -- data dropped
       }
     }
   });
 
   // Set up PTY exit handler -- remove window when its pane exits
-  muxClient.setOnPtyExited((paneId: number) => {
+  client.setOnPtyExited((paneId: number) => {
     ctx.handleMuxPaneExited(paneId);
   });
 
   // Set up pane created handler -- receive actual pane ID from daemon
-  muxClient.setOnPaneCreated((paneId: number) => {
+  client.setOnPaneCreated((paneId: number) => {
     ctx.handleMuxPaneCreated(paneId);
   });
 
-  // Start output stream
-  try {
-    await muxClient.startOutputStream();
-    // Output stream ready
-  } catch (e) {
-    console.error("[ERROR][FRONTEND] Mux start output stream failed:", e);
-  }
-
-  // Route all PTY writes to mux daemon via proxy
-  const ptyClient = ctx.getPtyClient();
-  if (ptyClient) {
-    ptyClient.setWriteProxy((data: Uint8Array) => {
-      const client = ctx.getMuxClient();
-      if (!client) return Promise.resolve();
-      const activePaneId = ctx.getActiveMuxPaneId() ?? ctx.getMuxPaneIds()[ctx.getActiveMuxWindowIndex()] ?? 1;
-      return client.sendInput(activePaneId, data);
-    });
-  }
+  // Set up detached handler
+  client.setOnDetached(() => {
+    exitMuxMode(ctx);
+  });
 
   // Suppress original PTY output during mux mode
   const ptyHandlerHandle = ctx.getPtyHandlerHandle();
   if (ptyHandlerHandle) {
     ptyHandlerHandle.suppressOriginalPty = true;
   }
+
+  // Start listening for Welcome before launching bridge
+  const welcomePromise = client.waitForWelcome();
+
+  // Launch the bridge process by writing the command to the PTY
+  // The bridge will connect to the daemon and send Welcome APC back
+  const muxCommand = "emterm mux\n";
+  await ptyClient.write(new TextEncoder().encode(muxCommand));
+
+  // Wait for Welcome APC from bridge
+  let muxSessions: MuxSessionInfo[] = [];
+  try {
+    muxSessions = await welcomePromise;
+    console.info(`[INFO][FRONTEND] Mux bridge connected: ${muxSessions.length} session(s)`);
+  } catch (e) {
+    console.error("[ERROR][FRONTEND] Mux bridge handshake failed:", e);
+    if (ptyHandlerHandle) {
+      ptyHandlerHandle.suppressOriginalPty = false;
+    }
+    setMuxApcContext(null);
+    ctx.setInMuxMode(false);
+    ctx.setMuxClient(null);
+    return;
+  }
+
+  // Route all PTY writes to mux daemon via APC proxy
+  ptyClient.setWriteProxy((data: Uint8Array) => {
+    const c = ctx.getMuxClient();
+    if (!c) return Promise.resolve();
+    const activePaneId = ctx.getActiveMuxPaneId() ?? ctx.getMuxPaneIds()[ctx.getActiveMuxWindowIndex()] ?? 1;
+    return c.sendInput(activePaneId, data);
+  });
 
   // Save the original grid and create a fresh one for mux mode
   const state = ctx.getState();
@@ -196,7 +223,7 @@ export async function enterMuxMode(ctx: MuxSessionContext, socketPath: string, s
   const existingPanes = muxSessions.reduce((sum, s) => sum + s.pane_count, 0);
 
   if (existingPanes > 0) {
-    // Reattach: send Attach message to daemon AFTER output stream is ready.
+    // Reattach: send Attach message to daemon AFTER APC communication is established.
     // Daemon will respond with PaneCreated + buffered output for existing panes.
     ctx.setMuxPendingWindowCount(existingPanes);
     ctx.setMuxIsReattaching(true);
@@ -211,7 +238,7 @@ export async function enterMuxMode(ctx: MuxSessionContext, socketPath: string, s
     // Fresh start: create initial window
     try {
       ctx.setMuxPendingWindowCount(ctx.getMuxPendingWindowCount() + 1);
-      await muxClient.sendControl(MuxMessageType.CreateWindow, 0);
+      await client.sendControl(MuxMessageType.CreateWindow, 0);
     } catch (e) {
       console.error("[ERROR][FRONTEND] Mux create window failed:", e);
     }
@@ -227,8 +254,6 @@ export async function enterMuxMode(ctx: MuxSessionContext, socketPath: string, s
       (action) => ctx.handleMuxAction(action),
     );
   }
-
-  // TODO: Status bar will be an eMterm application-level feature
 }
 
 /** Exit mux mode -- disconnect, disable prefix key, hide status bar. */
@@ -237,6 +262,9 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   ctx.setInMuxMode(false);
 
   console.info("[INFO][FRONTEND] Exiting mux mode");
+
+  // Clear mux APC context
+  setMuxApcContext(null);
 
   // Exit copy mode if active
   const copyModeManager = ctx.getCopyModeManager();

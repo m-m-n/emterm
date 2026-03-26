@@ -1,0 +1,101 @@
+schema_version: 1
+feature: mux-inband-protocol
+scale: full
+created: 2026-03-26
+
+project:
+  components:
+    main:
+      language: "Rust + TypeScript + Rust/WASM"
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml && bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 0a92e7596f9502e387c9bc982ad02326161e381a
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 0a92e7596f9502e387c9bc982ad02326161e381a
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 0a92e7596f9502e387c9bc982ad02326161e381a
+  - id: implement
+    status: completed
+    completed_at_commit: 0a92e7596f9502e387c9bc982ad02326161e381a
+  - id: check
+    status: completed
+    completed_at_commit: 0a92e7596f9502e387c9bc982ad02326161e381a
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 0a92e7596f9502e387c9bc982ad02326161e381a
+  - id: review
+    status: completed
+    completed_at_commit: 0a92e7596f9502e387c9bc982ad02326161e381a
+
+requirements:
+  FR1:
+    title: "APC Message Format"
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: "Bridge Process"
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: "GUI APC Send"
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: "GUI APC Receive"
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: "Normal Input Passthrough"
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: "Bridge Stdin Parsing"
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: "Bridge Lifecycle"
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: "Remove bridge.rs"
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: "Feature Gate Removal"
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Performance - No perceivable slowdown"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Reliability - Daemon survives bridge death"
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Compatibility - CLI commands unchanged"
+    status: ok
+    tasks: []
+    tests: []

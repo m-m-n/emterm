@@ -5,10 +5,20 @@
 //! - PTY data uses raw bytes payload
 //! - Control messages use bincode-serialized payload
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
 /// Protocol version for handshake compatibility check.
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// APC prefix for identifying emterm mux APC sequences.
+pub const APC_PREFIX: &str = "emterm-mux;";
+
+/// APC introducer: ESC _
+const APC_START: &str = "\x1b_";
+
+/// APC string terminator: ESC \
+const APC_ST: &str = "\x1b\\";
 
 /// Maximum IPC frame size (16MB) to prevent OOM.
 pub const MAX_FRAME_LENGTH: usize = 16 * 1024 * 1024;
@@ -230,7 +240,53 @@ impl MuxMessage {
     pub fn decode_payload<T: for<'a> Deserialize<'a>>(&self) -> Option<T> {
         bincode::deserialize(&self.payload).ok()
     }
+
+    /// Encode this message as an APC escape sequence string.
+    ///
+    /// Format: `ESC _ emterm-mux;<base64(frame_body)> ESC \`
+    pub fn to_apc(&self) -> String {
+        let body = self.to_frame_body();
+        let encoded = BASE64.encode(&body);
+        format!("{}{}{}{}", APC_START, APC_PREFIX, encoded, APC_ST)
+    }
+
+    /// Decode an APC payload string into a MuxMessage.
+    ///
+    /// The `payload` parameter is the content between `ESC _` and `ESC \`,
+    /// which must start with the `emterm-mux;` prefix.
+    pub fn from_apc(payload: &str) -> Result<Self, ApcDecodeError> {
+        let b64 = payload
+            .strip_prefix(APC_PREFIX)
+            .ok_or(ApcDecodeError::MissingPrefix)?;
+        let bytes = BASE64
+            .decode(b64)
+            .map_err(|_| ApcDecodeError::InvalidBase64)?;
+        Self::from_frame_body(&bytes).ok_or(ApcDecodeError::InvalidFrameBody)
+    }
 }
+
+/// Errors that can occur when decoding an APC payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApcDecodeError {
+    /// Payload does not start with `emterm-mux;`.
+    MissingPrefix,
+    /// Base64 decoding failed.
+    InvalidBase64,
+    /// Frame body is invalid (too short or unknown message type).
+    InvalidFrameBody,
+}
+
+impl std::fmt::Display for ApcDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingPrefix => write!(f, "missing emterm-mux; prefix"),
+            Self::InvalidBase64 => write!(f, "invalid base64 encoding"),
+            Self::InvalidFrameBody => write!(f, "invalid frame body"),
+        }
+    }
+}
+
+impl std::error::Error for ApcDecodeError {}
 
 #[cfg(test)]
 mod tests {
@@ -391,5 +447,113 @@ mod tests {
         assert_eq!(body.len(), 5); // type + pane_id only
         let parsed = MuxMessage::from_frame_body(&body).unwrap();
         assert!(parsed.payload.is_empty());
+    }
+
+    // ---- APC encode/decode tests ----
+
+    #[test]
+    fn test_apc_round_trip_pty_output() {
+        let msg = MuxMessage::pty_output(42, vec![1, 2, 3, 4]);
+        let apc = msg.to_apc();
+        // Verify APC format
+        assert!(apc.starts_with("\x1b_emterm-mux;"));
+        assert!(apc.ends_with("\x1b\\"));
+        // Extract payload between delimiters
+        let payload = &apc[2..apc.len() - 2]; // strip ESC_ and ESC\
+        let decoded = MuxMessage::from_apc(payload).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::PtyOutput);
+        assert_eq!(decoded.pane_id, 42);
+        assert_eq!(decoded.payload, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_apc_round_trip_control_hello() {
+        let hello = HelloMsg {
+            client_type: ClientType::Gui,
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
+        let apc = msg.to_apc();
+        let payload = &apc[2..apc.len() - 2];
+        let decoded = MuxMessage::from_apc(payload).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::Hello);
+        let hello_decoded: HelloMsg = decoded.decode_payload().unwrap();
+        assert_eq!(hello_decoded.client_type, ClientType::Gui);
+    }
+
+    #[test]
+    fn test_apc_round_trip_all_message_types() {
+        for i in 0x01..=0x16u8 {
+            let mt = MessageType::from_u8(i).unwrap();
+            let msg = MuxMessage {
+                msg_type: mt,
+                pane_id: i as u32,
+                payload: vec![i; 4],
+            };
+            let apc = msg.to_apc();
+            let payload = &apc[2..apc.len() - 2];
+            let decoded = MuxMessage::from_apc(payload).unwrap();
+            assert_eq!(decoded.msg_type, mt);
+            assert_eq!(decoded.pane_id, i as u32);
+            assert_eq!(decoded.payload, vec![i; 4]);
+        }
+    }
+
+    #[test]
+    fn test_apc_round_trip_empty_payload() {
+        let msg = MuxMessage::pty_output(0, vec![]);
+        let apc = msg.to_apc();
+        let payload = &apc[2..apc.len() - 2];
+        let decoded = MuxMessage::from_apc(payload).unwrap();
+        assert!(decoded.payload.is_empty());
+    }
+
+    #[test]
+    fn test_apc_from_apc_missing_prefix() {
+        let err = MuxMessage::from_apc("wrong-prefix;AAAA").unwrap_err();
+        assert_eq!(err, ApcDecodeError::MissingPrefix);
+    }
+
+    #[test]
+    fn test_apc_from_apc_invalid_base64() {
+        let err = MuxMessage::from_apc("emterm-mux;!!!invalid!!!").unwrap_err();
+        assert_eq!(err, ApcDecodeError::InvalidBase64);
+    }
+
+    #[test]
+    fn test_apc_from_apc_invalid_frame_body() {
+        use base64::Engine;
+        // Valid base64 but too short for a frame body (< 5 bytes)
+        let encoded = BASE64.encode(&[0x01]);
+        let input = format!("emterm-mux;{}", encoded);
+        let err = MuxMessage::from_apc(&input).unwrap_err();
+        assert_eq!(err, ApcDecodeError::InvalidFrameBody);
+    }
+
+    #[test]
+    fn test_apc_from_apc_invalid_message_type() {
+        use base64::Engine;
+        // Valid base64, 5 bytes, but invalid message type 0xFF
+        let encoded = BASE64.encode(&[0xFF, 0, 0, 0, 0]);
+        let input = format!("emterm-mux;{}", encoded);
+        let err = MuxMessage::from_apc(&input).unwrap_err();
+        assert_eq!(err, ApcDecodeError::InvalidFrameBody);
+    }
+
+    #[test]
+    fn test_apc_from_apc_empty_after_prefix() {
+        // emterm-mux; with empty base64 => empty bytes => invalid frame body
+        let err = MuxMessage::from_apc("emterm-mux;").unwrap_err();
+        assert_eq!(err, ApcDecodeError::InvalidFrameBody);
+    }
+
+    #[test]
+    fn test_apc_large_payload() {
+        let data = vec![0xAB; 65536];
+        let msg = MuxMessage::pty_output(99, data.clone());
+        let apc = msg.to_apc();
+        let payload = &apc[2..apc.len() - 2];
+        let decoded = MuxMessage::from_apc(payload).unwrap();
+        assert_eq!(decoded.payload, data);
     }
 }
