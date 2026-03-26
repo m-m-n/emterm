@@ -6,12 +6,14 @@
 
 import type { TerminalStateAccessor } from "./types.ts";
 import type { ApcAction } from "../../types/terminal.ts";
-import { MUX_APC_PREFIX, decodeApcPayload } from "../mux/mux-client.ts";
+import { MUX_APC_PREFIX, MuxMessageType, decodeApcPayload } from "../mux/mux-client.ts";
 import type { MuxClient } from "../mux/mux-client.ts";
 
 /** Context for mux APC handling. */
 export interface MuxApcContext {
   getMuxClient: () => MuxClient | null;
+  /** Called when a Welcome APC arrives but no MuxClient exists yet (user ran `emterm mux` manually). */
+  onWelcomeWithoutClient?: (msgType: number, paneId: number, data: Uint8Array) => void;
 }
 
 /** Module-level mux APC context, set by TerminalApp. */
@@ -49,6 +51,10 @@ export function handleMuxApc(data: Uint8Array): boolean {
   const muxClient = muxApcContext?.getMuxClient();
   if (muxClient) {
     muxClient.handleIncomingApc(parsed.msgType, parsed.paneId, parsed.data);
+  } else if (parsed.msgType === MuxMessageType.Welcome && muxApcContext?.onWelcomeWithoutClient) {
+    // Welcome arrived before MuxClient exists (user typed `emterm mux` manually).
+    // Trigger auto-enter mux mode with the bridge already running.
+    muxApcContext.onWelcomeWithoutClient(parsed.msgType, parsed.paneId, parsed.data);
   } else {
     console.warn("[WARN][FRONTEND] Mux APC received but no MuxClient active");
   }

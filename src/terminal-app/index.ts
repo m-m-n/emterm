@@ -77,6 +77,7 @@ import {
   enterMuxMode as enterMuxModeImpl,
   exitMuxMode as exitMuxModeImpl,
   type MuxSessionContext,
+  type EnterMuxOptions,
 } from "./mux/mux-session";
 import {
   type LayoutNode,
@@ -88,6 +89,7 @@ import { setupPtyHandlers, type PtyHandlerHandle } from "./pty-handler";
 import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
+import { setMuxApcContext } from "../terminal/handlers/apc_handlers";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -307,6 +309,10 @@ export class TerminalApp {
     this.muxDetachCallback = () => {
       this.exitMuxMode();
     };
+
+    // Register early APC context so Welcome from a manually-launched bridge
+    // (`emterm mux` typed by user) triggers auto-enter mux mode.
+    this.registerEarlyApcContext();
 
     // Listen for settings changes to update mux keybinds in real-time
     window.addEventListener("emterm-settings-changed", ((e: CustomEvent) => {
@@ -870,14 +876,26 @@ export class TerminalApp {
     await startMuxDirectImpl(this.getMuxWindowManagerContext());
   }
 
+  /** Register early APC context for detecting manually-launched bridge processes. */
+  private registerEarlyApcContext(): void {
+    setMuxApcContext({
+      getMuxClient: () => this.muxClient,
+      onWelcomeWithoutClient: (msgType, paneId, data) => {
+        this.enterMuxMode("", 0, { welcomeData: { msgType, paneId, data } });
+      },
+    });
+  }
+
   /** Enter mux mode -- connect to daemon, enable prefix key, show status bar. */
-  async enterMuxMode(socketPath: string, sessionId: number): Promise<void> {
-    await enterMuxModeImpl(this.getMuxSessionContext(), socketPath, sessionId);
+  async enterMuxMode(socketPath: string, sessionId: number, options?: EnterMuxOptions): Promise<void> {
+    await enterMuxModeImpl(this.getMuxSessionContext(), socketPath, sessionId, options);
   }
 
   /** Exit mux mode -- disconnect, disable prefix key, hide status bar. */
   exitMuxMode(): void {
     exitMuxModeImpl(this.getMuxSessionContext());
+    // Restore early APC context so next manual `emterm mux` is detected
+    this.registerEarlyApcContext();
   }
 
   /** Build the context object for mux copy mode functions. */

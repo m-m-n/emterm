@@ -134,7 +134,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
  *   - pane_count: u32 LE
  *   - active_window_index: u32 LE
  */
-function decodeWelcomeMsg(data: Uint8Array): MuxSessionInfo[] | null {
+export function decodeWelcomeMsg(data: Uint8Array): MuxSessionInfo[] | null {
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let offset = 0;
 
