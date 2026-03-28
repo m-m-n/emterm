@@ -1,0 +1,73 @@
+schema_version: 1
+feature: mux-osc-handshake
+scale: light
+created: 2026-03-28
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "bun test"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 4379abcd60ba45fe14677fddf91da7ede3aa7fd8
+  - id: implement
+    status: completed
+    completed_at_commit: 4379abcd60ba45fe14677fddf91da7ede3aa7fd8
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 4379abcd60ba45fe14677fddf91da7ede3aa7fd8
+
+requirements:
+  FR1:
+    title: OSC Query
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: eMterm ACK Response
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Stdin Response Reading
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Timeout Error
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Remove Environment Variable Check
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Nesting Check Preserved
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Handshake Timeout 2 seconds
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Terminal Safety
+    status: ok
+    tasks: []
+    tests: []
