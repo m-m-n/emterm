@@ -189,7 +189,6 @@ fn main() {
                 std::process::exit(err.exit_code());
             }
         }
-        #[cfg(feature = "gui")]
         Some(("mux", sub_matches)) => {
             if sub_matches.get_flag("daemon") {
                 if let Err(e) = app_lib::mux::cli::execute_daemon() {
