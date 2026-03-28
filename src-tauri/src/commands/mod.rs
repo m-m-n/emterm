@@ -1,4 +1,3 @@
-#[cfg(feature = "gui")]
 pub mod config;
 pub mod download;
 #[cfg(feature = "gui")]
