@@ -94,15 +94,20 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     if (fromWatchdog && !rafDegraded) {
       rafDegraded = true;
       console.warn("[WARN][FRONTEND] rAF not delivered — switching to degraded (setTimeout) mode");
-      // Force full re-render to recover from potential canvas buffer loss
-      // (WebKitGTK may discard canvas contents when rAF stops being delivered)
       if (currentState && currentRenderer) {
         try {
+          // Force full re-render to recover from potential canvas buffer loss
+          // (WebKitGTK may discard canvas contents when rAF stops being delivered)
           currentRenderer.forceRender(currentState);
+          // Start compositor keep-alive: WebKitGTK stops the compositor frame
+          // clock when rAF is idle, preventing canvas paints from reaching the
+          // screen. A running Web Animation keeps the compositor ticking.
+          currentRenderer.startCompositorKeepAlive();
         } catch (error) {
           console.error("[ERROR][FRONTEND] forceRender in degraded mode switch failed:", error);
         }
       }
+      startRafRecoveryCheck();
     }
     if (!currentState || !currentRenderer) return;
 
@@ -325,6 +330,35 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     }
   };
 
+  // ── rAF recovery check (single instance) ──────────────────
+  // Detect when rAF delivery resumes after degraded mode.
+  // Only one chain runs at a time to avoid flapping.
+  let rafRecoveryActive = false;
+  const RAF_RECOVERY_THRESHOLD = 3;
+
+  const startRafRecoveryCheck = () => {
+    if (rafRecoveryActive) return;
+    rafRecoveryActive = true;
+    let recoveryCount = 0;
+    const checkRecovery = () => {
+      recoveryCount++;
+      if (recoveryCount >= RAF_RECOVERY_THRESHOLD) {
+        rafDegraded = false;
+        rafRecoveryActive = false;
+        const renderer = ctx.getRenderer();
+        const currentState = ctx.getState();
+        renderer?.stopCompositorKeepAlive();
+        if (currentState && renderer) {
+          renderer.forceRender(currentState);
+        }
+        console.info("[INFO][FRONTEND] rAF delivery resumed — switching back to normal mode");
+      } else {
+        requestAnimationFrame(checkRecovery);
+      }
+    };
+    requestAnimationFrame(checkRecovery);
+  };
+
   const scheduleProcessing = () => {
     if (rafScheduled) return;
     rafScheduled = true;
@@ -332,20 +366,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     if (rafDegraded) {
       // In degraded mode, use setTimeout directly (rAF is not working)
       setTimeout(() => processPendingData(false), DEGRADED_INTERVAL_MS);
-      // Try rAF to detect recovery -- require multiple consecutive deliveries
-      // to avoid flapping between degraded/normal mode
-      let recoveryCount = 0;
-      const RAF_RECOVERY_THRESHOLD = 3;
-      const checkRecovery = () => {
-        recoveryCount++;
-        if (recoveryCount >= RAF_RECOVERY_THRESHOLD) {
-          rafDegraded = false;
-          console.info("[INFO][FRONTEND] rAF delivery resumed — switching back to normal mode");
-        } else {
-          requestAnimationFrame(checkRecovery);
-        }
-      };
-      requestAnimationFrame(checkRecovery);
     } else {
       requestAnimationFrame(() => processPendingData(false));
       // Watchdog: fallback if rAF callback is not delivered (e.g. WebKitGTK bug)

@@ -159,6 +159,18 @@ export interface ITerminalRenderer {
 	 * Set diagnostic flags for debugging rendering issues.
 	 */
 	setDiagnosticFlags(flags: { forceFullRender?: boolean }): void;
+
+	/**
+	 * Start a trivial CSS animation to keep the compositor active.
+	 * Used when rAF stops being delivered (degraded mode) to ensure
+	 * canvas paints are composited to the screen.
+	 */
+	startCompositorKeepAlive(): void;
+
+	/**
+	 * Stop the compositor keep-alive animation.
+	 */
+	stopCompositorKeepAlive(): void;
 }
 
 /**

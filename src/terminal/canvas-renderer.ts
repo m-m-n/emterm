@@ -219,6 +219,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Current search match index (-1 if none). */
 	private searchCurrentIndex: number = -1;
 
+	/** Compositor keep-alive animation (for degraded rAF mode). */
+	private compositorKeepAlive: Animation | null = null;
+
 	/** Per-frame cache for logical line detection (keyed by startRow). */
 	private detectionCache: Map<number, DetectionCacheEntry> = new Map();
 
@@ -1096,7 +1099,26 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	// ── Dispose ───────────────────────────────────────────────
 
+	startCompositorKeepAlive(): void {
+		if (this.compositorKeepAlive) return;
+		// WebKitGTK stops the compositor frame clock when rAF is not requested,
+		// which means canvas paints are never composited to the screen.
+		// A running Web Animation forces the compositor to keep ticking.
+		this.compositorKeepAlive = this.canvas.animate(
+			[{ opacity: 0.999 }, { opacity: 1 }],
+			{ duration: 100, iterations: Infinity },
+		);
+	}
+
+	stopCompositorKeepAlive(): void {
+		if (this.compositorKeepAlive) {
+			this.compositorKeepAlive.cancel();
+			this.compositorKeepAlive = null;
+		}
+	}
+
 	dispose(): void {
+		this.stopCompositorKeepAlive();
 		this.stopCursorBlink();
 
 		if (this.blinkTextTimer !== null) {
