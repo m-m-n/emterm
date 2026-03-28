@@ -10,12 +10,111 @@
 use super::daemon;
 use super::ipc::protocol::*;
 
-/// Check if running inside eMterm (TERM_PROGRAM=emterm).
-fn check_emterm_environment() -> Result<(), String> {
-    match std::env::var("TERM_PROGRAM") {
-        Ok(val) if val == "emterm" => Ok(()),
-        _ => Err("emterm mux must be run inside eMterm terminal".to_string()),
+/// OSC 777 handshake to verify running inside eMterm.
+///
+/// Sends `ESC]777;emterm;mux;query BEL` to stdout and waits for
+/// `ESC]777;emterm;mux;ack BEL` on stdin within a 2-second timeout.
+/// Works over SSH because escape sequences pass through the PTY stream.
+#[cfg(unix)]
+fn handshake_emterm() -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::os::unix::io::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    let stdin_fd = std::io::stdin().as_raw_fd();
+
+    // Save original termios and set raw mode
+    let orig_termios = unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(stdin_fd, &mut t) != 0 {
+            return Err("Failed to get terminal attributes".to_string());
+        }
+        t
+    };
+
+    let mut raw = orig_termios;
+    // Disable canonical mode and echo so we can read escape sequences
+    raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+    raw.c_cc[libc::VMIN] = 0;
+    raw.c_cc[libc::VTIME] = 0;
+
+    unsafe {
+        if libc::tcsetattr(stdin_fd, libc::TCSANOW, &raw) != 0 {
+            return Err("Failed to set raw mode".to_string());
+        }
     }
+
+    // RAII guard to restore termios on all exit paths
+    struct TermiosGuard {
+        fd: i32,
+        orig: libc::termios,
+    }
+    impl Drop for TermiosGuard {
+        fn drop(&mut self) {
+            unsafe {
+                libc::tcsetattr(self.fd, libc::TCSANOW, &self.orig);
+            }
+        }
+    }
+    let _guard = TermiosGuard {
+        fd: stdin_fd,
+        orig: orig_termios,
+    };
+
+    // Send query
+    let query = b"\x1b]777;emterm;mux;query\x07";
+    std::io::stdout()
+        .write_all(query)
+        .map_err(|e| format!("Failed to write OSC query: {}", e))?;
+    std::io::stdout()
+        .flush()
+        .map_err(|e| format!("Failed to flush stdout: {}", e))?;
+
+    // Read stdin with timeout, looking for the ACK
+    let timeout = Duration::from_secs(2);
+    let start = Instant::now();
+    let expected = b"\x1b]777;emterm;mux;ack\x07";
+    let mut buf = [0u8; 256];
+    let mut accumulated = Vec::with_capacity(256);
+    const MAX_ACCUMULATE: usize = 4096;
+
+    while start.elapsed() < timeout {
+        // Use poll to wait for data with remaining timeout
+        let remaining = timeout.saturating_sub(start.elapsed());
+        let mut pollfd = libc::pollfd {
+            fd: stdin_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let poll_ms = remaining.as_millis().min(100) as i32;
+        let poll_ret = unsafe { libc::poll(&mut pollfd, 1, poll_ms) };
+
+        if poll_ret > 0 {
+            let n = std::io::stdin()
+                .read(&mut buf)
+                .map_err(|e| format!("Failed to read stdin: {}", e))?;
+            if n > 0 {
+                accumulated.extend_from_slice(&buf[..n]);
+                if accumulated.len() > MAX_ACCUMULATE {
+                    return Err("emterm mux must be run inside eMterm terminal (unexpected data on stdin)".to_string());
+                }
+                // Check if accumulated data contains the ACK
+                if accumulated
+                    .windows(expected.len())
+                    .any(|w| w == expected)
+                {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    Err("emterm mux must be run inside eMterm terminal (no handshake response)".to_string())
+}
+
+#[cfg(not(unix))]
+fn handshake_emterm() -> Result<(), String> {
+    Err("Mux handshake is not supported on this platform".to_string())
 }
 
 /// Check for nesting (EMTERM_MUX=1).
@@ -43,7 +142,7 @@ pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Execute the `emterm mux` command (start/attach as long-running bridge).
 pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
-    check_emterm_environment().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    handshake_emterm().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     let sock_path =
@@ -62,7 +161,7 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// Attaches to an existing session. If no daemon is running, prints an error.
 pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    check_emterm_environment().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    handshake_emterm().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     let sock_path = daemon::socket_path();
@@ -660,25 +759,9 @@ mod tests {
         unsafe { std::env::remove_var("EMTERM_MUX") };
     }
 
-    #[test]
-    fn test_check_emterm_not_set() {
-        unsafe { std::env::remove_var("TERM_PROGRAM") };
-        assert!(check_emterm_environment().is_err());
-    }
-
-    #[test]
-    fn test_check_emterm_set() {
-        unsafe { std::env::set_var("TERM_PROGRAM", "emterm") };
-        assert!(check_emterm_environment().is_ok());
-        unsafe { std::env::remove_var("TERM_PROGRAM") };
-    }
-
-    #[test]
-    fn test_check_emterm_wrong_value() {
-        unsafe { std::env::set_var("TERM_PROGRAM", "other-terminal") };
-        assert!(check_emterm_environment().is_err());
-        unsafe { std::env::remove_var("TERM_PROGRAM") };
-    }
+    // handshake_emterm() requires a real terminal (stdin raw mode + poll),
+    // so it cannot be unit-tested in CI. The ACK parsing logic is tested
+    // via test_stdin_parser_* tests and integration tests.
 
     #[test]
     fn test_settings_file_path_with_home() {
