@@ -12,6 +12,19 @@ use crate::mux::session::pane::{
     MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget, SharedShadowParser,
 };
 
+/// Detect the default shell for the current platform.
+fn detect_default_shell() -> String {
+    #[cfg(unix)]
+    {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        "powershell.exe".to_string()
+    }
+}
+
 /// Result of spawning a PTY with shell process.
 pub(super) struct SpawnedPty {
     pub(super) master: Box<dyn MasterPty + Send>,
@@ -33,7 +46,7 @@ pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
         .openpty(pty_size)
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    let shell = crate::pty::detect_default_shell();
+    let shell = detect_default_shell();
     let mut cmd = portable_pty::CommandBuilder::new(&shell);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
