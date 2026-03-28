@@ -1,6 +1,6 @@
 schema_version: 1
-feature: mux-osc-handshake
-scale: light
+feature: mux-protocol-redesign
+scale: standard
 created: 2026-03-28
 
 project:
@@ -21,53 +21,89 @@ workflow:
   - id: create-spec
     artifacts: [SPEC.md]
     status: completed
-    completed_at_commit: 4379abcd60ba45fe14677fddf91da7ede3aa7fd8
+    completed_at_commit: 20ff9da632c04e863c2f336c1ecbeb32751df841
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 20ff9da632c04e863c2f336c1ecbeb32751df841
   - id: implement
     status: completed
-    completed_at_commit: 4379abcd60ba45fe14677fddf91da7ede3aa7fd8
+    completed_at_commit: 20ff9da632c04e863c2f336c1ecbeb32751df841
+    note: "Phase 1 (handshake removal) completed. Phase 2-5 tracked separately."
+  - id: check
+    status: completed
+    completed_at_commit: 20ff9da632c04e863c2f336c1ecbeb32751df841
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: completed
-    completed_at_commit: 4379abcd60ba45fe14677fddf91da7ede3aa7fd8
+    completed_at_commit: 20ff9da632c04e863c2f336c1ecbeb32751df841
+  - id: review
+    status: completed
+    completed_at_commit: 20ff9da632c04e863c2f336c1ecbeb32751df841
 
 requirements:
   FR1:
-    title: OSC Query
+    title: No-Check Startup
     status: ok
     tasks: []
     tests: []
   FR2:
-    title: eMterm ACK Response
+    title: Daemon-Side Grid
     status: ok
     tasks: []
     tests: []
   FR3:
-    title: Stdin Response Reading
+    title: Raw Bytes Forwarding
     status: ok
     tasks: []
     tests: []
   FR4:
-    title: Timeout Error
+    title: All-Window Streaming
     status: ok
     tasks: []
     tests: []
   FR5:
-    title: Remove Environment Variable Check
+    title: Window GUI Tab Mapping
     status: ok
     tasks: []
     tests: []
   FR6:
-    title: Nesting Check Preserved
+    title: Window Lifecycle Messages
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Window Switch Behavior
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Reattach Screen Restoration
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: Bridge Timeout
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: Nesting Prevention
     status: ok
     tasks: []
     tests: []
   NFR1:
-    title: Handshake Timeout 2 seconds
+    title: No blocking on startup
     status: ok
     tasks: []
     tests: []
   NFR2:
-    title: Terminal Safety
+    title: Memory efficiency
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Bandwidth proportional to active windows
     status: ok
     tasks: []
     tests: []

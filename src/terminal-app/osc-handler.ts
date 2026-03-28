@@ -328,11 +328,6 @@ function handleMuxOsc(ctx: OscHandlerContext, params: string[]): void {
     if (ctx.muxAttachCallback) {
       ctx.muxAttachCallback(socketPath, isNaN(sessionId) ? 0 : sessionId);
     }
-  } else if (action === "query") {
-    // Respond with ACK so the CLI bridge can verify it's running inside eMterm
-    if (ctx.ptyClient) {
-      ctx.ptyClient.write("\x1b]777;emterm;mux;ack\x07");
-    }
   } else if (action === "detach") {
     console.info("[INFO][FRONTEND] Mux detach");
     if (ctx.muxDetachCallback) {

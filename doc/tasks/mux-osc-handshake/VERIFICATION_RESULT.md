@@ -1,47 +1,53 @@
-# Verification Result: Mux OSC Handshake
+# Verification Result: Mux Protocol Redesign (Phase 1)
 
 **Date**: 2026-03-28
 **SPEC.md**: doc/tasks/mux-osc-handshake/SPEC.md
+**Scope**: Phase 1 (Handshake removal + Bridge timeout)
 
 ## Requirements Compliance
 
 | Requirement | Status | Evidence |
 |-------------|--------|----------|
-| FR1: OSC Query | PASS | `cli.rs:65` sends `\x1b]777;emterm;mux;query\x07` to stdout |
-| FR2: eMterm ACK Response | PASS | `osc-handler.ts:331-335` writes `\x1b]777;emterm;mux;ack\x07` via ptyClient |
-| FR3: Stdin Response Reading | PASS | `cli.rs:80-102` reads stdin with `libc::poll` + accumulated buffer with window search |
-| FR4: Timeout Error | PASS | `cli.rs:74,106` 2-second timeout, returns descriptive error on expiry |
-| FR5: Remove Environment Variable Check | PASS | `check_emterm_environment()` removed, replaced by `handshake_emterm()` |
-| FR6: Nesting Check Preserved | PASS | `check_nesting()` unchanged at `cli.rs:21-28`, still called in `execute_mux` and `execute_attach` |
-| NFR1: Timeout 2 seconds | PASS | `cli.rs:74` `Duration::from_secs(2)` |
-| NFR2: Terminal Safety | PASS | OSC 777 is silently ignored by non-eMterm terminals |
+| FR1: No-Check Startup | PASS | `execute_mux()` (`cli.rs:37`) calls only `check_nesting()` then starts bridge. No handshake, no env var check. |
+| FR2: Daemon-Side Grid | PASS | Shadow parser per pane unchanged (`pane.rs:54`). No modification needed. |
+| FR3: Raw Bytes Forwarding | PASS | `pty_reader_loop` in `pty_spawn.rs` unchanged. Raw bytes forwarded to client. |
+| FR4: All-Window Streaming | PASS | `connection.rs:142` — all pane output from active session already streams to client. No change needed. |
+| FR5: Window GUI Tab Mapping | N/A | Phase 3 (not yet implemented) |
+| FR6: Window Lifecycle Messages | PARTIAL | Message types defined in protocol.rs. SwitchWindow handler not yet implemented (Phase 2). |
+| FR7: Window Switch Behavior | N/A | Phase 3 (not yet implemented) |
+| FR8: Reattach Screen Restoration | PASS | `reattach.rs` unchanged. Shadow parser + ring buffer mechanism intact. |
+| FR9: Bridge Timeout | PASS | `cli.rs:117` — `tokio::time::timeout(Duration::from_secs(5), ...)` wraps Welcome read. |
+| FR10: Nesting Prevention | PASS | `check_nesting()` (`cli.rs:14-19`) unchanged. Checks `EMTERM_MUX` env var. |
+| NFR1: No blocking on startup | PASS | No blocking handshake. Bridge connects immediately. |
+| NFR2: Memory efficiency | PASS | Shadow parser already allocated per pane. No new allocations. |
+| NFR3: Bandwidth | PASS | No change to data transfer volume. |
 
-## Build Verification
+## Code Verification
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| CLI-only build (`--no-default-features`) | PASS | Compiles without errors |
-| GUI build (default features) | PASS | `cargo check` passes |
-| TypeScript typecheck | PASS | `tsc --noEmit` exits 0 |
-
-## Test Results
-
-| Suite | Status | Notes |
-|-------|--------|-------|
-| Rust tests | 742/743 pass | 1 pre-existing failure (`test_session_sets_term_program_env` - unrelated shell prompt parsing issue) |
+| `handshake_emterm()` removed | PASS | Function completely removed from cli.rs |
+| OSC query/ACK handler removed | PASS | No "query" action handler in osc-handler.ts |
+| No remaining handshake references | PASS | grep for `handshake_emterm`, `check_emterm_environment`, `mux;query`, `mux;ack` — zero results |
+| Welcome timeout implemented | PASS | 5-second tokio::time::timeout at cli.rs:117 |
+| Nesting check preserved | PASS | `check_nesting()` at cli.rs:14-19, called in execute_mux and execute_attach |
+| CLI-only build | PASS | `cargo build --release --no-default-features` succeeds |
+| GUI build | PASS | `cargo check` succeeds |
+| Tests | PASS | 742/743 (1 pre-existing unrelated failure) |
 | TypeScript typecheck | PASS | |
-
-## Implementation Quality
-
-- **Termios restoration**: RAII guard (`TermiosGuard`) ensures terminal state is restored even on early returns or errors
-- **Platform handling**: `#[cfg(unix)]` / `#[cfg(not(unix))]` correctly gates platform-specific code
-- **Chunk handling**: Accumulated buffer with `windows()` search handles partial OSC responses
-- **No visible side effects**: Query uses OSC 777 which is silently ignored by other terminals
+| Format | PASS | `cargo fmt` applied |
 
 ## Manual Verification Required
 
-- [ ] `emterm mux` works when run locally inside eMterm
-- [ ] `emterm mux` works when run over SSH from eMterm client
-- [ ] `emterm mux` shows error and exits when run in a non-eMterm terminal
-- [ ] `emterm mux ls` / `emterm mux kill` work without handshake
-- [ ] `emterm mux --daemon` works without handshake
+### Phase 1 (current)
+- [ ] `emterm mux` starts instantly inside eMterm (no delay)
+- [ ] `emterm mux` on SSH server starts without freeze
+- [ ] `emterm mux` in non-eMterm terminal: exits after ~5 seconds
+- [ ] Nesting prevention: running `emterm mux` inside mux session → error
+- [ ] Detach/reattach works correctly
+
+### Phase 2-5 (future)
+- [ ] SwitchWindow handler
+- [ ] GUI tab ↔ mux window mapping
+- [ ] All-window output routing verification
+- [ ] Multi-window reattach
