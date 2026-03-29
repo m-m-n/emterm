@@ -44,7 +44,7 @@ As a power user, I want to define custom commands that periodically execute and 
 - [ ] Custom commands defined in settings with name, executable path (no arguments), interval_ms
 - [ ] Referenced in templates as `{cmd:name}`
 - [ ] Each command runs at its own interval
-- [ ] Only a single executable path is accepted (no arguments, no shell expansion)
+- [ ] Only a single executable path is accepted (no arguments, no glob/command substitution). `~/` is expanded to the home directory
 
 ## Technical Requirements
 
@@ -60,7 +60,7 @@ As a power user, I want to define custom commands that periodically execute and 
 
 - **FR5: Git Branch Variable** - `{git_branch}` displays current git branch name. Text color changes based on git state (dirty/clean etc.).
 
-- **FR6: Custom Command Variable** - `{cmd:name}` executes a user-defined command and displays stdout. Commands are defined in settings under `statusbar_custom_commands` with a single executable path (no arguments allowed) and individual `interval_ms` (default 1000ms). This restriction simplifies security validation and prevents shell injection.
+- **FR6: Custom Command Variable** - `{cmd:name}` executes a user-defined command and displays stdout. Commands are defined in settings under `statusbar_custom_commands` with a single executable path (no arguments allowed, `~/` is expanded to home directory) and individual `interval_ms` (default 1000ms). Command names may contain alphanumerics, underscores, and hyphens. This restriction simplifies security validation and prevents shell injection.
 
 - **FR7: OSC Protocol** - OSC 777;statusbar;... protocol with commands: `set;left;content`, `set;right;content`, `clear`, `clear;left`, `clear;right`, `show`, `hide`. show/hide controls OSC layer only.
 
@@ -184,7 +184,7 @@ statusbar_refresh_rates: HashMap<String, u64>,  // per-variable rates in ms
 ```rust
 #[derive(Serialize, Deserialize, Clone)]
 struct CustomCommand {
-    executable: String, // Single executable path only, no arguments
+    executable: String, // Single executable path only, no arguments. ~/  expanded
     interval_ms: u64,   // default: 1000
 }
 ```
@@ -295,7 +295,7 @@ src/
 
 - **Input Validation:** OSC content is stripped of all HTML tags before DOM insertion (XSS prevention)
 - **Internal Content:** Template-resolved content supports full HTML (user-configured templates are trusted)
-- **Custom Commands:** Only a single executable path is accepted (no arguments, no shell expansion). This prevents shell injection attacks. Executed via the existing Tauri shell command infrastructure
+- **Custom Commands:** Only a single executable path is accepted (no arguments, no glob/command substitution). `~/` is expanded to the home directory. This prevents shell injection attacks. Executed via the existing Tauri shell command infrastructure
 - **Data Protection:** No sensitive data is stored; all status bar content is ephemeral
 
 ## Error Handling
