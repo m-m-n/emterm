@@ -184,11 +184,6 @@ export class PtyClient {
 		return invoke<void>("pty_write", {
 			sessionId: this.sessionId,
 			data: Array.from(data),
-		}).then(() => {
-			invoke("mux_client_log", { line: `${new Date().toISOString()} DEBUG[MUX-CLIENT] writeDirect OK (${data.length} bytes, session=${this.sessionId})` }).catch(() => {});
-		}).catch((e) => {
-			invoke("mux_client_log", { line: `${new Date().toISOString()} ERROR[MUX-CLIENT] writeDirect FAILED: ${e} (session=${this.sessionId})` }).catch(() => {});
-			throw e;
 		});
 	}
 

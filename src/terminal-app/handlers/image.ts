@@ -13,7 +13,6 @@ import type { PtyClient } from "../../pty/client";
 import type { TerminalState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import { handleMuxApc } from "../../terminal/handlers/apc_handlers";
-import { muxLog } from "../../terminal/mux/mux-logger";
 
 /**
  * Context interface for ImageHandler dependencies.
@@ -88,7 +87,6 @@ export class ImageHandler {
    */
   queueApc(data: Uint8Array): void {
     // Intercept mux APC messages before queuing
-    muxLog.debug(`queueApc called (${data.length} bytes)`);
     if (handleMuxApc(data)) return;
     this.pendingApcQueue.push(new Uint8Array(data));
   }

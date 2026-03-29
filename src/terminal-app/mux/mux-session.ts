@@ -225,7 +225,6 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     }
   }
 
-  muxLog.info("Setting up PTY write proxy");
   // Route all PTY writes to mux daemon via APC proxy
   ptyClient.setWriteProxy((data: Uint8Array) => {
     const c = ctx.getMuxClient();
@@ -234,29 +233,19 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     return c.sendInput(activePaneId, data);
   });
 
-  muxLog.info("Saving original grid and creating fresh grid for mux");
   // Save the original grid and create a fresh one for mux mode
   const state = ctx.getState();
   if (state) {
-    muxLog.debug("Saving original grid reference");
     ctx.setMuxOriginalGrid(state.getPrimaryGrid());
-    muxLog.debug("Getting cols/rows from WASM core");
     const cols = state.getWasmCore().cols();
     const rows = state.getWasmCore().rows();
-    muxLog.debug(`Creating fresh WasmGrid (${cols}x${rows})`);
     const freshGrid = new WasmGrid(cols, rows, 10000);
-    muxLog.debug("Swapping primary grid");
     state.swapPrimaryGrid(freshGrid);
-    muxLog.debug("Registering core callbacks");
     ctx.registerCoreCallbacks(state.getActiveCore());
     const renderer = ctx.getRenderer();
     if (renderer) {
-      muxLog.debug("Calling forceRender");
       renderer.forceRender(state);
     }
-    muxLog.debug("Grid setup complete");
-  } else {
-    muxLog.warn("No state available for grid setup");
   }
 
   // Initialize mux window tracking
@@ -324,7 +313,6 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   }
 
   // Re-enable original PTY output
-  muxLog.info("Re-enabling original PTY output");
   const ptyHandlerHandle = ctx.getPtyHandlerHandle();
   if (ptyHandlerHandle) {
     ptyHandlerHandle.suppressOriginalPty = false;
@@ -334,7 +322,6 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   // No need to save frontend snapshots (WASM serialization/deserialization is slow).
 
   // Restore original grid
-  muxLog.info("Restoring original grid");
   const muxOriginalGrid = ctx.getMuxOriginalGrid();
   const state = ctx.getState();
   if (muxOriginalGrid && state) {
@@ -372,14 +359,12 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   }
 
   // Restore direct PTY writes
-  muxLog.info("Restoring direct PTY writes");
   const ptyClient = ctx.getPtyClient();
   if (ptyClient) {
     ptyClient.setWriteProxy(null);
   }
 
   // Disconnect
-  muxLog.info("Disconnecting MuxClient");
   const muxClient = ctx.getMuxClient();
   if (muxClient) {
     muxClient.disconnect().catch(() => {});
