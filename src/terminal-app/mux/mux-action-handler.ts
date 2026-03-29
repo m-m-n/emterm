@@ -45,10 +45,10 @@ export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void 
 
   switch (action.type) {
     case "detach":
-      // Await Detach send before disconnecting to avoid race with disconnect()
-      ctx.getMuxClient()?.sendControl(MuxMessageType.Detach, 0)
-        .catch(() => {})
-        .finally(() => ctx.exitMuxMode());
+      // Send Detach to daemon; exitMuxMode is triggered by the onDetached callback
+      // when the daemon responds with Detached.
+      muxLog.info("Sending Detach, waiting for Detached response via onDetached callback");
+      ctx.getMuxClient()?.sendControl(MuxMessageType.Detach, 0).catch(() => {});
       break;
     case "new-window": {
       // Actual pane ID will arrive via PaneCreated event

@@ -64,6 +64,9 @@ export interface MuxSessionContext {
   getCopyModeKeybinds: () => ViKeybinds | EmacsKeybinds | null;
   setCopyModeKeybinds: (keybinds: ViKeybinds | EmacsKeybinds | null) => void;
 
+  // Called after exitMuxMode to restore early APC context for next manual bridge launch
+  onMuxModeExited?: () => void;
+
   // Delegate methods that call into other mux modules via TerminalApp wrappers
   registerCoreCallbacks: (core: ReturnType<TerminalState["getActiveCore"]>) => void;
   handleMuxPaneCreated: (paneId: number) => void;
@@ -321,6 +324,7 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   }
 
   // Re-enable original PTY output
+  muxLog.info("Re-enabling original PTY output");
   const ptyHandlerHandle = ctx.getPtyHandlerHandle();
   if (ptyHandlerHandle) {
     ptyHandlerHandle.suppressOriginalPty = false;
@@ -330,6 +334,7 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   // No need to save frontend snapshots (WASM serialization/deserialization is slow).
 
   // Restore original grid
+  muxLog.info("Restoring original grid");
   const muxOriginalGrid = ctx.getMuxOriginalGrid();
   const state = ctx.getState();
   if (muxOriginalGrid && state) {
@@ -367,12 +372,14 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   }
 
   // Restore direct PTY writes
+  muxLog.info("Restoring direct PTY writes");
   const ptyClient = ctx.getPtyClient();
   if (ptyClient) {
     ptyClient.setWriteProxy(null);
   }
 
   // Disconnect
+  muxLog.info("Disconnecting MuxClient");
   const muxClient = ctx.getMuxClient();
   if (muxClient) {
     muxClient.disconnect().catch(() => {});
@@ -382,10 +389,23 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   // Trigger host shell prompt redraw via SIGWINCH.
   // During mux mode, the host shell's prompt output was suppressed.
   // A resize kick forces the shell to redraw its prompt line.
+  // Delay: bridge process must exit first so the host shell becomes
+  // the foreground process group leader and receives SIGWINCH.
   if (ptyClient && state) {
     const cols = state.getWasmCore().cols();
     const rows = state.getWasmCore().rows();
-    ptyClient.resize(cols - 1, rows);
-    ptyClient.resize(cols, rows);
+    const p = ptyClient;
+    setTimeout(() => {
+      muxLog.info(`SIGWINCH kick: resizing ${cols}x${rows} → ${cols - 1}x${rows} → ${cols}x${rows}`);
+      p.resize(cols - 1, rows);
+      p.resize(cols, rows);
+      muxLog.info("SIGWINCH kick sent");
+    }, 500);
+  } else {
+    muxLog.warn(`SIGWINCH kick skipped: ptyClient=${!!ptyClient}, state=${!!state}`);
   }
+
+  // Restore early APC context so next manual `emterm mux` is detected
+  ctx.onMuxModeExited?.();
+  muxLog.info("exitMuxMode complete");
 }
