@@ -10,6 +10,7 @@ import {
   type LayoutNode,
 } from "../../terminal/mux/layout";
 import { detectBorderHit } from "../../terminal/mux/pane-border";
+import { muxLog } from "../../terminal/mux/mux-logger";
 import type { MuxPaneEntry } from "./mux-multi-pane";
 import type { CharSize } from "../types";
 
@@ -203,5 +204,5 @@ export function toggleMuxZoom(ctx: MuxDragResizeContext): void {
 
   ctx.applyMuxLayout();
   ctx.sendPaneResizes();
-  console.info(`[INFO][MUX-CLIENT] Mux zoom: ${ctx.getMuxPreZoomLayout() ? "zoomed" : "restored"}`);
+  muxLog.info(`Mux zoom: ${ctx.getMuxPreZoomLayout() ? "zoomed" : "restored"}`);
 }

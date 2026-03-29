@@ -62,7 +62,7 @@ fn init_bridge_logger() {
         use std::io::Write;
 
         env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Info)
+            .filter_level(log::LevelFilter::Debug)
             .target(env_logger::Target::Pipe(Box::new(log_file)))
             .format(move |buf, record| {
                 writeln!(
@@ -137,11 +137,46 @@ fn run_bridge(_sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Er
     std::process::exit(1);
 }
 
+/// Set stdin to raw mode (non-canonical, no echo) so APC bytes arrive immediately.
+/// Returns the original termios for restoration on exit.
+#[cfg(unix)]
+fn set_stdin_raw() -> Option<libc::termios> {
+    use std::mem::MaybeUninit;
+    unsafe {
+        let mut orig = MaybeUninit::<libc::termios>::uninit();
+        if libc::tcgetattr(libc::STDIN_FILENO, orig.as_mut_ptr()) != 0 {
+            log::warn!("tcgetattr failed, stdin may not be a tty");
+            return None;
+        }
+        let orig = orig.assume_init();
+        let mut raw = orig;
+        libc::cfmakeraw(&mut raw);
+        if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) != 0 {
+            log::warn!("tcsetattr failed");
+            return None;
+        }
+        log::info!("stdin set to raw mode");
+        Some(orig)
+    }
+}
+
+/// Restore original termios settings.
+#[cfg(unix)]
+fn restore_stdin(orig: &libc::termios) {
+    unsafe {
+        libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, orig);
+    }
+    log::info!("stdin restored to original mode");
+}
+
 /// Async bridge main loop: handshake, then bidirectional APC/socket forwarding.
 #[cfg(unix)]
 async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
+
+    // Set stdin to raw mode so APC escape sequences arrive byte-by-byte
+    let orig_termios = set_stdin_raw();
 
     // Connect to daemon
     log::info!("Connecting to daemon at {:?}", sock_path);
@@ -209,14 +244,20 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         let mut stdin = tokio::io::stdin();
         let mut parser = StdinApcParser::new();
         let mut buf = [0u8; 8192];
+        let mut total_bytes: u64 = 0;
 
+        log::info!("stdin reader started, waiting for data...");
         loop {
             let n = match stdin.read(&mut buf).await {
                 Ok(0) => {
-                    log::info!("stdin EOF, stopping stdin→daemon");
+                    log::info!("stdin EOF after {} total bytes, stopping stdin→daemon", total_bytes);
                     break;
                 }
-                Ok(n) => n,
+                Ok(n) => {
+                    total_bytes += n as u64;
+                    log::debug!("stdin read {} bytes (total={}): {:?}", n, total_bytes, &buf[..n.min(64)]);
+                    n
+                }
                 Err(e) => {
                     log::warn!("stdin read error: {}, stopping stdin→daemon", e);
                     break;
@@ -227,23 +268,21 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
             for action in actions {
                 match action {
                     StdinAction::MuxMessage(msg) => {
+                        log::info!("stdin→daemon: forwarding {:?} pane={}", msg.msg_type, msg.pane_id);
                         let body = msg.to_frame_body();
                         let len = (body.len() as u32).to_be_bytes();
                         if sock_writer.write_all(&len).await.is_err() {
+                            log::warn!("stdin→daemon: socket write failed (len)");
                             return;
                         }
                         if sock_writer.write_all(&body).await.is_err() {
+                            log::warn!("stdin→daemon: socket write failed (body)");
                             return;
                         }
                         let _ = sock_writer.flush().await;
                     }
                     StdinAction::Passthrough(data) => {
-                        // Passthrough data is NOT forwarded as PtyInput.
-                        // The bridge only handles APC mux messages.
-                        // Normal keyboard input goes directly from GUI to PTY stdin;
-                        // it does not flow through APC encoding.
-                        // Any non-APC data arriving on bridge stdin is unexpected
-                        // and is silently dropped.
+                        log::debug!("stdin→daemon: passthrough {} bytes (dropped)", data.len());
                         let _ = data;
                     }
                 }
@@ -253,12 +292,14 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
 
     let daemon_to_stdout = async {
         let mut len_buf = [0u8; 4];
+        log::info!("daemon→stdout reader started, waiting for frames...");
         loop {
             if let Err(e) = sock_reader.read_exact(&mut len_buf).await {
                 log::info!("Daemon socket read error: {}, stopping daemon→stdout", e);
                 break;
             }
             let frame_len = u32::from_be_bytes(len_buf) as usize;
+            log::debug!("daemon→stdout: frame header received, len={}", frame_len);
             if frame_len > MAX_FRAME_LENGTH || frame_len == 0 {
                 log::warn!("Invalid frame length {}, stopping daemon→stdout", frame_len);
                 break;
@@ -270,6 +311,7 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
             }
 
             if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
+                log::debug!("daemon→stdout: forwarding {:?} pane={} ({} bytes payload)", msg.msg_type, msg.pane_id, msg.payload.len());
                 let apc = msg.to_apc();
                 use std::io::Write;
                 let stdout = std::io::stdout();
@@ -293,6 +335,11 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         _ = daemon_to_stdout => {
             log::info!("daemon→stdout ended, shutting down bridge");
         }
+    }
+
+    // Restore terminal settings
+    if let Some(ref orig) = orig_termios {
+        restore_stdin(orig);
     }
 
     Ok(())

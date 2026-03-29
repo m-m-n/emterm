@@ -191,6 +191,27 @@ pub fn console_debug(message: String) {
     println!("{}", logging::format_frontend_log("debug", &message));
 }
 
+/// Write a log line to mux-client.log file.
+/// Uses the same directory as mux-daemon.log and mux-bridge.log.
+#[cfg(feature = "gui")]
+#[tauri::command]
+pub fn mux_client_log(line: String) {
+    use std::io::Write;
+
+    let log_path = crate::mux::daemon::socket_path()
+        .parent()
+        .map(|p| p.join("mux-client.log"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp/mux-client.log"));
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = writeln!(file, "{}", line);
+    }
+}
+
 /// Read the contents of the log file.
 #[cfg(feature = "gui")]
 #[tauri::command]

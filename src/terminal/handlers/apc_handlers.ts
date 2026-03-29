@@ -8,6 +8,7 @@ import type { TerminalStateAccessor } from "./types.ts";
 import type { ApcAction } from "../../types/terminal.ts";
 import { MUX_APC_PREFIX, MuxMessageType, decodeApcPayload } from "../mux/mux-client.ts";
 import type { MuxClient } from "../mux/mux-client.ts";
+import { muxLog } from "../mux/mux-logger";
 
 /** Context for mux APC handling. */
 export interface MuxApcContext {
@@ -44,9 +45,11 @@ export function handleMuxApc(data: Uint8Array): boolean {
   const payloadStr = new TextDecoder().decode(data);
   const parsed = decodeApcPayload(payloadStr);
   if (!parsed) {
-    console.warn("[WARN][FRONTEND] Failed to decode mux APC payload");
+    muxLog.warn("Failed to decode mux APC payload");
     return true; // consumed but invalid
   }
+
+  muxLog.info(`APC received: type=0x${parsed.msgType.toString(16)} pane=${parsed.paneId} (${data.length} bytes)`);
 
   const muxClient = muxApcContext?.getMuxClient();
   if (muxClient) {
@@ -54,9 +57,15 @@ export function handleMuxApc(data: Uint8Array): boolean {
   } else if (parsed.msgType === MuxMessageType.Welcome && muxApcContext?.onWelcomeWithoutClient) {
     // Welcome arrived before MuxClient exists (user typed `emterm mux` manually).
     // Trigger auto-enter mux mode with the bridge already running.
-    muxApcContext.onWelcomeWithoutClient(parsed.msgType, parsed.paneId, parsed.data);
+    // MUST defer: this runs inside process_pty_data's APC callback,
+    // and enterMuxMode accesses WASM core (cols/rows/swapGrid).
+    // Calling core synchronously here causes a recursive borrow deadlock.
+    muxLog.info("Welcome received without client, deferring auto-enter mux mode");
+    const cb = muxApcContext.onWelcomeWithoutClient;
+    const { msgType: mt, paneId: pid, data: d } = parsed;
+    queueMicrotask(() => cb(mt, pid, d));
   } else {
-    console.warn("[WARN][FRONTEND] Mux APC received but no MuxClient active");
+    muxLog.warn("Mux APC received but no MuxClient active");
   }
 
   return true;

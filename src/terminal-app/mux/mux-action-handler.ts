@@ -5,6 +5,7 @@
  */
 
 import { MuxMessageType } from "../../terminal/mux/mux-client";
+import { muxLog } from "../../terminal/mux/mux-logger";
 import type { MuxClient } from "../../terminal/mux/mux-client";
 import type { MuxAction } from "../../terminal/mux/prefix-key";
 import type { PtyClient } from "../../pty/client";
@@ -40,7 +41,7 @@ export interface MuxActionContext {
 
 /** Handle mux action dispatched by PrefixKeyHandler. */
 export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void {
-  console.info(`[INFO][MUX-CLIENT] Mux action: ${action.type}`);
+  muxLog.info(`Mux action: ${action.type}`);
 
   switch (action.type) {
     case "detach":
@@ -172,7 +173,7 @@ export function sendMuxControl(ctx: MuxActionContext, msgType: number, paneId: n
   const muxClient = ctx.getMuxClient();
   if (!muxClient) return;
   muxClient.sendControl(msgType, paneId, payload).catch((e) => {
-    console.error(`[ERROR][MUX-CLIENT] Mux control failed (type=0x${msgType.toString(16)}):`, e);
+    muxLog.error(`Mux control failed (type=0x${msgType.toString(16)}): ${e}`);
   });
 }
 

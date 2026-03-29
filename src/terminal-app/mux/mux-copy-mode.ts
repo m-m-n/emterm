@@ -13,6 +13,7 @@ import {
   type CopyModeSelection,
 } from "../../terminal/mux-copy-mode";
 import { SettingsService } from "../../settings/settings-service";
+import { muxLog } from "../../terminal/mux/mux-logger";
 
 /** Subset of TerminalApp state needed by copy mode functions. */
 export interface MuxCopyModeContext {
@@ -57,7 +58,7 @@ export function enterCopyMode(ctx: MuxCopyModeContext): void {
   });
 
   ctx.copyModeManager.enter();
-  console.info("[INFO][MUX-CLIENT] Entered mux copy mode");
+  muxLog.info("Entered mux copy mode");
 }
 
 /** Exit mux copy mode. */
@@ -67,7 +68,7 @@ export function exitCopyMode(ctx: MuxCopyModeContext): void {
   if (ctx.renderer && ctx.state) {
     ctx.renderer.forceRender(ctx.state);
   }
-  console.info("[INFO][MUX-CLIENT] Exited mux copy mode");
+  muxLog.info("Exited mux copy mode");
 }
 
 /** Handle keyboard input during copy mode. Returns true if the key was consumed. */
@@ -110,9 +111,9 @@ export async function copySelectionToClipboard(ctx: MuxCopyModeContext, selectio
 
   try {
     await navigator.clipboard.writeText(text);
-    console.info(`[INFO][MUX-CLIENT] Copy mode: copied ${text.length} chars to clipboard`);
+    muxLog.info(`Copy mode: copied ${text.length} chars to clipboard`);
   } catch (e) {
-    console.error("[ERROR][MUX-CLIENT] Copy mode clipboard write failed:", e);
+    muxLog.error(`Copy mode clipboard write failed: ${e}`);
   }
 }
 
@@ -123,9 +124,9 @@ export async function pasteFromClipboard(ctx: MuxCopyModeContext): Promise<void>
     if (text && ctx.ptyClient) {
       const data = new TextEncoder().encode(text);
       await ctx.ptyClient.write(data);
-      console.info(`[INFO][MUX-CLIENT] Mux paste: ${text.length} chars`);
+      muxLog.info(`Mux paste: ${text.length} chars`);
     }
   } catch (e) {
-    console.error("[ERROR][MUX-CLIENT] Mux paste failed:", e);
+    muxLog.error(`Mux paste failed: ${e}`);
   }
 }

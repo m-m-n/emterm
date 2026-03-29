@@ -173,6 +173,26 @@ export class PtyClient {
 	}
 
 	/**
+	 * Write directly to the PTY, bypassing the writeProxy.
+	 * Used by MuxClient to send APC control/input messages that must reach
+	 * the bridge process, not be re-routed through the proxy.
+	 */
+	writeDirect(data: Uint8Array): Promise<void> {
+		if (!this.sessionId) {
+			return Promise.reject(new Error("PTY session not started"));
+		}
+		return invoke<void>("pty_write", {
+			sessionId: this.sessionId,
+			data: Array.from(data),
+		}).then(() => {
+			invoke("mux_client_log", { line: `${new Date().toISOString()} DEBUG[MUX-CLIENT] writeDirect OK (${data.length} bytes, session=${this.sessionId})` }).catch(() => {});
+		}).catch((e) => {
+			invoke("mux_client_log", { line: `${new Date().toISOString()} ERROR[MUX-CLIENT] writeDirect FAILED: ${e} (session=${this.sessionId})` }).catch(() => {});
+			throw e;
+		});
+	}
+
+	/**
 	 * Resizes the PTY session to the specified dimensions.
 	 *
 	 * @param cols - New number of columns

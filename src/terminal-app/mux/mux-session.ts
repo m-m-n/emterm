@@ -5,6 +5,7 @@
  */
 
 import { MuxClient, MuxMessageType, decodeWelcomeMsg } from "../../terminal/mux/mux-client";
+import { muxLog } from "../../terminal/mux/mux-logger";
 import type { MuxSessionInfo } from "../../terminal/mux/mux-client";
 import type { MuxAction } from "../../terminal/mux/prefix-key";
 import type { PtyClient } from "../../pty/client";
@@ -93,14 +94,17 @@ export interface EnterMuxOptions {
 }
 
 export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, _sessionId: number, options?: EnterMuxOptions): Promise<void> {
-  if (ctx.getInMuxMode()) return;
+  if (ctx.getInMuxMode()) {
+    muxLog.warn("enterMuxMode called but already in mux mode");
+    return;
+  }
   ctx.setInMuxMode(true);
 
-  console.info("[INFO][MUX-CLIENT] Entering mux mode via inband protocol");
+  muxLog.info(`Entering mux mode via inband protocol (welcomeData=${!!options?.welcomeData})`);
 
   const ptyClient = ctx.getPtyClient();
   if (!ptyClient) {
-    console.error("[ERROR][MUX-CLIENT] No PTY client available for mux mode");
+    muxLog.error("No PTY client available for mux mode");
     ctx.setInMuxMode(false);
     return;
   }
@@ -183,9 +187,9 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     if (sessions) {
       client.handleWelcome(sessions);
       muxSessions = sessions;
-      console.info(`[INFO][MUX-CLIENT] Mux bridge already running: ${muxSessions.length} session(s)`);
+      muxLog.info(`Mux bridge already running: ${muxSessions.length} session(s)`);
     } else {
-      console.error("[ERROR][MUX-CLIENT] Failed to decode pre-received Welcome");
+      muxLog.error("Failed to decode pre-received Welcome");
       if (ptyHandlerHandle) {
         ptyHandlerHandle.suppressOriginalPty = false;
       }
@@ -205,9 +209,9 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     // Wait for Welcome APC from bridge
     try {
       muxSessions = await welcomePromise;
-      console.info(`[INFO][MUX-CLIENT] Mux bridge connected: ${muxSessions.length} session(s)`);
+      muxLog.info(`Mux bridge connected: ${muxSessions.length} session(s)`);
     } catch (e) {
-      console.error("[ERROR][MUX-CLIENT] Mux bridge handshake failed:", e);
+      muxLog.error(`Mux bridge handshake failed: ${e}`);
       if (ptyHandlerHandle) {
         ptyHandlerHandle.suppressOriginalPty = false;
       }
@@ -218,6 +222,7 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     }
   }
 
+  muxLog.info("Setting up PTY write proxy");
   // Route all PTY writes to mux daemon via APC proxy
   ptyClient.setWriteProxy((data: Uint8Array) => {
     const c = ctx.getMuxClient();
@@ -226,19 +231,29 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     return c.sendInput(activePaneId, data);
   });
 
+  muxLog.info("Saving original grid and creating fresh grid for mux");
   // Save the original grid and create a fresh one for mux mode
   const state = ctx.getState();
   if (state) {
+    muxLog.debug("Saving original grid reference");
     ctx.setMuxOriginalGrid(state.getPrimaryGrid());
+    muxLog.debug("Getting cols/rows from WASM core");
     const cols = state.getWasmCore().cols();
     const rows = state.getWasmCore().rows();
+    muxLog.debug(`Creating fresh WasmGrid (${cols}x${rows})`);
     const freshGrid = new WasmGrid(cols, rows, 10000);
+    muxLog.debug("Swapping primary grid");
     state.swapPrimaryGrid(freshGrid);
+    muxLog.debug("Registering core callbacks");
     ctx.registerCoreCallbacks(state.getActiveCore());
     const renderer = ctx.getRenderer();
     if (renderer) {
+      muxLog.debug("Calling forceRender");
       renderer.forceRender(state);
     }
+    muxLog.debug("Grid setup complete");
+  } else {
+    muxLog.warn("No state available for grid setup");
   }
 
   // Initialize mux window tracking
@@ -250,13 +265,14 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
 
   // Check if daemon has existing panes (reattach case)
   const existingPanes = muxSessions.reduce((sum, s) => sum + s.pane_count, 0);
+  muxLog.info(`existingPanes=${existingPanes}, sessions=${JSON.stringify(muxSessions)}`);
 
   if (existingPanes > 0) {
     // Reattach: send Attach message to daemon AFTER APC communication is established.
     // Daemon will respond with PaneCreated + buffered output for existing panes.
     ctx.setMuxPendingWindowCount(existingPanes);
     ctx.setMuxIsReattaching(true);
-    console.info(`[INFO][MUX-CLIENT] Reattaching to ${existingPanes} existing pane(s)`);
+    muxLog.info(`Reattaching to ${existingPanes} existing pane(s)`);
     const attachSessionId = muxSessions[0]?.id ?? 1;
     // AttachMsg payload: session_id as u32 LE (bincode serializes u32 as 4 bytes LE)
     const attachPayload = new Uint8Array(4);
@@ -269,10 +285,11 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
       ctx.setMuxPendingWindowCount(ctx.getMuxPendingWindowCount() + 1);
       await client.sendControl(MuxMessageType.CreateWindow, 0);
     } catch (e) {
-      console.error("[ERROR][MUX-CLIENT] Mux create window failed:", e);
+      muxLog.error(`Mux create window failed: ${e}`);
     }
   }
 
+  muxLog.info("enterMuxMode completed, enabling prefix key");
   // Enable prefix key handling
   const muxSettings = SettingsService.getCached()?.mux;
   const keyboardHandler = ctx.getKeyboardHandler();
@@ -290,7 +307,7 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   if (!ctx.getInMuxMode()) return;
   ctx.setInMuxMode(false);
 
-  console.info("[INFO][MUX-CLIENT] Exiting mux mode");
+  muxLog.info("Exiting mux mode");
 
   // Clear mux APC context
   setMuxApcContext(null);

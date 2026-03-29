@@ -79,6 +79,7 @@ pub fn run() {
             tauri_commands::console_error,
             tauri_commands::console_info,
             tauri_commands::console_debug,
+            tauri_commands::mux_client_log,
             tauri_commands::session_count,
             tauri_commands::tab_close_graceful,
             commands::config::io::load_settings,
