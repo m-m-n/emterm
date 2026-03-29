@@ -86,6 +86,10 @@ pub fn cleanup_stale_socket(path: &std::path::Path) -> std::io::Result<()> {
 pub fn ensure_daemon_running() -> Result<PathBuf, String> {
     let sock_path = socket_path();
 
+    // Clean up stale socket (daemon died but socket file remains)
+    cleanup_stale_socket(&sock_path)
+        .map_err(|e| format!("Failed to clean up stale socket: {}", e))?;
+
     if !sock_path.exists() {
         // Ensure parent directory exists with restricted permissions
         if let Some(parent) = sock_path.parent() {
