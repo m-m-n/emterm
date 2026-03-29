@@ -714,6 +714,47 @@ components:
       font-size: 11px
       color: "#888"
 
+  # ============================================================================
+  # Status Bar
+  # ============================================================================
+  status-bar:
+    class: .status-bar
+    description: "Application status bar at the bottom of the window. Uses terminal font for visual consistency with terminal content."
+    properties:
+      display: flex
+      flex-direction: column
+      background: var(--md-sys-color-surface-container)
+      color: var(--md-sys-color-on-surface)
+      font-family: "var(--terminal-font-family, monospace), emoji fallbacks"
+      font-size: var(--status-bar-font-size, 11pt)
+      line-height: 1.4
+      border-top: 1px solid var(--md-sys-color-outline-variant)
+      user-select: none
+      transition: "height 200ms ease"
+    states:
+      hidden:
+        display: none
+    layers:
+      description: "3-layer structure: osc, app-line1, app-line2"
+      class: .status-bar-layer
+      properties:
+        display: flex
+        justify-content: space-between
+        align-items: center
+        padding: 0 8px
+        min-height: 22px
+        gap: 8px
+      osc-layer:
+        class: .status-bar-layer--osc
+        background: var(--md-sys-color-surface-container-high, rgba(255,255,255,0.05))
+    sections:
+      class: .status-bar-section
+      properties:
+        white-space: nowrap
+        overflow: hidden
+        text-overflow: ellipsis
+        max-width: 50%
+
 # ==============================================================================
 # Z-Index Scale
 # ==============================================================================
