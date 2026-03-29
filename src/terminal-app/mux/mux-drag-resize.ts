@@ -203,5 +203,5 @@ export function toggleMuxZoom(ctx: MuxDragResizeContext): void {
 
   ctx.applyMuxLayout();
   ctx.sendPaneResizes();
-  console.info(`[INFO][FRONTEND] Mux zoom: ${ctx.getMuxPreZoomLayout() ? "zoomed" : "restored"}`);
+  console.info(`[INFO][MUX-CLIENT] Mux zoom: ${ctx.getMuxPreZoomLayout() ? "zoomed" : "restored"}`);
 }

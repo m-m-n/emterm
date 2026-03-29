@@ -19,26 +19,74 @@ fn check_nesting() -> Result<(), String> {
     }
 }
 
+/// Initialize env_logger with a component label prefix (e.g. "[DAEMON]", "[BRIDGE]").
+fn init_mux_logger(component: &'static str) {
+    use std::io::Write;
+
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Info)
+        .format(move |buf, record| {
+            writeln!(
+                buf,
+                "{} {}{} {}",
+                buf.timestamp_millis(),
+                record.level(),
+                component,
+                record.args()
+            )
+        })
+        .init();
+}
+
 /// Execute the `emterm mux --daemon` command (runs the daemon).
 pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logger for daemon process (Tauri's logger is not available here).
     // Daemon stderr is redirected to mux-daemon.log by the spawning process.
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)
-        .format_timestamp_millis()
-        .init();
+    init_mux_logger("[DAEMON]");
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(daemon::run_daemon())?;
     Ok(())
 }
 
+/// Initialize bridge logger, writing to mux-bridge.log (same directory as daemon log).
+fn init_bridge_logger() {
+    let log_dir = daemon::socket_path()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("mux-bridge.log");
+
+    if let Ok(log_file) = std::fs::File::create(&log_path) {
+        use std::io::Write;
+
+        env_logger::Builder::from_default_env()
+            .filter_level(log::LevelFilter::Info)
+            .target(env_logger::Target::Pipe(Box::new(log_file)))
+            .format(move |buf, record| {
+                writeln!(
+                    buf,
+                    "{} {}[BRIDGE] {}",
+                    buf.timestamp_millis(),
+                    record.level(),
+                    record.args()
+                )
+            })
+            .init();
+    }
+}
+
 /// Execute the `emterm mux` command (start/attach as long-running bridge).
 pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    init_bridge_logger();
+
+    log::info!("Starting mux bridge (pid={})", std::process::id());
 
     let sock_path =
         daemon::ensure_daemon_running().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    log::info!("Daemon ready at {:?}", sock_path);
 
     // Auto-import tmux.conf on first mux startup
     import_tmux_conf_if_needed();
@@ -46,6 +94,7 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     // Run the long-running bridge process
     run_bridge(&sock_path)?;
 
+    log::info!("Bridge exiting");
     Ok(())
 }
 
@@ -95,13 +144,16 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     use tokio::net::UnixStream;
 
     // Connect to daemon
+    log::info!("Connecting to daemon at {:?}", sock_path);
     let stream = UnixStream::connect(sock_path)
         .await
         .map_err(|e| format!("Failed to connect to daemon at {:?}: {}", sock_path, e))?;
+    log::info!("Socket connected");
 
     let (mut sock_reader, mut sock_writer) = tokio::io::split(stream);
 
     // Perform handshake
+    log::info!("Sending Hello (protocol v{})", PROTOCOL_VERSION);
     let hello = HelloMsg {
         client_type: ClientType::Gui,
         protocol_version: PROTOCOL_VERSION,
@@ -114,6 +166,7 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     sock_writer.flush().await?;
 
     // Read Welcome with 5-second timeout (handles non-eMterm terminals naturally)
+    log::info!("Waiting for Welcome (5s timeout)");
     let welcome_msg = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let mut len_buf = [0u8; 4];
         sock_reader
@@ -135,8 +188,10 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     .map_err(|_| "Daemon did not respond within 5 seconds")?
     .map_err(|e: String| -> Box<dyn std::error::Error> { e.into() })?;
     if welcome_msg.msg_type != MessageType::Welcome {
+        log::error!("Expected Welcome, got {:?}", welcome_msg.msg_type);
         return Err(format!("Expected Welcome, got {:?}", welcome_msg.msg_type).into());
     }
+    log::info!("Handshake complete, received Welcome");
 
     // Write Welcome as APC to stdout so GUI receives it
     let welcome_apc = welcome_msg.to_apc();
@@ -149,6 +204,7 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     }
 
     // Bidirectional forwarding: stdin -> daemon, daemon -> stdout
+    log::info!("Starting bidirectional forwarding");
     let stdin_to_daemon = async {
         let mut stdin = tokio::io::stdin();
         let mut parser = StdinApcParser::new();
@@ -156,9 +212,15 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
 
         loop {
             let n = match stdin.read(&mut buf).await {
-                Ok(0) => break, // stdin EOF
+                Ok(0) => {
+                    log::info!("stdin EOF, stopping stdin→daemon");
+                    break;
+                }
                 Ok(n) => n,
-                Err(_) => break,
+                Err(e) => {
+                    log::warn!("stdin read error: {}, stopping stdin→daemon", e);
+                    break;
+                }
             };
 
             let actions = parser.feed(&buf[..n]);
@@ -192,15 +254,18 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     let daemon_to_stdout = async {
         let mut len_buf = [0u8; 4];
         loop {
-            if sock_reader.read_exact(&mut len_buf).await.is_err() {
+            if let Err(e) = sock_reader.read_exact(&mut len_buf).await {
+                log::info!("Daemon socket read error: {}, stopping daemon→stdout", e);
                 break;
             }
             let frame_len = u32::from_be_bytes(len_buf) as usize;
             if frame_len > MAX_FRAME_LENGTH || frame_len == 0 {
+                log::warn!("Invalid frame length {}, stopping daemon→stdout", frame_len);
                 break;
             }
             let mut frame_buf = vec![0u8; frame_len];
-            if sock_reader.read_exact(&mut frame_buf).await.is_err() {
+            if let Err(e) = sock_reader.read_exact(&mut frame_buf).await {
+                log::warn!("Daemon socket read error (body): {}, stopping daemon→stdout", e);
                 break;
             }
 
@@ -210,17 +275,24 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
                 let stdout = std::io::stdout();
                 let mut stdout = stdout.lock();
                 if stdout.write_all(apc.as_bytes()).is_err() {
+                    log::info!("stdout write error, stopping daemon→stdout");
                     break;
                 }
                 let _ = stdout.flush();
+            } else {
+                log::warn!("Invalid frame body ({} bytes), skipping", frame_len);
             }
         }
     };
 
     // Run both directions concurrently; exit when either ends
     tokio::select! {
-        _ = stdin_to_daemon => {}
-        _ = daemon_to_stdout => {}
+        _ = stdin_to_daemon => {
+            log::info!("stdin→daemon ended, shutting down bridge");
+        }
+        _ = daemon_to_stdout => {
+            log::info!("daemon→stdout ended, shutting down bridge");
+        }
     }
 
     Ok(())

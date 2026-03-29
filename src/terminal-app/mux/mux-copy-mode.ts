@@ -57,7 +57,7 @@ export function enterCopyMode(ctx: MuxCopyModeContext): void {
   });
 
   ctx.copyModeManager.enter();
-  console.info("[INFO][FRONTEND] Entered mux copy mode");
+  console.info("[INFO][MUX-CLIENT] Entered mux copy mode");
 }
 
 /** Exit mux copy mode. */
@@ -67,7 +67,7 @@ export function exitCopyMode(ctx: MuxCopyModeContext): void {
   if (ctx.renderer && ctx.state) {
     ctx.renderer.forceRender(ctx.state);
   }
-  console.info("[INFO][FRONTEND] Exited mux copy mode");
+  console.info("[INFO][MUX-CLIENT] Exited mux copy mode");
 }
 
 /** Handle keyboard input during copy mode. Returns true if the key was consumed. */
@@ -110,9 +110,9 @@ export async function copySelectionToClipboard(ctx: MuxCopyModeContext, selectio
 
   try {
     await navigator.clipboard.writeText(text);
-    console.info(`[INFO][FRONTEND] Copy mode: copied ${text.length} chars to clipboard`);
+    console.info(`[INFO][MUX-CLIENT] Copy mode: copied ${text.length} chars to clipboard`);
   } catch (e) {
-    console.error("[ERROR][FRONTEND] Copy mode clipboard write failed:", e);
+    console.error("[ERROR][MUX-CLIENT] Copy mode clipboard write failed:", e);
   }
 }
 
@@ -123,9 +123,9 @@ export async function pasteFromClipboard(ctx: MuxCopyModeContext): Promise<void>
     if (text && ctx.ptyClient) {
       const data = new TextEncoder().encode(text);
       await ctx.ptyClient.write(data);
-      console.info(`[INFO][FRONTEND] Mux paste: ${text.length} chars`);
+      console.info(`[INFO][MUX-CLIENT] Mux paste: ${text.length} chars`);
     }
   } catch (e) {
-    console.error("[ERROR][FRONTEND] Mux paste failed:", e);
+    console.error("[ERROR][MUX-CLIENT] Mux paste failed:", e);
   }
 }
