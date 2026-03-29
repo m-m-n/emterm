@@ -6,6 +6,7 @@
  */
 
 import type { PtyClient } from "../../pty/client";
+import { muxLog } from "./mux-logger";
 
 /** APC prefix for emterm mux messages (must match Rust APC_PREFIX). */
 export const MUX_APC_PREFIX = "emterm-mux;";
@@ -219,7 +220,7 @@ export function parseMuxOsc(
     const socketPath = params[2]!;
     const sessionId = parseInt(params[3]!, 10);
     if (!validateSocketPath(socketPath)) {
-      console.error("[ERROR][MUX-CLIENT] Invalid mux socket path:", socketPath);
+      muxLog.error(`Invalid mux socket path: ${socketPath}`);
       return null;
     }
     return { action: "attach", socketPath, sessionId: isNaN(sessionId) ? 0 : sessionId };
@@ -251,7 +252,7 @@ export class MuxClient {
   }
 
   private setState(state: MuxConnectionState): void {
-    console.info(`[INFO][MUX-CLIENT] State: ${this._state} → ${state}`);
+    muxLog.info(`State: ${this._state} → ${state}`);
     this._state = state;
     this.onStateChange?.(state);
   }
@@ -317,7 +318,7 @@ export class MuxClient {
         if (sessions) {
           this.handleWelcome(sessions);
         } else {
-          console.warn("[WARN][MUX-CLIENT] Failed to decode Welcome message");
+          muxLog.warn("Failed to decode Welcome message");
           this.setState("error");
           this._pendingWelcomeReject?.("Invalid Welcome message");
           this._pendingWelcomeResolve = null;
@@ -329,15 +330,15 @@ export class MuxClient {
         this.onPtyOutput?.(paneId, data);
         break;
       case MuxMessageType.PtyExited:
-        console.info(`[INFO][MUX-CLIENT] PtyExited pane=${paneId}`);
+        muxLog.info(`PtyExited pane=${paneId}`);
         this.onPtyExited?.(paneId);
         break;
       case MuxMessageType.PaneCreated:
-        console.info(`[INFO][MUX-CLIENT] PaneCreated pane=${paneId}`);
+        muxLog.info(`PaneCreated pane=${paneId}`);
         this.onPaneCreated?.(paneId);
         break;
       case MuxMessageType.Detached:
-        console.info("[INFO][MUX-CLIENT] Detached from daemon");
+        muxLog.info("Detached from daemon");
         this.onDetached?.();
         break;
       case MuxMessageType.StatusUpdate:
@@ -351,7 +352,7 @@ export class MuxClient {
         break;
       default:
         // Other message types - log and ignore
-        console.debug(`[DEBUG][MUX-CLIENT] Mux APC: unhandled type 0x${msgType.toString(16)} pane=${paneId}`);
+        muxLog.debug(`Mux APC: unhandled type 0x${msgType.toString(16)} pane=${paneId}`);
     }
   }
 
@@ -386,29 +387,31 @@ export class MuxClient {
     this.setState("disconnected");
   }
 
-  /** Send PTY input to a pane via APC. */
+  /** Send PTY input to a pane via APC.
+   *  Uses writeDirect to bypass the writeProxy (which would recurse). */
   async sendInput(paneId: number, data: Uint8Array): Promise<void> {
     if (!this.ptyClient) {
-      console.error("[ERROR][MUX-CLIENT] sendInput: No PTY client");
+      muxLog.error("sendInput: No PTY client");
       throw new Error("No PTY client");
     }
     const apc = encodeApc(MuxMessageType.PtyInput, paneId, data);
-    await this.ptyClient.write(new TextEncoder().encode(apc));
+    await this.ptyClient.writeDirect(new TextEncoder().encode(apc));
   }
 
-  /** Send a control message to the daemon via APC. */
+  /** Send a control message to the daemon via APC.
+   *  Uses writeDirect to bypass the writeProxy. */
   async sendControl(
     msgType: number,
     paneId: number,
     payload: Uint8Array = new Uint8Array(),
   ): Promise<null> {
     if (!this.ptyClient) {
-      console.error(`[ERROR][MUX-CLIENT] sendControl(0x${msgType.toString(16)}): No PTY client`);
+      muxLog.error(`sendControl(0x${msgType.toString(16)}): No PTY client`);
       throw new Error("No PTY client");
     }
-    console.debug(`[DEBUG][MUX-CLIENT] sendControl type=0x${msgType.toString(16)} pane=${paneId}`);
+    muxLog.debug(`sendControl type=0x${msgType.toString(16)} pane=${paneId}`);
     const apc = encodeApc(msgType, paneId, payload);
-    await this.ptyClient.write(new TextEncoder().encode(apc));
+    await this.ptyClient.writeDirect(new TextEncoder().encode(apc));
     // APC-based communication is fire-and-forget; responses come via handleIncomingApc
     return null;
   }

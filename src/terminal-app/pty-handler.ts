@@ -11,6 +11,43 @@ import type { ImeHandler } from "./handlers/ime";
 import type { ImageHandler } from "./handlers/image";
 import type { CharSize } from "./types";
 import { reinitWasm } from "../terminal/wasm/loader";
+import { handleMuxApc } from "../terminal/handlers/apc_handlers";
+
+/**
+ * Extract APC sequences from raw PTY data and pass mux APCs to handleMuxApc.
+ * Used during suppressOriginalPty mode where WASM processing is skipped.
+ * APC format: ESC _ <body> ESC \
+ */
+function extractAndHandleMuxApcs(data: Uint8Array): void {
+  const ESC = 0x1b;
+  const UNDERSCORE = 0x5f; // '_'
+  const BACKSLASH = 0x5c; // '\'
+  let i = 0;
+  while (i < data.length - 1) {
+    // Look for APC start: ESC _
+    if (data[i] === ESC && data[i + 1] === UNDERSCORE) {
+      const bodyStart = i + 2;
+      // Find APC end: ESC \
+      let j = bodyStart;
+      while (j < data.length - 1) {
+        if (data[j] === ESC && data[j + 1] === BACKSLASH) {
+          // Found complete APC: body is data[bodyStart..j]
+          const body = data.subarray(bodyStart, j);
+          handleMuxApc(body);
+          i = j + 2;
+          break;
+        }
+        j++;
+      }
+      if (j >= data.length - 1) {
+        // Incomplete APC at end of buffer — skip for now
+        break;
+      }
+    } else {
+      i++;
+    }
+  }
+}
 
 /**
  * Context needed by PTY handler functions.
@@ -398,8 +435,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
 
   // Register binary data handler -- just buffer and schedule rAF
   ptyClient.onData((data: Uint8Array) => {
-    // Suppress original PTY output during mux mode
-    if (handle.suppressOriginalPty) return;
+    // During mux mode, skip WASM processing but still extract mux APC messages.
+    // Bridge sends PaneCreated/PtyOutput as APC sequences over the PTY.
+    if (handle.suppressOriginalPty) {
+      extractAndHandleMuxApcs(data);
+      return;
+    }
     pendingChunks.push(data);
     scheduleProcessing();
   });

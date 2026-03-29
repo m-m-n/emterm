@@ -17,6 +17,7 @@ import {
 } from "../../terminal/mux/layout";
 import { applyLayoutToContainer } from "../../terminal/mux/pane-border";
 import { MuxMessageType } from "../../terminal/mux/mux-client";
+import { muxLog } from "../../terminal/mux/mux-logger";
 import { SettingsService } from "../../settings/settings-service";
 import type { CharSize } from "../types";
 
@@ -72,7 +73,7 @@ export function handleMuxSplitPaneCreated(
     ctx.charSize.width, ctx.charSize.height,
   );
   if (!newLayout) {
-    console.warn("[WARN][MUX-CLIENT] Split refused: pane too small");
+    muxLog.warn("Split refused: pane too small");
     return;
   }
   ctx.muxLayoutRoot = newLayout;
@@ -89,7 +90,7 @@ export function handleMuxSplitPaneCreated(
   // Send resize messages for all panes based on new layout
   sendPaneResizes(ctx);
 
-  console.info(`[INFO][MUX-CLIENT] Split pane created: id=${newPaneId}, direction=${direction}`);
+  muxLog.info(`Split pane created: id=${newPaneId}, direction=${direction}`);
 }
 
 /** Initialize multi-pane mode from single-pane mode. */
