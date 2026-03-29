@@ -72,7 +72,7 @@ export function handleMuxSplitPaneCreated(
     ctx.charSize.width, ctx.charSize.height,
   );
   if (!newLayout) {
-    console.warn("[WARN][FRONTEND] Split refused: pane too small");
+    console.warn("[WARN][MUX-CLIENT] Split refused: pane too small");
     return;
   }
   ctx.muxLayoutRoot = newLayout;
@@ -89,7 +89,7 @@ export function handleMuxSplitPaneCreated(
   // Send resize messages for all panes based on new layout
   sendPaneResizes(ctx);
 
-  console.info(`[INFO][FRONTEND] Split pane created: id=${newPaneId}, direction=${direction}`);
+  console.info(`[INFO][MUX-CLIENT] Split pane created: id=${newPaneId}, direction=${direction}`);
 }
 
 /** Initialize multi-pane mode from single-pane mode. */

@@ -168,7 +168,7 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   muxPaneIds.push(paneId);
   ctx.setActiveMuxWindowIndex(newIdx);
 
-  console.info(`[INFO][FRONTEND] Mux pane created: id=${paneId}, window=${newIdx}`);
+  console.info(`[INFO][MUX-CLIENT] Mux pane created: id=${paneId}, window=${newIdx}`);
 
   // Try to restore from detached snapshot, otherwise create fresh grid
   const detachedKey = `pane-${paneId}`;
@@ -249,7 +249,7 @@ export function handleMuxPaneExited(ctx: MuxWindowManagerContext, paneId: number
   const windowIdx = muxPaneIds.indexOf(paneId);
   if (windowIdx === -1) return;
 
-  console.info(`[INFO][FRONTEND] Mux pane ${paneId} exited (window ${windowIdx})`);
+  console.info(`[INFO][MUX-CLIENT] Mux pane ${paneId} exited (window ${windowIdx})`);
 
   // Clean up snapshot for the exited pane — dispose WASM grids to free memory
   const savedState = muxPaneGrids.get(paneId);

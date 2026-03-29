@@ -40,7 +40,7 @@ export interface MuxActionContext {
 
 /** Handle mux action dispatched by PrefixKeyHandler. */
 export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void {
-  console.info(`[INFO][FRONTEND] Mux action: ${action.type}`);
+  console.info(`[INFO][MUX-CLIENT] Mux action: ${action.type}`);
 
   switch (action.type) {
     case "detach":
@@ -172,7 +172,7 @@ export function sendMuxControl(ctx: MuxActionContext, msgType: number, paneId: n
   const muxClient = ctx.getMuxClient();
   if (!muxClient) return;
   muxClient.sendControl(msgType, paneId, payload).catch((e) => {
-    console.error(`[ERROR][FRONTEND] Mux control failed (type=0x${msgType.toString(16)}):`, e);
+    console.error(`[ERROR][MUX-CLIENT] Mux control failed (type=0x${msgType.toString(16)}):`, e);
   });
 }
 
