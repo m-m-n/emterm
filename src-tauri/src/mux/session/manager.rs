@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use super::pane::PaneId;
 use super::session::{MuxSession, SessionId};
 use super::window::WindowId;
-use crate::mux::ipc::protocol::SessionInfo;
+use crate::mux::ipc::protocol::{SessionInfo, WindowInfo};
 
 /// The session manager owns all sessions.
 pub struct SessionManager {
@@ -72,12 +72,22 @@ impl SessionManager {
                     .active_window_id
                     .and_then(|aid| s.windows.keys().position(|&wid| wid == aid))
                     .unwrap_or(0) as u32;
+                let windows: Vec<WindowInfo> = s
+                    .windows
+                    .values()
+                    .map(|w| WindowInfo {
+                        id: w.id,
+                        name: w.name.clone(),
+                        active_pane_id: w.active_pane_id.unwrap_or(0),
+                    })
+                    .collect();
                 SessionInfo {
                     id: s.id,
                     name: s.name.clone(),
                     window_count: s.window_count() as u32,
                     pane_count: s.pane_count() as u32,
                     active_window_index: active_idx,
+                    windows,
                 }
             })
             .collect()
@@ -371,6 +381,42 @@ mod tests {
         assert_eq!(session_empty, Some(true));
         assert!(mgr.find_pane(10).is_none());
         assert!(mgr.find_pane(20).is_none());
+    }
+
+    #[test]
+    fn test_session_list_includes_windows() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("test".to_string());
+        let wid1 = mgr.create_window(sid, "shell".to_string()).unwrap();
+        let wid2 = mgr.create_window(sid, "editor".to_string()).unwrap();
+
+        // Add panes to set active_pane_id
+        let pane1 = make_test_pane(10);
+        let pane2 = make_test_pane(20);
+        {
+            let session = mgr.get_session_mut(sid).unwrap();
+            session.windows.get_mut(&wid1).unwrap().add_pane(pane1);
+            session.windows.get_mut(&wid2).unwrap().add_pane(pane2);
+        }
+
+        let list = mgr.session_list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].windows.len(), 2);
+        assert_eq!(list[0].windows[0].name, "shell");
+        assert_eq!(list[0].windows[0].active_pane_id, 10);
+        assert_eq!(list[0].windows[1].name, "editor");
+        assert_eq!(list[0].windows[1].active_pane_id, 20);
+    }
+
+    #[test]
+    fn test_session_list_window_no_active_pane() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("test".to_string());
+        mgr.create_window(sid, "empty".to_string()).unwrap();
+
+        let list = mgr.session_list();
+        assert_eq!(list[0].windows.len(), 1);
+        assert_eq!(list[0].windows[0].active_pane_id, 0);
     }
 
     #[test]

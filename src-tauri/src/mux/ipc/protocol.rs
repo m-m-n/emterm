@@ -98,6 +98,14 @@ pub struct HelloMsg {
     pub protocol_version: u32,
 }
 
+/// Per-window metadata for IPC messages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub id: u32,
+    pub name: String,
+    pub active_pane_id: u32,
+}
+
 /// Session info returned in Welcome message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -108,6 +116,9 @@ pub struct SessionInfo {
     /// Index of the active window (0-based) within the ordered window list.
     #[serde(default)]
     pub active_window_index: u32,
+    /// Per-window details for target resolution.
+    #[serde(default)]
+    pub windows: Vec<WindowInfo>,
 }
 
 /// Handshake response from daemon.
@@ -336,6 +347,7 @@ mod tests {
                 window_count: 2,
                 pane_count: 3,
                 active_window_index: 0,
+                windows: vec![],
             }],
         };
         let msg = MuxMessage::control(MessageType::Welcome, 0, &welcome);
@@ -555,5 +567,110 @@ mod tests {
         let payload = &apc[2..apc.len() - 2];
         let decoded = MuxMessage::from_apc(payload).unwrap();
         assert_eq!(decoded.payload, data);
+    }
+
+    // ---- WindowInfo and extended SessionInfo tests ----
+
+    #[test]
+    fn test_window_info_serde_roundtrip() {
+        let info = WindowInfo {
+            id: 1,
+            name: "editor".to_string(),
+            active_pane_id: 42,
+        };
+        let bytes = bincode::serialize(&info).unwrap();
+        let decoded: WindowInfo = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.id, 1);
+        assert_eq!(decoded.name, "editor");
+        assert_eq!(decoded.active_pane_id, 42);
+    }
+
+    #[test]
+    fn test_session_info_with_windows_roundtrip() {
+        let info = SessionInfo {
+            id: 1,
+            name: "main".to_string(),
+            window_count: 2,
+            pane_count: 3,
+            active_window_index: 0,
+            windows: vec![
+                WindowInfo {
+                    id: 1,
+                    name: "shell".to_string(),
+                    active_pane_id: 10,
+                },
+                WindowInfo {
+                    id: 2,
+                    name: "editor".to_string(),
+                    active_pane_id: 20,
+                },
+            ],
+        };
+        let bytes = bincode::serialize(&info).unwrap();
+        let decoded: SessionInfo = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.windows.len(), 2);
+        assert_eq!(decoded.windows[0].name, "shell");
+        assert_eq!(decoded.windows[0].active_pane_id, 10);
+        assert_eq!(decoded.windows[1].name, "editor");
+        assert_eq!(decoded.windows[1].active_pane_id, 20);
+    }
+
+    #[test]
+    fn test_session_info_backward_compat_missing_windows() {
+        // Simulate old SessionInfo without windows field (bincode)
+        // by serializing a struct that has no windows field
+        #[derive(Serialize)]
+        struct OldSessionInfo {
+            id: u32,
+            name: String,
+            window_count: u32,
+            pane_count: u32,
+            active_window_index: u32,
+        }
+        let old = OldSessionInfo {
+            id: 1,
+            name: "legacy".to_string(),
+            window_count: 1,
+            pane_count: 1,
+            active_window_index: 0,
+        };
+        // For bincode, missing trailing field won't deserialize correctly,
+        // but serde(default) handles JSON. Test via JSON for backward compat.
+        let json = serde_json::to_string(&old).unwrap();
+        let decoded: SessionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id, 1);
+        assert_eq!(decoded.name, "legacy");
+        assert!(decoded.windows.is_empty());
+    }
+
+    #[test]
+    fn test_welcome_with_windows_roundtrip() {
+        let welcome = WelcomeMsg::Accepted {
+            server_version: 1,
+            sessions: vec![SessionInfo {
+                id: 1,
+                name: "main".to_string(),
+                window_count: 1,
+                pane_count: 1,
+                active_window_index: 0,
+                windows: vec![WindowInfo {
+                    id: 1,
+                    name: "shell".to_string(),
+                    active_pane_id: 5,
+                }],
+            }],
+        };
+        let msg = MuxMessage::control(MessageType::Welcome, 0, &welcome);
+        let decoded: WelcomeMsg = MuxMessage::from_frame_body(&msg.to_frame_body())
+            .unwrap()
+            .decode_payload()
+            .unwrap();
+        match decoded {
+            WelcomeMsg::Accepted { sessions, .. } => {
+                assert_eq!(sessions[0].windows.len(), 1);
+                assert_eq!(sessions[0].windows[0].active_pane_id, 5);
+            }
+            _ => panic!("Expected Accepted"),
+        }
     }
 }

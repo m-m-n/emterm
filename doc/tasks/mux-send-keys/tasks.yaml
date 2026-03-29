@@ -1,0 +1,7 @@
+tasks:
+  - - id: phase1-protocol-extension
+      title: "Protocol Extension - WindowInfo and SessionInfo"
+      status: completed
+  - - id: phase2-cli-subcommand
+      title: "CLI Subcommand and Execution"
+      status: completed

@@ -261,7 +261,11 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
             for action in actions {
                 match action {
                     StdinAction::MuxMessage(msg) => {
-                        log::info!("stdin→daemon: forwarding {:?} pane={}", msg.msg_type, msg.pane_id);
+                        log::info!(
+                            "stdin→daemon: forwarding {:?} pane={}",
+                            msg.msg_type,
+                            msg.pane_id
+                        );
                         let body = msg.to_frame_body();
                         let len = (body.len() as u32).to_be_bytes();
                         if sock_writer.write_all(&len).await.is_err() {
@@ -296,7 +300,10 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
             }
             let mut frame_buf = vec![0u8; frame_len];
             if let Err(e) = sock_reader.read_exact(&mut frame_buf).await {
-                log::warn!("Daemon socket read error (body): {}, stopping daemon→stdout", e);
+                log::warn!(
+                    "Daemon socket read error (body): {}, stopping daemon→stdout",
+                    e
+                );
                 break;
             }
 
@@ -594,6 +601,103 @@ pub fn execute_new_window(
     _name: Option<&str>,
     _command: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Mux is not supported on this platform");
+    std::process::exit(1);
+}
+
+/// Resolve the target pane ID from sessions and optional window index.
+///
+/// Returns the active pane ID of the resolved window.
+fn resolve_target_pane(
+    sessions: &[SessionInfo],
+    target: Option<u32>,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    let session = sessions.first().ok_or("No active session")?;
+
+    let window_index = match target {
+        Some(idx) => {
+            if idx as usize >= session.windows.len() {
+                return Err(format!(
+                    "Window index {} out of range (0..{})",
+                    idx,
+                    session.windows.len()
+                )
+                .into());
+            }
+            idx as usize
+        }
+        None => {
+            if session.windows.is_empty() {
+                return Err("No windows in session".into());
+            }
+            let idx = session.active_window_index as usize;
+            if idx >= session.windows.len() {
+                return Err(format!(
+                    "Active window index {} out of range (0..{})",
+                    idx,
+                    session.windows.len()
+                )
+                .into());
+            }
+            idx
+        }
+    };
+
+    let window = &session.windows[window_index];
+    let pane_id = window.active_pane_id;
+
+    if pane_id == 0 {
+        return Err(format!("No active pane in window {}", window_index).into());
+    }
+
+    Ok(pane_id)
+}
+
+/// Execute the `emterm mux send-keys` command.
+///
+/// Reads stdin, connects to daemon, resolves target pane from window index,
+/// and sends PtyInput message.
+#[cfg(unix)]
+pub fn execute_send_keys(target: Option<u32>) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+
+    // Read stdin with size limit (MAX_FRAME_LENGTH = 16MB)
+    let mut data = Vec::new();
+    let bytes_read = std::io::stdin()
+        .take(MAX_FRAME_LENGTH as u64 + 1)
+        .read_to_end(&mut data)?;
+    if bytes_read > MAX_FRAME_LENGTH {
+        return Err(format!(
+            "stdin data exceeds maximum size ({}MB)",
+            MAX_FRAME_LENGTH / 1024 / 1024
+        )
+        .into());
+    }
+
+    // Empty stdin: exit 0 without connecting
+    if data.is_empty() {
+        return Ok(());
+    }
+
+    let (mut stream, sessions) = cli_handshake()?;
+
+    let pane_id = resolve_target_pane(&sessions, target)?;
+
+    // Send PtyInput
+    let msg = MuxMessage::pty_input(pane_id, data);
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    stream.write_all(&len)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    Ok(())
+}
+
+/// Execute the `emterm mux send-keys` command (Windows stub).
+#[cfg(not(unix))]
+pub fn execute_send_keys(_target: Option<u32>) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux is not supported on this platform");
     std::process::exit(1);
 }
@@ -962,5 +1066,98 @@ mod tests {
         // Should get 1 action (either MuxMessage error printed to stderr, or decoded)
         // The APC body is "emterm-mux;\x1bX" which is invalid base64
         assert_eq!(actions.len(), 0); // decode error is printed, no action produced
+    }
+
+    // ---- send-keys target resolution tests ----
+
+    use crate::mux::ipc::protocol::WindowInfo;
+
+    fn make_test_sessions(windows: Vec<WindowInfo>, active_window_index: u32) -> Vec<SessionInfo> {
+        vec![SessionInfo {
+            id: 1,
+            name: "test".to_string(),
+            window_count: windows.len() as u32,
+            pane_count: windows.len() as u32,
+            active_window_index,
+            windows,
+        }]
+    }
+
+    #[test]
+    fn test_resolve_target_pane_active_window() {
+        let sessions = make_test_sessions(
+            vec![
+                WindowInfo {
+                    id: 1,
+                    name: "shell".to_string(),
+                    active_pane_id: 10,
+                },
+                WindowInfo {
+                    id: 2,
+                    name: "editor".to_string(),
+                    active_pane_id: 20,
+                },
+            ],
+            1, // active window index = 1
+        );
+        let pane_id = resolve_target_pane(&sessions, None).unwrap();
+        assert_eq!(pane_id, 20); // active window's pane
+    }
+
+    #[test]
+    fn test_resolve_target_pane_explicit_index() {
+        let sessions = make_test_sessions(
+            vec![
+                WindowInfo {
+                    id: 1,
+                    name: "shell".to_string(),
+                    active_pane_id: 10,
+                },
+                WindowInfo {
+                    id: 2,
+                    name: "editor".to_string(),
+                    active_pane_id: 20,
+                },
+            ],
+            0,
+        );
+        let pane_id = resolve_target_pane(&sessions, Some(0)).unwrap();
+        assert_eq!(pane_id, 10);
+        let pane_id = resolve_target_pane(&sessions, Some(1)).unwrap();
+        assert_eq!(pane_id, 20);
+    }
+
+    #[test]
+    fn test_resolve_target_pane_out_of_range() {
+        let sessions = make_test_sessions(
+            vec![WindowInfo {
+                id: 1,
+                name: "shell".to_string(),
+                active_pane_id: 10,
+            }],
+            0,
+        );
+        let err = resolve_target_pane(&sessions, Some(5)).unwrap_err();
+        assert!(err.to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn test_resolve_target_pane_no_sessions() {
+        let err = resolve_target_pane(&[], None).unwrap_err();
+        assert!(err.to_string().contains("No active session"));
+    }
+
+    #[test]
+    fn test_resolve_target_pane_no_active_pane() {
+        let sessions = make_test_sessions(
+            vec![WindowInfo {
+                id: 1,
+                name: "empty".to_string(),
+                active_pane_id: 0,
+            }],
+            0,
+        );
+        let err = resolve_target_pane(&sessions, None).unwrap_err();
+        assert!(err.to_string().contains("No active pane"));
     }
 }
