@@ -337,12 +337,29 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         }
     }
 
+    // Ensure all stdout data (including final Detached APC) is flushed
+    // before exiting, so the GUI receives it.
+    log::info!("Flushing stdout before exit");
+    {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+    }
+
     // Restore terminal settings
     if let Some(ref orig) = orig_termios {
         restore_stdin(orig);
     }
 
-    Ok(())
+    // Brief delay so the GUI's PTY reader can consume the flushed data
+    // before the PTY slave fd is closed by process exit.
+    log::info!("Waiting 50ms for PTY reader to consume flushed data");
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Exit immediately so the host shell returns to foreground promptly.
+    // Without this, tokio runtime shutdown waits for the blocked stdin
+    // reader task, delaying shell prompt redraw by seconds.
+    log::info!("Bridge exiting via process::exit");
+    std::process::exit(0);
 }
 
 /// Actions produced by the stdin APC parser.

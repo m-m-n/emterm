@@ -778,6 +778,7 @@ export class TerminalApp {
       getActiveMuxPaneId: () => self.getActiveMuxPaneId(),
       emitMuxStateChange: () => self.emitMuxStateChange(),
       exitMultiPaneMode: (remainingPaneId) => self.exitMultiPaneMode(remainingPaneId),
+      onMuxModeExited: () => self.registerEarlyApcContext(),
     };
   }
 
