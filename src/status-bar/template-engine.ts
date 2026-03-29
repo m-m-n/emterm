@@ -9,7 +9,7 @@
 import type { VariableProvider } from "./providers/types";
 
 /** Regex to match {variable_name} patterns, including {cmd:name}. */
-const VARIABLE_PATTERN = /\{([a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z0-9_]+)?)\}/g;
+const VARIABLE_PATTERN = /\{([a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z0-9_-]+)?)\}/g;
 
 /**
  * TemplateEngine resolves template strings with variable placeholders.

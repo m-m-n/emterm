@@ -38,6 +38,18 @@ describe("TemplateEngine", () => {
     expect(vars).toEqual(["cmd:hostname"]);
   });
 
+  test("should extract hyphenated cmd:name variables", () => {
+    const vars = TemplateEngine.extractVariables("{cmd:load-average}");
+    expect(vars).toEqual(["cmd:load-average"]);
+  });
+
+  test("should resolve hyphenated cmd:name variables", () => {
+    engine.registerProvider("cmd:load-average", mockProvider("0.42"));
+
+    const result = engine.resolve("Load: {cmd:load-average}");
+    expect(result).toBe("Load: 0.42");
+  });
+
   test("should resolve template with registered providers", () => {
     engine.registerProvider("time", mockProvider("12:30:00"));
     engine.registerProvider("cwd", mockProvider("myproject"));

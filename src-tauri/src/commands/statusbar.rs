@@ -1,5 +1,7 @@
 /// Status bar command execution.
 
+use crate::ssh::detect::expand_tilde;
+
 /// Allowed built-in programs for status bar providers.
 const ALLOWED_PROGRAMS: &[&str] = &["git"];
 
@@ -20,15 +22,18 @@ pub fn run_statusbar_shell_command(
         return Err("Program path is empty".into());
     }
 
-    // Validate program against allowlist
-    if !is_program_allowed(&app, program_trimmed) {
+    // Expand ~ to home directory
+    let program_expanded = expand_tilde(program_trimmed);
+
+    // Validate program against allowlist (use expanded path for consistent comparison)
+    if !is_program_allowed(&app, &program_expanded) {
         return Err(format!(
             "Program '{}' is not allowed. Only built-in programs and configured custom commands are permitted.",
             program_trimmed
         ));
     }
 
-    let mut cmd = std::process::Command::new(program_trimmed);
+    let mut cmd = std::process::Command::new(&program_expanded);
     cmd.args(&args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -57,9 +62,11 @@ fn is_program_allowed(app: &tauri::AppHandle, program: &str) -> bool {
     }
 
     // Check user-configured custom command executables from settings
+    // Compare with tilde-expanded paths so ~/foo matches /home/user/foo
     if let Ok(settings) = super::config::load_settings(app.clone()) {
         for cmd in settings.statusbar_custom_commands.values() {
-            if cmd.executable == program {
+            let exe_expanded = expand_tilde(&cmd.executable);
+            if exe_expanded == program {
                 return true;
             }
         }
