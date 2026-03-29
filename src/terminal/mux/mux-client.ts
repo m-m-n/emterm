@@ -409,7 +409,6 @@ export class MuxClient {
       muxLog.error(`sendControl(0x${msgType.toString(16)}): No PTY client`);
       throw new Error("No PTY client");
     }
-    muxLog.debug(`sendControl type=0x${msgType.toString(16)} pane=${paneId}`);
     const apc = encodeApc(msgType, paneId, payload);
     await this.ptyClient.writeDirect(new TextEncoder().encode(apc));
     // APC-based communication is fire-and-forget; responses come via handleIncomingApc

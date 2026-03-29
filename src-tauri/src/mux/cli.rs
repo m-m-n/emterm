@@ -62,7 +62,7 @@ fn init_bridge_logger() {
         use std::io::Write;
 
         env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Debug)
+            .filter_level(log::LevelFilter::Info)
             .target(env_logger::Target::Pipe(Box::new(log_file)))
             .format(move |buf, record| {
                 writeln!(
@@ -244,20 +244,13 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         let mut stdin = tokio::io::stdin();
         let mut parser = StdinApcParser::new();
         let mut buf = [0u8; 8192];
-        let mut total_bytes: u64 = 0;
-
-        log::info!("stdin reader started, waiting for data...");
         loop {
             let n = match stdin.read(&mut buf).await {
                 Ok(0) => {
-                    log::info!("stdin EOF after {} total bytes, stopping stdin→daemon", total_bytes);
+                    log::info!("stdin EOF, stopping stdin→daemon");
                     break;
                 }
-                Ok(n) => {
-                    total_bytes += n as u64;
-                    log::debug!("stdin read {} bytes (total={}): {:?}", n, total_bytes, &buf[..n.min(64)]);
-                    n
-                }
+                Ok(n) => n,
                 Err(e) => {
                     log::warn!("stdin read error: {}, stopping stdin→daemon", e);
                     break;
@@ -281,9 +274,8 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
                         }
                         let _ = sock_writer.flush().await;
                     }
-                    StdinAction::Passthrough(data) => {
-                        log::debug!("stdin→daemon: passthrough {} bytes (dropped)", data.len());
-                        let _ = data;
+                    StdinAction::Passthrough(_) => {
+                        // Non-APC data from stdin is dropped in bridge mode
                     }
                 }
             }
@@ -292,14 +284,12 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
 
     let daemon_to_stdout = async {
         let mut len_buf = [0u8; 4];
-        log::info!("daemon→stdout reader started, waiting for frames...");
         loop {
             if let Err(e) = sock_reader.read_exact(&mut len_buf).await {
                 log::info!("Daemon socket read error: {}, stopping daemon→stdout", e);
                 break;
             }
             let frame_len = u32::from_be_bytes(len_buf) as usize;
-            log::debug!("daemon→stdout: frame header received, len={}", frame_len);
             if frame_len > MAX_FRAME_LENGTH || frame_len == 0 {
                 log::warn!("Invalid frame length {}, stopping daemon→stdout", frame_len);
                 break;
@@ -311,7 +301,6 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
             }
 
             if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
-                log::debug!("daemon→stdout: forwarding {:?} pane={} ({} bytes payload)", msg.msg_type, msg.pane_id, msg.payload.len());
                 let apc = msg.to_apc();
                 use std::io::Write;
                 let stdout = std::io::stdout();
@@ -352,7 +341,6 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
 
     // Brief delay so the GUI's PTY reader can consume the flushed data
     // before the PTY slave fd is closed by process exit.
-    log::info!("Waiting 50ms for PTY reader to consume flushed data");
     std::thread::sleep(std::time::Duration::from_millis(50));
 
     // Exit immediately so the host shell returns to foreground promptly.
