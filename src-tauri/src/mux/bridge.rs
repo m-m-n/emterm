@@ -246,6 +246,7 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
 
 /// Actions produced by the stdin APC parser.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(super) enum StdinAction {
     /// A decoded mux APC message to forward to the daemon.
     MuxMessage(MuxMessage),
