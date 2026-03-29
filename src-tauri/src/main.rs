@@ -121,6 +121,18 @@ fn build_cli() -> Command {
                                 .help("Initial command to run")
                                 .value_name("COMMAND"),
                         ),
+                )
+                .subcommand(
+                    Command::new("send-keys")
+                        .about("Send stdin data as key input to a pane")
+                        .arg(
+                            Arg::new("target")
+                                .short('t')
+                                .long("target")
+                                .help("Target window index (0-based, default: active window)")
+                                .value_name("INDEX")
+                                .value_parser(clap::value_parser!(u32)),
+                        ),
                 ),
         )
         .subcommand(
@@ -221,6 +233,13 @@ fn main() {
                         let name = sub.get_one::<String>("name").map(|s| s.as_str());
                         let command = sub.get_one::<String>("command").map(|s| s.as_str());
                         if let Err(e) = app_lib::mux::cli::execute_new_window(name, command) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    Some(("send-keys", sub)) => {
+                        let target = sub.get_one::<u32>("target").copied();
+                        if let Err(e) = app_lib::mux::cli::execute_send_keys(target) {
                             eprintln!("Error: {}", e);
                             std::process::exit(1);
                         }

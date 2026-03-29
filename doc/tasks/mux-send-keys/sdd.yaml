@@ -1,0 +1,77 @@
+schema_version: 1
+feature: mux-send-keys
+scale: standard
+created: 2026-03-30
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 78589038be06953471c4f0d89411da26042e801b
+  - id: implement
+    status: completed
+    completed_at_commit: 78589038be06953471c4f0d89411da26042e801b
+  - id: check
+    status: completed
+    completed_at_commit: 78589038be06953471c4f0d89411da26042e801b
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 78589038be06953471c4f0d89411da26042e801b
+  - id: review
+    status: completed
+    completed_at_commit: 78589038be06953471c4f0d89411da26042e801b
+
+requirements:
+  FR1:
+    title: Add send-keys subcommand with -t/--target option
+    status: pending
+    tasks: []
+    tests: []
+  FR2:
+    title: Read all data from stdin as raw bytes
+    status: pending
+    tasks: []
+    tests: []
+  FR3:
+    title: CLI connects via cli_handshake, resolves target pane, sends PtyInput
+    status: pending
+    tasks: []
+    tests: []
+  FR4:
+    title: Without -t, send to active window of active session
+    status: pending
+    tasks: []
+    tests: []
+  FR5:
+    title: With -t, send to window at given 0-based index
+    status: pending
+    tasks: []
+    tests: []
+  FR6:
+    title: Empty stdin exits with code 0 without sending
+    status: pending
+    tasks: []
+    tests: []
+  NFR1:
+    title: Command completes within 500ms
+    status: pending
+    tasks: []
+    tests: []
+  NFR2:
+    title: Linux and Windows platform support
+    status: pending
+    tasks: []
+    tests: []

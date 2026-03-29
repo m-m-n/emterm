@@ -1,5 +1,4 @@
 /// Status bar command execution.
-
 use crate::ssh::detect::expand_tilde;
 
 /// Allowed built-in programs for status bar providers.
