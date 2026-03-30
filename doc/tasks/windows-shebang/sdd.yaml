@@ -1,0 +1,67 @@
+schema_version: 1
+feature: windows-shebang
+scale: light
+created: 2026-03-30
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 1a2e7e5a3536d33960af3298f79d657eeb251b27
+  - id: implement
+    status: completed
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 1a2e7e5a3536d33960af3298f79d657eeb251b27
+
+requirements:
+  FR1:
+    title: PE Detection
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Shebang Parsing
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Interpreter Invocation
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Error on Missing Shebang
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Auto-trust Interpreter
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: CREATE_NO_WINDOW Flag
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Platform Scope (Windows only)
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Minimal File Read Performance
+    status: ok
+    tasks: []
+    tests: []
