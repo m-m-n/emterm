@@ -470,14 +470,20 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   };
 
   // Register binary data handler -- just buffer and schedule rAF
-  let muxDiagCount = 0;
   ptyClient.onData((data: Uint8Array) => {
-    // MUX-DIAG: log first 10 chunks unconditionally to confirm data flow
-    if (muxDiagCount < 10) {
-      const hexBytes = Array.from(data.subarray(0, Math.min(40, data.length)))
-        .map(b => b.toString(16).padStart(2, "0")).join(" ");
-      console.warn(`[MUX-DIAG] onData #${muxDiagCount} len=${data.length} hex=[${hexBytes}]`);
-      muxDiagCount++;
+    // MUX-DIAG: scan for "emterm-mux" string in raw data (no counter limit)
+    const needle = [0x65, 0x6d, 0x74, 0x65, 0x72, 0x6d, 0x2d, 0x6d, 0x75, 0x78]; // "emterm-mux"
+    for (let i = 0; i <= data.length - needle.length; i++) {
+      let match = true;
+      for (let j = 0; j < needle.length; j++) {
+        if (data[i + j] !== needle[j]) { match = false; break; }
+      }
+      if (match) {
+        const hexBytes = Array.from(data.subarray(Math.max(0, i - 10), Math.min(i + 40, data.length)))
+          .map(b => b.toString(16).padStart(2, "0")).join(" ");
+        console.warn(`[MUX-DIAG] "emterm-mux" found at offset=${i} context=[${hexBytes}] totalLen=${data.length}`);
+        break;
+      }
     }
     // MUX-DIAG: check if raw PTY data contains APC/OSC/DCS sequences
     for (let i = 0; i < data.length - 1; i++) {
