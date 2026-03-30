@@ -137,6 +137,9 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         use std::io::Write;
         let stdout = std::io::stdout();
         let mut stdout = stdout.lock();
+        // DEBUG: write plaintext to confirm stdout delivery through ConPTY
+        stdout.write_all(b"[BRIDGE-TEST] stdout works\r\n")?;
+        stdout.flush()?;
         stdout.write_all(welcome_osc.as_bytes())?;
         stdout.write_all(welcome_apc.as_bytes())?;
         stdout.flush()?;
