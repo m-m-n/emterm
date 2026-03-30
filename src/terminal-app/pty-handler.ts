@@ -471,37 +471,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
 
   // Register binary data handler -- just buffer and schedule rAF
   ptyClient.onData((data: Uint8Array) => {
-    // MUX-DIAG: scan for "emterm-mux" string in raw data (no counter limit)
-    const needle = [0x65, 0x6d, 0x74, 0x65, 0x72, 0x6d, 0x2d, 0x6d, 0x75, 0x78]; // "emterm-mux"
-    for (let i = 0; i <= data.length - needle.length; i++) {
-      let match = true;
-      for (let j = 0; j < needle.length; j++) {
-        if (data[i + j] !== needle[j]) { match = false; break; }
-      }
-      if (match) {
-        const hexBytes = Array.from(data.subarray(Math.max(0, i - 10), Math.min(i + 40, data.length)))
-          .map(b => b.toString(16).padStart(2, "0")).join(" ");
-        console.warn(`[MUX-DIAG] "emterm-mux" found at offset=${i} context=[${hexBytes}] totalLen=${data.length}`);
-        break;
-      }
-    }
-    // MUX-DIAG: check if raw PTY data contains APC/OSC/DCS sequences
-    for (let i = 0; i < data.length - 1; i++) {
-      if (data[i] === 0x1b) {
-        const next = data[i + 1]!;
-        // ESC_ = APC, ESC] = OSC, ESCP = DCS
-        if (next === 0x5f || next === 0x5d || next === 0x50) {
-          const tag = next === 0x5f ? "APC(ESC_)" : next === 0x5d ? "OSC(ESC])" : "DCS(ESCP)";
-          const snippet = data.subarray(i + 2, Math.min(i + 32, data.length));
-          const snippetStr = String.fromCharCode(...snippet);
-          console.warn(`[MUX-DIAG] ${tag} at offset=${i} snippet="${snippetStr}" totalLen=${data.length}`);
-        }
-      }
-    }
     // During mux mode, skip WASM processing but still extract mux APC messages.
     // Bridge sends PaneCreated/PtyOutput as APC sequences over the PTY.
     if (handle.suppressOriginalPty) {
-      console.warn(`[MUX-DIAG] suppressOriginalPty: extracting APCs from ${data.length} bytes`);
       extractAndHandleMuxMessages(data);
       return;
     }
