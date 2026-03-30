@@ -137,21 +137,6 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         use std::io::Write;
         let stdout = std::io::stdout();
         let mut stdout = stdout.lock();
-        // DEBUG: test multiple output paths
-        stdout.write_all(b"[BRIDGE-TEST] stdout\r\n")?;
-        stdout.flush()?;
-        // Also try stderr
-        {
-            let stderr = std::io::stderr();
-            let mut stderr = stderr.lock();
-            let _ = stderr.write_all(b"[BRIDGE-TEST] stderr\r\n");
-            let _ = stderr.flush();
-        }
-        // Also try /dev/tty directly (bypasses all fd redirection)
-        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
-            let _ = tty.write_all(b"[BRIDGE-TEST] /dev/tty\r\n");
-            let _ = tty.flush();
-        }
         stdout.write_all(welcome_osc.as_bytes())?;
         stdout.write_all(welcome_apc.as_bytes())?;
         stdout.flush()?;
@@ -162,7 +147,9 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
 
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
-    let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
+    // Default to OSC transport: works on both Linux and Windows.
+    // If the GUI sends APC (Linux), we switch to APC for efficiency.
+    let transport = Arc::new(AtomicU8::new(Transport::Osc as u8));
     let transport_for_stdin = Arc::clone(&transport);
     let transport_for_stdout = Arc::clone(&transport);
 
