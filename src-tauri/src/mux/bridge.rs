@@ -229,6 +229,12 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
             }
 
             if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
+                log::info!(
+                    "daemon→stdout: {:?} pane={} ({} bytes)",
+                    msg.msg_type,
+                    msg.pane_id,
+                    msg.payload.len()
+                );
                 let t = transport_for_stdout.load(Ordering::Relaxed);
                 use std::io::Write;
                 let stdout = std::io::stdout();
