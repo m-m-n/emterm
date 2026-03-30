@@ -48,6 +48,15 @@ impl TerminalCore {
     }
 
     pub(crate) fn handle_osc_internal(&mut self, param: u16, data: &str) {
+        // OSC 9999: emterm mux message — route to APC callback for mux handling.
+        // This allows mux to work through Windows ConPTY which strips APC but passes OSC.
+        if param == 9999 {
+            if data.starts_with("emterm-mux;") {
+                self.fire_apc_callback(data.as_bytes());
+            }
+            return;
+        }
+
         // Special handling for OSC 8: process hyperlink inline
         if param == 8 {
             if let Some(sep) = data.find(';') {

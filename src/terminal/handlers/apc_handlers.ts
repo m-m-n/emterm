@@ -66,6 +66,7 @@ export function handleMuxApc(data: Uint8Array): boolean {
     // Calling core synchronously here causes a recursive borrow deadlock.
     muxLog.info("Welcome received without client, deferring auto-enter mux mode");
     const cb = muxApcContext.onWelcomeWithoutClient;
+    muxApcContext.onWelcomeWithoutClient = undefined; // prevent duplicate Welcome (Linux delivers both APC and OSC)
     const { msgType: mt, paneId: pid, data: d } = parsed;
     queueMicrotask(() => cb(mt, pid, d));
   } else {
