@@ -443,13 +443,17 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       console.warn(`[MUX-DIAG] onData #${muxDiagCount} len=${data.length} hex=[${hexBytes}]`);
       muxDiagCount++;
     }
-    // MUX-DIAG: check if raw PTY data contains ESC _ (APC start)
+    // MUX-DIAG: check if raw PTY data contains APC/OSC/DCS sequences
     for (let i = 0; i < data.length - 1; i++) {
-      if (data[i] === 0x1b && data[i + 1] === 0x5f) {
-        const snippet = data.subarray(i + 2, Math.min(i + 22, data.length));
-        const snippetStr = String.fromCharCode(...snippet);
-        console.warn(`[MUX-DIAG] raw PTY data contains ESC_ at offset=${i} snippet="${snippetStr}" totalLen=${data.length}`);
-        break;
+      if (data[i] === 0x1b) {
+        const next = data[i + 1]!;
+        // ESC_ = APC, ESC] = OSC, ESCP = DCS
+        if (next === 0x5f || next === 0x5d || next === 0x50) {
+          const tag = next === 0x5f ? "APC(ESC_)" : next === 0x5d ? "OSC(ESC])" : "DCS(ESCP)";
+          const snippet = data.subarray(i + 2, Math.min(i + 32, data.length));
+          const snippetStr = String.fromCharCode(...snippet);
+          console.warn(`[MUX-DIAG] ${tag} at offset=${i} snippet="${snippetStr}" totalLen=${data.length}`);
+        }
       }
     }
     // During mux mode, skip WASM processing but still extract mux APC messages.
