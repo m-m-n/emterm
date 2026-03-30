@@ -434,7 +434,15 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   };
 
   // Register binary data handler -- just buffer and schedule rAF
+  let muxDiagCount = 0;
   ptyClient.onData((data: Uint8Array) => {
+    // MUX-DIAG: log first 10 chunks unconditionally to confirm data flow
+    if (muxDiagCount < 10) {
+      const hexBytes = Array.from(data.subarray(0, Math.min(40, data.length)))
+        .map(b => b.toString(16).padStart(2, "0")).join(" ");
+      console.warn(`[MUX-DIAG] onData #${muxDiagCount} len=${data.length} hex=[${hexBytes}]`);
+      muxDiagCount++;
+    }
     // MUX-DIAG: check if raw PTY data contains ESC _ (APC start)
     for (let i = 0; i < data.length - 1; i++) {
       if (data[i] === 0x1b && data[i + 1] === 0x5f) {
