@@ -41,14 +41,18 @@ export function handleMuxApc(data: Uint8Array): boolean {
     if (data[i] !== prefixBytes.charCodeAt(i)) return false;
   }
 
+  console.warn(`[MUX-DIAG] handleMuxApc: mux prefix matched, len=${data.length}`);
+
   // It's a mux APC message
   const payloadStr = new TextDecoder().decode(data);
   const parsed = decodeApcPayload(payloadStr);
   if (!parsed) {
+    console.warn("[MUX-DIAG] handleMuxApc: decodeApcPayload FAILED");
     muxLog.warn("Failed to decode mux APC payload");
     return true; // consumed but invalid
   }
 
+  console.warn(`[MUX-DIAG] handleMuxApc: type=0x${parsed.msgType.toString(16)} pane=${parsed.paneId} (${data.length} bytes)`);
   muxLog.info(`APC received: type=0x${parsed.msgType.toString(16)} pane=${parsed.paneId} (${data.length} bytes)`);
 
   const muxClient = muxApcContext?.getMuxClient();

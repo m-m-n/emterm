@@ -435,9 +435,19 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
 
   // Register binary data handler -- just buffer and schedule rAF
   ptyClient.onData((data: Uint8Array) => {
+    // MUX-DIAG: check if raw PTY data contains ESC _ (APC start)
+    for (let i = 0; i < data.length - 1; i++) {
+      if (data[i] === 0x1b && data[i + 1] === 0x5f) {
+        const snippet = data.subarray(i + 2, Math.min(i + 22, data.length));
+        const snippetStr = String.fromCharCode(...snippet);
+        console.warn(`[MUX-DIAG] raw PTY data contains ESC_ at offset=${i} snippet="${snippetStr}" totalLen=${data.length}`);
+        break;
+      }
+    }
     // During mux mode, skip WASM processing but still extract mux APC messages.
     // Bridge sends PaneCreated/PtyOutput as APC sequences over the PTY.
     if (handle.suppressOriginalPty) {
+      console.warn(`[MUX-DIAG] suppressOriginalPty: extracting APCs from ${data.length} bytes`);
       extractAndHandleMuxApcs(data);
       return;
     }
