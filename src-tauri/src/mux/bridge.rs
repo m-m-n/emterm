@@ -127,16 +127,18 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     }
     log::info!("Handshake complete, received Welcome");
 
-    // Write Welcome as both APC and OSC to stdout so GUI receives it
+    // Write Welcome as both OSC and APC to stdout so GUI receives it
     // regardless of which transport the terminal supports.
-    let welcome_apc = welcome_msg.to_apc();
+    // OSC is sent FIRST because Windows ConPTY may corrupt stream state
+    // when encountering APC (ESC _), potentially consuming subsequent data.
     let welcome_osc = welcome_msg.to_osc();
+    let welcome_apc = welcome_msg.to_apc();
     {
         use std::io::Write;
         let stdout = std::io::stdout();
         let mut stdout = stdout.lock();
-        stdout.write_all(welcome_apc.as_bytes())?;
         stdout.write_all(welcome_osc.as_bytes())?;
+        stdout.write_all(welcome_apc.as_bytes())?;
         stdout.flush()?;
     }
 
