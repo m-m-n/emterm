@@ -86,6 +86,9 @@ export class ImageHandler {
    * since they don't interact with the WASM core.
    */
   queueApc(data: Uint8Array): void {
+    // Debug: log all incoming APC for Windows ConPTY diagnosis
+    const prefix = data.length > 0 ? String.fromCharCode(...data.subarray(0, Math.min(20, data.length))) : "(empty)";
+    console.warn(`[MUX-DIAG] queueApc called: len=${data.length} prefix="${prefix}"`);
     // Intercept mux APC messages before queuing
     if (handleMuxApc(data)) return;
     this.pendingApcQueue.push(new Uint8Array(data));
