@@ -14,34 +14,70 @@ import { reinitWasm } from "../terminal/wasm/loader";
 import { handleMuxApc } from "../terminal/handlers/apc_handlers";
 
 /**
- * Extract APC sequences from raw PTY data and pass mux APCs to handleMuxApc.
+ * Extract APC and OSC 9999 sequences from raw PTY data and pass mux messages to handleMuxApc.
  * Used during suppressOriginalPty mode where WASM processing is skipped.
  * APC format: ESC _ <body> ESC \
+ * OSC format: ESC ] 9999 ; <body> ESC \ (or BEL)
  */
-function extractAndHandleMuxApcs(data: Uint8Array): void {
+function extractAndHandleMuxMessages(data: Uint8Array): void {
   const ESC = 0x1b;
   const UNDERSCORE = 0x5f; // '_'
   const BACKSLASH = 0x5c; // '\'
+  const BRACKET = 0x5d;   // ']'
+  const BEL = 0x07;
   let i = 0;
   while (i < data.length - 1) {
-    // Look for APC start: ESC _
-    if (data[i] === ESC && data[i + 1] === UNDERSCORE) {
-      const bodyStart = i + 2;
-      // Find APC end: ESC \
-      let j = bodyStart;
-      while (j < data.length - 1) {
-        if (data[j] === ESC && data[j + 1] === BACKSLASH) {
-          // Found complete APC: body is data[bodyStart..j]
-          const body = data.subarray(bodyStart, j);
-          handleMuxApc(body);
-          i = j + 2;
-          break;
+    if (data[i] === ESC) {
+      if (data[i + 1] === UNDERSCORE) {
+        // APC: ESC _ <body> ESC \
+        const bodyStart = i + 2;
+        let j = bodyStart;
+        while (j < data.length - 1) {
+          if (data[j] === ESC && data[j + 1] === BACKSLASH) {
+            const body = data.subarray(bodyStart, j);
+            handleMuxApc(body);
+            i = j + 2;
+            break;
+          }
+          j++;
         }
-        j++;
-      }
-      if (j >= data.length - 1) {
-        // Incomplete APC at end of buffer — skip for now
-        break;
+        if (j >= data.length - 1) break;
+      } else if (data[i + 1] === BRACKET) {
+        // OSC: ESC ] 9999 ; <body> ESC \ (or BEL)
+        // Parse the parameter number
+        let paramEnd = i + 2;
+        let param = 0;
+        while (paramEnd < data.length && data[paramEnd]! >= 0x30 && data[paramEnd]! <= 0x39) {
+          param = param * 10 + (data[paramEnd]! - 0x30);
+          paramEnd++;
+        }
+        // Check for semicolon after param
+        if (param === 9999 && paramEnd < data.length && data[paramEnd] === 0x3b) {
+          const bodyStart = paramEnd + 1;
+          let j = bodyStart;
+          while (j < data.length) {
+            // ESC \ terminator
+            if (j < data.length - 1 && data[j] === ESC && data[j + 1] === BACKSLASH) {
+              const body = data.subarray(bodyStart, j);
+              handleMuxApc(body);
+              i = j + 2;
+              break;
+            }
+            // BEL terminator
+            if (data[j] === BEL) {
+              const body = data.subarray(bodyStart, j);
+              handleMuxApc(body);
+              i = j + 1;
+              break;
+            }
+            j++;
+          }
+          if (j >= data.length) break;
+        } else {
+          i++;
+        }
+      } else {
+        i++;
       }
     } else {
       i++;
@@ -460,7 +496,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     // Bridge sends PaneCreated/PtyOutput as APC sequences over the PTY.
     if (handle.suppressOriginalPty) {
       console.warn(`[MUX-DIAG] suppressOriginalPty: extracting APCs from ${data.length} bytes`);
-      extractAndHandleMuxApcs(data);
+      extractAndHandleMuxMessages(data);
       return;
     }
     pendingChunks.push(data);

@@ -11,6 +11,9 @@ import { muxLog } from "./mux-logger";
 /** APC prefix for emterm mux messages (must match Rust APC_PREFIX). */
 export const MUX_APC_PREFIX = "emterm-mux;";
 
+/** OSC parameter for emterm mux messages (fallback for Windows ConPTY). */
+const MUX_OSC_PARAM = 9999;
+
 /** IPC message type constants (must match protocol.rs MessageType). */
 export const MuxMessageType = {
   PtyOutput: 0x01,
@@ -65,6 +68,34 @@ function encodeApc(msgType: number, paneId: number, payload: Uint8Array = new Ui
 
   const base64 = uint8ArrayToBase64(frameBody);
   return `\x1b_${MUX_APC_PREFIX}${base64}\x1b\\`;
+}
+
+/**
+ * Encode a MuxMessage frame body as an OSC 9999 escape sequence string.
+ * Used as fallback transport when ConPTY strips APC sequences (Windows).
+ */
+function encodeOsc(msgType: number, paneId: number, payload: Uint8Array = new Uint8Array()): string {
+  const frameBody = new Uint8Array(5 + payload.length);
+  frameBody[0] = msgType;
+  frameBody[1] = paneId & 0xff;
+  frameBody[2] = (paneId >> 8) & 0xff;
+  frameBody[3] = (paneId >> 16) & 0xff;
+  frameBody[4] = (paneId >> 24) & 0xff;
+  frameBody.set(payload, 5);
+
+  const base64 = uint8ArrayToBase64(frameBody);
+  return `\x1b]${MUX_OSC_PARAM};${MUX_APC_PREFIX}${base64}\x1b\\`;
+}
+
+/** Detect if running on Windows (ConPTY requires OSC transport). */
+const isWindows = typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent);
+
+/**
+ * Encode a mux message using the appropriate transport.
+ * Windows uses OSC 9999 (ConPTY strips APC), Linux uses APC.
+ */
+function encodeMuxMessage(msgType: number, paneId: number, payload: Uint8Array = new Uint8Array()): string {
+  return isWindows ? encodeOsc(msgType, paneId, payload) : encodeApc(msgType, paneId, payload);
 }
 
 /**
@@ -266,6 +297,7 @@ export class MuxClient {
    *  Called when the bridge's initial Welcome APC is received.
    */
   handleWelcome(sessions: MuxSessionInfo[]): void {
+    if (this._state === "connected") return; // ignore duplicate Welcome
     this.setState("connected");
     // Sessions are returned to the caller via the Promise in waitForWelcome
     this._pendingWelcomeResolve?.(sessions);
@@ -394,8 +426,8 @@ export class MuxClient {
       muxLog.error("sendInput: No PTY client");
       throw new Error("No PTY client");
     }
-    const apc = encodeApc(MuxMessageType.PtyInput, paneId, data);
-    await this.ptyClient.writeDirect(new TextEncoder().encode(apc));
+    const msg = encodeMuxMessage(MuxMessageType.PtyInput, paneId, data);
+    await this.ptyClient.writeDirect(new TextEncoder().encode(msg));
   }
 
   /** Send a control message to the daemon via APC.
@@ -409,8 +441,8 @@ export class MuxClient {
       muxLog.error(`sendControl(0x${msgType.toString(16)}): No PTY client`);
       throw new Error("No PTY client");
     }
-    const apc = encodeApc(msgType, paneId, payload);
-    await this.ptyClient.writeDirect(new TextEncoder().encode(apc));
+    const msg = encodeMuxMessage(msgType, paneId, payload);
+    await this.ptyClient.writeDirect(new TextEncoder().encode(msg));
     // APC-based communication is fire-and-forget; responses come via handleIncomingApc
     return null;
   }

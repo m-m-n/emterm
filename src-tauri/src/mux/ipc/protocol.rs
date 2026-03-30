@@ -20,6 +20,12 @@ const APC_START: &str = "\x1b_";
 /// APC string terminator: ESC \
 const APC_ST: &str = "\x1b\\";
 
+/// OSC parameter for emterm mux messages.
+pub const MUX_OSC_PARAM: u16 = 9999;
+
+/// OSC introducer: ESC ]
+const OSC_START: &str = "\x1b]";
+
 /// Maximum IPC frame size (16MB) to prevent OOM.
 pub const MAX_FRAME_LENGTH: usize = 16 * 1024 * 1024;
 
@@ -259,6 +265,19 @@ impl MuxMessage {
         let body = self.to_frame_body();
         let encoded = BASE64.encode(&body);
         format!("{}{}{}{}", APC_START, APC_PREFIX, encoded, APC_ST)
+    }
+
+    /// Encode this message as an OSC 9999 escape sequence string.
+    ///
+    /// Format: `ESC ] 9999 ; emterm-mux;<base64(frame_body)> ESC \`
+    /// Used as fallback transport when ConPTY strips APC sequences.
+    pub fn to_osc(&self) -> String {
+        let body = self.to_frame_body();
+        let encoded = BASE64.encode(&body);
+        format!(
+            "{}{};{}{}{}",
+            OSC_START, MUX_OSC_PARAM, APC_PREFIX, encoded, APC_ST
+        )
     }
 
     /// Decode an APC payload string into a MuxMessage.
@@ -557,6 +576,52 @@ mod tests {
         // emterm-mux; with empty base64 => empty bytes => invalid frame body
         let err = MuxMessage::from_apc("emterm-mux;").unwrap_err();
         assert_eq!(err, ApcDecodeError::InvalidFrameBody);
+    }
+
+    // ---- OSC encode/decode tests ----
+
+    #[test]
+    fn test_osc_round_trip_pty_output() {
+        let msg = MuxMessage::pty_output(42, vec![1, 2, 3, 4]);
+        let osc = msg.to_osc();
+        // Verify OSC format
+        assert!(osc.starts_with("\x1b]9999;emterm-mux;"));
+        assert!(osc.ends_with("\x1b\\"));
+        // Extract the APC-compatible payload (after "9999;")
+        // OSC: ESC ] 9999 ; <body> ESC \
+        // Strip ESC ] (2 bytes) at start and ESC \ (2 bytes) at end
+        let inner = &osc[2..osc.len() - 2]; // "9999;emterm-mux;<base64>"
+        let apc_payload = inner.strip_prefix("9999;").unwrap();
+        let decoded = MuxMessage::from_apc(apc_payload).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::PtyOutput);
+        assert_eq!(decoded.pane_id, 42);
+        assert_eq!(decoded.payload, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_osc_round_trip_control_hello() {
+        let hello = HelloMsg {
+            client_type: ClientType::Gui,
+            protocol_version: PROTOCOL_VERSION,
+        };
+        let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
+        let osc = msg.to_osc();
+        let inner = &osc[2..osc.len() - 2];
+        let apc_payload = inner.strip_prefix("9999;").unwrap();
+        let decoded = MuxMessage::from_apc(apc_payload).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::Hello);
+        let hello_decoded: HelloMsg = decoded.decode_payload().unwrap();
+        assert_eq!(hello_decoded.client_type, ClientType::Gui);
+    }
+
+    #[test]
+    fn test_osc_round_trip_empty_payload() {
+        let msg = MuxMessage::pty_output(0, vec![]);
+        let osc = msg.to_osc();
+        let inner = &osc[2..osc.len() - 2];
+        let apc_payload = inner.strip_prefix("9999;").unwrap();
+        let decoded = MuxMessage::from_apc(apc_payload).unwrap();
+        assert!(decoded.payload.is_empty());
     }
 
     #[test]
