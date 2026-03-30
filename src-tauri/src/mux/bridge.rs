@@ -147,9 +147,9 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
 
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
-    // Default to OSC transport: works on both Linux and Windows.
-    // If the GUI sends APC (Linux), we switch to APC for efficiency.
-    let transport = Arc::new(AtomicU8::new(Transport::Osc as u8));
+    // Start with undetected transport. While undetected, send both OSC and APC.
+    // Once the GUI sends its first message, lock to the detected transport.
+    let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
     let transport_for_stdin = Arc::clone(&transport);
     let transport_for_stdout = Arc::clone(&transport);
 
@@ -230,17 +230,29 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
 
             if let Some(msg) = MuxMessage::from_frame_body(&frame_buf) {
                 let t = transport_for_stdout.load(Ordering::Relaxed);
-                let encoded = if t == Transport::Osc as u8 {
-                    msg.to_osc()
-                } else {
-                    msg.to_apc()
-                };
                 use std::io::Write;
                 let stdout = std::io::stdout();
                 let mut stdout = stdout.lock();
-                if stdout.write_all(encoded.as_bytes()).is_err() {
-                    log::info!("stdout write error, stopping daemon→stdout");
-                    break;
+                if t == TRANSPORT_UNDETECTED {
+                    // Transport not yet detected: send both so at least one arrives.
+                    let osc = msg.to_osc();
+                    let apc = msg.to_apc();
+                    if stdout.write_all(osc.as_bytes()).is_err()
+                        || stdout.write_all(apc.as_bytes()).is_err()
+                    {
+                        log::info!("stdout write error, stopping daemon→stdout");
+                        break;
+                    }
+                } else {
+                    let encoded = if t == Transport::Osc as u8 {
+                        msg.to_osc()
+                    } else {
+                        msg.to_apc()
+                    };
+                    if stdout.write_all(encoded.as_bytes()).is_err() {
+                        log::info!("stdout write error, stopping daemon→stdout");
+                        break;
+                    }
                 }
                 let _ = stdout.flush();
             } else {
