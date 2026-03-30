@@ -13,6 +13,7 @@ import type { PtyClient } from "../../pty/client";
 import type { TerminalState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import { handleMuxApc } from "../../terminal/handlers/apc_handlers";
+import type { MuxApcContext } from "../../terminal/handlers/apc_handlers";
 
 /**
  * Context interface for ImageHandler dependencies.
@@ -33,6 +34,7 @@ export interface ImageHandlerContext {
  */
 export class ImageHandler {
   private context: ImageHandlerContext;
+  private muxApcContext: MuxApcContext | null = null;
   private pendingImages: Map<number, DecodedImage> = new Map();
   private imageEventUnlisten: UnlistenFn | null = null;
   private imageViewer: ImageViewer | null = null;
@@ -48,6 +50,16 @@ export class ImageHandler {
 
   constructor(context: ImageHandlerContext) {
     this.context = context;
+  }
+
+  /** Set the per-tab mux APC context for routing incoming mux messages. */
+  setMuxApcContext(ctx: MuxApcContext | null): void {
+    this.muxApcContext = ctx;
+  }
+
+  /** Get the current mux APC context. */
+  getMuxApcContext(): MuxApcContext | null {
+    return this.muxApcContext;
   }
 
   /**
@@ -87,7 +99,7 @@ export class ImageHandler {
    */
   queueApc(data: Uint8Array): void {
     // Intercept mux APC messages before queuing
-    if (handleMuxApc(data)) return;
+    if (handleMuxApc(data, this.muxApcContext)) return;
     this.pendingApcQueue.push(new Uint8Array(data));
   }
 
@@ -425,6 +437,7 @@ export class ImageHandler {
    * Clean up all image-related resources.
    */
   dispose(): void {
+    this.muxApcContext = null;
     if (this.imageEventUnlisten) {
       this.imageEventUnlisten();
       this.imageEventUnlisten = null;

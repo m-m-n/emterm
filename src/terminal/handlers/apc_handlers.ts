@@ -17,21 +17,15 @@ export interface MuxApcContext {
   onWelcomeWithoutClient?: (msgType: number, paneId: number, data: Uint8Array) => void;
 }
 
-/** Module-level mux APC context, set by TerminalApp. */
-let muxApcContext: MuxApcContext | null = null;
-
-/** Register the mux APC context for handling incoming mux messages. */
-export function setMuxApcContext(ctx: MuxApcContext | null): void {
-  muxApcContext = ctx;
-}
-
 /**
  * Check if raw APC data is a mux message and handle it.
  * Returns true if the message was handled (mux APC), false otherwise.
  *
  * This is called from the APC callback chain with the raw APC body bytes.
+ * The caller provides the per-tab MuxApcContext so that each tab's callbacks
+ * are correctly dispatched (no global state).
  */
-export function handleMuxApc(data: Uint8Array): boolean {
+export function handleMuxApc(data: Uint8Array, ctx: MuxApcContext | null): boolean {
   // Quick prefix check: "emterm-mux;" is ASCII
   if (data.length < MUX_APC_PREFIX.length) return false;
 
@@ -51,18 +45,18 @@ export function handleMuxApc(data: Uint8Array): boolean {
 
   muxLog.info(`APC received: type=0x${parsed.msgType.toString(16)} pane=${parsed.paneId} (${data.length} bytes)`);
 
-  const muxClient = muxApcContext?.getMuxClient();
+  const muxClient = ctx?.getMuxClient();
   if (muxClient) {
     muxClient.handleIncomingApc(parsed.msgType, parsed.paneId, parsed.data);
-  } else if (parsed.msgType === MuxMessageType.Welcome && muxApcContext?.onWelcomeWithoutClient) {
+  } else if (parsed.msgType === MuxMessageType.Welcome && ctx?.onWelcomeWithoutClient) {
     // Welcome arrived before MuxClient exists (user typed `emterm mux` manually).
     // Trigger auto-enter mux mode with the bridge already running.
     // MUST defer: this runs inside process_pty_data's APC callback,
     // and enterMuxMode accesses WASM core (cols/rows/swapGrid).
     // Calling core synchronously here causes a recursive borrow deadlock.
     muxLog.info("Welcome received without client, deferring auto-enter mux mode");
-    const cb = muxApcContext.onWelcomeWithoutClient;
-    muxApcContext.onWelcomeWithoutClient = undefined; // prevent duplicate Welcome (Linux delivers both APC and OSC)
+    const cb = ctx.onWelcomeWithoutClient;
+    ctx.onWelcomeWithoutClient = undefined; // prevent duplicate Welcome (Linux delivers both APC and OSC)
     const { msgType: mt, paneId: pid, data: d } = parsed;
     queueMicrotask(() => cb(mt, pid, d));
   } else {

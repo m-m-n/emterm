@@ -18,7 +18,7 @@ import { WasmGrid } from "../../terminal/wasm/terminal-core";
 import type { MuxPaneGridState } from "../../terminal/state";
 import { SettingsService } from "../../settings/settings-service";
 import type { CopyModeManager, ViKeybinds, EmacsKeybinds } from "../../terminal/mux-copy-mode";
-import { setMuxApcContext } from "../../terminal/handlers/apc_handlers";
+import type { MuxApcContext } from "../../terminal/handlers/apc_handlers";
 
 /**
  * Subset of TerminalApp state needed by mux session management functions.
@@ -63,6 +63,9 @@ export interface MuxSessionContext {
   setCopyModeManager: (manager: CopyModeManager | null) => void;
   getCopyModeKeybinds: () => ViKeybinds | EmacsKeybinds | null;
   setCopyModeKeybinds: (keybinds: ViKeybinds | EmacsKeybinds | null) => void;
+
+  // Set the per-tab mux APC context on the ImageHandler
+  setMuxApcContext: (ctx: MuxApcContext | null) => void;
 
   // Called after exitMuxMode to restore early APC context for next manual bridge launch
   onMuxModeExited?: () => void;
@@ -118,7 +121,7 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
   ctx.setMuxClient(client);
 
   // Register mux APC context so incoming APCs are routed to MuxClient
-  setMuxApcContext({
+  ctx.setMuxApcContext({
     getMuxClient: () => ctx.getMuxClient(),
   });
 
@@ -196,7 +199,7 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
       if (ptyHandlerHandle) {
         ptyHandlerHandle.suppressOriginalPty = false;
       }
-      setMuxApcContext(null);
+      ctx.setMuxApcContext(null);
       ctx.setInMuxMode(false);
       ctx.setMuxClient(null);
       return;
@@ -218,7 +221,7 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
       if (ptyHandlerHandle) {
         ptyHandlerHandle.suppressOriginalPty = false;
       }
-      setMuxApcContext(null);
+      ctx.setMuxApcContext(null);
       ctx.setInMuxMode(false);
       ctx.setMuxClient(null);
       return;
@@ -302,7 +305,7 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   muxLog.info("Exiting mux mode");
 
   // Clear mux APC context
-  setMuxApcContext(null);
+  ctx.setMuxApcContext(null);
 
   // Exit copy mode if active
   const copyModeManager = ctx.getCopyModeManager();
