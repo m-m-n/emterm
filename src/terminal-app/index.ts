@@ -89,7 +89,7 @@ import { setupPtyHandlers, type PtyHandlerHandle } from "./pty-handler";
 import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
-import { setMuxApcContext } from "../terminal/handlers/apc_handlers";
+
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -310,9 +310,8 @@ export class TerminalApp {
       this.exitMuxMode();
     };
 
-    // Register early APC context so Welcome from a manually-launched bridge
-    // (`emterm mux` typed by user) triggers auto-enter mux mode.
-    this.registerEarlyApcContext();
+    // NOTE: registerEarlyApcContext() is called after imageHandler.init() below,
+    // because it needs imageHandler to store the per-tab mux context.
 
     // Listen for settings changes to update mux keybinds in real-time
     window.addEventListener("emterm-settings-changed", ((e: CustomEvent) => {
@@ -452,6 +451,11 @@ export class TerminalApp {
     });
     await this.imageHandler.init();
 
+    // Register early APC context so Welcome from a manually-launched bridge
+    // (`emterm mux` typed by user) triggers auto-enter mux mode.
+    // Must be after imageHandler creation since context is stored there.
+    this.registerEarlyApcContext();
+
     // Initialize SFTP file drop handler and upload manager
     this._uploadManager = new UploadManager();
     await this._uploadManager.init();
@@ -590,6 +594,7 @@ export class TerminalApp {
       processPendingOscQueue: () => this.processPendingOscQueue(),
       getOutputActivityCallback: () => this.outputActivityCallback,
       getSessionExitCallback: () => this.sessionExitCallback,
+      getMuxApcContext: () => this.imageHandler?.getMuxApcContext() ?? null,
     });
   }
 
@@ -769,6 +774,7 @@ export class TerminalApp {
       setCopyModeManager: (manager) => { self.copyModeManager = manager; },
       getCopyModeKeybinds: () => self.copyModeKeybinds,
       setCopyModeKeybinds: (keybinds) => { self.copyModeKeybinds = keybinds; },
+      setMuxApcContext: (ctx) => self.imageHandler?.setMuxApcContext(ctx),
       registerCoreCallbacks: (core) => self.registerCoreCallbacks(core),
       handleMuxPaneCreated: (paneId) => self.handleMuxPaneCreated(paneId),
       handleMuxPaneExited: (paneId) => self.handleMuxPaneExited(paneId),
@@ -879,7 +885,7 @@ export class TerminalApp {
 
   /** Register early APC context for detecting manually-launched bridge processes. */
   private registerEarlyApcContext(): void {
-    setMuxApcContext({
+    this.imageHandler?.setMuxApcContext({
       getMuxClient: () => this.muxClient,
       onWelcomeWithoutClient: (msgType, paneId, data) => {
         this.enterMuxMode("", 0, { welcomeData: { msgType, paneId, data } });

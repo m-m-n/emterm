@@ -12,6 +12,7 @@ import type { ImageHandler } from "./handlers/image";
 import type { CharSize } from "./types";
 import { reinitWasm } from "../terminal/wasm/loader";
 import { handleMuxApc } from "../terminal/handlers/apc_handlers";
+import type { MuxApcContext } from "../terminal/handlers/apc_handlers";
 
 /**
  * Extract APC and OSC 9999 sequences from raw PTY data and pass mux messages to handleMuxApc.
@@ -19,7 +20,7 @@ import { handleMuxApc } from "../terminal/handlers/apc_handlers";
  * APC format: ESC _ <body> ESC \
  * OSC format: ESC ] 9999 ; <body> ESC \ (or BEL)
  */
-function extractAndHandleMuxMessages(data: Uint8Array): void {
+function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | null): void {
   const ESC = 0x1b;
   const UNDERSCORE = 0x5f; // '_'
   const BACKSLASH = 0x5c; // '\'
@@ -35,7 +36,7 @@ function extractAndHandleMuxMessages(data: Uint8Array): void {
         while (j < data.length - 1) {
           if (data[j] === ESC && data[j + 1] === BACKSLASH) {
             const body = data.subarray(bodyStart, j);
-            handleMuxApc(body);
+            handleMuxApc(body, muxCtx);
             i = j + 2;
             break;
           }
@@ -59,14 +60,14 @@ function extractAndHandleMuxMessages(data: Uint8Array): void {
             // ESC \ terminator
             if (j < data.length - 1 && data[j] === ESC && data[j + 1] === BACKSLASH) {
               const body = data.subarray(bodyStart, j);
-              handleMuxApc(body);
+              handleMuxApc(body, muxCtx);
               i = j + 2;
               break;
             }
             // BEL terminator
             if (data[j] === BEL) {
               const body = data.subarray(bodyStart, j);
-              handleMuxApc(body);
+              handleMuxApc(body, muxCtx);
               i = j + 1;
               break;
             }
@@ -99,6 +100,7 @@ export interface PtyHandlerContext {
   processPendingOscQueue: () => void;
   getOutputActivityCallback: () => (() => void) | null;
   getSessionExitCallback: () => ((sessionId: string) => void) | null;
+  getMuxApcContext: () => MuxApcContext | null;
 }
 
 /**
@@ -474,7 +476,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     // During mux mode, skip WASM processing but still extract mux APC messages.
     // Bridge sends PaneCreated/PtyOutput as APC sequences over the PTY.
     if (handle.suppressOriginalPty) {
-      extractAndHandleMuxMessages(data);
+      extractAndHandleMuxMessages(data, ctx.getMuxApcContext());
       return;
     }
     pendingChunks.push(data);
