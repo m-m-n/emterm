@@ -868,12 +868,129 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 - Frame format: `[length: u32][type: u8][pane_id: u32][payload: variable]`
 - PTY data transferred as raw bytes (no serialization)
 - Control messages via bincode
-- 16 message types (PtyOutput, PtyInput, Hello/Welcome, CreatePane, Resize, Attach/Detach, Snapshot, etc.)
+- Message types: PtyOutput, PtyInput, Hello/Welcome, CreatePane/PaneCreated, DestroyPane, Resize, Attach/Detach/Detached, Snapshot, SnapshotRestore, SessionList, Error, PtyExited, CreateWindow, SwitchWindow, RenameWindow, DestroyWindow, StatusUpdate
+
+**Window Management:**
+- Each mux window maps to a GUI tab (tab group UI)
+- `CreateWindow` / `DestroyWindow` / `SwitchWindow` / `RenameWindow` control messages
+- `StatusUpdate` pushed from daemon to GUI when window list changes
+- Daemon streams PTY output for all windows simultaneously (not just the active one)
+- Window switching is instant: target window's WASM grid is always current (no redraw delay)
 
 **Reliability:**
 - Automatic recovery on daemon crash (GUI returns to normal mode)
 - Per-pane ring buffer (64MB) accumulates output while detached
-- Snapshot-based grid state save/restore on detach/reattach
+- Daemon-side shadow grid (vt100 crate) for screen state restoration on reattach
+- Bridge timeout: 5s waiting for Welcome response (handles non-eMterm terminals gracefully)
+- Nesting prevention via `EMTERM_MUX=1` environment variable
+
+---
+
+#### Mux Inband Protocol
+
+Control messages between GUI and mux daemon travel over the PTY stream via APC escape sequences. The `emterm mux` command acts as a bridge process between the GUI PTY and the daemon's Unix socket.
+
+**Architecture:**
+```
+GUI (Tauri) <-- APC over PTY --> emterm mux (bridge) <-- Unix socket --> daemon
+```
+
+**APC Message Format:**
+```
+ESC _ emterm-mux;<base64(frame_body)> ST
+```
+- Frame body reuses the existing binary frame format: `[type: u8][pane_id: u32][payload]`
+- Normal keyboard input is written directly to PTY (not wrapped in APC)
+- Only mux control messages use APC wrapping
+
+**Windows Transport (ConPTY asymmetric handling):**
+- Bridge to GUI (output): OSC 9999 format (`ESC ] 9999 ; emterm-mux;<base64> ST`) - APC is stripped by ConPTY
+- GUI to bridge (input): Plaintext format (`EMUX;<base64>\n`) - only printable ASCII passes through ConPTY
+- Transport is auto-negotiated from the first message received on bridge stdin
+
+**Key Functionality:**
+- Bridge process connects to daemon via Unix socket; translates APC ↔ MuxMessage frames
+- Bridge exits cleanly on stdin EOF (SSH disconnect); daemon survives and allows reattach
+- SSH-transparent: mux sessions work over SSH without socket forwarding
+- GUI sends control messages (handshake, attach, resize, split, window management) as APC writes to PTY stdin
+- WASM parser already handles APC sequences; mux handler receives decoded messages via callback
+
+---
+
+#### Mux CLI Commands
+
+Additional CLI subcommands for scripted mux session control.
+
+**`emterm mux new-window`:**
+```bash
+emterm mux new-window [OPTIONS]
+  -n, --name <NAME>       Window name (displayed in tab bar)
+  -c, --command <COMMAND> Initial command to run in the new window
+```
+- Creates a new window in the active mux session
+- Connects to the daemon via `cli_handshake()`, sends `CreateWindow`, waits for `PaneCreated` response
+- If `--command` is provided, daemon writes it to the PTY after shell startup
+
+**`emterm mux send-keys`:**
+```bash
+emterm mux send-keys [OPTIONS]
+  -t, --target <INDEX>    Target window index (0-based, default: active window)
+```
+- Reads all data from stdin and sends as raw bytes to the target window's active pane
+- Connects to daemon, resolves target pane from `SessionInfo.windows`, sends `PtyInput` message
+- If stdin is empty, exits with code 0 without sending
+
+**Examples:**
+```bash
+# Open editor in a named window
+emterm mux new-window -n editor -c "nvim"
+
+# Send a command to window 0 (Enter = \r)
+printf 'glances\r' | emterm mux send-keys -t 0
+
+# Send Ctrl-C to window 3
+printf '\x03' | emterm mux send-keys -t 3
+```
+
+---
+
+#### Status Bar
+
+A configurable status bar displayed at the bottom of the application window, outside the terminal screen area. Default OFF.
+
+**Key Functionality:**
+- Toggle enable/disable in Settings (default: OFF)
+- Three-layer structure: OSC layer (hidden when empty), Application line 1, Application line 2 (hidden when empty)
+- Each layer has left and right sections; maximum 3 lines total
+- Template variables: `{time}`, `{cwd}`, `{git_branch}`, `{cmd:name}`
+- Default display: Application line 1 left = `{time}`, right = `{cwd}`
+- Custom commands: user-defined executables with `interval_ms` refresh rate, referenced as `{cmd:name}`
+- Git branch color: clean (green), dirty (yellow), untracked only (dim)
+- OSC 777 protocol for external content injection: `set;left;content`, `set;right;content`, `clear`, `show`, `hide`
+- OSC layer content: all HTML tags stripped (XSS prevention); template content supports full HTML
+- Status bar remains visible in mux mode
+
+**OSC Protocol:**
+```
+ESC ] 777 ; statusbar ; <command> ST
+```
+Commands: `set;left;<content>`, `set;right;<content>`, `clear`, `clear;left`, `clear;right`, `show`, `hide`
+
+**Settings:**
+| Setting | Default |
+|---------|---------|
+| `statusbar_enabled` | `false` |
+| `statusbar_app_line1_left` | `"{time}"` |
+| `statusbar_app_line1_right` | `"{cwd}"` |
+| `statusbar_app_line2_left` | `""` |
+| `statusbar_app_line2_right` | `""` |
+| `statusbar_time_format` | `"HH:mm:ss"` |
+| `statusbar_font_size` | `null` (uses UI default) |
+
+**Custom Command Security:**
+- Only a single executable path is accepted (no arguments, no shell substitution)
+- `~/` is expanded to the home directory
+- On Windows, PE executables run directly; script files require a shebang (`#!`) line specifying the interpreter
 
 ---
 
@@ -1081,6 +1198,18 @@ port = 22
 user = "username"
 identity_file = ""
 extra_args = ""
+
+[statusbar]
+enabled = false
+app_line1_left = "{time}"
+app_line1_right = "{cwd}"
+app_line2_left = ""
+app_line2_right = ""
+time_format = "HH:mm:ss"
+font_size = null
+
+[statusbar.custom_commands]
+# example: { executable = "~/scripts/my-status.sh", interval_ms = 1000 }
 ```
 
 ## Dependencies
@@ -1121,6 +1250,8 @@ ESC ] 777 ; emterm ; <subsystem> ; <verb> ; <params...> ST
 Subsystems:
 - `markdown` - Markdown display session
 - `fold` - Output folding annotation
+- `download` - File download session (begin/chunk/end)
+- `statusbar` - Status bar content injection (set/clear/show/hide)
 
 ### Binary IPC
 

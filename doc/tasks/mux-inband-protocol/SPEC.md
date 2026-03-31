@@ -69,11 +69,18 @@ Local:
 │ (Tauri) │                     │ (bridge)     │                   │        │          │       │
 └─────────┘                     └──────────────┘                   └────────┘          └───────┘
 
-Remote (SSH):
+Remote (SSH) - Linux client:
 ┌─────────┐    APC over PTY/SSH    ┌──────────────┐    Unix socket    ┌────────┐    PTY    ┌───────┐
 │   GUI   │ ◄──────────────────► │ emterm mux   │ ◄──────────────► │ daemon │ ◄──────► │ shell │
 │ (Tauri) │                       │ (bridge,     │                   │(remote)│          │       │
 │ (local) │                       │  remote)     │                   │        │          │       │
+└─────────┘                       └──────────────┘                   └────────┘          └───────┘
+
+Remote (SSH) - Windows client (asymmetric transport via ConPTY):
+┌─────────┐  Plaintext(EMUX;)→    ┌──────────────┐    Unix socket    ┌────────┐    PTY    ┌───────┐
+│   GUI   │  ←OSC 9999            │ emterm mux   │ ◄──────────────► │ daemon │ ◄──────► │ shell │
+│ (Tauri) │  over ConPTY/SSH      │ (bridge,     │                   │(remote)│          │       │
+│ (Win)   │                       │  remote)     │                   │        │          │       │
 └─────────┘                       └──────────────┘                   └────────┘          └───────┘
 ```
 
@@ -96,12 +103,12 @@ graph LR
         ChildPTY["Child PTYs"]
     end
 
-    PtyClient -->|"APC write"| StdinReader
+    PtyClient -->|"APC write (Linux)<br/>Plaintext write (Windows)"| StdinReader
     StdinReader -->|"MuxMessage"| SocketClient
     SocketClient -->|"MuxMessage"| SessionMgr
     SessionMgr -->|"MuxMessage"| SocketClient
     SocketClient -->|"MuxMessage"| StdoutWriter
-    StdoutWriter -->|"APC in PTY stream"| WasmParser
+    StdoutWriter -->|"APC (Linux) / OSC 9999 (Windows)<br/>in PTY stream"| WasmParser
     WasmParser -->|"parsed APC"| MuxHandler
     MuxHandler -->|"control msg"| PtyClient
     SessionMgr <-->|"PTY I/O"| ChildPTY
@@ -142,6 +149,49 @@ APC:   ESC _ emterm-mux;AgEAAABscwo= ESC \
 
 Note: Normal keyboard input is NOT wrapped in APC. Only mux-specific control messages (PtyInput routed to a specific pane_id, handshake, resize, etc.) use APC wrapping.
 
+### Windows ConPTY Transport
+
+Windows ConPTY has asymmetric escape sequence handling:
+
+- **Output direction** (bridge→GUI via SSH): OSC sequences pass through, APC is stripped
+- **Input direction** (GUI→bridge via SSH): Both APC and OSC are stripped; only printable ASCII passes
+
+This requires three transport encodings:
+
+| Transport | Direction | Platform | Wire format |
+|-----------|-----------|----------|-------------|
+| APC | Both | Linux | `ESC _ emterm-mux;<base64> ESC \` |
+| OSC 9999 | bridge→GUI | Windows | `ESC ] 9999 ; emterm-mux;<base64> ESC \` |
+| Plaintext | GUI→bridge | Windows | `EMUX;<base64>\n` |
+
+**OSC 9999 format (bridge→GUI on Windows):**
+```
+ESC ] 9999 ; emterm-mux;<base64_payload> ST
+```
+
+Where `9999` is the OSC parameter. The WASM parser routes OSC 9999 to the APC callback chain for unified handling.
+
+**Plaintext format (GUI→bridge on Windows):**
+```
+EMUX;<base64_payload>\n
+```
+
+Uses only printable ASCII characters and a newline terminator. ConPTY passes these through without modification. The bridge `StdinApcParser` recognizes the `EMUX;` prefix and decodes the base64 payload identically to APC messages.
+
+**Transport negotiation:**
+
+During initial handshake, the bridge sends Welcome in both OSC 9999 and APC formats (OSC first — ConPTY may corrupt the stream after encountering APC, so OSC must precede APC to ensure the Windows GUI receives Welcome). On Linux, the GUI receives both copies; the client deduplicates consecutive identical messages using a 1-element cache (type + paneId + data length + first 4 bytes).
+
+The first message received from the GUI on bridge stdin determines the output transport:
+- APC → Linux client, use APC for bridge→GUI output
+- Plaintext (`EMUX;`) → Windows client, use OSC 9999 for bridge→GUI output
+
+Note: The bridge stdin parser also recognizes OSC 9999 for forward compatibility, but the current GUI never sends OSC as input (ConPTY strips it in the input direction).
+
+**Security note (plaintext injection):**
+
+The `EMUX;` prefix uses printable ASCII, which means any program running inside a mux pane could theoretically output `EMUX;<valid-base64>\n` to forge control messages. However, in mux mode the bridge owns stdin exclusively — pane output flows through the daemon's Unix socket, not through bridge stdin. The injection risk is equivalent to APC injection on Linux (any program can emit `ESC _`). The bridge validates all decoded messages against the protocol before forwarding to the daemon.
+
 ### Data Flow
 
 **GUI → Daemon (control message):**
@@ -156,9 +206,9 @@ sequenceDiagram
     GUI->>GUI: Create MuxMessage
     GUI->>GUI: to_frame_body() → bytes
     GUI->>GUI: Base64 encode
-    GUI->>PTY: Write "ESC _ emterm-mux;{base64} ST"
-    PTY->>Bridge: stdin receives APC
-    Bridge->>Bridge: Parse APC, extract base64
+    GUI->>PTY: Write APC (Linux) or "EMUX;{base64}\n" (Windows)
+    PTY->>Bridge: stdin receives APC or plaintext
+    Bridge->>Bridge: Parse APC/plaintext, extract base64
     Bridge->>Bridge: Base64 decode → frame body
     Bridge->>Bridge: from_frame_body() → MuxMessage
     Bridge->>Socket: Send MuxMessage frame
@@ -178,9 +228,9 @@ sequenceDiagram
     Socket->>Bridge: Receive MuxMessage
     Bridge->>Bridge: to_frame_body() → bytes
     Bridge->>Bridge: Base64 encode
-    Bridge->>PTY: Write "ESC _ emterm-mux;{base64} ST" to stdout
-    PTY->>GUI: PTY stream with APC
-    GUI->>GUI: WASM parser extracts APC
+    Bridge->>PTY: Write APC (Linux) or OSC 9999 (Windows) to stdout
+    PTY->>GUI: PTY stream with APC or OSC
+    GUI->>GUI: WASM parser extracts APC / routes OSC 9999 to APC callback
     GUI->>GUI: Match "emterm-mux;" prefix
     GUI->>GUI: Base64 decode → frame body
     GUI->>GUI: from_frame_body() → MuxMessage
@@ -190,20 +240,24 @@ sequenceDiagram
 **Bridge stdin parsing:**
 ```mermaid
 flowchart TD
-    A[Read stdin bytes] --> B{Inside APC sequence?}
-    B -->|No| C{Is ESC _ ?}
-    C -->|Yes| D[Start APC accumulation]
-    C -->|No| E[Forward bytes to daemon<br/>as PtyInput for active pane]
-    B -->|Yes| F{Is ST ESC backslash?}
-    F -->|No| G[Accumulate APC data]
-    F -->|Yes| H{Has emterm-mux; prefix?}
-    H -->|Yes| I[Base64 decode → MuxMessage<br/>Send to daemon]
-    H -->|No| J[Forward raw APC to daemon<br/>as PtyInput]
-    D --> A
-    E --> A
-    G --> A
-    I --> A
-    J --> A
+    A[Read stdin bytes] --> B{Current state?}
+    B -->|Ground| C{First byte?}
+    C -->|ESC| D{Next byte?}
+    D -->|underscore| E[Start APC accumulation]
+    D -->|bracket| F[Start OSC param accumulation]
+    D -->|other| G[Passthrough]
+    C -->|"E (EMUX; start)"| H{Match remaining MUX; bytes?}
+    H -->|Yes| I[Start plaintext accumulation]
+    H -->|No| G[Passthrough matched bytes]
+    C -->|other| G
+    B -->|InApc| J{Is ST?}
+    J -->|Yes| K{Has emterm-mux prefix?}
+    K -->|Yes| L[Base64 decode and send to daemon]
+    K -->|No| M[Forward raw APC as passthrough]
+    J -->|No| N[Accumulate]
+    B -->|InPlaintext| O{Is newline?}
+    O -->|Yes| P[Base64 decode and send to daemon]
+    O -->|No| Q[Accumulate]
 ```
 
 ### Protocol Message Mapping
