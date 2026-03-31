@@ -64,7 +64,7 @@ fn init_bridge_logger() {
         use std::io::Write;
 
         env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Debug)
+            .filter_level(log::LevelFilter::Info)
             .target(env_logger::Target::Pipe(Box::new(log_file)))
             .format(move |buf, record| {
                 writeln!(

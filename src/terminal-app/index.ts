@@ -554,8 +554,6 @@ export class TerminalApp {
     });
 
     core.set_apc_callback((data: Uint8Array) => {
-      // Debug: log APC callback to trace ConPTY pass-through
-      console.warn(`APC callback: ${data.length}B prefix=${new TextDecoder().decode(data.subarray(0, Math.min(20, data.length)))}`);
       // Queue data - do NOT access core here (recursive borrow error)
       this.imageHandler?.queueApc(data);
     });
