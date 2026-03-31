@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { t } from "../../i18n/index.ts";
 import { renderSubsectionHeader, renderToggle } from "../settings-components";
 import type { SectionContext } from "./types";
@@ -97,11 +98,13 @@ export function renderLogSection(
       pathValue.textContent = path || t("settings.log.noLogFile");
 
       const contents = await invoke<string>("get_log_tail", { lines: 500 });
+      const version = await getVersion();
+      const versionLine = `\n--- Version: ${version} ---`;
       if (contents.trim()) {
-        logArea.textContent = contents;
+        logArea.textContent = contents + versionLine;
         logArea.scrollTop = logArea.scrollHeight;
       } else {
-        logArea.textContent = t("settings.log.empty");
+        logArea.textContent = t("settings.log.empty") + versionLine;
       }
     } catch (e) {
       logArea.textContent = String(e);
