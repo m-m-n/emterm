@@ -32,13 +32,13 @@ function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | n
     if (data[i] === ESC) {
       if (data[i + 1] === UNDERSCORE) {
         // APC: ESC _ <body> ESC \
-        console.debug(`[DEBUG][FRONTEND] mux-extract: found APC (ESC _) at offset ${i}`);
+        console.warn(`[WARN][FRONTEND] mux-extract: found APC (ESC _) at offset ${i}`);
         const bodyStart = i + 2;
         let j = bodyStart;
         while (j < data.length - 1) {
           if (data[j] === ESC && data[j + 1] === BACKSLASH) {
             const body = data.subarray(bodyStart, j);
-            console.debug(`[DEBUG][FRONTEND] mux-extract: APC body ${body.length}B, dispatching`);
+            console.warn(`[WARN][FRONTEND] mux-extract: APC body ${body.length}B, dispatching`);
             foundCount++;
             handleMuxApc(body, muxCtx);
             i = j + 2;
@@ -58,14 +58,14 @@ function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | n
         }
         // Check for semicolon after param
         if (param === 9999 && paramEnd < data.length && data[paramEnd] === 0x3b) {
-          console.debug(`[DEBUG][FRONTEND] mux-extract: found OSC 9999 at offset ${i}`);
+          console.warn(`[WARN][FRONTEND] mux-extract: found OSC 9999 at offset ${i}`);
           const bodyStart = paramEnd + 1;
           let j = bodyStart;
           while (j < data.length) {
             // ESC \ terminator
             if (j < data.length - 1 && data[j] === ESC && data[j + 1] === BACKSLASH) {
               const body = data.subarray(bodyStart, j);
-              console.debug(`[DEBUG][FRONTEND] mux-extract: OSC 9999 body ${body.length}B, dispatching`);
+              console.warn(`[WARN][FRONTEND] mux-extract: OSC 9999 body ${body.length}B, dispatching`);
               foundCount++;
               handleMuxApc(body, muxCtx);
               i = j + 2;
@@ -74,7 +74,7 @@ function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | n
             // BEL terminator
             if (data[j] === BEL) {
               const body = data.subarray(bodyStart, j);
-              console.debug(`[DEBUG][FRONTEND] mux-extract: OSC 9999 body ${body.length}B (BEL term), dispatching`);
+              console.warn(`[WARN][FRONTEND] mux-extract: OSC 9999 body ${body.length}B (BEL term), dispatching`);
               foundCount++;
               handleMuxApc(body, muxCtx);
               i = j + 1;
@@ -99,7 +99,7 @@ function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | n
     for (let k = 0; k < data.length; k++) {
       if (data[k] === ESC) escPositions.push(k);
     }
-    console.debug(`[DEBUG][FRONTEND] mux-extract: NO mux messages found in ${data.length}B, ESC positions=[${escPositions.join(",")}]`);
+    console.warn(`[WARN][FRONTEND] mux-extract: NO mux messages found in ${data.length}B, ESC positions=[${escPositions.join(",")}]`);
   }
 }
 
@@ -496,7 +496,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       // Debug: log raw PTY data in mux mode to trace what arrives from bridge
       const hexPreview = Array.from(data.subarray(0, Math.min(64, data.length)))
         .map(b => b.toString(16).padStart(2, "0")).join(" ");
-      console.debug(`[DEBUG][FRONTEND] mux-pty-raw: ${data.length}B hex=[${hexPreview}]`);
+      console.warn(`[WARN][FRONTEND] mux-pty-raw: ${data.length}B hex=[${hexPreview}]`);
       extractAndHandleMuxMessages(data, ctx.getMuxApcContext());
       return;
     }
