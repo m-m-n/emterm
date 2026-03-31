@@ -69,6 +69,9 @@ export function handleOscCallback(
 ): void {
   if (!ctx.state) return;
 
+  // Debug: log all OSC callbacks to trace ConPTY pass-through
+  console.warn(`OSC callback: actionType=${actionType} data=${data.substring(0, 80)}`);
+
   switch (actionType) {
     case 0: // SetTitleAndIcon
       ctx.state._title = data;
