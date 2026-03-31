@@ -121,10 +121,7 @@ function encodePlaintext(msgType: number, paneId: number, payload: Uint8Array = 
  * bridge→GUI (output direction) is handled by bridge.rs using OSC 9999.
  */
 function encodeMuxMessage(msgType: number, paneId: number, payload: Uint8Array = new Uint8Array()): string {
-  const transport = isWindows ? "PLAINTEXT" : "APC";
-  const encoded = isWindows ? encodePlaintext(msgType, paneId, payload) : encodeApc(msgType, paneId, payload);
-  console.warn(`mux SEND ${transport}: type=0x${msgType.toString(16)} pane=${paneId} payload=${payload.length}B encoded=${encoded.length}B isWindows=${isWindows}`);
-  return encoded;
+  return isWindows ? encodePlaintext(msgType, paneId, payload) : encodeApc(msgType, paneId, payload);
 }
 
 /**
@@ -380,14 +377,12 @@ export class MuxClient {
    * Called by the APC handler when it detects the emterm-mux; prefix.
    */
   handleIncomingApc(msgType: number, paneId: number, data: Uint8Array): void {
-    console.warn(`mux RECV: type=0x${msgType.toString(16)} pane=${paneId} data=${data.length}B`);
     // Dedup: skip identical consecutive messages (from dual OSC+APC transport)
     const head = data.length >= 4
       ? (data[0]! | (data[1]! << 8) | (data[2]! << 16) | (data[3]! << 24))
       : data.length > 0 ? data[0]! : 0;
     if (msgType === this._lastDedupType && paneId === this._lastDedupPaneId &&
         data.length === this._lastDedupDataLen && head === this._lastDedupDataHead) {
-      console.warn(`mux RECV dedup: skipping duplicate type=0x${msgType.toString(16)}`);
       return;
     }
     this._lastDedupType = msgType;
