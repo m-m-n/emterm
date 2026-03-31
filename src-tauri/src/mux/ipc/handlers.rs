@@ -278,6 +278,27 @@ pub(super) async fn handle_rename_window(
     }
 }
 
+/// Switch the active window in the session that contains the given window.
+pub(super) async fn handle_switch_window(
+    window_id: u32,
+    session_manager: &Arc<Mutex<SessionManager>>,
+) {
+    log::info!("SwitchWindow requested: window {}", window_id);
+    let mut mgr = session_manager.lock().await;
+    let session_id = mgr.find_window_session(window_id);
+    match session_id {
+        Some(sid) => {
+            if let Some(session) = mgr.get_session_mut(sid) {
+                session.active_window_id = Some(window_id);
+                log::info!("SwitchWindow: session {} active window -> {}", sid, window_id);
+            }
+        }
+        None => {
+            log::warn!("SwitchWindow: window {} not found", window_id);
+        }
+    }
+}
+
 /// Destroy a window and all its panes, cleaning up empty sessions.
 /// Signals daemon shutdown when all sessions become empty.
 pub(super) async fn handle_destroy_window(
