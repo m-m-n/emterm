@@ -28,9 +28,19 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - `emterm mux` starts a native multiplexer daemon; GUI receives raw PTY bytes (no double-parse overhead)
   - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
   - Pane split (`prefix+%` vertical, `prefix+"` horizontal), resize, and zoom (`prefix+z`)
-  - Multiple windows per session with tab group UI
+  - Multiple windows per session with tab group UI; instant window switching (all windows stream simultaneously)
   - Copy mode with vi/emacs keybindings and WASM-based search
   - tmux.conf import: prefix key, keybindings, base-index, mouse, status-position
+  - Inband APC protocol: mux control messages travel over the PTY stream (SSH-transparent, no socket forwarding needed)
+  - `emterm mux new-window [-n name] [-c command]`: create named windows with initial commands from CLI
+  - `emterm mux send-keys [-t window]`: pipe stdin data as key input to a mux window from CLI
+
+- **Status Bar**
+  - Configurable status bar at the bottom of the window (default OFF, enabled in settings)
+  - Template variables: `{time}`, `{cwd}`, `{git_branch}`, `{cmd:name}` with per-variable refresh rates
+  - Git branch color: clean (green), dirty (yellow)
+  - External content injection via OSC 777 statusbar protocol (set/clear/show/hide)
+  - Custom commands: user-defined executables with configurable refresh intervals
 
 - **Input and IME**
   - High-throughput key input (event-based binary IPC, zero JSON serialization)
@@ -290,7 +300,7 @@ eMterm supports the following OSC (Operating System Command) sequences:
 | 111 | ResetBackgroundColor | Reset default background color |
 | 112 | ResetCursorColor | Reset cursor color |
 | 133 | SemanticPrompt | Prompt/command/output zone markers (used for Ctrl+Up/Down jump, output folding) |
-| 777 | eMterm Extension | Inline Markdown rendering, file download, output folding |
+| 777 | eMterm Extension | Inline Markdown rendering, file download, output folding, status bar control |
 | 1337 | iTerm2 Protocol | Inline image display, user variables |
 
 ## Markdown Display
