@@ -95,7 +95,10 @@ const isWindows = typeof navigator !== "undefined" && /windows/i.test(navigator.
  * Windows uses OSC 9999 (ConPTY strips APC), Linux uses APC.
  */
 function encodeMuxMessage(msgType: number, paneId: number, payload: Uint8Array = new Uint8Array()): string {
-  return isWindows ? encodeOsc(msgType, paneId, payload) : encodeApc(msgType, paneId, payload);
+  const transport = isWindows ? "OSC" : "APC";
+  const encoded = isWindows ? encodeOsc(msgType, paneId, payload) : encodeApc(msgType, paneId, payload);
+  muxLog.debug(`SEND ${transport}: type=0x${msgType.toString(16)} pane=${paneId} payload=${payload.length}B encoded=${encoded.length}B isWindows=${isWindows}`);
+  return encoded;
 }
 
 /**
@@ -351,12 +354,14 @@ export class MuxClient {
    * Called by the APC handler when it detects the emterm-mux; prefix.
    */
   handleIncomingApc(msgType: number, paneId: number, data: Uint8Array): void {
+    muxLog.debug(`RECV: type=0x${msgType.toString(16)} pane=${paneId} data=${data.length}B`);
     // Dedup: skip identical consecutive messages (from dual OSC+APC transport)
     const head = data.length >= 4
       ? (data[0]! | (data[1]! << 8) | (data[2]! << 16) | (data[3]! << 24))
       : data.length > 0 ? data[0]! : 0;
     if (msgType === this._lastDedupType && paneId === this._lastDedupPaneId &&
         data.length === this._lastDedupDataLen && head === this._lastDedupDataHead) {
+      muxLog.debug(`RECV dedup: skipping duplicate type=0x${msgType.toString(16)}`);
       return;
     }
     this._lastDedupType = msgType;
