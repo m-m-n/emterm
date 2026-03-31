@@ -10,8 +10,10 @@ use super::ipc::protocol::*;
 pub(super) enum Transport {
     /// APC format (default, works on Linux).
     Apc = 0,
-    /// OSC 9999 format (fallback for Windows ConPTY).
+    /// OSC 9999 format (fallback for Windows ConPTY output direction).
     Osc = 1,
+    /// Plaintext format (Windows ConPTY input direction: EMUX;<base64>\n).
+    Plaintext = 2,
 }
 
 /// Sentinel value indicating transport has not been detected yet.
@@ -292,7 +294,10 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
                         break;
                     }
                 } else {
-                    let encoded = if t == Transport::Osc as u8 {
+                    // Plaintext input means Windows ConPTY: use OSC for output
+                    let encoded = if t == Transport::Osc as u8
+                        || t == Transport::Plaintext as u8
+                    {
                         msg.to_osc()
                     } else {
                         msg.to_apc()
@@ -357,10 +362,13 @@ pub(super) enum StdinAction {
 /// Base64 expands by ~4/3, so 22MB covers the 16MB frame limit.
 const MAX_APC_PAYLOAD: usize = 22 * 1024 * 1024;
 
-/// State machine that separates APC/OSC mux sequences from passthrough data on stdin.
+/// Plaintext prefix for mux messages from Windows ConPTY (must match TypeScript).
+const PLAINTEXT_PREFIX: &[u8] = b"EMUX;";
+
+/// State machine that separates APC/OSC/plaintext mux sequences from passthrough data on stdin.
 ///
 /// Handles partial reads across buffer boundaries.
-/// Recognizes both APC (ESC _) and OSC 9999 (ESC ]) mux sequences.
+/// Recognizes APC (ESC _), OSC 9999 (ESC ]), and plaintext (EMUX;<base64>\n) mux sequences.
 pub(super) struct StdinApcParser {
     state: ParserState,
     apc_buf: Vec<u8>,
@@ -371,6 +379,8 @@ pub(super) struct StdinApcParser {
     osc_param_digits: Vec<u8>,
     /// Whether the current sequence entered via the OSC path (ESC ] 9999 ;).
     is_osc: bool,
+    /// Number of bytes matched in the EMUX; prefix so far.
+    plaintext_prefix_matched: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -385,6 +395,10 @@ enum ParserState {
     InApc,
     /// Inside APC/OSC body, seen ESC (could be ST = ESC \).
     InApcEsc,
+    /// Matching EMUX; prefix (plaintext_prefix_matched tracks position).
+    InPlaintextPrefix,
+    /// Inside plaintext body accumulation (after EMUX; prefix matched).
+    InPlaintext,
 }
 
 impl StdinApcParser {
@@ -396,6 +410,26 @@ impl StdinApcParser {
             osc_param_accum: 0,
             osc_param_digits: Vec::new(),
             is_osc: false,
+            plaintext_prefix_matched: 0,
+        }
+    }
+
+    /// Complete a plaintext mux sequence (EMUX;<base64>\n).
+    fn complete_plaintext_sequence(
+        apc_buf: &mut Vec<u8>,
+        actions: &mut Vec<StdinAction>,
+    ) {
+        let payload_str = String::from_utf8_lossy(apc_buf).to_string();
+        apc_buf.clear();
+
+        // The buf contains the base64 data (after EMUX; prefix, before \n).
+        // Wrap it with APC_PREFIX so from_apc can decode it.
+        let with_prefix = format!("{}{}", APC_PREFIX, payload_str);
+        match MuxMessage::from_apc(&with_prefix) {
+            Ok(msg) => actions.push(StdinAction::MuxMessage(msg, Transport::Plaintext)),
+            Err(e) => {
+                eprintln!("Bridge: plaintext mux decode error: {}", e);
+            }
         }
     }
 
@@ -442,6 +476,15 @@ impl StdinApcParser {
                 ParserState::Ground => {
                     if byte == 0x1B {
                         self.state = ParserState::EscSeen;
+                    } else if byte == PLAINTEXT_PREFIX[0] {
+                        // Potential start of EMUX; prefix
+                        if !self.passthrough_buf.is_empty() {
+                            actions.push(StdinAction::Passthrough(std::mem::take(
+                                &mut self.passthrough_buf,
+                            )));
+                        }
+                        self.plaintext_prefix_matched = 1;
+                        self.state = ParserState::InPlaintextPrefix;
                     } else {
                         self.passthrough_buf.push(byte);
                     }
@@ -543,6 +586,43 @@ impl StdinApcParser {
                         self.apc_buf.push(0x1B);
                         self.apc_buf.push(byte);
                         self.state = ParserState::InApc;
+                    }
+                }
+                ParserState::InPlaintextPrefix => {
+                    let expected = PLAINTEXT_PREFIX[self.plaintext_prefix_matched];
+                    if byte == expected {
+                        self.plaintext_prefix_matched += 1;
+                        if self.plaintext_prefix_matched == PLAINTEXT_PREFIX.len() {
+                            // Full prefix matched: start accumulating body
+                            self.apc_buf.clear();
+                            self.state = ParserState::InPlaintext;
+                        }
+                    } else {
+                        // Prefix mismatch: push matched bytes + current as passthrough
+                        self.passthrough_buf
+                            .extend_from_slice(&PLAINTEXT_PREFIX[..self.plaintext_prefix_matched]);
+                        self.passthrough_buf.push(byte);
+                        self.plaintext_prefix_matched = 0;
+                        self.state = ParserState::Ground;
+                    }
+                }
+                ParserState::InPlaintext => {
+                    if byte == b'\n' {
+                        // Newline terminates the plaintext message
+                        Self::complete_plaintext_sequence(
+                            &mut self.apc_buf,
+                            &mut actions,
+                        );
+                        self.state = ParserState::Ground;
+                    } else if self.apc_buf.len() < MAX_APC_PAYLOAD {
+                        self.apc_buf.push(byte);
+                    } else {
+                        eprintln!(
+                            "Bridge: plaintext payload exceeds {} bytes, discarding",
+                            MAX_APC_PAYLOAD
+                        );
+                        self.apc_buf.clear();
+                        self.state = ParserState::Ground;
                     }
                 }
             }
@@ -836,5 +916,114 @@ mod tests {
         for a in &actions {
             assert!(matches!(a, StdinAction::Passthrough(_)));
         }
+    }
+
+    // ---- Plaintext mux message tests ----
+
+    #[test]
+    fn test_stdin_parser_plaintext_mux_message() {
+        let msg = MuxMessage::pty_input(1, vec![0x41, 0x42]);
+        let body = msg.to_frame_body();
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&body);
+        let input = format!("EMUX;{}\n", encoded);
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(input.as_bytes());
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            StdinAction::MuxMessage(decoded, transport) => {
+                assert_eq!(decoded.msg_type, MessageType::PtyInput);
+                assert_eq!(decoded.pane_id, 1);
+                assert_eq!(decoded.payload, vec![0x41, 0x42]);
+                assert_eq!(*transport, Transport::Plaintext);
+            }
+            _ => panic!("Expected MuxMessage"),
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_plaintext_with_passthrough() {
+        let msg = MuxMessage::pty_input(1, vec![0x41]);
+        let body = msg.to_frame_body();
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&body);
+        let input = format!("beforeEMUX;{}\nafter", encoded);
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(input.as_bytes());
+        // "before" as passthrough, then MuxMessage, then "after" as passthrough
+        let msgs: Vec<_> = actions
+            .iter()
+            .filter_map(|a| match a {
+                StdinAction::MuxMessage(m, _) => Some(m),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].pane_id, 1);
+    }
+
+    #[test]
+    fn test_stdin_parser_plaintext_split_across_boundaries() {
+        let msg = MuxMessage::pty_input(5, vec![0xFF]);
+        let body = msg.to_frame_body();
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&body);
+        let input = format!("EMUX;{}\n", encoded);
+        let bytes = input.as_bytes();
+        let mid = bytes.len() / 2;
+
+        let mut parser = StdinApcParser::new();
+
+        let actions1 = parser.feed(&bytes[..mid]);
+        for a in &actions1 {
+            assert!(
+                !matches!(a, StdinAction::MuxMessage(_, _)),
+                "Should not decode incomplete plaintext"
+            );
+        }
+
+        let actions2 = parser.feed(&bytes[mid..]);
+        let has_msg = actions2
+            .iter()
+            .any(|a| matches!(a, StdinAction::MuxMessage(_, _)));
+        assert!(has_msg, "Should decode plaintext after second half");
+    }
+
+    #[test]
+    fn test_stdin_parser_plaintext_prefix_mismatch() {
+        // "EMUY;" is not a valid prefix, should be passthrough
+        let input = b"EMUY;data\n";
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(input);
+        assert!(!actions.is_empty());
+        for a in &actions {
+            assert!(matches!(a, StdinAction::Passthrough(_)));
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_mixed_plaintext_and_apc() {
+        let msg1 = MuxMessage::pty_input(1, vec![0x01]);
+        let msg2 = MuxMessage::pty_input(2, vec![0x02]);
+        let body2 = msg2.to_frame_body();
+        use base64::Engine as _;
+        let encoded2 = base64::engine::general_purpose::STANDARD.encode(&body2);
+        let mut input = msg1.to_apc().into_bytes();
+        input.extend_from_slice(format!("EMUX;{}\n", encoded2).as_bytes());
+
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(&input);
+        let msgs: Vec<_> = actions
+            .iter()
+            .filter_map(|a| match a {
+                StdinAction::MuxMessage(m, t) => Some((m, *t)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].0.pane_id, 1);
+        assert_eq!(msgs[0].1, Transport::Apc);
+        assert_eq!(msgs[1].0.pane_id, 2);
+        assert_eq!(msgs[1].1, Transport::Plaintext);
     }
 }
