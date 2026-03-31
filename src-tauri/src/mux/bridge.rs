@@ -170,7 +170,35 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
                 }
             };
 
+            // Debug: log raw stdin bytes to trace what arrives through ConPTY+SSH
+            {
+                let preview_len = n.min(64);
+                let hex: Vec<String> = buf[..preview_len].iter().map(|b| format!("{:02x}", b)).collect();
+                log::debug!(
+                    "stdin raw: {}B hex=[{}]{}",
+                    n,
+                    hex.join(" "),
+                    if n > preview_len { "..." } else { "" }
+                );
+                // Also check for ESC sequences in the data
+                let esc_positions: Vec<usize> = buf[..n].iter().enumerate()
+                    .filter(|(_, b)| **b == 0x1b)
+                    .map(|(i, _)| i)
+                    .collect();
+                if !esc_positions.is_empty() {
+                    let next_bytes: Vec<String> = esc_positions.iter().map(|&pos| {
+                        if pos + 1 < n {
+                            format!("{}:0x{:02x}", pos, buf[pos + 1])
+                        } else {
+                            format!("{}:EOF", pos)
+                        }
+                    }).collect();
+                    log::debug!("stdin ESC positions: [{}]", next_bytes.join(", "));
+                }
+            }
+
             let actions = parser.feed(&buf[..n]);
+            log::debug!("stdin parser produced {} actions", actions.len());
             for action in actions {
                 match action {
                     StdinAction::MuxMessage(msg, t) => {
@@ -236,6 +264,16 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
                     msg.payload.len()
                 );
                 let t = transport_for_stdout.load(Ordering::Relaxed);
+                let transport_name = match t {
+                    0 => "APC",
+                    1 => "OSC",
+                    0xFF => "UNDETECTED(both)",
+                    _ => "UNKNOWN",
+                };
+                log::debug!(
+                    "daemon→stdout: sending {:?} pane={} via {} ({} bytes payload)",
+                    msg.msg_type, msg.pane_id, transport_name, msg.payload.len()
+                );
                 use std::io::Write;
                 let stdout = std::io::stdout();
                 let mut stdout = stdout.lock();
@@ -243,6 +281,10 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
                     // Transport not yet detected: send both so at least one arrives.
                     let osc = msg.to_osc();
                     let apc = msg.to_apc();
+                    log::debug!(
+                        "daemon→stdout: dual-send OSC={}B APC={}B",
+                        osc.len(), apc.len()
+                    );
                     if stdout.write_all(osc.as_bytes()).is_err()
                         || stdout.write_all(apc.as_bytes()).is_err()
                     {
