@@ -127,6 +127,16 @@ fn build_cli() -> Command {
                         .about("Start daemon without attaching (for scripted initialization)"),
                 )
                 .subcommand(
+                    Command::new("switch-window")
+                        .about("Switch active window")
+                        .arg(
+                            Arg::new("index")
+                                .help("Window index (0-based)")
+                                .value_parser(clap::value_parser!(u32))
+                                .required(true),
+                        ),
+                )
+                .subcommand(
                     Command::new("send-keys")
                         .about("Send stdin data as key input to a pane")
                         .arg(
@@ -243,6 +253,13 @@ fn main() {
                     }
                     Some(("script", _)) => {
                         if let Err(e) = app_lib::mux::cli::execute_script() {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    Some(("switch-window", sub)) => {
+                        let target = *sub.get_one::<u32>("index").unwrap();
+                        if let Err(e) = app_lib::mux::cli::execute_switch_window(target) {
                             eprintln!("Error: {}", e);
                             std::process::exit(1);
                         }

@@ -131,7 +131,7 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
     if !sock_path.exists() {
         eprintln!("No mux sessions to attach to (daemon not running)");
         eprintln!("Use 'emterm mux' to start a new session.");
-        return Ok(());
+        std::process::exit(1);
     }
 
     // Run the long-running bridge process
@@ -253,6 +253,47 @@ pub fn execute_new_window(
     _name: Option<&str>,
     _command: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Mux is not supported on this platform");
+    std::process::exit(1);
+}
+
+/// Execute the `emterm mux switch-window` command.
+///
+/// Connects to the daemon and sends SwitchWindow for the given window index.
+#[cfg(unix)]
+pub fn execute_switch_window(target: u32) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let (mut stream, sessions) = cli_handshake()?;
+    let session = sessions.first().ok_or("No active session")?;
+
+    if target as usize >= session.windows.len() {
+        return Err(format!(
+            "Window index {} out of range (0..{})",
+            target,
+            session.windows.len()
+        )
+        .into());
+    }
+
+    let window_id = session.windows[target as usize].id;
+    let msg = MuxMessage {
+        msg_type: MessageType::SwitchWindow,
+        pane_id: window_id,
+        payload: vec![],
+    };
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    stream.write_all(&len)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn execute_switch_window(_target: u32) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux is not supported on this platform");
     std::process::exit(1);
 }

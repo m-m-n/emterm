@@ -15,7 +15,7 @@ use tokio_util::codec::Framed;
 use super::codec::MuxCodec;
 use super::handlers::{
     handle_attach, handle_create_window, handle_destroy_pane, handle_destroy_window,
-    handle_rename_window, handle_resize, handle_split_pane,
+    handle_rename_window, handle_resize, handle_split_pane, handle_switch_window,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -226,6 +226,9 @@ async fn handle_cli_client(
             // Log the CLI-initiated window creation
             log_cli_window_creation(session_manager, active_session_id).await;
         }
+        MessageType::SwitchWindow => {
+            handle_switch_window(msg.pane_id, session_manager).await;
+        }
         _ => {
             log::warn!(
                 "CLI client sent unsupported message type: {:?}",
@@ -302,7 +305,7 @@ async fn route_message(
             handle_destroy_pane(msg.pane_id, session_manager, shutdown_tx).await;
         }
         MessageType::SwitchWindow => {
-            log::info!("SwitchWindow requested: window {}", msg.pane_id);
+            handle_switch_window(msg.pane_id, session_manager).await;
         }
         MessageType::RenameWindow => {
             handle_rename_window(msg, session_manager).await;
