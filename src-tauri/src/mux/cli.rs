@@ -79,6 +79,26 @@ fn init_bridge_logger() {
     }
 }
 
+/// Execute the `emterm mux script` command (start daemon without attaching).
+///
+/// Starts the daemon if not running, then exits immediately.
+/// Designed for shell scripts that initialize mux sessions before attaching.
+/// Stdout emits exactly one line: the daemon socket path.
+#[cfg(unix)]
+pub fn execute_script() -> Result<(), Box<dyn std::error::Error>> {
+    check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let sock_path =
+        daemon::ensure_daemon_running().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    println!("{}", sock_path.display());
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn execute_script() -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Mux is not supported on this platform");
+    std::process::exit(1);
+}
+
 /// Execute the `emterm mux` command (start/attach as long-running bridge).
 pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
