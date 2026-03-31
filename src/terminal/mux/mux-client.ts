@@ -90,13 +90,39 @@ function encodeOsc(msgType: number, paneId: number, payload: Uint8Array = new Ui
 /** Detect if running on Windows (ConPTY requires OSC transport). */
 const isWindows = typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent);
 
+/** Plaintext prefix for mux messages (must match Rust PLAINTEXT_PREFIX in bridge.rs). */
+const MUX_PLAINTEXT_PREFIX = "EMUX;";
+
+/**
+ * Encode a MuxMessage as plaintext for GUI→bridge direction on Windows.
+ * ConPTY drops escape sequences (APC/OSC) in the input direction,
+ * so we use printable ASCII: EMUX;<base64>\n
+ */
+function encodePlaintext(msgType: number, paneId: number, payload: Uint8Array = new Uint8Array()): string {
+  const frameBody = new Uint8Array(5 + payload.length);
+  frameBody[0] = msgType;
+  frameBody[1] = paneId & 0xff;
+  frameBody[2] = (paneId >> 8) & 0xff;
+  frameBody[3] = (paneId >> 16) & 0xff;
+  frameBody[4] = (paneId >> 24) & 0xff;
+  frameBody.set(payload, 5);
+
+  const base64 = uint8ArrayToBase64(frameBody);
+  return `${MUX_PLAINTEXT_PREFIX}${base64}\n`;
+}
+
 /**
  * Encode a mux message using the appropriate transport.
- * Windows uses OSC 9999 (ConPTY strips APC), Linux uses APC.
+ *
+ * GUI→bridge (input direction):
+ *   Windows: plaintext EMUX;<base64>\n (ConPTY drops escape sequences)
+ *   Linux: APC
+ *
+ * bridge→GUI (output direction) is handled by bridge.rs using OSC 9999.
  */
 function encodeMuxMessage(msgType: number, paneId: number, payload: Uint8Array = new Uint8Array()): string {
-  const transport = isWindows ? "OSC" : "APC";
-  const encoded = isWindows ? encodeOsc(msgType, paneId, payload) : encodeApc(msgType, paneId, payload);
+  const transport = isWindows ? "PLAINTEXT" : "APC";
+  const encoded = isWindows ? encodePlaintext(msgType, paneId, payload) : encodeApc(msgType, paneId, payload);
   console.warn(`mux SEND ${transport}: type=0x${msgType.toString(16)} pane=${paneId} payload=${payload.length}B encoded=${encoded.length}B isWindows=${isWindows}`);
   return encoded;
 }
