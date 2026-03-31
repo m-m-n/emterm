@@ -123,6 +123,10 @@ fn build_cli() -> Command {
                         ),
                 )
                 .subcommand(
+                    Command::new("script")
+                        .about("Start daemon without attaching (for scripted initialization)"),
+                )
+                .subcommand(
                     Command::new("send-keys")
                         .about("Send stdin data as key input to a pane")
                         .arg(
@@ -233,6 +237,12 @@ fn main() {
                         let name = sub.get_one::<String>("name").map(|s| s.as_str());
                         let command = sub.get_one::<String>("command").map(|s| s.as_str());
                         if let Err(e) = app_lib::mux::cli::execute_new_window(name, command) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    Some(("script", _)) => {
+                        if let Err(e) = app_lib::mux::cli::execute_script() {
                             eprintln!("Error: {}", e);
                             std::process::exit(1);
                         }
