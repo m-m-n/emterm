@@ -12,6 +12,11 @@ export function renderLogSection(
   const header = document.createElement("h2");
   header.className = "settings-section-header";
   header.textContent = t("settings.log.title");
+  const versionSpan = document.createElement("span");
+  versionSpan.className = "settings-log-version";
+  versionSpan.textContent = "";
+  header.appendChild(versionSpan);
+  getVersion().then((v) => { versionSpan.textContent = `  v${v}`; });
   panel.appendChild(header);
 
   // Log Recording toggle
@@ -98,13 +103,11 @@ export function renderLogSection(
       pathValue.textContent = path || t("settings.log.noLogFile");
 
       const contents = await invoke<string>("get_log_tail", { lines: 500 });
-      const version = await getVersion();
-      const versionLine = `\n--- Version: ${version} ---`;
       if (contents.trim()) {
-        logArea.textContent = contents + versionLine;
+        logArea.textContent = contents;
         logArea.scrollTop = logArea.scrollHeight;
       } else {
-        logArea.textContent = t("settings.log.empty") + versionLine;
+        logArea.textContent = t("settings.log.empty");
       }
     } catch (e) {
       logArea.textContent = String(e);

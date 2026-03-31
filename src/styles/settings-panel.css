@@ -218,6 +218,13 @@
   border-bottom: none;
 }
 
+.settings-log-version {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--md-sys-color-on-surface-variant);
+  font-family: monospace;
+}
+
 /* Settings Row - vertical layout */
 .settings-row {
   display: flex;
