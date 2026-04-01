@@ -8,3 +8,5 @@ pub mod protocol;
 pub mod pty_spawn;
 #[cfg(unix)]
 pub mod reattach;
+#[cfg(unix)]
+pub mod statusbar;

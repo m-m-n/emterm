@@ -19,6 +19,7 @@ use super::handlers::{
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
+use super::statusbar::{execute_command, StatusBarEngine};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::PtyOutputChunk;
 
@@ -112,12 +113,77 @@ pub async fn handle_connection(
     // message after its output stream is ready. This eliminates the timing
     // dependency where reattach data could arrive before the client is listening.
 
+    // Status bar engine setup
+    let active_pane_id: super::statusbar::SharedActivePaneId =
+        Arc::new(std::sync::Mutex::new(None));
+    let pane_cwd_map: super::statusbar::SharedPaneCwdMap =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut statusbar_engine = StatusBarEngine::new(
+        active_pane_id.clone(),
+        pane_cwd_map.clone(),
+    );
+
+    // Send initial error message if settings failed to load
+    if let Some(err_msg) = statusbar_engine.initial_error_update() {
+        let _ = framed.send(err_msg).await;
+    }
+
+    // Set up status bar timers only if enabled and templates contain variables
+    let statusbar_enabled = statusbar_engine.is_enabled();
+    let mut render_interval = if statusbar_enabled && statusbar_engine.has_template_variables() {
+        Some(statusbar_engine.render_interval())
+    } else {
+        None
+    };
+    let command_intervals = if statusbar_enabled {
+        statusbar_engine.command_intervals()
+    } else {
+        Vec::new()
+    };
+
+    // Create per-command timers using mpsc channel for aggregation.
+    // Each command timer runs as a separate task, sending its name when it fires.
+    let (cmd_tick_tx, mut cmd_tick_rx) = mpsc::channel::<String>(16);
+    for (name, dur) in command_intervals {
+        let tx = cmd_tick_tx.clone();
+        let cmd_name = name.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(dur);
+            interval.tick().await; // skip first immediate tick
+            loop {
+                interval.tick().await;
+                if tx.send(cmd_name.clone()).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    drop(cmd_tick_tx); // Drop the original sender; spawned tasks hold clones
+
+    // Channel for receiving command execution results from spawned tasks
+    let (cmd_result_tx, mut cmd_result_rx) = mpsc::channel::<(String, Option<String>)>(16);
+
     // Message + output loop using select! to handle both directions concurrently
     loop {
+        // Build a future for the render timer (if enabled)
+        let render_tick = async {
+            if let Some(ref mut interval) = render_interval {
+                interval.tick().await;
+            } else {
+                // Never resolves if disabled
+                std::future::pending::<()>().await;
+            }
+        };
+
         tokio::select! {
             msg = framed.next() => {
                 match msg {
                     Some(Ok(msg)) => {
+                        // Track active pane from PtyInput messages
+                        if msg.msg_type == MessageType::PtyInput {
+                            *active_pane_id.lock().unwrap() = Some(msg.pane_id);
+                        }
+
                         if let Err(should_break) = route_message(
                             msg,
                             &session_manager,
@@ -125,6 +191,8 @@ pub async fn handle_connection(
                             &pane_output_tx,
                             &mut active_session_id,
                             &shutdown_tx,
+                            &mut statusbar_engine,
+                            &pane_cwd_map,
                         ).await {
                             if should_break {
                                 break;
@@ -155,6 +223,25 @@ pub async fn handle_connection(
                         }
                     }
                 }
+            }
+            _ = render_tick => {
+                if let Some(update_msg) = statusbar_engine.render() {
+                    if framed.send(update_msg).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            Some(cmd_name) = cmd_tick_rx.recv() => {
+                if let Some(executable) = statusbar_engine.get_command_executable(&cmd_name) {
+                    let tx = cmd_result_tx.clone();
+                    tokio::spawn(async move {
+                        let result = execute_command(&executable).await;
+                        let _ = tx.send((cmd_name, result)).await;
+                    });
+                }
+            }
+            Some((name, output)) = cmd_result_rx.recv() => {
+                statusbar_engine.update_command_cache(&name, output);
             }
         }
     }
@@ -270,6 +357,8 @@ async fn route_message(
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
+    statusbar_engine: &mut StatusBarEngine,
+    pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
 ) -> Result<(), bool> {
     match msg.msg_type {
         MessageType::CreateWindow => {
@@ -281,6 +370,8 @@ async fn route_message(
                 *active_session_id,
             )
             .await?;
+            // Register pane cwd Arcs for newly created panes
+            register_session_pane_cwds(session_manager, *active_session_id, pane_cwd_map).await;
         }
         MessageType::Attach => {
             handle_attach(
@@ -291,9 +382,13 @@ async fn route_message(
                 active_session_id,
             )
             .await?;
+            // Register pane cwd Arcs for all panes in the new session
+            register_session_pane_cwds(session_manager, *active_session_id, pane_cwd_map).await;
         }
         MessageType::SplitPane => {
             handle_split_pane(msg, session_manager, framed, pane_output_tx).await?;
+            // Register pane cwd Arcs for newly split panes
+            register_session_pane_cwds(session_manager, *active_session_id, pane_cwd_map).await;
         }
         MessageType::Detach => {
             log::info!("Client requested detach");
@@ -302,6 +397,7 @@ async fn route_message(
             return Err(true);
         }
         MessageType::DestroyPane => {
+            pane_cwd_map.lock().unwrap().remove(&msg.pane_id);
             handle_destroy_pane(msg.pane_id, session_manager, shutdown_tx).await;
         }
         MessageType::SwitchWindow => {
@@ -315,6 +411,12 @@ async fn route_message(
         }
         MessageType::Resize => {
             handle_resize(msg, session_manager).await;
+        }
+        MessageType::RequestStatusUpdate => {
+            let update_msg = statusbar_engine.force_render();
+            if framed.send(update_msg).await.is_err() {
+                return Err(false);
+            }
         }
         MessageType::PtyInput => {
             let pane_id = msg.pane_id;
@@ -341,4 +443,22 @@ async fn route_message(
         }
     }
     Ok(())
+}
+
+/// Register pane cwd Arcs from session_manager into pane_cwd_map.
+/// Called once per pane creation / reattach (very rare), not per output chunk.
+async fn register_session_pane_cwds(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    session_id: u32,
+    pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
+) {
+    let mgr = session_manager.lock().await;
+    if let Some(session) = mgr.get_session(session_id) {
+        let mut map = pane_cwd_map.lock().unwrap();
+        for window in session.windows.values() {
+            for pane in window.panes.values() {
+                map.entry(pane.id).or_insert_with(|| pane.cwd.clone());
+            }
+        }
+    }
 }

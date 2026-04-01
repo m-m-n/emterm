@@ -542,6 +542,8 @@ pub struct MuxSettings {
     pub tmux_conf_imported: bool,
     #[serde(default)]
     pub keybinds: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub statusbar: MuxStatusbarSettings,
 }
 
 // ============================================================
@@ -604,8 +606,34 @@ impl Default for MuxSettings {
             tab_always_expand: false,
             tmux_conf_imported: false,
             keybinds: std::collections::HashMap::new(),
+            statusbar: MuxStatusbarSettings::default(),
         }
     }
+}
+
+fn default_mux_statusbar_interval() -> u64 {
+    5000
+}
+
+/// Mux status bar settings.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MuxStatusbarSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub left: String,
+    #[serde(default)]
+    pub right: String,
+    #[serde(default)]
+    pub commands: std::collections::HashMap<String, MuxStatusbarCommand>,
+}
+
+/// A registered command for the mux status bar.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MuxStatusbarCommand {
+    pub executable: String,
+    #[serde(default = "default_mux_statusbar_interval")]
+    pub interval_ms: u64,
 }
 
 impl Default for AppSettings {
@@ -674,5 +702,87 @@ impl Default for AppSettings {
             statusbar_custom_commands: std::collections::HashMap::new(),
             statusbar_refresh_rates: std::collections::HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mux_statusbar_settings_default() {
+        let settings = MuxStatusbarSettings::default();
+        assert!(!settings.enabled);
+        assert_eq!(settings.left, "");
+        assert_eq!(settings.right, "");
+        assert!(settings.commands.is_empty());
+    }
+
+    #[test]
+    fn test_mux_statusbar_settings_full_config() {
+        let json = r#"{
+            "enabled": true,
+            "left": "{hostname} | {cmd:git_branch}",
+            "right": "{cwd}",
+            "commands": {
+                "git_branch": {
+                    "executable": "/usr/bin/git-branch-name",
+                    "interval_ms": 3000
+                }
+            }
+        }"#;
+        let settings: MuxStatusbarSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.enabled);
+        assert_eq!(settings.left, "{hostname} | {cmd:git_branch}");
+        assert_eq!(settings.right, "{cwd}");
+        assert_eq!(settings.commands.len(), 1);
+        let cmd = settings.commands.get("git_branch").unwrap();
+        assert_eq!(cmd.executable, "/usr/bin/git-branch-name");
+        assert_eq!(cmd.interval_ms, 3000);
+    }
+
+    #[test]
+    fn test_mux_statusbar_settings_missing_fields() {
+        let json = r#"{"enabled": true}"#;
+        let settings: MuxStatusbarSettings = serde_json::from_str(json).unwrap();
+        assert!(settings.enabled);
+        assert_eq!(settings.left, "");
+        assert_eq!(settings.right, "");
+        assert!(settings.commands.is_empty());
+    }
+
+    #[test]
+    fn test_mux_statusbar_command_default_interval() {
+        let json = r#"{"executable": "/usr/bin/date"}"#;
+        let cmd: MuxStatusbarCommand = serde_json::from_str(json).unwrap();
+        assert_eq!(cmd.executable, "/usr/bin/date");
+        assert_eq!(cmd.interval_ms, 5000);
+    }
+
+    #[test]
+    fn test_mux_settings_with_statusbar() {
+        let json = r#"{
+            "prefix": "ctrl+a",
+            "base_index": 1,
+            "mouse": false,
+            "statusbar": {
+                "enabled": true,
+                "left": "test",
+                "right": "right",
+                "commands": {}
+            }
+        }"#;
+        let settings: MuxSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.prefix, "ctrl+a");
+        assert!(settings.statusbar.enabled);
+        assert_eq!(settings.statusbar.left, "test");
+    }
+
+    #[test]
+    fn test_mux_settings_without_statusbar_uses_default() {
+        let json = r#"{"prefix": "ctrl+b"}"#;
+        let settings: MuxSettings = serde_json::from_str(json).unwrap();
+        assert!(!settings.statusbar.enabled);
+        assert_eq!(settings.statusbar.left, "");
     }
 }

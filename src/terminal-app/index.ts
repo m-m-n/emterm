@@ -119,6 +119,8 @@ export class TerminalApp {
   public muxDetachCallback: (() => void) | null = null;
   /** Callback for status bar OSC commands (set from main.ts) */
   public statusBarOscCallback: ((command: string, param1?: string, param2?: string) => void) | null = null;
+  /** Callback for mux status updates (set from main.ts, routes to OSC layer) */
+  public muxStatusUpdateCallback: ((msg: { left: string; right: string }) => void) | null = null;
   private muxClient: MuxClient | null = null;
   private inMuxMode = false;
   private muxWindows: { id: number; name: string }[] = [];
@@ -785,6 +787,7 @@ export class TerminalApp {
       emitMuxStateChange: () => self.emitMuxStateChange(),
       exitMultiPaneMode: (remainingPaneId) => self.exitMultiPaneMode(remainingPaneId),
       onMuxModeExited: () => self.registerEarlyApcContext(),
+      onStatusUpdate: (msg) => self.muxStatusUpdateCallback?.(msg),
     };
   }
 
@@ -891,6 +894,16 @@ export class TerminalApp {
         this.enterMuxMode("", 0, { welcomeData: { msgType, paneId, data } });
       },
     });
+  }
+
+  /** Whether this terminal app is currently in mux mode. */
+  get isInMuxMode(): boolean {
+    return this.inMuxMode;
+  }
+
+  /** Send RequestStatusUpdate to the mux daemon (for tab switch). */
+  sendMuxRequestStatusUpdate(): void {
+    this.muxClient?.sendRequestStatusUpdate().catch(() => {});
   }
 
   /** Enter mux mode -- connect to daemon, enable prefix key, show status bar. */

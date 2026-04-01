@@ -70,6 +70,9 @@ export interface MuxSessionContext {
   // Called after exitMuxMode to restore early APC context for next manual bridge launch
   onMuxModeExited?: () => void;
 
+  // Status update callback: routes StatusUpdate to OSC layer
+  onStatusUpdate?: (msg: { left: string; right: string }) => void;
+
   // Delegate methods that call into other mux modules via TerminalApp wrappers
   registerCoreCallbacks: (core: ReturnType<TerminalState["getActiveCore"]>) => void;
   handleMuxPaneCreated: (paneId: number) => void;
@@ -171,6 +174,11 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
   // Set up pane created handler -- receive actual pane ID from daemon
   client.setOnPaneCreated((paneId: number) => {
     ctx.handleMuxPaneCreated(paneId);
+  });
+
+  // Set up status update handler -- push to OSC layer via callback
+  client.setOnStatusUpdate((msg) => {
+    ctx.onStatusUpdate?.(msg);
   });
 
   // Set up detached handler
@@ -306,6 +314,9 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
 
   // Clear mux APC context
   ctx.setMuxApcContext(null);
+
+  // Clear OSC layer (status bar content from daemon)
+  ctx.onStatusUpdate?.({ left: "", right: "" });
 
   // Exit copy mode if active
   const copyModeManager = ctx.getCopyModeManager();

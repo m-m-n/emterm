@@ -126,6 +126,18 @@ export interface AppSettings {
   statusbar_refresh_rates: Record<string, number>;
 }
 
+export interface MuxStatusbarSettings {
+  enabled: boolean;
+  left: string;
+  right: string;
+  commands: Record<string, MuxStatusbarCommand>;
+}
+
+export interface MuxStatusbarCommand {
+  executable: string;
+  interval_ms: number;
+}
+
 export interface MuxSettings {
   prefix: string;
   base_index: number;
@@ -134,6 +146,7 @@ export interface MuxSettings {
   tab_always_expand: boolean;
   tmux_conf_imported: boolean;
   keybinds: Record<string, string>;
+  statusbar: MuxStatusbarSettings;
 }
 
 export interface KeybindSettings {

@@ -110,6 +110,16 @@ async function main(): Promise<void> {
         };
       }
 
+      // Wire mux status update callback to OSC layer
+      app.muxStatusUpdateCallback = (msg) => {
+        if (msg.left === "" && msg.right === "") {
+          oscLayerController?.handleCommand("clear");
+        } else {
+          oscLayerController?.handleCommand("set", "left", msg.left);
+          oscLayerController?.handleCommand("set", "right", msg.right);
+        }
+      };
+
       // Connect PTY exit event to TabManager
       const sessionId = app.pty?.getSessionId();
       if (sessionId) {
@@ -280,9 +290,10 @@ async function main(): Promise<void> {
     // Wire mux state change to tab bar sub-tab rendering
     app.onMuxStateChange = (info) => {
       if (info.windowCount === 0) {
-        // Mux mode exited -- clear sub-tabs and restore original title
+        // Mux mode exited -- clear sub-tabs, restore title, and clear OSC layer
         tabBarUI?.clearMuxSubTabs(tab.id);
         manager.updateTabTitle(tab.id, "Terminal");
+        oscLayerController?.handleCommand("clear");
       } else if (info.windowCount === 1) {
         // Single window — show as regular tab with window name
         tabBarUI?.clearMuxSubTabs(tab.id);
@@ -331,6 +342,15 @@ async function main(): Promise<void> {
       window.terminalApp = app;
       window.terminalState = app.terminalState;
       window.terminalRenderer = app.terminalRenderer;
+
+      // Handle mux status bar on tab switch:
+      // - Mux tab: request fresh StatusUpdate from daemon
+      // - Non-mux tab: clear OSC layer
+      if (app.isInMuxMode) {
+        app.sendMuxRequestStatusUpdate();
+      } else {
+        oscLayerController?.handleCommand("clear");
+      }
     }
   });
 
