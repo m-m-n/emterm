@@ -38,6 +38,7 @@ export const MuxMessageType = {
   RenameWindow: 0x14,
   DestroyWindow: 0x15,
   StatusUpdate: 0x16,
+  RequestStatusUpdate: 0x17,
 } as const;
 
 /** Connection state for the mux client. */
@@ -297,7 +298,7 @@ export class MuxClient {
   private onPtyExited: ((paneId: number) => void) | null = null;
   private onPaneCreated: ((paneId: number) => void) | null = null;
   private onDetached: (() => void) | null = null;
-  private onStatusUpdate: ((msg: { session_name: string; window_names: string[]; active_window_index: number }) => void) | null = null;
+  private onStatusUpdate: ((msg: { left: string; right: string }) => void) | null = null;
 
   get state(): MuxConnectionState {
     return this._state;
@@ -454,8 +455,13 @@ export class MuxClient {
   }
 
   /** Set callback for status updates. */
-  setOnStatusUpdate(callback: (msg: { session_name: string; window_names: string[]; active_window_index: number }) => void): void {
+  setOnStatusUpdate(callback: (msg: { left: string; right: string }) => void): void {
     this.onStatusUpdate = callback;
+  }
+
+  /** Send RequestStatusUpdate (0x17) to daemon with empty payload. */
+  async sendRequestStatusUpdate(): Promise<void> {
+    await this.sendControl(MuxMessageType.RequestStatusUpdate, 0);
   }
 
   /** Disconnect (no-op for APC-based client since bridge handles lifecycle). */
@@ -502,39 +508,27 @@ export class MuxClient {
  * Decode a bincode-serialized StatusUpdateMsg.
  *
  * bincode format:
- * - session_name: String (u64 LE len + UTF-8)
- * - window_names: Vec<String> (u64 LE len, then Strings)
- * - active_window_index: u32 LE
+ * - left: String (u64 LE len + UTF-8)
+ * - right: String (u64 LE len + UTF-8)
  */
-function decodeStatusUpdateMsg(data: Uint8Array): { session_name: string; window_names: string[]; active_window_index: number } | null {
+export function decodeStatusUpdateMsg(data: Uint8Array): { left: string; right: string } | null {
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let offset = 0;
 
-  // session_name
+  // left: String (u64 LE len + UTF-8)
   if (offset + 8 > data.length) return null;
-  const nameLen = Number(view.getBigUint64(offset, true));
+  const leftLen = Number(view.getBigUint64(offset, true));
   offset += 8;
-  if (offset + nameLen > data.length) return null;
-  const session_name = new TextDecoder().decode(data.slice(offset, offset + nameLen));
-  offset += nameLen;
+  if (offset + leftLen > data.length) return null;
+  const left = new TextDecoder().decode(data.slice(offset, offset + leftLen));
+  offset += leftLen;
 
-  // window_names Vec length
+  // right: String (u64 LE len + UTF-8)
   if (offset + 8 > data.length) return null;
-  const windowNamesLen = Number(view.getBigUint64(offset, true));
+  const rightLen = Number(view.getBigUint64(offset, true));
   offset += 8;
-  const window_names: string[] = [];
-  for (let i = 0; i < windowNamesLen; i++) {
-    if (offset + 8 > data.length) return null;
-    const wLen = Number(view.getBigUint64(offset, true));
-    offset += 8;
-    if (offset + wLen > data.length) return null;
-    window_names.push(new TextDecoder().decode(data.slice(offset, offset + wLen)));
-    offset += wLen;
-  }
+  if (offset + rightLen > data.length) return null;
+  const right = new TextDecoder().decode(data.slice(offset, offset + rightLen));
 
-  // active_window_index
-  if (offset + 4 > data.length) return null;
-  const active_window_index = view.getUint32(offset, true);
-
-  return { session_name, window_names, active_window_index };
+  return { left, right };
 }

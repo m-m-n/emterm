@@ -56,6 +56,7 @@ pub enum MessageType {
     RenameWindow = 0x14,
     DestroyWindow = 0x15,
     StatusUpdate = 0x16,
+    RequestStatusUpdate = 0x17,
 }
 
 impl MessageType {
@@ -83,6 +84,7 @@ impl MessageType {
             0x14 => Some(Self::RenameWindow),
             0x15 => Some(Self::DestroyWindow),
             0x16 => Some(Self::StatusUpdate),
+            0x17 => Some(Self::RequestStatusUpdate),
             _ => None,
         }
     }
@@ -173,9 +175,8 @@ pub struct SplitPaneMsg {
 /// Status update pushed from daemon to GUI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusUpdateMsg {
-    pub session_name: String,
-    pub window_names: Vec<String>,
-    pub active_window_index: u32,
+    pub left: String,
+    pub right: String,
 }
 
 /// Rename window request.
@@ -324,12 +325,72 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x16u8 {
+        for i in 0x01..=0x17u8 {
             let mt = MessageType::from_u8(i).unwrap();
             assert_eq!(mt as u8, i);
         }
         assert!(MessageType::from_u8(0x00).is_none());
-        assert!(MessageType::from_u8(0x17).is_none());
+        assert!(MessageType::from_u8(0x18).is_none());
+    }
+
+    #[test]
+    fn test_request_status_update_message_type() {
+        assert_eq!(
+            MessageType::from_u8(0x17),
+            Some(MessageType::RequestStatusUpdate)
+        );
+        assert_eq!(MessageType::RequestStatusUpdate as u8, 0x17);
+    }
+
+    #[test]
+    fn test_status_update_msg_round_trip() {
+        let msg = StatusUpdateMsg {
+            left: "hello left".to_string(),
+            right: "hello right".to_string(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: StatusUpdateMsg = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.left, "hello left");
+        assert_eq!(decoded.right, "hello right");
+    }
+
+    #[test]
+    fn test_status_update_msg_empty_strings() {
+        let msg = StatusUpdateMsg {
+            left: String::new(),
+            right: String::new(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: StatusUpdateMsg = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.left, "");
+        assert_eq!(decoded.right, "");
+    }
+
+    #[test]
+    fn test_status_update_msg_unicode() {
+        let msg = StatusUpdateMsg {
+            left: "ステータス".to_string(),
+            right: "右側 🎉".to_string(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: StatusUpdateMsg = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.left, "ステータス");
+        assert_eq!(decoded.right, "右側 🎉");
+    }
+
+    #[test]
+    fn test_status_update_msg_via_mux_message() {
+        let status = StatusUpdateMsg {
+            left: "left content".to_string(),
+            right: "right content".to_string(),
+        };
+        let msg = MuxMessage::control(MessageType::StatusUpdate, 0, &status);
+        let body = msg.to_frame_body();
+        let parsed = MuxMessage::from_frame_body(&body).unwrap();
+        assert_eq!(parsed.msg_type, MessageType::StatusUpdate);
+        let decoded: StatusUpdateMsg = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.left, "left content");
+        assert_eq!(decoded.right, "right content");
     }
 
     #[test]
@@ -514,7 +575,7 @@ mod tests {
 
     #[test]
     fn test_apc_round_trip_all_message_types() {
-        for i in 0x01..=0x16u8 {
+        for i in 0x01..=0x17u8 {
             let mt = MessageType::from_u8(i).unwrap();
             let msg = MuxMessage {
                 msg_type: mt,

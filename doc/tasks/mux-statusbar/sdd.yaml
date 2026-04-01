@@ -1,0 +1,113 @@
+schema_version: 1
+feature: mux-statusbar
+scale: standard
+created: 2026-04-01
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "bun test"
+      format_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 59915abe7a6e4409c7c23aaa58872f824161ac34
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 59915abe7a6e4409c7c23aaa58872f824161ac34
+  - id: implement
+    status: completed
+    completed_at_commit: 59915abe7a6e4409c7c23aaa58872f824161ac34
+  - id: check
+    status: completed
+    completed_at_commit: 59915abe7a6e4409c7c23aaa58872f824161ac34
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 59915abe7a6e4409c7c23aaa58872f824161ac34
+  - id: review
+    status: completed
+    completed_at_commit: 59915abe7a6e4409c7c23aaa58872f824161ac34
+
+requirements:
+  FR1:
+    title: Settings structure (mux.statusbar section)
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Template resolution ({cmd:name}, {hostname}, {cwd})
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Command execution (registered executables only, 5s timeout)
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: StatusUpdate message format change
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Periodic StatusUpdate push from daemon
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: OSC layer display on GUI
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Auto-clear OSC layer on mux exit
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Settings file reading in daemon
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: Active pane cwd via OSC 7 in pty_reader_loop (per-pane cache, active_pane_id tracking)
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: Tab switch handling (RequestStatusUpdate on mux tab focus, clear on non-mux)
+    status: ok
+    tasks: []
+    tests: []
+  FR11:
+    title: RequestStatusUpdate message (0x17, GUI→Daemon)
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Security (executable whitelist only)
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Performance (async, non-blocking, timeout)
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Platform support (cwd via OSC 7, cross-platform)
+    status: ok
+    tasks: []
+    tests: []

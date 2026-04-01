@@ -118,11 +118,12 @@ pub(super) fn register_pane_and_start_reader(
         spawned.master,
     );
     let shadow_parser = pane.shadow_parser.clone();
+    let pane_cwd = pane.cwd.clone();
     window.add_pane(pane);
 
     let reader = spawned.reader;
     std::thread::spawn(move || {
-        pty_reader_loop(pane_id, reader, output_target, shadow_parser);
+        pty_reader_loop(pane_id, reader, output_target, shadow_parser, pane_cwd);
     });
 
     Some(pane_id)
@@ -139,6 +140,7 @@ fn pty_reader_loop(
     mut reader: Box<dyn Read + Send>,
     output_target: SharedOutputTarget,
     shadow_parser: SharedShadowParser,
+    pane_cwd: Arc<std::sync::Mutex<Option<String>>>,
 ) {
     let mut buf = [0u8; 65536];
     loop {
@@ -170,6 +172,11 @@ fn pty_reader_loop(
                 let data = &buf[..n];
                 // Feed shadow parser for screen state tracking (for restoration on reattach)
                 shadow_parser.lock().unwrap().process(data);
+
+                // Detect OSC 7 (cwd reporting) and cache the path
+                if let Some(cwd) = crate::mux::ipc::statusbar::detect_osc7_cwd(data) {
+                    *pane_cwd.lock().unwrap() = Some(cwd);
+                }
 
                 // Lock briefly to try non-blocking send or clone the sender.
                 // IMPORTANT: release lock before blocking_send to avoid deadlock

@@ -52,6 +52,8 @@ pub struct MuxPane {
     pub exited: bool,
     /// Shadow VT100 parser for screen state tracking (used for reattach restoration).
     pub shadow_parser: SharedShadowParser,
+    /// Cached working directory from OSC 7 detection.
+    pub cwd: Arc<StdMutex<Option<String>>>,
 }
 
 impl MuxPane {
@@ -73,6 +75,7 @@ impl MuxPane {
             master: Some(master),
             exited: false,
             shadow_parser: Arc::new(StdMutex::new(vt100::Parser::new(rows, cols, 0))),
+            cwd: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -129,6 +132,7 @@ impl MuxPane {
             master: None,
             exited: false,
             shadow_parser: Arc::new(StdMutex::new(vt100::Parser::new(rows, cols, 0))),
+            cwd: Arc::new(StdMutex::new(None)),
         }
     }
 }

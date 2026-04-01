@@ -1,0 +1,13 @@
+tasks:
+  - - id: phase1
+      title: "Settings & Protocol Foundation"
+      status: completed
+  - - id: phase2
+      title: "Daemon Status Bar Engine"
+      status: completed
+  - - id: phase3
+      title: "Frontend Wiring"
+      status: completed
+  - - id: phase4
+      title: "Cleanup & Validation"
+      status: completed

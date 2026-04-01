@@ -8,7 +8,8 @@ mod validation;
 #[cfg(feature = "gui")]
 pub use io::{load_settings, save_settings};
 pub use settings::{
-    AppSettings, KeybindSettings, Profile, SshConnection, SshOption, StatusbarCustomCommand,
+    AppSettings, KeybindSettings, MuxSettings, MuxStatusbarCommand, MuxStatusbarSettings, Profile,
+    SshConnection, SshOption, StatusbarCustomCommand,
 };
 pub use types::*;
 
