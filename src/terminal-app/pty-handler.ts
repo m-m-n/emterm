@@ -13,72 +13,102 @@ import type { CharSize } from "./types";
 import { reinitWasm } from "../terminal/wasm/loader";
 import { handleMuxApc } from "../terminal/handlers/apc_handlers";
 import type { MuxApcContext } from "../terminal/handlers/apc_handlers";
+import { muxLog } from "../terminal/mux/mux-logger";
 
 /**
- * Extract APC and OSC 9999 sequences from raw PTY data and pass mux messages to handleMuxApc.
- * Used during suppressOriginalPty mode where WASM processing is skipped.
+ * Stateful APC/OSC parser that buffers incomplete sequences across PTY read chunks.
+ *
+ * Used during suppressOriginalPty mode (mux) where WASM processing is skipped.
+ * The bridge writes complete APC/OSC sequences, but PTY reads may split them
+ * at arbitrary boundaries (especially for large PtyOutput payloads > 4KB).
+ *
  * APC format: ESC _ <body> ESC \
  * OSC format: ESC ] 9999 ; <body> ESC \ (or BEL)
  */
-function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | null): void {
-  const ESC = 0x1b;
-  const UNDERSCORE = 0x5f; // '_'
-  const BACKSLASH = 0x5c; // '\'
-  const BRACKET = 0x5d;   // ']'
-  const BEL = 0x07;
-  let i = 0;
-  while (i < data.length - 1) {
-    if (data[i] === ESC) {
-      if (data[i + 1] === UNDERSCORE) {
-        // APC: ESC _ <body> ESC \
-        const bodyStart = i + 2;
-        let j = bodyStart;
-        while (j < data.length - 1) {
-          if (data[j] === ESC && data[j + 1] === BACKSLASH) {
-            const body = data.subarray(bodyStart, j);
-            handleMuxApc(body, muxCtx);
-            i = j + 2;
-            break;
-          }
-          j++;
-        }
-        if (j >= data.length - 1) {
-          console.warn(`[DIAG-APC] APC sequence truncated at chunk boundary: bodyStart=${bodyStart} dataLen=${data.length}`);
-          break;
-        }
-      } else if (data[i + 1] === BRACKET) {
-        // OSC: ESC ] 9999 ; <body> ESC \ (or BEL)
-        // Parse the parameter number
-        let paramEnd = i + 2;
-        let param = 0;
-        while (paramEnd < data.length && data[paramEnd]! >= 0x30 && data[paramEnd]! <= 0x39) {
-          param = param * 10 + (data[paramEnd]! - 0x30);
-          paramEnd++;
-        }
-        // Check for semicolon after param
-        if (param === 9999 && paramEnd < data.length && data[paramEnd] === 0x3b) {
-          const bodyStart = paramEnd + 1;
+class MuxMessageExtractor {
+  private leftover: Uint8Array | null = null;
+  private truncationCount = 0;
+
+  extract(data: Uint8Array, muxCtx: MuxApcContext | null): void {
+    // Merge leftover from previous chunk if present
+    let buf: Uint8Array;
+    if (this.leftover) {
+      buf = new Uint8Array(this.leftover.length + data.length);
+      buf.set(this.leftover);
+      buf.set(data, this.leftover.length);
+      const leftoverLen = this.leftover.length;
+      this.leftover = null;
+      muxLog.debug(`[DIAG-APC] merged leftover (${leftoverLen}) + new (${data.length}) = ${buf.length} bytes`);
+    } else {
+      buf = data;
+    }
+
+    const ESC = 0x1b;
+    const UNDERSCORE = 0x5f; // '_'
+    const BACKSLASH = 0x5c; // '\'
+    const BRACKET = 0x5d;   // ']'
+    const BEL = 0x07;
+    let i = 0;
+    while (i < buf.length - 1) {
+      if (buf[i] === ESC) {
+        if (buf[i + 1] === UNDERSCORE) {
+          // APC: ESC _ <body> ESC \
+          const bodyStart = i + 2;
           let j = bodyStart;
-          while (j < data.length) {
-            // ESC \ terminator
-            if (j < data.length - 1 && data[j] === ESC && data[j + 1] === BACKSLASH) {
-              const body = data.subarray(bodyStart, j);
+          while (j < buf.length - 1) {
+            if (buf[j] === ESC && buf[j + 1] === BACKSLASH) {
+              const body = buf.subarray(bodyStart, j);
               handleMuxApc(body, muxCtx);
               i = j + 2;
               break;
             }
-            // BEL terminator
-            if (data[j] === BEL) {
-              const body = data.subarray(bodyStart, j);
-              handleMuxApc(body, muxCtx);
-              i = j + 1;
-              break;
-            }
             j++;
           }
-          if (j >= data.length) {
-            console.warn(`[DIAG-APC] OSC 9999 sequence truncated at chunk boundary: bodyStart=${bodyStart} dataLen=${data.length}`);
-            break;
+          if (j >= buf.length - 1) {
+            // Incomplete APC -- save from ESC _ onward for next chunk
+            this.leftover = buf.slice(i);
+            this.truncationCount++;
+            muxLog.warn(`[DIAG-APC] APC truncated at chunk boundary: saved ${this.leftover.length} bytes (total truncations: ${this.truncationCount})`);
+            return;
+          }
+        } else if (buf[i + 1] === BRACKET) {
+          // OSC: ESC ] 9999 ; <body> ESC \ (or BEL)
+          let paramEnd = i + 2;
+          let param = 0;
+          while (paramEnd < buf.length && buf[paramEnd]! >= 0x30 && buf[paramEnd]! <= 0x39) {
+            param = param * 10 + (buf[paramEnd]! - 0x30);
+            paramEnd++;
+          }
+          if (param === 9999 && paramEnd < buf.length && buf[paramEnd] === 0x3b) {
+            const bodyStart = paramEnd + 1;
+            let j = bodyStart;
+            let found = false;
+            while (j < buf.length) {
+              if (j < buf.length - 1 && buf[j] === ESC && buf[j + 1] === BACKSLASH) {
+                const body = buf.subarray(bodyStart, j);
+                handleMuxApc(body, muxCtx);
+                i = j + 2;
+                found = true;
+                break;
+              }
+              if (buf[j] === BEL) {
+                const body = buf.subarray(bodyStart, j);
+                handleMuxApc(body, muxCtx);
+                i = j + 1;
+                found = true;
+                break;
+              }
+              j++;
+            }
+            if (!found) {
+              // Incomplete OSC -- save from ESC ] onward for next chunk
+              this.leftover = buf.slice(i);
+              this.truncationCount++;
+              muxLog.warn(`[DIAG-APC] OSC truncated at chunk boundary: saved ${this.leftover.length} bytes (total truncations: ${this.truncationCount})`);
+              return;
+            }
+          } else {
+            i++;
           }
         } else {
           i++;
@@ -86,9 +116,12 @@ function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | n
       } else {
         i++;
       }
-    } else {
-      i++;
     }
+  }
+
+  /** Discard any buffered leftover (e.g., on mode exit). */
+  reset(): void {
+    this.leftover = null;
   }
 }
 
@@ -462,6 +495,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     }
   };
 
+  // Stateful extractor for mux APC/OSC messages -- buffers across chunk boundaries
+  const muxExtractor = new MuxMessageExtractor();
+
   const handle: PtyHandlerHandle = {
     injectData: (data: Uint8Array) => {
       pendingChunks.push(data);
@@ -471,6 +507,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     flushPendingData: () => {
       pendingChunks.length = 0;
       leftoverData = null;
+      muxExtractor.reset();
     },
     processNow: () => {
       processPendingData();
@@ -482,7 +519,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     // During mux mode, skip WASM processing but still extract mux APC messages.
     // Bridge sends PaneCreated/PtyOutput as APC sequences over the PTY.
     if (handle.suppressOriginalPty) {
-      extractAndHandleMuxMessages(data, ctx.getMuxApcContext());
+      muxExtractor.extract(data, ctx.getMuxApcContext());
       return;
     }
     pendingChunks.push(data);
