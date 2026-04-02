@@ -1122,7 +1122,10 @@ export class TerminalApp {
     if (!pane) return;
 
     // Process data through the pane's WASM grid
-    pane.grid.core.process_pty_data(data);
+    const consumed = pane.grid.core.process_pty_data(data);
+    if (consumed < data.length) {
+      console.warn(`[DIAG-MODE] muxPane=${paneId} consumed=${consumed}/${data.length} (partial - buffer switch or cursor_shown)`);
+    }
 
     // Render using the pane's own TerminalState and renderer
     pane.renderer.forceRender(pane.state);

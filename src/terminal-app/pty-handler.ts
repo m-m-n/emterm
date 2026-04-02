@@ -42,7 +42,10 @@ function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | n
           }
           j++;
         }
-        if (j >= data.length - 1) break;
+        if (j >= data.length - 1) {
+          console.warn(`[DIAG-APC] APC sequence truncated at chunk boundary: bodyStart=${bodyStart} dataLen=${data.length}`);
+          break;
+        }
       } else if (data[i + 1] === BRACKET) {
         // OSC: ESC ] 9999 ; <body> ESC \ (or BEL)
         // Parse the parameter number
@@ -73,7 +76,10 @@ function extractAndHandleMuxMessages(data: Uint8Array, muxCtx: MuxApcContext | n
             }
             j++;
           }
-          if (j >= data.length) break;
+          if (j >= data.length) {
+            console.warn(`[DIAG-APC] OSC 9999 sequence truncated at chunk boundary: bodyStart=${bodyStart} dataLen=${data.length}`);
+            break;
+          }
         } else {
           i++;
         }
