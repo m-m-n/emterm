@@ -159,7 +159,10 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
         const core = savedState.useAlternate && savedState.alternateGrid
           ? savedState.alternateGrid.core
           : savedState.primaryGrid.core;
-        core.process_pty_data(data);
+        const consumed = core.process_pty_data(data);
+        if (consumed < data.length) {
+          console.warn(`[DIAG-MODE] inactive pane=${paneId} consumed=${consumed}/${data.length} (partial - buffer switch or cursor_shown)`);
+        }
       } else {
         // No saved state for this pane -- data dropped
       }

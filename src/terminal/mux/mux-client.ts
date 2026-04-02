@@ -384,6 +384,7 @@ export class MuxClient {
       : data.length > 0 ? data[0]! : 0;
     if (msgType === this._lastDedupType && paneId === this._lastDedupPaneId &&
         data.length === this._lastDedupDataLen && head === this._lastDedupDataHead) {
+      muxLog.warn(`[DIAG-DEDUP] DROPPED msg type=${msgType} pane=${paneId} len=${data.length} head=0x${head.toString(16)}`);
       return;
     }
     this._lastDedupType = msgType;
