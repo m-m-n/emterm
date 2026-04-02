@@ -378,19 +378,22 @@ export class MuxClient {
    * Called by the APC handler when it detects the emterm-mux; prefix.
    */
   handleIncomingApc(msgType: number, paneId: number, data: Uint8Array): void {
-    // Dedup: skip identical consecutive messages (from dual OSC+APC transport)
-    const head = data.length >= 4
-      ? (data[0]! | (data[1]! << 8) | (data[2]! << 16) | (data[3]! << 24))
-      : data.length > 0 ? data[0]! : 0;
-    if (msgType === this._lastDedupType && paneId === this._lastDedupPaneId &&
-        data.length === this._lastDedupDataLen && head === this._lastDedupDataHead) {
-      muxLog.warn(`[DIAG-DEDUP] DROPPED msg type=${msgType} pane=${paneId} len=${data.length} head=0x${head.toString(16)}`);
-      return;
+    // Dedup: skip identical consecutive messages (from dual OSC+APC transport).
+    // PtyOutput is excluded -- legitimate consecutive chunks can have identical
+    // length and header bytes (e.g., cursor hide sequences from Claude Code).
+    if (msgType !== MuxMessageType.PtyOutput) {
+      const head = data.length >= 4
+        ? (data[0]! | (data[1]! << 8) | (data[2]! << 16) | (data[3]! << 24))
+        : data.length > 0 ? data[0]! : 0;
+      if (msgType === this._lastDedupType && paneId === this._lastDedupPaneId &&
+          data.length === this._lastDedupDataLen && head === this._lastDedupDataHead) {
+        return;
+      }
+      this._lastDedupType = msgType;
+      this._lastDedupPaneId = paneId;
+      this._lastDedupDataLen = data.length;
+      this._lastDedupDataHead = head;
     }
-    this._lastDedupType = msgType;
-    this._lastDedupPaneId = paneId;
-    this._lastDedupDataLen = data.length;
-    this._lastDedupDataHead = head;
     switch (msgType) {
       case MuxMessageType.Welcome: {
         const sessions = decodeWelcomeMsg(data);
