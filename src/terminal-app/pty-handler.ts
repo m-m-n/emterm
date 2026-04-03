@@ -185,6 +185,34 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   const DEGRADED_BUDGET_MS = 100; // Generous budget when rAF is broken
   const RAF_WATCHDOG_MS = 500; // Fallback if rAF stops being delivered
   const DEGRADED_INTERVAL_MS = 50; // setTimeout interval in degraded mode
+
+  // ── Diagnostic state for rAF freeze investigation ──────────
+  let lastRafCallbackTime = 0;       // When processPendingData last ran via rAF
+  let lastScheduleTime = 0;          // When scheduleProcessing was last called
+  let lastOnDataTime = 0;            // When onData last received PTY data
+  let onDataCountSinceLastRaf = 0;   // How many onData calls between rAF callbacks
+  let totalBytesQueued = 0;          // Total bytes queued since last processPendingData
+  let eventLoopProbeScheduled = false;
+  let longProcessingCount = 0;       // Count of processPendingData calls > 50ms
+
+  // Event loop health probe: measures setTimeout(0) latency to detect main thread blockage
+  const probeEventLoopHealth = () => {
+    if (eventLoopProbeScheduled) return;
+    eventLoopProbeScheduled = true;
+    const probeStart = performance.now();
+    setTimeout(() => {
+      eventLoopProbeScheduled = false;
+      const latency = performance.now() - probeStart;
+      if (latency > 100) {
+        console.warn(
+          `[WARN][FRONTEND] event-loop-lag: setTimeout(0) took ${latency.toFixed(1)}ms` +
+          ` | pendingChunks=${pendingChunks.length}` +
+          ` | rafScheduled=${rafScheduled}` +
+          ` | rafDegraded=${rafDegraded}`,
+        );
+      }
+    }, 0);
+  };
   const MAX_WASM_RECOVERY_ATTEMPTS = 3;
   const RECOVERY_WINDOW_MS = 60_000; // Reset attempt counter after 60s of stability
   let wasmRecoveryAttempts = 0;
@@ -193,6 +221,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let wasmUnrecoverable = false;
 
   const processPendingData = (fromWatchdog = false) => {
+    const processingStart = performance.now();
     rafScheduled = false;
 
     // During async WASM reinitialization or after exhausting retries, skip processing
@@ -205,9 +234,29 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     const currentState = ctx.getState();
     const currentRenderer = ctx.getRenderer();
 
+    // Diagnostic: track rAF callback timing
+    const now = performance.now();
+    const sinceLastRaf = lastRafCallbackTime > 0 ? now - lastRafCallbackTime : -1;
+    const sinceSchedule = lastScheduleTime > 0 ? now - lastScheduleTime : -1;
+    lastRafCallbackTime = now;
+    const queuedBytes = totalBytesQueued;
+    const queuedChunks = pendingChunks.length;
+    const dataCallsSinceRaf = onDataCountSinceLastRaf;
+    totalBytesQueued = 0;
+    onDataCountSinceLastRaf = 0;
+
     if (fromWatchdog && !rafDegraded) {
       rafDegraded = true;
-      console.warn("[WARN][FRONTEND] rAF not delivered — switching to degraded (setTimeout) mode");
+      console.warn(
+        `[WARN][FRONTEND] rAF not delivered — switching to degraded (setTimeout) mode` +
+        ` | sinceSchedule=${sinceSchedule.toFixed(0)}ms` +
+        ` | sinceLastRaf=${sinceLastRaf.toFixed(0)}ms` +
+        ` | pendingChunks=${queuedChunks}` +
+        ` | pendingBytes=${queuedBytes}` +
+        ` | onDataCalls=${dataCallsSinceRaf}` +
+        ` | document.hidden=${document.hidden}` +
+        ` | document.visibilityState=${document.visibilityState}`,
+      );
       if (currentState && currentRenderer) {
         try {
           // Force full re-render to recover from potential canvas buffer loss
@@ -356,9 +405,33 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         // Synchronized Output (mode 2026): suppress rendering while active.
         // Dirty rows accumulate in WASM; flush happens when mode is cleared.
         if (!currentState.modes.synchronizedOutput) {
+          const renderStart = performance.now();
           currentRenderer.renderImmediate(currentState);
+          const renderTime = performance.now() - renderStart;
           ctx.getImeHandler()?.updatePosition();
+
+          // Diagnostic: log slow renders
+          if (renderTime > 30) {
+            console.warn(
+              `[WARN][FRONTEND] slow-render: ${renderTime.toFixed(1)}ms` +
+              ` | rafDegraded=${rafDegraded}`,
+            );
+          }
         }
+      }
+
+      // Diagnostic: log total processing time
+      const processingTime = performance.now() - processingStart;
+      if (processingTime > 50) {
+        longProcessingCount++;
+        console.warn(
+          `[WARN][FRONTEND] slow-processPendingData: ${processingTime.toFixed(1)}ms` +
+          ` | inputBytes=${queuedBytes}` +
+          ` | chunks=${queuedChunks}` +
+          ` | hasLeftover=${leftoverData !== null}` +
+          ` | fromWatchdog=${fromWatchdog}` +
+          ` | longProcessingTotal=${longProcessingCount}`,
+        );
       }
 
       // If there's leftover data, schedule next frame to continue
@@ -476,6 +549,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   const scheduleProcessing = () => {
     if (rafScheduled) return;
     rafScheduled = true;
+    lastScheduleTime = performance.now();
 
     if (rafDegraded) {
       // In degraded mode, use setTimeout directly (rAF is not working)
@@ -486,8 +560,14 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       if (rafWatchdog !== null) clearTimeout(rafWatchdog);
       rafWatchdog = setTimeout(() => {
         if (rafScheduled) {
+          const elapsed = performance.now() - lastScheduleTime;
+          const pendingBytes = pendingChunks.reduce((sum, c) => sum + c.length, 0);
           console.warn(
-            "[WARN][FRONTEND] rAF watchdog triggered — forcing data processing",
+            `[WARN][FRONTEND] rAF watchdog triggered — forcing data processing` +
+            ` | elapsed=${elapsed.toFixed(0)}ms` +
+            ` | pendingChunks=${pendingChunks.length}` +
+            ` | pendingBytes=${pendingBytes}` +
+            ` | document.hidden=${document.hidden}`,
           );
           processPendingData(true);
         }
@@ -523,8 +603,53 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       return;
     }
     pendingChunks.push(data);
+    totalBytesQueued += data.length;
+    onDataCountSinceLastRaf++;
+    lastOnDataTime = performance.now();
+
+    // Probe event loop health periodically (every ~100 onData calls)
+    if (onDataCountSinceLastRaf % 100 === 0) {
+      probeEventLoopHealth();
+    }
+
     scheduleProcessing();
   });
+
+  // ── Periodic health monitor ─────────────────────────────────
+  // Runs every 10s to detect silent stalls (rAF stops but no data arrives to trigger watchdog)
+  const HEALTH_CHECK_INTERVAL_MS = 10_000;
+  const healthCheck = () => {
+    const now = performance.now();
+    const sinceLastRaf = lastRafCallbackTime > 0 ? now - lastRafCallbackTime : -1;
+    const sinceLastData = lastOnDataTime > 0 ? now - lastOnDataTime : -1;
+    const sinceLastSchedule = lastScheduleTime > 0 ? now - lastScheduleTime : -1;
+
+    // Log if rAF hasn't fired in a while but data is flowing
+    if (sinceLastRaf > 2000 && sinceLastData < 2000 && sinceLastData > 0) {
+      console.warn(
+        `[WARN][FRONTEND] health-check: rAF stalled` +
+        ` | sinceLastRaf=${sinceLastRaf.toFixed(0)}ms` +
+        ` | sinceLastData=${sinceLastData.toFixed(0)}ms` +
+        ` | sinceLastSchedule=${sinceLastSchedule.toFixed(0)}ms` +
+        ` | rafScheduled=${rafScheduled}` +
+        ` | rafDegraded=${rafDegraded}` +
+        ` | pendingChunks=${pendingChunks.length}` +
+        ` | document.hidden=${document.hidden}`,
+      );
+    }
+
+    // Log if rafScheduled is stuck true (scheduled but never fired)
+    if (rafScheduled && sinceLastSchedule > 3000) {
+      console.warn(
+        `[WARN][FRONTEND] health-check: rafScheduled stuck for ${sinceLastSchedule.toFixed(0)}ms` +
+        ` | rafDegraded=${rafDegraded}` +
+        ` | document.hidden=${document.hidden}`,
+      );
+    }
+
+    setTimeout(healthCheck, HEALTH_CHECK_INTERVAL_MS);
+  };
+  setTimeout(healthCheck, HEALTH_CHECK_INTERVAL_MS);
 
   // Handle exit event
   await ptyClient.onExit(async (_code, _remainingSessions) => {
