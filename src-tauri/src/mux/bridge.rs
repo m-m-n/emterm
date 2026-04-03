@@ -70,21 +70,36 @@ fn restore_stdin(orig: &libc::termios) {
     log::info!("stdin restored to original mode");
 }
 
+/// RAII guard that restores terminal settings on drop.
+#[cfg(unix)]
+struct RawModeGuard(Option<libc::termios>);
+
+#[cfg(unix)]
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        if let Some(ref orig) = self.0 {
+            restore_stdin(orig);
+        }
+    }
+}
+
 /// Async bridge main loop: handshake, then bidirectional APC/socket forwarding.
 #[cfg(unix)]
 async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
-    // Set stdin to raw mode so APC escape sequences arrive byte-by-byte
-    let orig_termios = set_stdin_raw();
-
-    // Connect to daemon
+    // Connect to daemon first, before changing terminal mode.
+    // If connection fails, the terminal must remain in its original state.
     log::info!("Connecting to daemon at {:?}", sock_path);
     let stream = UnixStream::connect(sock_path)
         .await
         .map_err(|e| format!("Failed to connect to daemon at {:?}: {}", sock_path, e))?;
     log::info!("Socket connected");
+
+    // Set stdin to raw mode so APC escape sequences arrive byte-by-byte.
+    // The guard ensures restoration even if an error occurs later.
+    let _raw_guard = RawModeGuard(set_stdin_raw());
 
     let (mut sock_reader, mut sock_writer) = tokio::io::split(stream);
 
@@ -290,10 +305,8 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         let _ = std::io::stdout().flush();
     }
 
-    // Restore terminal settings
-    if let Some(ref orig) = orig_termios {
-        restore_stdin(orig);
-    }
+    // Restore terminal settings (drop the guard explicitly before exit)
+    drop(_raw_guard);
 
     // Brief delay so the GUI's PTY reader can consume the flushed data
     // before the PTY slave fd is closed by process exit.
