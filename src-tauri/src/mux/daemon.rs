@@ -109,12 +109,26 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
         let log_file = std::fs::File::create(&log_path)
             .unwrap_or_else(|_| std::fs::File::create("/tmp/emterm-mux-daemon.log").unwrap());
 
-        std::process::Command::new(&exe)
-            .args(["mux", "--daemon"])
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(["mux", "--daemon"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::from(log_file))
-            .spawn()
+            .stderr(std::process::Stdio::from(log_file));
+
+        // Detach daemon into its own session so it survives parent terminal exit
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: setsid() is async-signal-safe per POSIX
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
+
+        cmd.spawn()
             .map_err(|e| format!("Failed to spawn daemon: {}", e))?;
 
         // Wait for daemon to start with exponential backoff
@@ -174,6 +188,8 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     #[cfg(unix)]
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    #[cfg(unix)]
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
 
     loop {
         #[cfg(unix)]
@@ -195,6 +211,9 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             _ = sigint.recv() => {
                 log::info!("SIGINT received, shutting down");
                 break;
+            }
+            _ = sighup.recv() => {
+                log::info!("SIGHUP received, ignoring (daemon continues)");
             }
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
