@@ -93,7 +93,16 @@ pub fn execute_script() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn execute_script() -> Result<(), Box<dyn std::error::Error>> {
+    check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let sock_path =
+        daemon::ensure_daemon_running().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    println!("{}", sock_path.display());
+    Ok(())
+}
+
+#[cfg(all(not(unix), not(windows)))]
 pub fn execute_script() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux is not supported on this platform");
     std::process::exit(1);
@@ -191,6 +200,58 @@ fn cli_handshake()
     }
 }
 
+/// Connect to the daemon via Named Pipe, perform handshake, and return session list.
+/// Uses blocking I/O since CLI commands run in a synchronous context.
+#[cfg(windows)]
+fn cli_handshake() -> Result<(std::fs::File, Vec<SessionInfo>), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+
+    let pipe_name = daemon::pipe_name();
+    if !daemon::is_daemon_running(&daemon::socket_path()) {
+        return Err("No mux daemon running".into());
+    }
+
+    let mut stream = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&pipe_name)?;
+
+    // Send Hello
+    let hello = HelloMsg {
+        client_type: ClientType::Cli,
+        protocol_version: PROTOCOL_VERSION,
+    };
+    let msg = MuxMessage::control(MessageType::Hello, 0, &hello);
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    stream.write_all(&len)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    // Read Welcome
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf)?;
+    let frame_len = u32::from_be_bytes(len_buf) as usize;
+    if frame_len > MAX_FRAME_LENGTH {
+        return Err("Frame too large".into());
+    }
+
+    let mut frame_buf = vec![0u8; frame_len];
+    stream.read_exact(&mut frame_buf)?;
+
+    let welcome_msg = MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid frame")?;
+
+    let welcome: WelcomeMsg = welcome_msg
+        .decode_payload()
+        .ok_or("Invalid Welcome payload")?;
+
+    match welcome {
+        WelcomeMsg::Accepted { sessions, .. } => Ok((stream, sessions)),
+        WelcomeMsg::Rejected { reason } => Err(format!("Connection rejected: {}", reason).into()),
+    }
+}
+
 /// Execute the `emterm mux new-window` command.
 ///
 /// Connects to the daemon, performs handshake, sends CreateWindow with
@@ -247,8 +308,55 @@ pub fn execute_new_window(
     }
 }
 
-/// Execute the `emterm mux new-window` command (Windows stub).
-#[cfg(not(unix))]
+/// Execute the `emterm mux new-window` command (Windows).
+#[cfg(windows)]
+pub fn execute_new_window(
+    name: Option<&str>,
+    command: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+
+    let (mut stream, _sessions) = cli_handshake()?;
+
+    let payload = CreateWindowPayload {
+        name: name.map(|s| s.to_string()),
+        command: command.map(|s| s.to_string()),
+    };
+
+    let msg = MuxMessage::control(MessageType::CreateWindow, 0, &payload);
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    stream.write_all(&len)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf)?;
+    let frame_len = u32::from_be_bytes(len_buf) as usize;
+    if frame_len > MAX_FRAME_LENGTH {
+        return Err("Frame too large".into());
+    }
+
+    let mut frame_buf = vec![0u8; frame_len];
+    stream.read_exact(&mut frame_buf)?;
+
+    let resp = MuxMessage::from_frame_body(&frame_buf).ok_or("Invalid frame")?;
+
+    match resp.msg_type {
+        MessageType::PaneCreated => Ok(()),
+        MessageType::Error => {
+            let err: ErrorMsg = resp.decode_payload().unwrap_or(ErrorMsg {
+                message: "Unknown error".to_string(),
+            });
+            Err(format!("Failed to create window: {}", err.message).into())
+        }
+        _ => Err(format!("Unexpected response: {:?}", resp.msg_type).into()),
+    }
+}
+
+/// Execute the `emterm mux new-window` command (unsupported platform).
+#[cfg(all(not(unix), not(windows)))]
 pub fn execute_new_window(
     _name: Option<&str>,
     _command: Option<&str>,
@@ -292,7 +400,41 @@ pub fn execute_switch_window(target: u32) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-#[cfg(not(unix))]
+/// Execute the `emterm mux switch-window` command (Windows).
+#[cfg(windows)]
+pub fn execute_switch_window(target: u32) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+
+    let (mut stream, sessions) = cli_handshake()?;
+    let session = sessions.first().ok_or("No active session")?;
+
+    if target as usize >= session.windows.len() {
+        return Err(format!(
+            "Window index {} out of range (0..{})",
+            target,
+            session.windows.len()
+        )
+        .into());
+    }
+
+    let window_id = session.windows[target as usize].id;
+    let msg = MuxMessage {
+        msg_type: MessageType::SwitchWindow,
+        pane_id: window_id,
+        payload: vec![],
+    };
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    stream.write_all(&len)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    Ok(())
+}
+
+/// Execute the `emterm mux switch-window` command (unsupported platform).
+#[cfg(all(not(unix), not(windows)))]
 pub fn execute_switch_window(_target: u32) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux is not supported on this platform");
     std::process::exit(1);
@@ -388,8 +530,44 @@ pub fn execute_send_keys(target: Option<u32>) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-/// Execute the `emterm mux send-keys` command (Windows stub).
-#[cfg(not(unix))]
+/// Execute the `emterm mux send-keys` command (Windows).
+#[cfg(windows)]
+pub fn execute_send_keys(target: Option<u32>) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+
+    let mut data = Vec::new();
+    let bytes_read = std::io::stdin()
+        .take(MAX_FRAME_LENGTH as u64 + 1)
+        .read_to_end(&mut data)?;
+    if bytes_read > MAX_FRAME_LENGTH {
+        return Err(format!(
+            "stdin data exceeds maximum size ({}MB)",
+            MAX_FRAME_LENGTH / 1024 / 1024
+        )
+        .into());
+    }
+
+    if data.is_empty() {
+        return Ok(());
+    }
+
+    let (mut stream, sessions) = cli_handshake()?;
+
+    let pane_id = resolve_target_pane(&sessions, target)?;
+
+    let msg = MuxMessage::pty_input(pane_id, data);
+    let body = msg.to_frame_body();
+    let len = (body.len() as u32).to_be_bytes();
+
+    stream.write_all(&len)?;
+    stream.write_all(&body)?;
+    stream.flush()?;
+
+    Ok(())
+}
+
+/// Execute the `emterm mux send-keys` command (unsupported platform).
+#[cfg(all(not(unix), not(windows)))]
 pub fn execute_send_keys(_target: Option<u32>) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux is not supported on this platform");
     std::process::exit(1);
@@ -421,8 +599,34 @@ pub fn execute_ls() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Execute the `emterm mux ls` command.
-#[cfg(not(unix))]
+/// Execute the `emterm mux ls` command (Windows).
+#[cfg(windows)]
+pub fn execute_ls() -> Result<(), Box<dyn std::error::Error>> {
+    let sock_path = daemon::socket_path();
+    if !daemon::is_daemon_running(&sock_path) {
+        println!("No mux daemon running");
+        return Ok(());
+    }
+
+    let (_stream, sessions) = cli_handshake()?;
+
+    if sessions.is_empty() {
+        println!("No sessions");
+        return Ok(());
+    }
+
+    for session in &sessions {
+        println!(
+            "{}: {} ({} windows, {} panes)",
+            session.id, session.name, session.window_count, session.pane_count
+        );
+    }
+
+    Ok(())
+}
+
+/// Execute the `emterm mux ls` command (unsupported platform).
+#[cfg(all(not(unix), not(windows)))]
 pub fn execute_ls() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux is not supported on this platform");
     Ok(())
@@ -454,8 +658,32 @@ pub fn execute_kill(_session: Option<&str>) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-/// Execute the `emterm mux kill` command.
-#[cfg(not(unix))]
+/// Execute the `emterm mux kill` command (Windows).
+#[cfg(windows)]
+pub fn execute_kill(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let sock_path = daemon::socket_path();
+    if !daemon::is_daemon_running(&sock_path) {
+        println!("No mux daemon running");
+        return Ok(());
+    }
+
+    if _session.is_some() {
+        eprintln!(
+            "Killing specific sessions is not yet supported. Use 'emterm mux kill' to kill the daemon."
+        );
+        return Ok(());
+    }
+
+    // Remove the marker file
+    let _ = std::fs::remove_file(&sock_path);
+    println!("Mux daemon marker removed. Active sessions will continue until shells exit.");
+    println!("To force stop, use: taskkill /IM emterm.exe /F");
+
+    Ok(())
+}
+
+/// Execute the `emterm mux kill` command (unsupported platform).
+#[cfg(all(not(unix), not(windows)))]
 pub fn execute_kill(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux is not supported on this platform");
     Ok(())

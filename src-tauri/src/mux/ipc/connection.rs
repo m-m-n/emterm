@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
@@ -33,11 +33,13 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const DRAIN_BATCH_LIMIT: usize = 64;
 
 /// Handle a new client connection through handshake and message loop.
-pub async fn handle_connection(
-    stream: UnixStream,
+pub async fn handle_connection<S>(
+    stream: S,
     session_manager: Arc<Mutex<SessionManager>>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
-) {
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let mut framed = Framed::new(stream, MuxCodec::new());
 
     // Wait for Hello with timeout to prevent idle connection DoS
@@ -322,11 +324,13 @@ pub async fn handle_connection(
 /// Reads at most one control message (e.g., CreateWindow), processes it,
 /// sends a response, and disconnects. If no message arrives within 5 seconds,
 /// disconnects gracefully (this is the normal `mux ls` path).
-async fn handle_cli_client(
-    framed: &mut Framed<UnixStream, MuxCodec>,
+async fn handle_cli_client<S>(
+    framed: &mut Framed<S, MuxCodec>,
     session_manager: &Arc<Mutex<SessionManager>>,
     _shutdown_tx: &tokio::sync::watch::Sender<bool>,
-) {
+) where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     // Wait for one optional control message with timeout
     let msg_result = tokio::time::timeout(Duration::from_secs(5), framed.next()).await;
 
@@ -406,16 +410,19 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 ///
 /// Returns `Err(true)` when the connection should be closed,
 /// `Err(false)` on a non-fatal send error, and `Ok(())` otherwise.
-async fn route_message(
+async fn route_message<S>(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    framed: &mut Framed<UnixStream, MuxCodec>,
+    framed: &mut Framed<S, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
     statusbar_engine: &mut StatusBarEngine,
     pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
-) -> Result<(), bool> {
+) -> Result<(), bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     match msg.msg_type {
         MessageType::CreateWindow => {
             handle_create_window(

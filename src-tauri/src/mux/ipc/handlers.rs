@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use futures::SinkExt;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
@@ -20,13 +20,16 @@ use crate::mux::session::pane::{PaneId, PtyOutputChunk};
 /// Decodes optional `CreateWindowPayload` from the message to set window name
 /// and execute an initial command. Empty or missing payload defaults to
 /// name="shell" with no command (backward compatible with GUI).
-pub(super) async fn handle_create_window(
+pub(super) async fn handle_create_window<S>(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    framed: &mut Framed<UnixStream, MuxCodec>,
+    framed: &mut Framed<S, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: u32,
-) -> Result<(), bool> {
+) -> Result<(), bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     // Decode payload; empty/invalid payload -> defaults (backward compat)
     let payload = msg
         .decode_payload::<CreateWindowPayload>()
@@ -123,12 +126,15 @@ pub(super) async fn handle_create_window(
 }
 
 /// Split an existing pane by spawning a new PTY in the same window.
-pub(super) async fn handle_split_pane(
+pub(super) async fn handle_split_pane<S>(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    framed: &mut Framed<UnixStream, MuxCodec>,
+    framed: &mut Framed<S, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
-) -> Result<(), bool> {
+) -> Result<(), bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let _split_msg: SplitPaneMsg = match msg.decode_payload() {
         Some(m) => m,
         None => {
@@ -386,13 +392,16 @@ pub(super) async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<S
 ///
 /// Detaches panes from the current session, updates the active session,
 /// and reattaches panes from the new session with buffered output replay.
-pub(super) async fn handle_attach(
+pub(super) async fn handle_attach<S>(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
-    framed: &mut Framed<UnixStream, MuxCodec>,
+    framed: &mut Framed<S, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
-) -> Result<(), bool> {
+) -> Result<(), bool>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let attach_msg: AttachMsg = match msg.decode_payload() {
         Some(m) => m,
         None => {
