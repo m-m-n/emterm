@@ -162,8 +162,8 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
     // Bidirectional forwarding: stdin -> daemon, daemon -> stdout
     log::info!("Starting bidirectional forwarding");
 
-    use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
     // Start with undetected transport. While undetected, send both OSC and APC.
     // Once the GUI sends its first message, lock to the detected transport.
     let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
@@ -268,9 +268,7 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
                     }
                 } else {
                     // Plaintext input means Windows ConPTY: use OSC for output
-                    let encoded = if t == Transport::Osc as u8
-                        || t == Transport::Plaintext as u8
-                    {
+                    let encoded = if t == Transport::Osc as u8 || t == Transport::Plaintext as u8 {
                         msg.to_osc()
                     } else {
                         msg.to_apc()
@@ -386,10 +384,7 @@ impl StdinApcParser {
     }
 
     /// Complete a plaintext mux sequence (EMUX;<base64>\n).
-    fn complete_plaintext_sequence(
-        apc_buf: &mut Vec<u8>,
-        actions: &mut Vec<StdinAction>,
-    ) {
+    fn complete_plaintext_sequence(apc_buf: &mut Vec<u8>, actions: &mut Vec<StdinAction>) {
         let payload_str = String::from_utf8_lossy(apc_buf).to_string();
         apc_buf.clear();
 
@@ -405,11 +400,7 @@ impl StdinApcParser {
     }
 
     /// Complete a mux sequence: decode the accumulated APC buffer and produce an action.
-    fn complete_mux_sequence(
-        apc_buf: &mut Vec<u8>,
-        is_osc: bool,
-        actions: &mut Vec<StdinAction>,
-    ) {
+    fn complete_mux_sequence(apc_buf: &mut Vec<u8>, is_osc: bool, actions: &mut Vec<StdinAction>) {
         let payload = String::from_utf8_lossy(apc_buf).to_string();
         apc_buf.clear();
 
@@ -525,11 +516,7 @@ impl StdinApcParser {
                         self.state = ParserState::InApcEsc;
                     } else if self.is_osc && byte == 0x07 {
                         // BEL as alternative OSC terminator
-                        Self::complete_mux_sequence(
-                            &mut self.apc_buf,
-                            self.is_osc,
-                            &mut actions,
-                        );
+                        Self::complete_mux_sequence(&mut self.apc_buf, self.is_osc, &mut actions);
                         self.state = ParserState::Ground;
                     } else if self.apc_buf.len() < MAX_APC_PAYLOAD {
                         self.apc_buf.push(byte);
@@ -546,11 +533,7 @@ impl StdinApcParser {
                 ParserState::InApcEsc => {
                     if byte == b'\\' {
                         // ST (ESC \) found: decode the payload
-                        Self::complete_mux_sequence(
-                            &mut self.apc_buf,
-                            self.is_osc,
-                            &mut actions,
-                        );
+                        Self::complete_mux_sequence(&mut self.apc_buf, self.is_osc, &mut actions);
                         self.state = ParserState::Ground;
                     } else {
                         // ESC inside APC but not followed by \: keep accumulating
@@ -580,10 +563,7 @@ impl StdinApcParser {
                 ParserState::InPlaintext => {
                     if byte == b'\n' {
                         // Newline terminates the plaintext message
-                        Self::complete_plaintext_sequence(
-                            &mut self.apc_buf,
-                            &mut actions,
-                        );
+                        Self::complete_plaintext_sequence(&mut self.apc_buf, &mut actions);
                         self.state = ParserState::Ground;
                     } else if self.apc_buf.len() < MAX_APC_PAYLOAD {
                         self.apc_buf.push(byte);

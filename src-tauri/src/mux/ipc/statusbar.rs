@@ -28,7 +28,8 @@ pub type SharedActivePaneId = Arc<std::sync::Mutex<Option<u32>>>;
 /// Shared CWD map: pane_id -> pane's own cwd Arc, registered once on pane creation.
 /// Reading the cwd only requires locking the outer map briefly to clone the Arc,
 /// then locking the inner Arc to read the Option<String>.
-pub type SharedPaneCwdMap = Arc<std::sync::Mutex<HashMap<u32, Arc<std::sync::Mutex<Option<String>>>>>>;
+pub type SharedPaneCwdMap =
+    Arc<std::sync::Mutex<HashMap<u32, Arc<std::sync::Mutex<Option<String>>>>>>;
 
 /// Status bar engine: manages command execution, template resolution, and
 /// periodic StatusUpdate generation.
@@ -46,10 +47,7 @@ impl StatusBarEngine {
     /// Create a new StatusBarEngine by reading settings from settings.json.
     ///
     /// Returns the engine and optionally an initial error StatusUpdate to send.
-    pub fn new(
-        active_pane_id: SharedActivePaneId,
-        pane_cwd_map: SharedPaneCwdMap,
-    ) -> Self {
+    pub fn new(active_pane_id: SharedActivePaneId, pane_cwd_map: SharedPaneCwdMap) -> Self {
         let (settings, settings_error) = load_statusbar_settings();
 
         let hostname = hostname::get()
@@ -138,8 +136,18 @@ impl StatusBarEngine {
     /// Returns None if content is the same as last send (differential).
     pub fn render(&mut self) -> Option<MuxMessage> {
         let cwd = self.get_active_pane_cwd();
-        let left = resolve_template(&self.settings.left, &self.command_states, &self.hostname, &cwd);
-        let right = resolve_template(&self.settings.right, &self.command_states, &self.hostname, &cwd);
+        let left = resolve_template(
+            &self.settings.left,
+            &self.command_states,
+            &self.hostname,
+            &cwd,
+        );
+        let right = resolve_template(
+            &self.settings.right,
+            &self.command_states,
+            &self.hostname,
+            &cwd,
+        );
 
         let current = (left, right);
         if self.last_sent.as_ref() == Some(&current) {
@@ -157,8 +165,18 @@ impl StatusBarEngine {
     /// Force-render (ignore diff) for RequestStatusUpdate responses.
     pub fn force_render(&mut self) -> MuxMessage {
         let cwd = self.get_active_pane_cwd();
-        let left = resolve_template(&self.settings.left, &self.command_states, &self.hostname, &cwd);
-        let right = resolve_template(&self.settings.right, &self.command_states, &self.hostname, &cwd);
+        let left = resolve_template(
+            &self.settings.left,
+            &self.command_states,
+            &self.hostname,
+            &cwd,
+        );
+        let right = resolve_template(
+            &self.settings.right,
+            &self.command_states,
+            &self.hostname,
+            &cwd,
+        );
 
         self.last_sent = Some((left.clone(), right.clone()));
         let msg = StatusUpdateMsg { left, right };
@@ -581,10 +599,7 @@ mod tests {
     #[test]
     fn test_detect_osc7_url_encoded_path() {
         let data = b"\x1b]7;file://host/home/my%20folder\x1b\\";
-        assert_eq!(
-            detect_osc7_cwd(data),
-            Some("/home/my folder".to_string())
-        );
+        assert_eq!(detect_osc7_cwd(data), Some("/home/my folder".to_string()));
     }
 
     #[test]
@@ -634,7 +649,10 @@ mod tests {
 
     #[test]
     fn test_url_decode_multibyte_utf8() {
-        assert_eq!(url_decode("/home/user/%E4%B8%AD%E6%96%87"), "/home/user/中文");
+        assert_eq!(
+            url_decode("/home/user/%E4%B8%AD%E6%96%87"),
+            "/home/user/中文"
+        );
     }
 
     // ---- Settings Loading Tests ----
@@ -644,12 +662,7 @@ mod tests {
         // Use a temp dir that doesn't have settings.json
         let temp_dir = std::env::temp_dir().join("emterm_test_missing");
         let _ = std::fs::remove_dir_all(&temp_dir);
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                temp_dir.to_str().unwrap(),
-            )
-        };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", temp_dir.to_str().unwrap()) };
         let (settings, error) = load_statusbar_settings();
         assert!(!settings.enabled);
         assert!(error.is_none()); // Missing file creates default, no error
@@ -664,12 +677,7 @@ mod tests {
         let settings_dir = temp_dir.join("net.laser5.app.emterm");
         std::fs::create_dir_all(&settings_dir).unwrap();
         std::fs::write(settings_dir.join("settings.json"), "not json{{{").unwrap();
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                temp_dir.to_str().unwrap(),
-            )
-        };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", temp_dir.to_str().unwrap()) };
         let (settings, error) = load_statusbar_settings();
         assert!(!settings.enabled);
         assert!(error.is_some());
@@ -695,12 +703,7 @@ mod tests {
             }
         }"#;
         std::fs::write(settings_dir.join("settings.json"), json).unwrap();
-        unsafe {
-            std::env::set_var(
-                "XDG_CONFIG_HOME",
-                temp_dir.to_str().unwrap(),
-            )
-        };
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", temp_dir.to_str().unwrap()) };
         let (settings, error) = load_statusbar_settings();
         assert!(settings.enabled);
         assert_eq!(settings.left, "test left");
