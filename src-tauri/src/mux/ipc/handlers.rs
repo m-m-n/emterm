@@ -290,7 +290,11 @@ pub(super) async fn handle_switch_window(
         Some(sid) => {
             if let Some(session) = mgr.get_session_mut(sid) {
                 session.active_window_id = Some(window_id);
-                log::info!("SwitchWindow: session {} active window -> {}", sid, window_id);
+                log::info!(
+                    "SwitchWindow: session {} active window -> {}",
+                    sid,
+                    window_id
+                );
             }
         }
         None => {

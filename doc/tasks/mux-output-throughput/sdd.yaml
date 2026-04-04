@@ -1,0 +1,23 @@
+feature: mux-output-throughput
+title: "Mux Output Throughput Optimization"
+scale: Standard
+created: "2026-04-03"
+
+workflow:
+  - id: create-spec
+    status: completed
+    completed_at_commit: b4008af60bd7922a8a816af800f503dd6e1c2375
+  - id: create-plan
+    status: completed
+    completed_at_commit: b4008af60bd7922a8a816af800f503dd6e1c2375
+  - id: verify-plan
+    status: completed
+    completed_at_commit: b4008af60bd7922a8a816af800f503dd6e1c2375
+  - id: implement
+    status: completed
+    completed_at_commit: b4008af60bd7922a8a816af800f503dd6e1c2375
+  - id: check
+    status: completed
+    completed_at_commit: b4008af60bd7922a8a816af800f503dd6e1c2375
+
+requirements: {}

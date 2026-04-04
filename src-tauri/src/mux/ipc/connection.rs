@@ -19,12 +19,18 @@ use super::handlers::{
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
-use super::statusbar::{execute_command, StatusBarEngine};
+use super::statusbar::{StatusBarEngine, execute_command};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::PtyOutputChunk;
 
 /// Handshake timeout: client must send Hello within this duration.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Maximum number of PTY output chunks to drain per select! iteration.
+/// Balances batch efficiency (fewer syscalls) against input responsiveness
+/// (returning to select! to check for PtyInput). At 64 chunks × 65KB max
+/// each, worst-case batch memory is ~4MB (transient, freed after flush).
+const DRAIN_BATCH_LIMIT: usize = 64;
 
 /// Handle a new client connection through handshake and message loop.
 pub async fn handle_connection(
@@ -118,10 +124,7 @@ pub async fn handle_connection(
         Arc::new(std::sync::Mutex::new(None));
     let pane_cwd_map: super::statusbar::SharedPaneCwdMap =
         Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut statusbar_engine = StatusBarEngine::new(
-        active_pane_id.clone(),
-        pane_cwd_map.clone(),
-    );
+    let mut statusbar_engine = StatusBarEngine::new(active_pane_id.clone(), pane_cwd_map.clone());
 
     // Send initial error message if settings failed to load
     if let Some(err_msg) = statusbar_engine.initial_error_update() {
@@ -176,6 +179,9 @@ pub async fn handle_connection(
         };
 
         tokio::select! {
+            // biased: prioritize client messages (PtyInput) over PTY output
+            biased;
+
             msg = framed.next() => {
                 match msg {
                     Some(Ok(msg)) => {
@@ -207,20 +213,70 @@ pub async fn handle_connection(
                 }
             }
             chunk = pane_output_rx.recv() => {
-                if let Some(chunk) = chunk {
-                    if chunk.data.is_empty() {
-                        // Empty chunk = PTY exited signal
-                        log::info!("PTY exited for pane {}", chunk.pane_id);
-                        let exit_msg = PtyExitedMsg { exit_code: Some(0) };
-                        let msg = MuxMessage::control(MessageType::PtyExited, chunk.pane_id, &exit_msg);
-                        if framed.send(msg).await.is_err() {
-                            break;
+                if let Some(first) = chunk {
+                    let batch_start = std::time::Instant::now();
+
+                    // Drain: collect all pending chunks non-blocking (up to limit)
+                    let mut chunks = vec![first];
+                    while chunks.len() < DRAIN_BATCH_LIMIT {
+                        match pane_output_rx.try_recv() {
+                            Ok(c) => chunks.push(c),
+                            Err(_) => break,
                         }
-                    } else {
-                        let msg = MuxMessage::pty_output(chunk.pane_id, chunk.data);
-                        if framed.send(msg).await.is_err() {
-                            break;
+                    }
+                    let drained_count = chunks.len();
+
+                    // Merge consecutive same-pane chunks to reduce IPC frames
+                    let merged = merge_consecutive_chunks(chunks);
+                    let merged_count = merged.len();
+                    let total_bytes: usize = merged.iter().map(|c| c.data.len()).sum();
+
+                    if drained_count >= DRAIN_BATCH_LIMIT {
+                        log::warn!(
+                            "pty-batch-full: drained={} (limit hit) | merged={} | {}bytes",
+                            drained_count, merged_count, total_bytes
+                        );
+                    } else if drained_count > 1 {
+                        log::info!(
+                            "pty-batch: drained={} | merged={} | {}bytes",
+                            drained_count, merged_count, total_bytes
+                        );
+                    }
+
+                    // Batch send: feed all into buffer, then flush once
+                    let mut send_err = false;
+                    for chunk in merged {
+                        if chunk.data.is_empty() {
+                            log::info!("PTY exited for pane {}", chunk.pane_id);
+                            let exit_msg = PtyExitedMsg { exit_code: Some(0) };
+                            let msg = MuxMessage::control(MessageType::PtyExited, chunk.pane_id, &exit_msg);
+                            if framed.feed(msg).await.is_err() {
+                                log::warn!("pty-batch feed error: merged_count={}", merged_count);
+                                send_err = true;
+                                break;
+                            }
+                        } else {
+                            let msg = MuxMessage::pty_output(chunk.pane_id, chunk.data);
+                            if framed.feed(msg).await.is_err() {
+                                log::warn!("pty-batch feed error: merged_count={}", merged_count);
+                                send_err = true;
+                                break;
+                            }
                         }
+                    }
+                    if send_err || framed.flush().await.is_err() {
+                        if !send_err {
+                            log::warn!("pty-batch flush error: merged_count={}", merged_count);
+                        }
+                        break;
+                    }
+
+                    let elapsed = batch_start.elapsed();
+                    if elapsed.as_millis() > 50 {
+                        log::warn!(
+                            "slow-pty-batch: {}ms | drained={} merged={} | {}bytes",
+                            elapsed.as_millis(), drained_count, merged_count, total_bytes
+                        );
                     }
                 }
             }
@@ -445,6 +501,33 @@ async fn route_message(
     Ok(())
 }
 
+/// Merge consecutive PTY output chunks from the same pane into a single chunk.
+///
+/// Preserves ordering across panes. Empty-data chunks (PTY exit signals) are
+/// never merged — they remain as separate entries to ensure correct exit handling.
+fn merge_consecutive_chunks(chunks: Vec<PtyOutputChunk>) -> Vec<PtyOutputChunk> {
+    if chunks.len() <= 1 {
+        return chunks;
+    }
+    let mut merged: Vec<PtyOutputChunk> = Vec::with_capacity(chunks.len());
+    for chunk in chunks {
+        if chunk.data.is_empty() {
+            // Exit signal: never merge
+            merged.push(chunk);
+        } else if let Some(last) = merged.last_mut() {
+            if last.pane_id == chunk.pane_id && !last.data.is_empty() {
+                // Same pane, both non-empty: concatenate data
+                last.data.extend_from_slice(&chunk.data);
+            } else {
+                merged.push(chunk);
+            }
+        } else {
+            merged.push(chunk);
+        }
+    }
+    merged
+}
+
 /// Register pane cwd Arcs from session_manager into pane_cwd_map.
 /// Called once per pane creation / reattach (very rare), not per output chunk.
 async fn register_session_pane_cwds(
@@ -460,5 +543,98 @@ async fn register_session_pane_cwds(
                 map.entry(pane.id).or_insert_with(|| pane.cwd.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(pane_id: u32, data: &[u8]) -> PtyOutputChunk {
+        PtyOutputChunk {
+            pane_id,
+            data: data.to_vec(),
+        }
+    }
+
+    fn exit_chunk(pane_id: u32) -> PtyOutputChunk {
+        PtyOutputChunk {
+            pane_id,
+            data: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn merge_single_chunk() {
+        let chunks = vec![chunk(1, b"hello")];
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].pane_id, 1);
+        assert_eq!(merged[0].data, b"hello");
+    }
+
+    #[test]
+    fn merge_same_pane_consecutive() {
+        let chunks = vec![chunk(1, b"hel"), chunk(1, b"lo"), chunk(1, b"!")];
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].pane_id, 1);
+        assert_eq!(merged[0].data, b"hello!");
+    }
+
+    #[test]
+    fn merge_different_panes_not_merged() {
+        let chunks = vec![chunk(1, b"a"), chunk(2, b"b"), chunk(1, b"c")];
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].pane_id, 1);
+        assert_eq!(merged[0].data, b"a");
+        assert_eq!(merged[1].pane_id, 2);
+        assert_eq!(merged[1].data, b"b");
+        assert_eq!(merged[2].pane_id, 1);
+        assert_eq!(merged[2].data, b"c");
+    }
+
+    #[test]
+    fn merge_exit_signal_not_merged() {
+        let chunks = vec![chunk(1, b"data"), exit_chunk(1)];
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].data, b"data");
+        assert!(merged[1].data.is_empty());
+    }
+
+    #[test]
+    fn merge_exit_signal_mid_batch() {
+        // pane 1 data, pane 1 exit, pane 1 data (from new process or leftover)
+        let chunks = vec![chunk(1, b"before"), exit_chunk(1), chunk(1, b"after")];
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].data, b"before");
+        assert!(merged[1].data.is_empty());
+        assert_eq!(merged[2].data, b"after");
+    }
+
+    #[test]
+    fn merge_mixed_pane_ordering_preserved() {
+        // Interleaved panes: A, B, A, B — ordering must be preserved
+        let chunks = vec![
+            chunk(1, b"a1"),
+            chunk(1, b"a2"),
+            chunk(2, b"b1"),
+            chunk(2, b"b2"),
+            chunk(1, b"a3"),
+            chunk(3, b"c1"),
+        ];
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged[0].pane_id, 1);
+        assert_eq!(merged[0].data, b"a1a2");
+        assert_eq!(merged[1].pane_id, 2);
+        assert_eq!(merged[1].data, b"b1b2");
+        assert_eq!(merged[2].pane_id, 1);
+        assert_eq!(merged[2].data, b"a3");
+        assert_eq!(merged[3].pane_id, 3);
+        assert_eq!(merged[3].data, b"c1");
     }
 }
