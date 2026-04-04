@@ -5,18 +5,13 @@
 
 use std::path::PathBuf;
 
-#[cfg(unix)]
+use super::ipc::connection::handle_connection;
+use super::session::manager::SessionManager;
 use std::sync::Arc;
-
-#[cfg(unix)]
-use tokio::net::UnixListener;
-#[cfg(unix)]
 use tokio::sync::Mutex;
 
 #[cfg(unix)]
-use super::ipc::connection::handle_connection;
-#[cfg(unix)]
-use super::session::manager::SessionManager;
+use tokio::net::UnixListener;
 
 /// Get the socket path for the mux daemon.
 ///
@@ -52,21 +47,31 @@ pub fn socket_path() -> PathBuf {
     }
 }
 
+/// Get the Named Pipe name for the mux daemon (Windows).
+///
+/// Includes the current username to isolate pipes per user,
+/// preventing cross-user access on shared machines.
+#[cfg(windows)]
+pub fn pipe_name() -> String {
+    let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
+    format!(r"\\.\pipe\emterm-mux-{}", user)
+}
+
 /// Check if a daemon is already running by attempting to connect to the socket.
 #[cfg(unix)]
 pub fn is_daemon_running(path: &std::path::Path) -> bool {
     std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
+/// Check if a daemon is already running by attempting to open the Named Pipe.
 #[cfg(windows)]
-pub fn is_daemon_running(path: &std::path::Path) -> bool {
-    // On Windows, attempt to connect to the AF_UNIX socket
-    std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
-        std::time::Duration::from_millis(100),
-    )
-    .is_err(); // placeholder — Windows AF_UNIX requires separate handling
-    path.exists() // fallback: assume running if socket file exists
+pub fn is_daemon_running(_path: &std::path::Path) -> bool {
+    use std::fs::OpenOptions;
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_name())
+        .is_ok()
 }
 
 /// Remove stale socket file if daemon is not running.
@@ -90,7 +95,12 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
     cleanup_stale_socket(&sock_path)
         .map_err(|e| format!("Failed to clean up stale socket: {}", e))?;
 
-    if !sock_path.exists() {
+    let daemon_running = if cfg!(unix) {
+        sock_path.exists()
+    } else {
+        is_daemon_running(&sock_path)
+    };
+    if !daemon_running {
         // Ensure parent directory exists with restricted permissions
         if let Some(parent) = sock_path.parent() {
             std::fs::create_dir_all(parent)
@@ -106,8 +116,14 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
             std::env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
 
         let log_path = sock_path.with_file_name("mux-daemon.log");
-        let log_file = std::fs::File::create(&log_path)
-            .unwrap_or_else(|_| std::fs::File::create("/tmp/emterm-mux-daemon.log").unwrap());
+        let log_file = std::fs::File::create(&log_path).unwrap_or_else(|_| {
+            let fallback = if cfg!(windows) {
+                std::env::temp_dir().join("emterm-mux-daemon.log")
+            } else {
+                std::path::PathBuf::from("/tmp/emterm-mux-daemon.log")
+            };
+            std::fs::File::create(fallback).unwrap()
+        });
 
         let mut cmd = std::process::Command::new(&exe);
         cmd.args(["mux", "--daemon"])
@@ -126,6 +142,14 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
                     Ok(())
                 });
             }
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+            const DETACHED_PROCESS: u32 = 0x00000008;
+            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
         }
 
         cmd.spawn()
@@ -222,24 +246,6 @@ pub async fn run_daemon() -> anyhow::Result<()> {
                 }
             }
         }
-
-        #[cfg(windows)]
-        tokio::select! {
-            result = listener.accept() => {
-                match result {
-                    Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone()));
-                    }
-                    Err(e) => {
-                        log::error!("Accept error: {}", e);
-                    }
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                log::info!("Ctrl+C received, shutting down");
-                break;
-            }
-        }
     }
 
     // Graceful shutdown: close all PTYs so shell processes terminate
@@ -252,16 +258,77 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run the mux daemon.
+/// Run the mux daemon on Windows using Named Pipes.
 ///
-/// Not yet supported on Windows. Returns an error with a clear message.
-#[cfg(not(unix))]
+/// Listens on `\\.\pipe\emterm-mux-default`, accepts client connections,
+/// and manages PTY sessions. Auto-exits when all sessions end or Ctrl+C.
+#[cfg(windows)]
 pub async fn run_daemon() -> anyhow::Result<()> {
-    anyhow::bail!("Mux daemon is not yet supported on this platform. Linux is required.");
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    let pipe_name_str = pipe_name();
+
+    // Write marker file so socket_path().exists() works for other checks
+    let sock_path = socket_path();
+    if let Some(parent) = sock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&sock_path, pipe_name_str.as_bytes())?;
+
+    log::info!("Mux daemon listening on {}", pipe_name_str);
+
+    let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // First iteration claims exclusive pipe ownership to prevent hijacking
+    let mut is_first_instance = true;
+    loop {
+        let server = ServerOptions::new()
+            .first_pipe_instance(is_first_instance)
+            .reject_remote_clients(true)
+            .create(&pipe_name_str)?;
+        is_first_instance = false;
+
+        tokio::select! {
+            result = server.connect() => {
+                match result {
+                    Ok(()) => {
+                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone()));
+                    }
+                    Err(e) => {
+                        log::error!("Pipe accept error: {}", e);
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                log::info!("Ctrl+C received, shutting down");
+                break;
+            }
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    log::info!("All sessions empty, auto-shutting down");
+                    break;
+                }
+            }
+        }
+    }
+
+    graceful_shutdown(&session_manager).await;
+
+    // Cleanup marker file
+    let _ = std::fs::remove_file(&sock_path);
+    log::info!("Daemon shutdown complete");
+
+    Ok(())
+}
+
+/// Run the mux daemon (unsupported platform).
+#[cfg(all(not(unix), not(windows)))]
+pub async fn run_daemon() -> anyhow::Result<()> {
+    anyhow::bail!("Mux daemon is not supported on this platform.");
 }
 
 /// Close all PTYs in all sessions for graceful daemon shutdown.
-#[cfg(unix)]
 async fn graceful_shutdown(session_manager: &Arc<Mutex<SessionManager>>) {
     let mut mgr = session_manager.lock().await;
     let mut pane_count = 0u32;

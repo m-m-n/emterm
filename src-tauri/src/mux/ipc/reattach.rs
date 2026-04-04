@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use futures::SinkExt;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
@@ -78,10 +78,13 @@ pub(super) async fn collect_reattach_data(
 }
 
 /// Send reattach data (PaneCreated + buffered output) to the client.
-pub(super) async fn send_reattach_data(
-    framed: &mut Framed<UnixStream, MuxCodec>,
+pub(super) async fn send_reattach_data<S>(
+    framed: &mut Framed<S, MuxCodec>,
     reattach_data: &[(PaneId, Vec<u8>)],
-) -> Result<(), ()> {
+) -> Result<(), ()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     for (pane_id, buffered) in reattach_data {
         let resp = MuxMessage::control(MessageType::PaneCreated, *pane_id, pane_id);
         if framed.send(resp).await.is_err() {

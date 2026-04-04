@@ -1,0 +1,93 @@
+schema_version: 1
+feature: windows-mux-support
+scale: standard
+created: 2026-04-04
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 3cf544fd49a62c570088f1ec6e49477a51b5e423
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 3cf544fd49a62c570088f1ec6e49477a51b5e423
+  - id: implement
+    status: completed
+    completed_at_commit: 3cf544fd49a62c570088f1ec6e49477a51b5e423
+  - id: check
+    status: completed
+    completed_at_commit: 3cf544fd49a62c570088f1ec6e49477a51b5e423
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 3cf544fd49a62c570088f1ec6e49477a51b5e423
+  - id: review
+    status: completed
+    completed_at_commit: 3cf544fd49a62c570088f1ec6e49477a51b5e423
+
+requirements:
+  FR1:
+    title: Named Pipe daemon
+    status: ok
+    tasks: [Phase2-step2, Phase2-step5]
+    tests: [TS-04]
+  FR2:
+    title: Daemon process detachment
+    status: ok
+    tasks: [Phase2-step4]
+    tests: [TS-11]
+  FR3:
+    title: Bridge connection
+    status: ok
+    tasks: [Phase3-step1, Phase3-step2, Phase3-step3, Phase3-step4]
+    tests: [TS-05]
+  FR4:
+    title: Session management CLI
+    status: ok
+    tasks: [Phase4-step1, Phase4-step4, Phase4-step5]
+    tests: [TS-06, TS-07]
+  FR5:
+    title: Window operations CLI
+    status: ok
+    tasks: [Phase4-step3]
+    tests: [TS-08, TS-09]
+  FR6:
+    title: Reattach/detach
+    status: ok
+    tasks: [Phase5-step1]
+    tests: [TS-10]
+  FR7:
+    title: Stale pipe detection
+    status: ok
+    tasks: [Phase2-step3]
+    tests: [TS-13]
+  NFR1:
+    title: Performance
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Security
+    status: ok
+    tasks: []
+    tests: [TS-15]
+  NFR3:
+    title: Compatibility
+    status: ok
+    tasks: [Phase1-step5, Phase5-step3]
+    tests: [TS-01]
+  NFR4:
+    title: Maintainability
+    status: ok
+    tasks: [Phase1-step1, Phase1-step2, Phase1-step3, Phase1-step4]
+    tests: []

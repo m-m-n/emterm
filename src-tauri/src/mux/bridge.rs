@@ -32,7 +32,18 @@ pub(super) fn run_bridge(sock_path: &std::path::Path) -> Result<(), Box<dyn std:
     rt.block_on(async { bridge_main_loop(sock_path).await })
 }
 
-#[cfg(not(unix))]
+/// Run the long-running bridge process on Windows via Named Pipe.
+#[cfg(windows)]
+pub(super) fn run_bridge(_sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    rt.block_on(async { bridge_main_loop_windows().await })
+}
+
+/// Run the long-running bridge process (unsupported platform).
+#[cfg(all(not(unix), not(windows)))]
 pub(super) fn run_bridge(_sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux bridge is not supported on this platform");
     std::process::exit(1);
@@ -83,23 +94,95 @@ impl Drop for RawModeGuard {
     }
 }
 
-/// Async bridge main loop: handshake, then bidirectional APC/socket forwarding.
+/// Set stdin to raw mode on Windows (enable VT input processing).
+/// Returns the original console mode for restoration on exit.
+#[cfg(windows)]
+fn set_stdin_raw_windows() -> Option<u32> {
+    use windows_sys::Win32::System::Console::*;
+    unsafe {
+        let handle = GetStdHandle(STD_INPUT_HANDLE);
+        if handle == 0 || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE as _ {
+            log::warn!("GetStdHandle failed, stdin may not be a console");
+            return None;
+        }
+        let mut original_mode: u32 = 0;
+        if GetConsoleMode(handle, &mut original_mode) == 0 {
+            log::warn!("GetConsoleMode failed, stdin may not be a console");
+            return None;
+        }
+        if SetConsoleMode(handle, ENABLE_VIRTUAL_TERMINAL_INPUT) == 0 {
+            log::warn!("SetConsoleMode failed");
+            return None;
+        }
+        log::info!("stdin set to raw mode (VT input)");
+        Some(original_mode)
+    }
+}
+
+/// Restore original console mode on Windows.
+#[cfg(windows)]
+fn restore_stdin_windows(original_mode: u32) {
+    use windows_sys::Win32::System::Console::*;
+    unsafe {
+        let handle = GetStdHandle(STD_INPUT_HANDLE);
+        SetConsoleMode(handle, original_mode);
+    }
+    log::info!("stdin restored to original mode");
+}
+
+/// RAII guard that restores console mode on drop (Windows).
+#[cfg(windows)]
+struct RawModeGuardWindows(Option<u32>);
+
+#[cfg(windows)]
+impl Drop for RawModeGuardWindows {
+    fn drop(&mut self) {
+        if let Some(mode) = self.0 {
+            restore_stdin_windows(mode);
+        }
+    }
+}
+
+/// Async bridge main loop (Unix): connect via Unix socket, then forward.
 #[cfg(unix)]
 async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
-    // Connect to daemon first, before changing terminal mode.
-    // If connection fails, the terminal must remain in its original state.
     log::info!("Connecting to daemon at {:?}", sock_path);
     let stream = UnixStream::connect(sock_path)
         .await
         .map_err(|e| format!("Failed to connect to daemon at {:?}: {}", sock_path, e))?;
     log::info!("Socket connected");
 
-    // Set stdin to raw mode so APC escape sequences arrive byte-by-byte.
-    // The guard ensures restoration even if an error occurs later.
     let _raw_guard = RawModeGuard(set_stdin_raw());
+
+    bridge_main_loop_impl(stream).await
+}
+
+/// Async bridge main loop (Windows): connect via Named Pipe, then forward.
+#[cfg(windows)]
+async fn bridge_main_loop_windows() -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    let pipe_name = super::daemon::pipe_name();
+    log::info!("Connecting to daemon at {}", pipe_name);
+    let stream = ClientOptions::new().open(&pipe_name)?;
+    log::info!("Pipe connected");
+
+    let _raw_guard = RawModeGuardWindows(set_stdin_raw_windows());
+
+    bridge_main_loop_impl(stream).await
+}
+
+/// Shared bridge main loop: handshake + bidirectional APC/socket forwarding.
+///
+/// Generic over the stream type so both Unix sockets and Windows Named Pipes
+/// can use the same APC parsing and transport detection logic.
+async fn bridge_main_loop_impl<S>(stream: S) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let (mut sock_reader, mut sock_writer) = tokio::io::split(stream);
 
@@ -302,9 +385,6 @@ async fn bridge_main_loop(sock_path: &std::path::Path) -> Result<(), Box<dyn std
         use std::io::Write;
         let _ = std::io::stdout().flush();
     }
-
-    // Restore terminal settings (drop the guard explicitly before exit)
-    drop(_raw_guard);
 
     // Brief delay so the GUI's PTY reader can consume the flushed data
     // before the PTY slave fd is closed by process exit.
