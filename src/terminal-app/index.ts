@@ -356,6 +356,7 @@ export class TerminalApp {
       onRestoreFocus: () => this.imeHandler?.focus(),
       onExitScrollback: () => this.exitScrollback(),
       onCopyModeKey: (event: KeyboardEvent) => this.handleCopyModeKey(event),
+      debugId: this.container.id || `tab-${Date.now()}`,
     };
     this.keyboardHandler = new KeyboardHandler(keyboardContext);
     // Attach to document but check if this tab's container is visible
