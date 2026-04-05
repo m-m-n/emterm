@@ -101,7 +101,7 @@ fn set_stdin_raw_windows() -> Option<u32> {
     use windows_sys::Win32::System::Console::*;
     unsafe {
         let handle = GetStdHandle(STD_INPUT_HANDLE);
-        if handle == 0 || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE as _ {
+        if handle.is_null() || handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE as _ {
             log::warn!("GetStdHandle failed, stdin may not be a console");
             return None;
         }
