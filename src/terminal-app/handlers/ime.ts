@@ -348,6 +348,17 @@ export class ImeHandler {
 				});
 			}
 
+			// Block input when this tab is not active (for multi-tab support)
+			if (!this.isActiveTab()) {
+				if (IME_DEBUG) console.log("[EditContext] textupdate: blocked by inactive tab");
+				if (this.editContext) {
+					this.editContext.updateText(0, this.editContext.text.length, "");
+					this.editContext.updateSelection(0, 0);
+				}
+				this.updateCompositionView("");
+				return;
+			}
+
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
 			if (isModalOverlayVisible()) {
 				if (IME_DEBUG) console.log("[EditContext] textupdate: blocked by modal overlay");
@@ -402,6 +413,18 @@ export class ImeHandler {
 		const onCompositionEnd = (event: any) => {
 			if (IME_DEBUG) console.log("[EditContext] compositionend");
 			isComposing = false;
+
+			// Block input when this tab is not active (for multi-tab support)
+			if (!this.isActiveTab()) {
+				if (IME_DEBUG) console.log("[EditContext] compositionend: blocked by inactive tab");
+				compositionText = "";
+				this.updateCompositionView("");
+				if (this.editContext) {
+					this.editContext.updateText(0, this.editContext.text.length, "");
+					this.editContext.updateSelection(0, 0);
+				}
+				return;
+			}
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
 			if (isModalOverlayVisible()) {
@@ -790,6 +813,14 @@ export class ImeHandler {
 
 			// Mark composition as ended
 			isComposing = false;
+
+			// Block input when this tab is not active (for multi-tab support)
+			if (!this.isActiveTab()) {
+				if (IME_DEBUG) console.log("[IME Debug] compositionend: blocked by inactive tab");
+				input.value = "";
+				this.updateCompositionView("");
+				return;
+			}
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
 			if (isModalOverlayVisible()) {
