@@ -365,10 +365,9 @@ export class TerminalState implements TerminalStateAccessor {
     this.primaryWasmGrid = newGrid;
 
     // Reset alternate screen state — new pane starts fresh.
-    if (this.alternateWasmGrid) {
-      this.alternateWasmGrid.dispose();
-      this.alternateWasmGrid = null;
-    }
+    // Do NOT dispose alternateWasmGrid: saveMuxPaneState() may hold a reference
+    // to it for the previous pane. Ownership transfers to muxPaneGrids.
+    this.alternateWasmGrid = null;
     this.alternateBuffer = null;
     this.alternateCursor = null;
     this.savedCursorForAlt = null;
