@@ -718,7 +718,14 @@ export class CanvasRenderer implements ITerminalRenderer {
 		startCursorBlinkImpl(blinkState, () => {
 			this.cursorBlinkVisible = blinkState.cursorBlinkVisible;
 			if (this.pendingState) {
-				this.renderCursorArea(this.pendingState);
+				try {
+					this.renderCursorArea(this.pendingState);
+				} catch (error) {
+					// WASM may be in recovery — silently skip this blink frame
+					if (error instanceof WebAssembly.RuntimeError) {
+						console.warn("[WARN][FRONTEND] cursor blink skipped — WASM unavailable");
+					}
+				}
 			}
 		});
 		this.cursorBlinkTimer = blinkState.cursorBlinkTimer;

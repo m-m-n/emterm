@@ -43,7 +43,12 @@ impl TerminalCore {
         if count == 0 {
             return;
         }
-        let base = self.viewport_row_base(row);
+        let abs = self.viewport_abs(row);
+        let cols_usize = self.cols as usize;
+        let base = abs * cols_usize;
+        if base + cols_usize > self.ring_cells.len() {
+            return;
+        }
 
         // Shift cells right (iterate in reverse)
         for c in (col + count..self.cols).rev() {
@@ -73,7 +78,12 @@ impl TerminalCore {
         if count == 0 {
             return;
         }
-        let base = self.viewport_row_base(row);
+        let abs = self.viewport_abs(row);
+        let cols_usize = self.cols as usize;
+        let base = abs * cols_usize;
+        if base + cols_usize > self.ring_cells.len() {
+            return;
+        }
 
         // Shift cells left
         for c in col..self.cols - count {

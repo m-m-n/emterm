@@ -266,6 +266,9 @@ impl TerminalCore {
     pub(crate) fn line_text_abs(&self, abs: usize) -> String {
         let cols = self.cols as usize;
         let base = abs * cols;
+        if base + cols > self.ring_cells.len() {
+            return String::new();
+        }
         let mut text = String::new();
         for col in 0..self.cols {
             let cell = &self.ring_cells[base + col as usize];

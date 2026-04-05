@@ -161,6 +161,16 @@ export interface ITerminalRenderer {
 	setDiagnosticFlags(flags: { forceFullRender?: boolean }): void;
 
 	/**
+	 * Start cursor blink timer.
+	 */
+	startCursorBlink(): void;
+
+	/**
+	 * Stop cursor blink timer.
+	 */
+	stopCursorBlink(): void;
+
+	/**
 	 * Start a trivial CSS animation to keep the compositor active.
 	 * Used when rAF stops being delivered (degraded mode) to ensure
 	 * canvas paints are composited to the screen.
