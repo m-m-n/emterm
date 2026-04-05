@@ -49,6 +49,8 @@ export interface KeyboardHandlerContext {
   onMuxAction?: (action: MuxAction) => void;
   /** Callback to intercept keys in mux copy mode. Returns true if consumed. */
   onCopyModeKey?: (event: KeyboardEvent) => boolean;
+  /** Debug identifier for this handler (e.g., container id) */
+  debugId?: string;
 }
 
 /**
@@ -69,6 +71,7 @@ export class KeyboardHandler {
   private prefixKeyHandler: PrefixKeyHandler | null = null;
   private onMuxAction: ((action: MuxAction) => void) | null;
   private onCopyModeKey: ((event: KeyboardEvent) => boolean) | null;
+  private debugId: string;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
   private boundHandleClipboardShortcut: ((e: KeyboardEvent) => void) | null =
@@ -92,6 +95,7 @@ export class KeyboardHandler {
     this.onExitScrollback = context.onExitScrollback || null;
     this.onMuxAction = context.onMuxAction ?? null;
     this.onCopyModeKey = context.onCopyModeKey ?? null;
+    this.debugId = context.debugId || "unknown";
 
     if (context.muxMode) {
       const muxSettings = SettingsService.getCached()?.mux;
@@ -212,7 +216,7 @@ export class KeyboardHandler {
     // but only the active tab processes input
     if (!this.isActiveTab()) {
       if (shouldHandleKey(event)) {
-        console.warn(`[DIAG-KEY] dropped: inactiveTab key=${event.key}`);
+        console.warn(`[DIAG-KEY][${this.debugId}] dropped: inactiveTab key=${event.key}`);
       }
       return;
     }
@@ -220,7 +224,7 @@ export class KeyboardHandler {
     // Skip if event was already handled by another component (e.g., fullscreen markdown view)
     // This is a cooperative pattern - components call preventDefault() when they handle an event
     if (event.defaultPrevented) {
-      console.warn(`[DIAG-KEY] dropped: defaultPrevented key=${event.key}`);
+      console.warn(`[DIAG-KEY][${this.debugId}] dropped: defaultPrevented key=${event.key}`);
       return;
     }
 
@@ -228,7 +232,7 @@ export class KeyboardHandler {
     // Defense-in-depth: the overlay's own capture-phase handler should intercept
     // events first, but we also check here to handle edge cases in event propagation.
     if (isModalOverlayVisible()) {
-      console.warn(`[DIAG-KEY] dropped: modalOverlayVisible key=${event.key}`);
+      console.warn(`[DIAG-KEY][${this.debugId}] dropped: modalOverlayVisible key=${event.key}`);
       return;
     }
 
@@ -245,7 +249,7 @@ export class KeyboardHandler {
     // so that all keys are routed to the copy mode keybinding handler
     if (this.onCopyModeKey) {
       if (this.onCopyModeKey(event)) {
-        console.warn(`[DIAG-KEY] consumed: copyMode key=${event.key}`);
+        console.warn(`[DIAG-KEY][${this.debugId}] consumed: copyMode key=${event.key}`);
         event.preventDefault();
         return;
       }
@@ -254,7 +258,7 @@ export class KeyboardHandler {
     // Mux prefix key handling
     if (this.prefixKeyHandler) {
       if (this.prefixKeyHandler.handleKeyEvent(event)) {
-        console.warn(`[DIAG-KEY] consumed: prefixKey key=${event.key} state=${this.prefixKeyHandler.state}`);
+        console.warn(`[DIAG-KEY][${this.debugId}] consumed: prefixKey key=${event.key} state=${this.prefixKeyHandler.state}`);
         event.preventDefault();
         return;
       }
@@ -336,7 +340,7 @@ export class KeyboardHandler {
       // (see: https://developer.mozilla.org/en-US/docs/Web/API/EditContext_API/Guide)
       // So we must process Enter here explicitly
       if (!this.isSpecialKey(event) && event.key !== "Enter") {
-        console.warn(`[DIAG-KEY] deferred: editContext key=${event.key}`);
+        console.warn(`[DIAG-KEY][${this.debugId}] deferred: editContext key=${event.key}`);
         return; // Let EditContext handle regular input
       }
       // Special keys (Ctrl+C, arrows, Enter, etc.) fall through to be processed
@@ -366,13 +370,14 @@ export class KeyboardHandler {
       // Auto-scroll to bottom when user types during scrollback
       this.onExitScrollback?.();
 
+      console.warn(`[DIAG-KEY][${this.debugId}] sent: key=${event.key} bytes=${bytes.length}`);
       // Fire-and-forget: don't await to avoid blocking key repeat
       // In mux mode, PtyClient's writeProxy routes input to daemon automatically.
       this.ptyClient.write(bytes).catch((error) => {
         console.error("Failed to write to PTY:", error);
       });
     } else {
-      console.warn(`[DIAG-KEY] dropped: noBytes key=${event.key} ctrl=${event.ctrlKey} alt=${event.altKey} shift=${event.shiftKey}`);
+      console.warn(`[DIAG-KEY][${this.debugId}] dropped: noBytes key=${event.key} ctrl=${event.ctrlKey} alt=${event.altKey} shift=${event.shiftKey}`);
     }
   }
 

@@ -350,7 +350,7 @@ export class ImeHandler {
 
 			// Block input when this tab is not active (for multi-tab support)
 			if (!this.isActiveTab()) {
-				if (IME_DEBUG) console.log("[EditContext] textupdate: blocked by inactive tab");
+				console.warn(`[DIAG-IME][${this.debugId}] textupdate: blocked by inactiveTab`);
 				if (this.editContext) {
 					this.editContext.updateText(0, this.editContext.text.length, "");
 					this.editContext.updateSelection(0, 0);
@@ -361,7 +361,7 @@ export class ImeHandler {
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
 			if (isModalOverlayVisible()) {
-				if (IME_DEBUG) console.log("[EditContext] textupdate: blocked by modal overlay");
+				console.warn(`[DIAG-IME][${this.debugId}] textupdate: blocked by modalOverlay`);
 				// Reset EditContext text
 				if (this.editContext) {
 					this.editContext.updateText(0, this.editContext.text.length, "");
@@ -380,6 +380,7 @@ export class ImeHandler {
 			} else {
 				// Direct input - send to PTY
 				if (text) {
+					console.warn(`[DIAG-IME][${this.debugId}] textupdate: sent ${text.length}ch`);
 					this.onExitScrollback?.();
 					const bytes = new TextEncoder().encode(text);
 					this.ptyClient.write(bytes).catch((error: unknown) => {
@@ -746,6 +747,7 @@ export class ImeHandler {
 
 			// Skip if this tab is not active (for multi-tab support)
 			if (!isActive) {
+				console.warn(`[DIAG-IME][${this.debugId}] input: blocked by inactiveTab`);
 				input.value = "";
 				this.updateCompositionView("");
 				return;
@@ -753,7 +755,7 @@ export class ImeHandler {
 
 			// Block input while modal overlay is visible (image viewer, markdown fullscreen)
 			if (isModalOverlayVisible()) {
-				if (IME_DEBUG) console.log("[IME Debug] input: blocked by modal overlay");
+				console.warn(`[DIAG-IME][${this.debugId}] input: blocked by modalOverlay`);
 				input.value = "";
 				this.updateCompositionView("");
 				return;
@@ -793,6 +795,7 @@ export class ImeHandler {
 			}
 
 			if (IME_DEBUG) console.log("[IME Debug] input: sending value:", value);
+			console.warn(`[DIAG-IME][${this.debugId}] input: sent ${value.length}ch`);
 			this.onExitScrollback?.();
 			const bytes = new TextEncoder().encode(value);
 			this.ptyClient.write(bytes).catch((error) => {
