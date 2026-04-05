@@ -659,6 +659,7 @@ export class TabBarUI {
       // Click handler: activate this tab + switch to this window
       const windowIndex = i;
       winTab.addEventListener('click', () => {
+        console.warn(`[DIAG-MUX] mux tab clicked: tabId=${tabId} windowIndex=${windowIndex}`);
         this.tabManager.switchTab(tabId);
         this.onMuxWindowClick?.(tabId, windowIndex);
       });
