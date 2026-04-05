@@ -150,11 +150,13 @@ pub async fn handle_connection<S>(
     // Each command timer runs as a separate task, sending its name when it fires.
     let (cmd_tick_tx, mut cmd_tick_rx) = mpsc::channel::<String>(16);
     for (name, dur) in command_intervals {
+        // Trigger immediate first execution so status bar populates without waiting
+        let _ = cmd_tick_tx.try_send(name.clone());
         let tx = cmd_tick_tx.clone();
         let cmd_name = name.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(dur);
-            interval.tick().await; // skip first immediate tick
+            interval.tick().await; // skip first immediate tick (already sent above)
             loop {
                 interval.tick().await;
                 if tx.send(cmd_name.clone()).await.is_err() {
