@@ -162,6 +162,23 @@ body {
   outline: none;
 }
 
+/* Copy mode indicator overlay */
+.copy-mode-indicator {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 12px;
+  background: var(--md-sys-color-primary-container, #4F378B);
+  color: var(--md-sys-color-on-primary-container, #EADDFF);
+  font-size: 12px;
+  font-weight: bold;
+  border-radius: 4px;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
 /* Mux multi-pane container */
 .mux-pane-container {
   position: absolute;

@@ -30,9 +30,16 @@ export class ViKeybinds {
   /**
    * Handle a key event. Returns true if consumed.
    */
-  handleKey(key: string): boolean {
+  handleKeyEvent(event: KeyboardEvent): boolean {
     if (!this.manager.isActive) return false;
 
+    // Ctrl+C: exit copy mode (tmux-compatible)
+    if (event.ctrlKey && event.key === "c") {
+      this.manager.exit();
+      return true;
+    }
+
+    const key = event.key;
     switch (key) {
       // Movement
       case "h":

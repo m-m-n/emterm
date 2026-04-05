@@ -133,6 +133,7 @@ export class TerminalApp {
   private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
   private copyModeManager: CopyModeManager | null = null;
   private copyModeKeybinds: ViKeybinds | EmacsKeybinds | null = null;
+  private copyModeIndicator: HTMLElement | null = null;
 
   // Multi-pane state (within active window)
   private muxLayoutRoot: LayoutNode | null = null;
@@ -933,6 +934,7 @@ export class TerminalApp {
       set copyModeManager(v) { self.copyModeManager = v; },
       get copyModeKeybinds() { return self.copyModeKeybinds; },
       set copyModeKeybinds(v) { self.copyModeKeybinds = v; },
+      onCopyModeIndicatorChange: (active: boolean) => self.handleCopyModeIndicatorChange(active),
     };
   }
 
@@ -959,6 +961,23 @@ export class TerminalApp {
   /** Paste clipboard text into the active PTY (mux paste action). */
   private async pasteFromClipboard(): Promise<void> {
     await pasteFromClipboardImpl(this.getMuxCopyModeContext());
+  }
+
+  /** Show or hide the copy mode indicator overlay. */
+  private handleCopyModeIndicatorChange(active: boolean): void {
+    if (active) {
+      if (!this.copyModeIndicator) {
+        this.copyModeIndicator = document.createElement("div");
+        this.copyModeIndicator.className = "copy-mode-indicator";
+        this.copyModeIndicator.textContent = "-- COPY --";
+        this.terminalRoot?.appendChild(this.copyModeIndicator);
+      }
+      this.copyModeIndicator.style.display = "";
+    } else {
+      if (this.copyModeIndicator) {
+        this.copyModeIndicator.style.display = "none";
+      }
+    }
   }
 
   /** Handle mux action dispatched by PrefixKeyHandler. */
@@ -1195,6 +1214,8 @@ export class TerminalApp {
       this.terminalRoot.remove();
       this.terminalRoot = null;
     }
+    this.copyModeIndicator?.remove();
+    this.copyModeIndicator = null;
     if (this.overlayRoot) {
       this.overlayRoot.remove();
       this.overlayRoot = null;
