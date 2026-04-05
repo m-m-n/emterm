@@ -23,6 +23,7 @@ export interface MuxCopyModeContext {
   readonly inMuxMode: boolean;
   copyModeManager: CopyModeManager | null;
   copyModeKeybinds: ViKeybinds | EmacsKeybinds | null;
+  onCopyModeIndicatorChange?: (active: boolean) => void;
 }
 
 /** Enter mux copy mode with vi or emacs keybindings. */
@@ -58,6 +59,7 @@ export function enterCopyMode(ctx: MuxCopyModeContext): void {
   });
 
   ctx.copyModeManager.enter();
+  ctx.onCopyModeIndicatorChange?.(true);
   muxLog.info("Entered mux copy mode");
 }
 
@@ -65,6 +67,7 @@ export function enterCopyMode(ctx: MuxCopyModeContext): void {
 export function exitCopyMode(ctx: MuxCopyModeContext): void {
   ctx.copyModeManager = null;
   ctx.copyModeKeybinds = null;
+  ctx.onCopyModeIndicatorChange?.(false);
   if (ctx.renderer && ctx.state) {
     ctx.renderer.forceRender(ctx.state);
   }
@@ -83,13 +86,14 @@ export function handleCopyModeKey(ctx: MuxCopyModeContext, event: KeyboardEvent)
   if (ctx.copyModeKeybinds instanceof EmacsKeybinds) {
     consumed = ctx.copyModeKeybinds.handleKeyEvent(event);
   } else {
-    consumed = (ctx.copyModeKeybinds as ViKeybinds).handleKey(event.key);
+    consumed = (ctx.copyModeKeybinds as ViKeybinds).handleKeyEvent(event);
   }
 
   if (!consumed) return false;
 
   // If copy mode just exited and we had a selection, it was a yank/copy action
-  if (!ctx.copyModeManager.isActive && preYankSelection) {
+  // Note: yank() -> exit() -> onStateChange -> exitCopyMode sets ctx.copyModeManager to null
+  if (!ctx.copyModeManager?.isActive && preYankSelection) {
     copySelectionToClipboard(ctx, preYankSelection);
   }
 

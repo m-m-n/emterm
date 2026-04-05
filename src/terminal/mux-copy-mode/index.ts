@@ -1,7 +1,7 @@
 /**
  * Mux copy mode — text selection with vi/emacs keybindings.
  *
- * Entered via prefix+[, exited via q/Escape.
+ * Entered via prefix+[, exited via q/Escape/Ctrl+C.
  * Supports scrollback navigation, text selection, and clipboard copy.
  */
 

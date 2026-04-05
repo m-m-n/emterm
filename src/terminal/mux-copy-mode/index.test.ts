@@ -78,6 +78,11 @@ describe("CopyModeManager", () => {
   });
 });
 
+/** Helper to create a KeyboardEvent for testing. */
+function keyEvent(key: string, opts?: KeyboardEventInit): KeyboardEvent {
+  return new KeyboardEvent("keydown", { key, ...opts });
+}
+
 describe("ViKeybinds", () => {
   test("h/j/k/l movement", () => {
     const mgr = new CopyModeManager();
@@ -85,13 +90,13 @@ describe("ViKeybinds", () => {
     mgr.moveCursor(40, 12, 80, 24); // center
     const vi = new ViKeybinds(mgr, 80, 24);
 
-    vi.handleKey("h");
+    vi.handleKeyEvent(keyEvent("h"));
     expect(mgr.getCursor().col).toBe(39);
-    vi.handleKey("l");
+    vi.handleKeyEvent(keyEvent("l"));
     expect(mgr.getCursor().col).toBe(40);
-    vi.handleKey("j");
+    vi.handleKeyEvent(keyEvent("j"));
     expect(mgr.getCursor().row).toBe(13);
-    vi.handleKey("k");
+    vi.handleKeyEvent(keyEvent("k"));
     expect(mgr.getCursor().row).toBe(12);
   });
 
@@ -101,9 +106,9 @@ describe("ViKeybinds", () => {
     mgr.moveCursor(40, 0, 80, 24);
     const vi = new ViKeybinds(mgr, 80, 24);
 
-    vi.handleKey("0");
+    vi.handleKeyEvent(keyEvent("0"));
     expect(mgr.getCursor().col).toBe(0);
-    vi.handleKey("$");
+    vi.handleKeyEvent(keyEvent("$"));
     expect(mgr.getCursor().col).toBe(79);
   });
 
@@ -111,7 +116,7 @@ describe("ViKeybinds", () => {
     const mgr = new CopyModeManager();
     mgr.enter();
     const vi = new ViKeybinds(mgr, 80, 24);
-    vi.handleKey("v");
+    vi.handleKeyEvent(keyEvent("v"));
     expect(mgr.state).toBe("selecting");
   });
 
@@ -119,9 +124,9 @@ describe("ViKeybinds", () => {
     const mgr = new CopyModeManager();
     mgr.enter();
     const vi = new ViKeybinds(mgr, 80, 24);
-    vi.handleKey("v");
-    vi.handleKey("l");
-    vi.handleKey("y");
+    vi.handleKeyEvent(keyEvent("v"));
+    vi.handleKeyEvent(keyEvent("l"));
+    vi.handleKeyEvent(keyEvent("y"));
     expect(mgr.state).toBe("inactive");
   });
 
@@ -129,7 +134,7 @@ describe("ViKeybinds", () => {
     const mgr = new CopyModeManager();
     mgr.enter();
     const vi = new ViKeybinds(mgr, 80, 24);
-    vi.handleKey("q");
+    vi.handleKeyEvent(keyEvent("q"));
     expect(mgr.state).toBe("inactive");
   });
 
@@ -137,13 +142,21 @@ describe("ViKeybinds", () => {
     const mgr = new CopyModeManager();
     mgr.enter();
     const vi = new ViKeybinds(mgr, 80, 24);
-    vi.handleKey("Escape");
+    vi.handleKeyEvent(keyEvent("Escape"));
+    expect(mgr.state).toBe("inactive");
+  });
+
+  test("Ctrl+C exits", () => {
+    const mgr = new CopyModeManager();
+    mgr.enter();
+    const vi = new ViKeybinds(mgr, 80, 24);
+    vi.handleKeyEvent(keyEvent("c", { ctrlKey: true }));
     expect(mgr.state).toBe("inactive");
   });
 
   test("not consumed when inactive", () => {
     const mgr = new CopyModeManager();
     const vi = new ViKeybinds(mgr, 80, 24);
-    expect(vi.handleKey("h")).toBe(false);
+    expect(vi.handleKeyEvent(keyEvent("h"))).toBe(false);
   });
 });

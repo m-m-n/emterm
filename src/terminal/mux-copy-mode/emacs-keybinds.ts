@@ -63,6 +63,9 @@ export class EmacsKeybinds {
             this.manager.startSelection();
           }
           return true;
+        case "c": // C-c: exit (tmux-compatible)
+          this.manager.exit();
+          return true;
         case "g": // C-g: cancel/exit
           this.manager.exit();
           return true;
