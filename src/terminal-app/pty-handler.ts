@@ -194,6 +194,10 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let totalBytesQueued = 0;          // Total bytes queued since last processPendingData
   let eventLoopProbeScheduled = false;
   let longProcessingCount = 0;       // Count of processPendingData calls > 50ms
+  let lastHealthCheckTime = 0;       // When healthCheck last actually ran (performance.now)
+  let lastHealthCheckWall = 0;       // When healthCheck last actually ran (Date.now)
+  let healthCheckCount = 0;          // Total health-check invocations
+  let lastProcessingEndTime = 0;     // When processPendingData last finished
 
   // Event loop health probe: measures setTimeout(0) latency to detect main thread blockage
   const probeEventLoopHealth = () => {
@@ -471,6 +475,8 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         );
       }
 
+      lastProcessingEndTime = performance.now();
+
       // If there's leftover data, schedule next frame to continue
       if (leftoverData && !rafScheduled) {
         scheduleProcessing();
@@ -662,8 +668,43 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   // ── Periodic health monitor ─────────────────────────────────
   // Runs every 10s to detect silent stalls (rAF stops but no data arrives to trigger watchdog)
   const HEALTH_CHECK_INTERVAL_MS = 10_000;
+  const STALL_THRESHOLD_MS = 3_000; // health-check interval overrun threshold for stall detection
   const healthCheck = () => {
     const now = performance.now();
+    const wallNow = Date.now();
+    healthCheckCount++;
+
+    // Detect main-thread stall: if this callback fired much later than expected,
+    // the event loop was blocked for (actual - expected) milliseconds.
+    const sinceLastHealthCheck = lastHealthCheckTime > 0 ? now - lastHealthCheckTime : -1;
+    const wallElapsed = lastHealthCheckWall > 0 ? wallNow - lastHealthCheckWall : -1;
+    const expectedInterval = HEALTH_CHECK_INTERVAL_MS;
+    const overrun = sinceLastHealthCheck - expectedInterval; // >0 means late delivery
+
+    if (overrun > STALL_THRESHOLD_MS) {
+      // This health-check was significantly delayed — the main thread was blocked
+      const sinceLastProcessing = lastProcessingEndTime > 0 ? now - lastProcessingEndTime : -1;
+      const pendingBytes = pendingChunks.reduce((sum, c) => sum + c.length, 0);
+      const clockDrift = sinceLastHealthCheck > 0 && wallElapsed > 0
+        ? Math.abs(sinceLastHealthCheck - wallElapsed)
+        : -1;
+      console.warn(
+        `[WARN][FRONTEND] health-check: main-thread stall detected` +
+        ` | expectedInterval=${expectedInterval}ms` +
+        ` | actualInterval=${sinceLastHealthCheck.toFixed(0)}ms` +
+        ` | overrun=${overrun.toFixed(0)}ms` +
+        ` | wallElapsed=${wallElapsed}ms` +
+        ` | clockDrift=${clockDrift.toFixed(0)}ms` +
+        ` | sinceLastProcessing=${sinceLastProcessing.toFixed(0)}ms` +
+        ` | pendingChunks=${pendingChunks.length}` +
+        ` | pendingBytes=${pendingBytes}` +
+        ` | rafScheduled=${rafScheduled}` +
+        ` | rafDegraded=${rafDegraded}` +
+        ` | healthCheckCount=${healthCheckCount}` +
+        ` | document.hidden=${document.hidden}`,
+      );
+    }
+
     const sinceLastRaf = lastRafCallbackTime > 0 ? now - lastRafCallbackTime : -1;
     const sinceLastData = lastOnDataTime > 0 ? now - lastOnDataTime : -1;
     const sinceLastSchedule = lastScheduleTime > 0 ? now - lastScheduleTime : -1;
@@ -691,8 +732,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       );
     }
 
+    lastHealthCheckTime = now;
+    lastHealthCheckWall = wallNow;
     setTimeout(healthCheck, HEALTH_CHECK_INTERVAL_MS);
   };
+  lastHealthCheckTime = performance.now();
+  lastHealthCheckWall = Date.now();
   setTimeout(healthCheck, HEALTH_CHECK_INTERVAL_MS);
 
   // Handle exit event
