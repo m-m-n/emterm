@@ -157,6 +157,11 @@ export class WasmLineProxy implements LineAccessor {
  */
 export class WasmGrid {
 	readonly core: TerminalCore;
+	private _disposed = false;
+
+	get isDisposed(): boolean {
+		return this._disposed;
+	}
 
 	constructor(cols: number, rows: number, scrollbackLines: number = 0) {
 		this.core = new TerminalCore(cols, rows, scrollbackLines);
@@ -169,6 +174,7 @@ export class WasmGrid {
 	static fromCore(core: TerminalCore): WasmGrid {
 		const grid = Object.create(WasmGrid.prototype) as WasmGrid;
 		(grid as { core: TerminalCore }).core = core;
+		(grid as unknown as { _disposed: boolean })._disposed = false;
 		return grid;
 	}
 
@@ -300,16 +306,19 @@ export class WasmGrid {
 
 	/** Returns scroll direction: 1=Up, 0=none. */
 	getScrollEventDirection(): number {
+		if (this._disposed) return 0;
 		return this.core.get_scroll_event_direction();
 	}
 
 	/** Returns scroll count (0 if no event). */
 	getScrollEventCount(): number {
+		if (this._disposed) return 0;
 		return this.core.get_scroll_event_count();
 	}
 
 	/** Clears the pending scroll event. */
 	clearScrollEvent(): void {
+		if (this._disposed) return;
 		this.core.clear_scroll_event();
 	}
 
@@ -371,6 +380,8 @@ export class WasmGrid {
 	}
 
 	dispose(): void {
+		if (this._disposed) return;
+		this._disposed = true;
 		this.core.free();
 	}
 }

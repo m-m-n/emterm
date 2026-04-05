@@ -764,6 +764,14 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Check if the state's WASM grids are still alive (not disposed).
+   */
+  isReady(): boolean {
+    const grid = this.getActiveWasmGrid();
+    return grid != null && !grid.isDisposed;
+  }
+
+  /**
    * Get scroll event direction from WASM (1=Up, 0=none).
    */
   getScrollEventDirection(): number {

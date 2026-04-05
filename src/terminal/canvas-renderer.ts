@@ -493,7 +493,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 * Perform the actual render.
 	 */
 	private render(): void {
-		if (!this.pendingState) {
+		if (!this.pendingState || !this.pendingState.isReady()) {
 			return;
 		}
 
