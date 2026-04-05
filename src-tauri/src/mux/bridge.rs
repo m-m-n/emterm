@@ -378,6 +378,26 @@ where
         }
     }
 
+    // Write synthetic Detached message so the GUI exits mux mode.
+    // When the daemon dies, no explicit Detached is sent — the bridge
+    // must synthesise one before exiting.
+    {
+        use std::io::Write;
+        let detached = MuxMessage::control(MessageType::Detached, 0, &());
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        let t = transport.load(Ordering::Relaxed);
+        if t == TRANSPORT_UNDETECTED {
+            let _ = lock.write_all(detached.to_osc().as_bytes());
+            let _ = lock.write_all(detached.to_apc().as_bytes());
+        } else if t == Transport::Osc as u8 || t == Transport::Plaintext as u8 {
+            let _ = lock.write_all(detached.to_osc().as_bytes());
+        } else {
+            let _ = lock.write_all(detached.to_apc().as_bytes());
+        }
+        log::info!("Wrote synthetic Detached message to stdout");
+    }
+
     // Ensure all stdout data (including final Detached APC) is flushed
     // before exiting, so the GUI receives it.
     log::info!("Flushing stdout before exit");
