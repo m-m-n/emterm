@@ -17,8 +17,12 @@ impl TerminalCore {
         }
         let bce = self.bce_cell();
         let abs = self.viewport_abs(row);
-        let base = abs * self.cols as usize;
-        for i in base..base + self.cols as usize {
+        let cols = self.cols as usize;
+        let base = abs * cols;
+        if base + cols > self.ring_cells.len() {
+            return;
+        }
+        for i in base..base + cols {
             self.ring_cells[i] = bce;
         }
         self.ring_wrapped[abs] = false;
@@ -36,7 +40,11 @@ impl TerminalCore {
         let start = start_col.min(self.cols) as usize;
         let end = end_col.min(self.cols) as usize;
         let abs = self.viewport_abs(row);
-        let base = abs * self.cols as usize;
+        let cols = self.cols as usize;
+        let base = abs * cols;
+        if base + cols > self.ring_cells.len() {
+            return;
+        }
         for i in base + start..base + end {
             self.ring_cells[i] = bce;
         }
@@ -63,8 +71,13 @@ impl TerminalCore {
         if row >= self.rows {
             return true;
         }
-        let base = self.viewport_row_base(row);
-        for col in 0..self.cols as usize {
+        let abs = self.viewport_abs(row);
+        let cols = self.cols as usize;
+        let base = abs * cols;
+        if base + cols > self.ring_cells.len() {
+            return true;
+        }
+        for col in 0..cols {
             let cell = &self.ring_cells[base + col];
             if cell.width > 0 {
                 if cell.is_overflow() {
@@ -103,6 +116,11 @@ impl TerminalCore {
         }
         let count = count.min(end_row - start_row + 1);
         let cols = self.cols as usize;
+
+        // Defensive: verify ring_cells can hold all viewport rows
+        if self.ring_capacity * cols > self.ring_cells.len() {
+            return;
+        }
 
         // Clear overflow for rows that will be overwritten (deleted range)
         for r in start_row..start_row + count {
@@ -163,6 +181,11 @@ impl TerminalCore {
         let count = count.min(end_row - start_row + 1);
         let cols = self.cols as usize;
 
+        // Defensive: verify ring_cells can hold all viewport rows
+        if self.ring_capacity * cols > self.ring_cells.len() {
+            return;
+        }
+
         // Clear overflow for rows that will be overwritten (bottom range)
         for r in (end_row + 1 - count)..=end_row {
             let abs = self.viewport_abs(r) as u32;
@@ -222,6 +245,9 @@ impl TerminalCore {
         let dst_abs = self.viewport_abs(dst_row);
         let src_base = src_abs * cols;
         let dst_base = dst_abs * cols;
+        if src_base + cols > self.ring_cells.len() || dst_base + cols > self.ring_cells.len() {
+            return;
+        }
         for i in 0..cols {
             self.ring_cells[dst_base + i] = self.ring_cells[src_base + i];
         }

@@ -469,6 +469,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           `[WARN][FRONTEND] WASM crash detected — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS})`,
         );
 
+        // Stop cursor blink during recovery to prevent WASM access on stale/freed state
+        ctx.getRenderer()?.stopCursorBlink();
+
         const finishRecovery = () => {
           const recoveryState = ctx.getState();
           if (!recoveryState) return;
@@ -480,7 +483,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
             Math.round(cs.width),
             Math.round(cs.height),
           );
-          ctx.getRenderer()?.forceRender(recoveryState);
+          const renderer = ctx.getRenderer();
+          renderer?.forceRender(recoveryState);
+          renderer?.startCursorBlink();
         };
 
         // Step 1: Try recreating WASM core (works if WASM engine is healthy)
