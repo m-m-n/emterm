@@ -221,6 +221,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	/** Compositor keep-alive animation (for degraded rAF mode). */
 	private compositorKeepAlive: Animation | null = null;
+	private compositorKeepAliveEl: HTMLDivElement | null = null;
 
 	/** Per-frame cache for logical line detection (keyed by startRow). */
 	private detectionCache: Map<number, DetectionCacheEntry> = new Map();
@@ -1111,7 +1112,18 @@ export class CanvasRenderer implements ITerminalRenderer {
 		// WebKitGTK stops the compositor frame clock when rAF is not requested,
 		// which means canvas paints are never composited to the screen.
 		// A running Web Animation forces the compositor to keep ticking.
-		this.compositorKeepAlive = this.canvas.animate(
+		// IMPORTANT: Use a lightweight div instead of the canvas element.
+		// Animating <canvas> opacity in WebKitGTK causes main-thread blocking
+		// because the compositor must synchronously re-composite the canvas
+		// texture, leading to a permanent UI freeze.
+		const el = document.createElement("div");
+		el.style.position = "absolute";
+		el.style.width = "1px";
+		el.style.height = "1px";
+		el.style.pointerEvents = "none";
+		this.canvas.parentElement?.appendChild(el);
+		this.compositorKeepAliveEl = el;
+		this.compositorKeepAlive = el.animate(
 			[{ opacity: 0.999 }, { opacity: 1 }],
 			{ duration: 100, iterations: Infinity },
 		);
@@ -1121,6 +1133,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (this.compositorKeepAlive) {
 			this.compositorKeepAlive.cancel();
 			this.compositorKeepAlive = null;
+		}
+		if (this.compositorKeepAliveEl) {
+			this.compositorKeepAliveEl.remove();
+			this.compositorKeepAliveEl = null;
 		}
 	}
 
