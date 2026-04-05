@@ -581,6 +581,8 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   const handle: PtyHandlerHandle = {
     injectData: (data: Uint8Array) => {
       pendingChunks.push(data);
+      totalBytesQueued += data.length;
+      onDataCountSinceLastRaf++;
       scheduleProcessing();
     },
     suppressOriginalPty: false,
