@@ -152,19 +152,60 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
         handle.injectData(data);
       }
     } else {
-      // Route to inactive pane's saved state (preserves ring buffer replay data)
+      // Route to inactive pane's saved state — process in a loop to handle
+      // buffer switches (alternate screen toggle) and cursor_just_shown interrupts.
       const savedState = ctx.getMuxPaneGrids().get(paneId);
       if (savedState) {
-        // Process on the active core (alternate if alternate screen was active)
-        const core = savedState.useAlternate && savedState.alternateGrid
-          ? savedState.alternateGrid.core
-          : savedState.primaryGrid.core;
-        const consumed = core.process_pty_data(data);
-        if (consumed < data.length) {
-          console.warn(`[DIAG-MODE] inactive pane=${paneId} consumed=${consumed}/${data.length} (partial - buffer switch or cursor_shown)`);
+        let remaining = data;
+        let iteration = 0;
+        while (remaining.length > 0) {
+          const useAlt = savedState.useAlternate && !!savedState.alternateGrid;
+          const core = useAlt ? savedState.alternateGrid!.core : savedState.primaryGrid.core;
+
+          const consumed = core.process_pty_data(remaining);
+
+          // Handle mode actions (buffer switches)
+          const modeActions = core.take_mode_actions();
+          if (modeActions.length > 0) {
+            let i = 0;
+            while (i < modeActions.length) {
+              const action = modeActions[i]!;
+              if (action === 0xFF || action === 0xFE) {
+                i += 3; // TS_FALLBACK: skip
+              } else if (action === 1 || action === 2) {
+                // SWITCH_TO_ALT / SAVE_AND_SWITCH_TO_ALT
+                console.warn(`[DIAG-MODE] inactive pane=${paneId} buffer-switch: → ALT (action=${action})`);
+                savedState.useAlternate = true;
+                if (!savedState.alternateGrid) {
+                  const cols = savedState.primaryGrid.core.cols();
+                  const rows = savedState.primaryGrid.core.rows();
+                  savedState.alternateGrid = new WasmGrid(cols, rows);
+                  console.warn(`[DIAG-MODE] inactive pane=${paneId} created alternateGrid ${cols}x${rows}`);
+                }
+                i += 1;
+              } else if (action === 3) {
+                // SWITCH_TO_MAIN
+                console.warn(`[DIAG-MODE] inactive pane=${paneId} buffer-switch: → MAIN`);
+                savedState.useAlternate = false;
+                i += 1;
+              } else {
+                i += 1; // cursor save/restore — skip
+              }
+            }
+          }
+
+          remaining = remaining.subarray(consumed);
+          iteration++;
+          if (consumed === 0) {
+            console.warn(`[DIAG-MODE] inactive pane=${paneId} consumed=0, breaking (remaining=${remaining.length})`);
+            break;
+          }
+        }
+        if (iteration > 1) {
+          console.warn(`[DIAG-MODE] inactive pane=${paneId} multi-pass: ${iteration} iterations for ${data.length} bytes`);
         }
       } else {
-        // No saved state for this pane -- data dropped
+        console.warn(`[DIAG-MODE] inactive pane=${paneId} NO savedState — data dropped (${data.length} bytes)`);
       }
     }
   });
@@ -242,8 +283,9 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
   // Route all PTY writes to mux daemon via APC proxy
   ptyClient.setWriteProxy((data: Uint8Array) => {
     const c = ctx.getMuxClient();
-    if (!c) return Promise.resolve();
+    if (!c) { console.warn(`[DIAG-MUX] writeProxy: no muxClient`); return Promise.resolve(); }
     const activePaneId = ctx.getActiveMuxPaneId() ?? ctx.getMuxPaneIds()[ctx.getActiveMuxWindowIndex()] ?? 1;
+    console.warn(`[DIAG-MUX] writeProxy: sending ${data.length}B to pane=${activePaneId} (windowIndex=${ctx.getActiveMuxWindowIndex()}, paneIds=[${ctx.getMuxPaneIds()}])`);
     return c.sendInput(activePaneId, data);
   });
 

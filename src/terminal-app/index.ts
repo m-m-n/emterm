@@ -841,12 +841,14 @@ export class TerminalApp {
 
   /** Switch to a specific mux window by index (called from tab bar UI). */
   public switchToMuxWindow(windowIndex: number): void {
-    if (!this.inMuxMode) return;
-    if (windowIndex < 0 || windowIndex >= this.muxWindows.length) return;
-    if (windowIndex === this.activeMuxWindowIndex) return;
+    console.warn(`[DIAG-MUX] switchToMuxWindow called: windowIndex=${windowIndex} inMuxMode=${this.inMuxMode} muxWindows.length=${this.muxWindows.length} activeMuxWindowIndex=${this.activeMuxWindowIndex}`);
+    if (!this.inMuxMode) { console.warn(`[DIAG-MUX] switchToMuxWindow: BLOCKED — not in mux mode`); return; }
+    if (windowIndex < 0 || windowIndex >= this.muxWindows.length) { console.warn(`[DIAG-MUX] switchToMuxWindow: BLOCKED — index out of range`); return; }
+    if (windowIndex === this.activeMuxWindowIndex) { console.warn(`[DIAG-MUX] switchToMuxWindow: BLOCKED — already active`); return; }
 
     const previousIndex = this.activeMuxWindowIndex;
     this.activeMuxWindowIndex = windowIndex;
+    console.warn(`[DIAG-MUX] switchToMuxWindow: switching ${previousIndex} → ${windowIndex}, paneIds=[${this.muxPaneIds}]`);
     this.switchMuxWindow(previousIndex);
   }
 
