@@ -259,9 +259,14 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       );
       if (currentState && currentRenderer) {
         try {
+          const forceRenderStart = performance.now();
           // Force full re-render to recover from potential canvas buffer loss
           // (WebKitGTK may discard canvas contents when rAF stops being delivered)
           currentRenderer.forceRender(currentState);
+          const forceRenderTime = performance.now() - forceRenderStart;
+          console.warn(
+            `[WARN][FRONTEND] degraded-mode forceRender completed: ${forceRenderTime.toFixed(1)}ms`,
+          );
           // Start compositor keep-alive: WebKitGTK stops the compositor frame
           // clock when rAF is idle, preventing canvas paints from reaching the
           // screen. A running Web Animation keeps the compositor ticking.
@@ -309,6 +314,10 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       const deadline = performance.now() + budget;
       let processed = false;
       const charSize = ctx.getCharSize();
+      // Hard timeout: absolute maximum time for the entire processing loop.
+      // If exceeded, abort to prevent UI freeze.
+      const HARD_TIMEOUT_MS = 2000;
+      const hardDeadline = performance.now() + HARD_TIMEOUT_MS;
 
       while (remaining.length > 0) {
         const core = currentState.getActiveCore();
@@ -326,7 +335,16 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         const prevCursorRow = currentState.cursorRow;
         const prevCursorVisible = currentState.cursorVisible;
 
+        const wasmStart = performance.now();
         const consumed = core.process_pty_data(remaining);
+        const wasmTime = performance.now() - wasmStart;
+        if (wasmTime > 500) {
+          console.warn(
+            `[WARN][FRONTEND] slow WASM process_pty_data: ${wasmTime.toFixed(1)}ms` +
+            ` | inputBytes=${remaining.length}` +
+            ` | consumed=${consumed}`,
+          );
+        }
 
         ctx.processPendingOscQueue();
         ctx.getImageHandler()?.processPendingApcQueue();
@@ -397,6 +415,17 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           leftoverData = remaining;
           break;
         }
+
+        // Hard timeout: abort to prevent UI freeze
+        if (remaining.length > 0 && performance.now() >= hardDeadline) {
+          console.error(
+            `[ERROR][FRONTEND] processPendingData hard timeout (${HARD_TIMEOUT_MS}ms) — aborting` +
+            ` | remainingBytes=${remaining.length}` +
+            ` | fromWatchdog=${fromWatchdog}`,
+          );
+          leftoverData = remaining;
+          break;
+        }
       }
 
       if (processed) {
@@ -431,6 +460,14 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           ` | hasLeftover=${leftoverData !== null}` +
           ` | fromWatchdog=${fromWatchdog}` +
           ` | longProcessingTotal=${longProcessingCount}`,
+        );
+      }
+
+      // Diagnostic: log completion when entering degraded mode (to detect freeze point)
+      if (fromWatchdog && rafDegraded) {
+        console.warn(
+          `[WARN][FRONTEND] degraded-mode processPendingData completed: ${processingTime.toFixed(1)}ms` +
+          ` | hasLeftover=${leftoverData !== null}`,
         );
       }
 
