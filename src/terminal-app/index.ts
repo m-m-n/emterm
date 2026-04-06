@@ -169,6 +169,7 @@ export class TerminalApp {
   private oscColorHandler: OscColorHandler = new OscColorHandler();
   private cursorShapeStack: CursorShapeStack = new CursorShapeStack();
   private ptyHandlerHandle: PtyHandlerHandle | null = null;
+  private _tabActive = true;
 
   /**
    * Creates a new TerminalApp instance
@@ -599,6 +600,7 @@ export class TerminalApp {
       getOutputActivityCallback: () => this.outputActivityCallback,
       getSessionExitCallback: () => this.sessionExitCallback,
       getMuxApcContext: () => this.imageHandler?.getMuxApcContext() ?? null,
+      isTabActive: () => this._tabActive,
     });
   }
 
@@ -691,6 +693,14 @@ export class TerminalApp {
    */
   focus(): void {
     this.imeHandler?.focus();
+  }
+
+  /** Mark this tab as active — resumes canvas rendering and repaints. */
+  setTabActive(active: boolean): void {
+    this._tabActive = active;
+    if (active) {
+      this.ptyHandlerHandle?.notifyTabActivated();
+    }
   }
 
   /**
