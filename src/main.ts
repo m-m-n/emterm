@@ -349,9 +349,18 @@ async function main(): Promise<void> {
   dragHandler.init();
 
   // Focus the terminal when a tab is activated and update global references
-  manager.on("tab:activated", ({ tab }) => {
+  manager.on("tab:activated", ({ tab, previousTabId }) => {
+    // Deactivate rendering on previous tab to reduce CPU/GPU load
+    if (previousTabId) {
+      const prevApp = manager.getTerminalApp(previousTabId);
+      prevApp?.setTabActive(false);
+    }
+
     const app = manager.getTerminalApp(tab.id);
     if (app) {
+      // Resume rendering on the active tab
+      app.setTabActive(true);
+
       // Focus the IME handler for the active tab
       app.focus();
 

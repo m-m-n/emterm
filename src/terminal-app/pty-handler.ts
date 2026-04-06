@@ -146,6 +146,7 @@ export interface PtyHandlerContext {
   getOutputActivityCallback: () => (() => void) | null;
   getSessionExitCallback: () => ((sessionId: string) => void) | null;
   getMuxApcContext: () => MuxApcContext | null;
+  isTabActive: () => boolean;
 }
 
 /**
@@ -166,12 +167,14 @@ export interface PtyHandlerHandle {
   flushPendingData: () => void;
   /** Process all buffered data synchronously (for reattach: process before saving state). */
   processNow: () => void;
+  /** Notify that the tab has become active — triggers forceRender to repaint skipped frames. */
+  notifyTabActivated: () => void;
 }
 
 export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandlerHandle> {
   const ptyClient = ctx.getPtyClient();
   const state = ctx.getState();
-  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {} };
+  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {} };
   if (!ptyClient || !state) return noopHandle;
 
   // Register callbacks on primary core
@@ -439,7 +442,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
 
         // Synchronized Output (mode 2026): suppress rendering while active.
         // Dirty rows accumulate in WASM; flush happens when mode is cleared.
-        if (!currentState.modes.synchronizedOutput) {
+        // Inactive tab: skip rendering entirely. WASM dirty flags persist,
+        // so forceRender on tab activation will repaint correctly.
+        if (!currentState.modes.synchronizedOutput && ctx.isTabActive()) {
           const renderStart = performance.now();
           currentRenderer.renderImmediate(currentState);
           const renderTime = performance.now() - renderStart;
@@ -642,6 +647,13 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     },
     processNow: () => {
       processPendingData();
+    },
+    notifyTabActivated: () => {
+      const currentState = ctx.getState();
+      const currentRenderer = ctx.getRenderer();
+      if (currentState && currentRenderer) {
+        currentRenderer.forceRender(currentState);
+      }
     },
   };
 
