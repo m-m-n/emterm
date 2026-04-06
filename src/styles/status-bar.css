@@ -60,9 +60,9 @@
   margin-left: auto;
 }
 
-/* OSC layer styling - slightly different appearance */
+/* OSC layer styling */
 .status-bar-layer--osc {
-  background: var(--md-sys-color-surface-container-high, rgba(255, 255, 255, 0.05));
+  /* No separate background — inherits from .status-bar (surface-container) */
 }
 
 /* Settings: custom command inline form */
