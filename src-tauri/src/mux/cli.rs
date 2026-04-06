@@ -138,9 +138,7 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
     let sock_path = daemon::socket_path();
 
     if !sock_path.exists() {
-        eprintln!("No mux sessions to attach to (daemon not running)");
-        eprintln!("Use 'emterm mux' to start a new session.");
-        std::process::exit(1);
+        return Err("No mux sessions to attach to (daemon not running)\nUse 'emterm mux' to start a new session.".into());
     }
 
     // Run the long-running bridge process

@@ -449,6 +449,13 @@ where
             .await?;
             // Register pane cwd Arcs for all panes in the new session
             register_session_pane_cwds(session_manager, *active_session_id, pane_cwd_map).await;
+            // Send status bar content immediately after attach
+            if statusbar_engine.is_enabled() {
+                let update_msg = statusbar_engine.force_render();
+                if framed.send(update_msg).await.is_err() {
+                    return Err(false);
+                }
+            }
         }
         MessageType::SplitPane => {
             handle_split_pane(msg, session_manager, framed, pane_output_tx).await?;

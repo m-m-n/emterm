@@ -199,6 +199,9 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
       switchMuxWindow(ctx, prev);
     }
     ctx.setMuxIsReattaching(false);
+
+    // Request status bar content from daemon after reattach completes
+    ctx.getMuxClient()?.sendRequestStatusUpdate().catch(() => {});
   }
 
   emitMuxStateChange(ctx);
