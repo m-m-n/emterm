@@ -189,8 +189,10 @@ pub async fn handle_connection<S>(
             msg = framed.next() => {
                 match msg {
                     Some(Ok(msg)) => {
-                        // Track active pane from PtyInput messages
-                        if msg.msg_type == MessageType::PtyInput {
+                        // Track active pane from PtyInput and SwitchWindow messages
+                        if msg.msg_type == MessageType::PtyInput
+                            || msg.msg_type == MessageType::SwitchWindow
+                        {
                             *active_pane_id.lock().unwrap() = Some(msg.pane_id);
                         }
 
@@ -475,6 +477,13 @@ where
         }
         MessageType::SwitchWindow => {
             handle_switch_window(msg.pane_id, session_manager).await;
+            // Force status bar re-render with new pane's cwd
+            if statusbar_engine.is_enabled() {
+                let update_msg = statusbar_engine.force_render();
+                if framed.send(update_msg).await.is_err() {
+                    return Err(false);
+                }
+            }
         }
         MessageType::RenameWindow => {
             handle_rename_window(msg, session_manager).await;
