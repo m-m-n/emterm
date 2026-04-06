@@ -170,16 +170,9 @@ export interface ITerminalRenderer {
 	 */
 	stopCursorBlink(): void;
 
-	/**
-	 * Start a trivial CSS animation to keep the compositor active.
-	 * Used when rAF stops being delivered (degraded mode) to ensure
-	 * canvas paints are composited to the screen.
-	 */
+	/** @deprecated No-op. Compositor keep-alive was removed (caused WebKitGTK freezes). */
 	startCompositorKeepAlive(): void;
-
-	/**
-	 * Stop the compositor keep-alive animation.
-	 */
+	/** @deprecated No-op. */
 	stopCompositorKeepAlive(): void;
 }
 
