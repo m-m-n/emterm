@@ -183,6 +183,11 @@ impl StatusBarEngine {
         MuxMessage::control(MessageType::StatusUpdate, 0, &msg)
     }
 
+    /// Get the active pane's working directory (for command execution).
+    pub fn active_cwd(&self) -> String {
+        self.get_active_pane_cwd()
+    }
+
     fn get_active_pane_cwd(&self) -> String {
         let active_id = *self.active_pane_id.lock().unwrap();
         match active_id {
@@ -282,13 +287,21 @@ fn resolve_template(
 
 /// Execute a command with a 5-second timeout.
 /// Returns the first line of stdout (trimmed), or None on timeout/error.
-pub async fn execute_command(executable: &PathBuf) -> Option<String> {
+///
+/// `cwd` is the active pane's working directory (from OSC 7 detection).
+/// Falls back to HOME if empty or non-existent.
+pub async fn execute_command(executable: &PathBuf, cwd: &str) -> Option<String> {
     let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+    let work_dir = if !cwd.is_empty() && std::path::Path::new(cwd).is_dir() {
+        cwd
+    } else {
+        &home_dir
+    };
 
     let result = tokio::time::timeout(
         COMMAND_TIMEOUT,
         tokio::process::Command::new(executable)
-            .current_dir(&home_dir)
+            .current_dir(work_dir)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .stdin(std::process::Stdio::null())

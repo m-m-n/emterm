@@ -294,8 +294,9 @@ pub async fn handle_connection<S>(
             Some(cmd_name) = cmd_tick_rx.recv() => {
                 if let Some(executable) = statusbar_engine.get_command_executable(&cmd_name) {
                     let tx = cmd_result_tx.clone();
+                    let cwd = statusbar_engine.active_cwd();
                     tokio::spawn(async move {
-                        let result = execute_command(&executable).await;
+                        let result = execute_command(&executable, &cwd).await;
                         let _ = tx.send((cmd_name, result)).await;
                     });
                 }
