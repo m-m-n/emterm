@@ -92,6 +92,9 @@ async function main(): Promise<void> {
     return initLegacyMode();
   }
 
+  // Cache for mux status bar content (per-tab) for synchronous restoration on tab switch
+  const statusBarCache = new Map<string, { left: string; right: string }>();
+
   // Create TabManager
   // Use a temporary variable to allow callback closure to reference it
   const manager = new TabManager({
@@ -116,9 +119,15 @@ async function main(): Promise<void> {
       app.muxStatusUpdateCallback = (msg) => {
         const activeTab = manager.getActiveTab();
         if (activeTab && manager.getTerminalApp(activeTab.id) !== app) return;
+        // Cache status bar content for synchronous restoration on tab switch
+        const tabForApp = manager.getTabs().find(
+          (t) => manager.getTerminalApp(t.id) === app,
+        );
         if (msg.left === "" && msg.right === "") {
+          if (tabForApp) statusBarCache.delete(tabForApp.id);
           oscLayerController?.handleCommand("clear");
         } else {
+          if (tabForApp) statusBarCache.set(tabForApp.id, { left: msg.left, right: msg.right });
           oscLayerController?.handleCommand("set", "left", msg.left);
           oscLayerController?.handleCommand("set", "right", msg.right);
         }
@@ -297,7 +306,11 @@ async function main(): Promise<void> {
         // Mux mode exited -- clear sub-tabs, restore title, and clear OSC layer
         tabBarUI?.clearMuxSubTabs(tab.id);
         manager.updateTabTitle(tab.id, "Terminal");
-        oscLayerController?.handleCommand("clear");
+        statusBarCache.delete(tab.id);
+        const activeTab = manager.getActiveTab();
+        if (activeTab && activeTab.id === tab.id) {
+          oscLayerController?.handleCommand("clear");
+        }
       } else if (info.windowCount === 1) {
         // Single window — show as regular tab with window name
         tabBarUI?.clearMuxSubTabs(tab.id);
@@ -348,9 +361,14 @@ async function main(): Promise<void> {
       window.terminalRenderer = app.terminalRenderer;
 
       // Handle mux status bar on tab switch:
-      // - Mux tab: request fresh StatusUpdate from daemon
+      // - Mux tab: restore cached status bar immediately, then request fresh data
       // - Non-mux tab: clear OSC layer
       if (app.isInMuxMode) {
+        const cached = statusBarCache.get(tab.id);
+        if (cached) {
+          oscLayerController?.handleCommand("set", "left", cached.left);
+          oscLayerController?.handleCommand("set", "right", cached.right);
+        }
         app.sendMuxRequestStatusUpdate();
       } else {
         oscLayerController?.handleCommand("clear");

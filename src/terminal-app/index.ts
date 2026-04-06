@@ -907,7 +907,9 @@ export class TerminalApp {
 
   /** Send RequestStatusUpdate to the mux daemon (for tab switch). */
   sendMuxRequestStatusUpdate(): void {
-    this.muxClient?.sendRequestStatusUpdate().catch(() => {});
+    this.muxClient?.sendRequestStatusUpdate().catch((e) => {
+      console.warn("sendMuxRequestStatusUpdate failed:", e);
+    });
   }
 
   /** Enter mux mode -- connect to daemon, enable prefix key, show status bar. */
