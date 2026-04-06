@@ -209,11 +209,18 @@ impl StatusBarEngine {
 /// Expand `~` to home directory in executable path.
 pub fn expand_tilde(path: &str) -> PathBuf {
     if path.starts_with("~/") {
-        if let Ok(home) = std::env::var("HOME") {
+        if let Some(home) = home_dir() {
             return PathBuf::from(home).join(&path[2..]);
         }
     }
     PathBuf::from(path)
+}
+
+/// Get the user's home directory (cross-platform).
+fn home_dir() -> Option<String> {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
 }
 
 /// Resolve a template string, replacing variables with cached values.
@@ -291,11 +298,15 @@ fn resolve_template(
 /// `cwd` is the active pane's working directory (from OSC 7 detection).
 /// Falls back to HOME if empty or non-existent.
 pub async fn execute_command(executable: &PathBuf, cwd: &str) -> Option<String> {
-    let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
+    let fallback_dir = home_dir().unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".to_string())
+    });
     let work_dir = if !cwd.is_empty() && std::path::Path::new(cwd).is_dir() {
         cwd
     } else {
-        &home_dir
+        &fallback_dir
     };
 
     let result = tokio::time::timeout(
@@ -391,6 +402,13 @@ fn settings_file_path() -> Option<PathBuf> {
         .ok()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
+        .or_else(|| {
+            // Windows: use APPDATA (e.g., C:\Users\<user>\AppData\Roaming)
+            std::env::var("APPDATA")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        })
         .or_else(|| {
             std::env::var("HOME")
                 .ok()

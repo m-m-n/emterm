@@ -284,28 +284,42 @@ pub(super) async fn handle_rename_window(
     }
 }
 
-/// Switch the active window in the session that contains the given window.
+/// Switch the active window in the session.
+///
+/// The `id` may be either a pane ID (from GUI) or a window ID (from CLI).
+/// Tries pane lookup first; falls back to window lookup.
 pub(super) async fn handle_switch_window(
-    window_id: u32,
+    id: u32,
     session_manager: &Arc<Mutex<SessionManager>>,
 ) {
-    log::info!("SwitchWindow requested: window {}", window_id);
     let mut mgr = session_manager.lock().await;
-    let session_id = mgr.find_window_session(window_id);
-    match session_id {
-        Some(sid) => {
-            if let Some(session) = mgr.get_session_mut(sid) {
-                session.active_window_id = Some(window_id);
-                log::info!(
-                    "SwitchWindow: session {} active window -> {}",
-                    sid,
-                    window_id
-                );
-            }
+
+    // Try as pane_id first (GUI sends pane_id)
+    if let Some((sid, wid)) = mgr.find_pane(id) {
+        if let Some(session) = mgr.get_session_mut(sid) {
+            session.active_window_id = Some(wid);
+            log::info!(
+                "SwitchWindow: pane {} -> session {} active window -> {}",
+                id,
+                sid,
+                wid
+            );
         }
-        None => {
-            log::warn!("SwitchWindow: window {} not found", window_id);
+        return;
+    }
+
+    // Fall back to window_id (CLI sends window_id)
+    if let Some(sid) = mgr.find_window_session(id) {
+        if let Some(session) = mgr.get_session_mut(sid) {
+            session.active_window_id = Some(id);
+            log::info!(
+                "SwitchWindow: session {} active window -> {}",
+                sid,
+                id
+            );
         }
+    } else {
+        log::warn!("SwitchWindow: id {} not found as pane or window", id);
     }
 }
 

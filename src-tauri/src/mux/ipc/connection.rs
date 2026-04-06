@@ -170,6 +170,12 @@ pub async fn handle_connection<S>(
     // Channel for receiving command execution results from spawned tasks
     let (cmd_result_tx, mut cmd_result_rx) = mpsc::channel::<(String, Option<String>)>(16);
 
+    // Per-command JoinHandle for single-flight control: skip if previous execution is still running
+    let mut cmd_handles: std::collections::HashMap<
+        String,
+        tokio::task::JoinHandle<()>,
+    > = std::collections::HashMap::new();
+
     // Message + output loop using select! to handle both directions concurrently
     loop {
         // Build a future for the render timer (if enabled)
@@ -294,13 +300,22 @@ pub async fn handle_connection<S>(
                 }
             }
             Some(cmd_name) = cmd_tick_rx.recv() => {
+                // Single-flight: skip if previous execution is still running
+                if let Some(handle) = cmd_handles.get(&cmd_name) {
+                    if !handle.is_finished() {
+                        log::debug!("Skipping command '{}': previous execution still running", cmd_name);
+                        continue;
+                    }
+                }
                 if let Some(executable) = statusbar_engine.get_command_executable(&cmd_name) {
                     let tx = cmd_result_tx.clone();
                     let cwd = statusbar_engine.active_cwd();
-                    tokio::spawn(async move {
+                    let name = cmd_name.clone();
+                    let handle = tokio::spawn(async move {
                         let result = execute_command(&executable, &cwd).await;
-                        let _ = tx.send((cmd_name, result)).await;
+                        let _ = tx.send((name, result)).await;
                     });
+                    cmd_handles.insert(cmd_name, handle);
                 }
             }
             Some((name, output)) = cmd_result_rx.recv() => {
