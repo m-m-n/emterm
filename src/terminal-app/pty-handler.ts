@@ -117,6 +117,12 @@ class MuxMessageExtractor {
         i++;
       }
     }
+
+    // Save a trailing ESC byte as leftover — it may be the start of an
+    // APC/OSC sequence that continues in the next chunk.
+    if (i === buf.length - 1 && buf[i] === ESC) {
+      this.leftover = buf.slice(i);
+    }
   }
 
   /** Discard any buffered leftover (e.g., on mode exit). */
