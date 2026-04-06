@@ -310,7 +310,7 @@ impl Parser {
                 self.state = State::CsiParam;
             }
             // Intermediate bytes (DEC private modes, etc.)
-            b'?' | b'>' | b'=' | b' ' => {
+            b'?' | b'>' | b'<' | b'=' | b' ' => {
                 self.params.add_intermediate(byte);
                 self.state = State::CsiParam;
             }
@@ -1507,6 +1507,22 @@ mod tests {
         let actions = parse_all(b"\x1B[1 q");
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0], csi(&[1], &[b' '], b'q'));
+    }
+
+    #[test]
+    fn test_parse_csi_with_less_than_intermediate() {
+        // Kitty keyboard protocol pop: CSI < u
+        let actions = parse_all(b"\x1B[<u");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0], csi(&[], &[b'<'], b'u'));
+    }
+
+    #[test]
+    fn test_parse_csi_with_less_than_and_params() {
+        // Kitty keyboard protocol pop with param: CSI < 1 u
+        let actions = parse_all(b"\x1B[<1u");
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0], csi(&[1], &[b'<'], b'u'));
     }
 
     #[test]
