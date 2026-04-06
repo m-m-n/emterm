@@ -106,12 +106,16 @@ async function main(): Promise<void> {
       // Wire status bar OSC callback
       if (oscLayerController) {
         app.statusBarOscCallback = (command, param1, param2) => {
+          const activeTab = manager.getActiveTab();
+          if (activeTab && manager.getTerminalApp(activeTab.id) !== app) return;
           oscLayerController?.handleCommand(command, param1, param2);
         };
       }
 
       // Wire mux status update callback to OSC layer
       app.muxStatusUpdateCallback = (msg) => {
+        const activeTab = manager.getActiveTab();
+        if (activeTab && manager.getTerminalApp(activeTab.id) !== app) return;
         if (msg.left === "" && msg.right === "") {
           oscLayerController?.handleCommand("clear");
         } else {
