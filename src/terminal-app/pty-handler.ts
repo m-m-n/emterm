@@ -271,10 +271,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           console.warn(
             `[WARN][FRONTEND] degraded-mode forceRender completed: ${forceRenderTime.toFixed(1)}ms`,
           );
-          // Start compositor keep-alive: WebKitGTK stops the compositor frame
-          // clock when rAF is idle, preventing canvas paints from reaching the
-          // screen. A running Web Animation keeps the compositor ticking.
-          currentRenderer.startCompositorKeepAlive();
         } catch (error) {
           console.error("[ERROR][FRONTEND] forceRender in degraded mode switch failed:", error);
         }
@@ -582,7 +578,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         rafRecoveryActive = false;
         const renderer = ctx.getRenderer();
         const currentState = ctx.getState();
-        renderer?.stopCompositorKeepAlive();
         if (currentState && renderer) {
           renderer.forceRender(currentState);
         }
