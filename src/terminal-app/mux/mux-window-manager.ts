@@ -125,6 +125,12 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     }
   }
 
+  // Notify daemon of active pane change for status bar cwd tracking
+  const activePaneId = muxPaneIds[ctx.getActiveMuxWindowIndex()];
+  if (activePaneId != null) {
+    ctx.sendMuxControl(MuxMessageType.SwitchWindow, activePaneId);
+  }
+
   const renderer = ctx.getRenderer();
   if (renderer) {
     renderer.forceRender(state);
