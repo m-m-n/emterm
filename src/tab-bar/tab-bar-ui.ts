@@ -81,11 +81,6 @@ export class TabBarUI {
     this.container.setAttribute("role", "tablist");
     this.container.setAttribute("aria-label", t("tabBar.terminalTabs"));
 
-    // Prevent tab bar clicks from stealing focus away from the terminal
-    this.container.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-    });
-
     // Create scroll area for tabs
     this.scrollArea = document.createElement("div");
     this.scrollArea.className = "tab-scroll-area";

@@ -864,8 +864,11 @@ export class TerminalApp {
     this.switchMuxWindow(previousIndex);
 
     // Restore focus after mux window switch (mouse clicks on mux tabs
-    // don't trigger tab:activated when the tab is already active)
+    // don't trigger tab:activated when the tab is already active).
+    // Use rAF to ensure focus is restored after browser's default
+    // mousedown focus handling completes.
     this.focus();
+    requestAnimationFrame(() => this.focus());
   }
 
   /** Switch to the current activeMuxWindowIndex: swap WASM grids and update UI. */
