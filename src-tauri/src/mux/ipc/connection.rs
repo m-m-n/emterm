@@ -117,6 +117,12 @@ pub async fn handle_connection<S>(
     let (pane_output_tx, mut pane_output_rx) =
         mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
 
+    // Subscribe to cross-client notifications (e.g., CLI-triggered SwitchWindow)
+    let mut notify_rx = {
+        let mgr = session_manager.lock().await;
+        mgr.notify_tx().subscribe()
+    };
+
     // NOTE: Reattach data is NOT sent here. The client must send an Attach
     // message after its output stream is ready. This eliminates the timing
     // dependency where reattach data could arrive before the client is listening.
@@ -321,6 +327,29 @@ pub async fn handle_connection<S>(
             Some((name, output)) = cmd_result_rx.recv() => {
                 statusbar_engine.update_command_cache(&name, output);
             }
+            notification = notify_rx.recv() => {
+                if let Ok(msg) = notification {
+                    // Forward cross-client notification (e.g., CLI SwitchWindow) to GUI
+                    log::info!("Forwarding notification to GUI: {:?} pane={}", msg.msg_type, msg.pane_id);
+                    if msg.msg_type == MessageType::SwitchWindow {
+                        *active_pane_id.lock().unwrap() = Some(msg.pane_id);
+                        if statusbar_engine.is_enabled() {
+                            // Send SwitchWindow + status bar update as a batch
+                            if framed.feed(msg).await.is_err() {
+                                break;
+                            }
+                            let update_msg = statusbar_engine.force_render();
+                            if framed.send(update_msg).await.is_err() {
+                                break;
+                            }
+                        } else if framed.send(msg).await.is_err() {
+                            break;
+                        }
+                    } else if framed.send(msg).await.is_err() {
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -394,7 +423,51 @@ async fn handle_cli_client<S>(
             log_cli_window_creation(session_manager, active_session_id).await;
         }
         MessageType::SwitchWindow => {
-            handle_switch_window(msg.pane_id, session_manager).await;
+            let target_id = msg.pane_id;
+            handle_switch_window(target_id, session_manager).await;
+            // Broadcast to GUI clients so they switch windows too.
+            // Resolve the active pane_id of the target window for the GUI.
+            let notify_pane_id = {
+                let mgr = session_manager.lock().await;
+                // Try as pane_id first, then as window_id (same logic as handle_switch_window)
+                if let Some((sid, wid)) = mgr.find_pane(target_id) {
+                    mgr.get_session(sid)
+                        .and_then(|s| s.windows.get(&wid))
+                        .and_then(|w| w.active_pane_id)
+                        .unwrap_or(target_id)
+                } else if let Some(sid) = mgr.find_window_session(target_id) {
+                    mgr.get_session(sid)
+                        .and_then(|s| s.windows.get(&target_id))
+                        .and_then(|w| w.active_pane_id)
+                        .unwrap_or(target_id)
+                } else {
+                    target_id
+                }
+            };
+            let notify_msg = MuxMessage {
+                msg_type: MessageType::SwitchWindow,
+                pane_id: notify_pane_id,
+                payload: vec![],
+            };
+            let mgr = session_manager.lock().await;
+            let _ = mgr.notify_tx().send(notify_msg);
+        }
+        MessageType::PtyInput => {
+            let pane_id = msg.pane_id;
+            let mgr = session_manager.lock().await;
+            if let Some((session_id, window_id)) = mgr.find_pane(pane_id) {
+                if let Some(session) = mgr.get_session(session_id) {
+                    if let Some(window) = session.windows.get(&window_id) {
+                        if let Some(pane) = window.panes.get(&pane_id) {
+                            if let Err(e) = pane.write_input(&msg.payload) {
+                                log::warn!("CLI send-keys: failed to write to pane {}: {}", pane_id, e);
+                            }
+                        }
+                    }
+                }
+            } else {
+                log::warn!("CLI send-keys: pane {} not found", pane_id);
+            }
         }
         _ => {
             log::warn!(
