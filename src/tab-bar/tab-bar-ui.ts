@@ -54,6 +54,8 @@ export class TabBarUI {
   private muxOriginalTabs: Map<string, HTMLElement> = new Map();
   /** Callback when a mux window tab is clicked */
   public onMuxWindowClick: ((tabId: string, windowIndex: number) => void) | null = null;
+  /** Callback when a tab's DOM element is replaced (mux group transform/restore) */
+  public onTabElementReplaced: ((tabId: string) => void) | null = null;
   private unsubscribers: (() => void)[] = [];
 
   constructor(options: TabBarUIOptions) {
@@ -637,6 +639,9 @@ export class TabBarUI {
 
       // Update tabElements to point to group
       this.tabElements.set(tabId, group);
+
+      // Notify drag handler that the DOM element changed
+      this.onTabElementReplaced?.(tabId);
     }
 
     // Clear and rebuild window tabs
@@ -693,6 +698,9 @@ export class TabBarUI {
     // Update tabElements
     this.tabElements.set(tabId, savedOriginal);
     this.muxOriginalTabs.delete(tabId);
+
+    // Notify drag handler that the DOM element changed
+    this.onTabElementReplaced?.(tabId);
   }
 
   /**

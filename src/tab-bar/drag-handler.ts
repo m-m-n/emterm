@@ -92,6 +92,15 @@ export class TabDragHandler {
   }
 
   /**
+   * Re-attaches pointer listeners to a tab whose DOM element was replaced
+   * (e.g. when a tab is transformed into a mux-tab-group or restored).
+   */
+  reattachTabListeners(tabId: string): void {
+    this.detachTabListeners(tabId);
+    this.attachTabListeners(tabId);
+  }
+
+  /**
    * Attaches pointer listeners to a specific tab element
    */
   private attachTabListeners(tabId: string): void {
@@ -308,8 +317,12 @@ export class TabDragHandler {
    */
   private findTabElement(element: HTMLElement | null): HTMLElement | null {
     if (!element) return null;
-    if (element.classList.contains("tab")) return element;
-    return element.closest(".tab") as HTMLElement | null;
+    if (element.classList.contains("mux-tab-group")) return element;
+    if (element.classList.contains("tab") && !element.classList.contains("mux-window-tab")) return element;
+    const group = element.closest(".mux-tab-group") as HTMLElement | null;
+    if (group) return group;
+    const tab = element.closest(".tab:not(.mux-window-tab)") as HTMLElement | null;
+    return tab;
   }
 
   /**
