@@ -862,6 +862,10 @@ export class TerminalApp {
     this.activeMuxWindowIndex = windowIndex;
     console.warn(`[DIAG-MUX] switchToMuxWindow: switching ${previousIndex} → ${windowIndex}, paneIds=[${this.muxPaneIds}]`);
     this.switchMuxWindow(previousIndex);
+
+    // Restore focus after mux window switch (mouse clicks on mux tabs
+    // don't trigger tab:activated when the tab is already active)
+    this.focus();
   }
 
   /** Switch to the current activeMuxWindowIndex: swap WASM grids and update UI. */
