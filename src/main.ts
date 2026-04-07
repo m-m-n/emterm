@@ -372,8 +372,12 @@ async function main(): Promise<void> {
       // Resume rendering on the active tab
       app.setTabActive(true);
 
-      // Focus the IME handler for the active tab
+      // Focus the IME handler for the active tab.
+      // Use rAF to ensure focus is restored after browser's default
+      // mousedown focus handling completes (mouse clicks on tab bar
+      // elements can steal focus away from the terminal).
       app.focus();
+      requestAnimationFrame(() => app.focus());
 
       // Update global references for E2E testing
       window.terminalApp = app;
