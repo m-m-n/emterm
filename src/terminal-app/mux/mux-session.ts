@@ -78,6 +78,7 @@ export interface MuxSessionContext {
   registerCoreCallbacks: (core: ReturnType<TerminalState["getActiveCore"]>) => void;
   handleMuxPaneCreated: (paneId: number) => void;
   handleMuxPaneExited: (paneId: number) => void;
+  handleRemoteSwitchWindow: (paneId: number) => void;
   handleMuxAction: (action: MuxAction) => void;
   sendMuxControl: (msgType: number, paneId: number, payload?: Uint8Array) => void;
   renderMuxPaneOutput: (paneId: number, data: Uint8Array) => void;
@@ -228,6 +229,11 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
   // Set up status update handler -- push to OSC layer via callback
   client.setOnStatusUpdate((msg) => {
     ctx.onStatusUpdate?.(msg);
+  });
+
+  // Set up remote switch-window handler (e.g., CLI `emterm mux switch-window`)
+  client.setOnSwitchWindow((paneId: number) => {
+    ctx.handleRemoteSwitchWindow(paneId);
   });
 
   // Set up detached handler

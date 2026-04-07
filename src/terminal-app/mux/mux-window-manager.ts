@@ -318,6 +318,58 @@ export function reloadMuxSettings(ctx: MuxWindowManagerContext): void {
   }
 }
 
+/** Handle a remote SwitchWindow notification (e.g., from CLI `emterm mux switch-window`).
+ *  Finds the window containing the given paneId and switches to it.
+ *  Does NOT send SwitchWindow back to daemon (unlike switchMuxWindow) to avoid feedback loops. */
+export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: number): void {
+  const state = ctx.getState();
+  if (!state) return;
+
+  const muxPaneIds = ctx.getMuxPaneIds();
+  const muxPaneGrids = ctx.getMuxPaneGrids();
+  const targetIndex = muxPaneIds.indexOf(paneId);
+  if (targetIndex === -1) {
+    muxLog.warn(`Remote SwitchWindow: pane ${paneId} not found in local windows`);
+    return;
+  }
+  if (targetIndex === ctx.getActiveMuxWindowIndex()) {
+    muxLog.debug(`Remote SwitchWindow: already on window ${targetIndex}`);
+    return;
+  }
+
+  muxLog.info(`Remote SwitchWindow: switching to window ${targetIndex} (pane ${paneId})`);
+
+  // Save current pane's full state
+  const previousIndex = ctx.getActiveMuxWindowIndex();
+  const prevPaneId = muxPaneIds[previousIndex];
+  if (prevPaneId != null) {
+    muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
+  }
+
+  // Discard any buffered PTY data from the previous pane
+  ctx.flushPtyPendingData();
+
+  ctx.setActiveMuxWindowIndex(targetIndex);
+
+  // Restore the target pane's state
+  const savedState = muxPaneGrids.get(paneId);
+  if (savedState) {
+    muxPaneGrids.delete(paneId);
+    state.restoreMuxPaneState(savedState);
+    ctx.registerCoreCallbacks(state.getActiveCore());
+  } else {
+    state.getWasmCore().reset();
+  }
+
+  // Skip sendMuxControl(SwitchWindow) — the daemon already knows
+
+  const renderer = ctx.getRenderer();
+  if (renderer) {
+    renderer.forceRender(state);
+  }
+  emitMuxStateChange(ctx);
+}
+
 /** Start or attach to mux session via inband protocol.
  *  Launches bridge process in the PTY and communicates via APC. */
 export async function startMuxDirect(ctx: MuxWindowManagerContext): Promise<void> {

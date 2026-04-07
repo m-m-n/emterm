@@ -9,22 +9,32 @@ use std::collections::HashMap;
 use super::pane::PaneId;
 use super::session::{MuxSession, SessionId};
 use super::window::WindowId;
-use crate::mux::ipc::protocol::{SessionInfo, WindowInfo};
+use crate::mux::ipc::protocol::{MuxMessage, SessionInfo, WindowInfo};
 
 /// The session manager owns all sessions.
 pub struct SessionManager {
     sessions: HashMap<SessionId, MuxSession>,
     next_session_id: SessionId,
     next_pane_id: u32,
+    /// Broadcast channel for cross-client notifications (e.g., CLI → GUI).
+    /// GUI connections subscribe to receive notifications triggered by CLI commands.
+    notify_tx: tokio::sync::broadcast::Sender<MuxMessage>,
 }
 
 impl SessionManager {
     pub fn new() -> Self {
+        let (notify_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             sessions: HashMap::new(),
             next_session_id: 1,
             next_pane_id: 1,
+            notify_tx,
         }
+    }
+
+    /// Get a broadcast sender for cross-client notifications.
+    pub fn notify_tx(&self) -> &tokio::sync::broadcast::Sender<MuxMessage> {
+        &self.notify_tx
     }
 
     /// Allocate a globally unique pane ID.

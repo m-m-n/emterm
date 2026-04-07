@@ -59,6 +59,7 @@ import {
   emitMuxStateChange as emitMuxStateChangeImpl,
   reloadMuxSettings as reloadMuxSettingsImpl,
   startMuxDirect as startMuxDirectImpl,
+  handleRemoteSwitchWindow as handleRemoteSwitchWindowImpl,
   type MuxWindowManagerContext,
 } from "./mux/mux-window-manager";
 import {
@@ -792,6 +793,7 @@ export class TerminalApp {
       registerCoreCallbacks: (core) => self.registerCoreCallbacks(core),
       handleMuxPaneCreated: (paneId) => self.handleMuxPaneCreated(paneId),
       handleMuxPaneExited: (paneId) => self.handleMuxPaneExited(paneId),
+      handleRemoteSwitchWindow: (paneId) => self.handleRemoteSwitchWindow(paneId),
       handleMuxAction: (action) => self.handleMuxAction(action),
       sendMuxControl: (msgType, paneId, payload) => self.sendMuxControl(msgType, paneId, payload),
       renderMuxPaneOutput: (paneId, data) => self.renderMuxPaneOutput(paneId, data),
@@ -879,6 +881,11 @@ export class TerminalApp {
   /** Handle PaneCreated from daemon — register actual pane ID and update UI. */
   private handleMuxPaneCreated(paneId: number): void {
     handleMuxPaneCreatedImpl(this.getMuxWindowManagerContext(), paneId);
+  }
+
+  /** Handle remote SwitchWindow notification from CLI. */
+  private handleRemoteSwitchWindow(paneId: number): void {
+    handleRemoteSwitchWindowImpl(this.getMuxWindowManagerContext(), paneId);
   }
 
   /** Send a Resize message to the daemon for a single pane using current terminal dimensions. */

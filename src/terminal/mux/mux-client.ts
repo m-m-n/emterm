@@ -299,6 +299,7 @@ export class MuxClient {
   private onPaneCreated: ((paneId: number) => void) | null = null;
   private onDetached: (() => void) | null = null;
   private onStatusUpdate: ((msg: { left: string; right: string }) => void) | null = null;
+  private onSwitchWindow: ((paneId: number) => void) | null = null;
 
   get state(): MuxConnectionState {
     return this._state;
@@ -423,6 +424,10 @@ export class MuxClient {
         muxLog.info("Detached from daemon");
         this.onDetached?.();
         break;
+      case MuxMessageType.SwitchWindow:
+        muxLog.info(`SwitchWindow notification: pane=${paneId}`);
+        this.onSwitchWindow?.(paneId);
+        break;
       case MuxMessageType.StatusUpdate:
         if (this.onStatusUpdate) {
           // Decode bincode StatusUpdateMsg
@@ -461,6 +466,11 @@ export class MuxClient {
   /** Set callback for status updates. */
   setOnStatusUpdate(callback: (msg: { left: string; right: string }) => void): void {
     this.onStatusUpdate = callback;
+  }
+
+  /** Set callback for remote window switch (e.g., CLI-triggered switch-window). */
+  setOnSwitchWindow(callback: (paneId: number) => void): void {
+    this.onSwitchWindow = callback;
   }
 
   /** Send RequestStatusUpdate (0x17) to daemon with empty payload. */
