@@ -1372,6 +1372,68 @@ export class TerminalApp {
   }
 
   /**
+   * Recheck container size and resize terminal if dimensions changed.
+   * Used when external layout changes (e.g. status bar visibility) may have
+   * altered the available area without triggering ResizeObserver reliably.
+   */
+  recheckSize(): void {
+    if (!this.state || !this.renderer) return;
+    // Skip if container is hidden (inactive tab)
+    if (this.container.style.display === "none" ||
+        this.container.clientWidth === 0 || this.container.clientHeight === 0) {
+      return;
+    }
+
+    const { cols, rows } = calculateTerminalSize(
+      this.container,
+      this.charSize.width,
+      this.charSize.height,
+    );
+
+    const currentCols = this.state.cols;
+    const currentRows = this.state.rows;
+    if (cols === currentCols && rows === currentRows) return;
+
+    try {
+      this.state.resize(cols, rows);
+      this.state.setCellSizePx(
+        Math.round(this.charSize.width),
+        Math.round(this.charSize.height),
+      );
+      this.renderer.resize(cols, rows);
+      this.renderer.forceRender(this.state);
+    } catch (error) {
+      console.error("Failed to resize terminal in recheckSize:", error);
+      try {
+        this.renderer.forceRender(this.state);
+      } catch {
+        // Recovery failed — nothing more we can do
+      }
+      return;
+    }
+
+    this.imeHandler?.updatePosition();
+    this.mouseHandler?.updateCharSize(this.charSize.width, this.charSize.height);
+    this.selectionController?.resize(cols, rows, this.charSize.width, this.charSize.height);
+
+    // Resize PTY
+    this.ptyClient?.resize(cols, rows);
+
+    // Propagate to mux daemon if in mux mode
+    if (this.inMuxMode && this.muxClient) {
+      if (this.muxLayoutRoot) {
+        this.applyMuxLayout();
+        this.sendPaneResizes();
+      } else {
+        const activePaneId = this.getActiveMuxPaneId();
+        if (activePaneId != null) {
+          this.sendMuxPaneResize(activePaneId);
+        }
+      }
+    }
+  }
+
+  /**
    * Recalculate terminal size after character dimensions change (e.g. font change).
    * Delegates to resize-handler module.
    */
