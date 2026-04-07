@@ -72,18 +72,6 @@ impl TerminalCore {
         }
     }
 
-    /// Get the base offset for a viewport row in ring_cells.
-    /// Returns 0 as fallback if the computed offset exceeds ring_cells bounds.
-    #[inline]
-    pub(crate) fn viewport_row_base(&self, row: u16) -> usize {
-        let abs = self.viewport_abs(row);
-        let base = abs * self.cols as usize;
-        if base + (self.cols as usize) > self.ring_cells.len() {
-            return 0;
-        }
-        base
-    }
-
     /// Get the number of scrollback lines.
     #[inline]
     pub(crate) fn scrollback_count(&self) -> usize {
