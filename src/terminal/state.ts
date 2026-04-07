@@ -54,6 +54,12 @@ export interface MuxPaneGridState {
   primaryGrid: WasmGrid;
   alternateGrid: WasmGrid | null;
   useAlternate: boolean;
+  /** TS-only modes not stored in WASM (mouseTracking, mouseEncoding, cursorKeys). */
+  tsModes: {
+    mouseTracking: import("./modes").MouseTrackingMode;
+    mouseEncoding: import("./modes").MouseEncoding;
+    cursorKeys: import("./modes").CursorKeysMode;
+  };
 }
 
 const MODE_ACTION_SWITCH_TO_ALT = 1;
@@ -296,6 +302,11 @@ export class TerminalState implements TerminalStateAccessor {
       primaryGrid: this.primaryWasmGrid!,
       alternateGrid: this.alternateWasmGrid,
       useAlternate: this.useAlternate,
+      tsModes: {
+        mouseTracking: this.modes.mouseTracking,
+        mouseEncoding: this.modes.mouseEncoding,
+        cursorKeys: this.modes.cursorKeys,
+      },
     };
   }
 
@@ -340,11 +351,16 @@ export class TerminalState implements TerminalStateAccessor {
       ? this.alternateCursor
       : this.primaryCursor;
 
-    // Sync modes from the active core
+    // Sync modes from the active core (boolean modes stored in WASM)
     const activeCore = this.useAlternate && paneState.alternateGrid
       ? paneState.alternateGrid.core
       : paneState.primaryGrid.core;
     syncModesFromWasm(this.modes, activeCore);
+
+    // Restore TS-only modes (not stored in WASM bitfield)
+    this.modes.mouseTracking = paneState.tsModes.mouseTracking;
+    this.modes.mouseEncoding = paneState.tsModes.mouseEncoding;
+    this.modes.cursorKeys = paneState.tsModes.cursorKeys;
 
     // Propagate cell size to all grids
     setCellSizePxOnGrid(paneState.primaryGrid, this.cellWidthPx, this.cellHeightPx);
@@ -386,8 +402,13 @@ export class TerminalState implements TerminalStateAccessor {
     this.primaryCursor.moveTo(newGrid.core.get_cursor_col(), newGrid.core.get_cursor_row());
     this.cursor = this.primaryCursor;
 
-    // Sync modes from the new core
+    // Sync modes from the new core (boolean modes stored in WASM)
     syncModesFromWasm(this.modes, newGrid.core);
+
+    // Reset TS-only modes — new pane starts with defaults
+    this.modes.mouseTracking = "none";
+    this.modes.mouseEncoding = "default";
+    this.modes.cursorKeys = "normal";
 
     // Propagate cell size
     setCellSizePxOnGrid(newGrid, this.cellWidthPx, this.cellHeightPx);

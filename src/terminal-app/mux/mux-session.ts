@@ -16,6 +16,7 @@ import type { PtyHandlerHandle } from "../pty-handler";
 import type { LayoutNode } from "../../terminal/mux/layout";
 import { WasmGrid } from "../../terminal/wasm/terminal-core";
 import type { MuxPaneGridState } from "../../terminal/state";
+import { DECPrivateMode } from "../../terminal/modes";
 import { SettingsService } from "../../settings/settings-service";
 import type { CopyModeManager, ViKeybinds, EmacsKeybinds } from "../../terminal/mux-copy-mode";
 import type { MuxApcContext } from "../../terminal/handlers/apc_handlers";
@@ -171,7 +172,11 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
             while (i < modeActions.length) {
               const action = modeActions[i]!;
               if (action === 0xFF || action === 0xFE) {
-                i += 3; // TS_FALLBACK: skip
+                // TS_FALLBACK: update savedState.tsModes for TS-only modes
+                const mode = modeActions[i + 1]! | (modeActions[i + 2]! << 8);
+                const isSet = action === 0xFF;
+                applyTsFallbackToSavedState(savedState, mode, isSet);
+                i += 3;
               } else if (action === 1 || action === 2) {
                 // SWITCH_TO_ALT / SAVE_AND_SWITCH_TO_ALT
                 console.warn(`[DIAG-MODE] inactive pane=${paneId} buffer-switch: → ALT (action=${action})`);
@@ -452,4 +457,58 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   // Restore early APC context so next manual `emterm mux` is detected
   ctx.onMuxModeExited?.();
   muxLog.info("exitMuxMode complete");
+}
+
+/**
+ * Apply a TS_FALLBACK mode action to an inactive pane's saved state.
+ * Updates tsModes for mouse tracking, mouse encoding, and cursor keys.
+ */
+function applyTsFallbackToSavedState(
+  savedState: MuxPaneGridState,
+  mode: number,
+  isSet: boolean,
+): void {
+  switch (mode) {
+    case DECPrivateMode.DECCKM:
+      savedState.tsModes.cursorKeys = isSet ? "application" : "normal";
+      break;
+    case DECPrivateMode.X10_MOUSE:
+      if (isSet) {
+        savedState.tsModes.mouseTracking = "x10";
+      } else if (savedState.tsModes.mouseTracking === "x10") {
+        savedState.tsModes.mouseTracking = "none";
+      }
+      break;
+    case DECPrivateMode.BTN_EVENT_MOUSE:
+      if (isSet) {
+        savedState.tsModes.mouseTracking = "button";
+      } else if (savedState.tsModes.mouseTracking === "button") {
+        savedState.tsModes.mouseTracking = "none";
+      }
+      break;
+    case DECPrivateMode.ANY_EVENT_MOUSE:
+      if (isSet) {
+        savedState.tsModes.mouseTracking = "any";
+      } else if (savedState.tsModes.mouseTracking === "any") {
+        savedState.tsModes.mouseTracking = "none";
+      }
+      break;
+    case DECPrivateMode.UTF8_MOUSE:
+      if (isSet) {
+        savedState.tsModes.mouseEncoding = "utf8";
+      } else if (savedState.tsModes.mouseEncoding === "utf8") {
+        savedState.tsModes.mouseEncoding = "default";
+      }
+      break;
+    case DECPrivateMode.SGR_MOUSE:
+      if (isSet) {
+        savedState.tsModes.mouseEncoding = "sgr";
+      } else if (savedState.tsModes.mouseEncoding === "sgr") {
+        savedState.tsModes.mouseEncoding = "default";
+      }
+      break;
+    default:
+      console.warn(`[DIAG-MODE] inactive pane: unhandled TS_FALLBACK mode=${mode} isSet=${isSet}`);
+      break;
+  }
 }
