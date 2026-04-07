@@ -359,6 +359,11 @@ async function main(): Promise<void> {
   });
   dragHandler.init();
 
+  // Re-attach drag listeners when tab DOM elements are replaced (mux group transform)
+  tabBarUI.onTabElementReplaced = (tabId) => {
+    dragHandler?.reattachTabListeners(tabId);
+  };
+
   // Focus the terminal when a tab is activated and update global references
   manager.on("tab:activated", ({ tab, previousTabId }) => {
     // Deactivate rendering on previous tab to reduce CPU/GPU load
