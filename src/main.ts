@@ -131,6 +131,10 @@ async function main(): Promise<void> {
           oscLayerController?.handleCommand("set", "left", msg.left);
           oscLayerController?.handleCommand("set", "right", msg.right);
         }
+        // Status bar height may have changed — recheck terminal size after layout reflow
+        requestAnimationFrame(() => {
+          app.recheckSize();
+        });
       };
 
       // Connect PTY exit event to TabManager
@@ -220,6 +224,13 @@ async function main(): Promise<void> {
     // Listen for settings changes to update status bar
     window.addEventListener("emterm-statusbar-settings", ((e: CustomEvent) => {
       statusBarUI?.applySettings(e.detail);
+      // Status bar visibility/height may have changed — recheck terminal sizes
+      requestAnimationFrame(() => {
+        const activeTab = manager.getActiveTab();
+        if (activeTab) {
+          manager.getTerminalApp(activeTab.id)?.recheckSize();
+        }
+      });
     }) as EventListener);
   }
 
