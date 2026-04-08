@@ -1,0 +1,58 @@
+schema_version: 1
+feature: visibility-render-recovery
+scale: light
+created: 2026-04-08
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 0b25fc59f198246f1aec77bc400a6060fb260e95
+  - id: implement
+    status: completed
+    completed_at_commit: 0b25fc59f198246f1aec77bc400a6060fb260e95
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 0b25fc59f198246f1aec77bc400a6060fb260e95
+
+requirements:
+  FR1:
+    title: Visibilitychange Listener
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: rAF Recovery on Visible
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Cleanup
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Recovery Latency
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Compatibility with existing degraded mode
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: No regression
+    status: ok
+    tasks: []
+    tests: []
