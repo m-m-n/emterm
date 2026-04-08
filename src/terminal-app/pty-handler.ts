@@ -169,12 +169,14 @@ export interface PtyHandlerHandle {
   processNow: () => void;
   /** Notify that the tab has become active — triggers forceRender to repaint skipped frames. */
   notifyTabActivated: () => void;
+  /** Remove event listeners and clean up resources. */
+  destroy: () => void;
 }
 
 export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandlerHandle> {
   const ptyClient = ctx.getPtyClient();
   const state = ctx.getState();
-  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {} };
+  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {}, destroy: () => {} };
   if (!ptyClient || !state) return noopHandle;
 
   // Register callbacks on primary core
@@ -632,6 +634,43 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   // Stateful extractor for mux APC/OSC messages -- buffers across chunk boundaries
   const muxExtractor = new MuxMessageExtractor();
 
+  // ── Visibility-based render recovery ─────────────────────────
+  // When the page becomes hidden (desktop lock, workspace switch), WebKitGTK stops
+  // delivering rAF callbacks. On visibility restoration, re-kick the rAF pipeline
+  // so rendering resumes without requiring user interaction.
+  const onVisibilityChange = () => {
+    if (document.visibilityState !== "visible") return;
+    if (!rafDegraded) return;
+
+    console.warn(
+      `[WARN][FRONTEND] visibilitychange: visible — recovering from degraded mode` +
+      ` | pendingChunks=${pendingChunks.length}` +
+      ` | leftover=${leftoverData !== null}`,
+    );
+
+    rafDegraded = false;
+    rafScheduled = false;
+
+    // Clear stale watchdog to prevent it from re-triggering degraded mode
+    if (rafWatchdog !== null) {
+      clearTimeout(rafWatchdog);
+      rafWatchdog = null;
+    }
+
+    // Force full re-render to recover from potential canvas buffer loss
+    const currentState = ctx.getState();
+    const currentRenderer = ctx.getRenderer();
+    if (currentState && currentRenderer) {
+      currentRenderer.forceRender(currentState);
+    }
+
+    // Re-enter rAF path if there is pending data
+    if (pendingChunks.length > 0 || leftoverData !== null) {
+      scheduleProcessing();
+    }
+  };
+  document.addEventListener("visibilitychange", onVisibilityChange);
+
   const handle: PtyHandlerHandle = {
     injectData: (data: Uint8Array) => {
       pendingChunks.push(data);
@@ -654,6 +693,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       if (currentState && currentRenderer) {
         currentRenderer.forceRender(currentState);
       }
+    },
+    destroy: () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     },
   };
 
