@@ -9,15 +9,24 @@ fn sanitize_osc_value(value: &str) -> String {
         .collect()
 }
 
+/// Chunk size for image-response OSC data (128KB, same as markdown chunks)
+pub const IMAGE_RESPONSE_CHUNK_SIZE: usize = 128 * 1024;
+
 /// Generates OSC 777 sequences for Markdown content
 ///
 /// # Format
 /// ```text
-/// ESC ] 777 ; emterm ; markdown ; begin ; id={uuid} ; format=gfm ; render=fullscreen ; version=1.0 ESC \
+/// ESC ] 777 ; emterm ; markdown ; begin ; id={uuid} ; format=gfm ; render=fullscreen ; version=1.0 [; basedir={path}] ESC \
 /// ESC ] 777 ; emterm ; markdown ; chunk ; id={uuid} ; seq=N ; data={base64} ESC \
 /// ESC ] 777 ; emterm ; markdown ; end ; id={uuid} ESC \
 /// ```
-pub fn generate_markdown_osc(session_id: &Uuid, chunks: Vec<String>) -> String {
+///
+/// When `basedir` is provided, it is appended to the begin sequence as `basedir={sanitized_path}`.
+pub fn generate_markdown_osc(
+    session_id: &Uuid,
+    chunks: Vec<String>,
+    basedir: Option<&str>,
+) -> String {
     let total_data: usize = chunks.iter().map(|c| c.len()).sum();
     let header_overhead = 100;
     let estimated = total_data + header_overhead * (chunks.len() + 2);
@@ -25,9 +34,13 @@ pub fn generate_markdown_osc(session_id: &Uuid, chunks: Vec<String>) -> String {
     let id = session_id.to_string();
 
     // Begin sequence
+    let basedir_param = match basedir {
+        Some(dir) => format!(";basedir={}", sanitize_osc_value(dir)),
+        None => String::new(),
+    };
     output.push_str(&format!(
-        "\x1b]777;emterm;markdown;begin;id={};format=gfm;render=fullscreen;version=1.0\x1b\\",
-        id
+        "\x1b]777;emterm;markdown;begin;id={};format=gfm;render=fullscreen;version=1.0{}\x1b\\",
+        id, basedir_param
     ));
 
     // Chunk sequences
@@ -42,6 +55,77 @@ pub fn generate_markdown_osc(session_id: &Uuid, chunks: Vec<String>) -> String {
     output.push_str(&format!("\x1b]777;emterm;markdown;end;id={}\x1b\\", id));
 
     output
+}
+
+/// Generates OSC 777 image-response sequence(s) for inline image data.
+///
+/// For data within `IMAGE_RESPONSE_CHUNK_SIZE`, produces a single OSC sequence.
+/// For larger data, splits into multiple chunked sequences with `chunk_seq`/`chunk_total` parameters.
+///
+/// # Format (single)
+/// ```text
+/// ESC ] 777 ; emterm ; markdown ; image-response ; request_id={id} ; mime_type={type} ; data={base64} ESC \
+/// ```
+///
+/// # Format (chunked)
+/// ```text
+/// ESC ] 777 ; emterm ; markdown ; image-response ; request_id={id} ; mime_type={type} ; chunk_seq=0 ; chunk_total=N ; data={base64} ESC \
+/// ESC ] 777 ; emterm ; markdown ; image-response ; request_id={id} ; chunk_seq=1 ; chunk_total=N ; data={base64} ESC \
+/// ...
+/// ```
+pub fn generate_image_response_osc(request_id: &str, mime_type: &str, base64_data: &str) -> String {
+    let safe_request_id = sanitize_osc_value(request_id);
+    let safe_mime_type = sanitize_osc_value(mime_type);
+
+    if base64_data.len() <= IMAGE_RESPONSE_CHUNK_SIZE {
+        // Single sequence (no chunking)
+        return format!(
+            "\x1b]777;emterm;markdown;image-response;request_id={};mime_type={};data={}\x1b\\",
+            safe_request_id, safe_mime_type, base64_data
+        );
+    }
+
+    // Chunked transfer
+    let data_chunks: Vec<&str> = base64_data
+        .as_bytes()
+        .chunks(IMAGE_RESPONSE_CHUNK_SIZE)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+        .collect();
+    let chunk_total = data_chunks.len();
+
+    let mut output = String::with_capacity(base64_data.len() + chunk_total * 150);
+
+    for (seq, data) in data_chunks.iter().enumerate() {
+        if seq == 0 {
+            // First chunk includes mime_type
+            output.push_str(&format!(
+                "\x1b]777;emterm;markdown;image-response;request_id={};mime_type={};chunk_seq={};chunk_total={};data={}\x1b\\",
+                safe_request_id, safe_mime_type, seq, chunk_total, data
+            ));
+        } else {
+            output.push_str(&format!(
+                "\x1b]777;emterm;markdown;image-response;request_id={};chunk_seq={};chunk_total={};data={}\x1b\\",
+                safe_request_id, seq, chunk_total, data
+            ));
+        }
+    }
+
+    output
+}
+
+/// Generates OSC 777 image-error sequence for a failed image request.
+///
+/// # Format
+/// ```text
+/// ESC ] 777 ; emterm ; markdown ; image-error ; request_id={id} ; error={message} ESC \
+/// ```
+pub fn generate_image_error_osc(request_id: &str, error_message: &str) -> String {
+    let safe_request_id = sanitize_osc_value(request_id);
+    let safe_error = sanitize_osc_value(error_message);
+    format!(
+        "\x1b]777;emterm;markdown;image-error;request_id={};error={}\x1b\\",
+        safe_request_id, safe_error
+    )
 }
 
 /// Generate a single download begin OSC sequence.
@@ -160,7 +244,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec!["SGVsbG8=".to_string()];
 
-        let result = generate_markdown_osc(&session_id, chunks);
+        let result = generate_markdown_osc(&session_id, chunks, None);
 
         // Verify structure
         assert!(result.contains("\x1b]777;emterm;markdown;begin"));
@@ -183,7 +267,7 @@ mod tests {
             "chunk2".to_string(),
         ];
 
-        let result = generate_markdown_osc(&session_id, chunks);
+        let result = generate_markdown_osc(&session_id, chunks, None);
 
         // Verify sequential chunk numbers
         assert!(result.contains("seq=0"));
@@ -199,7 +283,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec!["data".to_string()];
 
-        let result = generate_markdown_osc(&session_id, chunks);
+        let result = generate_markdown_osc(&session_id, chunks, None);
 
         // UUID should appear in begin, chunk, and end sequences
         let uuid_str = session_id.to_string();
@@ -428,12 +512,138 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec![];
 
-        let result = generate_markdown_osc(&session_id, chunks);
+        let result = generate_markdown_osc(&session_id, chunks, None);
 
         // Should still have begin and end sequences
         assert!(result.contains("\x1b]777;emterm;markdown;begin"));
         assert!(result.contains("\x1b]777;emterm;markdown;end"));
         // Should not have any chunk sequences
         assert!(!result.contains("\x1b]777;emterm;markdown;chunk"));
+    }
+
+    // --- basedir parameter tests ---
+
+    #[test]
+    fn test_generate_markdown_osc_with_basedir() {
+        let session_id = Uuid::new_v4();
+        let chunks = vec!["SGVsbG8=".to_string()];
+
+        let result = generate_markdown_osc(&session_id, chunks, Some("/home/user/docs"));
+
+        // basedir should appear in the begin sequence
+        assert!(result.contains("basedir=/home/user/docs"));
+        // Other fields should still be present
+        assert!(result.contains("format=gfm"));
+        assert!(result.contains("render=fullscreen"));
+        assert!(result.contains("version=1.0"));
+    }
+
+    #[test]
+    fn test_generate_markdown_osc_without_basedir_backward_compatible() {
+        let session_id = Uuid::new_v4();
+        let chunks = vec!["SGVsbG8=".to_string()];
+
+        let result = generate_markdown_osc(&session_id, chunks, None);
+
+        // basedir should NOT appear
+        assert!(!result.contains("basedir="));
+        // Other fields should still be present
+        assert!(result.contains("format=gfm"));
+        assert!(result.contains("render=fullscreen"));
+    }
+
+    #[test]
+    fn test_generate_markdown_osc_basedir_sanitizes_semicolons() {
+        let session_id = Uuid::new_v4();
+        let chunks = vec!["data".to_string()];
+
+        let result = generate_markdown_osc(&session_id, chunks, Some("/path;evil/dir"));
+
+        // Semicolons should be stripped from basedir value
+        assert!(result.contains("basedir=/pathevil/dir"));
+        assert!(!result.contains("basedir=/path;evil/dir"));
+    }
+
+    #[test]
+    fn test_generate_markdown_osc_basedir_sanitizes_control_chars() {
+        let session_id = Uuid::new_v4();
+        let chunks = vec!["data".to_string()];
+
+        let result = generate_markdown_osc(&session_id, chunks, Some("/path/\x1b[0m/dir"));
+
+        // Control characters should be stripped
+        assert!(result.contains("basedir=/path/[0m/dir"));
+    }
+
+    // --- image-response OSC tests ---
+
+    #[test]
+    fn test_generate_image_response_osc_small_data() {
+        let result = generate_image_response_osc("req123", "image/png", "iVBORw0KGgo=");
+
+        assert!(result.contains("\x1b]777;emterm;markdown;image-response"));
+        assert!(result.contains("request_id=req123"));
+        assert!(result.contains("mime_type=image/png"));
+        assert!(result.contains("data=iVBORw0KGgo="));
+        assert!(result.ends_with("\x1b\\"));
+        // Small data should NOT have chunk_seq/chunk_total
+        assert!(!result.contains("chunk_seq="));
+        assert!(!result.contains("chunk_total="));
+    }
+
+    #[test]
+    fn test_generate_image_response_osc_chunked_large_data() {
+        // Create data larger than IMAGE_RESPONSE_CHUNK_SIZE (128KB)
+        let large_data = "A".repeat(200 * 1024);
+
+        let result = generate_image_response_osc("req456", "image/jpeg", &large_data);
+
+        // Should have multiple chunks
+        assert!(result.contains("chunk_seq=0"));
+        assert!(result.contains("chunk_seq=1"));
+        assert!(result.contains("chunk_total="));
+        assert!(result.contains("request_id=req456"));
+        assert!(result.contains("mime_type=image/jpeg"));
+    }
+
+    #[test]
+    fn test_generate_image_response_osc_exact_chunk_boundary() {
+        // Data exactly at chunk size should be a single chunk (no chunking needed)
+        let data = "A".repeat(IMAGE_RESPONSE_CHUNK_SIZE);
+
+        let result = generate_image_response_osc("req789", "image/png", &data);
+
+        // Exactly one chunk size should NOT trigger chunking
+        assert!(!result.contains("chunk_seq="));
+        assert!(!result.contains("chunk_total="));
+    }
+
+    // --- image-error OSC tests ---
+
+    #[test]
+    fn test_generate_image_error_osc_format() {
+        let result = generate_image_error_osc("req123", "File not found");
+
+        assert!(result.contains("\x1b]777;emterm;markdown;image-error"));
+        assert!(result.contains("request_id=req123"));
+        assert!(result.contains("error=File not found"));
+        assert!(result.ends_with("\x1b\\"));
+    }
+
+    #[test]
+    fn test_generate_image_error_osc_sanitizes_message() {
+        let result = generate_image_error_osc("req123", "error;with;semicolons");
+
+        // Semicolons should be stripped from error message
+        assert!(result.contains("error=errorwithsemicolons"));
+        assert!(!result.contains("error=error;with;semicolons"));
+    }
+
+    #[test]
+    fn test_generate_image_error_osc_sanitizes_control_chars() {
+        let result = generate_image_error_osc("req123", "error\x1b[0mwith\ncontrol");
+
+        // Control characters should be stripped
+        assert!(result.contains("error=error[0mwithcontrol"));
     }
 }

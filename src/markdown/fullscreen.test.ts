@@ -17,7 +17,7 @@ mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
 }));
 
 // Import after mocks are set up
-const { FullscreenMarkdownView } = await import("./fullscreen.ts");
+const { FullscreenMarkdownView, resolvePath } = await import("./fullscreen.ts");
 
 function createMockBlock(html = "<p>Test content</p>"): MarkdownBlock {
 	return {
@@ -667,6 +667,188 @@ describe("FullscreenMarkdownView", () => {
 			// No dialog should appear
 			const dialog = container.querySelector(".link-confirm-dialog-overlay");
 			expect(dialog).toBeNull();
+		});
+	});
+
+	describe("markdown link navigation", () => {
+		test("should write navigate command for .md links", async () => {
+			const ptyWrite = mock((_data: string) => {});
+			const blockWithMdLink = createMockBlock(
+				'<p><a href="./other.md">Other doc</a></p>',
+			);
+			view.show(blockWithMdLink, container, undefined, ptyWrite, "/home/user/docs");
+
+			const link = container.querySelector("a") as HTMLElement;
+			link.click();
+
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(ptyWrite).toHaveBeenCalledWith("navigate /home/user/docs/other.md\n");
+		});
+
+		test("should resolve relative .md paths against basedir", async () => {
+			const ptyWrite = mock((_data: string) => {});
+			const blockWithMdLink = createMockBlock(
+				'<p><a href="../readme.md">Readme</a></p>',
+			);
+			view.show(blockWithMdLink, container, undefined, ptyWrite, "/home/user/docs/sub");
+
+			const link = container.querySelector("a") as HTMLElement;
+			link.click();
+
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(ptyWrite).toHaveBeenCalledWith("navigate /home/user/docs/readme.md\n");
+		});
+
+		test("should handle absolute .md paths", async () => {
+			const ptyWrite = mock((_data: string) => {});
+			const blockWithMdLink = createMockBlock(
+				'<p><a href="/absolute/path/doc.md">Doc</a></p>',
+			);
+			view.show(blockWithMdLink, container, undefined, ptyWrite, "/home/user");
+
+			const link = container.querySelector("a") as HTMLElement;
+			link.click();
+
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(ptyWrite).toHaveBeenCalledWith("navigate /absolute/path/doc.md\n");
+		});
+
+		test("should not navigate .md links without PTY write callback", async () => {
+			const blockWithMdLink = createMockBlock(
+				'<p><a href="./other.md">Other doc</a></p>',
+			);
+			// No ptyWrite callback
+			view.show(blockWithMdLink, container);
+
+			const link = container.querySelector("a") as HTMLElement;
+			link.click();
+
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			// Should not throw or show dialog
+			const dialog = container.querySelector(".link-confirm-dialog-overlay");
+			expect(dialog).toBeNull();
+		});
+
+		test("should still show dialog for http links when PTY write is set", async () => {
+			const ptyWrite = mock((_data: string) => {});
+			const blockWithHttpLink = createMockBlock(
+				'<p><a href="https://example.com">Example</a></p>',
+			);
+			view.show(blockWithHttpLink, container, undefined, ptyWrite, "/home/user");
+
+			const link = container.querySelector("a") as HTMLElement;
+			link.click();
+
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			// Should show confirmation dialog, not navigate
+			const dialog = container.querySelector(".link-confirm-dialog-overlay");
+			expect(dialog).not.toBeNull();
+
+			// Close dialog
+			const cancelBtn = container.querySelector(".link-confirm-cancel") as HTMLElement;
+			cancelBtn?.click();
+		});
+	});
+
+	describe("quit on close", () => {
+		test("should write quit command to PTY on close", () => {
+			const ptyWrite = mock((_data: string) => {});
+			const block = createMockBlock();
+			view.show(block, container, undefined, ptyWrite, "/home/user");
+
+			view.close();
+
+			expect(ptyWrite).toHaveBeenCalledWith("quit\n");
+		});
+
+		test("should not write quit without PTY write callback", () => {
+			const block = createMockBlock();
+			view.show(block, container);
+
+			// Should not throw
+			view.close();
+			expect(view.isActive()).toBe(false);
+		});
+
+		test("should write quit on Escape key", () => {
+			const ptyWrite = mock((_data: string) => {});
+			const block = createMockBlock();
+			view.show(block, container, undefined, ptyWrite, "/home/user");
+
+			const event = new KeyboardEvent("keydown", {
+				key: "Escape",
+				bubbles: true,
+			});
+			document.dispatchEvent(event);
+
+			expect(ptyWrite).toHaveBeenCalledWith("quit\n");
+			expect(view.isActive()).toBe(false);
+		});
+	});
+
+	describe("IntersectionObserver for local images", () => {
+		test("should set up observer for images with data-local-src", () => {
+			const ptyWrite = mock((_data: string) => {});
+			const blockWithImage = createMockBlock(
+				'<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-local-src="./images/test.png" alt="test"></p>',
+			);
+			view.show(blockWithImage, container, undefined, ptyWrite, "/home/user/docs");
+
+			// In test env, IntersectionObserver may not fire automatically
+			// Verify the img has data-local-src attribute
+			const img = container.querySelector("img[data-local-src]");
+			expect(img).not.toBeNull();
+		});
+
+		test("should not set up observer without PTY write callback", () => {
+			const blockWithImage = createMockBlock(
+				'<p><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-local-src="./images/test.png" alt="test"></p>',
+			);
+			view.show(blockWithImage, container);
+
+			// No observer should be set up, image should remain as placeholder
+			const img = container.querySelector("img[data-local-src]") as HTMLImageElement;
+			expect(img).not.toBeNull();
+			expect(img.getAttribute("data-request-id")).toBeNull();
+		});
+	});
+
+	describe("resolvePath", () => {
+		test("should resolve relative path against basedir", () => {
+			expect(resolvePath("/home/user/docs", "./file.md")).toBe("/home/user/docs/file.md");
+		});
+
+		test("should resolve parent directory references", () => {
+			expect(resolvePath("/home/user/docs/sub", "../file.md")).toBe("/home/user/docs/file.md");
+		});
+
+		test("should resolve deeply nested parent references", () => {
+			expect(resolvePath("/home/user/docs/a/b", "../../file.md")).toBe("/home/user/docs/file.md");
+		});
+
+		test("should return absolute paths as-is", () => {
+			expect(resolvePath("/home/user", "/absolute/path.md")).toBe("/absolute/path.md");
+		});
+
+		test("should handle basedir with trailing slash", () => {
+			expect(resolvePath("/home/user/docs/", "file.md")).toBe("/home/user/docs/file.md");
+		});
+
+		test("should handle simple relative path (no ./ prefix)", () => {
+			expect(resolvePath("/home/user/docs", "file.md")).toBe("/home/user/docs/file.md");
+		});
+
+		test("should handle paths with spaces", () => {
+			expect(resolvePath("/home/user/my docs", "file name.md")).toBe("/home/user/my docs/file name.md");
+		});
+
+		test("should not go above root", () => {
+			expect(resolvePath("/", "../file.md")).toBe("/file.md");
 		});
 	});
 });

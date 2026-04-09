@@ -18,6 +18,15 @@ import { isAncestorHidden } from "../shared/dom-utils.ts";
 import { createResizeHandle } from "../ui/resize-handle.ts";
 
 /**
+ * Sanitize a string for safe PTY write by stripping all control characters (0x00-0x1f).
+ * Prevents command injection via newlines, carriage returns, etc.
+ */
+function sanitizeForPty(value: string): string {
+	// biome-ignore lint: control character regex is intentional
+	return value.replace(/[\x00-\x1f]/g, "");
+}
+
+/**
  * Default minimum zoom level.
  */
 const MIN_ZOOM = 25;
@@ -82,6 +91,19 @@ export class FullscreenMarkdownView {
 	private onShowCallback: (() => void) | null = null;
 	private onHideCallback: (() => void) | null = null;
 
+	/** PTY write callback for sending commands to CLI */
+	private ptyWriteCallback: ((data: string) => void) | undefined = undefined;
+
+	/** Base directory for resolving relative paths */
+	private basedir: string | undefined = undefined;
+
+	/** IntersectionObserver for lazy image loading */
+	private imageObserver: IntersectionObserver | null = null;
+
+	/** Monotonic counter for image request IDs */
+	private imageRequestCounter = 0;
+
+
 	/**
 	 * Create a new fullscreen view.
 	 */
@@ -102,19 +124,27 @@ export class FullscreenMarkdownView {
 	 *                    This allows the viewer to render within the tab content area
 	 *                    instead of covering the entire viewport.
 	 * @param config - Display configuration
+	 * @param ptyWrite - PTY write callback for sending navigate/image/quit commands
+	 * @param basedir - Base directory for resolving relative .md link paths
 	 */
 	show(
 		block: MarkdownBlock,
 		container: HTMLElement,
 		config?: Partial<FullscreenConfig>,
+		ptyWrite?: (data: string) => void,
+		basedir?: string,
 	): void {
-		// Close existing if any
+		// Close existing if any (without sending quit for navigation replacement)
 		if (this.state.isActive) {
-			this.close();
+			this.closeInternal(false);
 		}
 
 		// Store container reference
 		this.container = container;
+
+		// Store PTY write callback and basedir
+		this.ptyWriteCallback = ptyWrite;
+		this.basedir = basedir;
 
 		// Save currently focused element for restoration on close
 		this.previouslyFocusedElement = document.activeElement as HTMLElement | null;
@@ -190,13 +220,40 @@ export class FullscreenMarkdownView {
 
 		// Update link dialog to use the same container
 		this.linkDialog.setContainer(this.container);
+
+		// Set up IntersectionObserver for lazy image loading
+		this.setupImageObserver();
 	}
 
 	/**
 	 * Close fullscreen view and cleanup.
+	 * Sends quit command to PTY if interactive mode is active.
 	 */
 	close(): void {
+		this.closeInternal(true);
+	}
+
+	/**
+	 * Internal close implementation.
+	 * @param sendQuit - Whether to send quit command to PTY
+	 */
+	private closeInternal(sendQuit: boolean): void {
 		if (!this.state.isActive) return;
+
+		// Send quit to PTY before closing (only in interactive mode)
+		if (sendQuit && this.ptyWriteCallback) {
+			try {
+				this.ptyWriteCallback("quit\n");
+			} catch {
+				// Ignore write errors during close
+			}
+		}
+
+		// Clean up IntersectionObserver
+		if (this.imageObserver) {
+			this.imageObserver.disconnect();
+			this.imageObserver = null;
+		}
 
 		// Dispose zoom controller
 		if (this.zoomController) {
@@ -233,6 +290,10 @@ export class FullscreenMarkdownView {
 
 		// Clear container reference
 		this.container = null;
+
+		// Clear PTY callback and basedir
+		this.ptyWriteCallback = undefined;
+		this.basedir = undefined;
 
 		// Restore focus to previously focused element
 		if (
@@ -375,6 +436,17 @@ export class FullscreenMarkdownView {
 			case "Escape":
 				this.close();
 				break;
+
+			case "q": {
+				// Close on 'q' unless focus is in a text input element
+				const tag = document.activeElement?.tagName?.toLowerCase();
+				const isEditable = tag === "input" || tag === "textarea" ||
+					document.activeElement?.getAttribute("contenteditable") === "true";
+				if (!isEditable) {
+					this.close();
+				}
+				break;
+			}
 
 			case "ArrowUp":
 				this.scrollBy(-40); // ~1 line
@@ -542,6 +614,7 @@ export class FullscreenMarkdownView {
 
 	/**
 	 * Handle link clicks.
+	 * Routes .md links to navigate via PTY, http/https to external browser.
 	 */
 	private async handleLinkClick(e: MouseEvent): Promise<void> {
 		const target = e.target as HTMLElement;
@@ -553,23 +626,30 @@ export class FullscreenMarkdownView {
 		const href = link.getAttribute("href");
 		if (!href) return;
 
-		// Skip non-http(s) links
-		if (!href.startsWith("http://") && !href.startsWith("https://")) {
+		// Handle http/https links first: external browser (takes priority over .md check)
+		if (href.startsWith("http://") || href.startsWith("https://")) {
+			// Ctrl+Click or Cmd+Click bypasses confirmation
+			const bypassConfirm = e.ctrlKey || e.metaKey;
+
+			if (bypassConfirm || this.config.linkBehavior === "direct") {
+				await this.openLink(href);
+			} else if (this.config.linkBehavior === "confirm") {
+				const confirmed = await this.linkDialog.confirm(href);
+				if (confirmed) {
+					await this.openLink(href);
+				}
+			}
+			// linkBehavior === "disabled": do nothing
 			return;
 		}
 
-		// Ctrl+Click or Cmd+Click bypasses confirmation
-		const bypassConfirm = e.ctrlKey || e.metaKey;
-
-		if (bypassConfirm || this.config.linkBehavior === "direct") {
-			await this.openLink(href);
-		} else if (this.config.linkBehavior === "confirm") {
-			const confirmed = await this.linkDialog.confirm(href);
-			if (confirmed) {
-				await this.openLink(href);
-			}
+		// Handle .md links: navigate via PTY
+		if (href.endsWith(".md") && this.ptyWriteCallback) {
+			const absolutePath = sanitizeForPty(resolvePath(this.basedir || "/", href));
+			this.ptyWriteCallback(`navigate ${absolutePath}\n`);
+			return;
 		}
-		// linkBehavior === "disabled": do nothing
+
 	}
 
 	/**
@@ -585,10 +665,107 @@ export class FullscreenMarkdownView {
 	}
 
 	/**
+	 * Set up IntersectionObserver for lazy loading of local images.
+	 * Observes img elements with data-local-src attribute.
+	 */
+	private setupImageObserver(): void {
+		if (!this.content || !this.ptyWriteCallback) return;
+
+		const images = this.content.querySelectorAll("img[data-local-src]");
+		if (images.length === 0) return;
+
+		this.imageObserver = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (!entry.isIntersecting) continue;
+
+					const img = entry.target as HTMLImageElement;
+					const localSrc = img.getAttribute("data-local-src");
+					if (!localSrc) continue;
+
+					// Generate unique request ID per img element
+					const requestId = `img-${this.imageRequestCounter++}`;
+
+					// Resolve path against basedir
+					const absolutePath = sanitizeForPty(resolvePath(this.basedir || "/", localSrc));
+
+					// Tag the img for response matching
+					img.setAttribute("data-request-id", requestId);
+
+					// Send image request to PTY
+					if (this.ptyWriteCallback) {
+						this.ptyWriteCallback(`image ${requestId} ${absolutePath}\n`);
+					}
+
+					// Stop observing this image
+					this.imageObserver?.unobserve(img);
+				}
+			},
+			{ root: this.content, threshold: 0 },
+		);
+
+		for (const img of images) {
+			this.imageObserver.observe(img);
+		}
+	}
+
+	/**
 	 * Dispose view and release resources.
 	 */
 	dispose(): void {
 		this.close();
 		this.linkDialog.dispose();
 	}
+}
+
+/**
+ * Resolve a relative path against a base directory to produce an absolute path.
+ * Handles `./`, `../`, and absolute paths starting with `/`.
+ * No Node.js path module needed - pure string manipulation.
+ *
+ * @param basedir - Base directory (absolute path)
+ * @param relativePath - Path to resolve (may be relative or absolute)
+ * @returns Absolute resolved path
+ */
+export function resolvePath(basedir: string, relativePath: string): string {
+	// Absolute path: return as-is
+	if (relativePath.startsWith("/")) {
+		return normalizePath(relativePath);
+	}
+
+	// Relative path: join with basedir
+	const combined = basedir.endsWith("/")
+		? `${basedir}${relativePath}`
+		: `${basedir}/${relativePath}`;
+
+	return normalizePath(combined);
+}
+
+/**
+ * Normalize a path by resolving `.` and `..` segments.
+ */
+function normalizePath(path: string): string {
+	const parts = path.split("/");
+	const normalized: string[] = [];
+
+	for (const part of parts) {
+		if (part === "." || part === "") {
+			// Skip current directory and empty segments (except root)
+			if (normalized.length === 0) {
+				normalized.push("");
+			}
+			continue;
+		}
+		if (part === "..") {
+			// Go up one level (but don't go above root)
+			if (normalized.length > 1) {
+				normalized.pop();
+			}
+			continue;
+		}
+		normalized.push(part);
+	}
+
+	const result = normalized.join("/");
+	return result || "/";
 }

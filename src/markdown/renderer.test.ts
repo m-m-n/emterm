@@ -156,6 +156,80 @@ This is a paragraph with **bold** text.
 		});
 	});
 
+	describe("data: URI handling", () => {
+		test("should allow data: URI in img src", () => {
+			const html = renderer.render(
+				'<img src="data:image/png;base64,iVBORw0KGgo=" alt="test">',
+				"commonmark",
+			);
+			expect(html).toContain("data:image/png;base64,iVBORw0KGgo=");
+		});
+
+		test("should block data: URI in a href", () => {
+			const html = renderer.render(
+				'<a href="data:text/html,<script>alert(1)</script>">Click</a>',
+				"commonmark",
+			);
+			expect(html).not.toContain("data:text/html");
+		});
+
+		test("should still allow http/https URLs", () => {
+			const html = renderer.render(
+				'[Example](https://example.com)',
+				"commonmark",
+			);
+			expect(html).toContain("https://example.com");
+		});
+	});
+
+	describe("local image marking", () => {
+		test("should mark local-path images with data-local-src", () => {
+			const html = renderer.render(
+				'![Alt text](./images/test.png)',
+				"commonmark",
+			);
+			expect(html).toContain('data-local-src="./images/test.png"');
+		});
+
+		test("should mark absolute-path images with data-local-src", () => {
+			const html = renderer.render(
+				'![Alt text](/home/user/images/test.png)',
+				"commonmark",
+			);
+			expect(html).toContain('data-local-src="/home/user/images/test.png"');
+		});
+
+		test("should set placeholder src for local images", () => {
+			const html = renderer.render(
+				'![Alt text](./images/test.png)',
+				"commonmark",
+			);
+			// The img src should be the transparent placeholder, not the original path
+			// Use a regex to match only the src attribute (not data-local-src)
+			const srcMatch = html.match(/\ssrc="([^"]*)"/);
+			expect(srcMatch).not.toBeNull();
+			expect(srcMatch![1]).toContain("data:image/gif;base64,");
+			expect(srcMatch![1]).not.toBe("./images/test.png");
+		});
+
+		test("should not mark http/https images with data-local-src", () => {
+			const html = renderer.render(
+				'![Alt text](https://example.com/image.png)',
+				"commonmark",
+			);
+			expect(html).not.toContain("data-local-src");
+			expect(html).toContain("https://example.com/image.png");
+		});
+
+		test("should not mark data: URI images with data-local-src", () => {
+			const html = renderer.render(
+				'<img src="data:image/png;base64,abc123" alt="test">',
+				"commonmark",
+			);
+			expect(html).not.toContain("data-local-src");
+		});
+	});
+
 	describe("syntax highlighting", () => {
 		test("should highlight JavaScript code", () => {
 			const html = renderer.render(

@@ -210,7 +210,66 @@ export class MarkdownRenderer {
 		// Sanitize HTML
 		const cleanHtml = DOMPurify.sanitize(rawHtml, PURIFY_CONFIG);
 
-		return `<div class="markdown-content">${cleanHtml}</div>`;
+		// Post-process to mark local-path images
+		const processedHtml = this.markLocalImages(cleanHtml);
+
+		return `<div class="markdown-content">${processedHtml}</div>`;
+	}
+
+	/**
+	 * Post-process HTML to identify local-path images and mark them
+	 * with data-local-src attribute, replacing src with a placeholder.
+	 *
+	 * Local paths are those not starting with http://, https://, or data:.
+	 * These images need to be loaded via the PTY request-response protocol.
+	 *
+	 * Uses DOM-based manipulation instead of regex to avoid XSS via
+	 * attribute injection and handle edge cases reliably.
+	 */
+	private markLocalImages(html: string): string {
+		const placeholder =
+			"data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+		// Use DOM-based manipulation when DOMParser is available (browser/WebView environment).
+		// This eliminates regex edge cases and XSS via attribute injection.
+		if (typeof DOMParser !== "undefined") {
+			const doc = new DOMParser().parseFromString(html, "text/html");
+			const images = doc.querySelectorAll("img[src]");
+
+			for (const img of images) {
+				const src = img.getAttribute("src") || "";
+
+				// Skip http/https URLs and data: URIs
+				if (
+					src.startsWith("http://") ||
+					src.startsWith("https://") ||
+					src.startsWith("data:")
+				) {
+					continue;
+				}
+
+				// Local path: store original in data-local-src, replace src with placeholder
+				img.setAttribute("data-local-src", src);
+				img.setAttribute("src", placeholder);
+			}
+
+			return doc.body.innerHTML;
+		}
+
+		// Fallback: regex-based approach for test environments without DOMParser
+		return html.replace(
+			/<img\s+([^>]*?)src="([^"]*)"([^>]*?)>/g,
+			(_match, before: string, src: string, after: string) => {
+				if (
+					src.startsWith("http://") ||
+					src.startsWith("https://") ||
+					src.startsWith("data:")
+				) {
+					return `<img ${before}src="${src}"${after}>`;
+				}
+				return `<img ${before}src="${placeholder}" data-local-src="${src}"${after}>`;
+			},
+		);
 	}
 
 	/**
