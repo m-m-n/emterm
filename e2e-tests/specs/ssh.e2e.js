@@ -48,12 +48,12 @@ describe("SSH Connection Test", () => {
 		// JavaScript状態を取得
 		const state = await browser.execute(() => {
 			const terminalState = window.terminalState;
-			const ptyClient = window.ptyClient;
+			const terminalApp = window.terminalApp;
 
 			return {
 				terminalStateExists: !!terminalState,
-				ptyClientExists: !!ptyClient,
-				sessionId: ptyClient?.getSessionId?.() || null,
+				ptyClientExists: !!terminalApp?.pty,
+				sessionId: terminalApp?.pty?.getSessionId?.() || null,
 				isAlternateBuffer: terminalState?.isAlternateBuffer || false,
 				cols: terminalState?.cols || 0,
 				rows: terminalState?.rows || 0,

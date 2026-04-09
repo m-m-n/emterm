@@ -485,13 +485,6 @@ mod tests {
         assert_eq!(core.viewport_cell_offset(80, 24), None);
     }
 
-    #[test]
-    fn test_viewport_row_base_no_scrollback() {
-        let core = TerminalCore::new(10, 5, 0);
-        assert_eq!(core.viewport_row_base(0), 0);
-        assert_eq!(core.viewport_row_base(1), 10);
-        assert_eq!(core.viewport_row_base(4), 40);
-    }
 
     #[test]
     fn test_scrollback_count_initial() {

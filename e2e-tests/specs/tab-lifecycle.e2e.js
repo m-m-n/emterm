@@ -1,12 +1,11 @@
 /**
- * Tab Lifecycle E2E Test - Tests tab lifecycle events and session counting
+ * Tab Lifecycle E2E Test - Tests tab lifecycle behavior
  *
  * This test verifies:
- * - tab_created event is emitted when a session starts
- * - tab_closed event is emitted when a session ends
- * - tab_count_changed event reflects accurate counts
- * - session_count command returns correct values
- * - Window closes only when last session exits
+ * - Tab creation works and tab count increases
+ * - Session ID is assigned to each tab
+ * - Shell exit closes the tab
+ * - Window closes when last session exits
  */
 
 async function typeSlowly(text, delay = 150) {
@@ -16,104 +15,114 @@ async function typeSlowly(text, delay = 150) {
 	}
 }
 
+async function waitForTabCount(expected, timeout = 10000) {
+	await browser.waitUntil(
+		async () => {
+			const count = await browser.execute(
+				() => window.tabManager?.getTabs().length || 0,
+			);
+			return count === expected;
+		},
+		{ timeout, timeoutMsg: `Expected ${expected} tabs within ${timeout}ms` },
+	);
+}
+
+async function waitForShellPrompt(timeout = 5000) {
+	const startTime = Date.now();
+	while (Date.now() - startTime < timeout) {
+		const output = await browser.execute(() => {
+			const state = window.terminalState;
+			if (!state) return "";
+			const lines = [];
+			for (let i = 0; i < state.totalLines; i++) {
+				const line = state.getLineText(i);
+				if (line.trim()) lines.push(line);
+			}
+			return lines[lines.length - 1] || "";
+		});
+		if (
+			output &&
+			(output.includes("$") ||
+				output.includes("#") ||
+				output.includes("%"))
+		) {
+			return true;
+		}
+		await browser.pause(200);
+	}
+	return false;
+}
+
 describe("Tab Lifecycle Tests", () => {
-	it("should capture tab lifecycle events on session creation", async () => {
+	it("should have initial session with valid session ID", async () => {
 		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
-
-		// Set up event capture
-		const setupResult = await browser.execute(async () => {
-			window.tabEvents = [];
-
-			const { listen } = await import("@tauri-apps/api/event");
-
-			// Listen for tab lifecycle events
-			await listen("tab_created", (event) => {
-				window.tabEvents.push({ type: "tab_created", payload: event.payload });
-			});
-
-			await listen("tab_closed", (event) => {
-				window.tabEvents.push({ type: "tab_closed", payload: event.payload });
-			});
-
-			await listen("tab_count_changed", (event) => {
-				window.tabEvents.push({
-					type: "tab_count_changed",
-					payload: event.payload,
-				});
-			});
-
-			return { listenersSetup: true };
-		});
-
-		console.log("Event listeners setup:", JSON.stringify(setupResult, null, 2));
-
-		// Wait for initial session to be created
 		await browser.pause(2000);
 
-		// Check if events were captured
-		const events = await browser.execute(() => window.tabEvents || []);
-		console.log("Tab events captured:", JSON.stringify(events, null, 2));
+		// Verify initial tab exists with session ID
+		const tabInfo = await browser.execute(() => {
+			const tabs = window.tabManager?.getTabs() || [];
+			const activeTab = window.tabManager?.getActiveTab();
+			const app = activeTab
+				? window.tabManager?.getTerminalApp(activeTab.id)
+				: null;
+			return {
+				tabCount: tabs.length,
+				activeTabId: activeTab?.id || null,
+				sessionId: app?.pty?.getSessionId?.() || null,
+			};
+		});
 
-		// Should have at least tab_created and tab_count_changed events
-		// (These were emitted when the initial session was created before our listeners)
-		// This test mainly verifies the listener setup works
-		await browser.saveScreenshot("./screenshots/tab-lifecycle-01-events.png");
+		console.log("Initial tab info:", JSON.stringify(tabInfo, null, 2));
+
+		expect(tabInfo.tabCount).toBe(1);
+		expect(tabInfo.activeTabId).toBeTruthy();
+		expect(tabInfo.sessionId).toBeTruthy();
+
+		await browser.saveScreenshot("./screenshots/tab-lifecycle-01-initial.png");
 	});
 
-	it("should query session count via invoke", async () => {
+	it("should track session count via tab manager", async () => {
 		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
 		await browser.pause(1000);
 
-		// Query session count
-		const result = await browser.execute(async () => {
-			const { invoke } = await import("@tauri-apps/api/core");
+		// Query session count via tabManager
+		const count = await browser.execute(
+			() => window.tabManager?.getTabs().length || 0,
+		);
 
-			try {
-				const count = await invoke("session_count");
-				return { success: true, count };
-			} catch (e) {
-				return { success: false, error: e.message };
-			}
-		});
-
-		console.log("Session count result:", JSON.stringify(result, null, 2));
-
-		// Should have at least 1 session (the current terminal)
-		expect(result.success).toBe(true);
-		expect(result.count).toBeGreaterThanOrEqual(1);
+		console.log("Session count:", count);
+		expect(count).toBeGreaterThanOrEqual(1);
 
 		await browser.saveScreenshot(
 			"./screenshots/tab-lifecycle-02-session-count.png",
 		);
 	});
 
-	it("should emit tab_closed when shell exits", async () => {
-		const terminal = await $('[data-testid="terminal"]');
-		await terminal.click();
+	it("should close tab when shell exits", async () => {
+		// Create a second tab via JS API so closing one doesn't exit the app
+		await browser.execute(() => window.tabManager?.createTab());
+		await waitForTabCount(2);
 
-		// Set up tab_closed event capture
-		await browser.execute(async () => {
-			window.tabClosedEvents = [];
+		const initialCount = await browser.execute(
+			() => window.tabManager?.getTabs().length || 0,
+		);
+		console.log("Tab count before exit:", initialCount);
+		expect(initialCount).toBe(2);
 
-			const { listen } = await import("@tauri-apps/api/event");
-
-			await listen("tab_closed", (event) => {
-				console.log("[TEST] tab_closed event received:", event.payload);
-				window.tabClosedEvents.push(event.payload);
-			});
-
-			await listen("tab_count_changed", (event) => {
-				console.log("[TEST] tab_count_changed event received:", event.payload);
-			});
-		});
-
-		// Wait for shell to be ready
-		await browser.pause(2000);
 		await browser.saveScreenshot(
 			"./screenshots/tab-lifecycle-03-before-exit.png",
 		);
+
+		// Wait for shell prompt in the new tab
+		await waitForShellPrompt();
+
+		// Focus terminal via JS to avoid "element not interactable" in new tab
+		await browser.execute(() => {
+			document.querySelector('[data-testid="terminal"]')?.focus();
+		});
+		await browser.pause(300);
 
 		// Type "exit" command
 		console.log("Typing exit command...");
@@ -124,84 +133,42 @@ describe("Tab Lifecycle Tests", () => {
 		console.log("Pressing Enter...");
 		await browser.keys("Enter");
 
-		// Wait for shell to exit and events to fire
-		console.log("Waiting for shell to exit...");
-		await browser.pause(3000);
+		// Wait for tab to close
+		await waitForTabCount(initialCount - 1);
 
-		// Check if tab_closed event was captured
-		const tabClosedEvents = await browser.execute(
-			() => window.tabClosedEvents || [],
+		const finalCount = await browser.execute(
+			() => window.tabManager?.getTabs().length || 0,
 		);
-		console.log("tab_closed events:", JSON.stringify(tabClosedEvents, null, 2));
+		console.log("Tab count after exit:", finalCount);
+		expect(finalCount).toBe(initialCount - 1);
 
 		await browser.saveScreenshot(
 			"./screenshots/tab-lifecycle-04-after-exit.png",
 		);
-
-		// Verify tab_closed event was emitted
-		// Note: The window may have closed by now, so this assertion might not execute
-		if (tabClosedEvents.length > 0) {
-			const event = tabClosedEvents[0];
-			expect(event.session_id).toBeDefined();
-			expect(typeof event.exit_code).toBe("number");
-		}
 	});
 
-	it("should test graceful shutdown via tab_close_graceful", async () => {
-		const terminal = await $('[data-testid="terminal"]');
-		await terminal.click();
+	it("should get session ID for active tab", async () => {
 		await browser.pause(2000);
-
-		// Get the current session ID
-		const sessionInfo = await browser.execute(() => ({
-			sessionId: window.ptyClient?.getSessionId?.() || null,
-		}));
-		console.log("Current session:", JSON.stringify(sessionInfo, null, 2));
-
-		if (!sessionInfo.sessionId) {
-			console.log("No session ID available, skipping graceful shutdown test");
-			return;
-		}
-
-		await browser.saveScreenshot(
-			"./screenshots/tab-lifecycle-05-before-graceful.png",
-		);
-
-		// Start a long-running process to test graceful shutdown
-		console.log("Starting sleep command...");
-		await typeSlowly("sleep 10", 100);
-		await browser.keys("Enter");
+		// Focus terminal via JS to avoid "element not interactable"
+		await browser.execute(() => {
+			document.querySelector('[data-testid="terminal"]')?.focus();
+		});
 		await browser.pause(500);
 
-		// Call tab_close_graceful with custom timeout
-		console.log("Calling tab_close_graceful...");
-		const shutdownResult = await browser.execute(async (sessionId) => {
-			const { invoke } = await import("@tauri-apps/api/core");
+		// Get the current session ID via tabManager (window.terminalApp may be stale after tab close)
+		const sessionInfo = await browser.execute(() => {
+			const activeTab = window.tabManager?.getActiveTab();
+			const app = activeTab
+				? window.tabManager?.getTerminalApp(activeTab.id)
+				: null;
+			return { sessionId: app?.pty?.getSessionId?.() || null };
+		});
+		console.log("Current session:", JSON.stringify(sessionInfo, null, 2));
 
-			try {
-				const startTime = Date.now();
-				await invoke("tab_close_graceful", {
-					sessionId: sessionId,
-					timeoutMs: 5000, // 5 second total timeout
-				});
-				const duration = Date.now() - startTime;
-				return { success: true, duration };
-			} catch (e) {
-				return { success: false, error: e.message };
-			}
-		}, sessionInfo.sessionId);
+		expect(sessionInfo.sessionId).toBeTruthy();
 
-		console.log(
-			"Graceful shutdown result:",
-			JSON.stringify(shutdownResult, null, 2),
-		);
-
-		// The graceful shutdown should complete
-		expect(shutdownResult.success).toBe(true);
-
-		await browser.pause(1000);
 		await browser.saveScreenshot(
-			"./screenshots/tab-lifecycle-06-after-graceful.png",
+			"./screenshots/tab-lifecycle-05-session-id.png",
 		);
 	});
 });

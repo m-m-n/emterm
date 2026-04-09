@@ -76,7 +76,7 @@ describe("Keyboard Debug Test", () => {
 
 		// Get initial session ID
 		const initialSession = await browser.execute(() => {
-			return window.ptyClient?.getSessionId?.() || null;
+			return window.terminalApp?.pty?.getSessionId?.() || null;
 		});
 		console.log("Initial session ID:", initialSession);
 
@@ -116,7 +116,7 @@ describe("Keyboard Debug Test", () => {
 
 		// Check session ID after
 		const finalSession = await browser.execute(() => {
-			return window.ptyClient?.getSessionId?.() || null;
+			return window.terminalApp?.pty?.getSessionId?.() || null;
 		});
 		console.log("Final session ID:", finalSession);
 		console.log(

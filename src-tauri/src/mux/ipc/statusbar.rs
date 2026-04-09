@@ -643,9 +643,10 @@ mod tests {
 
     #[test]
     fn test_expand_tilde_with_home() {
-        unsafe { std::env::set_var("HOME", "/home/testuser") };
-        let result = expand_tilde("~/bin/script.sh");
-        assert_eq!(result, PathBuf::from("/home/testuser/bin/script.sh"));
+        temp_env::with_var("HOME", Some("/home/testuser"), || {
+            let result = expand_tilde("~/bin/script.sh");
+            assert_eq!(result, PathBuf::from("/home/testuser/bin/script.sh"));
+        });
     }
 
     #[test]
@@ -690,16 +691,14 @@ mod tests {
 
     #[test]
     fn test_load_settings_missing_file() {
-        // Use a temp dir that doesn't have settings.json
         let temp_dir = std::env::temp_dir().join("emterm_test_missing");
         let _ = std::fs::remove_dir_all(&temp_dir);
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", temp_dir.to_str().unwrap()) };
-        let (settings, error) = load_statusbar_settings();
-        assert!(!settings.enabled);
-        assert!(error.is_none()); // Missing file creates default, no error
-        // Cleanup
+        temp_env::with_var("XDG_CONFIG_HOME", Some(temp_dir.to_str().unwrap()), || {
+            let (settings, error) = load_statusbar_settings();
+            assert!(!settings.enabled);
+            assert!(error.is_none()); // Missing file creates default, no error
+        });
         let _ = std::fs::remove_dir_all(&temp_dir);
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 
     #[test]
@@ -708,14 +707,13 @@ mod tests {
         let settings_dir = temp_dir.join("net.laser5.app.emterm");
         std::fs::create_dir_all(&settings_dir).unwrap();
         std::fs::write(settings_dir.join("settings.json"), "not json{{{").unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", temp_dir.to_str().unwrap()) };
-        let (settings, error) = load_statusbar_settings();
-        assert!(!settings.enabled);
-        assert!(error.is_some());
-        assert!(error.unwrap().contains("parse error"));
-        // Cleanup
+        temp_env::with_var("XDG_CONFIG_HOME", Some(temp_dir.to_str().unwrap()), || {
+            let (settings, error) = load_statusbar_settings();
+            assert!(!settings.enabled);
+            assert!(error.is_some());
+            assert!(error.unwrap().contains("parse error"));
+        });
         let _ = std::fs::remove_dir_all(&temp_dir);
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 
     #[test]
@@ -734,14 +732,13 @@ mod tests {
             }
         }"#;
         std::fs::write(settings_dir.join("settings.json"), json).unwrap();
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", temp_dir.to_str().unwrap()) };
-        let (settings, error) = load_statusbar_settings();
-        assert!(settings.enabled);
-        assert_eq!(settings.left, "test left");
-        assert_eq!(settings.right, "test right");
-        assert!(error.is_none());
-        // Cleanup
+        temp_env::with_var("XDG_CONFIG_HOME", Some(temp_dir.to_str().unwrap()), || {
+            let (settings, error) = load_statusbar_settings();
+            assert!(settings.enabled);
+            assert_eq!(settings.left, "test left");
+            assert_eq!(settings.right, "test right");
+            assert!(error.is_none());
+        });
         let _ = std::fs::remove_dir_all(&temp_dir);
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 }

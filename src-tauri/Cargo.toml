@@ -93,6 +93,7 @@ tempfile = "3.24.0"
 assert_cmd = "2"
 predicates = "3"
 criterion = "0.5"
+temp-env = "0.3"
 
 [[test]]
 name = "download_tests"

@@ -20,6 +20,12 @@ let tauriDriver;
 
 export const config = {
 	specs: ["./specs/**/*.e2e.js"],
+	exclude: [
+		"./specs/*-debug.e2e.js",
+		"./specs/*-diag.e2e.js",
+		"./specs/*-capture.e2e.js",
+		"./specs/benchmark.e2e.js",
+	],
 	maxInstances: 1,
 
 	capabilities: [
@@ -79,6 +85,35 @@ export const config = {
 		console.log("Waiting 5 seconds for tauri-driver to start...");
 		await new Promise((resolve) => setTimeout(resolve, 5000));
 		console.log("tauri-driver should be ready now");
+	},
+
+	before: async () => {
+		// Wait for app initialization (WASM load, PTY spawn, DOM ready)
+		console.log("Waiting for app to initialize...");
+		try {
+			await browser.waitUntil(
+				async () => {
+					return await browser.execute(() => {
+						return (
+							!!window.terminalState &&
+							window.terminalState.cols > 0 &&
+							!!window.tabManager &&
+							window.tabManager.getTabs().length > 0
+						);
+					});
+				},
+				{
+					timeout: 30000,
+					interval: 500,
+					timeoutMsg:
+						"App did not initialize within 30s (terminalState/tabManager not ready)",
+				},
+			);
+			console.log("App initialized successfully");
+		} catch (e) {
+			console.error("App initialization failed:", e.message);
+			throw e;
+		}
 	},
 
 	afterSession: async () => {

@@ -325,41 +325,40 @@ if-shell 'test -f ~/.local.conf' 'source ~/.local.conf'
 
     #[test]
     fn test_auto_import_no_home() {
-        unsafe { std::env::remove_var("HOME") };
-        assert!(auto_import_tmux_conf().is_none());
-        unsafe { std::env::set_var("HOME", "/tmp") };
+        temp_env::with_var_unset("HOME", || {
+            assert!(auto_import_tmux_conf().is_none());
+        });
     }
 
     #[test]
     fn test_auto_import_no_file() {
-        unsafe { std::env::set_var("HOME", "/tmp/nonexistent_test_dir_auto_import") };
-        assert!(auto_import_tmux_conf().is_none());
-        unsafe { std::env::set_var("HOME", "/tmp") };
+        temp_env::with_var("HOME", Some("/tmp/nonexistent_test_dir_auto_import"), || {
+            assert!(auto_import_tmux_conf().is_none());
+        });
     }
 
     #[test]
     fn test_auto_import_with_file() {
         let dir = tempfile::tempdir().unwrap();
-        unsafe { std::env::set_var("HOME", dir.path().to_str().unwrap()) };
         let conf_path = dir.path().join(".tmux.conf");
         std::fs::write(&conf_path, "set -g prefix C-a\nset -g mouse on\n").unwrap();
 
-        let result = auto_import_tmux_conf();
-        assert!(result.is_some());
-        let result = result.unwrap();
-        assert!(
-            result
-                .settings
-                .iter()
-                .any(|(k, v)| k == "prefix" && v == "Ctrl+A")
-        );
-        assert!(
-            result
-                .settings
-                .iter()
-                .any(|(k, v)| k == "mouse" && v == "true")
-        );
-
-        unsafe { std::env::set_var("HOME", "/tmp") };
+        temp_env::with_var("HOME", Some(dir.path().to_str().unwrap()), || {
+            let result = auto_import_tmux_conf();
+            assert!(result.is_some());
+            let result = result.unwrap();
+            assert!(
+                result
+                    .settings
+                    .iter()
+                    .any(|(k, v)| k == "prefix" && v == "Ctrl+A")
+            );
+            assert!(
+                result
+                    .settings
+                    .iter()
+                    .any(|(k, v)| k == "mouse" && v == "true")
+            );
+        });
     }
 }

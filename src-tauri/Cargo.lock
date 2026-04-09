@@ -1209,6 +1209,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tauri-plugin-shell",
+ "temp-env",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -5081,6 +5082,15 @@ dependencies = [
  "thiserror 2.0.17",
  "windows 0.61.3",
  "windows-version",
+]
+
+[[package]]
+name = "temp-env"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96374855068f47402c3121c6eed88d29cb1de8f3ab27090e273e420bdabcf050"
+dependencies = [
+ "parking_lot",
 ]
 
 [[package]]
