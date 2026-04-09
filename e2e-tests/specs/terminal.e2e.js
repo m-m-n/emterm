@@ -76,32 +76,6 @@ describe("eMterm Terminal", () => {
 		}
 	});
 
-	it("should test Ctrl+D behavior", async () => {
-		const terminal = await $('[data-testid="terminal"]');
-		await terminal.click();
-
-		// 現在の状態をスクリーンショット
-		await browser.saveScreenshot("./screenshots/05-before-ctrl-d.png");
-
-		// Ctrl+D を送信
-		console.log("Sending Ctrl+D...");
-		await browser.keys(["Control", "d"]);
-
-		// 少し待つ
-		await browser.pause(2000);
-
-		// ウィンドウがまだ開いているか確認
-		try {
-			const stillOpen = await browser.getTitle();
-			console.log("Window still open after Ctrl+D, title:", stillOpen);
-			await browser.saveScreenshot("./screenshots/06-after-ctrl-d.png");
-		} catch (e) {
-			console.log("Window closed after Ctrl+D (expected behavior)");
-		}
-	});
-});
-
-describe("eMterm SSH Test", () => {
 	it("should test SSH-like alternate buffer behavior", async () => {
 		const terminal = await $('[data-testid="terminal"]');
 		await terminal.click();
@@ -150,8 +124,10 @@ describe("eMterm SSH Test", () => {
 		const state = await browser.execute(() => {
 			const terminalState = window.terminalState;
 			const tabManager = window.tabManager;
-			const activeTabId = tabManager?.getActiveTabId?.();
-			const app = activeTabId ? tabManager?.getTerminalApp?.(activeTabId) : null;
+			const activeTab = tabManager?.getActiveTab?.();
+			const app = activeTab
+				? tabManager?.getTerminalApp?.(activeTab.id)
+				: null;
 
 			return {
 				terminalStateExists: !!terminalState,
@@ -162,5 +138,30 @@ describe("eMterm SSH Test", () => {
 		});
 
 		console.log("Terminal state:", JSON.stringify(state, null, 2));
+	});
+
+	// Ctrl+D tests must be last — they close the window and invalidate the session
+	it("should test Ctrl+D behavior", async () => {
+		const terminal = await $('[data-testid="terminal"]');
+		await terminal.click();
+
+		// 現在の状態をスクリーンショット
+		await browser.saveScreenshot("./screenshots/05-before-ctrl-d.png");
+
+		// Ctrl+D を送信
+		console.log("Sending Ctrl+D...");
+		await browser.keys(["Control", "d"]);
+
+		// 少し待つ
+		await browser.pause(2000);
+
+		// ウィンドウがまだ開いているか確認
+		try {
+			const stillOpen = await browser.getTitle();
+			console.log("Window still open after Ctrl+D, title:", stillOpen);
+			await browser.saveScreenshot("./screenshots/06-after-ctrl-d.png");
+		} catch (e) {
+			console.log("Window closed after Ctrl+D (expected behavior)");
+		}
 	});
 });

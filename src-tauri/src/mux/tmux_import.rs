@@ -111,23 +111,31 @@ mod tests {
 
     #[test]
     fn test_settings_file_path_with_home() {
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        unsafe { std::env::set_var("HOME", "/tmp/test_home") };
-        let path = settings_file_path().unwrap();
-        assert_eq!(
-            path,
-            std::path::PathBuf::from("/tmp/test_home/.config/net.laser5.app.emterm/settings.json")
+        temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", None::<&str>),
+                ("HOME", Some("/tmp/test_home")),
+            ],
+            || {
+                let path = settings_file_path().unwrap();
+                assert_eq!(
+                    path,
+                    std::path::PathBuf::from(
+                        "/tmp/test_home/.config/net.laser5.app.emterm/settings.json"
+                    )
+                );
+            },
         );
     }
 
     #[test]
     fn test_settings_file_path_with_xdg() {
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg_config") };
-        let path = settings_file_path().unwrap();
-        assert_eq!(
-            path,
-            std::path::PathBuf::from("/tmp/xdg_config/net.laser5.app.emterm/settings.json")
-        );
-        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        temp_env::with_var("XDG_CONFIG_HOME", Some("/tmp/xdg_config"), || {
+            let path = settings_file_path().unwrap();
+            assert_eq!(
+                path,
+                std::path::PathBuf::from("/tmp/xdg_config/net.laser5.app.emterm/settings.json")
+            );
+        });
     }
 }

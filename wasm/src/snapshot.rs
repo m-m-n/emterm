@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn test_from_snapshot_rejects_invalid_ring_cells_len() {
-        let mut core = TerminalCore::new(80, 24, 0);
+        let core = TerminalCore::new(80, 24, 0);
         let mut snapshot = core.to_snapshot();
         snapshot.ring_cells.push(Cell::EMPTY); // wrong length
         assert!(

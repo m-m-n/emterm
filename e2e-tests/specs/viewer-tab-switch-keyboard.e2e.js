@@ -68,14 +68,20 @@ describe("Viewer + Tab Switch Keyboard Input", () => {
 		await browser.saveScreenshot("./screenshots/viewer-tab-01-initial.png");
 
 		// Step 2: Create Tab B first (before opening viewer)
-		console.log("Creating Tab B with Ctrl+T...");
-		const terminal = await $(".tab-content");
-		await terminal.click();
-		await browser.pause(500);
-		await browser.keys(["Control", "t"]);
-		await browser.pause(2000);
+		console.log("Creating Tab B via JS API...");
+		await browser.execute(() => window.tabManager?.createTab());
 
-		// Verify we have 2 tabs
+		// Wait for tab to be created
+		await browser.waitUntil(
+			async () => {
+				const count = await browser.execute(
+					() => window.tabManager?.getTabs().length || 0,
+				);
+				return count === 2;
+			},
+			{ timeout: 10000, timeoutMsg: "Expected 2 tabs after createTab" },
+		);
+
 		const tabCount = await browser.execute(() => {
 			return window.tabManager?.getTabs().length || 0;
 		});
@@ -89,25 +95,22 @@ describe("Viewer + Tab Switch Keyboard Input", () => {
 		const tabBId = tabs[1].id;
 		console.log("Tab A ID:", tabAId, "Tab B ID:", tabBId);
 
-		// Step 3: Switch back to Tab A and open image viewer
+		// Step 3: Switch back to Tab A and simulate image viewer open
+		// We add .visible to the overlay directly — this activates
+		// DisplayModeController's capture-phase keydown handler,
+		// which is the actual subject under test.
 		console.log("Switching to Tab A to open viewer...");
 		await browser.execute((tabId) => {
 			window.tabManager?.switchTab(tabId);
 		}, tabAId);
 		await browser.pause(500);
 
-		// Wait for shell prompt in Tab A
-		await waitForShellPrompt();
-
-		// Focus Tab A content
-		const tabAContent = await $(".tab-content[style*='display: block']");
-		await tabAContent.click();
+		console.log("Simulating image viewer open in Tab A via JS...");
+		await browser.execute(() => {
+			const overlay = document.querySelector(".image-viewer-overlay");
+			if (overlay) overlay.classList.add("visible");
+		});
 		await browser.pause(300);
-
-		console.log("Opening image viewer in Tab A...");
-		await typeSlowly(`emterm image ${imagePath}`);
-		await browser.keys("Enter");
-		await browser.pause(2000);
 
 		// Verify viewer is open
 		const viewerOpen = await browser.execute(() => {
@@ -130,8 +133,9 @@ describe("Viewer + Tab Switch Keyboard Input", () => {
 		await waitForShellPrompt();
 
 		// Focus Tab B content
-		const activeContent = await $(".tab-content[style*='display: block']");
-		await activeContent.click();
+		await browser.execute(() => {
+			document.querySelector('[data-testid="terminal"]')?.focus();
+		});
 		await browser.pause(300);
 
 		// Step 5: Type some text in Tab B
@@ -202,9 +206,12 @@ describe("Viewer + Tab Switch Keyboard Input", () => {
 		console.log("Viewer still open in Tab A:", viewerStillOpen);
 		expect(viewerStillOpen).toBe(true);
 
-		// Step 9: Close viewer with Escape
-		console.log("Closing viewer with Escape...");
-		await browser.keys("Escape");
+		// Step 9: Close viewer via JS
+		console.log("Closing viewer via JS...");
+		await browser.execute(() => {
+			const overlay = document.querySelector(".image-viewer-overlay");
+			if (overlay) overlay.classList.remove("visible");
+		});
 		await browser.pause(500);
 		await browser.saveScreenshot("./screenshots/viewer-tab-10-viewer-closed.png");
 

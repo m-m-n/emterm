@@ -115,7 +115,7 @@ export function renderStatusBarSection(
   // Custom Commands subsection
   renderSubsectionHeader(panel, t("settings.statusBar.customCommands"));
 
-  const commands = settings.statusbar_custom_commands;
+  const commands = settings.statusbar_custom_commands ?? {};
   const commandEntries = Object.entries(commands);
 
   // Existing command list (editable inline)

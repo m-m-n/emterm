@@ -693,16 +693,16 @@ mod tests {
 
     #[test]
     fn test_check_nesting_not_set() {
-        // In test environment, EMTERM_MUX should not be set
-        unsafe { std::env::remove_var("EMTERM_MUX") };
-        assert!(check_nesting().is_ok());
+        temp_env::with_var_unset("EMTERM_MUX", || {
+            assert!(check_nesting().is_ok());
+        });
     }
 
     #[test]
     fn test_check_nesting_set() {
-        unsafe { std::env::set_var("EMTERM_MUX", "1") };
-        assert!(check_nesting().is_err());
-        unsafe { std::env::remove_var("EMTERM_MUX") };
+        temp_env::with_var("EMTERM_MUX", Some("1"), || {
+            assert!(check_nesting().is_err());
+        });
     }
 
     // ---- send-keys target resolution tests ----

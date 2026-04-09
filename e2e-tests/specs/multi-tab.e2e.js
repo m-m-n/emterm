@@ -68,9 +68,21 @@ describe("Multi-Tab Tests", () => {
 		// Press Ctrl+T to create new tab
 		console.log("Pressing Ctrl+T...");
 		await browser.keys(["Control", "t"]);
-		await browser.pause(2000); // Wait for tab creation and PTY spawn
 
-		// Verify tab was created
+		// Wait for tab to be created
+		await browser.waitUntil(
+			async () => {
+				const count = await browser.execute(
+					() => window.tabManager?.getTabs().length || 0,
+				);
+				return count === initialCount + 1;
+			},
+			{
+				timeout: 10000,
+				timeoutMsg: `Expected ${initialCount + 1} tabs after Ctrl+T`,
+			},
+		);
+
 		const newCount = await browser.execute(() => {
 			return window.tabManager?.getTabs().length || 0;
 		});
