@@ -316,6 +316,46 @@ src/selection-v2/
 - [ ] All existing tests pass
 - [ ] New tests for word selection drag pass
 
+## Selection Clearing Behavior
+
+### Overview
+
+選択解除のタイミングを定義する。主要ターミナルエミュレータの多数派挙動に基づく。
+
+### Clearing Triggers
+
+| トリガー | 動作 |
+|---|---|
+| シングルクリック | クリア（既存実装） |
+| ホイールクリック（中クリック） | クリア |
+| キーボード入力 | クリア（修飾キーのみの場合は除く） |
+| スクロール（ホイール） | 選択はスクロールに追従する（バッファ座標で管理） |
+| リサイズ | クリア（既存実装） |
+| Escape | クリア（既存実装） |
+| PTY出力 | 維持 |
+| フォーカス喪失 | 維持 |
+
+### FR5: Scroll-following Selection
+
+選択範囲はスクリーン座標ではなくバッファ座標（scrollback index）で管理する。スクロール時に選択範囲がビューポートに追従し、内容と一致した位置にハイライトが表示される。
+
+**実装方針:**
+- 選択開始時に、スクリーン行をバッファ上の絶対行インデックスに変換して保持する
+- スクロールオフセット変更時に、バッファ座標からスクリーン座標に逆変換して描画する
+- 選択範囲がビューポート外に出た場合はハイライトを非表示にする
+
+### FR6: Clear Selection on Middle Click
+
+ホイールクリック（button === 1）で選択をクリアする。middle_click_paste 設定が有効な場合、ペースト処理の前にクリアする。
+
+### FR7: Clear Selection on Key Input
+
+PTYに送信されるキー入力（文字入力、Enter、矢印キーなど）で選択をクリアする。ただし以下は除外:
+- 修飾キーのみの押下（Ctrl, Alt, Shift, Meta 単体）
+- クリップボードショートカット（Ctrl+Shift+C/V）
+- 検索ショートカット（Ctrl+Shift+F）
+- IME入力中のイベント
+
 ## Open Questions
 
 - None
