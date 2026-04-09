@@ -413,4 +413,324 @@ describe("MarkdownSessionManager", () => {
 			console.error = originalError;
 		});
 	});
+
+	describe("basedir handling", () => {
+		test("should store basedir from begin params", () => {
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=basedir-test",
+				"format=gfm",
+				"basedir=/home/user/docs",
+			]);
+
+			const session = manager.getSession("basedir-test");
+			expect(session).toBeDefined();
+			expect(session?.basedir).toBe("/home/user/docs");
+		});
+
+		test("should store undefined basedir when not provided", () => {
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=no-basedir-test",
+				"format=gfm",
+			]);
+
+			const session = manager.getSession("no-basedir-test");
+			expect(session).toBeDefined();
+			expect(session?.basedir).toBeUndefined();
+		});
+
+		test("should expose active basedir after end command", () => {
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=active-basedir-test",
+				"basedir=/home/user/project",
+			]);
+			manager.handleCommand("emterm", [
+				"markdown",
+				"chunk",
+				"id=active-basedir-test",
+				"seq=0",
+				"data=IyBUZXN0",
+			]);
+
+			// Suppress DOM errors
+			const originalError = console.error;
+			console.error = mock(() => {});
+
+			try {
+				manager.handleCommand("emterm", [
+					"markdown",
+					"end",
+					"id=active-basedir-test",
+				]);
+			} catch {
+				// Ignore DOM-related errors
+			}
+
+			expect(manager.getActiveBasedir()).toBe("/home/user/project");
+
+			console.error = originalError;
+		});
+	});
+
+	describe("PTY write callback", () => {
+		test("should accept and store PTY write callback", () => {
+			const writeFn = mock((_data: string) => {});
+			manager.setPtyWriteCallback(writeFn);
+
+			// Callback should be stored (verified via fullscreen integration)
+			expect(manager.getPtyWriteCallback()).toBe(writeFn);
+		});
+
+		test("should clear PTY write callback", () => {
+			const writeFn = mock((_data: string) => {});
+			manager.setPtyWriteCallback(writeFn);
+			manager.setPtyWriteCallback(null);
+
+			expect(manager.getPtyWriteCallback()).toBeNull();
+		});
+	});
+
+	describe("image-response handling", () => {
+		test("should handle single image-response", () => {
+			// Set up a DOM container with a placeholder image
+			const container = document.createElement("div");
+			const img = document.createElement("img");
+			img.setAttribute("data-request-id", "img-1");
+			img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+			container.appendChild(img);
+
+			manager.setImageContainer(container);
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-response",
+				"request_id=img-1",
+				"mime_type=image/png",
+				"data=iVBORw0KGgo=",
+			]);
+
+			expect(img.src).toBe("data:image/png;base64,iVBORw0KGgo=");
+		});
+
+		test("should reject SVG MIME type to prevent XSS", () => {
+			const container = document.createElement("div");
+			const img = document.createElement("img");
+			img.setAttribute("data-request-id", "img-10");
+			container.appendChild(img);
+
+			manager.setImageContainer(container);
+
+			const consoleSpy = mock(() => {});
+			const originalWarn = console.warn;
+			console.warn = consoleSpy;
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-response",
+				"request_id=img-10",
+				"mime_type=image/svg+xml",
+				"data=PHN2Zz48L3N2Zz4=",
+			]);
+
+			// Image should be replaced with error indicator
+			const errorEl = container.querySelector("[data-request-id='img-10']");
+			expect(errorEl).not.toBeNull();
+			expect(errorEl?.textContent).toContain("unsupported format");
+
+			expect(consoleSpy).toHaveBeenCalled();
+			console.warn = originalWarn;
+		});
+
+		test("should reject invalid request_id format", () => {
+			const container = document.createElement("div");
+			manager.setImageContainer(container);
+
+			const consoleSpy = mock(() => {});
+			const originalWarn = console.warn;
+			console.warn = consoleSpy;
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-response",
+				"request_id=evil\"][onclick=\"alert(1)",
+				"mime_type=image/png",
+				"data=iVBORw0KGgo=",
+			]);
+
+			expect(consoleSpy).toHaveBeenCalled();
+			console.warn = originalWarn;
+		});
+
+		test("should handle chunked image-response", () => {
+			const container = document.createElement("div");
+			const img = document.createElement("img");
+			img.setAttribute("data-request-id", "img-2");
+			container.appendChild(img);
+
+			manager.setImageContainer(container);
+
+			// Send chunk 0 of 2
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-response",
+				"request_id=img-2",
+				"mime_type=image/png",
+				"chunk_seq=0",
+				"chunk_total=2",
+				"data=iVBORw0K",
+			]);
+
+			// Image should not be set yet
+			expect(img.src).not.toContain("data:image/png");
+
+			// Send chunk 1 of 2 (final)
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-response",
+				"request_id=img-2",
+				"chunk_seq=1",
+				"chunk_total=2",
+				"data=Ggo=",
+			]);
+
+			// Image should now be assembled
+			expect(img.src).toBe("data:image/png;base64,iVBORw0KGgo=");
+		});
+
+		test("should ignore image-response with unknown request_id", () => {
+			const container = document.createElement("div");
+			manager.setImageContainer(container);
+
+			const consoleSpy = mock(() => {});
+			const originalWarn = console.warn;
+			console.warn = consoleSpy;
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-response",
+				"request_id=img-99",
+				"mime_type=image/png",
+				"data=iVBORw0KGgo=",
+			]);
+
+			expect(consoleSpy).toHaveBeenCalled();
+			console.warn = originalWarn;
+		});
+	});
+
+	describe("image-error handling", () => {
+		test("should handle image-error and show error on placeholder", () => {
+			const container = document.createElement("div");
+			const img = document.createElement("img");
+			img.setAttribute("data-request-id", "img-100");
+			container.appendChild(img);
+
+			manager.setImageContainer(container);
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-error",
+				"request_id=img-100",
+				"error=File not found",
+			]);
+
+			// Image should be replaced with error indicator
+			const errorEl = container.querySelector("[data-request-id='img-100']");
+			expect(errorEl).not.toBeNull();
+			expect(errorEl?.textContent).toContain("File not found");
+		});
+
+		test("should ignore image-error with invalid request_id format", () => {
+			const container = document.createElement("div");
+			manager.setImageContainer(container);
+
+			const consoleSpy = mock(() => {});
+			const originalWarn = console.warn;
+			console.warn = consoleSpy;
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-error",
+				"request_id=unknown-err",
+				"error=Some error",
+			]);
+
+			expect(consoleSpy).toHaveBeenCalled();
+			console.warn = originalWarn;
+		});
+
+		test("should ignore image-error with unknown but valid request_id", () => {
+			const container = document.createElement("div");
+			manager.setImageContainer(container);
+
+			const consoleSpy = mock(() => {});
+			const originalWarn = console.warn;
+			console.warn = consoleSpy;
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-error",
+				"request_id=img-999",
+				"error=Some error",
+			]);
+
+			expect(consoleSpy).toHaveBeenCalled();
+			console.warn = originalWarn;
+		});
+	});
+
+	describe("image request invalidation on navigation", () => {
+		test("should clear pending image chunks on new begin", () => {
+			const container = document.createElement("div");
+			const img = document.createElement("img");
+			img.setAttribute("data-request-id", "img-200");
+			container.appendChild(img);
+
+			manager.setImageContainer(container);
+
+			// Start a chunked image transfer
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-response",
+				"request_id=img-200",
+				"mime_type=image/png",
+				"chunk_seq=0",
+				"chunk_total=3",
+				"data=chunk0data",
+			]);
+
+			// New navigation begins (new session)
+			manager.handleCommand("emterm", [
+				"markdown",
+				"begin",
+				"id=new-session",
+				"basedir=/new/path",
+			]);
+
+			// Pending chunks should be cleared
+			// Verify by sending remaining chunks - they should not assemble
+			const consoleSpy = mock(() => {});
+			const originalWarn = console.warn;
+			console.warn = consoleSpy;
+
+			manager.handleCommand("emterm", [
+				"markdown",
+				"image-response",
+				"request_id=img-200",
+				"chunk_seq=1",
+				"chunk_total=3",
+				"data=chunk1data",
+			]);
+
+			// The old placeholder is gone (new session cleared it)
+			// So this should warn about unknown request_id
+			expect(consoleSpy).toHaveBeenCalled();
+			console.warn = originalWarn;
+		});
+	});
 });

@@ -16,6 +16,22 @@ import type {
 	MarkdownSession,
 } from "./types.ts";
 
+/** Allowlisted MIME types for image data URIs. SVG is excluded to prevent XSS. */
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+	"image/bmp",
+	"image/x-icon",
+]);
+
+/** Maximum number of concurrent pending chunked image transfers */
+const MAX_PENDING_CHUNKS = 50;
+
+/** Maximum total data size (bytes of base64 text) per chunked image transfer */
+const MAX_CHUNK_DATA_SIZE = 100 * 1024 * 1024;
+
 /**
  * Manages Markdown rendering sessions.
  *
@@ -60,6 +76,21 @@ export class MarkdownSessionManager {
 
 	/** Cleanup timer handle */
 	private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+	/** PTY write callback for sending requests to CLI */
+	private ptyWriteCallback: ((data: string) => void) | null = null;
+
+	/** Basedir from the most recent completed session (for fullscreen view) */
+	private activeBasedir: string | undefined = undefined;
+
+	/** Image container element for finding img placeholders */
+	private imageContainer: HTMLElement | null = null;
+
+	/** Pending chunked image transfers: request_id -> { mime_type, chunks: Map<seq, data> } */
+	private pendingImageChunks = new Map<
+		string,
+		{ mimeType: string; chunks: Map<number, string>; totalChunks: number }
+	>();
 
 	/**
 	 * Create a new session manager.
@@ -115,6 +146,12 @@ export class MarkdownSessionManager {
 			case "end":
 				this.handleEnd(parsed);
 				break;
+			case "image-response":
+				this.handleImageResponse(parsed);
+				break;
+			case "image-error":
+				this.handleImageError(parsed);
+				break;
 			default:
 				console.warn(`Unknown markdown verb: ${markdownVerb}`);
 		}
@@ -141,12 +178,16 @@ export class MarkdownSessionManager {
 			format = params.format;
 		}
 
+		// Clear pending image chunks from previous session (navigation invalidates them)
+		this.pendingImageChunks.clear();
+
 		const session: MarkdownSession = {
 			id,
 			format,
 			version: parseInt(params.version || "1", 10) || 1,
 			chunks: new Map(),
 			lastChunkAt: Date.now(),
+			basedir: params.basedir || undefined,
 		};
 
 		this.sessions.set(id, session);
@@ -223,6 +264,9 @@ export class MarkdownSessionManager {
 		// Render markdown to HTML
 		const html = this.renderer.render(markdown, session.format);
 
+		// Store active basedir for fullscreen view
+		this.activeBasedir = session.basedir;
+
 		// Cleanup session
 		this.sessions.delete(id);
 
@@ -243,7 +287,19 @@ export class MarkdownSessionManager {
 			return;
 		}
 
-		this.fullscreenView.show(block, this.container);
+		this.fullscreenView.show(
+			block,
+			this.container,
+			undefined,
+			this.ptyWriteCallback ?? undefined,
+			this.activeBasedir,
+		);
+
+		// Update image container reference to the fullscreen content area
+		const content = this.container.querySelector(".markdown-fullscreen-content");
+		if (content instanceof HTMLElement) {
+			this.imageContainer = content;
+		}
 	}
 
 	/**
@@ -252,6 +308,159 @@ export class MarkdownSessionManager {
 	private assembleChunks(session: MarkdownSession): string {
 		const sortedSeqs = Array.from(session.chunks.keys()).sort((a, b) => a - b);
 		return sortedSeqs.map((seq) => session.chunks.get(seq)!).join("");
+	}
+
+	/**
+	 * Handle image-response verb: find img placeholder by request_id,
+	 * assemble chunks if needed, set src to data: URI.
+	 */
+	private handleImageResponse(params: Record<string, string>): void {
+		const requestId = params.request_id;
+		if (!requestId) {
+			console.warn("Markdown image-response: missing request_id");
+			return;
+		}
+
+		const data = params.data || "";
+		const mimeType = params.mime_type;
+		const chunkSeq = params.chunk_seq !== undefined ? parseInt(params.chunk_seq, 10) : undefined;
+		const chunkTotal = params.chunk_total !== undefined ? parseInt(params.chunk_total, 10) : undefined;
+
+		// Chunked transfer
+		if (chunkSeq !== undefined && chunkTotal !== undefined && chunkTotal > 1) {
+			let pending = this.pendingImageChunks.get(requestId);
+			if (!pending) {
+				// Check concurrent transfer limit
+				if (this.pendingImageChunks.size >= MAX_PENDING_CHUNKS) {
+					console.warn(`Markdown image-response: too many pending chunked transfers (${MAX_PENDING_CHUNKS}), discarding ${requestId}`);
+					return;
+				}
+				if (!mimeType) {
+					console.warn("Markdown image-response: missing mime_type for first chunk");
+					return;
+				}
+				pending = {
+					mimeType,
+					chunks: new Map(),
+					totalChunks: chunkTotal,
+				};
+				this.pendingImageChunks.set(requestId, pending);
+			}
+
+			// Check accumulated data size limit
+			let currentSize = 0;
+			for (const chunk of pending.chunks.values()) {
+				currentSize += chunk.length;
+			}
+			if (currentSize + data.length > MAX_CHUNK_DATA_SIZE) {
+				console.warn(`Markdown image-response: chunk data size limit exceeded for ${requestId}, discarding`);
+				this.pendingImageChunks.delete(requestId);
+				return;
+			}
+
+			pending.chunks.set(chunkSeq, data);
+
+			// Check if all chunks received
+			if (pending.chunks.size < pending.totalChunks) {
+				return; // Wait for more chunks
+			}
+
+			// Assemble all chunks in order
+			const sortedSeqs = Array.from(pending.chunks.keys()).sort((a, b) => a - b);
+			const assembledData = sortedSeqs.map((seq) => pending!.chunks.get(seq)!).join("");
+			this.pendingImageChunks.delete(requestId);
+
+			this.setImageSrc(requestId, pending.mimeType, assembledData);
+			return;
+		}
+
+		// Single-shot transfer
+		if (!mimeType) {
+			console.warn("Markdown image-response: missing mime_type");
+			return;
+		}
+		this.setImageSrc(requestId, mimeType, data);
+	}
+
+	/**
+	 * Set the src of an img element with matching request_id.
+	 */
+	private setImageSrc(requestId: string, mimeType: string, base64Data: string): void {
+		// Validate requestId format to prevent CSS selector injection
+		if (!/^img-\d+$/.test(requestId)) {
+			console.warn(`Markdown image-response: invalid request_id format: ${requestId}`);
+			return;
+		}
+
+		// Validate MIME type against allowlist (blocks SVG XSS)
+		if (!ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) {
+			console.warn(`Markdown image-response: rejected MIME type: ${mimeType}`);
+			const container = this.imageContainer;
+			if (container) {
+				const img = container.querySelector(`img[data-request-id="${requestId}"]`);
+				if (img) {
+					const errorEl = document.createElement("span");
+					errorEl.setAttribute("data-request-id", requestId);
+					errorEl.className = "markdown-image-error";
+					errorEl.textContent = `[Image error: unsupported format ${mimeType}]`;
+					img.replaceWith(errorEl);
+				}
+			}
+			return;
+		}
+
+		const container = this.imageContainer;
+		if (!container) {
+			console.warn(`Markdown image-response: no image container for ${requestId}`);
+			return;
+		}
+
+		const img = container.querySelector(`img[data-request-id="${requestId}"]`);
+		if (!img) {
+			console.warn(`Markdown image-response: no placeholder found for ${requestId}`);
+			return;
+		}
+
+		(img as HTMLImageElement).src = `data:${mimeType};base64,${base64Data}`;
+	}
+
+	/**
+	 * Handle image-error verb: find img placeholder by request_id,
+	 * display error message.
+	 */
+	private handleImageError(params: Record<string, string>): void {
+		const requestId = params.request_id;
+		if (!requestId) {
+			console.warn("Markdown image-error: missing request_id");
+			return;
+		}
+
+		// Validate requestId format to prevent CSS selector injection
+		if (!/^img-\d+$/.test(requestId)) {
+			console.warn(`Markdown image-error: invalid request_id format: ${requestId}`);
+			return;
+		}
+
+		const errorMsg = params.error || "Unknown error";
+
+		const container = this.imageContainer;
+		if (!container) {
+			console.warn(`Markdown image-error: no image container for ${requestId}`);
+			return;
+		}
+
+		const img = container.querySelector(`img[data-request-id="${requestId}"]`);
+		if (!img) {
+			console.warn(`Markdown image-error: no placeholder found for ${requestId}`);
+			return;
+		}
+
+		// Replace img with error indicator
+		const errorEl = document.createElement("span");
+		errorEl.setAttribute("data-request-id", requestId);
+		errorEl.className = "markdown-image-error";
+		errorEl.textContent = `[Image error: ${errorMsg}]`;
+		img.replaceWith(errorEl);
 	}
 
 	/**
@@ -344,6 +553,36 @@ export class MarkdownSessionManager {
 	}
 
 	/**
+	 * Set the PTY write callback for sending requests to CLI.
+	 * @param callback - Function to write data to PTY, or null to clear
+	 */
+	setPtyWriteCallback(callback: ((data: string) => void) | null): void {
+		this.ptyWriteCallback = callback;
+	}
+
+	/**
+	 * Get the current PTY write callback.
+	 */
+	getPtyWriteCallback(): ((data: string) => void) | null {
+		return this.ptyWriteCallback;
+	}
+
+	/**
+	 * Get the basedir from the most recently completed session.
+	 */
+	getActiveBasedir(): string | undefined {
+		return this.activeBasedir;
+	}
+
+	/**
+	 * Set the image container for finding img placeholders.
+	 * Used by session manager to locate images for image-response/error handling.
+	 */
+	setImageContainer(container: HTMLElement | null): void {
+		this.imageContainer = container;
+	}
+
+	/**
 	 * Dispose the session manager and clean up resources.
 	 */
 	dispose(): void {
@@ -352,6 +591,10 @@ export class MarkdownSessionManager {
 			this.cleanupTimer = null;
 		}
 		this.sessions.clear();
+		this.pendingImageChunks.clear();
+		this.ptyWriteCallback = null;
+		this.activeBasedir = undefined;
+		this.imageContainer = null;
 		this.renderer.dispose();
 		this.fullscreenView.dispose();
 	}

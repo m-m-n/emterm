@@ -488,6 +488,11 @@ export class TerminalApp {
     // Set markdown session manager's container for fullscreen view
     this.state.getMarkdownManager().setContainer(this.overlayRoot!);
 
+    // Wire PTY write callback for markdown navigation (navigate/image/quit commands)
+    this.state.getMarkdownManager().setPtyWriteCallback((data: string) => {
+      this.ptyClient?.write(new TextEncoder().encode(data));
+    });
+
     // Set data viewer session manager's container
     this.state.getDataViewerManager().setContainer(this.overlayRoot!);
 

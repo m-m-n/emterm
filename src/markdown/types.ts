@@ -56,12 +56,14 @@ export interface MarkdownSession {
 	chunks: Map<number, string>;
 	/** Last chunk receipt timestamp (milliseconds) */
 	lastChunkAt: number;
+	/** Base directory for resolving relative paths (from CLI) */
+	basedir?: string;
 }
 
 /**
  * Markdown command verb types.
  */
-export type MarkdownVerb = "begin" | "chunk" | "end";
+export type MarkdownVerb = "begin" | "chunk" | "end" | "image-response" | "image-error";
 
 /**
  * Parsed OSC 777 markdown command.
@@ -104,6 +106,8 @@ export interface BeginParams {
 	format?: MarkdownFormat;
 	/** Protocol version */
 	version?: number;
+	/** Base directory for resolving relative paths */
+	basedir?: string;
 }
 
 /**

@@ -1,0 +1,140 @@
+schema_version: 1
+feature: markdown-viewer-navigation
+scale: standard
+created: 2026-04-08
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'cargo test --manifest-path src-tauri/Cargo.toml'"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+    frontend:
+      language: typescript
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'bun test'"
+      format_command: ""
+    wasm:
+      language: rust
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'cd wasm && cargo test'"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 1c6eaf1d2f74e14200499f1b0e1c1def75acb686
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 1c6eaf1d2f74e14200499f1b0e1c1def75acb686
+  - id: implement
+    status: completed
+    completed_at_commit: 1c6eaf1d2f74e14200499f1b0e1c1def75acb686
+  - id: check
+    status: completed
+    completed_at_commit: 1c6eaf1d2f74e14200499f1b0e1c1def75acb686
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 1c6eaf1d2f74e14200499f1b0e1c1def75acb686
+  - id: review
+    status: completed
+    completed_at_commit: 1c6eaf1d2f74e14200499f1b0e1c1def75acb686
+
+requirements:
+  FR1:
+    title: Add basedir parameter to OSC 777 markdown begin sequence
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: CLI enters interactive request loop when stdin is TTY
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: CLI handles navigate command - read file, output new OSC session
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: CLI handles image command - read file, output image-response/image-error OSC
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: CLI handles quit command - exit cleanly
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: CLI exits on stdin close (EOF)
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Frontend resolves relative paths against basedir and writes navigate request to PTY
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Frontend uses IntersectionObserver for lazy image loading via PTY
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: Frontend handles image-response OSC - set img src to data URI
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: Frontend handles image-error OSC - show error on placeholder
+    status: ok
+    tasks: []
+    tests: []
+  FR11:
+    title: Frontend writes QUIT to PTY on viewer close
+    status: ok
+    tasks: []
+    tests: []
+  FR12:
+    title: DOMPurify allows data URI scheme for img src attribute
+    status: ok
+    tasks: []
+    tests: []
+  FR13:
+    title: CLI detects pipe mode and maintains one-shot backward compatibility
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Lazy image loading via IntersectionObserver
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Path canonicalization on CLI side to prevent path traversal
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: DOMPurify data URI allowance restricted to img src only
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: All communication via PTY (SSH transparent)
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: Backward compatible with existing pipe usage
+    status: ok
+    tasks: []
+    tests: []
+  NFR6:
+    title: Graceful shutdown on stdin close / SSH disconnect
+    status: ok
+    tasks: []
+    tests: []
