@@ -93,6 +93,12 @@ export class SelectionController {
 	// Pending selection start for drag detection
 	private pendingSelectionStart: GridPosition | null = null;
 
+	// Buffer-absolute selection range for scroll-following
+	private bufferRange: {
+		start: { col: number; bufferRow: number };
+		end: { col: number; bufferRow: number };
+	} | null = null;
+
 	// Event listener cleanup
 	private cleanupFunctions: (() => void)[] = [];
 
@@ -128,6 +134,43 @@ export class SelectionController {
 	}
 
 	/**
+	 * Convert a screen row to a buffer-absolute row index.
+	 */
+	private screenRowToBufferRow(screenRow: number): number {
+		const state = this.getTerminalState();
+		const scrollOffset = this.getScrollOffset();
+		const scrollbackLength = state.getScrollbackLength();
+		return scrollbackLength - scrollOffset + screenRow;
+	}
+
+	/**
+	 * Convert a buffer-absolute row index to a screen row.
+	 * Returns a value that may be outside the viewport (< 0 or >= rows).
+	 */
+	private bufferRowToScreenRow(bufferRow: number): number {
+		const state = this.getTerminalState();
+		const scrollOffset = this.getScrollOffset();
+		const scrollbackLength = state.getScrollbackLength();
+		return bufferRow - scrollbackLength + scrollOffset;
+	}
+
+	/**
+	 * Get a line by buffer-absolute row index.
+	 */
+	private getBufferLine(bufferRow: number): LineAccessor | null {
+		const state = this.getTerminalState();
+		if (!state) return null;
+
+		const scrollbackLength = state.getScrollbackLength();
+		if (bufferRow < 0) return null;
+
+		if (bufferRow < scrollbackLength) {
+			return state.getScrollbackLine(bufferRow);
+		}
+		return state.getActiveBuffer().getLine(bufferRow - scrollbackLength);
+	}
+
+	/**
 	 * Get a visible line at the given screen row, accounting for scroll offset.
 	 * Uses the same logic as canvas-renderer's getVisibleLines().
 	 */
@@ -150,6 +193,21 @@ export class SelectionController {
 			return state.getScrollbackLine(lineIndex);
 		}
 		return buffer.getLine(lineIndex - scrollbackLength);
+	}
+
+	/**
+	 * Update bufferRange from the current model range and scroll offset.
+	 */
+	private updateBufferRange(): void {
+		const range = this.model.getState().range;
+		if (!range) {
+			this.bufferRange = null;
+			return;
+		}
+		this.bufferRange = {
+			start: { col: range.start.col, bufferRow: this.screenRowToBufferRow(range.start.row) },
+			end: { col: range.end.col, bufferRow: this.screenRowToBufferRow(range.end.row) },
+		};
 	}
 
 	/**
@@ -289,12 +347,14 @@ export class SelectionController {
 			const wordRange = this.wordBoundary.getWordAt(pos.col, pos.row);
 			this.anchorWord = wordRange;
 			this.model.setSelection(wordRange, mode, true);
+			this.updateBufferRange();
 		} else if (this.clickCount >= 3) {
 			// Triple click - line selection with drag enabled
 			mode = "line";
 			this.anchorRow = pos.row;
 			const lineRange = this.wordBoundary.getLineAt(pos.row);
 			this.model.setSelection(lineRange, mode, true);
+			this.updateBufferRange();
 			this.clickCount = 3; // Cap at 3
 		} else {
 			// Single click - clear existing selection and prepare for potential drag
@@ -324,6 +384,7 @@ export class SelectionController {
 			) {
 				this.model.startSelection(this.pendingSelectionStart, "char");
 				this.model.updateSelection(pos);
+				this.updateBufferRange();
 				event.preventDefault();
 			}
 			return;
@@ -350,6 +411,7 @@ export class SelectionController {
 			this.model.updateSelection(pos);
 		}
 
+		this.updateBufferRange();
 		event.preventDefault();
 	}
 
@@ -379,31 +441,39 @@ export class SelectionController {
 	 * @returns Selected text or empty string if no selection
 	 */
 	getSelectedText(): string {
-		const range = this.model.getNormalizedRange();
-		if (!range) {
+		if (!this.bufferRange) {
 			return "";
 		}
 
-		const { start, end } = range;
+		// Normalize buffer range so start comes before end
+		let startCol = this.bufferRange.start.col;
+		let startRow = this.bufferRange.start.bufferRow;
+		let endCol = this.bufferRange.end.col;
+		let endRow = this.bufferRange.end.bufferRow;
+
+		if (startRow > endRow || (startRow === endRow && startCol > endCol)) {
+			[startCol, startRow, endCol, endRow] = [endCol, endRow, startCol, startRow];
+		}
+
 		const lines: string[] = [];
 
-		for (let row = start.row; row <= end.row; row++) {
-			const line = this.getVisibleLine(row);
+		for (let bufRow = startRow; bufRow <= endRow; bufRow++) {
+			const line = this.getBufferLine(bufRow);
 			if (!line) continue;
 
 			const lineLength = line.length;
 			let rowStartCol: number;
 			let rowEndCol: number;
 
-			if (row === start.row && row === end.row) {
-				rowStartCol = start.col;
-				rowEndCol = end.col;
-			} else if (row === start.row) {
-				rowStartCol = start.col;
+			if (bufRow === startRow && bufRow === endRow) {
+				rowStartCol = startCol;
+				rowEndCol = endCol;
+			} else if (bufRow === startRow) {
+				rowStartCol = startCol;
 				rowEndCol = lineLength - 1;
-			} else if (row === end.row) {
+			} else if (bufRow === endRow) {
 				rowStartCol = 0;
-				rowEndCol = end.col;
+				rowEndCol = endCol;
 			} else {
 				rowStartCol = 0;
 				rowEndCol = lineLength - 1;
@@ -469,6 +539,52 @@ export class SelectionController {
 		this.model.clearSelection();
 		this.anchorWord = null;
 		this.anchorRow = null;
+		this.bufferRange = null;
+	}
+
+	/**
+	 * Notify that the scroll offset has changed.
+	 * Re-renders the selection overlay at the correct screen position
+	 * based on buffer-absolute coordinates.
+	 */
+	notifyScroll(): void {
+		if (!this.bufferRange || !this.model.hasSelection()) {
+			return;
+		}
+
+		// Normalize buffer range
+		let startCol = this.bufferRange.start.col;
+		let startBufRow = this.bufferRange.start.bufferRow;
+		let endCol = this.bufferRange.end.col;
+		let endBufRow = this.bufferRange.end.bufferRow;
+
+		if (startBufRow > endBufRow || (startBufRow === endBufRow && startCol > endCol)) {
+			[startCol, startBufRow, endCol, endBufRow] = [endCol, endBufRow, startCol, startBufRow];
+		}
+
+		const startScreenRow = this.bufferRowToScreenRow(startBufRow);
+		const endScreenRow = this.bufferRowToScreenRow(endBufRow);
+
+		// Completely outside viewport
+		if ((startScreenRow >= this.rows && endScreenRow >= this.rows) ||
+			(startScreenRow < 0 && endScreenRow < 0)) {
+			this.renderer.render(null, this.charWidth, this.charHeight, this.cols);
+			return;
+		}
+
+		// Build clamped screen range
+		const screenRange: SelectionRange = {
+			start: {
+				col: startScreenRow < 0 ? 0 : startCol,
+				row: Math.max(0, startScreenRow),
+			},
+			end: {
+				col: endScreenRow >= this.rows ? this.cols - 1 : endCol,
+				row: Math.min(this.rows - 1, endScreenRow),
+			},
+		};
+
+		this.renderer.render(screenRange, this.charWidth, this.charHeight, this.cols);
 	}
 
 	/**

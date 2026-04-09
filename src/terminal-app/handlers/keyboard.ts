@@ -367,6 +367,11 @@ export class KeyboardHandler {
     if (bytes) {
       event.preventDefault();
 
+      // Clear selection on key input that generates PTY data
+      if (this.selectionController?.hasSelection()) {
+        this.selectionController.clearSelection();
+      }
+
       // Auto-scroll to bottom when user types during scrollback
       this.onExitScrollback?.();
 

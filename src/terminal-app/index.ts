@@ -377,6 +377,9 @@ export class TerminalApp {
     // prevents PTY mouse tracking from seeing middle button events when paste is enabled)
     terminalContainer.addEventListener('mousedown', (e) => {
       if (e.button === 1) {
+        // Clear selection on middle click
+        this.selectionController?.clearSelection();
+
         const settings = SettingsService.getCached();
         if (settings?.middle_click_paste !== false) {
           e.preventDefault();
@@ -727,6 +730,8 @@ export class TerminalApp {
    */
   private handleWheel(e: WheelEvent): void {
     handleWheel(e, this.renderer, this.state, this.charSize);
+    // Update selection overlay position after scroll
+    this.selectionController?.notifyScroll();
   }
 
   /**
