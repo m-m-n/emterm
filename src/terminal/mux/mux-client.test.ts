@@ -76,55 +76,56 @@ describe("MuxMessageType", () => {
 });
 
 describe("decodeWelcomeMsg", () => {
+  interface TestWindowInfo { id: number; name: string; active_pane_id: number }
+  interface TestSessionInfo {
+    id: number; name: string; window_count: number; pane_count: number;
+    active_window_index: number; windows?: TestWindowInfo[];
+  }
+
+  /** Helper: push a u32 LE value. */
+  function pushU32(parts: Uint8Array[], value: number) {
+    const buf = new Uint8Array(4);
+    new DataView(buf.buffer).setUint32(0, value, true);
+    parts.push(buf);
+  }
+
+  /** Helper: push a u64 LE value. */
+  function pushU64(parts: Uint8Array[], value: number) {
+    const buf = new Uint8Array(8);
+    new DataView(buf.buffer).setBigUint64(0, BigInt(value), true);
+    parts.push(buf);
+  }
+
+  /** Helper: push a bincode String (u64 len + UTF-8 bytes). */
+  function pushString(parts: Uint8Array[], s: string) {
+    const bytes = new TextEncoder().encode(s);
+    pushU64(parts, bytes.length);
+    parts.push(bytes);
+  }
+
   /** Build a Welcome binary message with the Accepted variant (0). */
-  function buildWelcomeMsg(
-    serverVersion: number,
-    sessions: Array<{ id: number; name: string; window_count: number; pane_count: number; active_window_index: number }>,
-  ): Uint8Array {
+  function buildWelcomeMsg(serverVersion: number, sessions: TestSessionInfo[]): Uint8Array {
     const parts: Uint8Array[] = [];
 
-    // variant: u32 (0 = Accepted)
-    const variantBuf = new Uint8Array(4);
-    new DataView(variantBuf.buffer).setUint32(0, 0, true);
-    parts.push(variantBuf);
-
-    // server_version: u32
-    const versionBuf = new Uint8Array(4);
-    new DataView(versionBuf.buffer).setUint32(0, serverVersion, true);
-    parts.push(versionBuf);
-
-    // sessions Vec length: u64 LE
-    const lenBuf = new Uint8Array(8);
-    new DataView(lenBuf.buffer).setBigUint64(0, BigInt(sessions.length), true);
-    parts.push(lenBuf);
+    pushU32(parts, 0); // variant: Accepted
+    pushU32(parts, serverVersion);
+    pushU64(parts, sessions.length);
 
     for (const s of sessions) {
-      // id: u32
-      const idBuf = new Uint8Array(4);
-      new DataView(idBuf.buffer).setUint32(0, s.id, true);
-      parts.push(idBuf);
+      pushU32(parts, s.id);
+      pushString(parts, s.name);
+      pushU32(parts, s.window_count);
+      pushU32(parts, s.pane_count);
+      pushU32(parts, s.active_window_index);
 
-      // name: String (u64 len + bytes)
-      const nameBytes = new TextEncoder().encode(s.name);
-      const nameLenBuf = new Uint8Array(8);
-      new DataView(nameLenBuf.buffer).setBigUint64(0, BigInt(nameBytes.length), true);
-      parts.push(nameLenBuf);
-      parts.push(nameBytes);
-
-      // window_count: u32
-      const wcBuf = new Uint8Array(4);
-      new DataView(wcBuf.buffer).setUint32(0, s.window_count, true);
-      parts.push(wcBuf);
-
-      // pane_count: u32
-      const pcBuf = new Uint8Array(4);
-      new DataView(pcBuf.buffer).setUint32(0, s.pane_count, true);
-      parts.push(pcBuf);
-
-      // active_window_index: u32
-      const awiBuf = new Uint8Array(4);
-      new DataView(awiBuf.buffer).setUint32(0, s.active_window_index, true);
-      parts.push(awiBuf);
+      // windows: Vec<WindowInfo>
+      const windows = s.windows ?? [];
+      pushU64(parts, windows.length);
+      for (const w of windows) {
+        pushU32(parts, w.id);
+        pushString(parts, w.name);
+        pushU32(parts, w.active_pane_id);
+      }
     }
 
     const totalLen = parts.reduce((sum, a) => sum + a.length, 0);
@@ -161,6 +162,48 @@ describe("decodeWelcomeMsg", () => {
     expect(sessions!.length).toBe(2);
     expect(sessions![0].active_window_index).toBe(1);
     expect(sessions![1].active_window_index).toBe(4);
+  });
+
+  test("correctly skips windows Vec when decoding", () => {
+    const data = buildWelcomeMsg(1, [
+      {
+        id: 1, name: "with-windows", window_count: 2, pane_count: 3, active_window_index: 1,
+        windows: [
+          { id: 10, name: "win-0", active_pane_id: 100 },
+          { id: 11, name: "win-1", active_pane_id: 101 },
+        ],
+      },
+    ]);
+    const sessions = decodeWelcomeMsg(data);
+    expect(sessions).not.toBeNull();
+    expect(sessions!.length).toBe(1);
+    expect(sessions![0].name).toBe("with-windows");
+    expect(sessions![0].active_window_index).toBe(1);
+  });
+
+  test("correctly decodes multi-session with windows Vec", () => {
+    const data = buildWelcomeMsg(1, [
+      {
+        id: 1, name: "first", window_count: 2, pane_count: 2, active_window_index: 0,
+        windows: [
+          { id: 1, name: "w0", active_pane_id: 1 },
+          { id: 2, name: "w1", active_pane_id: 2 },
+        ],
+      },
+      {
+        id: 2, name: "second", window_count: 1, pane_count: 1, active_window_index: 0,
+        windows: [
+          { id: 3, name: "w0", active_pane_id: 3 },
+        ],
+      },
+    ]);
+    const sessions = decodeWelcomeMsg(data);
+    expect(sessions).not.toBeNull();
+    expect(sessions!.length).toBe(2);
+    expect(sessions![0].name).toBe("first");
+    expect(sessions![0].active_window_index).toBe(0);
+    expect(sessions![1].name).toBe("second");
+    expect(sessions![1].active_window_index).toBe(0);
   });
 
   test("active_window_index defaults to 0 for single-window session", () => {
