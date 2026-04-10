@@ -5,6 +5,21 @@
 
 use super::ipc::protocol::*;
 
+/// Global storage for original termios, so we can restore it before process::exit().
+#[cfg(unix)]
+static ORIGINAL_TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
+/// Restore stdin from the global original termios (safe to call from any context).
+#[cfg(unix)]
+fn restore_stdin_global() {
+    if let Some(orig) = ORIGINAL_TERMIOS.get() {
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, orig);
+        }
+        log::info!("stdin restored from global termios");
+    }
+}
+
 /// Transport format for mux messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Transport {
@@ -61,6 +76,8 @@ fn set_stdin_raw() -> Option<libc::termios> {
             return None;
         }
         let orig = orig.assume_init();
+        // Store in global so process::exit() path can restore it
+        let _ = ORIGINAL_TERMIOS.set(orig);
         let mut raw = orig;
         libc::cfmakeraw(&mut raw);
         if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) != 0 {
@@ -94,6 +111,19 @@ impl Drop for RawModeGuard {
     }
 }
 
+/// Global storage for original console mode (Windows).
+#[cfg(windows)]
+static ORIGINAL_CONSOLE_MODE: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+
+/// Restore stdin from the global console mode (Windows).
+#[cfg(windows)]
+fn restore_stdin_windows_global() {
+    if let Some(&mode) = ORIGINAL_CONSOLE_MODE.get() {
+        restore_stdin_windows(mode);
+        log::info!("stdin restored from global console mode");
+    }
+}
+
 /// Set stdin to raw mode on Windows (enable VT input processing).
 /// Returns the original console mode for restoration on exit.
 #[cfg(windows)]
@@ -110,6 +140,8 @@ fn set_stdin_raw_windows() -> Option<u32> {
             log::warn!("GetConsoleMode failed, stdin may not be a console");
             return None;
         }
+        // Store in global so process::exit() path can restore it
+        let _ = ORIGINAL_CONSOLE_MODE.set(original_mode);
         if SetConsoleMode(handle, ENABLE_VIRTUAL_TERMINAL_INPUT) == 0 {
             log::warn!("SetConsoleMode failed");
             return None;
@@ -409,6 +441,14 @@ where
     // Brief delay so the GUI's PTY reader can consume the flushed data
     // before the PTY slave fd is closed by process exit.
     std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Restore stdin before exit — process::exit() skips Drop, so
+    // the RawModeGuard won't run. Without this, the host terminal
+    // stays in raw mode (no OPOST → LF without CR, echo disabled).
+    #[cfg(unix)]
+    restore_stdin_global();
+    #[cfg(windows)]
+    restore_stdin_windows_global();
 
     // Exit immediately so the host shell returns to foreground promptly.
     // Without this, tokio runtime shutdown waits for the blocked stdin
