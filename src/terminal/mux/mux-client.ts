@@ -249,6 +249,26 @@ export function decodeWelcomeMsg(data: Uint8Array): MuxSessionInfo[] | null {
     const active_window_index = view.getUint32(offset, true);
     offset += 4;
 
+    // windows: Vec<WindowInfo> — skip over bincode-serialized window entries
+    // WindowInfo = { id: u32, name: String (u64 len + bytes), active_pane_id: u32 }
+    if (offset + 8 > data.length) return null;
+    const windowsLen = Number(view.getBigUint64(offset, true));
+    offset += 8;
+    for (let w = 0; w < windowsLen; w++) {
+      // id: u32
+      if (offset + 4 > data.length) return null;
+      offset += 4;
+      // name: String (u64 len + bytes)
+      if (offset + 8 > data.length) return null;
+      const winNameLen = Number(view.getBigUint64(offset, true));
+      offset += 8;
+      if (offset + winNameLen > data.length) return null;
+      offset += winNameLen;
+      // active_pane_id: u32
+      if (offset + 4 > data.length) return null;
+      offset += 4;
+    }
+
     sessions.push({ id, name, window_count, pane_count, active_window_index });
   }
 
