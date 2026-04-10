@@ -186,7 +186,7 @@ describe("Mux Reattach", () => {
 			await browser.saveScreenshot("./screenshots/mux-reattach-13-detached.png");
 		});
 
-		it("should reattach and show window 0 with content", async () => {
+		it("should reattach and restore to window 1 (last active before detach)", async () => {
 			await typeSlowly("emterm mux attach");
 			await browser.keys("Enter");
 			await browser.pause(5000);
@@ -198,30 +198,35 @@ describe("Mux Reattach", () => {
 			console.log("Sub-tab count after reattach:", count);
 			expect(count).toBe(2);
 
-			// Should show window 0 (first window) after reattach
+			// Should restore to window 1 (the active window at detach time)
+			const activeIndex = await browser.execute(() => {
+				return window.terminalApp?.activeMuxWindowIndex ?? -1;
+			});
+			console.log("Active window index after reattach:", activeIndex);
+			expect(activeIndex).toBe(1);
+
+			// Window 1 content should be visible (it was active when we detached)
 			const content = await readGridContent();
 			console.log("Grid after multi-window reattach:", JSON.stringify(content));
 
-			// Window 0 content should be visible (either from snapshot or ring buffer)
-			const hasWin0 = content.lines.some(l => l.includes("WIN0_CONTENT"));
-			console.log("Has WIN0_CONTENT:", hasWin0);
-			// Screen should NOT be blank
+			const hasWin1 = content.lines.some(l => l.includes("WIN1_CONTENT"));
+			console.log("Has WIN1_CONTENT:", hasWin1);
 			expect(content.lines.length).toBeGreaterThan(0);
 		});
 
-		it("should switch to window 1 and see its content", async () => {
+		it("should switch to window 0 and see its content", async () => {
 			await sendPrefixKey();
-			await browser.keys("n");
+			await browser.keys("p");
 			await browser.pause(1000);
 
-			await browser.saveScreenshot("./screenshots/mux-reattach-15-switched-to-win1.png");
+			await browser.saveScreenshot("./screenshots/mux-reattach-15-switched-to-win0.png");
 
 			const content = await readGridContent();
-			console.log("Window 1 after switch:", JSON.stringify(content));
+			console.log("Window 0 after switch:", JSON.stringify(content));
 
-			const hasWin1 = content.lines.some(l => l.includes("WIN1_CONTENT"));
-			console.log("Has WIN1_CONTENT:", hasWin1);
-			// Window 1 should not be blank either
+			const hasWin0 = content.lines.some(l => l.includes("WIN0_CONTENT"));
+			console.log("Has WIN0_CONTENT:", hasWin0);
+			// Window 0 should not be blank either
 			expect(content.lines.length).toBeGreaterThan(0);
 		});
 
