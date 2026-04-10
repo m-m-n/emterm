@@ -105,6 +105,11 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     const prevPaneId = muxPaneIds[previousIndex];
     if (prevPaneId != null) {
       muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
+      // Clear callbacks on saved grids to prevent OSC events from inactive panes
+      // leaking into the shared pendingOscQueue and polluting the active window's title
+      const saved = muxPaneGrids.get(prevPaneId)!;
+      saved.primaryGrid.core.clear_callbacks();
+      saved.alternateGrid?.core.clear_callbacks();
     }
   }
 
@@ -122,6 +127,7 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     } else {
       // No saved state (first visit) — just clear
       state.getWasmCore().reset();
+      ctx.registerCoreCallbacks(state.getActiveCore());
     }
   }
 
@@ -166,6 +172,10 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
       ctx.processPtyPendingDataNow();
     }
     muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
+    // Clear callbacks on saved grids to prevent OSC leaking from inactive panes
+    const saved = muxPaneGrids.get(prevPaneId)!;
+    saved.primaryGrid.core.clear_callbacks();
+    saved.alternateGrid?.core.clear_callbacks();
   }
 
   const newIdx = muxWindows.length;
@@ -344,6 +354,10 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
   const prevPaneId = muxPaneIds[previousIndex];
   if (prevPaneId != null) {
     muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
+    // Clear callbacks on saved grids to prevent OSC leaking from inactive panes
+    const saved = muxPaneGrids.get(prevPaneId)!;
+    saved.primaryGrid.core.clear_callbacks();
+    saved.alternateGrid?.core.clear_callbacks();
   }
 
   // Discard any buffered PTY data from the previous pane
@@ -359,6 +373,7 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
     ctx.registerCoreCallbacks(state.getActiveCore());
   } else {
     state.getWasmCore().reset();
+    ctx.registerCoreCallbacks(state.getActiveCore());
   }
 
   // Skip sendMuxControl(SwitchWindow) — the daemon already knows
