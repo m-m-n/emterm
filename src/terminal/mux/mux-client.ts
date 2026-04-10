@@ -50,6 +50,7 @@ export interface MuxSessionInfo {
   name: string;
   window_count: number;
   pane_count: number;
+  active_window_index: number;
 }
 
 /**
@@ -245,10 +246,10 @@ export function decodeWelcomeMsg(data: Uint8Array): MuxSessionInfo[] | null {
 
     // active_window_index: u32
     if (offset + 4 > data.length) return null;
-    // const activeWindowIndex = view.getUint32(offset, true);
+    const active_window_index = view.getUint32(offset, true);
     offset += 4;
 
-    sessions.push({ id, name, window_count, pane_count });
+    sessions.push({ id, name, window_count, pane_count, active_window_index });
   }
 
   return sessions;
