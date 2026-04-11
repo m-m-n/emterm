@@ -79,7 +79,9 @@ impl PtySession {
 
         // Set TERM environment variable for proper terminal emulation
         // This is essential for applications like SSH, vim, htop, etc.
-        cmd.env("TERM", "xterm-256color");
+        // Uses custom emterm-256color terminfo (auto-installed) which fixes
+        // ncurses color issues (e.g., black borders in glances/nethogs).
+        cmd.env("TERM", super::terminfo::get_term());
         cmd.env("COLORTERM", "truecolor");
 
         // Apply profile-specific environment variables first, then enforce
