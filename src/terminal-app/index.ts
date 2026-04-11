@@ -674,10 +674,13 @@ export class TerminalApp {
           this.applyMuxLayout();
           this.sendPaneResizes();
         } else {
-          // Single-pane: send resize for the active pane
-          const activePaneId = this.getActiveMuxPaneId();
-          if (activePaneId != null) {
-            this.sendMuxPaneResize(activePaneId);
+          // Single-pane: broadcast resize to all panes. Sending to only the
+          // active pane leaves inactive windows' daemon-side PTYs stale
+          // (e.g., if dimensions were initialized before the status bar was
+          // restored during reattach), so switching to them reports the wrong
+          // `stty size`.
+          for (const paneId of this.muxPaneIds) {
+            if (paneId != null) this.sendMuxPaneResize(paneId);
           }
         }
       },
@@ -1449,9 +1452,9 @@ export class TerminalApp {
         this.applyMuxLayout();
         this.sendPaneResizes();
       } else {
-        const activePaneId = this.getActiveMuxPaneId();
-        if (activePaneId != null) {
-          this.sendMuxPaneResize(activePaneId);
+        // Broadcast to all panes — see comment in onMuxResize for rationale.
+        for (const paneId of this.muxPaneIds) {
+          if (paneId != null) this.sendMuxPaneResize(paneId);
         }
       }
     }

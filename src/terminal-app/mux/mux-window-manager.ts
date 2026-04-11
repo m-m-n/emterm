@@ -135,6 +135,11 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
   const activePaneId = muxPaneIds[ctx.getActiveMuxWindowIndex()];
   if (activePaneId != null) {
     ctx.sendMuxControl(MuxMessageType.SwitchWindow, activePaneId);
+    // Reconcile daemon-side PTY dimensions with the current terminal size.
+    // The newly activated pane may have stale dimensions (e.g., initialized
+    // during reattach before the status bar was restored), which would cause
+    // `stty size` to report the wrong row count.
+    sendMuxPaneResize(ctx, activePaneId);
   }
 
   const renderer = ctx.getRenderer();
@@ -377,6 +382,11 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
   }
 
   // Skip sendMuxControl(SwitchWindow) — the daemon already knows
+
+  // Reconcile daemon-side PTY dimensions with the current terminal size.
+  // Same rationale as switchMuxWindow: the target pane may have stale
+  // dimensions if reattach initialized it before the status bar was restored.
+  sendMuxPaneResize(ctx, paneId);
 
   const renderer = ctx.getRenderer();
   if (renderer) {
