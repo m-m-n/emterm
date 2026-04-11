@@ -15,6 +15,7 @@ pub mod kitty_scanner;
 pub mod manager;
 pub mod session;
 pub mod shell;
+pub mod terminfo;
 pub mod writer;
 
 // Re-export commonly used types

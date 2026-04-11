@@ -1221,8 +1221,9 @@ function drawBoxDrawing(
 			const maxX = Math.max(x1, x2);
 			ctx.fillRect(minX, lineY, maxX - minX, lineWidth);
 		} else {
-			// Diagonal line - use stroke
+			// Diagonal line - use stroke with current fillStyle as strokeStyle
 			ctx.beginPath();
+			ctx.strokeStyle = ctx.fillStyle;
 			ctx.lineWidth = lineWidth;
 			ctx.lineCap = "square";
 			ctx.moveTo(x1, y1);

@@ -48,7 +48,7 @@ pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
 
     let shell = detect_default_shell();
     let mut cmd = portable_pty::CommandBuilder::new(&shell);
-    cmd.env("TERM", "xterm-256color");
+    cmd.env("TERM", crate::pty::terminfo::get_term());
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "emterm");
     cmd.env("EMTERM_MUX", "1");
