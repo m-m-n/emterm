@@ -126,7 +126,7 @@
       "editorCommandHint": "Placeholders: {file}, {line}, {col}",
       "editorCommandDesc": "Command template to open files. Use {file}, {line}, {col} as placeholders",
       "term": "TERM Environment Variable",
-      "termDesc": "TERM variable set for PTY sessions",
+      "termDesc": "TERM variable set for PTY sessions (applies to new tabs only)",
       "middleClickPaste": "Middle-Click Paste",
       "middleClickPasteDesc": "Paste clipboard contents when middle mouse button is clicked",
       "shiftEnterAsAltEnter": "Shift+Enter as Alt+Enter",
