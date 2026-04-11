@@ -279,26 +279,6 @@ fi
 
 tmux設定で`allow-passthrough on`が必要です。
 
-## 環境変数
-
-### TERM
-
-eMterm はデフォルトで `emterm-256color` を使用します。これは `xterm-256color` から `ccc` と `initc` ケイパビリティを除去したカスタム terminfo エントリで、`glances` などの ncurses アプリケーションで罫線やバーが前景色ではなく黒で表示される問題を解消します。
-
-この terminfo エントリは初回 PTY セッション作成時に `tic`（ncurses 付属の terminfo コンパイラ）で自動的にコンパイルされ、`~/.terminfo/` にインストールされます。`tic` が利用できない環境では `xterm-256color` にフォールバックします。
-
-**`sudo` 実行時の注意:** `sudo` はデフォルトで `HOME` を含む環境変数をリセットするため、ncurses は `/root/.terminfo/` を参照してしまい `emterm-256color` が見つからず、以下のエラーが発生します：
-
-```
-Error opening terminal: emterm-256color.
-```
-
-対処: 権限昇格が必要なコマンドを実行する際は `TERM` を明示的に指定してください：
-
-```bash
-sudo TERM=xterm-256color COMMAND
-```
-
 ## OSCシーケンス対応状況
 
 eMtermがサポートするOSC（Operating System Command）シーケンス一覧：

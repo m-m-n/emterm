@@ -48,13 +48,7 @@ pub(super) fn spawn_pty(cols: u16, rows: u16) -> Result<SpawnedPty, String> {
 
     let shell = detect_default_shell();
     let mut cmd = portable_pty::CommandBuilder::new(&shell);
-    // Inherit TERM from the daemon's own environment (which comes from the
-    // bridge/eMterm PTY and reflects the user's settings.term). Fall back to
-    // emterm-256color if not set. `resolve_term` installs the custom terminfo
-    // when needed.
-    let parent_term = std::env::var("TERM")
-        .unwrap_or_else(|_| crate::pty::terminfo::EMTERM_TERM.to_string());
-    cmd.env("TERM", crate::pty::terminfo::resolve_term(&parent_term));
+    cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "emterm");
     cmd.env("EMTERM_MUX", "1");

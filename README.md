@@ -281,26 +281,6 @@ fi
 
 Requires `allow-passthrough on` in tmux config.
 
-## Environment Variables
-
-### TERM
-
-eMterm uses `emterm-256color` by default. This is a custom terminfo entry based on `xterm-256color` with the `ccc` and `initc` capabilities removed, which fixes ncurses applications (e.g. `glances`) rendering borders and bars in black instead of the foreground color.
-
-The terminfo entry is automatically compiled with `tic` (part of ncurses) and installed to `~/.terminfo/` on the first PTY session. If `tic` is not available, eMterm falls back to `xterm-256color`.
-
-**Note for `sudo`:** By default, `sudo` resets environment variables including `HOME`, causing ncurses to look for `emterm-256color` in `/root/.terminfo/` (which does not exist). This results in:
-
-```
-Error opening terminal: emterm-256color.
-```
-
-Workaround: specify `TERM` explicitly when running privileged tools:
-
-```bash
-sudo TERM=xterm-256color COMMAND
-```
-
 ## OSC Sequence Support
 
 eMterm supports the following OSC (Operating System Command) sequences:
