@@ -73,6 +73,7 @@ deserialize_null_with!(
     String,
     default_editor_command
 );
+deserialize_null_with!(deserialize_null_term, String, default_term);
 deserialize_null_with!(
     deserialize_null_sftp_max_concurrent_uploads,
     u16,
@@ -124,6 +125,9 @@ fn default_markdown_font_size() -> u32 {
 }
 fn default_editor_command() -> String {
     "code --goto {file}:{line}:{col}".to_string()
+}
+fn default_term() -> String {
+    "emterm-256color".to_string()
 }
 fn default_sftp_max_concurrent_uploads() -> u16 {
     4
@@ -394,6 +398,8 @@ pub struct AppSettings {
         deserialize_with = "deserialize_null_editor_command"
     )]
     pub editor_command: String,
+    #[serde(default = "default_term", deserialize_with = "deserialize_null_term")]
+    pub term: String,
 
     // IME
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
@@ -682,6 +688,7 @@ impl Default for AppSettings {
             shift_enter_as_alt_enter: default_true(),
             ambiguous_width: default_true(),
             editor_command: default_editor_command(),
+            term: default_term(),
             skk_mode: default_true(),
             notification_enabled: default_true(),
             tab_activity_indicator: default_true(),

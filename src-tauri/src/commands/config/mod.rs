@@ -340,6 +340,7 @@ mod tests {
             shift_enter_as_alt_enter: false,
             ambiguous_width: false,
             editor_command: "vim +{line} {file}".to_string(),
+            term: "xterm-256color".to_string(),
             skk_mode: false,
             notification_enabled: false,
             tab_activity_indicator: false,
