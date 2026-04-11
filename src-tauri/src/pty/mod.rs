@@ -10,6 +10,7 @@
 //! - `session`: Individual PTY session management
 //! - `manager`: Multi-session PTY manager
 
+pub mod device_query_scanner;
 pub mod graceful_shutdown;
 pub mod kitty_scanner;
 pub mod manager;
