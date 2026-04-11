@@ -25,9 +25,9 @@
      inkscape:deskcolor="#d1d1d1"
      inkscape:document-units="px"
      showgrid="true"
-     inkscape:zoom="5.6568544"
-     inkscape:cx="58.513085"
-     inkscape:cy="63.374444"
+     inkscape:zoom="2"
+     inkscape:cx="11.25"
+     inkscape:cy="19.75"
      inkscape:window-width="1866"
      inkscape:window-height="1014"
      inkscape:window-x="0"
@@ -74,57 +74,59 @@
        x2="10.583333"
        y2="45.243752"
        gradientUnits="userSpaceOnUse"
-       gradientTransform="matrix(4.1034871,0,0,4.1034872,-6.5714257,-7.6571518)" />
+       gradientTransform="matrix(3.7795289,0,0,3.4555689,-1.000001,3.6571337)" />
   </defs>
   <g
      inkscape:label="Layer 1"
      inkscape:groupmode="layer"
      id="layer1">
     <rect
-       style="fill:url(#linearGradient7);stroke-width:15.1994;stroke-linecap:round;stroke-linejoin:round"
+       style="fill:url(#linearGradient7);stroke-width:13.3861;stroke-linecap:round;stroke-linejoin:round"
        id="rect6"
-       width="76"
-       height="76"
-       x="26"
-       y="26" />
+       width="70"
+       height="64"
+       x="29"
+       y="32" />
     <path
-       style="fill:#40ff40;fill-opacity:1;fill-rule:evenodd;stroke:#40ff40;stroke-width:4.34279;stroke-linecap:round;stroke-linejoin:bevel;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-       d="M 31.428612,31.428524 58.570761,53.142848 31.428612,74.857177 58.570761,53.142848 Z"
+       style="fill:#40ff40;fill-opacity:1;fill-rule:evenodd;stroke:#40ff40;stroke-width:3.75758;stroke-linecap:round;stroke-linejoin:bevel;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       d="M 41.308357,39.348353 62.632574,60.040037 41.308357,80.731724 62.632574,60.040037 Z"
        id="path7" />
     <rect
-       style="fill:#40ff40;fill-opacity:1;stroke:#40ff40;stroke-width:4.34279;stroke-linecap:round;stroke-linejoin:bevel;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       style="fill:#40ff40;fill-opacity:1;stroke:#40ff40;stroke-width:3.25409;stroke-linecap:round;stroke-linejoin:bevel;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
        id="rect9"
-       width="21.714283"
-       height="1.0857171"
-       x="65.073524"
-       y="73.334404" />
+       width="17.745907"
+       height="0.74590522"
+       x="67.62706"
+       y="78.62706" />
     <rect
        style="fill:#5a81a4;fill-opacity:1;stroke:#5a81a4;stroke-width:0;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;paint-order:normal"
        id="rect2"
        width="12"
-       height="128"
-       x="14"
-       y="0" />
+       height="128.76335"
+       x="31"
+       y="0"
+       transform="matrix(1,0,-0.10872659,0.99407169,0,0)" />
     <rect
        style="fill:#5a81a4;fill-opacity:1;stroke:#5a81a4;stroke-width:0;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;paint-order:normal"
        id="rect2-3"
        width="12"
-       height="128"
-       x="102"
-       y="0" />
+       height="128.76335"
+       x="99"
+       y="0"
+       transform="matrix(1,0,-0.10872659,0.99407169,0,0)" />
     <rect
        style="fill:#5a81a4;fill-opacity:1;stroke:#5a81a4;stroke-width:0;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;paint-order:normal"
        id="rect3"
        width="128"
        height="12"
        x="0"
-       y="14" />
+       y="24" />
     <rect
        style="fill:#5a81a4;fill-opacity:1;stroke:#5a81a4;stroke-width:0;stroke-linecap:butt;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1;paint-order:normal"
        id="rect3-1"
        width="128"
        height="12"
        x="0"
-       y="102" />
+       y="92" />
   </g>
 </svg>
