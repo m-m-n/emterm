@@ -113,9 +113,18 @@ export function handleOscCallback(
     case 10: // SetForegroundColor
     case 11: // SetBackgroundColor
     case 12: { // SetCursorColor
-      const writeFn = (resp: string) => {
-        ctx.ptyClient?.write(new TextEncoder().encode(resp));
-      };
+      // Query responses (`?`) for OSC 10/11/12 are handled by the Rust
+      // reader-thread scanner (src-tauri/src/pty/device_query_scanner.rs)
+      // which writes directly to the PTY master fd via libc::write() for
+      // zero-latency delivery. Responding from here goes through Tauri IPC
+      // and arrives too late: by the time the response hits the kernel the
+      // querying CLI has already exited and the shell is back in cooked
+      // mode with ECHO on, so the response bytes are echoed as visible
+      // `^[]11;rgb:xxxx/xxxx/xxxx^[\` garbage text.
+      // SET operations still need to update the in-process color state,
+      // so we pass a no-op writeFn and let handleOscDefaultColor() dispatch
+      // the non-query branch normally.
+      const writeFn = (_resp: string) => {};
       const lookupThemeDefault = (oscNum: number) => {
         switch (oscNum) {
           case 10: return DEFAULT_FOREGROUND;

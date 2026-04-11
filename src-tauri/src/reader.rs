@@ -103,6 +103,9 @@ pub fn spawn_reader_thread(
             let mut buf = [0u8; 65536];
             #[cfg(unix)]
             let mut kitty_scanner = crate::pty::kitty_scanner::KittyScanner::new();
+            #[cfg(unix)]
+            let mut device_query_scanner =
+                crate::pty::device_query_scanner::DeviceQueryScanner::new();
 
             loop {
                 match reader.read(&mut buf) {
@@ -114,11 +117,13 @@ pub fn spawn_reader_thread(
                         break;
                     }
                     Ok(n) => {
-                        // Scan for Kitty APC sequences and write responses directly
-                        // to the master fd via libc::write() (zero latency).
+                        // Scan for Kitty APC sequences and OSC color queries,
+                        // writing responses directly to the master fd via
+                        // libc::write() (zero latency — beats cooked-mode echo).
                         #[cfg(unix)]
                         if let Some(fd) = master_fd {
                             kitty_scanner.process(&buf[..n], fd);
+                            device_query_scanner.process(&buf[..n], fd);
                         }
 
                         if tx.send(buf[..n].to_vec()).is_err() {
