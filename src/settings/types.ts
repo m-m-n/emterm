@@ -59,7 +59,6 @@ export interface AppSettings {
   middle_click_paste: boolean;
   shift_enter_as_alt_enter: boolean;
   editor_command: string;
-  term: string;
 
   // IME
   skk_mode: boolean;

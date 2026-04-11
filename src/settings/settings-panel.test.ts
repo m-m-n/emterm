@@ -92,7 +92,6 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     middle_click_paste: false,
     shift_enter_as_alt_enter: false,
     editor_command: "",
-    term: "emterm-256color",
     skk_mode: false,
     notification_enabled: false,
     tab_activity_indicator: false,
