@@ -61,6 +61,11 @@ export interface MuxWindowManagerContext {
   removeMuxPane: (paneId: number) => void;
   exitMuxMode: () => void;
   enterMuxMode: (socketPath: string, sessionId: number) => Promise<void>;
+  /** Sync the TerminalApp's title dedup cache to match state._title. Called
+   *  after we swap in a different pane's saved title so the next OSC event
+   *  isn't suppressed (and the parent tab title immediately reflects the
+   *  new active window). */
+  syncWindowTitleFromState: () => void;
 }
 
 /** Clear the terminal screen for mux window switching. */
@@ -125,11 +130,17 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
       state.restoreMuxPaneState(savedState);
       ctx.registerCoreCallbacks(state.getActiveCore());
     } else {
-      // No saved state (first visit) — just clear
+      // No saved state (first visit) — clear screen AND title so the
+      // next pane starts without inheriting the previous pane's title.
       state.getWasmCore().reset();
+      state._title = "";
+      state._iconName = "";
       ctx.registerCoreCallbacks(state.getActiveCore());
     }
   }
+
+  // Sync the title dedup cache and parent tab title to the restored pane.
+  ctx.syncWindowTitleFromState();
 
   // Notify daemon of active pane change for status bar cwd tracking
   const activePaneId = muxPaneIds[ctx.getActiveMuxWindowIndex()];
@@ -172,20 +183,28 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   // alternate screen state from the daemon's replay is captured in the save.
   const previousIndex = ctx.getActiveMuxWindowIndex();
   const prevPaneId = muxPaneIds[previousIndex];
-  if (prevPaneId != null && state) {
+  const hadPrevPane = prevPaneId != null && state != null;
+  if (hadPrevPane) {
     if (ctx.getMuxIsReattaching()) {
       ctx.processPtyPendingDataNow();
     }
-    muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
+    muxPaneGrids.set(prevPaneId, state!.saveMuxPaneState());
     // Clear callbacks on saved grids to prevent OSC leaking from inactive panes
     const saved = muxPaneGrids.get(prevPaneId)!;
     saved.primaryGrid.core.clear_callbacks();
     saved.alternateGrid?.core.clear_callbacks();
+    // Reset shared title state so the NEW window doesn't inherit the
+    // previous pane's title via initialName / dedup. The previous pane's
+    // title is preserved inside its saved MuxPaneGridState.
+    state!._title = "";
+    state!._iconName = "";
   }
 
   const newIdx = muxWindows.length;
-  // Use current terminal title (set by OSC from initial PTY output) as initial window name
-  const initialName = state?.title || "Terminal";
+  // For the very first window (no previous pane), use the pre-mux title
+  // captured in state.title; for subsequent windows, start clean ("Terminal")
+  // so they don't display the previous window's title until they emit their own.
+  const initialName = hadPrevPane ? "Terminal" : (state?.title || "Terminal");
   muxWindows.push({ id: newIdx, name: initialName });
   muxPaneIds.push(paneId);
   ctx.setActiveMuxWindowIndex(newIdx);
@@ -200,6 +219,13 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   // Just create a fresh grid — the daemon's screen data will populate it.
   createFreshMuxGrid(ctx);
   muxDetachedGrids.delete(detachedKey);
+
+  // Sync title dedup / parent tab to the fresh pane (empty title) so that
+  // the previous pane's title doesn't linger on the parent tab until the
+  // new pane emits its own OSC.
+  if (hadPrevPane) {
+    ctx.syncWindowTitleFromState();
+  }
 
   // Send initial resize so daemon PTY matches actual terminal dimensions
   sendMuxPaneResize(ctx, paneId);
@@ -378,8 +404,13 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
     ctx.registerCoreCallbacks(state.getActiveCore());
   } else {
     state.getWasmCore().reset();
+    state._title = "";
+    state._iconName = "";
     ctx.registerCoreCallbacks(state.getActiveCore());
   }
+
+  // Sync the title dedup cache and parent tab title to the restored pane.
+  ctx.syncWindowTitleFromState();
 
   // Skip sendMuxControl(SwitchWindow) — the daemon already knows
 

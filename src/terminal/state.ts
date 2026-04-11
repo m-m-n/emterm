@@ -54,6 +54,12 @@ export interface MuxPaneGridState {
   primaryGrid: WasmGrid;
   alternateGrid: WasmGrid | null;
   useAlternate: boolean;
+  /** Window title at the time of save (OSC 0/2). Restored on switch so tabs
+   *  don't leak titles across panes (e.g. Claude Code's title appearing on
+   *  unrelated tabs). */
+  title: string;
+  /** Window icon name at the time of save (OSC 0/1). */
+  iconName: string;
   /** TS-only modes not stored in WASM (mouseTracking, mouseEncoding, cursorKeys). */
   tsModes: {
     mouseTracking: import("./modes").MouseTrackingMode;
@@ -302,6 +308,8 @@ export class TerminalState implements TerminalStateAccessor {
       primaryGrid: this.primaryWasmGrid!,
       alternateGrid: this.alternateWasmGrid,
       useAlternate: this.useAlternate,
+      title: this._title,
+      iconName: this._iconName,
       tsModes: {
         mouseTracking: this.modes.mouseTracking,
         mouseEncoding: this.modes.mouseEncoding,
@@ -322,6 +330,12 @@ export class TerminalState implements TerminalStateAccessor {
     this.primaryWasmGrid = paneState.primaryGrid;
     this.alternateWasmGrid = paneState.alternateGrid;
     this.useAlternate = paneState.useAlternate;
+
+    // Restore window title / icon so tabs don't leak titles across panes.
+    // Tracked per-pane because `_title` is shared state on TerminalState but
+    // each mux window should show its own title.
+    this._title = paneState.title;
+    this._iconName = paneState.iconName;
 
     // Rebuild primary buffer and cursor
     const cols = paneState.primaryGrid.core.cols();

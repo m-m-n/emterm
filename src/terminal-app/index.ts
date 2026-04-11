@@ -853,6 +853,17 @@ export class TerminalApp {
       removeMuxPane: (paneId) => self.removeMuxPane(paneId),
       exitMuxMode: () => self.exitMuxMode(),
       enterMuxMode: (socketPath, sessionId) => self.enterMuxMode(socketPath, sessionId),
+      syncWindowTitleFromState: () => {
+        // After swapping in a different pane's saved title (or resetting
+        // for a new window), force-push the title through the normal
+        // update path. Bypasses updateWindowTitle's dedup (since the
+        // effective title may equal the previous cached value even though
+        // the active pane just changed) and updates the browser window
+        // title, parent tab title, and mux sub-tab name.
+        const current = self.state?._title ?? "";
+        self.lastWindowTitle = current;
+        self.titleChangeCallback?.(current || "Terminal");
+      },
     };
   }
 
