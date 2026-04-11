@@ -193,6 +193,25 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
+  // TERM environment variable (select)
+  renderSelect(
+    panel,
+    {
+      key: "term",
+      label: t("settings.terminal.term"),
+      value: settings.term,
+      options: [
+        { value: "emterm-256color", label: "emterm-256color" },
+        { value: "xterm-256color", label: "xterm-256color" },
+        { value: "screen-256color", label: "screen-256color" },
+        { value: "tmux-256color", label: "tmux-256color" },
+      ],
+      description: t("settings.terminal.termDesc"),
+      onSave: (v) => ctx.saveSetting("term", v),
+    },
+    ctx.addContentListener,
+  );
+
   // Copy on Select (toggle)
   renderToggle(
     panel,

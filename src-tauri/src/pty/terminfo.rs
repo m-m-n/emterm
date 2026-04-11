@@ -40,6 +40,22 @@ fn home_dir() -> Option<PathBuf> {
     }
 }
 
+/// Resolve a user-specified TERM value, installing custom terminfo if needed.
+///
+/// - Empty or whitespace-only input resolves to the emterm-256color default.
+/// - If `user_term` matches `emterm-256color` (case-insensitive, trimmed),
+///   ensure the custom terminfo is installed and return the canonical value
+///   (or fall back to `xterm-256color` if installation fails).
+/// - Otherwise, pass through the trimmed value as-is.
+pub fn resolve_term(user_term: &str) -> String {
+    let trimmed = user_term.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case(EMTERM_TERM) {
+        get_term().to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Get the appropriate TERM value, installing custom terminfo if needed.
 ///
 /// Returns `emterm-256color` if the custom terminfo is available (or was
@@ -148,5 +164,58 @@ mod tests {
             term == EMTERM_TERM || term == FALLBACK_TERM,
             "TERM should be emterm-256color or xterm-256color, got: {}", term
         );
+    }
+
+    #[test]
+    fn test_resolve_term_passes_through_non_emterm() {
+        // Non-emterm values should pass through unchanged
+        assert_eq!(resolve_term("xterm-256color"), "xterm-256color");
+        assert_eq!(resolve_term("screen-256color"), "screen-256color");
+        assert_eq!(resolve_term("tmux-256color"), "tmux-256color");
+        assert_eq!(resolve_term("custom-term"), "custom-term");
+    }
+
+    #[test]
+    fn test_resolve_term_handles_emterm() {
+        // emterm-256color should resolve via get_term() (either emterm or fallback)
+        let resolved = resolve_term(EMTERM_TERM);
+        assert!(
+            resolved == EMTERM_TERM || resolved == FALLBACK_TERM,
+            "resolve_term(emterm-256color) should be emterm or xterm, got: {}",
+            resolved
+        );
+    }
+
+    #[test]
+    fn test_resolve_term_handles_empty_and_whitespace() {
+        // Empty or whitespace-only input should resolve to default
+        for input in ["", "   ", "\t", "\n"] {
+            let resolved = resolve_term(input);
+            assert!(
+                resolved == EMTERM_TERM || resolved == FALLBACK_TERM,
+                "resolve_term({:?}) should fall back to default, got: {}",
+                input, resolved
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_term_case_insensitive_emterm() {
+        // Case variations of emterm-256color should all resolve via get_term()
+        for input in ["EMTERM-256COLOR", "Emterm-256Color", "emterm-256color"] {
+            let resolved = resolve_term(input);
+            assert!(
+                resolved == EMTERM_TERM || resolved == FALLBACK_TERM,
+                "resolve_term({:?}) should match emterm variant, got: {}",
+                input, resolved
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_term_trims_whitespace() {
+        // Leading/trailing whitespace should be trimmed
+        assert_eq!(resolve_term("  xterm-256color  "), "xterm-256color");
+        assert_eq!(resolve_term("\ttmux-256color\n"), "tmux-256color");
     }
 }

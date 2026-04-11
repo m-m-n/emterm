@@ -77,20 +77,30 @@ impl PtySession {
             }
         }
 
-        // Set TERM environment variable for proper terminal emulation
-        // This is essential for applications like SSH, vim, htop, etc.
-        // Uses custom emterm-256color terminfo (auto-installed) which fixes
-        // ncurses color issues (e.g., black borders in glances/nethogs).
-        cmd.env("TERM", super::terminfo::get_term());
-        cmd.env("COLORTERM", "truecolor");
+        // Set TERM environment variable for proper terminal emulation.
+        // If env_vars contains a non-empty TERM, use the user's choice (via
+        // `resolve_term` which installs the custom terminfo if needed).
+        // Otherwise, fall back to emterm-256color (the default, preserving
+        // prior behavior for internal callers that don't supply env_vars).
+        let user_term = env_vars
+            .as_ref()
+            .and_then(|v| v.get("TERM"))
+            .map(|s| s.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(super::terminfo::EMTERM_TERM);
+        cmd.env("TERM", super::terminfo::resolve_term(user_term));
 
-        // Apply profile-specific environment variables first, then enforce
-        // reserved keys so they cannot be overridden by user profiles.
+        // Apply profile-specific environment variables (excluding TERM which
+        // is already resolved above, and excluding COLORTERM which we enforce
+        // below to accurately describe eMterm's true-color capability).
         if let Some(ref vars) = env_vars {
             for (key, value) in vars {
-                cmd.env(key, value);
+                if key != "TERM" && key != "COLORTERM" {
+                    cmd.env(key, value);
+                }
             }
         }
+        cmd.env("COLORTERM", "truecolor");
 
         // Identify eMterm to child processes (de facto standard, used by iTerm2, WezTerm, VS Code)
         // Set AFTER env_vars to prevent profile overrides.

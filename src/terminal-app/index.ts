@@ -539,7 +539,9 @@ export class TerminalApp {
       const args = overrides?.shell_args?.length
         ? overrides.shell_args
         : cachedSettings?.shell_args?.length ? cachedSettings.shell_args : undefined;
-      const env_vars = overrides?.env_vars;
+      // Merge settings.term into env_vars as TERM (profile env_vars take precedence).
+      const term = cachedSettings?.term || "emterm-256color";
+      const env_vars: Record<string, string> = { TERM: term, ...(overrides?.env_vars || {}) };
       const working_directory = overrides?.working_directory || undefined;
 
       await this.ptyClient.spawn({ shell, args, cols, rows, env_vars, working_directory });
