@@ -126,7 +126,7 @@
       "editorCommandHint": "プレースホルダー: {file}, {line}, {col}",
       "editorCommandDesc": "ファイルを開くコマンドテンプレート。{file}, {line}, {col} をプレースホルダーとして使用",
       "term": "TERM環境変数",
-      "termDesc": "PTYセッションに設定するTERM変数",
+      "termDesc": "PTYセッションに設定するTERM変数（変更は新しいタブから反映）",
       "middleClickPaste": "ホイールクリックでペースト",
       "middleClickPasteDesc": "マウスの中ボタンをクリックするとクリップボードの内容をペーストします",
       "shiftEnterAsAltEnter": "Shift+EnterをAlt+Enterとして送信",
