@@ -16,6 +16,7 @@ Tauriで構築されたLinux/Windows向けターミナルエミュレータ。�
   - 独自OSC 777拡張によるインラインMarkdown描画（CommonMark、GFM、シンタックスハイライト、Mermaidダイアグラム）
   - 大容量ドキュメント対応: ファイルサイズ制限なし、チャンク受信毎にセッションタイムアウトリセット
   - アウトラインパネル（目次）・ズーム・Space/Shift+Spaceスクロール対応のフルスクリーンMarkdownビューアー
+  - Markdownビューアーリンクナビゲーション: `.md`リンクをクリックして関連ファイルを閲覧、インライン画像の遅延読み込み（SSH越しでも動作）
   - Markdownドキュメント内のMermaidダイアグラム描画（フローチャート、シーケンス図など）とチャート/コードトグルツールバー
   - インライン画像表示（Kitty Graphics ProtocolおよびSIXEL対応）
   - Kittyプロトコル互換性: kitten icat、ratatui-image、treemdなど外部ツールと連携
@@ -34,6 +35,9 @@ Tauriで構築されたLinux/Windows向けターミナルエミュレータ。�
   - インバンドAPCプロトコル: PTYストリーム経由でmux制御メッセージを送受信（SSH透過、追加ソケット転送不要）
   - `emterm mux new-window [-n 名前] [-c コマンド]`: CLIからウィンドウを作成し初期コマンドを実行
   - `emterm mux send-keys [-t ウィンドウ]`: 標準入力のデータをmuxウィンドウにキー入力として送信
+  - `emterm mux script`: デーモン起動のみ（アタッチなし）、スクリプトによるワークスペース初期化に使用
+  - Muxステータスバー: デーモン側でコマンドを定期実行し、テンプレート変数（`{cmd:name}`、`{hostname}`、`{cwd}`）でステータスバーに反映
+  - Windows対応: Named Pipe IPCとプロセスデタッチ（ターミナル終了後もデーモン継続）
 
 - **ステータスバー**
   - ウィンドウ下部に表示する設定可能なステータスバー（デフォルトOFF、設定から有効化）

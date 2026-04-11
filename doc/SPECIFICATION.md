@@ -362,6 +362,31 @@ These commands work over SSH because they write control sequences to stdout, whi
 
 ---
 
+#### Markdown Viewer Navigation
+
+The `emterm markdown` CLI enters an interactive mode (when stdin is a TTY) to serve on-demand requests for linked files and images, enabling full navigation over SSH.
+
+**Key Functionality:**
+- Clicking `.md` links in the viewer navigates to the linked Markdown file (relative or absolute paths)
+- Inline images referenced by local paths are loaded lazily (IntersectionObserver-based)
+- CLI interactive loop: handles `navigate PATH`, `image REQ_ID PATH`, and `quit` commands via PTY
+- Pipe mode (stdin not TTY): one-shot exit, backward compatible
+- `basedir` parameter added to OSC 777 markdown `begin` sequence for path resolution
+- `DOMPurify` configured to allow `data:` URI scheme for inline image rendering
+- External `http`/`https` links continue to open in the system browser
+- CLI exits on `quit` command or stdin EOF (SSH disconnect)
+
+**Interactive Protocol:**
+```
+CLI receives via stdin:  navigate <path>
+                         image <req_id> <path>
+                         quit
+CLI outputs via stdout:  OSC 777 markdown session (for navigate)
+                         OSC 777 image-response/image-error (for images)
+```
+
+---
+
 ### Category 3: Multi-Tab Management
 
 #### Tab Bar
@@ -940,6 +965,15 @@ emterm mux send-keys [OPTIONS]
 - Connects to daemon, resolves target pane from `SessionInfo.windows`, sends `PtyInput` message
 - If stdin is empty, exits with code 0 without sending
 
+**`emterm mux script`:**
+```bash
+emterm mux script
+```
+- Starts the mux daemon if not already running, then exits (does not attach a bridge)
+- Enables pre-initialization of mux sessions from shell scripts before GUI attachment
+- Idempotent: safe to call multiple times; exits successfully if daemon is already running
+- Typical usage: call before `new-window` and `send-keys` to set up workspace
+
 **Examples:**
 ```bash
 # Open editor in a named window
@@ -950,6 +984,85 @@ printf 'glances\r' | emterm mux send-keys -t 0
 
 # Send Ctrl-C to window 3
 printf '\x03' | emterm mux send-keys -t 3
+
+# Script-based workspace initialization
+emterm mux script
+emterm mux new-window -n editor -c "nvim"
+emterm mux new-window -n monitor -c "glances"
+emterm mux  # attach from GUI
+```
+
+---
+
+#### Mux Output Throughput
+
+Batch processing optimization for high-frequency PTY output in the mux daemon, eliminating freeze when multiple tabs produce heavy output simultaneously.
+
+**Key Functionality:**
+- `select!` loop drains accumulated PTY output chunks via `try_recv()` (up to 64 chunks per batch)
+- Consecutive chunks from the same pane are merged into a single frame before IPC transfer
+- `biased` select!: client messages (PtyInput) take priority over PTY output processing
+- `feed()` + `flush()` pattern replaces per-chunk `send()` to reduce syscall overhead
+- No data dropping: all PTY output is transferred without frame skipping
+
+**Architecture:**
+```
+PTY reader thread → shared mpsc channel (capacity 256)
+  → select! loop: drain + merge → framed.feed() × N → framed.flush()
+  → Unix socket → bridge → frontend
+```
+
+---
+
+#### Windows Mux Support
+
+Mux functionality on Windows using Named Pipes for IPC, replacing Unix domain sockets.
+
+**Key Functionality:**
+- Named Pipe server at `\\.\pipe\emterm-mux-default` with `PIPE_REJECT_REMOTE_CLIENTS`
+- Daemon spawned with `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` flags (survives terminal closure)
+- Bridge sets console to `ENABLE_VIRTUAL_TERMINAL_INPUT` via Windows Console API
+- Stale pipe detection via connection attempt to verify daemon liveness
+- All shared logic (session management, IPC protocol, handlers, reattach) remains platform-agnostic
+- Platform-specific code isolated with `#[cfg(windows)]` / `#[cfg(unix)]`
+
+**Transport Abstraction:**
+```
+Unix: UnixListener / UnixStream / libc termios / setsid()
+Windows: NamedPipeServer / NamedPipeClient / Windows Console API / DETACHED_PROCESS
+```
+
+---
+
+#### Mux Status Bar
+
+The mux daemon executes registered commands periodically and pushes resolved template output to the GUI status bar's OSC layer.
+
+**Key Functionality:**
+- `mux.statusbar` settings section: `enabled`, `left`/`right` templates, `commands` map
+- Template variables: `{cmd:name}` (command stdout), `{hostname}`, `{cwd}` (active pane OSC 7)
+- Each command runs on its own independent timer (`interval_ms`, minimum 1000ms, clamped)
+- Single-flight control: skips tick if previous execution is still running
+- Commands timeout after 5 seconds (killed, previous value retained)
+- Render timer (1-second fixed interval): resolves templates and sends `StatusUpdate` only if content changed
+- OSC 7 detection per pane: scans raw PTY bytes for `ESC ] 7 ; file://host/path ST`
+- `RequestStatusUpdate` (0x17): GUI requests fresh status on tab switch to mux tab
+- Auto-clears OSC layer when exiting mux mode
+
+**Settings (Rust/JSON):**
+```json
+{
+  "mux": {
+    "statusbar": {
+      "enabled": false,
+      "left": "{time}",
+      "right": "{cwd}",
+      "commands": {
+        "mystat": { "executable": "~/scripts/status.sh", "interval_ms": 5000 }
+      }
+    }
+  }
+}
 ```
 
 ---
@@ -1092,6 +1205,19 @@ File download via the OSC 777 download protocol uses streaming I/O, eliminating 
 - Error recovery: on write failure, partial file is deleted and frontend is notified
 - OSC sequence format unchanged (`begin` / `chunk` / `end` verbs)
 - stdin input still buffers fully (size is unknown upfront)
+
+---
+
+#### Visibility-Based Render Recovery
+
+Automatic recovery from rendering suspension caused by WebKitGTK's Page Visibility API throttling when the desktop is locked or the window is hidden.
+
+**Key Functionality:**
+- `visibilitychange` event listener detects when the page transitions to `"visible"`
+- On visibility restoration: resets `rafDegraded` flag, calls `scheduleProcessing()` to re-enter the rAF path, calls `forceRender()` to repaint the canvas
+- Eliminates permanent UI freeze after desktop lock/unlock cycle without requiring application restart
+- Existing degraded mode (setTimeout fallback) is preserved as a safety net for other rAF failures
+- Listener is removed on tab/PTY handler destruction to prevent memory leaks
 
 ---
 

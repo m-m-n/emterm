@@ -16,6 +16,7 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Inline Markdown rendering via custom OSC 777 extension (CommonMark, GFM, syntax highlighting, Mermaid diagrams)
   - Large document support: no file size limit, session timeout resets per chunk
   - Fullscreen Markdown viewer with outline panel (table of contents), zoom, Space/Shift+Space scrolling, and keyboard navigation
+  - Markdown viewer link navigation: click `.md` links to browse related files; inline images loaded lazily (works over SSH)
   - Mermaid diagram rendering in Markdown (flowcharts, sequence diagrams, etc.) with Chart/Code toggle toolbar
   - Inline image rendering (Kitty Graphics Protocol and SIXEL)
   - Kitty protocol compatibility: works with kitten icat, ratatui-image, treemd, and other external tools
@@ -34,6 +35,9 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Inband APC protocol: mux control messages travel over the PTY stream (SSH-transparent, no socket forwarding needed)
   - `emterm mux new-window [-n name] [-c command]`: create named windows with initial commands from CLI
   - `emterm mux send-keys [-t window]`: pipe stdin data as key input to a mux window from CLI
+  - `emterm mux script`: start daemon without attaching (for scripted workspace initialization)
+  - Mux status bar: daemon-side command execution with template variables (`{cmd:name}`, `{hostname}`, `{cwd}`)
+  - Windows support: Named Pipe IPC with daemon process detachment (survives terminal closure)
 
 - **Status Bar**
   - Configurable status bar at the bottom of the window (default OFF, enabled in settings)
