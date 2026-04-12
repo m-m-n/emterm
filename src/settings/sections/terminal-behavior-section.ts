@@ -9,6 +9,7 @@ import {
   MAX_SCROLL_SPEED,
 } from "../types";
 import { t } from "../../i18n/index.ts";
+import { isLinux } from "../../platform";
 import {
   renderSubsectionHeader,
   renderTextInput,
@@ -193,31 +194,42 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
-  // Copy on Select (toggle)
-  renderToggle(
-    panel,
-    {
-      key: "copy-on-select",
-      label: t("settings.terminal.copyOnSelect"),
-      value: settings.copy_on_select,
-      description: t("settings.terminal.copyOnSelectDesc"),
-      onSave: (v) => ctx.saveSetting("copy_on_select", v),
-    },
-    ctx.addContentListener,
-  );
+  // Copy on Select / Middle Click Paste toggles.
+  //
+  // On Linux, these two settings are force-overridden to the native
+  // Linux defaults (copy_on_select = false, middle_click_paste = true)
+  // because the PRIMARY selection is used for select-to-copy and
+  // middle-click-paste independently of the Ctrl+C/Ctrl+V CLIPBOARD.
+  // See src/settings/effective-settings.ts. To avoid offering toggles
+  // that cannot change the actual behavior, both rows are omitted from
+  // the settings UI on Linux.
+  if (!isLinux()) {
+    // Copy on Select (toggle)
+    renderToggle(
+      panel,
+      {
+        key: "copy-on-select",
+        label: t("settings.terminal.copyOnSelect"),
+        value: settings.copy_on_select,
+        description: t("settings.terminal.copyOnSelectDesc"),
+        onSave: (v) => ctx.saveSetting("copy_on_select", v),
+      },
+      ctx.addContentListener,
+    );
 
-  // Middle Click Paste (toggle)
-  renderToggle(
-    panel,
-    {
-      key: "middle-click-paste",
-      label: t("settings.terminal.middleClickPaste"),
-      value: settings.middle_click_paste,
-      description: t("settings.terminal.middleClickPasteDesc"),
-      onSave: (v) => ctx.saveSetting("middle_click_paste", v),
-    },
-    ctx.addContentListener,
-  );
+    // Middle Click Paste (toggle)
+    renderToggle(
+      panel,
+      {
+        key: "middle-click-paste",
+        label: t("settings.terminal.middleClickPaste"),
+        value: settings.middle_click_paste,
+        description: t("settings.terminal.middleClickPasteDesc"),
+        onSave: (v) => ctx.saveSetting("middle_click_paste", v),
+      },
+      ctx.addContentListener,
+    );
+  }
 
   // Shift+Enter as Alt+Enter (toggle)
   renderToggle(

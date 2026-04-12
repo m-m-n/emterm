@@ -19,6 +19,7 @@ import { SettingsService, applySettingsToCSS } from "./settings";
 import { initI18n, resolveLocale, t } from "./i18n/index.ts";
 import { isTerminalTab } from "./tab-bar/types";
 import { initWasm } from "./terminal/wasm/loader.ts";
+import { initPlatform } from "./platform";
 import { StatusBarUI } from "./status-bar";
 import { OscLayerController } from "./status-bar/osc-controller";
 
@@ -44,6 +45,11 @@ async function main(): Promise<void> {
 
   // Initialize WASM module before any terminal processing (fail-fast on error)
   await initWasm();
+
+  // Resolve and cache the platform identifier before any selection / paste /
+  // settings UI code runs. This lets isLinux() / isWindows() be consulted
+  // synchronously from hot paths.
+  await initPlatform();
 
   // Load and apply settings at startup
   try {

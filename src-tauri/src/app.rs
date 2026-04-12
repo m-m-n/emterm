@@ -82,6 +82,8 @@ pub fn run() {
             tauri_commands::mux_client_log,
             tauri_commands::session_count,
             tauri_commands::tab_close_graceful,
+            commands::clipboard_primary::clipboard_write_primary,
+            commands::clipboard_primary::clipboard_read_primary,
             commands::config::io::load_settings,
             commands::config::io::save_settings,
             commands::editor::check_file_exists,

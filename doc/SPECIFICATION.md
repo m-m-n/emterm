@@ -555,11 +555,36 @@ Double-click selects a word; continuing to hold and drag extends the selection w
 Middle mouse button (wheel click) pastes clipboard contents into the terminal.
 
 **Key Functionality:**
-- Middle-click in the terminal area reads from the system clipboard and pastes
+- On Windows, middle-click reads from the system CLIPBOARD and pastes. The
+  `middle_click_paste` boolean setting (default: `true`) controls this.
+- On Linux, middle-click reads from the X11/Wayland PRIMARY selection first
+  and falls back to CLIPBOARD when PRIMARY is empty. This is the native
+  xterm/gnome-terminal behavior and cannot be disabled via settings (both
+  `copy_on_select` and `middle_click_paste` values in `settings.json` are
+  ignored on Linux).
 - Single-line text is pasted immediately; multi-line text shows the existing confirmation dialog
 - Text is sent via the existing chunked paste mechanism (identical to Ctrl+Shift+V)
 - Middle-click paste takes priority over PTY mouse tracking mode
-- `middle_click_paste` boolean setting (default: `true`) enables or disables the feature
+
+---
+
+#### Linux PRIMARY Selection
+
+Linux (X11 and Wayland via `wayland-data-control`) has two independent clipboards:
+- **CLIPBOARD** — populated by `Ctrl+C`, read by `Ctrl+V`
+- **PRIMARY** — populated automatically on text selection, read by middle-click
+
+eMterm honors this distinction on Linux:
+- Selecting text in the terminal automatically writes the selected text to PRIMARY.
+- Middle-click pastes from PRIMARY (falling back to CLIPBOARD when empty).
+- `Ctrl+C` / `Ctrl+Shift+C` still operate on CLIPBOARD, so copied content survives
+  subsequent mouse selections.
+- OSC 52 continues to operate on CLIPBOARD only; PRIMARY is never written by
+  remote programs.
+- On Linux the "Copy on select" and "Middle-click paste" toggles are hidden from
+  the settings UI because PRIMARY handles these behaviors natively. Their
+  `settings.json` values are ignored at runtime (the file itself is not rewritten,
+  so toggling to Windows preserves the original settings).
 
 ---
 

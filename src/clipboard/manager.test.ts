@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { ClipboardManager } from "./manager";
+import {
+	_resetPlatformCacheForTests,
+	_setPlatformCacheForTests,
+} from "../platform";
 
 // Mock the Tauri plugin
 const mockWriteText = mock(() => Promise.resolve());
@@ -10,6 +14,13 @@ mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
 	readText: mockReadText,
 }));
 
+// Mock the core invoke used by writePrimary / readPrimary.
+const mockInvoke = mock(() => Promise.resolve(""));
+
+mock.module("@tauri-apps/api/core", () => ({
+	invoke: mockInvoke,
+}));
+
 describe("ClipboardManager", () => {
 	let manager: ClipboardManager;
 
@@ -17,10 +28,16 @@ describe("ClipboardManager", () => {
 		// Reset mocks
 		mockWriteText.mockClear();
 		mockReadText.mockClear();
+		mockInvoke.mockClear();
 		mockWriteText.mockImplementation(() => Promise.resolve());
 		mockReadText.mockImplementation(() => Promise.resolve(""));
+		mockInvoke.mockImplementation(() => Promise.resolve(""));
 
 		manager = new ClipboardManager();
+	});
+
+	afterEach(() => {
+		_resetPlatformCacheForTests();
 	});
 
 	describe("copyToClipboard", () => {
@@ -198,6 +215,103 @@ describe("ClipboardManager", () => {
 
 		test("handles mixed newline types", () => {
 			expect(manager.countLines("Line 1\nLine 2\r\nLine 3\rLine 4")).toBe(4);
+		});
+	});
+
+	describe("writePrimary", () => {
+		test("returns false and does not invoke on non-Linux", async () => {
+			_setPlatformCacheForTests("windows");
+			const result = await manager.writePrimary("hello");
+
+			expect(result).toBe(false);
+			expect(mockInvoke).not.toHaveBeenCalled();
+		});
+
+		test("returns false and does not invoke before platform is resolved", async () => {
+			_resetPlatformCacheForTests();
+			const result = await manager.writePrimary("hello");
+
+			expect(result).toBe(false);
+			expect(mockInvoke).not.toHaveBeenCalled();
+		});
+
+		test("invokes clipboard_write_primary on Linux", async () => {
+			_setPlatformCacheForTests("linux");
+			mockInvoke.mockImplementation(() => Promise.resolve(""));
+
+			const result = await manager.writePrimary("hello");
+
+			expect(result).toBe(true);
+			expect(mockInvoke).toHaveBeenCalledTimes(1);
+			expect(mockInvoke).toHaveBeenCalledWith("clipboard_write_primary", {
+				text: "hello",
+			});
+		});
+
+		test("returns false and logs on Linux when invoke throws", async () => {
+			_setPlatformCacheForTests("linux");
+			mockInvoke.mockImplementation(() =>
+				Promise.reject(new Error("backend unavailable")),
+			);
+
+			const consoleWarn = mock(() => {});
+			const originalWarn = console.warn;
+			console.warn = consoleWarn;
+
+			const result = await manager.writePrimary("hello");
+
+			expect(result).toBe(false);
+			expect(consoleWarn).toHaveBeenCalled();
+
+			console.warn = originalWarn;
+		});
+	});
+
+	describe("readPrimary", () => {
+		test("returns empty string and does not invoke on non-Linux", async () => {
+			_setPlatformCacheForTests("windows");
+			const result = await manager.readPrimary();
+
+			expect(result).toBe("");
+			expect(mockInvoke).not.toHaveBeenCalled();
+		});
+
+		test("returns empty string and does not invoke before platform is resolved", async () => {
+			_resetPlatformCacheForTests();
+			const result = await manager.readPrimary();
+
+			expect(result).toBe("");
+			expect(mockInvoke).not.toHaveBeenCalled();
+		});
+
+		test("returns the invoke result on Linux", async () => {
+			_setPlatformCacheForTests("linux");
+			mockInvoke.mockImplementation(() => Promise.resolve("primary content"));
+
+			const result = await manager.readPrimary();
+
+			expect(result).toBe("primary content");
+			expect(mockInvoke).toHaveBeenCalledWith("clipboard_read_primary");
+		});
+
+		test("returns null and logs on Linux when invoke throws", async () => {
+			_setPlatformCacheForTests("linux");
+			mockInvoke.mockImplementation(() =>
+				Promise.reject(new Error("backend unavailable")),
+			);
+
+			const consoleWarn = mock(() => {});
+			const originalWarn = console.warn;
+			console.warn = consoleWarn;
+
+			const result = await manager.readPrimary();
+
+			// null distinguishes "read error" from "" (genuinely empty PRIMARY).
+			// Callers must NOT fall back to CLIPBOARD on null.
+			expect(result).toBeNull();
+			expect(consoleWarn).toHaveBeenCalled();
+
+			console.warn = originalWarn;
 		});
 	});
 });

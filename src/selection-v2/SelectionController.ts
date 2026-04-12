@@ -8,6 +8,8 @@ import type { TerminalState } from "../terminal/state";
 import type { LineAccessor } from "../terminal/grid";
 import { isMouseTrackingEnabled } from "../terminal/mouse";
 import { SettingsService } from "../settings/settings-service";
+import { effectiveCopyOnSelect } from "../settings/effective-settings";
+import { isLinux } from "../platform";
 import { ClipboardBridge } from "./ClipboardBridge";
 import { SelectionModel } from "./SelectionModel";
 import { SelectionRenderer } from "./SelectionRenderer";
@@ -427,9 +429,24 @@ export class SelectionController {
 		if (this.model.isActivelySelecting()) {
 			this.model.endSelection();
 
-			// Auto-copy on selection if enabled
 			const settings = SettingsService.getCached();
-			if (settings?.copy_on_select) {
+
+			// Linux: always publish the selection to the X11/Wayland PRIMARY
+			// selection (select-to-copy, middle-click-paste). This is the
+			// native Linux behavior and is independent of the copy_on_select
+			// setting (which has an effective value of `false` on Linux —
+			// see `effective-settings.ts`).
+			if (isLinux()) {
+				const selectedText = this.getSelectedText();
+				if (selectedText.length > 0) {
+					this.clipboard.writePrimary(selectedText).catch(() => {});
+				}
+			}
+
+			// Auto-copy on selection — effective value is always `false` on
+			// Linux, so this branch only fires on Windows when the setting
+			// is explicitly enabled.
+			if (effectiveCopyOnSelect(settings)) {
 				this.copy().catch(() => {});
 			}
 		}
@@ -509,6 +526,36 @@ export class SelectionController {
 	 * @returns Clipboard text
 	 */
 	async paste(): Promise<string> {
+		return this.clipboard.read();
+	}
+
+	/**
+	 * Resolve the text to paste for a middle-click action.
+	 *
+	 * On Linux:
+	 * - Reads PRIMARY first.
+	 * - If PRIMARY contains text, returns it.
+	 * - If PRIMARY is genuinely empty (`""`), falls back to CLIPBOARD so
+	 *   that "Ctrl+C in another app → middle-click here" still works.
+	 * - If PRIMARY read errored (`null`, e.g. backend unreachable), returns
+	 *   the empty string and does **not** fall back to CLIPBOARD. Falling
+	 *   back on a read error would silently leak unrelated CLIPBOARD
+	 *   content (the privacy concern that motivated the PRIMARY/CLIPBOARD
+	 *   split in the first place).
+	 *
+	 * On non-Linux platforms, reads CLIPBOARD only (identical to `paste()`).
+	 *
+	 * @returns Resolved paste text, or empty string when no text is available
+	 */
+	async pastePrimaryFirst(): Promise<string> {
+		if (isLinux()) {
+			const primary = await this.clipboard.readPrimary();
+			// null = read error, do NOT fall back to CLIPBOARD
+			if (primary === null) return "";
+			// non-empty PRIMARY → use it
+			if (primary.length > 0) return primary;
+			// empty PRIMARY → safe to fall back to CLIPBOARD
+		}
 		return this.clipboard.read();
 	}
 

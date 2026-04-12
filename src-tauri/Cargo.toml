@@ -70,6 +70,11 @@ font-kit = { version = "0.14", optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# X11/Wayland PRIMARY selection support (select-to-copy, middle-click-paste).
+# Linux-only so Windows binaries do not pull it in.
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3", features = ["wayland-data-control"] }
+
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = { version = "0.6", optional = true }
 

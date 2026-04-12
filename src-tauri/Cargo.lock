@@ -1179,6 +1179,7 @@ name = "emterm"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "assert_cmd",
  "base64 0.22.1",
  "bincode",

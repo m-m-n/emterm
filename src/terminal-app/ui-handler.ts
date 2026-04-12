@@ -99,7 +99,10 @@ export async function handleMiddleClickPaste(
   if (!selectionController || !ptyClient) return;
 
   try {
-    const text = await selectionController.paste();
+    // On Linux, prefer the PRIMARY selection (select-to-copy buffer) and
+    // fall back to the standard CLIPBOARD when PRIMARY is empty. On other
+    // platforms, this returns CLIPBOARD content like before.
+    const text = await selectionController.pastePrimaryFirst();
     if (!text) return;
 
     // Auto-scroll to bottom when user pastes during scrollback

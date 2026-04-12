@@ -51,7 +51,13 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Full IME support: EditContext API (Chromium) and hidden textarea fallback (WebKit)
   - IME position auto-adjustment for TUI applications (cursor-hidden mode positions IME at bottom-left)
   - Capture-phase clipboard shortcuts (Ctrl+Shift+C/V) compatible with IME
-  - Middle-click paste (configurable)
+  - Middle-click paste (configurable on Windows; fixed native behavior on Linux)
+  - Linux X11/Wayland PRIMARY selection: selecting text auto-copies to PRIMARY,
+    middle-click pastes from PRIMARY (falls back to CLIPBOARD when empty), and
+    PRIMARY/CLIPBOARD remain independent so `Ctrl+C` content survives selections.
+    On Linux the "Copy on select" / "Middle-click paste" settings are hidden
+    because PRIMARY handles them natively (and their `settings.json` values
+    are ignored).
   - Shift+Enter as Alt+Enter for multiline input in AI interfaces (configurable, default ON)
   - Word selection drag (double-click and drag to extend by word)
   - Comprehensive special key mapping (Ctrl+symbols, modified arrow keys, F-keys, Shift+Tab)
