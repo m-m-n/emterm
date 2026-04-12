@@ -17,6 +17,7 @@ import { KeyboardHandler, MouseHandler, ImeHandler, FoldHandler, SearchHandler, 
 import type { KeyboardHandlerContext } from "./handlers/keyboard";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
+import { effectiveMiddleClickPaste } from "../settings/effective-settings";
 import { buildFontFamilyChain } from "../settings/settings-applier";
 import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
@@ -381,7 +382,7 @@ export class TerminalApp {
         this.selectionController?.clearSelection();
 
         const settings = SettingsService.getCached();
-        if (settings?.middle_click_paste !== false) {
+        if (effectiveMiddleClickPaste(settings)) {
           e.preventDefault();
           e.stopImmediatePropagation();
           // Suppress the matching mouseup to prevent an orphaned release event reaching the PTY.

@@ -7,6 +7,8 @@ import {
 	readText,
 	writeText,
 } from "@tauri-apps/plugin-clipboard-manager";
+import { invoke } from "@tauri-apps/api/core";
+import { isLinux } from "../platform";
 
 /**
  * Manages clipboard operations using the Clipboard API.
@@ -66,6 +68,52 @@ export class ClipboardManager {
 		} catch (error) {
 			console.error("Failed to read from clipboard:", error);
 			return "";
+		}
+	}
+
+	/**
+	 * Write text to the Linux PRIMARY selection (select-to-copy buffer).
+	 *
+	 * No-op on non-Linux platforms. Failures are caught and logged via
+	 * `console.warn`; the return value is informational only.
+	 *
+	 * @param text - Text to write
+	 * @returns `true` on a successful Linux write, `false` otherwise
+	 */
+	async writePrimary(text: string): Promise<boolean> {
+		if (!isLinux()) return false;
+		try {
+			await invoke("clipboard_write_primary", { text });
+			return true;
+		} catch (error) {
+			console.warn("[WARN][FRONTEND] Failed to write PRIMARY:", error);
+			return false;
+		}
+	}
+
+	/**
+	 * Read the current Linux PRIMARY selection.
+	 *
+	 * Returns:
+	 * - `""` when PRIMARY is genuinely empty on Linux, or on non-Linux
+	 *   platforms (no IPC call is dispatched).
+	 * - A non-empty string when PRIMARY contains text.
+	 * - `null` on Linux when the read failed (backend error). The error is
+	 *   logged via `console.warn`.
+	 *
+	 * Callers should distinguish `""` (safe to fall back to CLIPBOARD) from
+	 * `null` (read errored — do NOT fall back, as that would defeat the
+	 * privacy goal of keeping PRIMARY and CLIPBOARD independent).
+	 *
+	 * @returns PRIMARY text, `""` if empty/non-Linux, `null` on read error
+	 */
+	async readPrimary(): Promise<string | null> {
+		if (!isLinux()) return "";
+		try {
+			return await invoke<string>("clipboard_read_primary");
+		} catch (error) {
+			console.warn("[WARN][FRONTEND] Failed to read PRIMARY:", error);
+			return null;
 		}
 	}
 

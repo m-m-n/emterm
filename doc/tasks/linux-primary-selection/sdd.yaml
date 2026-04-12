@@ -1,0 +1,160 @@
+schema_version: 1
+feature: linux-primary-selection
+scale: standard
+created: 2026-04-12
+
+project:
+  components:
+    frontend:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 3b6928a974827ba201b099ccf8510ef7727b0fe6
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 3b6928a974827ba201b099ccf8510ef7727b0fe6
+  - id: implement
+    status: completed
+    completed_at_commit: 3b6928a974827ba201b099ccf8510ef7727b0fe6
+  - id: check
+    status: completed
+    completed_at_commit: 3b6928a974827ba201b099ccf8510ef7727b0fe6
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 3b6928a974827ba201b099ccf8510ef7727b0fe6
+  - id: review
+    status: completed
+    completed_at_commit: 3b6928a974827ba201b099ccf8510ef7727b0fe6
+
+requirements:
+  FR1:
+    title: "PRIMARY write Tauri command (Linux only, no-op elsewhere)"
+    status: ok
+    tasks:
+      - "Phase 1: Add arboard dep, create clipboard_primary.rs, register in app.rs"
+    tests:
+      - TS-25
+      - TS-27
+      - E2E-1
+  FR2:
+    title: "PRIMARY read Tauri command (Linux only, empty elsewhere)"
+    status: ok
+    tasks:
+      - "Phase 1: clipboard_read_primary command + registration"
+    tests:
+      - TS-26
+      - TS-28
+      - E2E-2
+  FR3:
+    title: "Auto-write selected text to PRIMARY on mouseup (Linux)"
+    status: ok
+    tasks:
+      - "Phase 3: SelectionController.onMouseUp wiring"
+    tests:
+      - TS-17
+      - TS-18
+      - TS-19
+      - E2E-1
+      - E2E-3
+  FR4:
+    title: "Middle-click reads PRIMARY first with CLIPBOARD fallback (Linux)"
+    status: ok
+    tasks:
+      - "Phase 3: handleMiddleClickPaste resolver"
+    tests:
+      - TS-20
+      - TS-21
+      - TS-22
+      - TS-23
+      - TS-24
+      - E2E-2
+      - E2E-3
+      - E2E-6
+      - E2E-7
+  FR5:
+    title: "Force-override copy_on_select=false and middle_click_paste=true on Linux (runtime, no file rewrite)"
+    status: ok
+    tasks:
+      - "Phase 4: effective-settings.ts accessors and call-site rewiring"
+    tests:
+      - TS-10
+      - TS-11
+      - TS-12
+      - TS-13
+      - TS-14
+      - TS-15
+      - TS-16
+      - E2E-4
+  FR6:
+    title: "Hide copy_on_select and middle_click_paste rows from the settings UI on Linux"
+    status: ok
+    tasks:
+      - "Phase 4: terminal-behavior-section.ts conditional render"
+    tests:
+      - E2E-5
+      - M-1
+  FR7:
+    title: "Cached platform detection helper (isLinux / isWindows)"
+    status: ok
+    tasks:
+      - "Phase 2: platform.ts module and main.ts initPlatform wiring"
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+  NFR1:
+    title: "Performance - non-blocking PRIMARY write, < 50ms typical"
+    status: ok
+    tasks:
+      - "Phase 3: fire-and-forget writePrimary in onMouseUp"
+    tests:
+      - "Integration: onMouseUp returns without awaiting writePrimary"
+  NFR2:
+    title: "Resilience - PRIMARY failures never crash or disrupt, warn-log only"
+    status: ok
+    tasks:
+      - "Phase 2: ClipboardBridge error handling"
+    tests:
+      - TS-6
+      - TS-9
+      - SC-9
+  NFR3:
+    title: "Compatibility - X11 and Wayland (wayland-data-control); Windows behavior unchanged"
+    status: ok
+    tasks:
+      - "Phase 1: arboard wayland-data-control feature"
+      - "Phase 5: manual X11 / Wayland verification"
+    tests:
+      - M-2
+      - M-3
+      - M-6
+  NFR4:
+    title: "Build isolation - arboard is a cfg(target_os=linux) dependency"
+    status: ok
+    tasks:
+      - "Phase 1: target-gated dependency in Cargo.toml"
+    tests:
+      - "cargo tree --target x86_64-pc-windows-msvc"
+  NFR5:
+    title: "Logging via console.warn or higher"
+    status: ok
+    tasks:
+      - "Phase 2: console.warn in ClipboardBridge error paths"
+    tests:
+      - TS-6
+      - TS-9
