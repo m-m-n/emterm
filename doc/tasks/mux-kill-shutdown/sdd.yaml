@@ -1,0 +1,63 @@
+schema_version: 1
+feature: mux-kill-shutdown
+scale: light
+created: 2026-04-13
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: b175989f22696979ec39ad47af86a24d817776b1
+  - id: implement
+    status: completed
+    completed_at_commit: b175989f22696979ec39ad47af86a24d817776b1
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: b175989f22696979ec39ad47af86a24d817776b1
+
+requirements:
+  FR1:
+    title: Add Shutdown variant to MessageType enum
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: execute_kill sends IPC Shutdown message (fire-and-forget)
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Daemon handle_cli_client triggers graceful_shutdown on Shutdown message
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Fallback to socket removal when daemon is unreachable
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Remove pkill/taskkill suggestions from CLI output
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Cross-platform support (Linux and Windows)
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Backward-compatible MessageType value (0x18)
+    status: ok
+    tasks: []
+    tests: []

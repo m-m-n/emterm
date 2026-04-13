@@ -57,6 +57,7 @@ pub enum MessageType {
     DestroyWindow = 0x15,
     StatusUpdate = 0x16,
     RequestStatusUpdate = 0x17,
+    Shutdown = 0x18,
 }
 
 impl MessageType {
@@ -85,6 +86,7 @@ impl MessageType {
             0x15 => Some(Self::DestroyWindow),
             0x16 => Some(Self::StatusUpdate),
             0x17 => Some(Self::RequestStatusUpdate),
+            0x18 => Some(Self::Shutdown),
             _ => None,
         }
     }
@@ -325,12 +327,12 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x17u8 {
+        for i in 0x01..=0x18u8 {
             let mt = MessageType::from_u8(i).unwrap();
             assert_eq!(mt as u8, i);
         }
         assert!(MessageType::from_u8(0x00).is_none());
-        assert!(MessageType::from_u8(0x18).is_none());
+        assert!(MessageType::from_u8(0x19).is_none());
     }
 
     #[test]
@@ -575,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_apc_round_trip_all_message_types() {
-        for i in 0x01..=0x17u8 {
+        for i in 0x01..=0x18u8 {
             let mt = MessageType::from_u8(i).unwrap();
             let msg = MuxMessage {
                 msg_type: mt,
