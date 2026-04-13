@@ -376,7 +376,7 @@ pub async fn handle_connection<S>(
 async fn handle_cli_client<S>(
     framed: &mut Framed<S, MuxCodec>,
     session_manager: &Arc<Mutex<SessionManager>>,
-    _shutdown_tx: &tokio::sync::watch::Sender<bool>,
+    shutdown_tx: &tokio::sync::watch::Sender<bool>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -468,6 +468,10 @@ async fn handle_cli_client<S>(
             } else {
                 log::warn!("CLI send-keys: pane {} not found", pane_id);
             }
+        }
+        MessageType::Shutdown => {
+            log::info!("CLI client requested daemon shutdown");
+            let _ = shutdown_tx.send(true);
         }
         _ => {
             log::warn!(
