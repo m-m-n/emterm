@@ -307,6 +307,9 @@ export class TabBarUI {
   updateTabTitle(tabId: string, title: string): void {
     const element = this.tabElements.get(tabId);
     if (element) {
+      // In mux mode, renderMuxSubTabs handles title updates
+      if (element.classList.contains('mux-tab-group')) return;
+
       const titleElement = element.querySelector(".tab-title");
       if (titleElement) {
         titleElement.textContent = title;
