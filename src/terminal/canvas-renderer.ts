@@ -536,6 +536,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 				);
 				this.ctx.fillStyle = rgbToCSS(this.currentBackground);
 				this.ctx.fillRect(0, canvasH - shiftPx, canvasW, shiftPx);
+				// Adjust previous cursor row to match shifted pixel position
+				this.prevCursorRow -= scrollCount;
 			}
 		}
 
