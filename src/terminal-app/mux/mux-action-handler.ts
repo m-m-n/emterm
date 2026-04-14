@@ -112,13 +112,14 @@ export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void 
         }
         // Notify daemon: RenameWindowMsg { name: String }
         // bincode for String = u64 length (LE) + UTF-8 bytes
+        // Send active pane ID — daemon resolves pane→window internally.
         const nameBytes = new TextEncoder().encode(newName);
         const payload = new Uint8Array(8 + nameBytes.length);
         const view = new DataView(payload.buffer);
         view.setBigUint64(0, BigInt(nameBytes.length), true);
         payload.set(nameBytes, 8);
-        const windowId = win?.id ?? 0;
-        sendMuxControl(ctx, MuxMessageType.RenameWindow, windowId, payload);
+        const paneId = ctx.getMuxPaneIds()[activeIndex] ?? 0;
+        sendMuxControl(ctx, MuxMessageType.RenameWindow, paneId, payload);
       }
       break;
     }

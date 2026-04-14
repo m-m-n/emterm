@@ -202,19 +202,22 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   }
 
   const newIdx = muxWindows.length;
-  // Determine initial window name:
-  // 1. During reattach, use daemon-provided window name (matched by pane ID)
-  // 2. For the very first window, use the pre-mux title from state
-  // 3. Otherwise, start with "Terminal" until OSC title arrives
+  // Determine initial window name and daemon window ID:
+  // During reattach, use daemon-provided window info (matched by index position,
+  // since PaneCreated messages arrive in the same order as the windows array).
   let initialName = hadPrevPane ? "Terminal" : (state?.title || "Terminal");
+  let daemonWindowId = newIdx; // fallback: use frontend index
   if (ctx.getMuxIsReattaching()) {
     const reattachWindows = ctx.getMuxReattachWindows();
-    const winInfo = reattachWindows.find(w => w.active_pane_id === paneId);
-    if (winInfo && winInfo.name) {
-      initialName = winInfo.name;
+    const winInfo = reattachWindows[newIdx];
+    if (winInfo) {
+      daemonWindowId = winInfo.id;
+      if (winInfo.name) {
+        initialName = winInfo.name;
+      }
     }
   }
-  muxWindows.push({ id: newIdx, name: initialName });
+  muxWindows.push({ id: daemonWindowId, name: initialName });
   muxPaneIds.push(paneId);
   ctx.setActiveMuxWindowIndex(newIdx);
 

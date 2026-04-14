@@ -1356,13 +1356,17 @@ export class TerminalApp {
         if (activeWin && activeWin.name !== title) {
           activeWin.name = title;
           this.emitMuxStateChange();
-          // Sync title to daemon so reattach preserves it
-          const nameBytes = new TextEncoder().encode(title);
-          const payload = new Uint8Array(8 + nameBytes.length);
-          const view = new DataView(payload.buffer);
-          view.setBigUint64(0, BigInt(nameBytes.length), true);
-          payload.set(nameBytes, 8);
-          this.sendMuxControl(MuxMessageType.RenameWindow, activeWin.id, payload);
+          // Sync title to daemon so reattach preserves it.
+          // Send active pane ID — daemon resolves pane→window internally.
+          const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
+          if (activePaneId != null) {
+            const nameBytes = new TextEncoder().encode(title);
+            const payload = new Uint8Array(8 + nameBytes.length);
+            const view = new DataView(payload.buffer);
+            view.setBigUint64(0, BigInt(nameBytes.length), true);
+            payload.set(nameBytes, 8);
+            this.sendMuxControl(MuxMessageType.RenameWindow, activePaneId, payload);
+          }
         }
       }
       callback(title);

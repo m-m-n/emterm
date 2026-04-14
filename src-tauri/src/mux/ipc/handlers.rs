@@ -254,6 +254,9 @@ pub(super) async fn handle_destroy_pane(
 }
 
 /// Rename a window, decoding the new name from the message payload.
+///
+/// The `id` field may be either a pane ID (from GUI OSC title sync) or a
+/// window ID (from CLI). Tries pane lookup first; falls back to window lookup.
 pub(super) async fn handle_rename_window(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -265,22 +268,32 @@ pub(super) async fn handle_rename_window(
             return;
         }
     };
-    let window_id = msg.pane_id;
-    log::info!(
-        "RenameWindow: window {} -> '{}'",
-        window_id,
-        rename_msg.name
-    );
+    let id = msg.pane_id;
 
     let mut mgr = session_manager.lock().await;
-    let session_id = mgr.find_window_session(window_id);
-    match session_id {
-        Some(sid) => {
-            mgr.rename_window(sid, window_id, rename_msg.name);
-        }
-        None => {
-            log::warn!("RenameWindow: window {} not found", window_id);
-        }
+
+    // Try as pane_id first (GUI sends active pane_id)
+    if let Some((sid, wid)) = mgr.find_pane(id) {
+        log::info!(
+            "RenameWindow: pane {} -> window {} -> '{}'",
+            id,
+            wid,
+            rename_msg.name
+        );
+        mgr.rename_window(sid, wid, rename_msg.name);
+        return;
+    }
+
+    // Fall back to window_id
+    if let Some(sid) = mgr.find_window_session(id) {
+        log::info!(
+            "RenameWindow: window {} -> '{}'",
+            id,
+            rename_msg.name
+        );
+        mgr.rename_window(sid, id, rename_msg.name);
+    } else {
+        log::warn!("RenameWindow: id {} not found as pane or window", id);
     }
 }
 
