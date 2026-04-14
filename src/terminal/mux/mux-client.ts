@@ -44,6 +44,13 @@ export const MuxMessageType = {
 /** Connection state for the mux client. */
 export type MuxConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
+/** Window info within a session. */
+export interface MuxWindowInfo {
+  id: number;
+  name: string;
+  active_pane_id: number;
+}
+
 /** Session info returned from daemon. */
 export interface MuxSessionInfo {
   id: number;
@@ -51,6 +58,7 @@ export interface MuxSessionInfo {
   window_count: number;
   pane_count: number;
   active_window_index: number;
+  windows: MuxWindowInfo[];
 }
 
 /**
@@ -249,27 +257,33 @@ export function decodeWelcomeMsg(data: Uint8Array): MuxSessionInfo[] | null {
     const active_window_index = view.getUint32(offset, true);
     offset += 4;
 
-    // windows: Vec<WindowInfo> — skip over bincode-serialized window entries
+    // windows: Vec<WindowInfo>
     // WindowInfo = { id: u32, name: String (u64 len + bytes), active_pane_id: u32 }
     if (offset + 8 > data.length) return null;
     const windowsLen = Number(view.getBigUint64(offset, true));
     offset += 8;
+    const windows: MuxWindowInfo[] = [];
     for (let w = 0; w < windowsLen; w++) {
       // id: u32
       if (offset + 4 > data.length) return null;
+      const winId = view.getUint32(offset, true);
       offset += 4;
       // name: String (u64 len + bytes)
       if (offset + 8 > data.length) return null;
       const winNameLen = Number(view.getBigUint64(offset, true));
       offset += 8;
       if (offset + winNameLen > data.length) return null;
+      const winNameBytes = data.slice(offset, offset + winNameLen);
+      const winName = new TextDecoder().decode(winNameBytes);
       offset += winNameLen;
       // active_pane_id: u32
       if (offset + 4 > data.length) return null;
+      const activePaneId = view.getUint32(offset, true);
       offset += 4;
+      windows.push({ id: winId, name: winName, active_pane_id: activePaneId });
     }
 
-    sessions.push({ id, name, window_count, pane_count, active_window_index });
+    sessions.push({ id, name, window_count, pane_count, active_window_index, windows });
   }
 
   return sessions;
