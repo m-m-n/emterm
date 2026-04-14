@@ -1104,14 +1104,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 	// ── Dispose ───────────────────────────────────────────────
 
 	startCompositorKeepAlive(): void {
-		// No-op: removed. The compositor keep-alive animation was causing
-		// permanent UI freezes in WebKitGTK by triggering synchronous
-		// canvas texture re-compositing on the main thread.
-		// In degraded mode, renderImmediate() via setTimeout is sufficient.
+		// No-op: removed.
 	}
 
 	stopCompositorKeepAlive(): void {
-		// No-op: compositor keep-alive removed.
+		// No-op: removed.
 	}
 
 	dispose(): void {

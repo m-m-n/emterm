@@ -190,12 +190,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let pendingChunks: Uint8Array[] = [];
   let leftoverData: Uint8Array | null = null;
   let rafScheduled = false;
-  let rafWatchdog: ReturnType<typeof setTimeout> | null = null;
-  let rafDegraded = false; // true when rAF is not being delivered
   const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
-  const DEGRADED_BUDGET_MS = 100; // Generous budget when rAF is broken
-  const RAF_WATCHDOG_MS = 500; // Fallback if rAF stops being delivered
-  const DEGRADED_INTERVAL_MS = 50; // setTimeout interval in degraded mode
 
   // ── Diagnostic state for rAF freeze investigation ──────────
   let lastRafCallbackTime = 0;       // When processPendingData last ran via rAF
@@ -222,8 +217,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         console.warn(
           `[WARN][FRONTEND] event-loop-lag: setTimeout(0) took ${latency.toFixed(1)}ms` +
           ` | pendingChunks=${pendingChunks.length}` +
-          ` | rafScheduled=${rafScheduled}` +
-          ` | rafDegraded=${rafDegraded}`,
+          ` | rafScheduled=${rafScheduled}`,
         );
       }
     }, 0);
@@ -235,16 +229,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let wasmRecoveryInProgress = false;
   let wasmUnrecoverable = false;
 
-  const processPendingData = (fromWatchdog = false) => {
+  const processPendingData = () => {
     const processingStart = performance.now();
     rafScheduled = false;
 
     // During async WASM reinitialization or after exhausting retries, skip processing
     if (wasmRecoveryInProgress || wasmUnrecoverable) return;
-    if (rafWatchdog !== null) {
-      clearTimeout(rafWatchdog);
-      rafWatchdog = null;
-    }
 
     const currentState = ctx.getState();
     const currentRenderer = ctx.getRenderer();
@@ -252,42 +242,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     // Diagnostic: track rAF callback timing
     const now = performance.now();
     const sinceLastRaf = lastRafCallbackTime > 0 ? now - lastRafCallbackTime : -1;
-    const sinceSchedule = lastScheduleTime > 0 ? now - lastScheduleTime : -1;
     lastRafCallbackTime = now;
     const queuedBytes = totalBytesQueued;
     const queuedChunks = pendingChunks.length;
-    const dataCallsSinceRaf = onDataCountSinceLastRaf;
     totalBytesQueued = 0;
     onDataCountSinceLastRaf = 0;
 
-    if (fromWatchdog && !rafDegraded) {
-      rafDegraded = true;
-      console.warn(
-        `[WARN][FRONTEND] rAF not delivered — switching to degraded (setTimeout) mode` +
-        ` | sinceSchedule=${sinceSchedule.toFixed(0)}ms` +
-        ` | sinceLastRaf=${sinceLastRaf.toFixed(0)}ms` +
-        ` | pendingChunks=${queuedChunks}` +
-        ` | pendingBytes=${queuedBytes}` +
-        ` | onDataCalls=${dataCallsSinceRaf}` +
-        ` | document.hidden=${document.hidden}` +
-        ` | document.visibilityState=${document.visibilityState}`,
-      );
-      if (currentState && currentRenderer) {
-        try {
-          const forceRenderStart = performance.now();
-          // Force full re-render to recover from potential canvas buffer loss
-          // (WebKitGTK may discard canvas contents when rAF stops being delivered)
-          currentRenderer.forceRender(currentState);
-          const forceRenderTime = performance.now() - forceRenderStart;
-          console.warn(
-            `[WARN][FRONTEND] degraded-mode forceRender completed: ${forceRenderTime.toFixed(1)}ms`,
-          );
-        } catch (error) {
-          console.error("[ERROR][FRONTEND] forceRender in degraded mode switch failed:", error);
-        }
-      }
-      startRafRecoveryCheck();
-    }
     if (!currentState || !currentRenderer) return;
 
     try {
@@ -319,10 +279,8 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       }
 
       // Process data with frame budget -- stop when time is up
-      // In degraded mode (rAF broken), use a larger budget to avoid falling behind
       let remaining = merged;
-      const budget = rafDegraded ? DEGRADED_BUDGET_MS : FRAME_BUDGET_MS;
-      const deadline = performance.now() + budget;
+      const deadline = performance.now() + FRAME_BUDGET_MS;
       let processed = false;
       const charSize = ctx.getCharSize();
       // Hard timeout: absolute maximum time for the entire processing loop.
@@ -431,8 +389,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         if (remaining.length > 0 && performance.now() >= hardDeadline) {
           console.error(
             `[ERROR][FRONTEND] processPendingData hard timeout (${HARD_TIMEOUT_MS}ms) — aborting` +
-            ` | remainingBytes=${remaining.length}` +
-            ` | fromWatchdog=${fromWatchdog}`,
+            ` | remainingBytes=${remaining.length}`,
           );
           leftoverData = remaining;
           break;
@@ -455,8 +412,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           // Diagnostic: log slow renders
           if (renderTime > 30) {
             console.warn(
-              `[WARN][FRONTEND] slow-render: ${renderTime.toFixed(1)}ms` +
-              ` | rafDegraded=${rafDegraded}`,
+              `[WARN][FRONTEND] slow-render: ${renderTime.toFixed(1)}ms`,
             );
           }
         }
@@ -471,16 +427,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           ` | inputBytes=${queuedBytes}` +
           ` | chunks=${queuedChunks}` +
           ` | hasLeftover=${leftoverData !== null}` +
-          ` | fromWatchdog=${fromWatchdog}` +
           ` | longProcessingTotal=${longProcessingCount}`,
-        );
-      }
-
-      // Diagnostic: log completion when entering degraded mode (to detect freeze point)
-      if (fromWatchdog && rafDegraded) {
-        console.warn(
-          `[WARN][FRONTEND] degraded-mode processPendingData completed: ${processingTime.toFixed(1)}ms` +
-          ` | hasLeftover=${leftoverData !== null}`,
         );
       }
 
@@ -574,98 +521,31 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     }
   };
 
-  // ── rAF recovery check (single instance) ──────────────────
-  // Detect when rAF delivery resumes after degraded mode.
-  // Only one chain runs at a time to avoid flapping.
-  let rafRecoveryActive = false;
-  const RAF_RECOVERY_THRESHOLD = 3;
-
-  const startRafRecoveryCheck = () => {
-    if (rafRecoveryActive) return;
-    rafRecoveryActive = true;
-    let recoveryCount = 0;
-    const checkRecovery = () => {
-      recoveryCount++;
-      if (recoveryCount >= RAF_RECOVERY_THRESHOLD) {
-        rafDegraded = false;
-        rafRecoveryActive = false;
-        const renderer = ctx.getRenderer();
-        const currentState = ctx.getState();
-        if (currentState && renderer) {
-          renderer.forceRender(currentState);
-        }
-        console.info("[INFO][FRONTEND] rAF delivery resumed — switching back to normal mode");
-      } else {
-        requestAnimationFrame(checkRecovery);
-      }
-    };
-    requestAnimationFrame(checkRecovery);
-  };
-
   const scheduleProcessing = () => {
     if (rafScheduled) return;
     rafScheduled = true;
     lastScheduleTime = performance.now();
-
-    if (rafDegraded) {
-      // In degraded mode, use setTimeout directly (rAF is not working)
-      setTimeout(() => processPendingData(false), DEGRADED_INTERVAL_MS);
-    } else {
-      requestAnimationFrame(() => processPendingData(false));
-      // Watchdog: fallback if rAF callback is not delivered (e.g. WebKitGTK bug)
-      if (rafWatchdog !== null) clearTimeout(rafWatchdog);
-      rafWatchdog = setTimeout(() => {
-        if (rafScheduled) {
-          const elapsed = performance.now() - lastScheduleTime;
-          const pendingBytes = pendingChunks.reduce((sum, c) => sum + c.length, 0);
-          console.warn(
-            `[WARN][FRONTEND] rAF watchdog triggered — forcing data processing` +
-            ` | elapsed=${elapsed.toFixed(0)}ms` +
-            ` | pendingChunks=${pendingChunks.length}` +
-            ` | pendingBytes=${pendingBytes}` +
-            ` | document.hidden=${document.hidden}`,
-          );
-          processPendingData(true);
-        }
-      }, RAF_WATCHDOG_MS);
-    }
+    requestAnimationFrame(() => processPendingData());
   };
 
   // Stateful extractor for mux APC/OSC messages -- buffers across chunk boundaries
   const muxExtractor = new MuxMessageExtractor();
 
   // ── Visibility-based render recovery ─────────────────────────
-  // When the page becomes hidden (desktop lock, workspace switch), WebKitGTK stops
-  // delivering rAF callbacks. On visibility restoration, re-kick the rAF pipeline
-  // so rendering resumes without requiring user interaction.
+  // When the page becomes visible again after being hidden (desktop lock, workspace switch),
+  // force a full re-render to recover from potential canvas buffer loss
+  // and re-kick the rAF pipeline if there is pending data.
   const onVisibilityChange = () => {
     if (document.visibilityState !== "visible") return;
-    if (!rafDegraded) return;
 
-    console.warn(
-      `[WARN][FRONTEND] visibilitychange: visible — recovering from degraded mode` +
-      ` | pendingChunks=${pendingChunks.length}` +
-      ` | leftover=${leftoverData !== null}`,
-    );
-
-    rafDegraded = false;
-    rafScheduled = false;
-
-    // Clear stale watchdog to prevent it from re-triggering degraded mode
-    if (rafWatchdog !== null) {
-      clearTimeout(rafWatchdog);
-      rafWatchdog = null;
-    }
-
-    // Force full re-render to recover from potential canvas buffer loss
     const currentState = ctx.getState();
     const currentRenderer = ctx.getRenderer();
     if (currentState && currentRenderer) {
       currentRenderer.forceRender(currentState);
     }
 
-    // Re-enter rAF path if there is pending data
     if (pendingChunks.length > 0 || leftoverData !== null) {
+      rafScheduled = false;
       scheduleProcessing();
     }
   };
@@ -754,7 +634,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         ` | pendingChunks=${pendingChunks.length}` +
         ` | pendingBytes=${pendingBytes}` +
         ` | rafScheduled=${rafScheduled}` +
-        ` | rafDegraded=${rafDegraded}` +
         ` | healthCheckCount=${healthCheckCount}` +
         ` | document.hidden=${document.hidden}`,
       );
@@ -772,7 +651,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         ` | sinceLastData=${sinceLastData.toFixed(0)}ms` +
         ` | sinceLastSchedule=${sinceLastSchedule.toFixed(0)}ms` +
         ` | rafScheduled=${rafScheduled}` +
-        ` | rafDegraded=${rafDegraded}` +
         ` | pendingChunks=${pendingChunks.length}` +
         ` | document.hidden=${document.hidden}`,
       );
@@ -782,7 +660,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     if (rafScheduled && sinceLastSchedule > 3000) {
       console.warn(
         `[WARN][FRONTEND] health-check: rafScheduled stuck for ${sinceLastSchedule.toFixed(0)}ms` +
-        ` | rafDegraded=${rafDegraded}` +
         ` | document.hidden=${document.hidden}`,
       );
     }
