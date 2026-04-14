@@ -58,6 +58,7 @@ export interface MuxSessionContext {
   setMuxPendingSplitCount: (count: number) => void;
   getMuxLastActiveIndex: () => number;
   setMuxLastActiveIndex: (index: number) => void;
+  setMuxReattachWindows: (windows: import("../../terminal/mux/mux-client").MuxWindowInfo[]) => void;
 
   // Copy mode state
   getCopyModeManager: () => CopyModeManager | null;
@@ -333,6 +334,7 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     ctx.setMuxIsReattaching(true);
     const activeIdx = muxSessions[0]?.active_window_index ?? 0;
     ctx.setMuxLastActiveIndex(activeIdx);
+    ctx.setMuxReattachWindows(muxSessions[0]?.windows ?? []);
     muxLog.info(`Reattaching to ${existingPanes} existing pane(s), active_window_index=${activeIdx}`);
     const attachSessionId = muxSessions[0]?.id ?? 1;
     // AttachMsg payload: session_id as u32 LE (bincode serializes u32 as 4 bytes LE)

@@ -6,7 +6,7 @@
 import { WasmGrid } from "../../terminal/wasm/terminal-core";
 import { muxLog } from "../../terminal/mux/mux-logger";
 import { MuxMessageType } from "../../terminal/mux/mux-client";
-import type { MuxClient } from "../../terminal/mux/mux-client";
+import type { MuxClient, MuxWindowInfo } from "../../terminal/mux/mux-client";
 import type { TerminalState, MuxPaneGridState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import type { KeyboardHandler } from "../handlers/keyboard";
@@ -39,6 +39,7 @@ export interface MuxWindowManagerContext {
   getMuxPendingSplitCount: () => number;
   setMuxPendingSplitCount: (count: number) => void;
   getMuxLastActiveIndex: () => number;
+  getMuxReattachWindows: () => MuxWindowInfo[];
   getMuxPendingSplitDirection: () => SplitDirection;
   getMuxLayoutRoot: () => LayoutNode | null;
   getMuxPaneCanvases: () => Map<number, unknown>;
@@ -201,10 +202,18 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   }
 
   const newIdx = muxWindows.length;
-  // For the very first window (no previous pane), use the pre-mux title
-  // captured in state.title; for subsequent windows, start clean ("Terminal")
-  // so they don't display the previous window's title until they emit their own.
-  const initialName = hadPrevPane ? "Terminal" : (state?.title || "Terminal");
+  // Determine initial window name:
+  // 1. During reattach, use daemon-provided window name (matched by pane ID)
+  // 2. For the very first window, use the pre-mux title from state
+  // 3. Otherwise, start with "Terminal" until OSC title arrives
+  let initialName = hadPrevPane ? "Terminal" : (state?.title || "Terminal");
+  if (ctx.getMuxIsReattaching()) {
+    const reattachWindows = ctx.getMuxReattachWindows();
+    const winInfo = reattachWindows.find(w => w.active_pane_id === paneId);
+    if (winInfo && winInfo.name) {
+      initialName = winInfo.name;
+    }
+  }
   muxWindows.push({ id: newIdx, name: initialName });
   muxPaneIds.push(paneId);
   ctx.setActiveMuxWindowIndex(newIdx);
@@ -238,6 +247,10 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
 
   // After all pending windows are received during reattach, switch to first window
   if (ctx.getMuxIsReattaching() && ctx.getMuxPendingWindowCount() === 0) {
+    // Process any pending output for the last pane before switching,
+    // so its screen data and OSC title are captured in the saved state.
+    ctx.processPtyPendingDataNow();
+
     // Restore the active window from before detach (clamped to valid range)
     const targetIndex = Math.min(ctx.getMuxLastActiveIndex(), muxWindows.length - 1);
     if (targetIndex !== ctx.getActiveMuxWindowIndex()) {

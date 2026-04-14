@@ -23,6 +23,7 @@ import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
 import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
+import { MuxMessageType } from "../terminal/mux/mux-client";
 import type { MuxClient } from "../terminal/mux/mux-client";
 import type { MuxAction } from "../terminal/mux/prefix-key";
 import {
@@ -130,6 +131,7 @@ export class TerminalApp {
   private muxPaneIds: number[] = []; // Actual pane IDs from daemon
   private muxPendingWindowCount = 0; // Windows waiting for PaneCreated response
   private muxIsReattaching = false; // True during reattach (receiving existing panes)
+  private muxReattachWindows: import("../terminal/mux/mux-client").MuxWindowInfo[] = []; // Window info from Welcome for reattach
   private muxPaneGrids: Map<number, import("../terminal/state").MuxPaneGridState> = new Map(); // Full pane state per pane
   private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
   private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
@@ -799,6 +801,7 @@ export class TerminalApp {
       setMuxPendingSplitCount: (count) => { self.muxPendingSplitCount = count; },
       getMuxLastActiveIndex: () => self.muxLastActiveIndex,
       setMuxLastActiveIndex: (index) => { self.muxLastActiveIndex = index; },
+      setMuxReattachWindows: (windows) => { self.muxReattachWindows = windows; },
       getCopyModeManager: () => self.copyModeManager,
       setCopyModeManager: (manager) => { self.copyModeManager = manager; },
       getCopyModeKeybinds: () => self.copyModeKeybinds,
@@ -843,6 +846,7 @@ export class TerminalApp {
       setMuxPendingSplitCount: (count) => { self.muxPendingSplitCount = count; },
       getMuxPendingSplitDirection: () => self.muxPendingSplitDirection,
       getMuxLastActiveIndex: () => self.muxLastActiveIndex,
+      getMuxReattachWindows: () => self.muxReattachWindows,
       getMuxLayoutRoot: () => self.muxLayoutRoot,
       getMuxPaneCanvases: () => self.muxPaneCanvases,
       get onMuxStateChange() { return self.onMuxStateChange; },
@@ -1352,6 +1356,13 @@ export class TerminalApp {
         if (activeWin && activeWin.name !== title) {
           activeWin.name = title;
           this.emitMuxStateChange();
+          // Sync title to daemon so reattach preserves it
+          const nameBytes = new TextEncoder().encode(title);
+          const payload = new Uint8Array(8 + nameBytes.length);
+          const view = new DataView(payload.buffer);
+          view.setBigUint64(0, BigInt(nameBytes.length), true);
+          payload.set(nameBytes, 8);
+          this.sendMuxControl(MuxMessageType.RenameWindow, activeWin.id, payload);
         }
       }
       callback(title);
