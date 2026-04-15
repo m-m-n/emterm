@@ -131,10 +131,12 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
       state.restoreMuxPaneState(savedState);
       ctx.registerCoreCallbacks(state.getActiveCore());
     } else {
-      // No saved state (first visit) — clear screen AND title so the
-      // next pane starts without inheriting the previous pane's title.
+      // No saved state (first visit, e.g. after reattach). Seed the title
+      // from the daemon-provided window name so syncWindowTitleFromState
+      // does not overwrite muxWindows[i].name with the "Terminal" fallback.
       state.getWasmCore().reset();
-      state._title = "";
+      const windows = ctx.getMuxWindows();
+      state._title = windows[ctx.getActiveMuxWindowIndex()]?.name ?? "";
       state._iconName = "";
       ctx.registerCoreCallbacks(state.getActiveCore());
     }
@@ -423,7 +425,8 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
     ctx.registerCoreCallbacks(state.getActiveCore());
   } else {
     state.getWasmCore().reset();
-    state._title = "";
+    const windows = ctx.getMuxWindows();
+    state._title = windows[ctx.getActiveMuxWindowIndex()]?.name ?? "";
     state._iconName = "";
     ctx.registerCoreCallbacks(state.getActiveCore());
   }

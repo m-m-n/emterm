@@ -19,7 +19,7 @@ use crate::mux::session::pane::{PaneId, PtyOutputChunk};
 ///
 /// Decodes optional `CreateWindowPayload` from the message to set window name
 /// and execute an initial command. Empty or missing payload defaults to
-/// name="shell" with no command (backward compatible with GUI).
+/// name="Terminal" with no command (backward compatible with GUI).
 pub(super) async fn handle_create_window<S>(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -39,7 +39,7 @@ where
         .name
         .as_deref()
         .filter(|s| !s.is_empty())
-        .unwrap_or("shell")
+        .unwrap_or("Terminal")
         .to_string();
 
     let spawned = match spawn_pty(80, 24) {
