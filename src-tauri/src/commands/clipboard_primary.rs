@@ -63,17 +63,23 @@ mod cache {
 /// via `wayland-data-control`) cannot be initialized or the write call fails.
 #[cfg(feature = "gui")]
 #[tauri::command]
-pub fn clipboard_write_primary(text: String) -> Result<(), String> {
+pub async fn clipboard_write_primary(text: String) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
-        use arboard::{LinuxClipboardKind, SetExtLinux};
-        cache::with_clipboard(|clipboard| {
-            clipboard
-                .set()
-                .clipboard(LinuxClipboardKind::Primary)
-                .text(text)
-                .map_err(|e| e.to_string())
+        // Move the blocking X11/Wayland selection round-trip off the Tauri IPC
+        // thread so a slow or unresponsive PRIMARY owner cannot freeze the UI.
+        tokio::task::spawn_blocking(move || {
+            use arboard::{LinuxClipboardKind, SetExtLinux};
+            cache::with_clipboard(|clipboard| {
+                clipboard
+                    .set()
+                    .clipboard(LinuxClipboardKind::Primary)
+                    .text(text)
+                    .map_err(|e| e.to_string())
+            })
         })
+        .await
+        .map_err(|e| e.to_string())?
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -99,21 +105,28 @@ pub fn clipboard_write_primary(text: String) -> Result<(), String> {
 /// the privacy goal of keeping PRIMARY and CLIPBOARD separate.
 #[cfg(feature = "gui")]
 #[tauri::command]
-pub fn clipboard_read_primary() -> Result<String, String> {
+pub async fn clipboard_read_primary() -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
-        use arboard::{GetExtLinux, LinuxClipboardKind};
-        cache::with_clipboard(|clipboard| {
-            match clipboard
-                .get()
-                .clipboard(LinuxClipboardKind::Primary)
-                .text()
-            {
-                Ok(text) => Ok(text),
-                Err(arboard::Error::ContentNotAvailable) => Ok(String::new()),
-                Err(e) => Err(e.to_string()),
-            }
+        // X11 `XConvertSelection` blocks until the PRIMARY owner responds (or
+        // arboard's internal timeout fires). Running this on the Tauri IPC
+        // thread would stall the entire UI, so dispatch to a blocking worker.
+        tokio::task::spawn_blocking(|| {
+            use arboard::{GetExtLinux, LinuxClipboardKind};
+            cache::with_clipboard(|clipboard| {
+                match clipboard
+                    .get()
+                    .clipboard(LinuxClipboardKind::Primary)
+                    .text()
+                {
+                    Ok(text) => Ok(text),
+                    Err(arboard::Error::ContentNotAvailable) => Ok(String::new()),
+                    Err(e) => Err(e.to_string()),
+                }
+            })
         })
+        .await
+        .map_err(|e| e.to_string())?
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -127,17 +140,17 @@ mod tests {
 
     /// On non-Linux builds the write command must be a no-op and always return Ok.
     #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn write_primary_non_linux_is_noop() {
-        assert!(clipboard_write_primary("hello".to_string()).is_ok());
-        assert!(clipboard_write_primary(String::new()).is_ok());
+    #[tokio::test]
+    async fn write_primary_non_linux_is_noop() {
+        assert!(clipboard_write_primary("hello".to_string()).await.is_ok());
+        assert!(clipboard_write_primary(String::new()).await.is_ok());
     }
 
     /// On non-Linux builds the read command must return an empty string.
     #[cfg(not(target_os = "linux"))]
-    #[test]
-    fn read_primary_non_linux_returns_empty() {
-        let result = clipboard_read_primary();
+    #[tokio::test]
+    async fn read_primary_non_linux_returns_empty() {
+        let result = clipboard_read_primary().await;
         assert_eq!(result.unwrap(), "");
     }
 
@@ -149,17 +162,17 @@ mod tests {
     /// (e.g. interactive Linux desktops) so the test is useful in CI headless
     /// containers and in local dev alike.
     #[cfg(target_os = "linux")]
-    #[test]
-    fn write_primary_linux_returns_without_panicking() {
-        let _ = clipboard_write_primary("test".to_string());
+    #[tokio::test]
+    async fn write_primary_linux_returns_without_panicking() {
+        let _ = clipboard_write_primary("test".to_string()).await;
     }
 
     /// Same reasoning as `write_primary_linux_returns_without_panicking`: the
     /// test only asserts that the command does not panic and returns a proper
     /// `Result`.
     #[cfg(target_os = "linux")]
-    #[test]
-    fn read_primary_linux_returns_without_panicking() {
-        let _ = clipboard_read_primary();
+    #[tokio::test]
+    async fn read_primary_linux_returns_without_panicking() {
+        let _ = clipboard_read_primary().await;
     }
 }
