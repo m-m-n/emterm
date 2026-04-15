@@ -158,9 +158,65 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
 
   const renderer = ctx.getRenderer();
   if (renderer) {
-    renderer.forceRender(state);
+    diagTraceMuxRender(state, renderer, "switchMuxWindow");
   }
   emitMuxStateChange(ctx);
+}
+
+/** Diagnostic trace for forceRender on mux switch paths. Logs canvas state,
+ *  grid dimensions, parent visibility, and samples again on next rAF to see
+ *  whether anything overwrites the canvas after forceRender. */
+function diagTraceMuxRender(state: TerminalState, renderer: ITerminalRenderer, callsite: string): void {
+  try {
+    const activeCore = state.getActiveCore();
+    const rows = activeCore.rows();
+    const cols = activeCore.cols();
+    const dirtyBefore = state.getDirtyRows().length;
+    const rend = renderer as unknown as { canvas?: HTMLCanvasElement; cols?: number; rows?: number; scrollOffset?: number; dpr?: number };
+    const cw = rend.canvas?.width ?? -1;
+    const ch = rend.canvas?.height ?? -1;
+    const cssW = rend.canvas?.clientWidth ?? -1;
+    const cssH = rend.canvas?.clientHeight ?? -1;
+    const parent = rend.canvas?.parentElement;
+    const parentDisplay = parent ? getComputedStyle(parent).display : "n/a";
+    const parentVis = parent ? getComputedStyle(parent).visibility : "n/a";
+    const isReady = state.isReady?.() ?? "n/a";
+    console.warn(
+      `[DIAG-MUX-RENDER][${callsite}] pre-forceRender` +
+      ` | gridCols=${cols} gridRows=${rows}` +
+      ` | rendCols=${rend.cols} rendRows=${rend.rows}` +
+      ` | scrollOffset=${rend.scrollOffset}` +
+      ` | canvasPx=${cw}x${ch} cssPx=${cssW}x${cssH} dpr=${rend.dpr}` +
+      ` | parentDisplay=${parentDisplay} parentVis=${parentVis}` +
+      ` | dirtyRows=${dirtyBefore}` +
+      ` | isReady=${isReady}`,
+    );
+    const t0 = performance.now();
+    renderer.forceRender(state);
+    const t1 = performance.now();
+    const dirtyAfter = state.getDirtyRows().length;
+    console.warn(
+      `[DIAG-MUX-RENDER][${callsite}] post-forceRender` +
+      ` | elapsed=${(t1 - t0).toFixed(2)}ms` +
+      ` | dirtyAfter=${dirtyAfter}` +
+      ` | canvasPx=${rend.canvas?.width}x${rend.canvas?.height}`,
+    );
+    requestAnimationFrame(() => {
+      const cw2 = rend.canvas?.width ?? -1;
+      const ch2 = rend.canvas?.height ?? -1;
+      const parentDisplay2 = parent ? getComputedStyle(parent).display : "n/a";
+      const parentVis2 = parent ? getComputedStyle(parent).visibility : "n/a";
+      console.warn(
+        `[DIAG-MUX-RENDER][${callsite}] next-rAF` +
+        ` | canvasPx=${cw2}x${ch2}` +
+        ` | parentDisplay=${parentDisplay2} parentVis=${parentVis2}` +
+        ` | canvasSizeChanged=${cw !== cw2 || ch !== ch2}`,
+      );
+    });
+  } catch (err) {
+    console.warn(`[DIAG-MUX-RENDER][${callsite}] diag error: ${err instanceof Error ? err.message : String(err)}`);
+    renderer.forceRender(state);
+  }
 }
 
 /** Handle PaneCreated from daemon — register actual pane ID and update UI. */
