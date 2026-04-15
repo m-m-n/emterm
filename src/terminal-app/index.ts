@@ -1351,15 +1351,16 @@ export class TerminalApp {
   onTitleChange(callback: (title: string) => void): void {
     this.titleChangeCallback = (title: string) => {
       // In mux mode, also update the active window's name
-      if (this.inMuxMode && this.muxWindows.length > 0) {
+      if (this.inMuxMode && this.muxWindows.length > 0 && !this.muxIsReattaching) {
         const activeWin = this.muxWindows[this.activeMuxWindowIndex];
         if (activeWin && activeWin.name !== title) {
           activeWin.name = title;
           this.emitMuxStateChange();
           // Sync title to daemon so reattach preserves it.
           // Send active pane ID — daemon resolves pane→window internally.
+          // Skip default/fallback titles that don't represent actual OSC content.
           const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
-          if (activePaneId != null) {
+          if (activePaneId != null && title && title !== "Terminal") {
             const nameBytes = new TextEncoder().encode(title);
             const payload = new Uint8Array(8 + nameBytes.length);
             const view = new DataView(payload.buffer);

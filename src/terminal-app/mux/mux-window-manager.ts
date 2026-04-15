@@ -235,7 +235,10 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   // Sync title dedup / parent tab to the fresh pane (empty title) so that
   // the previous pane's title doesn't linger on the parent tab until the
   // new pane emits its own OSC.
-  if (hadPrevPane) {
+  // Skip during reattach — initialName was just set from daemon-provided
+  // window name, and syncWindowTitleFromState would overwrite it with the
+  // empty state._title (which would also clobber daemon-side via RenameWindow).
+  if (hadPrevPane && !ctx.getMuxIsReattaching()) {
     ctx.syncWindowTitleFromState();
   }
 
