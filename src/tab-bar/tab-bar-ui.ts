@@ -647,6 +647,9 @@ export class TabBarUI {
       this.onTabElementReplaced?.(tabId);
     }
 
+    console.warn(
+      `[DIAG-MUX-RENDER-TABS] tabId=${tabId} windows=${JSON.stringify(windows.map((w) => ({ name: w.name, active: w.active })))}`,
+    );
     // Clear and rebuild window tabs
     group.innerHTML = '';
     for (let i = 0; i < windows.length; i++) {
