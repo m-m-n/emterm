@@ -279,6 +279,10 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   muxPaneIds.push(paneId);
   ctx.setActiveMuxWindowIndex(newIdx);
 
+  console.warn(
+    `[DIAG-MUX-ATTACH] push window newIdx=${newIdx} name="${initialName}" daemonId=${daemonWindowId} paneId=${paneId} reattach=${ctx.getMuxIsReattaching()} reattachWindows=${JSON.stringify(ctx.getMuxReattachWindows().map((w) => ({ id: w.id, name: w.name })))}`,
+  );
+
   muxLog.info(`Mux pane created: id=${paneId}, window=${newIdx}`);
 
   // Try to restore from detached snapshot, otherwise create fresh grid
@@ -417,6 +421,9 @@ export function handleMuxPaneExited(ctx: MuxWindowManagerContext, paneId: number
 /** Notify listeners of mux window state changes. */
 export function emitMuxStateChange(ctx: MuxWindowManagerContext): void {
   const muxWindows = ctx.getMuxWindows();
+  console.warn(
+    `[DIAG-MUX-STATE] emit windowCount=${muxWindows.length} active=${ctx.getActiveMuxWindowIndex()} names=${JSON.stringify(muxWindows.map((w) => w.name))} ids=${JSON.stringify(muxWindows.map((w) => w.id))}`,
+  );
   ctx.onMuxStateChange?.({
     windowCount: muxWindows.length,
     activeWindow: ctx.getActiveMuxWindowIndex(),

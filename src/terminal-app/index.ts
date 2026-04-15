@@ -1354,6 +1354,9 @@ export class TerminalApp {
       if (this.inMuxMode && this.muxWindows.length > 0 && !this.muxIsReattaching) {
         const activeWin = this.muxWindows[this.activeMuxWindowIndex];
         if (activeWin && activeWin.name !== title) {
+          console.warn(
+            `[DIAG-MUX-RENAME] activeIndex=${this.activeMuxWindowIndex} daemonId=${activeWin.id} old="${activeWin.name}" new="${title}" reattach=${this.muxIsReattaching}`,
+          );
           activeWin.name = title;
           this.emitMuxStateChange();
           // Sync title to daemon so reattach preserves it.
