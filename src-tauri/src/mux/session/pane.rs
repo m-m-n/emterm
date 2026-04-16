@@ -11,6 +11,13 @@ use crate::mux::ring_buffer::DetachRingBuffer;
 /// Pane identifier.
 pub type PaneId = u32;
 
+/// Channel for pane title change notifications (pane_id, new_title).
+pub type TitleChangeSender = mpsc::Sender<(PaneId, String)>;
+
+/// Swappable title sender shared between the reader thread and the connection handler.
+/// Set to Some(tx) when a GUI client is connected; None when detached.
+pub type SharedTitleSender = Arc<StdMutex<Option<TitleChangeSender>>>;
+
 /// Thread-safe shared reference to a shadow VT100 parser.
 pub type SharedShadowParser = Arc<StdMutex<vt100::Parser>>;
 
@@ -54,6 +61,10 @@ pub struct MuxPane {
     pub shadow_parser: SharedShadowParser,
     /// Cached working directory from OSC 7 detection.
     pub cwd: Arc<StdMutex<Option<String>>>,
+    /// Cached title from OSC 0/2 detection (set by pty_reader_loop).
+    pub title: Arc<StdMutex<Option<String>>>,
+    /// Swappable title change sender (reader thread reads from this on each title change).
+    pub title_sender: SharedTitleSender,
 }
 
 impl MuxPane {
@@ -76,6 +87,8 @@ impl MuxPane {
             exited: false,
             shadow_parser: Arc::new(StdMutex::new(vt100::Parser::new(rows, cols, 0))),
             cwd: Arc::new(StdMutex::new(None)),
+            title: Arc::new(StdMutex::new(None)),
+            title_sender: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -133,6 +146,8 @@ impl MuxPane {
             exited: false,
             shadow_parser: Arc::new(StdMutex::new(vt100::Parser::new(rows, cols, 0))),
             cwd: Arc::new(StdMutex::new(None)),
+            title: Arc::new(StdMutex::new(None)),
+            title_sender: Arc::new(StdMutex::new(None)),
         }
     }
 }

@@ -13,7 +13,7 @@ use super::protocol::*;
 use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
 use super::reattach::{collect_reattach_data, detach_session_panes, send_reattach_data};
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{PaneId, PtyOutputChunk};
+use crate::mux::session::pane::{PaneId, PtyOutputChunk, TitleChangeSender};
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
 ///
@@ -26,6 +26,7 @@ pub(super) async fn handle_create_window<S>(
     framed: &mut Framed<S, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: u32,
+    title_tx: &TitleChangeSender,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -78,6 +79,7 @@ where
         24,
         spawned,
         pane_output_tx,
+        title_tx,
     ) {
         Some(id) => id,
         None => {
@@ -131,6 +133,7 @@ pub(super) async fn handle_split_pane<S>(
     session_manager: &Arc<Mutex<SessionManager>>,
     framed: &mut Framed<S, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    title_tx: &TitleChangeSender,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -180,6 +183,7 @@ where
         rows,
         spawned,
         pane_output_tx,
+        title_tx,
     ) {
         Some(id) => id,
         None => {
@@ -425,6 +429,7 @@ pub(super) async fn handle_attach<S>(
     framed: &mut Framed<S, MuxCodec>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
+    title_tx: &TitleChangeSender,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -462,7 +467,7 @@ where
 
     // Reattach to new session's panes
     let reattach_data =
-        collect_reattach_data(session_manager, new_session_id, pane_output_tx).await;
+        collect_reattach_data(session_manager, new_session_id, pane_output_tx, title_tx).await;
 
     if send_reattach_data(framed, &reattach_data).await.is_err() {
         return Err(true);

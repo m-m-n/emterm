@@ -237,6 +237,19 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     ctx.handleRemoteSwitchWindow(paneId);
   });
 
+  // Set up daemon-initiated window rename handler (OSC title detected by daemon)
+  client.setOnWindowRenamed((windowId: number, name: string) => {
+    const muxWindows = ctx.getMuxWindows();
+    const idx = muxWindows.findIndex((w) => w.id === windowId);
+    if (idx >= 0 && muxWindows[idx]!.name !== name) {
+      console.warn(
+        `[DIAG-MUX-RENAME] daemon rename: windowId=${windowId} idx=${idx} old="${muxWindows[idx]!.name}" new="${name}"`,
+      );
+      muxWindows[idx]!.name = name;
+      ctx.emitMuxStateChange();
+    }
+  });
+
   // Set up detached handler
   client.setOnDetached(() => {
     exitMuxMode(ctx);

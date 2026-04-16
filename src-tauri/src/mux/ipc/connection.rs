@@ -21,7 +21,7 @@ use super::protocol::*;
 use super::reattach::detach_session_panes;
 use super::statusbar::{StatusBarEngine, execute_command};
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::PtyOutputChunk;
+use crate::mux::session::pane::{PtyOutputChunk, TitleChangeSender};
 
 /// Handshake timeout: client must send Hello within this duration.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -116,6 +116,10 @@ pub async fn handle_connection<S>(
     // and the select! loop forwards it to the client.
     let (pane_output_tx, mut pane_output_rx) =
         mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
+
+    // Channel for pane title change notifications from reader threads.
+    // Bounded: title changes are idempotent (only latest matters), so dropping is safe.
+    let (title_tx, mut title_rx) = mpsc::channel::<(u32, String)>(16);
 
     // Subscribe to cross-client notifications (e.g., CLI-triggered SwitchWindow)
     let mut notify_rx = {
@@ -217,6 +221,7 @@ pub async fn handle_connection<S>(
                             &shutdown_tx,
                             &mut statusbar_engine,
                             &pane_cwd_map,
+                            &title_tx,
                         ).await {
                             if should_break {
                                 break;
@@ -327,6 +332,24 @@ pub async fn handle_connection<S>(
             Some((name, output)) = cmd_result_rx.recv() => {
                 statusbar_engine.update_command_cache(&name, output);
             }
+            Some((pane_id, new_title)) = title_rx.recv() => {
+                let mut mgr = session_manager.lock().await;
+                if let Some((sid, wid)) = mgr.find_pane(pane_id) {
+                    let old_name = mgr.get_session(sid)
+                        .and_then(|s| s.windows.get(&wid))
+                        .map(|w| w.name.clone());
+                    if old_name.as_deref() != Some(&new_title) {
+                        log::info!("Title change: pane {} -> window {} -> '{}'", pane_id, wid, new_title);
+                        mgr.rename_window(sid, wid, new_title.clone());
+                        drop(mgr);
+                        let rename_payload = RenameWindowMsg { name: new_title };
+                        let msg = MuxMessage::control(MessageType::RenameWindow, wid, &rename_payload);
+                        if framed.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
             notification = notify_rx.recv() => {
                 if let Ok(msg) = notification {
                     // Forward cross-client notification (e.g., CLI SwitchWindow) to GUI
@@ -408,6 +431,9 @@ async fn handle_cli_client<S>(
     let (pane_output_tx, _pane_output_rx) =
         mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
 
+    // Temporary title channel (CLI doesn't process title notifications)
+    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+
     match msg.msg_type {
         MessageType::CreateWindow => {
             let _ = handle_create_window(
@@ -416,6 +442,7 @@ async fn handle_cli_client<S>(
                 framed,
                 &pane_output_tx,
                 active_session_id,
+                &title_tx,
             )
             .await;
 
@@ -516,6 +543,7 @@ async fn route_message<S>(
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
     statusbar_engine: &mut StatusBarEngine,
     pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
+    title_tx: &TitleChangeSender,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -528,6 +556,7 @@ where
                 framed,
                 pane_output_tx,
                 *active_session_id,
+                title_tx,
             )
             .await?;
             // Register pane cwd Arcs for newly created panes
@@ -540,6 +569,7 @@ where
                 framed,
                 pane_output_tx,
                 active_session_id,
+                title_tx,
             )
             .await?;
             // Register pane cwd Arcs for all panes in the new session
@@ -553,7 +583,7 @@ where
             }
         }
         MessageType::SplitPane => {
-            handle_split_pane(msg, session_manager, framed, pane_output_tx).await?;
+            handle_split_pane(msg, session_manager, framed, pane_output_tx, title_tx).await?;
             // Register pane cwd Arcs for newly split panes
             register_session_pane_cwds(session_manager, *active_session_id, pane_cwd_map).await;
         }

@@ -10,6 +10,7 @@ use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget, SharedShadowParser,
+    SharedTitleSender, TitleChangeSender,
 };
 
 /// Detect the default shell for the current platform.
@@ -95,6 +96,7 @@ pub(super) fn register_pane_and_start_reader(
     rows: u16,
     spawned: SpawnedPty,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    title_tx: &TitleChangeSender,
 ) -> Option<PaneId> {
     // Verify session/window exist before allocating pane ID
     {
@@ -119,11 +121,15 @@ pub(super) fn register_pane_and_start_reader(
     );
     let shadow_parser = pane.shadow_parser.clone();
     let pane_cwd = pane.cwd.clone();
+    let pane_title = pane.title.clone();
+    let title_sender = pane.title_sender.clone();
+    // Store initial title_tx in the swappable sender (reattach will swap in a new one)
+    *title_sender.lock().unwrap() = Some(title_tx.clone());
     window.add_pane(pane);
 
     let reader = spawned.reader;
     std::thread::spawn(move || {
-        pty_reader_loop(pane_id, reader, output_target, shadow_parser, pane_cwd);
+        pty_reader_loop(pane_id, reader, output_target, shadow_parser, pane_cwd, pane_title, title_sender);
     });
 
     Some(pane_id)
@@ -141,6 +147,8 @@ fn pty_reader_loop(
     output_target: SharedOutputTarget,
     shadow_parser: SharedShadowParser,
     pane_cwd: Arc<std::sync::Mutex<Option<String>>>,
+    last_title: Arc<std::sync::Mutex<Option<String>>>,
+    title_sender: SharedTitleSender,
 ) {
     let mut buf = [0u8; 65536];
     loop {
@@ -170,8 +178,29 @@ fn pty_reader_loop(
             }
             Ok(n) => {
                 let data = &buf[..n];
-                // Feed shadow parser for screen state tracking (for restoration on reattach)
-                shadow_parser.lock().unwrap().process(data);
+                // Feed shadow parser and detect OSC title in a single lock scope
+                let title_changed = {
+                    let mut parser = shadow_parser.lock().unwrap();
+                    parser.process(data);
+                    let new_title = parser.screen().title();
+                    if new_title.is_empty() {
+                        None
+                    } else {
+                        let mut current = last_title.lock().unwrap();
+                        if Some(new_title) != current.as_deref() {
+                            let owned = new_title.to_string();
+                            *current = Some(owned.clone());
+                            Some(owned)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if let Some(new_title) = title_changed {
+                    if let Some(tx) = title_sender.lock().unwrap().as_ref() {
+                        let _ = tx.try_send((pane_id, new_title));
+                    }
+                }
 
                 // Detect OSC 7 (cwd reporting) and cache the path
                 if let Some(cwd) = crate::mux::ipc::statusbar::detect_osc7_cwd(data) {
