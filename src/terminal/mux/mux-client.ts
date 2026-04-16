@@ -335,6 +335,7 @@ export class MuxClient {
   private onDetached: (() => void) | null = null;
   private onStatusUpdate: ((msg: { left: string; right: string }) => void) | null = null;
   private onSwitchWindow: ((paneId: number) => void) | null = null;
+  private onWindowRenamed: ((windowId: number, name: string) => void) | null = null;
 
   get state(): MuxConnectionState {
     return this._state;
@@ -463,6 +464,21 @@ export class MuxClient {
         muxLog.info(`SwitchWindow notification: pane=${paneId}`);
         this.onSwitchWindow?.(paneId);
         break;
+      case MuxMessageType.RenameWindow: {
+        // Daemon-initiated window rename (window_id in paneId field)
+        // Payload is bincode RenameWindowMsg: u64 LE name_len + UTF-8 bytes
+        const windowId = paneId;
+        if (data.length >= 8) {
+          const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+          const nameLen = Number(view.getBigUint64(0, true));
+          if (8 + nameLen > data.length) break;
+          const nameBytes = data.slice(8, 8 + nameLen);
+          const name = new TextDecoder().decode(nameBytes);
+          muxLog.info(`RenameWindow from daemon: window=${windowId} name="${name}"`);
+          this.onWindowRenamed?.(windowId, name);
+        }
+        break;
+      }
       case MuxMessageType.StatusUpdate:
         if (this.onStatusUpdate) {
           // Decode bincode StatusUpdateMsg
@@ -506,6 +522,11 @@ export class MuxClient {
   /** Set callback for remote window switch (e.g., CLI-triggered switch-window). */
   setOnSwitchWindow(callback: (paneId: number) => void): void {
     this.onSwitchWindow = callback;
+  }
+
+  /** Set callback for daemon-initiated window rename (OSC title detected by daemon). */
+  setOnWindowRenamed(callback: (windowId: number, name: string) => void): void {
+    this.onWindowRenamed = callback;
   }
 
   /** Send RequestStatusUpdate (0x17) to daemon with empty payload. */

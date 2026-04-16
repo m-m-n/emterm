@@ -23,7 +23,6 @@ import { showTerminalContextMenu } from "../context-menu";
 import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
 import { UploadManager } from "../sftp/upload-manager";
 import { DownloadSessionManager } from "../download";
-import { MuxMessageType } from "../terminal/mux/mux-client";
 import type { MuxClient } from "../terminal/mux/mux-client";
 import type { MuxAction } from "../terminal/mux/prefix-key";
 import {
@@ -1350,29 +1349,8 @@ export class TerminalApp {
    */
   onTitleChange(callback: (title: string) => void): void {
     this.titleChangeCallback = (title: string) => {
-      // In mux mode, also update the active window's name
-      if (this.inMuxMode && this.muxWindows.length > 0 && !this.muxIsReattaching) {
-        const activeWin = this.muxWindows[this.activeMuxWindowIndex];
-        if (activeWin && activeWin.name !== title) {
-          console.warn(
-            `[DIAG-MUX-RENAME] activeIndex=${this.activeMuxWindowIndex} daemonId=${activeWin.id} old="${activeWin.name}" new="${title}" reattach=${this.muxIsReattaching}`,
-          );
-          activeWin.name = title;
-          this.emitMuxStateChange();
-          // Sync title to daemon so reattach preserves it.
-          // Send active pane ID — daemon resolves pane→window internally.
-          // Skip default/fallback titles that don't represent actual OSC content.
-          const activePaneId = this.muxPaneIds[this.activeMuxWindowIndex];
-          if (activePaneId != null && title && title !== "Terminal") {
-            const nameBytes = new TextEncoder().encode(title);
-            const payload = new Uint8Array(8 + nameBytes.length);
-            const view = new DataView(payload.buffer);
-            view.setBigUint64(0, BigInt(nameBytes.length), true);
-            payload.set(nameBytes, 8);
-            this.sendMuxControl(MuxMessageType.RenameWindow, activePaneId, payload);
-          }
-        }
-      }
+      // In mux mode, local title updates are now handled by daemon-side
+      // OSC detection → WindowRenamed notification (no frontend→daemon rename).
       callback(title);
     };
   }

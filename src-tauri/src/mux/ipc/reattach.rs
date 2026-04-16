@@ -12,7 +12,7 @@ use super::codec::MuxCodec;
 use super::protocol::*;
 use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{PaneId, PaneOutputTarget, PtyOutputChunk};
+use crate::mux::session::pane::{PaneId, PaneOutputTarget, PtyOutputChunk, TitleChangeSender};
 
 /// Collect reattach data for panes in the given session.
 ///
@@ -21,6 +21,7 @@ pub(super) async fn collect_reattach_data(
     session_manager: &Arc<Mutex<SessionManager>>,
     session_id: u32,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    title_tx: &TitleChangeSender,
 ) -> Vec<(PaneId, Vec<u8>)> {
     let mgr = session_manager.lock().await;
     let mut data: Vec<(PaneId, Vec<u8>)> = Vec::new();
@@ -52,6 +53,8 @@ pub(super) async fn collect_reattach_data(
                     Vec::new()
                 };
                 *target = PaneOutputTarget::Connected(pane_output_tx.clone());
+                // Swap in new title sender so reader threads notify the new connection
+                *pane.title_sender.lock().unwrap() = Some(title_tx.clone());
                 log::info!(
                     "collect_reattach: pane {} was={}, screen={}B, ring={}B, total={}B, alt_screen={}, exited={}",
                     pane.id,
@@ -125,6 +128,8 @@ pub(super) async fn detach_session_panes(
                     *target = PaneOutputTarget::Detached(DetachRingBuffer::new(
                         crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
                     ));
+                    // Clear title sender so reader threads don't send to dead channel
+                    *pane.title_sender.lock().unwrap() = None;
                     log::info!(
                         "detach_session_panes: pane {} switched {} -> Detached",
                         pane.id,
@@ -198,7 +203,8 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
 
         // Call collect_reattach_data
-        let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx).await;
 
         // CRITICAL: Must return 2 entries
         assert_eq!(
@@ -256,7 +262,8 @@ mod tests {
         }
 
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
-        let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx).await;
 
         assert_eq!(
             data.len(),
@@ -298,7 +305,8 @@ mod tests {
         }
 
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
-        let data = collect_reattach_data(&mgr, session_id, &new_tx).await;
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx).await;
 
         assert_eq!(
             data.len(),
