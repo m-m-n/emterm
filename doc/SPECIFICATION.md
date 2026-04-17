@@ -1233,16 +1233,18 @@ File download via the OSC 777 download protocol uses streaming I/O, eliminating 
 
 ---
 
-#### Visibility-Based Render Recovery
+#### Visibility & Focus-Based Recovery
 
-Automatic recovery from rendering suspension caused by WebKitGTK's Page Visibility API throttling when the desktop is locked or the window is hidden.
+Automatic recovery from two failure modes triggered by desktop lock, window hiding, or system suspend: rAF suspension (Page Visibility API throttling) and WASM memory corruption (`RuntimeError: Out of bounds memory access` after long idle).
 
 **Key Functionality:**
-- `visibilitychange` event listener detects when the page transitions to `"visible"`
-- On visibility restoration: resets `rafDegraded` flag, calls `scheduleProcessing()` to re-enter the rAF path, calls `forceRender()` to repaint the canvas
-- Eliminates permanent UI freeze after desktop lock/unlock cycle without requiring application restart
+- `visibilitychange` event listener detects when the page transitions to `"visible"` and re-kicks the rAF pipeline (resets `rafDegraded`, calls `scheduleProcessing()`, calls `forceRender()`)
+- Tauri window focus listener performs a WASM health probe on focus restoration; on `WebAssembly.RuntimeError`, invokes the shared WASM recovery entry point
+- Shared WASM recovery entry point is reused by `processPendingData`, the focus health probe, cursor-blink/render/resize error paths, and the `tab:activated` handler; guarded by `wasmRecoveryInProgress` / `wasmUnrecoverable` flags for idempotency
+- Recovery first attempts `recreateWasmCore()`; on failure, asynchronously `reinitWasm()`, then `forceRender()` and `startCursorBlink()`
+- Eliminates permanent UI freeze after desktop lock/unlock cycle and permanent WASM crash after system suspend, without requiring application restart
 - Existing degraded mode (setTimeout fallback) is preserved as a safety net for other rAF failures
-- Listener is removed on tab/PTY handler destruction to prevent memory leaks
+- Listeners are removed on tab/PTY handler destruction to prevent memory leaks
 
 ---
 

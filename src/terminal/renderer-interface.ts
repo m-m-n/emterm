@@ -170,6 +170,18 @@ export interface ITerminalRenderer {
 	 */
 	stopCursorBlink(): void;
 
+	/**
+	 * Register a WASM crash recovery callback.
+	 *
+	 * When the render path (rAF-scheduled render, synchronous renderImmediate,
+	 * or cursor blink) catches an error, it is routed to this callback so the
+	 * PTY handler can run shared recovery. Pass `null` to clear.
+	 *
+	 * @param cb - Callback returning `true` if the error was a WASM crash
+	 *   and recovery was attempted. `null` clears the current callback.
+	 */
+	setWasmRecoveryCallback(cb: ((error: unknown) => boolean) | null): void;
+
 	/** @deprecated No-op. Compositor keep-alive was removed (caused WebKitGTK freezes). */
 	startCompositorKeepAlive(): void;
 	/** @deprecated No-op. */

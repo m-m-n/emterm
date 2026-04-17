@@ -14,6 +14,7 @@ import { reinitWasm } from "../terminal/wasm/loader";
 import { handleMuxApc } from "../terminal/handlers/apc_handlers";
 import type { MuxApcContext } from "../terminal/handlers/apc_handlers";
 import { muxLog } from "../terminal/mux/mux-logger";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 /**
  * Stateful APC/OSC parser that buffers incomplete sequences across PTY read chunks.
@@ -169,6 +170,29 @@ export interface PtyHandlerHandle {
   processNow: () => void;
   /** Notify that the tab has become active — triggers forceRender to repaint skipped frames. */
   notifyTabActivated: () => void;
+  /**
+   * Shared WASM crash recovery entry point.
+   *
+   * Returns `true` when the error was a WASM crash (or related wasm-bindgen /
+   * uninitialized state) and recovery was attempted or was already in progress.
+   * Returns `false` when the error was unrelated to WASM — callers should then
+   * handle or rethrow as appropriate.
+   *
+   * Optional `onComplete` callback fires once recovery finishes with `success`
+   * indicating whether a fresh WASM core is available. It fires synchronously
+   * when recovery succeeds on the fast path (recreateWasmCore), asynchronously
+   * after `reinitWasm` on the slow path, or immediately with `false` when the
+   * terminal is already marked unrecoverable. Callbacks queued while another
+   * recovery is in flight all fire when that recovery finishes.
+   *
+   * Safe to call concurrently from multiple error sites; gated by
+   * `wasmRecoveryInProgress` / `wasmUnrecoverable` flags to ensure idempotency.
+   * Never throws.
+   */
+  tryRecoverFromWasmCrash: (
+    error: unknown,
+    onComplete?: (success: boolean) => void,
+  ) => boolean;
   /** Remove event listeners and clean up resources. */
   destroy: () => void;
 }
@@ -176,7 +200,7 @@ export interface PtyHandlerHandle {
 export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandlerHandle> {
   const ptyClient = ctx.getPtyClient();
   const state = ctx.getState();
-  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {}, destroy: () => {} };
+  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {}, tryRecoverFromWasmCrash: (_err, onComplete) => { onComplete?.(false); return false; }, destroy: () => {} };
   if (!ptyClient || !state) return noopHandle;
 
   // Register callbacks on primary core
@@ -228,6 +252,154 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let lastRecoveryTimestamp = 0;
   let wasmRecoveryInProgress = false;
   let wasmUnrecoverable = false;
+
+  /**
+   * Shared WASM crash recovery entry point.
+   *
+   * Detects WASM crashes (`WebAssembly.RuntimeError`, wasm-bindgen "recursive
+   * use of an object" borrow errors, and "WASM not initialized" states) and
+   * attempts to recover by first recreating the core and, on failure,
+   * reinitializing the WASM module asynchronously.
+   *
+   * Idempotent: concurrent calls while recovery is in progress (or after the
+   * module has been marked unrecoverable) are no-ops aside from returning
+   * `true` so the caller knows the error was WASM-related.
+   */
+  // onComplete callbacks queued while an async recovery is in flight. All
+  // fire once that recovery finishes, with the same success flag. A fresh
+  // call that fires synchronously does not touch this queue.
+  let pendingRecoveryCallbacks: Array<(success: boolean) => void> = [];
+  const fireRecoveryCallback = (cb: ((success: boolean) => void) | undefined, success: boolean) => {
+    if (!cb) return;
+    try {
+      cb(success);
+    } catch (cbError) {
+      console.error("[ERROR][FRONTEND] WASM recovery onComplete callback threw:", cbError);
+    }
+  };
+  const drainPendingRecoveryCallbacks = (success: boolean) => {
+    const callbacks = pendingRecoveryCallbacks;
+    pendingRecoveryCallbacks = [];
+    for (const cb of callbacks) fireRecoveryCallback(cb, success);
+  };
+
+  const tryRecoverFromWasmCrash = (
+    error: unknown,
+    onComplete?: (success: boolean) => void,
+  ): boolean => {
+    // Detect WASM crash or uninitialized state:
+    // - RuntimeError: memory corruption (e.g., after long idle)
+    // - "recursive use of an object": wasm-bindgen borrow flag stuck after crash
+    // - "WASM not initialized": previous recovery failed, primaryWasmGrid is null
+    const isWasmCrash = error instanceof WebAssembly.RuntimeError;
+    const msg = error instanceof Error ? error.message : String(error);
+    const isBorrowError = msg.includes("recursive use of an object");
+    const isWasmUninitialized = msg.includes("WASM not initialized");
+    if (!isWasmCrash && !isBorrowError && !isWasmUninitialized) return false;
+
+    // Idempotency: suppress duplicate triggers while a prior recovery is
+    // either in flight or has already given up permanently.
+    if (wasmUnrecoverable) {
+      fireRecoveryCallback(onComplete, false);
+      return true;
+    }
+    if (wasmRecoveryInProgress) {
+      // Queue the callback so it fires with the outcome of the in-flight
+      // recovery — otherwise retry logic (e.g. resize) is silently dropped.
+      if (onComplete) pendingRecoveryCallbacks.push(onComplete);
+      return true;
+    }
+
+    const currentState = ctx.getState();
+    const now = Date.now();
+    // Reset counter if enough time has passed since last recovery
+    if (now - lastRecoveryTimestamp > RECOVERY_WINDOW_MS) {
+      wasmRecoveryAttempts = 0;
+    }
+    lastRecoveryTimestamp = now;
+    wasmRecoveryAttempts++;
+    if (wasmRecoveryAttempts > MAX_WASM_RECOVERY_ATTEMPTS) {
+      wasmUnrecoverable = true;
+      console.error(
+        `[ERROR][FRONTEND] WASM recovery exhausted (${MAX_WASM_RECOVERY_ATTEMPTS} attempts within ${RECOVERY_WINDOW_MS / 1000}s) — terminal is unrecoverable`,
+      );
+      fireRecoveryCallback(onComplete, false);
+      return true;
+    }
+    console.warn(
+      `[WARN][FRONTEND] WASM crash detected — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS})`,
+    );
+
+    // Stop cursor blink during recovery to prevent WASM access on stale/freed state
+    try {
+      ctx.getRenderer()?.stopCursorBlink();
+    } catch (stopError) {
+      console.warn("[WARN][FRONTEND] stopCursorBlink during recovery failed:", stopError);
+    }
+
+    const finishRecovery = () => {
+      const recoveryState = ctx.getState();
+      if (!recoveryState) return;
+      const newCore = recoveryState.getWasmCore();
+      ctx.registerCoreCallbacks(newCore);
+      registeredCore = newCore;
+      const cs = ctx.getCharSize();
+      recoveryState.setCellSizePx(
+        Math.round(cs.width),
+        Math.round(cs.height),
+      );
+      const renderer = ctx.getRenderer();
+      renderer?.forceRender(recoveryState);
+      renderer?.startCursorBlink();
+    };
+
+    try {
+      // Step 1: Try recreating WASM core (works if WASM engine is healthy)
+      if (currentState?.recreateWasmCore()) {
+        finishRecovery();
+        fireRecoveryCallback(onComplete, true);
+      } else if (currentState) {
+        // Step 2: WASM engine itself is corrupted -- reinitialize the module
+        console.warn("[WARN][FRONTEND] WASM core recreation failed — reinitializing WASM module");
+        wasmRecoveryInProgress = true;
+        if (onComplete) pendingRecoveryCallbacks.push(onComplete);
+        (async () => {
+          let success = false;
+          try {
+            await reinitWasm();
+            const recoveryState = ctx.getState();
+            if (recoveryState?.recreateWasmCore()) {
+              finishRecovery();
+              success = true;
+              console.warn("[WARN][FRONTEND] WASM module reinitialized — terminal recovered");
+            } else {
+              wasmUnrecoverable = true;
+              console.error("[ERROR][FRONTEND] WASM recovery failed after module reinit — terminal is unrecoverable");
+            }
+          } catch (reinitError) {
+            wasmUnrecoverable = true;
+            console.error("[ERROR][FRONTEND] WASM module reinit failed:", reinitError);
+          } finally {
+            wasmRecoveryInProgress = false;
+            // Process any data that arrived during recovery (only if recovered)
+            if (!wasmUnrecoverable && pendingChunks.length > 0) {
+              scheduleProcessing();
+            }
+            drainPendingRecoveryCallbacks(success);
+          }
+        })();
+      } else {
+        // No state at all — nothing to recover to.
+        fireRecoveryCallback(onComplete, false);
+      }
+    } catch (recoveryError) {
+      // Defensive: recovery itself threw synchronously. Swallow so the function
+      // contract (never throws) holds; log for diagnostics.
+      console.error("[ERROR][FRONTEND] WASM recovery threw:", recoveryError);
+      fireRecoveryCallback(onComplete, false);
+    }
+    return true;
+  };
 
   const processPendingData = () => {
     const processingStart = performance.now();
@@ -440,84 +612,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     } catch (error) {
       console.error("[ERROR][FRONTEND] processPendingData failed:", error);
       leftoverData = null;
-
-      // Detect WASM crash or uninitialized state:
-      // - RuntimeError: memory corruption (e.g., after long idle)
-      // - "recursive use of an object": wasm-bindgen borrow flag stuck after crash
-      // - "WASM not initialized": previous recovery failed, primaryWasmGrid is null
-      const isWasmCrash = error instanceof WebAssembly.RuntimeError;
-      const msg = error instanceof Error ? error.message : String(error);
-      const isBorrowError = msg.includes("recursive use of an object");
-      const isWasmUninitialized = msg.includes("WASM not initialized");
-      if (isWasmCrash || isBorrowError || isWasmUninitialized) {
-        const now = Date.now();
-        // Reset counter if enough time has passed since last recovery
-        if (now - lastRecoveryTimestamp > RECOVERY_WINDOW_MS) {
-          wasmRecoveryAttempts = 0;
-        }
-        lastRecoveryTimestamp = now;
-        wasmRecoveryAttempts++;
-        if (wasmRecoveryAttempts > MAX_WASM_RECOVERY_ATTEMPTS) {
-          wasmUnrecoverable = true;
-          console.error(
-            `[ERROR][FRONTEND] WASM recovery exhausted (${MAX_WASM_RECOVERY_ATTEMPTS} attempts within ${RECOVERY_WINDOW_MS / 1000}s) — terminal is unrecoverable`,
-          );
-          return;
-        }
-        console.warn(
-          `[WARN][FRONTEND] WASM crash detected — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS})`,
-        );
-
-        // Stop cursor blink during recovery to prevent WASM access on stale/freed state
-        ctx.getRenderer()?.stopCursorBlink();
-
-        const finishRecovery = () => {
-          const recoveryState = ctx.getState();
-          if (!recoveryState) return;
-          const newCore = recoveryState.getWasmCore();
-          ctx.registerCoreCallbacks(newCore);
-          registeredCore = newCore;
-          const cs = ctx.getCharSize();
-          recoveryState.setCellSizePx(
-            Math.round(cs.width),
-            Math.round(cs.height),
-          );
-          const renderer = ctx.getRenderer();
-          renderer?.forceRender(recoveryState);
-          renderer?.startCursorBlink();
-        };
-
-        // Step 1: Try recreating WASM core (works if WASM engine is healthy)
-        if (currentState?.recreateWasmCore()) {
-          finishRecovery();
-        } else if (currentState) {
-          // Step 2: WASM engine itself is corrupted -- reinitialize the module
-          console.warn("[WARN][FRONTEND] WASM core recreation failed — reinitializing WASM module");
-          wasmRecoveryInProgress = true;
-          (async () => {
-            try {
-              await reinitWasm();
-              const recoveryState = ctx.getState();
-              if (recoveryState?.recreateWasmCore()) {
-                finishRecovery();
-                console.warn("[WARN][FRONTEND] WASM module reinitialized — terminal recovered");
-              } else {
-                wasmUnrecoverable = true;
-                console.error("[ERROR][FRONTEND] WASM recovery failed after module reinit — terminal is unrecoverable");
-              }
-            } catch (reinitError) {
-              wasmUnrecoverable = true;
-              console.error("[ERROR][FRONTEND] WASM module reinit failed:", reinitError);
-            } finally {
-              wasmRecoveryInProgress = false;
-              // Process any data that arrived during recovery (only if recovered)
-              if (!wasmUnrecoverable && pendingChunks.length > 0) {
-                scheduleProcessing();
-              }
-            }
-          })();
-        }
-      }
+      tryRecoverFromWasmCrash(error);
     }
   };
 
@@ -551,6 +646,45 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   };
   document.addEventListener("visibilitychange", onVisibilityChange);
 
+  // ── Focus-based WASM health probe ───────────────────────────
+  // After system suspend/resume or long idle, WASM linear memory may be
+  // corrupted. When the window regains focus, perform a cheap read-only
+  // WASM call; on RuntimeError, route through the shared recovery path.
+  // This complements the processPendingData recovery site — it fires even
+  // when no PTY data arrives after unlock. NFR4: may fire late or not at
+  // all on some Linux compositors, which is why processPendingData remains
+  // as a safety net.
+  let unlistenFocus: (() => void) | null = null;
+  let focusListenerDisposed = false;
+  void (async () => {
+    try {
+      const win = getCurrentWebviewWindow();
+      const unlisten = await win.onFocusChanged(({ payload: focused }) => {
+        if (!focused) return;
+        if (wasmRecoveryInProgress || wasmUnrecoverable) return;
+        const currentState = ctx.getState();
+        if (!currentState) return;
+        try {
+          // Cheap read-only probe: touch WASM linear memory. If corrupted,
+          // this throws WebAssembly.RuntimeError and we route into recovery.
+          const core = currentState.getActiveCore();
+          void core.cols();
+        } catch (error) {
+          console.warn("[WARN][FRONTEND] focus health probe failed — invoking WASM recovery");
+          tryRecoverFromWasmCrash(error);
+        }
+      });
+      if (focusListenerDisposed) {
+        // destroy() ran before the listener finished registering; unlisten now.
+        try { unlisten(); } catch { /* ignore */ }
+      } else {
+        unlistenFocus = unlisten;
+      }
+    } catch (e) {
+      console.warn("[WARN][FRONTEND] failed to register focus listener:", e);
+    }
+  })();
+
   const handle: PtyHandlerHandle = {
     injectData: (data: Uint8Array) => {
       pendingChunks.push(data);
@@ -574,8 +708,14 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         currentRenderer.forceRender(currentState);
       }
     },
+    tryRecoverFromWasmCrash,
     destroy: () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      focusListenerDisposed = true;
+      if (unlistenFocus) {
+        try { unlistenFocus(); } catch { /* ignore */ }
+        unlistenFocus = null;
+      }
     },
   };
 

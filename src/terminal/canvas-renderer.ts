@@ -223,6 +223,16 @@ export class CanvasRenderer implements ITerminalRenderer {
 	private detectionCache: Map<number, DetectionCacheEntry> = new Map();
 
 	/**
+	 * Optional WASM crash recovery callback. When a render path (rAF render,
+	 * synchronous renderImmediate, or cursor blink) catches an error, it is
+	 * routed here so the PTY handler can trigger shared recovery instead of
+	 * leaving the terminal silently broken.
+	 *
+	 * Returns `true` if the error was a WASM crash and recovery was attempted.
+	 */
+	private wasmRecoveryCallback: ((error: unknown) => boolean) | null = null;
+
+	/**
 	 * Create a new canvas renderer.
 	 */
 	constructor(container: HTMLElement, fontFamily: string, fontSize: number) {
@@ -450,6 +460,15 @@ export class CanvasRenderer implements ITerminalRenderer {
 	// ── Render scheduling ─────────────────────────────────────
 
 	/**
+	 * Register a WASM crash recovery callback. Invoked from render and cursor
+	 * blink error paths so the PTY handler's shared recovery can run instead
+	 * of the error being silently swallowed.
+	 */
+	setWasmRecoveryCallback(cb: ((error: unknown) => boolean) | null): void {
+		this.wasmRecoveryCallback = cb;
+	}
+
+	/**
 	 * Schedule a render of the terminal state.
 	 */
 	scheduleRender(state: TerminalState): void {
@@ -463,6 +482,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 				} catch (error) {
 					console.error("[ERROR][FRONTEND] Render failed:", error);
 					this.detectionCache.clear();
+					this.wasmRecoveryCallback?.(error);
 				} finally {
 					this.renderPending = false;
 				}
@@ -480,6 +500,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 		} catch (error) {
 			console.error("[ERROR][FRONTEND] Render failed:", error);
 			this.detectionCache.clear();
+			this.wasmRecoveryCallback?.(error);
 		}
 		this.renderPending = false;
 	}
@@ -724,6 +745,9 @@ export class CanvasRenderer implements ITerminalRenderer {
 					if (error instanceof WebAssembly.RuntimeError) {
 						console.warn("[WARN][FRONTEND] cursor blink skipped — WASM unavailable");
 					}
+					// Route into shared recovery so the terminal can self-heal even
+					// when no PTY data is arriving (idle terminal after suspend).
+					this.wasmRecoveryCallback?.(error);
 				}
 			}
 		});

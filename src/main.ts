@@ -370,44 +370,65 @@ async function main(): Promise<void> {
     dragHandler?.reattachTabListeners(tabId);
   };
 
-  // Focus the terminal when a tab is activated and update global references
+  // Focus the terminal when a tab is activated and update global references.
+  //
+  // The try/catch wrappers below are intentionally narrow — each guards one
+  // WASM-touching operation (`setTabActive`). After system suspend/resume
+  // these can surface `RuntimeError: Out of bounds memory access`. Routing
+  // the error into the shared recovery entry point lets the rest of the
+  // activation flow (focus, globals, mux status) continue so the tab does
+  // not end up in a half-switched state.
   manager.on("tab:activated", ({ tab, previousTabId }) => {
     // Deactivate rendering on previous tab to reduce CPU/GPU load
     if (previousTabId) {
       const prevApp = manager.getTerminalApp(previousTabId);
-      prevApp?.setTabActive(false);
+      if (prevApp) {
+        try {
+          prevApp.setTabActive(false);
+        } catch (error) {
+          console.error("[ERROR][FRONTEND] setTabActive(false) failed:", error);
+          prevApp.tryRecoverFromWasmCrash?.(error);
+        }
+      }
     }
 
     const app = manager.getTerminalApp(tab.id);
-    if (app) {
-      // Resume rendering on the active tab
+    if (!app) return;
+
+    // Resume rendering on the active tab
+    try {
       app.setTabActive(true);
+    } catch (error) {
+      console.error("[ERROR][FRONTEND] setTabActive(true) failed:", error);
+      app.tryRecoverFromWasmCrash?.(error);
+      // Continue: remaining steps do not touch WASM directly. If recovery
+      // is async the render will refresh once reinitWasm finishes.
+    }
 
-      // Focus the IME handler for the active tab.
-      // Use rAF to ensure focus is restored after browser's default
-      // mousedown focus handling completes (mouse clicks on tab bar
-      // elements can steal focus away from the terminal).
-      app.focus();
-      requestAnimationFrame(() => app.focus());
+    // Focus the IME handler for the active tab.
+    // Use rAF to ensure focus is restored after browser's default
+    // mousedown focus handling completes (mouse clicks on tab bar
+    // elements can steal focus away from the terminal).
+    app.focus();
+    requestAnimationFrame(() => app.focus());
 
-      // Update global references for E2E testing
-      window.terminalApp = app;
-      window.terminalState = app.terminalState;
-      window.terminalRenderer = app.terminalRenderer;
+    // Update global references for E2E testing
+    window.terminalApp = app;
+    window.terminalState = app.terminalState;
+    window.terminalRenderer = app.terminalRenderer;
 
-      // Handle mux status bar on tab switch:
-      // - Mux tab: restore cached status bar immediately, then request fresh data
-      // - Non-mux tab: clear OSC layer
-      if (app.isInMuxMode) {
-        const cached = statusBarCache.get(tab.id);
-        if (cached) {
-          oscLayerController?.handleCommand("set", "left", cached.left);
-          oscLayerController?.handleCommand("set", "right", cached.right);
-        }
-        app.sendMuxRequestStatusUpdate();
-      } else {
-        oscLayerController?.handleCommand("clear");
+    // Handle mux status bar on tab switch:
+    // - Mux tab: restore cached status bar immediately, then request fresh data
+    // - Non-mux tab: clear OSC layer
+    if (app.isInMuxMode) {
+      const cached = statusBarCache.get(tab.id);
+      if (cached) {
+        oscLayerController?.handleCommand("set", "left", cached.left);
+        oscLayerController?.handleCommand("set", "right", cached.right);
       }
+      app.sendMuxRequestStatusUpdate();
+    } else {
+      oscLayerController?.handleCommand("clear");
     }
   });
 

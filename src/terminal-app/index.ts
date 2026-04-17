@@ -613,6 +613,12 @@ export class TerminalApp {
       getMuxApcContext: () => this.imageHandler?.getMuxApcContext() ?? null,
       isTabActive: () => this._tabActive,
     });
+
+    // Route renderer-side WASM crashes (render, renderImmediate, cursor blink)
+    // into the shared recovery entry point so they do not get silently swallowed.
+    this.renderer?.setWasmRecoveryCallback((error) =>
+      this.ptyHandlerHandle?.tryRecoverFromWasmCrash(error) ?? false,
+    );
   }
 
   /**
@@ -669,6 +675,8 @@ export class TerminalApp {
       getDisconnectResizeObserver: () => this.disconnectResizeObserver,
       setDisconnectResizeObserver: (fn) => { this.disconnectResizeObserver = fn; },
       setupResizeObserver: () => this.setupResizeObserver(),
+      tryRecoverFromWasmCrash: (error) =>
+        this.ptyHandlerHandle?.tryRecoverFromWasmCrash(error) ?? false,
       onMuxResize: (cols, rows) => {
         if (!this.inMuxMode || !this.muxClient) return;
         if (this.muxLayoutRoot) {
@@ -715,6 +723,21 @@ export class TerminalApp {
     if (active) {
       this.ptyHandlerHandle?.notifyTabActivated();
     }
+  }
+
+  /**
+   * Route an error through the shared WASM crash recovery entry point.
+   *
+   * Used by callers outside the PTY handler (e.g., the `tab:activated`
+   * handler in main.ts) that may catch a `WebAssembly.RuntimeError` from
+   * WASM-touching operations such as `forceRender` invoked via
+   * `setTabActive(true)`.
+   *
+   * @returns `true` if the error was a WASM crash and recovery was attempted;
+   *   `false` if the error was unrelated or no PTY handler is active.
+   */
+  tryRecoverFromWasmCrash(error: unknown): boolean {
+    return this.ptyHandlerHandle?.tryRecoverFromWasmCrash(error) ?? false;
   }
 
   /**
@@ -1244,6 +1267,11 @@ export class TerminalApp {
     this.imageHandler?.dispose();
     this.imageHandler = null;
 
+    // Remove PTY-handler-owned document/window listeners (visibilitychange,
+    // Tauri focus) before tearing down the PTY client itself.
+    this.ptyHandlerHandle?.destroy();
+    this.ptyHandlerHandle = null;
+
     // Clean up PTY
     if (this.ptyClient) {
       this.ptyClient.dispose();
@@ -1413,7 +1441,9 @@ export class TerminalApp {
    * altered the available area without triggering ResizeObserver reliably.
    */
   recheckSize(): void {
-    if (!this.state || !this.renderer) return;
+    const state = this.state;
+    const renderer = this.renderer;
+    if (!state || !renderer) return;
     // Skip if container is hidden (inactive tab)
     if (this.container.style.display === "none" ||
         this.container.clientWidth === 0 || this.container.clientHeight === 0) {
@@ -1426,24 +1456,53 @@ export class TerminalApp {
       this.charSize.height,
     );
 
-    const currentCols = this.state.cols;
-    const currentRows = this.state.rows;
+    const currentCols = state.cols;
+    const currentRows = state.rows;
     if (cols === currentCols && rows === currentRows) return;
 
-    try {
-      this.state.resize(cols, rows);
-      this.state.setCellSizePx(
+    // Replays the resize pipeline. Reused after WASM recovery so state and
+    // renderer dimensions stay in sync if the first attempt failed mid-way.
+    const applyResize = (): void => {
+      state.resize(cols, rows);
+      state.setCellSizePx(
         Math.round(this.charSize.width),
         Math.round(this.charSize.height),
       );
-      this.renderer.resize(cols, rows);
-      this.renderer.forceRender(this.state);
+      renderer.resize(cols, rows);
+      renderer.forceRender(state);
+    };
+
+    try {
+      applyResize();
     } catch (error) {
       console.error("Failed to resize terminal in recheckSize:", error);
-      try {
-        this.renderer.forceRender(this.state);
-      } catch {
-        // Recovery failed — nothing more we can do
+      // Route into shared WASM recovery so the terminal can self-heal after
+      // system suspend/resume instead of leaving the UI permanently stuck.
+      const handled = this.ptyHandlerHandle?.tryRecoverFromWasmCrash(error, (success) => {
+        if (!success) return;
+        // After recovery the fresh state/renderer may not be the same objects
+        // we captured above, so re-read via this.* for the retry attempt.
+        const recoveredState = this.state;
+        const recoveredRenderer = this.renderer;
+        if (!recoveredState || !recoveredRenderer) return;
+        try {
+          recoveredState.resize(cols, rows);
+          recoveredState.setCellSizePx(
+            Math.round(this.charSize.width),
+            Math.round(this.charSize.height),
+          );
+          recoveredRenderer.resize(cols, rows);
+          recoveredRenderer.forceRender(recoveredState);
+        } catch (retryError) {
+          console.error("[ERROR][FRONTEND] recheckSize retry after WASM recovery failed:", retryError);
+        }
+      }) ?? false;
+      if (!handled) {
+        try {
+          renderer.forceRender(state);
+        } catch {
+          // Recovery failed — nothing more we can do
+        }
       }
       return;
     }
