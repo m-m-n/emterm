@@ -32,6 +32,20 @@ export interface ResizeHandlerContext {
   setupResizeObserver: () => void;
   /** Optional callback to propagate resize to mux daemon panes. */
   onMuxResize?: (cols: number, rows: number) => void;
+  /**
+   * Optional shared WASM crash recovery entry point. The resize path calls
+   * into WASM (state.resize, setCellSizePx, forceRender) and can surface
+   * `WebAssembly.RuntimeError` after system suspend; route such errors
+   * here so recovery runs instead of the terminal silently freezing.
+   *
+   * The optional `onComplete` callback fires when recovery finishes; the
+   * resize handler uses it to retry the resize so state and renderer
+   * dimensions stay in sync after an async reinit.
+   */
+  tryRecoverFromWasmCrash?: (
+    error: unknown,
+    onComplete?: (success: boolean) => void,
+  ) => boolean;
 }
 
 /**
@@ -59,22 +73,45 @@ export function setupResizeObserver(ctx: ResizeHandlerContext): (() => void) | n
 
       // Always update local terminal state/renderer (even if PTY not ready)
       if (state && renderer) {
-        try {
-          state.resize(newCols, newRows);
+        // Replays the resize pipeline. Used both for the initial attempt and
+        // to retry after WASM recovery succeeds — without a retry, `state`
+        // and `renderer` dimensions can diverge if an error occurs mid-way.
+        const applyResize = (s: typeof state, r: typeof renderer): void => {
+          s.resize(newCols, newRows);
           // Update cell size for CSI 14t/16t XTWINOPS responses
-          state.setCellSizePx(
+          s.setCellSizePx(
             Math.round(cs.width),
             Math.round(cs.height),
           );
-          renderer.resize(newCols, newRows);
-          renderer.forceRender(state);
+          r.resize(newCols, newRows);
+          r.forceRender(s);
+        };
+
+        try {
+          applyResize(state, renderer);
         } catch (error) {
           console.error("Failed to resize terminal:", error);
-          // Attempt recovery: force re-render with current state
-          try {
-            renderer.forceRender(state);
-          } catch {
-            // Rendering failed too - nothing we can do
+          // Route into shared WASM recovery — resize hits WASM, so a
+          // RuntimeError here indicates memory corruption after suspend.
+          const handled = ctx.tryRecoverFromWasmCrash?.(error, (success) => {
+            if (!success) return;
+            const recoveredState = ctx.getState();
+            const recoveredRenderer = ctx.getRenderer();
+            if (!recoveredState || !recoveredRenderer) return;
+            try {
+              applyResize(recoveredState, recoveredRenderer);
+            } catch (retryError) {
+              // Second failure — give up to avoid infinite retry loops.
+              console.error("[ERROR][FRONTEND] resize retry after WASM recovery failed:", retryError);
+            }
+          }) ?? false;
+          if (!handled) {
+            // Not a WASM crash (or recovery declined) — at least try to repaint.
+            try {
+              renderer.forceRender(state);
+            } catch {
+              // Rendering failed too - nothing we can do
+            }
           }
         }
         ctx.getImeHandler()?.updatePosition();

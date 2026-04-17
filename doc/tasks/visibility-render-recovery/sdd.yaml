@@ -24,6 +24,16 @@ workflow:
     artifacts: [VERIFICATION_RESULT.md]
     status: completed
     completed_at_commit: 0b25fc59f198246f1aec77bc400a6060fb260e95
+  - id: extend-spec-focus-wasm-recovery
+    artifacts: [SPEC.md]
+    status: completed
+  - id: implement-focus-wasm-recovery
+    status: completed
+    completed_at_commit: 1dc8b4445fc6b8f55d4af1f717cc440cac124244
+  - id: verify-focus-wasm-recovery
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 1dc8b4445fc6b8f55d4af1f717cc440cac124244
 
 requirements:
   FR1:
@@ -41,6 +51,26 @@ requirements:
     status: ok
     tasks: []
     tests: []
+  FR4:
+    title: Focus Listener
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Shared Recovery Entry Point
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Recovery Idempotency
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Focus Listener Cleanup
+    status: ok
+    tasks: []
+    tests: []
   NFR1:
     title: Recovery Latency
     status: ok
@@ -53,6 +83,11 @@ requirements:
     tests: []
   NFR3:
     title: No regression
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: Focus event robustness
     status: ok
     tasks: []
     tests: []
