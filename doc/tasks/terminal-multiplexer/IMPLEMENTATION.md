@@ -364,10 +364,13 @@ Reattach flow:
 
 **Files to Modify**:
 - `src/terminal/mux/tab-group.ts` — Window sub-tabs, expand/compact animation, window navigation
-- `src/terminal/mux/mux-client.ts` — Window management messages
+- `src/terminal/mux/mux-client.ts` — Window management messages, RequestPaneSnapshot helper
 - `src/terminal/mux/prefix-key.ts` — Window operation keybindings (c, n, p, comma)
 - `src/tab-bar/tab-bar-ui.ts` — Sub-tab rendering within tab groups
-- `src-tauri/src/mux/ipc/protocol.rs` — Add CreateWindow, SwitchWindow, RenameWindow message types
+- `src/terminal-app/mux/mux-window-manager.ts` — Send RequestPaneSnapshot on switchMuxWindow / handleRemoteSwitchWindow
+- `src-tauri/src/mux/ipc/protocol.rs` — Add CreateWindow, SwitchWindow, RenameWindow, RequestPaneSnapshot message types
+- `src-tauri/src/mux/ipc/handlers.rs` (or `connection.rs`) — Handle RequestPaneSnapshot → PtyOutput with shadow parser replay
+- `src-tauri/src/mux/ipc/reattach.rs` — Extract snapshot-builder helper for reuse from RequestPaneSnapshot handler
 - `src-tauri/src/mux/session/manager.rs` — Window CRUD operations
 - `src-tauri/src/mux/session/window.rs` — Window state management (active pane tracking)
 
@@ -382,18 +385,24 @@ Reattach flow:
 **Processing Flow**:
 1. `prefix + c` → GUI sends CreateWindow to daemon → daemon creates window with default pane
 2. Daemon sends WindowCreated → GUI adds sub-tab, switches to new window
-3. `prefix + n/p` → GUI switches active window (local operation, notifies daemon)
-4. Tab click → switch window directly
+3. `prefix + n/p` → GUI switches active window. Per-switch state sync sequence:
+   a. GUI saves previous pane's WASM grid and restores the target pane's saved grid (instant visual from local cache — may be stale)
+   b. GUI sends `SwitchWindow(paneId)` to daemon (active-pane tracking for statusbar, etc.)
+   c. GUI sends `RequestPaneSnapshot(paneId)` to daemon
+   d. Daemon replies with `PtyOutput(paneId, "\x1b[H\x1b[2J" + shadow_parser.screen().contents_formatted())`
+   e. GUI's normal PtyOutput path consumes the bytes into the active WASM grid, overwriting any stale content with the daemon's authoritative screen state
+4. Tab click → same sequence as step 3
 5. Active mux tab group auto-expands showing all window sub-tabs
 6. Switching away from mux tab → compact animation (0.3s) to "mux (N)"
 7. Window close: last pane exit → window removed → if last window → session ends
 
 **Implementation Steps**:
 1. **Window management protocol** — CreateWindow, SwitchWindow, RenameWindow, DestroyWindow messages
-2. **Daemon window operations** — Window CRUD in session manager, cascade cleanup
-3. **Sub-tab UI** — Window sub-tabs within tab group, click to switch
-4. **Window keybindings** — prefix+c (create), prefix+n/p (navigate), prefix+comma (rename)
-5. **Expand/compact animation** — CSS transitions for tab group state, "mux (N)" compact label
+2. **On-demand snapshot protocol** — RequestPaneSnapshot message, daemon handler reusing `contents_formatted()` (same as reattach). Response travels as standard PtyOutput so no client-side deserializer is needed.
+3. **Daemon window operations** — Window CRUD in session manager, cascade cleanup
+4. **Sub-tab UI** — Window sub-tabs within tab group, click to switch
+5. **Window keybindings** — prefix+c (create), prefix+n/p (navigate), prefix+comma (rename)
+6. **Expand/compact animation** — CSS transitions for tab group state, "mux (N)" compact label
 
 **Dependencies**: Phase 3 (pane layout)
 

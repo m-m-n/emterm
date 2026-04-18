@@ -74,8 +74,8 @@ As a tmux user, I want to import my tmux.conf settings, so that my keybindings a
 - **FR2: IPC Protocol** — Length-prefixed binary frames over Unix domain socket. PTY data as raw bytes (no serialization), control messages via bincode. 16 message types.
 - **FR3: Session Management** — Session > Window > Pane hierarchy with actor-model Session Manager. Cascade: PTY exit → pane close → window close → session end → daemon exit.
 - **FR4: OSC Signaling** — `OSC 777 ; emterm ; mux ; attach ; <socket_path> ; <session_id> ST` and `OSC 777 ; emterm ; mux ; detach ST` for CLI→GUI mode switching.
-- **FR5: GUI Mode Switching** — Tab integration: mux tab group with sub-tabs for windows. Normal tabs and mux tab groups coexist. AtomicBool flag pauses original PTY reader during mux mode.
-- **FR6: Detach/Reattach** — Snapshot-based state restoration. GUI serializes WASM grid state on detach. Per-pane ring buffer (64MB) accumulates PTY output while detached. Atomic attach process prevents data loss.
+- **FR5: GUI Mode Switching** — Tab integration: mux tab group with sub-tabs for windows. Normal tabs and mux tab groups coexist. AtomicBool flag pauses original PTY reader during mux mode. On window switch, GUI requests a fresh snapshot from the daemon so the target pane's display matches the daemon authoritative state (no reliance on client-side incremental buffering).
+- **FR6: Snapshot-Based State Sync** — Three scenarios use the same per-pane `shadow_parser` (vt100::Parser) as the authoritative screen source: (a) detach — GUI serializes WASM grid state on detach for future reattach; (b) reattach — daemon replays shadow parser screen + ring buffer delta; (c) window switch — daemon replays shadow parser screen only (no delta). Per-pane ring buffer (64MB) accumulates PTY output while detached. Atomic attach process prevents data loss.
 - **FR7: Pane Layout** — Binary tree model. Pixel-based calculations. CSS Grid for layout. Drag-resize support. tmux-compatible preset layouts (even-horizontal, even-vertical, main-horizontal, main-vertical, tiled).
 - **FR8: Window Management** — Multiple windows per session. Tab group UI with auto-expand (active) / auto-compact (inactive, shows "mux (N)"). 0.3s animation for expand/compact.
 - **FR9: Status Bar** — HTML-rendered status bar. Daemon pushes state changes (session name, window list). Event-driven (no polling). Local info (clock) managed by GUI.
@@ -188,10 +188,16 @@ PTY read → daemon → IPC(socket) → Tauri internal → WASM → Canvas
 | 0x0E | SessionList | D→C | bincode | Session listing |
 | 0x0F | Error | D→C | bincode (message) | Error notification |
 | 0x10 | PtyExited | D→G | bincode (exit_code) | PTY process exit |
+| 0x19 | RequestPaneSnapshot | G→D | empty | Request on-demand screen replay for the given pane |
 
 Additional types for Phase 3+: SplitPane, CreateWindow, SwitchWindow, etc.
 
-### Snapshot and Reattach
+**RequestPaneSnapshot Response:**
+The daemon answers by emitting a single `PtyOutput (0x01)` frame for the requested pane. The payload is `\x1b[H\x1b[2J` followed by `shadow_parser.screen().contents_formatted()`, which is self-contained ANSI sufficient to reproduce the current screen (alt-screen toggle, SGR state, cursor position, etc.). The client's normal PtyOutput path consumes the frame, so no separate `PaneSnapshot` message type is required.
+
+### Snapshot and State Sync
+
+**Authoritative Source:** Every connected pane has a daemon-side `shadow_parser: Arc<StdMutex<vt100::Parser>>` that observes all PTY output. The daemon treats this parser's `screen().contents_formatted()` output as the source of truth for visual state reconstruction — it is self-contained ANSI that reproduces the exact screen on replay.
 
 **Detach Flow:**
 1. GUI serializes WASM grid state → sends Snapshot to daemon
@@ -200,12 +206,20 @@ Additional types for Phase 3+: SplitPane, CreateWindow, SwitchWindow, etc.
 **Reattach Flow:**
 1. GUI connects, sends Attach request
 2. Daemon locks ring buffer writes (PTY readers wait on channel)
-3. Daemon sends snapshot + all delta bytes
-4. GUI restores WASM grid from snapshot
-5. GUI replays delta bytes through WASM parser
-6. Daemon unlocks ring buffer, resumes streaming
+3. Daemon sends, per pane: `\x1b[H\x1b[2J` + `contents_formatted()` + ring buffer delta
+4. GUI feeds the bytes through its WASM parser → grid reaches the exact daemon state
+5. Daemon unlocks ring buffer, resumes streaming
 
-**Snapshot Contents:**
+**Window Switch Flow (on-demand snapshot):**
+1. GUI user clicks a mux sub-tab (or invokes prefix+n/p)
+2. GUI sends `RequestPaneSnapshot(paneId)` to the daemon
+3. Daemon responds with a single `PtyOutput` frame: `\x1b[H\x1b[2J` + `shadow_parser.screen().contents_formatted()`
+4. GUI's normal PtyOutput pipeline processes the bytes into the target pane's active WASM grid
+5. The grid is guaranteed to match the daemon screen state; any stale client-side buffered state for the target pane is implicitly overwritten by the reset-and-replay bytes
+
+This flow eliminates the reliance on accumulating incremental PTY output into a client-side saved grid while a pane is inactive. The display is always reconciled from the daemon shadow parser on switch, which guarantees "the visible screen matches the authoritative screen" without depending on every inactive-path byte having been correctly routed to the right client-side grid.
+
+**Snapshot Contents (Detach Flow — client-serialized):**
 - Visible screen (rows x cols cell data)
 - Scrollback (up to configured limit)
 - Cursor position and attributes (including shape)
@@ -214,7 +228,10 @@ Additional types for Phase 3+: SplitPane, CreateWindow, SwitchWindow, etc.
 - Tab title (OSC 0/2)
 - Current directory (OSC 7)
 
-**Ring Buffer:** Per-pane, 64MB cap. Overwrites oldest data. VT100 parser state machine recovers sync within a few bytes.
+**Snapshot Contents (Reattach and Window Switch — daemon shadow_parser):**
+The daemon-side `vt100::Parser::screen().contents_formatted()` produces self-contained ANSI that includes alt-screen enter/leave, SGR attributes, cursor position, and cell contents. The client does not need a separate deserializer — the bytes go through the existing PTY output parser (WASM).
+
+**Ring Buffer:** Per-pane, 64MB cap. Overwrites oldest data. Used only for detach flow delta capture. Not used for window switch (the shadow parser already holds the latest screen).
 
 ### Pane Layout
 
@@ -256,6 +273,8 @@ Session
 **Original PTY reader:** AtomicBool flag suppresses data forwarding to GUI during mux mode. Thread stays alive.
 
 **Canvas/DOM:** Per-pane Canvas elements created dynamically. CSS Grid for pane layout (binary tree → CSS template conversion). Mux Canvases destroyed on detach, original tab display restored.
+
+**Window Switch State Sync (single-pane mode):** When the user switches between mux windows (sub-tab click, `prefix+n/p`, or CLI `emterm mux switch-window`), the GUI sends `RequestPaneSnapshot(paneId)` to the daemon in addition to `SwitchWindow`. The daemon replies with a `PtyOutput` frame containing `\x1b[H\x1b[2J` + `contents_formatted()` from the target pane's `shadow_parser`. The GUI pipeline processes these bytes into the active WASM grid, guaranteeing the displayed screen matches the daemon state. This replaces reliance on client-side incremental state accumulation for inactive panes (which is fragile across buffer-switch edge cases and potential races between `flushPtyPendingData` and in-flight PtyOutput messages).
 
 ### Dependencies
 

@@ -39,6 +39,8 @@ export const MuxMessageType = {
   DestroyWindow: 0x15,
   StatusUpdate: 0x16,
   RequestStatusUpdate: 0x17,
+  Shutdown: 0x18,
+  RequestPaneSnapshot: 0x19,
 } as const;
 
 /** Connection state for the mux client. */
@@ -532,6 +534,16 @@ export class MuxClient {
   /** Send RequestStatusUpdate (0x17) to daemon with empty payload. */
   async sendRequestStatusUpdate(): Promise<void> {
     await this.sendControl(MuxMessageType.RequestStatusUpdate, 0);
+  }
+
+  /** Request an on-demand screen snapshot for the given pane.
+   *  The daemon replies with a PtyOutput frame (0x01) containing
+   *  `\x1b[H\x1b[2J` + `shadow_parser.screen().contents_formatted()`.
+   *  The normal PtyOutput path applies the bytes to the active WASM grid,
+   *  guaranteeing the displayed screen matches the daemon authoritative state
+   *  after a mux window switch. */
+  async sendRequestPaneSnapshot(paneId: number): Promise<void> {
+    await this.sendControl(MuxMessageType.RequestPaneSnapshot, paneId);
   }
 
   /** Disconnect (no-op for APC-based client since bridge handles lifecycle). */
