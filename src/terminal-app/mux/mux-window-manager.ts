@@ -106,6 +106,16 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
   const muxPaneIds = ctx.getMuxPaneIds();
   const muxPaneGrids = ctx.getMuxPaneGrids();
 
+  // Capture current terminal dimensions from the active (prev) pane before
+  // save/restore. muxPaneGrids entries are only resized when their pane is
+  // active, so a pane that was inactive during a terminal resize (e.g., mux
+  // status bar appeared after reattach) holds a grid at stale dimensions.
+  // We re-apply the current size after restoreMuxPaneState so forceRender
+  // paints the correct area and sendMuxPaneResize sends the correct size to
+  // the daemon.
+  const targetCols = state.cols;
+  const targetRows = state.rows;
+
   // Save current pane's full state (primary + alternate)
   if (previousIndex != null) {
     const prevPaneId = muxPaneIds[previousIndex];
@@ -142,6 +152,9 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     }
   }
 
+  // Reconcile restored grid dimensions with the current terminal size.
+  reconcileActivePaneSize(state, targetCols, targetRows);
+
   // Sync the title dedup cache and parent tab title to the restored pane.
   ctx.syncWindowTitleFromState();
 
@@ -161,6 +174,15 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     diagTraceMuxRender(state, renderer, "switchMuxWindow");
   }
   emitMuxStateChange(ctx);
+}
+
+/** Resize the currently-active grid to match the given dimensions if they
+ *  differ. Used after restoreMuxPaneState to compensate for saved grids that
+ *  went stale while their pane was inactive (saved grids are not touched by
+ *  ResizeObserver). */
+function reconcileActivePaneSize(state: TerminalState, cols: number, rows: number): void {
+  if (state.cols === cols && state.rows === rows) return;
+  state.resize(cols, rows);
 }
 
 /** Diagnostic trace for forceRender on mux switch paths. Logs canvas state,
@@ -464,6 +486,11 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
 
   muxLog.info(`Remote SwitchWindow: switching to window ${targetIndex} (pane ${paneId})`);
 
+  // Capture current terminal dimensions before save/restore — see
+  // switchMuxWindow for rationale.
+  const targetCols = state.cols;
+  const targetRows = state.rows;
+
   // Save current pane's full state
   const previousIndex = ctx.getActiveMuxWindowIndex();
   const prevPaneId = muxPaneIds[previousIndex];
@@ -493,6 +520,9 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
     state._iconName = "";
     ctx.registerCoreCallbacks(state.getActiveCore());
   }
+
+  // Reconcile restored grid dimensions with the current terminal size.
+  reconcileActivePaneSize(state, targetCols, targetRows);
 
   // Sync the title dedup cache and parent tab title to the restored pane.
   ctx.syncWindowTitleFromState();
