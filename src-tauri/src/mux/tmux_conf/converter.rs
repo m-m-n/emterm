@@ -332,9 +332,13 @@ if-shell 'test -f ~/.local.conf' 'source ~/.local.conf'
 
     #[test]
     fn test_auto_import_no_file() {
-        temp_env::with_var("HOME", Some("/tmp/nonexistent_test_dir_auto_import"), || {
-            assert!(auto_import_tmux_conf().is_none());
-        });
+        temp_env::with_var(
+            "HOME",
+            Some("/tmp/nonexistent_test_dir_auto_import"),
+            || {
+                assert!(auto_import_tmux_conf().is_none());
+            },
+        );
     }
 
     #[test]

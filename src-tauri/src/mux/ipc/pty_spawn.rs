@@ -129,7 +129,15 @@ pub(super) fn register_pane_and_start_reader(
 
     let reader = spawned.reader;
     std::thread::spawn(move || {
-        pty_reader_loop(pane_id, reader, output_target, shadow_parser, pane_cwd, pane_title, title_sender);
+        pty_reader_loop(
+            pane_id,
+            reader,
+            output_target,
+            shadow_parser,
+            pane_cwd,
+            pane_title,
+            title_sender,
+        );
     });
 
     Some(pane_id)

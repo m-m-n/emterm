@@ -38,6 +38,7 @@ pub async fn handle_connection<S>(
     stream: S,
     session_manager: Arc<Mutex<SessionManager>>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
+    daemon_title_tx: TitleChangeSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -78,6 +79,14 @@ pub async fn handle_connection<S>(
         return;
     }
 
+    // Subscribe to notify_tx before building Welcome so any RenameWindow
+    // broadcast emitted between snapshot construction and message-loop entry
+    // is captured rather than lost.
+    let mut notify_rx = {
+        let mgr = session_manager.lock().await;
+        mgr.notify_tx().subscribe()
+    };
+
     // Send Welcome with session list, auto-creating default session if none exist
     let welcome = {
         let mut mgr = session_manager.lock().await;
@@ -103,7 +112,13 @@ pub async fn handle_connection<S>(
     // CLI clients: serve session list + optionally process one control message.
     // Skip reattach and full message loop to avoid stealing panes from GUI.
     if hello.client_type == ClientType::Cli {
-        handle_cli_client(&mut framed, &session_manager, &shutdown_tx).await;
+        handle_cli_client(
+            &mut framed,
+            &session_manager,
+            &shutdown_tx,
+            &daemon_title_tx,
+        )
+        .await;
         return;
     }
 
@@ -118,15 +133,11 @@ pub async fn handle_connection<S>(
     let (pane_output_tx, mut pane_output_rx) =
         mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
 
-    // Channel for pane title change notifications from reader threads.
-    // Bounded: title changes are idempotent (only latest matters), so dropping is safe.
-    let (title_tx, mut title_rx) = mpsc::channel::<(u32, String)>(16);
-
-    // Subscribe to cross-client notifications (e.g., CLI-triggered SwitchWindow)
-    let mut notify_rx = {
-        let mgr = session_manager.lock().await;
-        mgr.notify_tx().subscribe()
-    };
+    // Reuse the daemon-level title sender so OSC title updates flow to the
+    // daemon task regardless of connection lifetime. GUI delivery of
+    // RenameWindow happens via notify_rx, which is populated by the daemon
+    // task when it updates window.name.
+    let title_tx = daemon_title_tx;
 
     // NOTE: Reattach data is NOT sent here. The client must send an Attach
     // message after its output stream is ready. This eliminates the timing
@@ -182,10 +193,8 @@ pub async fn handle_connection<S>(
     let (cmd_result_tx, mut cmd_result_rx) = mpsc::channel::<(String, Option<String>)>(16);
 
     // Per-command JoinHandle for single-flight control: skip if previous execution is still running
-    let mut cmd_handles: std::collections::HashMap<
-        String,
-        tokio::task::JoinHandle<()>,
-    > = std::collections::HashMap::new();
+    let mut cmd_handles: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+        std::collections::HashMap::new();
 
     // Message + output loop using select! to handle both directions concurrently
     loop {
@@ -333,43 +342,51 @@ pub async fn handle_connection<S>(
             Some((name, output)) = cmd_result_rx.recv() => {
                 statusbar_engine.update_command_cache(&name, output);
             }
-            Some((pane_id, new_title)) = title_rx.recv() => {
-                let mut mgr = session_manager.lock().await;
-                if let Some((sid, wid)) = mgr.find_pane(pane_id) {
-                    let old_name = mgr.get_session(sid)
-                        .and_then(|s| s.windows.get(&wid))
-                        .map(|w| w.name.clone());
-                    if old_name.as_deref() != Some(&new_title) {
-                        log::info!("Title change: pane {} -> window {} -> '{}'", pane_id, wid, new_title);
-                        mgr.rename_window(sid, wid, new_title.clone());
-                        drop(mgr);
-                        let rename_payload = RenameWindowMsg { name: new_title };
-                        let msg = MuxMessage::control(MessageType::RenameWindow, wid, &rename_payload);
-                        if framed.send(msg).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
             notification = notify_rx.recv() => {
-                if let Ok(msg) = notification {
-                    // Forward cross-client notification (e.g., CLI SwitchWindow) to GUI
-                    log::info!("Forwarding notification to GUI: {:?} pane={}", msg.msg_type, msg.pane_id);
-                    if msg.msg_type == MessageType::SwitchWindow {
-                        *active_pane_id.lock().unwrap() = Some(msg.pane_id);
-                        if statusbar_engine.is_enabled() {
-                            // Send SwitchWindow + status bar update as a batch
-                            if framed.feed(msg).await.is_err() {
-                                break;
-                            }
-                            let update_msg = statusbar_engine.force_render();
-                            if framed.send(update_msg).await.is_err() {
+                match notification {
+                    Ok(msg) => {
+                        // Forward cross-client notification (e.g., CLI SwitchWindow) to GUI
+                        log::info!("Forwarding notification to GUI: {:?} pane={}", msg.msg_type, msg.pane_id);
+                        if msg.msg_type == MessageType::SwitchWindow {
+                            *active_pane_id.lock().unwrap() = Some(msg.pane_id);
+                            if statusbar_engine.is_enabled() {
+                                // Send SwitchWindow + status bar update as a batch
+                                if framed.feed(msg).await.is_err() {
+                                    break;
+                                }
+                                let update_msg = statusbar_engine.force_render();
+                                if framed.send(update_msg).await.is_err() {
+                                    break;
+                                }
+                            } else if framed.send(msg).await.is_err() {
                                 break;
                             }
                         } else if framed.send(msg).await.is_err() {
                             break;
                         }
-                    } else if framed.send(msg).await.is_err() {
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        log::warn!(
+                            "notify_rx lagged: {} notifications dropped; resyncing window names from session_list",
+                            skipped
+                        );
+                        let list = session_manager.lock().await.session_list();
+                        for sess in &list {
+                            for win in &sess.windows {
+                                let payload = RenameWindowMsg { name: win.name.clone() };
+                                let msg = MuxMessage::control(
+                                    MessageType::RenameWindow,
+                                    win.id,
+                                    &payload,
+                                );
+                                if framed.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        log::warn!("notify_rx closed; exiting connection loop");
                         break;
                     }
                 }
@@ -401,6 +418,7 @@ async fn handle_cli_client<S>(
     framed: &mut Framed<S, MuxCodec>,
     session_manager: &Arc<Mutex<SessionManager>>,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
+    daemon_title_tx: &TitleChangeSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -432,9 +450,6 @@ async fn handle_cli_client<S>(
     let (pane_output_tx, _pane_output_rx) =
         mpsc::channel::<PtyOutputChunk>(crate::mux::session::pane::PTY_CHANNEL_CAPACITY);
 
-    // Temporary title channel (CLI doesn't process title notifications)
-    let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
-
     match msg.msg_type {
         MessageType::CreateWindow => {
             let _ = handle_create_window(
@@ -443,7 +458,7 @@ async fn handle_cli_client<S>(
                 framed,
                 &pane_output_tx,
                 active_session_id,
-                &title_tx,
+                daemon_title_tx,
             )
             .await;
 
@@ -488,7 +503,11 @@ async fn handle_cli_client<S>(
                     if let Some(window) = session.windows.get(&window_id) {
                         if let Some(pane) = window.panes.get(&pane_id) {
                             if let Err(e) = pane.write_input(&msg.payload) {
-                                log::warn!("CLI send-keys: failed to write to pane {}: {}", pane_id, e);
+                                log::warn!(
+                                    "CLI send-keys: failed to write to pane {}: {}",
+                                    pane_id,
+                                    e
+                                );
                             }
                         }
                     }

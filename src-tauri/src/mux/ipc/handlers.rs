@@ -292,11 +292,7 @@ pub(super) async fn handle_rename_window(
 
     // Fall back to window_id
     if let Some(sid) = mgr.find_window_session(id) {
-        log::info!(
-            "RenameWindow: window {} -> '{}'",
-            id,
-            rename_msg.name
-        );
+        log::info!("RenameWindow: window {} -> '{}'", id, rename_msg.name);
         mgr.rename_window(sid, id, rename_msg.name);
     } else {
         log::warn!("RenameWindow: id {} not found as pane or window", id);
@@ -307,10 +303,7 @@ pub(super) async fn handle_rename_window(
 ///
 /// The `id` may be either a pane ID (from GUI) or a window ID (from CLI).
 /// Tries pane lookup first; falls back to window lookup.
-pub(super) async fn handle_switch_window(
-    id: u32,
-    session_manager: &Arc<Mutex<SessionManager>>,
-) {
+pub(super) async fn handle_switch_window(id: u32, session_manager: &Arc<Mutex<SessionManager>>) {
     let mut mgr = session_manager.lock().await;
 
     // Try as pane_id first (GUI sends pane_id)
@@ -331,11 +324,7 @@ pub(super) async fn handle_switch_window(
     if let Some(sid) = mgr.find_window_session(id) {
         if let Some(session) = mgr.get_session_mut(sid) {
             session.active_window_id = Some(id);
-            log::info!(
-                "SwitchWindow: session {} active window -> {}",
-                sid,
-                id
-            );
+            log::info!("SwitchWindow: session {} active window -> {}", sid, id);
         }
     } else {
         log::warn!("SwitchWindow: id {} not found as pane or window", id);
@@ -460,10 +449,7 @@ pub(super) async fn handle_request_pane_snapshot(
     };
 
     let Some(shadow_parser) = shadow_parser else {
-        log::warn!(
-            "RequestPaneSnapshot: pane {} not found; ignoring",
-            pane_id
-        );
+        log::warn!("RequestPaneSnapshot: pane {} not found; ignoring", pane_id);
         return Ok(());
     };
 
@@ -484,7 +470,11 @@ pub(super) async fn handle_request_pane_snapshot(
         })
         .await
     {
-        log::warn!("RequestPaneSnapshot: failed to enqueue snapshot for pane {}: {}", pane_id, e);
+        log::warn!(
+            "RequestPaneSnapshot: failed to enqueue snapshot for pane {}: {}",
+            pane_id,
+            e
+        );
     }
     Ok(())
 }

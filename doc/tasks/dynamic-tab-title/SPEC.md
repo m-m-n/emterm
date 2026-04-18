@@ -1,5 +1,7 @@
 # SPEC: Dynamic Tab Title
 
+> **Note**: この仕様は非 mux モード（直接 PTY 接続時）のタブタイトル反映フローを扱います。mux モードにおける OSC タイトル反映は `doc/tasks/mux-osc-title-propagation/SPEC.md` を参照してください。
+
 ## Overview
 
 シェルが送信するOSCシーケンス（OSC 0 / OSC 2）によるタイトル変更をタブバーのタブタイトルに反映する。
