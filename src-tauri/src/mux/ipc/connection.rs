@@ -15,7 +15,8 @@ use tokio_util::codec::Framed;
 use super::codec::MuxCodec;
 use super::handlers::{
     handle_attach, handle_create_window, handle_destroy_pane, handle_destroy_window,
-    handle_rename_window, handle_resize, handle_split_pane, handle_switch_window,
+    handle_rename_window, handle_request_pane_snapshot, handle_resize, handle_split_pane,
+    handle_switch_window,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -621,6 +622,9 @@ where
             if framed.send(update_msg).await.is_err() {
                 return Err(false);
             }
+        }
+        MessageType::RequestPaneSnapshot => {
+            handle_request_pane_snapshot(&msg, session_manager, pane_output_tx).await?;
         }
         MessageType::PtyInput => {
             let pane_id = msg.pane_id;

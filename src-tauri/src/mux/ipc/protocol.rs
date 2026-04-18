@@ -58,6 +58,7 @@ pub enum MessageType {
     StatusUpdate = 0x16,
     RequestStatusUpdate = 0x17,
     Shutdown = 0x18,
+    RequestPaneSnapshot = 0x19,
 }
 
 impl MessageType {
@@ -87,6 +88,7 @@ impl MessageType {
             0x16 => Some(Self::StatusUpdate),
             0x17 => Some(Self::RequestStatusUpdate),
             0x18 => Some(Self::Shutdown),
+            0x19 => Some(Self::RequestPaneSnapshot),
             _ => None,
         }
     }
@@ -327,12 +329,12 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x18u8 {
+        for i in 0x01..=0x19u8 {
             let mt = MessageType::from_u8(i).unwrap();
             assert_eq!(mt as u8, i);
         }
         assert!(MessageType::from_u8(0x00).is_none());
-        assert!(MessageType::from_u8(0x19).is_none());
+        assert!(MessageType::from_u8(0x1a).is_none());
     }
 
     #[test]
@@ -342,6 +344,15 @@ mod tests {
             Some(MessageType::RequestStatusUpdate)
         );
         assert_eq!(MessageType::RequestStatusUpdate as u8, 0x17);
+    }
+
+    #[test]
+    fn test_request_pane_snapshot_message_type() {
+        assert_eq!(
+            MessageType::from_u8(0x19),
+            Some(MessageType::RequestPaneSnapshot)
+        );
+        assert_eq!(MessageType::RequestPaneSnapshot as u8, 0x19);
     }
 
     #[test]

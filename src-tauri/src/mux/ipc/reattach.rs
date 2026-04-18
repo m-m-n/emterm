@@ -12,7 +12,28 @@ use super::codec::MuxCodec;
 use super::protocol::*;
 use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{PaneId, PaneOutputTarget, PtyOutputChunk, TitleChangeSender};
+use crate::mux::session::pane::{PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender};
+
+/// Build a self-contained ANSI byte sequence that reproduces the current
+/// screen state tracked by the given shadow parser.
+///
+/// Output layout: `ESC[H ESC[2J` + `vt100::Screen::contents_formatted()`.
+/// The first fragment clears the screen and homes the cursor so the client
+/// starts from a known state; the second fragment replays the full screen
+/// including alt-screen toggle, SGR attributes, cursor position, and cells.
+///
+/// Used by both the reattach path (combined with ring buffer delta) and the
+/// on-demand `RequestPaneSnapshot` path (shadow parser output only).
+pub(super) fn build_shadow_parser_snapshot(shadow_parser: &SharedShadowParser) -> Vec<u8> {
+    let screen_data = {
+        let parser = shadow_parser.lock().unwrap();
+        parser.screen().contents_formatted()
+    };
+    let mut combined = Vec::with_capacity(screen_data.len() + 10);
+    combined.extend_from_slice(b"\x1b[H\x1b[2J");
+    combined.extend_from_slice(&screen_data);
+    combined
+}
 
 /// Collect reattach data for panes in the given session.
 ///
@@ -33,11 +54,14 @@ pub(super) async fn collect_reattach_data(
                 }
 
                 // Get screen restoration data from shadow parser
-                let (screen_data, is_alternate_screen) = {
-                    let parser = pane.shadow_parser.lock().unwrap();
-                    let screen = parser.screen();
-                    (screen.contents_formatted(), screen.alternate_screen())
-                };
+                let mut combined = build_shadow_parser_snapshot(&pane.shadow_parser);
+                let is_alternate_screen = pane
+                    .shadow_parser
+                    .lock()
+                    .unwrap()
+                    .screen()
+                    .alternate_screen();
+                let screen_len = combined.len();
 
                 // Get ring buffer data from detached panes
                 let mut target = pane.output_target.lock().unwrap();
@@ -59,18 +83,19 @@ pub(super) async fn collect_reattach_data(
                     "collect_reattach: pane {} was={}, screen={}B, ring={}B, total={}B, alt_screen={}, exited={}",
                     pane.id,
                     target_was,
-                    screen_data.len(),
+                    screen_len,
                     ring_data.len(),
-                    screen_data.len() + ring_data.len(),
+                    screen_len + ring_data.len(),
                     is_alternate_screen,
                     pane.exited
                 );
 
-                // Combine: reset screen + shadow parser contents + ring buffer replay
-                let mut combined = Vec::with_capacity(screen_data.len() + ring_data.len() + 10);
-                // Reset: clear screen + home cursor
-                combined.extend_from_slice(b"\x1b[H\x1b[2J");
-                combined.extend_from_slice(&screen_data);
+                // Ensure the ring buffer (up to 64MB) fits without incremental
+                // reallocation. `build_shadow_parser_snapshot` only reserves
+                // `screen_data.len() + 10`, so without this the reattach path
+                // would grow `combined` in ~log2(ring_data.len() / screen_len)
+                // doubling steps.
+                combined.reserve(ring_data.len());
                 combined.extend_from_slice(&ring_data);
 
                 data.push((pane.id, combined));

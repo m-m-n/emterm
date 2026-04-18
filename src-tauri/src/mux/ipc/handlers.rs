@@ -11,9 +11,11 @@ use tokio_util::codec::Framed;
 use super::codec::MuxCodec;
 use super::protocol::*;
 use super::pty_spawn::{register_pane_and_start_reader, spawn_pty};
-use super::reattach::{collect_reattach_data, detach_session_panes, send_reattach_data};
+use super::reattach::{
+    build_shadow_parser_snapshot, collect_reattach_data, detach_session_panes, send_reattach_data,
+};
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{PaneId, PtyOutputChunk, TitleChangeSender};
+use crate::mux::session::pane::{PaneId, PtyOutputChunk, SharedShadowParser, TitleChangeSender};
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
 ///
@@ -417,6 +419,74 @@ pub(super) async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<S
             }
         }
     }
+}
+
+/// Handle RequestPaneSnapshot message by pushing a snapshot `PtyOutputChunk`
+/// onto the shared pane output channel.
+///
+/// Why the channel (and not a direct `framed.send`): the PTY reader thread
+/// updates `shadow_parser` *and* enqueues the raw bytes onto
+/// `pane_output_tx`. If the snapshot bypassed the channel, pending PTY chunks
+/// already in the queue — whose effects are already baked into the snapshot
+/// state — would be delivered *after* the snapshot and re-applied on top of
+/// it, producing duplicated/shifted output. Routing through the same channel
+/// minimizes (but does not strictly eliminate) this ordering divergence.
+///
+/// A narrow race window remains: the reader takes `shadow_parser.lock()`,
+/// applies bytes, releases the lock, and *then* enqueues the chunk onto
+/// `pane_output_tx`. If this handler runs between the reader's lock release
+/// and its enqueue, we can end up with `[snapshot, reader_chunk]` in the
+/// channel — duplicating that chunk's effect over the snapshot. In practice
+/// the gap is ~µs and dominated by absolute-positioned ANSI (which is
+/// idempotent), and the snapshot's leading `\x1b[H\x1b[2J` provides a
+/// recovery point, so the observable drift is minimal. Absolute ordering is
+/// *not* guaranteed; callers that need it must use a different mechanism
+/// (e.g. a reader-side snapshot-request barrier).
+pub(super) async fn handle_request_pane_snapshot(
+    msg: &MuxMessage,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+) -> Result<(), bool> {
+    let pane_id = msg.pane_id;
+
+    let shadow_parser: Option<SharedShadowParser> = {
+        let mgr = session_manager.lock().await;
+        mgr.find_pane(pane_id).and_then(|(sid, wid)| {
+            mgr.get_session(sid)
+                .and_then(|s| s.windows.get(&wid))
+                .and_then(|w| w.panes.get(&pane_id))
+                .map(|p| p.shadow_parser.clone())
+        })
+    };
+
+    let Some(shadow_parser) = shadow_parser else {
+        log::warn!(
+            "RequestPaneSnapshot: pane {} not found; ignoring",
+            pane_id
+        );
+        return Ok(());
+    };
+
+    let snapshot = build_shadow_parser_snapshot(&shadow_parser);
+    log::debug!(
+        "RequestPaneSnapshot: pane {} -> {}B",
+        pane_id,
+        snapshot.len()
+    );
+
+    // Send as a regular PTY output chunk so it interleaves correctly with any
+    // already-queued bytes for this pane. If the client is gone the channel is
+    // closed — that's not a fatal error for this handler, just drop the reply.
+    if let Err(e) = pane_output_tx
+        .send(PtyOutputChunk {
+            pane_id,
+            data: snapshot,
+        })
+        .await
+    {
+        log::warn!("RequestPaneSnapshot: failed to enqueue snapshot for pane {}: {}", pane_id, e);
+    }
+    Ok(())
 }
 
 /// Handle Attach message: switch the client to a different session.

@@ -167,6 +167,12 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     // during reattach before the status bar was restored), which would cause
     // `stty size` to report the wrong row count.
     sendMuxPaneResize(ctx, activePaneId);
+    // Request an on-demand screen snapshot so the displayed grid is
+    // reconciled with the daemon shadow_parser authoritative state. Without
+    // this, any bytes that arrived in the gap between the click and
+    // flushPtyPendingData (or any ambiguity in the inactive-pane processing
+    // path) can leave the target pane's saved grid stale.
+    requestPaneSnapshot(ctx, activePaneId);
   }
 
   const renderer = ctx.getRenderer();
@@ -174,6 +180,21 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     diagTraceMuxRender(state, renderer, "switchMuxWindow");
   }
   emitMuxStateChange(ctx);
+}
+
+/** Send RequestPaneSnapshot to the daemon for the given pane. The daemon
+ *  replies with a PtyOutput frame containing a screen reset + shadow parser
+ *  replay, which the normal PTY pipeline applies to the active WASM grid. */
+function requestPaneSnapshot(ctx: MuxWindowManagerContext, paneId: number): void {
+  const client = ctx.getMuxClient();
+  if (!client) return;
+  client.sendRequestPaneSnapshot(paneId).catch((err: unknown) => {
+    muxLog.warn(
+      `sendRequestPaneSnapshot failed for pane ${paneId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  });
 }
 
 /** Resize the currently-active grid to match the given dimensions if they
@@ -533,6 +554,9 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
   // Same rationale as switchMuxWindow: the target pane may have stale
   // dimensions if reattach initialized it before the status bar was restored.
   sendMuxPaneResize(ctx, paneId);
+
+  // Request on-demand screen snapshot — same rationale as switchMuxWindow.
+  requestPaneSnapshot(ctx, paneId);
 
   const renderer = ctx.getRenderer();
   if (renderer) {
