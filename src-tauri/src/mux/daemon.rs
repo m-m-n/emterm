@@ -6,9 +6,15 @@
 use std::path::PathBuf;
 
 use super::ipc::connection::handle_connection;
+use super::ipc::protocol::{MessageType, MuxMessage, RenameWindowMsg};
 use super::session::manager::SessionManager;
+use super::session::pane::TitleChangeSender;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+
+/// Daemon-level title channel capacity.
+const TITLE_CHANNEL_CAPACITY: usize = 64;
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -205,6 +211,13 @@ pub async fn run_daemon() -> anyhow::Result<()> {
 
     let session_manager = Arc::new(Mutex::new(SessionManager::new()));
 
+    // Daemon-level title channel: lives as long as the daemon so every pane
+    // (GUI-created or CLI-created) can propagate OSC title changes to the
+    // session manager even when no GUI client is attached.
+    let (title_tx, title_rx): (TitleChangeSender, mpsc::Receiver<(u32, String)>) =
+        mpsc::channel(TITLE_CHANNEL_CAPACITY);
+    tokio::spawn(run_title_update_task(session_manager.clone(), title_rx));
+
     // Shutdown signal: sent by handle_destroy_pane/handle_destroy_window when all sessions empty
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -221,7 +234,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone()));
+                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
@@ -278,6 +291,14 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     log::info!("Mux daemon listening on {}", pipe_name_str);
 
     let session_manager = Arc::new(Mutex::new(SessionManager::new()));
+
+    // Daemon-level title channel: lives as long as the daemon so every pane
+    // (GUI-created or CLI-created) can propagate OSC title changes to the
+    // session manager even when no GUI client is attached.
+    let (title_tx, title_rx): (TitleChangeSender, mpsc::Receiver<(u32, String)>) =
+        mpsc::channel(TITLE_CHANNEL_CAPACITY);
+    tokio::spawn(run_title_update_task(session_manager.clone(), title_rx));
+
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
     // First iteration claims exclusive pipe ownership to prevent hijacking
@@ -293,7 +314,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = server.connect() => {
                 match result {
                     Ok(()) => {
-                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone()));
+                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone()));
                     }
                     Err(e) => {
                         log::error!("Pipe accept error: {}", e);
@@ -326,6 +347,59 @@ pub async fn run_daemon() -> anyhow::Result<()> {
 #[cfg(all(not(unix), not(windows)))]
 pub async fn run_daemon() -> anyhow::Result<()> {
     anyhow::bail!("Mux daemon is not supported on this platform.");
+}
+
+/// Apply a title change to the SessionManager with diff detection.
+///
+/// Returns `true` when `window.name` was updated and a broadcast was sent;
+/// `false` when the pane was not found or the title was unchanged.
+async fn apply_title_change(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_id: u32,
+    new_title: String,
+) -> bool {
+    let mut mgr = session_manager.lock().await;
+    let Some((sid, wid)) = mgr.find_pane(pane_id) else {
+        log::warn!("apply_title_change: pane {} not found", pane_id);
+        return false;
+    };
+    let unchanged = mgr
+        .get_session(sid)
+        .and_then(|s| s.windows.get(&wid))
+        .map(|w| w.name == new_title)
+        .unwrap_or(false);
+    if unchanged {
+        return false;
+    }
+    log::info!(
+        "Title change: pane {} -> window {} -> '{}'",
+        pane_id,
+        wid,
+        new_title
+    );
+    mgr.rename_window(sid, wid, new_title.clone());
+    let notify_tx = mgr.notify_tx().clone();
+    drop(mgr);
+    let rename_payload = RenameWindowMsg { name: new_title };
+    let msg = MuxMessage::control(MessageType::RenameWindow, wid, &rename_payload);
+    if let Err(e) = notify_tx.send(msg) {
+        log::debug!("apply_title_change: no active subscribers: {}", e);
+    }
+    true
+}
+
+/// Run the daemon-level title update task.
+///
+/// Exits when all senders are dropped (daemon shutdown).
+async fn run_title_update_task(
+    session_manager: Arc<Mutex<SessionManager>>,
+    mut title_rx: mpsc::Receiver<(u32, String)>,
+) {
+    log::info!("Title update task started");
+    while let Some((pane_id, new_title)) = title_rx.recv().await {
+        apply_title_change(&session_manager, pane_id, new_title).await;
+    }
+    log::info!("Title update task exiting");
 }
 
 /// Close all PTYs in all sessions for graceful daemon shutdown.
@@ -474,5 +548,221 @@ mod tests {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
         // Should not panic on empty manager
         graceful_shutdown(&mgr).await;
+    }
+
+    /// Helpers for title-update tests.
+    fn make_title_test_pane(id: u32) -> crate::mux::session::pane::MuxPane {
+        use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        let (tx, _rx) = mpsc::channel(1);
+        let target: SharedOutputTarget =
+            StdArc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+        MuxPane::new_test(id, 80, 24, target)
+    }
+
+    async fn setup_single_pane_manager() -> (Arc<Mutex<SessionManager>>, u32, u32, u32) {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let mut m = mgr.lock().await;
+        let sid = m.create_session("default".to_string());
+        let wid = m.create_window(sid, "shell".to_string()).unwrap();
+        let pane_id = 42;
+        m.get_session_mut(sid)
+            .unwrap()
+            .windows
+            .get_mut(&wid)
+            .unwrap()
+            .add_pane(make_title_test_pane(pane_id));
+        drop(m);
+        (mgr, sid, wid, pane_id)
+    }
+
+    #[tokio::test]
+    async fn test_apply_title_change_updates_window_and_broadcasts() {
+        let (mgr, sid, wid, pane_id) = setup_single_pane_manager().await;
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        let changed = apply_title_change(&mgr, pane_id, "hello".to_string()).await;
+        assert!(changed, "first title change should return true");
+
+        let m = mgr.lock().await;
+        let name = m
+            .get_session(sid)
+            .unwrap()
+            .windows
+            .get(&wid)
+            .unwrap()
+            .name
+            .clone();
+        assert_eq!(name, "hello");
+        drop(m);
+
+        let msg = notify_rx.recv().await.unwrap();
+        assert_eq!(msg.msg_type, MessageType::RenameWindow);
+        assert_eq!(msg.pane_id, wid);
+        let payload: RenameWindowMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.name, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_apply_title_change_same_title_skips_broadcast() {
+        let (mgr, _sid, _wid, pane_id) = setup_single_pane_manager().await;
+        let _ = apply_title_change(&mgr, pane_id, "hello".to_string()).await;
+
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+        let changed = apply_title_change(&mgr, pane_id, "hello".to_string()).await;
+        assert!(!changed, "same title should return false");
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(
+            timeout.is_err(),
+            "no broadcast should be sent for unchanged title"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_title_change_unknown_pane_no_change() {
+        let (mgr, sid, wid, _pane_id) = setup_single_pane_manager().await;
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        let changed = apply_title_change(&mgr, 9999, "bogus".to_string()).await;
+        assert!(!changed);
+
+        let m = mgr.lock().await;
+        assert_eq!(
+            m.get_session(sid).unwrap().windows.get(&wid).unwrap().name,
+            "shell"
+        );
+        drop(m);
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_millis(50), notify_rx.recv()).await;
+        assert!(timeout.is_err(), "no broadcast for unknown pane");
+    }
+
+    #[tokio::test]
+    async fn test_title_update_task_applies_messages_from_channel() {
+        let (mgr, sid, wid, pane_id) = setup_single_pane_manager().await;
+        let (tx, rx) = mpsc::channel::<(u32, String)>(8);
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        let mgr_clone = mgr.clone();
+        let task = tokio::spawn(run_title_update_task(mgr_clone, rx));
+
+        tx.send((pane_id, "first".to_string())).await.unwrap();
+        tx.send((pane_id, "first".to_string())).await.unwrap();
+        tx.send((pane_id, "second".to_string())).await.unwrap();
+
+        // Expect two broadcasts: "first" and "second"
+        let msg1 = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let p1: RenameWindowMsg = msg1.decode_payload().unwrap();
+        assert_eq!(p1.name, "first");
+        let msg2 = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let p2: RenameWindowMsg = msg2.decode_payload().unwrap();
+        assert_eq!(p2.name, "second");
+
+        // Drop sender so task exits.
+        drop(tx);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), task).await;
+
+        let m = mgr.lock().await;
+        assert_eq!(
+            m.get_session(sid).unwrap().windows.get(&wid).unwrap().name,
+            "second"
+        );
+    }
+
+    /// TS-10: after a detach (output_target switched to Detached, title_sender
+    /// preserved), a title change still propagates to window.name through the
+    /// daemon-level title task. The subsequent Welcome snapshot observes the
+    /// updated name.
+    #[tokio::test]
+    async fn test_detached_pane_title_change_updates_window_name() {
+        use crate::mux::ipc::reattach::detach_session_panes;
+
+        let (mgr, sid, wid, pane_id) = setup_single_pane_manager().await;
+        let (tx, rx) = mpsc::channel::<(u32, String)>(8);
+
+        // Attach the daemon-level tx to the pane (simulating CLI-created pane).
+        {
+            let m = mgr.lock().await;
+            let session = m.get_session(sid).unwrap();
+            let pane = session
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&pane_id)
+                .unwrap();
+            *pane.title_sender.lock().unwrap() = Some(tx.clone());
+        }
+
+        // Simulate GUI disconnect: this must NOT clear the title sender.
+        detach_session_panes(&mgr, sid).await;
+        {
+            let m = mgr.lock().await;
+            let session = m.get_session(sid).unwrap();
+            let pane = session
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&pane_id)
+                .unwrap();
+            assert!(
+                pane.title_sender.lock().unwrap().is_some(),
+                "detach must preserve title_sender"
+            );
+        }
+
+        // Launch the daemon-level title task and send a title through the
+        // pane-side sender to simulate an OSC update while detached.
+        let task = tokio::spawn(run_title_update_task(mgr.clone(), rx));
+        tx.send((pane_id, "detached-title".to_string()))
+            .await
+            .unwrap();
+        drop(tx);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), task).await;
+
+        // The next Welcome would observe this new name via session_list().
+        let m = mgr.lock().await;
+        let list = m.session_list();
+        let window = list[0].windows.iter().find(|w| w.id == wid).unwrap();
+        assert_eq!(window.name, "detached-title");
+    }
+
+    /// TS-11: notify_tx subscription taken before Welcome construction must
+    /// capture any RenameWindow emitted between snapshot build and message-
+    /// loop entry. Emulate the race: subscribe first, then broadcast, then
+    /// verify the subscriber receives the event (i.e. no gap).
+    #[tokio::test]
+    async fn test_subscribe_before_welcome_catches_rename() {
+        let (mgr, _sid, wid, pane_id) = setup_single_pane_manager().await;
+
+        // Phase A: subscribe BEFORE any broadcast (simulates the reordered
+        // sequence in handle_connection).
+        let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
+
+        // Phase B: build Welcome snapshot (mimics the Welcome frame build).
+        let _snapshot_len = { mgr.lock().await.session_list().len() };
+
+        // Phase C: broadcast arrives between snapshot and loop-entry.
+        apply_title_change(&mgr, pane_id, "raced-title".to_string()).await;
+
+        // Phase D: subscriber must see it (the race is closed).
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("notify_rx should receive RenameWindow")
+            .unwrap();
+        assert_eq!(msg.msg_type, MessageType::RenameWindow);
+        assert_eq!(msg.pane_id, wid);
+        let payload: RenameWindowMsg = msg.decode_payload().unwrap();
+        assert_eq!(payload.name, "raced-title");
     }
 }

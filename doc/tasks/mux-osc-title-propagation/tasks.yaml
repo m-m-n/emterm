@@ -1,0 +1,10 @@
+tasks:
+  - id: phase1-daemon-title-channel
+    title: "daemon-level title チャネルと更新タスクの導入"
+    status: completed
+  - id: phase2-connection-and-detach-refactor
+    title: "接続ハンドラと detach 経路のリファクタリング（title_tx 一元化・Welcome/subscribe 順序是正・detach 時 title_sender 非null化）"
+    status: completed
+  - id: phase3-diff-detection-and-tests
+    title: "差分検出の純粋関数化と unit/integration テスト追加（TS-10, TS-11, TS-12 含む）"
+    status: completed

@@ -64,7 +64,7 @@ User input
 - **FR6: Window Lifecycle Messages** - The following control messages manage windows:
   - `CreateWindow` (0x12): Client → Daemon. Create a new window with optional name/command.
   - `SwitchWindow` (0x13): Client → Daemon. Notify daemon of active window change (for priority/optimization).
-  - `RenameWindow` (0x14): Client → Daemon. Rename a window.
+  - `RenameWindow` (0x14): Bidirectional. Client→Daemon for user-initiated rename. Daemon→Client for OSC title propagation (詳細は `doc/tasks/mux-osc-title-propagation/SPEC.md`).
   - `DestroyWindow` (0x15): Client → Daemon. Close a window and its panes.
   - `StatusUpdate` (0x16): Daemon → Client. Push window list updates (names, active index, flags).
 
@@ -121,7 +121,7 @@ ESC _ emterm-mux;<base64(frame_body)> ESC \
 | PtyExited | 0x10 | D→C | PtyExitedMsg | Pane process exited |
 | CreateWindow | 0x12 | C→D | CreateWindowPayload | Create new window |
 | SwitchWindow | 0x13 | C→D | window_id | Active window changed (informational) |
-| RenameWindow | 0x14 | C→D | RenameWindowMsg | Rename window |
+| RenameWindow | 0x14 | C↔D | RenameWindowMsg | Rename window (C→D: user action, D→C: OSC title propagation) |
 | DestroyWindow | 0x15 | C→D | window_id | Destroy window |
 | StatusUpdate | 0x16 | D→C | StatusUpdateMsg | Window list update push |
 

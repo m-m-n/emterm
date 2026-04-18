@@ -12,7 +12,9 @@ use super::codec::MuxCodec;
 use super::protocol::*;
 use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender};
+use crate::mux::session::pane::{
+    PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
+};
 
 /// Build a self-contained ANSI byte sequence that reproduces the current
 /// screen state tracked by the given shadow parser.
@@ -129,7 +131,7 @@ where
 }
 
 /// Switch panes in a session to detached buffering mode.
-pub(super) async fn detach_session_panes(
+pub(in crate::mux) async fn detach_session_panes(
     session_manager: &Arc<Mutex<SessionManager>>,
     session_id: u32,
 ) {
@@ -153,8 +155,6 @@ pub(super) async fn detach_session_panes(
                     *target = PaneOutputTarget::Detached(DetachRingBuffer::new(
                         crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
                     ));
-                    // Clear title sender so reader threads don't send to dead channel
-                    *pane.title_sender.lock().unwrap() = None;
                     log::info!(
                         "detach_session_panes: pane {} switched {} -> Detached",
                         pane.id,
@@ -339,6 +339,56 @@ mod tests {
             "Should only return 1 entry (pane 2 is exited)"
         );
         assert_eq!(data[0].0, 1, "Only pane 1 should be included");
+    }
+
+    /// TS-12: detach_session_panes must preserve the pane's title_sender
+    /// so the daemon-level title task keeps receiving OSC title updates
+    /// while no GUI is attached.
+    #[tokio::test]
+    async fn test_detach_session_panes_preserves_title_sender() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (pane_out_tx, _pane_out_rx) = mpsc::channel::<PtyOutputChunk>(16);
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(pane_out_tx)));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target);
+            *pane.title_sender.lock().unwrap() = Some(title_tx.clone());
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+
+        detach_session_panes(&mgr, session_id).await;
+
+        let m = mgr.lock().await;
+        let session = m.get_session(session_id).unwrap();
+        let pane = session
+            .windows
+            .values()
+            .next()
+            .unwrap()
+            .panes
+            .values()
+            .next()
+            .unwrap();
+        assert!(
+            pane.title_sender.lock().unwrap().is_some(),
+            "detach must not clear title_sender (daemon-level tx stays alive)"
+        );
+        assert!(matches!(
+            *pane.output_target.lock().unwrap(),
+            PaneOutputTarget::Detached(_)
+        ));
     }
 
     /// Test: session_list reports correct pane_count for multi-window session.

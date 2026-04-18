@@ -1,0 +1,64 @@
+schema_version: 1
+feature: mux-osc-title-propagation
+scale: standard
+created: 2026-04-18
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: b93046cee5fbfd8cb4d7f7ae57c6cb0e279d3663
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: b93046cee5fbfd8cb4d7f7ae57c6cb0e279d3663
+  - id: verify-plan
+    status: completed
+    completed_at_commit: b93046cee5fbfd8cb4d7f7ae57c6cb0e279d3663
+  - id: implement
+    status: completed
+    completed_at_commit: b93046cee5fbfd8cb4d7f7ae57c6cb0e279d3663
+  - id: check
+    status: completed
+    completed_at_commit: b93046cee5fbfd8cb4d7f7ae57c6cb0e279d3663
+
+requirements:
+  FR-1:
+    title: daemon 主導のタイトル更新
+    files:
+      - src-tauri/src/mux/daemon.rs
+      - src-tauri/src/mux/ipc/connection.rs
+  FR-2:
+    title: 接続 GUI への通知
+    files:
+      - src-tauri/src/mux/daemon.rs
+  FR-3:
+    title: アタッチ時の整合性
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+  FR-4:
+    title: 差分検出の維持
+    files:
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/daemon.rs
+  FR-5:
+    title: CLI new-window 経路 / detach 中 OSC
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/ipc/reattach.rs
+  FR-6:
+    title: Welcome と notify 購読の順序保証
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+  FR-7:
+    title: 複数ペインとタイトル所有（現行挙動維持）
+    files: []
