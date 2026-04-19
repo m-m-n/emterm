@@ -364,6 +364,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       const renderer = ctx.getRenderer();
       renderer?.forceRender(recoveryState);
       renderer?.startCursorBlink();
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] finishRecovery invoking onRecovered | viaReinit=${viaReinit} hasHook=${!!ctx.onRecovered}`,
+      );
       try {
         ctx.onRecovered?.(viaReinit);
       } catch (hookError) {

@@ -1092,15 +1092,39 @@ export class TerminalApp {
    * - Non-mux has no backend buffer — the shell redraws on the next keypress.
    */
   private onWasmRecovered(viaReinit: boolean): void {
+    const activePaneIdPre = this.inMuxMode ? this.getActiveMuxPaneId() : null;
+    console.warn(
+      `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered entry | viaReinit=${viaReinit} inMuxMode=${this.inMuxMode} muxClient=${!!this.muxClient} activePaneId=${activePaneIdPre} activeMuxWindowIndex=${this.activeMuxWindowIndex} muxPaneGrids=${this.muxPaneGrids.size} muxDetached=${this.muxDetachedGrids.size} muxPaneCanvases=${this.muxPaneCanvases.size}`,
+    );
     if (viaReinit) {
       this.muxPaneGrids.clear();
       this.muxDetachedGrids.clear();
       if (this.muxPaneCanvases.size > 0) this.teardownMultiPaneAfterReinit();
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered cleared stale refs | muxPaneGrids=0 muxDetached=0 muxPaneCanvases=${this.muxPaneCanvases.size}`,
+      );
     }
-    if (!this.inMuxMode || !this.muxClient) return;
+    if (!this.inMuxMode || !this.muxClient) {
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered skip snapshot — inMuxMode=${this.inMuxMode} muxClient=${!!this.muxClient}`,
+      );
+      return;
+    }
     const paneId = this.getActiveMuxPaneId();
-    if (paneId == null) return;
-    this.muxClient.sendRequestPaneSnapshot(paneId).catch((err: unknown) => {
+    if (paneId == null) {
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered skip snapshot — activePaneId=null activeMuxWindowIndex=${this.activeMuxWindowIndex} muxPaneIds=[${this.muxPaneIds.join(",")}]`,
+      );
+      return;
+    }
+    console.warn(
+      `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered sending RequestPaneSnapshot | paneId=${paneId}`,
+    );
+    this.muxClient.sendRequestPaneSnapshot(paneId).then(() => {
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] RequestPaneSnapshot sent | paneId=${paneId}`,
+      );
+    }).catch((err: unknown) => {
       console.warn(
         `[WARN][FRONTEND] sendRequestPaneSnapshot after WASM recovery failed: ${
           err instanceof Error ? err.message : String(err)
