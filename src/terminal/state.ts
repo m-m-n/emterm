@@ -184,12 +184,24 @@ export class TerminalState implements TerminalStateAccessor {
    * @param rows - Number of rows
    * @param scrollbackLines - Maximum number of lines to keep in scrollback (default: 10000)
    * @param useWasm - Whether to use WASM-backed viewport (default: true)
+   * @param existingGrid - Optional pre-allocated WasmGrid to adopt as primary
+   *   instead of allocating a fresh one. Use this for mux pane creation to
+   *   avoid the throw-away "allocate then swap" pattern that leaks WASM memory.
+   *   The caller transfers ownership; the WasmGrid will be freed by dispose().
    */
-  constructor(cols: number, rows: number, scrollbackLines: number = 10000, useWasm: boolean = true) {
+  constructor(
+    cols: number,
+    rows: number,
+    scrollbackLines: number = 10000,
+    useWasm: boolean = true,
+    existingGrid?: WasmGrid,
+  ) {
     this.maxScrollbackLines = scrollbackLines;
 
-    // Create WASM grid for viewport (if WASM is available)
-    if (useWasm) {
+    // Adopt an externally-provided grid, or create a fresh WASM grid
+    if (existingGrid) {
+      this.primaryWasmGrid = existingGrid;
+    } else if (useWasm) {
       try {
         this.primaryWasmGrid = new WasmGrid(cols, rows, scrollbackLines);
       } catch {
