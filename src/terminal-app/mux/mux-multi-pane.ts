@@ -156,7 +156,11 @@ export function createPaneCanvas(ctx: MuxMultiPaneContext, paneId: number): void
   const rows = ctx.state.getWasmCore().rows();
   const grid = new WasmGrid(cols, rows, 10000);
   const paneState = new TerminalState(cols, rows);
-  paneState.swapPrimaryGrid(grid);
+  // TerminalState's constructor allocates an internal WasmGrid with the
+  // default 10000-line scrollback (~33 MB at cols=206). Dispose the discarded
+  // grid returned by swapPrimaryGrid to prevent per-pane WASM memory leak.
+  const discardedGrid = paneState.swapPrimaryGrid(grid);
+  discardedGrid?.dispose();
 
   // Create a renderer inside this pane container
   const computedStyle = window.getComputedStyle(ctx.container);
