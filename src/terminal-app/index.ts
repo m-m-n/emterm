@@ -612,6 +612,7 @@ export class TerminalApp {
       getSessionExitCallback: () => this.sessionExitCallback,
       getMuxApcContext: () => this.imageHandler?.getMuxApcContext() ?? null,
       isTabActive: () => this._tabActive,
+      onRecovered: (viaReinit) => this.onWasmRecovered(viaReinit),
     });
 
     // Route renderer-side WASM crashes (render, renderImmediate, cursor blink)
@@ -1071,6 +1072,70 @@ export class TerminalApp {
   /** Get the active mux pane ID (multi-pane or single-pane mode). */
   private getActiveMuxPaneId(): number | null {
     return getActiveMuxPaneIdImpl(this.getMuxActionContext());
+  }
+
+  /**
+   * Post-recovery hook: restore visible content that a fresh empty WASM grid
+   * cannot reproduce on its own.
+   *
+   * - `viaReinit=true`: the WASM module was replaced, so every saved
+   *   `MuxPaneGridState` / detached snapshot references dead memory. Drop
+   *   them so subsequent `switchMuxWindow` takes the "no saved state"
+   *   branch (fresh grid + daemon snapshot) instead of crashing during
+   *   `restoreMuxPaneState`. The multi-pane layout (`muxPaneCanvases`) also
+   *   holds per-pane `WasmGrid`+`TerminalState` from the dead module; since
+   *   `exitMultiPaneMode` would itself call `.dispose()` on dead grids and
+   *   crash, we tear the layout down manually and let the daemon snapshot
+   *   replay restore the active pane in the main canvas.
+   * - In any mux mode, ask the daemon to resend the active pane's shadow
+   *   screen so the user sees real content instead of a blank buffer.
+   * - Non-mux has no backend buffer — the shell redraws on the next keypress.
+   */
+  private onWasmRecovered(viaReinit: boolean): void {
+    if (viaReinit) {
+      this.muxPaneGrids.clear();
+      this.muxDetachedGrids.clear();
+      if (this.muxPaneCanvases.size > 0) this.teardownMultiPaneAfterReinit();
+    }
+    if (!this.inMuxMode || !this.muxClient) return;
+    const paneId = this.getActiveMuxPaneId();
+    if (paneId == null) return;
+    this.muxClient.sendRequestPaneSnapshot(paneId).catch((err: unknown) => {
+      console.warn(
+        `[WARN][FRONTEND] sendRequestPaneSnapshot after WASM recovery failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
+  }
+
+  /**
+   * Post-reinit multi-pane teardown.
+   *
+   * The usual `exitMultiPaneMode` path invokes `TerminalState.dispose()` on
+   * every pane entry, which touches WASM memory that no longer exists after
+   * `reinitWasm()`. We drop the DOM shells and state references here without
+   * invoking dispose; the dead wasm-bindgen JS wrappers become garbage for
+   * the normal GC to reclaim. The main `this.state` has already been
+   * rebuilt by `recreateWasmCore()` in the recovery path.
+   */
+  private teardownMultiPaneAfterReinit(): void {
+    for (const [, paneEntry] of this.muxPaneCanvases) {
+      try { paneEntry.container.remove(); } catch { /* DOM already detached */ }
+    }
+    this.muxPaneCanvases.clear();
+    if (this.muxPaneContainer) {
+      try { this.muxPaneContainer.remove(); } catch { /* already detached */ }
+      this.muxPaneContainer = null;
+    }
+    this.muxLayoutRoot = null;
+    this.muxActivePaneId = null;
+    this.muxPreZoomLayout = null;
+    if (this.terminalRoot) {
+      const mainCanvas = this.terminalRoot.querySelector("canvas:not(.mux-pane-canvas)") as HTMLCanvasElement | null;
+      if (mainCanvas) mainCanvas.style.display = "block";
+    }
+    console.warn("[WARN][FRONTEND] multi-pane layout torn down after WASM reinit — split view lost");
   }
 
   /** Build the context object for mux action handler functions. */

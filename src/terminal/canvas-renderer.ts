@@ -743,7 +743,13 @@ export class CanvasRenderer implements ITerminalRenderer {
 				} catch (error) {
 					// WASM may be in recovery — silently skip this blink frame
 					if (error instanceof WebAssembly.RuntimeError) {
-						console.warn("[WARN][FRONTEND] cursor blink skipped — WASM unavailable");
+						// DIAG-IDLE: capture visibility context so we can tell
+						// whether WebKitGTK flips document.hidden during PC lock.
+						const vs = typeof document !== "undefined" ? document.visibilityState : "n/a";
+						const hidden = typeof document !== "undefined" ? document.hidden : "n/a";
+						console.warn(
+							`[WARN][FRONTEND] cursor blink skipped — WASM unavailable | visibilityState=${vs} hidden=${hidden}`,
+						);
 					}
 					// Route into shared recovery so the terminal can self-heal even
 					// when no PTY data is arriving (idle terminal after suspend).
