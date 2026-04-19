@@ -148,6 +148,14 @@ export interface PtyHandlerContext {
   getSessionExitCallback: () => ((sessionId: string) => void) | null;
   getMuxApcContext: () => MuxApcContext | null;
   isTabActive: () => boolean;
+  /**
+   * Invoked after WASM recovery finishes successfully (fast or slow path).
+   * `viaReinit=true` means the entire WASM module was reloaded — all saved
+   * WasmGrid references (e.g., mux inactive-pane grids) now point to dead
+   * memory and must be discarded. Caller is responsible for triggering
+   * content replay (e.g., mux RequestPaneSnapshot) if applicable.
+   */
+  onRecovered?: (viaReinit: boolean) => void;
 }
 
 /**
@@ -326,8 +334,13 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       fireRecoveryCallback(onComplete, false);
       return true;
     }
+    // DIAG-IDLE: include visibility/focus context so we can tell whether the
+    // crash was surfaced while hidden (blink during PC lock) vs. visible
+    // (post-resume render / focus probe).
+    const vs = typeof document !== "undefined" ? document.visibilityState : "n/a";
+    const hidden = typeof document !== "undefined" ? document.hidden : "n/a";
     console.warn(
-      `[WARN][FRONTEND] WASM crash detected — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS})`,
+      `[WARN][FRONTEND] WASM crash detected — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS}) | visibilityState=${vs} hidden=${hidden}`,
     );
 
     // Stop cursor blink during recovery to prevent WASM access on stale/freed state
@@ -337,7 +350,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       console.warn("[WARN][FRONTEND] stopCursorBlink during recovery failed:", stopError);
     }
 
-    const finishRecovery = () => {
+    const finishRecovery = (viaReinit: boolean) => {
       const recoveryState = ctx.getState();
       if (!recoveryState) return;
       const newCore = recoveryState.getWasmCore();
@@ -351,12 +364,17 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       const renderer = ctx.getRenderer();
       renderer?.forceRender(recoveryState);
       renderer?.startCursorBlink();
+      try {
+        ctx.onRecovered?.(viaReinit);
+      } catch (hookError) {
+        console.warn("[WARN][FRONTEND] onRecovered hook threw:", hookError);
+      }
     };
 
     try {
       // Step 1: Try recreating WASM core (works if WASM engine is healthy)
       if (currentState?.recreateWasmCore()) {
-        finishRecovery();
+        finishRecovery(false);
         fireRecoveryCallback(onComplete, true);
       } else if (currentState) {
         // Step 2: WASM engine itself is corrupted -- reinitialize the module
@@ -369,7 +387,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
             await reinitWasm();
             const recoveryState = ctx.getState();
             if (recoveryState?.recreateWasmCore()) {
-              finishRecovery();
+              finishRecovery(true);
               success = true;
               console.warn("[WARN][FRONTEND] WASM module reinitialized — terminal recovered");
             } else {
@@ -630,8 +648,25 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   // When the page becomes visible again after being hidden (desktop lock, workspace switch),
   // force a full re-render to recover from potential canvas buffer loss
   // and re-kick the rAF pipeline if there is pending data.
+  // DIAG-IDLE: track how long the document was hidden so idle-time WASM
+  // crashes can be correlated with actual hidden duration vs. wall clock.
+  let lastHiddenAt: number | null = null;
   const onVisibilityChange = () => {
-    if (document.visibilityState !== "visible") return;
+    const vs = document.visibilityState;
+    if (vs !== "visible") {
+      // First non-visible transition wins so `hiddenForMs` measures the full
+      // lock duration even if browsers coalesce intermediate states
+      // (e.g. hidden→prerender→hidden).
+      if (lastHiddenAt == null) lastHiddenAt = Date.now();
+      console.warn(`[WARN][FRONTEND] [DIAG-IDLE] visibility→${vs} at ${new Date().toISOString()}`);
+      return;
+    }
+
+    const hiddenForMs = lastHiddenAt != null ? Date.now() - lastHiddenAt : -1;
+    lastHiddenAt = null;
+    console.warn(
+      `[WARN][FRONTEND] [DIAG-IDLE] visibility→visible at ${new Date().toISOString()} | hiddenForMs=${hiddenForMs}`,
+    );
 
     const currentState = ctx.getState();
     const currentRenderer = ctx.getRenderer();
@@ -660,6 +695,11 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     try {
       const win = getCurrentWebviewWindow();
       const unlisten = await win.onFocusChanged(({ payload: focused }) => {
+        // DIAG-IDLE: record focus transitions so we can correlate them with
+        // visibilitychange events and see which one actually fires on PC unlock.
+        console.warn(
+          `[WARN][FRONTEND] [DIAG-IDLE] focusChanged=${focused} at ${new Date().toISOString()} | visibilityState=${document.visibilityState}`,
+        );
         if (!focused) return;
         if (wasmRecoveryInProgress || wasmUnrecoverable) return;
         const currentState = ctx.getState();
