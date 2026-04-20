@@ -147,6 +147,10 @@ fn build_cli() -> Command {
                                 .value_name("INDEX")
                                 .value_parser(clap::value_parser!(u32)),
                         ),
+                )
+                .subcommand(
+                    Command::new("clear-logs")
+                        .about("Truncate mux log files (daemon, bridge, client)"),
                 ),
         )
         .subcommand(
@@ -267,6 +271,12 @@ fn main() {
                     Some(("send-keys", sub)) => {
                         let target = sub.get_one::<u32>("target").copied();
                         if let Err(e) = app_lib::mux::cli::execute_send_keys(target) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    Some(("clear-logs", _)) => {
+                        if let Err(e) = app_lib::mux::cli::execute_clear_logs() {
                             eprintln!("Error: {}", e);
                             std::process::exit(1);
                         }

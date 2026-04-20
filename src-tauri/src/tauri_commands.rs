@@ -193,6 +193,10 @@ pub fn console_debug(message: String) {
 
 /// Write a log line to mux-client.log file.
 /// Uses the same directory as mux-daemon.log and mux-bridge.log.
+///
+/// Opens the log via `open_mux_log_append`, which applies `O_NOFOLLOW` +
+/// `mode(0o600)` on Unix to refuse pre-placed symlink attacks redirecting
+/// writes to an attacker-controlled file.
 #[cfg(feature = "gui")]
 #[tauri::command]
 pub fn mux_client_log(line: String) {
@@ -203,11 +207,7 @@ pub fn mux_client_log(line: String) {
         .map(|p| p.join("mux-client.log"))
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp/mux-client.log"));
 
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
+    if let Ok(mut file) = crate::mux::daemon::open_mux_log_append(&log_path) {
         let _ = writeln!(file, "{}", line);
     }
 }

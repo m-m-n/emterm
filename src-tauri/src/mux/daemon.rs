@@ -63,6 +63,27 @@ pub fn pipe_name() -> String {
     format!(r"\\.\pipe\emterm-mux-{}", user)
 }
 
+/// Open a mux log file for appending, refusing symlinks on Unix.
+///
+/// All three mux log files (`mux-daemon.log`, `mux-bridge.log`, `mux-client.log`)
+/// live in the same user-writable runtime directory. A pre-placed symlink on
+/// that path would otherwise redirect appended log lines into an arbitrary
+/// user-writable file. `O_NOFOLLOW` + `mode(0o600)` closes that at open time
+/// on Unix. Windows falls back to the default open, which has a residual
+/// same-user reparse-point TOCTOU; the directory is per-user (`%LOCALAPPDATA%`)
+/// so the threat surface is limited to a locally compromised user account.
+pub fn open_mux_log_append(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
 /// Check if a daemon is already running by attempting to connect to the socket.
 #[cfg(unix)]
 pub fn is_daemon_running(path: &std::path::Path) -> bool {
@@ -122,20 +143,35 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
             std::env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
 
         let log_path = sock_path.with_file_name("mux-daemon.log");
-        let log_file = std::fs::File::create(&log_path).unwrap_or_else(|_| {
+        let log_file = open_mux_log_append(&log_path).or_else(|_| {
             let fallback = if cfg!(windows) {
                 std::env::temp_dir().join("emterm-mux-daemon.log")
             } else {
                 std::path::PathBuf::from("/tmp/emterm-mux-daemon.log")
             };
-            std::fs::File::create(fallback).unwrap()
+            open_mux_log_append(&fallback)
         });
 
         let mut cmd = std::process::Command::new(&exe);
         cmd.args(["mux", "--daemon"])
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::from(log_file));
+            .stdout(std::process::Stdio::null());
+        // Fall back to discarding daemon stderr if no log file could be opened
+        // (symlink refusal, permission denied, disk full). Prior code panicked
+        // via `.unwrap()` on the fallback, which aborted daemon startup.
+        match log_file {
+            Ok(f) => {
+                cmd.stderr(std::process::Stdio::from(f));
+            }
+            Err(e) => {
+                eprintln!(
+                    "Daemon log unavailable ({}): {} (daemon stderr discarded)",
+                    log_path.display(),
+                    e
+                );
+                cmd.stderr(std::process::Stdio::null());
+            }
+        }
 
         // Detach daemon into its own session so it survives parent terminal exit
         #[cfg(unix)]
