@@ -8,7 +8,14 @@
 import { invoke } from "@tauri-apps/api/core";
 
 function timestamp(): string {
-  return new Date().toISOString();
+  const d = new Date();
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  const offsetMin = -d.getTimezoneOffset();
+  const offSign = offsetMin >= 0 ? "+" : "-";
+  const offAbs = Math.abs(offsetMin);
+  const offset = `${offSign}${pad(Math.floor(offAbs / 60))}:${pad(offAbs % 60)}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}${offset}`;
 }
 
 function writeLine(level: string, msg: string): void {

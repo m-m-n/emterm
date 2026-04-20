@@ -31,7 +31,7 @@ fn init_mux_logger(component: &'static str) {
             writeln!(
                 buf,
                 "{} {}{} {}",
-                buf.timestamp_millis(),
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f%:z"),
                 record.level(),
                 component,
                 record.args()
@@ -52,6 +52,11 @@ pub fn execute_daemon() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Initialize bridge logger, writing to mux-bridge.log (same directory as daemon log).
+///
+/// Opens the log in **append mode** so concurrent bridge processes (e.g. two
+/// `emterm mux attach` invocations) do not clobber each other's log contents.
+/// Hardening (O_NOFOLLOW, 0o600) lives in `daemon::open_mux_log_append` and
+/// is shared with the daemon and client log paths.
 fn init_bridge_logger() {
     let log_dir = daemon::socket_path()
         .parent()
@@ -60,22 +65,34 @@ fn init_bridge_logger() {
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("mux-bridge.log");
 
-    if let Ok(log_file) = std::fs::File::create(&log_path) {
-        use std::io::Write;
+    match daemon::open_mux_log_append(&log_path) {
+        Ok(log_file) => {
+            use std::io::Write;
 
-        env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Info)
-            .target(env_logger::Target::Pipe(Box::new(log_file)))
-            .format(move |buf, record| {
-                writeln!(
-                    buf,
-                    "{} {}[BRIDGE] {}",
-                    buf.timestamp_millis(),
-                    record.level(),
-                    record.args()
-                )
-            })
-            .init();
+            env_logger::Builder::from_default_env()
+                .filter_level(log::LevelFilter::Info)
+                .target(env_logger::Target::Pipe(Box::new(log_file)))
+                .format(move |buf, record| {
+                    writeln!(
+                        buf,
+                        "{} {}[BRIDGE] {}",
+                        chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f%:z"),
+                        record.level(),
+                        record.args()
+                    )
+                })
+                .init();
+        }
+        Err(e) => {
+            // Visible diagnostic: Windows sharing-mode rejections and Unix
+            // `O_NOFOLLOW` symlink refusals both land here. Without this
+            // message the bridge would run silently without a log file.
+            eprintln!(
+                "Bridge logger unavailable ({}): {}",
+                log_path.display(),
+                e
+            );
+        }
     }
 }
 
@@ -134,6 +151,9 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
 /// Attaches to an existing session. If no daemon is running, prints an error.
 pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    init_bridge_logger();
+
+    log::info!("Starting mux bridge via attach (pid={})", std::process::id());
 
     let sock_path = daemon::socket_path();
 
@@ -144,6 +164,7 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
     // Run the long-running bridge process
     run_bridge(&sock_path)?;
 
+    log::info!("Bridge exiting");
     Ok(())
 }
 
@@ -761,6 +782,119 @@ pub fn execute_kill(session: Option<&str>) -> Result<(), Box<dyn std::error::Err
 pub fn execute_kill(_session: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mux is not supported on this platform");
     Ok(())
+}
+
+/// Format a byte count as a human-readable size.
+fn format_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB", "PB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} B", bytes)
+    } else {
+        format!("{:.1} {}", size, UNITS[unit])
+    }
+}
+
+/// Open an existing regular file for truncation, refusing symlinks.
+///
+/// Uses `symlink_metadata` to reject symlinked targets before opening, and on
+/// Unix additionally sets `O_NOFOLLOW` to close the TOCTOU window between the
+/// stat and the open. `create(false)` prevents re-creating a file that was
+/// deleted between the check and the open (which would otherwise leave behind
+/// a zero-byte file with default umask permissions).
+fn truncate_regular_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let meta = std::fs::symlink_metadata(path)?;
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing to truncate symlink",
+        ));
+    }
+    if !ft.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).truncate(true).create(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    opts.open(path)
+}
+
+/// Execute the `emterm mux clear-logs` command.
+///
+/// Truncates `mux-daemon.log`, `mux-bridge.log`, and `mux-client.log` in-place.
+/// Truncation (not removal) keeps open file descriptors held by the running
+/// daemon/bridge valid — new log lines continue writing from offset 0.
+///
+/// Returns `Err` if any targeted file could not be truncated, so callers
+/// (including the CLI dispatcher in `main.rs`) propagate a non-zero exit
+/// status. Partial-failure details are still printed to stderr per file.
+pub fn execute_clear_logs() -> Result<(), Box<dyn std::error::Error>> {
+    let sock_path = daemon::socket_path();
+    let log_dir = sock_path
+        .parent()
+        .ok_or("Failed to resolve mux log directory")?;
+
+    let files = ["mux-daemon.log", "mux-bridge.log", "mux-client.log"];
+    let mut cleared = 0u32;
+    let mut total_bytes = 0u64;
+    let mut failed = 0u32;
+
+    for name in &files {
+        let path = log_dir.join(name);
+        // Use symlink_metadata so a dangling/victim symlink is treated as
+        // "refuse to touch" rather than being silently skipped via exists().
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                eprintln!("Failed to stat {}: {}", path.display(), e);
+                failed += 1;
+                continue;
+            }
+        };
+        let size = meta.len();
+        match truncate_regular_file(&path) {
+            Ok(_) => {
+                println!("Cleared: {} ({})", path.display(), format_size(size));
+                cleared += 1;
+                total_bytes += size;
+            }
+            Err(e) => {
+                eprintln!("Failed to clear {}: {}", path.display(), e);
+                failed += 1;
+            }
+        }
+    }
+
+    if cleared == 0 && failed == 0 {
+        println!("No mux log files to clear in {}", log_dir.display());
+    } else {
+        println!(
+            "Cleared {} file(s), freed {}",
+            cleared,
+            format_size(total_bytes)
+        );
+    }
+
+    if failed > 0 {
+        Err(format!("Failed to clear {} file(s)", failed).into())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
