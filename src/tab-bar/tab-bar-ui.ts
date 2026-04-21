@@ -615,6 +615,7 @@ export class TabBarUI {
     if (!currentEl) return;
 
     let group: HTMLElement;
+    let groupCreated = false;
     if (currentEl.classList.contains('mux-tab-group')) {
       // Already transformed — reuse existing group
       group = currentEl;
@@ -634,6 +635,17 @@ export class TabBarUI {
         group.setAttribute('aria-selected', 'true');
       }
 
+      // Delegated click handler — attached once per group so that high-frequency
+      // re-renders (driven by OSC title updates) never recreate listeners.
+      group.addEventListener('click', (e) => {
+        const winTab = (e.target as HTMLElement | null)?.closest('.mux-window-tab') as HTMLElement | null;
+        if (!winTab || winTab.parentElement !== group) return;
+        const windowIndex = Array.prototype.indexOf.call(group.children, winTab);
+        if (windowIndex < 0) return;
+        this.tabManager.switchTab(tabId);
+        this.onMuxWindowClick?.(tabId, windowIndex);
+      });
+
       // Replace original in DOM
       currentEl.replaceWith(group);
 
@@ -642,40 +654,52 @@ export class TabBarUI {
 
       // Update tabElements to point to group
       this.tabElements.set(tabId, group);
+      groupCreated = true;
 
       // Notify drag handler that the DOM element changed
       this.onTabElementReplaced?.(tabId);
     }
 
-    console.warn(
-      `[DIAG-MUX-RENDER-TABS] tabId=${tabId} windows=${JSON.stringify(windows.map((w) => ({ name: w.name, active: w.active })))}`,
-    );
-    // Clear and rebuild window tabs
-    group.innerHTML = '';
-    for (let i = 0; i < windows.length; i++) {
-      const win = windows[i]!;
+    const previousCount = group.children.length;
+
+    // Differentially reconcile child elements against the new window list.
+    // Reusing existing DOM keeps :hover / :active states stable across the
+    // frequent title-only re-renders that Claude Code triggers.
+    while (group.children.length > windows.length) {
+      group.lastElementChild?.remove();
+    }
+    while (group.children.length < windows.length) {
       const winTab = document.createElement('div');
       winTab.className = 'tab mux-window-tab';
-      if (win.active) {
-        winTab.classList.add('mux-window-active');
-      }
       winTab.setAttribute('role', 'tab');
-      winTab.setAttribute('title', win.name);
-
       const title = document.createElement('span');
       title.className = 'tab-title';
-      title.textContent = win.name;
       winTab.appendChild(title);
-
-      // Click handler: activate this tab + switch to this window
-      const windowIndex = i;
-      winTab.addEventListener('click', () => {
-        console.warn(`[DIAG-MUX] mux tab clicked: tabId=${tabId} windowIndex=${windowIndex}`);
-        this.tabManager.switchTab(tabId);
-        this.onMuxWindowClick?.(tabId, windowIndex);
-      });
-
       group.appendChild(winTab);
+    }
+
+    for (let i = 0; i < windows.length; i++) {
+      const win = windows[i]!;
+      const winTab = group.children[i] as HTMLElement;
+      const titleEl = winTab.firstElementChild as HTMLElement | null;
+      if (titleEl && titleEl.textContent !== win.name) {
+        titleEl.textContent = win.name;
+      }
+      if (winTab.getAttribute('title') !== win.name) {
+        winTab.setAttribute('title', win.name);
+      }
+      const hasActive = winTab.classList.contains('mux-window-active');
+      if (win.active && !hasActive) {
+        winTab.classList.add('mux-window-active');
+      } else if (!win.active && hasActive) {
+        winTab.classList.remove('mux-window-active');
+      }
+    }
+
+    if (groupCreated || previousCount !== windows.length) {
+      console.warn(
+        `[DIAG-MUX-RENDER-TABS] tabId=${tabId} windows=${JSON.stringify(windows.map((w) => ({ name: w.name, active: w.active })))}`,
+      );
     }
   }
 
