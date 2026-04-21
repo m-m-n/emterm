@@ -15,7 +15,6 @@ const ACTION_I18N_KEYS: Record<string, string> = {
   "next-window": "settings.mux.keybind.nextWindow",
   "prev-window": "settings.mux.keybind.prevWindow",
   "rename-window": "settings.mux.keybind.renameWindow",
-  "paste": "settings.mux.keybind.paste",
 };
 
 export function renderMuxSection(

@@ -354,8 +354,7 @@
         "newWindow": "新規ウィンドウ",
         "nextWindow": "次のウィンドウ",
         "prevWindow": "前のウィンドウ",
-        "renameWindow": "ウィンドウ名変更",
-        "paste": "ペースト"
+        "renameWindow": "ウィンドウ名変更"
       }
     },
     "log": {

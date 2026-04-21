@@ -910,19 +910,6 @@ export class TerminalApp {
     this.registerEarlyApcContext();
   }
 
-  /** Paste clipboard text into the active PTY (mux paste action). */
-  private async pasteFromClipboard(): Promise<void> {
-    if (!this.ptyClient) return;
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        this.ptyClient.write(new TextEncoder().encode(text)).catch(() => {});
-      }
-    } catch {
-      // Clipboard access failed (permission denied, not available, etc.)
-    }
-  }
-
   /** Handle mux action dispatched by PrefixKeyHandler. */
   private handleMuxAction(action: MuxAction): void {
     handleMuxActionImpl(this.getMuxActionContext(), action);
@@ -1007,7 +994,6 @@ export class TerminalApp {
       setMuxPendingWindowCount: (count) => { self.muxPendingWindowCount = count; },
       switchMuxWindow: (previousIndex?) => self.switchMuxWindow(previousIndex),
       emitMuxStateChange: () => self.emitMuxStateChange(),
-      pasteFromClipboard: () => self.pasteFromClipboard(),
       exitMuxMode: () => self.exitMuxMode(),
     };
   }

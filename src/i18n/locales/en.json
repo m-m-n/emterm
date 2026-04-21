@@ -354,8 +354,7 @@
         "newWindow": "New Window",
         "nextWindow": "Next Window",
         "prevWindow": "Previous Window",
-        "renameWindow": "Rename Window",
-        "paste": "Paste"
+        "renameWindow": "Rename Window"
       }
     },
     "log": {
