@@ -10,18 +10,11 @@ import { DEFAULT_ACTION_BINDINGS } from "../../terminal/mux/prefix-key";
 
 /** i18n key mapping for each mux action. */
 const ACTION_I18N_KEYS: Record<string, string> = {
-  "split-vertical": "settings.mux.keybind.splitVertical",
-  "split-horizontal": "settings.mux.keybind.splitHorizontal",
-  "next-pane": "settings.mux.keybind.nextPane",
-  "prev-pane": "settings.mux.keybind.prevPane",
-  "close-pane": "settings.mux.keybind.closePane",
-  "zoom-toggle": "settings.mux.keybind.zoomToggle",
   "detach": "settings.mux.keybind.detach",
   "new-window": "settings.mux.keybind.newWindow",
   "next-window": "settings.mux.keybind.nextWindow",
   "prev-window": "settings.mux.keybind.prevWindow",
   "rename-window": "settings.mux.keybind.renameWindow",
-  "copy-mode": "settings.mux.keybind.copyMode",
   "paste": "settings.mux.keybind.paste",
 };
 

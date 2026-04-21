@@ -32,7 +32,6 @@ export const MuxMessageType = {
   SessionList: 0x0e,
   Error: 0x0f,
   PtyExited: 0x10,
-  SplitPane: 0x11,
   CreateWindow: 0x12,
   SwitchWindow: 0x13,
   RenameWindow: 0x14,

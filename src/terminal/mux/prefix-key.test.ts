@@ -30,30 +30,6 @@ describe("PrefixKeyHandler", () => {
     expect(handler.state).toBe("idle");
   });
 
-  test("prefix + % dispatches split-vertical", () => {
-    const handler = new PrefixKeyHandler();
-    const actions: MuxAction[] = [];
-    handler.setOnAction((a) => actions.push(a));
-
-    handler.handleKeyEvent(makeKeyEvent("b", true));
-    handler.handleKeyEvent(makeKeyEvent("%"));
-
-    expect(actions).toHaveLength(1);
-    expect(actions[0]!.type).toBe("split-vertical");
-    expect(handler.state).toBe("idle");
-  });
-
-  test('prefix + " dispatches split-horizontal', () => {
-    const handler = new PrefixKeyHandler();
-    const actions: MuxAction[] = [];
-    handler.setOnAction((a) => actions.push(a));
-
-    handler.handleKeyEvent(makeKeyEvent("b", true));
-    handler.handleKeyEvent(makeKeyEvent('"'));
-
-    expect(actions[0]!.type).toBe("split-horizontal");
-  });
-
   test("prefix + d dispatches detach", () => {
     const handler = new PrefixKeyHandler();
     const actions: MuxAction[] = [];
@@ -63,17 +39,6 @@ describe("PrefixKeyHandler", () => {
     handler.handleKeyEvent(makeKeyEvent("d"));
 
     expect(actions[0]!.type).toBe("detach");
-  });
-
-  test("prefix + z dispatches zoom-toggle", () => {
-    const handler = new PrefixKeyHandler();
-    const actions: MuxAction[] = [];
-    handler.setOnAction((a) => actions.push(a));
-
-    handler.handleKeyEvent(makeKeyEvent("b", true));
-    handler.handleKeyEvent(makeKeyEvent("z"));
-
-    expect(actions[0]!.type).toBe("zoom-toggle");
   });
 
   test("double prefix sends passthrough", () => {
@@ -114,17 +79,11 @@ describe("PrefixKeyHandler", () => {
     handler.setOnAction((a) => actions.push(a));
 
     const bindings = [
-      { key: "%", expected: "split-vertical" },
-      { key: '"', expected: "split-horizontal" },
-      { key: "o", expected: "next-pane" },
-      { key: "x", expected: "close-pane" },
-      { key: "z", expected: "zoom-toggle" },
       { key: "d", expected: "detach" },
       { key: "c", expected: "new-window" },
       { key: "n", expected: "next-window" },
       { key: "p", expected: "prev-window" },
       { key: ",", expected: "rename-window" },
-      { key: "[", expected: "copy-mode" },
       { key: "]", expected: "paste" },
     ];
 
@@ -134,6 +93,22 @@ describe("PrefixKeyHandler", () => {
       handler.handleKeyEvent(makeKeyEvent(key));
       expect(actions).toHaveLength(1);
       expect(actions[0]!.type).toBe(expected);
+    }
+  });
+
+  test("removed tmux action keys dispatch no action and return to idle", () => {
+    const handler = new PrefixKeyHandler();
+    const actions: MuxAction[] = [];
+    handler.setOnAction((a) => actions.push(a));
+
+    const removedKeys = ["%", '"', "o", ";", "x", "z", "["];
+    for (const key of removedKeys) {
+      actions.length = 0;
+      handler.handleKeyEvent(makeKeyEvent("b", true));
+      const consumed = handler.handleKeyEvent(makeKeyEvent(key));
+      expect(consumed).toBe(true);
+      expect(actions).toHaveLength(0);
+      expect(handler.state).toBe("idle");
     }
   });
 

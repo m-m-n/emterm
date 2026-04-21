@@ -1,5 +1,11 @@
 # Implementation Plan: Terminal Multiplexer
 
+> **NOTE (post-cleanup)**: Pane split / copy-mode / zoom-toggle / close-pane / next-pane / prev-pane の 7 機能は `doc/tasks/mux-feature-cleanup/` で削除済み。現行の有効機能 (detach / new-window / next-window / prev-window / rename-window / paste / prefix-passthrough) の仕様は `doc/tasks/terminal-multiplexer/SPEC.md` を参照。本ドキュメントは当初実装計画の履歴として残す。
+>
+> 削除済みファイル: `src/terminal/mux/layout.ts`, `src/terminal/mux/pane-manager.ts`, `src/terminal/mux/pane-border.ts`, `src/terminal/mux-copy-mode/*`, `src/terminal-app/mux/mux-multi-pane.ts`, `src/terminal-app/mux/mux-drag-resize.ts`, `src/terminal-app/mux/mux-copy-mode.ts`
+>
+> 削除済み IPC: `SplitPane (0x11)` / `SplitPaneMsg` / `handle_split_pane`
+
 ## Overview
 
 Integrate a native terminal multiplexer into eMterm, adding a daemon process for PTY session management, IPC communication via Unix domain sockets, and a GUI multiplexer mode with pane splitting, window management, and tmux-compatible keybindings. The architecture eliminates VT100 double-parsing by relaying raw PTY bytes through the daemon directly to per-pane WASM parser instances in the GUI.

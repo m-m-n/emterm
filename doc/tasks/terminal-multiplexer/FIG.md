@@ -1,5 +1,7 @@
 # Terminal Multiplexer Architecture Diagrams
 
+> **NOTE (post-cleanup)**: 本ドキュメント内の Pane Layout / Copy Mode / SplitPane (0x11) / split-vertical / split-horizontal / zoom-toggle / copy-mode 等の記述は、`doc/tasks/mux-feature-cleanup/` で削除された機能に関する履歴情報。現行の有効機能のアーキテクチャは `doc/tasks/terminal-multiplexer/SPEC.md` を参照。
+
 ## 1. Component Architecture
 
 ```mermaid

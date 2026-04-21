@@ -73,6 +73,10 @@ describe("MuxMessageType", () => {
   test("StatusUpdate has correct value", () => {
     expect(MuxMessageType.StatusUpdate).toBe(0x16);
   });
+
+  test("SplitPane (0x11) is no longer exposed", () => {
+    expect((MuxMessageType as Record<string, unknown>).SplitPane).toBeUndefined();
+  });
 });
 
 describe("decodeWelcomeMsg", () => {

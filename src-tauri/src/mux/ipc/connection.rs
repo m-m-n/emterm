@@ -15,8 +15,7 @@ use tokio_util::codec::Framed;
 use super::codec::MuxCodec;
 use super::handlers::{
     handle_attach, handle_create_window, handle_destroy_pane, handle_destroy_window,
-    handle_rename_window, handle_request_pane_snapshot, handle_resize, handle_split_pane,
-    handle_switch_window,
+    handle_rename_window, handle_request_pane_snapshot, handle_resize, handle_switch_window,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -601,11 +600,6 @@ where
                     return Err(false);
                 }
             }
-        }
-        MessageType::SplitPane => {
-            handle_split_pane(msg, session_manager, framed, pane_output_tx, title_tx).await?;
-            // Register pane cwd Arcs for newly split panes
-            register_session_pane_cwds(session_manager, *active_session_id, pane_cwd_map).await;
         }
         MessageType::Detach => {
             log::info!("Client requested detach");

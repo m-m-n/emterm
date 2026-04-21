@@ -1,0 +1,155 @@
+schema_version: 1
+feature: mux-feature-cleanup
+scale: standard
+created: 2026-04-20
+
+project:
+  components:
+    main:
+      language: rust+typescript
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c 'cargo test --manifest-path src-tauri/Cargo.toml && bun test && bun run typecheck'"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 1b8fb6d53e180c2f454edf750fe3d0c4ff680de2
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 1b8fb6d53e180c2f454edf750fe3d0c4ff680de2
+  - id: implement
+    status: completed
+    completed_at_commit: 1b8fb6d53e180c2f454edf750fe3d0c4ff680de2
+  - id: check
+    status: completed
+    completed_at_commit: 1b8fb6d53e180c2f454edf750fe3d0c4ff680de2
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 1b8fb6d53e180c2f454edf750fe3d0c4ff680de2
+  - id: review
+    status: completed
+    completed_at_commit: 1b8fb6d53e180c2f454edf750fe3d0c4ff680de2
+
+requirements:
+  FR1:
+    title: Actions removed from MuxAction and DEFAULT_ACTION_BINDINGS
+    status: ok
+    tasks:
+      - phase-1-prefix-key-shrink
+      - phase-1-action-handler-shrink
+    tests:
+      - TS-4
+      - TS-5
+      - unit:src/terminal/mux/prefix-key.test.ts
+  FR2:
+    title: Actions retained
+    status: ok
+    tasks:
+      - phase-1-prefix-key-shrink
+    tests:
+      - TS-4
+      - unit:src/terminal/mux/prefix-key.test.ts
+      - e2e:mux.e2e.js
+      - e2e:mux-multi-session.e2e.js
+      - e2e:mux-reattach.e2e.js
+  FR3:
+    title: Frontend files deleted
+    status: ok
+    tasks:
+      - phase-2-delete-files
+    tests:
+      - structure:test-not-exists-11-files
+      - typecheck:bun-run-typecheck
+  FR4:
+    title: Frontend files reduced
+    status: ok
+    tasks:
+      - phase-1-action-handler-shrink
+      - phase-1-session-shrink
+      - phase-1-window-manager-shrink
+      - phase-1-terminal-app-shrink
+      - phase-1-settings-section-shrink
+      - phase-1-i18n-shrink
+      - phase-3-test-shrink
+    tests:
+      - typecheck:bun-run-typecheck
+      - unit:bun-test
+  FR5:
+    title: Backend protocol (SplitPane / SplitPaneMsg / handle_split_pane) removed
+    status: ok
+    tasks:
+      - phase-4-protocol-shrink
+      - phase-4-handlers-shrink
+      - phase-4-connection-shrink
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - unit:cargo-test-mux-ipc-protocol
+      - grep:rg-SplitPane-src-tauri
+  FR6:
+    title: Backend Pane struct kept; one pane per window enforced by callers
+    status: ok
+    tasks:
+      - phase-4-protocol-shrink
+    tests:
+      - diff:pane-rs-unchanged
+      - unit:cargo-test-mux
+  FR7:
+    title: Settings migration policy (serde default drop of unknown fields)
+    status: ok
+    tasks: []
+    tests:
+      - manual:legacy-settings-json-loads
+  FR8:
+    title: E2E test policy (prune pane/zoom/copy-mode cases, keep window/detach)
+    status: ok
+    tasks:
+      - phase-5-e2e-prune
+    tests:
+      - e2e:mux.e2e.js
+      - e2e:mux-multi-session.e2e.js
+      - e2e:mux-reattach.e2e.js
+      - e2e:viewer-tab-switch-keyboard.e2e.js
+  FR9:
+    title: doc/tasks/terminal-multiplexer/SPEC.md updated in place
+    status: ok
+    tasks:
+      - phase-6-docs-followup
+    tests:
+      - grep:rg-removed-symbols-terminal-multiplexer-docs
+  NFR1:
+    title: Behavior preservation for retained actions
+    status: ok
+    tasks:
+      - phase-1-action-handler-shrink
+      - phase-5-e2e-prune
+    tests:
+      - e2e:mux.e2e.js
+      - e2e:mux-multi-session.e2e.js
+      - e2e:mux-reattach.e2e.js
+  NFR2:
+    title: All test commands pass after cleanup
+    status: ok
+    tasks:
+      - phase-1-all
+      - phase-2-delete-files
+      - phase-3-test-shrink
+      - phase-4-all
+      - phase-5-e2e-prune
+    tests:
+      - unit:cargo-test
+      - unit:bun-test
+      - typecheck:bun-run-typecheck
+      - e2e:run-e2e-docker
+  NFR3:
+    title: Legacy settings.json loads without error
+    status: ok
+    tasks: []
+    tests:
+      - manual:legacy-settings-json-loads

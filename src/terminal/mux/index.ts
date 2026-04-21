@@ -9,6 +9,5 @@
  */
 
 export { MuxClient, type MuxConnectionState } from "./mux-client";
-export { MuxPaneManager } from "./pane-manager";
 export { MuxTabGroup, type MuxTabGroupState } from "./tab-group";
 export { validateSocketPath, parseMuxOsc } from "./mux-client";

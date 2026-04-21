@@ -35,13 +35,21 @@ impl Decoder for MuxCodec {
     type Error = std::io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match self.inner.decode(src)? {
-            Some(frame) => MuxMessage::from_frame_body(&frame)
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid mux frame")
-                })
-                .map(Some),
-            None => Ok(None),
+        loop {
+            match self.inner.decode(src)? {
+                Some(frame) => match MuxMessage::from_frame_body(&frame) {
+                    Some(msg) => return Ok(Some(msg)),
+                    None => {
+                        let type_byte = frame.first().copied().unwrap_or(0);
+                        log::warn!(
+                            "Discarding unknown/malformed mux frame: type=0x{:02x} len={}",
+                            type_byte,
+                            frame.len()
+                        );
+                    }
+                },
+                None => return Ok(None),
+            }
         }
     }
 }
@@ -114,6 +122,49 @@ mod tests {
 
         // No more
         assert!(codec.decode(&mut buf).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_codec_unknown_frame_is_discarded_not_fatal() {
+        let mut codec = MuxCodec::new();
+        let mut buf = BytesMut::new();
+
+        // Manually craft a frame with unknown message type 0x11 (removed SplitPane)
+        // Format: [length: u32 big-endian][type: u8][pane_id: u32 LE][payload]
+        let body: Vec<u8> = vec![0x11, 0x01, 0x00, 0x00, 0x00, 0xDE, 0xAD];
+        buf.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&body);
+
+        // Then a valid PtyOutput frame immediately after
+        codec
+            .encode(MuxMessage::pty_output(2, vec![0xBB]), &mut buf)
+            .unwrap();
+
+        // The unknown frame should be silently discarded, and decode should
+        // return the next valid frame (PtyOutput) instead of erroring out.
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded.msg_type, MessageType::PtyOutput);
+        assert_eq!(decoded.pane_id, 2);
+        assert_eq!(decoded.payload, vec![0xBB]);
+    }
+
+    #[test]
+    fn test_codec_short_frame_is_discarded_not_fatal() {
+        let mut codec = MuxCodec::new();
+        let mut buf = BytesMut::new();
+
+        // Frame shorter than 5 bytes (type + pane_id minimum) must not kill the stream
+        let body: Vec<u8> = vec![0x01, 0x02];
+        buf.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&body);
+
+        codec
+            .encode(MuxMessage::pty_output(3, vec![0xCC]), &mut buf)
+            .unwrap();
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded.msg_type, MessageType::PtyOutput);
+        assert_eq!(decoded.pane_id, 3);
     }
 
     #[test]

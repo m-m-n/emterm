@@ -4,6 +4,8 @@
 
 Native terminal multiplexer integrated into eMterm, eliminating the VT100 double-parse bottleneck that degrades performance when using tmux with high-throughput tools like Claude Code. The daemon relays raw PTY bytes via IPC to the GUI, where existing WASM parsers process them directly — removing the virtual terminal regeneration layer entirely.
 
+Each mux window holds a single pane. Pane splitting, pane navigation, pane zoom, and copy mode are not part of this specification.
+
 ## Objectives
 
 - Eliminate the VT100 double-parse bottleneck present in tmux/Zellij/Screen
@@ -14,11 +16,11 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 ## User Stories
 
 ### US1: Start Multiplexer Session
-As an eMterm user, I want to run `emterm mux` to start a multiplexer session, so that I can manage multiple terminal panes and windows.
+As an eMterm user, I want to run `emterm mux` to start a multiplexer session, so that I can manage multiple terminal windows.
 
 **Acceptance Criteria:**
 - [ ] `emterm mux` starts a daemon (if not running) and switches GUI to mux mode
-- [ ] A new session with one window and one pane is created
+- [ ] A new session with one window (one pane) is created
 - [ ] The pane displays a shell prompt
 
 ### US2: Detach and Reattach
@@ -30,16 +32,7 @@ As an eMterm user, I want to detach from a session and reattach later, so that l
 - [ ] `emterm mux attach` restores the session with full screen state
 - [ ] PTY output during detach is captured and replayed on reattach
 
-### US3: Split Panes
-As an eMterm user, I want to split the terminal into multiple panes, so that I can work with multiple shells simultaneously.
-
-**Acceptance Criteria:**
-- [ ] `prefix + %` splits vertically, `prefix + "` splits horizontally
-- [ ] Panes can be resized by dragging borders
-- [ ] `prefix + z` zooms/unzooms a pane
-- [ ] Minimum pane size: 2 rows x 10 columns
-
-### US4: Manage Windows
+### US3: Manage Windows
 As an eMterm user, I want to create and switch between windows, so that I can organize my work into groups.
 
 **Acceptance Criteria:**
@@ -48,16 +41,7 @@ As an eMterm user, I want to create and switch between windows, so that I can or
 - [ ] Windows appear as sub-tabs in the mux tab group
 - [ ] `prefix + ,` renames a window
 
-### US5: Copy Mode
-As an eMterm user, I want to enter copy mode to select and copy text using vi/emacs keybindings, so that I can efficiently copy terminal output.
-
-**Acceptance Criteria:**
-- [ ] `prefix + [` enters copy mode
-- [ ] vi/emacs keybindings for cursor movement and selection
-- [ ] Selection copies to system clipboard
-- [ ] `prefix + ]` pastes from system clipboard
-
-### US6: Migrate from tmux
+### US4: Migrate from tmux
 As a tmux user, I want to import my tmux.conf settings, so that my keybindings and preferences carry over.
 
 **Acceptance Criteria:**
@@ -71,27 +55,26 @@ As a tmux user, I want to import my tmux.conf settings, so that my keybindings a
 ### Functional Requirements
 
 - **FR1: Daemon Process** — Background daemon manages PTY sessions, communicates with GUI via Unix domain socket. Auto-starts on first `emterm mux`, auto-exits when all sessions end.
-- **FR2: IPC Protocol** — Length-prefixed binary frames over Unix domain socket. PTY data as raw bytes (no serialization), control messages via bincode. 16 message types.
-- **FR3: Session Management** — Session > Window > Pane hierarchy with actor-model Session Manager. Cascade: PTY exit → pane close → window close → session end → daemon exit.
+- **FR2: IPC Protocol** — Length-prefixed binary frames over Unix domain socket. PTY data as raw bytes (no serialization), control messages via bincode.
+- **FR3: Session Management** — Session > Window > Pane hierarchy with actor-model Session Manager. One pane per window. Cascade: PTY exit → pane close → window close → session end → daemon exit.
 - **FR4: OSC Signaling** — `OSC 777 ; emterm ; mux ; attach ; <socket_path> ; <session_id> ST` and `OSC 777 ; emterm ; mux ; detach ST` for CLI→GUI mode switching.
 - **FR5: GUI Mode Switching** — Tab integration: mux tab group with sub-tabs for windows. Normal tabs and mux tab groups coexist. AtomicBool flag pauses original PTY reader during mux mode. On window switch, GUI requests a fresh snapshot from the daemon so the target pane's display matches the daemon authoritative state (no reliance on client-side incremental buffering).
 - **FR6: Snapshot-Based State Sync** — Three scenarios use the same per-pane `shadow_parser` (vt100::Parser) as the authoritative screen source: (a) detach — GUI serializes WASM grid state on detach for future reattach; (b) reattach — daemon replays shadow parser screen + ring buffer delta; (c) window switch — daemon replays shadow parser screen only (no delta). Per-pane ring buffer (64MB) accumulates PTY output while detached. Atomic attach process prevents data loss.
-- **FR7: Pane Layout** — Binary tree model. Pixel-based calculations. CSS Grid for layout. Drag-resize support. tmux-compatible preset layouts (even-horizontal, even-vertical, main-horizontal, main-vertical, tiled).
-- **FR8: Window Management** — Multiple windows per session. Tab group UI with auto-expand (active) / auto-compact (inactive, shows "mux (N)"). 0.3s animation for expand/compact.
-- **FR9: Status Bar** — HTML-rendered status bar. Daemon pushes state changes (session name, window list). Event-driven (no polling). Local info (clock) managed by GUI.
-- **FR10: Copy Mode** — vi/emacs keybindings in TypeScript. Scrollback search in WASM. Selection highlight via Canvas. System clipboard integration (no tmux buffer). Daemon not involved.
-- **FR11: tmux.conf Conversion** — Regex-based line-oriented parser. Converts prefix, keybindings, base-index, mouse, status-position, default-terminal. Ignores if-shell, run-shell, plugins, format strings, set-hook with warnings.
-- **FR12: Prefix Key** — Processed in GUI (TypeScript). Default `Ctrl+b`. Loaded from local settings (`settings.json` mux section), configurable via settings UI.
-- **FR13: Flow Control** — Bounded channel (capacity 256) + adaptive batching (4ms accumulation window). Per-pane independent channels with round-robin select! consumption. Backpressure chain: socket buffer → channel → PTY reader → kernel buffer → process write().
-- **FR14: Environment Variables** — `TERM_PROGRAM=emterm` and `TERM_PROGRAM_VERSION=<version>` set by GUI on PTY startup. `EMTERM_MUX=1` and `EMTERM_MUX_SOCKET=<path>` set by daemon in PTY environment. Nesting prevention via `EMTERM_MUX` check.
-- **FR15: WASM Instance Management** — Independent WASM instance per pane (grid, parser state, cursor). ~2-4MB per pane. Module compilation cached, only instantiation per pane.
+- **FR7: Window Management** — Multiple windows per session. Each window has exactly one pane. Tab group UI with auto-expand (active) / auto-compact (inactive, shows "mux (N)"). 0.3s animation for expand/compact.
+- **FR8: Status Bar** — HTML-rendered status bar. Daemon pushes state changes (session name, window list). Event-driven (no polling). Local info (clock) managed by GUI.
+- **FR9: Clipboard Paste** — `prefix + ]` pastes from the system clipboard into the active pane's PTY. No tmux buffer abstraction. Daemon not involved.
+- **FR10: tmux.conf Conversion** — Regex-based line-oriented parser. Converts prefix, keybindings, base-index, mouse, status-position, default-terminal. Ignores if-shell, run-shell, plugins, format strings, set-hook with warnings. Unsupported keybinding actions (split, zoom, copy-mode, etc.) are logged and skipped.
+- **FR11: Prefix Key** — Processed in GUI (TypeScript). Default `Ctrl+b`. Loaded from local settings (`settings.json` mux section), configurable via settings UI.
+- **FR12: Flow Control** — Bounded channel (capacity 256) + adaptive batching (4ms accumulation window). Per-pane independent channels with round-robin select! consumption. Backpressure chain: socket buffer → channel → PTY reader → kernel buffer → process write().
+- **FR13: Environment Variables** — `TERM_PROGRAM=emterm` and `TERM_PROGRAM_VERSION=<version>` set by GUI on PTY startup. `EMTERM_MUX=1` and `EMTERM_MUX_SOCKET=<path>` set by daemon in PTY environment. Nesting prevention via `EMTERM_MUX` check.
+- **FR14: WASM Instance Management** — Independent WASM instance per pane (grid, parser state, cursor). ~2-4MB per pane. Module compilation cached, only instantiation per pane.
 
 ### Non-Functional Requirements
 
 - **NFR1 - Performance:** No perceptible latency degradation compared to normal mode. Raw bytes transfer (no serialization/compression for PTY data). Adaptive batching for high-throughput output. Per-pane backpressure isolation.
 - **NFR2 - Security:** Socket path validation (allowed directories only, no path traversal). File permission protection on Unix socket. No authentication needed (local-only).
 - **NFR3 - Reliability:** Automatic recovery on daemon crash (GUI returns to normal mode). IPC disconnect retry with fallback. Snapshot deserialization failure results in empty screen reattach.
-- **NFR4 - Compatibility:** Linux and Windows support. Windows AF_UNIX requires Windows 10 1803+. tmux-compatible keybindings at user operation level.
+- **NFR4 - Compatibility:** Linux and Windows support. Windows AF_UNIX requires Windows 10 1803+. tmux-compatible keybindings at user operation level for the subset of actions this specification retains.
 - **NFR5 - Resource Usage:** Per-pane ring buffer capped at 64MB. WASM instances ~2-4MB each. IPC frame max 16MB.
 
 ## Implementation Approach
@@ -103,11 +86,11 @@ As a tmux user, I want to import my tmux.conf settings, so that my keybindings a
 ```
 ┌─────────────────────────────────────────────────┐
 │  eMterm GUI (Tauri)                              │
-│  ┌───────────┬───────────┬───────────┐          │
-│  │  Pane 1   │  Pane 2   │  Pane 3   │          │
-│  │Canvas+WASM│Canvas+WASM│Canvas+WASM│          │
-│  └───────────┴───────────┴───────────┘          │
-│  Multiplexer Client (layout, OSC, prefix key)    │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐    │
+│  │ Window 1  │  │ Window 2  │  │ Window 3  │    │
+│  │Canvas+WASM│  │Canvas+WASM│  │Canvas+WASM│    │
+│  └───────────┘  └───────────┘  └───────────┘    │
+│  Multiplexer Client (OSC, prefix key, tab group) │
 └──────────────────┬──────────────────────────────┘
                    │ IPC (Unix socket)
 ┌──────────────────┴──────────────────────────────┐
@@ -188,9 +171,14 @@ PTY read → daemon → IPC(socket) → Tauri internal → WASM → Canvas
 | 0x0E | SessionList | D→C | bincode | Session listing |
 | 0x0F | Error | D→C | bincode (message) | Error notification |
 | 0x10 | PtyExited | D→G | bincode (exit_code) | PTY process exit |
+| 0x12 | CreateWindow | G→D | bincode | Window creation request |
+| 0x13 | SwitchWindow | G→D | bincode | Switch active window |
+| 0x14 | RenameWindow | G→D | bincode | Rename window |
+| 0x15 | DestroyWindow | G→D | bincode | Window destruction |
+| 0x16 | StatusUpdate | D→G | bincode | Status bar update |
+| 0x17 | RequestStatusUpdate | G→D | empty | Request status refresh |
+| 0x18 | Shutdown | C→D | empty | Daemon shutdown request |
 | 0x19 | RequestPaneSnapshot | G→D | empty | Request on-demand screen replay for the given pane |
-
-Additional types for Phase 3+: SplitPane, CreateWindow, SwitchWindow, etc.
 
 **RequestPaneSnapshot Response:**
 The daemon answers by emitting a single `PtyOutput (0x01)` frame for the requested pane. The payload is `\x1b[H\x1b[2J` followed by `shadow_parser.screen().contents_formatted()`, which is self-contained ANSI sufficient to reproduce the current screen (alt-screen toggle, SGR state, cursor position, etc.). The client's normal PtyOutput path consumes the frame, so no separate `PaneSnapshot` message type is required.
@@ -233,25 +221,17 @@ The daemon-side `vt100::Parser::screen().contents_formatted()` produces self-con
 
 **Ring Buffer:** Per-pane, 64MB cap. Overwrites oldest data. Used only for detach flow delta capture. Not used for window switch (the shadow parser already holds the latest screen).
 
-### Pane Layout
+### Session Hierarchy
 
-**Binary Tree Model:**
-- Each node: leaf (pane) or split (direction + size ratio)
-- Preset layouts: even-horizontal, even-vertical, main-horizontal, main-vertical, tiled
-- Pixel-based calculation (not character-cell-based)
-- Pane borders: CSS border or gap (not character box-drawing)
-
-**Session Hierarchy:**
 ```
 Session
 ├── Window 1
-│   ├── Pane 1
-│   └── Pane 2
+│   └── Pane
 └── Window 2
-    ├── Pane 3
-    ├── Pane 4
-    └── Pane 5
+    └── Pane
 ```
+
+Each window owns exactly one pane. The pane's PTY is tied to the window lifecycle.
 
 ### GUI Mode Switching
 
@@ -272,9 +252,9 @@ Session
 
 **Original PTY reader:** AtomicBool flag suppresses data forwarding to GUI during mux mode. Thread stays alive.
 
-**Canvas/DOM:** Per-pane Canvas elements created dynamically. CSS Grid for pane layout (binary tree → CSS template conversion). Mux Canvases destroyed on detach, original tab display restored.
+**Canvas/DOM:** Per-window Canvas elements created dynamically. Mux Canvases destroyed on detach, original tab display restored.
 
-**Window Switch State Sync (single-pane mode):** When the user switches between mux windows (sub-tab click, `prefix+n/p`, or CLI `emterm mux switch-window`), the GUI sends `RequestPaneSnapshot(paneId)` to the daemon in addition to `SwitchWindow`. The daemon replies with a `PtyOutput` frame containing `\x1b[H\x1b[2J` + `contents_formatted()` from the target pane's `shadow_parser`. The GUI pipeline processes these bytes into the active WASM grid, guaranteeing the displayed screen matches the daemon state. This replaces reliance on client-side incremental state accumulation for inactive panes (which is fragile across buffer-switch edge cases and potential races between `flushPtyPendingData` and in-flight PtyOutput messages).
+**Window Switch State Sync:** When the user switches between mux windows (sub-tab click, `prefix+n/p`, or CLI `emterm mux switch-window`), the GUI sends `RequestPaneSnapshot(paneId)` to the daemon in addition to `SwitchWindow`. The daemon replies with a `PtyOutput` frame containing `\x1b[H\x1b[2J` + `contents_formatted()` from the target pane's `shadow_parser`. The GUI pipeline processes these bytes into the active WASM grid, guaranteeing the displayed screen matches the daemon state. This replaces reliance on client-side incremental state accumulation for inactive panes (which is fragile across buffer-switch edge cases and potential races between `flushPtyPendingData` and in-flight PtyOutput messages).
 
 ### Dependencies
 
@@ -318,16 +298,10 @@ src/
 ├── terminal/
 │   ├── mux/
 │   │   ├── index.ts            # Mux client entry point
-│   │   ├── mux-client.ts       # IPC client (WebSocket or Tauri channel)
-│   │   ├── layout.ts           # Binary tree layout engine
-│   │   ├── pane-manager.ts     # WASM instance + Canvas per pane
+│   │   ├── mux-client.ts       # IPC client (Tauri channel)
 │   │   ├── prefix-key.ts       # Prefix key handler
 │   │   ├── tab-group.ts        # Tab group UI
-│   │   └── status-bar.ts       # HTML status bar
-│   ├── mux-copy-mode/
-│   │   ├── index.ts            # Copy mode entry
-│   │   ├── vi-keybinds.ts      # vi keybinding handler
-│   │   └── emacs-keybinds.ts   # emacs keybinding handler
+│   │   └── mux-logger.ts       # Mux-scoped logger
 │   └── ...
 ```
 
@@ -347,7 +321,7 @@ Added to existing `settings.json`:
 }
 ```
 
-Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirror.
+Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirror. Unknown keys under `mux.keybinds` are silently dropped by serde.
 
 ### Environment Variables
 
@@ -362,7 +336,6 @@ Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirr
 
 ### Unit Tests
 - [ ] IPC frame encoding/decoding round-trip
-- [ ] Binary tree layout calculations (split, resize, remove)
 - [ ] Ring buffer write/read with overflow
 - [ ] Snapshot serialization/deserialization
 - [ ] Socket path validation (allowed dirs, path traversal rejection)
@@ -383,24 +356,22 @@ Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirr
 **Run command**: `./scripts/run-e2e-docker.sh`
 - [ ] Existing E2E tests pass without regression
 - [ ] Daemon start → attach → type command → see output → detach → reattach → verify state
-- [ ] Pane split → resize → navigate → close
 - [ ] Window create → switch → rename → close
-- [ ] Copy mode: enter → select text → verify clipboard
+- [ ] Paste from clipboard into active pane
 - [ ] Daemon crash → GUI auto-recovery to normal mode
 
 ### Edge Cases
 - [ ] Non-eMterm environment: `emterm mux` shows error and exits
 - [ ] Nesting: `emterm mux` inside mux session shows error
-- [ ] Minimum pane size enforcement (2 rows x 10 columns)
 - [ ] Max frame length exceeded (16MB)
 - [ ] Ring buffer overflow during extended detach (64MB cap, oldest data overwritten)
 - [ ] Snapshot deserialization failure (empty screen reattach)
 - [ ] Concurrent attach (second GUI evicts first)
-- [ ] Window resize during mux mode (layout recalculation, per-pane Resize messages)
+- [ ] Window resize during mux mode (per-pane Resize messages)
 
 ### Performance Tests
 - [ ] High-throughput output (seq 1 1000000): no perceptible degradation vs normal mode
-- [ ] Multi-pane: high-throughput pane doesn't starve others
+- [ ] Multi-window: high-throughput window doesn't starve others
 - [ ] Reattach time: snapshot + 64MB delta replay under 2 seconds
 
 ## Security Considerations
@@ -417,10 +388,11 @@ Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirr
 | Daemon startup failure | CLI shows error message, exits |
 | IPC connection loss (daemon alive) | GUI retries several times → falls back to normal mode + toast notification |
 | Daemon crash | GUI detects socket disconnect → toast notification → auto-return to normal mode |
-| PTY process abnormal exit (in mux) | PtyExited sent to GUI, pane closes |
+| PTY process abnormal exit (in mux) | PtyExited sent to GUI, pane closes, window closes |
 | Snapshot deserialization failure | Discard snapshot, reattach with empty screen |
 | Protocol version mismatch | Daemon sends Rejected, client shows error |
 | Stale socket file | Connect attempt fails → delete socket → create new |
+| Unknown IPC message type from legacy client | Daemon logs a warning and discards the frame |
 
 ## Performance Optimization
 
@@ -434,16 +406,15 @@ Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirr
 - Per-pane bounded channels with round-robin consumption (no starvation)
 - Adaptive batching (4ms accumulation window) for high-throughput output
 - WASM module compilation cache (compile once, instantiate per pane)
-- CSS Grid for layout (GPU-accelerated, no JS layout calculations)
 
 ## Success Criteria
 
-- [ ] All functional requirements (FR1-FR15) are implemented and tested
+- [ ] All functional requirements (FR1-FR14) are implemented and tested
 - [ ] All test scenarios pass
 - [ ] Performance meets specified goals (no degradation vs normal mode)
 - [ ] Security requirements are satisfied (socket path validation)
 - [ ] Linux and Windows support
-- [ ] tmux-compatible keybindings work correctly
+- [ ] tmux-compatible keybindings for the retained action set work correctly
 - [ ] OSC extensions (Markdown/image) work in mux mode
 - [ ] Code review completed
 
@@ -470,38 +441,21 @@ Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirr
 - Environment variable setup (TERM_PROGRAM, EMTERM_MUX)
 - Error recovery (daemon crash → normal mode)
 
-### Phase 3: Pane Split + Layout
-**Goals:** Multi-pane support with flexible layout
-**Deliverables:**
-- Binary tree layout engine
-- Pane split/resize/close operations
-- CSS Grid layout rendering
-- Drag-resize support
-- Per-pane WASM instance management
-
-### Phase 4: Window Management
+### Phase 3: Window Management
 **Goals:** Multiple windows per session
 **Deliverables:**
-- Window create/switch/rename/close
+- Window create/switch/rename/close (one pane per window)
 - Tab group UI (expand/compact animation)
 - Window navigation (prefix+n/p, mouse click)
 
-### Phase 5: Status Bar
+### Phase 4: Status Bar
 **Goals:** Rich status bar display
 **Deliverables:**
 - HTML-rendered status bar
 - Session/window info display
 - Event-driven updates from daemon
 
-### Phase 6: Copy Mode
-**Goals:** Text selection and clipboard integration
-**Deliverables:**
-- vi/emacs keybindings
-- Scrollback search (WASM)
-- Selection highlight (Canvas)
-- System clipboard integration
-
-### Phase 7: tmux.conf Conversion
+### Phase 5: tmux.conf Conversion
 **Goals:** Settings migration from tmux
 **Deliverables:**
 - Tokenizer-based tmux.conf parser
@@ -512,3 +466,4 @@ Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirr
 ## References
 
 - Design report: `tmp/emterm-tmux-report.md`
+- Cleanup task: `doc/tasks/mux-feature-cleanup/SPEC.md`

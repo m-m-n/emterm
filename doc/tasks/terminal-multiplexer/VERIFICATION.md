@@ -1,5 +1,7 @@
 # Verification Document: Terminal Multiplexer
 
+> **NOTE (post-cleanup)**: FR7 (Pane Layout) / FR10 (Copy Mode) / split / zoom 等、`doc/tasks/mux-feature-cleanup/` で削除された機能に関する検証項目は現行では無効。現行の検証範囲は `doc/tasks/terminal-multiplexer/SPEC.md` と `doc/tasks/mux-feature-cleanup/SPEC.md` を参照。
+
 ## Overview
 **Feature**: Terminal Multiplexer
 **SPEC.md**: `doc/tasks/terminal-multiplexer/SPEC.md`
