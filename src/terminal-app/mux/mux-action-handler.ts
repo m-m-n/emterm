@@ -25,7 +25,6 @@ export interface MuxActionContext {
   // Delegate methods that call into other mux modules via TerminalApp wrappers
   switchMuxWindow: (previousIndex?: number) => void;
   emitMuxStateChange: () => void;
-  pasteFromClipboard: () => void;
   exitMuxMode: () => void;
 }
 
@@ -101,9 +100,6 @@ export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void 
           }
         }
       }
-      break;
-    case "paste":
-      ctx.pasteFromClipboard();
       break;
   }
 }

@@ -84,7 +84,6 @@ describe("PrefixKeyHandler", () => {
       { key: "n", expected: "next-window" },
       { key: "p", expected: "prev-window" },
       { key: ",", expected: "rename-window" },
-      { key: "]", expected: "paste" },
     ];
 
     for (const { key, expected } of bindings) {
@@ -101,7 +100,7 @@ describe("PrefixKeyHandler", () => {
     const actions: MuxAction[] = [];
     handler.setOnAction((a) => actions.push(a));
 
-    const removedKeys = ["%", '"', "o", ";", "x", "z", "["];
+    const removedKeys = ["%", '"', "o", ";", "x", "z", "[", "]"];
     for (const key of removedKeys) {
       actions.length = 0;
       handler.handleKeyEvent(makeKeyEvent("b", true));
