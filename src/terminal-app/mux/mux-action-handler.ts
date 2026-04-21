@@ -9,8 +9,6 @@ import { muxLog } from "../../terminal/mux/mux-logger";
 import type { MuxClient } from "../../terminal/mux/mux-client";
 import type { MuxAction } from "../../terminal/mux/prefix-key";
 import type { PtyClient } from "../../pty/client";
-import type { LayoutNode, SplitDirection } from "../../terminal/mux/layout";
-import { getAllPaneIds } from "../../terminal/mux/layout";
 import { SettingsService } from "../../settings/settings-service";
 
 /** Subset of TerminalApp state needed by mux action handler functions. */
@@ -23,18 +21,10 @@ export interface MuxActionContext {
   getMuxPaneIds: () => number[];
   getMuxPendingWindowCount: () => number;
   setMuxPendingWindowCount: (count: number) => void;
-  getMuxPendingSplitCount: () => number;
-  setMuxPendingSplitCount: (count: number) => void;
-  setMuxPendingSplitDirection: (direction: SplitDirection) => void;
-  getMuxActivePaneId: () => number | null;
-  getMuxLayoutRoot: () => LayoutNode | null;
 
   // Delegate methods that call into other mux modules via TerminalApp wrappers
   switchMuxWindow: (previousIndex?: number) => void;
   emitMuxStateChange: () => void;
-  setActiveMuxPane: (paneId: number) => void;
-  toggleMuxZoom: () => void;
-  enterCopyMode: () => void;
   pasteFromClipboard: () => void;
   exitMuxMode: () => void;
 }
@@ -54,31 +44,6 @@ export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void 
       // Actual pane ID will arrive via PaneCreated event
       ctx.setMuxPendingWindowCount(ctx.getMuxPendingWindowCount() + 1);
       sendMuxControl(ctx, MuxMessageType.CreateWindow, 0);
-      break;
-    }
-    case "split-vertical": {
-      const activePaneId = getActiveMuxPaneId(ctx);
-      if (activePaneId != null) {
-        ctx.setMuxPendingSplitCount(ctx.getMuxPendingSplitCount() + 1);
-        ctx.setMuxPendingSplitDirection("vertical");
-        sendMuxControl(ctx, MuxMessageType.SplitPane, activePaneId, new Uint8Array([0x01]));
-      }
-      break;
-    }
-    case "split-horizontal": {
-      const activePaneId = getActiveMuxPaneId(ctx);
-      if (activePaneId != null) {
-        ctx.setMuxPendingSplitCount(ctx.getMuxPendingSplitCount() + 1);
-        ctx.setMuxPendingSplitDirection("horizontal");
-        sendMuxControl(ctx, MuxMessageType.SplitPane, activePaneId, new Uint8Array([0x00]));
-      }
-      break;
-    }
-    case "close-pane": {
-      const activePaneId = getActiveMuxPaneId(ctx);
-      if (activePaneId != null) {
-        sendMuxControl(ctx, MuxMessageType.DestroyPane, activePaneId);
-      }
       break;
     }
     case "next-window": {
@@ -137,32 +102,6 @@ export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void 
         }
       }
       break;
-    case "next-pane": {
-      const layoutRoot = ctx.getMuxLayoutRoot();
-      if (layoutRoot) {
-        const paneIds = getAllPaneIds(layoutRoot);
-        const currentIdx = paneIds.indexOf(ctx.getMuxActivePaneId()!);
-        const nextIdx = (currentIdx + 1) % paneIds.length;
-        ctx.setActiveMuxPane(paneIds[nextIdx]!);
-      }
-      break;
-    }
-    case "prev-pane": {
-      const layoutRoot = ctx.getMuxLayoutRoot();
-      if (layoutRoot) {
-        const paneIds = getAllPaneIds(layoutRoot);
-        const currentIdx = paneIds.indexOf(ctx.getMuxActivePaneId()!);
-        const prevIdx = (currentIdx - 1 + paneIds.length) % paneIds.length;
-        ctx.setActiveMuxPane(paneIds[prevIdx]!);
-      }
-      break;
-    }
-    case "zoom-toggle":
-      ctx.toggleMuxZoom();
-      break;
-    case "copy-mode":
-      ctx.enterCopyMode();
-      break;
     case "paste":
       ctx.pasteFromClipboard();
       break;
@@ -187,10 +126,8 @@ export function prefixKeyToByte(prefix: string): number | null {
   return null;
 }
 
-/** Get the active mux pane ID (multi-pane or single-pane mode). */
+/** Get the active mux pane ID (single-pane mode). */
 export function getActiveMuxPaneId(ctx: MuxActionContext): number | null {
-  const activePaneId = ctx.getMuxActivePaneId();
-  if (activePaneId != null) return activePaneId;
   const paneIds = ctx.getMuxPaneIds();
   return paneIds[ctx.getActiveMuxWindowIndex()] ?? null;
 }

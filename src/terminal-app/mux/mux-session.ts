@@ -13,12 +13,10 @@ import type { TerminalState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import type { KeyboardHandler } from "../handlers/keyboard";
 import type { PtyHandlerHandle } from "../pty-handler";
-import type { LayoutNode } from "../../terminal/mux/layout";
 import { WasmGrid } from "../../terminal/wasm/terminal-core";
 import type { MuxPaneGridState } from "../../terminal/state";
 import { DECPrivateMode } from "../../terminal/modes";
 import { SettingsService } from "../../settings/settings-service";
-import type { CopyModeManager, ViKeybinds, EmacsKeybinds } from "../../terminal/mux-copy-mode";
 import type { MuxApcContext } from "../../terminal/handlers/apc_handlers";
 
 /**
@@ -52,19 +50,9 @@ export interface MuxSessionContext {
   getMuxOriginalGrid: () => WasmGrid | null;
   setMuxOriginalGrid: (grid: WasmGrid | null) => void;
   getMuxPaneGrids: () => Map<number, MuxPaneGridState>;
-  getMuxLayoutRoot: () => LayoutNode | null;
-  getMuxPaneCanvases: () => Map<number, unknown>;
-  getMuxPendingSplitCount: () => number;
-  setMuxPendingSplitCount: (count: number) => void;
   getMuxLastActiveIndex: () => number;
   setMuxLastActiveIndex: (index: number) => void;
   setMuxReattachWindows: (windows: import("../../terminal/mux/mux-client").MuxWindowInfo[]) => void;
-
-  // Copy mode state
-  getCopyModeManager: () => CopyModeManager | null;
-  setCopyModeManager: (manager: CopyModeManager | null) => void;
-  getCopyModeKeybinds: () => ViKeybinds | EmacsKeybinds | null;
-  setCopyModeKeybinds: (keybinds: ViKeybinds | EmacsKeybinds | null) => void;
 
   // Set the per-tab mux APC context on the ImageHandler
   setMuxApcContext: (ctx: MuxApcContext | null) => void;
@@ -82,10 +70,8 @@ export interface MuxSessionContext {
   handleRemoteSwitchWindow: (paneId: number) => void;
   handleMuxAction: (action: MuxAction) => void;
   sendMuxControl: (msgType: number, paneId: number, payload?: Uint8Array) => void;
-  renderMuxPaneOutput: (paneId: number, data: Uint8Array) => void;
   getActiveMuxPaneId: () => number | null;
   emitMuxStateChange: () => void;
-  exitMultiPaneMode: (remainingPaneId: number | null) => void;
 }
 
 /**
@@ -133,12 +119,6 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
 
   // Set up PTY output handler -- route to correct pane
   client.setOnPtyOutput((paneId: number, data: Uint8Array) => {
-    // Multi-pane mode: route to specific pane's canvas/grid
-    if (ctx.getMuxLayoutRoot() && (ctx.getMuxPaneCanvases() as Map<number, unknown>).has(paneId)) {
-      ctx.renderMuxPaneOutput(paneId, data);
-      return;
-    }
-
     // Single-pane mode: route to main renderer
     const activePaneId = ctx.getMuxPaneIds()[ctx.getActiveMuxWindowIndex()];
     if (activePaneId === undefined) {
@@ -391,14 +371,6 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   // Clear OSC layer (status bar content from daemon)
   ctx.onStatusUpdate?.({ left: "", right: "" });
 
-  // Exit copy mode if active
-  const copyModeManager = ctx.getCopyModeManager();
-  if (copyModeManager) {
-    copyModeManager.exit();
-    ctx.setCopyModeManager(null);
-    ctx.setCopyModeKeybinds(null);
-  }
-
   // Re-enable original PTY output
   const ptyHandlerHandle = ctx.getPtyHandlerHandle();
   if (ptyHandlerHandle) {
@@ -421,11 +393,6 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
     ctx.setMuxOriginalGrid(null);
   }
 
-  // Clean up multi-pane state
-  if (ctx.getMuxLayoutRoot()) {
-    ctx.exitMultiPaneMode(null);
-  }
-
   // Save active window index for reattach
   ctx.setMuxLastActiveIndex(ctx.getActiveMuxWindowIndex());
 
@@ -435,7 +402,6 @@ export function exitMuxMode(ctx: MuxSessionContext): void {
   ctx.setMuxPaneIds([]);
   ctx.setMuxPendingWindowCount(0);
   ctx.setMuxIsReattaching(false);
-  ctx.setMuxPendingSplitCount(0);
   ctx.getMuxPaneGrids().clear();
   ctx.emitMuxStateChange();
 

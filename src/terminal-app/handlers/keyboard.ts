@@ -47,8 +47,6 @@ export interface KeyboardHandlerContext {
   muxMode?: boolean;
   /** Callback when a mux action is triggered via prefix key */
   onMuxAction?: (action: MuxAction) => void;
-  /** Callback to intercept keys in mux copy mode. Returns true if consumed. */
-  onCopyModeKey?: (event: KeyboardEvent) => boolean;
   /** Debug identifier for this handler (e.g., container id) */
   debugId?: string;
 }
@@ -70,7 +68,6 @@ export class KeyboardHandler {
   private onExitScrollback: (() => void) | null;
   private prefixKeyHandler: PrefixKeyHandler | null = null;
   private onMuxAction: ((action: MuxAction) => void) | null;
-  private onCopyModeKey: ((event: KeyboardEvent) => boolean) | null;
   private debugId: string;
   private target: EventTarget | null = null;
   private boundHandleKeyDown: ((e: KeyboardEvent) => void) | null = null;
@@ -94,7 +91,6 @@ export class KeyboardHandler {
     this.onRestoreFocus = context.onRestoreFocus || null;
     this.onExitScrollback = context.onExitScrollback || null;
     this.onMuxAction = context.onMuxAction ?? null;
-    this.onCopyModeKey = context.onCopyModeKey ?? null;
     this.debugId = context.debugId || "unknown";
 
     if (context.muxMode) {
@@ -240,16 +236,6 @@ export class KeyboardHandler {
     if (event.key === "Escape" && this.selectionController) {
       if (this.selectionController.hasSelection()) {
         this.selectionController.clearSelection();
-        event.preventDefault();
-        return;
-      }
-    }
-
-    // Copy mode key interception -- must come before prefix key handler
-    // so that all keys are routed to the copy mode keybinding handler
-    if (this.onCopyModeKey) {
-      if (this.onCopyModeKey(event)) {
-        console.warn(`[DIAG-KEY][${this.debugId}] consumed: copyMode key=${event.key}`);
         event.preventDefault();
         return;
       }

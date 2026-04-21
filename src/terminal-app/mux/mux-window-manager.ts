@@ -10,8 +10,6 @@ import type { MuxClient, MuxWindowInfo } from "../../terminal/mux/mux-client";
 import type { TerminalState, MuxPaneGridState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import type { KeyboardHandler } from "../handlers/keyboard";
-import type { LayoutNode } from "../../terminal/mux/layout";
-import type { SplitDirection } from "../../terminal/mux/layout";
 import { SettingsService } from "../../settings/settings-service";
 
 /**
@@ -36,13 +34,8 @@ export interface MuxWindowManagerContext {
   setMuxPendingWindowCount: (count: number) => void;
   getMuxIsReattaching: () => boolean;
   setMuxIsReattaching: (value: boolean) => void;
-  getMuxPendingSplitCount: () => number;
-  setMuxPendingSplitCount: (count: number) => void;
   getMuxLastActiveIndex: () => number;
   getMuxReattachWindows: () => MuxWindowInfo[];
-  getMuxPendingSplitDirection: () => SplitDirection;
-  getMuxLayoutRoot: () => LayoutNode | null;
-  getMuxPaneCanvases: () => Map<number, unknown>;
 
   // Callbacks
   onMuxStateChange: ((info: {
@@ -58,8 +51,6 @@ export interface MuxWindowManagerContext {
   // Delegate methods that remain on TerminalApp
   registerCoreCallbacks: (core: ReturnType<TerminalState["getActiveCore"]>) => void;
   sendMuxControl: (msgType: number, paneId: number, payload?: Uint8Array) => void;
-  handleMuxSplitPaneCreated: (paneId: number, direction: SplitDirection) => void;
-  removeMuxPane: (paneId: number) => void;
   exitMuxMode: () => void;
   enterMuxMode: (socketPath: string, sessionId: number) => Promise<void>;
   /** Sync the TerminalApp's title dedup cache to match state._title. Called
@@ -67,18 +58,6 @@ export interface MuxWindowManagerContext {
    *  isn't suppressed (and the parent tab title immediately reflects the
    *  new active window). */
   syncWindowTitleFromState: () => void;
-}
-
-/** Clear the terminal screen for mux window switching. */
-export function clearMuxScreen(ctx: MuxWindowManagerContext): void {
-  const state = ctx.getState();
-  if (state) {
-    state.getWasmCore().reset();
-    const renderer = ctx.getRenderer();
-    if (renderer) {
-      renderer.forceRender(state);
-    }
-  }
 }
 
 /** Create a fresh WASM grid for a new mux pane and swap it in. */
@@ -264,13 +243,6 @@ function diagTraceMuxRender(state: TerminalState, renderer: ITerminalRenderer, c
 
 /** Handle PaneCreated from daemon — register actual pane ID and update UI. */
 export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: number): void {
-  // Check if this is a split pane response
-  if (ctx.getMuxPendingSplitCount() > 0) {
-    ctx.setMuxPendingSplitCount(ctx.getMuxPendingSplitCount() - 1);
-    ctx.handleMuxSplitPaneCreated(paneId, ctx.getMuxPendingSplitDirection());
-    return;
-  }
-
   if (ctx.getMuxPendingWindowCount() <= 0) return;
   ctx.setMuxPendingWindowCount(ctx.getMuxPendingWindowCount() - 1);
 
@@ -410,12 +382,6 @@ export function sendMuxPaneResize(ctx: MuxWindowManagerContext, paneId: number):
 export function handleMuxPaneExited(ctx: MuxWindowManagerContext, paneId: number): void {
   // Notify daemon to clean up the exited pane (cascade: pane->window->session)
   ctx.sendMuxControl(MuxMessageType.DestroyPane, paneId);
-
-  // Multi-pane mode: remove from layout
-  if (ctx.getMuxLayoutRoot() && ctx.getMuxPaneCanvases().has(paneId)) {
-    ctx.removeMuxPane(paneId);
-    return;
-  }
 
   const muxPaneIds = ctx.getMuxPaneIds();
   const muxWindows = ctx.getMuxWindows();

@@ -1,0 +1,9 @@
+schema_version: 1
+feature: mux-feature-cleanup
+tasks:
+  - [{id: phase-1-frontend-shrink, status: completed, description: "Frontend MuxAction/handler/session/window-manager/client/settings/i18n shrink"}]
+  - [{id: phase-2-delete-files, status: completed, description: "Delete 11 frontend files + mux-copy-mode dir"}]
+  - [{id: phase-3-test-shrink, status: completed, description: "Shrink prefix-key.test.ts and mux-client.test.ts"}]
+  - [{id: phase-4-backend-shrink, status: completed, description: "Remove SplitPane/SplitPaneMsg/handle_split_pane"}]
+  - [{id: phase-5-e2e-recheck, status: completed, description: "Re-grep e2e specs and run e2e"}]
+  - [{id: phase-6-docs-followup, status: completed, description: "Update doc/tasks/terminal-multiplexer/ docs"}]

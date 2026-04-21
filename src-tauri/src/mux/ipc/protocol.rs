@@ -50,7 +50,6 @@ pub enum MessageType {
     Error = 0x0F,
     PtyExited = 0x10,
     // Phase 3+ message types
-    SplitPane = 0x11,
     CreateWindow = 0x12,
     SwitchWindow = 0x13,
     RenameWindow = 0x14,
@@ -80,7 +79,6 @@ impl MessageType {
             0x0E => Some(Self::SessionList),
             0x0F => Some(Self::Error),
             0x10 => Some(Self::PtyExited),
-            0x11 => Some(Self::SplitPane),
             0x12 => Some(Self::CreateWindow),
             0x13 => Some(Self::SwitchWindow),
             0x14 => Some(Self::RenameWindow),
@@ -168,12 +166,6 @@ pub struct ErrorMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachMsg {
     pub session_id: u32,
-}
-
-/// Split pane request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SplitPaneMsg {
-    pub direction: u8, // 0 = horizontal, 1 = vertical
 }
 
 /// Status update pushed from daemon to GUI.
@@ -330,10 +322,15 @@ mod tests {
     #[test]
     fn test_message_type_round_trip() {
         for i in 0x01..=0x19u8 {
+            if i == 0x11 {
+                // 0x11 (SplitPane) was removed -- must return None
+                continue;
+            }
             let mt = MessageType::from_u8(i).unwrap();
             assert_eq!(mt as u8, i);
         }
         assert!(MessageType::from_u8(0x00).is_none());
+        assert!(MessageType::from_u8(0x11).is_none());
         assert!(MessageType::from_u8(0x1a).is_none());
     }
 
@@ -589,6 +586,10 @@ mod tests {
     #[test]
     fn test_apc_round_trip_all_message_types() {
         for i in 0x01..=0x18u8 {
+            if i == 0x11 {
+                // 0x11 (SplitPane) was removed
+                continue;
+            }
             let mt = MessageType::from_u8(i).unwrap();
             let msg = MuxMessage {
                 msg_type: mt,

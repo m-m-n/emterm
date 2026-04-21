@@ -10,18 +10,11 @@ import { matchKeybindStr, parseKeybind } from "../../keybind/matcher";
 
 /** Mux action dispatched after prefix + key. */
 export type MuxAction =
-  | { type: "split-vertical" }
-  | { type: "split-horizontal" }
-  | { type: "next-pane" }
-  | { type: "prev-pane" }
-  | { type: "close-pane" }
-  | { type: "zoom-toggle" }
   | { type: "detach" }
   | { type: "new-window" }
   | { type: "next-window" }
   | { type: "prev-window" }
   | { type: "rename-window" }
-  | { type: "copy-mode" }
   | { type: "paste" }
   | { type: "prefix-passthrough" }; // Send prefix key itself to PTY
 
@@ -30,18 +23,11 @@ export type PrefixKeyState = "idle" | "waiting";
 
 /** Default action bindings (action -> keybind string, tmux-compatible). */
 export const DEFAULT_ACTION_BINDINGS: Record<string, string> = {
-  "split-vertical": "%",
-  "split-horizontal": '"',
-  "next-pane": "o",
-  "prev-pane": ";",
-  "close-pane": "x",
-  "zoom-toggle": "z",
   "detach": "d",
   "new-window": "c",
   "next-window": "n",
   "prev-window": "p",
   "rename-window": ",",
-  "copy-mode": "[",
   "paste": "]",
 };
 

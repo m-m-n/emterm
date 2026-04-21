@@ -350,18 +350,11 @@
       "statusPosition": "Status Bar Position",
       "keybinds": "Keybinds",
       "keybind": {
-        "splitVertical": "Split Vertical",
-        "splitHorizontal": "Split Horizontal",
-        "nextPane": "Next Pane",
-        "prevPane": "Previous Pane",
-        "closePane": "Close Pane",
-        "zoomToggle": "Zoom Toggle",
         "detach": "Detach",
         "newWindow": "New Window",
         "nextWindow": "Next Window",
         "prevWindow": "Previous Window",
         "renameWindow": "Rename Window",
-        "copyMode": "Copy Mode",
         "paste": "Paste"
       }
     },
