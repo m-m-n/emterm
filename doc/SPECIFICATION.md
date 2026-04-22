@@ -895,30 +895,37 @@ PROMPT_COMMAND="_emterm_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 
 #### Terminal Multiplexer
 
-Native terminal multiplexer integrated into eMterm, eliminating the VT100 double-parse bottleneck present when using external multiplexers (tmux, Zellij). A background daemon manages PTY sessions over a Unix domain socket; the GUI receives raw PTY bytes and processes them through the existing WASM parser.
+Native terminal multiplexer integrated into eMterm, eliminating the VT100 double-parse bottleneck present when using external multiplexers (tmux, Zellij). A background daemon manages PTY sessions over a Unix domain socket; the GUI receives raw PTY bytes and processes them through the existing WASM parser. Each mux window holds exactly one pane; pane splitting, pane navigation, zoom, and copy mode are not supported.
 
 **Architecture:**
-- Daemon process manages Session > Window > Pane hierarchy
+- Daemon process manages Session > Window > Pane hierarchy (one pane per window)
 - GUI communicates with daemon via Unix domain socket (binary framing)
 - Independent WASM instance per pane (~2-4MB each, module compilation cached)
-- GUI handles prefix key, pane layout, and OSC sequences
+- GUI handles prefix key and OSC sequences
 
 **Key Functionality:**
 - `emterm mux` starts the daemon (if not running) and switches the GUI to mux mode
 - Detach (`prefix+d`) returns to host shell; daemon and PTYs survive
 - `emterm mux attach` restores session with full screen state replay
-- Pane split: `prefix+%` (vertical), `prefix+"` (horizontal)
-- Pane resize via drag; `prefix+z` zoom/unzoom
 - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename)
-- Copy mode: vi/emacs keybindings, WASM-based search, system clipboard
 - tmux.conf import: prefix key, keybindings, base-index, mouse, status-position
 - Nesting prevention via `EMTERM_MUX=1` environment variable
+
+**Retained prefix key actions:**
+| Action | Default key (after prefix) |
+|--------|---------------------------|
+| `detach` | `d` |
+| `new-window` | `c` |
+| `next-window` | `n` |
+| `prev-window` | `p` |
+| `rename-window` | `,` |
+| `prefix-passthrough` | (prefix key again) |
 
 **IPC Protocol:**
 - Frame format: `[length: u32][type: u8][pane_id: u32][payload: variable]`
 - PTY data transferred as raw bytes (no serialization)
 - Control messages via bincode
-- Message types: PtyOutput, PtyInput, Hello/Welcome, CreatePane/PaneCreated, DestroyPane, Resize, Attach/Detach/Detached, Snapshot, SnapshotRestore, SessionList, Error, PtyExited, CreateWindow, SwitchWindow, RenameWindow, DestroyWindow, StatusUpdate
+- Message types: PtyOutput, PtyInput, Hello/Welcome, PaneCreated, DestroyPane, Resize, Attach/Detach/Detached, Snapshot, SnapshotRestore, SessionList, Error, PtyExited, CreateWindow, SwitchWindow, RenameWindow, DestroyWindow, StatusUpdate, Shutdown
 
 **Window Management:**
 - Each mux window maps to a GUI tab (tab group UI)
@@ -926,6 +933,7 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 - `StatusUpdate` pushed from daemon to GUI when window list changes
 - Daemon streams PTY output for all windows simultaneously (not just the active one)
 - Window switching is instant: target window's WASM grid is always current (no redraw delay)
+- Daemon-level OSC title propagation: daemon detects OSC 0/2 from each pane's PTY and updates `window.name` independently of GUI connection state; connected GUI clients receive `RenameWindow` notifications; `Welcome.session_list` on attach always reflects the latest titles
 
 **Reliability:**
 - Automatic recovery on daemon crash (GUI returns to normal mode)
@@ -933,6 +941,7 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 - Daemon-side shadow grid (vt100 crate) for screen state restoration on reattach
 - Bridge timeout: 5s waiting for Welcome response (handles non-eMterm terminals gracefully)
 - Nesting prevention via `EMTERM_MUX=1` environment variable
+- `emterm mux kill` sends a `Shutdown` IPC message to the daemon, triggering graceful shutdown that terminates all PTY subprocesses and removes the socket file; if the daemon is unreachable, the socket file is cleaned up
 
 ---
 
@@ -962,7 +971,7 @@ ESC _ emterm-mux;<base64(frame_body)> ST
 - Bridge process connects to daemon via Unix socket; translates APC ↔ MuxMessage frames
 - Bridge exits cleanly on stdin EOF (SSH disconnect); daemon survives and allows reattach
 - SSH-transparent: mux sessions work over SSH without socket forwarding
-- GUI sends control messages (handshake, attach, resize, split, window management) as APC writes to PTY stdin
+- GUI sends control messages (handshake, attach, resize, window management) as APC writes to PTY stdin
 - WASM parser already handles APC sequences; mux handler receives decoded messages via callback
 
 ---
@@ -999,6 +1008,15 @@ emterm mux script
 - Idempotent: safe to call multiple times; exits successfully if daemon is already running
 - Typical usage: call before `new-window` and `send-keys` to set up workspace
 
+**`emterm mux kill`:**
+```bash
+emterm mux kill
+```
+- Sends a `Shutdown` IPC message to the daemon via Unix socket / Named Pipe
+- Daemon performs graceful shutdown: terminates all PTY subprocesses, removes socket file, exits
+- If the daemon is not reachable, cleans up the stale socket file and exits with status 0
+- No `pkill` or `taskkill` required; a single command terminates everything
+
 **Examples:**
 ```bash
 # Open editor in a named window
@@ -1015,6 +1033,9 @@ emterm mux script
 emterm mux new-window -n editor -c "nvim"
 emterm mux new-window -n monitor -c "glances"
 emterm mux  # attach from GUI
+
+# Terminate the mux daemon and all sessions
+emterm mux kill
 ```
 
 ---

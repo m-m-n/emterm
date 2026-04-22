@@ -28,14 +28,15 @@ Tauriで構築されたLinux/Windows向けターミナルエミュレータ。�
 - **ターミナルマルチプレクサ**
   - `emterm mux` でネイティブマルチプレクサデーモンを起動（GUIが生のPTYバイトを受信、二重パースなし）
   - デタッチ（`prefix+d`）／リアタッチ（`emterm mux attach`）と画面状態の完全な復元
-  - ペイン分割（`prefix+%` 垂直、`prefix+"` 水平）、リサイズ、ズーム（`prefix+z`）
   - セッションあたり複数ウィンドウとタブグループUI（全ウィンドウ同時ストリーミングによる瞬時切り替え）
-  - コピーモード（vi/emacsキーバインド、WASMベースの検索）
+  - ウィンドウ管理: `prefix+c`（新規）、`prefix+n`/`prefix+p`（切替）、`prefix+,`（リネーム）
   - tmux.conf インポート: プレフィックスキー、キーバインド、base-index、マウス、status-position
   - インバンドAPCプロトコル: PTYストリーム経由でmux制御メッセージを送受信（SSH透過、追加ソケット転送不要）
   - `emterm mux new-window [-n 名前] [-c コマンド]`: CLIからウィンドウを作成し初期コマンドを実行
   - `emterm mux send-keys [-t ウィンドウ]`: 標準入力のデータをmuxウィンドウにキー入力として送信
   - `emterm mux script`: デーモン起動のみ（アタッチなし）、スクリプトによるワークスペース初期化に使用
+  - `emterm mux kill`: IPC経由でデーモンと全PTYセッションをgracefulに終了
+  - OSCタイトル伝播: デーモンがシェルのOSC 0/2シーケンスからウィンドウ名を更新（GUI未接続中も有効）
   - Muxステータスバー: デーモン側でコマンドを定期実行し、テンプレート変数（`{cmd:name}`、`{hostname}`、`{cwd}`）でステータスバーに反映
   - Windows対応: Named Pipe IPCとプロセスデタッチ（ターミナル終了後もデーモン継続）
 

@@ -28,14 +28,15 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
 - **Terminal Multiplexer**
   - `emterm mux` starts a native multiplexer daemon; GUI receives raw PTY bytes (no double-parse overhead)
   - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
-  - Pane split (`prefix+%` vertical, `prefix+"` horizontal), resize, and zoom (`prefix+z`)
   - Multiple windows per session with tab group UI; instant window switching (all windows stream simultaneously)
-  - Copy mode with vi/emacs keybindings and WASM-based search
+  - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename)
   - tmux.conf import: prefix key, keybindings, base-index, mouse, status-position
   - Inband APC protocol: mux control messages travel over the PTY stream (SSH-transparent, no socket forwarding needed)
   - `emterm mux new-window [-n name] [-c command]`: create named windows with initial commands from CLI
   - `emterm mux send-keys [-t window]`: pipe stdin data as key input to a mux window from CLI
   - `emterm mux script`: start daemon without attaching (for scripted workspace initialization)
+  - `emterm mux kill`: gracefully terminate the daemon and all PTY sessions via IPC
+  - OSC title propagation: daemon updates window names from shell OSC 0/2 sequences even while GUI is detached
   - Mux status bar: daemon-side command execution with template variables (`{cmd:name}`, `{hostname}`, `{cwd}`)
   - Windows support: Named Pipe IPC with daemon process detachment (survives terminal closure)
 
