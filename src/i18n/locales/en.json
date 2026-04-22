@@ -453,6 +453,14 @@
     "newTab": "New Tab",
     "openProfile": "Open Profile"
   },
+  "mux": {
+    "renameDialog": {
+      "title": "Rename Window",
+      "label": "Window name",
+      "confirm": "OK",
+      "cancel": "Cancel"
+    }
+  },
   "sftp": {
     "dropOverlay": {
       "upload": "Drop to upload via SFTP",

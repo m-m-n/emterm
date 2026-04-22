@@ -453,6 +453,14 @@
     "newTab": "\u65b0\u898f\u30bf\u30d6",
     "openProfile": "\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb\u3092\u958b\u304f"
   },
+  "mux": {
+    "renameDialog": {
+      "title": "\u30a6\u30a3\u30f3\u30c9\u30a6\u540d\u3092\u5909\u66f4",
+      "label": "\u30a6\u30a3\u30f3\u30c9\u30a6\u540d",
+      "confirm": "OK",
+      "cancel": "\u30ad\u30e3\u30f3\u30bb\u30eb"
+    }
+  },
   "sftp": {
     "dropOverlay": {
       "upload": "\u30c9\u30ed\u30c3\u30d7\u3057\u3066SFTP\u3067\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9",

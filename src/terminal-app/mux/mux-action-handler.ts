@@ -10,6 +10,10 @@ import type { MuxClient } from "../../terminal/mux/mux-client";
 import type { MuxAction } from "../../terminal/mux/prefix-key";
 import type { PtyClient } from "../../pty/client";
 import { SettingsService } from "../../settings/settings-service";
+import { showRenameWindowDialog } from "./rename-window-dialog";
+
+/** Guard against concurrent rename dialogs. Module-local state. */
+let renameDialogOpen = false;
 
 /** Subset of TerminalApp state needed by mux action handler functions. */
 export interface MuxActionContext {
@@ -64,26 +68,47 @@ export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void 
       break;
     }
     case "rename-window": {
-      const muxWindows = ctx.getMuxWindows();
+      if (renameDialogOpen) break;
       const activeIndex = ctx.getActiveMuxWindowIndex();
-      const currentName = muxWindows[activeIndex]?.name ?? "";
-      const newName = prompt("Rename window:", currentName);
-      if (newName != null && newName !== "") {
-        const win = muxWindows[activeIndex];
-        if (win) {
-          win.name = newName;
-          ctx.emitMuxStateChange();
-        }
-        // Notify daemon: RenameWindowMsg { name: String }
-        // bincode for String = u64 length (LE) + UTF-8 bytes
-        // Send active pane ID — daemon resolves pane→window internally.
-        const nameBytes = new TextEncoder().encode(newName);
-        const payload = new Uint8Array(8 + nameBytes.length);
-        const view = new DataView(payload.buffer);
-        view.setBigUint64(0, BigInt(nameBytes.length), true);
-        payload.set(nameBytes, 8);
-        const paneId = ctx.getMuxPaneIds()[activeIndex] ?? 0;
-        sendMuxControl(ctx, MuxMessageType.RenameWindow, paneId, payload);
+      const target = ctx.getMuxWindows()[activeIndex];
+      if (!target) break;
+      // Capture stable window id so we can re-resolve after the async dialog,
+      // even if the active index shifts due to concurrent mux state changes.
+      const targetWinId = target.id;
+      const currentName = target.name;
+      renameDialogOpen = true;
+      try {
+        showRenameWindowDialog({ currentName }).then((result) => {
+          if (!result.confirmed || result.name === "") return;
+          const currentWindows = ctx.getMuxWindows();
+          const currentIdx = currentWindows.findIndex((w) => w.id === targetWinId);
+          if (currentIdx < 0) return; // window was closed during the dialog
+          const paneId = ctx.getMuxPaneIds()[currentIdx];
+          if (paneId === undefined) return; // no pane for this window — abort
+          const win = currentWindows[currentIdx];
+          if (win) {
+            win.name = result.name;
+            ctx.emitMuxStateChange();
+          }
+          // Notify daemon: RenameWindowMsg { name: String }
+          // bincode for String = u64 length (LE) + UTF-8 bytes
+          // Send active pane ID — daemon resolves pane→window internally.
+          const nameBytes = new TextEncoder().encode(result.name);
+          const payload = new Uint8Array(8 + nameBytes.length);
+          const view = new DataView(payload.buffer);
+          view.setBigUint64(0, BigInt(nameBytes.length), true);
+          payload.set(nameBytes, 8);
+          sendMuxControl(ctx, MuxMessageType.RenameWindow, paneId, payload);
+        }).catch((e) => {
+          muxLog.error(`Rename dialog failed: ${e}`);
+        }).finally(() => {
+          renameDialogOpen = false;
+        });
+      } catch (e) {
+        // Synchronous throw before the Promise chain was established
+        // (e.g., DOM setup failure in showRenameWindowDialog).
+        renameDialogOpen = false;
+        muxLog.error(`Rename dialog setup failed: ${e}`);
       }
       break;
     }
