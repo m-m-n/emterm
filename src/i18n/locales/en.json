@@ -11,7 +11,7 @@
       "markdownViewer": "Markdown Viewer",
       "profiles": "Profiles",
       "ssh": "SSH Connections",
-      "log": "Log",
+      "log": "Debug",
       "mux": "Multiplexer",
       "statusBar": "Status Bar"
     },
@@ -358,7 +358,7 @@
       }
     },
     "log": {
-      "title": "Log",
+      "title": "Debug",
       "recording": "Log Recording",
       "recordingDesc": "Record WARN and ERROR logs to file",
       "logFile": "Log File",
