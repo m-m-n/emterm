@@ -201,6 +201,15 @@ export interface PtyHandlerHandle {
     error: unknown,
     onComplete?: (success: boolean) => void,
   ) => boolean;
+  /**
+   * User-initiated WASM reinitialization. Resets the automatic recovery
+   * guards (attempt counter, unrecoverable flag) before invoking the shared
+   * recovery path with a synthetic `WebAssembly.RuntimeError`, so it works
+   * even after the terminal has been marked unrecoverable.
+   *
+   * `onComplete` fires once recovery finishes with the success flag.
+   */
+  forceReinitWasm: (onComplete?: (success: boolean) => void) => void;
   /** Remove event listeners and clean up resources. */
   destroy: () => void;
 }
@@ -208,7 +217,7 @@ export interface PtyHandlerHandle {
 export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandlerHandle> {
   const ptyClient = ctx.getPtyClient();
   const state = ctx.getState();
-  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {}, tryRecoverFromWasmCrash: (_err, onComplete) => { onComplete?.(false); return false; }, destroy: () => {} };
+  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {}, tryRecoverFromWasmCrash: (_err, onComplete) => { onComplete?.(false); return false; }, forceReinitWasm: (onComplete) => { onComplete?.(false); }, destroy: () => {} };
   if (!ptyClient || !state) return noopHandle;
 
   // Register callbacks on primary core
@@ -752,6 +761,16 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       }
     },
     tryRecoverFromWasmCrash,
+    forceReinitWasm: (onComplete) => {
+      // Reset guards so recovery runs even after prior exhaustion.
+      wasmRecoveryAttempts = 0;
+      wasmUnrecoverable = false;
+      console.warn("[WARN][FRONTEND] manual WASM reinitialization requested");
+      const syntheticError = new WebAssembly.RuntimeError(
+        "manual reinitialize requested",
+      );
+      tryRecoverFromWasmCrash(syntheticError, onComplete);
+    },
     destroy: () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       focusListenerDisposed = true;
