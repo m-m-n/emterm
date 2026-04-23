@@ -371,7 +371,14 @@
       "cleared": "ログをクリアしました",
       "empty": "ログエントリーなし",
       "reload": "再読み込み",
-      "loading": "読み込み中..."
+      "loading": "読み込み中...",
+      "recovery": "WASM リカバリ",
+      "recoveryDesc": "ターミナルが応答しなくなった場合、WASMエンジンを再初期化してアクティブなターミナルを復旧します。画面の内容はクリアされます。",
+      "reinitWasm": "WASMを再初期化",
+      "reinitializing": "再初期化中...",
+      "reinitSuccess": "ターミナルを復旧しました",
+      "reinitFailed": "再初期化に失敗しました",
+      "reinitUnavailable": "アクティブなターミナルがありません"
     },
     "statusBar": {
       "title": "\u30b9\u30c6\u30fc\u30bf\u30b9\u30d0\u30fc",

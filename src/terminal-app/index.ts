@@ -679,6 +679,20 @@ export class TerminalApp {
   }
 
   /**
+   * User-initiated WASM reinitialization. Bypasses the automatic recovery
+   * guards so it can rescue a terminal that has already been marked
+   * unrecoverable. `onComplete` fires with the final success flag.
+   */
+  forceReinitWasm(onComplete?: (success: boolean) => void): void {
+    const handle = this.ptyHandlerHandle;
+    if (!handle) {
+      onComplete?.(false);
+      return;
+    }
+    handle.forceReinitWasm(onComplete);
+  }
+
+  /**
    * Exit scrollback mode by resetting scroll offset to bottom.
    */
   exitScrollback(): void {

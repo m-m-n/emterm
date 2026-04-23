@@ -147,4 +147,44 @@ export function renderLogSection(
       statusSpan.textContent = String(e);
     }
   });
+
+  // === WASM Recovery ===
+  renderSubsectionHeader(panel, t("settings.log.recovery"));
+
+  const recoveryDesc = document.createElement("p");
+  recoveryDesc.className = "settings-description";
+  recoveryDesc.textContent = t("settings.log.recoveryDesc");
+  panel.appendChild(recoveryDesc);
+
+  const recoveryRow = document.createElement("div");
+  recoveryRow.className = "settings-log-actions";
+
+  const reinitBtn = document.createElement("button");
+  reinitBtn.className = "settings-btn settings-btn-danger";
+  reinitBtn.textContent = t("settings.log.reinitWasm");
+  recoveryRow.appendChild(reinitBtn);
+
+  const reinitStatus = document.createElement("span");
+  reinitStatus.className = "settings-log-status";
+  recoveryRow.appendChild(reinitStatus);
+
+  panel.appendChild(recoveryRow);
+
+  ctx.addContentListener(reinitBtn, "click", () => {
+    const app = window.terminalApp;
+    if (!app || typeof app.forceReinitWasm !== "function") {
+      reinitStatus.textContent = t("settings.log.reinitUnavailable");
+      setTimeout(() => { reinitStatus.textContent = ""; }, 3000);
+      return;
+    }
+    reinitBtn.disabled = true;
+    reinitStatus.textContent = t("settings.log.reinitializing");
+    app.forceReinitWasm((success) => {
+      reinitStatus.textContent = success
+        ? t("settings.log.reinitSuccess")
+        : t("settings.log.reinitFailed");
+      reinitBtn.disabled = false;
+      setTimeout(() => { reinitStatus.textContent = ""; }, 5000);
+    });
+  });
 }
