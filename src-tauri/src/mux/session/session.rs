@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use tokio::sync::oneshot;
+
 use super::window::{MuxWindow, WindowId};
 
 /// Session identifier.
@@ -13,6 +15,14 @@ pub struct MuxSession {
     pub name: String,
     pub windows: BTreeMap<WindowId, MuxWindow>,
     pub active_window_id: Option<WindowId>,
+    /// Signal handle for the currently attached GUI client.
+    ///
+    /// When another client attaches to the same session, the new `collect_reattach_data`
+    /// takes this sender and fires it, which causes the previous client's connection
+    /// loop to send `Detached` and exit. The connection handler treats an `Err` on the
+    /// receiver (sender dropped without send) as a no-op, so a client that cleanly
+    /// switches to a different session is not kicked out of the one it is leaving.
+    pub active_client_kick: Option<oneshot::Sender<()>>,
     next_window_id: WindowId,
 }
 
@@ -23,6 +33,7 @@ impl MuxSession {
             name,
             windows: BTreeMap::new(),
             active_window_id: None,
+            active_client_kick: None,
             next_window_id: 1,
         }
     }

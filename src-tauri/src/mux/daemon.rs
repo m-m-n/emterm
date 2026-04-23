@@ -586,35 +586,49 @@ mod tests {
         graceful_shutdown(&mgr).await;
     }
 
-    /// Helpers for title-update tests.
-    fn make_title_test_pane(id: u32) -> crate::mux::session::pane::MuxPane {
+    /// Helpers for title-update tests. Returns the pane plus the `Sender`
+    /// installed into its `output_target`, so tests can pass the matching
+    /// `Sender` to identity-scoped `detach_session_panes`.
+    fn make_title_test_pane(
+        id: u32,
+    ) -> (
+        crate::mux::session::pane::MuxPane,
+        mpsc::Sender<crate::mux::session::pane::PtyOutputChunk>,
+    ) {
         use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
         use std::sync::{Arc as StdArc, Mutex as StdMutex};
         let (tx, _rx) = mpsc::channel(1);
         let target: SharedOutputTarget =
-            StdArc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
-        MuxPane::new_test(id, 80, 24, target)
+            StdArc::new(StdMutex::new(PaneOutputTarget::Connected(tx.clone())));
+        (MuxPane::new_test(id, 80, 24, target), tx)
     }
 
-    async fn setup_single_pane_manager() -> (Arc<Mutex<SessionManager>>, u32, u32, u32) {
+    async fn setup_single_pane_manager() -> (
+        Arc<Mutex<SessionManager>>,
+        u32,
+        u32,
+        u32,
+        mpsc::Sender<crate::mux::session::pane::PtyOutputChunk>,
+    ) {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
         let mut m = mgr.lock().await;
         let sid = m.create_session("default".to_string());
         let wid = m.create_window(sid, "shell".to_string()).unwrap();
         let pane_id = 42;
+        let (pane, pane_tx) = make_title_test_pane(pane_id);
         m.get_session_mut(sid)
             .unwrap()
             .windows
             .get_mut(&wid)
             .unwrap()
-            .add_pane(make_title_test_pane(pane_id));
+            .add_pane(pane);
         drop(m);
-        (mgr, sid, wid, pane_id)
+        (mgr, sid, wid, pane_id, pane_tx)
     }
 
     #[tokio::test]
     async fn test_apply_title_change_updates_window_and_broadcasts() {
-        let (mgr, sid, wid, pane_id) = setup_single_pane_manager().await;
+        let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
         let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
 
         let changed = apply_title_change(&mgr, pane_id, "hello".to_string()).await;
@@ -641,7 +655,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_title_change_same_title_skips_broadcast() {
-        let (mgr, _sid, _wid, pane_id) = setup_single_pane_manager().await;
+        let (mgr, _sid, _wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
         let _ = apply_title_change(&mgr, pane_id, "hello".to_string()).await;
 
         let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
@@ -658,7 +672,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_title_change_unknown_pane_no_change() {
-        let (mgr, sid, wid, _pane_id) = setup_single_pane_manager().await;
+        let (mgr, sid, wid, _pane_id, _pane_tx) = setup_single_pane_manager().await;
         let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
 
         let changed = apply_title_change(&mgr, 9999, "bogus".to_string()).await;
@@ -678,7 +692,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_title_update_task_applies_messages_from_channel() {
-        let (mgr, sid, wid, pane_id) = setup_single_pane_manager().await;
+        let (mgr, sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
         let (tx, rx) = mpsc::channel::<(u32, String)>(8);
         let mut notify_rx = { mgr.lock().await.notify_tx().subscribe() };
 
@@ -722,7 +736,7 @@ mod tests {
     async fn test_detached_pane_title_change_updates_window_name() {
         use crate::mux::ipc::reattach::detach_session_panes;
 
-        let (mgr, sid, wid, pane_id) = setup_single_pane_manager().await;
+        let (mgr, sid, wid, pane_id, pane_tx) = setup_single_pane_manager().await;
         let (tx, rx) = mpsc::channel::<(u32, String)>(8);
 
         // Attach the daemon-level tx to the pane (simulating CLI-created pane).
@@ -739,8 +753,11 @@ mod tests {
             *pane.title_sender.lock().unwrap() = Some(tx.clone());
         }
 
-        // Simulate GUI disconnect: this must NOT clear the title sender.
-        detach_session_panes(&mgr, sid).await;
+        // Simulate GUI disconnect: pass the pane's matching tx so the
+        // identity-scoped detach_session_panes actually flips output_target
+        // to Detached. The assertion below verifies title_sender is preserved
+        // through this state transition.
+        detach_session_panes(&mgr, sid, &pane_tx).await;
         {
             let m = mgr.lock().await;
             let session = m.get_session(sid).unwrap();
@@ -779,7 +796,7 @@ mod tests {
     /// verify the subscriber receives the event (i.e. no gap).
     #[tokio::test]
     async fn test_subscribe_before_welcome_catches_rename() {
-        let (mgr, _sid, wid, pane_id) = setup_single_pane_manager().await;
+        let (mgr, _sid, wid, pane_id, _pane_tx) = setup_single_pane_manager().await;
 
         // Phase A: subscribe BEFORE any broadcast (simulates the reordered
         // sequence in handle_connection).

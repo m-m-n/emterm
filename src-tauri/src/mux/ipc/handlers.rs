@@ -6,6 +6,7 @@ use futures::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
@@ -401,6 +402,11 @@ pub(super) async fn handle_request_pane_snapshot(
 ///
 /// Detaches panes from the current session, updates the active session,
 /// and reattaches panes from the new session with buffered output replay.
+///
+/// Also allocates a fresh kick channel: the sender is installed on the new
+/// session (firing any previously-installed kick to evict the prior client),
+/// and the receiver is written to `kick_rx` so the connection loop can await
+/// it in its select!. Any prior receiver held by the caller is replaced.
 pub(super) async fn handle_attach<S>(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -408,6 +414,7 @@ pub(super) async fn handle_attach<S>(
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: &mut u32,
     title_tx: &TitleChangeSender,
+    kick_rx: &mut Option<oneshot::Receiver<()>>,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -437,15 +444,33 @@ where
         }
     }
 
-    // Detach from current session
-    detach_session_panes(session_manager, *active_session_id).await;
+    // Detach from current session — identity-scoped: only panes still owned
+    // by our pane_output_tx are flipped to Detached. Panes that have been
+    // handed off to another connection (race window) are preserved.
+    detach_session_panes(session_manager, *active_session_id, pane_output_tx).await;
 
     // Update active session
     *active_session_id = new_session_id;
 
+    // Allocate a fresh kick channel for this attachment. The sender is
+    // installed onto the target session by collect_reattach_data, which also
+    // fires any previously-installed kick to evict the prior client.
+    let (new_kick_tx, new_kick_rx) = oneshot::channel::<()>();
+
     // Reattach to new session's panes
-    let reattach_data =
-        collect_reattach_data(session_manager, new_session_id, pane_output_tx, title_tx).await;
+    let reattach_data = collect_reattach_data(
+        session_manager,
+        new_session_id,
+        pane_output_tx,
+        title_tx,
+        new_kick_tx,
+    )
+    .await;
+
+    // Replace the connection's kick receiver with the fresh one for the new
+    // session. Any prior receiver (for the session we just left) is dropped;
+    // firing its sender would return Err and be ignored.
+    *kick_rx = Some(new_kick_rx);
 
     if send_reattach_data(framed, &reattach_data).await.is_err() {
         return Err(true);
