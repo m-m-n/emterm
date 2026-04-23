@@ -10,6 +10,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
@@ -195,6 +196,13 @@ pub async fn handle_connection<S>(
     let mut cmd_handles: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
         std::collections::HashMap::new();
 
+    // Kick channel: set by handle_attach. Fires with Ok(()) when another
+    // client attaches to the same session and evicts us. Drop-without-send
+    // (Err) is treated as a no-op so that cleanly switching sessions does
+    // not kick ourselves off.
+    let mut kick_rx: Option<oneshot::Receiver<()>> = None;
+    let mut was_kicked = false;
+
     // Message + output loop using select! to handle both directions concurrently
     loop {
         // Build a future for the render timer (if enabled)
@@ -204,6 +212,24 @@ pub async fn handle_connection<S>(
             } else {
                 // Never resolves if disabled
                 std::future::pending::<()>().await;
+            }
+        };
+
+        // Kick future: resolves when our kick_rx fires. `Ok(())` means
+        // another client attached to this session and evicted us. `Err(_)`
+        // means the Sender was dropped — in practice this occurs when the
+        // active session is destroyed while we're still attached (the
+        // session's `active_client_kick` drops along with the MuxSession).
+        // Both cases are terminal for this connection; `None` stays pending.
+        let kick_fut = async {
+            match kick_rx.as_mut() {
+                Some(rx) => rx.await,
+                None => {
+                    std::future::pending::<
+                        Result<(), tokio::sync::oneshot::error::RecvError>,
+                    >()
+                    .await
+                }
             }
         };
 
@@ -231,6 +257,7 @@ pub async fn handle_connection<S>(
                             &mut statusbar_engine,
                             &pane_cwd_map,
                             &title_tx,
+                            &mut kick_rx,
                         ).await {
                             if should_break {
                                 break;
@@ -243,6 +270,20 @@ pub async fn handle_connection<S>(
                     }
                     None => break,
                 }
+            }
+            kick_result = kick_fut => {
+                let reason = match kick_result {
+                    Ok(()) => "evicted by newer client",
+                    Err(_) => "active session destroyed",
+                };
+                log::info!(
+                    "Client disconnecting ({}) from session {}; sending Detached",
+                    reason, active_session_id
+                );
+                was_kicked = true;
+                let resp = MuxMessage::control(MessageType::Detached, 0, &());
+                let _ = framed.send(resp).await;
+                break;
             }
             chunk = pane_output_rx.recv() => {
                 if let Some(first) = chunk {
@@ -396,16 +437,32 @@ pub async fn handle_connection<S>(
     // Switch all panes in the active session to detached buffering mode.
     // This prevents pty_reader_loop from racing with the next connection's
     // collect_reattach_data when the output_target is still Connected(dead_tx).
-    log::info!(
-        "Client disconnecting, detaching panes for session {}",
-        active_session_id
-    );
-    detach_session_panes(&session_manager, active_session_id).await;
+    //
+    // Skipped when we were kicked by another attaching client: in that case
+    // the newer client has already taken ownership of the panes, and running
+    // detach_session_panes would immediately clobber their Connected state
+    // back to Detached, stranding them.
+    if was_kicked {
+        log::info!(
+            "Client disconnecting (kicked), leaving session {} panes attached to new client",
+            active_session_id
+        );
+    } else {
+        log::info!(
+            "Client disconnecting, detaching panes for session {}",
+            active_session_id
+        );
+        // Identity-scoped: detach only panes still owned by our pane_output_tx.
+        // Belt-and-suspenders with `was_kicked`: protects against races where
+        // framed.next() wins over kick_fut in the select!, or where the socket
+        // fails mid-eviction and we exit without observing the kick.
+        detach_session_panes(&session_manager, active_session_id, &pane_output_tx).await;
 
-    log::info!(
-        "Client disconnected, session {} panes detached",
-        active_session_id
-    );
+        log::info!(
+            "Client disconnected, session {} panes detached",
+            active_session_id
+        );
+    }
 }
 
 /// Handle a CLI client after handshake.
@@ -563,6 +620,7 @@ async fn route_message<S>(
     statusbar_engine: &mut StatusBarEngine,
     pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
     title_tx: &TitleChangeSender,
+    kick_rx: &mut Option<oneshot::Receiver<()>>,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -589,6 +647,7 @@ where
                 pane_output_tx,
                 active_session_id,
                 title_tx,
+                kick_rx,
             )
             .await?;
             // Register pane cwd Arcs for all panes in the new session

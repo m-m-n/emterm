@@ -6,6 +6,7 @@ use futures::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
@@ -40,69 +41,85 @@ pub(super) fn build_shadow_parser_snapshot(shadow_parser: &SharedShadowParser) -
 /// Collect reattach data for panes in the given session.
 ///
 /// Drains buffered output from detached panes and switches them to connected mode.
+/// Also swaps the session's `active_client_kick` to the caller's sender. Any
+/// previously registered kick sender is fired (after releasing the session lock)
+/// so the prior attached client is signalled to detach.
 pub(super) async fn collect_reattach_data(
     session_manager: &Arc<Mutex<SessionManager>>,
     session_id: u32,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     title_tx: &TitleChangeSender,
+    new_kick: oneshot::Sender<()>,
 ) -> Vec<(PaneId, Vec<u8>)> {
-    let mgr = session_manager.lock().await;
+    let mut new_kick_opt = Some(new_kick);
+    let mut old_kick: Option<oneshot::Sender<()>> = None;
     let mut data: Vec<(PaneId, Vec<u8>)> = Vec::new();
-    if let Some(session) = mgr.get_session(session_id) {
-        for window in session.windows.values() {
-            for pane in window.panes.values() {
-                if pane.exited {
-                    continue;
+    {
+        let mut mgr = session_manager.lock().await;
+        if let Some(session) = mgr.get_session_mut(session_id) {
+            old_kick = session.active_client_kick.take();
+            session.active_client_kick = new_kick_opt.take();
+            for window in session.windows.values() {
+                for pane in window.panes.values() {
+                    if pane.exited {
+                        continue;
+                    }
+
+                    // Get screen restoration data from shadow parser
+                    let mut combined = build_shadow_parser_snapshot(&pane.shadow_parser);
+                    let is_alternate_screen = pane
+                        .shadow_parser
+                        .lock()
+                        .unwrap()
+                        .screen()
+                        .alternate_screen();
+                    let screen_len = combined.len();
+
+                    // Get ring buffer data from detached panes
+                    let mut target = pane.output_target.lock().unwrap();
+                    let target_was = match &*target {
+                        PaneOutputTarget::Connected(_) => "Connected",
+                        PaneOutputTarget::Detached(_) => "Detached",
+                    };
+                    let ring_data = if let PaneOutputTarget::Detached(ref mut ring) = *target {
+                        let buf = ring.read_all();
+                        ring.clear();
+                        buf
+                    } else {
+                        Vec::new()
+                    };
+                    *target = PaneOutputTarget::Connected(pane_output_tx.clone());
+                    // Swap in new title sender so reader threads notify the new connection
+                    *pane.title_sender.lock().unwrap() = Some(title_tx.clone());
+                    log::info!(
+                        "collect_reattach: pane {} was={}, screen={}B, ring={}B, total={}B, alt_screen={}, exited={}",
+                        pane.id,
+                        target_was,
+                        screen_len,
+                        ring_data.len(),
+                        screen_len + ring_data.len(),
+                        is_alternate_screen,
+                        pane.exited
+                    );
+
+                    // Ensure the ring buffer (up to 64MB) fits without incremental
+                    // reallocation. `build_shadow_parser_snapshot` only reserves
+                    // `screen_data.len() + 10`, so without this the reattach path
+                    // would grow `combined` in ~log2(ring_data.len() / screen_len)
+                    // doubling steps.
+                    combined.reserve(ring_data.len());
+                    combined.extend_from_slice(&ring_data);
+
+                    data.push((pane.id, combined));
                 }
-
-                // Get screen restoration data from shadow parser
-                let mut combined = build_shadow_parser_snapshot(&pane.shadow_parser);
-                let is_alternate_screen = pane
-                    .shadow_parser
-                    .lock()
-                    .unwrap()
-                    .screen()
-                    .alternate_screen();
-                let screen_len = combined.len();
-
-                // Get ring buffer data from detached panes
-                let mut target = pane.output_target.lock().unwrap();
-                let target_was = match &*target {
-                    PaneOutputTarget::Connected(_) => "Connected",
-                    PaneOutputTarget::Detached(_) => "Detached",
-                };
-                let ring_data = if let PaneOutputTarget::Detached(ref mut ring) = *target {
-                    let buf = ring.read_all();
-                    ring.clear();
-                    buf
-                } else {
-                    Vec::new()
-                };
-                *target = PaneOutputTarget::Connected(pane_output_tx.clone());
-                // Swap in new title sender so reader threads notify the new connection
-                *pane.title_sender.lock().unwrap() = Some(title_tx.clone());
-                log::info!(
-                    "collect_reattach: pane {} was={}, screen={}B, ring={}B, total={}B, alt_screen={}, exited={}",
-                    pane.id,
-                    target_was,
-                    screen_len,
-                    ring_data.len(),
-                    screen_len + ring_data.len(),
-                    is_alternate_screen,
-                    pane.exited
-                );
-
-                // Ensure the ring buffer (up to 64MB) fits without incremental
-                // reallocation. `build_shadow_parser_snapshot` only reserves
-                // `screen_data.len() + 10`, so without this the reattach path
-                // would grow `combined` in ~log2(ring_data.len() / screen_len)
-                // doubling steps.
-                combined.reserve(ring_data.len());
-                combined.extend_from_slice(&ring_data);
-
-                data.push((pane.id, combined));
             }
         }
+        // If session is not found, new_kick_opt is dropped here (nothing to kick).
+    }
+    if let Some(old) = old_kick {
+        // Notify the previously attached client to detach. Err means the
+        // receiver was already dropped (client gone) — harmless.
+        let _ = old.send(());
     }
     data
 }
@@ -130,10 +147,26 @@ where
     Ok(())
 }
 
-/// Switch panes in a session to detached buffering mode.
+/// Switch panes in a session to detached buffering mode — identity-scoped.
+///
+/// Only panes whose current `Connected(tx)` matches the caller's
+/// `owned_tx` (compared via `Sender::same_channel`) are flipped to
+/// `Detached`. Panes already owned by a different connection (e.g., a
+/// newer client that has taken over the session via `collect_reattach_data`)
+/// are left untouched.
+///
+/// This makes the cleanup safe against races where:
+/// - The `kick_fut` arm and `framed.next()` arm of the connection's select!
+///   loop both become ready simultaneously and biased scheduling picks
+///   `framed.next()`; the loop exits with `was_kicked == false` and reaches
+///   this function, but the panes are already owned by the new client.
+/// - `handle_attach` detaches the old session while switching sessions;
+///   if another connection has concurrently taken the old session over,
+///   that connection's `Connected(tx)` is preserved.
 pub(in crate::mux) async fn detach_session_panes(
     session_manager: &Arc<Mutex<SessionManager>>,
     session_id: u32,
+    owned_tx: &mpsc::Sender<PtyOutputChunk>,
 ) {
     let mgr = session_manager.lock().await;
     if let Some(session) = mgr.get_session(session_id) {
@@ -151,7 +184,11 @@ pub(in crate::mux) async fn detach_session_panes(
                     PaneOutputTarget::Connected(_) => "Connected",
                     PaneOutputTarget::Detached(_) => "Detached",
                 };
-                if let PaneOutputTarget::Connected(_) = &*target {
+                let owned_by_caller = match &*target {
+                    PaneOutputTarget::Connected(tx) => tx.same_channel(owned_tx),
+                    PaneOutputTarget::Detached(_) => false,
+                };
+                if owned_by_caller {
                     *target = PaneOutputTarget::Detached(DetachRingBuffer::new(
                         crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
                     ));
@@ -159,6 +196,11 @@ pub(in crate::mux) async fn detach_session_panes(
                         "detach_session_panes: pane {} switched {} -> Detached",
                         pane.id,
                         was
+                    );
+                } else if matches!(&*target, PaneOutputTarget::Connected(_)) {
+                    log::info!(
+                        "detach_session_panes: pane {} Connected to other client, preserving",
+                        pane.id
                     );
                 } else {
                     log::info!(
@@ -229,7 +271,8 @@ mod tests {
 
         // Call collect_reattach_data
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
-        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx).await;
+        let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
 
         // CRITICAL: Must return 2 entries
         assert_eq!(
@@ -288,7 +331,8 @@ mod tests {
 
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
-        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx).await;
+        let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
 
         assert_eq!(
             data.len(),
@@ -331,7 +375,8 @@ mod tests {
 
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
-        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx).await;
+        let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
 
         assert_eq!(
             data.len(),
@@ -351,7 +396,7 @@ mod tests {
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
 
         let target: SharedOutputTarget =
-            Arc::new(StdMutex::new(PaneOutputTarget::Connected(pane_out_tx)));
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(pane_out_tx.clone())));
 
         let session_id;
         {
@@ -368,7 +413,7 @@ mod tests {
                 .add_pane(pane);
         }
 
-        detach_session_panes(&mgr, session_id).await;
+        detach_session_panes(&mgr, session_id, &pane_out_tx).await;
 
         let m = mgr.lock().await;
         let session = m.get_session(session_id).unwrap();
@@ -389,6 +434,187 @@ mod tests {
             *pane.output_target.lock().unwrap(),
             PaneOutputTarget::Detached(_)
         ));
+    }
+
+    /// Test: a second reattach fires the kick sender installed by the first
+    /// reattach, signalling the prior client to detach.
+    #[tokio::test]
+    async fn test_collect_reattach_data_fires_old_kick() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx.clone())));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target);
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+
+        let (tx1, _rx1) = mpsc::channel::<PtyOutputChunk>(256);
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+
+        // First client attaches: installs kick1.
+        let (kick_tx1, mut kick_rx1) = oneshot::channel::<()>();
+        let _ = collect_reattach_data(&mgr, session_id, &tx1, &title_tx, kick_tx1).await;
+
+        // Receiver must still be pending (no kick yet).
+        assert!(
+            kick_rx1.try_recv().is_err(),
+            "first client should not be kicked before second attach"
+        );
+
+        // Second client attaches: should fire kick1 and install kick2.
+        let (tx2, _rx2) = mpsc::channel::<PtyOutputChunk>(256);
+        let (kick_tx2, mut kick_rx2) = oneshot::channel::<()>();
+        let _ = collect_reattach_data(&mgr, session_id, &tx2, &title_tx, kick_tx2).await;
+
+        // First client's kick_rx must now resolve with Ok(()).
+        assert_eq!(
+            kick_rx1.try_recv(),
+            Ok(()),
+            "second attach must fire first client's kick with Ok(())"
+        );
+
+        // Second client's kick_rx must still be pending.
+        assert!(
+            kick_rx2.try_recv().is_err(),
+            "second client should not be kicked yet"
+        );
+
+        // Session must hold the second kick sender.
+        let m = mgr.lock().await;
+        assert!(
+            m.get_session(session_id)
+                .unwrap()
+                .active_client_kick
+                .is_some(),
+            "session must hold the second kick sender"
+        );
+    }
+
+    /// Regression: detach_session_panes must leave panes whose Connected(tx)
+    /// belongs to another connection alone. This guards against the race
+    /// where a kicked client's cleanup path would otherwise clobber the new
+    /// client's freshly-attached panes.
+    #[tokio::test]
+    async fn test_detach_session_panes_identity_scoped() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        // Client A owns the pane (Connected(tx_a)).
+        let (tx_a, _rx_a) = mpsc::channel::<PtyOutputChunk>(16);
+        // Client B is a different connection (different channel).
+        let (tx_b, _rx_b) = mpsc::channel::<PtyOutputChunk>(16);
+
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx_a.clone())));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target);
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+
+        // Client B calls detach with its own tx. Must NOT detach pane owned by A.
+        detach_session_panes(&mgr, session_id, &tx_b).await;
+        {
+            let m = mgr.lock().await;
+            let pane = m
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .values()
+                .next()
+                .unwrap();
+            assert!(
+                matches!(*pane.output_target.lock().unwrap(), PaneOutputTarget::Connected(_)),
+                "detach_session_panes must preserve pane owned by a different connection"
+            );
+        }
+
+        // Now Client A calls detach with its own tx. MUST detach.
+        detach_session_panes(&mgr, session_id, &tx_a).await;
+        {
+            let m = mgr.lock().await;
+            let pane = m
+                .get_session(session_id)
+                .unwrap()
+                .windows
+                .values()
+                .next()
+                .unwrap()
+                .panes
+                .values()
+                .next()
+                .unwrap();
+            assert!(
+                matches!(*pane.output_target.lock().unwrap(), PaneOutputTarget::Detached(_)),
+                "detach_session_panes must detach pane owned by caller"
+            );
+        }
+    }
+
+    /// Test: first attach with no prior client simply installs the kick.
+    #[tokio::test]
+    async fn test_collect_reattach_data_first_attach_no_old_kick() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(tx.clone())));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target);
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+        let (kick_tx, mut kick_rx) = oneshot::channel::<()>();
+        let _ = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
+
+        assert!(
+            kick_rx.try_recv().is_err(),
+            "no prior client, so new kick must remain pending"
+        );
+        let m = mgr.lock().await;
+        assert!(
+            m.get_session(session_id)
+                .unwrap()
+                .active_client_kick
+                .is_some(),
+            "session must hold the newly-installed kick sender"
+        );
     }
 
     /// Test: session_list reports correct pane_count for multi-window session.
