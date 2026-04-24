@@ -124,7 +124,21 @@ pub(super) async fn collect_reattach_data(
     data
 }
 
+/// Maximum payload bytes per `PtyOutput` frame emitted during reattach replay.
+///
+/// A pane's ring buffer can hold up to `DEFAULT_RING_CAPACITY` (64 MiB) but a
+/// single codec frame must stay under `MAX_FRAME_LENGTH` (16 MiB). Chosen well
+/// below the codec cap so the 5-byte frame-body header plus any future growth
+/// stays safely within bounds.
+const REATTACH_CHUNK_SIZE: usize = 8 * 1024 * 1024;
+
 /// Send reattach data (PaneCreated + buffered output) to the client.
+///
+/// Large per-pane buffers are split into multiple `PtyOutput` frames so each
+/// frame fits under `MAX_FRAME_LENGTH`. Without this split, a 34 MiB ring
+/// buffer (e.g. a long-detached `glances` pane) produces a single oversized
+/// frame, the codec encode fails, the socket tears down, and the bridge
+/// synthesises a Detached that drops the GUI out of mux mode mid-reattach.
 pub(super) async fn send_reattach_data<S>(
     framed: &mut Framed<S, MuxCodec>,
     reattach_data: &[(PaneId, Vec<u8>)],
@@ -137,8 +151,8 @@ where
         if framed.send(resp).await.is_err() {
             return Err(());
         }
-        if !buffered.is_empty() {
-            let msg = MuxMessage::pty_output(*pane_id, buffered.clone());
+        for chunk in buffered.chunks(REATTACH_CHUNK_SIZE) {
+            let msg = MuxMessage::pty_output(*pane_id, chunk.to_vec());
             if framed.send(msg).await.is_err() {
                 return Err(());
             }
@@ -622,6 +636,93 @@ mod tests {
                 .is_some(),
             "session must hold the newly-installed kick sender"
         );
+    }
+
+    /// Regression test: a pane whose ring buffer exceeds `MAX_FRAME_LENGTH` must
+    /// be sent as multiple `PtyOutput` frames. A single oversized frame would
+    /// make the codec encoder fail, tearing down the reattach connection.
+    #[tokio::test]
+    async fn test_send_reattach_data_splits_large_buffer() {
+        use futures::StreamExt;
+        use tokio_util::codec::Framed;
+
+        let (client, server) = tokio::io::duplex(64 * 1024 * 1024);
+        let mut server_framed = Framed::new(server, MuxCodec::new());
+        let client_framed = Framed::new(client, MuxCodec::new());
+
+        // Payload that spans just over two full chunks.
+        let payload_len = REATTACH_CHUNK_SIZE * 2 + 123;
+        let big: Vec<u8> = (0..payload_len).map(|i| (i % 251) as u8).collect();
+        let reattach_data = vec![(42u32, big.clone())];
+
+        // Sender task.
+        let sender = tokio::spawn(async move {
+            let mut framed = client_framed;
+            send_reattach_data(&mut framed, &reattach_data).await
+        });
+
+        // First frame: PaneCreated.
+        let first = server_framed.next().await.unwrap().unwrap();
+        assert_eq!(first.msg_type, MessageType::PaneCreated);
+        assert_eq!(first.pane_id, 42);
+
+        // Subsequent frames: PtyOutput chunks, each <= REATTACH_CHUNK_SIZE.
+        // Concatenated payload must reproduce the original big buffer byte-for-byte.
+        let mut reassembled = Vec::with_capacity(payload_len);
+        let mut chunks_seen = 0;
+        while reassembled.len() < payload_len {
+            let frame = server_framed.next().await.unwrap().unwrap();
+            assert_eq!(frame.msg_type, MessageType::PtyOutput);
+            assert_eq!(frame.pane_id, 42);
+            assert!(
+                frame.payload.len() <= REATTACH_CHUNK_SIZE,
+                "chunk {} len {} exceeded REATTACH_CHUNK_SIZE {}",
+                chunks_seen,
+                frame.payload.len(),
+                REATTACH_CHUNK_SIZE
+            );
+            reassembled.extend_from_slice(&frame.payload);
+            chunks_seen += 1;
+        }
+        assert_eq!(chunks_seen, 3, "expected 3 chunks (2 full + 1 partial)");
+        assert_eq!(reassembled, big, "reassembled payload must match input");
+
+        sender.await.unwrap().expect("send_reattach_data ok");
+    }
+
+    /// Empty buffer emits PaneCreated and nothing else.
+    #[tokio::test]
+    async fn test_send_reattach_data_empty_buffer_emits_only_pane_created() {
+        use futures::StreamExt;
+        use tokio_util::codec::Framed;
+
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let mut server_framed = Framed::new(server, MuxCodec::new());
+        let client_framed = Framed::new(client, MuxCodec::new());
+
+        let reattach_data = vec![(7u32, Vec::<u8>::new())];
+        let sender = tokio::spawn(async move {
+            let mut framed = client_framed;
+            send_reattach_data(&mut framed, &reattach_data).await
+        });
+
+        let first = server_framed.next().await.unwrap().unwrap();
+        assert_eq!(first.msg_type, MessageType::PaneCreated);
+        assert_eq!(first.pane_id, 7);
+
+        sender.await.unwrap().expect("send_reattach_data ok");
+
+        // No further frames expected — drop the sender so the stream closes.
+        let next = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            server_framed.next(),
+        )
+        .await;
+        match next {
+            Ok(None) | Err(_) => {} // stream closed or timed out: both OK
+            Ok(Some(Ok(frame))) => panic!("unexpected extra frame: {:?}", frame.msg_type),
+            Ok(Some(Err(e))) => panic!("unexpected stream error: {}", e),
+        }
     }
 
     /// Test: session_list reports correct pane_count for multi-window session.
