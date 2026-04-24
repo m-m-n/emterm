@@ -1,0 +1,102 @@
+schema_version: 1
+feature: mux-move-window
+scale: standard
+created: 2026-04-24
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, requirements.md]
+    status: completed
+    completed_at_commit: 1f9fb9b5e57d4702ff163eb754eb0ff6d5a60dcd
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 1f9fb9b5e57d4702ff163eb754eb0ff6d5a60dcd
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 1f9fb9b5e57d4702ff163eb754eb0ff6d5a60dcd
+  - id: implement
+    status: completed
+    completed_at_commit: 1f9fb9b5e57d4702ff163eb754eb0ff6d5a60dcd
+  - id: check
+    status: completed
+    completed_at_commit: 1f9fb9b5e57d4702ff163eb754eb0ff6d5a60dcd
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 1f9fb9b5e57d4702ff163eb754eb0ff6d5a60dcd
+  - id: review
+    status: completed
+    completed_at_commit: 1f9fb9b5e57d4702ff163eb754eb0ff6d5a60dcd
+
+requirements:
+  FR1:
+    title: Add move-window MuxAction and default binding (prefix + m)
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: Implement move-window-dialog with Enter/Esc and IME handling
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: Add MuxMessageType.MoveWindow and MoveWindowMsg payload to IPC protocol
+    status: ok
+    tasks: []
+    tests: []
+  FR4:
+    title: Implement MuxSession::move_window with insert/move semantics preserving active window
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Render mux tab labels as [N] title including single-window case
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Add i18n keys mux.moveDialog.{title,label,cancel,confirm} in en/ja locales
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Invalid input (out of range / non-numeric / same position) cancels without error
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: Linux and Windows platform support
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: UI consistency with existing sftp-dialog pattern and UI design guidelines
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: Reorder completes within 200ms
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: Failed reorder is non-destructive (previous order preserved)
+    status: ok
+    tasks: []
+    tests: []

@@ -11,9 +11,14 @@ import type { MuxAction } from "../../terminal/mux/prefix-key";
 import type { PtyClient } from "../../pty/client";
 import { SettingsService } from "../../settings/settings-service";
 import { showRenameWindowDialog } from "./rename-window-dialog";
+import { showMoveWindowDialog } from "./move-window-dialog";
+import { reorderMuxWindows } from "./mux-window-manager";
 
 /** Guard against concurrent rename dialogs. Module-local state. */
 let renameDialogOpen = false;
+
+/** Guard against concurrent move-window dialogs. Module-local state. */
+let moveDialogOpen = false;
 
 /** Subset of TerminalApp state needed by mux action handler functions. */
 export interface MuxActionContext {
@@ -110,6 +115,74 @@ export function handleMuxAction(ctx: MuxActionContext, action: MuxAction): void 
         renameDialogOpen = false;
         muxLog.error(`Rename dialog setup failed: ${e}`);
       }
+      break;
+    }
+    case "move-window": {
+      if (moveDialogOpen) break;
+      const activeIndex = ctx.getActiveMuxWindowIndex();
+      const windows = ctx.getMuxWindows();
+      const target = windows[activeIndex];
+      if (!target) break;
+      // Capture stable window id so we can re-resolve after the async dialog.
+      const targetWinId = target.id;
+      const windowCount = windows.length;
+      if (windowCount <= 1) break; // nothing to reorder
+      moveDialogOpen = true;
+      // IIFE with single try/finally so the reentry guard is released on
+      // any exit path, including future synchronous throws from the dialog.
+      void (async () => {
+        try {
+          const result = await showMoveWindowDialog({
+            currentIndex: activeIndex + 1,
+            windowCount,
+          });
+          if (!result.confirmed || result.value === undefined) return;
+          const currentWindows = ctx.getMuxWindows();
+          const currentIdx = currentWindows.findIndex(
+            (w) => w.id === targetWinId,
+          );
+          if (currentIdx < 0) return; // window closed during the dialog
+          const currentCount = currentWindows.length;
+          const value = result.value;
+          if (value < 1 || value > currentCount) return;
+          if (value === currentIdx + 1) return; // same position — no-op
+          const targetIndex = value - 1; // 0-based
+          const paneId = ctx.getMuxPaneIds()[currentIdx];
+          if (paneId === undefined) return;
+
+          // Optimistic local reorder so the UI updates immediately.
+          reorderMuxWindows(ctx, currentIdx, targetIndex);
+
+          muxLog.info(
+            `Move window: ${currentIdx + 1} -> ${value} (pane=${paneId})`,
+          );
+
+          // MoveWindowMsg bincode = u32 LE (4 bytes)
+          const payload = new Uint8Array(4);
+          const view = new DataView(payload.buffer);
+          view.setUint32(0, targetIndex, true);
+
+          // Send directly so we can roll back the optimistic reorder on
+          // IPC failure; otherwise the attached UI would diverge from the
+          // daemon until the next reattach.
+          const muxClient = ctx.getMuxClient();
+          if (!muxClient) {
+            reorderMuxWindows(ctx, targetIndex, currentIdx);
+            muxLog.error("Move window: no mux client, reverted local reorder");
+            return;
+          }
+          try {
+            await muxClient.sendControl(MuxMessageType.MoveWindow, paneId, payload);
+          } catch (e) {
+            reorderMuxWindows(ctx, targetIndex, currentIdx);
+            muxLog.error(`Move window IPC send failed, reverted local reorder: ${e}`);
+          }
+        } catch (e) {
+          muxLog.error(`Move dialog failed: ${e}`);
+        } finally {
+          moveDialogOpen = false;
+        }
+      })();
       break;
     }
     case "prefix-passthrough":

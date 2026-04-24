@@ -87,11 +87,7 @@ fn init_bridge_logger() {
             // Visible diagnostic: Windows sharing-mode rejections and Unix
             // `O_NOFOLLOW` symlink refusals both land here. Without this
             // message the bridge would run silently without a log file.
-            eprintln!(
-                "Bridge logger unavailable ({}): {}",
-                log_path.display(),
-                e
-            );
+            eprintln!("Bridge logger unavailable ({}): {}", log_path.display(), e);
         }
     }
 }
@@ -153,7 +149,10 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
     check_nesting().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     init_bridge_logger();
 
-    log::info!("Starting mux bridge via attach (pid={})", std::process::id());
+    log::info!(
+        "Starting mux bridge via attach (pid={})",
+        std::process::id()
+    );
 
     let sock_path = daemon::socket_path();
 

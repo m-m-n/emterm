@@ -15,6 +15,7 @@ export type MuxAction =
   | { type: "next-window" }
   | { type: "prev-window" }
   | { type: "rename-window" }
+  | { type: "move-window" }
   | { type: "prefix-passthrough" }; // Send prefix key itself to PTY
 
 /** Prefix key handler state. */
@@ -27,6 +28,7 @@ export const DEFAULT_ACTION_BINDINGS: Record<string, string> = {
   "next-window": "n",
   "prev-window": "p",
   "rename-window": ",",
+  "move-window": "m",
 };
 
 /**

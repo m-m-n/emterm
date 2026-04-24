@@ -395,8 +395,9 @@ mod tests {
         let (pane_out_tx, _pane_out_rx) = mpsc::channel::<PtyOutputChunk>(16);
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
 
-        let target: SharedOutputTarget =
-            Arc::new(StdMutex::new(PaneOutputTarget::Connected(pane_out_tx.clone())));
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Connected(
+            pane_out_tx.clone(),
+        )));
 
         let session_id;
         {
@@ -548,7 +549,10 @@ mod tests {
                 .next()
                 .unwrap();
             assert!(
-                matches!(*pane.output_target.lock().unwrap(), PaneOutputTarget::Connected(_)),
+                matches!(
+                    *pane.output_target.lock().unwrap(),
+                    PaneOutputTarget::Connected(_)
+                ),
                 "detach_session_panes must preserve pane owned by a different connection"
             );
         }
@@ -569,7 +573,10 @@ mod tests {
                 .next()
                 .unwrap();
             assert!(
-                matches!(*pane.output_target.lock().unwrap(), PaneOutputTarget::Detached(_)),
+                matches!(
+                    *pane.output_target.lock().unwrap(),
+                    PaneOutputTarget::Detached(_)
+                ),
                 "detach_session_panes must detach pane owned by caller"
             );
         }

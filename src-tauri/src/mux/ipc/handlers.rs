@@ -218,6 +218,52 @@ pub(super) async fn handle_rename_window(
     }
 }
 
+/// Move a window to a new position within its session's window order.
+///
+/// The `msg.pane_id` field must be a pane ID; the handler resolves it to
+/// the containing session and window via `find_pane`. Unlike
+/// `handle_switch_window`, this handler does NOT accept a bare window ID,
+/// because window IDs are session-local and a global window-ID lookup
+/// would be non-deterministic across sessions.
+///
+/// The daemon does NOT broadcast the new order to attached clients. The GUI
+/// performs an optimistic local reorder before sending this message; the
+/// daemon side catches up silently and any reattach handshake will then
+/// reflect the authoritative order via `Welcome`.
+pub(super) async fn handle_move_window(
+    msg: MuxMessage,
+    session_manager: &Arc<Mutex<SessionManager>>,
+) {
+    let move_msg: MoveWindowMsg = match msg.decode_payload() {
+        Some(m) => m,
+        None => {
+            log::warn!("Invalid MoveWindow payload");
+            return;
+        }
+    };
+    let id = msg.pane_id;
+    let target_index = move_msg.target_index as usize;
+
+    let mut mgr = session_manager.lock().await;
+
+    if let Some((sid, wid)) = mgr.find_pane(id) {
+        if let Some(session) = mgr.get_session_mut(sid) {
+            let changed = session.move_window(wid, target_index);
+            log::info!(
+                "MoveWindow: pane {} -> window {} -> index {} (changed={})",
+                id,
+                wid,
+                target_index,
+                changed
+            );
+        }
+    } else {
+        // Not logged at warn level: a stale pane_id arriving after window
+        // destruction is normal (concurrent close + move from GUI).
+        log::debug!("MoveWindow: pane id {} not found", id);
+    }
+}
+
 /// Switch the active window in the session.
 ///
 /// The `id` may be either a pane ID (from GUI) or a window ID (from CLI).

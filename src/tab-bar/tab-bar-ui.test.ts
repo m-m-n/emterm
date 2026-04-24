@@ -307,6 +307,72 @@ describe("TabBarUI", () => {
     });
   });
 
+  describe("mux sub-tabs (renderMuxSubTabs)", () => {
+    test("renders [1] badge even for a single mux window", async () => {
+      tabBarUI.init();
+      const tab = await tabManager.createTab();
+      tabBarUI.renderMuxSubTabs(tab!.id, [{ name: "shell", active: true }]);
+
+      const group = tabBarContainer.querySelector(".mux-tab-group");
+      expect(group).not.toBeNull();
+      const windowTabs = group!.querySelectorAll(".mux-window-tab");
+      expect(windowTabs.length).toBe(1);
+      const numberEl = windowTabs[0]!.querySelector(".mux-window-number");
+      expect(numberEl?.textContent).toBe("[1]");
+      const titleEl = windowTabs[0]!.querySelector(".tab-title");
+      expect(titleEl?.textContent).toBe("shell");
+    });
+
+    test("renders sequential [1] [2] [3] badges for multiple windows", async () => {
+      tabBarUI.init();
+      const tab = await tabManager.createTab();
+      tabBarUI.renderMuxSubTabs(tab!.id, [
+        { name: "a", active: false },
+        { name: "b", active: true },
+        { name: "c", active: false },
+      ]);
+
+      const windowTabs = tabBarContainer.querySelectorAll(".mux-window-tab");
+      expect(windowTabs.length).toBe(3);
+      expect(
+        windowTabs[0]!.querySelector(".mux-window-number")?.textContent,
+      ).toBe("[1]");
+      expect(
+        windowTabs[1]!.querySelector(".mux-window-number")?.textContent,
+      ).toBe("[2]");
+      expect(
+        windowTabs[2]!.querySelector(".mux-window-number")?.textContent,
+      ).toBe("[3]");
+    });
+
+    test("updates number badges when the window list is reordered", async () => {
+      tabBarUI.init();
+      const tab = await tabManager.createTab();
+      tabBarUI.renderMuxSubTabs(tab!.id, [
+        { name: "a", active: true },
+        { name: "b", active: false },
+        { name: "c", active: false },
+      ]);
+      // Reorder to [c, a, b]
+      tabBarUI.renderMuxSubTabs(tab!.id, [
+        { name: "c", active: false },
+        { name: "a", active: true },
+        { name: "b", active: false },
+      ]);
+
+      const windowTabs = tabBarContainer.querySelectorAll(".mux-window-tab");
+      expect(windowTabs[0]!.querySelector(".tab-title")?.textContent).toBe("c");
+      expect(windowTabs[0]!.querySelector(".mux-window-number")?.textContent)
+        .toBe("[1]");
+      expect(windowTabs[1]!.querySelector(".tab-title")?.textContent).toBe("a");
+      expect(windowTabs[1]!.querySelector(".mux-window-number")?.textContent)
+        .toBe("[2]");
+      expect(windowTabs[2]!.querySelector(".tab-title")?.textContent).toBe("b");
+      expect(windowTabs[2]!.querySelector(".mux-window-number")?.textContent)
+        .toBe("[3]");
+    });
+  });
+
   describe("accessibility", () => {
     test("tab bar has role=tablist", () => {
       tabBarUI.init();

@@ -77,6 +77,10 @@ describe("MuxMessageType", () => {
   test("SplitPane (0x11) is no longer exposed", () => {
     expect((MuxMessageType as Record<string, unknown>).SplitPane).toBeUndefined();
   });
+
+  test("MoveWindow has correct value", () => {
+    expect(MuxMessageType.MoveWindow).toBe(0x1a);
+  });
 });
 
 describe("decodeWelcomeMsg", () => {
