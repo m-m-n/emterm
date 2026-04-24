@@ -427,6 +427,89 @@ export function handleMuxPaneExited(ctx: MuxWindowManagerContext, paneId: number
   }
 }
 
+/**
+ * Reorder `muxWindows` / `muxPaneIds` atomically, adjusting
+ * `activeMuxWindowIndex` to follow the movement, and emit a state-change.
+ *
+ * Semantics (remove-then-insert, matching `MuxSession::move_window` on the
+ * daemon side): the element at `fromIndex` is removed, then re-inserted at
+ * `toIndex`. Both indices are 0-based.
+ *
+ * `activeMuxWindowIndex` adjustment:
+ * - if the active window is the one being moved, the active index follows
+ *   the element to its new position (`toIndex`);
+ * - otherwise, the active index is shifted one step when the moved window
+ *   crosses it (from ≤ active < to  => active - 1; to ≤ active < from  =>
+ *   active + 1); otherwise unchanged.
+ *
+ * Returns `true` iff the order was actually changed.
+ */
+export function reorderMuxWindows(
+  ctx: MuxWindowManagerContext | MuxReorderContext,
+  fromIndex: number,
+  toIndex: number,
+): boolean {
+  const muxWindows = ctx.getMuxWindows();
+  const muxPaneIds = ctx.getMuxPaneIds();
+  const len = muxWindows.length;
+  if (len === 0) return false;
+  if (
+    !Number.isInteger(fromIndex) ||
+    !Number.isInteger(toIndex) ||
+    fromIndex < 0 ||
+    fromIndex >= len ||
+    toIndex < 0 ||
+    toIndex >= len
+  ) {
+    return false;
+  }
+  if (fromIndex === toIndex) return false;
+
+  const winItem = muxWindows.splice(fromIndex, 1)[0]!;
+  muxWindows.splice(toIndex, 0, winItem);
+  const paneItem = muxPaneIds.splice(fromIndex, 1)[0]!;
+  muxPaneIds.splice(toIndex, 0, paneItem);
+
+  const active = ctx.getActiveMuxWindowIndex();
+  let newActive = active;
+  if (active === fromIndex) {
+    newActive = toIndex;
+  } else if (fromIndex < active && active <= toIndex) {
+    newActive = active - 1;
+  } else if (toIndex <= active && active < fromIndex) {
+    newActive = active + 1;
+  }
+  if (newActive !== active) {
+    ctx.setActiveMuxWindowIndex(newActive);
+  }
+
+  // Emit via whichever API the context exposes.
+  if ("emitMuxStateChange" in ctx && typeof ctx.emitMuxStateChange === "function") {
+    ctx.emitMuxStateChange();
+  } else {
+    emitMuxStateChange(ctx as MuxWindowManagerContext);
+  }
+  return true;
+}
+
+/**
+ * Narrow context accepted by `reorderMuxWindows`. Declared separately so
+ * both `MuxWindowManagerContext` and `MuxActionContext` (which both expose
+ * these accessors) can be passed without requiring a shared base class.
+ */
+export interface MuxReorderContext {
+  getMuxWindows: () => { id: number; name: string }[];
+  getMuxPaneIds: () => number[];
+  getActiveMuxWindowIndex: () => number;
+  setActiveMuxWindowIndex: (index: number) => void;
+  emitMuxStateChange?: () => void;
+  onMuxStateChange?: ((info: {
+    windowCount: number;
+    activeWindow: number;
+    windowNames: string[];
+  }) => void) | null;
+}
+
 /** Notify listeners of mux window state changes. */
 export function emitMuxStateChange(ctx: MuxWindowManagerContext): void {
   const muxWindows = ctx.getMuxWindows();

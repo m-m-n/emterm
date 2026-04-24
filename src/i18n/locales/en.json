@@ -466,6 +466,12 @@
       "label": "Window name",
       "confirm": "OK",
       "cancel": "Cancel"
+    },
+    "moveDialog": {
+      "title": "Move Window",
+      "label": "Target position (1-origin)",
+      "confirm": "OK",
+      "cancel": "Cancel"
     }
   },
   "sftp": {

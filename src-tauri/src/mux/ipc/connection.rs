@@ -16,7 +16,8 @@ use tokio_util::codec::Framed;
 use super::codec::MuxCodec;
 use super::handlers::{
     handle_attach, handle_create_window, handle_destroy_pane, handle_destroy_window,
-    handle_rename_window, handle_request_pane_snapshot, handle_resize, handle_switch_window,
+    handle_move_window, handle_rename_window, handle_request_pane_snapshot, handle_resize,
+    handle_switch_window,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -225,10 +226,8 @@ pub async fn handle_connection<S>(
             match kick_rx.as_mut() {
                 Some(rx) => rx.await,
                 None => {
-                    std::future::pending::<
-                        Result<(), tokio::sync::oneshot::error::RecvError>,
-                    >()
-                    .await
+                    std::future::pending::<Result<(), tokio::sync::oneshot::error::RecvError>>()
+                        .await
                 }
             }
         };
@@ -682,6 +681,9 @@ where
         }
         MessageType::RenameWindow => {
             handle_rename_window(msg, session_manager).await;
+        }
+        MessageType::MoveWindow => {
+            handle_move_window(msg, session_manager).await;
         }
         MessageType::DestroyWindow => {
             handle_destroy_window(msg.pane_id, session_manager, shutdown_tx).await;

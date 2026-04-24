@@ -1,0 +1,196 @@
+schema_version: 1
+feature: mux-move-window
+
+tasks:
+  - - id: phase1-backend-order-model
+      title: "Phase 1: MuxSession に window_order: Vec<WindowId> を追加し add/remove/session_list を順序整合させる"
+      status: completed
+      area: backend
+      description: |
+        セッション内ウィンドウ順序を明示的に保持するデータモデルを導入する。
+        BTreeMap は ID→データのルックアップに残し、表示順は window_order から参照する。
+        見積もり: +30〜60 行（session.rs, manager.rs）、新規テスト 4 件。
+      depends_on: []
+      artifacts:
+        - src-tauri/src/mux/session/session.rs
+        - src-tauri/src/mux/session/manager.rs
+      requirements: [FR4, NFR4]
+      tests:
+        - session::tests::test_window_order_after_adds
+        - session::tests::test_window_order_after_removes
+        - session::tests::test_active_window_id_after_remove_uses_order
+        - manager::tests::test_session_list_matches_window_order
+
+  - - id: phase2-ipc-protocol-extension
+      title: "Phase 2: MessageType::MoveWindow (0x1A) と MoveWindowMsg を追加、round-trip テスト上限を 0x1A に拡張"
+      status: completed
+      area: both
+      description: |
+        protocol.rs に MoveWindow バリアントと MoveWindowMsg を追加し、既存の
+        test_message_type_round_trip / test_apc_round_trip_all_message_types の
+        走査上限を 0x1A まで広げる。TS 側 MuxMessageType にも 0x1a を追加する。
+        見積もり: +40 行（Rust）、+1 行（TS）、新規テスト 3 件。
+      depends_on: []
+      artifacts:
+        - src-tauri/src/mux/ipc/protocol.rs
+        - src/terminal/mux/mux-client.ts
+      requirements: [FR3]
+      tests:
+        - protocol::tests::test_move_window_message_type
+        - protocol::tests::test_move_window_msg_round_trip
+        - protocol::tests::test_move_window_msg_via_mux_message
+
+  - - id: phase3-backend-move-handler
+      title: "Phase 3: MuxSession::move_window 実装と handle_move_window / route_message dispatch (broadcast なし)"
+      status: completed
+      area: backend
+      description: |
+        insert/move セマンティクスで move_window を実装し、pane_id→window_id
+        フォールバックを伴う IPC ハンドラを追加、connection.rs の GUI route
+        にのみ dispatch を組み込む。CLI 分岐への組み込みは不要。
+        broadcast は導入せず、フロント側の楽観更新で UI 整合を担う
+        (attach 中の順序同期は Welcome handshake で完結)。
+        見積もり: +60〜100 行、新規テスト 8 件（session）、1 件（manager）。
+      depends_on:
+        - phase1-backend-order-model
+        - phase2-ipc-protocol-extension
+      artifacts:
+        - src-tauri/src/mux/session/session.rs
+        - src-tauri/src/mux/ipc/handlers.rs
+        - src-tauri/src/mux/ipc/connection.rs
+      requirements: [FR4, NFR3, NFR4]
+      tests:
+        - session::tests::test_move_window_to_first
+        - session::tests::test_move_window_to_last
+        - session::tests::test_move_window_to_middle_forward
+        - session::tests::test_move_window_same_position
+        - session::tests::test_move_window_out_of_range_clamps
+        - session::tests::test_move_window_unknown_id
+        - session::tests::test_move_window_preserves_active
+        - session::tests::test_move_window_single_window_noop
+        - manager::tests::test_session_list_reflects_move_window_order
+
+  - - id: phase4-frontend-prefix-action
+      title: "Phase 4: prefix + m に move-window アクションを追加"
+      status: completed
+      area: frontend
+      description: |
+        MuxAction union への型追加、DEFAULT_ACTION_BINDINGS への "m" 登録、
+        prefix-key.test.ts のバインディングテスト拡張。
+        見積もり: +5 行（実装）、+15 行（テスト）。
+      depends_on: []
+      artifacts:
+        - src/terminal/mux/prefix-key.ts
+        - src/terminal/mux/prefix-key.test.ts
+      requirements: [FR1]
+      tests:
+        - "prefix-key.test.ts: prefix + m dispatches move-window"
+        - "prefix-key.test.ts: all tmux-compatible bindings are present (拡張)"
+
+    - id: phase5-frontend-dialog
+      title: "Phase 5: move-window-dialog.ts 新規実装と i18n キー追加"
+      status: completed
+      area: frontend
+      description: |
+        rename-window-dialog.ts と同形の sftp-dialog スタイル準拠モーダルを新設。
+        Enter/Esc/IME/focus-restore を rename と同等に実装。
+        en/ja locale に mux.moveDialog.{title,label,confirm,cancel} を追加。
+        見積もり: +120 行（dialog）、+80 行（テスト）、+8 行（i18n）。
+      depends_on:
+        - phase4-frontend-prefix-action
+      artifacts:
+        - src/terminal-app/mux/move-window-dialog.ts
+        - src/terminal-app/mux/move-window-dialog.test.ts
+        - src/i18n/locales/en.json
+        - src/i18n/locales/ja.json
+      requirements: [FR2, FR6, FR7, NFR2]
+      tests:
+        - "move-window-dialog.test.ts: 有効整数 Enter → confirmed"
+        - "move-window-dialog.test.ts: 非整数/範囲外/空文字 Enter → cancel"
+        - "move-window-dialog.test.ts: Esc / Cancel / Confirm ボタン"
+        - "move-window-dialog.test.ts: IME composition 中 Enter は確定しない"
+        - "move-window-dialog.test.ts: close 後に previouslyFocused が復帰"
+
+  - - id: phase6-frontend-action-dispatch
+      title: "Phase 6: mux-action-handler.ts に case \"move-window\" を配線し楽観更新 + IPC 送信"
+      status: completed
+      area: frontend
+      description: |
+        moveDialogOpen 重複ガードを導入し、ダイアログ確定後に
+        windows 再取得 → 再バリデーション → ローカル配列 reorder
+        (muxWindows/muxPaneIds を同期的に並び替え activeMuxWindowIndex を追従) →
+        emitMuxStateChange → 4B LE u32 ペイロード構築 →
+        MuxMessageType.MoveWindow 送信を行う。既存 RenameWindow と同じ楽観更新パターン。
+        reorderMuxWindows ヘルパを mux-window-manager.ts に追加し context 経由で呼ぶ。
+        見積もり: +70 行 (action-handler +40、window-manager +30)。
+      depends_on:
+        - phase2-ipc-protocol-extension
+        - phase3-backend-move-handler
+        - phase4-frontend-prefix-action
+        - phase5-frontend-dialog
+        # Phase 7 (タブ [N] 描画) と順序の依存関係はないが、Phase 7 完了前は
+        # move-window の効果が視覚的に確認しづらいため、実装順は 7 → 6 を推奨
+      artifacts:
+        - src/terminal-app/mux/mux-action-handler.ts
+        - src/terminal-app/mux/mux-window-manager.ts
+        - src/terminal-app/mux/mux-window-manager.test.ts
+      requirements: [FR7, NFR3, NFR4]
+      tests:
+        - "reorderMuxWindows: [A,B,C] で B(1) を 2 へ → [A,C,B]、active 追従"
+        - "reorderMuxWindows: active が先頭から末尾へ動くケース"
+        - "reorderMuxWindows: active が非対象 (from < to、from > to 双方) のケース"
+        - "bun run typecheck がエラー 0"
+        - "Phase 8 E2E で 楽観更新が即座に UI に反映されることを裏付け"
+
+    - id: phase7-frontend-tab-number
+      title: "Phase 7: renderMuxSubTabs と main.ts 分岐で [N] バッジを描画（単一ウィンドウ時も main.ts 分岐を統合）"
+      status: completed
+      area: frontend
+      description: |
+        main.ts の onMuxStateChange の windowCount===1 分岐を廃し、
+        windowCount >= 1 は renderMuxSubTabs に合流させる (windowCount===0 のみ clearMuxSubTabs)。
+        renderMuxSubTabs の windows.length<=1 早期 return を廃し、
+        常に mux-tab-group で描画する。各 .mux-window-tab は
+        <span.mux-window-number>[N]</span><span.tab-title>title</span> の二要素構造で
+        差分更新する。既存子要素が旧1-span 構造のケースを考慮した
+        マイグレーション処理 (prepend または再構築) を入れる。
+        .mux-window-number CSS を tab-bar.css に追加。
+        見積もり: +40 行 (tab-bar-ui)、+6 行 (CSS)、+5 行 (main.ts 分岐)。
+      depends_on: []
+      artifacts:
+        - src/main.ts
+        - src/tab-bar/tab-bar-ui.ts
+        - src/styles/tab-bar.css
+      requirements: [FR5, NFR2]
+      tests:
+        - "Phase 8 E2E で DOM 構造を assert (単一ウィンドウ [1] / 複数 [1][2][3])"
+        - "手動目視（0.85em・tabular-nums・単一ウィンドウ [1]）"
+
+  - - id: phase8-e2e
+      title: "Phase 8: E2E spec (mux-move-window.e2e.js) を追加し Docker で 6 シナリオを自動化"
+      status: completed
+      area: frontend
+      description: |
+        既存 mux-multi-session.e2e.js の prefix 送信ヘルパを参考に、
+        3 window 作成 → move, Esc, 非数値, 999, 同位置, 単一ウィンドウ [1]
+        の 6 シナリオを spec 化。スクリーンショット保存。
+        見積もり: +150 行。
+      depends_on:
+        - phase1-backend-order-model
+        - phase2-ipc-protocol-extension
+        - phase3-backend-move-handler
+        - phase4-frontend-prefix-action
+        - phase5-frontend-dialog
+        - phase6-frontend-action-dispatch
+        - phase7-frontend-tab-number
+      artifacts:
+        - e2e-tests/specs/mux-move-window.e2e.js
+      requirements: [FR1, FR2, FR5, FR7, NFR1, NFR3, NFR4]
+      tests:
+        - "E2E-1: prefix+m → 1 で active window が先頭へ"
+        - "E2E-2: Esc で順序不変"
+        - "E2E-3: 999 入力で順序不変"
+        - "E2E-4: abc 入力で順序不変"
+        - "E2E-5: 現在と同じ番号で順序不変"
+        - "E2E-6: 1 window のみでタブに [1] が表示"
+        - "既存 mux E2E 非回帰"

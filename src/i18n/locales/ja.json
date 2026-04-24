@@ -466,6 +466,12 @@
       "label": "\u30a6\u30a3\u30f3\u30c9\u30a6\u540d",
       "confirm": "OK",
       "cancel": "\u30ad\u30e3\u30f3\u30bb\u30eb"
+    },
+    "moveDialog": {
+      "title": "\u30a6\u30a3\u30f3\u30c9\u30a6\u3092\u79fb\u52d5",
+      "label": "\u79fb\u52d5\u5148\u306e\u4f4d\u7f6e (1-origin)",
+      "confirm": "OK",
+      "cancel": "\u30ad\u30e3\u30f3\u30bb\u30eb"
     }
   },
   "sftp": {

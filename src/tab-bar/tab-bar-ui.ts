@@ -604,13 +604,15 @@ export class TabBarUI {
   renderMuxSubTabs(tabId: string, windows: { name: string; active: boolean }[]): void {
     if (!this.scrollArea) return;
 
-    // Single window — keep as regular tab, just update title
-    if (windows.length <= 1) {
-      this.restoreMuxOriginalTab(tabId);
-      return;
-    }
+    // Defensive guard: windowCount === 0 is expected to be routed through
+    // clearMuxSubTabs by the caller; nothing to render here in that case.
+    if (windows.length < 1) return;
 
-    // Multiple windows — create/update tab group
+    // Always group-render while in mux mode, including the single-window
+    // case. This keeps the `[N] title` badge visible even when only one
+    // mux window exists, and keeps the DOM structure that `drag-handler`
+    // relies on (`.mux-tab-group` + `.mux-window-tab`) stable across
+    // window count transitions.
     const currentEl = this.tabElements.get(tabId);
     if (!currentEl) return;
 
@@ -672,6 +674,9 @@ export class TabBarUI {
       const winTab = document.createElement('div');
       winTab.className = 'tab mux-window-tab';
       winTab.setAttribute('role', 'tab');
+      const numberEl = document.createElement('span');
+      numberEl.className = 'mux-window-number';
+      winTab.appendChild(numberEl);
       const title = document.createElement('span');
       title.className = 'tab-title';
       winTab.appendChild(title);
@@ -681,7 +686,28 @@ export class TabBarUI {
     for (let i = 0; i < windows.length; i++) {
       const win = windows[i]!;
       const winTab = group.children[i] as HTMLElement;
-      const titleEl = winTab.firstElementChild as HTMLElement | null;
+      // Migrate legacy single-span (title-only) children to the new
+      // two-span structure (number + title). Older tab elements may have
+      // been created before the badge was added.
+      if (winTab.children.length < 2) {
+        const existing = winTab.firstElementChild;
+        const numberEl = document.createElement('span');
+        numberEl.className = 'mux-window-number';
+        if (existing) {
+          winTab.insertBefore(numberEl, existing);
+        } else {
+          const title = document.createElement('span');
+          title.className = 'tab-title';
+          winTab.appendChild(numberEl);
+          winTab.appendChild(title);
+        }
+      }
+      const numberEl = winTab.children[0] as HTMLElement;
+      const titleEl = winTab.children[1] as HTMLElement;
+      const numberText = `[${i + 1}]`;
+      if (numberEl.textContent !== numberText) {
+        numberEl.textContent = numberText;
+      }
       if (titleEl && titleEl.textContent !== win.name) {
         titleEl.textContent = win.name;
       }

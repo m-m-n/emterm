@@ -30,6 +30,18 @@ describe("PrefixKeyHandler", () => {
     expect(handler.state).toBe("idle");
   });
 
+  test("prefix + m dispatches move-window", () => {
+    const handler = new PrefixKeyHandler();
+    const actions: MuxAction[] = [];
+    handler.setOnAction((a) => actions.push(a));
+
+    handler.handleKeyEvent(makeKeyEvent("b", true));
+    handler.handleKeyEvent(makeKeyEvent("m"));
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]!.type).toBe("move-window");
+  });
+
   test("prefix + d dispatches detach", () => {
     const handler = new PrefixKeyHandler();
     const actions: MuxAction[] = [];
@@ -84,6 +96,7 @@ describe("PrefixKeyHandler", () => {
       { key: "n", expected: "next-window" },
       { key: "p", expected: "prev-window" },
       { key: ",", expected: "rename-window" },
+      { key: "m", expected: "move-window" },
     ];
 
     for (const { key, expected } of bindings) {

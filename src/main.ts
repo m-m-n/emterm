@@ -317,7 +317,11 @@ async function main(): Promise<void> {
       activityTracker?.markActivity(tab.id, "output");
     });
 
-    // Wire mux state change to tab bar sub-tab rendering
+    // Wire mux state change to tab bar sub-tab rendering.
+    // While mux mode is active (windowCount >= 1) we always render as a
+    // tab group so the `[N] title` badge is visible even for a single
+    // window. Only mux-mode-exit (windowCount === 0) falls back to the
+    // normal tab/title path.
     app.onMuxStateChange = (info) => {
       if (info.windowCount === 0) {
         // Mux mode exited -- clear sub-tabs, restore title, and clear OSC layer
@@ -328,12 +332,8 @@ async function main(): Promise<void> {
         if (activeTab && activeTab.id === tab.id) {
           oscLayerController?.handleCommand("clear");
         }
-      } else if (info.windowCount === 1) {
-        // Single window — show as regular tab with window name
-        tabBarUI?.clearMuxSubTabs(tab.id);
-        manager.updateTabTitle(tab.id, info.windowNames[0]!);
       } else {
-        // Multiple windows — render as tab group
+        // In-mux rendering (1+ windows) — always group, always with [N] badge
         const windows = info.windowNames.map((name, i) => ({
           name,
           active: i === info.activeWindow,

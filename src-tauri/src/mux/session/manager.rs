@@ -80,11 +80,12 @@ impl SessionManager {
             .map(|s| {
                 let active_idx = s
                     .active_window_id
-                    .and_then(|aid| s.windows.keys().position(|&wid| wid == aid))
+                    .and_then(|aid| s.window_order.iter().position(|&wid| wid == aid))
                     .unwrap_or(0) as u32;
                 let windows: Vec<WindowInfo> = s
-                    .windows
-                    .values()
+                    .window_order
+                    .iter()
+                    .filter_map(|wid| s.windows.get(wid))
                     .map(|w| WindowInfo {
                         id: w.id,
                         name: w.name.clone(),
@@ -427,6 +428,57 @@ mod tests {
         let list = mgr.session_list();
         assert_eq!(list[0].windows.len(), 1);
         assert_eq!(list[0].windows[0].active_pane_id, 0);
+    }
+
+    #[test]
+    fn test_session_list_reflects_move_window_order() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("test".to_string());
+        let w1 = mgr.create_window(sid, "a".to_string()).unwrap();
+        let w2 = mgr.create_window(sid, "b".to_string()).unwrap();
+        let w3 = mgr.create_window(sid, "c".to_string()).unwrap();
+
+        // Initial order matches creation order
+        let list = mgr.session_list();
+        assert_eq!(
+            list[0].windows.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![w1, w2, w3]
+        );
+
+        // Move w3 to position 0
+        let session = mgr.get_session_mut(sid).unwrap();
+        assert!(session.move_window(w3, 0));
+
+        let list = mgr.session_list();
+        assert_eq!(
+            list[0].windows.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![w3, w1, w2]
+        );
+        assert_eq!(list[0].windows[0].name, "c");
+        assert_eq!(list[0].windows[1].name, "a");
+        assert_eq!(list[0].windows[2].name, "b");
+    }
+
+    #[test]
+    fn test_session_list_matches_window_order() {
+        let mut mgr = SessionManager::new();
+        let sid = mgr.create_session("test".to_string());
+        let _w1 = mgr.create_window(sid, "a".to_string()).unwrap();
+        let _w2 = mgr.create_window(sid, "b".to_string()).unwrap();
+        let _w3 = mgr.create_window(sid, "c".to_string()).unwrap();
+
+        let list = mgr.session_list();
+        let session = mgr.get_session(sid).unwrap();
+
+        // SessionInfo.windows order must match window_order.
+        assert_eq!(list[0].windows.len(), session.window_order.len());
+        for (i, wid) in session.window_order.iter().enumerate() {
+            assert_eq!(list[0].windows[i].id, *wid);
+        }
+        // Names follow the same order
+        assert_eq!(list[0].windows[0].name, "a");
+        assert_eq!(list[0].windows[1].name, "b");
+        assert_eq!(list[0].windows[2].name, "c");
     }
 
     #[test]

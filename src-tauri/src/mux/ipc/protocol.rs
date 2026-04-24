@@ -58,6 +58,7 @@ pub enum MessageType {
     RequestStatusUpdate = 0x17,
     Shutdown = 0x18,
     RequestPaneSnapshot = 0x19,
+    MoveWindow = 0x1A,
 }
 
 impl MessageType {
@@ -87,6 +88,7 @@ impl MessageType {
             0x17 => Some(Self::RequestStatusUpdate),
             0x18 => Some(Self::Shutdown),
             0x19 => Some(Self::RequestPaneSnapshot),
+            0x1A => Some(Self::MoveWindow),
             _ => None,
         }
     }
@@ -179,6 +181,16 @@ pub struct StatusUpdateMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameWindowMsg {
     pub name: String,
+}
+
+/// Move window request (reorder within a session).
+///
+/// `target_index` is the 0-based position in `MuxSession::window_order`
+/// the window should occupy after the move. The daemon clamps out-of-range
+/// values to the valid range `[0, window_order.len() - 1]`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoveWindowMsg {
+    pub target_index: u32,
 }
 
 /// Payload for CreateWindow message.
@@ -321,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x19u8 {
+        for i in 0x01..=0x1Au8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed -- must return None
                 continue;
@@ -331,7 +343,43 @@ mod tests {
         }
         assert!(MessageType::from_u8(0x00).is_none());
         assert!(MessageType::from_u8(0x11).is_none());
-        assert!(MessageType::from_u8(0x1a).is_none());
+        assert!(MessageType::from_u8(0x1b).is_none());
+    }
+
+    #[test]
+    fn test_move_window_message_type() {
+        assert_eq!(MessageType::from_u8(0x1A), Some(MessageType::MoveWindow));
+        assert_eq!(MessageType::MoveWindow as u8, 0x1A);
+    }
+
+    #[test]
+    fn test_move_window_msg_round_trip() {
+        let msg = MoveWindowMsg { target_index: 42 };
+        let bytes = bincode::serialize(&msg).unwrap();
+        // bincode u32 should be 4 bytes LE
+        assert_eq!(bytes.len(), 4);
+        let decoded: MoveWindowMsg = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.target_index, 42);
+    }
+
+    #[test]
+    fn test_move_window_msg_via_mux_message() {
+        let move_msg = MoveWindowMsg { target_index: 3 };
+        let msg = MuxMessage::control(MessageType::MoveWindow, 99, &move_msg);
+        let body = msg.to_frame_body();
+        let parsed = MuxMessage::from_frame_body(&body).unwrap();
+        assert_eq!(parsed.msg_type, MessageType::MoveWindow);
+        assert_eq!(parsed.pane_id, 99);
+        let decoded: MoveWindowMsg = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.target_index, 3);
+    }
+
+    #[test]
+    fn test_move_window_msg_zero_index() {
+        let msg = MoveWindowMsg { target_index: 0 };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: MoveWindowMsg = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.target_index, 0);
     }
 
     #[test]
@@ -585,7 +633,7 @@ mod tests {
 
     #[test]
     fn test_apc_round_trip_all_message_types() {
-        for i in 0x01..=0x18u8 {
+        for i in 0x01..=0x1Au8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed
                 continue;

@@ -40,6 +40,7 @@ export const MuxMessageType = {
   RequestStatusUpdate: 0x17,
   Shutdown: 0x18,
   RequestPaneSnapshot: 0x19,
+  MoveWindow: 0x1a,
 } as const;
 
 /** Connection state for the mux client. */
