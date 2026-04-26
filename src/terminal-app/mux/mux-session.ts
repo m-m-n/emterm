@@ -63,6 +63,22 @@ export interface MuxSessionContext {
   // Status update callback: routes StatusUpdate to OSC layer
   onStatusUpdate?: (msg: { left: string; right: string }) => void;
 
+  /**
+   * Returns the deadline (Date.now() ms) until which post-recovery mux
+   * traffic should be counted for observability. Returns 0 when the watch
+   * window is closed. Used by the PtyOutput callback to gate counter
+   * updates after a WASM viaReinit recovery.
+   */
+  getPostRecoveryWatchUntil?: () => number;
+
+  /**
+   * Increment the post-recovery PtyOutput counters by `bytes`. Called from
+   * the PtyOutput callback only when the watch window is open. Aggregated
+   * counts are emitted as a single summary log at window close to avoid
+   * per-chunk logging on the hot path.
+   */
+  countPostRecoveryPtyOutput?: (bytes: number) => void;
+
   // Delegate methods that call into other mux modules via TerminalApp wrappers
   registerCoreCallbacks: (core: ReturnType<TerminalState["getActiveCore"]>) => void;
   handleMuxPaneCreated: (paneId: number) => void;
@@ -119,6 +135,14 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
 
   // Set up PTY output handler -- route to correct pane
   client.setOnPtyOutput((paneId: number, data: Uint8Array) => {
+    // Observability: during the post-recovery watch window, accumulate
+    // chunk/byte counters so a single summary log is emitted when the
+    // window closes. Avoids per-chunk logging on the hot path under
+    // high mux throughput (案2 観測強化).
+    const watchUntil = ctx.getPostRecoveryWatchUntil?.() ?? 0;
+    if (watchUntil > 0 && Date.now() < watchUntil) {
+      ctx.countPostRecoveryPtyOutput?.(data.length);
+    }
     // Single-pane mode: route to main renderer
     const activePaneId = ctx.getMuxPaneIds()[ctx.getActiveMuxWindowIndex()];
     if (activePaneId === undefined) {
