@@ -118,7 +118,7 @@ impl TerminalCore {
         let cols = self.cols as usize;
 
         // Defensive: verify ring_cells can hold all viewport rows
-        if self.ring_capacity * cols > self.ring_cells.len() {
+        if self.rows as usize * cols > self.ring_cells.len() {
             return;
         }
 
@@ -182,7 +182,7 @@ impl TerminalCore {
         let cols = self.cols as usize;
 
         // Defensive: verify ring_cells can hold all viewport rows
-        if self.ring_capacity * cols > self.ring_cells.len() {
+        if self.rows as usize * cols > self.ring_cells.len() {
             return;
         }
 

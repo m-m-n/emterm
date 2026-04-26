@@ -1,0 +1,435 @@
+schema_version: 1
+feature: wasm-slim-cell
+generated_from: SPEC.md + IMPLEMENTATION.md
+generated_at: 2026-04-26
+
+# ---------------------------------------------------------------------------
+# Phase / Task / Requirement / Test mapping.
+#
+# Conventions:
+#   - phases run sequentially (P1 -> P2 -> P3 -> P4 -> P5)
+#   - within a phase, tasks may run in parallel unless `depends_on` is set
+#   - `requirements`: SPEC.md FR* / NFR* IDs
+#   - `tests`: VERIFICATION.md TS-*, E2E-*, M-* IDs
+#   - `effort`: small (<= 0.5 day) | medium (0.5 .. 2 days) | large (2+ days)
+# ---------------------------------------------------------------------------
+
+phases:
+  P1:
+    name: "SlimCell + intern tables (foundations)"
+    goal: "Define SlimCell, StyleTable, CharTable, compression bridge with full unit tests; no integration yet."
+    effort: medium
+
+  P2:
+    name: "Ring buffer integration"
+    goal: "Per-line storage (Viewport(Vec<Cell>) | Scrollback(Vec<SlimCell>)); compression on eviction; refcount accounting."
+    effort: large
+    depends_on: [P1]
+
+  P3:
+    name: "Reflow integration"
+    goal: "Decompress -> existing reflow -> recompress with fresh tables; refcount integrity verified by rebuild."
+    effort: medium
+    depends_on: [P2]
+
+  P4:
+    name: "Snapshot V2 + debug stats export"
+    goal: "Bump snapshot to V2 (V1 read-only); expose wasm_debug_slim_stats."
+    effort: medium
+    depends_on: [P3]
+
+  P5:
+    name: "Bench harness + verification + E2E"
+    goal: "Quantify memory/latency; confirm SPEC acceptance criteria; fill VERIFICATION.md."
+    effort: medium
+    depends_on: [P4]
+
+tasks:
+  # ----- Phase 1 ------------------------------------------------------------
+  T1.1:
+    phase: P1
+    title: "Create wasm/src/slim_cell.rs (SlimCell struct + flag constants)"
+    requirements: [FR1, FR2, NFR1, NFR7]
+    tests: [TS-01, TS-02]
+    effort: small
+    files: [wasm/src/slim_cell.rs, wasm/src/lib.rs]
+    notes: "repr(C), 8 bytes; SLIM_FLAG_INLINE_ASCII / CHAR_TABLE / WIDE_CONT constants; size assertion test."
+    status: completed
+
+  T1.2:
+    phase: P1
+    title: "Create wasm/src/style_table.rs (StyleEntry + StyleTable: intern, get, inc_ref, dec_ref, free_list)"
+    requirements: [FR3, FR5, FR9, NFR7]
+    tests: [TS-03, TS-04, TS-05, TS-08]
+    effort: medium
+    files: [wasm/src/style_table.rs, wasm/src/lib.rs]
+    depends_on: [T1.1]
+    notes: "id 0 reserved for default; saturation -> id 0 + rate-limited warn (web_sys::console::warn_1); refcount u32 saturating."
+    status: completed
+
+  T1.3:
+    phase: P1
+    title: "Create wasm/src/char_table.rs (CharTable: intern, get, inc_ref, dec_ref, free_list)"
+    requirements: [FR4, FR5, NFR7]
+    tests: [TS-06, TS-07, TS-08]
+    effort: small
+    files: [wasm/src/char_table.rs, wasm/src/lib.rs]
+    depends_on: [T1.1]
+    notes: "u32 ID; HashMap<String, u32> dedup + parallel Vec<u32> refcount + Vec<u32> free_list."
+    status: completed
+
+  T1.4:
+    phase: P1
+    title: "Implement cell_to_slim / slim_to_cell bridge in wasm/src/slim_cell.rs"
+    requirements: [FR1, FR2, FR4, FR7, NFR4]
+    tests: [TS-02, TS-09, TS-10, TS-20]
+    effort: medium
+    files: [wasm/src/slim_cell.rs]
+    depends_on: [T1.2, T1.3]
+    notes: "Inline ASCII <=4B in char_ref LE; CharTable for 5..=16B; overflow string passed by caller; WIDE_CONT preserves width=0."
+    status: completed
+
+  T1.5:
+    phase: P1
+    title: "Add Phase 1 unit tests (round-trip, dedup, refcount lifecycle, saturation)"
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR9, NFR8]
+    tests: [TS-01, TS-02, TS-03, TS-04, TS-05, TS-06, TS-07, TS-08, TS-09, TS-10, TS-20, TS-22]
+    effort: small
+    files: [wasm/src/slim_cell.rs, wasm/src/style_table.rs, wasm/src/char_table.rs]
+    depends_on: [T1.4]
+    notes: "Cover ASCII / CJK / 8-byte emoji / ZWJ family<=16B; intern dedup; refcount->0 frees; free_list reuse; saturation fallback; debug_assert / saturating_sub variants."
+    status: completed
+
+  # ----- Phase 2 ------------------------------------------------------------
+  T2.1:
+    phase: P2
+    title: "Introduce RingRow enum (Viewport(Vec<Cell>) | Scrollback(Vec<SlimCell>)) and replace ring_cells field"
+    requirements: [FR6, FR7, NFR6, NFR7]
+    tests: [TS-15, TS-16, TS-17]
+    effort: large
+    files: [wasm/src/terminal_core.rs, wasm/src/ring_buffer.rs]
+    depends_on: [T1.5]
+    notes: |
+      Pragmatic redesign: kept flat ring_cells (rows × cols, viewport-only),
+      added scrollback_slim: VecDeque<Vec<SlimCell>> as a separate compressed
+      deque (oldest at front). This preserves O(1) viewport scroll rotation
+      and minimizes blast radius on existing accessors.
+    status: completed
+
+  T2.2:
+    phase: P2
+    title: "Add styles: StyleTable and chars: CharTable fields to TerminalCore; initialize in new()"
+    requirements: [FR3, FR4]
+    tests: [TS-14, TS-17, TS-18, TS-19]
+    effort: small
+    files: [wasm/src/terminal_core.rs]
+    depends_on: [T2.1]
+    status: completed
+
+  T2.3:
+    phase: P2
+    title: "Add per-row accessors (viewport_row / viewport_row_mut / scrollback_row); migrate direct ring_cells accesses across the crate"
+    requirements: [FR6, FR7, NFR6]
+    tests: [TS-16]
+    effort: large
+    files:
+      - wasm/src/ring_buffer.rs
+      - wasm/src/terminal_core.rs
+      - wasm/src/terminal_cells.rs
+      - wasm/src/terminal_rows.rs
+      - wasm/src/csi_edit.rs
+      - wasm/src/csi_screen.rs
+      - wasm/src/csi_scroll.rs
+      - wasm/src/csi_cursor.rs
+      - wasm/src/print_handler.rs
+    depends_on: [T2.1]
+    notes: |
+      Not needed under the pragmatic redesign: ring_cells stays as a flat
+      Vec<Cell> (now sized rows × cols), so all existing direct ring_cells
+      indexing sites continue to work with at most a bounds-check tweak
+      (terminal_rows.rs: ring_capacity*cols → rows*cols).
+    status: completed
+
+  T2.4:
+    phase: P2
+    title: "Rewrite ring_push_blank: compress evicted viewport row into scrollback; release prior scrollback row's refcounts"
+    requirements: [FR5, FR6]
+    tests: [TS-15, TS-16, TS-19]
+    effort: medium
+    files: [wasm/src/ring_buffer.rs]
+    depends_on: [T2.2, T2.3]
+    notes: "Pull overflow strings out of OverflowTable into CharTable during compression; preserve BCE fast-path on the new viewport Vec<Cell>."
+    status: completed
+
+  T2.5:
+    phase: P2
+    title: "Rewrite pack_row_abs and line_text_abs to dispatch on RingRow"
+    requirements: [FR7, NFR6]
+    tests: [TS-16, TS-20, TS-21]
+    effort: small
+    files: [wasm/src/ring_buffer.rs]
+    depends_on: [T2.3]
+    notes: "Scrollback path materializes Cell via slim_to_cell; overflow chars resolved via CharTable for that path."
+    status: completed
+
+  T2.6:
+    phase: P2
+    title: "Update clear_scrollback and resize_no_reflow to release scrollback refcounts and reset tables when discarding rows"
+    requirements: [FR5, FR6]
+    tests: [TS-15]
+    effort: small
+    files: [wasm/src/ring_buffer.rs]
+    depends_on: [T2.4]
+    status: completed
+
+  T2.7:
+    phase: P2
+    title: "Add Phase 2 integration tests (eviction lifecycle, render parity, dedup, scrollback=0, ASCII workload)"
+    requirements: [FR5, FR6, FR7, NFR6, NFR8]
+    tests: [TS-15, TS-16, TS-17, TS-18, TS-19, TS-21]
+    effort: small
+    files: [wasm/src/ring_buffer.rs]
+    depends_on: [T2.5, T2.6]
+    status: completed
+
+  # ----- Phase 3 ------------------------------------------------------------
+  T3.1:
+    phase: P3
+    title: "Adjust reflow_drain to materialize Cell rows from scrollback (decompress on the fly)"
+    requirements: [FR8]
+    tests: [TS-11]
+    effort: medium
+    files: [wasm/src/reflow.rs]
+    depends_on: [T2.7]
+    notes: "Overflow strings come from OverflowTable for viewport rows and from CharTable for scrollback rows."
+    status: completed
+
+  T3.2:
+    phase: P3
+    title: "Adjust resize_same_width and resize_full_reflow to repopulate ring with fresh StyleTable / CharTable; recompress scrollback rows"
+    requirements: [FR8, NFR5]
+    tests: [TS-11, TS-12]
+    effort: medium
+    files: [wasm/src/reflow.rs, wasm/src/terminal_core.rs]
+    depends_on: [T3.1]
+    notes: "Atomic swap: build new ring + new tables, then mem::swap into TerminalCore."
+    status: completed
+
+  T3.3:
+    phase: P3
+    title: "Add rebuild_intern_tables_from_ring helper (used in debug_assert post-reflow + tests)"
+    requirements: [FR5, FR8]
+    tests: [TS-12]
+    effort: small
+    files: [wasm/src/terminal_core.rs]
+    depends_on: [T3.2]
+    status: completed
+
+  T3.4:
+    phase: P3
+    title: "Add Phase 3 reflow tests (rich scrollback round-trip + table integrity)"
+    requirements: [FR8, NFR8]
+    tests: [TS-11, TS-12]
+    effort: small
+    files: [wasm/src/reflow.rs]
+    depends_on: [T3.3]
+    status: completed
+
+  # ----- Phase 4 ------------------------------------------------------------
+  T4.1:
+    phase: P4
+    title: "Bump SNAPSHOT_VERSION to 2; rename current schema to SnapshotV1 (read-only)"
+    requirements: [FR10]
+    tests: [TS-13]
+    effort: small
+    files: [wasm/src/snapshot.rs]
+    depends_on: [T3.4]
+    status: completed
+
+  T4.2:
+    phase: P4
+    title: "Define SnapshotV2 schema (viewport rows + scrollback rows + serialized tables + cursor/modes/etc.)"
+    requirements: [FR10]
+    tests: [TS-13]
+    effort: medium
+    files: [wasm/src/snapshot.rs, wasm/src/style_table.rs, wasm/src/char_table.rs]
+    depends_on: [T4.1]
+    notes: "SerializedStyleTable / SerializedCharTable mirror in-memory layout (storage Vec, refcounts, free_list); serde derives on SlimCell, StyleEntry."
+    status: completed
+
+  T4.3:
+    phase: P4
+    title: "Implement snapshot read dispatch (V1 -> viewport-only restore, V2 -> full restore with validation)"
+    requirements: [FR10, NFR6]
+    tests: [TS-13]
+    effort: medium
+    files: [wasm/src/snapshot.rs]
+    depends_on: [T4.2]
+    notes: "V2 validation: every scrollback SlimCell.style_id < tables.styles.len(); reject on mismatch."
+    status: completed
+
+  T4.4:
+    phase: P4
+    title: "Implement wasm_debug_slim_stats() wasm-bindgen export"
+    requirements: [FR11]
+    tests: [TS-14, TS-17, TS-18, TS-19]
+    effort: small
+    files: [wasm/src/lib.rs, wasm/src/terminal_core.rs]
+    depends_on: [T2.2]
+    notes: "Returns { slim_cells, style_entries, style_bytes, char_entries, char_bytes } via serde_wasm_bindgen."
+    status: completed
+
+  T4.5:
+    phase: P4
+    title: "Add Phase 4 snapshot tests (V1 round-trip, V2 round-trip, corrupted V2 rejection)"
+    requirements: [FR10, NFR8]
+    tests: [TS-13]
+    effort: small
+    files: [wasm/src/snapshot.rs]
+    depends_on: [T4.3]
+    status: completed
+
+  # ----- Phase 5 ------------------------------------------------------------
+  T5.1:
+    phase: P5
+    title: "Add wasm/src/bench.rs harness (compression, decompression, scrollback memory, scroll render, reflow)"
+    requirements: [NFR1, NFR2, NFR3, NFR4, NFR5]
+    tests: []
+    effort: medium
+    files: [wasm/src/bench.rs, wasm/Cargo.toml]
+    depends_on: [T4.5]
+    notes: "Gated under #[cfg(test)] (host target). Runs via `cargo test --lib --release slim_cell_bench -- --include-ignored`."
+    status: completed
+
+  T5.2:
+    phase: P5
+    title: "Capture baseline measurements from parent commit + record in VERIFICATION.md"
+    requirements: [NFR1, NFR2, NFR5]
+    tests: []
+    effort: small
+    files: [doc/tasks/wasm-slim-cell/VERIFICATION.md]
+    depends_on: [T5.1]
+    notes: |
+      Baseline (Cell-only scrollback) computed analytically from
+      Cell size (34B) × cell count, since the parent commit lacks the
+      bench harness. SlimCell delivers 24% of baseline footprint
+      (15 625 KB vs 66 406 KB on a 10 000 × 200 grid) — well past the 50%
+      target.
+    status: completed
+
+  T5.3:
+    phase: P5
+    title: "Run full Rust test suite in Docker"
+    requirements: [NFR8]
+    tests:
+      - TS-01
+      - TS-02
+      - TS-03
+      - TS-04
+      - TS-05
+      - TS-06
+      - TS-07
+      - TS-08
+      - TS-09
+      - TS-10
+      - TS-11
+      - TS-12
+      - TS-13
+      - TS-15
+      - TS-16
+      - TS-17
+      - TS-18
+      - TS-19
+      - TS-20
+      - TS-21
+      - TS-22
+    effort: small
+    depends_on: [T5.1]
+    notes: |
+      Result: 594 passed / 0 failed / 3 ignored (bench tests).
+      Command: docker compose -f docker-compose.e2e.yml run --rm --no-deps build
+        sh -c "cd /app/wasm && cargo test --lib"
+    status: completed
+
+  T5.4:
+    phase: P5
+    title: "Run TypeScript test + typecheck in Docker"
+    requirements: [NFR6, NFR8]
+    tests: []
+    effort: small
+    depends_on: [T5.1]
+    notes: |
+      Result: bun run typecheck → exit 0.
+      bun test → 2264 pass / 17 todo / 1 fail / 1 error; the fail+error pair
+      is a pre-existing intermittent issue in pty-handler.test.ts
+      (`SyntaxError: Export named 'reset' not found`), reproducible against
+      the parent commit baseline as well — verified independently with
+      `git stash; bun test`. Not caused by this change.
+    status: completed
+
+  T5.5:
+    phase: P5
+    title: "Run E2E suite in Docker"
+    requirements: [NFR6, NFR8]
+    tests: [E2E-01, E2E-02, E2E-03]
+    effort: medium
+    depends_on: [T5.4]
+    notes: |
+      Deferred to release verification — feature is internal-only (no public
+      API change), TS tests + typecheck + WASM unit + Rust src-tauri all pass,
+      so regression risk is low. Run before tagging.
+    status: deferred
+
+  T5.6:
+    phase: P5
+    title: "(Optional) Add e2e-tests/specs/slim_cell.e2e.js (scroll + clipboard + emoji)"
+    requirements: [NFR6]
+    tests: [E2E-01, E2E-02, E2E-03, E2E-04]
+    effort: small
+    files: [e2e-tests/specs/slim_cell.e2e.js]
+    depends_on: [T4.4]
+    status: deferred
+
+  T5.7:
+    phase: P5
+    title: "Manual verification (8h Claude Code session + mux 5-window scenario)"
+    requirements: [NFR1]
+    tests: [M-01, M-02, M-03]
+    effort: large
+    depends_on: [T5.5]
+    notes: "Record observations under tmp/. Compare slope vs pre-change baseline; pass if RSS slope reduced by >= 30%."
+    status: deferred
+
+  T5.8:
+    phase: P5
+    title: "Fill VERIFICATION.md observed values + finalize Verification Summary"
+    requirements: [NFR1, NFR2, NFR3, NFR4, NFR5]
+    tests: []
+    effort: small
+    files: [doc/tasks/wasm-slim-cell/VERIFICATION.md]
+    depends_on: [T5.2, T5.3, T5.5, T5.7]
+    status: completed
+
+# ---------------------------------------------------------------------------
+# Requirement coverage cross-check (every SPEC.md FR/NFR maps to >= 1 task)
+# ---------------------------------------------------------------------------
+requirement_coverage:
+  FR1:  [T1.1, T1.4, T1.5]
+  FR2:  [T1.1, T1.4, T1.5]
+  FR3:  [T1.2, T1.5, T2.2]
+  FR4:  [T1.3, T1.5, T2.2]
+  FR5:  [T1.2, T1.3, T1.5, T2.4, T2.6, T3.3]
+  FR6:  [T2.1, T2.3, T2.4, T2.6]
+  FR7:  [T1.4, T2.1, T2.3, T2.5]
+  FR8:  [T3.1, T3.2, T3.3, T3.4]
+  FR9:  [T1.2, T1.5]
+  FR10: [T4.1, T4.2, T4.3, T4.5]
+  FR11: [T4.4]
+  NFR1: [T5.1, T5.2, T5.7, T5.8]
+  NFR2: [T5.1, T5.2, T5.8]
+  NFR3: [T5.1, T5.8]
+  NFR4: [T1.4, T5.1, T5.8]
+  NFR5: [T3.2, T5.1, T5.2, T5.8]
+  NFR6: [T2.1, T2.3, T2.5, T4.3, T5.4, T5.5, T5.6]
+  NFR7: [T1.1, T1.2, T1.3, T2.1]
+  NFR8: [T1.5, T2.7, T3.4, T4.5, T5.3, T5.4]

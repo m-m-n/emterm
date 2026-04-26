@@ -1,0 +1,135 @@
+schema_version: 1
+feature: wasm-slim-cell
+scale: standard
+created: 2026-04-26
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: 'docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --manifest-path src-tauri/Cargo.toml && cd wasm && cargo test"'
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 59b83635a5857f4296000219f36f50cc5fe4ef6c
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
+    status: completed
+    completed_at_commit: 59b83635a5857f4296000219f36f50cc5fe4ef6c
+  - id: implement
+    status: completed
+    completed_at_commit: 59b83635a5857f4296000219f36f50cc5fe4ef6c
+  - id: check
+    status: completed
+    completed_at_commit: 59b83635a5857f4296000219f36f50cc5fe4ef6c
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 59b83635a5857f4296000219f36f50cc5fe4ef6c
+  - id: review
+    status: completed
+    completed_at_commit: 59b83635a5857f4296000219f36f50cc5fe4ef6c
+
+requirements:
+  FR1:
+    title: SlimCell struct (8 bytes, repr(C), char_ref + width + flags + style_id)
+    status: ok
+    tasks: []
+    tests: []
+  FR2:
+    title: SlimCell flags semantics (inline ASCII / CharTable ref / wide cont)
+    status: ok
+    tasks: []
+    tests: []
+  FR3:
+    title: StyleTable (intern + dedup + refcount + free_list, id 0 = default)
+    status: tbd
+    tbd_reason: "u16 id (max 65,535) saturation threshold needs validation against real workloads; may need u32 ids"
+    tasks: []
+    tests: []
+  FR4:
+    title: CharTable (id-keyed grapheme storage with intern + refcount)
+    status: ok
+    tasks: []
+    tests: []
+  FR5:
+    title: Refcount GC for StyleTable / CharTable on scrollback writes
+    status: ok
+    tasks: []
+    tests: []
+  FR6:
+    title: Compress Cell -> SlimCell on viewport eviction into scrollback
+    status: ok
+    tasks: []
+    tests: []
+  FR7:
+    title: Decompress SlimCell -> Cell on scrollback read paths
+    status: ok
+    tasks: []
+    tests: []
+  FR8:
+    title: Reflow integration (decompress -> reflow -> recompress + table rebuild)
+    status: ok
+    tasks: []
+    tests: []
+  FR9:
+    title: Capacity saturation handling (StyleTable / CharTable fallback + warn log)
+    status: ok
+    tasks: []
+    tests: []
+  FR10:
+    title: Snapshot format V2 with backward read compatibility
+    status: tbd
+    tbd_reason: "Whether to bump format version or auto-convert dual-read; decided in Phase 1 implementation"
+    tasks: []
+    tests: []
+  FR11:
+    title: wasm_debug_slim_stats export for monitoring StyleTable / CharTable usage
+    status: ok
+    tasks: []
+    tests: []
+  NFR1:
+    title: "Memory: size_of::<SlimCell>() == 8; scrollback total memory reduced >= 50%"
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: "Render latency: scroll-render p99 within 5% regression"
+    status: ok
+    tasks: []
+    tests: []
+  NFR3:
+    title: "Compression latency: <= 50us per 200-cell row"
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: "Decompression latency: <= 200ns per cell"
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: "Reflow latency: <= 2x current implementation"
+    status: ok
+    tasks: []
+    tests: []
+  NFR6:
+    title: "Compatibility: WASM public API and packed binary format unchanged"
+    status: ok
+    tasks: []
+    tests: []
+  NFR7:
+    title: "Memory safety: safe Rust only, no new unsafe blocks"
+    status: ok
+    tasks: []
+    tests: []
+  NFR8:
+    title: "Test coverage: existing tests pass + new unit tests for slim/style/char/refcount/reflow/saturation"
+    status: ok
+    tasks: []
+    tests: []

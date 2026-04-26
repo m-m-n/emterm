@@ -19,7 +19,7 @@ pub const STYLE_STRIKETHROUGH: u16 = 0x0080;
 
 /// Color packed into 4 bytes: tag + 3 payload bytes.
 ///   tag=0: Default, tag=1: Indexed(index), tag=2: RGB(r,g,b)
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct PackedColor {
     pub tag: u8,

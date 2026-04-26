@@ -3,7 +3,12 @@
 /// Handles joining wrapped physical lines into logical lines and
 /// re-splitting them at a new column width, preserving cursor position
 /// and overflow strings.
+use std::collections::VecDeque;
+
 use crate::cell::*;
+use crate::char_table::CharTable;
+use crate::slim_cell::{cell_to_slim, slim_overflow_str, slim_to_cell};
+use crate::style_table::StyleTable;
 use crate::terminal_core::TerminalCore;
 
 // ── Reflow internals ────────────────────────────────────
@@ -32,68 +37,47 @@ impl TerminalCore {
         cursor_col: usize,
         cursor_row: usize,
     ) -> (usize, usize) {
-        let new_cap = scrollback_lines as usize + new_rows as usize;
+        let scrollback_capacity = scrollback_lines as usize;
         let new_rows_usize = new_rows as usize;
         let old_rows = self.rows as usize;
         let cols = self.cols as usize;
 
-        // Drain all lines from old ring
+        // Drain all lines (scrollback + viewport) into Cell-based PhysicalLines.
         let lines = self.reflow_drain();
         let total_lines = lines.len();
 
         // Cursor's absolute position in drained lines
         let cursor_abs = total_lines.saturating_sub(old_rows) + cursor_row;
 
-        // How many lines to keep: at most new_cap, at most total_lines
-        let keep = total_lines.min(new_cap);
+        // Total target capacity = scrollback + viewport
+        let total_capacity = scrollback_capacity + new_rows_usize;
+        let keep = total_lines.min(total_capacity);
 
         // Compute skip to keep cursor visible in viewport.
-        // Cursor's desired viewport row: min(cursor_row, new_rows - 1).
         let desired_vp_row = cursor_row.min(new_rows_usize.saturating_sub(1));
-        // vp_start in kept range = keep - new_rows_usize
-        // cursor must be at: skip + vp_start + desired_vp_row = cursor_abs
-        // skip = cursor_abs - (keep - new_rows_usize) - desired_vp_row
-        let skip = if total_lines <= new_cap {
-            0 // All lines fit, no skip needed
+        let skip = if total_lines <= total_capacity {
+            0
         } else {
             let ideal = cursor_abs
                 .saturating_sub(keep.saturating_sub(new_rows_usize))
                 .saturating_sub(desired_vp_row);
-            // Clamp: skip can't exceed total - keep, and can't be negative
             ideal.min(total_lines.saturating_sub(keep))
         };
 
-        // New ring
-        let new_total = new_cap * cols;
-        let mut new_grid = vec![Cell::EMPTY; new_total];
-        let mut new_wrapped = vec![false; new_cap];
-
-        let mut new_overflow = OverflowTable::new();
-        for (i, line) in lines.iter().skip(skip).take(keep).enumerate() {
-            let base = i * cols;
-            let copy_len = line.cells.len().min(cols);
-            for c in 0..copy_len {
-                new_grid[base + c] = line.cells[c];
-                if let Some(Some(s)) = line.overflow_data.get(c) {
-                    new_overflow.insert((c as u32, i as u32), s.clone());
-                }
-            }
-            new_wrapped[i] = line.wrapped;
-        }
-
-        self.ring_cells = new_grid;
-        self.ring_wrapped = new_wrapped;
-        self.ring_head = 0;
-        // Ensure ring_size >= new_rows (invariant)
-        let actual_size = keep.max(new_rows_usize);
-        self.ring_size = actual_size;
-        self.ring_capacity = new_cap;
-        self.overflow = new_overflow;
-        self.overflow_ridx = overflow_ridx_rebuild(&self.overflow);
+        self.repopulate_ring_from_lines(
+            &lines,
+            skip,
+            keep,
+            new_rows_usize,
+            cols,
+            scrollback_capacity,
+        );
 
         // Cursor tracking
         let cursor_abs_new = cursor_abs.saturating_sub(skip);
-        let vp_start = actual_size.saturating_sub(new_rows_usize);
+        // The viewport bottom corresponds to the last `new_rows_usize` lines of
+        // the kept set; vp_start = keep - new_rows_usize.
+        let vp_start = keep.saturating_sub(new_rows_usize);
         let new_cursor_row = cursor_abs_new.saturating_sub(vp_start);
         (cursor_col, new_cursor_row)
     }
@@ -110,7 +94,7 @@ impl TerminalCore {
         let old_cols = self.cols as usize;
         let old_rows = self.rows as usize;
         let new_cols_usize = new_cols as usize;
-        let new_cap = scrollback_lines as usize + new_rows as usize;
+        let scrollback_capacity = scrollback_lines as usize;
 
         // 1. Drain all lines
         let phys_lines = self.reflow_drain();
@@ -149,39 +133,23 @@ impl TerminalCore {
         }
         // Ensure at least new_rows lines
         keep_count = keep_count.max(new_rows as usize);
-        // Cap at new capacity
-        let keep = keep_count.min(new_cap);
-        let skip = if keep_count > new_cap {
-            keep_count - new_cap
+        let total_capacity = scrollback_capacity + new_rows as usize;
+        let keep = keep_count.min(total_capacity);
+        let skip = if keep_count > total_capacity {
+            keep_count - total_capacity
         } else {
             0
         };
 
-        // 5. Write to new ring buffer
-        let new_total = new_cap * new_cols_usize;
-        let mut new_grid = vec![Cell::EMPTY; new_total];
-        let mut new_wrapped = vec![false; new_cap];
-
-        let mut new_overflow = OverflowTable::new();
-        for (i, line) in new_phys.iter().skip(skip).take(keep).enumerate() {
-            let base = i * new_cols_usize;
-            let copy_len = line.cells.len().min(new_cols_usize);
-            for c in 0..copy_len {
-                new_grid[base + c] = line.cells[c];
-                if let Some(Some(s)) = line.overflow_data.get(c) {
-                    new_overflow.insert((c as u32, i as u32), s.clone());
-                }
-            }
-            new_wrapped[i] = line.wrapped;
-        }
-
-        self.ring_cells = new_grid;
-        self.ring_wrapped = new_wrapped;
-        self.ring_head = 0;
-        self.ring_size = keep;
-        self.ring_capacity = new_cap;
-        self.overflow = new_overflow;
-        self.overflow_ridx = overflow_ridx_rebuild(&self.overflow);
+        // 5. Write to new ring + scrollback storage
+        self.repopulate_ring_from_lines(
+            &new_phys,
+            skip,
+            keep,
+            new_rows as usize,
+            new_cols_usize,
+            scrollback_capacity,
+        );
 
         // 6. Track cursor
         let cursor_new_phys_adj = cursor_new_phys.saturating_sub(skip);
@@ -190,13 +158,136 @@ impl TerminalCore {
         (cursor_new_col, new_cursor_row)
     }
 
-    /// Drain all lines from ring buffer (scrollback + viewport) in order.
-    /// Captures overflow strings from the overflow table for each cell.
+    /// Rebuild the viewport flat ring + compressed scrollback deque from a
+    /// drained PhysicalLine sequence. Allocates fresh `StyleTable`/`CharTable`.
+    pub(crate) fn repopulate_ring_from_lines(
+        &mut self,
+        lines: &[PhysicalLine],
+        skip: usize,
+        keep: usize,
+        new_rows: usize,
+        new_cols: usize,
+        scrollback_capacity: usize,
+    ) {
+        // The last `new_rows` of the kept range become the viewport; everything
+        // before that becomes scrollback.
+        let vp_start = keep.saturating_sub(new_rows);
+
+        // Allocate fresh tables; old refs are released when the deque is replaced.
+        let mut new_styles = StyleTable::new();
+        let mut new_chars = CharTable::new();
+
+        // Build viewport flat array.
+        let new_total = new_rows * new_cols;
+        let mut new_grid = vec![Cell::EMPTY; new_total];
+        let mut new_wrapped = vec![false; new_rows];
+        let mut new_overflow = OverflowTable::new();
+
+        for vp_row in 0..new_rows {
+            let line_idx_in_keep = vp_start + vp_row;
+            if line_idx_in_keep >= keep {
+                break;
+            }
+            let abs = skip + line_idx_in_keep;
+            if abs >= lines.len() {
+                break;
+            }
+            let line = &lines[abs];
+            let base = vp_row * new_cols;
+            let copy_len = line.cells.len().min(new_cols);
+            for c in 0..copy_len {
+                new_grid[base + c] = line.cells[c];
+                if let Some(Some(s)) = line.overflow_data.get(c) {
+                    new_overflow.insert((c as u32, vp_row as u32), s.clone());
+                }
+            }
+            new_wrapped[vp_row] = line.wrapped;
+        }
+
+        // Build compressed scrollback (oldest first).
+        let scrollback_count = vp_start.min(scrollback_capacity);
+        let scrollback_skip = vp_start.saturating_sub(scrollback_count);
+        let mut new_scrollback_slim: VecDeque<Vec<crate::slim_cell::SlimCell>> =
+            VecDeque::with_capacity(scrollback_count);
+        let mut new_scrollback_wrapped: VecDeque<bool> = VecDeque::with_capacity(scrollback_count);
+
+        for sb_idx in 0..scrollback_count {
+            let line_idx_in_keep = scrollback_skip + sb_idx;
+            if line_idx_in_keep >= vp_start {
+                break;
+            }
+            let abs = skip + line_idx_in_keep;
+            if abs >= lines.len() {
+                break;
+            }
+            let line = &lines[abs];
+            let mut slim_row = Vec::with_capacity(new_cols);
+            for c in 0..new_cols {
+                let cell = line.cells.get(c).copied().unwrap_or(Cell::EMPTY);
+                let overflow_str = line.overflow_data.get(c).and_then(|s| s.as_deref());
+                let slim = cell_to_slim(&cell, overflow_str, &mut new_styles, &mut new_chars);
+                slim_row.push(slim);
+            }
+            new_scrollback_slim.push_back(slim_row);
+            new_scrollback_wrapped.push_back(line.wrapped);
+        }
+
+        // Atomic swap: drop old tables and old scrollback (refcounts implicitly released).
+        self.ring_cells = new_grid;
+        self.ring_wrapped = new_wrapped;
+        self.ring_head = 0;
+        self.ring_size = new_rows;
+        self.ring_capacity = scrollback_capacity + new_rows;
+        self.scrollback_capacity = scrollback_capacity;
+        self.scrollback_slim = new_scrollback_slim;
+        self.scrollback_wrapped = new_scrollback_wrapped;
+        self.styles = new_styles;
+        self.chars = new_chars;
+        self.overflow = new_overflow;
+        self.overflow_ridx = overflow_ridx_rebuild(&self.overflow);
+    }
+
+    /// Drain all lines from scrollback (oldest first) followed by viewport
+    /// (top to bottom) in order. Scrollback rows are decompressed from
+    /// `SlimCell` to `Cell`; viewport rows are copied directly.
     pub(crate) fn reflow_drain(&self) -> Vec<PhysicalLine> {
         let cols = self.cols as usize;
-        let mut lines = Vec::with_capacity(self.ring_size);
-        for i in 0..self.ring_size {
-            let abs = (self.ring_head + i) % self.ring_capacity;
+        let rows = self.rows as usize;
+        let scrollback_count = self.scrollback_slim.len();
+        let mut lines = Vec::with_capacity(scrollback_count + rows);
+
+        // 1. Scrollback rows (decompress on the fly).
+        for (sb_idx, slim_row) in self.scrollback_slim.iter().enumerate() {
+            let mut cells = Vec::with_capacity(cols);
+            let mut overflow_data = Vec::with_capacity(cols);
+            for c in 0..cols {
+                let slim = slim_row
+                    .get(c)
+                    .copied()
+                    .unwrap_or(crate::slim_cell::SlimCell::EMPTY);
+                let cell = slim_to_cell(&slim, &self.styles, &self.chars);
+                if cell.is_overflow() {
+                    let s = slim_overflow_str(&slim, &self.chars);
+                    overflow_data.push(Some(s.to_string()));
+                } else {
+                    overflow_data.push(None);
+                }
+                cells.push(cell);
+            }
+            lines.push(PhysicalLine {
+                cells,
+                overflow_data,
+                wrapped: self
+                    .scrollback_wrapped
+                    .get(sb_idx)
+                    .copied()
+                    .unwrap_or(false),
+            });
+        }
+
+        // 2. Viewport rows.
+        for r in 0..rows {
+            let abs = (self.ring_head + r) % rows;
             let abs32 = abs as u32;
             let base = abs * cols;
             let mut cells = Vec::with_capacity(cols);
@@ -666,6 +757,79 @@ mod tests {
         assert_eq!(core.get_cell_char(0, 0), long);
         assert_eq!(core.get_cell_char(10, 0), long);
         assert_eq!(core.overflow.len(), 2);
+    }
+
+    // ── Phase 3: Reflow with SlimCell scrollback ─────────
+
+    #[test]
+    fn test_reflow_preserves_scrollback_with_rich_content() {
+        // 10 distinct colors + 5 hyperlinks + 3 ZWJ family emoji in scrollback
+        // Resize and verify all visible attributes preserved.
+        let mut core = TerminalCore::new(20, 3, 30);
+        let zwj = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
+
+        // Push 10 lines into scrollback with varying colors.
+        for i in 0..10u16 {
+            for c in 0..20 {
+                let r = ((i * 25) & 0xFF) as u8;
+                core.set_cell(c, 0, "X", 1, 2, r, 0, 0, 0, 0, 0, 0, 0);
+            }
+            core.scroll_up_internal(1);
+        }
+        // Add ZWJ family in scrollback at one row.
+        core.set_cell(0, 0, zwj, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.scroll_up_internal(1);
+
+        let scrollback_before = core.scrollback_count();
+        assert!(scrollback_before > 0);
+
+        // Sanity: ZWJ still recoverable in scrollback.
+        let oldest_text = core.get_scrollback_text(0);
+        assert!(!oldest_text.is_empty());
+
+        // Resize narrower (full reflow).
+        core.set_cursor(0, 0);
+        let _packed = core.resize_reflow(10, 5, 30);
+        assert_eq!(core.cols(), 10);
+        assert_eq!(core.rows(), 5);
+        // Scrollback should still have entries (lines reflowed).
+        assert!(core.scrollback_count() > 0);
+    }
+
+    #[test]
+    fn test_post_reflow_intern_tables_match_rebuild() {
+        let mut core = TerminalCore::new(10, 3, 10);
+        for i in 0..5u32 {
+            for c in 0..10 {
+                core.set_cell(c, 0, "Z", 1, 2, i as u8, 50, 100, 0, 0, 0, 0, 0);
+            }
+            core.scroll_up_internal(1);
+        }
+        // Reflow same width, different rows.
+        core.resize_reflow(10, 5, 10);
+        let (live_styles_rebuild, live_chars_rebuild) = core.rebuild_intern_tables_from_ring();
+        assert_eq!(live_styles_rebuild, core.styles.live_entries());
+        assert_eq!(live_chars_rebuild, core.chars.live_entries());
+    }
+
+    #[test]
+    fn test_reflow_rebuilds_tables_drops_stale_entries() {
+        // Add a unique style to scrollback, then reflow with a smaller capacity
+        // that drops the row. The new tables should not contain the stale style.
+        let mut core = TerminalCore::new(10, 3, 5);
+        for i in 0..5u32 {
+            core.set_cell(0, 0, "X", 1, 2, i as u8, 0, 0, 0, 0, 0, 0, 0);
+            core.scroll_up_internal(1);
+        }
+        let live_before = core.styles.live_entries();
+        assert!(live_before >= 2);
+
+        // Reflow with scrollback_lines=0: scrollback gets dropped.
+        core.resize_reflow(10, 3, 0);
+        assert_eq!(core.scrollback_count(), 0);
+        // Tables should be reset to baseline (default style only).
+        assert_eq!(core.styles.live_entries(), 1);
+        assert_eq!(core.chars.live_entries(), 0);
     }
 
     #[test]

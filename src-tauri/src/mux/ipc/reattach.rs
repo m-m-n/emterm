@@ -713,11 +713,8 @@ mod tests {
         sender.await.unwrap().expect("send_reattach_data ok");
 
         // No further frames expected — drop the sender so the stream closes.
-        let next = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            server_framed.next(),
-        )
-        .await;
+        let next =
+            tokio::time::timeout(std::time::Duration::from_millis(50), server_framed.next()).await;
         match next {
             Ok(None) | Err(_) => {} // stream closed or timed out: both OK
             Ok(Some(Ok(frame))) => panic!("unexpected extra frame: {:?}", frame.msg_type),
