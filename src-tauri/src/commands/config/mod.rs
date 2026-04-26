@@ -2,6 +2,7 @@
 pub mod io;
 pub mod settings;
 pub mod types;
+#[cfg(any(feature = "gui", test))]
 mod validation;
 
 // Re-export main types for external use

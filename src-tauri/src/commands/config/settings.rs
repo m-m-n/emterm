@@ -327,6 +327,7 @@ pub struct AppSettings {
 
     /// Legacy field for backward compatibility. Read during deserialization but never serialized.
     #[serde(default, skip_serializing)]
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     pub(super) font_family: String,
     /// Deprecated: line_height is no longer configurable (always uses font metrics).
     /// Kept for backward compatibility with existing config files.
