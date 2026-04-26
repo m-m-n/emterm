@@ -1,6 +1,9 @@
 mod cell;
+mod char_table;
 mod color_spec;
+mod slim_cell;
 pub mod snapshot;
+mod style_table;
 mod terminal_cells;
 mod terminal_core;
 mod terminal_cursor;
@@ -15,6 +18,10 @@ mod unicode_width;
 mod parser;
 mod parser_params;
 mod parser_types;
+
+// Bench harness (test-only)
+#[cfg(test)]
+mod bench;
 
 // Handler modules (impl TerminalCore in separate files)
 mod apc_handler;
@@ -106,3 +113,6 @@ pub fn classify_codepoints(text: &str) -> Vec<u8> {
 pub fn string_width(text: &str) -> u32 {
     unicode::string_width(text)
 }
+
+// ── Debug stats (FR11) ──────────────────────────────────
+// Implementation lives in `terminal_core.rs` (alongside TerminalCore).

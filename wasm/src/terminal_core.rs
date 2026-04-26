@@ -2,9 +2,14 @@
 ///
 /// Owns the viewport grid (rows × cols cells), cursor state, terminal modes,
 /// tab stops, and dirty row tracking. Exported via wasm_bindgen for JS access.
+use std::collections::VecDeque;
+
 use wasm_bindgen::prelude::*;
 
 use crate::cell::*;
+use crate::char_table::CharTable;
+use crate::slim_cell::SlimCell;
+use crate::style_table::StyleTable;
 
 // ── Mode bit positions (matches SPEC.md) ─────────────────
 
@@ -20,6 +25,18 @@ pub const MODE_SYNCHRONIZED_OUTPUT: u8 = 8;
 // Bits 9-10: cursor keys (2 bits)
 // Bits 11-12: mouse tracking (2 bits)
 // Bits 13-14: mouse encoding (2 bits)
+
+// ── SlimStats (FR11 debug export) ────────────────────────
+
+/// Compact statistics about the SlimCell scrollback storage.
+#[derive(serde::Serialize)]
+pub struct SlimStats {
+    pub slim_cells: u32,
+    pub style_entries: u32,
+    pub style_bytes: u32,
+    pub char_entries: u32,
+    pub char_bytes: u32,
+}
 
 // ── CursorState ──────────────────────────────────────────
 
@@ -65,12 +82,19 @@ impl CursorState {
 pub struct TerminalCore {
     pub(crate) cols: u16,
     pub(crate) rows: u16,
-    // Ring buffer: unified viewport + scrollback storage
-    pub(crate) ring_cells: Vec<Cell>,
-    pub(crate) ring_wrapped: Vec<bool>,
-    pub(crate) ring_head: usize,     // Index of oldest line in ring
-    pub(crate) ring_size: usize,     // Current number of lines (>= rows)
-    pub(crate) ring_capacity: usize, // Maximum line count (scrollback_lines + rows)
+    // Viewport ring buffer: rotates among `rows` viewport rows.
+    pub(crate) ring_cells: Vec<Cell>,   // length = rows × cols
+    pub(crate) ring_wrapped: Vec<bool>, // length = rows
+    pub(crate) ring_head: usize,        // Index of oldest viewport row in ring (0..rows)
+    pub(crate) ring_size: usize,        // Always equals `rows` after construction.
+    pub(crate) ring_capacity: usize,    // Total target capacity (= rows + scrollback_lines).
+    // Scrollback storage (compressed): oldest rows at front, newest at back.
+    pub(crate) scrollback_slim: VecDeque<Vec<SlimCell>>,
+    pub(crate) scrollback_wrapped: VecDeque<bool>,
+    pub(crate) scrollback_capacity: usize, // Maximum number of scrollback rows.
+    // Intern tables backing scrollback SlimCells.
+    pub(crate) styles: StyleTable,
+    pub(crate) chars: CharTable,
     pub(crate) dirty: Vec<u64>,
     pub(crate) cursor: CursorState,
     pub(crate) saved_cursor: Option<CursorState>,
@@ -129,8 +153,11 @@ impl TerminalCore {
     #[wasm_bindgen(constructor)]
     pub fn new(cols: u16, rows: u16, scrollback_lines: u32) -> Self {
         debug_assert!(cols > 0 && rows > 0, "cols and rows must be > 0");
-        let ring_capacity = scrollback_lines as usize + rows as usize;
-        let total = ring_capacity * cols as usize;
+        let scrollback_capacity = scrollback_lines as usize;
+        let ring_capacity = scrollback_capacity + rows as usize;
+        // Viewport ring is sized for `rows` lines only; scrollback lives in
+        // a separate compressed deque (scrollback_slim).
+        let total = rows as usize * cols as usize;
         let dirty_words = (rows as usize + 63) / 64;
 
         // Default modes: autoWrap=true, cursorVisible=true, cursorBlink=true
@@ -146,10 +173,15 @@ impl TerminalCore {
             cols,
             rows,
             ring_cells: vec![Cell::EMPTY; total],
-            ring_wrapped: vec![false; ring_capacity],
+            ring_wrapped: vec![false; rows as usize],
             ring_head: 0,
             ring_size: rows as usize,
             ring_capacity,
+            scrollback_slim: VecDeque::with_capacity(scrollback_capacity.min(64)),
+            scrollback_wrapped: VecDeque::with_capacity(scrollback_capacity.min(64)),
+            scrollback_capacity,
+            styles: StyleTable::new(),
+            chars: CharTable::new(),
             dirty: vec![u64::MAX; dirty_words], // all dirty initially
             cursor: CursorState::new(),
             saved_cursor: None,
@@ -255,11 +287,15 @@ impl TerminalCore {
     // ── Reset ────────────────────────────────────────────
 
     pub fn reset(&mut self) {
-        let total = self.ring_capacity * self.cols as usize;
+        let total = self.rows as usize * self.cols as usize;
         self.ring_cells = vec![Cell::EMPTY; total];
-        self.ring_wrapped = vec![false; self.ring_capacity];
+        self.ring_wrapped = vec![false; self.rows as usize];
         self.ring_head = 0;
         self.ring_size = self.rows as usize;
+        self.scrollback_slim.clear();
+        self.scrollback_wrapped.clear();
+        self.styles = StyleTable::new();
+        self.chars = CharTable::new();
         self.cursor = CursorState::new();
         self.saved_cursor = None;
         self.modes =
@@ -293,6 +329,51 @@ impl TerminalCore {
     /// Take and clear the mode action queue.
     pub fn take_mode_actions(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.mode_actions)
+    }
+
+    /// Total number of SlimCells currently held in scrollback.
+    pub(crate) fn slim_cell_total(&self) -> usize {
+        self.scrollback_slim.iter().map(|r| r.len()).sum()
+    }
+
+    /// Return current SlimCell scrollback statistics as a JS object:
+    /// `{ slim_cells, style_entries, style_bytes, char_entries, char_bytes }`.
+    /// (FR11)
+    pub fn wasm_debug_slim_stats(&self) -> JsValue {
+        let stats = SlimStats {
+            slim_cells: self.slim_cell_total() as u32,
+            style_entries: self.styles.live_entries() as u32,
+            style_bytes: self.styles.bytes_used() as u32,
+            char_entries: self.chars.live_entries() as u32,
+            char_bytes: self.chars.bytes_used() as u32,
+        };
+        serde_wasm_bindgen::to_value(&stats).unwrap_or(JsValue::NULL)
+    }
+
+    /// Rebuild the StyleTable / CharTable refcounts by walking the current
+    /// scrollback. Returns the number of (style, char) live entries in the
+    /// rebuilt tables. Used by tests and debug assertions to verify
+    /// refcount integrity after operations like reflow.
+    #[allow(dead_code)]
+    pub(crate) fn rebuild_intern_tables_from_ring(&self) -> (usize, usize) {
+        use crate::char_table::CharTable;
+        use crate::slim_cell::{cell_to_slim, slim_to_cell};
+        use crate::style_table::StyleTable;
+        let mut styles = StyleTable::new();
+        let mut chars = CharTable::new();
+        for slim_row in self.scrollback_slim.iter() {
+            for slim in slim_row {
+                // Decompress to Cell + overflow string, re-intern into fresh tables.
+                let cell = slim_to_cell(slim, &self.styles, &self.chars);
+                let overflow_str = if slim.is_char_table() {
+                    Some(crate::slim_cell::slim_overflow_str(slim, &self.chars).to_string())
+                } else {
+                    None
+                };
+                let _ = cell_to_slim(&cell, overflow_str.as_deref(), &mut styles, &mut chars);
+            }
+        }
+        (styles.live_entries(), chars.live_entries())
     }
 
     /// Enable/disable cursor hidden→visible interrupt.
@@ -1080,6 +1161,27 @@ mod tests {
             }
         }
     }
+
+    // ── SlimCell stats tests (FR11) ──────────────────────
+
+    #[test]
+    fn test_slim_cell_total_initial_zero() {
+        let core = TerminalCore::new(80, 24, 100);
+        assert_eq!(core.slim_cell_total(), 0);
+    }
+
+    #[test]
+    fn test_slim_cell_total_after_eviction() {
+        let mut core = TerminalCore::new(10, 3, 5);
+        for r in 0..3 {
+            core.set_cell(0, r, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+        core.scroll_up_internal(2); // 2 rows go to scrollback
+        // Each scrollback row has 10 SlimCells.
+        assert_eq!(core.slim_cell_total(), 20);
+    }
+
+    // ── BCE shift_rows_down test ────────────────────────
 
     #[test]
     fn test_bce_shift_rows_down() {
