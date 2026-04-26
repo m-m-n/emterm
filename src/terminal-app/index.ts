@@ -97,6 +97,17 @@ export class TerminalApp {
   private muxPaneGrids: Map<number, import("../terminal/state").MuxPaneGridState> = new Map(); // Full pane state per pane
   private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
   private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
+  /**
+   * After a viaReinit WASM recovery completes, this is set to a deadline
+   * (Date.now() + N) during which incoming mux traffic is counted for
+   * observability. 0 means the watch window is closed; treated as a
+   * single-flight gate by `runPostRecoveryIpcHealthCheck`.
+   */
+  private postRecoveryWatchUntil = 0;
+  /** PtyOutput chunks seen during the post-recovery watch window. */
+  private postRecoveryPtyOutputChunks = 0;
+  /** PtyOutput bytes seen during the post-recovery watch window. */
+  private postRecoveryPtyOutputBytes = 0;
   private muxLastActiveIndex = 0;
 
   /** Callback to update tab UI when mux window state changes */
@@ -783,6 +794,11 @@ export class TerminalApp {
       emitMuxStateChange: () => self.emitMuxStateChange(),
       onMuxModeExited: () => self.registerEarlyApcContext(),
       onStatusUpdate: (msg) => self.muxStatusUpdateCallback?.(msg),
+      getPostRecoveryWatchUntil: () => self.postRecoveryWatchUntil,
+      countPostRecoveryPtyOutput: (bytes: number) => {
+        self.postRecoveryPtyOutputChunks++;
+        self.postRecoveryPtyOutputBytes += bytes;
+      },
     };
   }
 
@@ -984,6 +1000,19 @@ export class TerminalApp {
       console.warn(
         `[WARN][FRONTEND] [DIAG-RECOVERY] RequestPaneSnapshot sent | paneId=${paneId}`,
       );
+      // After a WASM module reinit, the daemon snapshot reply is the only
+      // way to repaint. Run a lightweight IPC health check to detect a dead
+      // bridge socket (e.g. from a PC suspend that left the Unix socket in a
+      // half-open state) and surface it instead of leaving a blank screen.
+      if (viaReinit) {
+        this.runPostRecoveryIpcHealthCheck().catch((healthErr: unknown) => {
+          console.error(
+            `[ERROR][FRONTEND] runPostRecoveryIpcHealthCheck threw: ${
+              healthErr instanceof Error ? healthErr.message : String(healthErr)
+            }`,
+          );
+        });
+      }
     }).catch((err: unknown) => {
       console.warn(
         `[WARN][FRONTEND] sendRequestPaneSnapshot after WASM recovery failed: ${
@@ -991,6 +1020,95 @@ export class TerminalApp {
         }`,
       );
     });
+  }
+
+  /**
+   * Post-recovery mux IPC health probe.
+   *
+   * Runs only after a viaReinit WASM recovery in mux mode. Sends a
+   * `RequestStatusUpdate` and waits up to `HEALTH_CHECK_TIMEOUT_MS` for the
+   * matching `StatusUpdate` reply. If nothing arrives, the bridge↔daemon
+   * socket is presumably dead (typical after a long PC suspend on Linux),
+   * so we exit mux mode to expose the host shell prompt — the user can
+   * type `emterm mux` to relaunch the bridge and rebuild the connection.
+   *
+   * Also opens a 10 s observability window during which incoming mux APC
+   * traffic is logged at warn level (案2 観測強化).
+   */
+  private async runPostRecoveryIpcHealthCheck(): Promise<void> {
+    if (!this.muxClient || !this.inMuxMode) return;
+    // Single-flight: if a check is already in flight, skip. Avoids
+    // wrapper-chain corruption from overlapping recoveries.
+    if (this.postRecoveryWatchUntil > 0) return;
+
+    const client = this.muxClient;
+    const sessionMuxClient = client;
+    const HEALTH_CHECK_TIMEOUT_MS = 3_000;
+    const WATCH_WINDOW_MS = 10_000;
+
+    this.postRecoveryWatchUntil = Date.now() + WATCH_WINDOW_MS;
+    this.postRecoveryPtyOutputChunks = 0;
+    this.postRecoveryPtyOutputBytes = 0;
+    console.warn(
+      `[WARN][FRONTEND] [DIAG-RECOVERY] post-recovery watch opened | windowMs=${WATCH_WINDOW_MS}`,
+    );
+
+    let statusReceived = false;
+    const originalCallback = this.muxStatusUpdateCallback;
+    const wrapper = (msg: { left: string; right: string }) => {
+      if (!statusReceived) {
+        statusReceived = true;
+        console.warn(
+          `[WARN][FRONTEND] [DIAG-RECOVERY] mux IPC alive — StatusUpdate received post-recovery`,
+        );
+      }
+      originalCallback?.(msg);
+    };
+    this.muxStatusUpdateCallback = wrapper;
+
+    // Restore the callback only if our wrapper is still the current one —
+    // otherwise some other code (concurrent run, exit, external rewire)
+    // has taken over the slot and we must not stomp on it.
+    const restoreCallback = () => {
+      if (this.muxStatusUpdateCallback === wrapper) {
+        this.muxStatusUpdateCallback = originalCallback;
+      }
+    };
+
+    try {
+      try {
+        await client.sendRequestStatusUpdate();
+      } catch (err) {
+        console.error(
+          `[ERROR][FRONTEND] [DIAG-RECOVERY] post-recovery sendRequestStatusUpdate failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        return;
+      }
+
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, HEALTH_CHECK_TIMEOUT_MS),
+      );
+
+      // Bail out if mux mode was torn down or replaced during the wait —
+      // a late StatusUpdate from a stale session must not trigger exit on
+      // a freshly-attached session.
+      if (!this.inMuxMode || this.muxClient !== sessionMuxClient) return;
+
+      if (!statusReceived) {
+        console.error(
+          `[ERROR][FRONTEND] [DIAG-RECOVERY] mux IPC dead — no StatusUpdate within ${HEALTH_CHECK_TIMEOUT_MS}ms after WASM recovery. Exiting mux mode so the user can relaunch the bridge.`,
+        );
+        this.exitMuxMode();
+      }
+    } finally {
+      restoreCallback();
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] post-recovery watch closed | chunks=${this.postRecoveryPtyOutputChunks} bytes=${this.postRecoveryPtyOutputBytes}`,
+      );
+      this.postRecoveryWatchUntil = 0;
+    }
   }
 
   /** Build the context object for mux action handler functions. */
