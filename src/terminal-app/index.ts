@@ -1032,8 +1032,16 @@ export class TerminalApp {
    * so we exit mux mode to expose the host shell prompt — the user can
    * type `emterm mux` to relaunch the bridge and rebuild the connection.
    *
-   * Also opens a 10 s observability window during which incoming mux APC
-   * traffic is logged at warn level (案2 観測強化).
+   * Implementation notes:
+   * - Uses `Promise.race` between StatusUpdate arrival and timeout so
+   *   in-flight replies short-circuit the wait instead of being judged
+   *   against a 2 ms-precision setTimeout boundary (this caused a
+   *   false-positive exit in production: alive reply arrived 2 ms after
+   *   the 3 s timer fired).
+   * - After timeout, applies a small grace window for late arrivals that
+   *   raced the timer fire — recovers the session without exiting mux.
+   * - Also opens an observability window during which incoming mux APC
+   *   traffic is logged at warn level.
    */
   private async runPostRecoveryIpcHealthCheck(): Promise<void> {
     if (!this.muxClient || !this.inMuxMode) return;
@@ -1043,24 +1051,48 @@ export class TerminalApp {
 
     const client = this.muxClient;
     const sessionMuxClient = client;
-    const HEALTH_CHECK_TIMEOUT_MS = 3_000;
-    const WATCH_WINDOW_MS = 10_000;
+    // 10 s tolerates slow daemon replies after heavy WASM reinit work
+    // (snapshot replay, large grid resize) which previously squeezed
+    // the alive reply past the old 3 s threshold.
+    const HEALTH_CHECK_TIMEOUT_MS = 10_000;
+    // Grace window for replies that lost the race against the timeout
+    // fire by a handful of ms. Without this, a 2 ms latecomer trips a
+    // false exit identical to the original bug.
+    const LATE_ARRIVAL_GRACE_MS = 200;
+    // Watch window equals the maximum wait — `finally` clears
+    // `postRecoveryWatchUntil` immediately when the await chain ends,
+    // so any tail beyond timeout+grace is unobservable.
+    const WATCH_WINDOW_MS = HEALTH_CHECK_TIMEOUT_MS + LATE_ARRIVAL_GRACE_MS;
 
-    this.postRecoveryWatchUntil = Date.now() + WATCH_WINDOW_MS;
+    const watchOpenedAt = Date.now();
+    this.postRecoveryWatchUntil = watchOpenedAt + WATCH_WINDOW_MS;
     this.postRecoveryPtyOutputChunks = 0;
     this.postRecoveryPtyOutputBytes = 0;
     console.warn(
-      `[WARN][FRONTEND] [DIAG-RECOVERY] post-recovery watch opened | windowMs=${WATCH_WINDOW_MS}`,
+      `[WARN][FRONTEND] [DIAG-RECOVERY] post-recovery watch opened | windowMs=${WATCH_WINDOW_MS} timeoutMs=${HEALTH_CHECK_TIMEOUT_MS} graceMs=${LATE_ARRIVAL_GRACE_MS}`,
     );
 
     let statusReceived = false;
+    let statusResolve: (() => void) | null = null;
+    const statusPromise = new Promise<void>((resolve) => {
+      statusResolve = resolve;
+    });
     const originalCallback = this.muxStatusUpdateCallback;
     const wrapper = (msg: { left: string; right: string }) => {
+      // If a session swap happened mid-flight (exit + re-enter), the new
+      // session's StatusUpdate must NOT mark this probe as alive — that
+      // would let a half-dead original session escape detection.
+      if (this.muxClient !== sessionMuxClient) {
+        originalCallback?.(msg);
+        return;
+      }
       if (!statusReceived) {
         statusReceived = true;
+        const elapsedMs = Date.now() - watchOpenedAt;
         console.warn(
-          `[WARN][FRONTEND] [DIAG-RECOVERY] mux IPC alive — StatusUpdate received post-recovery`,
+          `[WARN][FRONTEND] [DIAG-RECOVERY] mux IPC alive — StatusUpdate received post-recovery | elapsedMs=${elapsedMs}`,
         );
+        statusResolve?.();
       }
       originalCallback?.(msg);
     };
@@ -1087,25 +1119,54 @@ export class TerminalApp {
         return;
       }
 
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, HEALTH_CHECK_TIMEOUT_MS),
-      );
+      // Race: alive reply short-circuits the timeout. This avoids the
+      // 2 ms false-positive class entirely.
+      await Promise.race([
+        statusPromise,
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, HEALTH_CHECK_TIMEOUT_MS),
+        ),
+      ]);
 
       // Bail out if mux mode was torn down or replaced during the wait —
       // a late StatusUpdate from a stale session must not trigger exit on
       // a freshly-attached session.
       if (!this.inMuxMode || this.muxClient !== sessionMuxClient) return;
 
-      if (!statusReceived) {
-        console.error(
-          `[ERROR][FRONTEND] [DIAG-RECOVERY] mux IPC dead — no StatusUpdate within ${HEALTH_CHECK_TIMEOUT_MS}ms after WASM recovery. Exiting mux mode so the user can relaunch the bridge.`,
+      if (statusReceived) return;
+
+      // Timeout fired without a reply. Wait briefly for late arrivals
+      // that raced the timer — exiting mux mode is destructive (forces
+      // the user to manually `emterm mux`), so a small grace is well
+      // worth a 200 ms delay.
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] no StatusUpdate within ${HEALTH_CHECK_TIMEOUT_MS}ms — entering ${LATE_ARRIVAL_GRACE_MS}ms grace window before exiting mux mode`,
+      );
+
+      await Promise.race([
+        statusPromise,
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, LATE_ARRIVAL_GRACE_MS),
+        ),
+      ]);
+
+      if (!this.inMuxMode || this.muxClient !== sessionMuxClient) return;
+
+      if (statusReceived) {
+        console.warn(
+          `[WARN][FRONTEND] [DIAG-RECOVERY] mux IPC alive (late arrival in grace window) — keeping mux mode`,
         );
-        this.exitMuxMode();
+        return;
       }
+
+      console.error(
+        `[ERROR][FRONTEND] [DIAG-RECOVERY] mux IPC dead — no StatusUpdate within ${HEALTH_CHECK_TIMEOUT_MS}ms + ${LATE_ARRIVAL_GRACE_MS}ms grace after WASM recovery. Exiting mux mode so the user can relaunch the bridge.`,
+      );
+      this.exitMuxMode();
     } finally {
       restoreCallback();
       console.warn(
-        `[WARN][FRONTEND] [DIAG-RECOVERY] post-recovery watch closed | chunks=${this.postRecoveryPtyOutputChunks} bytes=${this.postRecoveryPtyOutputBytes}`,
+        `[WARN][FRONTEND] [DIAG-RECOVERY] post-recovery watch closed | chunks=${this.postRecoveryPtyOutputChunks} bytes=${this.postRecoveryPtyOutputBytes} statusReceived=${statusReceived}`,
       );
       this.postRecoveryWatchUntil = 0;
     }
