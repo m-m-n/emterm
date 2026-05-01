@@ -9,6 +9,7 @@ Tauriで構築されたLinux/Windows向けターミナルエミュレータ。�
   - 独立したPTYセッションを持つマルチタブターミナル
   - WASMベースのターミナルコアによる高性能グリッドレンダリング
   - リサイズ時の全バッファリフローに対応したリングバッファ（UnifiedBuffer）
+  - SlimCellスクロールバック圧縮: StyleTable/CharTable重複排除によるセルあたり76%のメモリ削減（34B→8B）
   - ダーティ行追跡付きCanvas 2Dレンダラー
   - BCE（背景色消去）対応
 
@@ -29,7 +30,7 @@ Tauriで構築されたLinux/Windows向けターミナルエミュレータ。�
   - `emterm mux` でネイティブマルチプレクサデーモンを起動（GUIが生のPTYバイトを受信、二重パースなし）
   - デタッチ（`prefix+d`）／リアタッチ（`emterm mux attach`）と画面状態の完全な復元
   - セッションあたり複数ウィンドウとタブグループUI（全ウィンドウ同時ストリーミングによる瞬時切り替え）
-  - ウィンドウ管理: `prefix+c`（新規）、`prefix+n`/`prefix+p`（切替）、`prefix+,`（リネーム）
+  - ウィンドウ管理: `prefix+c`（新規）、`prefix+n`/`prefix+p`（切替）、`prefix+,`（リネーム）、`prefix+m`（移動/並び替え、`[N]`位置バッジ表示）
   - tmux.conf インポート: プレフィックスキー、キーバインド、base-index、マウス、status-position
   - インバンドAPCプロトコル: PTYストリーム経由でmux制御メッセージを送受信（SSH透過、追加ソケット転送不要）
   - `emterm mux new-window [-n 名前] [-c コマンド]`: CLIからウィンドウを作成し初期コマンドを実行

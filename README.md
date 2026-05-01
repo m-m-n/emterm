@@ -9,6 +9,7 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Multi-tab terminal with independent PTY sessions
   - WASM-based terminal core for high-performance grid rendering
   - Unified ring buffer with full-buffer reflow on resize
+  - SlimCell scrollback compression: 76% per-cell memory reduction (34B → 8B) via StyleTable/CharTable deduplication
   - Canvas 2D renderer with dirty-row tracking
   - Background Color Erase (BCE) support
 
@@ -29,7 +30,7 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - `emterm mux` starts a native multiplexer daemon; GUI receives raw PTY bytes (no double-parse overhead)
   - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
   - Multiple windows per session with tab group UI; instant window switching (all windows stream simultaneously)
-  - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename)
+  - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename), `prefix+m` (move/reorder with `[N]` position badge)
   - tmux.conf import: prefix key, keybindings, base-index, mouse, status-position
   - Inband APC protocol: mux control messages travel over the PTY stream (SSH-transparent, no socket forwarding needed)
   - `emterm mux new-window [-n name] [-c command]`: create named windows with initial commands from CLI

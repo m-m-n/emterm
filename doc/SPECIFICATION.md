@@ -919,6 +919,8 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 | `next-window` | `n` |
 | `prev-window` | `p` |
 | `rename-window` | `,` |
+| `move-window` | `m` |
+| `paste` | `]` |
 | `prefix-passthrough` | (prefix key again) |
 
 **IPC Protocol:**
@@ -929,11 +931,12 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 
 **Window Management:**
 - Each mux window maps to a GUI tab (tab group UI)
-- `CreateWindow` / `DestroyWindow` / `SwitchWindow` / `RenameWindow` control messages
+- `CreateWindow` / `DestroyWindow` / `SwitchWindow` / `RenameWindow` / `MoveWindow` control messages
 - `StatusUpdate` pushed from daemon to GUI when window list changes
 - Daemon streams PTY output for all windows simultaneously (not just the active one)
 - Window switching is instant: target window's WASM grid is always current (no redraw delay)
 - Daemon-level OSC title propagation: daemon detects OSC 0/2 from each pane's PTY and updates `window.name` independently of GUI connection state; connected GUI clients receive `RenameWindow` notifications; `Welcome.session_list` on attach always reflects the latest titles
+- `MoveWindow`: reorder the active window to a 1-origin position via `prefix+m`; opens a numeric dialog; tab labels render with a `[N]` position badge
 
 **Reliability:**
 - Automatic recovery on daemon crash (GUI returns to normal mode)
@@ -1232,6 +1235,27 @@ The CLI commands (`emterm image`, `emterm markdown`) can be built without GUI de
 - `--no-default-features` produces a lightweight CLI binary without any GUI libraries
 - Enables building on servers without `gdk-sys`, `libwebkit2gtk`, etc.
 - `EMTERM_CLI_ONLY=1 make dpkg` workflow for CLI-only package generation
+
+---
+
+#### SlimCell Scrollback Compression
+
+Per-cell memory footprint in the WASM scrollback region is reduced by storing evicted cells as `SlimCell` (8 bytes) instead of the full `Cell` struct (34 bytes). The active viewport continues to use `Cell` for maximum render performance; only cells that slide off the viewport into scrollback are compressed.
+
+**Key Functionality:**
+- `SlimCell` struct: 8 bytes (`char_ref: u32`, `width: u8`, `flags: u8`, `style_id: u16`)
+- `StyleTable`: interns cell styles (fg, bg, SGR flags, underline, hyperlink) by id; refcount GC frees unused entries
+- `CharTable`: interns non-ASCII grapheme strings (ZWJ emoji, wide sequences) by id; refcount GC frees unused entries
+- ASCII cells use inline encoding (`char_ref` holds up to 4-byte UTF-8 directly), bypassing `CharTable`
+- Compression occurs when a viewport row is evicted to scrollback (`ring_push_blank`); decompression (`slim_to_cell`) occurs on-demand for rendering, selection, and copy
+- Reflow (terminal resize) decompresses scrollback rows, runs existing reflow logic, then re-compresses; `StyleTable`/`CharTable` are rebuilt from scratch for refcount integrity
+- Snapshot format bumped to V2: scrollback stored as `SlimCell` rows + serialized tables; V1 snapshots are loaded with scrollback discarded
+- Debug export: `wasm_debug_slim_stats()` returns live entry counts and byte usage for both tables
+
+**Memory Impact:**
+- Per-cell scrollback footprint: 34 bytes → 8 bytes (76% reduction)
+- Total scrollback memory for a fully populated 10,000-line × 200-column grid: ≥ 50% reduction (including table overhead)
+- Benefit scales with mux multi-window usage: each additional window's scrollback is independently compressed
 
 ---
 
