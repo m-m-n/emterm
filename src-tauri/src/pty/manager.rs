@@ -12,7 +12,8 @@ use tokio::sync::{Mutex, RwLock};
 type EnvVars = HashMap<String, String>;
 
 use super::{
-    PtyError, PtySession, SessionId, WriterRegistry, detect_default_shell, generate_session_id,
+    BackpressureRegistry, PtyError, PtySession, SessionId, WriterRegistry, detect_default_shell,
+    generate_session_id,
 };
 
 /// Result of session creation with atomic count.
@@ -44,6 +45,10 @@ pub struct PtyManager {
     sessions: Arc<RwLock<HashMap<SessionId, Arc<Mutex<PtySession>>>>>,
     /// Registry of write channel senders for fast PTY writes.
     writer_registry: Arc<WriterRegistry>,
+    /// Registry of per-session backpressure counters. The PTY reader thread
+    /// inspects this before forwarding bytes to the frontend; the frontend
+    /// invokes `pty_ack` after consuming a batch.
+    backpressure: BackpressureRegistry,
 }
 
 impl Default for PtyManager {
@@ -58,12 +63,18 @@ impl PtyManager {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             writer_registry: Arc::new(WriterRegistry::new()),
+            backpressure: BackpressureRegistry::new(),
         }
     }
 
     /// Returns a reference to the writer registry for fast PTY writes.
     pub fn writer_registry(&self) -> &WriterRegistry {
         &self.writer_registry
+    }
+
+    /// Returns a reference to the backpressure registry.
+    pub fn backpressure(&self) -> &BackpressureRegistry {
+        &self.backpressure
     }
 
     /// Creates a new PTY session with the specified parameters.
@@ -129,6 +140,7 @@ impl PtyManager {
         if let Err(e) = self.writer_registry.remove(id) {
             log::warn!("Failed to remove writer for session {}: {}", id, e);
         }
+        self.backpressure.remove(id);
         let mut sessions = self.sessions.write().await;
         sessions.remove(id)
     }
@@ -176,6 +188,7 @@ impl PtyManager {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         super::writer::spawn_writer_thread(id.clone(), writer_handle, rx);
         self.writer_registry.register(id.clone(), tx)?;
+        self.backpressure.register(id.clone());
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), Arc::new(Mutex::new(session)));
@@ -202,6 +215,9 @@ impl PtyManager {
         if let Err(e) = self.writer_registry.remove(id) {
             log::warn!("Failed to remove writer for session {}: {}", id, e);
         }
+        // Drop backpressure entry; any reader still holding the Arc will see
+        // a zeroed counter on next ack, which is harmless.
+        self.backpressure.remove(id);
 
         let mut sessions = self.sessions.write().await;
         let session = sessions.remove(id)?;

@@ -188,6 +188,22 @@ export class PtyClient {
 	}
 
 	/**
+	 * Acknowledge that the frontend has consumed `bytes` bytes of PTY output.
+	 * The Rust reader uses this counter to apply backpressure when the
+	 * frontend stalls (e.g. WebKitGTK throttles rAF after focus loss).
+	 * Best-effort: ack failures are logged but never throw to callers.
+	 */
+	ackBytes(bytes: number): void {
+		if (!this.sessionId || bytes <= 0) return;
+		void invoke<void>("pty_ack", {
+			sessionId: this.sessionId,
+			bytes,
+		}).catch((err: unknown) => {
+			console.warn("[WARN][FRONTEND] pty_ack failed:", err);
+		});
+	}
+
+	/**
 	 * Resizes the PTY session to the specified dimensions.
 	 *
 	 * @param cols - New number of columns

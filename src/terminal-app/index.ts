@@ -128,6 +128,31 @@ export class TerminalApp {
   private cursorShapeStack: CursorShapeStack = new CursorShapeStack();
   private ptyHandlerHandle: PtyHandlerHandle | null = null;
   private _tabActive = true;
+  /** Cooldown timestamp (Date.now() ms) for `tab-active mismatch` warning. */
+  private _tabActiveLogAt = 0;
+  /**
+   * Strict tab-active check for input handlers. Returns true only when both
+   * the explicit `_tabActive` flag (set by the tab:activated event) AND the
+   * DOM `display` style agree the tab is visible. Logs when they disagree so
+   * the wrong-tab-receives-input regression observed in tmp/crash-recovery.md
+   * can be diagnosed if it recurs.
+   */
+  private isThisTabActive(): boolean {
+    const visible = this.container.style.display !== "none";
+    const flag = this._tabActive;
+    if (visible !== flag) {
+      // Sampled log: emit at most every ~5s per tab to avoid log spam from
+      // input-handler call sites firing per keystroke.
+      const now = Date.now();
+      if (now - this._tabActiveLogAt > 5_000) {
+        this._tabActiveLogAt = now;
+        console.warn(
+          `[WARN][FRONTEND] tab-active mismatch: _tabActive=${flag} display=${visible ? "visible" : "none"} containerId=${this.container.id || "(unset)"}`,
+        );
+      }
+    }
+    return flag && visible;
+  }
 
   /**
    * Creates a new TerminalApp instance
@@ -294,7 +319,7 @@ export class TerminalApp {
       getState: () => this.state!,
       charSize: this.charSize,
       // Check if this tab's container is visible (for multi-tab support)
-      isActiveTab: () => this.container.style.display !== "none",
+      isActiveTab: () => this.isThisTabActive(),
       debugId: imeDebugId,
       onExitScrollback: () => this.exitScrollback(),
     });
@@ -310,7 +335,7 @@ export class TerminalApp {
         this.imeHandler?.isEditContextActive() ?? false,
       isImeInputFocused: () => this.imeHandler?.isImeInputFocused() ?? false,
       // Check if this tab's container is visible (for multi-tab support)
-      isActiveTab: () => this.container.style.display !== "none",
+      isActiveTab: () => this.isThisTabActive(),
       onToggleSearch: () => this.toggleSearch(),
       onRestoreFocus: () => this.imeHandler?.focus(),
       onExitScrollback: () => this.exitScrollback(),
@@ -427,7 +452,7 @@ export class TerminalApp {
 
     this.fileDropHandler = new FileDropHandler({
       container: this.container,
-      isActiveTab: () => this.container.style.display !== "none",
+      isActiveTab: () => this.isThisTabActive(),
       getSshConnectionName: () => this.options.sshConnectionName || "",
       onSshDrop: (files: FileDropInfo[]) => {
         const destination = extractRemotePath(this.state?._workingDirectory || "");

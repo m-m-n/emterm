@@ -10,6 +10,7 @@
 //! - `session`: Individual PTY session management
 //! - `manager`: Multi-session PTY manager
 
+pub mod backpressure;
 pub mod device_query_scanner;
 pub mod graceful_shutdown;
 pub mod kitty_scanner;
@@ -19,6 +20,7 @@ pub mod shell;
 pub mod writer;
 
 // Re-export commonly used types
+pub use backpressure::{BackpressureRegistry, SessionBackpressure};
 pub use manager::PtyManager;
 pub use session::PtySession;
 pub use shell::detect_default_shell;
