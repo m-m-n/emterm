@@ -99,6 +99,26 @@ pub fn pty_write(
 }
 
 #[cfg(feature = "gui")]
+/// Acknowledges that the frontend has consumed `bytes` bytes of PTY output for
+/// the given session. Decrements the per-session backpressure counter so the
+/// reader thread knows it can forward more data without flooding.
+///
+/// This is the only signal the Rust side has that the frontend is keeping up,
+/// because the Tauri Channel used for PTY data is one-way. When the frontend
+/// stalls (e.g. WebKitGTK background tab freezes rAF), unacked bytes accumulate
+/// and the reader pauses at the high water mark.
+#[tauri::command]
+pub fn pty_ack(
+    state: State<'_, PtyManager>,
+    session_id: String,
+    bytes: usize,
+) {
+    if let Some(bp) = state.backpressure().get(&session_id) {
+        bp.ack(bytes);
+    }
+}
+
+#[cfg(feature = "gui")]
 /// Resizes a PTY session.
 ///
 /// # Arguments

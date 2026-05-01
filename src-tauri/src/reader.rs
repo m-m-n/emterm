@@ -8,6 +8,11 @@ use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
 
+/// Heartbeat emit interval. Sent to the frontend even when rAF is throttled
+/// (e.g., WebKitGTK background tab) so the frontend can drain pending data
+/// via setTimeout instead of waiting for a frame.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
+
 /// Spawns a dedicated thread to read output from a PTY session.
 ///
 /// This thread continuously reads from the PTY and sends raw bytes via Channel:
@@ -91,6 +96,12 @@ pub fn spawn_reader_thread(
         drop(session_guard);
 
         log::trace!("PTY reader: starting read loop for session {}", session_id);
+
+        // Backpressure: ensure a registry entry exists. `create_session_atomic`
+        // already registers, but legacy `create_session` callers won't, so
+        // register defensively here.
+        let backpressure = manager.backpressure().register(session_id.clone());
+        let mut last_heartbeat = Instant::now();
 
         // Use a helper thread for blocking read + mpsc channel so that
         // the main reader loop can periodically check process_exited.
@@ -202,6 +213,24 @@ pub fn spawn_reader_thread(
                         }
                     }
                     let len = batch.len();
+                    // Backpressure: if the frontend has not acked enough bytes,
+                    // wait for it to drain before forwarding more. This propagates
+                    // backpressure through the helper sync_channel(256) → PTY pipe
+                    // buffer → shell process write.
+                    if backpressure.over_high_water() {
+                        let in_flight_before = backpressure.in_flight();
+                        let waited = backpressure.wait_for_drain();
+                        if waited >= Duration::from_millis(100) {
+                            log::warn!(
+                                "PTY reader: backpressure stalled session {} for {}ms (in_flight before={} after={} bytes)",
+                                session_id,
+                                waited.as_millis(),
+                                in_flight_before,
+                                backpressure.in_flight()
+                            );
+                        }
+                    }
+                    backpressure.add_sent(len);
                     if let Err(e) = channel.send(InvokeResponseBody::Raw(batch)) {
                         log::warn!(
                             "PTY reader: channel.send failed for session {} ({} bytes lost): {}",
@@ -220,6 +249,20 @@ pub fn spawn_reader_thread(
                             session_id
                         );
                         break;
+                    }
+                    // Heartbeat: emit a lightweight event when no PTY data has
+                    // arrived recently. The frontend listens for `pty_heartbeat`
+                    // via setTimeout-driven scheduling so it can drain pending
+                    // data even if `requestAnimationFrame` is throttled by the
+                    // host WebView (e.g. background tab in WebKitGTK).
+                    if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+                        last_heartbeat = Instant::now();
+                        let _ = app.emit(
+                            "pty_heartbeat",
+                            PtyHeartbeatPayload {
+                                session_id: session_id.clone(),
+                            },
+                        );
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
