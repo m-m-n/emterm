@@ -1030,7 +1030,10 @@ export class TerminalState implements TerminalStateAccessor {
       this.semanticZoneTracker.clear();
       this.foldManager.unfoldAll();
 
-      console.warn("[WARN][FRONTEND] WASM core recreated after crash — terminal content lost");
+      // Neutral wording: this method is shared between auto-recovery from a
+      // real crash and the manual `forceReinitWasm` path. The caller logs the
+      // reason; here we just record the side-effect.
+      console.warn("[WARN][FRONTEND] WASM core recreated — grid contents cleared");
       return true;
     } catch (e) {
       console.error("[ERROR][FRONTEND] Failed to recreate WASM core:", e);

@@ -419,7 +419,11 @@ pub(super) async fn handle_request_pane_snapshot(
     };
 
     let snapshot = build_shadow_parser_snapshot(&shadow_parser);
-    log::debug!(
+    // Promoted from debug -> warn so release builds (which drop debug/info)
+    // capture the snapshot-reply path during recovery investigations. The
+    // call is rare (only on WASM recovery / window-switch reattach), so the
+    // log volume is bounded.
+    log::warn!(
         "RequestPaneSnapshot: pane {} -> {}B",
         pane_id,
         snapshot.len()

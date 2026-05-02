@@ -698,6 +698,10 @@ where
             }
         }
         MessageType::RequestPaneSnapshot => {
+            // WARN-level entry log so release builds capture whether the
+            // request even reached the daemon. The reply is logged inside
+            // handle_request_pane_snapshot once the snapshot is built.
+            log::warn!("RequestPaneSnapshot: received for pane {}", msg.pane_id);
             handle_request_pane_snapshot(&msg, session_manager, pane_output_tx).await?;
         }
         MessageType::PtyInput => {

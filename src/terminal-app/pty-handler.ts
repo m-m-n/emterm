@@ -272,6 +272,11 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let lastHealthCheckWall = 0;       // When healthCheck last actually ran (Date.now)
   let healthCheckCount = 0;          // Total health-check invocations
   let lastProcessingEndTime = 0;     // When processPendingData last finished
+  // Per-stall flag for `heartbeat-wake` warning. Set on the first heartbeat
+  // that observes a stall (sinceLastProcess > 1s) and cleared whenever
+  // processPendingData completes, so we get one warning per stall episode
+  // instead of one every 500ms while the queue is held back.
+  let heartbeatWakeWarnedDuringStall = false;
 
   // Event loop health probe: measures setTimeout(0) latency to detect main thread blockage
   const probeEventLoopHealth = () => {
@@ -330,6 +335,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   const tryRecoverFromWasmCrash = (
     error: unknown,
     onComplete?: (success: boolean) => void,
+    isManual = false,
   ): boolean => {
     // Detect WASM crash or uninitialized state:
     // - RuntimeError: memory corruption (e.g., after long idle)
@@ -375,8 +381,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     // (post-resume render / focus probe).
     const vs = typeof document !== "undefined" ? document.visibilityState : "n/a";
     const hidden = typeof document !== "undefined" ? document.hidden : "n/a";
+    const reason = isManual ? "manual reinitialization" : "WASM crash detected";
     console.warn(
-      `[WARN][FRONTEND] WASM crash detected — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS}) | visibilityState=${vs} hidden=${hidden}`,
+      `[WARN][FRONTEND] ${reason} — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS}) | visibilityState=${vs} hidden=${hidden}`,
     );
 
     // Stop cursor blink during recovery to prevent WASM access on stale/freed state
@@ -458,7 +465,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     return true;
   };
 
-  const processPendingData = () => {
+  // `trigger` lets us tell which scheduling path actually drained pendingChunks
+  // — rAF (normal frame) vs setTimeout fallback (rAF throttled by WebView) vs
+  // direct call (processNow / leftover continuation). Helps validate whether
+  // the rAF-independent recovery path is engaging when the host throttles rAF.
+  type ProcessTrigger = "raf" | "fallback" | "manual";
+  const processPendingData = (trigger: ProcessTrigger = "manual") => {
     const processingStart = performance.now();
     rafScheduled = false;
     // Invalidate any callbacks that the browser already queued from the
@@ -669,6 +681,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         longProcessingCount++;
         console.warn(
           `[WARN][FRONTEND] slow-processPendingData: ${processingTime.toFixed(1)}ms` +
+          ` | trigger=${trigger}` +
           ` | inputBytes=${queuedBytes}` +
           ` | chunks=${queuedChunks}` +
           ` | hasLeftover=${leftoverData !== null}` +
@@ -677,6 +690,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       }
 
       lastProcessingEndTime = performance.now();
+      // Stall recovered: re-arm the heartbeat-wake warning so the next
+      // stall (if any) gets logged once.
+      heartbeatWakeWarnedDuringStall = false;
 
       // Backpressure: tell Rust how many bytes the frontend just consumed so
       // it can resume reading from the PTY. The "consumed" count is bytes we
@@ -731,18 +747,27 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     rafHandle = requestAnimationFrame(() => {
       rafHandle = null;
       if (myToken !== scheduleToken) return;
-      processPendingData();
+      processPendingData("raf");
     });
     rafFallbackTimer = setTimeout(() => {
       rafFallbackTimer = null;
       if (myToken !== scheduleToken) return;
       rafFallbackFireCount++;
       if (rafFallbackFireCount === 1 || rafFallbackFireCount % 20 === 0) {
+        // When the fallback is winning the race against rAF, the WebView is
+        // throttling animations. Include the queue depth and time since last
+        // successful drain so we can correlate with backend backpressure.
+        const sinceLastProcess = lastProcessingEndTime > 0
+          ? performance.now() - lastProcessingEndTime
+          : -1;
         console.warn(
-          `[WARN][FRONTEND] rAF fallback fired (count=${rafFallbackFireCount}) — rAF likely throttled by WebView`,
+          `[WARN][FRONTEND] rAF fallback fired (count=${rafFallbackFireCount}) — rAF likely throttled by WebView` +
+          ` | pendingChunks=${pendingChunks.length}` +
+          ` | leftoverBytes=${leftoverData?.length ?? 0}` +
+          ` | sinceLastProcessMs=${sinceLastProcess.toFixed(0)}`,
         );
       }
-      processPendingData();
+      processPendingData("fallback");
     }, RAF_FALLBACK_MS);
   };
 
@@ -807,6 +832,25 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           return;
         }
         if (pendingChunks.length === 0 && !leftoverData) return;
+        // A heartbeat arriving while data is still queued indicates the rAF
+        // pipeline has been quiet long enough for the backend's idle pulse
+        // to fire. Log once per stall window so we can confirm the
+        // heartbeat-driven drain path actually wakes processPendingData.
+        // Throttle: emit at most one warning per stall, cleared when
+        // processPendingData completes (see `heartbeatWakeWarnedDuringStall`
+        // reset above). Without throttling, a sustained backlog produces a
+        // warning every 500ms which floods release logs.
+        if (!heartbeatWakeWarnedDuringStall && lastProcessingEndTime > 0) {
+          const sinceLastProcess = performance.now() - lastProcessingEndTime;
+          if (sinceLastProcess > 1000) {
+            console.warn(
+              `[WARN][FRONTEND] heartbeat-wake | pendingChunks=${pendingChunks.length}` +
+              ` | leftoverBytes=${leftoverData?.length ?? 0}` +
+              ` | sinceLastProcessMs=${sinceLastProcess.toFixed(0)}`,
+            );
+            heartbeatWakeWarnedDuringStall = true;
+          }
+        }
         scheduleProcessing();
       });
       if (heartbeatListenerDisposed) {
@@ -905,7 +949,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       const syntheticError = new WebAssembly.RuntimeError(
         "manual reinitialize requested",
       );
-      tryRecoverFromWasmCrash(syntheticError, onComplete);
+      tryRecoverFromWasmCrash(syntheticError, onComplete, true);
     },
     destroy: () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);

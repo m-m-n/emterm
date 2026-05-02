@@ -79,6 +79,17 @@ export interface MuxSessionContext {
    */
   countPostRecoveryPtyOutput?: (bytes: number) => void;
 
+  /**
+   * Pane id we're awaiting a `RequestPaneSnapshot` reply for after a WASM
+   * recovery. The PtyOutput callback uses this to log the first chunk that
+   * matches and clear the wait. `null` means no snapshot is pending.
+   */
+  getSnapshotWaitPaneId?: () => number | null;
+  /** Set/clear the snapshot-wait pane id. */
+  setSnapshotWaitPaneId?: (paneId: number | null) => void;
+  /** When the wait was set (performance.now()), used for elapsed-time log. */
+  getSnapshotWaitSetAt?: () => number;
+
   // Delegate methods that call into other mux modules via TerminalApp wrappers
   registerCoreCallbacks: (core: ReturnType<TerminalState["getActiveCore"]>) => void;
   handleMuxPaneCreated: (paneId: number) => void;
@@ -142,6 +153,25 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     const watchUntil = ctx.getPostRecoveryWatchUntil?.() ?? 0;
     if (watchUntil > 0 && Date.now() < watchUntil) {
       ctx.countPostRecoveryPtyOutput?.(data.length);
+    }
+    // TEMPORARY DIAGNOSTIC (remove once snapshot path is verified):
+    // If a RequestPaneSnapshot is in flight, log the first PtyOutput chunk
+    // that targets the matching pane so we can confirm the daemon's reply
+    // is reaching the frontend at all. This intentionally cannot tell the
+    // snapshot reply apart from any unrelated PTY output for that pane —
+    // the log message says "first PtyOutput after snapshot request" rather
+    // than "snapshot reply received" to avoid implying causation. Hot-path
+    // overhead is two getter calls per chunk; remove this block when the
+    // snapshot path is no longer under investigation.
+    const waitPaneId = ctx.getSnapshotWaitPaneId?.();
+    if (waitPaneId != null && waitPaneId === paneId) {
+      const setAt = ctx.getSnapshotWaitSetAt?.() ?? 0;
+      const elapsed = setAt > 0 ? performance.now() - setAt : -1;
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] first PtyOutput after snapshot request` +
+        ` | paneId=${paneId} bytes=${data.length} elapsedMs=${elapsed.toFixed(0)}`,
+      );
+      ctx.setSnapshotWaitPaneId?.(null);
     }
     // Single-pane mode: route to main renderer
     const activePaneId = ctx.getMuxPaneIds()[ctx.getActiveMuxWindowIndex()];
@@ -314,7 +344,6 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
     const c = ctx.getMuxClient();
     if (!c) { console.warn(`[DIAG-MUX] writeProxy: no muxClient`); return Promise.resolve(); }
     const activePaneId = ctx.getActiveMuxPaneId() ?? ctx.getMuxPaneIds()[ctx.getActiveMuxWindowIndex()] ?? 1;
-    console.warn(`[DIAG-MUX] writeProxy: sending ${data.length}B to pane=${activePaneId} (windowIndex=${ctx.getActiveMuxWindowIndex()}, paneIds=[${ctx.getMuxPaneIds()}])`);
     return c.sendInput(activePaneId, data);
   });
 

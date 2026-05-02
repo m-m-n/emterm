@@ -226,14 +226,17 @@ function diagTraceMuxRender(state: TerminalState, renderer: ITerminalRenderer, c
     requestAnimationFrame(() => {
       const cw2 = rend.canvas?.width ?? -1;
       const ch2 = rend.canvas?.height ?? -1;
-      const parentDisplay2 = parent ? getComputedStyle(parent).display : "n/a";
-      const parentVis2 = parent ? getComputedStyle(parent).visibility : "n/a";
-      console.warn(
-        `[DIAG-MUX-RENDER][${callsite}] next-rAF` +
-        ` | canvasPx=${cw2}x${ch2}` +
-        ` | parentDisplay=${parentDisplay2} parentVis=${parentVis2}` +
-        ` | canvasSizeChanged=${cw !== cw2 || ch !== ch2}`,
-      );
+      // Only log when canvas size actually changed between forceRender and the
+      // next rAF — the steady state (no resize) was the dominant noise source.
+      if (cw !== cw2 || ch !== ch2) {
+        const parentDisplay2 = parent ? getComputedStyle(parent).display : "n/a";
+        const parentVis2 = parent ? getComputedStyle(parent).visibility : "n/a";
+        console.warn(
+          `[DIAG-MUX-RENDER][${callsite}] next-rAF canvas-resized` +
+          ` | from=${cw}x${ch} to=${cw2}x${ch2}` +
+          ` | parentDisplay=${parentDisplay2} parentVis=${parentVis2}`,
+        );
+      }
     });
   } catch (err) {
     console.warn(`[DIAG-MUX-RENDER][${callsite}] diag error: ${err instanceof Error ? err.message : String(err)}`);
@@ -295,7 +298,7 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   ctx.setActiveMuxWindowIndex(newIdx);
 
   console.warn(
-    `[DIAG-MUX-ATTACH] push window newIdx=${newIdx} name="${initialName}" daemonId=${daemonWindowId} paneId=${paneId} reattach=${ctx.getMuxIsReattaching()} reattachWindows=${JSON.stringify(ctx.getMuxReattachWindows().map((w) => ({ id: w.id, name: w.name })))}`,
+    `[DIAG-MUX-ATTACH] push window newIdx=${newIdx} daemonId=${daemonWindowId} paneId=${paneId} reattach=${ctx.getMuxIsReattaching()}`,
   );
 
   muxLog.info(`Mux pane created: id=${paneId}, window=${newIdx}`);
@@ -513,12 +516,14 @@ export interface MuxReorderContext {
 /** Notify listeners of mux window state changes. */
 export function emitMuxStateChange(ctx: MuxWindowManagerContext): void {
   const muxWindows = ctx.getMuxWindows();
+  const activeIdx = ctx.getActiveMuxWindowIndex();
+  const activeId = muxWindows[activeIdx]?.id ?? -1;
   console.warn(
-    `[DIAG-MUX-STATE] emit windowCount=${muxWindows.length} active=${ctx.getActiveMuxWindowIndex()} names=${JSON.stringify(muxWindows.map((w) => w.name))} ids=${JSON.stringify(muxWindows.map((w) => w.id))}`,
+    `[DIAG-MUX-STATE] emit windowCount=${muxWindows.length} active=${activeIdx} activeId=${activeId}`,
   );
   ctx.onMuxStateChange?.({
     windowCount: muxWindows.length,
-    activeWindow: ctx.getActiveMuxWindowIndex(),
+    activeWindow: activeIdx,
     windowNames: muxWindows.map((w) => w.name),
   });
 }
