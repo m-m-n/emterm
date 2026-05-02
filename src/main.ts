@@ -39,6 +39,22 @@ async function main(): Promise<void> {
   // Initialize console bridge to forward logs to stdout/stderr
   initConsoleBridge();
 
+  // Hold a perpetual Web Lock so WebKitGTK doesn't aggressively suspend
+  // rAF/setTimeout when the window loses focus. WebKitGTK has no native
+  // background-throttling toggle (Tauri issue #5250 marks Linux as
+  // unsupported), and a held lock is the documented userland workaround.
+  // The lock callback returns a never-resolving Promise so the hold lasts
+  // for the page lifetime.
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    navigator.locks.request(
+      "emterm-keepalive",
+      { mode: "exclusive" },
+      () => new Promise<void>(() => {}),
+    ).catch((err) => {
+      console.warn("[WARN][FRONTEND] Web Lock keepalive request failed:", err);
+    });
+  }
+
   // Suppress browser default context menu globally.
   // Custom context menus are shown by specific handlers on terminal, tab, and tab bar areas.
   document.addEventListener("contextmenu", (e) => e.preventDefault());
