@@ -146,6 +146,11 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
 
   // Set up PTY output handler -- route to correct pane
   client.setOnPtyOutput((paneId: number, data: Uint8Array) => {
+    // DIAG-MUX-OUTPUT: time the entire callback so we can confirm whether
+    // the mux tab's onData→APC→PtyOutput path is the source of long blocks
+    // that delay ackBytes. Logged only when slow (>30ms) to avoid log noise
+    // on normal traffic.
+    const ptyOutCbStart = performance.now();
     // Observability: during the post-recovery watch window, accumulate
     // chunk/byte counters so a single summary log is emitted when the
     // window closes. Avoids per-chunk logging on the hot path under
@@ -193,6 +198,17 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
       // buffer switches (alternate screen toggle) and cursor_just_shown interrupts.
       const savedState = ctx.getMuxPaneGrids().get(paneId);
       if (savedState) {
+        // DIAG-MUX-INACTIVE: inactive pane processing is fully synchronous
+        // and has no frame budget. Streaming monitors (glances, nethogs,
+        // asterisk -rvvv) sitting in inactive panes can therefore hold the
+        // mux tab's onData callback for hundreds of ms per chunk, delaying
+        // ackBytes and triggering backend backpressure stalls. Track elapsed
+        // time and total bytes so we can confirm whether inactive-pane
+        // processing is the bottleneck.
+        const inactiveStart = performance.now();
+        const initialBytes = data.length;
+        const INACTIVE_HARD_TIMEOUT_MS = 100;
+        let timedOut = false;
         let remaining = data;
         let iteration = 0;
         while (remaining.length > 0) {
@@ -241,13 +257,57 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
             console.warn(`[DIAG-MODE] inactive pane=${paneId} consumed=0, breaking (remaining=${remaining.length})`);
             break;
           }
+          // Hard timeout to surface inactive-pane processing as the cause of
+          // the mux tab's onData callback hanging. Break out and log so the
+          // remaining bytes (currently dropped silently here) are visible —
+          // a real fix needs a per-pane deferred queue, but this at least
+          // confirms the bottleneck.
+          if (performance.now() - inactiveStart > INACTIVE_HARD_TIMEOUT_MS) {
+            timedOut = true;
+            console.warn(
+              `[WARN][FRONTEND] [DIAG-MUX-INACTIVE] hard timeout pane=${paneId}` +
+              ` | elapsedMs=${(performance.now() - inactiveStart).toFixed(0)}` +
+              ` | processedBytes=${initialBytes - remaining.length}` +
+              ` | remainingBytesDropped=${remaining.length}` +
+              ` | iterations=${iteration}` +
+              ` | useAlt=${savedState.useAlternate}`,
+            );
+            break;
+          }
         }
-        if (iteration > 1) {
+        const inactiveElapsed = performance.now() - inactiveStart;
+        if (!timedOut && inactiveElapsed > 30) {
+          // Slow inactive-pane processing — main signal for the bottleneck
+          // hypothesis (mux tab onData blocked > 30ms => ackBytes delayed).
+          console.warn(
+            `[WARN][FRONTEND] [DIAG-MUX-INACTIVE] slow pane=${paneId}` +
+            ` | elapsedMs=${inactiveElapsed.toFixed(1)}` +
+            ` | bytes=${initialBytes}` +
+            ` | iterations=${iteration}` +
+            ` | useAlt=${savedState.useAlternate}`,
+          );
+        }
+        if (iteration > 1 && inactiveElapsed <= 30) {
           console.warn(`[DIAG-MODE] inactive pane=${paneId} multi-pass: ${iteration} iterations for ${data.length} bytes`);
         }
       } else {
         console.warn(`[DIAG-MODE] inactive pane=${paneId} NO savedState — data dropped (${data.length} bytes)`);
       }
+    }
+    // DIAG-MUX-OUTPUT: callback total time. Threshold higher than the
+    // inactive-pane-only log so we catch cases where the active-pane
+    // injectData (which schedules processPendingData asynchronously) is
+    // not the cost — useful for confirming inactive-pane work dominates.
+    const ptyOutCbElapsed = performance.now() - ptyOutCbStart;
+    if (ptyOutCbElapsed > 50) {
+      const activePaneIdAtEnd = ctx.getMuxPaneIds()[ctx.getActiveMuxWindowIndex()];
+      const wasActive = paneId === activePaneIdAtEnd;
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-MUX-OUTPUT] slow callback` +
+        ` | paneId=${paneId} active=${wasActive}` +
+        ` | bytes=${data.length}` +
+        ` | elapsedMs=${ptyOutCbElapsed.toFixed(1)}`,
+      );
     }
   });
 
