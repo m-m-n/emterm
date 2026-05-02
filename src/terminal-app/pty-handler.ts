@@ -894,6 +894,28 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         } catch (error) {
           console.warn("[WARN][FRONTEND] focus health probe failed — invoking WASM recovery");
           tryRecoverFromWasmCrash(error);
+          return;
+        }
+        // WebKitGTK suspends rAF and setTimeout after focus loss for several
+        // minutes (visibilityState stays "visible" but timers freeze). Any
+        // schedule made before focus loss is stuck with rafScheduled=true,
+        // so a plain scheduleProcessing() would early-return. Force a
+        // re-schedule so the queued PTY data gets drained immediately on
+        // focus return — without this the user sees a frozen screen until
+        // the next PTY chunk arrives or they toggle the tab.
+        if (pendingChunks.length > 0 || leftoverData !== null) {
+          const sinceLastProcess = lastProcessingEndTime > 0
+            ? performance.now() - lastProcessingEndTime
+            : -1;
+          console.warn(
+            `[WARN][FRONTEND] [DIAG-IDLE] focus drain triggered` +
+            ` | pendingChunks=${pendingChunks.length}` +
+            ` | leftoverBytes=${leftoverData?.length ?? 0}` +
+            ` | sinceLastProcessMs=${sinceLastProcess.toFixed(0)}` +
+            ` | rafScheduled=${rafScheduled}`,
+          );
+          rafScheduled = false;
+          scheduleProcessing();
         }
       });
       if (focusListenerDisposed) {
