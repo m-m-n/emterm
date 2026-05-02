@@ -723,8 +723,9 @@ export class TabBarUI {
     }
 
     if (groupCreated || previousCount !== windows.length) {
+      const activeIdx = windows.findIndex((w) => w.active);
       console.warn(
-        `[DIAG-MUX-RENDER-TABS] tabId=${tabId} windows=${JSON.stringify(windows.map((w) => ({ name: w.name, active: w.active })))}`,
+        `[DIAG-MUX-RENDER-TABS] tabId=${tabId} count=${windows.length} active=${activeIdx}`,
       );
     }
   }

@@ -361,7 +361,6 @@ export class KeyboardHandler {
       // Auto-scroll to bottom when user types during scrollback
       this.onExitScrollback?.();
 
-      console.warn(`[DIAG-KEY][${this.debugId}] sent: key=${event.key} bytes=${bytes.length}`);
       // Fire-and-forget: don't await to avoid blocking key repeat
       // In mux mode, PtyClient's writeProxy routes input to daemon automatically.
       this.ptyClient.write(bytes).catch((error) => {

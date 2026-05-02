@@ -108,6 +108,15 @@ export class TerminalApp {
   private postRecoveryPtyOutputChunks = 0;
   /** PtyOutput bytes seen during the post-recovery watch window. */
   private postRecoveryPtyOutputBytes = 0;
+  /**
+   * Pane id we're awaiting a `RequestPaneSnapshot` reply for after a WASM
+   * recovery in mux mode. The PtyOutput callback in mux-session.ts logs the
+   * arriving chunk once and clears this so we can confirm the snapshot
+   * reply path is alive (or missing).
+   */
+  private snapshotWaitPaneId: number | null = null;
+  /** When `snapshotWaitPaneId` was set (performance.now()), for elapsed-time logging. */
+  private snapshotWaitSetAt = 0;
   private muxLastActiveIndex = 0;
 
   /** Callback to update tab UI when mux window state changes */
@@ -824,6 +833,12 @@ export class TerminalApp {
         self.postRecoveryPtyOutputChunks++;
         self.postRecoveryPtyOutputBytes += bytes;
       },
+      getSnapshotWaitPaneId: () => self.snapshotWaitPaneId,
+      setSnapshotWaitPaneId: (paneId: number | null) => {
+        self.snapshotWaitPaneId = paneId;
+        self.snapshotWaitSetAt = paneId == null ? 0 : performance.now();
+      },
+      getSnapshotWaitSetAt: () => self.snapshotWaitSetAt,
     };
   }
 
@@ -872,14 +887,16 @@ export class TerminalApp {
 
   /** Switch to a specific mux window by index (called from tab bar UI). */
   public switchToMuxWindow(windowIndex: number): void {
-    console.warn(`[DIAG-MUX] switchToMuxWindow called: windowIndex=${windowIndex} inMuxMode=${this.inMuxMode} muxWindows.length=${this.muxWindows.length} activeMuxWindowIndex=${this.activeMuxWindowIndex}`);
-    if (!this.inMuxMode) { console.warn(`[DIAG-MUX] switchToMuxWindow: BLOCKED — not in mux mode`); return; }
-    if (windowIndex < 0 || windowIndex >= this.muxWindows.length) { console.warn(`[DIAG-MUX] switchToMuxWindow: BLOCKED — index out of range`); return; }
-    if (windowIndex === this.activeMuxWindowIndex) { console.warn(`[DIAG-MUX] switchToMuxWindow: BLOCKED — already active`); return; }
+    if (!this.inMuxMode) { console.warn(`[DIAG-MUX] switchToMuxWindow blocked: not in mux mode (idx=${windowIndex})`); return; }
+    if (windowIndex < 0 || windowIndex >= this.muxWindows.length) {
+      console.warn(`[DIAG-MUX] switchToMuxWindow blocked: idx=${windowIndex} out of range (len=${this.muxWindows.length})`);
+      return;
+    }
+    if (windowIndex === this.activeMuxWindowIndex) return;
 
     const previousIndex = this.activeMuxWindowIndex;
     this.activeMuxWindowIndex = windowIndex;
-    console.warn(`[DIAG-MUX] switchToMuxWindow: switching ${previousIndex} → ${windowIndex}, paneIds=[${this.muxPaneIds}]`);
+    console.warn(`[DIAG-MUX] switchToMuxWindow ${previousIndex}→${windowIndex}`);
     this.switchMuxWindow(previousIndex);
 
     // Restore focus after mux window switch (mouse clicks on mux tabs
@@ -1021,6 +1038,17 @@ export class TerminalApp {
     console.warn(
       `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered sending RequestPaneSnapshot | paneId=${paneId}`,
     );
+    // Arm the snapshot-reply observer so the next PtyOutput chunk for this
+    // pane gets logged once. Cleared in mux-session.ts on first match. Use
+    // the setter (rather than direct field write) so any future invariants
+    // added to setSnapshotWaitPaneId apply here too.
+    if (this.snapshotWaitPaneId != null) {
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] previous snapshot wait abandoned | prevPaneId=${this.snapshotWaitPaneId} newPaneId=${paneId} elapsedMs=${(performance.now() - this.snapshotWaitSetAt).toFixed(0)}`,
+      );
+    }
+    this.snapshotWaitPaneId = paneId;
+    this.snapshotWaitSetAt = performance.now();
     this.muxClient.sendRequestPaneSnapshot(paneId).then(() => {
       console.warn(
         `[WARN][FRONTEND] [DIAG-RECOVERY] RequestPaneSnapshot sent | paneId=${paneId}`,
@@ -1044,6 +1072,13 @@ export class TerminalApp {
           err instanceof Error ? err.message : String(err)
         }`,
       );
+      // Disarm the wait observer on send failure so a stray PtyOutput chunk
+      // for this pane doesn't get falsely attributed to a snapshot reply
+      // that will never arrive.
+      if (this.snapshotWaitPaneId === paneId) {
+        this.snapshotWaitPaneId = null;
+        this.snapshotWaitSetAt = 0;
+      }
     });
   }
 
