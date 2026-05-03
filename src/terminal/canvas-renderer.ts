@@ -235,6 +235,23 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 *  the freeze hides itself. A per-call counter guarantees uniqueness. */
 	private _probeSeq: number = 0;
 
+	/** Context-reset bookkeeping for the mux race detector. Mux switch (or any
+	 *  caller that swaps the active TerminalCore beneath the renderer) calls
+	 *  notifyContextReset(label, expectedRef). Subsequent render()/forceRender()
+	 *  within `_raceWindowMs` compare state.getActiveCore().__wbg_ptr to
+	 *  expectedRef; mismatch warns once per reset event so we can tell whether a
+	 *  draw landed on the wrong canvas/core. */
+	private _lastCtxReset: { at: number; label: string; expectedRef: number; activePaneId: number } | null = null;
+	private _raceWarnedForReset: number = -1;
+	private _raceWindowMs: number = 500;
+
+	/** rAF interval tracking for heartbeat. _maxRafGapMs is the largest gap
+	 *  observed since the last heartbeat reset; _lastRafAt is the previous
+	 *  rAF callback timestamp. Updated on every render() entry. The heartbeat
+	 *  consumer reads and resets via getAndResetMaxRafGap(). */
+	private _maxRafGapMs: number = 0;
+	private _lastRafAt: number = 0;
+
 	/** Current scroll offset (number of lines scrolled back from bottom). */
 	private scrollOffset: number = 0;
 
@@ -506,6 +523,64 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.wasmRecoveryCallback = cb;
 	}
 
+	/** Mux switch (or any active-core swap) calls this with the new core's
+	 *  __wbg_ptr so the race detector can flag any subsequent render that
+	 *  lands on a different core within the race window. label is "muxSwitch"
+	 *  / "muxCreate" / "muxRestore" / etc. for log triage. */
+	notifyContextReset(label: string, expectedRef: number, activePaneId: number): void {
+		this._lastCtxReset = {
+			at: performance.now(),
+			label,
+			expectedRef,
+			activePaneId,
+		};
+		this._raceWarnedForReset = -1;
+	}
+
+	/** Returns the largest rAF interval observed since the previous call and
+	 *  resets both the max counter and the per-frame anchor. Heartbeat reads
+	 *  this every 5 s — a value much greater than 16 ms is a sign the WebKit
+	 *  compositor / main thread is stalling. Resetting `_lastRafAt = 0`
+	 *  prevents the next render after a long idle period from producing a
+	 *  spurious huge gap (the renderer is event-driven; long gaps during
+	 *  user idle are not stalls). */
+	getAndResetMaxRafGap(): number {
+		const v = this._maxRafGapMs;
+		this._maxRafGapMs = 0;
+		this._lastRafAt = 0;
+		return v;
+	}
+
+	/** Compare the active core to the one notified at last context reset.
+	 *  Warns at most once per reset event (debounced via _raceWarnedForReset)
+	 *  so a freeze that pegs render() at 60 fps does not flood the log. kind
+	 *  identifies the call site for triage. */
+	private checkRaceWithLastReset(state: TerminalState, kind: string): void {
+		const reset = this._lastCtxReset;
+		if (!reset) return;
+		const now = performance.now();
+		const sinceMs = now - reset.at;
+		if (sinceMs > this._raceWindowMs) return;
+		if (this._raceWarnedForReset === reset.at) return;
+		try {
+			const core = state.getActiveCore() as unknown as { __wbg_ptr?: number };
+			const ref = core.__wbg_ptr ?? 0;
+			if (ref !== reset.expectedRef) {
+				console.warn(
+					`[DIAG-MUX-RACE] ${kind} on stale core` +
+					` | sinceReset=${sinceMs.toFixed(0)}ms` +
+					` | label=${reset.label}` +
+					` | expectedRef=${reset.expectedRef} gotRef=${ref}` +
+					` | resetPaneId=${reset.activePaneId}`,
+				);
+				this._raceWarnedForReset = reset.at;
+			}
+		} catch (err) {
+			console.warn(`[DIAG-MUX-RACE] checkRace threw: ${err instanceof Error ? err.message : String(err)}`);
+			this._raceWarnedForReset = reset.at;
+		}
+	}
+
 	/**
 	 * Schedule a render of the terminal state.
 	 */
@@ -552,6 +627,21 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (!this.pendingState || !this.pendingState.isReady()) {
 			return;
 		}
+
+		// Track rAF interval for the heartbeat: a gap >> 16 ms during an
+		// active rendering sequence means the main thread or compositor was
+		// blocked. Heartbeat reads max gap every 5 s and resets _lastRafAt
+		// so the next idle→active transition does not record a huge gap as
+		// a spurious stall. Cap at 2 s defensively in case some other path
+		// resets state between renders without going through the heartbeat.
+		const renderEntryAt = performance.now();
+		if (this._lastRafAt > 0) {
+			const gap = Math.min(renderEntryAt - this._lastRafAt, 2000);
+			if (gap > this._maxRafGapMs) this._maxRafGapMs = gap;
+		}
+		this._lastRafAt = renderEntryAt;
+
+		this.checkRaceWithLastReset(this.pendingState, "diff-render");
 
 		this.renderTimer.start();
 
@@ -859,6 +949,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	forceRender(state: TerminalState): void {
 		this.pendingState = state;
+		this.checkRaceWithLastReset(state, "forceRender");
 		// Diagnostic counters reset at the top so every forceRender call
 		// produces a fresh snapshot. Fields are mutated below in the bg/text
 		// passes and read by mux-window-manager.ts on freeze investigation.

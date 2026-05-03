@@ -176,6 +176,20 @@ impl BackpressureRegistry {
         }
         entry
     }
+
+    /// Snapshot the current in-flight byte counts for every registered
+    /// session. Used by the reader-thread stalled diagnostic so a single
+    /// `backpressure stalled` warn line can show whether other sessions are
+    /// also backed up (Claude Code parallel-output scenario) or whether
+    /// only the reporting session is the offender. The returned vector is
+    /// unsorted; callers may sort by count if they want a top-N display.
+    pub fn snapshot_in_flight(&self) -> Vec<(SessionId, usize)> {
+        let guard = self.inner.read().expect("backpressure registry poisoned");
+        guard
+            .iter()
+            .map(|(id, bp)| (id.clone(), bp.in_flight()))
+            .collect()
+    }
 }
 
 #[cfg(test)]

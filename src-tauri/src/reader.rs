@@ -221,12 +221,40 @@ pub fn spawn_reader_thread(
                         let in_flight_before = backpressure.in_flight();
                         let waited = backpressure.wait_for_drain();
                         if waited >= Duration::from_millis(100) {
+                            // Snapshot every session's in_flight so the warn
+                            // line shows whether the parallel-Claude-Code
+                            // hypothesis (multiple panes simultaneously
+                            // backed up) holds at this moment, vs only the
+                            // reporting session being slow. Self is also in
+                            // the list — the caller can spot the entry by
+                            // session_id match.
+                            let snap = manager.backpressure().snapshot_in_flight();
+                            let total_sessions = snap.len();
+                            let total_in_flight: usize =
+                                snap.iter().map(|(_, n)| *n).sum();
+                            let mut others: Vec<(String, usize)> = snap
+                                .into_iter()
+                                .filter(|(id, _)| id != &session_id)
+                                .collect();
+                            others.sort_by(|a, b| b.1.cmp(&a.1));
+                            let others_str = others
+                                .iter()
+                                .take(8)
+                                .map(|(id, n)| {
+                                    let short: String = id.chars().take(8).collect();
+                                    format!("{}={}KB", short, n / 1024)
+                                })
+                                .collect::<Vec<_>>()
+                                .join(",");
                             log::warn!(
-                                "PTY reader: backpressure stalled session {} for {}ms (in_flight before={} after={} bytes)",
+                                "PTY reader: backpressure stalled session {} for {}ms (in_flight before={} after={} bytes) | total_sessions={} total_in_flight={}KB | others=[{}]",
                                 session_id,
                                 waited.as_millis(),
                                 in_flight_before,
-                                backpressure.in_flight()
+                                backpressure.in_flight(),
+                                total_sessions,
+                                total_in_flight / 1024,
+                                others_str,
                             );
                         }
                     }

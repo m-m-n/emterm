@@ -5,11 +5,16 @@
  * Must be called before any WASM-backed functions are used.
  */
 
-import init, { reset as wasmReset } from "../../../wasm/pkg/emterm_wasm.js";
+import init, { reset as wasmReset, type InitOutput } from "../../../wasm/pkg/emterm_wasm.js";
 
 let initialized = false;
 let initPromise: Promise<void> | null = null;
 let reinitPromise: Promise<void> | null = null;
+/** Captured InitOutput from the most recent successful init(). wasm-bindgen
+ *  exposes `memory: WebAssembly.Memory` only on this module-level object —
+ *  individual TerminalCore instances do NOT carry a `memory` field. The
+ *  diagnostic heartbeat reads heap size via getWasmMemoryBytes() below. */
+let wasmInitOutput: InitOutput | null = null;
 
 /**
  * Initialize the WASM module.
@@ -20,12 +25,20 @@ let reinitPromise: Promise<void> | null = null;
 export async function initWasm(): Promise<void> {
 	if (initialized) return;
 	if (initPromise) return initPromise;
-	initPromise = init().then(() => { initialized = true; });
+	initPromise = init().then((out) => { wasmInitOutput = out; initialized = true; });
 	try {
 		await initPromise;
 	} finally {
 		initPromise = null;
 	}
+}
+
+/** Current size of the WASM linear-memory ArrayBuffer in bytes, or -1 if WASM
+ *  has not been initialized. Used by the diagnostic heartbeat. WebAssembly
+ *  memory only ever grows, so a rising value across heartbeats indicates
+ *  either legitimate growth or a leak in the parser/grid. */
+export function getWasmMemoryBytes(): number {
+	return wasmInitOutput?.memory?.buffer.byteLength ?? -1;
 }
 
 /**
@@ -43,7 +56,7 @@ export async function reinitWasm(): Promise<void> {
 		// Destructive: clears the wasm-bindgen singleton and heap.
 		// If init() fails after this, WASM is left unusable (no rollback).
 		wasmReset();
-		await init();
+		wasmInitOutput = await init();
 		initialized = true;
 	})();
 	try {
