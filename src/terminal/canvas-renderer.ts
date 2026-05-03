@@ -210,7 +210,30 @@ export class CanvasRenderer implements ITerminalRenderer {
 		bgFillCount: number;
 		textPassRows: number;
 		cursorRendered: boolean;
+		probeR: number;
+		probeG: number;
+		probeB: number;
+		probeSxDev: number;
+		probeSyDev: number;
+		probeWDev: number;
+		probeHDev: number;
+		ctxFillStyle: string;
+		ctxFont: string;
+		ctxAlpha: number;
+		ctxComposite: string;
+		ctxTxA: number;
+		ctxTxD: number;
+		ctxTxE: number;
+		ctxTxF: number;
 	} | null = null;
+
+	/** Monotonic counter feeding the diagnostic probe RGB. Using performance.now()
+	 *  caused false-positive `match=true` because two forceRender calls within
+	 *  the same millisecond produced identical probe colors — when the
+	 *  freeze-symptom case (fillRect did not commit) leaves the previous probe
+	 *  pixel on the surface, the readback equals the new expected color and
+	 *  the freeze hides itself. A per-call counter guarantees uniqueness. */
+	private _probeSeq: number = 0;
 
 	/** Current scroll offset (number of lines scrolled back from bottom). */
 	private scrollOffset: number = 0;
@@ -845,6 +868,21 @@ export class CanvasRenderer implements ITerminalRenderer {
 			bgFillCount: 0,
 			textPassRows: 0,
 			cursorRendered: false,
+			probeR: 0,
+			probeG: 0,
+			probeB: 0,
+			probeSxDev: 0,
+			probeSyDev: 0,
+			probeWDev: 0,
+			probeHDev: 0,
+			ctxFillStyle: "",
+			ctxFont: "",
+			ctxAlpha: 1,
+			ctxComposite: "",
+			ctxTxA: 1,
+			ctxTxD: 1,
+			ctxTxE: 0,
+			ctxTxF: 0,
 		};
 		this._lastForceRenderDiag = diag;
 
@@ -960,6 +998,55 @@ export class CanvasRenderer implements ITerminalRenderer {
 			diag.cursorRendered = state.cursorVisible;
 		}
 
+		// Diagnostic probe: paint a small region in the bottom-right corner
+		// with a monotonically-changing color, then snapshot the 2D context
+		// state. mux-window-manager.ts reads the painted pixels back via an
+		// off-screen drawImage and compares to (probeR,probeG,probeB) to tell
+		// whether the Canvas2D API actually committed pixels (vs the WASM
+		// grid being correct but the canvas surface being stuck — the
+		// "screen frozen but keys go through" symptom).
+		//
+		// Visible side-effect: a small colored square flickers at the bottom-
+		// right corner. Acceptable for the freeze-investigation build.
+		//
+		// Coords are computed in device pixels and the transform is reset to
+		// identity around the paint, so the probe always lands on integer
+		// device-pixel boundaries even with fractional DPR. Otherwise a half-
+		// pixel left edge would be alpha-blended and the readback would never
+		// equal the expected RGB.
+		try {
+			this._probeSeq = (this._probeSeq + 1) & 0xffffff;
+			const seq = this._probeSeq;
+			const pr = seq & 0xff;
+			const pg = (seq >> 8) & 0xff;
+			const pb = (seq >> 16) & 0xff;
+			const wDev = Math.max(1, Math.floor(4 * this.dpr));
+			const hDev = wDev;
+			const sxDev = Math.max(0, this.canvas.width - wDev);
+			const syDev = Math.max(0, this.canvas.height - hDev);
+			const prevTx = this.ctx.getTransform();
+			this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+			this.ctx.fillStyle = `rgb(${pr},${pg},${pb})`;
+			this.ctx.fillRect(sxDev, syDev, wDev, hDev);
+			diag.ctxFillStyle = String(this.ctx.fillStyle);
+			diag.ctxFont = this.ctx.font;
+			diag.ctxAlpha = this.ctx.globalAlpha;
+			diag.ctxComposite = this.ctx.globalCompositeOperation;
+			diag.ctxTxA = prevTx.a;
+			diag.ctxTxD = prevTx.d;
+			diag.ctxTxE = prevTx.e;
+			diag.ctxTxF = prevTx.f;
+			this.ctx.setTransform(prevTx);
+			diag.probeR = pr;
+			diag.probeG = pg;
+			diag.probeB = pb;
+			diag.probeSxDev = sxDev;
+			diag.probeSyDev = syDev;
+			diag.probeWDev = wDev;
+			diag.probeHDev = hDev;
+		} catch {
+			// Probe paint must never block real rendering — swallow.
+		}
 	}
 
 	// ── Resize ────────────────────────────────────────────────

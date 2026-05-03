@@ -200,6 +200,58 @@ function reconcileActivePaneSize(state: TerminalState, cols: number, rows: numbe
  *  `willReadFrequently:true` so the readback path is fast) and getImageData
  *  from the copy. drawImage stays GPU→GPU and the production canvas's
  *  context attributes are untouched. */
+/** Stable per-canvas-instance ID assigned on first sighting. Used by mux
+ *  switch diagnostics to detect whether a switch swaps to a different canvas
+ *  element (legitimate — each pane owns its own) or stays on the same one
+ *  (the case where a canvas surface is stuck). Never grows beyond the number
+ *  of canvases the user creates in a session. */
+const _canvasIdMap: WeakMap<HTMLCanvasElement, number> = new WeakMap();
+let _canvasIdCounter = 0;
+function canvasIdOf(c: HTMLCanvasElement | undefined): number {
+  if (!c) return -1;
+  let id = _canvasIdMap.get(c);
+  if (id === undefined) {
+    _canvasIdCounter++;
+    id = _canvasIdCounter;
+    _canvasIdMap.set(c, id);
+  }
+  return id;
+}
+
+/** Read the 4x4 probe region painted by CanvasRenderer.forceRender at the
+ *  bottom-right corner of `canvas` and return the actual RGB of the
+ *  top-left probe pixel. Compared against the (probeR,probeG,probeB) the
+ *  renderer recorded into _lastForceRenderDiag — mismatch means the
+ *  Canvas2D fillRect committed in TS-land but the surface didn't update,
+ *  which is the smoking gun for "renderer thinks it drew but the GPU
+ *  texture is stuck". Like sampleCanvasHash, isolated via off-screen
+ *  drawImage so the production canvas isn't demoted to CPU. */
+function sampleProbePixel(
+  canvas: HTMLCanvasElement | undefined,
+  sxDev: number,
+  syDev: number,
+  wDev: number,
+  hDev: number,
+): { r: number; g: number; b: number; ok: boolean } {
+  if (!canvas) return { r: 0, g: 0, b: 0, ok: false };
+  try {
+    if (wDev <= 0 || hDev <= 0) return { r: 0, g: 0, b: 0, ok: false };
+    if (sxDev + wDev > canvas.width || syDev + hDev > canvas.height) {
+      return { r: 0, g: 0, b: 0, ok: false };
+    }
+    const off = document.createElement("canvas");
+    off.width = wDev;
+    off.height = hDev;
+    const offCtx = off.getContext("2d", { willReadFrequently: true });
+    if (!offCtx) return { r: 0, g: 0, b: 0, ok: false };
+    offCtx.drawImage(canvas, sxDev, syDev, wDev, hDev, 0, 0, wDev, hDev);
+    const data = offCtx.getImageData(0, 0, wDev, hDev).data;
+    return { r: data[0] ?? 0, g: data[1] ?? 0, b: data[2] ?? 0, ok: true };
+  } catch {
+    return { r: 0, g: 0, b: 0, ok: false };
+  }
+}
+
 function sampleCanvasHash(canvas: HTMLCanvasElement | undefined): string {
   if (!canvas) return "n/a";
   try {
@@ -288,11 +340,61 @@ function diagTraceMuxRender(state: TerminalState, renderer: ITerminalRenderer, c
         bgFillCount: number;
         textPassRows: number;
         cursorRendered: boolean;
+        probeR: number;
+        probeG: number;
+        probeB: number;
+        probeSxDev: number;
+        probeSyDev: number;
+        probeWDev: number;
+        probeHDev: number;
+        ctxFillStyle: string;
+        ctxFont: string;
+        ctxAlpha: number;
+        ctxComposite: string;
+        ctxTxA: number;
+        ctxTxD: number;
+        ctxTxE: number;
+        ctxTxF: number;
       };
     })._lastForceRenderDiag;
     const fdiagStr = fdiag
       ? `vl=${fdiag.visibleLines} empty=${fdiag.emptyRows} bgFill=${fdiag.bgFillCount} text=${fdiag.textPassRows} cur=${fdiag.cursorRendered}`
       : "n/a";
+    // Read back the probe pixel that CanvasRenderer painted at the bottom-
+    // right. match=true means Canvas2D actually committed pixels; false
+    // means the API succeeded in TS-land but the surface is stuck (the
+    // freeze fingerprint we're hunting). Coords come back from the renderer
+    // in device pixels, computed at probe-paint time, so a DPR drift
+    // between paint and readback cannot misalign the sample.
+    const probeRead = fdiag
+      ? sampleProbePixel(canvas0, fdiag.probeSxDev, fdiag.probeSyDev, fdiag.probeWDev, fdiag.probeHDev)
+      : null;
+    const probeStr = fdiag && probeRead
+      ? probeRead.ok
+        ? `wantRGB=${fdiag.probeR},${fdiag.probeG},${fdiag.probeB}` +
+          ` gotRGB=${probeRead.r},${probeRead.g},${probeRead.b}` +
+          ` match=${probeRead.r === fdiag.probeR && probeRead.g === fdiag.probeG && probeRead.b === fdiag.probeB}`
+        : `wantRGB=${fdiag.probeR},${fdiag.probeG},${fdiag.probeB} gotRGB=READ-FAIL match=n/a`
+      : "n/a";
+    // 2D context state. globalAlpha=0, transform a/d=0, or a destination-out
+    // composite mode would all silently nullify fillRect. fillStyle/font are
+    // captured at probe-paint time so they reflect the very last fillStyle
+    // the renderer set (the probe color), proving the value actually stuck
+    // on the context object.
+    const ctxStr = fdiag
+      ? `fill=${fdiag.ctxFillStyle.substring(0, 20)} font=${fdiag.ctxFont.substring(0, 24)}` +
+        ` alpha=${fdiag.ctxAlpha} comp=${fdiag.ctxComposite}` +
+        ` tx=${fdiag.ctxTxA.toFixed(2)},${fdiag.ctxTxD.toFixed(2)},${fdiag.ctxTxE.toFixed(1)},${fdiag.ctxTxF.toFixed(1)}`
+      : "n/a";
+    // CSS state on the canvas itself. opacity:0, visibility:hidden, a
+    // filter:blur, or mix-blend-mode:multiply with a black overlay would
+    // all keep the surface "alive" while making it invisible to the user.
+    const gcs = canvas0 ? getComputedStyle(canvas0) : null;
+    const cssStr = gcs
+      ? `op=${gcs.opacity} vis=${gcs.visibility} disp=${gcs.display}` +
+        ` fil=${gcs.filter} mix=${gcs.mixBlendMode} iso=${gcs.isolation}`
+      : "n/a";
+    const canvasId = canvasIdOf(canvas0);
     // FNV-1a hash of the entire viewport grid content (codepoint bytes,
     // width, fg/bg/flags). Logged alongside canvasHash so a human reading
     // the log can do the cross-comparison:
@@ -310,10 +412,14 @@ function diagTraceMuxRender(state: TerminalState, renderer: ITerminalRenderer, c
       ` | elapsed=${(t1 - t0).toFixed(2)}ms` +
       ` | dirtyAfter=${dirtyAfter}` +
       ` | canvasPx=${canvas0?.width}x${canvas0?.height}` +
+      ` | canvasId=${canvasId}` +
       ` | canvasHash=${postHash}` +
       ` | gridHash=${postGridHash}` +
       ` | dom=conn:${isConn},inDoc:${inDoc},rect:${visW}x${visH}` +
-      ` | fdiag=${fdiagStr}`,
+      ` | fdiag=${fdiagStr}` +
+      ` | probe=${probeStr}` +
+      ` | ctx=${ctxStr}` +
+      ` | css=${cssStr}`,
     );
     requestAnimationFrame(() => {
       const canvas1 = rend.canvas;
