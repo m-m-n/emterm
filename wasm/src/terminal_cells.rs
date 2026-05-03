@@ -182,6 +182,45 @@ impl TerminalCore {
             .unwrap_or_default()
     }
 
+    // ── Diagnostics ──────────────────────────────────────
+
+    /// Compute a stable FNV-1a 32-bit hash of all visible viewport cells
+    /// (codepoint bytes + width + fg + bg + flags). Frontend diagnostics
+    /// compare this against the canvas pixel hash to tell whether a freeze
+    /// is in the renderer (grid changed but pixels didn't) or upstream
+    /// (grid never changed). No allocation; cost is O(cols * rows) bytes
+    /// hashed and runs only on mux switches.
+    pub fn grid_content_hash(&self) -> u32 {
+        let mut h: u32 = 2166136261;
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let Some(idx) = self.viewport_cell_offset(col, row) else { continue };
+                let cell = &self.ring_cells[idx];
+                let len = if cell.char_len == 0xFF {
+                    16
+                } else {
+                    (cell.char_len as usize).min(16)
+                };
+                for b in &cell.char_data[..len] {
+                    h ^= *b as u32;
+                    h = h.wrapping_mul(16777619);
+                }
+                h ^= cell.width as u32;
+                h = h.wrapping_mul(16777619);
+                let fg = cell.fg.to_u32();
+                let bg = cell.bg.to_u32();
+                let flags = cell.flags as u32;
+                for w in [fg, bg, flags] {
+                    for shift in [0, 8, 16, 24] {
+                        h ^= (w >> shift) & 0xff;
+                        h = h.wrapping_mul(16777619);
+                    }
+                }
+            }
+        }
+        h
+    }
+
     // ── Batch cell read ──────────────────────────────────
 
     pub fn get_row_packed(&self, row: u16) -> Vec<u8> {

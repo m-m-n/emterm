@@ -268,12 +268,52 @@ function diagTraceMuxRender(state: TerminalState, renderer: ITerminalRenderer, c
     // compare canvas0 === rend.canvas later to gate the equality check.
     const canvas0 = rend.canvas;
     const postHash = sampleCanvasHash(canvas0);
+    // DOM connectivity probe: distinguishes "canvas in DOM, getting
+    // pixels" (real freeze) from "canvas detached or zero-sized" (DOM
+    // wiring problem). isConnected=false / rect 0x0 / parentDisplay=none
+    // would all indicate the user can't possibly be seeing this canvas.
+    const isConn = canvas0?.isConnected ?? false;
+    const inDoc = canvas0 ? document.contains(canvas0) : false;
+    const rect = canvas0?.getBoundingClientRect();
+    const visW = rect?.width.toFixed(0) ?? "n/a";
+    const visH = rect?.height.toFixed(0) ?? "n/a";
+    // Snapshot the renderer's internal forceRender counters (set on the
+    // CanvasRenderer's _lastForceRenderDiag private field). Tells us
+    // whether forceRender actually iterated visible lines and called
+    // fillRect / textRender, vs short-circuiting somehow.
+    const fdiag = (renderer as unknown as {
+      _lastForceRenderDiag?: {
+        visibleLines: number;
+        emptyRows: number;
+        bgFillCount: number;
+        textPassRows: number;
+        cursorRendered: boolean;
+      };
+    })._lastForceRenderDiag;
+    const fdiagStr = fdiag
+      ? `vl=${fdiag.visibleLines} empty=${fdiag.emptyRows} bgFill=${fdiag.bgFillCount} text=${fdiag.textPassRows} cur=${fdiag.cursorRendered}`
+      : "n/a";
+    // FNV-1a hash of the entire viewport grid content (codepoint bytes,
+    // width, fg/bg/flags). Logged alongside canvasHash so a human reading
+    // the log can do the cross-comparison:
+    //   - gridHash differs but canvasHash same → render path failed to commit
+    //   - gridHash same and canvasHash same     → no actual change to draw
+    //   - gridHash same but canvasHash differs  → renderer touched pixels
+    //     unrelated to grid (e.g. stale overlay)
+    // Limitation: overflow cells (codepoint stored in side table when
+    // char_len == 0xFF) only contribute their attributes to the hash, not
+    // the actual grapheme bytes — different overflow strings with the
+    // same width/colors hash identically. Acceptable for freeze triage.
+    const postGridHash = `0x${(activeCore.grid_content_hash() >>> 0).toString(16).padStart(8, "0")}`;
     console.warn(
       `[DIAG-MUX-RENDER][${callsite}] post-forceRender` +
       ` | elapsed=${(t1 - t0).toFixed(2)}ms` +
       ` | dirtyAfter=${dirtyAfter}` +
       ` | canvasPx=${canvas0?.width}x${canvas0?.height}` +
-      ` | canvasHash=${postHash}`,
+      ` | canvasHash=${postHash}` +
+      ` | gridHash=${postGridHash}` +
+      ` | dom=conn:${isConn},inDoc:${inDoc},rect:${visW}x${visH}` +
+      ` | fdiag=${fdiagStr}`,
     );
     requestAnimationFrame(() => {
       const canvas1 = rend.canvas;
