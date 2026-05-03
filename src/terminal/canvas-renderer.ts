@@ -197,6 +197,21 @@ export class CanvasRenderer implements ITerminalRenderer {
 	/** Glyph width cache: outer key = ctx.font string, inner key = character. */
 	private glyphWidthCache: Map<string, Map<string, number>> = new Map();
 
+	/**
+	 * Diagnostic-only: counters from the most recent forceRender call.
+	 * Surfaced via structural cast in mux-window-manager.ts so that we can
+	 * tell whether forceRender did real drawing work (>0 fills + text rows)
+	 * or short-circuited internally (the canvasHash-unchanged freeze
+	 * symptom). Reset at the top of each forceRender.
+	 */
+	private _lastForceRenderDiag: {
+		visibleLines: number;
+		emptyRows: number;
+		bgFillCount: number;
+		textPassRows: number;
+		cursorRendered: boolean;
+	} | null = null;
+
 	/** Current scroll offset (number of lines scrolled back from bottom). */
 	private scrollOffset: number = 0;
 
@@ -821,6 +836,17 @@ export class CanvasRenderer implements ITerminalRenderer {
 	 */
 	forceRender(state: TerminalState): void {
 		this.pendingState = state;
+		// Diagnostic counters reset at the top so every forceRender call
+		// produces a fresh snapshot. Fields are mutated below in the bg/text
+		// passes and read by mux-window-manager.ts on freeze investigation.
+		const diag = {
+			visibleLines: 0,
+			emptyRows: 0,
+			bgFillCount: 0,
+			textPassRows: 0,
+			cursorRendered: false,
+		};
+		this._lastForceRenderDiag = diag;
 
 		const foldManager = state.getFoldManager();
 		const collapsedRegions = foldManager.getCollapsedRegions();
@@ -830,6 +856,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 			? this.getVisibleLinesWithFolding(state, foldManager)
 			: getVisibleLines(state, this.scrollOffset);
 
+		diag.visibleLines = visibleLines.length;
 		this.renderVisibleLines = visibleLines;
 
 		const rctx = this.getLineRenderContext();
@@ -861,6 +888,8 @@ export class CanvasRenderer implements ITerminalRenderer {
 				const fillNextY = Math.ceil((row + 1) * this.charHeight);
 				this.ctx.fillStyle = bgCSS;
 				this.ctx.fillRect(0, fillY, canvasWidth, fillNextY - fillY);
+				diag.emptyRows++;
+				diag.bgFillCount++;
 			} else {
 				const spans = packedSpans[row];
 				if (spans) {
@@ -868,6 +897,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 				} else {
 					renderLineBackgroundImpl(rctx, row, line);
 				}
+				diag.bgFillCount++;
 			}
 		}
 
@@ -890,6 +920,7 @@ export class CanvasRenderer implements ITerminalRenderer {
 				} else {
 					renderLineTextImpl(rctx, row, line);
 				}
+				diag.textPassRows++;
 			}
 		}
 
@@ -922,6 +953,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 			this.prevCursorCol = state.cursorCol;
 			this.prevCursorRow = state.cursorRow;
 			this.prevCursorVisible = state.cursorVisible;
+			// Only count as 'rendered' when the cursor is visible. The
+			// branch may execute with cursorVisible=false (renderCursor
+			// then no-ops), and we don't want to report a draw that
+			// didn't happen during freeze triage.
+			diag.cursorRendered = state.cursorVisible;
 		}
 
 	}
