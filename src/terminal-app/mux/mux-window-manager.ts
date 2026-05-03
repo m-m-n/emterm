@@ -78,12 +78,40 @@ export function createFreshMuxGrid(ctx: MuxWindowManagerContext): void {
   }
 }
 
+/** Read the wasm-bindgen pointer for an opaque core handle. -1 if missing.
+ *  Identifies a TerminalCore instance for the bind-watch diagnostic so we
+ *  can tell when mux switch swapped to a new core vs left the renderer
+ *  pointing at the old one. */
+function corePtrOf(core: unknown): number {
+  return (core as { __wbg_ptr?: number } | null)?.__wbg_ptr ?? -1;
+}
+
+/** Wall-clock (perf clock) timestamp of the last completed mux switch. Read
+ *  by the heartbeat to print `lastSwitchAgoMs`. 0 means no switch has
+ *  happened in this session. Updated at the very end of switchMuxWindow. */
+let _lastMuxSwitchAt: number = 0;
+export function getLastMuxSwitchAt(): number {
+  return _lastMuxSwitchAt;
+}
+
 /** Switch to the current activeMuxWindowIndex: swap WASM grids and update UI. */
 export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: number): void {
+  // Record switch *attempt* timestamp eagerly so the heartbeat's
+  // `lastSwitchAgoMs` reflects "user just tried to switch" even if we
+  // bail out below or hit an exception in the middle of the swap. The
+  // alternative (record only on success) would mask freezes that abort
+  // mid-switch — the very pattern we are hunting.
+  _lastMuxSwitchAt = performance.now();
   const state = ctx.getState();
   if (!state) return;
   const muxPaneIds = ctx.getMuxPaneIds();
   const muxPaneGrids = ctx.getMuxPaneGrids();
+  // Capture pre-switch core identity so the bind-watch log can show whether
+  // the active TerminalCore actually changed across the swap. If two
+  // consecutive switches both report the same corePtr, save/restore is not
+  // doing what we think it is.
+  const prePaneId = previousIndex != null ? muxPaneIds[previousIndex] : -1;
+  const preCorePtr = corePtrOf(state.getActiveCore());
 
   // Capture current terminal dimensions from the active (prev) pane before
   // save/restore. muxPaneGrids entries are only resized when their pane is
@@ -155,7 +183,25 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
   }
 
   const renderer = ctx.getRenderer();
+  // Log the bind-watch line BEFORE diagTraceMuxRender so the race detector,
+  // armed by notifyContextReset, can flag the very forceRender that
+  // diagTrace triggers (if it ever winds up running on the wrong core).
+  const postPaneId = muxPaneIds[ctx.getActiveMuxWindowIndex()] ?? -1;
+  const postCorePtr = corePtrOf(state.getActiveCore());
+  console.warn(
+    `[DIAG-MUX-BIND] switchMuxWindow` +
+    ` | paneId=${prePaneId}→${postPaneId}` +
+    ` | corePtr=0x${(preCorePtr >>> 0).toString(16)}→0x${(postCorePtr >>> 0).toString(16)}` +
+    ` | ptrChanged=${preCorePtr !== postCorePtr}`,
+  );
   if (renderer) {
+    // Arm the race detector with the new core's identity. Any subsequent
+    // render() / forceRender() within the race window that lands on a
+    // different core (i.e. wrong active pane) will produce a [DIAG-MUX-RACE]
+    // warn from inside the renderer.
+    (renderer as unknown as {
+      notifyContextReset?: (label: string, expectedRef: number, activePaneId: number) => void;
+    }).notifyContextReset?.("muxSwitch", postCorePtr, postPaneId);
     diagTraceMuxRender(state, renderer, "switchMuxWindow");
   }
   emitMuxStateChange(ctx);

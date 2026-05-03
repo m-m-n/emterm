@@ -34,6 +34,7 @@ import {
   reloadMuxSettings as reloadMuxSettingsImpl,
   startMuxDirect as startMuxDirectImpl,
   handleRemoteSwitchWindow as handleRemoteSwitchWindowImpl,
+  getLastMuxSwitchAt,
   type MuxWindowManagerContext,
 } from "./mux/mux-window-manager";
 import {
@@ -54,6 +55,7 @@ import { setupPtyHandlers, type PtyHandlerHandle } from "./pty-handler";
 import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
+import { getWasmMemoryBytes } from "../terminal/wasm/loader";
 
 
 /**
@@ -118,6 +120,16 @@ export class TerminalApp {
   /** When `snapshotWaitPaneId` was set (performance.now()), for elapsed-time logging. */
   private snapshotWaitSetAt = 0;
   private muxLastActiveIndex = 0;
+
+  /** Diagnostic heartbeat timer, started at the end of init() and stopped in
+   *  dispose(). Logs a single [DIAG-MUX-HEARTBEAT] warn line every 5s with
+   *  pane count, active pane id, last switch elapsed, main-thread loop lag
+   *  (delay between heartbeat firings minus the 5000 ms expected), max rAF
+   *  gap reported by the renderer, and WASM heap size. The lag and rAF gap
+   *  values are the most direct signals for "main thread or compositor was
+   *  blocked between heartbeats" — the freeze fingerprint. */
+  private _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private _heartbeatLastFiredAt = 0;
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -542,6 +554,58 @@ export class TerminalApp {
       console.error("Failed to spawn PTY:", error);
       terminalContainer.textContent = `Failed to start terminal: ${error}`;
       return;
+    }
+
+    this.startDiagnosticHeartbeat();
+  }
+
+  /** Start the 5s diagnostic heartbeat (see _heartbeatTimer field doc). */
+  private startDiagnosticHeartbeat(): void {
+    if (this._heartbeatTimer) return;
+    this._heartbeatLastFiredAt = performance.now();
+    this._heartbeatTimer = setInterval(() => this.fireHeartbeat(), 5000);
+  }
+
+  /** Emit one heartbeat warn line. Hot path is intentionally minimal — no
+   *  Tauri IPC, no per-pane WASM calls (we only touch the active core).
+   *  Lag is the difference between the actual interval and the expected
+   *  5000 ms; large positive values mean the timer was held back by a
+   *  blocked main thread. */
+  private fireHeartbeat(): void {
+    try {
+      const now = performance.now();
+      const lag = Math.round(now - this._heartbeatLastFiredAt - 5000);
+      this._heartbeatLastFiredAt = now;
+
+      const panes = this.muxWindows.length;
+      const activeIdx = this.activeMuxWindowIndex;
+      const activePaneId = this.muxPaneIds[activeIdx] ?? -1;
+
+      const lastSwitchAt = getLastMuxSwitchAt();
+      const lastSwitchAgoMs = lastSwitchAt > 0 ? Math.round(now - lastSwitchAt) : -1;
+
+      const rafGap = (this.renderer as unknown as {
+        getAndResetMaxRafGap?: () => number;
+      })?.getAndResetMaxRafGap?.() ?? -1;
+
+      let wasmHeapMB = -1;
+      try {
+        const bytes = getWasmMemoryBytes();
+        if (bytes >= 0) wasmHeapMB = Math.round(bytes / (1024 * 1024));
+      } catch { /* loader not initialized */ }
+
+      console.warn(
+        `[DIAG-MUX-HEARTBEAT]` +
+        ` mux=${this.inMuxMode}` +
+        ` panes=${panes}` +
+        ` activeIdx=${activeIdx} activePaneId=${activePaneId}` +
+        ` lastSwitchAgoMs=${lastSwitchAgoMs}` +
+        ` loopLag=${lag}ms` +
+        ` rafMaxGap=${Math.round(rafGap)}ms` +
+        ` wasmHeapMB=${wasmHeapMB}`,
+      );
+    } catch (err) {
+      console.warn(`[DIAG-MUX-HEARTBEAT] heartbeat threw: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1255,6 +1319,11 @@ export class TerminalApp {
    * Cleans up resources and event listeners
    */
   dispose(): void {
+    if (this._heartbeatTimer) {
+      clearInterval(this._heartbeatTimer);
+      this._heartbeatTimer = null;
+    }
+
     // Disconnect resize observer
     if (this.disconnectResizeObserver) {
       this.disconnectResizeObserver();
