@@ -185,6 +185,36 @@ function reconcileActivePaneSize(state: TerminalState, cols: number, rows: numbe
   state.resize(cols, rows);
 }
 
+/** Sample a 64x64 region in the center of `canvas` and return a stable FNV-1a
+ *  hash of the RGB bytes (alpha skipped). Used to detect "forceRender ran but
+ *  no pixels changed" — the symptom users describe as "screen frozen but keys
+ *  go through". Returns "n/a" / "no-ctx" / "err" sentinels on failure so the
+ *  diagnostic never throws. Cost: ~16KB ImageData read + 4096 FNV iterations,
+ *  bounded under 1ms on modern hardware and only triggered on mux switches. */
+function sampleCanvasHash(canvas: HTMLCanvasElement | undefined): string {
+  if (!canvas) return "n/a";
+  try {
+    const ctx2d = canvas.getContext("2d");
+    if (!ctx2d) return "no-ctx";
+    const w = Math.min(64, canvas.width);
+    const h = Math.min(64, canvas.height);
+    if (w <= 0 || h <= 0) return "0";
+    const x = Math.max(0, Math.floor((canvas.width - w) / 2));
+    const y = Math.max(0, Math.floor((canvas.height - h) / 2));
+    const data = ctx2d.getImageData(x, y, w, h).data;
+    let h32 = 2166136261;
+    const len = data.length;
+    for (let i = 0; i < len; i += 4) {
+      h32 = Math.imul(h32 ^ (data[i] ?? 0), 16777619);
+      h32 = Math.imul(h32 ^ (data[i + 1] ?? 0), 16777619);
+      h32 = Math.imul(h32 ^ (data[i + 2] ?? 0), 16777619);
+    }
+    return "0x" + (h32 >>> 0).toString(16).padStart(8, "0");
+  } catch {
+    return "err";
+  }
+}
+
 /** Diagnostic trace for forceRender on mux switch paths. Logs canvas state,
  *  grid dimensions, parent visibility, and samples again on next rAF to see
  *  whether anything overwrites the canvas after forceRender. */
@@ -217,26 +247,44 @@ function diagTraceMuxRender(state: TerminalState, renderer: ITerminalRenderer, c
     renderer.forceRender(state);
     const t1 = performance.now();
     const dirtyAfter = state.getDirtyRows().length;
+    const postHash = sampleCanvasHash(rend.canvas);
     console.warn(
       `[DIAG-MUX-RENDER][${callsite}] post-forceRender` +
       ` | elapsed=${(t1 - t0).toFixed(2)}ms` +
       ` | dirtyAfter=${dirtyAfter}` +
-      ` | canvasPx=${rend.canvas?.width}x${rend.canvas?.height}`,
+      ` | canvasPx=${rend.canvas?.width}x${rend.canvas?.height}` +
+      ` | canvasHash=${postHash}`,
     );
     requestAnimationFrame(() => {
       const cw2 = rend.canvas?.width ?? -1;
       const ch2 = rend.canvas?.height ?? -1;
-      // Only log when canvas size actually changed between forceRender and the
-      // next rAF — the steady state (no resize) was the dominant noise source.
-      if (cw !== cw2 || ch !== ch2) {
-        const parentDisplay2 = parent ? getComputedStyle(parent).display : "n/a";
-        const parentVis2 = parent ? getComputedStyle(parent).visibility : "n/a";
-        console.warn(
-          `[DIAG-MUX-RENDER][${callsite}] next-rAF canvas-resized` +
-          ` | from=${cw}x${ch} to=${cw2}x${ch2}` +
-          ` | parentDisplay=${parentDisplay2} parentVis=${parentVis2}`,
-        );
-      }
+      const rafHash = sampleCanvasHash(rend.canvas);
+      const sizeChanged = cw !== cw2 || ch !== ch2;
+      // Always log the rAF hash so we can correlate "forceRender ran but
+      // pixels never changed" with user-observed freezes. Append the
+      // canvas-resize signal only when relevant — that was the dominant
+      // noise source under steady state.
+      const resizeNote = sizeChanged
+        ? (() => {
+            const parentDisplay2 = parent ? getComputedStyle(parent).display : "n/a";
+            const parentVis2 = parent ? getComputedStyle(parent).visibility : "n/a";
+            return ` | canvas-resized from=${cw}x${ch} to=${cw2}x${ch2}` +
+                   ` parentDisplay=${parentDisplay2} parentVis=${parentVis2}`;
+          })()
+        : "";
+      // Only treat hashes as comparable when both samples returned a real
+      // hex digest. Sentinel-vs-sentinel ('n/a', 'no-ctx', 'err', '0')
+      // would otherwise produce postHashEq=true and read as "forceRender
+      // produced no pixel change" during freeze investigation, when the
+      // truth is "we never sampled real pixels".
+      const bothSampled = postHash.startsWith("0x") && rafHash.startsWith("0x");
+      const postHashEq = bothSampled ? String(rafHash === postHash) : "n/a";
+      console.warn(
+        `[DIAG-MUX-RENDER][${callsite}] next-rAF` +
+        ` | canvasHash=${rafHash}` +
+        ` | postHashEq=${postHashEq}` +
+        resizeNote,
+      );
     });
   } catch (err) {
     console.warn(`[DIAG-MUX-RENDER][${callsite}] diag error: ${err instanceof Error ? err.message : String(err)}`);
