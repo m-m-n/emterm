@@ -594,6 +594,23 @@ export class TerminalApp {
         if (bytes >= 0) wasmHeapMB = Math.round(bytes / (1024 * 1024));
       } catch { /* loader not initialized */ }
 
+      // IPC layer observability: chunkRecv* counters tell us whether the
+      // backend → frontend Channel listener is firing at all (== distinguish
+      // "IPC stuck" from "scheduling stuck"). pending* counters reveal
+      // whether listener-delivered chunks are piling up because
+      // processPendingData isn't running. lastChunkAgoMs == -1 means no
+      // chunk has been received since spawn.
+      const recv = this.ptyClient?.getRecvStats();
+      const recvCount = recv?.count ?? -1;
+      const recvBytes = recv?.bytes ?? -1;
+      const lastChunkAgoMs = recv && recv.lastRecvAt > 0
+        ? Math.round(now - recv.lastRecvAt)
+        : -1;
+      const pending = this.ptyHandlerHandle?.getPendingStats();
+      const pendingChunks = pending?.chunks ?? -1;
+      const pendingBytes = pending?.bytes ?? -1;
+      const pendingLeftover = pending?.hasLeftover ?? false;
+
       console.warn(
         `[DIAG-MUX-HEARTBEAT]` +
         ` mux=${this.inMuxMode}` +
@@ -602,7 +619,10 @@ export class TerminalApp {
         ` lastSwitchAgoMs=${lastSwitchAgoMs}` +
         ` loopLag=${lag}ms` +
         ` rafMaxGap=${Math.round(rafGap)}ms` +
-        ` wasmHeapMB=${wasmHeapMB}`,
+        ` wasmHeapMB=${wasmHeapMB}` +
+        ` chunkRecv=${recvCount}/${recvBytes}b` +
+        ` lastChunkAgoMs=${lastChunkAgoMs}` +
+        ` pending=${pendingChunks}c/${pendingBytes}b leftover=${pendingLeftover}`,
       );
     } catch (err) {
       console.warn(`[DIAG-MUX-HEARTBEAT] heartbeat threw: ${err instanceof Error ? err.message : String(err)}`);

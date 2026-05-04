@@ -74,6 +74,18 @@ export class PtyClient {
 	/** Optional proxy that intercepts all write() calls (used for mux I/O routing) */
 	private writeProxy: ((data: Uint8Array) => Promise<void>) | null = null;
 
+	/** Diagnostic counters for the freeze-investigation heartbeat. The Tauri
+	 *  Channel listener (channel.onmessage) updates these on every binary
+	 *  arrival from the backend. The heartbeat reads them via getRecvStats()
+	 *  so we can distinguish "backend not sending" from "backend sending but
+	 *  frontend not draining" — when in_flight is high but chunkRecvCount is
+	 *  static, the IPC layer itself is stuck; when chunkRecvCount keeps
+	 *  growing but pendingChunks does too, the listener is alive but the
+	 *  scheduling path is the bottleneck. */
+	private _chunkRecvCount = 0;
+	private _chunkRecvBytes = 0;
+	private _lastChunkRecvAt = 0;
+
 	/**
 	 * Returns the current session ID, or null if no session is active.
 	 */
@@ -112,6 +124,9 @@ export class PtyClient {
 		// Create Channel for binary data transfer (raw ArrayBuffer via InvokeResponseBody::Raw)
 		this.channel = new Channel<ArrayBuffer>();
 		this.channel.onmessage = (data: ArrayBuffer) => {
+			this._chunkRecvCount++;
+			this._chunkRecvBytes += data.byteLength;
+			this._lastChunkRecvAt = performance.now();
 			if (this.dataCallback) {
 				this.dataCallback(new Uint8Array(data));
 			}
@@ -328,5 +343,18 @@ export class PtyClient {
 		this.unlisteners = [];
 		this.channel = null;
 		this.dataCallback = null;
+	}
+
+	/** Snapshot of binary-channel receive counters for the diagnostic
+	 *  heartbeat. count is the cumulative number of onmessage callbacks
+	 *  invoked since spawn() (the listener fired this many times). bytes
+	 *  is the cumulative byte volume. lastRecvAt is performance.now() at
+	 *  the most recent onmessage; 0 if no chunk has been received yet. */
+	getRecvStats(): { count: number; bytes: number; lastRecvAt: number } {
+		return {
+			count: this._chunkRecvCount,
+			bytes: this._chunkRecvBytes,
+			lastRecvAt: this._lastChunkRecvAt,
+		};
 	}
 }

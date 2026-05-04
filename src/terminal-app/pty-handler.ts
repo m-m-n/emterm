@@ -213,12 +213,18 @@ export interface PtyHandlerHandle {
   forceReinitWasm: (onComplete?: (success: boolean) => void) => void;
   /** Remove event listeners and clean up resources. */
   destroy: () => void;
+  /** Diagnostic snapshot for the heartbeat: pending-queue depth + total
+   *  bytes still in the queue + leftover indicator. Combined with
+   *  PtyClient.getRecvStats() this lets the heartbeat distinguish "IPC
+   *  receive layer stuck" (chunks not arriving) from "scheduling stuck"
+   *  (chunks arrived and piled up but processPendingData not running). */
+  getPendingStats: () => { chunks: number; bytes: number; hasLeftover: boolean };
 }
 
 export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandlerHandle> {
   const ptyClient = ctx.getPtyClient();
   const state = ctx.getState();
-  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {}, tryRecoverFromWasmCrash: (_err, onComplete) => { onComplete?.(false); return false; }, forceReinitWasm: (onComplete) => { onComplete?.(false); }, destroy: () => {} };
+  const noopHandle: PtyHandlerHandle = { injectData: () => {}, suppressOriginalPty: false, flushPendingData: () => {}, processNow: () => {}, notifyTabActivated: () => {}, tryRecoverFromWasmCrash: (_err, onComplete) => { onComplete?.(false); return false; }, forceReinitWasm: (onComplete) => { onComplete?.(false); }, destroy: () => {}, getPendingStats: () => ({ chunks: 0, bytes: 0, hasLeftover: false }) };
   if (!ptyClient || !state) return noopHandle;
 
   // Register callbacks on primary core
@@ -972,6 +978,16 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         "manual reinitialize requested",
       );
       tryRecoverFromWasmCrash(syntheticError, onComplete, true);
+    },
+    getPendingStats: () => {
+      let bytes = 0;
+      for (const chunk of pendingChunks) bytes += chunk.length;
+      if (leftoverData) bytes += leftoverData.length;
+      return {
+        chunks: pendingChunks.length,
+        bytes,
+        hasLeftover: leftoverData !== null,
+      };
     },
     destroy: () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
