@@ -1,9 +1,9 @@
 use crate::payloads::*;
 use crate::pty::PtyManager;
 use std::io::Read;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
@@ -230,8 +230,7 @@ pub fn spawn_reader_thread(
                             // session_id match.
                             let snap = manager.backpressure().snapshot_in_flight();
                             let total_sessions = snap.len();
-                            let total_in_flight: usize =
-                                snap.iter().map(|(_, n)| *n).sum();
+                            let total_in_flight: usize = snap.iter().map(|(_, n)| *n).sum();
                             let mut others: Vec<(String, usize)> = snap
                                 .into_iter()
                                 .filter(|(id, _)| id != &session_id)
@@ -259,14 +258,19 @@ pub fn spawn_reader_thread(
                         }
                     }
                     backpressure.add_sent(len);
-                    if let Err(e) = channel.send(InvokeResponseBody::Raw(batch)) {
-                        log::warn!(
-                            "PTY reader: channel.send failed for session {} ({} bytes lost): {}",
-                            session_id,
-                            len,
-                            e
-                        );
-                        break;
+                    match channel.send(InvokeResponseBody::Raw(batch)) {
+                        Ok(()) => {
+                            backpressure.record_send_success(len);
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "PTY reader: channel.send failed for session {} ({} bytes lost): {}",
+                                session_id,
+                                len,
+                                e
+                            );
+                            break;
+                        }
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
