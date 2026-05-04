@@ -8,8 +8,8 @@
 //! through the PTY pipe buffer to the shell process.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 
@@ -38,6 +38,17 @@ pub struct SessionBackpressure {
     /// ack lowers the in-flight counter below LOW_WATER_BYTES.
     cond: Mutex<()>,
     cond_notify: std::sync::Condvar,
+    /// Cumulative count of `channel.send(...)` invocations recorded by the
+    /// reader thread for this session. Used by the diagnostic
+    /// `pty_get_send_stats` Tauri command so the frontend heartbeat can
+    /// compare backend-side "messages sent" against frontend-side
+    /// `chunkRecv` and detect IPC transport stalls (when the gap grows
+    /// while the frontend appears responsive elsewhere).
+    sent_count: AtomicU64,
+    /// Cumulative bytes sent. Same purpose as `sent_count`. Note that
+    /// `in_flight` is gross-volume-since-last-ack; `sent_bytes` never
+    /// decreases.
+    sent_bytes: AtomicU64,
 }
 
 impl SessionBackpressure {
@@ -47,12 +58,40 @@ impl SessionBackpressure {
             waiters: AtomicBool::new(false),
             cond: Mutex::new(()),
             cond_notify: std::sync::Condvar::new(),
+            sent_count: AtomicU64::new(0),
+            sent_bytes: AtomicU64::new(0),
         }
     }
 
-    /// Record that `n` bytes have been sent to the frontend.
+    /// Record that `n` bytes have been sent to the frontend. Updates the
+    /// backpressure `in_flight` counter (subject to ack). Does NOT update
+    /// the diagnostic `sent_count` / `sent_bytes` — call
+    /// `record_send_success` for those, AFTER the channel.send returns Ok,
+    /// so the diagnostic counters reflect deliveries that succeeded at the
+    /// Tauri layer rather than attempts.
     pub fn add_sent(&self, n: usize) {
         self.in_flight.fetch_add(n, Ordering::AcqRel);
+    }
+
+    /// Diagnostic-only: increment cumulative send-success counters. Called
+    /// from the reader thread immediately after `channel.send` returns Ok.
+    /// Frontend heartbeat compares these against its own `chunkRecv` to
+    /// surface Tauri-IPC stalls.
+    pub fn record_send_success(&self, n: usize) {
+        self.sent_count.fetch_add(1, Ordering::Relaxed);
+        self.sent_bytes.fetch_add(n as u64, Ordering::Relaxed);
+    }
+
+    /// Cumulative `channel.send` call count for this session. Diagnostic-
+    /// only; never decreases.
+    pub fn sent_count(&self) -> u64 {
+        self.sent_count.load(Ordering::Relaxed)
+    }
+
+    /// Cumulative bytes passed to `channel.send` for this session.
+    /// Diagnostic-only; never decreases.
+    pub fn sent_bytes(&self) -> u64 {
+        self.sent_bytes.load(Ordering::Relaxed)
     }
 
     /// Record that the frontend has consumed `n` bytes.

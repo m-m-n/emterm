@@ -3,7 +3,7 @@ use {
     crate::payloads::*,
     crate::pty::{PtyError, PtyManager},
     crate::reader::spawn_reader_thread,
-    crate::state::{ImageProcessorState, LARGE_IMAGE_DATA_THRESHOLD, LargeImageDataStore},
+    crate::state::{ImageProcessorState, LargeImageDataStore, LARGE_IMAGE_DATA_THRESHOLD},
     crate::{ansi, image, logging},
     std::collections::HashMap,
     tauri::ipc::{Channel, InvokeResponseBody},
@@ -108,13 +108,24 @@ pub fn pty_write(
 /// stalls (e.g. WebKitGTK background tab freezes rAF), unacked bytes accumulate
 /// and the reader pauses at the high water mark.
 #[tauri::command]
-pub fn pty_ack(
-    state: State<'_, PtyManager>,
-    session_id: String,
-    bytes: usize,
-) {
+pub fn pty_ack(state: State<'_, PtyManager>, session_id: String, bytes: usize) {
     if let Some(bp) = state.backpressure().get(&session_id) {
         bp.ack(bytes);
+    }
+}
+
+/// Diagnostic-only: returns the cumulative `channel.send` count and bytes
+/// that the reader thread has recorded for `session_id`. Compared by the
+/// frontend heartbeat against its own `chunkRecv` count to detect Tauri
+/// IPC transport stalls — the gap grows when backend keeps sending but
+/// frontend's Channel.onmessage stops firing. Returns -1 / 0 if the
+/// session is not registered in the backpressure registry.
+#[tauri::command]
+pub fn pty_get_send_stats(state: State<'_, PtyManager>, session_id: String) -> (i64, u64) {
+    if let Some(bp) = state.backpressure().get(&session_id) {
+        (bp.sent_count() as i64, bp.sent_bytes())
+    } else {
+        (-1, 0)
     }
 }
 
@@ -498,7 +509,7 @@ pub async fn tab_close_graceful(
 /// Returns width, height, and RGBA pixel data as base64.
 #[tauri::command]
 pub async fn decode_iterm2_image(base64_data: String) -> Result<serde_json::Value, String> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine};
 
     let raw = STANDARD
         .decode(&base64_data)
@@ -584,7 +595,7 @@ pub fn append_download_chunk(
     id: String,
     data_base64: String,
 ) -> Result<(), String> {
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
 
     let data = general_purpose::STANDARD
         .decode(&data_base64)

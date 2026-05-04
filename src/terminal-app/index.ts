@@ -56,6 +56,15 @@ import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
 import { getWasmMemoryBytes } from "../terminal/wasm/loader";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+
+/** Diagnostic helper: ask backend for cumulative send-counter for the given
+ *  session. Returns (count, bytes) tuple from Rust pty_get_send_stats. The
+ *  Rust side returns count=-1 / bytes=0 when session is missing. */
+async function invokeBackendSendStats(sessionId: string): Promise<{ count: number; bytes: number }> {
+  const result = await tauriInvoke<[number, number]>("pty_get_send_stats", { sessionId });
+  return { count: result[0], bytes: result[1] };
+}
 
 
 /**
@@ -130,6 +139,13 @@ export class TerminalApp {
    *  blocked between heartbeats" — the freeze fingerprint. */
   private _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private _heartbeatLastFiredAt = 0;
+  /** Latest snapshot of backend send counters returned by pty_get_send_stats.
+   *  Updated asynchronously per heartbeat (fire-and-forget invoke). When the
+   *  backend keeps sending but this stops being updated, IPC invoke itself
+   *  is stuck — orthogonal to the Channel transport stalling. */
+  private _backendSendStats: { count: number; bytes: number; updatedAt: number } | null = null;
+  private _backendSendStatsPending = false;
+  private _backendSendStatsLastReqAt = 0;
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -611,6 +627,52 @@ export class TerminalApp {
       const pendingBytes = pending?.bytes ?? -1;
       const pendingLeftover = pending?.hasLeftover ?? false;
 
+      // Backend-side send counters via Tauri invoke. Fire-and-forget so a
+      // stuck IPC doesn't block the heartbeat itself; result lands in
+      // _backendSendStats by the next tick. The gap between this and
+      // chunkRecv is the smoking gun for "Tauri Channel transport stalled":
+      // backend keeps incrementing sent_count but onmessage stops firing in
+      // frontend, so backendSent count >> chunkRecv count.
+      const sessionId = this.ptyClient?.getSessionId();
+      if (sessionId && !this._backendSendStatsPending) {
+        this._backendSendStatsPending = true;
+        this._backendSendStatsLastReqAt = now;
+        invokeBackendSendStats(sessionId)
+          .then((res) => {
+            this._backendSendStats = {
+              count: res.count,
+              bytes: res.bytes,
+              updatedAt: performance.now(),
+            };
+          })
+          .catch((err) => {
+            console.warn(`[DIAG-MUX-HEARTBEAT] pty_get_send_stats failed: ${err instanceof Error ? err.message : String(err)}`);
+          })
+          .finally(() => {
+            this._backendSendStatsPending = false;
+            // Clear request timestamp on completion so reqAgo only reads
+            // meaningfully (>0) while an invoke is in flight. In healthy
+            // steady state inflight=false reqAgo=-1; during a stuck invoke
+            // inflight=true reqAgo grows, the smoking-gun signal we want.
+            this._backendSendStatsLastReqAt = 0;
+          });
+      }
+      const sendStats = this._backendSendStats;
+      const backendSentCount = sendStats?.count ?? -1;
+      const backendSentBytes = sendStats?.bytes ?? -1;
+      // ago: heartbeats elapsed since last successful invoke resolve. 0 ms
+      //   each tick means invoke is healthy. Monotonically growing means
+      //   invoke responses themselves are stuck (= IPC fully dead, not just
+      //   Channel transport).
+      const sendStatsAgoMs = sendStats ? Math.round(now - sendStats.updatedAt) : -1;
+      // reqAgo: time since the most recent invoke was *fired*. Combined
+      //   with `pending=true` (this._backendSendStatsPending), reqAgo > 5s
+      //   means the in-flight invoke has been waiting longer than a
+      //   heartbeat — confirming the invoke side is also frozen.
+      const sendStatsReqAgoMs = this._backendSendStatsLastReqAt > 0
+        ? Math.round(now - this._backendSendStatsLastReqAt)
+        : -1;
+
       console.warn(
         `[DIAG-MUX-HEARTBEAT]` +
         ` mux=${this.inMuxMode}` +
@@ -622,7 +684,9 @@ export class TerminalApp {
         ` wasmHeapMB=${wasmHeapMB}` +
         ` chunkRecv=${recvCount}/${recvBytes}b` +
         ` lastChunkAgoMs=${lastChunkAgoMs}` +
-        ` pending=${pendingChunks}c/${pendingBytes}b leftover=${pendingLeftover}`,
+        ` pending=${pendingChunks}c/${pendingBytes}b leftover=${pendingLeftover}` +
+        ` backendSent=${backendSentCount}/${backendSentBytes}b` +
+        ` sendStatsAgo=${sendStatsAgoMs}ms reqAgo=${sendStatsReqAgoMs}ms inflight=${this._backendSendStatsPending}`,
       );
     } catch (err) {
       console.warn(`[DIAG-MUX-HEARTBEAT] heartbeat threw: ${err instanceof Error ? err.message : String(err)}`);

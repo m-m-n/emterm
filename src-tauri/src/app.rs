@@ -7,11 +7,11 @@
 #[cfg(windows)]
 fn set_taskbar_icon(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::Error>> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::core::PCWSTR;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        IMAGE_ICON, LR_DEFAULTSIZE, LoadImageW, SendMessageW, WM_SETICON,
+        LoadImageW, SendMessageW, IMAGE_ICON, LR_DEFAULTSIZE, WM_SETICON,
     };
-    use windows::core::PCWSTR;
 
     const ICON_BIG: usize = 1;
     const MAINICON_ID: u16 = 32512;
@@ -70,6 +70,7 @@ pub fn run() {
             tauri_commands::pty_spawn,
             tauri_commands::pty_write,
             tauri_commands::pty_ack,
+            tauri_commands::pty_get_send_stats,
             tauri_commands::pty_resize,
             tauri_commands::pty_kill,
             tauri_commands::process_image_data,
@@ -157,11 +158,9 @@ pub fn run() {
             {
                 use tauri::Manager;
                 let registry = Arc::clone(&app.state::<Arc<DownloadRegistry>>().inner());
-                std::thread::spawn(move || {
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_secs(30));
-                        registry.cleanup_expired();
-                    }
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    registry.cleanup_expired();
                 });
             }
 
