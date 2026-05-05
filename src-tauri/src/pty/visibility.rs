@@ -5,7 +5,7 @@
 //! `is_visible()` to decide whether to forward bytes to the frontend or
 //! to feed them into the shadow parser only.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -37,7 +37,7 @@ pub const HIDDEN_DEBOUNCE_MS: u64 = 1000;
 /// so the caller can emit a single warn per drop episode.
 pub struct RawPassthroughBuffer {
     capacity: usize,
-    buf: Vec<u8>,
+    buf: VecDeque<u8>,
     drop_warned: bool,
 }
 
@@ -45,7 +45,7 @@ impl RawPassthroughBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            buf: Vec::new(),
+            buf: VecDeque::new(),
             drop_warned: false,
         }
     }
@@ -62,7 +62,7 @@ impl RawPassthroughBuffer {
             // last `capacity` bytes only.
             self.buf.clear();
             let start = data.len() - self.capacity;
-            self.buf.extend_from_slice(&data[start..]);
+            self.buf.extend(data[start..].iter().copied());
             let first = !self.drop_warned;
             self.drop_warned = true;
             return first;
@@ -71,17 +71,17 @@ impl RawPassthroughBuffer {
         if new_len > self.capacity {
             let drop_n = new_len - self.capacity;
             self.buf.drain(..drop_n);
-            self.buf.extend_from_slice(data);
+            self.buf.extend(data.iter().copied());
             let first = !self.drop_warned;
             self.drop_warned = true;
             return first;
         }
-        self.buf.extend_from_slice(data);
+        self.buf.extend(data.iter().copied());
         false
     }
 
     pub fn read_all(&self) -> Vec<u8> {
-        self.buf.clone()
+        Vec::from_iter(self.buf.iter().copied())
     }
 
     pub fn clear(&mut self) {
@@ -351,6 +351,50 @@ mod tests {
         let dropped = buf.append(b"123456789");
         assert!(dropped);
         assert_eq!(buf.read_all(), b"6789");
+    }
+
+    #[test]
+    fn raw_passthrough_fifo_eviction_byte_by_byte() {
+        // Capacity 16, append 1 byte at a time for 1000 iterations.
+        // After each append past capacity, the buffer must hold the
+        // trailing 16 bytes in insertion order (FIFO). The VecDeque
+        // backing makes per-append eviction O(1); the test asserts the
+        // observable contract (FIFO content + length cap) rather than
+        // timing.
+        let mut buf = RawPassthroughBuffer::new(16);
+        for i in 0u32..1000 {
+            let byte = [(i & 0xFF) as u8];
+            buf.append(&byte);
+            assert!(buf.len() <= 16);
+        }
+        assert_eq!(buf.len(), 16);
+        let tail = buf.read_all();
+        let expected: Vec<u8> = (1000u32 - 16..1000u32).map(|i| (i & 0xFF) as u8).collect();
+        assert_eq!(tail, expected);
+    }
+
+    #[test]
+    fn raw_passthrough_fifo_eviction_chunked() {
+        // Capacity 8. Multiple chunks that together overflow must keep
+        // the trailing capacity bytes in arrival order.
+        let mut buf = RawPassthroughBuffer::new(8);
+        buf.append(b"AAAA");
+        buf.append(b"BBBB");
+        buf.append(b"CCCC");
+        buf.append(b"DD");
+        assert_eq!(buf.len(), 8);
+        assert_eq!(buf.read_all(), b"BBCCCCDD");
+    }
+
+    #[test]
+    fn raw_passthrough_read_all_does_not_consume() {
+        let mut buf = RawPassthroughBuffer::new(8);
+        buf.append(b"abcd");
+        let first = buf.read_all();
+        let second = buf.read_all();
+        assert_eq!(first, b"abcd");
+        assert_eq!(second, b"abcd");
+        assert_eq!(buf.len(), 4);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use super::protocol::*;
 use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
+    DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
 };
 
 /// Build a self-contained ANSI byte sequence that reproduces the current
@@ -79,9 +79,10 @@ pub(super) async fn collect_reattach_data(
                     let mut target = pane.output_target.lock().unwrap();
                     let target_was = match &*target {
                         PaneOutputTarget::Connected(_) => "Connected",
-                        PaneOutputTarget::Detached(_) => "Detached",
+                        PaneOutputTarget::Detached { .. } => "Detached",
                     };
-                    let ring_data = if let PaneOutputTarget::Detached(ref mut ring) = *target {
+                    let ring_data = if let PaneOutputTarget::Detached { ref mut ring, .. } = *target
+                    {
                         let buf = ring.read_all();
                         ring.clear();
                         buf
@@ -211,18 +212,20 @@ pub(in crate::mux) async fn detach_session_panes(
                 let mut target = pane.output_target.lock().unwrap();
                 let was = match &*target {
                     PaneOutputTarget::Connected(_) => "Connected",
-                    PaneOutputTarget::Detached(_) => "Detached",
+                    PaneOutputTarget::Detached { .. } => "Detached",
                 };
                 let owned_by_caller = match &*target {
                     PaneOutputTarget::Connected(tx) => tx.same_channel(owned_tx),
-                    PaneOutputTarget::Detached(_) => false,
+                    PaneOutputTarget::Detached { .. } => false,
                 };
                 if owned_by_caller {
-                    *target = PaneOutputTarget::Detached(DetachRingBuffer::new(
-                        crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-                    ));
+                    *target = PaneOutputTarget::Detached {
+                        reason: DetachReason::NetworkDetach,
+                        owner: None,
+                        ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+                    };
                     log::info!(
-                        "detach_session_panes: pane {} switched {} -> Detached",
+                        "detach_session_panes: pane {} switched {} -> Detached(NetworkDetach)",
                         pane.id,
                         was
                     );
@@ -338,10 +341,16 @@ mod tests {
         let mut ring2 = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
         ring2.write(b"hello from pane 2");
 
-        let target1: SharedOutputTarget =
-            Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring1)));
-        let target2: SharedOutputTarget =
-            Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring2)));
+        let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+            ring: ring1,
+        }));
+        let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+            ring: ring2,
+        }));
 
         let session_id;
         {
@@ -462,7 +471,7 @@ mod tests {
         );
         assert!(matches!(
             *pane.output_target.lock().unwrap(),
-            PaneOutputTarget::Detached(_)
+            PaneOutputTarget::Detached { .. }
         ));
     }
 
@@ -604,7 +613,7 @@ mod tests {
             assert!(
                 matches!(
                     *pane.output_target.lock().unwrap(),
-                    PaneOutputTarget::Detached(_)
+                    PaneOutputTarget::Detached { .. }
                 ),
                 "detach_session_panes must detach pane owned by caller"
             );
@@ -778,7 +787,11 @@ mod tests {
 
         let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
         ring.write(b"buffered-from-ring");
-        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring)));
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+            ring,
+        }));
 
         let session_id;
         {

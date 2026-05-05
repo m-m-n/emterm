@@ -63,7 +63,7 @@ As a ターミナル常用ユーザー, I want 数百 ms 程度のウィンド�
   - 推奨は案A (差分最小)。
   - ペインの「buffer 要求」は (a) クライアント切断 (network_detach) または (b) クライアント接続中の hidden のいずれかで成立する。
   - 状態評価関数 `evaluate_output_target(pane: &MuxPane, network_detach: bool, visible: bool, owned_tx: &Sender<PtyOutputChunk>)` を `mux/session/pane.rs` に追加し、(a) いずれかが立てば `Detached(buf)` に切り替え、(b) 両方解消なら `Connected(owned_tx)` に戻す、動作とする。`output_target` の物理表現は既存の `PaneOutputTarget::{Connected, Detached}` 二値を維持する (新規 enum を追加しない)。
-  - identity スコープ: Connected → Detached への切替は、現在 Connected の tx が `owned_tx.same_channel(...)` で一致する場合のみ実施する (既存 `detach_session_panes` と同じ基準)。Detached → Connected への切替は無条件で `owned_tx` を採用する (caller がそのセッションを attach しているため)。
+  - identity スコープ: Connected → Detached への切替は、現在 Connected の tx が `owned_tx.same_channel(...)` で一致する場合のみ実施する (既存 `detach_session_panes` と同じ基準)。Detached → Connected への切替は、`Detached` が保持する `owner` が `owned_tx.same_channel(...)` で一致するか、`owner = None` (system origin) の場合に限り実施する。owner が異なる場合は Detached のまま維持する (別 connection の hidden pane を SetVisibility(true) で reclaim しない)。`Detached` は `reason: NetworkDetach | HiddenByVisibility | Both` を保持し、`HiddenByVisibility` は `evaluate_output_target(visible=true)` で解消、`NetworkDetach` は reattach 経路でのみ解消する。両 bit が立っている場合は片方の解消では Connected に戻らない。
   - 状態再評価は次の 2 タイミングで行う:
     1. `SetVisibility` 受信時 (`handle_set_visibility`): 接続中の各ペインに対し評価関数を呼ぶ
     2. reattach 完了時 (`collect_reattach_data`): 旧 `network_detach == true` から復帰直後に、最新 `visible` で評価関数を呼ぶ
