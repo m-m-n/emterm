@@ -90,22 +90,29 @@ export class VisibilityController {
     this.visibilityTarget.addEventListener("visibilitychange", this.visibilityListener);
 
     try {
-      this.focusUnsubscribe = await this.deps.subscribeFocus((focused) => {
+      const unsub = await this.deps.subscribeFocus((focused) => {
         if (this.destroyed) return;
         this.focused = focused;
         this.onSignalChanged();
       });
-      if (this.destroyed && this.focusUnsubscribe) {
+      // RACE GUARD: stop() may have run while subscribeFocus was awaiting.
+      // In that case unsubscribe immediately and skip the post-await setup so
+      // the health timer is never created against a torn-down controller.
+      if (this.destroyed) {
         try {
-          this.focusUnsubscribe();
+          unsub();
         } catch {
           /* ignore */
         }
-        this.focusUnsubscribe = null;
+        return;
       }
+      this.focusUnsubscribe = unsub;
     } catch (err) {
       console.warn("[WARN][FRONTEND] VisibilityController: focus subscribe failed:", err);
+      if (this.destroyed) return;
     }
+
+    if (this.destroyed) return;
 
     // Push the current effective state once so the backend is in sync from the
     // start (rather than implicitly assuming visible).
@@ -118,6 +125,8 @@ export class VisibilityController {
 
   /** Stop observing. Safe to call multiple times. */
   stop(): void {
+    // Set destroyed first so any in-flight start() awaits exit early before
+    // creating timers or storing the focus unsubscribe handle.
     this.destroyed = true;
     this.started = false;
     if (this.visibilityListener) {

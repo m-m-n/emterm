@@ -233,6 +233,60 @@ describe("VisibilityController", () => {
     expect(h.pty.setVisibilityCalls).toEqual([true]);
   });
 
+  test("F11: stop() during subscribeFocus await leaks no healthTimer", async () => {
+    const scheduler = new FakeScheduler();
+    const pty = makeMockPty();
+    const visibilityTarget = makeMockEventTarget();
+
+    let resolveSubscribe: ((unsub: FocusUnsubscribe) => void) | null = null;
+    let unsubscribeCalls = 0;
+    let setIntervalCalls = 0;
+
+    const trackedSetInterval = ((cb: () => void, ms: number) => {
+      setIntervalCalls++;
+      return scheduler.setInterval(cb, ms);
+    }) as typeof setInterval;
+
+    const controller = new VisibilityController({
+      getPtyClient: () => pty as unknown as import("./client").PtyClient,
+      getMuxClient: () => null,
+      getDocumentVisible: () => true,
+      subscribeFocus: () =>
+        new Promise<FocusUnsubscribe>((resolve) => {
+          resolveSubscribe = resolve;
+        }),
+      visibilityTarget,
+      setTimeoutFn: scheduler.setTimeout,
+      clearTimeoutFn: scheduler.clearTimeout,
+      setIntervalFn: trackedSetInterval,
+      clearIntervalFn: scheduler.clearInterval,
+    });
+
+    const startPromise = controller.start();
+    expect(resolveSubscribe).not.toBeNull();
+
+    controller.stop();
+
+    resolveSubscribe!(() => {
+      unsubscribeCalls++;
+    });
+    await startPromise;
+
+    expect(setIntervalCalls).toBe(0);
+    expect(unsubscribeCalls).toBe(1);
+    expect(pty.setVisibilityCalls).toEqual([]);
+
+    scheduler.advance(HEALTH_CHECK_MS * 2);
+    expect(pty.setVisibilityCalls).toEqual([]);
+  });
+
+  test("F11: stop() after fully completed start() clears healthTimer", async () => {
+    expect(h.pty.setVisibilityCalls).toEqual([true]);
+    h.controller.stop();
+    h.scheduler.advance(HEALTH_CHECK_MS * 3);
+    expect(h.pty.setVisibilityCalls).toEqual([true]);
+  });
+
   test("DIAG-IDLE: warn log emitted on confirmed visibility transitions", async () => {
     const originalWarn = console.warn;
     const lines: string[] = [];

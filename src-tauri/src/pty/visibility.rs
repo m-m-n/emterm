@@ -210,23 +210,17 @@ impl SessionVisibilityState {
         }
     }
 
-    /// Atomically swap to visible. If a transition actually happened,
-    /// build a resume snapshot (`ESC[H ESC[2J` + shadow contents +
-    /// raw_passthrough bytes), clear the passthrough buffer, and return
-    /// `Some(bytes)`. If already visible, return `None`.
+    /// Build the resume snapshot (`ESC[H ESC[2J` + shadow contents +
+    /// raw_passthrough bytes) and clear the passthrough buffer. Caller must
+    /// hold the inner lock throughout to keep the snapshot consistent with
+    /// the shadow state observed at lock-acquire time.
     ///
     /// `vt100::Screen::contents_formatted` is wrapped in `catch_unwind`
     /// for the same reason as `process_hidden`. On panic the shadow is
     /// rebuilt and an empty contents block is used; the snapshot still
     /// includes the clear-screen prefix and any buffered passthrough so
     /// the frontend recovers without a backend crash.
-    pub fn set_visible_and_take_snapshot(&self) -> Option<Vec<u8>> {
-        let prev = self.visible.swap(true, Ordering::AcqRel);
-        if prev {
-            return None;
-        }
-        log::debug!("[DEBUG][BACKEND] visibility: hidden -> visible (building snapshot)");
-        let mut inner = self.inner.lock().expect("visibility state poisoned");
+    fn build_snapshot_locked(inner: &mut InnerState) -> Vec<u8> {
         let screen = match catch_unwind(AssertUnwindSafe(|| {
             inner.shadow.screen().contents_formatted()
         })) {
@@ -247,25 +241,56 @@ impl SessionVisibilityState {
         out.extend_from_slice(&screen);
         out.extend_from_slice(&passthrough);
         inner.passthrough.clear();
-        Some(out)
+        out
+    }
+
+    /// Build a resume snapshot and flip the visible flag, returning the
+    /// snapshot bytes. If already visible, returns `None` and does not
+    /// touch the flag or buffers.
+    ///
+    /// Caller-side ordering: the caller must have already enqueued the
+    /// returned bytes onto the reader channel before any subsequent live
+    /// reader batch can be sent. `dispatch_resume_snapshot` does this in
+    /// one call by holding the inner lock across `channel.send` and the
+    /// flag flip; external callers that bypass `dispatch_resume_snapshot`
+    /// inherit the responsibility for that ordering.
+    pub fn set_visible_and_take_snapshot(&self) -> Option<Vec<u8>> {
+        let mut inner = self.inner.lock().expect("visibility state poisoned");
+        if self.visible.load(Ordering::Acquire) {
+            return None;
+        }
+        log::debug!("[DEBUG][BACKEND] visibility: hidden -> visible (building snapshot)");
+        let bytes = Self::build_snapshot_locked(&mut inner);
+        self.visible.store(true, Ordering::Release);
+        Some(bytes)
     }
 
     /// Send the resume snapshot through the registered reader channel.
     /// Returns `true` if a snapshot was produced and sent.
+    ///
+    /// FR9 ordering guarantee: the snapshot is enqueued onto the reader
+    /// `Channel` *before* the `visible` atomic flag flips to `true`. The
+    /// reader thread checks `is_visible()` lock-free and only forwards live
+    /// PTY bytes once that flag is true, so the channel's FIFO order
+    /// guarantees the snapshot lands ahead of any subsequent live batch.
     pub fn dispatch_resume_snapshot(&self) -> bool {
-        let snapshot = self.set_visible_and_take_snapshot();
-        let Some(bytes) = snapshot else {
+        let mut inner = self.inner.lock().expect("visibility state poisoned");
+        if self.visible.load(Ordering::Acquire) {
             return false;
-        };
-        let inner = self.inner.lock().expect("visibility state poisoned");
+        }
+        log::debug!("[DEBUG][BACKEND] visibility: hidden -> visible (building snapshot)");
+        let bytes = Self::build_snapshot_locked(&mut inner);
         let Some(channel) = inner.channel.as_ref() else {
             log::warn!(
                 "[WARN][BACKEND] visibility: no channel registered, snapshot ({}B) dropped",
                 bytes.len()
             );
+            self.visible.store(true, Ordering::Release);
             return false;
         };
-        if let Err(e) = channel.send(InvokeResponseBody::Raw(bytes)) {
+        let send_result = channel.send(InvokeResponseBody::Raw(bytes));
+        self.visible.store(true, Ordering::Release);
+        if let Err(e) = send_result {
             log::warn!(
                 "[WARN][BACKEND] visibility: snapshot channel.send failed: {}",
                 e
@@ -319,6 +344,7 @@ impl VisibilityRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
 
     #[test]
     fn raw_passthrough_keeps_tail_when_over_capacity() {
@@ -484,6 +510,65 @@ mod tests {
             "snapshot must be a screen replay, not a tape replay (got {}B)",
             snap.len()
         );
+    }
+
+    /// F3 regression: `dispatch_resume_snapshot` must enqueue the snapshot
+    /// onto the registered `Channel` *before* flipping the `visible` flag to
+    /// true. Without that ordering, a reader thread that observes
+    /// `is_visible() == true` lock-free could send a live PTY batch ahead
+    /// of the snapshot, and the snapshot's `\x1b[H\x1b[2J` prefix would
+    /// then wipe that live batch from the frontend grid.
+    #[test]
+    fn visibility_dispatch_enqueues_snapshot_before_flag_flip() {
+        let s = Arc::new(SessionVisibilityState::new(80, 24, 1024));
+        s.set_hidden();
+        s.process_hidden(b"resume-payload");
+
+        let visible_when_received: Arc<StdMutex<Option<bool>>> = Arc::new(StdMutex::new(None));
+        let captured_bytes: Arc<StdMutex<Vec<u8>>> = Arc::new(StdMutex::new(Vec::new()));
+        let captured_clone = captured_bytes.clone();
+        let visible_clone = visible_when_received.clone();
+        let s_for_cb = s.clone();
+        let channel = Channel::new(move |body| {
+            *visible_clone.lock().unwrap() = Some(s_for_cb.is_visible());
+            if let InvokeResponseBody::Raw(bytes) = body {
+                captured_clone.lock().unwrap().extend_from_slice(&bytes);
+            }
+            Ok(())
+        });
+        s.register_channel(channel);
+
+        assert!(s.dispatch_resume_snapshot());
+        assert!(s.is_visible(), "flag must be true after dispatch");
+        let observed = visible_when_received
+            .lock()
+            .unwrap()
+            .expect("send callback must have fired");
+        assert!(
+            !observed,
+            "callback observed visible=true at send time; snapshot would race the next reader batch"
+        );
+        let body = captured_bytes.lock().unwrap();
+        assert!(body.starts_with(b"\x1b[H\x1b[2J"));
+        let s = String::from_utf8_lossy(&body);
+        assert!(s.contains("resume-payload"));
+    }
+
+    /// Re-using the same dispatch path while already visible must be a
+    /// no-op — no snapshot, no flag change.
+    #[test]
+    fn visibility_dispatch_when_already_visible_is_noop() {
+        let s = SessionVisibilityState::new(80, 24, 1024);
+        let count: Arc<StdMutex<u32>> = Arc::new(StdMutex::new(0));
+        let count_clone = count.clone();
+        let channel = Channel::new(move |_body| {
+            *count_clone.lock().unwrap() += 1;
+            Ok(())
+        });
+        s.register_channel(channel);
+
+        assert!(!s.dispatch_resume_snapshot());
+        assert_eq!(*count.lock().unwrap(), 0);
     }
 
     /// TS-2: snapshot prefix is the standard reset-and-home pair.
