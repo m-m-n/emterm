@@ -40,16 +40,31 @@ pub(super) fn build_shadow_parser_snapshot(shadow_parser: &SharedShadowParser) -
 
 /// Collect reattach data for panes in the given session.
 ///
-/// Drains buffered output from detached panes and switches them to connected mode.
-/// Also swaps the session's `active_client_kick` to the caller's sender. Any
-/// previously registered kick sender is fired (after releasing the session lock)
-/// so the prior attached client is signalled to detach.
+/// When `visible == true`, drains buffered output from detached panes and
+/// switches each pane to `Connected(pane_output_tx)`. Each returned tuple
+/// carries the pane id and the resume snapshot bytes (shadow + ring +
+/// raw_passthrough).
+///
+/// When `visible == false` (FR13: hidden reattach), the panes are NOT
+/// flipped to `Connected`. Instead each pane is set / kept in
+/// `Detached { reason = HiddenByVisibility, owner = Some(pane_output_tx) }`
+/// so the reader thread continues to accumulate ring + raw_passthrough
+/// bytes. The returned tuples carry empty buffers, which `send_reattach_data`
+/// emits as bare `PaneCreated` frames (no `PtyOutput`). The next
+/// `SetVisibility(true)` from this connection then triggers the resume
+/// snapshot via `resume_pane_with_permit`.
+///
+/// In both modes, the session's `active_client_kick` is swapped to the
+/// caller's sender. Any previously registered kick sender is fired (after
+/// releasing the session lock) so the prior attached client is signalled
+/// to detach.
 pub(super) async fn collect_reattach_data(
     session_manager: &Arc<Mutex<SessionManager>>,
     session_id: u32,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     title_tx: &TitleChangeSender,
     new_kick: oneshot::Sender<()>,
+    visible: bool,
 ) -> Vec<(PaneId, Vec<u8>)> {
     let mut new_kick_opt = Some(new_kick);
     let mut old_kick: Option<oneshot::Sender<()>> = None;
@@ -65,7 +80,53 @@ pub(super) async fn collect_reattach_data(
                         continue;
                     }
 
-                    // Get screen restoration data from shadow parser
+                    // Swap in new title sender so reader threads notify the new connection
+                    *pane.title_sender.lock().unwrap() = Some(title_tx.clone());
+
+                    if !visible {
+                        // FR13 hidden reattach: keep the pane Detached so the
+                        // reader keeps filling ring + raw_passthrough. Adopt
+                        // the caller as `owner` and set the reason to
+                        // HiddenByVisibility so a subsequent
+                        // SetVisibility(true) from this connection can
+                        // resume it via `resume_pane_with_permit`. Existing
+                        // ring / raw_passthrough contents are preserved.
+                        let mut target = pane.output_target.lock().unwrap();
+                        match &mut *target {
+                            PaneOutputTarget::Connected(_) => {
+                                *target = PaneOutputTarget::Detached {
+                                    reason: DetachReason::HiddenByVisibility,
+                                    owner: Some(pane_output_tx.clone()),
+                                    ring: DetachRingBuffer::new(
+                                        crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
+                                    ),
+                                };
+                            }
+                            PaneOutputTarget::Detached { reason, owner, .. } => {
+                                *reason = DetachReason::combine(
+                                    *reason,
+                                    DetachReason::HiddenByVisibility,
+                                );
+                                // The NetworkDetach bit is cleared on
+                                // reattach because the caller is now the
+                                // owning client. Hidden bit stays.
+                                if let Some(without_network) = reason.clear_network() {
+                                    *reason = without_network;
+                                } else {
+                                    *reason = DetachReason::HiddenByVisibility;
+                                }
+                                *owner = Some(pane_output_tx.clone());
+                            }
+                        }
+                        log::info!(
+                            "collect_reattach: pane {} hidden reattach, kept Detached (snapshot deferred)",
+                            pane.id
+                        );
+                        data.push((pane.id, Vec::new()));
+                        continue;
+                    }
+
+                    // Visible reattach: build snapshot and switch to Connected.
                     let mut combined = build_shadow_parser_snapshot(&pane.shadow_parser);
                     let is_alternate_screen = pane
                         .shadow_parser
@@ -75,7 +136,6 @@ pub(super) async fn collect_reattach_data(
                         .alternate_screen();
                     let screen_len = combined.len();
 
-                    // Get ring buffer data from detached panes
                     let mut target = pane.output_target.lock().unwrap();
                     let target_was = match &*target {
                         PaneOutputTarget::Connected(_) => "Connected",
@@ -90,8 +150,6 @@ pub(super) async fn collect_reattach_data(
                         Vec::new()
                     };
                     *target = PaneOutputTarget::Connected(pane_output_tx.clone());
-                    // Swap in new title sender so reader threads notify the new connection
-                    *pane.title_sender.lock().unwrap() = Some(title_tx.clone());
 
                     // Drain the per-pane raw passthrough buffer so image /
                     // Markdown OSC byte runs captured while detached are
@@ -304,7 +362,7 @@ mod tests {
         // Call collect_reattach_data
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
         let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
 
         // CRITICAL: Must return 2 entries
         assert_eq!(
@@ -370,7 +428,7 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
         let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
 
         assert_eq!(
             data.len(),
@@ -414,7 +472,7 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
         let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
 
         assert_eq!(
             data.len(),
@@ -504,7 +562,7 @@ mod tests {
 
         // First client attaches: installs kick1.
         let (kick_tx1, mut kick_rx1) = oneshot::channel::<()>();
-        let _ = collect_reattach_data(&mgr, session_id, &tx1, &title_tx, kick_tx1).await;
+        let _ = collect_reattach_data(&mgr, session_id, &tx1, &title_tx, kick_tx1, true).await;
 
         // Receiver must still be pending (no kick yet).
         assert!(
@@ -515,7 +573,7 @@ mod tests {
         // Second client attaches: should fire kick1 and install kick2.
         let (tx2, _rx2) = mpsc::channel::<PtyOutputChunk>(256);
         let (kick_tx2, mut kick_rx2) = oneshot::channel::<()>();
-        let _ = collect_reattach_data(&mgr, session_id, &tx2, &title_tx, kick_tx2).await;
+        let _ = collect_reattach_data(&mgr, session_id, &tx2, &title_tx, kick_tx2, true).await;
 
         // First client's kick_rx must now resolve with Ok(()).
         assert_eq!(
@@ -646,7 +704,7 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
         let (kick_tx, mut kick_rx) = oneshot::channel::<()>();
-        let _ = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
+        let _ = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
 
         assert!(
             kick_rx.try_recv().is_err(),
@@ -819,7 +877,7 @@ mod tests {
         let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
         let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
         let (kick_tx, _kick_rx) = oneshot::channel::<()>();
-        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, true).await;
 
         assert_eq!(data.len(), 1, "expected 1 entry");
         let (pane_id, snapshot) = &data[0];
@@ -856,5 +914,199 @@ mod tests {
             0,
             "raw_passthrough must be cleared after collect_reattach_data"
         );
+    }
+
+    /// F4: hidden reattach must NOT switch panes to Connected and must NOT
+    /// drain ring/raw_passthrough. The returned tuples carry empty bytes so
+    /// `send_reattach_data` emits only `PaneCreated` (no `PtyOutput`).
+    #[tokio::test]
+    async fn test_collect_reattach_data_hidden_keeps_detached_and_skips_snapshot() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
+        ring.write(b"buffered-from-ring");
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+            ring,
+        }));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target.clone());
+            pane.shadow_parser.lock().unwrap().process(b"shadow-state");
+            pane.raw_passthrough
+                .lock()
+                .unwrap()
+                .append(b"\x1b_Gi=99;ZZ\x1b\\");
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+        let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+        let data =
+            collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false).await;
+
+        assert_eq!(data.len(), 1, "one entry for the live pane");
+        let (pane_id, snapshot) = &data[0];
+        assert_eq!(*pane_id, 1);
+        assert!(
+            snapshot.is_empty(),
+            "hidden reattach must defer the snapshot (got {}B)",
+            snapshot.len()
+        );
+
+        // Pane stayed Detached, owner adopted, reason is HiddenByVisibility.
+        match &*target.lock().unwrap() {
+            PaneOutputTarget::Detached { reason, owner, .. } => {
+                assert_eq!(*reason, DetachReason::HiddenByVisibility);
+                let owner = owner.as_ref().expect("owner must be set to caller");
+                assert!(owner.same_channel(&new_tx));
+            }
+            _ => panic!("hidden reattach must keep pane Detached"),
+        }
+        // Ring + raw_passthrough must be preserved (NOT drained).
+        let m = mgr.lock().await;
+        let pane = m
+            .get_session(session_id)
+            .unwrap()
+            .windows
+            .values()
+            .next()
+            .unwrap()
+            .panes
+            .values()
+            .next()
+            .unwrap();
+        match &*pane.output_target.lock().unwrap() {
+            PaneOutputTarget::Detached { ring, .. } => {
+                let buf = ring.read_all();
+                assert!(
+                    buf.windows(b"buffered-from-ring".len())
+                        .any(|w| w == b"buffered-from-ring"),
+                    "ring must still hold buffered bytes"
+                );
+            }
+            _ => panic!("expected Detached after hidden reattach"),
+        }
+        assert!(
+            !pane.raw_passthrough.lock().unwrap().is_empty(),
+            "raw_passthrough must NOT be cleared on hidden reattach"
+        );
+    }
+
+    /// F4: a previously Connected pane (e.g. owned by an earlier client
+    /// that did not detach cleanly) must still drop into Detached on a
+    /// hidden reattach.
+    #[tokio::test]
+    async fn test_collect_reattach_data_hidden_demotes_connected_to_detached() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        let (dead_tx, _dead_rx) = mpsc::channel::<PtyOutputChunk>(1);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(dead_tx)));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target.clone());
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+        let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+        let data =
+            collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false).await;
+        assert_eq!(data.len(), 1);
+        assert!(data[0].1.is_empty());
+
+        match &*target.lock().unwrap() {
+            PaneOutputTarget::Detached { reason, owner, .. } => {
+                assert_eq!(*reason, DetachReason::HiddenByVisibility);
+                let owner = owner.as_ref().expect("owner must be set");
+                assert!(owner.same_channel(&new_tx));
+            }
+            _ => panic!("expected Detached"),
+        }
+    }
+
+    /// F4: visible reattach after a hidden reattach: SetVisibility(true)
+    /// in the meantime would be the production trigger, but at the
+    /// `collect_reattach_data` level the simpler invariant is that
+    /// `visible=true` continues to flip the pane to Connected and drain.
+    /// Already covered by the existing
+    /// `test_collect_reattach_data_two_windows_detached` etc., so we add
+    /// a focused round-trip: hidden reattach then visible reattach must
+    /// produce exactly one non-empty snapshot.
+    #[tokio::test]
+    async fn test_collect_reattach_data_hidden_then_visible_round_trip() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
+        ring.write(b"ring-bytes");
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+            ring,
+        }));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target.clone());
+            pane.shadow_parser.lock().unwrap().process(b"shadow-x");
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+
+        // Hidden reattach: empty payload, pane stays Detached.
+        let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+        let data1 =
+            collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx, false).await;
+        assert!(data1[0].1.is_empty());
+
+        // Visible reattach immediately after: pane flips Connected, full snapshot returned.
+        let (kick_tx2, _kick_rx2) = oneshot::channel::<()>();
+        let data2 =
+            collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx2, true).await;
+        assert_eq!(data2.len(), 1);
+        let (_pid, snapshot) = &data2[0];
+        assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(
+            snapshot
+                .windows(b"ring-bytes".len())
+                .any(|w| w == b"ring-bytes"),
+            "visible reattach must include ring data captured during hidden window"
+        );
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
     }
 }

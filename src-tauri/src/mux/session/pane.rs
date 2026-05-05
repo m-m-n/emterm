@@ -124,6 +124,18 @@ pub enum EvalResult {
     ResumeWithSnapshot { snapshot: Vec<u8> },
 }
 
+/// Outcome of `resume_pane_with_permit`. Mirrors the in-lock decision so
+/// callers can branch on the side effects (snapshot enqueued + Connected
+/// swap, or no transition) without re-locking the pane.
+pub enum ResumeOutcome {
+    /// Pane was Detached and resolved cleanly. The snapshot was sent via
+    /// the supplied permit and the target was swapped to `Connected`.
+    Resumed,
+    /// No transition: pane is already Connected, owner mismatches, or
+    /// `NetworkDetach` is still active (only reattach can clear it).
+    NoChange,
+}
+
 /// Decide the correct `output_target` for `pane` given the current network
 /// detach flag and the connection-scoped visible flag, and apply the
 /// transition in place.
@@ -216,6 +228,77 @@ pub fn evaluate_output_target(
                     EvalResult::ResumeWithSnapshot { snapshot }
                 }
             }
+        }
+    }
+}
+
+/// FR9 race-free Detached -> Connected resume.
+///
+/// The caller obtains an `mpsc::Permit` for `pane_output_tx` *outside* the
+/// pane lock (via `Sender::reserve().await`), then hands it in here. This
+/// function holds the pane's `output_target` mutex for the full lifetime of
+/// (build snapshot, send via permit, swap to `Connected`). Because the PTY
+/// reader thread also takes the same `output_target` mutex before its
+/// `try_send` / `blocking_send`, the reader cannot push a live chunk between
+/// the snapshot enqueue and the Connected swap — the snapshot is guaranteed
+/// to land first in the channel's FIFO.
+///
+/// `Permit::send` is consumed and infallible (the slot is already reserved),
+/// so the entire sequence runs under the std mutex without `await`.
+///
+/// Returns `ResumeOutcome::NoChange` when the pane is not eligible to
+/// resume (already Connected, owner mismatch, or `NetworkDetach` still
+/// active). The caller should drop the permit on `NoChange` to release the
+/// reserved slot.
+pub fn resume_pane_with_permit(
+    pane: &MuxPane,
+    owned_tx: &mpsc::Sender<PtyOutputChunk>,
+    permit: mpsc::Permit<'_, PtyOutputChunk>,
+) -> ResumeOutcome {
+    let mut target = pane.output_target.lock().unwrap();
+    match &mut *target {
+        PaneOutputTarget::Connected(_) => ResumeOutcome::NoChange,
+        PaneOutputTarget::Detached {
+            reason,
+            owner,
+            ring,
+        } => {
+            let owner_matches = match owner {
+                Some(o) => o.same_channel(owned_tx),
+                None => true,
+            };
+            if !owner_matches {
+                return ResumeOutcome::NoChange;
+            }
+            let resolved = reason.clear_hidden();
+            if let Some(r) = resolved {
+                *reason = r;
+                if owner.is_none() {
+                    *owner = Some(owned_tx.clone());
+                }
+                return ResumeOutcome::NoChange;
+            }
+            let mut snapshot = Vec::new();
+            snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
+            let screen = pane
+                .shadow_parser
+                .lock()
+                .unwrap()
+                .screen()
+                .contents_formatted();
+            snapshot.extend_from_slice(&screen);
+            let buffered = ring.read_all();
+            snapshot.extend_from_slice(&buffered);
+            let passthrough = pane.raw_passthrough.lock().unwrap().read_all();
+            snapshot.extend_from_slice(&passthrough);
+            ring.clear();
+            pane.raw_passthrough.lock().unwrap().clear();
+            permit.send(PtyOutputChunk {
+                pane_id: pane.id,
+                data: snapshot,
+            });
+            *target = PaneOutputTarget::Connected(owned_tx.clone());
+            ResumeOutcome::Resumed
         }
     }
 }
@@ -666,6 +749,127 @@ mod tests {
             }
             _ => panic!("expected Detached"),
         }
+    }
+
+    /// F2: `resume_pane_with_permit` must enqueue the snapshot via the
+    /// caller-supplied permit and only swap to Connected after the send.
+    /// The pane mutex is held for the full sequence, so a reader thread
+    /// taking the same mutex cannot push a live chunk between the two
+    /// steps. This test asserts the post-conditions.
+    #[tokio::test]
+    async fn test_resume_pane_with_permit_sends_then_swaps() {
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
+        ring.write(b"ring-data");
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+            ring,
+        }));
+        let pane = MuxPane::new_test(7, 80, 24, target.clone());
+        pane.shadow_parser.lock().unwrap().process(b"resume-shadow");
+        pane.raw_passthrough
+            .lock()
+            .unwrap()
+            .append(b"\x1b_Gi=7;PASS\x1b\\");
+
+        let permit = owned_tx.reserve().await.expect("reserve permit");
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+        // Target switched to Connected.
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+
+        // Snapshot is on the channel.
+        let chunk = rx.try_recv().expect("snapshot enqueued under pane lock");
+        assert_eq!(chunk.pane_id, 7);
+        assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        let needle_passthrough = b"\x1b_Gi=7;PASS\x1b\\";
+        assert!(
+            chunk
+                .data
+                .windows(needle_passthrough.len())
+                .any(|w| w == needle_passthrough),
+            "snapshot must contain captured passthrough"
+        );
+        assert!(
+            chunk
+                .data
+                .windows(b"ring-data".len())
+                .any(|w| w == b"ring-data"),
+            "snapshot must contain ring data"
+        );
+
+        // raw_passthrough drained.
+        assert!(pane.raw_passthrough.lock().unwrap().is_empty());
+    }
+
+    /// F2: full Both reason cannot be cleared by `resume_pane_with_permit`
+    /// alone — NetworkDetach stays. The permit is dropped without sending.
+    #[tokio::test]
+    async fn test_resume_pane_with_permit_keeps_detached_when_network_bit_set() {
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::Both,
+            owner: Some(owned_tx.clone()),
+            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+        }));
+        let pane = MuxPane::new_test(8, 80, 24, target.clone());
+
+        let permit = owned_tx.reserve().await.expect("reserve permit");
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        assert!(matches!(outcome, ResumeOutcome::NoChange));
+
+        match &*target.lock().unwrap() {
+            PaneOutputTarget::Detached { reason, .. } => {
+                assert_eq!(*reason, DetachReason::NetworkDetach);
+            }
+            _ => panic!("expected Detached"),
+        }
+        assert!(rx.try_recv().is_err(), "no snapshot must be sent");
+    }
+
+    /// F2: connected pane is a no-op (already resumed).
+    #[tokio::test]
+    async fn test_resume_pane_with_permit_no_change_when_already_connected() {
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let pane = MuxPane::new_test(9, 80, 24, target.clone());
+
+        let permit = owned_tx.reserve().await.expect("reserve permit");
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        assert!(matches!(outcome, ResumeOutcome::NoChange));
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// F2: owner mismatch (different connection's tx) must be NoChange.
+    #[tokio::test]
+    async fn test_resume_pane_with_permit_owner_mismatch_keeps_detached() {
+        let (a_tx, _a_rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let (b_tx, mut b_rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(a_tx.clone()),
+            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+        }));
+        let pane = MuxPane::new_test(10, 80, 24, target.clone());
+
+        let permit = b_tx.reserve().await.expect("reserve permit");
+        let outcome = resume_pane_with_permit(&pane, &b_tx, permit);
+        assert!(matches!(outcome, ResumeOutcome::NoChange));
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Detached { .. }
+        ));
+        assert!(b_rx.try_recv().is_err(), "no snapshot must reach B");
     }
 
     #[test]
