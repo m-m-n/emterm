@@ -4,6 +4,7 @@
 //! handshake -> authenticated (GUI streaming or CLI control).
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
@@ -17,7 +18,7 @@ use super::codec::MuxCodec;
 use super::handlers::{
     handle_attach, handle_create_window, handle_destroy_pane, handle_destroy_window,
     handle_move_window, handle_rename_window, handle_request_pane_snapshot, handle_resize,
-    handle_switch_window,
+    handle_set_visibility, handle_switch_window,
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
@@ -204,6 +205,12 @@ pub async fn handle_connection<S>(
     let mut kick_rx: Option<oneshot::Receiver<()>> = None;
     let mut was_kicked = false;
 
+    // Per-connection effective-visible state (FR3, FR7). Initially true so
+    // newly-attached clients receive PTY output immediately. Updated by
+    // SetVisibility messages and consulted on reattach (collect_reattach_data
+    // re-evaluates output_target after a session switch).
+    let visible_state: Arc<AtomicBool> = Arc::new(AtomicBool::new(true));
+
     // Message + output loop using select! to handle both directions concurrently
     loop {
         // Build a future for the render timer (if enabled)
@@ -257,6 +264,7 @@ pub async fn handle_connection<S>(
                             &pane_cwd_map,
                             &title_tx,
                             &mut kick_rx,
+                            &visible_state,
                         ).await {
                             if should_break {
                                 break;
@@ -609,6 +617,7 @@ async fn log_cli_window_creation(session_manager: &Arc<Mutex<SessionManager>>, s
 ///
 /// Returns `Err(true)` when the connection should be closed,
 /// `Err(false)` on a non-fatal send error, and `Ok(())` otherwise.
+#[allow(clippy::too_many_arguments)]
 async fn route_message<S>(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -620,6 +629,7 @@ async fn route_message<S>(
     pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
     title_tx: &TitleChangeSender,
     kick_rx: &mut Option<oneshot::Receiver<()>>,
+    visible_state: &Arc<AtomicBool>,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -647,6 +657,7 @@ where
                 active_session_id,
                 title_tx,
                 kick_rx,
+                visible_state,
             )
             .await?;
             // Register pane cwd Arcs for all panes in the new session
@@ -703,6 +714,23 @@ where
             // handle_request_pane_snapshot once the snapshot is built.
             log::warn!("RequestPaneSnapshot: received for pane {}", msg.pane_id);
             handle_request_pane_snapshot(&msg, session_manager, pane_output_tx).await?;
+        }
+        MessageType::SetVisibility => {
+            let payload = match SetVisibilityPayload::from_payload(&msg.payload) {
+                Some(p) => p,
+                None => {
+                    log::warn!("SetVisibility: empty payload, ignoring");
+                    return Ok(());
+                }
+            };
+            handle_set_visibility(
+                payload.visible,
+                session_manager,
+                *active_session_id,
+                pane_output_tx,
+                visible_state,
+            )
+            .await;
         }
         MessageType::PtyInput => {
             let pane_id = msg.pane_id;

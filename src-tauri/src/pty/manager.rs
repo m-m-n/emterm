@@ -12,8 +12,8 @@ use tokio::sync::{Mutex, RwLock};
 type EnvVars = HashMap<String, String>;
 
 use super::{
-    BackpressureRegistry, PtyError, PtySession, SessionId, WriterRegistry, detect_default_shell,
-    generate_session_id,
+    BackpressureRegistry, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX, PtyError, PtySession, SessionId,
+    VisibilityRegistry, WriterRegistry, detect_default_shell, generate_session_id,
 };
 
 /// Result of session creation with atomic count.
@@ -49,6 +49,9 @@ pub struct PtyManager {
     /// inspects this before forwarding bytes to the frontend; the frontend
     /// invokes `pty_ack` after consuming a batch.
     backpressure: BackpressureRegistry,
+    /// Per-session visibility / shadow-parser state used to suspend
+    /// PTY-to-frontend forwarding when the GUI is hidden.
+    visibility: VisibilityRegistry,
 }
 
 impl Default for PtyManager {
@@ -64,6 +67,7 @@ impl PtyManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             writer_registry: Arc::new(WriterRegistry::new()),
             backpressure: BackpressureRegistry::new(),
+            visibility: VisibilityRegistry::new(),
         }
     }
 
@@ -75,6 +79,11 @@ impl PtyManager {
     /// Returns a reference to the backpressure registry.
     pub fn backpressure(&self) -> &BackpressureRegistry {
         &self.backpressure
+    }
+
+    /// Returns a reference to the visibility registry.
+    pub fn visibility(&self) -> &VisibilityRegistry {
+        &self.visibility
     }
 
     /// Creates a new PTY session with the specified parameters.
@@ -141,6 +150,7 @@ impl PtyManager {
             log::warn!("Failed to remove writer for session {}: {}", id, e);
         }
         self.backpressure.remove(id);
+        self.visibility.remove(id);
         let mut sessions = self.sessions.write().await;
         sessions.remove(id)
     }
@@ -189,6 +199,8 @@ impl PtyManager {
         super::writer::spawn_writer_thread(id.clone(), writer_handle, rx);
         self.writer_registry.register(id.clone(), tx)?;
         self.backpressure.register(id.clone());
+        self.visibility
+            .register(id.clone(), cols, rows, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX);
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(id.clone(), Arc::new(Mutex::new(session)));
@@ -218,6 +230,7 @@ impl PtyManager {
         // Drop backpressure entry; any reader still holding the Arc will see
         // a zeroed counter on next ack, which is harmless.
         self.backpressure.remove(id);
+        self.visibility.remove(id);
 
         let mut sessions = self.sessions.write().await;
         let session = sessions.remove(id)?;

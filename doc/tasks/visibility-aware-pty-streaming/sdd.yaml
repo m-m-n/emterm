@@ -1,0 +1,159 @@
+schema_version: 1
+feature: visibility-aware-pty-streaming
+created: 2026-05-04
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --manifest-path src-tauri/Cargo.toml\""
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"bun test\""
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    wasm:
+      language: rust
+      build_command: "bun run build:wasm"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cd wasm && cargo test\""
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: b4f7cd26c1fcd0eb06cc4326db29b0f9440a4b90
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: b4f7cd26c1fcd0eb06cc4326db29b0f9440a4b90
+  - id: verify-plan
+    status: completed
+    completed_at_commit: b4f7cd26c1fcd0eb06cc4326db29b0f9440a4b90
+  - id: implement
+    status: completed
+    completed_at_commit: b4f7cd26c1fcd0eb06cc4326db29b0f9440a4b90
+  - id: check
+    status: completed
+    completed_at_commit: b4f7cd26c1fcd0eb06cc4326db29b0f9440a4b90
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: b4f7cd26c1fcd0eb06cc4326db29b0f9440a4b90
+
+requirements:
+  FR1:
+    title: Visibility 検知と統合判定
+    status: ok
+    tasks: [phase2-visibility-controller, phase2-terminal-app-wiring]
+    tests: [TS-8, TS-9]
+  FR2:
+    title: Backend への通知 (非 mux)
+    status: ok
+    tasks: [phase1-tauri-command, phase2-pty-client-setvisibility]
+    tests: [TS-15]
+  FR3:
+    title: Daemon への通知 (mux)
+    status: ok
+    tasks: [phase3-mux-protocol, phase3-mux-handler, phase2-mux-client-setvisibility]
+    tests: [TS-7, TS-19]
+  FR4:
+    title: Backend shadow parser (非 mux)
+    status: ok
+    tasks: [phase1-visibility-state, phase1-manager-registry]
+    tests: [TS-1, TS-6]
+  FR5:
+    title: デバウンス制御
+    status: ok
+    tasks: [phase2-visibility-controller]
+    tests: [TS-8, TS-9]
+  FR6:
+    title: Hidden 中の reader 挙動 (非 mux)
+    status: ok
+    tasks: [phase1-reader-rewire]
+    tests: [TS-1, TS-15, TS-16]
+  FR7:
+    title: Hidden 中の daemon 挙動 (mux)
+    status: ok
+    tasks: [phase3-evaluate-output-target, phase3-mux-handler, phase3-pty-spawn-passthrough]
+    tests: [TS-12, TS-13, TS-14, TS-18]
+  FR8:
+    title: Visible 復帰時のスナップショット送信 (非 mux)
+    status: ok
+    tasks: [phase1-visibility-state, phase1-tauri-command]
+    tests: [TS-2, TS-16, TS-17]
+  FR9:
+    title: Visible 復帰時のスナップショット送信 (mux)
+    status: ok
+    tasks: [phase3-reattach-integration, phase3-mux-handler]
+    tests: [TS-19]
+  FR10:
+    title: リングバッファ容量上限
+    status: ok
+    tasks: [phase1-visibility-state]
+    tests: [TS-3]
+  FR11:
+    title: Visibility 状態の pty_ack 解釈
+    status: ok
+    tasks: [phase1-reader-rewire, phase1-backpressure-cleanup]
+    tests: [TS-15]
+  FR12:
+    title: Backend からの再構築不要保証
+    status: ok
+    tasks: [phase1-visibility-state, phase3-reattach-integration]
+    tests: [TS-17, TS-19]
+  FR13:
+    title: mux 既存 detach との共存
+    status: ok
+    tasks: [phase3-evaluate-output-target, phase3-reattach-integration, phase3-mux-handler]
+    tests: [TS-12, TS-13, TS-14, TS-20]
+  FR14:
+    title: 画像 / Markdown OSC の取り扱い
+    status: ok
+    tasks: [phase1-passthrough-scanner, phase1-visibility-state, phase3-pane-passthrough, phase3-pty-spawn-passthrough]
+    tests: [TS-4, TS-5, TS-10, TS-11, TS-22]
+  FR15:
+    title: 既存対症療法の撤去
+    status: ok
+    tasks: [phase1-reader-rewire, phase1-backpressure-cleanup, phase2-pty-handler-cleanup, phase4-frontend-cleanup]
+    tests: [TS-23]
+  FR16:
+    title: 既存対症療法の維持
+    status: ok
+    tasks: [phase4-frontend-cleanup]
+    tests: [TS-24]
+  NFR1:
+    title: Performance (visible 中)
+    status: ok
+    tasks: [phase5-perf-throughput]
+    tests: [TS-25]
+  NFR2:
+    title: Performance (復帰時)
+    status: ok
+    tasks: [phase5-perf-resume-block]
+    tests: [TS-27]
+  NFR3:
+    title: Memory
+    status: ok
+    tasks: [phase5-perf-rss]
+    tests: [TS-26]
+  NFR4:
+    title: Compatibility
+    status: ok
+    tasks: [phase4-e2e-spec, phase5-manual-freeze-repro]
+    tests: [TS-28]
+  NFR5:
+    title: Reliability
+    status: ok
+    tasks: [phase2-visibility-controller]
+    tests: [TS-21]
+  NFR6:
+    title: Observability
+    status: ok
+    tasks: [phase1-visibility-state, phase2-visibility-controller, phase3-evaluate-output-target]
+    tests: [TS-5]

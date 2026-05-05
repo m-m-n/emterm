@@ -91,24 +91,39 @@ pub(super) async fn collect_reattach_data(
                     *target = PaneOutputTarget::Connected(pane_output_tx.clone());
                     // Swap in new title sender so reader threads notify the new connection
                     *pane.title_sender.lock().unwrap() = Some(title_tx.clone());
+
+                    // Drain the per-pane raw passthrough buffer so image /
+                    // Markdown OSC byte runs captured while detached are
+                    // replayed as part of the resume snapshot. Cleared
+                    // unconditionally so the next detach cycle starts fresh.
+                    let passthrough_data = {
+                        let mut buf = pane.raw_passthrough.lock().unwrap();
+                        let bytes = buf.read_all();
+                        buf.clear();
+                        bytes
+                    };
+
                     log::info!(
-                        "collect_reattach: pane {} was={}, screen={}B, ring={}B, total={}B, alt_screen={}, exited={}",
+                        "collect_reattach: pane {} was={}, screen={}B, ring={}B, passthrough={}B, total={}B, alt_screen={}, exited={}",
                         pane.id,
                         target_was,
                         screen_len,
                         ring_data.len(),
-                        screen_len + ring_data.len(),
+                        passthrough_data.len(),
+                        screen_len + ring_data.len() + passthrough_data.len(),
                         is_alternate_screen,
                         pane.exited
                     );
 
-                    // Ensure the ring buffer (up to 64MB) fits without incremental
-                    // reallocation. `build_shadow_parser_snapshot` only reserves
-                    // `screen_data.len() + 10`, so without this the reattach path
-                    // would grow `combined` in ~log2(ring_data.len() / screen_len)
-                    // doubling steps.
-                    combined.reserve(ring_data.len());
+                    // Ensure the ring buffer (up to 64MB) plus the
+                    // passthrough buffer fit without incremental
+                    // reallocation. `build_shadow_parser_snapshot` only
+                    // reserves `screen_data.len() + 10`, so without this the
+                    // reattach path would grow `combined` in
+                    // ~log2((ring + passthrough) / screen) doubling steps.
+                    combined.reserve(ring_data.len() + passthrough_data.len());
                     combined.extend_from_slice(&ring_data);
+                    combined.extend_from_slice(&passthrough_data);
 
                     data.push((pane.id, combined));
                 }
@@ -750,5 +765,83 @@ mod tests {
             assert_eq!(list[0].pane_count, 2, "Session should report 2 panes");
             assert_eq!(list[0].window_count, 2, "Session should report 2 windows");
         }
+    }
+
+    /// TS-20: collect_reattach_data must concatenate the per-pane
+    /// `raw_passthrough` buffer onto the resume snapshot AND clear the
+    /// buffer after consumption. Without this, image / Markdown OSC
+    /// sequences captured while the pane was Detached would be lost on
+    /// reattach (and would also leak across the next detach cycle).
+    #[tokio::test]
+    async fn test_collect_reattach_data_includes_raw_passthrough_and_clears_it() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+
+        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
+        ring.write(b"buffered-from-ring");
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring)));
+
+        let session_id;
+        {
+            let mut m = mgr.lock().await;
+            session_id = m.create_session("default".to_string());
+            let wid = m.create_window(session_id, "shell".to_string()).unwrap();
+            let pane = make_test_pane_with_target(1, target);
+            // Seed shadow + raw_passthrough as the reader thread would.
+            pane.shadow_parser
+                .lock()
+                .unwrap()
+                .process(b"shadow-content");
+            pane.raw_passthrough
+                .lock()
+                .unwrap()
+                .append(b"\x1b_Gi=42;PNG-bytes\x1b\\");
+            m.get_session_mut(session_id)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(pane);
+        }
+
+        let (new_tx, _new_rx) = mpsc::channel::<PtyOutputChunk>(256);
+        let (title_tx, _title_rx) = mpsc::channel::<(u32, String)>(16);
+        let (kick_tx, _kick_rx) = oneshot::channel::<()>();
+        let data = collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx).await;
+
+        assert_eq!(data.len(), 1, "expected 1 entry");
+        let (pane_id, snapshot) = &data[0];
+        assert_eq!(*pane_id, 1);
+        assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
+        let needle = b"\x1b_Gi=42;PNG-bytes\x1b\\";
+        assert!(
+            snapshot.windows(needle.len()).any(|w| w == needle),
+            "reattach snapshot must include captured passthrough sequence"
+        );
+        // The ring data must still be present.
+        assert!(
+            snapshot
+                .windows(b"buffered-from-ring".len())
+                .any(|w| w == b"buffered-from-ring"),
+            "reattach snapshot must include ring data"
+        );
+
+        // raw_passthrough must be drained — otherwise the next detach cycle
+        // would re-emit the same bytes.
+        let m = mgr.lock().await;
+        let session = m.get_session(session_id).unwrap();
+        let pane = session
+            .windows
+            .values()
+            .next()
+            .unwrap()
+            .panes
+            .values()
+            .next()
+            .unwrap();
+        assert_eq!(
+            pane.raw_passthrough.lock().unwrap().len(),
+            0,
+            "raw_passthrough must be cleared after collect_reattach_data"
+        );
     }
 }

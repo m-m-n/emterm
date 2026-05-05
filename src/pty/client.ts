@@ -219,6 +219,21 @@ export class PtyClient {
 	}
 
 	/**
+	 * Notify the backend of the frontend's effective visibility for this
+	 * session. Hidden -> backend stops streaming PTY bytes to the channel
+	 * and feeds them to a shadow parser instead. Visible -> backend sends
+	 * a 1-message snapshot (clear-screen + shadow contents + raw image
+	 * passthrough) on the same channel and resumes streaming.
+	 */
+	async setVisibility(visible: boolean): Promise<void> {
+		if (!this.sessionId) return;
+		await invoke<void>("pty_set_visibility", {
+			sessionId: this.sessionId,
+			visible,
+		});
+	}
+
+	/**
 	 * Resizes the PTY session to the specified dimensions.
 	 *
 	 * @param cols - New number of columns

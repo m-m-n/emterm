@@ -44,14 +44,6 @@ pub struct TabCountChangedPayload {
     pub count: usize,
 }
 
-/// Payload for pty_heartbeat event. Emitted periodically by the PTY reader
-/// when the helper channel times out, so the frontend can drain pending data
-/// via setTimeout even if requestAnimationFrame is throttled.
-#[derive(Serialize, Clone)]
-pub struct PtyHeartbeatPayload {
-    pub session_id: String,
-}
-
 /// Payload for image_event IPC channel.
 ///
 /// Wraps an `ImageEvent` with the associated session ID for routing

@@ -7,7 +7,9 @@ import {
   calculateTerminalSize,
   measureCharacterSize,
   PtyClient,
+  VisibilityController,
 } from "../pty";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TerminalState } from "../terminal/state";
 import { WasmGrid } from "../terminal/wasm/terminal-core";
 import { createRenderer, createRendererAsync, type ITerminalRenderer } from "../terminal";
@@ -56,16 +58,6 @@ import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
 import { getWasmMemoryBytes } from "../terminal/wasm/loader";
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-
-/** Diagnostic helper: ask backend for cumulative send-counter for the given
- *  session. Returns (count, bytes) tuple from Rust pty_get_send_stats. The
- *  Rust side returns count=-1 / bytes=0 when session is missing. */
-async function invokeBackendSendStats(sessionId: string): Promise<{ count: number; bytes: number }> {
-  const result = await tauriInvoke<[number, number]>("pty_get_send_stats", { sessionId });
-  return { count: result[0], bytes: result[1] };
-}
-
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -98,6 +90,7 @@ export class TerminalApp {
   /** Callback for mux status updates (set from main.ts, routes to OSC layer) */
   public muxStatusUpdateCallback: ((msg: { left: string; right: string }) => void) | null = null;
   private muxClient: MuxClient | null = null;
+  private visibilityController: VisibilityController | null = null;
   private inMuxMode = false;
   private muxWindows: { id: number; name: string }[] = [];
   private activeMuxWindowIndex = 0;
@@ -130,22 +123,19 @@ export class TerminalApp {
   private snapshotWaitSetAt = 0;
   private muxLastActiveIndex = 0;
 
-  /** Diagnostic heartbeat timer, started at the end of init() and stopped in
-   *  dispose(). Logs a single [DIAG-MUX-HEARTBEAT] warn line every 5s with
-   *  pane count, active pane id, last switch elapsed, main-thread loop lag
-   *  (delay between heartbeat firings minus the 5000 ms expected), max rAF
-   *  gap reported by the renderer, and WASM heap size. The lag and rAF gap
-   *  values are the most direct signals for "main thread or compositor was
-   *  blocked between heartbeats" — the freeze fingerprint. */
+  /** Diagnostic heartbeat timer, started at the end of init() and stopped
+   *  in dispose(). Logs a single `[DIAG-PTY-HEALTH]` warn line every 5s
+   *  containing the FR16 retained signals: chunk-recv counters, pending
+   *  queue depth, main-thread loop lag (delay between heartbeat firings
+   *  minus the 5000 ms expected), max rAF gap reported by the renderer,
+   *  and WASM heap size. Loop-lag and rAF-gap remain the most direct
+   *  signals for "main thread or compositor was blocked between
+   *  heartbeats". The earlier `pty_get_send_stats` probe used to detect
+   *  Tauri Channel transport stalls is removed (FR15) — under the new
+   *  visibility-aware streaming model the backend never sends while
+   *  hidden, so the gap that probe was diagnosing no longer occurs. */
   private _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private _heartbeatLastFiredAt = 0;
-  /** Latest snapshot of backend send counters returned by pty_get_send_stats.
-   *  Updated asynchronously per heartbeat (fire-and-forget invoke). When the
-   *  backend keeps sending but this stops being updated, IPC invoke itself
-   *  is stuck — orthogonal to the Channel transport stalling. */
-  private _backendSendStats: { count: number; bytes: number; updatedAt: number } | null = null;
-  private _backendSendStatsPending = false;
-  private _backendSendStatsLastReqAt = 0;
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -346,6 +336,23 @@ export class TerminalApp {
 
     // Set up PTY output handler
     await this.setupPtyHandlers();
+
+    // Visibility-aware streaming controller (FR1, FR2, FR5, NFR5).
+    // Watches document.visibilityState + Tauri focus, debounces hide,
+    // forwards confirmed transitions to backend / mux daemon.
+    this.visibilityController = new VisibilityController({
+      getPtyClient: () => this.ptyClient,
+      getMuxClient: () => this.muxClient,
+      getDocumentVisible: () => document.visibilityState === "visible",
+      subscribeFocus: async (cb) => {
+        const win = getCurrentWebviewWindow();
+        const unlisten = await win.onFocusChanged(({ payload: focused }) => cb(focused));
+        return unlisten;
+      },
+    });
+    this.visibilityController.start().catch((err) => {
+      console.warn("[WARN][FRONTEND] VisibilityController.start failed:", err);
+    });
 
     // Initialize IME handler
     // Use container id or generate unique id for debugging
@@ -611,7 +618,7 @@ export class TerminalApp {
       } catch { /* loader not initialized */ }
 
       // IPC layer observability: chunkRecv* counters tell us whether the
-      // backend → frontend Channel listener is firing at all (== distinguish
+      // backend → frontend Channel listener is firing at all (= distinguish
       // "IPC stuck" from "scheduling stuck"). pending* counters reveal
       // whether listener-delivered chunks are piling up because
       // processPendingData isn't running. lastChunkAgoMs == -1 means no
@@ -627,54 +634,8 @@ export class TerminalApp {
       const pendingBytes = pending?.bytes ?? -1;
       const pendingLeftover = pending?.hasLeftover ?? false;
 
-      // Backend-side send counters via Tauri invoke. Fire-and-forget so a
-      // stuck IPC doesn't block the heartbeat itself; result lands in
-      // _backendSendStats by the next tick. The gap between this and
-      // chunkRecv is the smoking gun for "Tauri Channel transport stalled":
-      // backend keeps incrementing sent_count but onmessage stops firing in
-      // frontend, so backendSent count >> chunkRecv count.
-      const sessionId = this.ptyClient?.getSessionId();
-      if (sessionId && !this._backendSendStatsPending) {
-        this._backendSendStatsPending = true;
-        this._backendSendStatsLastReqAt = now;
-        invokeBackendSendStats(sessionId)
-          .then((res) => {
-            this._backendSendStats = {
-              count: res.count,
-              bytes: res.bytes,
-              updatedAt: performance.now(),
-            };
-          })
-          .catch((err) => {
-            console.warn(`[DIAG-MUX-HEARTBEAT] pty_get_send_stats failed: ${err instanceof Error ? err.message : String(err)}`);
-          })
-          .finally(() => {
-            this._backendSendStatsPending = false;
-            // Clear request timestamp on completion so reqAgo only reads
-            // meaningfully (>0) while an invoke is in flight. In healthy
-            // steady state inflight=false reqAgo=-1; during a stuck invoke
-            // inflight=true reqAgo grows, the smoking-gun signal we want.
-            this._backendSendStatsLastReqAt = 0;
-          });
-      }
-      const sendStats = this._backendSendStats;
-      const backendSentCount = sendStats?.count ?? -1;
-      const backendSentBytes = sendStats?.bytes ?? -1;
-      // ago: heartbeats elapsed since last successful invoke resolve. 0 ms
-      //   each tick means invoke is healthy. Monotonically growing means
-      //   invoke responses themselves are stuck (= IPC fully dead, not just
-      //   Channel transport).
-      const sendStatsAgoMs = sendStats ? Math.round(now - sendStats.updatedAt) : -1;
-      // reqAgo: time since the most recent invoke was *fired*. Combined
-      //   with `pending=true` (this._backendSendStatsPending), reqAgo > 5s
-      //   means the in-flight invoke has been waiting longer than a
-      //   heartbeat — confirming the invoke side is also frozen.
-      const sendStatsReqAgoMs = this._backendSendStatsLastReqAt > 0
-        ? Math.round(now - this._backendSendStatsLastReqAt)
-        : -1;
-
       console.warn(
-        `[DIAG-MUX-HEARTBEAT]` +
+        `[DIAG-PTY-HEALTH]` +
         ` mux=${this.inMuxMode}` +
         ` panes=${panes}` +
         ` activeIdx=${activeIdx} activePaneId=${activePaneId}` +
@@ -684,12 +645,10 @@ export class TerminalApp {
         ` wasmHeapMB=${wasmHeapMB}` +
         ` chunkRecv=${recvCount}/${recvBytes}b` +
         ` lastChunkAgoMs=${lastChunkAgoMs}` +
-        ` pending=${pendingChunks}c/${pendingBytes}b leftover=${pendingLeftover}` +
-        ` backendSent=${backendSentCount}/${backendSentBytes}b` +
-        ` sendStatsAgo=${sendStatsAgoMs}ms reqAgo=${sendStatsReqAgoMs}ms inflight=${this._backendSendStatsPending}`,
+        ` pending=${pendingChunks}c/${pendingBytes}b leftover=${pendingLeftover}`,
       );
     } catch (err) {
-      console.warn(`[DIAG-MUX-HEARTBEAT] heartbeat threw: ${err instanceof Error ? err.message : String(err)}`);
+      console.warn(`[DIAG-PTY-HEALTH] heartbeat threw: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -1440,6 +1399,11 @@ export class TerminalApp {
     // Clean up image handler (ImageViewer, event listener, queues)
     this.imageHandler?.dispose();
     this.imageHandler = null;
+
+    // Stop visibility controller before PTY teardown so its final
+    // setVisibility callbacks don't race with `dispose`.
+    this.visibilityController?.stop();
+    this.visibilityController = null;
 
     // Remove PTY-handler-owned document/window listeners (visibilitychange,
     // Tauri focus) before tearing down the PTY client itself.

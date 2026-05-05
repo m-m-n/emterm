@@ -1,17 +1,12 @@
 use crate::payloads::*;
 use crate::pty::PtyManager;
 use std::io::Read;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
-
-/// Heartbeat emit interval. Sent to the frontend even when rAF is throttled
-/// (e.g., WebKitGTK background tab) so the frontend can drain pending data
-/// via setTimeout instead of waiting for a frame.
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Spawns a dedicated thread to read output from a PTY session.
 ///
@@ -101,7 +96,14 @@ pub fn spawn_reader_thread(
         // already registers, but legacy `create_session` callers won't, so
         // register defensively here.
         let backpressure = manager.backpressure().register(session_id.clone());
-        let mut last_heartbeat = Instant::now();
+        // Visibility: register the reader Channel so resume snapshots are
+        // delivered through the same path as normal PTY output. Legacy
+        // `create_session` callers won't have a visibility entry, so the
+        // hidden code path is silently skipped in that (deprecated) case.
+        let visibility = manager.visibility().get(&session_id);
+        if let Some(vis) = visibility.as_ref() {
+            vis.register_channel(channel.clone());
+        }
 
         // Use a helper thread for blocking read + mpsc channel so that
         // the main reader loop can periodically check process_exited.
@@ -213,21 +215,24 @@ pub fn spawn_reader_thread(
                         }
                     }
                     let len = batch.len();
-                    // Backpressure: if the frontend has not acked enough bytes,
-                    // wait for it to drain before forwarding more. This propagates
-                    // backpressure through the helper sync_channel(256) → PTY pipe
-                    // buffer → shell process write.
+                    // Hidden short-circuit: feed the shadow parser and the
+                    // raw-passthrough scanner, but skip channel.send +
+                    // add_sent + wait_for_drain entirely.
+                    if let Some(vis) = visibility.as_ref() {
+                        if !vis.is_visible() {
+                            vis.process_hidden(&batch);
+                            continue;
+                        }
+                    }
+                    // Visible path. Backpressure: if the frontend has not
+                    // acked enough bytes, wait for it to drain before
+                    // forwarding more. wait_for_drain is ack-driven (no
+                    // timeout); a hidden transition unparks via
+                    // set_hidden_wake.
                     if backpressure.over_high_water() {
                         let in_flight_before = backpressure.in_flight();
                         let waited = backpressure.wait_for_drain();
                         if waited >= Duration::from_millis(100) {
-                            // Snapshot every session's in_flight so the warn
-                            // line shows whether the parallel-Claude-Code
-                            // hypothesis (multiple panes simultaneously
-                            // backed up) holds at this moment, vs only the
-                            // reporting session being slow. Self is also in
-                            // the list — the caller can spot the entry by
-                            // session_id match.
                             let snap = manager.backpressure().snapshot_in_flight();
                             let total_sessions = snap.len();
                             let total_in_flight: usize = snap.iter().map(|(_, n)| *n).sum();
@@ -256,6 +261,15 @@ pub fn spawn_reader_thread(
                                 others_str,
                             );
                         }
+                        // Re-check visibility after waking: a hidden
+                        // transition raised set_hidden_wake, so the batch
+                        // we held belongs on the hidden path now.
+                        if let Some(vis) = visibility.as_ref() {
+                            if !vis.is_visible() {
+                                vis.process_hidden(&batch);
+                                continue;
+                            }
+                        }
                     }
                     backpressure.add_sent(len);
                     match channel.send(InvokeResponseBody::Raw(batch)) {
@@ -281,20 +295,6 @@ pub fn spawn_reader_thread(
                             session_id
                         );
                         break;
-                    }
-                    // Heartbeat: emit a lightweight event when no PTY data has
-                    // arrived recently. The frontend listens for `pty_heartbeat`
-                    // via setTimeout-driven scheduling so it can drain pending
-                    // data even if `requestAnimationFrame` is throttled by the
-                    // host WebView (e.g. background tab in WebKitGTK).
-                    if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-                        last_heartbeat = Instant::now();
-                        let _ = app.emit(
-                            "pty_heartbeat",
-                            PtyHeartbeatPayload {
-                                session_id: session_id.clone(),
-                            },
-                        );
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
