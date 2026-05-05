@@ -15,7 +15,6 @@ import { handleMuxApc } from "../terminal/handlers/apc_handlers";
 import type { MuxApcContext } from "../terminal/handlers/apc_handlers";
 import { muxLog } from "../terminal/mux/mux-logger";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /**
  * Stateful APC/OSC parser that buffers incomplete sequences across PTY read chunks.
@@ -239,24 +238,13 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let leftoverData: Uint8Array | null = null;
   let rafScheduled = false;
   let rafHandle: number | null = null;
-  let rafFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   // Monotonically increasing token. Each scheduleProcessing call captures the
-  // current value; both the rAF and setTimeout callbacks compare against this
-  // before running so a stale callback that the browser already queued cannot
-  // double-fire processPendingData after another callback (or a direct
-  // synchronous processPendingData) has already advanced the schedule.
+  // current value; the rAF callback compares against this before running so a
+  // stale callback that the browser already queued cannot double-fire
+  // processPendingData after another callback (or a direct synchronous
+  // processPendingData) has already advanced the schedule.
   let scheduleToken = 0;
-  // Fallback delay before forcing processPendingData via setTimeout when
-  // requestAnimationFrame is throttled by the host WebView (e.g. WebKitGTK
-  // background tab). Picked to be longer than a normal frame (16.7ms) but
-  // short enough to drain backlog quickly when rAF is paused for minutes.
-  const RAF_FALLBACK_MS = 150;
   const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
-  // When the rAF fallback fires, the WebView is likely throttling animations.
-  // Track recent fallback hits so the early-reinit detector can decide whether
-  // a long pending buildup warrants a forceReinitWasm before the WASM grid is
-  // actually corrupted.
-  let rafFallbackFireCount = 0;
   // Coalesced ack state: at 60Hz a per-frame `pty_ack` IPC for tiny keystroke
   // echoes is pure overhead (HIGH_WATER is 8 MB so single-byte acks add no
   // value). Accumulate consumed bytes here and flush either at the byte
@@ -278,11 +266,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let lastHealthCheckWall = 0;       // When healthCheck last actually ran (Date.now)
   let healthCheckCount = 0;          // Total health-check invocations
   let lastProcessingEndTime = 0;     // When processPendingData last finished
-  // Per-stall flag for `heartbeat-wake` warning. Set on the first heartbeat
-  // that observes a stall (sinceLastProcess > 1s) and cleared whenever
-  // processPendingData completes, so we get one warning per stall episode
-  // instead of one every 500ms while the queue is held back.
-  let heartbeatWakeWarnedDuringStall = false;
 
   // Event loop health probe: measures setTimeout(0) latency to detect main thread blockage
   const probeEventLoopHealth = () => {
@@ -472,10 +455,8 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   };
 
   // `trigger` lets us tell which scheduling path actually drained pendingChunks
-  // — rAF (normal frame) vs setTimeout fallback (rAF throttled by WebView) vs
-  // direct call (processNow / leftover continuation). Helps validate whether
-  // the rAF-independent recovery path is engaging when the host throttles rAF.
-  type ProcessTrigger = "raf" | "fallback" | "manual";
+  // — rAF (normal frame) vs direct call (processNow / leftover continuation).
+  type ProcessTrigger = "raf" | "manual";
   const processPendingData = (trigger: ProcessTrigger = "manual") => {
     const processingStart = performance.now();
     rafScheduled = false;
@@ -486,10 +467,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     if (rafHandle !== null) {
       try { cancelAnimationFrame(rafHandle); } catch { /* ignore */ }
       rafHandle = null;
-    }
-    if (rafFallbackTimer !== null) {
-      clearTimeout(rafFallbackTimer);
-      rafFallbackTimer = null;
     }
 
     // During async WASM reinitialization or after exhausting retries, skip processing
@@ -545,9 +522,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       const charSize = ctx.getCharSize();
       // Hard timeout: absolute maximum time for the entire processing loop.
       // If exceeded, abort to prevent UI freeze. Tightened from 2000 → 200 to
-      // keep the main thread responsive when WebKitGTK throttles rAF and the
-      // backlog is drained via the setTimeout fallback (fewer frames available
-      // per second, so each must yield faster).
+      // keep the main thread responsive: visibility-aware streaming pauses
+      // backend forwarding while hidden, so per-frame backlog stays small and
+      // each iteration must yield quickly to keep input latency low.
       const HARD_TIMEOUT_MS = 200;
       const hardDeadline = performance.now() + HARD_TIMEOUT_MS;
 
@@ -696,9 +673,6 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       }
 
       lastProcessingEndTime = performance.now();
-      // Stall recovered: re-arm the heartbeat-wake warning so the next
-      // stall (if any) gets logged once.
-      heartbeatWakeWarnedDuringStall = false;
 
       // Backpressure: tell Rust how many bytes the frontend just consumed so
       // it can resume reading from the PTY. The "consumed" count is bytes we
@@ -744,37 +718,15 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     rafScheduled = true;
     lastScheduleTime = performance.now();
     const myToken = ++scheduleToken;
-    // Schedule both rAF and a setTimeout fallback. Whichever fires first wins
-    // and bumps scheduleToken in processPendingData; the loser sees its
-    // captured token is stale and bails out before re-entering processing.
-    // The setTimeout fallback is the main heartbeat-independent path that
-    // keeps draining when the host WebView throttles rAF (e.g. WebKitGTK
-    // background tab freezes rAF for minutes after focus loss).
+    // Hidden tabs no longer accumulate frontend backlog — the backend pauses
+    // forwarding while hidden (visibility-aware streaming). So a single rAF
+    // schedule is sufficient; the prior setTimeout fallback that drained
+    // backlog under rAF throttling is no longer needed.
     rafHandle = requestAnimationFrame(() => {
       rafHandle = null;
       if (myToken !== scheduleToken) return;
       processPendingData("raf");
     });
-    rafFallbackTimer = setTimeout(() => {
-      rafFallbackTimer = null;
-      if (myToken !== scheduleToken) return;
-      rafFallbackFireCount++;
-      if (rafFallbackFireCount === 1 || rafFallbackFireCount % 20 === 0) {
-        // When the fallback is winning the race against rAF, the WebView is
-        // throttling animations. Include the queue depth and time since last
-        // successful drain so we can correlate with backend backpressure.
-        const sinceLastProcess = lastProcessingEndTime > 0
-          ? performance.now() - lastProcessingEndTime
-          : -1;
-        console.warn(
-          `[WARN][FRONTEND] rAF fallback fired (count=${rafFallbackFireCount}) — rAF likely throttled by WebView` +
-          ` | pendingChunks=${pendingChunks.length}` +
-          ` | leftoverBytes=${leftoverData?.length ?? 0}` +
-          ` | sinceLastProcessMs=${sinceLastProcess.toFixed(0)}`,
-        );
-      }
-      processPendingData("fallback");
-    }, RAF_FALLBACK_MS);
   };
 
   // Stateful extractor for mux APC/OSC messages -- buffers across chunk boundaries
@@ -782,150 +734,32 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
 
   // ── Visibility-based render recovery ─────────────────────────
   // When the page becomes visible again after being hidden (desktop lock, workspace switch),
-  // force a full re-render to recover from potential canvas buffer loss
-  // and re-kick the rAF pipeline if there is pending data.
-  // DIAG-IDLE: track how long the document was hidden so idle-time WASM
-  // crashes can be correlated with actual hidden duration vs. wall clock.
-  let lastHiddenAt: number | null = null;
-  const onVisibilityChange = () => {
-    const vs = document.visibilityState;
-    if (vs !== "visible") {
-      // First non-visible transition wins so `hiddenForMs` measures the full
-      // lock duration even if browsers coalesce intermediate states
-      // (e.g. hidden→prerender→hidden).
-      if (lastHiddenAt == null) lastHiddenAt = Date.now();
-      console.warn(`[WARN][FRONTEND] [DIAG-IDLE] visibility→${vs} at ${new Date().toISOString()}`);
-      return;
-    }
-
-    const hiddenForMs = lastHiddenAt != null ? Date.now() - lastHiddenAt : -1;
-    lastHiddenAt = null;
-    console.warn(
-      `[WARN][FRONTEND] [DIAG-IDLE] visibility→visible at ${new Date().toISOString()} | hiddenForMs=${hiddenForMs}`,
-    );
-
-    const currentState = ctx.getState();
-    const currentRenderer = ctx.getRenderer();
-    if (currentState && currentRenderer) {
-      currentRenderer.forceRender(currentState);
-    }
-
-    if (pendingChunks.length > 0 || leftoverData !== null) {
-      rafScheduled = false;
-      scheduleProcessing();
-    }
-  };
-  document.addEventListener("visibilitychange", onVisibilityChange);
-
-  // ── Backend heartbeat listener ──────────────────────────────
-  // The Rust PTY reader emits `pty_heartbeat` periodically (every 500ms while
-  // its helper channel is idle). This is independent of rAF and gives the
-  // frontend an additional setTimeout-class wakeup path so pending data is
-  // drained even if the WebView throttles rAF for an extended period.
-  let unlistenHeartbeat: UnlistenFn | null = null;
-  let heartbeatListenerDisposed = false;
-  void (async () => {
-    try {
-      const fn = await listen("pty_heartbeat", (event) => {
-        const payload = event.payload as { session_id?: string } | undefined;
-        // Filter to this session — every TerminalApp shares the document and
-        // would otherwise process every other tab's heartbeat too. Read the
-        // session id on each event: the listener is registered during
-        // setupPtyHandlers, before ptyClient.spawn() resolves, so capturing
-        // it once would freeze it at null and disable filtering.
-        const sessionId = ptyClient.getSessionId();
-        if (payload?.session_id && sessionId && payload.session_id !== sessionId) {
-          return;
-        }
-        if (pendingChunks.length === 0 && !leftoverData) return;
-        // A heartbeat arriving while data is still queued indicates the rAF
-        // pipeline has been quiet long enough for the backend's idle pulse
-        // to fire. Log once per stall window so we can confirm the
-        // heartbeat-driven drain path actually wakes processPendingData.
-        // Throttle: emit at most one warning per stall, cleared when
-        // processPendingData completes (see `heartbeatWakeWarnedDuringStall`
-        // reset above). Without throttling, a sustained backlog produces a
-        // warning every 500ms which floods release logs.
-        if (!heartbeatWakeWarnedDuringStall && lastProcessingEndTime > 0) {
-          const sinceLastProcess = performance.now() - lastProcessingEndTime;
-          if (sinceLastProcess > 1000) {
-            console.warn(
-              `[WARN][FRONTEND] heartbeat-wake | pendingChunks=${pendingChunks.length}` +
-              ` | leftoverBytes=${leftoverData?.length ?? 0}` +
-              ` | sinceLastProcessMs=${sinceLastProcess.toFixed(0)}`,
-            );
-            heartbeatWakeWarnedDuringStall = true;
-          }
-        }
-        scheduleProcessing();
-      });
-      if (heartbeatListenerDisposed) {
-        try { fn(); } catch { /* ignore */ }
-      } else {
-        unlistenHeartbeat = fn;
-      }
-    } catch (e) {
-      console.warn("[WARN][FRONTEND] failed to register pty_heartbeat listener:", e);
-    }
-  })();
-
   // ── Focus-based WASM health probe ───────────────────────────
   // After system suspend/resume or long idle, WASM linear memory may be
   // corrupted. When the window regains focus, perform a cheap read-only
   // WASM call; on RuntimeError, route through the shared recovery path.
-  // This complements the processPendingData recovery site — it fires even
-  // when no PTY data arrives after unlock. NFR4: may fire late or not at
-  // all on some Linux compositors, which is why processPendingData remains
-  // as a safety net.
+  // FR16: this probe is retained even after visibility-aware streaming
+  // takes over the drain-on-resume responsibility, because WASM grid
+  // corruption is a separate failure mode that focus return can surface.
   let unlistenFocus: (() => void) | null = null;
   let focusListenerDisposed = false;
   void (async () => {
     try {
       const win = getCurrentWebviewWindow();
       const unlisten = await win.onFocusChanged(({ payload: focused }) => {
-        // DIAG-IDLE: record focus transitions so we can correlate them with
-        // visibilitychange events and see which one actually fires on PC unlock.
-        console.warn(
-          `[WARN][FRONTEND] [DIAG-IDLE] focusChanged=${focused} at ${new Date().toISOString()} | visibilityState=${document.visibilityState}`,
-        );
         if (!focused) return;
         if (wasmRecoveryInProgress || wasmUnrecoverable) return;
         const currentState = ctx.getState();
         if (!currentState) return;
         try {
-          // Cheap read-only probe: touch WASM linear memory. If corrupted,
-          // this throws WebAssembly.RuntimeError and we route into recovery.
           const core = currentState.getActiveCore();
           void core.cols();
         } catch (error) {
           console.warn("[WARN][FRONTEND] focus health probe failed — invoking WASM recovery");
           tryRecoverFromWasmCrash(error);
-          return;
-        }
-        // WebKitGTK suspends rAF and setTimeout after focus loss for several
-        // minutes (visibilityState stays "visible" but timers freeze). Any
-        // schedule made before focus loss is stuck with rafScheduled=true,
-        // so a plain scheduleProcessing() would early-return. Force a
-        // re-schedule so the queued PTY data gets drained immediately on
-        // focus return — without this the user sees a frozen screen until
-        // the next PTY chunk arrives or they toggle the tab.
-        if (pendingChunks.length > 0 || leftoverData !== null) {
-          const sinceLastProcess = lastProcessingEndTime > 0
-            ? performance.now() - lastProcessingEndTime
-            : -1;
-          console.warn(
-            `[WARN][FRONTEND] [DIAG-IDLE] focus drain triggered` +
-            ` | pendingChunks=${pendingChunks.length}` +
-            ` | leftoverBytes=${leftoverData?.length ?? 0}` +
-            ` | sinceLastProcessMs=${sinceLastProcess.toFixed(0)}` +
-            ` | rafScheduled=${rafScheduled}`,
-          );
-          rafScheduled = false;
-          scheduleProcessing();
         }
       });
       if (focusListenerDisposed) {
-        // destroy() ran before the listener finished registering; unlisten now.
         try { unlisten(); } catch { /* ignore */ }
       } else {
         unlistenFocus = unlisten;
@@ -957,13 +791,8 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       if (currentState && currentRenderer) {
         currentRenderer.forceRender(currentState);
       }
-      // Reset the rAF-fallback fire counter so the early-reinit detector
-      // doesn't carry over background-tab throttling state into the
-      // foreground session.
-      rafFallbackFireCount = 0;
       // If data piled up while the tab was hidden, drain it now via the
-      // standard scheduling path (rAF + setTimeout fallback) instead of
-      // waiting for the next onData chunk.
+      // standard scheduling path instead of waiting for the next onData chunk.
       if (pendingChunks.length > 0 || leftoverData) {
         scheduleProcessing();
       }
@@ -990,24 +819,14 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       };
     },
     destroy: () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
       focusListenerDisposed = true;
       if (unlistenFocus) {
         try { unlistenFocus(); } catch { /* ignore */ }
         unlistenFocus = null;
       }
-      heartbeatListenerDisposed = true;
-      if (unlistenHeartbeat) {
-        try { unlistenHeartbeat(); } catch { /* ignore */ }
-        unlistenHeartbeat = null;
-      }
       if (rafHandle !== null) {
         try { cancelAnimationFrame(rafHandle); } catch { /* ignore */ }
         rafHandle = null;
-      }
-      if (rafFallbackTimer !== null) {
-        clearTimeout(rafFallbackTimer);
-        rafFallbackTimer = null;
       }
       if (ackFlushTimer !== null) {
         clearTimeout(ackFlushTimer);
@@ -1105,58 +924,11 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         `[WARN][FRONTEND] health-check: rafScheduled stuck for ${sinceLastSchedule.toFixed(0)}ms` +
         ` | document.hidden=${document.hidden}`,
       );
-      // The setTimeout fallback should have already fired by this point. If
-      // we're still in this branch, something is preventing processPendingData
-      // from running. Force a synchronous drain so backlog doesn't keep growing.
+      // Something is preventing the rAF callback from running. Force a
+      // synchronous drain so backlog does not keep growing.
       if (!wasmRecoveryInProgress && !wasmUnrecoverable) {
         try { processPendingData(); } catch { /* logged inside */ }
       }
-    }
-
-    // Early viaReinit recovery trigger: when the main thread has been silent
-    // for a long time and pending data is still piling up, the WASM grid is
-    // probably about to corrupt during the eventual catch-up burst. Triggering
-    // forceReinitWasm proactively skips the WASM-grid-corruption path and the
-    // 14+ minute response window observed in tmp/crash-recovery.md.
-    const EARLY_REINIT_STALL_MS = 60_000; // 1 min of no processPendingData
-    const EARLY_REINIT_PENDING_BYTES = 16 * 1024 * 1024; // 16 MB pending
-    const sinceLastProcessing = lastProcessingEndTime > 0 ? now - lastProcessingEndTime : -1;
-    const pendingBytesNow = pendingChunks.reduce((sum, c) => sum + c.length, 0);
-    if (
-      !wasmRecoveryInProgress &&
-      !wasmUnrecoverable &&
-      sinceLastProcessing > EARLY_REINIT_STALL_MS &&
-      pendingBytesNow > EARLY_REINIT_PENDING_BYTES &&
-      sinceLastData > 0 &&
-      sinceLastData < 5_000
-    ) {
-      console.warn(
-        `[WARN][FRONTEND] health-check: triggering early WASM reinit` +
-        ` | sinceLastProcessing=${sinceLastProcessing.toFixed(0)}ms` +
-        ` | pendingBytes=${pendingBytesNow}` +
-        ` | rafFallbackFireCount=${rafFallbackFireCount}`,
-      );
-      // Drop the runaway backlog before reinit so the post-reinit drain
-      // doesn't immediately re-create the same condition. Ack the dropped
-      // bytes (plus any coalesced acks waiting to flush) back to Rust so its
-      // in_flight counter doesn't stay pinned at HIGH_WATER, which would
-      // make the reader sit in wait_for_drain for up to MAX_BACKPRESSURE_WAIT
-      // (60s) waiting for acks that never come.
-      const droppedBytes =
-        pendingBytesNow + (leftoverData ? leftoverData.length : 0);
-      pendingChunks.length = 0;
-      leftoverData = null;
-      totalBytesQueued = 0;
-      if (ackFlushTimer !== null) {
-        clearTimeout(ackFlushTimer);
-        ackFlushTimer = null;
-      }
-      const totalAck = droppedBytes + pendingAckBytes;
-      pendingAckBytes = 0;
-      if (totalAck > 0) {
-        ptyClient.ackBytes(totalAck);
-      }
-      handle.forceReinitWasm();
     }
 
     lastHealthCheckTime = now;

@@ -15,8 +15,10 @@ pub mod device_query_scanner;
 pub mod graceful_shutdown;
 pub mod kitty_scanner;
 pub mod manager;
+pub mod passthrough_scanner;
 pub mod session;
 pub mod shell;
+pub mod visibility;
 pub mod writer;
 
 // Re-export commonly used types
@@ -24,6 +26,10 @@ pub use backpressure::{BackpressureRegistry, SessionBackpressure};
 pub use manager::PtyManager;
 pub use session::PtySession;
 pub use shell::detect_default_shell;
+pub use visibility::{
+    HIDDEN_PASSTHROUGH_CAPACITY_MUX, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX, RawPassthroughBuffer,
+    SessionVisibilityState, VisibilityRegistry,
+};
 pub use writer::WriterRegistry;
 
 use thiserror::Error;

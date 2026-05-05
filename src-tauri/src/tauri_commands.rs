@@ -3,7 +3,7 @@ use {
     crate::payloads::*,
     crate::pty::{PtyError, PtyManager},
     crate::reader::spawn_reader_thread,
-    crate::state::{ImageProcessorState, LargeImageDataStore, LARGE_IMAGE_DATA_THRESHOLD},
+    crate::state::{ImageProcessorState, LARGE_IMAGE_DATA_THRESHOLD, LargeImageDataStore},
     crate::{ansi, image, logging},
     std::collections::HashMap,
     tauri::ipc::{Channel, InvokeResponseBody},
@@ -114,18 +114,64 @@ pub fn pty_ack(state: State<'_, PtyManager>, session_id: String, bytes: usize) {
     }
 }
 
+#[cfg(feature = "gui")]
 /// Diagnostic-only: returns the cumulative `channel.send` count and bytes
-/// that the reader thread has recorded for `session_id`. Compared by the
-/// frontend heartbeat against its own `chunkRecv` count to detect Tauri
-/// IPC transport stalls — the gap grows when backend keeps sending but
-/// frontend's Channel.onmessage stops firing. Returns -1 / 0 if the
-/// session is not registered in the backpressure registry.
+/// that the reader thread has recorded for `session_id`. Used by E2E specs
+/// to verify that the reader stops emitting data while the session is hidden
+/// (TS-29 / TS-15). Returns `(-1, 0)` if the session is not registered.
+///
+/// Frontend code does NOT call this command (FR15 撤去対象). It exists for
+/// E2E specs and on-demand manual debugging only.
 #[tauri::command]
 pub fn pty_get_send_stats(state: State<'_, PtyManager>, session_id: String) -> (i64, u64) {
     if let Some(bp) = state.backpressure().get(&session_id) {
         (bp.sent_count() as i64, bp.sent_bytes())
     } else {
         (-1, 0)
+    }
+}
+
+#[cfg(feature = "gui")]
+/// Notify the backend of the frontend's effective visibility for a session.
+///
+/// Visible -> hidden: the reader stops forwarding PTY bytes to the frontend
+/// channel and instead feeds the bytes to a per-session shadow VT100 parser
+/// plus a raw-passthrough scanner (for image / Markdown OSC sequences). It
+/// also raises a hidden wake on the backpressure waiter so the reader can
+/// re-evaluate without waiting for an ack the frontend will not send.
+///
+/// Hidden -> visible: the backend builds a 1-message snapshot
+/// (`ESC[H ESC[2J` + shadow contents + raw passthrough) and sends it on the
+/// reader channel. Subsequent batches go through the normal visible path.
+///
+/// Unknown `session_id` -> warn + no-op (frontend sometimes notifies before
+/// `pty_spawn` resolves on a fresh window).
+#[tauri::command]
+pub fn pty_set_visibility(state: State<'_, PtyManager>, session_id: String, visible: bool) {
+    let Some(vis) = state.visibility().get(&session_id) else {
+        log::warn!(
+            "[WARN][BACKEND] pty_set_visibility: session {} not found",
+            session_id
+        );
+        return;
+    };
+    if visible {
+        let dispatched = vis.dispatch_resume_snapshot();
+        if dispatched {
+            log::debug!(
+                "[DEBUG][BACKEND] pty_set_visibility: session {} -> visible (snapshot sent)",
+                session_id
+            );
+        }
+    } else {
+        let was_visible = vis.set_hidden();
+        if was_visible {
+            // Wake any reader sitting in wait_for_drain so it stops
+            // expecting acks and proceeds to the hidden short-circuit.
+            if let Some(bp) = state.backpressure().get(&session_id) {
+                bp.set_hidden_wake();
+            }
+        }
     }
 }
 
@@ -147,7 +193,14 @@ pub async fn pty_resize(
     let session = state
         .get_session(&session_id)
         .await
-        .ok_or_else(|| PtyError::SessionNotFound(session_id).to_string())?;
+        .ok_or_else(|| PtyError::SessionNotFound(session_id.clone()).to_string())?;
+
+    // Keep the visibility shadow parser in sync with the PTY size so
+    // hidden-mode VT100 processing operates against the same dimensions
+    // the foreground frontend sees (FR4).
+    if let Some(vis) = state.visibility().get(&session_id) {
+        vis.resize(cols, rows);
+    }
 
     let session = session.lock().await;
     session.resize(cols, rows).map_err(|e| e.to_string())
@@ -509,7 +562,7 @@ pub async fn tab_close_graceful(
 /// Returns width, height, and RGBA pixel data as base64.
 #[tauri::command]
 pub async fn decode_iterm2_image(base64_data: String) -> Result<serde_json::Value, String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
 
     let raw = STANDARD
         .decode(&base64_data)
@@ -595,7 +648,7 @@ pub fn append_download_chunk(
     id: String,
     data_base64: String,
 ) -> Result<(), String> {
-    use base64::{engine::general_purpose, Engine as _};
+    use base64::{Engine as _, engine::general_purpose};
 
     let data = general_purpose::STANDARD
         .decode(&data_base64)

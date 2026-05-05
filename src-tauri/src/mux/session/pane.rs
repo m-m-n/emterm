@@ -7,6 +7,8 @@ use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
 use crate::mux::ring_buffer::DetachRingBuffer;
+use crate::pty::passthrough_scanner::PassthroughScanner;
+use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
 
 /// Pane identifier.
 pub type PaneId = u32;
@@ -44,6 +46,83 @@ pub enum PaneOutputTarget {
 /// Thread-safe shared reference to a pane's output target.
 pub type SharedOutputTarget = Arc<StdMutex<PaneOutputTarget>>;
 
+/// Result of `evaluate_output_target`. Carries the resume snapshot bytes
+/// when the pane transitions Detached -> Connected so the handler can
+/// enqueue them on the same channel before the next reader chunk lands.
+pub enum EvalResult {
+    /// No state change required; output_target is still correct.
+    Unchanged,
+    /// Pane was switched into Detached buffering mode.
+    SwitchedToDetached,
+    /// Pane was switched (back) into Connected mode. The handler must send
+    /// `snapshot` on the channel before any subsequent reader chunk.
+    ResumeWithSnapshot { snapshot: Vec<u8> },
+}
+
+/// Decide the correct `output_target` for `pane` given the current network
+/// detach flag and the connection-scoped visible flag, and apply the
+/// transition in place.
+///
+/// - `network_detach == true` OR `visible == false`: Detached.
+/// - Both clear: Connected(`owned_tx`). Existing Detached state contributes
+///   `shadow_snapshot + ring + raw_passthrough` as a one-shot resume snapshot.
+///
+/// Identity-scoped: when switching Connected -> Detached we only flip panes
+/// whose current `Connected(tx)` is `same_channel(owned_tx)`. Panes already
+/// owned by another connection are left alone.
+pub fn evaluate_output_target(
+    pane: &MuxPane,
+    network_detach: bool,
+    visible: bool,
+    owned_tx: &mpsc::Sender<PtyOutputChunk>,
+) -> EvalResult {
+    let want_connected = !network_detach && visible;
+    let mut target = pane.output_target.lock().unwrap();
+    match &mut *target {
+        PaneOutputTarget::Connected(current_tx) => {
+            if want_connected {
+                if current_tx.same_channel(owned_tx) {
+                    EvalResult::Unchanged
+                } else {
+                    // Different connection owns this pane. Do not touch.
+                    EvalResult::Unchanged
+                }
+            } else if current_tx.same_channel(owned_tx) {
+                *target = PaneOutputTarget::Detached(DetachRingBuffer::new(
+                    crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
+                ));
+                EvalResult::SwitchedToDetached
+            } else {
+                // Owned by another connection — don't clobber.
+                EvalResult::Unchanged
+            }
+        }
+        PaneOutputTarget::Detached(ring) => {
+            if want_connected {
+                let mut snapshot = Vec::new();
+                snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
+                let screen = pane
+                    .shadow_parser
+                    .lock()
+                    .unwrap()
+                    .screen()
+                    .contents_formatted();
+                snapshot.extend_from_slice(&screen);
+                let buffered = ring.read_all();
+                snapshot.extend_from_slice(&buffered);
+                let passthrough = pane.raw_passthrough.lock().unwrap().read_all();
+                snapshot.extend_from_slice(&passthrough);
+                ring.clear();
+                pane.raw_passthrough.lock().unwrap().clear();
+                *target = PaneOutputTarget::Connected(owned_tx.clone());
+                EvalResult::ResumeWithSnapshot { snapshot }
+            } else {
+                EvalResult::Unchanged
+            }
+        }
+    }
+}
+
 /// A single terminal pane with its PTY and communication channels.
 pub struct MuxPane {
     pub id: PaneId,
@@ -65,6 +144,14 @@ pub struct MuxPane {
     pub title: Arc<StdMutex<Option<String>>>,
     /// Swappable title change sender (reader thread reads from this on each title change).
     pub title_sender: SharedTitleSender,
+    /// Per-pane raw passthrough buffer for image / Markdown OSC sequences
+    /// captured while the pane is detached (network detach OR client hidden).
+    /// Drained into the reattach / resume snapshot.
+    pub raw_passthrough: Arc<StdMutex<RawPassthroughBuffer>>,
+    /// Stateful scanner that pulls passthrough sequences out of the raw PTY
+    /// byte stream. Lives alongside `raw_passthrough` because partial
+    /// sequences span multiple reader chunks.
+    pub passthrough_scanner: Arc<StdMutex<PassthroughScanner>>,
 }
 
 impl MuxPane {
@@ -89,6 +176,10 @@ impl MuxPane {
             cwd: Arc::new(StdMutex::new(None)),
             title: Arc::new(StdMutex::new(None)),
             title_sender: Arc::new(StdMutex::new(None)),
+            raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
+                HIDDEN_PASSTHROUGH_CAPACITY_MUX,
+            ))),
+            passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
         }
     }
 
@@ -148,6 +239,10 @@ impl MuxPane {
             cwd: Arc::new(StdMutex::new(None)),
             title: Arc::new(StdMutex::new(None)),
             title_sender: Arc::new(StdMutex::new(None)),
+            raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
+                HIDDEN_PASSTHROUGH_CAPACITY_MUX,
+            ))),
+            passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
         }
     }
 }
@@ -261,5 +356,108 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(pane.cols, 120);
         assert_eq!(pane.rows, 40);
+    }
+
+    /// TS-12: detached + visible -> stays Detached.
+    #[test]
+    fn test_evaluate_output_target_network_detached_visible_stays_detached() {
+        let (owned_tx, _rx) = mpsc::channel(16);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(
+            DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+        )));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        // network_detach=true, visible=true -> still hidden by network detach.
+        let result = evaluate_output_target(&pane, true, true, &owned_tx);
+        assert!(matches!(result, EvalResult::Unchanged));
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Detached(_)
+        ));
+    }
+
+    /// TS-13: identity-scoped Connected -> Detached.
+    #[test]
+    fn test_evaluate_output_target_identity_scoped_connected_to_detached() {
+        let (owner_tx, _rx) = mpsc::channel(16);
+        let (other_tx, _other_rx) = mpsc::channel(16);
+        // Pane is connected to OTHER client.
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(other_tx)));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        // Caller (owner_tx) tries to detach with hidden visible=false.
+        let result = evaluate_output_target(&pane, false, false, &owner_tx);
+        assert!(matches!(result, EvalResult::Unchanged));
+        // Pane remains Connected (to other client) — identity-scoped guard held.
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+    }
+
+    #[test]
+    fn test_evaluate_output_target_owner_can_detach() {
+        let (owner_tx, _rx) = mpsc::channel(16);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owner_tx.clone())));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        let result = evaluate_output_target(&pane, false, false, &owner_tx);
+        assert!(matches!(result, EvalResult::SwitchedToDetached));
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Detached(_)
+        ));
+    }
+
+    /// TS-14: Detached -> Connected returns snapshot bytes including
+    /// shadow contents and raw_passthrough.
+    #[test]
+    fn test_evaluate_output_target_detached_to_connected_returns_snapshot() {
+        let (owned_tx, _rx) = mpsc::channel(16);
+        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
+        ring.write(b"buffered-from-ring");
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring)));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        // Seed shadow with some text.
+        pane.shadow_parser.lock().unwrap().process(b"hello-shadow");
+        // Seed raw_passthrough.
+        pane.raw_passthrough
+            .lock()
+            .unwrap()
+            .append(b"\x1b_Gi=1;ZZ\x1b\\");
+        let result = evaluate_output_target(&pane, false, true, &owned_tx);
+        match result {
+            EvalResult::ResumeWithSnapshot { snapshot } => {
+                assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
+                let s = String::from_utf8_lossy(&snapshot);
+                assert!(s.contains("hello-shadow"), "snapshot must include shadow");
+                assert!(
+                    snapshot
+                        .windows(b"buffered-from-ring".len())
+                        .any(|w| w == b"buffered-from-ring"),
+                    "snapshot must include ring data"
+                );
+                assert!(
+                    s.contains("\u{1b}_Gi=1"),
+                    "snapshot must include passthrough"
+                );
+            }
+            _ => panic!("expected ResumeWithSnapshot"),
+        }
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+        // raw_passthrough must be cleared after consumption.
+        assert_eq!(pane.raw_passthrough.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_evaluate_output_target_already_connected_visible_no_op() {
+        let (owned_tx, _rx) = mpsc::channel(16);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        let result = evaluate_output_target(&pane, false, true, &owned_tx);
+        assert!(matches!(result, EvalResult::Unchanged));
     }
 }

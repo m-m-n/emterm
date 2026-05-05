@@ -41,6 +41,7 @@ export const MuxMessageType = {
   Shutdown: 0x18,
   RequestPaneSnapshot: 0x19,
   MoveWindow: 0x1a,
+  SetVisibility: 0x1b,
 } as const;
 
 /** Connection state for the mux client. */
@@ -534,6 +535,13 @@ export class MuxClient {
   /** Send RequestStatusUpdate (0x17) to daemon with empty payload. */
   async sendRequestStatusUpdate(): Promise<void> {
     await this.sendControl(MuxMessageType.RequestStatusUpdate, 0);
+  }
+
+  /** Send SetVisibility (0x1B) to daemon. payload: 1 byte (0x01 = visible, 0x00 = hidden), pane_id = 0 (session-wide).
+   *  Uses sendControl which goes via writeDirect -> bypasses writeProxy. */
+  async sendSetVisibility(visible: boolean): Promise<void> {
+    const payload = new Uint8Array([visible ? 0x01 : 0x00]);
+    await this.sendControl(MuxMessageType.SetVisibility, 0, payload);
   }
 
   /** Request an on-demand screen snapshot for the given pane.

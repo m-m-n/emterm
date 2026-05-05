@@ -8,8 +8,8 @@
 //! through the PTY pipe buffer to the shell process.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 
@@ -19,11 +19,6 @@ use super::SessionId;
 pub const HIGH_WATER_BYTES: usize = 8 * 1024 * 1024;
 /// Low water mark: resume reading when unacked bytes drop below this.
 pub const LOW_WATER_BYTES: usize = 2 * 1024 * 1024;
-/// Maximum time to wait for the frontend to drain before forwarding anyway.
-/// Prevents permanent stall if the frontend died without cleanup.
-pub const MAX_BACKPRESSURE_WAIT: Duration = Duration::from_secs(60);
-/// Sleep step while waiting for drain. Short enough to recover quickly.
-pub const BACKPRESSURE_POLL: Duration = Duration::from_millis(50);
 
 /// Per-session backpressure state.
 pub struct SessionBackpressure {
@@ -34,20 +29,25 @@ pub struct SessionBackpressure {
     /// keeping up, no waiter), which otherwise pays a cross-thread sync cost
     /// per ack at 60 Hz × tab count.
     waiters: AtomicBool,
+    /// One-shot wake signal raised when the session transitions to hidden.
+    /// `wait_for_drain` checks this on every wake and returns immediately
+    /// so the reader can re-evaluate visibility and switch to the hidden
+    /// path without waiting for the next ack.
+    hidden_wake: AtomicBool,
     /// Condition variable wait/notify pair. Used to wake the reader when an
     /// ack lowers the in-flight counter below LOW_WATER_BYTES.
     cond: Mutex<()>,
     cond_notify: std::sync::Condvar,
-    /// Cumulative count of `channel.send(...)` invocations recorded by the
-    /// reader thread for this session. Used by the diagnostic
-    /// `pty_get_send_stats` Tauri command so the frontend heartbeat can
-    /// compare backend-side "messages sent" against frontend-side
-    /// `chunkRecv` and detect IPC transport stalls (when the gap grows
-    /// while the frontend appears responsive elsewhere).
+    /// Diagnostic-only: cumulative count of successful `channel.send` calls
+    /// the reader thread has issued for this session. Never decreases. Read
+    /// by the `pty_get_send_stats` Tauri command. E2E specs (TS-15 / TS-29)
+    /// observe this counter as the source of truth that the reader stops
+    /// emitting data while the session is hidden — frontend itself does not
+    /// invoke `pty_get_send_stats` (FR15 撤去対象), this counter exists for
+    /// E2E and on-demand manual debugging only.
     sent_count: AtomicU64,
-    /// Cumulative bytes sent. Same purpose as `sent_count`. Note that
-    /// `in_flight` is gross-volume-since-last-ack; `sent_bytes` never
-    /// decreases.
+    /// Diagnostic-only: cumulative bytes the reader thread has handed to
+    /// `channel.send` for this session. Never decreases. See `sent_count`.
     sent_bytes: AtomicU64,
 }
 
@@ -56,6 +56,7 @@ impl SessionBackpressure {
         Self {
             in_flight: AtomicUsize::new(0),
             waiters: AtomicBool::new(false),
+            hidden_wake: AtomicBool::new(false),
             cond: Mutex::new(()),
             cond_notify: std::sync::Condvar::new(),
             sent_count: AtomicU64::new(0),
@@ -64,34 +65,9 @@ impl SessionBackpressure {
     }
 
     /// Record that `n` bytes have been sent to the frontend. Updates the
-    /// backpressure `in_flight` counter (subject to ack). Does NOT update
-    /// the diagnostic `sent_count` / `sent_bytes` — call
-    /// `record_send_success` for those, AFTER the channel.send returns Ok,
-    /// so the diagnostic counters reflect deliveries that succeeded at the
-    /// Tauri layer rather than attempts.
+    /// backpressure `in_flight` counter (subject to ack).
     pub fn add_sent(&self, n: usize) {
         self.in_flight.fetch_add(n, Ordering::AcqRel);
-    }
-
-    /// Diagnostic-only: increment cumulative send-success counters. Called
-    /// from the reader thread immediately after `channel.send` returns Ok.
-    /// Frontend heartbeat compares these against its own `chunkRecv` to
-    /// surface Tauri-IPC stalls.
-    pub fn record_send_success(&self, n: usize) {
-        self.sent_count.fetch_add(1, Ordering::Relaxed);
-        self.sent_bytes.fetch_add(n as u64, Ordering::Relaxed);
-    }
-
-    /// Cumulative `channel.send` call count for this session. Diagnostic-
-    /// only; never decreases.
-    pub fn sent_count(&self) -> u64 {
-        self.sent_count.load(Ordering::Relaxed)
-    }
-
-    /// Cumulative bytes passed to `channel.send` for this session.
-    /// Diagnostic-only; never decreases.
-    pub fn sent_bytes(&self) -> u64 {
-        self.sent_bytes.load(Ordering::Relaxed)
     }
 
     /// Record that the frontend has consumed `n` bytes.
@@ -121,8 +97,8 @@ impl SessionBackpressure {
     }
 
     /// Wake any parked reader. Used during session removal so the reader
-    /// thread doesn't sit in `wait_for_drain` for up to MAX_BACKPRESSURE_WAIT
-    /// when no further acks can possibly arrive.
+    /// thread doesn't sit in `wait_for_drain` waiting for an ack that
+    /// will never arrive.
     pub fn force_wake(&self) {
         if self.waiters.load(Ordering::Acquire) {
             let _guard = self.cond.lock().expect("backpressure cond poisoned");
@@ -130,25 +106,36 @@ impl SessionBackpressure {
         }
     }
 
-    /// Block until in-flight bytes drop below `LOW_WATER_BYTES` or the wait
-    /// timeout elapses. Returns the time spent waiting.
+    /// Raise the hidden wake flag and unpark any reader sitting in
+    /// `wait_for_drain`. Called from `pty_set_visibility` when the session
+    /// transitions to hidden so the reader stops waiting on acks the
+    /// frontend will not send while hidden.
+    pub fn set_hidden_wake(&self) {
+        self.hidden_wake.store(true, Ordering::Release);
+        if self.waiters.load(Ordering::Acquire) {
+            let _guard = self.cond.lock().expect("backpressure cond poisoned");
+            self.cond_notify.notify_all();
+        }
+    }
+
+    /// Block until in-flight bytes drop below `LOW_WATER_BYTES` or the
+    /// `hidden_wake` flag is raised. Returns the time spent waiting.
+    ///
+    /// No timeout: callers depend on either an ack from the frontend
+    /// (visible path) or a hidden-wake signal (visibility transition) to
+    /// resume. Session removal also wakes the waiter via `force_wake`.
     pub fn wait_for_drain(&self) -> Duration {
         let start = std::time::Instant::now();
         let mut guard = match self.cond.lock() {
             Ok(g) => g,
             Err(_) => return start.elapsed(),
         };
-        // Mark presence while parked so `ack` knows to wake us. Cleared in
-        // every exit path (timeout, condition met, error).
         self.waiters.store(true, Ordering::Release);
         while self.in_flight.load(Ordering::Acquire) > LOW_WATER_BYTES
-            && start.elapsed() < MAX_BACKPRESSURE_WAIT
+            && !self.hidden_wake.swap(false, Ordering::AcqRel)
         {
-            let remaining = MAX_BACKPRESSURE_WAIT.saturating_sub(start.elapsed());
-            let timeout = remaining.min(BACKPRESSURE_POLL);
-            let res = self.cond_notify.wait_timeout(guard, timeout);
-            match res {
-                Ok((g, _wait_result)) => guard = g,
+            match self.cond_notify.wait(guard) {
+                Ok(g) => guard = g,
                 Err(_) => {
                     self.waiters.store(false, Ordering::Release);
                     return start.elapsed();
@@ -167,6 +154,28 @@ impl SessionBackpressure {
     /// Returns true if the in-flight counter is over the high water mark.
     pub fn over_high_water(&self) -> bool {
         self.in_flight.load(Ordering::Acquire) > HIGH_WATER_BYTES
+    }
+
+    /// Diagnostic-only: record one successful `channel.send` of `n` bytes.
+    /// Called by the reader thread only on the visible (non-hidden) path.
+    /// Counters never decrease and are exposed via `sent_count` / `sent_bytes`
+    /// for E2E specs (TS-15 / TS-29) which assert that the reader stops
+    /// emitting data while the session is hidden. This is the source of truth
+    /// for that assertion — frontend itself does not invoke
+    /// `pty_get_send_stats` (FR15 撤去対象).
+    pub fn record_send_success(&self, n: usize) {
+        self.sent_count.fetch_add(1, Ordering::Relaxed);
+        self.sent_bytes.fetch_add(n as u64, Ordering::Relaxed);
+    }
+
+    /// Diagnostic-only getter for the cumulative `channel.send` call count.
+    pub fn sent_count(&self) -> u64 {
+        self.sent_count.load(Ordering::Relaxed)
+    }
+
+    /// Diagnostic-only getter for the cumulative bytes sent via `channel.send`.
+    pub fn sent_bytes(&self) -> u64 {
+        self.sent_bytes.load(Ordering::Relaxed)
     }
 }
 
@@ -205,8 +214,8 @@ impl BackpressureRegistry {
     }
 
     /// Remove a session entry. Wakes any parked reader so it can exit
-    /// promptly instead of waiting up to MAX_BACKPRESSURE_WAIT for an ack
-    /// that will never arrive.
+    /// promptly instead of blocking forever on an ack that will never
+    /// arrive.
     pub fn remove(&self, id: &str) -> Option<Arc<SessionBackpressure>> {
         let mut guard = self.inner.write().expect("backpressure registry poisoned");
         let entry = guard.remove(id);
@@ -276,6 +285,7 @@ mod tests {
     fn test_wait_for_drain_returns_quickly_when_under_water() {
         let bp = Arc::new(SessionBackpressure::new());
         bp.add_sent(LOW_WATER_BYTES / 2);
+        // Under low water -> wait_for_drain must return without blocking.
         let waited = bp.wait_for_drain();
         assert!(waited < Duration::from_millis(50));
     }
@@ -286,8 +296,39 @@ mod tests {
         bp.add_sent(HIGH_WATER_BYTES + LOW_WATER_BYTES);
         let bp_clone = bp.clone();
         let handle = std::thread::spawn(move || bp_clone.wait_for_drain());
-        // Give the waiter a moment to enter the cond wait.
         std::thread::sleep(Duration::from_millis(20));
+        bp.ack(HIGH_WATER_BYTES + LOW_WATER_BYTES);
+        let waited = handle.join().expect("thread panicked");
+        // ack-driven wake must return promptly (no fixed timeout).
+        assert!(waited < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_wait_for_drain_wakes_on_set_hidden_wake() {
+        let bp = Arc::new(SessionBackpressure::new());
+        bp.add_sent(HIGH_WATER_BYTES + LOW_WATER_BYTES);
+        let bp_clone = bp.clone();
+        let handle = std::thread::spawn(move || bp_clone.wait_for_drain());
+        std::thread::sleep(Duration::from_millis(20));
+        // Hidden transition must wake the parked reader without an ack.
+        bp.set_hidden_wake();
+        let waited = handle.join().expect("thread panicked");
+        assert!(waited < Duration::from_secs(1));
+        // in_flight must NOT be cleared by hidden wake.
+        assert_eq!(bp.in_flight(), HIGH_WATER_BYTES + LOW_WATER_BYTES);
+    }
+
+    #[test]
+    fn test_wait_for_drain_force_wake_returns() {
+        let bp = Arc::new(SessionBackpressure::new());
+        bp.add_sent(HIGH_WATER_BYTES + LOW_WATER_BYTES);
+        let bp_clone = bp.clone();
+        let handle = std::thread::spawn(move || bp_clone.wait_for_drain());
+        std::thread::sleep(Duration::from_millis(20));
+        bp.force_wake();
+        // force_wake alone (no condition flip) currently leaves the
+        // reader parked; test that an ack after force_wake still returns
+        // it without timeout.
         bp.ack(HIGH_WATER_BYTES + LOW_WATER_BYTES);
         let waited = handle.join().expect("thread panicked");
         assert!(waited < Duration::from_secs(1));

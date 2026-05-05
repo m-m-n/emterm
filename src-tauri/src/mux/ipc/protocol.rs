@@ -59,6 +59,7 @@ pub enum MessageType {
     Shutdown = 0x18,
     RequestPaneSnapshot = 0x19,
     MoveWindow = 0x1A,
+    SetVisibility = 0x1B,
 }
 
 impl MessageType {
@@ -89,6 +90,7 @@ impl MessageType {
             0x18 => Some(Self::Shutdown),
             0x19 => Some(Self::RequestPaneSnapshot),
             0x1A => Some(Self::MoveWindow),
+            0x1B => Some(Self::SetVisibility),
             _ => None,
         }
     }
@@ -181,6 +183,27 @@ pub struct StatusUpdateMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameWindowMsg {
     pub name: String,
+}
+
+/// SetVisibility payload (1 byte: 0x01 = visible, 0x00 = hidden).
+///
+/// Carried as a raw 1-byte payload (NOT bincode) so the wire shape matches
+/// the frontend `MuxClient.sendSetVisibility` encoding without requiring
+/// any deserializer round-trip on the daemon side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetVisibilityPayload {
+    pub visible: bool,
+}
+
+impl SetVisibilityPayload {
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        let byte = *payload.first()?;
+        Some(Self { visible: byte != 0 })
+    }
+
+    pub fn to_payload(self) -> Vec<u8> {
+        vec![if self.visible { 0x01 } else { 0x00 }]
+    }
 }
 
 /// Move window request (reorder within a session).
@@ -333,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x1Au8 {
+        for i in 0x01..=0x1Bu8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed -- must return None
                 continue;
@@ -343,13 +366,57 @@ mod tests {
         }
         assert!(MessageType::from_u8(0x00).is_none());
         assert!(MessageType::from_u8(0x11).is_none());
-        assert!(MessageType::from_u8(0x1b).is_none());
+        assert_eq!(MessageType::from_u8(0x1B), Some(MessageType::SetVisibility));
+        assert!(MessageType::from_u8(0x1c).is_none());
+        assert!(MessageType::from_u8(0xff).is_none());
     }
 
     #[test]
     fn test_move_window_message_type() {
         assert_eq!(MessageType::from_u8(0x1A), Some(MessageType::MoveWindow));
         assert_eq!(MessageType::MoveWindow as u8, 0x1A);
+    }
+
+    #[test]
+    fn test_set_visibility_message_type() {
+        assert_eq!(MessageType::from_u8(0x1B), Some(MessageType::SetVisibility));
+        assert_eq!(MessageType::SetVisibility as u8, 0x1B);
+    }
+
+    #[test]
+    fn test_set_visibility_payload_round_trip() {
+        for visible in [true, false] {
+            let payload = SetVisibilityPayload { visible };
+            let bytes = payload.to_payload();
+            assert_eq!(bytes.len(), 1);
+            let decoded = SetVisibilityPayload::from_payload(&bytes).unwrap();
+            assert_eq!(decoded.visible, visible);
+        }
+    }
+
+    #[test]
+    fn test_set_visibility_via_mux_message_apc_round_trip() {
+        for visible in [true, false] {
+            let payload = SetVisibilityPayload { visible };
+            let msg = MuxMessage {
+                msg_type: MessageType::SetVisibility,
+                pane_id: 0,
+                payload: payload.to_payload(),
+            };
+            let apc = msg.to_apc();
+            let body = &apc[2..apc.len() - 2];
+            let decoded = MuxMessage::from_apc(body).unwrap();
+            assert_eq!(decoded.msg_type, MessageType::SetVisibility);
+            assert_eq!(decoded.pane_id, 0);
+            assert_eq!(decoded.payload.len(), 1);
+            let payload_back = SetVisibilityPayload::from_payload(&decoded.payload).unwrap();
+            assert_eq!(payload_back.visible, visible);
+        }
+    }
+
+    #[test]
+    fn test_set_visibility_payload_empty_returns_none() {
+        assert!(SetVisibilityPayload::from_payload(&[]).is_none());
     }
 
     #[test]
@@ -633,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_apc_round_trip_all_message_types() {
-        for i in 0x01..=0x1Au8 {
+        for i in 0x01..=0x1Bu8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed
                 continue;

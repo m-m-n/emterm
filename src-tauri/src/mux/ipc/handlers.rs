@@ -1,6 +1,7 @@
 //! Message handlers for mux IPC commands.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -16,7 +17,10 @@ use super::reattach::{
     build_shadow_parser_snapshot, collect_reattach_data, detach_session_panes, send_reattach_data,
 };
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{PaneId, PtyOutputChunk, SharedShadowParser, TitleChangeSender};
+use crate::mux::session::pane::{
+    EvalResult, PaneId, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
+    evaluate_output_target,
+};
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
 ///
@@ -457,6 +461,7 @@ pub(super) async fn handle_request_pane_snapshot(
 /// session (firing any previously-installed kick to evict the prior client),
 /// and the receiver is written to `kick_rx` so the connection loop can await
 /// it in its select!. Any prior receiver held by the caller is replaced.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_attach<S>(
     msg: MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -465,6 +470,7 @@ pub(super) async fn handle_attach<S>(
     active_session_id: &mut u32,
     title_tx: &TitleChangeSender,
     kick_rx: &mut Option<oneshot::Receiver<()>>,
+    visible_state: &Arc<AtomicBool>,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -526,10 +532,236 @@ where
         return Err(true);
     }
 
+    // If the client is currently hidden, immediately re-evaluate every pane
+    // so the freshly-attached panes go straight back into Detached buffering
+    // (the snapshot we just sent reflects the screen at attach time; further
+    // output should accumulate locally until visible is restored).
+    if !visible_state.load(Ordering::Acquire) {
+        let mgr = session_manager.lock().await;
+        if let Some(session) = mgr.get_session(new_session_id) {
+            for window in session.windows.values() {
+                for pane in window.panes.values() {
+                    if pane.exited {
+                        continue;
+                    }
+                    let _ = evaluate_output_target(pane, false, false, pane_output_tx);
+                }
+            }
+        }
+    }
+
     log::info!(
         "Attached to session {} with {} pane(s)",
         new_session_id,
         reattach_data.len()
     );
     Ok(())
+}
+
+/// Apply a `SetVisibility` message: update the connection-scoped visible
+/// state and re-evaluate every pane in the active session. visible -> true
+/// pushes a resume snapshot for any pane that was Detached only because we
+/// were hidden; visible -> false flips identity-owned panes to Detached so
+/// their shadow + ring + raw_passthrough accumulate while we are hidden.
+pub(super) async fn handle_set_visibility(
+    visible: bool,
+    session_manager: &Arc<Mutex<SessionManager>>,
+    active_session_id: u32,
+    pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
+    visible_state: &Arc<AtomicBool>,
+) {
+    let prev = visible_state.swap(visible, Ordering::AcqRel);
+    if prev == visible {
+        return;
+    }
+    log::debug!(
+        "[DEBUG][BACKEND] handle_set_visibility: {} (session {})",
+        visible,
+        active_session_id
+    );
+    // Apply evaluate_output_target while holding the session manager lock,
+    // collecting any resume snapshots into an owned Vec. We must drop the
+    // pane references (which hold non-Send raw pointers via portable-pty
+    // master handles) before awaiting the channel send, otherwise the
+    // returned future is not `Send` and tokio::spawn at the connection
+    // accept site fails to compile.
+    let mut pending_snapshots: Vec<(PaneId, Vec<u8>)> = Vec::new();
+    {
+        let mgr = session_manager.lock().await;
+        let Some(session) = mgr.get_session(active_session_id) else {
+            return;
+        };
+        for window in session.windows.values() {
+            for pane in window.panes.values() {
+                if pane.exited {
+                    continue;
+                }
+                let result = evaluate_output_target(pane, false, visible, pane_output_tx);
+                if let EvalResult::ResumeWithSnapshot { snapshot } = result {
+                    pending_snapshots.push((pane.id, snapshot));
+                }
+            }
+        }
+    }
+    for (pane_id, snapshot) in pending_snapshots {
+        if let Err(e) = pane_output_tx
+            .send(PtyOutputChunk {
+                pane_id,
+                data: snapshot,
+            })
+            .await
+        {
+            log::warn!(
+                "[WARN][BACKEND] handle_set_visibility: snapshot enqueue failed for pane {}: {}",
+                pane_id,
+                e
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+    use std::sync::Mutex as StdMutex;
+
+    fn add_pane(
+        mgr: &mut SessionManager,
+        session_id: u32,
+        window_id: u32,
+        pane_id: u32,
+        target: SharedOutputTarget,
+    ) {
+        let pane = MuxPane::new_test(pane_id, 80, 24, target);
+        mgr.get_session_mut(session_id)
+            .unwrap()
+            .windows
+            .get_mut(&window_id)
+            .unwrap()
+            .add_pane(pane);
+    }
+
+    /// TS-7: SetVisibility(false) flips identity-owned panes to Detached.
+    /// While hidden, no PTY chunks must reach the channel (the reader thread
+    /// would push into the per-pane ring buffer instead).
+    #[tokio::test]
+    async fn handle_set_visibility_false_switches_owned_pane_to_detached() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        let visible_state = Arc::new(AtomicBool::new(true));
+        handle_set_visibility(false, &mgr, session_id, &owned_tx, &visible_state).await;
+
+        assert!(!visible_state.load(Ordering::Acquire));
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Detached(_)
+        ));
+        // No snapshot enqueued on hidden transition.
+        assert!(rx.try_recv().is_err(), "no snapshot expected on hidden");
+    }
+
+    /// TS-7 / TS-14b: SetVisibility(true) after hidden enqueues exactly one
+    /// snapshot per pane onto the channel and restores Connected.
+    #[tokio::test]
+    async fn handle_set_visibility_true_after_hidden_enqueues_snapshot() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+
+        // Start in Detached as if SetVisibility(false) ran earlier and the
+        // reader had captured shadow + raw_passthrough state.
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(
+            crate::mux::ring_buffer::DetachRingBuffer::new(
+                crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
+            ),
+        )));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            // Seed shadow + raw_passthrough on the just-added pane.
+            let pane_ref = m
+                .get_session(sid)
+                .unwrap()
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&1)
+                .unwrap();
+            pane_ref.shadow_parser.lock().unwrap().process(b"hi-shadow");
+            pane_ref
+                .raw_passthrough
+                .lock()
+                .unwrap()
+                .append(b"\x1b_Gi=9;XX\x1b\\");
+            sid
+        };
+
+        // visible_state was false before this call — same precondition the
+        // hidden -> visible transition exhibits in production.
+        let visible_state = Arc::new(AtomicBool::new(false));
+        handle_set_visibility(true, &mgr, session_id, &owned_tx, &visible_state).await;
+
+        assert!(visible_state.load(Ordering::Acquire));
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+
+        // Exactly one snapshot chunk must have landed on the channel.
+        let chunk = rx.try_recv().expect("snapshot chunk expected");
+        assert_eq!(chunk.pane_id, 1);
+        assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        let needle = b"\x1b_Gi=9;XX\x1b\\";
+        assert!(
+            chunk.data.windows(needle.len()).any(|w| w == needle),
+            "snapshot must include the captured passthrough sequence"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no further chunk expected for a single-pane session"
+        );
+    }
+
+    /// Idempotent: SetVisibility with the same value as the current state
+    /// must be a no-op (no pane churn, no snapshot).
+    #[tokio::test]
+    async fn handle_set_visibility_same_state_is_noop() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        let visible_state = Arc::new(AtomicBool::new(true));
+        handle_set_visibility(true, &mgr, session_id, &owned_tx, &visible_state).await;
+
+        // No state change, no snapshot.
+        assert!(visible_state.load(Ordering::Acquire));
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+        assert!(rx.try_recv().is_err(), "no snapshot expected on no-op");
+    }
 }

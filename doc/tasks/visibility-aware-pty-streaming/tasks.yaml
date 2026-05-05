@@ -1,0 +1,70 @@
+tasks:
+  - - id: phase1-visibility-state
+      title: "Phase 1: visibility.rs (SessionVisibilityState / RawPassthroughBuffer / 定数。HiddenRingBuffer は廃止)"
+      status: completed
+    - id: phase1-passthrough-scanner
+      title: "Phase 1: passthrough_scanner.rs (PassthroughScanner stateful, chunk 跨ぎ対応)"
+      status: completed
+    - id: phase1-manager-registry
+      title: "Phase 1: PtyManager に visibility registry を追加"
+      status: completed
+    - id: phase1-tauri-command
+      title: "Phase 1: pty_set_visibility Tauri command を新設し invoke handler に登録"
+      status: completed
+    - id: phase1-reader-rewire
+      title: "Phase 1: reader.rs の hidden 経路追加と heartbeat / HEARTBEAT_INTERVAL 撤去"
+      status: completed
+    - id: phase1-backpressure-cleanup
+      title: "Phase 1: backpressure.rs の MAX_BACKPRESSURE_WAIT 撤去 + wait_for_drain を ack 駆動に書き換え + set_hidden_wake 追加 + 既存テスト 2 本書き換え"
+      status: completed
+  - - id: phase2-pty-client-setvisibility
+      title: "Phase 2: PtyClient.setVisibility メソッド追加"
+      status: completed
+    - id: phase2-mux-client-setvisibility
+      title: "Phase 2: MuxClient.sendSetVisibility と MuxMessageType.SetVisibility = 0x1B 追加"
+      status: completed
+    - id: phase2-visibility-controller
+      title: "Phase 2: VisibilityController 新設 (debounce、ヘルスチェック、統合判定)"
+      status: completed
+    - id: phase2-terminal-app-wiring
+      title: "Phase 2: terminal-app/index.ts で VisibilityController を起動"
+      status: completed
+    - id: phase2-pty-handler-cleanup
+      title: "Phase 2: pty-handler.ts の対症療法 (FR15) 撤去"
+      status: completed
+  - - id: phase3-mux-protocol
+      title: "Phase 3: MessageType::SetVisibility = 0x1B と SetVisibilityPayload 追加 (round-trip テスト追加 + 既存 protocol テスト 2 本のループ範囲拡張・is_none チェック箇所変更)"
+      status: completed
+    - id: phase3-pane-passthrough
+      title: "Phase 3: MuxPane に raw_passthrough (1 MiB / pane) と passthrough_scanner フィールド追加"
+      status: completed
+    - id: phase3-evaluate-output-target
+      title: "Phase 3: evaluate_output_target 関数追加 (network_detach × visible 二軸 + identity-scoped + visible 復帰時 snapshot bytes 返却)"
+      status: completed
+    - id: phase3-mux-handler
+      title: "Phase 3: handle_set_visibility と route_message 拡張、handle_connection に loop ローカル Arc<AtomicBool> visible_state 追加 (ConnectionState 新規 struct は導入しない)"
+      status: completed
+    - id: phase3-pty-spawn-passthrough
+      title: "Phase 3: pty_reader_loop の Detached 経路で raw_passthrough 蓄積"
+      status: completed
+    - id: phase3-reattach-integration
+      title: "Phase 3: collect_reattach_data に raw_passthrough 連結と reattach 後 visibility 評価を追加"
+      status: completed
+  - - id: phase4-e2e-spec
+      title: "Phase 4: 新規 E2E spec 2 本 (非 mux + mux) と既存スイート回帰確認"
+      status: completed
+    - id: phase4-frontend-cleanup
+      title: "Phase 4: 残存診断ログ整理と FR16 維持確認 (静的 grep)"
+      status: completed
+    - id: phase5-perf-throughput
+      title: "Phase 5: visible 中 throughput 回帰計測 (NFR1 / TS-25)"
+      status: completed
+    - id: phase5-perf-resume-block
+      title: "Phase 5: 復帰時 main thread block 計測 (NFR2 / TS-27)"
+      status: completed
+    - id: phase5-perf-rss
+      title: "Phase 5: hidden 1 時間後 backend RSS 計測 (NFR3 / TS-26)"
+      status: pending_user_verification
+    - id: phase5-manual-freeze-repro
+      title: "Phase 5: 既存フリーズ症状の実機 10 分以上 hidden 再現確認 (Linux + Windows)"
+      status: pending_user_verification

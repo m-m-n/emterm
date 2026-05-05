@@ -6,6 +6,11 @@
  */
 
 export { PtyClient } from "./client";
+export {
+	HEALTH_CHECK_MS,
+	HIDE_DEBOUNCE_MS,
+	VisibilityController,
+} from "./visibility-controller";
 export { type KeyMapping, keyEventToBytes, shouldHandleKey } from "./keyboard";
 export {
 	type CharacterSize,
