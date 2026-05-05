@@ -10,8 +10,8 @@ use tokio::sync::mpsc;
 use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget, SharedShadowParser,
-    SharedTitleSender, TitleChangeSender,
+    DetachReason, MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget,
+    SharedShadowParser, SharedTitleSender, TitleChangeSender,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -185,7 +185,7 @@ fn pty_reader_loop(
                     let t = output_target.lock().unwrap();
                     match &*t {
                         PaneOutputTarget::Connected(_) => "Connected",
-                        PaneOutputTarget::Detached(_) => "Detached",
+                        PaneOutputTarget::Detached { .. } => "Detached",
                     }
                 };
                 log::info!(
@@ -269,12 +269,16 @@ fn pty_reader_loop(
                                         &raw_passthrough,
                                         &passthrough_scanner,
                                     );
-                                    *target = PaneOutputTarget::Detached(ring);
+                                    *target = PaneOutputTarget::Detached {
+                                        reason: DetachReason::NetworkDetach,
+                                        owner: None,
+                                        ring,
+                                    };
                                     Some(Err(()))
                                 }
                             }
                         }
-                        PaneOutputTarget::Detached(ring) => {
+                        PaneOutputTarget::Detached { ring, .. } => {
                             ring.write(data);
                             capture_passthrough(
                                 pane_id,
@@ -297,7 +301,11 @@ fn pty_reader_loop(
                             DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
                         ring.write(data);
                         capture_passthrough(pane_id, data, &raw_passthrough, &passthrough_scanner);
-                        *target = PaneOutputTarget::Detached(ring);
+                        *target = PaneOutputTarget::Detached {
+                            reason: DetachReason::NetworkDetach,
+                            owner: None,
+                            ring,
+                        };
                     }
                 }
             }

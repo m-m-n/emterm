@@ -34,6 +34,10 @@ pub struct SessionBackpressure {
     /// so the reader can re-evaluate visibility and switch to the hidden
     /// path without waiting for the next ack.
     hidden_wake: AtomicBool,
+    /// Latched flag raised by `force_wake` during session removal. Once set,
+    /// `wait_for_drain` exits immediately on its next check so the reader
+    /// thread does not block forever on an ack the frontend will never send.
+    closed: AtomicBool,
     /// Condition variable wait/notify pair. Used to wake the reader when an
     /// ack lowers the in-flight counter below LOW_WATER_BYTES.
     cond: Mutex<()>,
@@ -57,6 +61,7 @@ impl SessionBackpressure {
             in_flight: AtomicUsize::new(0),
             waiters: AtomicBool::new(false),
             hidden_wake: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
             cond: Mutex::new(()),
             cond_notify: std::sync::Condvar::new(),
             sent_count: AtomicU64::new(0),
@@ -96,10 +101,11 @@ impl SessionBackpressure {
         }
     }
 
-    /// Wake any parked reader. Used during session removal so the reader
-    /// thread doesn't sit in `wait_for_drain` waiting for an ack that
-    /// will never arrive.
+    /// Wakes any parked `wait_for_drain` waiter and marks the session as
+    /// closed so the waiter exits immediately on next check. Used during
+    /// session removal.
     pub fn force_wake(&self) {
+        self.closed.store(true, Ordering::Release);
         if self.waiters.load(Ordering::Acquire) {
             let _guard = self.cond.lock().expect("backpressure cond poisoned");
             self.cond_notify.notify_all();
@@ -118,12 +124,13 @@ impl SessionBackpressure {
         }
     }
 
-    /// Block until in-flight bytes drop below `LOW_WATER_BYTES` or the
-    /// `hidden_wake` flag is raised. Returns the time spent waiting.
+    /// Block until in-flight bytes drop below `LOW_WATER_BYTES`, the
+    /// `hidden_wake` flag is raised, or the session is closed via
+    /// `force_wake`. Returns the time spent waiting.
     ///
     /// No timeout: callers depend on either an ack from the frontend
-    /// (visible path) or a hidden-wake signal (visibility transition) to
-    /// resume. Session removal also wakes the waiter via `force_wake`.
+    /// (visible path), a hidden-wake signal (visibility transition), or
+    /// session removal (`force_wake` sets `closed`) to resume.
     pub fn wait_for_drain(&self) -> Duration {
         let start = std::time::Instant::now();
         let mut guard = match self.cond.lock() {
@@ -131,7 +138,8 @@ impl SessionBackpressure {
             Err(_) => return start.elapsed(),
         };
         self.waiters.store(true, Ordering::Release);
-        while self.in_flight.load(Ordering::Acquire) > LOW_WATER_BYTES
+        while !self.closed.load(Ordering::Acquire)
+            && self.in_flight.load(Ordering::Acquire) > LOW_WATER_BYTES
             && !self.hidden_wake.swap(false, Ordering::AcqRel)
         {
             match self.cond_notify.wait(guard) {
@@ -324,13 +332,13 @@ mod tests {
         bp.add_sent(HIGH_WATER_BYTES + LOW_WATER_BYTES);
         let bp_clone = bp.clone();
         let handle = std::thread::spawn(move || bp_clone.wait_for_drain());
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(50));
         bp.force_wake();
-        // force_wake alone (no condition flip) currently leaves the
-        // reader parked; test that an ack after force_wake still returns
-        // it without timeout.
-        bp.ack(HIGH_WATER_BYTES + LOW_WATER_BYTES);
         let waited = handle.join().expect("thread panicked");
-        assert!(waited < Duration::from_secs(1));
+        assert!(
+            waited < Duration::from_secs(5),
+            "wait_for_drain did not release after force_wake (waited {:?})",
+            waited
+        );
     }
 }

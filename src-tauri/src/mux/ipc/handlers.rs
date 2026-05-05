@@ -666,7 +666,7 @@ mod tests {
         assert!(!visible_state.load(Ordering::Acquire));
         assert!(matches!(
             *target.lock().unwrap(),
-            PaneOutputTarget::Detached(_)
+            PaneOutputTarget::Detached { .. }
         ));
         // No snapshot enqueued on hidden transition.
         assert!(rx.try_recv().is_err(), "no snapshot expected on hidden");
@@ -680,12 +680,15 @@ mod tests {
         let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
 
         // Start in Detached as if SetVisibility(false) ran earlier and the
-        // reader had captured shadow + raw_passthrough state.
-        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(
-            crate::mux::ring_buffer::DetachRingBuffer::new(
+        // reader had captured shadow + raw_passthrough state. Owner = the
+        // caller's tx so the visibility resume is permitted.
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+            ring: crate::mux::ring_buffer::DetachRingBuffer::new(
                 crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
             ),
-        )));
+        }));
         let session_id = {
             let mut m = mgr.lock().await;
             let sid = m.create_session("default".to_string());

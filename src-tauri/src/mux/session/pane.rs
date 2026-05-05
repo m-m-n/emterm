@@ -32,15 +32,80 @@ pub struct PtyOutputChunk {
 /// Bounded channel capacity for PTY output per pane.
 pub const PTY_CHANNEL_CAPACITY: usize = 256;
 
+/// Why a pane is currently detached. Combines `NetworkDetach`
+/// (no client connected / kicked / explicit detach) with
+/// `HiddenByVisibility` (client connected but reported hidden).
+///
+/// A pane stays Detached until **all** active reasons clear:
+/// - hidden -> visible resolves the `HiddenByVisibility` bit
+/// - reattach resolves the `NetworkDetach` bit
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetachReason {
+    NetworkDetach,
+    HiddenByVisibility,
+    Both,
+}
+
+impl DetachReason {
+    pub fn has_network(self) -> bool {
+        matches!(self, DetachReason::NetworkDetach | DetachReason::Both)
+    }
+
+    pub fn has_hidden(self) -> bool {
+        matches!(self, DetachReason::HiddenByVisibility | DetachReason::Both)
+    }
+
+    /// Combine two reasons (set union).
+    pub fn combine(a: Self, b: Self) -> Self {
+        match (
+            a.has_network() || b.has_network(),
+            a.has_hidden() || b.has_hidden(),
+        ) {
+            (true, true) => DetachReason::Both,
+            (true, false) => DetachReason::NetworkDetach,
+            (false, true) => DetachReason::HiddenByVisibility,
+            (false, false) => DetachReason::HiddenByVisibility,
+        }
+    }
+
+    /// Clear the `NetworkDetach` bit. Returns `None` when the result is empty.
+    pub fn clear_network(self) -> Option<Self> {
+        match self {
+            DetachReason::NetworkDetach => None,
+            DetachReason::HiddenByVisibility => Some(DetachReason::HiddenByVisibility),
+            DetachReason::Both => Some(DetachReason::HiddenByVisibility),
+        }
+    }
+
+    /// Clear the `HiddenByVisibility` bit. Returns `None` when the result is empty.
+    pub fn clear_hidden(self) -> Option<Self> {
+        match self {
+            DetachReason::HiddenByVisibility => None,
+            DetachReason::NetworkDetach => Some(DetachReason::NetworkDetach),
+            DetachReason::Both => Some(DetachReason::NetworkDetach),
+        }
+    }
+}
+
 /// Where the PTY reader thread sends output data.
 ///
 /// When a GUI client is connected, output goes directly to the channel.
 /// When disconnected, output accumulates in a ring buffer for later replay.
+///
+/// `Detached` carries identity (`owner`) and cause (`reason`) so a second
+/// connection cannot reclaim a pane that the first connection put into
+/// `HiddenByVisibility`. `owner = None` marks system-origin detaches (e.g.
+/// pane spawned before any client attached, or PTY EOF fallback) which any
+/// connection may reclaim.
 pub enum PaneOutputTarget {
     /// Connected: send output to the GUI via channel.
     Connected(mpsc::Sender<PtyOutputChunk>),
     /// Detached: buffer output in a ring buffer for replay on reattach.
-    Detached(DetachRingBuffer),
+    Detached {
+        reason: DetachReason,
+        owner: Option<mpsc::Sender<PtyOutputChunk>>,
+        ring: DetachRingBuffer,
+    },
 }
 
 /// Thread-safe shared reference to a pane's output target.
@@ -63,61 +128,93 @@ pub enum EvalResult {
 /// detach flag and the connection-scoped visible flag, and apply the
 /// transition in place.
 ///
-/// - `network_detach == true` OR `visible == false`: Detached.
-/// - Both clear: Connected(`owned_tx`). Existing Detached state contributes
-///   `shadow_snapshot + ring + raw_passthrough` as a one-shot resume snapshot.
-///
-/// Identity-scoped: when switching Connected -> Detached we only flip panes
-/// whose current `Connected(tx)` is `same_channel(owned_tx)`. Panes already
-/// owned by another connection are left alone.
+/// Identity-scoped on both edges:
+/// - Connected -> Detached: only flip panes whose current `Connected(tx)`
+///   is `same_channel(owned_tx)`. The new `Detached` records `owned_tx` as
+///   `owner` so a different connection cannot reclaim it via SetVisibility.
+/// - Detached -> Connected: only resume when `owner` matches `owned_tx`
+///   (or `owner == None`, system origin), AND the resolved reason becomes
+///   empty after the caller's transition (`HiddenByVisibility` clears on
+///   `visible=true`; `NetworkDetach` only clears via the reattach path).
 pub fn evaluate_output_target(
     pane: &MuxPane,
     network_detach: bool,
     visible: bool,
     owned_tx: &mpsc::Sender<PtyOutputChunk>,
 ) -> EvalResult {
-    let want_connected = !network_detach && visible;
     let mut target = pane.output_target.lock().unwrap();
+    let new_reason = match (network_detach, visible) {
+        (true, true) => Some(DetachReason::NetworkDetach),
+        (false, false) => Some(DetachReason::HiddenByVisibility),
+        (true, false) => Some(DetachReason::Both),
+        (false, true) => None,
+    };
     match &mut *target {
         PaneOutputTarget::Connected(current_tx) => {
-            if want_connected {
-                if current_tx.same_channel(owned_tx) {
-                    EvalResult::Unchanged
-                } else {
-                    // Different connection owns this pane. Do not touch.
-                    EvalResult::Unchanged
+            let owned_by_caller = current_tx.same_channel(owned_tx);
+            match new_reason {
+                None => EvalResult::Unchanged,
+                Some(reason) if owned_by_caller => {
+                    *target = PaneOutputTarget::Detached {
+                        reason,
+                        owner: Some(owned_tx.clone()),
+                        ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+                    };
+                    EvalResult::SwitchedToDetached
                 }
-            } else if current_tx.same_channel(owned_tx) {
-                *target = PaneOutputTarget::Detached(DetachRingBuffer::new(
-                    crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-                ));
-                EvalResult::SwitchedToDetached
-            } else {
-                // Owned by another connection — don't clobber.
-                EvalResult::Unchanged
+                Some(_) => EvalResult::Unchanged,
             }
         }
-        PaneOutputTarget::Detached(ring) => {
-            if want_connected {
-                let mut snapshot = Vec::new();
-                snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
-                let screen = pane
-                    .shadow_parser
-                    .lock()
-                    .unwrap()
-                    .screen()
-                    .contents_formatted();
-                snapshot.extend_from_slice(&screen);
-                let buffered = ring.read_all();
-                snapshot.extend_from_slice(&buffered);
-                let passthrough = pane.raw_passthrough.lock().unwrap().read_all();
-                snapshot.extend_from_slice(&passthrough);
-                ring.clear();
-                pane.raw_passthrough.lock().unwrap().clear();
-                *target = PaneOutputTarget::Connected(owned_tx.clone());
-                EvalResult::ResumeWithSnapshot { snapshot }
+        PaneOutputTarget::Detached {
+            reason,
+            owner,
+            ring,
+        } => {
+            let owner_matches = match owner {
+                Some(o) => o.same_channel(owned_tx),
+                None => true,
+            };
+            if !owner_matches {
+                return EvalResult::Unchanged;
+            }
+            // Resolve current reason against the caller's transition.
+            let resolved = if visible {
+                reason.clear_hidden()
             } else {
-                EvalResult::Unchanged
+                Some(*reason)
+            };
+            let resolved = match (network_detach, resolved) {
+                (true, Some(r)) => Some(DetachReason::combine(r, DetachReason::NetworkDetach)),
+                (true, None) => Some(DetachReason::NetworkDetach),
+                (false, r) => r,
+            };
+            match resolved {
+                Some(r) => {
+                    *reason = r;
+                    if owner.is_none() {
+                        *owner = Some(owned_tx.clone());
+                    }
+                    EvalResult::Unchanged
+                }
+                None => {
+                    let mut snapshot = Vec::new();
+                    snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
+                    let screen = pane
+                        .shadow_parser
+                        .lock()
+                        .unwrap()
+                        .screen()
+                        .contents_formatted();
+                    snapshot.extend_from_slice(&screen);
+                    let buffered = ring.read_all();
+                    snapshot.extend_from_slice(&buffered);
+                    let passthrough = pane.raw_passthrough.lock().unwrap().read_all();
+                    snapshot.extend_from_slice(&passthrough);
+                    ring.clear();
+                    pane.raw_passthrough.lock().unwrap().clear();
+                    *target = PaneOutputTarget::Connected(owned_tx.clone());
+                    EvalResult::ResumeWithSnapshot { snapshot }
+                }
             }
         }
     }
@@ -358,20 +455,27 @@ mod tests {
         assert_eq!(pane.rows, 40);
     }
 
+    /// Build a `Detached` target with a `NetworkDetach`-only reason and
+    /// `owner = None` (system origin), matching the daemon's pre-attach state.
+    fn detached_system_target() -> SharedOutputTarget {
+        Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+        }))
+    }
+
     /// TS-12: detached + visible -> stays Detached.
     #[test]
     fn test_evaluate_output_target_network_detached_visible_stays_detached() {
         let (owned_tx, _rx) = mpsc::channel(16);
-        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(
-            DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
-        )));
+        let target = detached_system_target();
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
-        // network_detach=true, visible=true -> still hidden by network detach.
         let result = evaluate_output_target(&pane, true, true, &owned_tx);
         assert!(matches!(result, EvalResult::Unchanged));
         assert!(matches!(
             *target.lock().unwrap(),
-            PaneOutputTarget::Detached(_)
+            PaneOutputTarget::Detached { .. }
         ));
     }
 
@@ -380,14 +484,11 @@ mod tests {
     fn test_evaluate_output_target_identity_scoped_connected_to_detached() {
         let (owner_tx, _rx) = mpsc::channel(16);
         let (other_tx, _other_rx) = mpsc::channel(16);
-        // Pane is connected to OTHER client.
         let target: SharedOutputTarget =
             Arc::new(StdMutex::new(PaneOutputTarget::Connected(other_tx)));
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
-        // Caller (owner_tx) tries to detach with hidden visible=false.
         let result = evaluate_output_target(&pane, false, false, &owner_tx);
         assert!(matches!(result, EvalResult::Unchanged));
-        // Pane remains Connected (to other client) — identity-scoped guard held.
         assert!(matches!(
             *target.lock().unwrap(),
             PaneOutputTarget::Connected(_)
@@ -402,24 +503,31 @@ mod tests {
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
         let result = evaluate_output_target(&pane, false, false, &owner_tx);
         assert!(matches!(result, EvalResult::SwitchedToDetached));
-        assert!(matches!(
-            *target.lock().unwrap(),
-            PaneOutputTarget::Detached(_)
-        ));
+        match &*target.lock().unwrap() {
+            PaneOutputTarget::Detached { reason, owner, .. } => {
+                assert_eq!(*reason, DetachReason::HiddenByVisibility);
+                let owner = owner.as_ref().expect("owner must be set");
+                assert!(owner.same_channel(&owner_tx));
+            }
+            _ => panic!("expected Detached"),
+        }
     }
 
-    /// TS-14: Detached -> Connected returns snapshot bytes including
-    /// shadow contents and raw_passthrough.
+    /// TS-14: Detached -> Connected returns snapshot bytes including shadow
+    /// contents and raw_passthrough. Owner = caller, reason = hidden,
+    /// resolved by visible=true.
     #[test]
     fn test_evaluate_output_target_detached_to_connected_returns_snapshot() {
         let (owned_tx, _rx) = mpsc::channel(16);
         let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
         ring.write(b"buffered-from-ring");
-        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached(ring)));
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+            ring,
+        }));
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
-        // Seed shadow with some text.
         pane.shadow_parser.lock().unwrap().process(b"hello-shadow");
-        // Seed raw_passthrough.
         pane.raw_passthrough
             .lock()
             .unwrap()
@@ -447,7 +555,6 @@ mod tests {
             *target.lock().unwrap(),
             PaneOutputTarget::Connected(_)
         ));
-        // raw_passthrough must be cleared after consumption.
         assert_eq!(pane.raw_passthrough.lock().unwrap().len(), 0);
     }
 
@@ -459,5 +566,142 @@ mod tests {
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
         let result = evaluate_output_target(&pane, false, true, &owned_tx);
         assert!(matches!(result, EvalResult::Unchanged));
+    }
+
+    /// F6 regression: connection A puts a pane into HiddenByVisibility
+    /// (Detached, owner=A). Connection B then calls SetVisibility(true) with
+    /// its own tx — must NOT reclaim the pane.
+    #[test]
+    fn test_evaluate_output_target_other_connection_cannot_reclaim_hidden() {
+        let (a_tx, _a_rx) = mpsc::channel(16);
+        let (b_tx, _b_rx) = mpsc::channel(16);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(a_tx.clone()),
+            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+        }));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+
+        let result = evaluate_output_target(&pane, false, true, &b_tx);
+        assert!(matches!(result, EvalResult::Unchanged));
+        match &*target.lock().unwrap() {
+            PaneOutputTarget::Detached { reason, owner, .. } => {
+                assert_eq!(*reason, DetachReason::HiddenByVisibility);
+                let owner = owner.as_ref().expect("owner must remain A");
+                assert!(
+                    owner.same_channel(&a_tx),
+                    "pane must still be owned by connection A"
+                );
+            }
+            _ => panic!("expected Detached, got Connected"),
+        }
+    }
+
+    /// F6: same connection's hide -> show round trip restores Connected.
+    #[test]
+    fn test_evaluate_output_target_same_connection_hide_show_roundtrip() {
+        let (a_tx, _a_rx) = mpsc::channel(16);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(a_tx.clone())));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+
+        let r1 = evaluate_output_target(&pane, false, false, &a_tx);
+        assert!(matches!(r1, EvalResult::SwitchedToDetached));
+
+        let r2 = evaluate_output_target(&pane, false, true, &a_tx);
+        assert!(matches!(r2, EvalResult::ResumeWithSnapshot { .. }));
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
+    }
+
+    /// F6: when both NetworkDetach and HiddenByVisibility are active,
+    /// SetVisibility(true) only clears the hidden bit. The pane stays
+    /// Detached because the network reason is still active. Only the reattach
+    /// path may clear `NetworkDetach`.
+    #[test]
+    fn test_evaluate_output_target_both_reasons_visible_keeps_detached() {
+        let (a_tx, _a_rx) = mpsc::channel(16);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::Both,
+            owner: Some(a_tx.clone()),
+            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
+        }));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+
+        let result = evaluate_output_target(&pane, false, true, &a_tx);
+        assert!(matches!(result, EvalResult::Unchanged));
+        match &*target.lock().unwrap() {
+            PaneOutputTarget::Detached { reason, .. } => {
+                assert_eq!(
+                    *reason,
+                    DetachReason::NetworkDetach,
+                    "hidden bit cleared but network bit stays"
+                );
+            }
+            _ => panic!("expected Detached"),
+        }
+    }
+
+    /// F6: system-origin Detached (`owner = None`, reason = NetworkDetach)
+    /// is NOT cleared by `evaluate_output_target` — the `NetworkDetach` bit
+    /// only resolves through the reattach path. Until then, the pane stays
+    /// Detached even when the caller asserts `visible = true`. The owner
+    /// slot is adopted so a subsequent visibility transition is matched
+    /// against the correct connection.
+    #[test]
+    fn test_evaluate_output_target_system_origin_stays_detached_until_reattach() {
+        let (a_tx, _a_rx) = mpsc::channel(16);
+        let target = detached_system_target();
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+
+        let result = evaluate_output_target(&pane, false, true, &a_tx);
+        assert!(matches!(result, EvalResult::Unchanged));
+        match &*target.lock().unwrap() {
+            PaneOutputTarget::Detached { reason, owner, .. } => {
+                assert_eq!(*reason, DetachReason::NetworkDetach);
+                let owner = owner.as_ref().expect("owner adopted from caller");
+                assert!(owner.same_channel(&a_tx));
+            }
+            _ => panic!("expected Detached"),
+        }
+    }
+
+    #[test]
+    fn test_detach_reason_combine() {
+        assert_eq!(
+            DetachReason::combine(
+                DetachReason::NetworkDetach,
+                DetachReason::HiddenByVisibility
+            ),
+            DetachReason::Both
+        );
+        assert_eq!(
+            DetachReason::combine(DetachReason::NetworkDetach, DetachReason::NetworkDetach),
+            DetachReason::NetworkDetach
+        );
+        assert_eq!(
+            DetachReason::combine(DetachReason::Both, DetachReason::HiddenByVisibility),
+            DetachReason::Both
+        );
+    }
+
+    #[test]
+    fn test_detach_reason_clear_bits() {
+        assert_eq!(DetachReason::NetworkDetach.clear_network(), None);
+        assert_eq!(
+            DetachReason::Both.clear_network(),
+            Some(DetachReason::HiddenByVisibility)
+        );
+        assert_eq!(
+            DetachReason::HiddenByVisibility.clear_network(),
+            Some(DetachReason::HiddenByVisibility)
+        );
+        assert_eq!(DetachReason::HiddenByVisibility.clear_hidden(), None);
+        assert_eq!(
+            DetachReason::Both.clear_hidden(),
+            Some(DetachReason::NetworkDetach)
+        );
     }
 }
