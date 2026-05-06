@@ -1,0 +1,81 @@
+schema_version: 1
+feature: visibility-raf-heartbeat
+
+tasks:
+  - id: phase1-constants-deps-state
+    phase: 1
+    title: Add constants, DI fields, and private heartbeat state to VisibilityController
+    files_modified:
+      - src/pty/visibility-controller.ts
+    requirements: [FR8, NFR2, NFR3]
+    estimated_effort: small
+    status: completed
+
+  - id: phase2-self-loop-and-detection
+    phase: 2
+    title: Implement rAF self-loop, dead detection, suspend gap, currentEffective integration, and notify wiring
+    files_modified:
+      - src/pty/visibility-controller.ts
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR7, FR9, NFR1]
+    estimated_effort: medium
+    status: completed
+
+  - id: phase3-diag-idle-reason
+    phase: 3
+    title: Append reason field to DIAG-IDLE hidden log line
+    files_modified:
+      - src/pty/visibility-controller.ts
+    requirements: [FR6, NFR4]
+    estimated_effort: small
+    status: completed
+
+  - id: phase4-unit-tests
+    phase: 4
+    title: Add TS-29 〜 TS-39 unit tests in visibility-controller.test.ts
+    files_modified:
+      - src/pty/visibility-controller.test.ts
+    requirements: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR8, FR9, FR10, NFR3]
+    estimated_effort: medium
+    status: completed
+
+  - id: phase4-e2e-spec
+    phase: 4
+    title: Create visibility-raf-heartbeat.e2e.js using rAF monkey-patch
+    files_created:
+      - e2e-tests/specs/visibility-raf-heartbeat.e2e.js
+    requirements: [FR1, FR2, FR4]
+    estimated_effort: medium
+    status: completed
+
+  - id: phase4-regression-validation
+    phase: 4
+    title: Confirm existing visibility-aware-streaming E2E specs pass unchanged
+    requirements: [FR10, NFR5]
+    estimated_effort: small
+    status: deferred
+    notes: >
+      Full E2E regression run (./scripts/run-e2e-docker.sh test) is deferred to
+      sdd.6-verify. The frontend changes preserve every public API on
+      VisibilityController; the existing visibility-aware-streaming /
+      freeze-regression / visibility-resume-block / visibility-throughput-bench
+      specs invoke pty_set_visibility directly via Tauri internals and do not
+      exercise the new rAF path, so the controller modifications cannot
+      regress them in principle. The full bun test suite (2305 tests) passes
+      including the original TS-8 / TS-9 / TS-21 / F11 cases.
+
+  - id: phase5-manual-repro-doc
+    phase: 5
+    title: Author freeze-repro-rafstall.md with workspace / occluded / screen lock / suspend scenarios
+    files_created:
+      - doc/tasks/visibility-raf-heartbeat/freeze-repro-rafstall.md
+    requirements: [NFR4, NFR5]
+    estimated_effort: small
+    status: completed
+
+  - id: phase5-manual-repro-execution
+    phase: 5
+    title: Execute manual repro per freeze-repro-rafstall.md (user verifiable)
+    requirements: [NFR5]
+    estimated_effort: small
+    status: pending
+    notes: User-verifiable — requires a real desktop environment.

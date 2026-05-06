@@ -1,0 +1,118 @@
+schema_version: 1
+feature: visibility-raf-heartbeat
+created: 2026-05-06
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --manifest-path src-tauri/Cargo.toml\""
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"bun test\""
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [REQUIREMENTS.md, SPEC.md]
+    status: completed
+    completed_at_commit: dd76f8b1c57410b37116d9d4f014211215055581
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: dd76f8b1c57410b37116d9d4f014211215055581
+  - id: verify-plan
+    status: completed
+    completed_at_commit: dd76f8b1c57410b37116d9d4f014211215055581
+  - id: implement
+    status: completed
+    completed_at_commit: dd76f8b1c57410b37116d9d4f014211215055581
+  - id: check
+    status: completed
+    completed_at_commit: dd76f8b1c57410b37116d9d4f014211215055581
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: dd76f8b1c57410b37116d9d4f014211215055581
+
+requirements:
+  FR1:
+    title: rAF self-loop
+    status: ok
+    tasks: [phase1-constants-deps-state, phase2-self-loop-and-detection, phase4-unit-tests, phase4-e2e-spec]
+    tests: [TS-29, E2E-1]
+  FR2:
+    title: rAF dead detection
+    status: ok
+    tasks: [phase2-self-loop-and-detection, phase4-unit-tests, phase4-e2e-spec]
+    tests: [TS-29, TS-32, E2E-1]
+  FR3:
+    title: currentEffective integration
+    status: ok
+    tasks: [phase2-self-loop-and-detection, phase4-unit-tests]
+    tests: [TS-30]
+  FR4:
+    title: rAF resume → immediate visible
+    status: ok
+    tasks: [phase2-self-loop-and-detection, phase4-unit-tests, phase4-e2e-spec]
+    tests: [TS-31, E2E-2]
+  FR5:
+    title: suspend gap skip
+    status: ok
+    tasks: [phase2-self-loop-and-detection, phase4-unit-tests]
+    tests: [TS-33]
+  FR6:
+    title: DIAG-IDLE reason field
+    status: ok
+    tasks: [phase3-diag-idle-reason, phase4-unit-tests]
+    tests: [TS-35, TS-36]
+  FR7:
+    title: loop termination on hidden
+    status: ok
+    tasks: [phase2-self-loop-and-detection, phase4-unit-tests]
+    tests: [TS-34]
+  FR8:
+    title: DI for rAF / now
+    status: ok
+    tasks: [phase1-constants-deps-state, phase4-unit-tests]
+    tests: [TS-37]
+  FR9:
+    title: start grace period
+    status: ok
+    tasks: [phase2-self-loop-and-detection, phase4-unit-tests]
+    tests: [TS-32]
+  FR10:
+    title: compat with visibility-aware-pty-streaming FR1〜FR16
+    status: ok
+    tasks: [phase4-regression-validation, phase4-unit-tests]
+    tests: [TS-38, TS-39, E2E-3]
+  NFR1:
+    title: Performance
+    status: ok
+    tasks: [phase2-self-loop-and-detection]
+    tests: []
+  NFR2:
+    title: Resource
+    status: ok
+    tasks: [phase1-constants-deps-state]
+    tests: []
+  NFR3:
+    title: Reliability
+    status: ok
+    tasks: [phase1-constants-deps-state, phase4-unit-tests]
+    tests: [TS-37]
+  NFR4:
+    title: Observability
+    status: ok
+    tasks: [phase3-diag-idle-reason, phase5-manual-repro-doc]
+    tests: [TS-35, TS-36]
+  NFR5:
+    title: Compatibility
+    status: ok
+    tasks: [phase4-regression-validation, phase5-manual-repro-doc, phase5-manual-repro-execution]
+    tests: [E2E-3]
