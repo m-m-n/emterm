@@ -166,6 +166,35 @@ export interface PtyHandlerContext {
  * so the TS side can perform the buffer switch, then the remaining data is
  * routed to the correct (alternate or primary) core.
  */
+/** Sliding-window timestamp logs (perf clock) for slow-render and
+ *  slow-processPendingData events. Trimmed lazily in their getters. Module
+ *  scope rather than per-handle because the heartbeat should see counts even
+ *  when handlers are torn down and re-created (e.g. after WASM recovery). */
+const _slowRenderTimestamps: number[] = [];
+const _slowProcessTimestamps: number[] = [];
+function recordSlowRender(now: number): void {
+  _slowRenderTimestamps.push(now);
+  if (_slowRenderTimestamps.length > 1024) _slowRenderTimestamps.shift();
+}
+function recordSlowProcess(now: number): void {
+  _slowProcessTimestamps.push(now);
+  if (_slowProcessTimestamps.length > 1024) _slowProcessTimestamps.shift();
+}
+export function getSlowRenderCountWithin(windowMs: number): number {
+  const cutoff = performance.now() - windowMs;
+  while (_slowRenderTimestamps.length > 0 && _slowRenderTimestamps[0]! < cutoff) {
+    _slowRenderTimestamps.shift();
+  }
+  return _slowRenderTimestamps.length;
+}
+export function getSlowProcessCountWithin(windowMs: number): number {
+  const cutoff = performance.now() - windowMs;
+  while (_slowProcessTimestamps.length > 0 && _slowProcessTimestamps[0]! < cutoff) {
+    _slowProcessTimestamps.shift();
+  }
+  return _slowProcessTimestamps.length;
+}
+
 /** Handle returned by setupPtyHandlers for injecting external data into the pipeline. */
 export interface PtyHandlerHandle {
   /** Inject data into the PTY processing pipeline (same path as onData). */
@@ -651,6 +680,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
 
           // Diagnostic: log slow renders
           if (renderTime > 30) {
+            recordSlowRender(performance.now());
             console.warn(
               `[WARN][FRONTEND] slow-render: ${renderTime.toFixed(1)}ms`,
             );
@@ -662,6 +692,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       const processingTime = performance.now() - processingStart;
       if (processingTime > 50) {
         longProcessingCount++;
+        recordSlowProcess(performance.now());
         console.warn(
           `[WARN][FRONTEND] slow-processPendingData: ${processingTime.toFixed(1)}ms` +
           ` | trigger=${trigger}` +

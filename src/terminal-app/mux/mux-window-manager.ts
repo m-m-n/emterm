@@ -94,6 +94,33 @@ export function getLastMuxSwitchAt(): number {
   return _lastMuxSwitchAt;
 }
 
+/** Sliding-window log of recent mux switch timestamps (perf clock).
+ *  Pushed at the start of switchMuxWindow; consumed by the heartbeat to
+ *  surface "switch storm" patterns (e.g. 8 switches in 4 minutes correlated
+ *  with a renderer hang). Trimmed lazily in getMuxSwitchCountWithin. */
+const _muxSwitchTimestamps: number[] = [];
+export function getMuxSwitchCountWithin(windowMs: number): number {
+  const cutoff = performance.now() - windowMs;
+  while (_muxSwitchTimestamps.length > 0 && _muxSwitchTimestamps[0]! < cutoff) {
+    _muxSwitchTimestamps.shift();
+  }
+  return _muxSwitchTimestamps.length;
+}
+
+/** Throttle window for `emitMuxStateChange` calls during a mux reattach burst.
+ *  The original coalescing emitted 11 times for an 11-pane reattach; the
+ *  per-pane skip introduced for FR7 dropped that to 1 (final emit). However,
+ *  if the daemon delivers fewer PaneCreated messages than expected (transport
+ *  drop, daemon-side error, partial reply), the final-pane condition never
+ *  fires and the tab bar is never updated for the panes that DID arrive.
+ *  This throttle adds a safety net: during reattach, emit at most once per
+ *  REATTACH_EMIT_THROTTLE_MS so the UI surfaces partial progress without
+ *  reintroducing the per-pane storm. The first PaneCreated of a fresh reattach
+ *  always emits because the initial 0 (or stale timestamp from a long-ago
+ *  reattach) makes `now - _lastReattachEmitAt >= THROTTLE_MS` trivially true. */
+const REATTACH_EMIT_THROTTLE_MS = 150;
+let _lastReattachEmitAt = 0;
+
 /** Switch to the current activeMuxWindowIndex: swap WASM grids and update UI. */
 export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: number): void {
   // Record switch *attempt* timestamp eagerly so the heartbeat's
@@ -102,6 +129,8 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
   // alternative (record only on success) would mask freezes that abort
   // mid-switch — the very pattern we are hunting.
   _lastMuxSwitchAt = performance.now();
+  _muxSwitchTimestamps.push(_lastMuxSwitchAt);
+  if (_muxSwitchTimestamps.length > 1024) _muxSwitchTimestamps.shift();
   const state = ctx.getState();
   if (!state) return;
   const muxPaneIds = ctx.getMuxPaneIds();
@@ -511,6 +540,14 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   if (ctx.getMuxPendingWindowCount() <= 0) return;
   ctx.setMuxPendingWindowCount(ctx.getMuxPendingWindowCount() - 1);
 
+  // Snapshot reattach state at function entry per SPEC FR9. The finalize block
+  // below flips setMuxIsReattaching(false) mid-function, so subsequent
+  // FR6 / FR7 / FR8 decisions MUST use this captured value rather than
+  // re-querying ctx.getMuxIsReattaching(). Capturing here also fixes the prior
+  // location-violation flagged by the spec reviewer (the snapshot was
+  // previously taken further down, after sendMuxPaneResize).
+  const wasReattachingThisCall = ctx.getMuxIsReattaching();
+
   const state = ctx.getState();
   const muxPaneIds = ctx.getMuxPaneIds();
   const muxPaneGrids = ctx.getMuxPaneGrids();
@@ -524,7 +561,7 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   const prevPaneId = muxPaneIds[previousIndex];
   const hadPrevPane = prevPaneId != null && state != null;
   if (hadPrevPane) {
-    if (ctx.getMuxIsReattaching()) {
+    if (wasReattachingThisCall) {
       ctx.processPtyPendingDataNow();
     }
     muxPaneGrids.set(prevPaneId, state!.saveMuxPaneState());
@@ -545,7 +582,7 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   // since PaneCreated messages arrive in the same order as the windows array).
   let initialName = hadPrevPane ? "Terminal" : (state?.title || "Terminal");
   let daemonWindowId = newIdx; // fallback: use frontend index
-  if (ctx.getMuxIsReattaching()) {
+  if (wasReattachingThisCall) {
     const reattachWindows = ctx.getMuxReattachWindows();
     const winInfo = reattachWindows[newIdx];
     if (winInfo) {
@@ -560,7 +597,7 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   ctx.setActiveMuxWindowIndex(newIdx);
 
   console.warn(
-    `[DIAG-MUX-ATTACH] push window newIdx=${newIdx} daemonId=${daemonWindowId} paneId=${paneId} reattach=${ctx.getMuxIsReattaching()}`,
+    `[DIAG-MUX-ATTACH] push window newIdx=${newIdx} daemonId=${daemonWindowId} paneId=${paneId} reattach=${wasReattachingThisCall}`,
   );
 
   muxLog.info(`Mux pane created: id=${paneId}, window=${newIdx}`);
@@ -580,39 +617,78 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
   // Skip during reattach — initialName was just set from daemon-provided
   // window name, and syncWindowTitleFromState would overwrite it with the
   // empty state._title (which would also clobber daemon-side via RenameWindow).
-  if (hadPrevPane && !ctx.getMuxIsReattaching()) {
+  if (hadPrevPane && !wasReattachingThisCall) {
     ctx.syncWindowTitleFromState();
   }
 
   // Send initial resize so daemon PTY matches actual terminal dimensions
   sendMuxPaneResize(ctx, paneId);
 
-  // Ensure canvas reflects restored/fresh grid (without this, canvas stays blank)
+  // Ensure canvas reflects restored/fresh grid (without this, canvas stays blank).
+  // Skip during reattach: the final switchMuxWindow below performs a forceRender
+  // on the restored active pane, and intermediate forceRender calls on
+  // not-yet-active panes contribute to the 1-2s reattach storm (slow-render
+  // 40-85ms × N panes, plus event-loop hangs >500ms) without visible benefit.
   const renderer = ctx.getRenderer();
-  if (renderer && state) {
+  if (renderer && state && !wasReattachingThisCall) {
     renderer.forceRender(state);
   }
 
-  // After all pending windows are received during reattach, switch to first window
-  if (ctx.getMuxIsReattaching() && ctx.getMuxPendingWindowCount() === 0) {
-    // Process any pending output for the last pane before switching,
-    // so its screen data and OSC title are captured in the saved state.
-    ctx.processPtyPendingDataNow();
+  // After all pending windows are received during reattach, switch to first window.
+  // Wrap the swap/render path in try/finally so that a thrown exception in
+  // switchMuxWindow or renderer.forceRender (e.g. WASM RuntimeError after
+  // suspend/resume) does NOT leak isReattaching=true permanently. The flag
+  // gates several downstream paths (wasReattachingThisCall snapshot in
+  // future calls, syncWindowTitleFromState skip, processPtyPendingDataNow,
+  // and the emit gate below); leaving it stuck silently degrades all of them.
+  if (wasReattachingThisCall && ctx.getMuxPendingWindowCount() === 0) {
+    try {
+      // Process any pending output for the last pane before switching,
+      // so its screen data and OSC title are captured in the saved state.
+      ctx.processPtyPendingDataNow();
 
-    // Restore the active window from before detach (clamped to valid range)
-    const targetIndex = Math.min(ctx.getMuxLastActiveIndex(), muxWindows.length - 1);
-    if (targetIndex !== ctx.getActiveMuxWindowIndex()) {
-      const prev = ctx.getActiveMuxWindowIndex();
-      ctx.setActiveMuxWindowIndex(targetIndex);
-      switchMuxWindow(ctx, prev);
+      // Restore the active window from before detach (clamped to valid range)
+      const targetIndex = Math.min(ctx.getMuxLastActiveIndex(), muxWindows.length - 1);
+      if (targetIndex !== ctx.getActiveMuxWindowIndex()) {
+        const prev = ctx.getActiveMuxWindowIndex();
+        ctx.setActiveMuxWindowIndex(targetIndex);
+        switchMuxWindow(ctx, prev);
+      } else if (renderer && state) {
+        // Edge case (FR10): the pre-detach active window is the last-attached
+        // one, so switchMuxWindow above does not fire. With per-pane
+        // forceRender skipped during reattach, no canvas paint would occur
+        // unless we force one here. The current `state` already corresponds
+        // to the active pane's grid (it was just registered as
+        // newIdx === targetIndex), so a single render is sufficient.
+        renderer.forceRender(state);
+      }
+    } finally {
+      ctx.setMuxIsReattaching(false);
+
+      // Request status bar content from daemon after reattach completes.
+      // Run in finally so a render failure above does not skip the request.
+      ctx.getMuxClient()?.sendRequestStatusUpdate().catch(() => {});
     }
-    ctx.setMuxIsReattaching(false);
-
-    // Request status bar content from daemon after reattach completes
-    ctx.getMuxClient()?.sendRequestStatusUpdate().catch(() => {});
   }
 
-  emitMuxStateChange(ctx);
+  // Mux-state-change emits during reattach were originally fired per pane (11
+  // emits for an 11-pane reattach, each triggering a tab-bar repaint and
+  // contributing to the slow-render / event-loop-hang storm). The
+  // happy-path final emit (pendingCount===0) handles a clean reattach in a
+  // single emit. To avoid the bad-path failure mode where the daemon delivers
+  // fewer PaneCreated messages than expected — pendingCount never reaches 0
+  // and the tab bar is never updated for panes that DID arrive — also emit
+  // during the burst at most once per REATTACH_EMIT_THROTTLE_MS so partial
+  // progress is still visible to the user.
+  if (!wasReattachingThisCall || ctx.getMuxPendingWindowCount() === 0) {
+    emitMuxStateChange(ctx);
+  } else {
+    const now = performance.now();
+    if (now - _lastReattachEmitAt >= REATTACH_EMIT_THROTTLE_MS) {
+      _lastReattachEmitAt = now;
+      emitMuxStateChange(ctx);
+    }
+  }
 }
 
 /** Send a Resize message to the daemon for a single pane using current terminal dimensions.
