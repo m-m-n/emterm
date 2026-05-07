@@ -288,13 +288,17 @@ describe("VisibilityController", () => {
     expect(h.pty.setVisibilityCalls.length).toBe(3);
   });
 
-  test("focus change drives effective state", async () => {
+  test("focus loss alone does NOT pause stream while window stays visible", async () => {
+    // Regression guard: previously focus was AND'd into currentEffective(),
+    // so losing focus to another app paused the PTY stream after the
+    // 1s hide debounce. With the fix, focus is observability-only — only
+    // document.hidden or rAF stall can pause the stream.
     expect(h.pty.setVisibilityCalls).toEqual([true]);
     h.flipFocus(false);
     h.scheduler.advance(HIDE_DEBOUNCE_MS + 10);
-    expect(h.pty.setVisibilityCalls).toEqual([true, false]);
+    expect(h.pty.setVisibilityCalls).toEqual([true]);
     h.flipFocus(true);
-    expect(h.pty.setVisibilityCalls).toEqual([true, false, true]);
+    expect(h.pty.setVisibilityCalls).toEqual([true]);
   });
 
   test("stop() removes listeners and cancels timers", async () => {

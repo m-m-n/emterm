@@ -1,9 +1,13 @@
 /**
  * Visibility-aware PTY streaming controller.
  *
- * Watches `document.visibilityState` and Tauri `onFocusChanged` to compute
- * an effective-visible state. Hide is debounced so brief blur/focus
- * cycles do not pause/resume the backend stream. Show is immediate.
+ * Watches `document.visibilityState` and a rAF heartbeat to compute an
+ * effective-visible state. Tauri `onFocusChanged` is observed for
+ * diagnostic logging only — focus loss alone (window still visible) MUST
+ * NOT pause the stream; rAF stall detection covers the WebKit case where
+ * an unfocused/occluded window's rAF actually freezes. Hide is debounced
+ * so brief visibility cycles do not pause/resume the backend stream.
+ * Show is immediate.
  *
  * The controller forwards confirmed state changes to:
  *   - PtyClient.setVisibility (always, for the local Tauri PTY backend)
@@ -236,7 +240,11 @@ export class VisibilityController {
   }
 
   private currentEffective(): boolean {
-    return this.deps.getDocumentVisible() && this.focused && this.rafAlive;
+    // Focus is intentionally NOT included here. Losing focus while the
+    // window remains visible must not pause the stream. rAF stall
+    // detection (`rafAlive`) covers the WebKit/WebKitGTK case where the
+    // window is occluded or backgrounded enough for rAF to actually halt.
+    return this.deps.getDocumentVisible() && this.rafAlive;
   }
 
   private onSignalChanged(): void {
@@ -295,8 +303,7 @@ export class VisibilityController {
     const inRecoveryProbe =
       this.lastNotified === false &&
       !this.rafAlive &&
-      this.deps.getDocumentVisible() &&
-      this.focused;
+      this.deps.getDocumentVisible();
     if (!inHotLoop && !inRecoveryProbe) return;
 
     let handle: number;
@@ -368,8 +375,7 @@ export class VisibilityController {
     if (
       this.lastNotified === false &&
       !this.rafAlive &&
-      this.deps.getDocumentVisible() &&
-      this.focused
+      this.deps.getDocumentVisible()
     ) {
       this.scheduleRaf();
       return;
