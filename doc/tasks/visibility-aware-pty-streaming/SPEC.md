@@ -45,7 +45,7 @@ As a ターミナル常用ユーザー, I want 数百 ms 程度のウィンド�
 
 ### Functional Requirements
 
-- **FR1 — Visibility 検知と統合判定:** frontend が `document.visibilityState` と Tauri `getCurrentWebviewWindow().onFocusChanged` を併用し、両方 visible のときのみ `visible` 扱いとする。状態変化はデバウンス (FR5) を通る。
+- **FR1 — Visibility 検知と統合判定:** frontend は `document.visibilityState` と rAF heartbeat (visibility-raf-heartbeat FR1〜FR3 参照) を `effective_visible` の判定に使用する。Tauri `getCurrentWebviewWindow().onFocusChanged` は購読するが、その focused 状態は `effective_visible` の判定から除外し、`[DIAG-IDLE]` ログの `reason` 構成 (visibility-raf-heartbeat FR6) のみで参照する観測専用シグナルとする。状態変化はデバウンス (FR5) を通る。
 - **FR2 — Backend への通知 (非 mux):** Tauri invoke `pty_set_visibility(session_id: String, visible: bool)` を新設する。frontend は確定した状態を当該セッションに対し通知する。
 - **FR3 — Daemon への通知 (mux):** mux IPC に `SetVisibility(visible: bool)` メッセージを追加する。frontend は接続中の daemon に対し通知する。クライアント単位で 1 状態を持つ (ペイン個別ではない)。
 - **FR4 — Backend shadow parser (非 mux):** Tauri 側に `SessionVisibilityState` を新設し、各セッションについて `vt100::Parser` shadow と画像/Markdown 用 raw passthrough バッファを持つ。`pty_resize` 時に shadow のスクリーンサイズも同期する。スナップショット復帰は shadow + raw passthrough の 2 系統のみで再構築するため、汎用 raw リングバッファ (HiddenRingBuffer) は本機能では作成しない (将来的に diagnostic 用途で追加する場合は別 PR とする)。
@@ -108,8 +108,10 @@ As a ターミナル常用ユーザー, I want 数百 ms 程度のウィンド�
 ```
 ┌────────────────────────────────────┐
 │ Frontend (WebView)                 │
-│  visibility/focus → debounce       │
-│  → invoke pty_set_visibility       │
+│  visibility + rAF heartbeat        │
+│   → debounce → invoke              │
+│      pty_set_visibility            │
+│  (focus は観測専用シグナル)        │
 │  WASM grid ← Channel onmessage     │
 └────────────────┬───────────────────┘
                  │ Tauri IPC
@@ -166,7 +168,8 @@ As a ターミナル常用ユーザー, I want 数百 ms 程度のウィンド�
 
 **Hidden への遷移 (非 mux):**
 ```
-visibility/focus → frontend debounce (1000ms)
+document.hidden または rAF stall (>5s)
+  → frontend debounce (1000ms)
   → pty_set_visibility(session_id, false)
   → SessionVisibilityState.visible = false
   → backpressure.wake() で wait_for_drain 中の reader を起こす
@@ -178,7 +181,7 @@ visibility/focus → frontend debounce (1000ms)
 
 **Visible 復帰 (非 mux):**
 ```
-visibility/focus → frontend (即座に)
+document.visible または rAF resume → frontend (即座に)
   → pty_set_visibility(session_id, true)
   → SessionVisibilityState.set_visible_and_take_snapshot()
        snapshot = b"\x1b[H\x1b[2J" + parser.screen().contents_formatted()
@@ -190,7 +193,8 @@ visibility/focus → frontend (即座に)
 
 **Hidden への遷移 (mux):**
 ```
-visibility/focus → frontend debounce (1000ms)
+document.hidden または rAF stall (>5s)
+  → frontend debounce (1000ms)
   → APC: SetVisibility(false) → bridge → daemon
   → connection-scope visible = false
   → 各ペインに対し evaluate_output_target(network_detach=false, visible=false)
@@ -201,7 +205,7 @@ visibility/focus → frontend debounce (1000ms)
 
 **Visible 復帰 (mux):**
 ```
-visibility/focus → frontend (即座に)
+document.visible または rAF resume → frontend (即座に)
   → APC: SetVisibility(true) → bridge → daemon
   → connection-scope visible = true
   → 各ペインに対し pane.output_target lock を取り:
@@ -291,9 +295,9 @@ SetVisibilityMessage {
 
 `src/pty/visibility-controller.ts` (新規)
 
-**VisibilityController** — visibility/focus 統合判定 + デバウンス + 通知
+**VisibilityController** — visibility 判定 + デバウンス + 通知 (focus は観測専用)
 - `constructor(ptyClient, muxClient | null)`
-- `start()` — `visibilitychange` / `onFocusChanged` listener 登録 + 10 秒間隔のヘルスチェックタイマ起動
+- `start()` — `visibilitychange` / `onFocusChanged` listener 登録 (focused は診断ログ専用) + 10 秒間隔のヘルスチェックタイマ起動
 - `stop()` — listener 解除、タイマ停止
 - 内部状態: 直近確定状態 (visible | hidden)、未確定の hide 候補のタイマハンドル
 - 確定したら `ptyClient.setVisibility()` および `muxClient?.sendSetVisibility()` を呼ぶ

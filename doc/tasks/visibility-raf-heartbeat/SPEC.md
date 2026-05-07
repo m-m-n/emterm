@@ -43,7 +43,7 @@ As a notebook user who suspends and resumes the system, I want the controller to
 
 - **FR1 (rAF self-loop):** `VisibilityController` schedules a `requestAnimationFrame` callback whenever `effective_visible` is true. Each callback updates `lastRafPerfMs = nowFn()` and re-schedules itself. The loop terminates when `effective_visible` becomes false.
 - **FR2 (rAF dead detection):** A periodic health-check (the existing `HEALTH_CHECK_MS = 10000` interval) computes `now - lastRafPerfMs`. If the result exceeds `RAF_DEAD_THRESHOLD_MS = 5000`, `rafAlive` flips to false and `evaluate()` is invoked.
-- **FR3 (currentEffective integration):** `currentEffective()` returns `getDocumentVisible() && focused && rafAlive`.
+- **FR3 (currentEffective integration):** `currentEffective()` returns `getDocumentVisible() && rafAlive`. The `focused` signal from Tauri `onFocusChanged` is intentionally NOT part of this expression — losing focus while the window remains visible MUST NOT pause the stream. WebKit / WebKitGTK rAF freezes triggered by occluded or backgrounded windows are detected by `rafAlive` (FR2). The `focused` field is still subscribed and updated for diagnostic use only (FR6 reason composition).
 - **FR4 (rAF resume → immediate visible):** When the rAF callback fires after `rafAlive` was false, the controller flips `rafAlive` to true and calls `evaluate()` synchronously. No debounce is applied.
 - **FR5 (suspend gap skip):** The health-check tracks `lastHealthTickPerfMs`. If the gap between consecutive ticks exceeds `HEALTH_CHECK_MS * 3 = 30000`, the dead-detection branch is skipped for that tick and `lastRafPerfMs` is reset to the current `now`.
 - **FR6 (DIAG-IDLE reason field):** Hidden notifications append `| reason={document|focus|raf-stall}` to the existing `[DIAG-IDLE] visibility→hidden at <ISO>` log line. Multiple causes are joined with `+` (e.g., `reason=document+focus`).
@@ -68,12 +68,15 @@ As a notebook user who suspends and resumes the system, I want the controller to
 ┌─────────────────────────────────────────────────────────┐
 │                  VisibilityController                   │
 │                                                         │
-│  Inputs (3 sources):                                    │
+│  Inputs (effective decision):                           │
 │    1. document.visibilitychange  → getDocumentVisible() │
-│    2. tauri webview onFocusChanged → focused            │
-│    3. rAF heartbeat (NEW)         → rafAlive            │
+│    2. rAF heartbeat              → rafAlive             │
 │                                                         │
-│  effective_visible = #1 && #2 && #3                     │
+│  effective_visible = #1 && #2                           │
+│                                                         │
+│  Observability-only signal (NOT in effective decision): │
+│    - tauri webview onFocusChanged → focused             │
+│      (used only for [DIAG-IDLE] reason composition)     │
 │                                                         │
 │  Hide path: 1000 ms debounce (existing)                 │
 │  Show path: immediate (existing)                        │
@@ -91,12 +94,14 @@ As a notebook user who suspends and resumes the system, I want the controller to
                                   │
                                   ▼
                        VisibilityController
-                       ┌───────────────────┐
-   visibilitychange ──▶│ document signal    │
-   onFocusChanged   ──▶│ focus signal       │── evaluate ──▶ notify ──▶ dispatch
-   rAF callback     ──▶│ rafAlive signal    │
-                       │ (NEW: heartbeat)   │
-                       └───────────────────┘
+                       ┌────────────────────────┐
+   visibilitychange ──▶│ document signal         │
+   rAF callback     ──▶│ rafAlive signal         │── evaluate ──▶ notify ──▶ dispatch
+                       │ (heartbeat)             │
+                       │                         │
+   onFocusChanged   ──▶│ focus signal            │ (observability only;
+                       │ → hiddenReason() input  │  NOT part of evaluate)
+                       └────────────────────────┘
                                   │
                                   ▼
                        [setInterval health-check]
@@ -138,13 +143,12 @@ keep looping...
         │     │                                  │      │
         │     │ rAF callback after dead          │      │
         │     │ (rafAlive flips true)            │      │
-        │     │ OR document/focus comes back     │      │
+        │     │ OR document.visibility = visible │      │
         │     │                                  │      │
         │     └──────────────────────────────────┘      │
         │                                               │
         │ rAF stall > 5s   (rafAlive=false)             │
-        │ OR document.hidden=true                       │
-        │ OR window blur (debounced 1s)                 │
+        │ OR document.hidden=true (debounced 1s)        │
         └───────────────────────────────────────────────▶
 ```
 
@@ -315,7 +319,7 @@ console.warn(
 ### Unit Tests (`src/pty/visibility-controller.test.ts`)
 
 - [ ] **TS-29 (FR1, FR2):** rAF stall (no rAF callback for >= 5s) triggers `setVisibility(false)`.
-- [ ] **TS-30 (FR3):** `document.hidden=false` and `focused=true` but rAF dead → `currentEffective()` returns false.
+- [ ] **TS-30 (FR3):** `document.hidden=false` but rAF dead → `currentEffective()` returns false. (Focus state is irrelevant to `currentEffective()` per FR3.)
 - [ ] **TS-31 (FR4):** rAF callback after dead state immediately re-flags `rafAlive=true` and dispatches `setVisibility(true)` (no debounce).
 - [ ] **TS-32 (FR9):** When `lastRafPerfMs === null`, the health-check tick must not fire `setVisibility(false)`.
 - [ ] **TS-33 (FR5):** Tick gap > 30 s skips dead detection and resets `lastRafPerfMs`; the immediately following stale value does not trigger hidden.
@@ -357,7 +361,7 @@ Not applicable. The change is internal to the renderer process and does not hand
 
 | Error condition | Handling |
 |------------------|----------|
-| `requestAnimationFrame` throws | Caught and logged via `console.warn`; controller falls back to relying on `document.visibilitychange` and `onFocusChanged` (degraded mode but no crash) |
+| `requestAnimationFrame` throws | Caught and logged via `console.warn`; controller falls back to relying on `document.visibilitychange` (degraded mode but no crash). rAF stall detection becomes unavailable but document hidden detection still works. |
 | `cancelAnimationFrame` throws | Swallowed (best-effort cleanup, same as existing `focusUnsubscribe()` pattern) |
 | `nowFn()` returns non-monotonic value (test fake) | Treated literally; tests are responsible for monotonic fakes |
 
