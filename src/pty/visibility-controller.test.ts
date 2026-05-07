@@ -379,6 +379,40 @@ describe("VisibilityController", () => {
       expect(hiddenLines.length).toBe(1);
       expect(visibleLines.length).toBe(1);
       expect(visibleLines[0]).toMatch(/hiddenForMs=\d+/);
+      // Sanity: the new format is "visibility→visible at ..." for transitions
+      // out of a recorded hidden state — not the "(initial)" marker which is
+      // reserved for the very first dispatch (covered by a separate test).
+      expect(visibleLines[0]).not.toMatch(/\(initial\)/);
+      expect(visibleLines[0]).not.toMatch(/hiddenForMs=-1/);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("DIAG-IDLE: initial visible dispatch logs (initial) marker, never hiddenForMs=-1", async () => {
+    // Capture warn output, then construct a fresh controller so we observe
+    // the very first DIAG-IDLE line emitted by start()'s initial evaluate().
+    // Previously this line emitted `hiddenForMs=-1` (a confusing sentinel
+    // that fired on every fresh app startup); now it emits an explicit
+    // `(initial)` marker so the meaning is unambiguous.
+    h.controller.stop();
+    const originalWarn = console.warn;
+    const lines: string[] = [];
+    console.warn = (...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(" "));
+    };
+    try {
+      const fresh = await makeHarness();
+      try {
+        const initialLines = lines.filter((l) =>
+          l.includes("[DIAG-IDLE] visibility→visible"),
+        );
+        expect(initialLines.length).toBeGreaterThanOrEqual(1);
+        expect(initialLines[0]).toMatch(/\(initial\)/);
+        expect(initialLines[0]).not.toMatch(/hiddenForMs=/);
+      } finally {
+        fresh.controller.stop();
+      }
     } finally {
       console.warn = originalWarn;
     }

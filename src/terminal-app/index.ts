@@ -37,6 +37,7 @@ import {
   startMuxDirect as startMuxDirectImpl,
   handleRemoteSwitchWindow as handleRemoteSwitchWindowImpl,
   getLastMuxSwitchAt,
+  getMuxSwitchCountWithin,
   type MuxWindowManagerContext,
 } from "./mux/mux-window-manager";
 import {
@@ -53,7 +54,12 @@ import {
 } from "./mux/mux-session";
 import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
-import { setupPtyHandlers, type PtyHandlerHandle } from "./pty-handler";
+import {
+  setupPtyHandlers,
+  getSlowRenderCountWithin,
+  getSlowProcessCountWithin,
+  type PtyHandlerHandle,
+} from "./pty-handler";
 import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
@@ -136,6 +142,19 @@ export class TerminalApp {
    *  hidden, so the gap that probe was diagnosing no longer occurs. */
   private _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private _heartbeatLastFiredAt = 0;
+
+  /** Event-loop watchdog. A short-interval (200 ms) tick that records the
+   *  delta between expected and actual fire time. When the JS event loop is
+   *  stuck (e.g. the 11-second hang observed during a mux-switch storm), the
+   *  tick that finally runs after the loop unblocks reports the gap as
+   *  `[DIAG-EVENTLOOP] hang Xms`. Without this, long event-loop hangs are
+   *  invisible because the 5 s heartbeat and 10 s pty health-check both
+   *  miss several intervals silently (their sliding-window stall logs only
+   *  fire if/when the timer eventually wakes). 500 ms threshold suppresses
+   *  noise from ordinary GC or layout pauses. */
+  private _eventLoopWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private _eventLoopWatchdogLastFiredAt = 0;
+  private _eventLoopWatchdogMaxLagSinceHeartbeat = 0;
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -580,6 +599,7 @@ export class TerminalApp {
     }
 
     this.startDiagnosticHeartbeat();
+    this.startEventLoopWatchdog();
   }
 
   /** Start the 5s diagnostic heartbeat (see _heartbeatTimer field doc). */
@@ -587,6 +607,34 @@ export class TerminalApp {
     if (this._heartbeatTimer) return;
     this._heartbeatLastFiredAt = performance.now();
     this._heartbeatTimer = setInterval(() => this.fireHeartbeat(), 5000);
+  }
+
+  /** Start the 200 ms event-loop watchdog (see _eventLoopWatchdogTimer doc). */
+  private startEventLoopWatchdog(): void {
+    if (this._eventLoopWatchdogTimer) return;
+    const INTERVAL_MS = 200;
+    const HANG_THRESHOLD_MS = 500;
+    this._eventLoopWatchdogLastFiredAt = performance.now();
+    this._eventLoopWatchdogTimer = setInterval(() => {
+      try {
+        const now = performance.now();
+        const lag = now - this._eventLoopWatchdogLastFiredAt - INTERVAL_MS;
+        this._eventLoopWatchdogLastFiredAt = now;
+        if (lag > HANG_THRESHOLD_MS) {
+          if (lag > this._eventLoopWatchdogMaxLagSinceHeartbeat) {
+            this._eventLoopWatchdogMaxLagSinceHeartbeat = lag;
+          }
+          // Resume timestamp is `now`; the loop was stuck from
+          // (now - INTERVAL_MS - lag) up to `now`. Reporting the lag is
+          // sufficient — the wall-clock log timestamp gives the resume
+          // moment, so the start can be derived by subtraction.
+          console.warn(
+            `[DIAG-EVENTLOOP] hang ${Math.round(lag)}ms (resume at perf=${Math.round(now)}ms)` +
+            ` document.hidden=${document.hidden}`,
+          );
+        }
+      } catch { /* never let a watchdog tick throw */ }
+    }, INTERVAL_MS);
   }
 
   /** Emit one heartbeat warn line. Hot path is intentionally minimal — no
@@ -634,6 +682,22 @@ export class TerminalApp {
       const pendingBytes = pending?.bytes ?? -1;
       const pendingLeftover = pending?.hasLeftover ?? false;
 
+      // Sliding-window counters over the last 30 s. Surface mux-switch
+      // storms and slow-render / slow-process accumulation directly in the
+      // heartbeat so we can correlate with hangs without scanning every
+      // slow-render line in the log.
+      const W = 30_000;
+      const muxSw30s = getMuxSwitchCountWithin(W);
+      const slowR30s = getSlowRenderCountWithin(W);
+      const slowP30s = getSlowProcessCountWithin(W);
+
+      // Largest event-loop hang observed since the previous heartbeat.
+      // Reported here (rather than only inside the watchdog tick) so that
+      // a hang that ends just before the heartbeat is preserved alongside
+      // the surrounding heartbeat counters for correlation.
+      const evLoopMaxLag = Math.round(this._eventLoopWatchdogMaxLagSinceHeartbeat);
+      this._eventLoopWatchdogMaxLagSinceHeartbeat = 0;
+
       console.warn(
         `[DIAG-PTY-HEALTH]` +
         ` mux=${this.inMuxMode}` +
@@ -645,7 +709,9 @@ export class TerminalApp {
         ` wasmHeapMB=${wasmHeapMB}` +
         ` chunkRecv=${recvCount}/${recvBytes}b` +
         ` lastChunkAgoMs=${lastChunkAgoMs}` +
-        ` pending=${pendingChunks}c/${pendingBytes}b leftover=${pendingLeftover}`,
+        ` pending=${pendingChunks}c/${pendingBytes}b leftover=${pendingLeftover}` +
+        ` muxSw30s=${muxSw30s} slowR30s=${slowR30s} slowP30s=${slowP30s}` +
+        ` evLoopMaxLag=${evLoopMaxLag}ms`,
       );
     } catch (err) {
       console.warn(`[DIAG-PTY-HEALTH] heartbeat threw: ${err instanceof Error ? err.message : String(err)}`);
@@ -811,6 +877,20 @@ export class TerminalApp {
   setTabActive(active: boolean): void {
     this._tabActive = active;
     if (active) {
+      // Defense: if the container is hidden but we're being told this tab is
+      // active, the tab manager's display orchestration got out of sync (seen
+      // after multi-hour-background → visibility-recover paths where the
+      // foreground tab came up with `_tabActive=true` AND `display=none`,
+      // leaving the canvas invisible until manual restart). Force display back
+      // to "" so the canvas can render. Logged so the underlying ordering bug
+      // remains observable rather than silently masked.
+      if (this.container.style.display === "none") {
+        console.warn(
+          `[WARN][FRONTEND] setTabActive(true) recovered hidden container: ` +
+            `containerId=${this.container.id || "(unset)"} (forced display="")`,
+        );
+        this.container.style.display = "";
+      }
       this.ptyHandlerHandle?.notifyTabActivated();
     }
   }
@@ -1365,6 +1445,10 @@ export class TerminalApp {
     if (this._heartbeatTimer) {
       clearInterval(this._heartbeatTimer);
       this._heartbeatTimer = null;
+    }
+    if (this._eventLoopWatchdogTimer) {
+      clearInterval(this._eventLoopWatchdogTimer);
+      this._eventLoopWatchdogTimer = null;
     }
 
     // Disconnect resize observer

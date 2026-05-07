@@ -393,14 +393,20 @@ export class VisibilityController {
     const nowIso = new Date().toISOString();
     const perfNow = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (visible) {
-      const hiddenForMs =
-        this.hiddenSincePerfMs !== null
-          ? Math.round(perfNow - this.hiddenSincePerfMs)
-          : -1;
-      this.hiddenSincePerfMs = null;
-      console.warn(
-        `[WARN][FRONTEND] [DIAG-IDLE] visibility→visible at ${nowIso} | hiddenForMs=${hiddenForMs}`,
-      );
+      if (this.hiddenSincePerfMs !== null) {
+        const hiddenForMs = Math.round(perfNow - this.hiddenSincePerfMs);
+        this.hiddenSincePerfMs = null;
+        console.warn(
+          `[WARN][FRONTEND] [DIAG-IDLE] visibility→visible at ${nowIso} | hiddenForMs=${hiddenForMs}`,
+        );
+      } else {
+        // No prior hidden was recorded — initial dispatch right after start(),
+        // typically during fresh app startup. Emit explicit (initial) marker
+        // instead of the previous misleading hiddenForMs=-1 sentinel.
+        console.warn(
+          `[WARN][FRONTEND] [DIAG-IDLE] visibility→visible (initial) at ${nowIso}`,
+        );
+      }
     } else {
       this.hiddenSincePerfMs = perfNow;
       console.warn(
