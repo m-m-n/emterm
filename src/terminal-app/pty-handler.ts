@@ -261,18 +261,34 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   // Track which core has callbacks registered
   let registeredCore = state.getWasmCore();
 
-  // Buffer for incoming PTY data -- processed in rAF with frame budgeting
-  // "Video approach": process data within time budget, render at 60fps
+  // Buffer for incoming PTY data -- processed on a sub-rAF scheduler with
+  // frame budgeting (MessageChannel primary, setTimeout(0) fallback). Both
+  // primitives are *task* schedulers (not microtask checkpoints), so they
+  // keep running while the WebView is hidden / occluded AND yield between
+  // drains so rendering / input can interleave. The label "microtask" in
+  // the trigger union is historical shorthand for "sub-rAF scheduler that
+  // keeps draining while occluded" — both paths are task-driven.
+  // Canvas rendering itself remains rAF-driven and is unchanged.
   let pendingChunks: Uint8Array[] = [];
   let leftoverData: Uint8Array | null = null;
-  let rafScheduled = false;
-  let rafHandle: number | null = null;
-  // Monotonically increasing token. Each scheduleProcessing call captures the
-  // current value; the rAF callback compares against this before running so a
-  // stale callback that the browser already queued cannot double-fire
-  // processPendingData after another callback (or a direct synchronous
-  // processPendingData) has already advanced the schedule.
+  let processScheduled = false;
+  // Populated only on the setTimeout(0) fallback path so destroy() can cancel
+  // it. Always null on the MessageChannel path. runScheduledCallback resets it
+  // unconditionally — that is a no-op on the MessageChannel path and the
+  // intentional cleanup on the timer path.
+  let pendingHandle: ReturnType<typeof setTimeout> | null = null;
+  // Monotonically increasing token. scheduleProcessing captures the current
+  // value at queue time and passes it to the scheduler primitive; the
+  // scheduled callback compares its captured token against scheduleToken
+  // before running, so a stale callback queued before a direct synchronous
+  // processPendingData (which bumps scheduleToken) cannot double-fire
+  // processPendingData.
   let scheduleToken = 0;
+  // Last token observed by a fired callback — diagnostic only.
+  let pendingToken = 0;
+  // Flips true at the top of destroy(); guards in-flight scheduled callbacks
+  // from observing torn-down state.
+  let disposed = false;
   const FRAME_BUDGET_MS = 12; // Leave ~4ms for rendering within 16.67ms frame
   // Coalesced ack state: at 60Hz a per-frame `pty_ack` IPC for tiny keystroke
   // echoes is pure overhead (HIGH_WATER is 8 MB so single-byte acks add no
@@ -308,7 +324,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         console.warn(
           `[WARN][FRONTEND] event-loop-lag: setTimeout(0) took ${latency.toFixed(1)}ms` +
           ` | pendingChunks=${pendingChunks.length}` +
-          ` | rafScheduled=${rafScheduled}`,
+          ` | processScheduled=${processScheduled}`,
         );
       }
     }, 0);
@@ -483,19 +499,27 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     return true;
   };
 
-  // `trigger` lets us tell which scheduling path actually drained pendingChunks
-  // — rAF (normal frame) vs direct call (processNow / leftover continuation).
-  type ProcessTrigger = "raf" | "manual";
+  // `trigger` lets us tell which scheduling path actually drained pendingChunks:
+  //   - "microtask": MessageChannel / queueMicrotask delivery (primary)
+  //   - "timer":     setTimeout(0) fallback delivery
+  //   - "manual":    direct invocation (processNow, health-check force-drain)
+  type ProcessTrigger = "microtask" | "timer" | "manual";
   const processPendingData = (trigger: ProcessTrigger = "manual") => {
     const processingStart = performance.now();
-    rafScheduled = false;
-    // Invalidate any callbacks that the browser already queued from the
-    // previous scheduleProcessing — they will compare their captured token
-    // against the new value and bail out before re-entering this function.
+    // Invalidate any callbacks that were already queued from the previous
+    // scheduleProcessing — they will compare their captured token against
+    // the new scheduleToken and bail out before re-entering this function.
     scheduleToken++;
-    if (rafHandle !== null) {
-      try { cancelAnimationFrame(rafHandle); } catch { /* ignore */ }
-      rafHandle = null;
+    // Reset the schedule flag here (in addition to runScheduledCallback) so
+    // the manual entry path (processNow / health-check force-drain) can
+    // re-schedule via the leftover-data branch at the bottom. Without this,
+    // processScheduled remains stuck-true after a manual call and the
+    // leftover re-schedule is short-circuited by the early-return guard in
+    // scheduleProcessing.
+    processScheduled = false;
+    if (pendingHandle !== null) {
+      clearTimeout(pendingHandle);
+      pendingHandle = null;
     }
 
     // During async WASM reinitialization or after exhausting retries, skip processing
@@ -733,8 +757,10 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         }
       }
 
-      // If there's leftover data, schedule next frame to continue
-      if (leftoverData && !rafScheduled) {
+      // If there's leftover data, schedule next microtask to continue.
+      // Deduplication is enforced inside scheduleProcessing via the
+      // processScheduled flag.
+      if (leftoverData) {
         scheduleProcessing();
       }
     } catch (error) {
@@ -744,20 +770,85 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     }
   };
 
+  // ── Sub-rAF scheduler ───────────────────────────────────────
+  // Selects MessageChannel (primary, task-scheduled via postMessage) or
+  // setTimeout(0) (fallback, also task-scheduled). Both yield between drains
+  // so rendering / input can interleave under sustained PTY output. The
+  // queueMicrotask path was removed because microtask chaining (leftover →
+  // scheduleProcessing → queueMicrotask) cannot yield to the task queue and
+  // would starve rendering during long bursts. The trigger label exposed to
+  // processPendingData ("microtask" or "timer") names the primitive, not the
+  // checkpoint kind.
+  type Scheduler = {
+    schedule: (token: number) => void;
+    dispose: () => void;
+  };
+
+  // Body of the scheduled callback. Compares the token captured at queue
+  // time against scheduleToken to discard stale callbacks. Resets
+  // processScheduled (and pendingHandle for the timer path) BEFORE invoking
+  // processPendingData so a re-entrant scheduleProcessing() from
+  // leftoverData can enqueue the next tick. Bails immediately if destroy()
+  // has already begun teardown.
+  const runScheduledCallback = (trigger: "microtask" | "timer", capturedToken: number) => {
+    pendingToken = capturedToken;
+    processScheduled = false;
+    pendingHandle = null;
+    if (disposed) return;
+    if (capturedToken !== scheduleToken) return;
+    processPendingData(trigger);
+  };
+
+  const createMicrotaskScheduler = (): Scheduler => {
+    if (typeof MessageChannel !== "undefined") {
+      try {
+        const ch = new MessageChannel();
+        ch.port2.onmessage = (e) => {
+          const token = typeof e.data === "number" ? e.data : 0;
+          runScheduledCallback("microtask", token);
+        };
+        return {
+          schedule: (token) => {
+            try {
+              ch.port1.postMessage(token);
+            } catch {
+              // Defensive: if postMessage throws (e.g. ports already closed
+              // during teardown) drop silently — destroy() resets state.
+            }
+          },
+          dispose: () => {
+            // Detach onmessage first so any task in flight before close()
+            // becomes a no-op when dispatched.
+            try { ch.port2.onmessage = null; } catch { /* ignore */ }
+            try { ch.port1.close(); } catch { /* ignore */ }
+            try { ch.port2.close(); } catch { /* ignore */ }
+          },
+        };
+      } catch (e) {
+        console.warn("[WARN][FRONTEND] MessageChannel unavailable, falling back to setTimeout(0):", e);
+        // fall through
+      }
+    }
+    return {
+      schedule: (token) => {
+        pendingHandle = setTimeout(() => runScheduledCallback("timer", token), 0);
+      },
+      dispose: () => {
+        // pendingHandle is cleared by destroy() directly; the disposed flag
+        // makes any late-firing timer callback a no-op.
+      },
+    };
+  };
+
+  const scheduler = createMicrotaskScheduler();
+
   const scheduleProcessing = () => {
-    if (rafScheduled) return;
-    rafScheduled = true;
+    if (processScheduled) return;
+    processScheduled = true;
     lastScheduleTime = performance.now();
-    const myToken = ++scheduleToken;
-    // Hidden tabs no longer accumulate frontend backlog — the backend pauses
-    // forwarding while hidden (visibility-aware streaming). So a single rAF
-    // schedule is sufficient; the prior setTimeout fallback that drained
-    // backlog under rAF throttling is no longer needed.
-    rafHandle = requestAnimationFrame(() => {
-      rafHandle = null;
-      if (myToken !== scheduleToken) return;
-      processPendingData("raf");
-    });
+    const token = ++scheduleToken;
+    pendingToken = token;
+    scheduler.schedule(token);
   };
 
   // Stateful extractor for mux APC/OSC messages -- buffers across chunk boundaries
@@ -855,10 +946,22 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         try { unlistenFocus(); } catch { /* ignore */ }
         unlistenFocus = null;
       }
-      if (rafHandle !== null) {
-        try { cancelAnimationFrame(rafHandle); } catch { /* ignore */ }
-        rafHandle = null;
+      // Mark the handler as torn down BEFORE disposing the scheduler so any
+      // in-flight scheduled callback that fires after dispose() is observed
+      // by runScheduledCallback as disposed and bails before touching state.
+      // Also bump scheduleToken so the captured token of any in-flight
+      // callback becomes stale even if the disposed check is bypassed.
+      disposed = true;
+      scheduleToken++;
+      // Tear down the sub-rAF scheduler. On the MessageChannel path this
+      // detaches onmessage and closes both MessagePort instances; on the
+      // setTimeout path it is a no-op (the timer handle is cleared below).
+      try { scheduler.dispose(); } catch { /* ignore */ }
+      if (pendingHandle !== null) {
+        clearTimeout(pendingHandle);
+        pendingHandle = null;
       }
+      processScheduled = false;
       if (ackFlushTimer !== null) {
         clearTimeout(ackFlushTimer);
         ackFlushTimer = null;
@@ -926,7 +1029,7 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         ` | sinceLastProcessing=${sinceLastProcessing.toFixed(0)}ms` +
         ` | pendingChunks=${pendingChunks.length}` +
         ` | pendingBytes=${pendingBytes}` +
-        ` | rafScheduled=${rafScheduled}` +
+        ` | processScheduled=${processScheduled}` +
         ` | healthCheckCount=${healthCheckCount}` +
         ` | document.hidden=${document.hidden}`,
       );
@@ -936,27 +1039,36 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     const sinceLastData = lastOnDataTime > 0 ? now - lastOnDataTime : -1;
     const sinceLastSchedule = lastScheduleTime > 0 ? now - lastScheduleTime : -1;
 
-    // Log if rAF hasn't fired in a while but data is flowing
+    // Log if processPendingData hasn't run in a while but data is flowing.
+    // Note: under the sub-rAF scheduler, the data path is no longer driven
+    // by rAF; this branch now tracks the symptom of "scheduled callbacks not
+    // getting delivered" via the same lastRafCallbackTime field. The warn
+    // text is kept verbatim for log-grep compatibility (NFR6 / FR10) — only
+    // the rafScheduled→processScheduled flag rename is intended.
     if (sinceLastRaf > 2000 && sinceLastData < 2000 && sinceLastData > 0) {
       console.warn(
         `[WARN][FRONTEND] health-check: rAF stalled` +
         ` | sinceLastRaf=${sinceLastRaf.toFixed(0)}ms` +
         ` | sinceLastData=${sinceLastData.toFixed(0)}ms` +
         ` | sinceLastSchedule=${sinceLastSchedule.toFixed(0)}ms` +
-        ` | rafScheduled=${rafScheduled}` +
+        ` | processScheduled=${processScheduled}` +
         ` | pendingChunks=${pendingChunks.length}` +
         ` | document.hidden=${document.hidden}`,
       );
     }
 
-    // Log if rafScheduled is stuck true (scheduled but never fired)
-    if (rafScheduled && sinceLastSchedule > 3000) {
+    // Log if processScheduled is stuck true (scheduled but never fired).
+    // Under the microtask scheduler this branch is not expected to fire —
+    // microtasks keep running while hidden — but it is retained as
+    // defense-in-depth (FR10) against future regressions where a synchronous
+    // body could hold the main thread long enough for processScheduled to
+    // appear stuck.
+    if (processScheduled && sinceLastSchedule > 3000) {
       console.warn(
-        `[WARN][FRONTEND] health-check: rafScheduled stuck for ${sinceLastSchedule.toFixed(0)}ms` +
+        `[WARN][FRONTEND] health-check: processScheduled stuck for ${sinceLastSchedule.toFixed(0)}ms` +
         ` | document.hidden=${document.hidden}`,
       );
-      // Something is preventing the rAF callback from running. Force a
-      // synchronous drain so backlog does not keep growing.
+      // Force a synchronous drain so backlog does not keep growing.
       if (!wasmRecoveryInProgress && !wasmUnrecoverable) {
         try { processPendingData(); } catch { /* logged inside */ }
       }

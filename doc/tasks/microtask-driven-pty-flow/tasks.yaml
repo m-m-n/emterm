@@ -1,0 +1,188 @@
+schema_version: 1
+feature: microtask-driven-pty-flow
+
+# Task units derived from IMPLEMENTATION.md phases. Each task is a unit of
+# work that the implementer (sdd.4) can execute and the verifier (sdd.6) can
+# attribute test results to. Task IDs are referenced from
+# sdd.yaml.requirements.{ID}.tasks.
+
+phases:
+  - id: phase-1
+    title: Microtask scheduler primitive
+    summary: >
+      Replace the requestAnimationFrame call site in scheduleProcessing with a
+      MessageChannel-backed scheduler created once at handler setup, with
+      queueMicrotask and setTimeout(0) defensive fallbacks. Rename rafScheduled
+      / rafHandle to processScheduled / pendingHandle and update the
+      ProcessTrigger union.
+    estimated_effort: small
+    tasks:
+      - id: define-process-trigger-union
+        title: Update ProcessTrigger union
+        status: completed
+        summary: >
+          Remove the "raf" literal from the trigger string union and add
+          "microtask" and "timer". Direct-call paths that pass "manual" remain
+          as today.
+        files:
+          - src/terminal-app/pty-handler.ts
+        depends_on: []
+
+      - id: add-scheduler-factory
+        title: Add microtask scheduler factory
+        status: completed
+        summary: >
+          Introduce a scheduler factory inside setupPtyHandlers that selects
+          MessageChannel (primary), queueMicrotask (fallback), or setTimeout(0)
+          (last-resort). The factory takes a microtask callback and a timer
+          callback and returns a schedule(myToken) closure plus disposal hooks
+          for destroy().
+        files:
+          - src/terminal-app/pty-handler.ts
+        depends_on:
+          - define-process-trigger-union
+
+      - id: rewrite-schedule-processing
+        title: Rewrite scheduleProcessing body and rename state fields
+        status: completed
+        summary: >
+          Replace requestAnimationFrame(...) with the schedule() closure
+          produced by the factory. Rename rafScheduled -> processScheduled and
+          rafHandle -> pendingHandle. Reset processScheduled to false inside
+          the scheduler closure before invoking processPendingData. Remove the
+          cancelAnimationFrame block at the top of processPendingData (no
+          longer needed; token check inside the closure handles invalidation).
+        files:
+          - src/terminal-app/pty-handler.ts
+        depends_on:
+          - add-scheduler-factory
+
+      - id: update-leftover-reschedule-guard
+        title: Simplify leftover-data re-schedule guard
+        status: completed
+        summary: >
+          Change "if (leftoverData && !rafScheduled) scheduleProcessing();" to
+          "if (leftoverData) scheduleProcessing();" since deduplication is
+          handled inside scheduleProcessing via the processScheduled flag.
+        files:
+          - src/terminal-app/pty-handler.ts
+        depends_on:
+          - rewrite-schedule-processing
+
+      - id: update-diagnostic-logs
+        title: Update DIAG / health-check log lines
+        status: completed
+        summary: >
+          Replace rafScheduled=... with processScheduled=... in:
+          (a) probeEventLoopHealth event-loop-lag warn,
+          (b) healthCheck main-thread stall warn,
+          (c) healthCheck "rAF stalled" warn (rename log message body —
+              rAF stall is no longer the primary failure mode for the data
+              path; consider phrasing as "render-rAF stalled" but keep the
+              field set otherwise identical to preserve log-grep compatibility),
+          (d) healthCheck "rafScheduled stuck" warn → "processScheduled stuck".
+          The synchronous force-drain branch under (d) is retained as
+          defense-in-depth (FR10 belt-and-braces note); under microtask
+          driving it is not expected to fire. Preserve overall log format
+          (NFR4 / NFR6) — only the flag name and trigger label values change.
+        files:
+          - src/terminal-app/pty-handler.ts
+        depends_on:
+          - rewrite-schedule-processing
+
+      - id: phase1-unit-tests
+        title: Add unit tests TS-1, TS-2, TS-3, TS-5, TS-6, TS-7, TS-10, TS-11
+        status: completed
+        summary: >
+          Cover scheduler primitive selection, deduplication via
+          processScheduled, fallback chain selection, trigger label, leftover
+          re-schedule, no rAF on data path, pendingHandle population, and
+          source-grep-style assertion that rafScheduled / rafHandle are
+          removed.
+        files:
+          - src/terminal-app/pty-handler.test.ts
+        depends_on:
+          - update-diagnostic-logs
+          - update-leftover-reschedule-guard
+
+  - id: phase-2
+    title: Cleanup, token semantics, and edge cases
+    summary: >
+      Extend destroy() with scheduler teardown. Verify scheduleToken
+      invalidates stale microtasks across flushPendingData and that
+      re-entrant scheduleProcessing from leftoverData is safe.
+    estimated_effort: small
+    tasks:
+      - id: extend-destroy-cleanup
+        title: Extend destroy() with scheduler teardown
+        status: completed
+        summary: >
+          Invoke the factory-returned dispose() hook (try/catch — closes both
+          MessagePort instances on the MessageChannel path; no-op on the
+          queueMicrotask / setTimeout paths), clearTimeout on pendingHandle if
+          non-null, and reset processScheduled to false defensively. Retain
+          existing pendingAckBytes flush, ackFlushTimer clear, and focus
+          listener unregister.
+        files:
+          - src/terminal-app/pty-handler.ts
+        depends_on:
+          - rewrite-schedule-processing
+
+      - id: phase2-unit-tests
+        title: Add unit tests TS-4, TS-9
+        status: completed
+        summary: >
+          Token invalidation (TS-4) and destroy cleanup (TS-9). TS-9 covers
+          port close + clearTimeout in the timer fallback path.
+        files:
+          - src/terminal-app/pty-handler.test.ts
+        depends_on:
+          - extend-destroy-cleanup
+
+  - id: phase-3
+    title: E2E verification and regression coverage
+    summary: >
+      Author a new E2E spec proving NFR1 (data path drains while
+      requestAnimationFrame is stalled), and run the full E2E suite to confirm
+      no regression in existing specs.
+    estimated_effort: medium
+    tasks:
+      - id: author-microtask-data-flow-e2e
+        title: Create microtask-data-flow.e2e.js
+        status: completed
+        summary: >
+          New E2E spec following the visibility-raf-heartbeat.e2e.js pattern.
+          Stall globalThis.requestAnimationFrame, drive a busy PTY producer,
+          assert pty_get_send_stats sent_bytes keeps increasing across
+          samples (proves the reader is not blocked in wait_for_drain — i.e.
+          acks are still flowing) and no "backpressure stalled" warn appears
+          during the rAF-stall window. pty_get_send_stats currently exposes
+          (sent_count, sent_bytes); in_flight is not directly observable from
+          the frontend, so sent_bytes growth is the available proxy.
+        files:
+          - e2e-tests/specs/microtask-data-flow.e2e.js
+        depends_on:
+          - phase1-unit-tests
+          - phase2-unit-tests
+
+      - id: run-full-e2e-suite
+        title: Run full E2E suite
+        status: in_progress
+        summary: >
+          Execute ./scripts/run-e2e-docker.sh test and confirm all existing
+          specs pass without modification (FR10 / NFR5). New
+          microtask-data-flow.e2e.js also passes.
+        files: []
+        depends_on:
+          - author-microtask-data-flow-e2e
+
+      - id: manual-freeze-reproduction
+        title: Manual long-hidden freeze reproduction
+        status: pending
+        summary: >
+          Reproduce US1 (workspace switch ≥ 30 min) and US2 (window minimize
+          ≥ 30 min) and confirm no freeze on resume. Document outcome in
+          VERIFICATION_RESULT.md (sdd.6 owns the result file).
+        files: []
+        depends_on:
+          - run-full-e2e-suite
