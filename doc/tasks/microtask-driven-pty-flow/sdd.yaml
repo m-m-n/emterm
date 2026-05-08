@@ -1,0 +1,171 @@
+schema_version: 1
+feature: microtask-driven-pty-flow
+created: 2026-05-08
+
+project:
+  components:
+    frontend:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"bun test\""
+      format_command: "bun run typecheck"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --manifest-path src-tauri/Cargo.toml\""
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: ea075e1207489e7b73288de277ee97a6d45f5514
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: ea075e1207489e7b73288de277ee97a6d45f5514
+  - id: verify-plan
+    status: completed
+    completed_at_commit: ea075e1207489e7b73288de277ee97a6d45f5514
+  - id: implement
+    status: completed
+    completed_at_commit: ea075e1207489e7b73288de277ee97a6d45f5514
+  - id: check
+    status: completed
+    completed_at_commit: ea075e1207489e7b73288de277ee97a6d45f5514
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: ea075e1207489e7b73288de277ee97a6d45f5514
+
+requirements:
+  FR1:
+    title: WASM パース処理の microtask 駆動化 (MessageChannel 主体)
+    status: ok
+    tasks:
+      - add-scheduler-factory
+      - rewrite-schedule-processing
+    tests:
+      - TS-1
+      - TS-2
+  FR2:
+    title: queueMicrotask / setTimeout フォールバック
+    status: ok
+    tasks:
+      - add-scheduler-factory
+    tests:
+      - TS-3
+  FR3:
+    title: データ経路から rAF を完全削除 (rafScheduled / rafHandle のリネーム含む)
+    status: ok
+    tasks:
+      - rewrite-schedule-processing
+      - update-diagnostic-logs
+    tests:
+      - TS-7
+      - TS-11
+  FR4:
+    title: scheduleToken による古いスケジュール無効化の維持
+    status: ok
+    tasks:
+      - rewrite-schedule-processing
+    tests:
+      - TS-4
+  FR5:
+    title: trigger ラベル集合の更新 ("raf" 削除、"microtask" / "timer" 追加)
+    status: ok
+    tasks:
+      - define-process-trigger-union
+      - rewrite-schedule-processing
+    tests:
+      - TS-5
+  FR6:
+    title: leftoverData 残存時の microtask 再スケジュール
+    status: ok
+    tasks:
+      - update-leftover-reschedule-guard
+    tests:
+      - TS-6
+  FR7:
+    title: 既存 ack コアレッシング (ACK_FLUSH_BYTES / ACK_FLUSH_INTERVAL_MS) の継続動作
+    status: ok
+    tasks:
+      - rewrite-schedule-processing
+    tests:
+      - TS-12
+  FR8:
+    title: WASM 時間バジェット機構の維持
+    status: ok
+    tasks:
+      - rewrite-schedule-processing
+    tests:
+      - TS-12
+  FR9:
+    title: Canvas レンダリングは rAF 駆動のまま維持
+    status: ok
+    tasks: []
+    tests:
+      - TS-8
+  FR10:
+    title: visibility-raf-heartbeat / visibility-aware-pty-streaming / visibility-render-recovery との併存
+    status: ok
+    tasks: []
+    tests:
+      - TS-13
+      - TS-15
+  FR11:
+    title: destroy 時の MessageChannel クローズと pendingHandle クリア
+    status: ok
+    tasks:
+      - extend-destroy-cleanup
+    tests:
+      - TS-9
+      - TS-10
+  NFR1:
+    title: visibility=hidden / occlusion でも PTY パース処理が継続する
+    status: ok
+    tasks:
+      - author-microtask-data-flow-e2e
+      - manual-freeze-reproduction
+    tests:
+      - TS-12
+  NFR2:
+    title: throughput 回帰なし (±10% 以内)
+    status: ok
+    tasks:
+      - run-full-e2e-suite
+    tests:
+      - TS-14
+  NFR3:
+    title: typing latency 回帰なし (±10% 以内)
+    status: ok
+    tasks:
+      - manual-freeze-reproduction
+    tests:
+      - TS-14
+  NFR4:
+    title: Linux (WebKitGTK) / Windows (WebView2) の両方で動作
+    status: ok
+    tasks:
+      - run-full-e2e-suite
+    tests:
+      - TS-12
+      - TS-14
+  NFR5:
+    title: 既存テスト・既存保険機構との互換性
+    status: ok
+    tasks:
+      - run-full-e2e-suite
+    tests:
+      - TS-13
+      - TS-15
+  NFR6:
+    title: ログ形式の互換 (trigger ラベルのみ変化)
+    status: ok
+    tasks:
+      - update-diagnostic-logs
+    tests:
+      - TS-5
+      - TS-12
