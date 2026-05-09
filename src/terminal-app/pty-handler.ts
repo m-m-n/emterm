@@ -1028,6 +1028,26 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     // Bridge sends PaneCreated/PtyOutput as APC sequences over the PTY.
     if (handle.suppressOriginalPty) {
       muxExtractor.extract(data, ctx.getMuxApcContext());
+      // Mux mode ack: the bridge PTY's outer bytes (APC framing + control
+      // frames like Welcome/PaneCreated/Detached) are fully consumed by
+      // muxExtractor here, but the inner pane bytes that get dispatched
+      // via injectData → processPendingData → ackBytes credit only the
+      // EXTRACTED payload, not the wrapper overhead. Without crediting
+      // the wrapper bytes the bridge PTY's Rust-side in_flight grows
+      // monotonically (~10 KB per 5 s observed) and eventually hits
+      // HIGH_WATER, parking the reader and freezing the mux tab.
+      //
+      // Acking data.length here over-credits in_flight when the inner
+      // bytes path also acks for the same chunk, but the backend uses
+      // saturating_sub so in_flight just clamps to 0; the bridge PTY's
+      // backpressure is effectively bypassed in mux mode. That is
+      // acceptable because the real flow-control choke points in mux
+      // mode are (a) the bridge process's stdout kernel buffer and
+      // (b) the daemon socket — the GUI PTY HIGH_WATER was redundant.
+      flowAckCalls += 1;
+      flowAckBytes += data.length;
+      lastAckPerfMs = performance.now();
+      ptyClient.ackBytes(data.length);
       return;
     }
     pendingChunks.push(data);
