@@ -250,9 +250,37 @@ pub fn spawn_reader_thread(
                     // timeout); a hidden transition unparks via
                     // set_hidden_wake.
                     if backpressure.over_high_water() {
+                        drain_entry_count = drain_entry_count.saturating_add(1);
+                        let entry_id = drain_entry_count;
                         let in_flight_before = backpressure.in_flight();
-                        let waited = backpressure.wait_for_drain();
-                        if waited >= Duration::from_millis(100) {
+                        // [DIAG-BACKPRESSURE] Always warn on entry so the
+                        // beginning of every stall is in the log, even if
+                        // the wait turns out to be brief. Without this we
+                        // only see stalls that lasted >=100ms.
+                        log::warn!(
+                            "[DIAG-BACKPRESSURE] enter wait_for_drain | session={} | entry#{} | in_flight={} bytes | sent_count={} sent_bytes={}",
+                            session_id,
+                            entry_id,
+                            in_flight_before,
+                            backpressure.sent_count(),
+                            backpressure.sent_bytes(),
+                        );
+                        let outcome = backpressure.wait_for_drain_diag();
+                        // [DIAG-BACKPRESSURE] Always warn on exit, with the
+                        // reason and how many condvar wakeups occurred. The
+                        // "before == after" stall pattern (no acks at all)
+                        // is the smoking gun we are hunting.
+                        log::warn!(
+                            "[DIAG-BACKPRESSURE] exit  wait_for_drain | session={} | entry#{} | reason={:?} | elapsed={}ms | wakes={} | in_flight before={} after={} bytes",
+                            session_id,
+                            entry_id,
+                            outcome.reason,
+                            outcome.elapsed.as_millis(),
+                            outcome.wake_count,
+                            outcome.in_flight_at_entry,
+                            outcome.in_flight_at_exit,
+                        );
+                        if outcome.elapsed >= Duration::from_millis(100) {
                             let snap = manager.backpressure().snapshot_in_flight();
                             let total_sessions = snap.len();
                             let total_in_flight: usize = snap.iter().map(|(_, n)| *n).sum();
@@ -273,7 +301,7 @@ pub fn spawn_reader_thread(
                             log::warn!(
                                 "PTY reader: backpressure stalled session {} for {}ms (in_flight before={} after={} bytes) | total_sessions={} total_in_flight={}KB | others=[{}]",
                                 session_id,
-                                waited.as_millis(),
+                                outcome.elapsed.as_millis(),
                                 in_flight_before,
                                 backpressure.in_flight(),
                                 total_sessions,
@@ -292,6 +320,47 @@ pub fn spawn_reader_thread(
                         }
                     }
                     backpressure.add_sent(len);
+                    // [DIAG-BACKPRESSURE] Watermark crossings: warn the
+                    // first time we cross 50% / 75% of HIGH_WATER, and
+                    // reset both flags when in_flight drops below
+                    // LOW_WATER. This makes the climb toward stall visible
+                    // in the log even when no stall ever fires.
+                    let in_flight_now = backpressure.in_flight();
+                    if in_flight_now > THREE_QUARTER_HIGH_WATER_BYTES && !crossed_three_quarter {
+                        crossed_three_quarter = true;
+                        crossed_half = true;
+                        log::warn!(
+                            "[DIAG-BACKPRESSURE] watermark 75% crossed | session={} | in_flight={} bytes (>{} bytes) | sent_count={} sent_bytes={}",
+                            session_id,
+                            in_flight_now,
+                            THREE_QUARTER_HIGH_WATER_BYTES,
+                            backpressure.sent_count(),
+                            backpressure.sent_bytes(),
+                        );
+                    } else if in_flight_now > HALF_HIGH_WATER_BYTES && !crossed_half {
+                        crossed_half = true;
+                        log::warn!(
+                            "[DIAG-BACKPRESSURE] watermark 50% crossed | session={} | in_flight={} bytes (>{} bytes) | sent_count={} sent_bytes={}",
+                            session_id,
+                            in_flight_now,
+                            HALF_HIGH_WATER_BYTES,
+                            backpressure.sent_count(),
+                            backpressure.sent_bytes(),
+                        );
+                    } else if in_flight_now <= LOW_WATER_BYTES
+                        && (crossed_half || crossed_three_quarter)
+                    {
+                        log::warn!(
+                            "[DIAG-BACKPRESSURE] watermark recovered | session={} | in_flight={} bytes (<= LOW_WATER {} bytes) | sent_count={} sent_bytes={}",
+                            session_id,
+                            in_flight_now,
+                            LOW_WATER_BYTES,
+                            backpressure.sent_count(),
+                            backpressure.sent_bytes(),
+                        );
+                        crossed_half = false;
+                        crossed_three_quarter = false;
+                    }
                     match channel.send(InvokeResponseBody::Raw(batch)) {
                         Ok(()) => {
                             backpressure.record_send_success(len);
