@@ -371,14 +371,7 @@
       "cleared": "Log cleared",
       "empty": "No log entries",
       "reload": "Reload",
-      "loading": "Loading...",
-      "recovery": "WASM Recovery",
-      "recoveryDesc": "Reinitialize the WASM engine to recover the active terminal when it has stopped responding. Screen contents will be cleared.",
-      "reinitWasm": "Reinitialize WASM",
-      "reinitializing": "Reinitializing...",
-      "reinitSuccess": "Terminal recovered",
-      "reinitFailed": "Reinitialization failed",
-      "reinitUnavailable": "No active terminal"
+      "loading": "Loading..."
     },
     "statusBar": {
       "title": "Status Bar",
