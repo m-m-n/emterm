@@ -312,6 +312,30 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   let healthCheckCount = 0;          // Total health-check invocations
   let lastProcessingEndTime = 0;     // When processPendingData last finished
 
+  // ── [DIAG-PTY-FLOW] 5-second rolling counters ──────────────
+  // Used to expose the data-flow state in the log even when no slow-event
+  // warning fires. Resets every flush window so the per-window counts (not
+  // cumulative totals) stay readable. Tracks the four hops in the visible
+  // PTY pipeline:
+  //   onData            : how much arrived from Rust via Tauri Channel
+  //   processPendingData: how much frontend actually drained from the queue
+  //   ackBytes          : how much was reported back to Rust via pty_ack
+  // A persistent gap between onData bytes and ackBytes is what caused the
+  // 38-minute 02:06 freeze (in_flight before == after).
+  let flowOnDataCalls = 0;
+  let flowOnDataBytes = 0;
+  let flowProcessCalls = 0;
+  let flowProcessBytes = 0;
+  let flowAckCalls = 0;
+  let flowAckBytes = 0;
+  // Wall-clock + perf timestamps of the most recent onData event so the flow
+  // log can include "ago" in case nothing has arrived recently.
+  let lastOnDataPerfMs = 0;
+  // Wall-clock + perf timestamps of the most recent ackBytes invocation.
+  let lastAckPerfMs = 0;
+  let flowFlushTimer: ReturnType<typeof setInterval> | null = null;
+  const FLOW_FLUSH_INTERVAL_MS = 5000;
+
   // Event loop health probe: measures setTimeout(0) latency to detect main thread blockage
   const probeEventLoopHealth = () => {
     if (eventLoopProbeScheduled) return;
@@ -737,9 +761,18 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
       // short interval.
       const leftoverLen = leftoverData ? leftoverData.length : 0;
       const consumed = inputBytes - leftoverLen;
+      // [DIAG-PTY-FLOW] Per-window stats for processPendingData.
+      flowProcessCalls += 1;
+      flowProcessBytes += consumed;
       if (consumed > 0) {
         pendingAckBytes += consumed;
         if (pendingAckBytes >= ACK_FLUSH_BYTES) {
+          // [DIAG-PTY-FLOW] Track every actual ack issued so the per-window
+          // log can show how often / how many bytes the frontend told Rust
+          // it consumed. Discrepancy vs flowOnDataBytes is the smoking gun.
+          flowAckCalls += 1;
+          flowAckBytes += pendingAckBytes;
+          lastAckPerfMs = performance.now();
           ptyClient.ackBytes(pendingAckBytes);
           pendingAckBytes = 0;
           if (ackFlushTimer !== null) {
@@ -750,6 +783,9 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           ackFlushTimer = setTimeout(() => {
             ackFlushTimer = null;
             if (pendingAckBytes > 0) {
+              flowAckCalls += 1;
+              flowAckBytes += pendingAckBytes;
+              lastAckPerfMs = performance.now();
               ptyClient.ackBytes(pendingAckBytes);
               pendingAckBytes = 0;
             }
@@ -966,6 +1002,11 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
         clearTimeout(ackFlushTimer);
         ackFlushTimer = null;
       }
+      // [DIAG-PTY-FLOW] Stop the per-session 5s flow-summary timer.
+      if (flowFlushTimer !== null) {
+        clearInterval(flowFlushTimer);
+        flowFlushTimer = null;
+      }
       // Best-effort flush of any unsent ack so Rust isn't left thinking the
       // frontend has more in-flight than it really does after teardown.
       if (pendingAckBytes > 0) {
@@ -977,6 +1018,12 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
 
   // Register binary data handler -- just buffer and schedule rAF
   ptyClient.onData((data: Uint8Array) => {
+    // [DIAG-PTY-FLOW] Count BOTH mux and non-mux paths so the per-window
+    // log shows the true bytes-from-Rust rate even in mux mode (where the
+    // bytes are extracted by muxExtractor, not pushed onto pendingChunks).
+    flowOnDataCalls += 1;
+    flowOnDataBytes += data.length;
+    lastOnDataPerfMs = performance.now();
     // During mux mode, skip WASM processing but still extract mux APC messages.
     // Bridge sends PaneCreated/PtyOutput as APC sequences over the PTY.
     if (handle.suppressOriginalPty) {
@@ -1081,6 +1128,44 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
   lastHealthCheckTime = performance.now();
   lastHealthCheckWall = Date.now();
   setTimeout(healthCheck, HEALTH_CHECK_INTERVAL_MS);
+
+  // [DIAG-PTY-FLOW] Per-window summary of bytes-from-Rust vs bytes-acked.
+  // Always emits at warn level so release builds keep the log; rate is one
+  // line per FLOW_FLUSH_INTERVAL_MS per PTY session. Skips windows where
+  // nothing happened (no data arrived AND no acks issued AND no pending
+  // bytes) so the log is not flooded by idle sessions.
+  const flushFlow = () => {
+    const sessionId = ptyClient.getSessionId() ?? "?";
+    const muxMode = handle.suppressOriginalPty;
+    const now = performance.now();
+    const onDataAgo = lastOnDataPerfMs > 0 ? Math.round(now - lastOnDataPerfMs) : -1;
+    const ackAgo = lastAckPerfMs > 0 ? Math.round(now - lastAckPerfMs) : -1;
+    const pendingBytes = pendingChunks.reduce((sum, c) => sum + c.length, 0);
+    const idle = flowOnDataBytes === 0 && flowAckBytes === 0
+      && pendingBytes === 0 && pendingAckBytes === 0;
+    if (!idle) {
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-PTY-FLOW]` +
+        ` session=${sessionId.slice(0, 8)}` +
+        ` mux=${muxMode}` +
+        ` onData=${flowOnDataCalls}c/${flowOnDataBytes}b` +
+        ` proc=${flowProcessCalls}c/${flowProcessBytes}b` +
+        ` ack=${flowAckCalls}c/${flowAckBytes}b` +
+        ` pendingChunks=${pendingChunks.length}` +
+        ` pendingChunkBytes=${pendingBytes}` +
+        ` pendingAckBytes=${pendingAckBytes}` +
+        ` lastOnDataAgoMs=${onDataAgo}` +
+        ` lastAckAgoMs=${ackAgo}`,
+      );
+    }
+    flowOnDataCalls = 0;
+    flowOnDataBytes = 0;
+    flowProcessCalls = 0;
+    flowProcessBytes = 0;
+    flowAckCalls = 0;
+    flowAckBytes = 0;
+  };
+  flowFlushTimer = setInterval(flushFlow, FLOW_FLUSH_INTERVAL_MS);
 
   // Handle exit event
   await ptyClient.onExit(async (_code, _remainingSessions) => {
