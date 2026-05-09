@@ -44,30 +44,22 @@ import {
   flushGraphemeBuffer as flushGraphemeBufferFn,
   type ActionContext,
 } from "./state-actions.ts";
+import { extractText as extractTextFn } from "./state-extract-text.ts";
+import {
+  saveMuxPaneState as saveMuxPaneStateFn,
+  restoreMuxPaneState as restoreMuxPaneStateFn,
+  swapPrimaryGrid as swapPrimaryGridFn,
+  type MuxPaneGridState,
+} from "./state-mux-pane.ts";
+import {
+  bindPrimaryEvictCallback,
+  buildFreshPrimary,
+} from "./state-recovery.ts";
+
+// Re-export so existing imports from "./state" / "./terminal/state" keep working.
+export type { MuxPaneGridState };
 
 // ── WASM Mode Action Codes (mirror Rust constants) ──────
-/**
- * Snapshot of a mux pane's grid state (primary + alternate screen).
- * Used by mux window manager to save/restore pane state on window switch.
- */
-export interface MuxPaneGridState {
-  primaryGrid: WasmGrid;
-  alternateGrid: WasmGrid | null;
-  useAlternate: boolean;
-  /** Window title at the time of save (OSC 0/2). Restored on switch so tabs
-   *  don't leak titles across panes (e.g. Claude Code's title appearing on
-   *  unrelated tabs). */
-  title: string;
-  /** Window icon name at the time of save (OSC 0/1). */
-  iconName: string;
-  /** TS-only modes not stored in WASM (mouseTracking, mouseEncoding, cursorKeys). */
-  tsModes: {
-    mouseTracking: import("./modes").MouseTrackingMode;
-    mouseEncoding: import("./modes").MouseEncoding;
-    cursorKeys: import("./modes").CursorKeysMode;
-  };
-}
-
 const MODE_ACTION_SWITCH_TO_ALT = 1;
 const MODE_ACTION_SAVE_AND_SWITCH_TO_ALT = 2;
 const MODE_ACTION_SWITCH_TO_MAIN = 3;
@@ -223,10 +215,7 @@ export class TerminalState implements TerminalStateAccessor {
     this.foldManager = new FoldManager();
 
     // Set eviction callback for scrollback overflow
-    this.primaryBuffer.onEvict = (count: number) => {
-      this.semanticZoneTracker.pruneBeforeLine(count);
-      this.foldManager.pruneBeforeLine(count);
-    };
+    bindPrimaryEvictCallback(this.primaryBuffer, this.semanticZoneTracker, this.foldManager);
   }
 
   /**
@@ -310,138 +299,70 @@ export class TerminalState implements TerminalStateAccessor {
 
   /**
    * Save the current pane's full grid state (primary + alternate) for mux switching.
-   * Returns a snapshot that can be restored later via restoreMuxPaneState.
+   * Delegates to state-mux-pane module.
    */
   saveMuxPaneState(): MuxPaneGridState {
-    // Return references to current grids. The caller will immediately replace
-    // them via swapPrimaryGrid or restoreMuxPaneState, so shared references
-    // are safe (no concurrent mutation).
-    return {
-      primaryGrid: this.primaryWasmGrid!,
-      alternateGrid: this.alternateWasmGrid,
+    return saveMuxPaneStateFn({
+      primaryWasmGrid: this.primaryWasmGrid,
+      alternateWasmGrid: this.alternateWasmGrid,
       useAlternate: this.useAlternate,
       title: this._title,
       iconName: this._iconName,
-      tsModes: {
-        mouseTracking: this.modes.mouseTracking,
-        mouseEncoding: this.modes.mouseEncoding,
-        cursorKeys: this.modes.cursorKeys,
-      },
-    };
+      modes: this.modes,
+    });
   }
 
   /**
    * Restore a previously saved mux pane state (primary + alternate).
-   * Rebuilds buffers and cursors around the restored grids.
+   * Delegates to state-mux-pane module.
    */
   restoreMuxPaneState(paneState: MuxPaneGridState): void {
-    // Note: we do NOT dispose existing grids here — they may be shared
-    // references saved by saveMuxPaneState for another pane.
-
-    // Restore grids
-    this.primaryWasmGrid = paneState.primaryGrid;
-    this.alternateWasmGrid = paneState.alternateGrid;
-    this.useAlternate = paneState.useAlternate;
-
-    // Restore window title / icon so tabs don't leak titles across panes.
-    // Tracked per-pane because `_title` is shared state on TerminalState but
-    // each mux window should show its own title.
-    this._title = paneState.title;
-    this._iconName = paneState.iconName;
-
-    // Rebuild primary buffer and cursor
-    const cols = paneState.primaryGrid.core.cols();
-    const rows = paneState.primaryGrid.core.rows();
-    this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, paneState.primaryGrid);
-    this.primaryBuffer.onEvict = (count: number) => {
-      this.semanticZoneTracker.pruneBeforeLine(count);
-      this.foldManager.pruneBeforeLine(count);
-    };
-    this.primaryCursor = new CursorState(cols, rows, paneState.primaryGrid.core);
-    this.primaryCursor.moveTo(paneState.primaryGrid.core.get_cursor_col(), paneState.primaryGrid.core.get_cursor_row());
-
-    // Rebuild alternate buffer and cursor if alternate screen was active
-    if (paneState.alternateGrid) {
-      const altCols = paneState.alternateGrid.core.cols();
-      const altRows = paneState.alternateGrid.core.rows();
-      this.alternateBuffer = new UnifiedBuffer(altCols, altRows, 0, paneState.alternateGrid);
-      this.alternateCursor = new CursorState(altCols, altRows, paneState.alternateGrid.core);
-      this.alternateCursor.moveTo(paneState.alternateGrid.core.get_cursor_col(), paneState.alternateGrid.core.get_cursor_row());
-    } else {
-      this.alternateBuffer = null;
-      this.alternateCursor = null;
-    }
-
-    // Set active cursor
-    this.cursor = this.useAlternate && this.alternateCursor
-      ? this.alternateCursor
-      : this.primaryCursor;
-
-    // Sync modes from the active core (boolean modes stored in WASM)
-    const activeCore = this.useAlternate && paneState.alternateGrid
-      ? paneState.alternateGrid.core
-      : paneState.primaryGrid.core;
-    syncModesFromWasm(this.modes, activeCore);
-
-    // Restore TS-only modes (not stored in WASM bitfield)
-    this.modes.mouseTracking = paneState.tsModes.mouseTracking;
-    this.modes.mouseEncoding = paneState.tsModes.mouseEncoding;
-    this.modes.cursorKeys = paneState.tsModes.cursorKeys;
-
-    // Propagate cell size to all grids
-    setCellSizePxOnGrid(paneState.primaryGrid, this.cellWidthPx, this.cellHeightPx);
-    if (paneState.alternateGrid) {
-      setCellSizePxOnGrid(paneState.alternateGrid, this.cellWidthPx, this.cellHeightPx);
-    }
-
-    // Mark all rows dirty for full repaint
-    activeCore.mark_all_dirty();
+    const result = restoreMuxPaneStateFn(
+      paneState,
+      this.modes,
+      this.semanticZoneTracker,
+      this.foldManager,
+      this.maxScrollbackLines,
+      this.cellWidthPx,
+      this.cellHeightPx,
+    );
+    this.primaryWasmGrid = result.primaryWasmGrid;
+    this.alternateWasmGrid = result.alternateWasmGrid;
+    this.primaryBuffer = result.primaryBuffer;
+    this.alternateBuffer = result.alternateBuffer;
+    this.primaryCursor = result.primaryCursor;
+    this.alternateCursor = result.alternateCursor;
+    this.cursor = result.cursor;
+    this.useAlternate = result.useAlternate;
+    this._title = result.title;
+    this._iconName = result.iconName;
+    this.savedCursorForAlt = result.savedCursorForAlt;
   }
 
   /**
    * Swap the primary WASM grid with a fresh one (for new mux pane creation).
-   * Resets alternate screen state. Returns the old primary grid.
+   * Delegates to state-mux-pane module. Returns the old primary grid.
    */
   swapPrimaryGrid(newGrid: WasmGrid): WasmGrid | null {
     const oldGrid = this.primaryWasmGrid;
-    this.primaryWasmGrid = newGrid;
-
-    // Reset alternate screen state — new pane starts fresh.
-    // Do NOT dispose alternateWasmGrid: saveMuxPaneState() may hold a reference
-    // to it for the previous pane. Ownership transfers to muxPaneGrids.
-    this.alternateWasmGrid = null;
-    this.alternateBuffer = null;
-    this.alternateCursor = null;
-    this.savedCursorForAlt = null;
-    this.useAlternate = false;
-
-    const cols = newGrid.core.cols();
-    const rows = newGrid.core.rows();
-
-    // Rebuild buffer and cursor around the new grid
-    this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, newGrid);
-    this.primaryBuffer.onEvict = (count: number) => {
-      this.semanticZoneTracker.pruneBeforeLine(count);
-      this.foldManager.pruneBeforeLine(count);
-    };
-    this.primaryCursor = new CursorState(cols, rows, newGrid.core);
-    this.primaryCursor.moveTo(newGrid.core.get_cursor_col(), newGrid.core.get_cursor_row());
-    this.cursor = this.primaryCursor;
-
-    // Sync modes from the new core (boolean modes stored in WASM)
-    syncModesFromWasm(this.modes, newGrid.core);
-
-    // Reset TS-only modes — new pane starts with defaults
-    this.modes.mouseTracking = "none";
-    this.modes.mouseEncoding = "default";
-    this.modes.cursorKeys = "normal";
-
-    // Propagate cell size
-    setCellSizePxOnGrid(newGrid, this.cellWidthPx, this.cellHeightPx);
-
-    // Mark all rows dirty for full repaint
-    newGrid.core.mark_all_dirty();
-
+    const result = swapPrimaryGridFn(
+      newGrid,
+      this.modes,
+      this.semanticZoneTracker,
+      this.foldManager,
+      this.maxScrollbackLines,
+      this.cellWidthPx,
+      this.cellHeightPx,
+    );
+    this.primaryWasmGrid = result.primaryWasmGrid;
+    this.alternateWasmGrid = result.alternateWasmGrid;
+    this.primaryBuffer = result.primaryBuffer;
+    this.alternateBuffer = result.alternateBuffer;
+    this.primaryCursor = result.primaryCursor;
+    this.alternateCursor = result.alternateCursor;
+    this.cursor = result.cursor;
+    this.useAlternate = result.useAlternate;
+    this.savedCursorForAlt = result.savedCursorForAlt;
     return oldGrid;
   }
 
@@ -910,20 +831,21 @@ export class TerminalState implements TerminalStateAccessor {
       this.alternateWasmGrid = null;
     }
 
-    // Reset buffers (recreate primary buffer with unified scrollback)
-    this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, this.primaryWasmGrid ?? undefined);
-    this.primaryBuffer.onEvict = (count: number) => {
-      this.semanticZoneTracker.pruneBeforeLine(count);
-      this.foldManager.pruneBeforeLine(count);
-    };
+    // Reset buffers / cursor (rebuild primary around the existing/cleared grid)
+    const fresh = buildFreshPrimary(
+      this.primaryWasmGrid,
+      cols, rows,
+      this.maxScrollbackLines,
+      this.semanticZoneTracker,
+      this.foldManager,
+    );
+    this.primaryBuffer = fresh.primaryBuffer;
+    this.primaryCursor = fresh.primaryCursor;
     this.alternateBuffer = null;
-    this.useAlternate = false;
-
-    // Reset cursors
-    this.primaryCursor = new CursorState(cols, rows, this.primaryWasmGrid?.core);
     this.alternateCursor = null;
     this.cursor = this.primaryCursor;
     this.savedCursorForAlt = null;
+    this.useAlternate = false;
 
     // Reset modes
     this.modes = createDefaultModes();
@@ -936,15 +858,24 @@ export class TerminalState implements TerminalStateAccessor {
     // Reset other state
     this.wrapPending = false;
     this.tabStops = this.createDefaultTabStops(cols);
+    // Setter form: also syncs to active WASM grid.
     this.g0CharSet = "Ascii";
     this.g1CharSet = "Ascii";
     this.activeCharSet = "G0";
 
-    // Reset grapheme buffer
-    this.graphemeBuffer = [];
-    // WASM grapheme buffer already cleared by primaryWasmGrid.reset() above
+    // Reset OSC / session / tracker state (also clears graphemeBuffer)
+    this.resetAuxState();
+  }
 
-    // Reset OSC state
+  /**
+   * Reset TS-only auxiliary state (OSC values, grapheme buffer, session managers,
+   * trackers). Shared by reset() and recreateWasmCore().
+   *
+   * The markdown manager is replaced with a fresh instance because dispose()
+   * is destructive.
+   */
+  private resetAuxState(): void {
+    this.graphemeBuffer = [];
     this._title = "";
     this._iconName = "";
     this._workingDirectory = "";
@@ -954,15 +885,10 @@ export class TerminalState implements TerminalStateAccessor {
     this._progressPercentage = -1;
     this._userVariables.clear();
 
-    // Reset session managers (preserve container/callbacks)
     this.dataViewerManager.resetSessions();
     this.markdownManager.dispose();
     this.markdownManager = new MarkdownSessionManager();
-
-    // Reset semantic zone tracker
     this.semanticZoneTracker.clear();
-
-    // Reset fold manager (keep enabled state)
     this.foldManager.unfoldAll();
   }
 
@@ -985,15 +911,16 @@ export class TerminalState implements TerminalStateAccessor {
       // Create fresh WASM grid
       this.primaryWasmGrid = new WasmGrid(cols, rows, this.maxScrollbackLines);
 
-      // Rebuild primary buffer with new grid
-      this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, this.primaryWasmGrid);
-      this.primaryBuffer.onEvict = (count: number) => {
-        this.semanticZoneTracker.pruneBeforeLine(count);
-        this.foldManager.pruneBeforeLine(count);
-      };
-
-      // Reset cursors
-      this.primaryCursor = new CursorState(cols, rows, this.primaryWasmGrid.core);
+      // Rebuild primary buffer + cursor around the fresh grid
+      const fresh = buildFreshPrimary(
+        this.primaryWasmGrid,
+        cols, rows,
+        this.maxScrollbackLines,
+        this.semanticZoneTracker,
+        this.foldManager,
+      );
+      this.primaryBuffer = fresh.primaryBuffer;
+      this.primaryCursor = fresh.primaryCursor;
       this.alternateCursor = null;
       this.cursor = this.primaryCursor;
       this.savedCursorForAlt = null;
@@ -1012,23 +939,15 @@ export class TerminalState implements TerminalStateAccessor {
       // Reset other state (matching reset() coverage)
       this.wrapPending = false;
       this.tabStops = this.createDefaultTabStops(cols);
-      this.graphemeBuffer = [];
+      // NOTE: charsets are reset via private fields here (not setters), matching
+      // legacy behavior — the freshly-created WASM core already starts with
+      // ASCII charsets so explicit sync is unnecessary.
       this._g0CharSet = "Ascii";
       this._g1CharSet = "Ascii";
       this._activeCharSet = "G0";
-      this._title = "";
-      this._iconName = "";
-      this._workingDirectory = "";
-      this._pendingResponses = [];
-      this._activeHyperlink = null;
-      this._progressState = 0;
-      this._progressPercentage = -1;
-      this._userVariables.clear();
-      this.dataViewerManager.resetSessions();
-      this.markdownManager.dispose();
-      this.markdownManager = new MarkdownSessionManager();
-      this.semanticZoneTracker.clear();
-      this.foldManager.unfoldAll();
+
+      // Reset OSC / session / tracker state (also clears graphemeBuffer)
+      this.resetAuxState();
 
       // Neutral wording: this method is shared between auto-recovery from a
       // real crash and the manual `forceReinitWasm` path. The caller logs the
@@ -1077,16 +996,19 @@ export class TerminalState implements TerminalStateAccessor {
       // Wrap restored core in WasmGrid
       this.primaryWasmGrid = WasmGrid.fromCore(restoredCore);
 
-      // Rebuild primary buffer with restored grid
-      this.primaryBuffer = new UnifiedBuffer(cols, rows, this.maxScrollbackLines, this.primaryWasmGrid);
-      this.primaryBuffer.onEvict = (count: number) => {
-        this.semanticZoneTracker.pruneBeforeLine(count);
-        this.foldManager.pruneBeforeLine(count);
-      };
-
-      // Restore cursor from WASM core state
-      this.primaryCursor = new CursorState(cols, rows, restoredCore);
-      this.primaryCursor.moveTo(restoredCore.get_cursor_col(), restoredCore.get_cursor_row());
+      // Rebuild primary buffer + cursor around the restored grid, seeding
+      // cursor position from the WASM core state.
+      const fresh = buildFreshPrimary(
+        this.primaryWasmGrid,
+        cols, rows,
+        this.maxScrollbackLines,
+        this.semanticZoneTracker,
+        this.foldManager,
+        restoredCore.get_cursor_row(),
+        restoredCore.get_cursor_col(),
+      );
+      this.primaryBuffer = fresh.primaryBuffer;
+      this.primaryCursor = fresh.primaryCursor;
       this.alternateCursor = null;
       this.cursor = this.primaryCursor;
       this.savedCursorForAlt = null;
@@ -1113,10 +1035,7 @@ export class TerminalState implements TerminalStateAccessor {
 
   /**
    * Extract plain text from a grid range for copy operations.
-   *
-   * Coordinates are automatically normalized (start comes before end).
-   * Trailing spaces on each line are removed.
-   * Lines are joined with '\n'.
+   * Delegates to state-extract-text module.
    */
   extractText(
     startCol: number,
@@ -1124,59 +1043,6 @@ export class TerminalState implements TerminalStateAccessor {
     endCol: number,
     endRow: number,
   ): string {
-    // Normalize coordinates (ensure start comes before end)
-    if (startRow > endRow || (startRow === endRow && startCol > endCol)) {
-      [startCol, startRow, endCol, endRow] = [
-        endCol,
-        endRow,
-        startCol,
-        startRow,
-      ];
-    }
-
-    const buffer = this.getActiveBuffer();
-    const lines: string[] = [];
-
-    // Extract text row by row
-    for (let row = startRow; row <= endRow; row++) {
-      const line = buffer.getLine(row);
-      const lineLength = line.length;
-
-      let rowStartCol: number;
-      let rowEndCol: number;
-
-      if (row === startRow && row === endRow) {
-        // Single line selection
-        rowStartCol = startCol;
-        rowEndCol = endCol;
-      } else if (row === startRow) {
-        // First line of multi-line selection
-        rowStartCol = startCol;
-        rowEndCol = lineLength - 1;
-      } else if (row === endRow) {
-        // Last line of multi-line selection
-        rowStartCol = 0;
-        rowEndCol = endCol;
-      } else {
-        // Middle line of multi-line selection
-        rowStartCol = 0;
-        rowEndCol = lineLength - 1;
-      }
-
-      // Extract characters from this row
-      let rowText = "";
-      for (let col = rowStartCol; col <= rowEndCol && col < lineLength; col++) {
-        const cell = line.getCell(col);
-        rowText += cell.char;
-      }
-
-      // Remove trailing spaces
-      rowText = rowText.replace(/\s+$/, "");
-
-      lines.push(rowText);
-    }
-
-    // Join lines with newline
-    return lines.join("\n");
+    return extractTextFn(this.getActiveBuffer(), startCol, startRow, endCol, endRow);
   }
 }
