@@ -6,14 +6,14 @@
 //! to feed them into the shadow parser only.
 
 use std::collections::{HashMap, VecDeque};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use tauri::ipc::{Channel, InvokeResponseBody};
 
-use super::SessionId;
 use super::passthrough_scanner::PassthroughScanner;
+use super::SessionId;
 
 /// Default raw passthrough capacity for non-mux sessions (4 MiB).
 pub const HIDDEN_PASSTHROUGH_CAPACITY_NONMUX: usize = 4 * 1024 * 1024;
@@ -207,6 +207,33 @@ impl SessionVisibilityState {
                     inner.passthrough.capacity()
                 );
             }
+        }
+    }
+
+    /// Feed the shadow parser while visible.
+    ///
+    /// Mirrors `process_hidden` but skips the passthrough scanner because
+    /// passthrough sequences (Kitty / SIXEL / OSC 9999) are already being
+    /// forwarded live to the frontend. Keeping the shadow in sync during
+    /// visible periods means a subsequent visible→hidden→visible cycle
+    /// produces a faithful resume snapshot even when the shell is idle
+    /// during the hidden window — without this the shadow only contains
+    /// bytes received while hidden, so an idle hidden period yields a
+    /// blank snapshot that wipes the visible screen on resume.
+    pub fn process_visible(&self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let mut inner = self.inner.lock().expect("visibility state poisoned");
+        let shadow_ref = &mut inner.shadow;
+        let result = catch_unwind(AssertUnwindSafe(|| shadow_ref.process(data)));
+        if result.is_err() {
+            log::warn!(
+                "[WARN][BACKEND] visibility: shadow vt100 parser panicked (visible path); rebuilding at {}x{}",
+                inner.shadow_cols,
+                inner.shadow_rows,
+            );
+            inner.shadow = vt100::Parser::new(inner.shadow_rows, inner.shadow_cols, 0);
         }
     }
 
@@ -467,6 +494,54 @@ mod tests {
         // emit additional control sequences).
         let s = String::from_utf8_lossy(&snap);
         assert!(s.contains("hello world"), "snapshot should contain text");
+    }
+
+    #[test]
+    fn visibility_state_process_visible_seeds_shadow_so_idle_hidden_resume_preserves_screen() {
+        // Regression: when the session was visible and producing output, then
+        // went hidden during an idle period (no PTY bytes), the resume
+        // snapshot used to be `clear-screen + blank` because the shadow had
+        // never been fed. With process_visible() in place the shadow
+        // reflects the pre-hidden screen state, so the snapshot redraws it.
+        let s = SessionVisibilityState::new(80, 24, 1024);
+        // Simulate visible-period output.
+        s.process_visible(b"prompt> running tail -f\r\nline 1\r\nline 2\r\n");
+        s.set_hidden();
+        // Idle hidden: no process_hidden calls.
+        let snap = s.set_visible_and_take_snapshot().expect("snapshot");
+        assert!(snap.starts_with(b"\x1b[H\x1b[2J"));
+        let snap_str = String::from_utf8_lossy(&snap);
+        assert!(
+            snap_str.contains("prompt>"),
+            "snapshot must redraw pre-hidden visible content, got: {:?}",
+            snap_str,
+        );
+        assert!(
+            snap_str.contains("line 2"),
+            "snapshot must include later visible lines, got: {:?}",
+            snap_str,
+        );
+    }
+
+    #[test]
+    fn visibility_state_process_visible_then_hidden_combines_both() {
+        // Visible-fed bytes plus hidden-fed bytes both land in the snapshot.
+        let s = SessionVisibilityState::new(80, 24, 1024);
+        s.process_visible(b"before-hidden\r\n");
+        s.set_hidden();
+        s.process_hidden(b"during-hidden\r\n");
+        let snap = s.set_visible_and_take_snapshot().expect("snapshot");
+        let snap_str = String::from_utf8_lossy(&snap);
+        assert!(
+            snap_str.contains("before-hidden"),
+            "snapshot must include visible-period content, got: {:?}",
+            snap_str,
+        );
+        assert!(
+            snap_str.contains("during-hidden"),
+            "snapshot must include hidden-period content, got: {:?}",
+            snap_str,
+        );
     }
 
     #[test]

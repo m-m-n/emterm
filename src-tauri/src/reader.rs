@@ -361,6 +361,14 @@ pub fn spawn_reader_thread(
                         crossed_half = false;
                         crossed_three_quarter = false;
                     }
+                    // Keep the shadow VT100 parser in sync with the live
+                    // stream. Without this, the shadow only ever sees bytes
+                    // received while hidden — so an idle hidden period
+                    // produces a blank resume snapshot that wipes the
+                    // user's screen on visibility recovery.
+                    if let Some(vis) = visibility.as_ref() {
+                        vis.process_visible(&batch);
+                    }
                     match channel.send(InvokeResponseBody::Raw(batch)) {
                         Ok(()) => {
                             backpressure.record_send_success(len);
