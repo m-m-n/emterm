@@ -8,8 +8,8 @@
 //! through the PTY pipe buffer to the shell process.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 
@@ -19,6 +19,35 @@ use super::SessionId;
 pub const HIGH_WATER_BYTES: usize = 8 * 1024 * 1024;
 /// Low water mark: resume reading when unacked bytes drop below this.
 pub const LOW_WATER_BYTES: usize = 2 * 1024 * 1024;
+
+/// Why a `wait_for_drain_diag` call exited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainExit {
+    /// `in_flight` dropped to or below `LOW_WATER_BYTES` (frontend kept up).
+    Drained,
+    /// `set_hidden_wake` raised the hidden flag (visibility transition).
+    HiddenWake,
+    /// `force_wake` set `closed` (session removal).
+    Closed,
+    /// Mutex / condvar poison observed; treat as fatal-ish exit.
+    Poisoned,
+}
+
+/// Diagnostic outcome of a `wait_for_drain_diag` call.
+#[derive(Debug, Clone, Copy)]
+pub struct WaitOutcome {
+    /// Wall-clock time spent inside `wait_for_drain_diag`.
+    pub elapsed: Duration,
+    /// Why the wait exited.
+    pub reason: DrainExit,
+    /// Number of condvar wakeups observed before exit. Zero means we never
+    /// actually parked (entered already-eligible to exit).
+    pub wake_count: u32,
+    /// `in_flight` snapshot taken before parking.
+    pub in_flight_at_entry: usize,
+    /// `in_flight` snapshot taken just before returning.
+    pub in_flight_at_exit: usize,
+}
 
 /// Per-session backpressure state.
 pub struct SessionBackpressure {
@@ -132,26 +161,68 @@ impl SessionBackpressure {
     /// (visible path), a hidden-wake signal (visibility transition), or
     /// session removal (`force_wake` sets `closed`) to resume.
     pub fn wait_for_drain(&self) -> Duration {
+        self.wait_for_drain_diag().elapsed
+    }
+
+    /// Diagnostic variant of `wait_for_drain` that exposes the exit reason
+    /// and how many condvar wakeups occurred before exit. The wake count
+    /// distinguishes spurious wakes / repeated ack-then-still-over-low-water
+    /// cycles from a single direct unpark, which helps explain stalls where
+    /// `before == after` in_flight (no progress despite many notifications).
+    pub fn wait_for_drain_diag(&self) -> WaitOutcome {
         let start = std::time::Instant::now();
+        let in_flight_at_entry = self.in_flight.load(Ordering::Acquire);
         let mut guard = match self.cond.lock() {
             Ok(g) => g,
-            Err(_) => return start.elapsed(),
+            Err(_) => {
+                return WaitOutcome {
+                    elapsed: start.elapsed(),
+                    reason: DrainExit::Poisoned,
+                    wake_count: 0,
+                    in_flight_at_entry,
+                    in_flight_at_exit: self.in_flight.load(Ordering::Acquire),
+                };
+            }
         };
         self.waiters.store(true, Ordering::Release);
-        while !self.closed.load(Ordering::Acquire)
-            && self.in_flight.load(Ordering::Acquire) > LOW_WATER_BYTES
-            && !self.hidden_wake.swap(false, Ordering::AcqRel)
-        {
+        let mut wake_count: u32 = 0;
+        let reason: DrainExit = loop {
+            // Check exit conditions in order so the reason reflects what
+            // actually unblocked us.
+            if self.closed.load(Ordering::Acquire) {
+                break DrainExit::Closed;
+            }
+            if self.hidden_wake.swap(false, Ordering::AcqRel) {
+                break DrainExit::HiddenWake;
+            }
+            if self.in_flight.load(Ordering::Acquire) <= LOW_WATER_BYTES {
+                break DrainExit::Drained;
+            }
             match self.cond_notify.wait(guard) {
-                Ok(g) => guard = g,
+                Ok(g) => {
+                    guard = g;
+                    wake_count = wake_count.saturating_add(1);
+                }
                 Err(_) => {
                     self.waiters.store(false, Ordering::Release);
-                    return start.elapsed();
+                    return WaitOutcome {
+                        elapsed: start.elapsed(),
+                        reason: DrainExit::Poisoned,
+                        wake_count,
+                        in_flight_at_entry,
+                        in_flight_at_exit: self.in_flight.load(Ordering::Acquire),
+                    };
                 }
             }
-        }
+        };
         self.waiters.store(false, Ordering::Release);
-        start.elapsed()
+        WaitOutcome {
+            elapsed: start.elapsed(),
+            reason,
+            wake_count,
+            in_flight_at_entry,
+            in_flight_at_exit: self.in_flight.load(Ordering::Acquire),
+        }
     }
 
     /// Returns the current unacked byte count.

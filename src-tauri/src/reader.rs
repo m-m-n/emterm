@@ -1,12 +1,20 @@
 use crate::payloads::*;
+use crate::pty::backpressure::{HIGH_WATER_BYTES, LOW_WATER_BYTES};
 use crate::pty::PtyManager;
 use std::io::Read;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
+
+/// Early warning threshold (50% of HIGH_WATER): warn once per crossing so we
+/// can see whether in_flight is climbing toward the stall point.
+const HALF_HIGH_WATER_BYTES: usize = HIGH_WATER_BYTES / 2;
+/// Closer warning threshold (75% of HIGH_WATER): the frontend is barely
+/// keeping up at this level — useful to see right before a stall.
+const THREE_QUARTER_HIGH_WATER_BYTES: usize = HIGH_WATER_BYTES * 3 / 4;
 
 /// Spawns a dedicated thread to read output from a PTY session.
 ///
@@ -104,6 +112,18 @@ pub fn spawn_reader_thread(
         if let Some(vis) = visibility.as_ref() {
             vis.register_channel(channel.clone());
         }
+
+        // [DIAG-BACKPRESSURE] One-shot watermark crossing flags. We log a
+        // warn the first time in_flight crosses 50% / 75% of HIGH_WATER so a
+        // climb toward the stall point is visible in the log. Both flags are
+        // reset together when in_flight drops below LOW_WATER, so a session
+        // that recovers from a near-stall can warn again on the next climb.
+        let mut crossed_half: bool = false;
+        let mut crossed_three_quarter: bool = false;
+        // [DIAG-BACKPRESSURE] Cumulative count of wait_for_drain entries for
+        // this session, included in entry/exit warns so consecutive stalls
+        // are easy to correlate.
+        let mut drain_entry_count: u64 = 0;
 
         // Use a helper thread for blocking read + mpsc channel so that
         // the main reader loop can periodically check process_exited.
