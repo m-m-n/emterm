@@ -7,9 +7,8 @@ import {
   calculateTerminalSize,
   measureCharacterSize,
   PtyClient,
-  VisibilityController,
+  type VisibilityController,
 } from "../pty";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { TerminalState } from "../terminal/state";
 import { WasmGrid } from "../terminal/wasm/terminal-core";
 import { createRenderer, createRendererAsync, type ITerminalRenderer } from "../terminal";
@@ -19,12 +18,10 @@ import { KeyboardHandler, MouseHandler, ImeHandler, FoldHandler, SearchHandler, 
 import type { KeyboardHandlerContext } from "./handlers/keyboard";
 import type { RendererSettings } from "../settings/settings-applier";
 import { SettingsService } from "../settings/settings-service";
-import { effectiveMiddleClickPaste } from "../settings/effective-settings";
-import { buildFontFamilyChain } from "../settings/settings-applier";
-import { showTerminalContextMenu } from "../context-menu";
-import { FileDropHandler, formatPathsForPaste, extractRemotePath, type FileDropInfo } from "../sftp/file-drop-handler";
-import { UploadManager } from "../sftp/upload-manager";
-import { DownloadSessionManager } from "../download";
+import { applyInitialCachedSettings } from "./initial-settings";
+import type { FileDropHandler } from "../sftp/file-drop-handler";
+import type { UploadManager } from "../sftp/upload-manager";
+import type { DownloadSessionManager } from "../download";
 import type { MuxClient } from "../terminal/mux/mux-client";
 import type { MuxAction } from "../terminal/mux/prefix-key";
 import {
@@ -56,14 +53,27 @@ import { OscColorHandler } from "../terminal/osc-colors";
 import { CursorShapeStack } from "../terminal/osc-cursor-shape";
 import {
   setupPtyHandlers,
-  getSlowRenderCountWithin,
-  getSlowProcessCountWithin,
   type PtyHandlerHandle,
 } from "./pty-handler";
 import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
-import { getWasmMemoryBytes } from "../terminal/wasm/loader";
+import { wireInputEvents } from "./input-wiring";
+import { setupOverlayBindings } from "./overlay-setup";
+import { setupSftpFileDrop } from "./sftp-setup";
+import { buildVisibilityController } from "./visibility-setup";
+import { DiagnosticsController } from "./diagnostics";
+import { registerCoreCallbacks as registerCoreCallbacksImpl } from "./core-callbacks";
+import {
+  onWasmRecovered as onWasmRecoveredImpl,
+  type RecoveryHookContext,
+} from "./recovery-hook";
+import {
+  buildMuxSessionContext,
+  buildMuxWindowManagerContext,
+  buildMuxActionContext,
+  type MuxStateAccess,
+} from "./mux-state";
 
 /**
  * Main terminal application class that orchestrates the terminal UI and event handling
@@ -129,32 +139,10 @@ export class TerminalApp {
   private snapshotWaitSetAt = 0;
   private muxLastActiveIndex = 0;
 
-  /** Diagnostic heartbeat timer, started at the end of init() and stopped
-   *  in dispose(). Logs a single `[DIAG-PTY-HEALTH]` warn line every 5s
-   *  containing the FR16 retained signals: chunk-recv counters, pending
-   *  queue depth, main-thread loop lag (delay between heartbeat firings
-   *  minus the 5000 ms expected), max rAF gap reported by the renderer,
-   *  and WASM heap size. Loop-lag and rAF-gap remain the most direct
-   *  signals for "main thread or compositor was blocked between
-   *  heartbeats". The earlier `pty_get_send_stats` probe used to detect
-   *  Tauri Channel transport stalls is removed (FR15) — under the new
-   *  visibility-aware streaming model the backend never sends while
-   *  hidden, so the gap that probe was diagnosing no longer occurs. */
-  private _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private _heartbeatLastFiredAt = 0;
-
-  /** Event-loop watchdog. A short-interval (200 ms) tick that records the
-   *  delta between expected and actual fire time. When the JS event loop is
-   *  stuck (e.g. the 11-second hang observed during a mux-switch storm), the
-   *  tick that finally runs after the loop unblocks reports the gap as
-   *  `[DIAG-EVENTLOOP] hang Xms`. Without this, long event-loop hangs are
-   *  invisible because the 5 s heartbeat and 10 s pty health-check both
-   *  miss several intervals silently (their sliding-window stall logs only
-   *  fire if/when the timer eventually wakes). 500 ms threshold suppresses
-   *  noise from ordinary GC or layout pauses. */
-  private _eventLoopWatchdogTimer: ReturnType<typeof setInterval> | null = null;
-  private _eventLoopWatchdogLastFiredAt = 0;
-  private _eventLoopWatchdogMaxLagSinceHeartbeat = 0;
+  /** Owns the diagnostic heartbeat (`[DIAG-PTY-HEALTH]`) and event-loop
+   *  watchdog (`[DIAG-EVENTLOOP] hang ...`) timers. See `diagnostics.ts`
+   *  for the rationale and the exact signals each timer surfaces. */
+  private diagnostics: DiagnosticsController | null = null;
 
   /** Callback to update tab UI when mux window state changes */
   public onMuxStateChange: ((info: {
@@ -281,42 +269,7 @@ export class TerminalApp {
 
     // Apply cached settings to the newly created renderer
     // (applySettings runs before tabManager exists, so renderer notifications are dropped)
-    const cachedSettings = SettingsService.getCached();
-    if (cachedSettings) {
-      if (cachedSettings.terminal_color_scheme) {
-        // Check if it's a user-defined color scheme
-        const userScheme = cachedSettings.custom_color_schemes?.find(
-          (s) => s.name === cachedSettings.terminal_color_scheme
-        );
-        if (userScheme) {
-          // Apply user-defined color scheme directly
-          this.renderer.setUserColorScheme(userScheme);
-        } else {
-          // Apply preset color scheme
-          this.renderer.applySetting("colorScheme", cachedSettings.terminal_color_scheme);
-        }
-      }
-      if (cachedSettings.cursor_style) {
-        this.renderer.applySetting("cursorStyle", cachedSettings.cursor_style);
-      }
-      if (cachedSettings.cursor_blink !== undefined) {
-        this.renderer.applySetting("cursorBlink", cachedSettings.cursor_blink);
-      }
-      if (cachedSettings.fold_enabled !== undefined) {
-        this.state.getFoldManager().setEnabled(cachedSettings.fold_enabled);
-      }
-      if (cachedSettings.bold_brightens_ansi_colors !== undefined) {
-        this.renderer.applySetting("boldBrightensAnsiColors", cachedSettings.bold_brightens_ansi_colors);
-      }
-      const fontChain = buildFontFamilyChain(
-        cachedSettings.font_family_primary || "",
-        cachedSettings.font_family_emoji || "",
-        cachedSettings.font_family_secondary || "",
-      );
-      if (fontChain) {
-        this.renderer.applySetting("fontFamily", fontChain);
-      }
-    }
+    applyInitialCachedSettings(this.state, this.renderer);
 
     // Register bell callback
     this.state.onBell = () => this.handleBell();
@@ -359,18 +312,9 @@ export class TerminalApp {
     // Visibility-aware streaming controller (FR1, FR2, FR5, NFR5).
     // Watches document.visibilityState + Tauri focus, debounces hide,
     // forwards confirmed transitions to backend / mux daemon.
-    this.visibilityController = new VisibilityController({
+    this.visibilityController = buildVisibilityController({
       getPtyClient: () => this.ptyClient,
       getMuxClient: () => this.muxClient,
-      getDocumentVisible: () => document.visibilityState === "visible",
-      subscribeFocus: async (cb) => {
-        const win = getCurrentWebviewWindow();
-        const unlisten = await win.onFocusChanged(({ payload: focused }) => cb(focused));
-        return unlisten;
-      },
-    });
-    this.visibilityController.start().catch((err) => {
-      console.warn("[WARN][FRONTEND] VisibilityController.start failed:", err);
     });
 
     // Initialize IME handler
@@ -417,30 +361,18 @@ export class TerminalApp {
     });
     this.searchHandler.init(this.terminalRoot!);
 
-    // Add middle-click paste handler (registered before MouseHandler so stopImmediatePropagation
-    // prevents PTY mouse tracking from seeing middle button events when paste is enabled)
-    terminalContainer.addEventListener('mousedown', (e) => {
-      if (e.button === 1) {
-        // Clear selection on middle click
-        this.selectionController?.clearSelection();
-
-        const settings = SettingsService.getCached();
-        if (effectiveMiddleClickPaste(settings)) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          // Suppress the matching mouseup to prevent an orphaned release event reaching the PTY.
-          // Uses capture phase so it fires before MouseHandler's bubble-phase listener.
-          const suppressMouseUp = (ev: MouseEvent) => {
-            if (ev.button === 1) {
-              ev.stopPropagation();
-              ev.preventDefault();
-              terminalContainer.removeEventListener('mouseup', suppressMouseUp, true);
-            }
-          };
-          terminalContainer.addEventListener('mouseup', suppressMouseUp, true);
-          this.handleMiddleClickPaste();
-        }
-      }
+    // Wire pointer events (middle-click paste, contextmenu, wheel, click).
+    // Registered BEFORE `mouseHandler.attach()` so the middle-click
+    // suppressor's stopImmediatePropagation runs before PTY mouse tracking.
+    wireInputEvents({
+      container: this.container,
+      terminalContainer,
+      getSelectionController: () => this.selectionController,
+      getLinkHandler: () => this.linkHandler,
+      getFoldHandler: () => this.foldHandler,
+      app: this,
+      onMiddleClickPaste: () => { this.handleMiddleClickPaste(); },
+      onWheel: (e) => this.handleWheel(e),
     });
 
     // Initialize mouse handler (for PTY mouse tracking only - selection handled by SelectionController)
@@ -455,20 +387,10 @@ export class TerminalApp {
     );
     this.mouseHandler.attach();
 
-    // Add context menu handler for terminal right-click
-    // Use this.container (.tab-content) instead of terminalContainer (.terminal-root)
-    // so the handler also covers the padding area around the terminal
-    this.container.addEventListener('contextmenu', (e) => {
-      showTerminalContextMenu(e, { app: this });
-    });
-
     // Attach selection controller
     this.selectionController.attach();
 
-    // Add mouse wheel handler for scrollback
-    terminalContainer.addEventListener('wheel', (e) => this.handleWheel(e));
-
-    // Create fold handler
+    // Create fold handler (referenced by the click listener above via getter).
     this.foldHandler = new FoldHandler({
       getState: () => this.state,
       getRenderer: () => this.renderer,
@@ -477,6 +399,7 @@ export class TerminalApp {
     });
 
     // Create link handler for URL/file path detection and hover cursor
+    // (also referenced by the click listener above via getter).
     this.linkHandler = new LinkHandler({
       getState: () => this.state,
       getRenderer: () => this.renderer,
@@ -484,15 +407,6 @@ export class TerminalApp {
       getCharSize: () => this.charSize,
     });
     this.linkHandler.attach(terminalContainer);
-
-    // Add click handler for fold toggle (plain click) and URL opening (Ctrl+click)
-    terminalContainer.addEventListener('click', (e) => {
-      if (e.ctrlKey || e.metaKey) {
-        this.linkHandler?.handleUrlClick(e);
-      } else {
-        this.foldHandler?.handleFoldClick(e);
-      }
-    });
 
     // Initialize image handler (ImageViewer + Kitty/SIXEL event listener)
     this.imageHandler = new ImageHandler({
@@ -510,60 +424,25 @@ export class TerminalApp {
     this.registerEarlyApcContext();
 
     // Initialize SFTP file drop handler and upload manager
-    this._uploadManager = new UploadManager();
-    await this._uploadManager.init();
-
-    this.fileDropHandler = new FileDropHandler({
+    const sftpSetup = await setupSftpFileDrop({
       container: this.container,
       isActiveTab: () => this.isThisTabActive(),
       getSshConnectionName: () => this.options.sshConnectionName || "",
-      onSshDrop: (files: FileDropInfo[]) => {
-        const destination = extractRemotePath(this.state?._workingDirectory || "");
-        const sshConnectionName = this.options.sshConnectionName || "";
-        this._uploadManager?.handleSshDrop(files, sshConnectionName, destination);
-      },
-      onLocalDrop: (paths: string[]) => {
-        const text = formatPathsForPaste(paths);
-        if (text && this.ptyClient) {
-          const bytes = new TextEncoder().encode(text);
-          this.ptyClient.write(bytes);
-        }
-      },
+      getState: () => this.state,
+      getPtyClient: () => this.ptyClient,
     });
-    await this.fileDropHandler.attach();
+    this._uploadManager = sftpSetup.uploadManager;
+    this.fileDropHandler = sftpSetup.fileDropHandler;
 
-    // Set markdown session manager's container for fullscreen view
-    this.state.getMarkdownManager().setContainer(this.overlayRoot!);
-
-    // Wire PTY write callback for markdown navigation (navigate/image/quit commands)
-    this.state.getMarkdownManager().setPtyWriteCallback((data: string) => {
-      this.ptyClient?.write(new TextEncoder().encode(data));
+    // Wire markdown / data viewer / download managers into the overlay
+    // root, including the IME blur/focus pairing for their fullscreen views.
+    const overlaySetup = setupOverlayBindings({
+      state: this.state,
+      overlayRoot: this.overlayRoot!,
+      getPtyClient: () => this.ptyClient,
+      getImeHandler: () => this.imeHandler,
     });
-
-    // Set data viewer session manager's container
-    this.state.getDataViewerManager().setContainer(this.overlayRoot!);
-
-    // Initialize download session manager
-    this.downloadManager = new DownloadSessionManager();
-    this.downloadManager.setContainer(this.overlayRoot!);
-
-    // Wire up IME blur/focus for fullscreen markdown view (same pattern as ImageViewer)
-    const fullscreenView = this.state.getMarkdownManager().getFullscreenView();
-    fullscreenView.onShow(() => {
-      this.imeHandler?.blur();
-    });
-    fullscreenView.onHide(() => {
-      this.imeHandler?.focus();
-    });
-
-    // Wire up IME blur/focus for data viewer
-    const dataViewerFullscreen = this.state.getDataViewerManager().getFullscreenView();
-    dataViewerFullscreen.onShow(() => {
-      this.imeHandler?.blur();
-    });
-    dataViewerFullscreen.onHide(() => {
-      this.imeHandler?.focus();
-    });
+    this.downloadManager = overlaySetup.downloadManager;
 
     // Make terminal focusable and set up resize observer before PTY spawn
     terminalContainer.tabIndex = 0;
@@ -578,6 +457,7 @@ export class TerminalApp {
     // Spawn PTY session (non-blocking UI)
     try {
       // Use profile-specific spawn overrides if provided, otherwise fall back to global settings
+      const cachedSettings = SettingsService.getCached();
       const overrides = this.options.spawnOverrides;
       const shell = (overrides?.shell_path || cachedSettings?.shell_path) || undefined;
       const args = overrides?.shell_args?.length
@@ -598,124 +478,16 @@ export class TerminalApp {
       return;
     }
 
-    this.startDiagnosticHeartbeat();
-    this.startEventLoopWatchdog();
-  }
-
-  /** Start the 5s diagnostic heartbeat (see _heartbeatTimer field doc). */
-  private startDiagnosticHeartbeat(): void {
-    if (this._heartbeatTimer) return;
-    this._heartbeatLastFiredAt = performance.now();
-    this._heartbeatTimer = setInterval(() => this.fireHeartbeat(), 5000);
-  }
-
-  /** Start the 200 ms event-loop watchdog (see _eventLoopWatchdogTimer doc). */
-  private startEventLoopWatchdog(): void {
-    if (this._eventLoopWatchdogTimer) return;
-    const INTERVAL_MS = 200;
-    const HANG_THRESHOLD_MS = 500;
-    this._eventLoopWatchdogLastFiredAt = performance.now();
-    this._eventLoopWatchdogTimer = setInterval(() => {
-      try {
-        const now = performance.now();
-        const lag = now - this._eventLoopWatchdogLastFiredAt - INTERVAL_MS;
-        this._eventLoopWatchdogLastFiredAt = now;
-        if (lag > HANG_THRESHOLD_MS) {
-          if (lag > this._eventLoopWatchdogMaxLagSinceHeartbeat) {
-            this._eventLoopWatchdogMaxLagSinceHeartbeat = lag;
-          }
-          // Resume timestamp is `now`; the loop was stuck from
-          // (now - INTERVAL_MS - lag) up to `now`. Reporting the lag is
-          // sufficient — the wall-clock log timestamp gives the resume
-          // moment, so the start can be derived by subtraction.
-          console.warn(
-            `[DIAG-EVENTLOOP] hang ${Math.round(lag)}ms (resume at perf=${Math.round(now)}ms)` +
-            ` document.hidden=${document.hidden}`,
-          );
-        }
-      } catch { /* never let a watchdog tick throw */ }
-    }, INTERVAL_MS);
-  }
-
-  /** Emit one heartbeat warn line. Hot path is intentionally minimal — no
-   *  Tauri IPC, no per-pane WASM calls (we only touch the active core).
-   *  Lag is the difference between the actual interval and the expected
-   *  5000 ms; large positive values mean the timer was held back by a
-   *  blocked main thread. */
-  private fireHeartbeat(): void {
-    try {
-      const now = performance.now();
-      const lag = Math.round(now - this._heartbeatLastFiredAt - 5000);
-      this._heartbeatLastFiredAt = now;
-
-      const panes = this.muxWindows.length;
-      const activeIdx = this.activeMuxWindowIndex;
-      const activePaneId = this.muxPaneIds[activeIdx] ?? -1;
-
-      const lastSwitchAt = getLastMuxSwitchAt();
-      const lastSwitchAgoMs = lastSwitchAt > 0 ? Math.round(now - lastSwitchAt) : -1;
-
-      const rafGap = (this.renderer as unknown as {
-        getAndResetMaxRafGap?: () => number;
-      })?.getAndResetMaxRafGap?.() ?? -1;
-
-      let wasmHeapMB = -1;
-      try {
-        const bytes = getWasmMemoryBytes();
-        if (bytes >= 0) wasmHeapMB = Math.round(bytes / (1024 * 1024));
-      } catch { /* loader not initialized */ }
-
-      // IPC layer observability: chunkRecv* counters tell us whether the
-      // backend → frontend Channel listener is firing at all (= distinguish
-      // "IPC stuck" from "scheduling stuck"). pending* counters reveal
-      // whether listener-delivered chunks are piling up because
-      // processPendingData isn't running. lastChunkAgoMs == -1 means no
-      // chunk has been received since spawn.
-      const recv = this.ptyClient?.getRecvStats();
-      const recvCount = recv?.count ?? -1;
-      const recvBytes = recv?.bytes ?? -1;
-      const lastChunkAgoMs = recv && recv.lastRecvAt > 0
-        ? Math.round(now - recv.lastRecvAt)
-        : -1;
-      const pending = this.ptyHandlerHandle?.getPendingStats();
-      const pendingChunks = pending?.chunks ?? -1;
-      const pendingBytes = pending?.bytes ?? -1;
-      const pendingLeftover = pending?.hasLeftover ?? false;
-
-      // Sliding-window counters over the last 30 s. Surface mux-switch
-      // storms and slow-render / slow-process accumulation directly in the
-      // heartbeat so we can correlate with hangs without scanning every
-      // slow-render line in the log.
-      const W = 30_000;
-      const muxSw30s = getMuxSwitchCountWithin(W);
-      const slowR30s = getSlowRenderCountWithin(W);
-      const slowP30s = getSlowProcessCountWithin(W);
-
-      // Largest event-loop hang observed since the previous heartbeat.
-      // Reported here (rather than only inside the watchdog tick) so that
-      // a hang that ends just before the heartbeat is preserved alongside
-      // the surrounding heartbeat counters for correlation.
-      const evLoopMaxLag = Math.round(this._eventLoopWatchdogMaxLagSinceHeartbeat);
-      this._eventLoopWatchdogMaxLagSinceHeartbeat = 0;
-
-      console.warn(
-        `[DIAG-PTY-HEALTH]` +
-        ` mux=${this.inMuxMode}` +
-        ` panes=${panes}` +
-        ` activeIdx=${activeIdx} activePaneId=${activePaneId}` +
-        ` lastSwitchAgoMs=${lastSwitchAgoMs}` +
-        ` loopLag=${lag}ms` +
-        ` rafMaxGap=${Math.round(rafGap)}ms` +
-        ` wasmHeapMB=${wasmHeapMB}` +
-        ` chunkRecv=${recvCount}/${recvBytes}b` +
-        ` lastChunkAgoMs=${lastChunkAgoMs}` +
-        ` pending=${pendingChunks}c/${pendingBytes}b leftover=${pendingLeftover}` +
-        ` muxSw30s=${muxSw30s} slowR30s=${slowR30s} slowP30s=${slowP30s}` +
-        ` evLoopMaxLag=${evLoopMaxLag}ms`,
-      );
-    } catch (err) {
-      console.warn(`[DIAG-PTY-HEALTH] heartbeat threw: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    this.diagnostics = new DiagnosticsController({
+      getRenderer: () => this.renderer,
+      getPtyClient: () => this.ptyClient,
+      getPtyHandlerHandle: () => this.ptyHandlerHandle,
+      getInMuxMode: () => this.inMuxMode,
+      getMuxWindowsLength: () => this.muxWindows.length,
+      getActiveMuxWindowIndex: () => this.activeMuxWindowIndex,
+      getMuxPaneIds: () => this.muxPaneIds,
+    });
+    this.diagnostics.start();
   }
 
   /**
@@ -723,35 +495,11 @@ export class TerminalApp {
    * Called once for primary core and again when alternate core becomes active.
    */
   private registerCoreCallbacks(core: ReturnType<TerminalState["getActiveCore"]>): void {
-    core.set_osc_callback((actionType: number, data: string) => {
-      // Queue data - do NOT access core here (recursive borrow error)
-      // OSC 133 (SemanticPrompt) and OSC 777 (EmtermExtension) call
-      // getScrollbackLength() which re-enters WASM during process_pty_data.
-      this.pendingOscQueue.push({ actionType, data });
-    });
-
-    core.set_apc_callback((data: Uint8Array) => {
-      // Queue data - do NOT access core here (recursive borrow error)
-      this.imageHandler?.queueApc(data);
-    });
-
-    core.set_dcs_callback((data: Uint8Array) => {
-      // Queue data - do NOT access core here (recursive borrow error)
-      this.imageHandler?.queueDcs(data);
-    });
-
-    core.set_bell_callback(() => {
-      this.state?.onBell?.();
-    });
-
-    core.set_device_response_callback((data: Uint8Array) => {
-      // Skip Kitty Graphics Protocol APC responses (ESC _ G ...).
-      // These are handled by the PTY reader thread's KittyScanner which
-      // writes directly to the master fd for zero-latency delivery.
-      if (data.length >= 3 && data[0] === 0x1b && data[1] === 0x5f && data[2] === 0x47) {
-        return;
-      }
-      this.ptyClient?.write(data);
+    registerCoreCallbacksImpl(core, {
+      getState: () => this.state,
+      getPtyClient: () => this.ptyClient,
+      getImageHandler: () => this.imageHandler,
+      enqueueOsc: (actionType, data) => this.pendingOscQueue.push({ actionType, data }),
     });
   }
 
@@ -974,8 +722,8 @@ export class TerminalApp {
     this.searchHandler?.toggleSearch();
   }
 
-  /** Build the context object for mux session management functions. */
-  private getMuxSessionContext(): MuxSessionContext {
+  /** Build the shared mux-state access used by all three mux context builders. */
+  private getMuxStateAccess(): MuxStateAccess {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     return {
@@ -983,7 +731,9 @@ export class TerminalApp {
       getRenderer: () => self.renderer,
       getPtyClient: () => self.ptyClient,
       getKeyboardHandler: () => self.keyboardHandler,
+      getImageHandler: () => self.imageHandler,
       getPtyHandlerHandle: () => self.ptyHandlerHandle,
+
       getInMuxMode: () => self.inMuxMode,
       setInMuxMode: (value) => { self.inMuxMode = value; },
       getMuxClient: () => self.muxClient,
@@ -1001,20 +751,12 @@ export class TerminalApp {
       getMuxOriginalGrid: () => self.muxOriginalGrid,
       setMuxOriginalGrid: (grid) => { self.muxOriginalGrid = grid; },
       getMuxPaneGrids: () => self.muxPaneGrids,
+      getMuxDetachedGrids: () => self.muxDetachedGrids,
       getMuxLastActiveIndex: () => self.muxLastActiveIndex,
       setMuxLastActiveIndex: (index) => { self.muxLastActiveIndex = index; },
       setMuxReattachWindows: (windows) => { self.muxReattachWindows = windows; },
-      setMuxApcContext: (ctx) => self.imageHandler?.setMuxApcContext(ctx),
-      registerCoreCallbacks: (core) => self.registerCoreCallbacks(core),
-      handleMuxPaneCreated: (paneId) => self.handleMuxPaneCreated(paneId),
-      handleMuxPaneExited: (paneId) => self.handleMuxPaneExited(paneId),
-      handleRemoteSwitchWindow: (paneId) => self.handleRemoteSwitchWindow(paneId),
-      handleMuxAction: (action) => self.handleMuxAction(action),
-      sendMuxControl: (msgType, paneId, payload) => self.sendMuxControl(msgType, paneId, payload),
-      getActiveMuxPaneId: () => self.getActiveMuxPaneId(),
-      emitMuxStateChange: () => self.emitMuxStateChange(),
-      onMuxModeExited: () => self.registerEarlyApcContext(),
-      onStatusUpdate: (msg) => self.muxStatusUpdateCallback?.(msg),
+      getMuxReattachWindows: () => self.muxReattachWindows,
+
       getPostRecoveryWatchUntil: () => self.postRecoveryWatchUntil,
       countPostRecoveryPtyOutput: (bytes: number) => {
         self.postRecoveryPtyOutputChunks++;
@@ -1026,38 +768,22 @@ export class TerminalApp {
         self.snapshotWaitSetAt = paneId == null ? 0 : performance.now();
       },
       getSnapshotWaitSetAt: () => self.snapshotWaitSetAt,
-    };
-  }
 
-  /** Build the context object for mux window manager functions. */
-  private getMuxWindowManagerContext(): MuxWindowManagerContext {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-    return {
-      getState: () => self.state,
-      getRenderer: () => self.renderer,
-      getMuxClient: () => self.muxClient,
-      getKeyboardHandler: () => self.keyboardHandler,
-      getInMuxMode: () => self.inMuxMode,
-      getMuxWindows: () => self.muxWindows,
-      getActiveMuxWindowIndex: () => self.activeMuxWindowIndex,
-      setActiveMuxWindowIndex: (index) => { self.activeMuxWindowIndex = index; },
-      getMuxPaneIds: () => self.muxPaneIds,
-      getMuxPaneGrids: () => self.muxPaneGrids,
-      getMuxDetachedGrids: () => self.muxDetachedGrids,
-      getMuxPendingWindowCount: () => self.muxPendingWindowCount,
-      setMuxPendingWindowCount: (count) => { self.muxPendingWindowCount = count; },
-      getMuxIsReattaching: () => self.muxIsReattaching,
-      setMuxIsReattaching: (value) => { self.muxIsReattaching = value; },
-      getMuxLastActiveIndex: () => self.muxLastActiveIndex,
-      getMuxReattachWindows: () => self.muxReattachWindows,
-      get onMuxStateChange() { return self.onMuxStateChange; },
-      flushPtyPendingData: () => { self.ptyHandlerHandle?.flushPendingData(); },
-      processPtyPendingDataNow: () => { self.ptyHandlerHandle?.processNow(); },
+      onStatusUpdate: (msg) => self.muxStatusUpdateCallback?.(msg),
+
       registerCoreCallbacks: (core) => self.registerCoreCallbacks(core),
+      handleMuxPaneCreated: (paneId) => self.handleMuxPaneCreated(paneId),
+      handleMuxPaneExited: (paneId) => self.handleMuxPaneExited(paneId),
+      handleRemoteSwitchWindow: (paneId) => self.handleRemoteSwitchWindow(paneId),
+      handleMuxAction: (action) => self.handleMuxAction(action),
       sendMuxControl: (msgType, paneId, payload) => self.sendMuxControl(msgType, paneId, payload),
+      getActiveMuxPaneId: () => self.getActiveMuxPaneId(),
+      emitMuxStateChange: () => self.emitMuxStateChange(),
+      switchMuxWindow: (previousIndex?) => self.switchMuxWindow(previousIndex),
       exitMuxMode: () => self.exitMuxMode(),
-      enterMuxMode: (socketPath, sessionId) => self.enterMuxMode(socketPath, sessionId),
+      enterMuxMode: (socketPath, sessionId, options) =>
+        self.enterMuxMode(socketPath, sessionId, options),
+      onMuxModeExited: () => self.registerEarlyApcContext(),
       syncWindowTitleFromState: () => {
         // After swapping in a different pane's saved title (or resetting
         // for a new window), force-push the title through the normal
@@ -1069,7 +795,16 @@ export class TerminalApp {
         self.lastWindowTitle = current;
         self.titleChangeCallback?.(current || "Terminal");
       },
+      getOnMuxStateChange: () => self.onMuxStateChange,
     };
+  }
+
+  private getMuxSessionContext(): MuxSessionContext {
+    return buildMuxSessionContext(this.getMuxStateAccess());
+  }
+
+  private getMuxWindowManagerContext(): MuxWindowManagerContext {
+    return buildMuxWindowManagerContext(this.getMuxStateAccess());
   }
 
   /** Switch to a specific mux window by index (called from tab bar UI). */
@@ -1185,271 +920,55 @@ export class TerminalApp {
   }
 
   /**
-   * Post-recovery hook: restore visible content that a fresh empty WASM grid
-   * cannot reproduce on its own.
-   *
-   * - `viaReinit=true`: the WASM module was replaced, so every saved
-   *   `MuxPaneGridState` / detached snapshot references dead memory. Drop
-   *   them so subsequent `switchMuxWindow` takes the "no saved state"
-   *   branch (fresh grid + daemon snapshot) instead of crashing during
-   *   `restoreMuxPaneState`.
-   * - In any mux mode, ask the daemon to resend the active pane's shadow
-   *   screen so the user sees real content instead of a blank buffer.
-   * - Non-mux has no backend buffer — the shell redraws on the next keypress.
+   * Post-recovery hook: restore visible content + probe mux IPC liveness.
+   * Implementation lives in `recovery-hook.ts`; this method just wires
+   * the host's mutable state into a context object.
    */
   private onWasmRecovered(viaReinit: boolean): void {
-    const activePaneIdPre = this.inMuxMode ? this.getActiveMuxPaneId() : null;
-    console.warn(
-      `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered entry | viaReinit=${viaReinit} inMuxMode=${this.inMuxMode} muxClient=${!!this.muxClient} activePaneId=${activePaneIdPre} activeMuxWindowIndex=${this.activeMuxWindowIndex} muxPaneGrids=${this.muxPaneGrids.size} muxDetached=${this.muxDetachedGrids.size}`,
-    );
-    if (viaReinit) {
-      this.muxPaneGrids.clear();
-      this.muxDetachedGrids.clear();
-      console.warn(
-        `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered cleared stale refs | muxPaneGrids=0 muxDetached=0`,
-      );
-    }
-    if (!this.inMuxMode || !this.muxClient) {
-      console.warn(
-        `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered skip snapshot — inMuxMode=${this.inMuxMode} muxClient=${!!this.muxClient}`,
-      );
-      return;
-    }
-    const paneId = this.getActiveMuxPaneId();
-    if (paneId == null) {
-      console.warn(
-        `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered skip snapshot — activePaneId=null activeMuxWindowIndex=${this.activeMuxWindowIndex} muxPaneIds=[${this.muxPaneIds.join(",")}]`,
-      );
-      return;
-    }
-    console.warn(
-      `[WARN][FRONTEND] [DIAG-RECOVERY] onWasmRecovered sending RequestPaneSnapshot | paneId=${paneId}`,
-    );
-    // Arm the snapshot-reply observer so the next PtyOutput chunk for this
-    // pane gets logged once. Cleared in mux-session.ts on first match. Use
-    // the setter (rather than direct field write) so any future invariants
-    // added to setSnapshotWaitPaneId apply here too.
-    if (this.snapshotWaitPaneId != null) {
-      console.warn(
-        `[WARN][FRONTEND] [DIAG-RECOVERY] previous snapshot wait abandoned | prevPaneId=${this.snapshotWaitPaneId} newPaneId=${paneId} elapsedMs=${(performance.now() - this.snapshotWaitSetAt).toFixed(0)}`,
-      );
-    }
-    this.snapshotWaitPaneId = paneId;
-    this.snapshotWaitSetAt = performance.now();
-    this.muxClient.sendRequestPaneSnapshot(paneId).then(() => {
-      console.warn(
-        `[WARN][FRONTEND] [DIAG-RECOVERY] RequestPaneSnapshot sent | paneId=${paneId}`,
-      );
-      // After a WASM module reinit, the daemon snapshot reply is the only
-      // way to repaint. Run a lightweight IPC health check to detect a dead
-      // bridge socket (e.g. from a PC suspend that left the Unix socket in a
-      // half-open state) and surface it instead of leaving a blank screen.
-      if (viaReinit) {
-        this.runPostRecoveryIpcHealthCheck().catch((healthErr: unknown) => {
-          console.error(
-            `[ERROR][FRONTEND] runPostRecoveryIpcHealthCheck threw: ${
-              healthErr instanceof Error ? healthErr.message : String(healthErr)
-            }`,
-          );
-        });
-      }
-    }).catch((err: unknown) => {
-      console.warn(
-        `[WARN][FRONTEND] sendRequestPaneSnapshot after WASM recovery failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-      // Disarm the wait observer on send failure so a stray PtyOutput chunk
-      // for this pane doesn't get falsely attributed to a snapshot reply
-      // that will never arrive.
-      if (this.snapshotWaitPaneId === paneId) {
-        this.snapshotWaitPaneId = null;
-        this.snapshotWaitSetAt = 0;
-      }
-    });
+    onWasmRecoveredImpl(this.getRecoveryHookContext(), viaReinit);
   }
 
-  /**
-   * Post-recovery mux IPC health probe.
-   *
-   * Runs only after a viaReinit WASM recovery in mux mode. Sends a
-   * `RequestStatusUpdate` and waits up to `HEALTH_CHECK_TIMEOUT_MS` for the
-   * matching `StatusUpdate` reply. If nothing arrives, the bridge↔daemon
-   * socket is presumably dead (typical after a long PC suspend on Linux),
-   * so we exit mux mode to expose the host shell prompt — the user can
-   * type `emterm mux` to relaunch the bridge and rebuild the connection.
-   *
-   * Implementation notes:
-   * - Uses `Promise.race` between StatusUpdate arrival and timeout so
-   *   in-flight replies short-circuit the wait instead of being judged
-   *   against a 2 ms-precision setTimeout boundary (this caused a
-   *   false-positive exit in production: alive reply arrived 2 ms after
-   *   the 3 s timer fired).
-   * - After timeout, applies a small grace window for late arrivals that
-   *   raced the timer fire — recovers the session without exiting mux.
-   * - Also opens an observability window during which incoming mux APC
-   *   traffic is logged at warn level.
-   */
-  private async runPostRecoveryIpcHealthCheck(): Promise<void> {
-    if (!this.muxClient || !this.inMuxMode) return;
-    // Single-flight: if a check is already in flight, skip. Avoids
-    // wrapper-chain corruption from overlapping recoveries.
-    if (this.postRecoveryWatchUntil > 0) return;
-
-    const client = this.muxClient;
-    const sessionMuxClient = client;
-    // 10 s tolerates slow daemon replies after heavy WASM reinit work
-    // (snapshot replay, large grid resize) which previously squeezed
-    // the alive reply past the old 3 s threshold.
-    const HEALTH_CHECK_TIMEOUT_MS = 10_000;
-    // Grace window for replies that lost the race against the timeout
-    // fire by a handful of ms. Without this, a 2 ms latecomer trips a
-    // false exit identical to the original bug.
-    const LATE_ARRIVAL_GRACE_MS = 200;
-    // Watch window equals the maximum wait — `finally` clears
-    // `postRecoveryWatchUntil` immediately when the await chain ends,
-    // so any tail beyond timeout+grace is unobservable.
-    const WATCH_WINDOW_MS = HEALTH_CHECK_TIMEOUT_MS + LATE_ARRIVAL_GRACE_MS;
-
-    const watchOpenedAt = Date.now();
-    this.postRecoveryWatchUntil = watchOpenedAt + WATCH_WINDOW_MS;
-    this.postRecoveryPtyOutputChunks = 0;
-    this.postRecoveryPtyOutputBytes = 0;
-    console.warn(
-      `[WARN][FRONTEND] [DIAG-RECOVERY] post-recovery watch opened | windowMs=${WATCH_WINDOW_MS} timeoutMs=${HEALTH_CHECK_TIMEOUT_MS} graceMs=${LATE_ARRIVAL_GRACE_MS}`,
-    );
-
-    let statusReceived = false;
-    let statusResolve: (() => void) | null = null;
-    const statusPromise = new Promise<void>((resolve) => {
-      statusResolve = resolve;
-    });
-    const originalCallback = this.muxStatusUpdateCallback;
-    const wrapper = (msg: { left: string; right: string }) => {
-      // If a session swap happened mid-flight (exit + re-enter), the new
-      // session's StatusUpdate must NOT mark this probe as alive — that
-      // would let a half-dead original session escape detection.
-      if (this.muxClient !== sessionMuxClient) {
-        originalCallback?.(msg);
-        return;
-      }
-      if (!statusReceived) {
-        statusReceived = true;
-        const elapsedMs = Date.now() - watchOpenedAt;
-        console.warn(
-          `[WARN][FRONTEND] [DIAG-RECOVERY] mux IPC alive — StatusUpdate received post-recovery | elapsedMs=${elapsedMs}`,
-        );
-        statusResolve?.();
-      }
-      originalCallback?.(msg);
-    };
-    this.muxStatusUpdateCallback = wrapper;
-
-    // Restore the callback only if our wrapper is still the current one —
-    // otherwise some other code (concurrent run, exit, external rewire)
-    // has taken over the slot and we must not stomp on it.
-    const restoreCallback = () => {
-      if (this.muxStatusUpdateCallback === wrapper) {
-        this.muxStatusUpdateCallback = originalCallback;
-      }
-    };
-
-    try {
-      try {
-        await client.sendRequestStatusUpdate();
-      } catch (err) {
-        console.error(
-          `[ERROR][FRONTEND] [DIAG-RECOVERY] post-recovery sendRequestStatusUpdate failed: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-        return;
-      }
-
-      // Race: alive reply short-circuits the timeout. This avoids the
-      // 2 ms false-positive class entirely.
-      await Promise.race([
-        statusPromise,
-        new Promise<void>((resolve) =>
-          setTimeout(resolve, HEALTH_CHECK_TIMEOUT_MS),
-        ),
-      ]);
-
-      // Bail out if mux mode was torn down or replaced during the wait —
-      // a late StatusUpdate from a stale session must not trigger exit on
-      // a freshly-attached session.
-      if (!this.inMuxMode || this.muxClient !== sessionMuxClient) return;
-
-      if (statusReceived) return;
-
-      // Timeout fired without a reply. Wait briefly for late arrivals
-      // that raced the timer — exiting mux mode is destructive (forces
-      // the user to manually `emterm mux`), so a small grace is well
-      // worth a 200 ms delay.
-      console.warn(
-        `[WARN][FRONTEND] [DIAG-RECOVERY] no StatusUpdate within ${HEALTH_CHECK_TIMEOUT_MS}ms — entering ${LATE_ARRIVAL_GRACE_MS}ms grace window before exiting mux mode`,
-      );
-
-      await Promise.race([
-        statusPromise,
-        new Promise<void>((resolve) =>
-          setTimeout(resolve, LATE_ARRIVAL_GRACE_MS),
-        ),
-      ]);
-
-      if (!this.inMuxMode || this.muxClient !== sessionMuxClient) return;
-
-      if (statusReceived) {
-        console.warn(
-          `[WARN][FRONTEND] [DIAG-RECOVERY] mux IPC alive (late arrival in grace window) — keeping mux mode`,
-        );
-        return;
-      }
-
-      console.error(
-        `[ERROR][FRONTEND] [DIAG-RECOVERY] mux IPC dead — no StatusUpdate within ${HEALTH_CHECK_TIMEOUT_MS}ms + ${LATE_ARRIVAL_GRACE_MS}ms grace after WASM recovery. Exiting mux mode so the user can relaunch the bridge.`,
-      );
-      this.exitMuxMode();
-    } finally {
-      restoreCallback();
-      console.warn(
-        `[WARN][FRONTEND] [DIAG-RECOVERY] post-recovery watch closed | chunks=${this.postRecoveryPtyOutputChunks} bytes=${this.postRecoveryPtyOutputBytes} statusReceived=${statusReceived}`,
-      );
-      this.postRecoveryWatchUntil = 0;
-    }
-  }
-
-  /** Build the context object for mux action handler functions. */
-  private getMuxActionContext(): MuxActionContext {
+  /** Build the context object for recovery-hook functions. */
+  private getRecoveryHookContext(): RecoveryHookContext {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     return {
+      getState: () => self.state,
+      getInMuxMode: () => self.inMuxMode,
       getMuxClient: () => self.muxClient,
-      getPtyClient: () => self.ptyClient,
-      getMuxWindows: () => self.muxWindows,
+      getActiveMuxPaneId: () => self.getActiveMuxPaneId(),
       getActiveMuxWindowIndex: () => self.activeMuxWindowIndex,
-      setActiveMuxWindowIndex: (index) => { self.activeMuxWindowIndex = index; },
       getMuxPaneIds: () => self.muxPaneIds,
-      getMuxPendingWindowCount: () => self.muxPendingWindowCount,
-      setMuxPendingWindowCount: (count) => { self.muxPendingWindowCount = count; },
-      switchMuxWindow: (previousIndex?) => self.switchMuxWindow(previousIndex),
-      emitMuxStateChange: () => self.emitMuxStateChange(),
+      getMuxPaneGrids: () => self.muxPaneGrids,
+      getMuxDetachedGrids: () => self.muxDetachedGrids,
+      getSnapshotWaitPaneId: () => self.snapshotWaitPaneId,
+      setSnapshotWaitPaneId: (paneId) => { self.snapshotWaitPaneId = paneId; },
+      getSnapshotWaitSetAt: () => self.snapshotWaitSetAt,
+      setSnapshotWaitSetAt: (perfNow) => { self.snapshotWaitSetAt = perfNow; },
+      getPostRecoveryWatchUntil: () => self.postRecoveryWatchUntil,
+      setPostRecoveryWatchUntil: (deadlineMs) => { self.postRecoveryWatchUntil = deadlineMs; },
+      resetPostRecoveryCounters: () => {
+        self.postRecoveryPtyOutputChunks = 0;
+        self.postRecoveryPtyOutputBytes = 0;
+      },
+      getPostRecoveryPtyOutputChunks: () => self.postRecoveryPtyOutputChunks,
+      getPostRecoveryPtyOutputBytes: () => self.postRecoveryPtyOutputBytes,
+      getMuxStatusUpdateCallback: () => self.muxStatusUpdateCallback,
+      setMuxStatusUpdateCallback: (cb) => { self.muxStatusUpdateCallback = cb; },
       exitMuxMode: () => self.exitMuxMode(),
     };
+  }
+
+  private getMuxActionContext(): MuxActionContext {
+    return buildMuxActionContext(this.getMuxStateAccess());
   }
 
   /**
    * Cleans up resources and event listeners
    */
   dispose(): void {
-    if (this._heartbeatTimer) {
-      clearInterval(this._heartbeatTimer);
-      this._heartbeatTimer = null;
-    }
-    if (this._eventLoopWatchdogTimer) {
-      clearInterval(this._eventLoopWatchdogTimer);
-      this._eventLoopWatchdogTimer = null;
-    }
+    this.diagnostics?.stop();
+    this.diagnostics = null;
 
     // Disconnect resize observer
     if (this.disconnectResizeObserver) {
