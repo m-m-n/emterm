@@ -122,7 +122,7 @@ pub fn validate_rgba(data: &[u8], width: u32, height: u32) -> Result<(), String>
 
 /// Decode base64 data.
 pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine};
     STANDARD
         .decode(data)
         .map_err(|e| format!("Base64 decode error: {}", e))
@@ -130,7 +130,7 @@ pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
 
 /// Encode data to base64.
 pub fn encode_base64(data: &[u8]) -> String {
-    use base64::{Engine, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine};
     STANDARD.encode(data)
 }
 
@@ -386,8 +386,8 @@ mod tests {
 
     #[test]
     fn test_decompress_zlib_valid() {
-        use flate2::Compression;
         use flate2::write::ZlibEncoder;
+        use flate2::Compression;
         use std::io::Write;
 
         // Compress some data

@@ -10,26 +10,40 @@
 //! - `session`: Individual PTY session management
 //! - `manager`: Multi-session PTY manager
 
+#[cfg(feature = "gui")]
 pub mod backpressure;
+#[cfg(feature = "gui")]
 pub mod device_query_scanner;
+#[cfg(feature = "gui")]
 pub mod graceful_shutdown;
+#[cfg(feature = "gui")]
 pub mod kitty_scanner;
+#[cfg(feature = "gui")]
 pub mod manager;
 pub mod passthrough_scanner;
+#[cfg(feature = "gui")]
 pub mod session;
+#[cfg(feature = "gui")]
 pub mod shell;
 pub mod visibility;
+#[cfg(feature = "gui")]
 pub mod writer;
 
 // Re-export commonly used types
+#[cfg(feature = "gui")]
 pub use backpressure::{BackpressureRegistry, SessionBackpressure};
+#[cfg(feature = "gui")]
 pub use manager::PtyManager;
+#[cfg(feature = "gui")]
 pub use session::PtySession;
+#[cfg(feature = "gui")]
 pub use shell::detect_default_shell;
 pub use visibility::{
-    HIDDEN_PASSTHROUGH_CAPACITY_MUX, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX, RawPassthroughBuffer,
-    SessionVisibilityState, VisibilityRegistry,
+    RawPassthroughBuffer, HIDDEN_PASSTHROUGH_CAPACITY_MUX, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX,
 };
+#[cfg(feature = "gui")]
+pub use visibility::{SessionVisibilityState, VisibilityRegistry};
+#[cfg(feature = "gui")]
 pub use writer::WriterRegistry;
 
 use thiserror::Error;

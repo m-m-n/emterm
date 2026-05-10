@@ -1,4 +1,4 @@
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 
 /// Encodes bytes to base64 string using standard encoding
 pub fn encode_base64(data: &[u8]) -> String {

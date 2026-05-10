@@ -1,13 +1,13 @@
 //! Message handlers for mux IPC commands.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use futures::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::Mutex;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
@@ -18,8 +18,8 @@ use super::reattach::{
 };
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    PaneId, PtyOutputChunk, SharedShadowParser, TitleChangeSender, evaluate_output_target,
-    resume_pane_with_permit,
+    evaluate_output_target, resume_pane_with_permit, PaneId, PtyOutputChunk, SharedShadowParser,
+    TitleChangeSender,
 };
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.

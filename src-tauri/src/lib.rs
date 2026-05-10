@@ -12,7 +12,6 @@ pub mod image;
 #[cfg(feature = "gui")]
 pub mod logging;
 pub mod mux;
-#[cfg(feature = "gui")]
 pub mod pty;
 
 // CLI command modules
@@ -52,7 +51,7 @@ mod tests {
     use crate::image;
     use crate::payloads::ImageEventPayload;
     use crate::pty::PtyManager;
-    use crate::state::{LARGE_IMAGE_DATA_THRESHOLD, LargeImageDataStore};
+    use crate::state::{LargeImageDataStore, LARGE_IMAGE_DATA_THRESHOLD};
     use crate::{ansi, commands, protocols};
 
     #[tokio::test]

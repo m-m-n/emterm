@@ -5,14 +5,22 @@
 //! `is_visible()` to decide whether to forward bytes to the frontend or
 //! to feed them into the shadow parser only.
 
-use std::collections::{HashMap, VecDeque};
+#[cfg(feature = "gui")]
+use std::collections::HashMap;
+use std::collections::VecDeque;
+#[cfg(feature = "gui")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(feature = "gui")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "gui")]
 use std::sync::{Arc, Mutex, RwLock};
 
+#[cfg(feature = "gui")]
 use tauri::ipc::{Channel, InvokeResponseBody};
 
+#[cfg(feature = "gui")]
 use super::passthrough_scanner::PassthroughScanner;
+#[cfg(feature = "gui")]
 use super::SessionId;
 
 /// Default raw passthrough capacity for non-mux sessions (4 MiB).
@@ -103,6 +111,7 @@ impl RawPassthroughBuffer {
 }
 
 /// Internal state guarded by a mutex. Held inside `SessionVisibilityState`.
+#[cfg(feature = "gui")]
 struct InnerState {
     shadow: vt100::Parser,
     /// Last known shadow parser dimensions, kept so that we can rebuild
@@ -118,11 +127,13 @@ struct InnerState {
 }
 
 /// Visibility + shadow state for a single PTY session.
+#[cfg(feature = "gui")]
 pub struct SessionVisibilityState {
     visible: AtomicBool,
     inner: Mutex<InnerState>,
 }
 
+#[cfg(feature = "gui")]
 impl SessionVisibilityState {
     pub fn new(cols: u16, rows: u16, passthrough_capacity: usize) -> Self {
         Self {
@@ -329,11 +340,13 @@ impl SessionVisibilityState {
 }
 
 /// Per-`PtyManager` registry of `SessionVisibilityState` arcs keyed by session id.
+#[cfg(feature = "gui")]
 #[derive(Clone, Default)]
 pub struct VisibilityRegistry {
     inner: Arc<RwLock<HashMap<SessionId, Arc<SessionVisibilityState>>>>,
 }
 
+#[cfg(feature = "gui")]
 impl VisibilityRegistry {
     pub fn new() -> Self {
         Self::default()
@@ -371,7 +384,6 @@ impl VisibilityRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
 
     #[test]
     fn raw_passthrough_keeps_tail_when_over_capacity() {
@@ -460,6 +472,12 @@ mod tests {
         let first = buf.append(b"abcde");
         assert!(first, "after clear, the warn flag must rearm");
     }
+}
+
+#[cfg(all(test, feature = "gui"))]
+mod visibility_state_tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
 
     #[test]
     fn visibility_state_starts_visible() {
