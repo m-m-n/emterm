@@ -12,8 +12,8 @@ use tokio::sync::{Mutex, RwLock};
 type EnvVars = HashMap<String, String>;
 
 use super::{
-    BackpressureRegistry, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX, PtyError, PtySession, SessionId,
-    VisibilityRegistry, WriterRegistry, detect_default_shell, generate_session_id,
+    detect_default_shell, generate_session_id, BackpressureRegistry, PtyError, PtySession,
+    SessionId, VisibilityRegistry, WriterRegistry, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX,
 };
 
 /// Result of session creation with atomic count.

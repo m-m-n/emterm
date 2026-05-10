@@ -14,7 +14,7 @@
 
 use crate::ansi::dcs::{self, SixelData};
 
-use super::{DecodedImage, ImageEvent, ImagePlacement, decoder};
+use super::{decoder, DecodedImage, ImageEvent, ImagePlacement};
 
 /// SIXEL handler.
 pub struct SixelHandler {
@@ -114,8 +114,8 @@ impl SixelHandler {
 mod tests {
     use super::*;
     use crate::ansi::dcs::{
-        SixelAspectRatio, SixelBackgroundMode, SixelColor, decode_sixel_to_rgba,
-        parse_sixel_sequence,
+        decode_sixel_to_rgba, parse_sixel_sequence, SixelAspectRatio, SixelBackgroundMode,
+        SixelColor,
     };
 
     // =========================================================================
@@ -710,12 +710,10 @@ mod tests {
                 // Base64 should not be empty
                 assert!(!image.rgba_base64.is_empty());
                 // Should be valid base64 (only contains valid chars)
-                assert!(
-                    image
-                        .rgba_base64
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
-                );
+                assert!(image
+                    .rgba_base64
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
             }
             _ => panic!("Expected ImageReady"),
         }

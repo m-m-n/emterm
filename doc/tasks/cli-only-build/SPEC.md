@@ -31,7 +31,7 @@ As a developer, I want `make dpkg` (without env var) to produce the same GUI pac
 
 ### Functional Requirements
 - **FR1:** Add `gui` default feature to `Cargo.toml` gating GUI-specific dependencies as optional
-- **FR2:** Gate GUI modules and Tauri code in `lib.rs` with `#[cfg(feature = "gui")]`
+- **FR2:** Gate GUI-only top-level modules in `lib.rs` with `#[cfg(feature = "gui")]`. Modules that expose both CLI-reachable items (consumed by `mux` or CLI commands) and GUI-only items gate at the submodule / item level instead.
 - **FR3:** Gate `tauri_build::build()` in `build.rs` with `#[cfg(feature = "gui")]`
 - **FR4:** Gate `app_lib::run()` in `main.rs` with `#[cfg(feature = "gui")]`
 - **FR5:** Gate GUI-only submodules in `commands/mod.rs` (`config`, `font`, `editor`)
@@ -40,7 +40,7 @@ As a developer, I want `make dpkg` (without env var) to produce the same GUI pac
 
 ### Non-Functional Requirements
 - **NFR1 - Backward Compatibility:** Default build (no env var) must produce identical results
-- **NFR2 - Minimal Invasiveness:** `#[cfg]` gates should be concentrated at module boundaries, not scattered throughout
+- **NFR2 - Minimal Invasiveness:** `#[cfg]` gates are concentrated at module boundaries when feasible. Modules with mixed CLI/GUI surfaces (currently `pty`) gate at the submodule and item level so the CLI-reachable surface stays exported.
 
 ## Implementation Approach
 
@@ -60,12 +60,38 @@ lib.rs
 ├── #[cfg(feature = "gui")]  pub mod ansi;
 ├── #[cfg(feature = "gui")]  pub mod image;
 ├── #[cfg(feature = "gui")]  pub mod logging;
-├── #[cfg(feature = "gui")]  pub mod pty;
+├── #[cfg(feature = "gui")]  mod app;
+├── #[cfg(feature = "gui")]  pub mod download_registry;
+├── #[cfg(feature = "gui")]  pub mod payloads;
+├── #[cfg(feature = "gui")]  pub mod reader;
+├── #[cfg(feature = "gui")]  pub mod state;
+├── #[cfg(feature = "gui")]  pub mod tauri_commands;
+├── pub mod mux;               // always available (CLI daemon path)
+├── pub mod pty;               // always available with internal gating (see pty/mod.rs)
 ├── pub mod commands;          // always available
 ├── pub mod encoding;          // always available
 ├── pub mod error;             // always available
 ├── pub mod protocols;         // always available
-└── pub mod validation;        // always available
+├── pub mod sftp;              // always available
+├── pub mod ssh;               // always available
+├── pub mod validation;        // always available
+└── pub mod wsl;               // always available
+
+pty/mod.rs (mixed CLI/GUI surface)
+├── pub mod passthrough_scanner;          // always available (used by mux)
+├── pub mod visibility;                   // always available; only RawPassthroughBuffer
+│                                         // and HIDDEN_PASSTHROUGH_CAPACITY_* are
+│                                         // re-exported in CLI builds
+├── pub fn generate_session_id;           // always available
+├── pub type SessionId / pub enum PtyError; // always available
+├── #[cfg(feature = "gui")]  pub mod backpressure;
+├── #[cfg(feature = "gui")]  pub mod device_query_scanner;
+├── #[cfg(feature = "gui")]  pub mod graceful_shutdown;
+├── #[cfg(feature = "gui")]  pub mod kitty_scanner;
+├── #[cfg(feature = "gui")]  pub mod manager;
+├── #[cfg(feature = "gui")]  pub mod session;
+├── #[cfg(feature = "gui")]  pub mod shell;
+└── #[cfg(feature = "gui")]  pub mod writer;
 
 commands/mod.rs
 ├── #[cfg(feature = "gui")]  pub mod config;
@@ -90,22 +116,26 @@ EMTERM_CLI_ONLY=1 make dpkg
 
 **Cargo.toml Changes:**
 
+`portable-pty`, `tokio`, and `futures` are always-on because the `mux` daemon path
+(non-`gui`) consumes them.
+
 ```toml
 [features]
 default = ["gui"]
 gui = [
   "tauri",
   "tauri-plugin-clipboard-manager",
+  "tauri-plugin-dialog",
   "tauri-plugin-notification",
   "tauri-plugin-shell",
-  "portable-pty",
-  "tokio",
-  "futures",
   "font-kit",
+  "tauri-build",
+  "raw-window-handle",
+  "windows",
 ]
 
 [dependencies]
-# Always-on (CLI + GUI)
+# Always-on (CLI + GUI + mux daemon)
 clap = { version = "4.5.54", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -120,29 +150,21 @@ gif = "0.13"
 flate2 = "1"
 thiserror = "2"
 anyhow = "1"
+portable-pty = "0.8"
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net", "io-util", "io-std", "signal", "process"] }
+futures = "0.3"
+vt100 = "0.15"
 
 # GUI-only (optional)
 tauri = { version = "2.9.5", features = [], optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 tauri-plugin-shell = { version = "2", optional = true }
-portable-pty = { version = "0.8", optional = true }
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"], optional = true }
-futures = { version = "0.3", optional = true }
 font-kit = { version = "0.14", optional = true }
 
 [build-dependencies]
 tauri-build = { version = "2.5.3", features = [], optional = true }
-
-[features]
-default = ["gui"]
-gui = [
-  "tauri", "tauri-build",
-  "tauri-plugin-clipboard-manager",
-  "tauri-plugin-notification",
-  "tauri-plugin-shell",
-  "portable-pty", "tokio", "futures", "font-kit",
-]
 ```
 
 ### File Structure
@@ -153,7 +175,11 @@ src-tauri/
 ├── build.rs             # Gate tauri_build::build() with cfg
 └── src/
     ├── main.rs          # Gate app_lib::run() with cfg
-    ├── lib.rs           # Gate GUI modules and all Tauri code with cfg
+    ├── lib.rs           # Gate GUI-only top-level modules with cfg
+    ├── pty/
+    │   └── mod.rs       # Internally gate GUI-only submodules; keep
+    │                    # passthrough_scanner / visibility::RawPassthroughBuffer
+    │                    # / capacity constants always available for mux
     └── commands/
         └── mod.rs       # Gate config, font, editor with cfg
 

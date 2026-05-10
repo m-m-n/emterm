@@ -170,8 +170,8 @@ pub fn execute_attach(_session: Option<&str>) -> Result<(), Box<dyn std::error::
 /// Connect to the daemon, perform handshake, and return session list.
 /// Uses blocking I/O since CLI commands run in a synchronous context.
 #[cfg(unix)]
-fn cli_handshake()
--> Result<(std::os::unix::net::UnixStream, Vec<SessionInfo>), Box<dyn std::error::Error>> {
+fn cli_handshake(
+) -> Result<(std::os::unix::net::UnixStream, Vec<SessionInfo>), Box<dyn std::error::Error>> {
     use std::io::{Read, Write};
 
     let sock_path = daemon::socket_path();

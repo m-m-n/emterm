@@ -6,7 +6,7 @@
 use bytes::{Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder, LengthDelimitedCodec};
 
-use super::protocol::{MAX_FRAME_LENGTH, MuxMessage};
+use super::protocol::{MuxMessage, MAX_FRAME_LENGTH};
 
 /// Codec that frames MuxMessages with length-delimited encoding.
 pub struct MuxCodec {

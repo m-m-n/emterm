@@ -26,7 +26,7 @@ use crate::ansi::apc::{
 };
 
 use super::animation::{AnimationFrame, AnimationManager, AnimationState, CompositionMode};
-use super::{DecodedImage, ImageDelete, ImageEvent, ImagePlacement, decoder};
+use super::{decoder, DecodedImage, ImageDelete, ImageEvent, ImagePlacement};
 
 /// Kitty Graphics Protocol version string.
 const KITTY_GRAPHICS_VERSION: &str = "OK";
