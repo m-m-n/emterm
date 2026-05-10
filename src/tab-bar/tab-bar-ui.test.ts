@@ -9,18 +9,37 @@ mock.module("@tauri-apps/api/core", () => ({
   invoke: mock(async (cmd: string) => {
     if (cmd === "load_settings") {
       return {
-        font_size: 14, font_family: "monospace",
-        ui_theme: "dark", ui_theme_preset: "purple", terminal_color_scheme: "default",
-        padding: 8, scrollback_lines: 10000, show_scrollbar: "auto",
-        shell_path: "/bin/bash", shell_args: [], cursor_style: "block",
-        cursor_blink: true, scroll_speed: 3, bell_action: "none",
-        url_detection: true, copy_on_select: false,
+        font_size: 14,
+        font_family: "monospace",
+        ui_theme: "dark",
+        ui_theme_preset: "purple",
+        terminal_color_scheme: "default",
+        padding: 8,
+        scrollback_lines: 10000,
+        show_scrollbar: "auto",
+        shell_path: "/bin/bash",
+        shell_args: [],
+        cursor_style: "block",
+        cursor_blink: true,
+        scroll_speed: 3,
+        bell_action: "none",
+        url_detection: true,
+        copy_on_select: false,
         keybinds: {
-          copy: "Ctrl+Shift+C", paste: "Ctrl+Shift+V", select_all: "Ctrl+Shift+A",
-          search: "Ctrl+Shift+F", new_tab: "Ctrl+Shift+T", close_tab: "Ctrl+Shift+W",
-          next_tab: "Ctrl+PageDown", prev_tab: "Ctrl+PageUp",
-          zoom_in: "Ctrl+Plus", zoom_out: "Ctrl+Minus", zoom_reset: "Ctrl+0",
-          toggle_fullscreen: "F11", open_settings: "Ctrl+,",
+          copy: "Ctrl+Shift+C",
+          paste: "Ctrl+Shift+V",
+          select_all: "Ctrl+Shift+A",
+          search: "Ctrl+Shift+F",
+          new_tab: "Ctrl+Shift+T",
+          new_tab_global: "Ctrl+Shift+G",
+          close_tab: "Ctrl+Shift+W",
+          next_tab: "Ctrl+PageDown",
+          prev_tab: "Ctrl+PageUp",
+          zoom_in: "Ctrl+Plus",
+          zoom_out: "Ctrl+Minus",
+          zoom_reset: "Ctrl+0",
+          toggle_fullscreen: "F11",
+          open_settings: "Ctrl+,",
         },
         language: "auto",
         custom_color_schemes: [],
@@ -362,14 +381,17 @@ describe("TabBarUI", () => {
 
       const windowTabs = tabBarContainer.querySelectorAll(".mux-window-tab");
       expect(windowTabs[0]!.querySelector(".tab-title")?.textContent).toBe("c");
-      expect(windowTabs[0]!.querySelector(".mux-window-number")?.textContent)
-        .toBe("[1]");
+      expect(
+        windowTabs[0]!.querySelector(".mux-window-number")?.textContent,
+      ).toBe("[1]");
       expect(windowTabs[1]!.querySelector(".tab-title")?.textContent).toBe("a");
-      expect(windowTabs[1]!.querySelector(".mux-window-number")?.textContent)
-        .toBe("[2]");
+      expect(
+        windowTabs[1]!.querySelector(".mux-window-number")?.textContent,
+      ).toBe("[2]");
       expect(windowTabs[2]!.querySelector(".tab-title")?.textContent).toBe("b");
-      expect(windowTabs[2]!.querySelector(".mux-window-number")?.textContent)
-        .toBe("[3]");
+      expect(
+        windowTabs[2]!.querySelector(".mux-window-number")?.textContent,
+      ).toBe("[3]");
     });
   });
 

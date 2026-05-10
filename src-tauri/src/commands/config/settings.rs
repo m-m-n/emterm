@@ -204,6 +204,9 @@ define_keybinds! {
     new_tab,          default_keybind_new_tab,          deserialize_null_keybind_new_tab,
                       "default_keybind_new_tab",        "deserialize_null_keybind_new_tab",
                       "Ctrl+Shift+T";
+    new_tab_global,   default_keybind_new_tab_global,   deserialize_null_keybind_new_tab_global,
+                      "default_keybind_new_tab_global", "deserialize_null_keybind_new_tab_global",
+                      "Ctrl+Shift+G";
     close_tab,        default_keybind_close_tab,        deserialize_null_keybind_close_tab,
                       "default_keybind_close_tab",      "deserialize_null_keybind_close_tab",
                       "Ctrl+Shift+W";

@@ -2,9 +2,10 @@
  * TabKeyboardHandler Unit Tests
  */
 
-import { describe, test, expect, beforeEach, mock } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { TabKeyboardHandler } from "./keyboard-handler";
 import { TabManager } from "./tab-manager";
+import { SettingsService } from "../settings/settings-service";
 
 // Mock TerminalApp
 const mockTerminalApp = () => ({
@@ -71,6 +72,158 @@ describe("TabKeyboardHandler", () => {
       const handled = keyboardHandler.handleKeyDown(event);
 
       expect(handled).toBe(true);
+    });
+  });
+
+  describe("Ctrl+Shift+G (new tab with global settings)", () => {
+    const originalCached = SettingsService.getCached();
+
+    afterEach(() => {
+      // Restore cached settings after each test in this block
+      (SettingsService as any).cachedSettings = originalCached;
+    });
+
+    function makeKeybinds(overrides: Record<string, string> = {}) {
+      return {
+        copy: "Ctrl+Shift+C",
+        paste: "Ctrl+Shift+V",
+        select_all: "Ctrl+Shift+A",
+        search: "Ctrl+Shift+F",
+        new_tab: "Ctrl+Shift+T",
+        new_tab_global: "Ctrl+Shift+G",
+        close_tab: "Ctrl+Shift+W",
+        next_tab: "Ctrl+PageDown",
+        prev_tab: "Ctrl+PageUp",
+        zoom_in: "Ctrl+Plus",
+        zoom_out: "Ctrl+Minus",
+        zoom_reset: "Ctrl+0",
+        toggle_fullscreen: "F11",
+        open_settings: "Ctrl+,",
+        toggle_tab_bar: "Ctrl+Shift+B",
+        jump_to_prev_prompt: "Ctrl+Shift+ArrowUp",
+        jump_to_next_prompt: "Ctrl+Shift+ArrowDown",
+        profile_selector: "Ctrl+Shift+P",
+        ...overrides,
+      };
+    }
+
+    test("creates new tab via tabManager.createTab when no profiles exist", async () => {
+      // No SettingsService cache → keybinds is undefined → fallback to default
+      const createTabSpy = mock(tabManager.createTab.bind(tabManager));
+      tabManager.createTab = createTabSpy as any;
+
+      const event = createKeyboardEvent("g", { ctrlKey: true, shiftKey: true });
+      const handled = keyboardHandler.handleKeyDown(event);
+
+      expect(handled).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(createTabSpy).toHaveBeenCalled();
+      // No profile argument
+      expect(createTabSpy.mock.calls[0]?.length ?? 0).toBe(0);
+    });
+
+    test("does not call tabBarUI.createTabWithProfile even when default profile exists", async () => {
+      // Set cached settings with a default profile
+      (SettingsService as any).cachedSettings = {
+        profiles: [
+          {
+            name: "Default Profile",
+            shell_path: "/bin/zsh",
+            shell_args: [],
+            env_vars: "",
+            working_directory: "",
+            is_default: true,
+            ssh_connection_name: "",
+            wsl_distro_name: "",
+          },
+        ],
+        keybinds: makeKeybinds(),
+      };
+
+      const tabBarUIMock = {
+        createTabWithProfile: mock(() => {}),
+        showProfileSelector: mock(() => {}),
+      };
+      const handler = new TabKeyboardHandler(tabManager, {
+        tabBarUI: tabBarUIMock as any,
+      });
+
+      const createTabSpy = mock(tabManager.createTab.bind(tabManager));
+      tabManager.createTab = createTabSpy as any;
+
+      const event = createKeyboardEvent("g", { ctrlKey: true, shiftKey: true });
+      const handled = handler.handleKeyDown(event);
+
+      expect(handled).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(tabBarUIMock.createTabWithProfile).not.toHaveBeenCalled();
+      expect(createTabSpy).toHaveBeenCalled();
+      expect(createTabSpy.mock.calls[0]?.length ?? 0).toBe(0);
+    });
+
+    test("Ctrl+Shift+T regression: still uses profile-aware path", async () => {
+      const defaultProfile = {
+        name: "Default Profile",
+        shell_path: "/bin/zsh",
+        shell_args: [],
+        env_vars: "",
+        working_directory: "",
+        is_default: true,
+        ssh_connection_name: "",
+        wsl_distro_name: "",
+      };
+      (SettingsService as any).cachedSettings = {
+        profiles: [defaultProfile],
+        keybinds: makeKeybinds(),
+      };
+
+      const tabBarUIMock = {
+        createTabWithProfile: mock(() => {}),
+        showProfileSelector: mock(() => {}),
+      };
+      const handler = new TabKeyboardHandler(tabManager, {
+        tabBarUI: tabBarUIMock as any,
+      });
+
+      const event = createKeyboardEvent("t", { ctrlKey: true, shiftKey: true });
+      const handled = handler.handleKeyDown(event);
+
+      expect(handled).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalled();
+      // Profile-aware path must still be used for new_tab
+      expect(tabBarUIMock.createTabWithProfile).toHaveBeenCalledWith(
+        defaultProfile,
+      );
+    });
+
+    test("custom keybind override (Ctrl+Alt+N) triggers global new tab", async () => {
+      (SettingsService as any).cachedSettings = {
+        profiles: [],
+        keybinds: makeKeybinds({ new_tab_global: "Ctrl+Alt+N" }),
+      };
+
+      const createTabSpy = mock(tabManager.createTab.bind(tabManager));
+      tabManager.createTab = createTabSpy as any;
+
+      // Default Ctrl+Shift+G should NOT trigger now
+      const eventDefault = createKeyboardEvent("g", {
+        ctrlKey: true,
+        shiftKey: true,
+      });
+      const handledDefault = keyboardHandler.handleKeyDown(eventDefault);
+      expect(handledDefault).toBe(false);
+      expect(createTabSpy).not.toHaveBeenCalled();
+
+      // Custom Ctrl+Alt+N must trigger
+      const eventCustom = createKeyboardEvent("n", {
+        ctrlKey: true,
+        altKey: true,
+      });
+      const handledCustom = keyboardHandler.handleKeyDown(eventCustom);
+      expect(handledCustom).toBe(true);
+      expect(eventCustom.preventDefault).toHaveBeenCalled();
+      expect(createTabSpy).toHaveBeenCalled();
+      expect(createTabSpy.mock.calls[0]?.length ?? 0).toBe(0);
     });
   });
 

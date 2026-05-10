@@ -113,6 +113,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     select_all: "Ctrl+Shift+A",
     search: "Ctrl+Shift+F",
     new_tab: "Ctrl+Shift+T",
+    new_tab_global: "Ctrl+Shift+G",
     close_tab: "Ctrl+Shift+W",
     next_tab: "Ctrl+PageDown",
     prev_tab: "Ctrl+PageUp",
@@ -188,13 +189,19 @@ describe("buildFontFamilyChain", () => {
   });
 
   test("primary + secondary", () => {
-    expect(buildFontFamilyChain("Fira Code", "", "Noto Sans JP")).toBe("Fira Code, Noto Sans JP");
+    expect(buildFontFamilyChain("Fira Code", "", "Noto Sans JP")).toBe(
+      "Fira Code, Noto Sans JP",
+    );
   });
 
   test("all three filled", () => {
-    expect(buildFontFamilyChain("JetBrains Mono", "Noto Color Emoji", "Noto Sans JP")).toBe(
-      "JetBrains Mono, Noto Color Emoji, Noto Sans JP",
-    );
+    expect(
+      buildFontFamilyChain(
+        "JetBrains Mono",
+        "Noto Color Emoji",
+        "Noto Sans JP",
+      ),
+    ).toBe("JetBrains Mono, Noto Color Emoji, Noto Sans JP");
   });
 
   test("emoji + secondary (no primary)", () => {
@@ -208,7 +215,9 @@ describe("buildFontFamilyChain", () => {
   });
 
   test("emoji only", () => {
-    expect(buildFontFamilyChain("", "Noto Color Emoji", "")).toBe("Noto Color Emoji");
+    expect(buildFontFamilyChain("", "Noto Color Emoji", "")).toBe(
+      "Noto Color Emoji",
+    );
   });
 });
 
@@ -371,12 +380,16 @@ describe("applyScrollbar", () => {
 
   test("should map 'always' to overflow 'scroll'", () => {
     applyScrollbar("always");
-    expect(mockStyle.properties["--terminal-scrollbar-overflow"]).toBe("scroll");
+    expect(mockStyle.properties["--terminal-scrollbar-overflow"]).toBe(
+      "scroll",
+    );
   });
 
   test("should map 'never' to overflow 'hidden'", () => {
     applyScrollbar("never");
-    expect(mockStyle.properties["--terminal-scrollbar-overflow"]).toBe("hidden");
+    expect(mockStyle.properties["--terminal-scrollbar-overflow"]).toBe(
+      "hidden",
+    );
   });
 
   test("should map 'auto' to overflow 'auto'", () => {
@@ -515,9 +528,7 @@ describe("applyTerminalColorScheme", () => {
   test("should set data attribute for named scheme", () => {
     applyTerminalColorScheme("solarized-dark");
 
-    expect(mockAttributes["data-terminal-color-scheme"]).toBe(
-      "solarized-dark",
-    );
+    expect(mockAttributes["data-terminal-color-scheme"]).toBe("solarized-dark");
   });
 
   test("should notify renderers with scheme name for named scheme", () => {
@@ -672,10 +683,22 @@ function createMockUserScheme(name: string): UserColorScheme {
     cursor: "#f8f8f2",
     selection: "#44475a",
     ansi_colors: [
-      "#21222c", "#ff5555", "#50fa7b", "#f1fa8c",
-      "#bd93f9", "#ff79c6", "#8be9fd", "#f8f8f2",
-      "#6272a4", "#ff6e6e", "#69ff94", "#ffffa5",
-      "#d6acff", "#ff92df", "#a4ffff", "#ffffff",
+      "#21222c",
+      "#ff5555",
+      "#50fa7b",
+      "#f1fa8c",
+      "#bd93f9",
+      "#ff79c6",
+      "#8be9fd",
+      "#f8f8f2",
+      "#6272a4",
+      "#ff6e6e",
+      "#69ff94",
+      "#ffffa5",
+      "#d6acff",
+      "#ff92df",
+      "#a4ffff",
+      "#ffffff",
     ],
   };
 }
@@ -725,7 +748,9 @@ describe("applyTerminalColorScheme with user schemes", () => {
     applyTerminalColorScheme("dracula", userSchemes);
 
     // Should use preset's background color
-    expect(mockStyle.properties["--terminal-background"]).toBe("rgb(40, 42, 54)");
+    expect(mockStyle.properties["--terminal-background"]).toBe(
+      "rgb(40, 42, 54)",
+    );
     expect(mockAttributes["data-terminal-color-scheme"]).toBe("dracula");
   });
 
@@ -764,8 +789,12 @@ describe("applyMarkdownSettings", () => {
   test("should set all CSS variables when fonts are non-empty", () => {
     applyMarkdownSettings("Georgia", "Fira Code", "Noto Color Emoji", 16);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
-    expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
-    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe("Noto Color Emoji");
+    expect(mockStyle.properties["--markdown-code-font-family"]).toBe(
+      "Fira Code",
+    );
+    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe(
+      "Noto Color Emoji",
+    );
     expect(mockStyle.properties["--markdown-body-font-size"]).toBe("16pt");
   });
 
@@ -777,7 +806,9 @@ describe("applyMarkdownSettings", () => {
     // Then clear it
     applyMarkdownSettings("", "Fira Code", "", 14);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBeUndefined();
-    expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
+    expect(mockStyle.properties["--markdown-code-font-family"]).toBe(
+      "Fira Code",
+    );
   });
 
   test("should remove code font CSS variable when empty string", () => {
@@ -788,19 +819,25 @@ describe("applyMarkdownSettings", () => {
 
   test("should remove emoji font CSS variable when empty string", () => {
     applyMarkdownSettings("Georgia", "Fira Code", "", 14);
-    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBeUndefined();
+    expect(
+      mockStyle.properties["--markdown-emoji-font-family"],
+    ).toBeUndefined();
   });
 
   test("should set emoji font CSS variable when non-empty", () => {
     applyMarkdownSettings("", "", "Noto Color Emoji", 14);
-    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe("Noto Color Emoji");
+    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe(
+      "Noto Color Emoji",
+    );
   });
 
   test("should remove font CSS variables for whitespace-only strings", () => {
     applyMarkdownSettings("  ", "  \t  ", "   ", 14);
     expect(mockStyle.properties["--markdown-body-font-family"]).toBeUndefined();
     expect(mockStyle.properties["--markdown-code-font-family"]).toBeUndefined();
-    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBeUndefined();
+    expect(
+      mockStyle.properties["--markdown-emoji-font-family"],
+    ).toBeUndefined();
   });
 
   test("should always set font size with pt unit", () => {
@@ -812,10 +849,19 @@ describe("applyMarkdownSettings", () => {
   });
 
   test("should trim font names before setting", () => {
-    applyMarkdownSettings("  Georgia  ", "  Fira Code  ", "  Noto Color Emoji  ", 14);
+    applyMarkdownSettings(
+      "  Georgia  ",
+      "  Fira Code  ",
+      "  Noto Color Emoji  ",
+      14,
+    );
     expect(mockStyle.properties["--markdown-body-font-family"]).toBe("Georgia");
-    expect(mockStyle.properties["--markdown-code-font-family"]).toBe("Fira Code");
-    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe("Noto Color Emoji");
+    expect(mockStyle.properties["--markdown-code-font-family"]).toBe(
+      "Fira Code",
+    );
+    expect(mockStyle.properties["--markdown-emoji-font-family"]).toBe(
+      "Noto Color Emoji",
+    );
   });
 });
 
@@ -826,7 +872,13 @@ describe("applyMarkdownSettings", () => {
 describe("applyMarkdownColorTheme", () => {
   test("with followUi=true uses UI theme and preset", () => {
     // followUi=true: should use uiTheme (dark) + uiPreset (blue), ignoring md values
-    applyMarkdownColorTheme({ followUi: true, mdTheme: "light", mdPreset: "green", uiTheme: "dark", uiPreset: "blue" });
+    applyMarkdownColorTheme({
+      followUi: true,
+      mdTheme: "light",
+      mdPreset: "green",
+      uiTheme: "dark",
+      uiPreset: "blue",
+    });
     // Verify blue/dark palette colors
     expect(mockStyle.properties["--markdown-bg"]).toBe("#111318");
     expect(mockStyle.properties["--markdown-link"]).toBe("#A8C7FA");
@@ -834,14 +886,26 @@ describe("applyMarkdownColorTheme", () => {
 
   test("with followUi=false uses markdown theme and preset", () => {
     // followUi=false: should use mdTheme (light) + mdPreset (green), ignoring ui values
-    applyMarkdownColorTheme({ followUi: false, mdTheme: "light", mdPreset: "green", uiTheme: "dark", uiPreset: "blue" });
+    applyMarkdownColorTheme({
+      followUi: false,
+      mdTheme: "light",
+      mdPreset: "green",
+      uiTheme: "dark",
+      uiPreset: "blue",
+    });
     // Verify green/light palette colors
     expect(mockStyle.properties["--markdown-bg"]).toBe("#F5FBF5");
     expect(mockStyle.properties["--markdown-link"]).toBe("#006D3E");
   });
 
   test("sets all 11 --markdown-* color CSS variables", () => {
-    applyMarkdownColorTheme({ followUi: false, mdTheme: "dark", mdPreset: "purple", uiTheme: "system", uiPreset: "purple" });
+    applyMarkdownColorTheme({
+      followUi: false,
+      mdTheme: "dark",
+      mdPreset: "purple",
+      uiTheme: "system",
+      uiPreset: "purple",
+    });
     const expectedVars = [
       "--markdown-bg",
       "--markdown-fg",
@@ -864,7 +928,13 @@ describe("applyMarkdownColorTheme", () => {
   test("system theme resolves to dark when prefers-color-scheme is dark", () => {
     mockMatchesDark = true;
     mockMediaQueryList.matches = true;
-    applyMarkdownColorTheme({ followUi: false, mdTheme: "system", mdPreset: "orange", uiTheme: "system", uiPreset: "purple" });
+    applyMarkdownColorTheme({
+      followUi: false,
+      mdTheme: "system",
+      mdPreset: "orange",
+      uiTheme: "system",
+      uiPreset: "purple",
+    });
     // Should use orange/dark palette
     expect(mockStyle.properties["--markdown-bg"]).toBe("#18120B");
     expect(mockStyle.properties["--markdown-link"]).toBe("#FFB877");
@@ -873,7 +943,13 @@ describe("applyMarkdownColorTheme", () => {
   test("system theme resolves to light when prefers-color-scheme is light", () => {
     mockMatchesDark = false;
     mockMediaQueryList.matches = false;
-    applyMarkdownColorTheme({ followUi: false, mdTheme: "system", mdPreset: "orange", uiTheme: "system", uiPreset: "purple" });
+    applyMarkdownColorTheme({
+      followUi: false,
+      mdTheme: "system",
+      mdPreset: "orange",
+      uiTheme: "system",
+      uiPreset: "purple",
+    });
     // Should use orange/light palette
     expect(mockStyle.properties["--markdown-bg"]).toBe("#FFF8F4");
     expect(mockStyle.properties["--markdown-link"]).toBe("#8B5000");
@@ -882,16 +958,34 @@ describe("applyMarkdownColorTheme", () => {
   test("followUi=true with system UI theme resolves correctly", () => {
     mockMatchesDark = true;
     mockMediaQueryList.matches = true;
-    applyMarkdownColorTheme({ followUi: true, mdTheme: "light", mdPreset: "green", uiTheme: "system", uiPreset: "purple" });
+    applyMarkdownColorTheme({
+      followUi: true,
+      mdTheme: "light",
+      mdPreset: "green",
+      uiTheme: "system",
+      uiPreset: "purple",
+    });
     // Should use purple/dark palette (UI is system->dark, purple preset)
     expect(mockStyle.properties["--markdown-bg"]).toBe("#141218");
     expect(mockStyle.properties["--markdown-link"]).toBe("#D0BCFF");
   });
 
   test("should clean up previous media listener when switching themes", () => {
-    applyMarkdownColorTheme({ followUi: false, mdTheme: "system", mdPreset: "purple", uiTheme: "system", uiPreset: "purple" });
+    applyMarkdownColorTheme({
+      followUi: false,
+      mdTheme: "system",
+      mdPreset: "purple",
+      uiTheme: "system",
+      uiPreset: "purple",
+    });
     expect(mockMediaChangeHandler).not.toBeNull();
-    applyMarkdownColorTheme({ followUi: false, mdTheme: "dark", mdPreset: "purple", uiTheme: "system", uiPreset: "purple" });
+    applyMarkdownColorTheme({
+      followUi: false,
+      mdTheme: "dark",
+      mdPreset: "purple",
+      uiTheme: "system",
+      uiPreset: "purple",
+    });
     expect(mockMediaChangeHandler).toBeNull();
   });
 });

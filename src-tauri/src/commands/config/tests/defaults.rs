@@ -58,6 +58,7 @@ fn test_keybind_settings_default() {
     assert_eq!(keybinds.select_all, "Ctrl+Shift+A");
     assert_eq!(keybinds.search, "Ctrl+Shift+F");
     assert_eq!(keybinds.new_tab, "Ctrl+Shift+T");
+    assert_eq!(keybinds.new_tab_global, "Ctrl+Shift+G");
     assert_eq!(keybinds.close_tab, "Ctrl+Shift+W");
     assert_eq!(keybinds.next_tab, "Ctrl+PageDown");
     assert_eq!(keybinds.prev_tab, "Ctrl+PageUp");

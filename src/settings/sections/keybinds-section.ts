@@ -46,6 +46,14 @@ export function renderKeybindsSection(
   );
   renderKeybindInput(
     tabGrid,
+    "new_tab_global",
+    t("settings.keybinds.newTabGlobal"),
+    kb.new_tab_global,
+    ctx.addContentListener,
+    ctx.keybindCtx,
+  );
+  renderKeybindInput(
+    tabGrid,
     "close_tab",
     t("settings.keybinds.closeTab"),
     kb.close_tab,

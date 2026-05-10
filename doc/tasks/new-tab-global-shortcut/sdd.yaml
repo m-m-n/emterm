@@ -1,0 +1,105 @@
+schema_version: 1
+feature: new-tab-global-shortcut
+created: 2026-05-10
+
+project:
+  components:
+    main:
+      language: rust+typescript
+      build_command: "bun tauri build"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --manifest-path src-tauri/Cargo.toml && bun test && bun run typecheck\""
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml && bun x prettier --write 'src/**/*.{ts,json}'"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: e6bb1061f919ce59438b36bc8f63e4f717866f2b
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: e6bb1061f919ce59438b36bc8f63e4f717866f2b
+  - id: verify-plan
+    status: completed
+    completed_at_commit: e6bb1061f919ce59438b36bc8f63e4f717866f2b
+  - id: implement
+    status: completed
+    completed_at_commit: e6bb1061f919ce59438b36bc8f63e4f717866f2b
+  - id: check
+    status: completed
+    completed_at_commit: e6bb1061f919ce59438b36bc8f63e4f717866f2b
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: e6bb1061f919ce59438b36bc8f63e4f717866f2b
+
+requirements:
+  FR1:
+    title: "Add new_tab_global field to KeybindSettings (Rust + TypeScript) with default Ctrl+Shift+G"
+    status: ok
+    tasks:
+      - backend-keybind-field
+      - frontend-type-and-dispatch
+    tests:
+      - TS-1
+      - TS-9
+  FR2:
+    title: "Dispatch Ctrl+Shift+G in TabKeyboardHandler to tabManager.createTab() directly (no profile selector)"
+    status: ok
+    tasks:
+      - frontend-type-and-dispatch
+    tests:
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-8
+  FR3:
+    title: "Add keybind input row for new_tab_global in Settings UI (Tab Management subsection, after new_tab)"
+    status: ok
+    tasks:
+      - settings-ui-and-i18n
+    tests:
+      - TS-10
+  FR4:
+    title: "Add i18n entry settings.keybinds.newTabGlobal (en/ja)"
+    status: ok
+    tasks:
+      - settings-ui-and-i18n
+    tests:
+      - TS-10
+  FR5:
+    title: "Preserve existing new_tab (Ctrl+Shift+T) behavior including default-profile auto-selection"
+    status: ok
+    tasks:
+      - frontend-type-and-dispatch
+    tests:
+      - TS-7
+  NFR1:
+    title: "Performance: keypress-to-tab latency on par with existing new_tab"
+    status: ok
+    tasks:
+      - frontend-type-and-dispatch
+    tests:
+      - TS-11
+  NFR2:
+    title: "Backward compatibility with existing config.json (missing field or null applies default)"
+    status: ok
+    tasks:
+      - backend-keybind-field
+    tests:
+      - TS-2
+      - TS-3
+  NFR3:
+    title: "Maintainability: declare Rust field via existing define_keybinds! macro"
+    status: ok
+    tasks:
+      - backend-keybind-field
+    tests:
+      - TS-1
+  NFR4:
+    title: "Cross-platform: works identically on Linux and Windows"
+    status: ok
+    tasks:
+      - frontend-type-and-dispatch
+    tests: []

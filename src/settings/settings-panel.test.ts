@@ -11,7 +11,13 @@ import type { FontListResponse } from "./types";
 
 const mockFontList: FontListResponse = {
   monospace_fonts: ["Courier New", "Fira Code", "JetBrains Mono"],
-  all_fonts: ["Arial", "Courier New", "Fira Code", "JetBrains Mono", "Noto Sans JP"],
+  all_fonts: [
+    "Arial",
+    "Courier New",
+    "Fira Code",
+    "JetBrains Mono",
+    "Noto Sans JP",
+  ],
   emoji_fonts: ["Noto Color Emoji"],
 };
 
@@ -27,12 +33,17 @@ mock.module("@tauri-apps/api/core", () => ({
   },
   Resource: class Resource {
     readonly rid: number;
-    constructor(rid: number) { this.rid = rid; }
-    close() { return Promise.resolve(); }
+    constructor(rid: number) {
+      this.rid = rid;
+    }
+    close() {
+      return Promise.resolve();
+    }
   },
   Channel: class Channel {},
   transformCallback: () => 0,
-  addPluginListener: () => Promise.resolve({ unregister: () => Promise.resolve() }),
+  addPluginListener: () =>
+    Promise.resolve({ unregister: () => Promise.resolve() }),
 }));
 
 // Mock settings-service (must include getCached for cross-file compatibility)
@@ -53,6 +64,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
     select_all: "Ctrl+Shift+A",
     search: "Ctrl+Shift+F",
     new_tab: "Ctrl+Shift+T",
+    new_tab_global: "Ctrl+Shift+G",
     close_tab: "Ctrl+Shift+W",
     next_tab: "Ctrl+PageDown",
     prev_tab: "Ctrl+PageUp",
@@ -201,41 +213,67 @@ describe("SettingsPanel render methods - description feature", () => {
   describe("aria-describedby is set on input elements", () => {
     test("should set aria-describedby on number inputs", () => {
       // Switch to terminal-appearance for font-size
-      const termAppTab = container.querySelector('[data-category-id="terminal-appearance"]') as HTMLButtonElement;
+      const termAppTab = container.querySelector(
+        '[data-category-id="terminal-appearance"]',
+      ) as HTMLButtonElement;
       termAppTab?.click();
-      const fontSizeInput = container.querySelector("#settings-font-size") as HTMLInputElement;
+      const fontSizeInput = container.querySelector(
+        "#settings-font-size",
+      ) as HTMLInputElement;
       expect(fontSizeInput).not.toBeNull();
-      expect(fontSizeInput?.getAttribute("aria-describedby")).toBe("settings-font-size-desc");
+      expect(fontSizeInput?.getAttribute("aria-describedby")).toBe(
+        "settings-font-size-desc",
+      );
     });
 
     test("should set aria-describedby on font picker inputs", () => {
       // Switch to terminal-appearance for font pickers
-      const termAppTab = container.querySelector('[data-category-id="terminal-appearance"]') as HTMLButtonElement;
+      const termAppTab = container.querySelector(
+        '[data-category-id="terminal-appearance"]',
+      ) as HTMLButtonElement;
       termAppTab?.click();
-      const fontFamilyInput = container.querySelector("#settings-font-family-primary") as HTMLInputElement;
+      const fontFamilyInput = container.querySelector(
+        "#settings-font-family-primary",
+      ) as HTMLInputElement;
       expect(fontFamilyInput).not.toBeNull();
-      expect(fontFamilyInput?.getAttribute("aria-describedby")).toBe("settings-font-family-primary-desc");
+      expect(fontFamilyInput?.getAttribute("aria-describedby")).toBe(
+        "settings-font-family-primary-desc",
+      );
     });
 
     test("should set aria-describedby on select elements", () => {
-      const languageTrigger = container.querySelector("#settings-language .md3-select-trigger");
+      const languageTrigger = container.querySelector(
+        "#settings-language .md3-select-trigger",
+      );
       expect(languageTrigger).not.toBeNull();
-      expect(languageTrigger?.getAttribute("aria-describedby")).toBe("settings-language-desc");
+      expect(languageTrigger?.getAttribute("aria-describedby")).toBe(
+        "settings-language-desc",
+      );
     });
 
     test("should set aria-describedby on select elements (ui-theme)", () => {
-      const uiThemeTrigger = container.querySelector("#settings-ui-theme .md3-select-trigger");
+      const uiThemeTrigger = container.querySelector(
+        "#settings-ui-theme .md3-select-trigger",
+      );
       expect(uiThemeTrigger).not.toBeNull();
-      expect(uiThemeTrigger?.getAttribute("aria-describedby")).toBe("settings-ui-theme-desc");
+      expect(uiThemeTrigger?.getAttribute("aria-describedby")).toBe(
+        "settings-ui-theme-desc",
+      );
     });
 
     test("should set aria-describedby on slider inputs", () => {
       // Check scroll-speed slider in terminal-behavior section (opacity removed)
-      const terminalTab = container.querySelector('[data-category-id="terminal-behavior"]') as HTMLButtonElement;
+      const terminalTab = container.querySelector(
+        '[data-category-id="terminal-behavior"]',
+      ) as HTMLButtonElement;
       terminalTab?.click();
-      const scrollSpeedSlider = container.querySelector("#settings-scroll-speed") as HTMLInputElement;
+      const scrollSpeedSlider = container.querySelector(
+        "#settings-scroll-speed",
+      ) as HTMLInputElement;
       expect(scrollSpeedSlider).not.toBeNull();
-      expect(scrollSpeedSlider?.getAttribute("aria-describedby")).toBe("settings-scroll-speed-desc");
+      expect(scrollSpeedSlider?.getAttribute("aria-describedby")).toBe(
+        "settings-scroll-speed-desc",
+      );
     });
   });
 
@@ -246,12 +284,16 @@ describe("SettingsPanel render methods - description feature", () => {
   describe("toggle rows use wrapper div for description", () => {
     beforeEach(() => {
       // Switch to terminal-behavior category which has toggle buttons
-      const terminalTab = container.querySelector('[data-category-id="terminal-behavior"]') as HTMLButtonElement;
+      const terminalTab = container.querySelector(
+        '[data-category-id="terminal-behavior"]',
+      ) as HTMLButtonElement;
       terminalTab?.click();
     });
 
     test("should wrap label and description in settings-toggle-label-group", () => {
-      const cursorBlinkToggle = container.querySelector("#settings-cursor-blink");
+      const cursorBlinkToggle = container.querySelector(
+        "#settings-cursor-blink",
+      );
       expect(cursorBlinkToggle).not.toBeNull();
 
       // Find the row containing this toggle
@@ -279,7 +321,9 @@ describe("SettingsPanel render methods - description feature", () => {
   describe("terminal section descriptions", () => {
     beforeEach(() => {
       // Switch to terminal-behavior category
-      const terminalTab = container.querySelector('[data-category-id="terminal-behavior"]') as HTMLButtonElement;
+      const terminalTab = container.querySelector(
+        '[data-category-id="terminal-behavior"]',
+      ) as HTMLButtonElement;
       terminalTab?.click();
     });
 
@@ -290,21 +334,33 @@ describe("SettingsPanel render methods - description feature", () => {
     });
 
     test("should set aria-describedby on cursor style select", () => {
-      const cursorStyleTrigger = container.querySelector("#settings-cursor-style .md3-select-trigger");
+      const cursorStyleTrigger = container.querySelector(
+        "#settings-cursor-style .md3-select-trigger",
+      );
       expect(cursorStyleTrigger).not.toBeNull();
-      expect(cursorStyleTrigger?.getAttribute("aria-describedby")).toBe("settings-cursor-style-desc");
+      expect(cursorStyleTrigger?.getAttribute("aria-describedby")).toBe(
+        "settings-cursor-style-desc",
+      );
     });
 
     test("should set aria-describedby on cursor blink toggle", () => {
-      const cursorBlinkToggle = container.querySelector("#settings-cursor-blink") as HTMLButtonElement;
+      const cursorBlinkToggle = container.querySelector(
+        "#settings-cursor-blink",
+      ) as HTMLButtonElement;
       expect(cursorBlinkToggle).not.toBeNull();
-      expect(cursorBlinkToggle?.getAttribute("aria-describedby")).toBe("settings-cursor-blink-desc");
+      expect(cursorBlinkToggle?.getAttribute("aria-describedby")).toBe(
+        "settings-cursor-blink-desc",
+      );
     });
 
     test("should set aria-describedby on scroll speed slider", () => {
-      const scrollSpeedSlider = container.querySelector("#settings-scroll-speed") as HTMLInputElement;
+      const scrollSpeedSlider = container.querySelector(
+        "#settings-scroll-speed",
+      ) as HTMLInputElement;
       expect(scrollSpeedSlider).not.toBeNull();
-      expect(scrollSpeedSlider?.getAttribute("aria-describedby")).toBe("settings-scroll-speed-desc");
+      expect(scrollSpeedSlider?.getAttribute("aria-describedby")).toBe(
+        "settings-scroll-speed-desc",
+      );
     });
   });
 });
@@ -323,7 +379,9 @@ describe("SettingsPanel - font picker input", () => {
     panel = new SettingsPanel({ container });
     await panel.init();
     // Switch to terminal-appearance category where font pickers are
-    const termAppearanceTab = container.querySelector('[data-category-id="terminal-appearance"]') as HTMLElement;
+    const termAppearanceTab = container.querySelector(
+      '[data-category-id="terminal-appearance"]',
+    ) as HTMLElement;
     termAppearanceTab?.click();
   });
 
@@ -333,20 +391,26 @@ describe("SettingsPanel - font picker input", () => {
   });
 
   test("should render readonly input for primary font", () => {
-    const input = container.querySelector("#settings-font-family-primary") as HTMLInputElement;
+    const input = container.querySelector(
+      "#settings-font-family-primary",
+    ) as HTMLInputElement;
     expect(input).not.toBeNull();
     expect(input.readOnly).toBe(true);
     expect(input.type).toBe("text");
   });
 
   test("should render readonly input for secondary font", () => {
-    const input = container.querySelector("#settings-font-family-secondary") as HTMLInputElement;
+    const input = container.querySelector(
+      "#settings-font-family-secondary",
+    ) as HTMLInputElement;
     expect(input).not.toBeNull();
     expect(input.readOnly).toBe(true);
   });
 
   test("should render readonly input for emoji font", () => {
-    const input = container.querySelector("#settings-font-family-emoji") as HTMLInputElement;
+    const input = container.querySelector(
+      "#settings-font-family-emoji",
+    ) as HTMLInputElement;
     expect(input).not.toBeNull();
     expect(input.readOnly).toBe(true);
   });
@@ -371,7 +435,8 @@ describe("SettingsPanel - font picker input", () => {
     // Override settings to have a font value
     mock.module("./settings-service", () => ({
       SettingsService: {
-        load: () => Promise.resolve(makeSettings({ font_family_primary: "Fira Code" })),
+        load: () =>
+          Promise.resolve(makeSettings({ font_family_primary: "Fira Code" })),
         save: () => Promise.resolve(),
         getCached: () => null,
       },
@@ -404,7 +469,9 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("clicking Change button transitions to font picker view", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     expect(changeBtn).not.toBeNull();
 
     changeBtn.click();
@@ -418,7 +485,9 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("font picker contains back button, search bar, and font list", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -433,7 +502,9 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("font list container has role=listbox", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -442,7 +513,9 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("font list items have role=option", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -454,7 +527,9 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("navigation tabs are disabled during font picker", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -466,7 +541,9 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("back button restores settings view", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
@@ -474,7 +551,9 @@ describe("SettingsPanel - font picker integration", () => {
     expect(container.querySelector(".font-picker")).not.toBeNull();
 
     // Click back
-    const backBtn = container.querySelector(".font-picker-back") as HTMLButtonElement;
+    const backBtn = container.querySelector(
+      ".font-picker-back",
+    ) as HTMLButtonElement;
     backBtn.click();
 
     // Settings view should be restored
@@ -483,12 +562,16 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("navigation tabs re-enabled after closing font picker", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Click back
-    const backBtn = container.querySelector(".font-picker-back") as HTMLButtonElement;
+    const backBtn = container.querySelector(
+      ".font-picker-back",
+    ) as HTMLButtonElement;
     backBtn.click();
 
     // Tabs should be re-enabled
@@ -500,12 +583,16 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("selecting a font restores settings view", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Click a font item
-    const firstItem = container.querySelector(".font-picker-item") as HTMLElement;
+    const firstItem = container.querySelector(
+      ".font-picker-item",
+    ) as HTMLElement;
     expect(firstItem).not.toBeNull();
     firstItem.click();
 
@@ -515,12 +602,17 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("search filters the font list", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const searchInput = container.querySelector(".font-picker-search-input") as HTMLInputElement;
-    const initialItemCount = container.querySelectorAll(".font-picker-item").length;
+    const searchInput = container.querySelector(
+      ".font-picker-search-input",
+    ) as HTMLInputElement;
+    const initialItemCount =
+      container.querySelectorAll(".font-picker-item").length;
 
     // Type a search query
     searchInput.value = "Courier";
@@ -532,11 +624,15 @@ describe("SettingsPanel - font picker integration", () => {
   });
 
   test("no results message shown when search has no matches", async () => {
-    const changeBtn = container.querySelector(".settings-font-picker-button") as HTMLButtonElement;
+    const changeBtn = container.querySelector(
+      ".settings-font-picker-button",
+    ) as HTMLButtonElement;
     changeBtn.click();
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const searchInput = container.querySelector(".font-picker-search-input") as HTMLInputElement;
+    const searchInput = container.querySelector(
+      ".font-picker-search-input",
+    ) as HTMLInputElement;
     searchInput.value = "xyznonexistentfont";
     searchInput.dispatchEvent(new Event("input"));
 
@@ -565,7 +661,10 @@ describe("SettingsPanel.filterFontList", () => {
 
   test("filters case-insensitively", () => {
     const fonts = ["Arial", "Courier", "Courier New"];
-    expect(panel.filterFontList("cour", fonts)).toEqual(["Courier", "Courier New"]);
+    expect(panel.filterFontList("cour", fonts)).toEqual([
+      "Courier",
+      "Courier New",
+    ]);
   });
 
   test("uppercase search matches", () => {

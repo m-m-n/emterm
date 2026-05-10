@@ -52,6 +52,30 @@ fn test_deserialize_null_keybind() {
 }
 
 #[test]
+fn test_deserialize_keybinds_missing_new_tab_global() {
+    // Older config files without new_tab_global must apply the default.
+    let json = r#"{"keybinds": {"new_tab": "Ctrl+Shift+T"}}"#;
+    let settings: AppSettings = serde_json::from_str(json).unwrap();
+    assert_eq!(settings.keybinds.new_tab_global, "Ctrl+Shift+G");
+}
+
+#[test]
+fn test_deserialize_keybinds_null_new_tab_global() {
+    // Explicit null for new_tab_global must apply the default
+    // via deserialize_null_keybind_new_tab_global.
+    let json = r#"{"keybinds": {"new_tab_global": null}}"#;
+    let settings: AppSettings = serde_json::from_str(json).unwrap();
+    assert_eq!(settings.keybinds.new_tab_global, "Ctrl+Shift+G");
+}
+
+#[test]
+fn test_deserialize_keybinds_custom_new_tab_global() {
+    let json = r#"{"keybinds": {"new_tab_global": "Ctrl+Alt+N"}}"#;
+    let settings: AppSettings = serde_json::from_str(json).unwrap();
+    assert_eq!(settings.keybinds.new_tab_global, "Ctrl+Alt+N");
+}
+
+#[test]
 fn test_deserialize_null_all_custom_defaults() {
     let json = r#"{
         "font_size": null,
