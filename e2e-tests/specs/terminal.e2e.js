@@ -34,8 +34,9 @@ describe("eMterm Terminal", () => {
 	});
 
 	it("should have terminal element", async () => {
-		// ターミナル要素が存在するか
-		const terminal = await $('[data-testid="terminal"]');
+		// ターミナル要素が存在するか (タブ生成後に .tab-content が動的に追加される)
+		const terminal = await $(".tab-content");
+		await terminal.waitForExist({ timeout: 10000 });
 		const isDisplayed = await terminal.isDisplayed();
 		console.log("Terminal element displayed:", isDisplayed);
 		expect(isDisplayed).toBe(true);
@@ -45,7 +46,8 @@ describe("eMterm Terminal", () => {
 
 	it("should accept keyboard input", async () => {
 		// ターミナルにフォーカス
-		const terminal = await $('[data-testid="terminal"]');
+		const terminal = await $(".tab-content");
+		await terminal.waitForExist({ timeout: 10000 });
 		await terminal.click();
 
 		// エコーコマンドを入力
@@ -77,7 +79,8 @@ describe("eMterm Terminal", () => {
 	});
 
 	it("should test SSH-like alternate buffer behavior", async () => {
-		const terminal = await $('[data-testid="terminal"]');
+		const terminal = await $(".tab-content");
+		await terminal.waitForExist({ timeout: 10000 });
 		await terminal.click();
 
 		// 代替バッファに切り替えるコマンド（例: less や vim）
@@ -142,7 +145,8 @@ describe("eMterm Terminal", () => {
 
 	// Ctrl+D tests must be last — they close the window and invalidate the session
 	it("should test Ctrl+D behavior", async () => {
-		const terminal = await $('[data-testid="terminal"]');
+		const terminal = await $(".tab-content");
+		await terminal.waitForExist({ timeout: 10000 });
 		await terminal.click();
 
 		// 現在の状態をスクリーンショット
