@@ -75,6 +75,15 @@ export class TabKeyboardHandler {
       return true;
     }
 
+    // New tab using global settings (no profile selector, no default profile).
+    // Placed BEFORE the profile-aware new_tab branch so that this global
+    // shortcut wins when both keybinds resolve to the same key combination.
+    if (matchKeybindStr(event, keybinds?.new_tab_global ?? "Ctrl+Shift+G")) {
+      event.preventDefault();
+      this.tabManager.createTab();
+      return true;
+    }
+
     // New tab (profile-aware)
     if (matchKeybindStr(event, keybinds?.new_tab ?? "Ctrl+Shift+T")) {
       event.preventDefault();
@@ -104,7 +113,13 @@ export class TabKeyboardHandler {
     }
 
     // Ctrl+1-8: Jump to tab by index (not configurable)
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && /^[1-8]$/.test(event.key)) {
+    if (
+      event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      /^[1-8]$/.test(event.key)
+    ) {
       event.preventDefault();
       const index = parseInt(event.key, 10) - 1;
       this.tabManager.activateTabByIndex(index);
@@ -112,7 +127,13 @@ export class TabKeyboardHandler {
     }
 
     // Ctrl+9: Jump to last tab (not configurable)
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key === "9") {
+    if (
+      event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      event.key === "9"
+    ) {
       event.preventDefault();
       this.tabManager.activateLastTab();
       return true;

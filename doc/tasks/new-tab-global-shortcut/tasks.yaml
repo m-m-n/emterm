@@ -1,0 +1,47 @@
+schema_version: 1
+feature: new-tab-global-shortcut
+source_plan: doc/tasks/new-tab-global-shortcut/IMPLEMENTATION.md
+
+tasks:
+  - id: backend-keybind-field
+    phase: 1
+    title: "Add new_tab_global to Rust KeybindSettings via define_keybinds! macro"
+    files:
+      - src-tauri/src/commands/config/settings.rs
+      - src-tauri/src/commands/config/tests/defaults.rs
+    requirements: [FR1, NFR2, NFR3]
+    tests: [TS-1, TS-2, TS-3]
+    estimated_effort: small
+    depends_on: []
+    status: completed
+
+  - id: frontend-type-and-dispatch
+    phase: 2
+    title: "Mirror field in TS KeybindSettings, dispatch Ctrl+Shift+G in TabKeyboardHandler, update test mocks"
+    files:
+      - src/settings/types.ts
+      - src/tab-bar/keyboard-handler.ts
+      - src/tab-bar/keyboard-handler.test.ts
+      - src/settings/settings-panel.test.ts
+      - src/settings/settings-applier.test.ts
+      - src/tab-bar/tab-manager.test.ts
+      - src/tab-bar/tab-bar-ui.test.ts
+      - src/tab-bar/drag-handler.test.ts
+    requirements: [FR1, FR2, FR5, NFR1, NFR4]
+    tests: [TS-4, TS-5, TS-6, TS-7, TS-8, TS-9, TS-11]
+    estimated_effort: medium
+    depends_on: [backend-keybind-field]
+    status: completed
+
+  - id: settings-ui-and-i18n
+    phase: 3
+    title: "Add Settings UI row for new_tab_global and i18n labels (en/ja)"
+    files:
+      - src/settings/sections/keybinds-section.ts
+      - src/i18n/locales/en.json
+      - src/i18n/locales/ja.json
+    requirements: [FR3, FR4]
+    tests: [TS-10]
+    estimated_effort: small
+    depends_on: [frontend-type-and-dispatch]
+    status: completed

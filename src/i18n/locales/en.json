@@ -147,6 +147,7 @@
       "search": "Search",
       "tabManagement": "Tab Management",
       "newTab": "New Tab",
+      "newTabGlobal": "New Tab (Global)",
       "closeTab": "Close Tab",
       "nextTab": "Next Tab",
       "prevTab": "Previous Tab",

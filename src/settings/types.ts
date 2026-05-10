@@ -100,7 +100,6 @@ export interface AppSettings {
   ssh_command_path: string;
   ssh_connections: SshConnection[];
 
-
   // SFTP
   sftp_max_concurrent_uploads: number;
 
@@ -155,6 +154,7 @@ export interface KeybindSettings {
   select_all: string;
   search: string;
   new_tab: string;
+  new_tab_global: string;
   close_tab: string;
   next_tab: string;
   prev_tab: string;
@@ -179,7 +179,14 @@ export interface FontListResponse {
   emoji_fonts: string[];
 }
 
-export type FontCategory = "primary" | "secondary" | "emoji" | "ui" | "markdown-body" | "markdown-code" | "markdown-emoji";
+export type FontCategory =
+  | "primary"
+  | "secondary"
+  | "emoji"
+  | "ui"
+  | "markdown-body"
+  | "markdown-code"
+  | "markdown-emoji";
 
 // ============================================================
 // Profile
@@ -195,7 +202,6 @@ export interface Profile {
   ssh_connection_name: string;
   wsl_distro_name: string;
 }
-
 
 // ============================================================
 // SSH Connection

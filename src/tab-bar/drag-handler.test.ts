@@ -9,18 +9,37 @@ mock.module("@tauri-apps/api/core", () => ({
   invoke: mock(async (cmd: string) => {
     if (cmd === "load_settings") {
       return {
-        font_size: 14, font_family: "monospace",
-        ui_theme: "dark", ui_theme_preset: "purple", terminal_color_scheme: "default",
-        padding: 8, scrollback_lines: 10000, show_scrollbar: "auto",
-        shell_path: "/bin/bash", shell_args: [], cursor_style: "block",
-        cursor_blink: true, scroll_speed: 3, bell_action: "none",
-        url_detection: true, copy_on_select: false,
+        font_size: 14,
+        font_family: "monospace",
+        ui_theme: "dark",
+        ui_theme_preset: "purple",
+        terminal_color_scheme: "default",
+        padding: 8,
+        scrollback_lines: 10000,
+        show_scrollbar: "auto",
+        shell_path: "/bin/bash",
+        shell_args: [],
+        cursor_style: "block",
+        cursor_blink: true,
+        scroll_speed: 3,
+        bell_action: "none",
+        url_detection: true,
+        copy_on_select: false,
         keybinds: {
-          copy: "Ctrl+Shift+C", paste: "Ctrl+Shift+V", select_all: "Ctrl+Shift+A",
-          search: "Ctrl+Shift+F", new_tab: "Ctrl+Shift+T", close_tab: "Ctrl+Shift+W",
-          next_tab: "Ctrl+PageDown", prev_tab: "Ctrl+PageUp",
-          zoom_in: "Ctrl+Plus", zoom_out: "Ctrl+Minus", zoom_reset: "Ctrl+0",
-          toggle_fullscreen: "F11", open_settings: "Ctrl+,",
+          copy: "Ctrl+Shift+C",
+          paste: "Ctrl+Shift+V",
+          select_all: "Ctrl+Shift+A",
+          search: "Ctrl+Shift+F",
+          new_tab: "Ctrl+Shift+T",
+          new_tab_global: "Ctrl+Shift+G",
+          close_tab: "Ctrl+Shift+W",
+          next_tab: "Ctrl+PageDown",
+          prev_tab: "Ctrl+PageUp",
+          zoom_in: "Ctrl+Plus",
+          zoom_out: "Ctrl+Minus",
+          zoom_reset: "Ctrl+0",
+          toggle_fullscreen: "F11",
+          open_settings: "Ctrl+,",
         },
         language: "auto",
         custom_color_schemes: [],
@@ -53,7 +72,14 @@ if (typeof globalThis.PointerEvent === "undefined") {
     readonly clientX: number;
     readonly clientY: number;
     readonly button: number;
-    constructor(type: string, init: PointerEventInit & { clientX?: number; clientY?: number; button?: number } = {}) {
+    constructor(
+      type: string,
+      init: PointerEventInit & {
+        clientX?: number;
+        clientY?: number;
+        button?: number;
+      } = {},
+    ) {
       super(type, init);
       this.clientX = init.clientX ?? 0;
       this.clientY = init.clientY ?? 0;
@@ -134,7 +160,11 @@ describe("TabDragHandler", () => {
 
       // Pointer down on tab element
       tabElement.dispatchEvent(
-        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 0 }),
+        createPointerEvent("pointerdown", {
+          clientX: 50,
+          clientY: 10,
+          button: 0,
+        }),
       );
 
       // Move past threshold on document
@@ -152,7 +182,11 @@ describe("TabDragHandler", () => {
       const tabElement = tabBarUI.getTabElement(tab!.id)!;
 
       tabElement.dispatchEvent(
-        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 0 }),
+        createPointerEvent("pointerdown", {
+          clientX: 50,
+          clientY: 10,
+          button: 0,
+        }),
       );
 
       // Move less than threshold
@@ -171,7 +205,11 @@ describe("TabDragHandler", () => {
 
       // Right-click
       tabElement.dispatchEvent(
-        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 2 }),
+        createPointerEvent("pointerdown", {
+          clientX: 50,
+          clientY: 10,
+          button: 2,
+        }),
       );
 
       document.dispatchEvent(
@@ -193,14 +231,24 @@ describe("TabDragHandler", () => {
 
       // Mock getBoundingClientRect for tab2
       tab2Element.getBoundingClientRect = () => ({
-        left: 100, right: 200, width: 100,
-        top: 0, bottom: 32, height: 32,
-        x: 100, y: 0, toJSON: () => {},
+        left: 100,
+        right: 200,
+        width: 100,
+        top: 0,
+        bottom: 32,
+        height: 32,
+        x: 100,
+        y: 0,
+        toJSON: () => {},
       });
 
       // Start drag on tab1
       tab1Element.dispatchEvent(
-        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 0 }),
+        createPointerEvent("pointerdown", {
+          clientX: 50,
+          clientY: 10,
+          button: 0,
+        }),
       );
 
       // Move over tab2 (past threshold, within tab2 bounds)
@@ -209,7 +257,9 @@ describe("TabDragHandler", () => {
       );
 
       expect(dragHandler.getDropIndicatorPosition()).toBeDefined();
-      expect(dragHandler.getDropIndicatorPosition()?.targetTabId).toBe(tab2!.id);
+      expect(dragHandler.getDropIndicatorPosition()?.targetTabId).toBe(
+        tab2!.id,
+      );
     });
   });
 
@@ -231,14 +281,24 @@ describe("TabDragHandler", () => {
 
       // Mock getBoundingClientRect for tab1
       tab1Element.getBoundingClientRect = () => ({
-        left: 0, right: 100, width: 100,
-        top: 0, bottom: 32, height: 32,
-        x: 0, y: 0, toJSON: () => {},
+        left: 0,
+        right: 100,
+        width: 100,
+        top: 0,
+        bottom: 32,
+        height: 32,
+        x: 0,
+        y: 0,
+        toJSON: () => {},
       });
 
       // Start drag on tab3
       tab3Element.dispatchEvent(
-        createPointerEvent("pointerdown", { clientX: 250, clientY: 10, button: 0 }),
+        createPointerEvent("pointerdown", {
+          clientX: 250,
+          clientY: 10,
+          button: 0,
+        }),
       );
 
       // Move to tab1 (before position - clientX=10 < midpoint=50)
@@ -267,7 +327,11 @@ describe("TabDragHandler", () => {
 
       // Start drag
       tab1Element.dispatchEvent(
-        createPointerEvent("pointerdown", { clientX: 50, clientY: 10, button: 0 }),
+        createPointerEvent("pointerdown", {
+          clientX: 50,
+          clientY: 10,
+          button: 0,
+        }),
       );
 
       // Move past threshold
