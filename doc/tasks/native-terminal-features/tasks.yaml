@@ -232,43 +232,43 @@ phases:
     tasks:
       - id: image-layer-skeleton
         title: Author native-poc/src/image/mod.rs with ImageLayer (textures + placements + lru + quota)
-        status: pending
+        status: completed
         files:
           - native-poc/src/image/mod.rs
       - id: image-overlay-pipeline
         title: Author native-poc/src/image/overlay.rs with a textured-quad wgpu pipeline (Rgba8UnormSrgb, source-over blend)
-        status: pending
+        status: completed
         files:
           - native-poc/src/image/overlay.rs
       - id: apc-dcs-parse-adapter
         title: Author native-poc/src/image/parse.rs with decode_apc(bytes, cursor_row, cursor_col, &mut ImageProcessor) and decode_dcs(bytes, cursor_row, cursor_col, &mut ImageProcessor) that bridge to term_images::image_proc::ImageProcessor::{process_kitty_command, process_sixel}. Cursor coordinates required because the trait method on_apc/on_dcs cannot see TerminalCore state.
-        status: pending
+        status: completed
         files:
           - native-poc/src/image/parse.rs
       - id: wire-callbacks-to-image-layer
         title: Replace on_apc/on_dcs log stubs in callbacks.rs with buffering (pending_apc/pending_dcs on NativeCallbackState); drain + decode + ImageLayer::ingest happen in Tab::pump (callbacks themselves cannot see cursor coords).
-        status: pending
+        status: completed
         files:
           - native-poc/src/callbacks.rs
           - native-poc/src/tabs.rs
       - id: settings-image-quota
         title: Add image_memory_quota_mb setting (default 320)
-        status: pending
+        status: completed
         files:
           - native-poc/src/settings.rs
       - id: image-response-drain
         title: Drain ImageEvent::Response in tabs::pump and feed back into PtySession::write
-        status: pending
+        status: completed
         files:
           - native-poc/src/tabs.rs
       - id: image-resize-recompute
         title: Recompute image placement pixel dimensions on resize while keeping (row,col) anchor
-        status: pending
+        status: completed
         files:
           - native-poc/src/image/mod.rs
       - id: native-poc-image-deps
         title: Add term_images path dep to native-poc/Cargo.toml
-        status: pending
+        status: completed
         files:
           - native-poc/Cargo.toml
 

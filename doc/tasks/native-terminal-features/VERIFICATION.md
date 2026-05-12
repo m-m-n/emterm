@@ -222,3 +222,21 @@ Phase 3 adds **no new E2E specs**: no headless driver covers tao+wgpu+egui. Manu
 | **Totals** | **45 TS + manual** | **46** | **0** | **14** |
 
 > **Legacy regression note**: `cargo test --workspace` counts as 1 automated check (covering 849 `app_lib` tests). Legacy E2E (`./scripts/run-e2e-docker.sh`) is excluded from this SDD's gate per SPEC.md SC-6 rationale.
+
+## Implementation Results — Phase 5 (inline image overlay)
+
+- **Build**: `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo build -p emterm-native-poc"` exit 0; full workspace `cargo build --workspace` exit 0.
+- **Tests**: `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --workspace"` exit 0.
+  - native-poc went from 66 → 104 passing tests (+38 new tests across `image::*` and `callbacks::tests`). Per-crate counts: app_lib 816+10+10+7+6, term_core 597, term_images 182, wasm 4, emterm-native-poc 104. Total: 1736 passing (vs. 1698 Phase 4 baseline).
+  - Specific TS coverage added:
+    - TS-22 (decode_apc reaches ImageEvent::Place) — `image::parse::tests::decode_apc_cursor_coords_propagate_to_place_events`.
+    - TS-23 (decode_dcs reaches ImageEvent::Place) — `image::parse::tests::decode_dcs_accepts_minimal_sixel_introducer` + symmetric Query/Delete coverage.
+    - TS-33 (Settings missing `image_memory_quota_mb` defaults to 320) — `settings::tests::default_image_memory_quota_is_320_mb`.
+    - TS-36 (ImageLayer evicts LRU when over quota) — `image::tests::record_image_evicts_lru_when_over_quota` + `record_image_evicts_multiple_when_huge_insert` + `touch_image_moves_to_mru_end`.
+    - TS-40 (resize keeps placements anchored) — `image::tests::resolve_pixel_placements_resize_anchor_stable`.
+    - TS-43 / TS-44 (malformed APC/DCS warn-and-continue) — `image::parse::tests::decode_apc_rejects_empty_payload` / `decode_apc_rejects_non_kitty_payload` / `decode_dcs_rejects_payload_without_q_introducer`.
+- **Code quality**: `cargo fmt --all -- --check` exit 0 (no diff). Clippy not re-run for Phase 5 (deferred to the final Phase 7 verification pass; the implementation introduces only warnings of the same kind already present in the tree: dead-code on currently-unused public helpers reserved for upcoming phases).
+- **Files created (Phase 5)**: `native-poc/src/image/mod.rs`, `native-poc/src/image/overlay.rs`, `native-poc/src/image/parse.rs`.
+- **Files modified (Phase 5)**: `native-poc/Cargo.toml` (term_images dep), `native-poc/src/main.rs` (module declaration), `native-poc/src/settings.rs` (image_memory_quota_mb), `native-poc/src/callbacks.rs` (pending_apc/dcs buffers), `native-poc/src/tabs.rs` (ImageProcessor + drain_and_decode_images + drain_image_events), `native-poc/src/window_host.rs` (ImageLayer + OverlayPipeline + image-overlay render pass).
+- **Existing E2E regression**: not re-run for Phase 5 in isolation; deferred to Phase 7 (per SPEC.md SC-6 rationale, legacy E2E is out of this SDD's gate, and tauri-driver-based E2E requires the legacy WebView build which is unaffected by native-poc changes).
+- **Known deferred**: image animation (Kitty `a=f`/`a=a`/`a=c`) — `ImageEvent::Animation` is logged at debug level and not applied to the GPU layer in Phase 5; tracked for a follow-up phase. Plumbing is in place (`split_image_events` + `ingest_state_events` already handle the variant cleanly).
