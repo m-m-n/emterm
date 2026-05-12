@@ -22,24 +22,74 @@
 //! - IME hooks (Phase 7).
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use egui::ViewportId;
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::ScreenDescriptor;
-use tao::dpi::PhysicalSize;
-use tao::event::{ElementState, Event, StartCause, WindowEvent};
+use tao::dpi::{PhysicalPosition, PhysicalSize};
+use tao::event::{ElementState, Event, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget};
 use tao::keyboard::Key as TaoKey;
 use tao::window::{Window, WindowBuilder};
 
 use crate::app::App;
 use crate::pty::input::{encode, Key, Modifiers};
+use crate::selection::{Pos, Selection, SelectionMode};
 
 /// Fallback cell size in physical pixels. Phase 4 replaces this with a real
 /// font-metrics-derived value.
 const FALLBACK_CELL_W: u32 = 9;
 const FALLBACK_CELL_H: u32 = 18;
+
+/// Maximum time between successive clicks that still counts as a "multi-click".
+/// Within this window the click counter increments; beyond it the counter
+/// resets to 1. 500 ms matches xterm's `multiClickTime` default.
+const MULTI_CLICK_WINDOW_MS: u128 = 500;
+
+/// Tracks last-click metadata so a double / triple click can be detected by
+/// comparing time + position against the next press.
+#[derive(Debug, Clone, Copy, Default)]
+struct ClickTracker {
+    last_press_at: Option<Instant>,
+    last_press_pos: Option<(u16, u16)>,
+    /// Click counter: 1 → Character, 2 → Word, 3 → Line. After 3, the next
+    /// press resets to 1.
+    count: u32,
+}
+
+/// Output of the click classifier: the click count and the matching
+/// selection mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClickClassification {
+    count: u32,
+    mode: SelectionMode,
+}
+
+impl ClickTracker {
+    /// Classify a new press at `(row, col)` happening at `now`. The internal
+    /// state is updated for the next call.
+    fn classify(&mut self, now: Instant, row: u16, col: u16) -> ClickClassification {
+        let mut count = 1u32;
+        if let (Some(prev_at), Some(prev_pos)) = (self.last_press_at, self.last_press_pos) {
+            let elapsed_ms = now.duration_since(prev_at).as_millis();
+            if elapsed_ms <= MULTI_CLICK_WINDOW_MS && prev_pos == (row, col) && self.count < 3 {
+                count = self.count + 1;
+            }
+        }
+        self.last_press_at = Some(now);
+        self.last_press_pos = Some((row, col));
+        self.count = count;
+        ClickClassification {
+            count,
+            mode: match count {
+                1 => SelectionMode::Character,
+                2 => SelectionMode::Word,
+                _ => SelectionMode::Line, // 3 or more
+            },
+        }
+    }
+}
 
 /// Owns the window, the wgpu surface, the egui context, and the
 /// egui-wgpu renderer.
@@ -57,6 +107,15 @@ pub struct WindowHost {
     /// `SurfaceError::Lost`).
     surface_dirty: bool,
     current_mods: Modifiers,
+    /// Last cursor position in physical pixels (updated on `CursorMoved`).
+    cursor_pos: PhysicalPosition<f64>,
+    /// Whether a left-button drag is in progress.
+    dragging: bool,
+    /// Click tracker for double / triple click detection.
+    click_tracker: ClickTracker,
+    /// Lazily-initialized arboard clipboard. We only fail-loud once if the
+    /// platform clipboard cannot be acquired (X11 without display, etc.).
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl WindowHost {
@@ -136,6 +195,14 @@ impl WindowHost {
 
         let pixels_per_point = window.scale_factor() as f32;
 
+        let clipboard = match arboard::Clipboard::new() {
+            Ok(c) => Some(c),
+            Err(e) => {
+                log::warn!("arboard clipboard unavailable: {e}");
+                None
+            }
+        };
+
         Self {
             window,
             instance,
@@ -148,6 +215,10 @@ impl WindowHost {
             pixels_per_point,
             surface_dirty: true,
             current_mods: Modifiers::NONE,
+            cursor_pos: PhysicalPosition::new(0.0, 0.0),
+            dragging: false,
+            click_tracker: ClickTracker::default(),
+            clipboard,
         }
     }
 
@@ -201,6 +272,118 @@ impl WindowHost {
         let cols = (w / FALLBACK_CELL_W).max(20).min(500) as u16;
         let rows = (usable_h / FALLBACK_CELL_H).max(5).min(200) as u16;
         (cols, rows)
+    }
+
+    /// Map a physical pixel position to a grid cell `(row, col)`. The top
+    /// bar reserved by `grid_size` accounts for `~36 px`; we use the same
+    /// offset so the cursor lands on the visually-correct row.
+    fn pixel_to_cell(&self, pos: PhysicalPosition<f64>, app: &App) -> (u16, u16) {
+        let top_bar_px = 36.0_f64;
+        let x = (pos.x.max(0.0)) / (FALLBACK_CELL_W as f64);
+        let y = ((pos.y - top_bar_px).max(0.0)) / (FALLBACK_CELL_H as f64);
+        let cols = app.cell_size.cols.max(1);
+        let rows = app.cell_size.rows.max(1);
+        let col = (x as u32).min((cols - 1) as u32) as u16;
+        let row = (y as u32).min((rows - 1) as u32) as u16;
+        (row, col)
+    }
+
+    /// Write `text` to the X11 PRIMARY selection (auto-copy on mouse-up).
+    /// No-op when arboard is unavailable.
+    fn set_primary(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let cb = match &mut self.clipboard {
+            Some(c) => c,
+            None => return,
+        };
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            use arboard::{LinuxClipboardKind, SetExtLinux};
+            if let Err(e) = cb.set().clipboard(LinuxClipboardKind::Primary).text(text) {
+                log::warn!("arboard PRIMARY set failed: {e}");
+            }
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        {
+            // PRIMARY is X11-only; fall through to CLIPBOARD on other
+            // platforms (Phase 4 targets Linux; this keeps the type checked).
+            if let Err(e) = cb.set_text(text) {
+                log::warn!("clipboard set_text fallback failed: {e}");
+            }
+        }
+    }
+
+    /// Write `text` to the CLIPBOARD selection (Ctrl+Shift+C).
+    fn set_clipboard(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let cb = match &mut self.clipboard {
+            Some(c) => c,
+            None => return,
+        };
+        if let Err(e) = cb.set_text(text) {
+            log::warn!("arboard CLIPBOARD set failed: {e}");
+        }
+    }
+
+    /// Read the CLIPBOARD selection (Ctrl+Shift+V).
+    fn get_clipboard(&mut self) -> Option<String> {
+        let cb = self.clipboard.as_mut()?;
+        match cb.get_text() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                log::warn!("arboard CLIPBOARD get failed: {e}");
+                None
+            }
+        }
+    }
+
+    /// Read the PRIMARY selection (middle-click paste).
+    fn get_primary(&mut self) -> Option<String> {
+        let cb = self.clipboard.as_mut()?;
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            use arboard::{GetExtLinux, LinuxClipboardKind};
+            match cb.get().clipboard(LinuxClipboardKind::Primary).text() {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    log::warn!("arboard PRIMARY get failed: {e}");
+                    None
+                }
+            }
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        {
+            match cb.get_text() {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    log::warn!("clipboard get_text fallback failed: {e}");
+                    None
+                }
+            }
+        }
+    }
+
+    /// Feed pasted text to the active tab, wrapping it in bracketed paste
+    /// when DECSET 2004 is on.
+    fn deliver_paste(&self, app: &App, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let tab = match app.active_tab() {
+            Some(t) => t,
+            None => return,
+        };
+        let bracketed = tab
+            .core
+            .lock()
+            .get_mode(term_core::terminal_core::MODE_BRACKETED_PASTE);
+        if let Some(pty) = &tab.pty {
+            pty.write_paste(text, bracketed);
+        }
     }
 
     /// Run a single egui frame and present.
@@ -498,10 +681,85 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
                 };
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                if let Some(bytes) = tao_key_to_bytes(&event, host.current_mods) {
-                    if let Some(tab) = app.active_tab() {
-                        tab.write(bytes);
+                // Phase 4 chords intercept the generic encoder path:
+                //   Ctrl+Shift+C  → copy current selection to CLIPBOARD
+                //   Ctrl+Shift+V  → paste CLIPBOARD into PTY (bracketed if 2004)
+                //   Shift+PageUp  → scroll back one page
+                //   Shift+PageDown → scroll forward one page
+                //   Shift+Home    → scroll to top of scrollback
+                //   Shift+End     → scroll back to live tail
+                let handled = handle_special_chord(&event, host.current_mods, &mut host, &mut app);
+                if !handled {
+                    if let Some(bytes) = tao_key_to_bytes(&event, host.current_mods) {
+                        if let Some(tab) = app.active_tab() {
+                            tab.write(bytes);
+                        }
                     }
+                }
+                host.window().request_redraw();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                host.cursor_pos = position;
+                if host.dragging {
+                    let (row, col) = host.pixel_to_cell(position, &app);
+                    if let Some(sel) = app.selection.as_mut() {
+                        if let Some(tab) = app.tabs.get(app.active) {
+                            let core = tab.core.lock();
+                            sel.extend(Pos { row, col }, &core);
+                        }
+                    }
+                    host.window().request_redraw();
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => match (button, state) {
+                (MouseButton::Left, ElementState::Pressed) => {
+                    let (row, col) = host.pixel_to_cell(host.cursor_pos, &app);
+                    let cls = host.click_tracker.classify(Instant::now(), row, col);
+                    let mut sel = Selection::new_with_mode(Pos { row, col }, cls.mode);
+                    // For Word / Line, snap immediately at press.
+                    if cls.mode != SelectionMode::Character {
+                        if let Some(tab) = app.tabs.get(app.active) {
+                            let core = tab.core.lock();
+                            sel.extend(Pos { row, col }, &core);
+                        }
+                    }
+                    app.selection = Some(sel);
+                    host.dragging = true;
+                    host.window().request_redraw();
+                }
+                (MouseButton::Left, ElementState::Released) => {
+                    host.dragging = false;
+                    // PRIMARY auto-copy on mouse-up.
+                    if let Some(sel) = app.selection {
+                        if let Some(tab) = app.tabs.get(app.active) {
+                            let core = tab.core.lock();
+                            let text = sel.resolve(&core);
+                            drop(core);
+                            host.set_primary(&text);
+                        }
+                    }
+                }
+                (MouseButton::Middle, ElementState::Pressed) => {
+                    if let Some(text) = host.get_primary() {
+                        host.deliver_paste(&app, &text);
+                    }
+                }
+                _ => {}
+            },
+            WindowEvent::MouseWheel { delta, .. } => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => (p.y as f32) / (FALLBACK_CELL_H as f32),
+                    _ => 0.0,
+                };
+                // Convention: positive = scroll up (away from user) ⇒ into scrollback.
+                let step = 3u32;
+                if lines > 0.0 {
+                    app.scroll_up_by(step);
+                    host.window().request_redraw();
+                } else if lines < 0.0 {
+                    app.scroll_down_by(step);
+                    host.window().request_redraw();
                 }
             }
             _ => {}
@@ -514,4 +772,140 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
         }
         _ => {}
     });
+}
+
+/// Intercept Phase 4 chords. Returns `true` when the event was consumed
+/// (the generic encoder should not run).
+fn handle_special_chord(
+    event: &tao::event::KeyEvent,
+    mods: Modifiers,
+    host: &mut WindowHost,
+    app: &mut App,
+) -> bool {
+    // Clipboard chords need Ctrl+Shift+<char>. tao reports the Character
+    // logical key for letter keys.
+    if mods.ctrl && mods.shift {
+        if let TaoKey::Character(s) = &event.logical_key {
+            let lower = s.to_ascii_lowercase();
+            match lower.as_str() {
+                "c" => {
+                    // Copy current selection to CLIPBOARD.
+                    if let Some(sel) = app.selection {
+                        if let Some(tab) = app.tabs.get(app.active) {
+                            let core = tab.core.lock();
+                            let text = sel.resolve(&core);
+                            drop(core);
+                            host.set_clipboard(&text);
+                        }
+                    }
+                    return true;
+                }
+                "v" => {
+                    if let Some(text) = host.get_clipboard() {
+                        host.deliver_paste(app, &text);
+                    }
+                    return true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Scrollback chords use Shift + nav keys.
+    if mods.shift && !mods.ctrl && !mods.alt {
+        match event.logical_key {
+            TaoKey::PageUp => {
+                let rows = app.cell_size.rows.max(1) as u32;
+                app.scroll_up_by(rows);
+                return true;
+            }
+            TaoKey::PageDown => {
+                let rows = app.cell_size.rows.max(1) as u32;
+                app.scroll_down_by(rows);
+                return true;
+            }
+            TaoKey::Home => {
+                app.scroll_to_top();
+                return true;
+            }
+            TaoKey::End => {
+                app.scroll_to_live();
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn click_classifier_single_click_is_character() {
+        let mut t = ClickTracker::default();
+        let now = Instant::now();
+        let cls = t.classify(now, 5, 10);
+        assert_eq!(cls.count, 1);
+        assert_eq!(cls.mode, SelectionMode::Character);
+    }
+
+    #[test]
+    fn click_classifier_double_click_within_window_at_same_cell() {
+        let mut t = ClickTracker::default();
+        let t0 = Instant::now();
+        let _ = t.classify(t0, 5, 10);
+        let t1 = t0 + Duration::from_millis(200);
+        let cls = t.classify(t1, 5, 10);
+        assert_eq!(cls.count, 2);
+        assert_eq!(cls.mode, SelectionMode::Word);
+    }
+
+    #[test]
+    fn click_classifier_triple_click_at_same_cell() {
+        let mut t = ClickTracker::default();
+        let t0 = Instant::now();
+        let _ = t.classify(t0, 5, 10);
+        let _ = t.classify(t0 + Duration::from_millis(100), 5, 10);
+        let cls = t.classify(t0 + Duration::from_millis(200), 5, 10);
+        assert_eq!(cls.count, 3);
+        assert_eq!(cls.mode, SelectionMode::Line);
+    }
+
+    #[test]
+    fn click_classifier_resets_after_triple() {
+        let mut t = ClickTracker::default();
+        let t0 = Instant::now();
+        let _ = t.classify(t0, 5, 10);
+        let _ = t.classify(t0 + Duration::from_millis(100), 5, 10);
+        let _ = t.classify(t0 + Duration::from_millis(200), 5, 10);
+        // Fourth click within window collapses back to Character.
+        let cls = t.classify(t0 + Duration::from_millis(300), 5, 10);
+        assert_eq!(cls.count, 1);
+        assert_eq!(cls.mode, SelectionMode::Character);
+    }
+
+    #[test]
+    fn click_classifier_resets_when_position_changes() {
+        let mut t = ClickTracker::default();
+        let t0 = Instant::now();
+        let _ = t.classify(t0, 5, 10);
+        let cls = t.classify(t0 + Duration::from_millis(100), 5, 11);
+        // Different cell → back to single click.
+        assert_eq!(cls.count, 1);
+        assert_eq!(cls.mode, SelectionMode::Character);
+    }
+
+    #[test]
+    fn click_classifier_resets_when_window_expires() {
+        let mut t = ClickTracker::default();
+        let t0 = Instant::now();
+        let _ = t.classify(t0, 5, 10);
+        // 600 ms > MULTI_CLICK_WINDOW_MS (500 ms) → reset.
+        let cls = t.classify(t0 + Duration::from_millis(600), 5, 10);
+        assert_eq!(cls.count, 1);
+        assert_eq!(cls.mode, SelectionMode::Character);
+    }
 }
