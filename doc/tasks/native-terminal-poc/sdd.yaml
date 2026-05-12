@@ -1,0 +1,226 @@
+schema_version: 1
+feature: native-terminal-poc
+created: 2026-05-12
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cargo build --manifest-path native-poc/Cargo.toml"
+      test_command: "cargo test --manifest-path native-poc/Cargo.toml"
+      format_command: "cargo fmt --manifest-path native-poc/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+  - id: implement
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+    notes: |
+      Implemented Phases 1-3 fully and Phase 4 partially (render + theme +
+      selection-state). Phase 4 remaining (copy-shortcut, paste-shortcut wiring
+      in window_host) and Phases 5-8 are pending — they require additional
+      implementation sessions because the full scope (multi-week per
+      restruct.md) exceeds a single SDD run. cargo build / cargo test
+      (45 unit + integration tests) / cargo fmt all pass.
+  - id: check
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: needs_update
+    notes: |
+      Deferred: verify depends on Phases 5-8 (tabs, Wry Markdown viewer,
+      settings/IME, 8h Claude Code session) which are not yet implemented.
+      Resume after the remaining phases are coded. /em-sdd:sdd will pick this
+      up automatically on re-run.
+
+requirements:
+  FR1:
+    title: Native window (tao + wgpu + egui)
+    status: ok
+    tasks:
+      - scaffold-cargo-project
+      - boot-tao-event-loop
+      - attach-wgpu-surface
+      - wgpu-surface-recovery
+      - wire-egui-integration
+      - render-placeholder-ui
+      - initialize-logging
+    tests:
+      - TS-28
+    notes: "Phase 1 acceptance + manual launch; TS-28 covers device-loss recovery."
+  FR2:
+    title: PTY bridge via portable-pty
+    status: ok
+    tasks:
+      - spawn-pty
+      - pty-reader-thread
+      - pty-writer-thread
+      - key-encoder
+      - resize-plumbing
+      - pty-lifecycle-teardown
+      - pty-eof-handling
+    tests:
+      - TS-9
+      - TS-12
+      - TS-20
+      - TS-21
+      - TS-27
+      - TS-29
+  FR3:
+    title: Minimal ANSI parser (C0/CSI/OSC subset)
+    status: assumed
+    assumption: "Cover the baseline set in SPEC.md (C0, CSI cursor/erase/SGR/DECSTBM, alt-screen DEC modes, OSC 0/2/emterm-ext). Extra sequences are added incrementally when Claude Code surfaces a gap."
+    tasks:
+      - parser-state-machine
+      - parser-c0
+      - parser-csi-cursor-erase
+      - parser-csi-sgr
+      - parser-scroll-altscreen
+      - parser-osc-basic-and-ext
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-23
+  FR4:
+    title: Grid rendering on egui+wgpu
+    status: ok
+    tasks:
+      - per-frame-render
+      - theme-palette
+    tests:
+      - TS-23
+  FR5:
+    title: Scrollback (~1000 lines default)
+    status: ok
+    tasks:
+      - grid-and-scrollback
+    tests:
+      - TS-8
+  FR6:
+    title: Mouse-drag selection + Ctrl+Shift+C copy
+    status: ok
+    tasks:
+      - selection-state
+      - copy-shortcut
+    tests:
+      - TS-10
+      - TS-16
+  FR7:
+    title: Ctrl+Shift+V paste (with bracketed paste)
+    status: ok
+    tasks:
+      - paste-shortcut
+    tests:
+      - TS-16
+      - TS-17
+  FR8:
+    title: Tabs for multiple PTYs (no mux/split)
+    status: ok
+    tasks:
+      - tab-vector-in-app
+      - tab-bar-widget
+      - keybindings-map
+      - tab-focus-routing
+      - empty-window-policy
+    tests:
+      - TS-15
+      - TS-22
+  FR9:
+    title: emterm OSC extension triggers Wry viewer spawn
+    status: ok
+    tasks:
+      - parser-osc-basic-and-ext
+      - osc-decode
+      - main-thread-queue-drain
+    tests:
+      - TS-7
+      - TS-13
+      - TS-14
+  FR10:
+    title: Wry Markdown viewer reuses src/markdown/ assets
+    status: assumed
+    assumption: "Default to string-load (embed HTML harness via include_str, inject Markdown payload through Wry's initialization script). Switch to local URL only if string-load proves infeasible."
+    tasks:
+      - wry-markdown-spawner
+      - payload-injection
+      - viewer-lifecycle
+    tests:
+      - TS-19
+      - TS-26
+  FR11:
+    title: Load existing settings.json (best effort)
+    status: ok
+    tasks:
+      - settings-model
+      - settings-locate-and-parse
+      - settings-apply
+    tests:
+      - TS-11
+      - TS-24
+  FR12:
+    title: Linux fcitx5 IME (preedit/commit/candidate)
+    status: assumed
+    assumption: "Start with egui's built-in IME (preedit/commit hooks). If candidate window position or commit fails on fcitx5, fall back to tao raw-IME glue limited to the terminal grid widget."
+    tasks:
+      - ime-egui-builtin
+      - ime-tao-raw-fallback
+    tests:
+      - TS-18
+  NFR1:
+    title: 8h Claude Code stability (no screen loss, crash, or monotonic memory growth)
+    status: ok
+    tasks:
+      - long-run-claude-code
+    tests:
+      - TS-25
+  NFR2:
+    title: Input latency subjectively not worse than current Tauri build
+    status: ok
+    tasks:
+      - verification-checklist-walkthrough
+    tests: []
+    notes: "Subjective comparison; covered by VERIFICATION.md Performance Verification → Input latency. No TS-ID."
+  NFR3:
+    title: cargo build sampling shorter than current Tauri build
+    status: assumed
+    assumption: "Qualitative acceptance: clean build and incremental build both shorter than the current src-tauri build measured on the same dev machine. No numeric threshold."
+    tasks:
+      - build-time-sampling
+    tests: []
+    notes: "Captured in VERIFICATION.md Build-time sampling section. No TS-ID."
+  NFR4:
+    title: Logging via log + env_logger
+    status: ok
+    tasks:
+      - initialize-logging
+    tests: []
+    notes: "Validated by manual RUST_LOG=info run. No TS-ID."
+  NFR5:
+    title: Module separation by responsibility
+    status: ok
+    tasks: []
+    tests: []
+    notes: "Structural; validated by VERIFICATION.md File Structure Verification section. Covered by all phase tasks."
+  NFR6:
+    title: Linux-only support (Ubuntu 22.04 family)
+    status: ok
+    tasks:
+      - scaffold-cargo-project
+    tests: []
+    notes: "Implicit through Cargo target and dependencies. No TS-ID."

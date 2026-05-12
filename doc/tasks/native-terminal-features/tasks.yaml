@@ -1,0 +1,297 @@
+schema_version: 1
+feature: native-terminal-features
+
+phases:
+  - id: phase-0
+    name: wgpu surface-initialization fix
+    summary: Eliminate the ERROR_SURFACE_LOST_KHR panic in WindowHost::new so downstream phases can be exercised manually and the 12h stability gate is reachable.
+    estimated_effort: small
+    tasks:
+      - id: defer-surface-configure
+        title: Defer surface.configure out of WindowHost::new into the first redraw path, gated by surface_dirty
+        status: completed
+        files:
+          - native-poc/src/window_host.rs
+      - id: lost-outdated-resilient
+        title: Ensure Lost/Outdated arm sets surface_dirty=true and requests redraw without panicking
+        status: completed
+        files:
+          - native-poc/src/window_host.rs
+      - id: phase0-smoke-validate
+        title: Confirm cargo run -p emterm-native-poc launches without panic on three consecutive runs (manual)
+        status: pending
+        files: []
+
+  - id: phase-1
+    name: Extract crates/term_images shared crate
+    summary: Move src-tauri/src/image/ and src-tauri/src/ansi/{apc,dcs}.rs into a new tauri-free workspace crate consumed by both src-tauri and native-poc.
+    estimated_effort: medium
+    tasks:
+      - id: confirm-no-tauri-refs
+        title: Confirm the to-be-moved files have no tauri::* references (one-time grep)
+        status: completed
+        files: []
+      - id: scaffold-term-images-crate
+        title: Create crates/term_images/Cargo.toml + src/lib.rs with module roots
+        status: completed
+        files:
+          - crates/term_images/Cargo.toml
+          - crates/term_images/src/lib.rs
+      - id: git-mv-image-and-ansi
+        title: git mv src-tauri/src/image/ -> crates/term_images/src/image_proc/ and src-tauri/src/ansi/{apc,dcs}.rs -> crates/term_images/src/ansi/
+        status: completed
+        files:
+          - crates/term_images/src/image_proc/
+          - crates/term_images/src/ansi/
+      - id: fix-internal-paths
+        title: Adjust use paths inside moved files (crate::ansi::* etc.)
+        status: completed
+        files:
+          - crates/term_images/src/image_proc/
+          - crates/term_images/src/ansi/
+      - id: add-workspace-member
+        title: Add crates/term_images to root Cargo.toml [workspace] members
+        status: completed
+        files:
+          - Cargo.toml
+      - id: src-tauri-reexport
+        title: Re-export term_images modules from src-tauri/src/lib.rs to keep its internal callers unchanged
+        status: completed
+        files:
+          - src-tauri/Cargo.toml
+          - src-tauri/src/lib.rs
+      - id: phase1-workspace-build
+        title: cargo build --workspace and cargo test --workspace exit 0 (Docker)
+        status: completed
+        files: []
+      - id: phase1-legacy-e2e
+        title: ./scripts/run-e2e-docker.sh exits 0 (legacy build regression gate)
+        status: pending
+        files: []
+
+  - id: phase-2
+    name: Dirty-row diff renderer
+    summary: Replace native-poc/src/render/'s full-frame redraw with a per-row diff driven by term_core::TerminalCore::get_dirty_rows.
+    estimated_effort: medium
+    tasks:
+      - id: dirty-union
+        title: Build dirty_rows_this_frame union of term_core dirty rows + cursor + selection deltas
+        status: pending
+        files:
+          - native-poc/src/app.rs
+      - id: refactor-draw-loop
+        title: Refactor Renderer::draw to iterate the dirty set instead of 0..rows
+        status: pending
+        files:
+          - native-poc/src/render/mod.rs
+      - id: ghost-prevention
+        title: Capture last-frame cursor/selection rows so vacated rows are also redrawn
+        status: pending
+        files:
+          - native-poc/src/app.rs
+      - id: full-redraw-fallback
+        title: Add debug-only EMTERM_FULL_REDRAW env var that forces full redraw (LOG_RENDER_FALLBACK)
+        status: pending
+        files:
+          - native-poc/src/render/mod.rs
+      - id: clear-dirty
+        title: Call TerminalCore::clear_dirty() once per frame after consuming dirty set
+        status: pending
+        files:
+          - native-poc/src/window_host.rs
+
+  - id: phase-3
+    name: Cursor + SGR rendering full reflection
+    summary: Render every SGR attribute and cursor shape/blink/visibility/color state that term_core already tracks.
+    estimated_effort: medium
+    tasks:
+      - id: cursor-state-getters
+        title: Wire term_core cursor getters (style/blink/visible/fg/bg) into renderer
+        status: pending
+        files:
+          - native-poc/src/render/mod.rs
+      - id: palette-resolver
+        title: Build palette resolver in theme.rs handling indexed-256 + OSC 4 overrides
+        status: pending
+        files:
+          - native-poc/src/render/theme.rs
+      - id: sgr-cell-style
+        title: Extend cell_style to honor bold/italic/underline (single/double/curly + SGR 58)/reverse/blink/conceal/strikethrough
+        status: pending
+        files:
+          - native-poc/src/render/mod.rs
+      - id: ambiguous-width-plumb
+        title: Plumb ambiguous_width_mode through Settings -> App -> Renderer
+        status: pending
+        files:
+          - native-poc/src/settings.rs
+          - native-poc/src/render/mod.rs
+      - id: cursor-blink-timer
+        title: Implement cursor blink timer (~530 ms xterm-equivalent) that marks cursor row dirty on toggle
+        status: pending
+        files:
+          - native-poc/src/app.rs
+
+  - id: phase-4
+    name: Selection + scrollback + paste
+    summary: Word/line selection, PRIMARY auto-copy, CLIPBOARD shortcuts, middle-click paste, bracketed paste, 10000-line scrollback with alt-screen suppression and auto-follow control.
+    estimated_effort: large
+    tasks:
+      - id: selection-mode-extension
+        title: Extend Selection struct with mode (Character/Word/Line) and word/line range resolution
+        status: pending
+        files:
+          - native-poc/src/selection.rs
+      - id: click-classifier
+        title: Detect double/triple click using 500 ms window in window_host.rs
+        status: pending
+        files:
+          - native-poc/src/window_host.rs
+      - id: arboard-clipboard-hooks
+        title: Hook PRIMARY auto-copy on mouse-up; CLIPBOARD on Ctrl+Shift+C; paste on Ctrl+Shift+V/middle-click
+        status: pending
+        files:
+          - native-poc/src/window_host.rs
+          - native-poc/src/selection.rs
+      - id: bracketed-paste
+        title: Implement bracketed_paste helper + sanitize_bracket_sequences; read DECSET 2004 from term_core
+        status: pending
+        files:
+          - native-poc/src/selection.rs
+          - native-poc/src/pty/mod.rs
+      - id: scrollback-state-machine
+        title: Introduce ScrollPosition enum (Live | OffsetFromLive) in app.rs with alt-screen suppression and auto-follow rule
+        status: pending
+        files:
+          - native-poc/src/app.rs
+      - id: scrollback-keybindings
+        title: Route wheel / Shift+PageUp/Down / Shift+Home/End to ScrollPosition
+        status: pending
+        files:
+          - native-poc/src/window_host.rs
+      - id: scrollback-settings
+        title: Add scrollback_lines setting (default 10000) and plumb to ring_buffer cap at Tab::spawn_shell
+        status: pending
+        files:
+          - native-poc/src/settings.rs
+          - native-poc/src/tabs.rs
+
+  - id: phase-5
+    name: Inline image overlay layer (Kitty + SIXEL)
+    summary: Render Kitty Graphics Protocol and SIXEL payloads inline via a new native-poc/src/image/ module backed by term_images.
+    estimated_effort: large
+    tasks:
+      - id: image-layer-skeleton
+        title: Author native-poc/src/image/mod.rs with ImageLayer (textures + placements + lru + quota)
+        status: pending
+        files:
+          - native-poc/src/image/mod.rs
+      - id: image-overlay-pipeline
+        title: Author native-poc/src/image/overlay.rs with a textured-quad wgpu pipeline (Rgba8UnormSrgb, source-over blend)
+        status: pending
+        files:
+          - native-poc/src/image/overlay.rs
+      - id: apc-dcs-parse-adapter
+        title: Author native-poc/src/image/parse.rs with decode_apc(bytes, cursor_row, cursor_col, &mut ImageProcessor) and decode_dcs(bytes, cursor_row, cursor_col, &mut ImageProcessor) that bridge to term_images::image_proc::ImageProcessor::{process_kitty_command, process_sixel}. Cursor coordinates required because the trait method on_apc/on_dcs cannot see TerminalCore state.
+        status: pending
+        files:
+          - native-poc/src/image/parse.rs
+      - id: wire-callbacks-to-image-layer
+        title: Replace on_apc/on_dcs log stubs in callbacks.rs with buffering (pending_apc/pending_dcs on NativeCallbackState); drain + decode + ImageLayer::ingest happen in Tab::pump (callbacks themselves cannot see cursor coords).
+        status: pending
+        files:
+          - native-poc/src/callbacks.rs
+          - native-poc/src/tabs.rs
+      - id: settings-image-quota
+        title: Add image_memory_quota_mb setting (default 320)
+        status: pending
+        files:
+          - native-poc/src/settings.rs
+      - id: image-response-drain
+        title: Drain ImageEvent::Response in tabs::pump and feed back into PtySession::write
+        status: pending
+        files:
+          - native-poc/src/tabs.rs
+      - id: image-resize-recompute
+        title: Recompute image placement pixel dimensions on resize while keeping (row,col) anchor
+        status: pending
+        files:
+          - native-poc/src/image/mod.rs
+      - id: native-poc-image-deps
+        title: Add term_images path dep to native-poc/Cargo.toml
+        status: pending
+        files:
+          - native-poc/Cargo.toml
+
+  - id: phase-6
+    name: OSC dispatch matrix + notifications + clipboard policy
+    summary: Cover every action_type emitted by term_core::osc_handler with a native-side handler (or queue) + unit test; add OSC 9 (notify-rust) and OSC 52 default-deny clipboard.
+    estimated_effort: medium
+    tasks:
+      - id: osc-match-arm-expand
+        title: Extend NativeCallbacks::on_osc to cover all action_types (0,1,2,4,7,8,9,10,11,12,22,52,104,110,111,112,133,100,101,255)
+        status: pending
+        files:
+          - native-poc/src/callbacks.rs
+      - id: theme-osc-color-mutators
+        title: Add Theme::apply_osc helpers for palette (4/104), fg (10/110), bg (11/111), cursor color (12/112) and cursor style (22)
+        status: pending
+        files:
+          - native-poc/src/render/theme.rs
+      - id: notify-rust-integration
+        title: Add notify-rust dep + NotificationRateLimiter (dedupe identical (title, body) within 1 s)
+        status: pending
+        files:
+          - native-poc/Cargo.toml
+          - native-poc/src/callbacks.rs
+      - id: osc52-policy
+        title: Add clipboard_read_osc52 (bool, default true) and clipboard_max_size_osc52 (u32, default 10 MB) settings (mirrors legacy field names/defaults) + policy gate in on_osc(52)
+        status: pending
+        files:
+          - native-poc/src/settings.rs
+          - native-poc/src/callbacks.rs
+      - id: osc133-prompt-mark
+        title: Persist OSC 133 semantic prompt mark on current row
+        status: pending
+        files:
+          - native-poc/src/callbacks.rs
+      - id: osc-test-matrix
+        title: Add per-action_type unit tests (mirrors term_core Recorder pattern)
+        status: pending
+        files:
+          - native-poc/src/callbacks.rs
+
+  - id: phase-7
+    name: Stability re-verification (12+ hour Claude Code session)
+    summary: Demonstrate 12+ hour Claude Code session stability without crash, screen loss, or monotonic memory growth; final visual parity checks.
+    estimated_effort: small
+    tasks:
+      - id: workspace-test-final
+        title: cargo test --workspace exits 0 (final pass)
+        status: pending
+        files: []
+      - id: legacy-e2e-final
+        title: ./scripts/run-e2e-docker.sh exits 0 (final legacy regression)
+        status: pending
+        files: []
+      - id: long-run-session
+        title: Run a 12+ hour Claude Code session, take memory samples at 4h/8h/12h
+        status: pending
+        files: []
+      - id: visual-parity-kitty
+        title: Side-by-side Kitty Graphics Protocol parity check vs. WebView build
+        status: pending
+        files: []
+      - id: visual-parity-sixel
+        title: Side-by-side SIXEL parity check vs. WebView build
+        status: pending
+        files: []
+      - id: sgr-parity
+        title: SGR sampler parity check vs. WebView build
+        status: pending
+        files: []
+      - id: readme-update
+        title: Update native-poc/README.md with Phase 3 feature matrix
+        status: pending
+        files:
+          - native-poc/README.md

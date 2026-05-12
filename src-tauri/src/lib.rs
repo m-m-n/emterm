@@ -5,10 +5,14 @@
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+// Phase 3 (native-terminal-features): the former `ansi/` and `image/` modules
+// have moved to the shared `term_images` workspace crate. Re-export them here
+// under their legacy names so existing call sites inside `src-tauri` and the
+// integration test crate keep working unchanged.
 #[cfg(feature = "gui")]
-pub mod ansi;
+pub use term_images::ansi;
 #[cfg(feature = "gui")]
-pub mod image;
+pub use term_images::image_proc as image;
 #[cfg(feature = "gui")]
 pub mod logging;
 pub mod mux;
@@ -51,7 +55,7 @@ mod tests {
     use crate::image;
     use crate::payloads::ImageEventPayload;
     use crate::pty::PtyManager;
-    use crate::state::{LargeImageDataStore, LARGE_IMAGE_DATA_THRESHOLD};
+    use crate::state::{LARGE_IMAGE_DATA_THRESHOLD, LargeImageDataStore};
     use crate::{ansi, commands, protocols};
 
     #[tokio::test]

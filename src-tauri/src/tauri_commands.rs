@@ -3,7 +3,7 @@ use {
     crate::payloads::*,
     crate::pty::{PtyError, PtyManager},
     crate::reader::spawn_reader_thread,
-    crate::state::{ImageProcessorState, LargeImageDataStore, LARGE_IMAGE_DATA_THRESHOLD},
+    crate::state::{ImageProcessorState, LARGE_IMAGE_DATA_THRESHOLD, LargeImageDataStore},
     crate::{ansi, image, logging},
     std::collections::HashMap,
     tauri::ipc::{Channel, InvokeResponseBody},
@@ -562,7 +562,7 @@ pub async fn tab_close_graceful(
 /// Returns width, height, and RGBA pixel data as base64.
 #[tauri::command]
 pub async fn decode_iterm2_image(base64_data: String) -> Result<serde_json::Value, String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use base64::{Engine, engine::general_purpose::STANDARD};
 
     let raw = STANDARD
         .decode(&base64_data)
@@ -648,7 +648,7 @@ pub fn append_download_chunk(
     id: String,
     data_base64: String,
 ) -> Result<(), String> {
-    use base64::{engine::general_purpose, Engine as _};
+    use base64::{Engine as _, engine::general_purpose};
 
     let data = general_purpose::STANDARD
         .decode(&data_base64)

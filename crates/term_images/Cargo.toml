@@ -1,0 +1,21 @@
+[package]
+name = "term_images"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Kitty Graphics Protocol + SIXEL image decoders + APC/DCS parsers shared between the legacy Tauri build and native-poc."
+
+[lib]
+name = "term_images"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+log = { version = "0.4", features = ["std"] }
+png = "0.17"
+gif = "0.13"
+base64 = "0.22"
+flate2 = "1"
+
+[dev-dependencies]
+serde_json = "1.0"

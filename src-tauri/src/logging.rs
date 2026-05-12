@@ -9,8 +9,8 @@
 
 use log::{Level, Log, Metadata, Record};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Whether log recording to file is enabled.
 static LOG_RECORDING_ENABLED: AtomicBool = AtomicBool::new(false);

@@ -252,10 +252,12 @@ mod tests {
         let directives = parse_tmux_conf("bind r source-file ~/.tmux.conf");
         let result = convert_directives(&directives);
         assert!(result.settings.is_empty());
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("unsupported command")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("unsupported command"))
+        );
     }
 
     #[test]
@@ -349,14 +351,18 @@ if-shell 'test -f ~/.local.conf' 'source ~/.local.conf'
             let result = auto_import_tmux_conf();
             assert!(result.is_some());
             let result = result.unwrap();
-            assert!(result
-                .settings
-                .iter()
-                .any(|(k, v)| k == "prefix" && v == "Ctrl+A"));
-            assert!(result
-                .settings
-                .iter()
-                .any(|(k, v)| k == "mouse" && v == "true"));
+            assert!(
+                result
+                    .settings
+                    .iter()
+                    .any(|(k, v)| k == "prefix" && v == "Ctrl+A")
+            );
+            assert!(
+                result
+                    .settings
+                    .iter()
+                    .any(|(k, v)| k == "mouse" && v == "true")
+            );
         });
     }
 }

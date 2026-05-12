@@ -7,9 +7,11 @@ node_modules/
 # Build outputs
 dist/
 build/
+target/
 src-tauri/target/
 wasm/pkg/
 wasm/target/
+native-poc/target/
 src-tauri/icons/*
 !src-tauri/icons/.gitkeep
 

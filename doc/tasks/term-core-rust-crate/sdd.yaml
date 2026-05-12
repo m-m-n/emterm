@@ -1,0 +1,191 @@
+schema_version: 1
+feature: term-core-rust-crate
+created: 2026-05-12
+
+project:
+  components:
+    workspace:
+      language: rust
+      build_command: "cargo build --workspace"
+      test_command: "cargo test --workspace"
+      format_command: "cargo fmt --all"
+      e2e_test_command: ""
+    tauri_build:
+      language: typescript
+      build_command: "bun tauri build"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+  - id: implement
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+    notes: |
+      Phases 1-5 completed fully: workspace bootstrap, term_core extraction
+      (15k LOC moved via git mv, wasm-bindgen stripped, TerminalCallbacks
+      trait with 5 methods), cargo test green (597 pass), thin wasm wrapper
+      rebuilt, TS/Tauri verified (bun tauri build green, bun test 2325 pass,
+      wasm-pack baseline diff = signature parity).
+      Phase 6 (native-poc → term_core swap) deferred because native-poc's
+      wry/tao stack conflicts with tauri-utils' kuchikiki=0.8.8-speedreader
+      requirement; native-poc is currently EXCLUDED from workspace members.
+      A follow-up session must upgrade wry/tao (or pin kuchiki) before Phase 6.
+      Phase 7 partially done (cargo fmt clean); clippy review and README
+      notes pending.
+  - id: check
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+    notes: |
+      build ✅ / fmt ✅ / clippy term_core ⚠ 24 style warnings (auto-fixable, Phase 7 cleanup予定) /
+      clippy emterm-wasm ✅ 0 / test --workspace ⚠ 997/998 (failing
+      test_session_sets_term_program_env は環境依存・src-tauri/pty/session.rs の
+      pre-existing 失敗、Phase 2 で当該ファイル無改変)
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: "647a79baab2569de65ffd174f155ab6cddf0eff2"
+    notes: |
+      Phase 6 (native-poc → term_core swap) と Phase 7 (clippy review + README)
+      を追加で実施し、SC-8 (FR8 native-poc switched) を達成。SC-1〜SC-11 すべて Pass。
+      native-poc は workspace member に復帰、tao 0.34 / wry 0.53 へ移行で kuchikiki conflict 解消。
+      pre-existing な src-tauri テスト失敗 (test_session_sets_term_program_env) は環境依存で Phase 2 と無関係。
+
+requirements:
+  FR1:
+    title: Cargo workspace at repository root
+    status: ok
+    tasks:
+      - create-workspace-cargo-toml
+      - verify-workspace-build
+      - verify-tauri-build-baseline
+      - capture-baseline-pkg-and-exports
+      - add-term-core-to-workspace
+    tests:
+      - TS-4
+  FR2:
+    title: Code relocation via git mv (wasm/src/ → crates/term_core/src/)
+    status: ok
+    tasks:
+      - git-mv-wasm-src
+    tests:
+      - TS-2
+      - TS-14
+  FR3:
+    title: wasm-bindgen strip in term_core
+    status: ok
+    tasks:
+      - strip-wasm-bindgen-attrs
+      - replace-jsvalue-and-typedarrays
+      - term-core-builds-green
+      - term-core-metadata-clean
+    tests:
+      - TS-3
+  FR4:
+    title: TerminalCallbacks trait abstraction
+    status: assumed
+    assumption: "Trait methods mirror the existing wasm/src/callbacks.rs 1:1; exact list finalized during implementation by grepping js_sys::Function uses."
+    tasks:
+      - capture-baseline-pkg-and-exports
+      - design-terminal-callbacks-trait
+    tests:
+      - TS-13
+  FR5:
+    title: wasm/ rewritten as a thin wrapper
+    status: ok
+    tasks:
+      - install-wasm-stub-lib-rs
+      - rewrite-wasm-cargo-toml
+      - author-thin-wrapper-lib-rs
+      - implement-js-callbacks
+      - wasm-pack-build
+    tests:
+      - TS-6
+      - TS-12
+  FR6:
+    title: Test suite ports to cargo test (incl. parser/tests.rs)
+    status: ok
+    tasks:
+      - collect-test-failures
+      - rewrite-tests-using-jsvalue
+      - cargo-test-green
+      - record-test-drops
+    tests:
+      - TS-1
+      - TS-2
+      - TS-5
+  FR7:
+    title: TS-facing exports remain functionally identical
+    status: ok
+    tasks:
+      - pkg-export-diff
+      - bun-wasm-build
+      - bun-tauri-build-green
+      - bun-test-green
+      - tauri-dev-smoke
+    tests:
+      - TS-7
+      - TS-8
+      - TS-10
+      - TS-12
+  FR8:
+    title: native-poc switches to term_core
+    status: ok
+    tasks:
+      - add-term-core-dep-to-native-poc
+      - delete-native-poc-parser-grid
+      - rewire-native-poc-tab-render
+      - implement-native-poc-callbacks
+      - native-poc-builds-and-tests
+    tests:
+      - TS-9
+  NFR1:
+    title: Tauri build stays green
+    status: ok
+    tasks:
+      - verify-tauri-build-baseline
+      - bun-tauri-build-green
+      - final-tauri-build
+      - final-bun-test
+    tests:
+      - TS-7
+      - TS-8
+  NFR2:
+    title: Build-time parity (informal)
+    status: assumed
+    assumption: "Qualitative: cargo build -p term_core not noticeably slower than the previous wasm/ build."
+    tasks: []
+    tests:
+      - TS-11
+    notes: "Captured during Phase 7 with at least two samples on the same machine. No dedicated task; informal."
+  NFR3:
+    title: Module layout preservation
+    status: ok
+    tasks:
+      - git-mv-wasm-src
+    tests: []
+    notes: "Validated by manual tree diff of crates/term_core/src/ vs. previous wasm/src/. No TS-ID."
+  NFR4:
+    title: No silent test loss
+    status: ok
+    tasks:
+      - record-test-drops
+    tests:
+      - TS-14
+  NFR5:
+    title: Linux-only validation
+    status: ok
+    tasks: []
+    tests: []
+    notes: "Implicit through the verification host. No TS-ID."

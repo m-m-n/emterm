@@ -1,10 +1,10 @@
 use crate::payloads::*;
-use crate::pty::backpressure::{HIGH_WATER_BYTES, LOW_WATER_BYTES};
 use crate::pty::PtyManager;
+use crate::pty::backpressure::{HIGH_WATER_BYTES, LOW_WATER_BYTES};
 use std::io::Read;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
