@@ -73,32 +73,44 @@ phases:
     name: Dirty-row diff renderer
     summary: Replace native-poc/src/render/'s full-frame redraw with a per-row diff driven by term_core::TerminalCore::get_dirty_rows.
     estimated_effort: medium
+    completed_at_commit: 6930b1c83
     tasks:
       - id: dirty-union
         title: Build dirty_rows_this_frame union of term_core dirty rows + cursor + selection deltas
-        status: pending
+        status: completed
         files:
           - native-poc/src/app.rs
       - id: refactor-draw-loop
         title: Refactor Renderer::draw to iterate the dirty set instead of 0..rows
-        status: pending
+        status: completed
         files:
           - native-poc/src/render/mod.rs
+          - native-poc/src/window_host.rs
+        notes: |
+          Implemented as frame-level skip in window_host::render (skip whole egui+wgpu cycle when dirty set is empty)
+          instead of per-row skip in draw_grid, because egui's immediate-mode pipeline rebuilds tessellation each
+          frame and the wgpu pass clears the framebuffer on present — per-row skip requires a persistent offscreen
+          target which is deferred to a future optimization sub-phase. render/mod.rs doc comment records this.
       - id: ghost-prevention
         title: Capture last-frame cursor/selection rows so vacated rows are also redrawn
-        status: pending
+        status: completed
         files:
           - native-poc/src/app.rs
       - id: full-redraw-fallback
         title: Add debug-only EMTERM_FULL_REDRAW env var that forces full redraw (LOG_RENDER_FALLBACK)
-        status: pending
+        status: completed
         files:
-          - native-poc/src/render/mod.rs
+          - native-poc/src/app.rs
+        notes: |
+          Env var lives in App::new (not render/mod.rs as originally planned) because the dirty-set logic lives in
+          App. Behavior unchanged: setting EMTERM_FULL_REDRAW=1 makes dirty_rows_this_frame() return 0..rows
+          unconditionally, disabling the optimization for triage. A warn log fires on startup when set.
       - id: clear-dirty
         title: Call TerminalCore::clear_dirty() once per frame after consuming dirty set
-        status: pending
+        status: completed
         files:
           - native-poc/src/window_host.rs
+          - native-poc/src/app.rs
 
   - id: phase-3
     name: Cursor + SGR rendering full reflection
