@@ -22,8 +22,16 @@ pub struct Tab {
     pub title: String,
     pub core: Arc<Mutex<TerminalCore>>,
     pub cb_state: Arc<Mutex<NativeCallbackState>>,
-    pub pty: Option<PtySession>,
+    // Drop order matters: `events` must drop before `pty`. Struct fields
+    // drop in declaration order, so `events` (the Receiver) closing first
+    // disconnects the bounded(256) channel from the reader/writer side.
+    // That lets the EOF `event_tx.send(PtyEvent::Exited)` in `reader_loop`
+    // return `Err` immediately on shutdown instead of blocking forever
+    // when the channel happens to be full — which would deadlock
+    // `PtySession::Drop`'s `reader_join.join()` and freeze the X-button
+    // close path (WM marks the window as 応答なし while we wait).
     pub events: Receiver<PtyEvent>,
+    pub pty: Option<PtySession>,
     pub exited: bool,
 }
 

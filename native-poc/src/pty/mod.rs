@@ -134,14 +134,30 @@ impl PtySession {
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // Closing the input channel signals the writer thread to exit.
-        // The reader thread observes EOF when the child exits or when we
-        // drop the master. We send SIGHUP to the child best-effort.
+        // 1. Kill the child first so the kernel closes the slave side of
+        //    the PTY. Reader will then see EOF on `reader.read()`.
         {
             let mut child = self.child.lock();
             let _ = child.kill();
         }
-        // Wait briefly for threads; ignore errors so Drop never panics.
+
+        // 2. Force-close the input channel so `writer_loop`'s `input_rx.recv()`
+        //    returns `Err(Disconnected)` and the thread exits. Without this
+        //    the `Sender` lived as a struct field through the whole Drop and
+        //    the writer thread sat forever on `recv()` — the symptom the
+        //    user reported when clicking the X button ("応答なし").
+        //
+        //    We can't `drop(self.input_tx)` because moving out of `&mut self`
+        //    isn't allowed in Drop; `mem::replace` swaps in a freshly-built
+        //    Sender backed by an immediately-dropped Receiver, which is
+        //    already disconnected, then we drop the real Sender.
+        let (dummy_tx, _dummy_rx) = bounded::<Vec<u8>>(1);
+        let old_tx = std::mem::replace(&mut self.input_tx, dummy_tx);
+        drop(old_tx);
+
+        // 3. Join threads. Order matters: reader is unblocked by step 1
+        //    (kernel-side EOF on master read); writer is unblocked by step 2
+        //    (channel disconnect).
         if let Some(h) = self.reader_join.take() {
             let _ = h.join();
         }
@@ -156,7 +172,13 @@ fn reader_loop(reader: &mut dyn Read, event_tx: Sender<PtyEvent>) {
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
-                let _ = event_tx.send(PtyEvent::Exited {
+                // Defensive: use `try_send` so a full channel during
+                // shutdown can't keep this thread alive past `read` EOF.
+                // `Receiver` may already be dropped (Tab::drop reorders
+                // fields so the events Receiver dies before PtySession);
+                // in that case `try_send` returns `Err(Disconnected)`
+                // immediately, which we don't care about — we're exiting.
+                let _ = event_tx.try_send(PtyEvent::Exited {
                     reason: ExitReason::Eof,
                 });
                 break;
