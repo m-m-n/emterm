@@ -19,6 +19,26 @@ use crate::tabs::Tab;
 /// `cursorBlinkXOR` interval; one full on/off cycle is `2 * BLINK_HALF_MS`.
 pub const BLINK_HALF_MS: u128 = 530;
 
+/// Where the viewport currently sits relative to the live tail.
+///
+/// `Live` means the user is tracking new output (auto-follow). When PTY
+/// output arrives in this state, the viewport advances with it.
+///
+/// `OffsetFromLive(n)` means the user has scrolled back `n` rows into
+/// scrollback. New PTY output preserves this offset so the user does not
+/// get yanked back to the bottom mid-read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollPosition {
+    Live,
+    OffsetFromLive(u32),
+}
+
+impl Default for ScrollPosition {
+    fn default() -> Self {
+        ScrollPosition::Live
+    }
+}
+
 pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
@@ -31,6 +51,14 @@ pub struct App {
     /// Runtime settings (ambiguous-width policy and future fields).
     /// Loaded from `settings.json` in Phase 7; today initialized to default.
     pub settings: Settings,
+    /// Scrollback position. `Live` = auto-follow; `OffsetFromLive(n)` = the
+    /// viewport is pinned `n` rows above the live tail.
+    pub scroll_position: ScrollPosition,
+    /// Whether the alternate screen buffer (DECSET 1049/47/1047) is active.
+    /// Tracked by draining `core.take_mode_actions()` after every chunk in
+    /// `Tab::pump`. While true, scrollback inputs are suppressed and the
+    /// position is pinned to `Live`.
+    pub alt_screen: bool,
     /// Reference point for cursor-blink phase computation.
     blink_started: Instant,
     /// Cursor-blink "visible" phase observed during the previous render.
@@ -78,6 +106,8 @@ impl App {
             cell_size: GridDims::default(),
             selection: None,
             settings: Settings::new(),
+            scroll_position: ScrollPosition::Live,
+            alt_screen: false,
             blink_started: Instant::now(),
             previous_blink_visible: true,
             previous_cursor: None,
@@ -110,7 +140,12 @@ impl App {
     /// Spawn the initial shell tab. Called once at startup.
     pub fn spawn_initial_tab(&mut self) {
         let dims = self.cell_size;
-        let tab = Tab::spawn_shell("shell", dims.cols, dims.rows);
+        let tab = Tab::spawn_shell(
+            "shell",
+            dims.cols,
+            dims.rows,
+            self.settings.scrollback_lines,
+        );
         self.tabs.push(tab);
         self.active = 0;
         // A brand-new tab populated rows; ensure the first frame draws them.
@@ -137,6 +172,18 @@ impl App {
             if tab.pump() {
                 changed = true;
             }
+        }
+        // Mirror the active tab's alt-screen flag onto the App so the
+        // scroll input routes can suppress wheel / Shift+Page during
+        // alt-screen sessions.
+        let active_alt = self.tabs.get(self.active).map(|t| t.alt_screen);
+        if let Some(active_alt) = active_alt {
+            self.set_alt_screen(active_alt);
+        }
+        // Notify scroll-position state machine that new bytes arrived so
+        // the auto-follow rule can preserve the off-tail offset.
+        if changed {
+            self.on_pty_output();
         }
         // Reap exited tabs (Phase 5 will refine the policy).
         let before = self.tabs.len();
@@ -168,6 +215,99 @@ impl App {
     /// `term_core` dirty bits. Use after resize / surface recovery /
     /// other structural changes.
     pub fn mark_full_redraw(&mut self) {
+        self.needs_full_redraw = true;
+    }
+
+    // ── Scrollback (Phase 4 sub-phase 4) ─────────────────────
+
+    /// Current scrollback offset in rows. `0` means `Live`. Saturates at the
+    /// configured `scrollback_lines` ceiling.
+    pub fn scroll_offset(&self) -> u32 {
+        match self.scroll_position {
+            ScrollPosition::Live => 0,
+            ScrollPosition::OffsetFromLive(n) => n,
+        }
+    }
+
+    /// Scroll back by `delta` rows (clamps to `scrollback_lines`). No-op
+    /// when alt-screen is active.
+    pub fn scroll_up_by(&mut self, delta: u32) {
+        if self.alt_screen {
+            return;
+        }
+        let new = self.scroll_offset().saturating_add(delta);
+        let max = self.settings.scrollback_lines;
+        self.scroll_position = if new == 0 {
+            ScrollPosition::Live
+        } else {
+            ScrollPosition::OffsetFromLive(new.min(max))
+        };
+        self.needs_full_redraw = true;
+    }
+
+    /// Scroll forward (toward live tail) by `delta` rows. Snaps to `Live`
+    /// when the resulting offset would be zero. No-op when alt-screen is
+    /// active.
+    pub fn scroll_down_by(&mut self, delta: u32) {
+        if self.alt_screen {
+            return;
+        }
+        let cur = self.scroll_offset();
+        let new = cur.saturating_sub(delta);
+        self.scroll_position = if new == 0 {
+            ScrollPosition::Live
+        } else {
+            ScrollPosition::OffsetFromLive(new)
+        };
+        self.needs_full_redraw = true;
+    }
+
+    /// Jump to the top of the scrollback buffer (max offset).
+    pub fn scroll_to_top(&mut self) {
+        if self.alt_screen {
+            return;
+        }
+        let max = self.settings.scrollback_lines;
+        self.scroll_position = if max == 0 {
+            ScrollPosition::Live
+        } else {
+            ScrollPosition::OffsetFromLive(max)
+        };
+        self.needs_full_redraw = true;
+    }
+
+    /// Jump back to the live tail.
+    pub fn scroll_to_live(&mut self) {
+        self.scroll_position = ScrollPosition::Live;
+        self.needs_full_redraw = true;
+    }
+
+    /// React to new PTY output. When already at the live tail, no-op (the
+    /// renderer will pick up the new rows automatically). When sitting at an
+    /// offset, preserve the offset so the user is not yanked to the bottom.
+    /// Visually, the offset stays anchored because `term_core`'s ring buffer
+    /// shifts the old content into scrollback under us.
+    pub fn on_pty_output(&mut self) {
+        // No-op for `Live`; explicit branch documents intent.
+        if matches!(self.scroll_position, ScrollPosition::OffsetFromLive(_)) {
+            // The offset is preserved; nothing to mutate, but we mark the
+            // viewport as needing repaint because the visible row content
+            // shifted by one (live tail advanced underneath the offset).
+            self.needs_full_redraw = true;
+        }
+    }
+
+    /// Update the alt-screen flag. Called from `Tab::pump` after draining
+    /// `core.take_mode_actions()`. Entering alt-screen forces the scroll
+    /// position back to `Live` (alt buffers have no scrollback).
+    pub fn set_alt_screen(&mut self, active: bool) {
+        if self.alt_screen == active {
+            return;
+        }
+        self.alt_screen = active;
+        if active {
+            self.scroll_position = ScrollPosition::Live;
+        }
         self.needs_full_redraw = true;
     }
 
@@ -265,7 +405,7 @@ impl Default for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::selection::Pos;
+    use crate::selection::{Pos, SelectionMode};
     use term_core::terminal_core::TerminalCore;
 
     fn fresh_core(cols: u16, rows: u16) -> TerminalCore {
@@ -320,6 +460,7 @@ mod tests {
         app.selection = Some(Selection {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 3, col: 0 },
+            mode: SelectionMode::Character,
         });
         let set = app.dirty_rows_this_frame(&core);
         // 0 = cursor, 1..=3 = selection.
@@ -336,6 +477,7 @@ mod tests {
         app.selection = Some(Selection {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 3, col: 0 },
+            mode: SelectionMode::Character,
         });
         let _ = app.dirty_rows_this_frame(&core);
         app.record_render_state(&mut core);
@@ -343,6 +485,7 @@ mod tests {
         app.selection = Some(Selection {
             anchor: Pos { row: 1, col: 0 },
             extent: Pos { row: 1, col: 0 },
+            mode: SelectionMode::Character,
         });
         let set = app.dirty_rows_this_frame(&core);
         assert!(set.contains(&1));
@@ -382,5 +525,120 @@ mod tests {
             set.len() < core.rows() as usize,
             "should not be full redraw"
         );
+    }
+
+    // ── Scrollback state machine ─────────────────────
+
+    #[test]
+    fn scroll_position_default_is_live() {
+        let app = App::new();
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+        assert_eq!(app.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_up_by_advances_offset() {
+        let mut app = App::new();
+        app.scroll_up_by(3);
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(3));
+        app.scroll_up_by(2);
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(5));
+    }
+
+    #[test]
+    fn scroll_up_by_clamps_to_scrollback_lines() {
+        let mut app = App::new();
+        // Default scrollback_lines = 10_000.
+        app.scroll_up_by(99_999);
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(10_000));
+    }
+
+    #[test]
+    fn scroll_down_to_zero_snaps_to_live() {
+        let mut app = App::new();
+        app.scroll_up_by(5);
+        app.scroll_down_by(5);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn scroll_down_below_zero_saturates_at_live() {
+        let mut app = App::new();
+        app.scroll_up_by(3);
+        app.scroll_down_by(99);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn scroll_to_top_uses_scrollback_ceiling() {
+        let mut app = App::new();
+        app.scroll_to_top();
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(10_000));
+    }
+
+    #[test]
+    fn scroll_to_live_clears_offset() {
+        let mut app = App::new();
+        app.scroll_up_by(7);
+        app.scroll_to_live();
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn alt_screen_suppresses_scroll_up() {
+        let mut app = App::new();
+        app.alt_screen = true;
+        app.scroll_up_by(5);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn alt_screen_suppresses_scroll_to_top() {
+        let mut app = App::new();
+        app.alt_screen = true;
+        app.scroll_to_top();
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn set_alt_screen_true_forces_live() {
+        let mut app = App::new();
+        app.scroll_up_by(5);
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(5));
+        app.set_alt_screen(true);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+        assert!(app.alt_screen);
+    }
+
+    #[test]
+    fn set_alt_screen_false_preserves_live() {
+        let mut app = App::new();
+        app.set_alt_screen(true);
+        app.set_alt_screen(false);
+        assert!(!app.alt_screen);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn on_pty_output_in_live_is_noop() {
+        let mut app = App::new();
+        app.needs_full_redraw = false;
+        app.on_pty_output();
+        // No offset change.
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+        // No redraw forced (already at live, nothing visual shifted).
+        assert!(!app.needs_full_redraw);
+    }
+
+    #[test]
+    fn on_pty_output_preserves_offset() {
+        let mut app = App::new();
+        app.scroll_up_by(4);
+        app.needs_full_redraw = false;
+        app.on_pty_output();
+        // Offset preserved: user is not pulled to the bottom.
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(4));
+        // Viewport content shifted underneath us, so a repaint is needed.
+        assert!(app.needs_full_redraw);
     }
 }
