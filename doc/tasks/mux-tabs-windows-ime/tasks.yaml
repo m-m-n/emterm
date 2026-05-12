@@ -1,0 +1,184 @@
+# Tasks derived from IMPLEMENTATION.md.
+# Used by sdd.update-spec for impact analysis (sdd.yaml.requirements.{ID}.tasks references these IDs).
+
+phases:
+  - id: phase-4-a
+    name: "mux_ipc crate extraction (protocol-only)"
+    estimated_effort: small
+    tasks:
+      - id: mux-ipc-carve-crate
+        title: "Create crates/mux_ipc/ manifest + lib.rs (pub mod protocol)"
+        status: completed
+        files:
+          - crates/mux_ipc/Cargo.toml
+          - crates/mux_ipc/src/lib.rs
+      - id: mux-ipc-workspace-member
+        title: "Register mux_ipc as workspace member + add src-tauri path dep"
+        status: completed
+        files:
+          - Cargo.toml
+          - src-tauri/Cargo.toml
+      - id: mux-ipc-git-mv
+        title: "git mv protocol.rs from src-tauri to crates/mux_ipc (codec/connection stay)"
+        status: completed
+        files:
+          - crates/mux_ipc/src/protocol.rs
+      - id: mux-ipc-shim
+        title: "src-tauri/src/mux/ipc/protocol.rs becomes 1-line pub use mux_ipc::protocol::* shim"
+        status: completed
+        files:
+          - src-tauri/src/mux/ipc/protocol.rs
+      - id: mux-ipc-verify
+        title: "Workspace build + test + clippy after move"
+        status: completed
+        files: []
+
+  - id: phase-4-b
+    name: "tab bar widget + central keybinds"
+    estimated_effort: medium
+    tasks:
+      - id: tab-define-app-action
+        title: "Define AppAction + TabEvent enums"
+        files:
+          - native-poc/src/ui/mod.rs
+      - id: tab-bar-widget
+        title: "Implement egui tab bar (new/close/switch/title)"
+        files:
+          - native-poc/src/ui/tab_bar.rs
+      - id: tab-keybinds-dispatch
+        title: "Implement keybinds dispatch table (Ctrl+Shift+T/W, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1..9)"
+        files:
+          - native-poc/src/ui/keybinds.rs
+      - id: tab-wire-app-loop
+        title: "Wire tab bar + keybinds into app loop"
+        files:
+          - native-poc/src/app.rs
+          - native-poc/src/tabs.rs
+      - id: tab-unit-tests
+        title: "Unit tests TS-tab-1/2/3, TS-kb-1"
+        files: []
+
+  - id: phase-4-c
+    name: "mux client + prefix state machine"
+    estimated_effort: large
+    tasks:
+      - id: mux-wire-framing
+        title: "Sync wire framing (4-byte BE length + bincode body, MAX_FRAME_LENGTH enforcement)"
+        files:
+          - native-poc/src/mux/wire.rs
+          - native-poc/src/mux/mod.rs
+      - id: mux-osc777-parser
+        title: "OSC 777 parser with socket / session_id validation"
+        files:
+          - native-poc/src/mux/osc777.rs
+          - native-poc/src/callbacks.rs
+      - id: mux-client-wrapper
+        title: "Mux Client wrapper (blocking UnixStream + connect/send/try_recv/shutdown)"
+        files:
+          - native-poc/src/mux/client.rs
+          - native-poc/src/mux/mod.rs
+          - native-poc/Cargo.toml
+      - id: mux-prefix-latch
+        title: "Prefix-key state machine with timeout + double-press passthrough"
+        files:
+          - native-poc/src/mux/prefix.rs
+      - id: mux-pty-pause-ring
+        title: "Native PTY pause flag + 256 KB ring buffer + resume replay"
+        files:
+          - native-poc/src/pty/reader.rs
+          - native-poc/src/pty/writer.rs
+          - native-poc/src/tabs.rs
+      - id: mux-tab-integration
+        title: "Tab gains mux_client field; app routes Snapshot via term_core reset_and_replay"
+        files:
+          - native-poc/src/app.rs
+          - native-poc/src/tabs.rs
+      - id: mux-settings-prefix-key
+        title: "settings.mux.prefix_key field"
+        files:
+          - native-poc/src/settings.rs
+      - id: mux-mock-daemon
+        title: "cfg(test) in-memory mock daemon"
+        files:
+          - native-poc/src/mux/mock.rs
+      - id: mux-tests
+        title: "TS-wire-1/2, TS-osc777-1/2/3, TS-prefix-1/2/3, TS-mux-int-1..4"
+        files: []
+
+  - id: phase-4-d
+    name: "status bar (egui)"
+    estimated_effort: small
+    tasks:
+      - id: status-settings-extension
+        title: "settings.statusbar.enabled + position (with validation warn)"
+        files:
+          - native-poc/src/settings.rs
+      - id: status-state-plumbing
+        title: "Per-tab StatusBarState updated by Mux Client RX path"
+        files:
+          - native-poc/src/app.rs
+          - native-poc/src/tabs.rs
+      - id: status-bar-widget
+        title: "egui top/bottom panel widget"
+        files:
+          - native-poc/src/ui/status_bar.rs
+          - native-poc/src/ui/mod.rs
+      - id: status-idle-repaint
+        title: "1 Hz repaint scheduling for idle clock-only updates"
+        files:
+          - native-poc/src/app.rs
+      - id: status-tests
+        title: "TS-status-1/2/3, TS-settings-1"
+        files: []
+
+  - id: phase-4-e
+    name: "Windows MS-IME + Linux fcitx5 parity"
+    estimated_effort: medium
+    tasks:
+      - id: ime-preedit-state
+        title: "Preedit state struct + sanitization (C0/C1 drop)"
+        files:
+          - native-poc/src/ime/preedit.rs
+          - native-poc/src/ime/mod.rs
+      - id: ime-commit-path
+        title: "Commit dispatch writes sanitized bytes to active PTY"
+        files:
+          - native-poc/src/ime/commit.rs
+      - id: ime-cursor-renderer
+        title: "Cursor renderer extension for preedit underline overlay"
+        files:
+          - native-poc/src/render/cursor.rs
+      - id: ime-app-routing
+        title: "Route egui::Event::Ime to ime module"
+        files:
+          - native-poc/src/app.rs
+      - id: ime-tests
+        title: "TS-ime-1/2/3"
+        files: []
+      - id: ime-manual-linux
+        title: "Manual TS-manual-ime-linux (fcitx5 parity)"
+        files: []
+      - id: ime-manual-windows
+        title: "Manual TS-manual-ime-windows (preedit + commit)"
+        files: []
+
+  - id: phase-4-f
+    name: "long-run stability + final gates"
+    estimated_effort: medium
+    tasks:
+      - id: gate-fmt-clippy
+        title: "cargo fmt + clippy sweep across native-poc + mux_ipc"
+        files: []
+      - id: gate-readme
+        title: "native-poc/README.md Phase 4 feature matrix"
+        files:
+          - native-poc/README.md
+      - id: gate-soak
+        title: "Manual TS-manual-soak (12 h Claude Code under mux)"
+        files: []
+      - id: gate-perf
+        title: "TS-perf-1, TS-perf-2 measurements"
+        files: []
+      - id: gate-final-build-test
+        title: "Final cargo build/test/clippy/fmt clean"
+        files: []

@@ -1,0 +1,243 @@
+schema_version: 1
+feature: mux-tabs-windows-ime
+created: 2026-05-13
+
+project:
+  components:
+    main:
+      language: rust
+      # Workspace-wide. Phase 4 introduces `crates/mux_ipc/` and extends `native-poc/`,
+      # but legacy `src-tauri/` must keep compiling and testing until Phase 7.
+      build_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo build --workspace\""
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --workspace\""
+      format_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo fmt --all\""
+      # Legacy E2E is preexisting regression gate only; Phase 4 verifies its own scope via cargo test --workspace.
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "72b748a9594d9e7577e99e0b45facef7af6ee2f1"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
+    status: completed
+    completed_at_commit: "72b748a9594d9e7577e99e0b45facef7af6ee2f1"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "72b748a9594d9e7577e99e0b45facef7af6ee2f1"
+    notes: |
+      整合性検証で 1 件の critical issue を検出 + 修正:
+        FR3 (mux_ipc extraction) — 当初案は codec.rs / connection.rs もまとめて
+        crates/mux_ipc に move する計画だったが、connection.rs は server-side
+        accept loop で `crate::mux::session::*` に依存しており、移動すると src-tauri
+        の mux runtime 全体を crate 横断で巻き込む不整合が発生する。
+        修正: protocol.rs のみを抽出 (pure serde 型)、codec/connection は
+        src-tauri に残置。native-poc は std blocking UnixStream + 自前の wire.rs
+        (4-byte BE 長さ + bincode body, MAX_FRAME_LENGTH 強制) を実装。
+        この修正に伴い SPEC.md / IMPLEMENTATION.md / VERIFICATION.md / tasks.yaml /
+        sdd.yaml requirements を整合更新済 (TS-wire-1/2 追加, TS-tab-3 追加,
+        TS-osc777-3 / TS-prefix-3 / TS-status-3 を SPEC に明示)。
+      他に minor issues は無し、設計レビューで blocking 問題なし。
+  - id: implement
+    status: in_progress
+  - id: check
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+
+requirements:
+  FR1:
+    title: egui tab bar widget (new / close / switch / title; mux mode title prefix)
+    status: ok
+    tasks:
+      - tab-define-app-action
+      - tab-bar-widget
+      - tab-wire-app-loop
+      - tab-unit-tests
+    tests:
+      - TS-tab-1
+      - TS-tab-2
+      - TS-tab-3
+  FR2:
+    title: Tab keybinds (Ctrl+Shift+T/W, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1..9)
+    status: ok
+    tasks:
+      - tab-keybinds-dispatch
+      - tab-wire-app-loop
+      - tab-unit-tests
+    tests:
+      - TS-kb-1
+  FR3:
+    title: Extract crates/mux_ipc/ from src-tauri/src/mux/ipc/protocol.rs (scope-limited; codec/connection stay)
+    status: ok
+    tasks:
+      - mux-ipc-carve-crate
+      - mux-ipc-workspace-member
+      - mux-ipc-git-mv
+      - mux-ipc-shim
+      - mux-ipc-verify
+    tests:
+      - TS-mux-1
+  FR4:
+    title: mux attach (OSC 777 parsing + sync wire framing + socket connect + snapshot apply)
+    status: ok
+    tasks:
+      - mux-wire-framing
+      - mux-osc777-parser
+      - mux-client-wrapper
+      - mux-tab-integration
+      - mux-tests
+    tests:
+      - TS-osc777-1
+      - TS-osc777-3
+      - TS-wire-1
+      - TS-wire-2
+      - TS-mux-int-1
+      - TS-mux-int-2
+  FR5:
+    title: mux detach (prefix d + replay native PTY ring buffer + resume reader)
+    status: ok
+    tasks:
+      - mux-prefix-latch
+      - mux-pty-pause-ring
+      - mux-tab-integration
+      - mux-tests
+    tests:
+      - TS-osc777-2
+      - TS-prefix-1
+      - TS-mux-int-1
+      - TS-mux-int-4
+  FR6:
+    title: mux window switch (prefix n/p/0-9)
+    status: ok
+    tasks:
+      - mux-prefix-latch
+      - mux-client-wrapper
+      - mux-tests
+    tests:
+      - TS-prefix-1
+      - TS-mux-int-1
+  FR7:
+    title: Native PTY pause/resume during mux (256 KB ring buffer)
+    status: ok
+    tasks:
+      - mux-pty-pause-ring
+      - mux-tab-integration
+      - mux-tests
+    tests:
+      - TS-mux-int-4
+  FR8:
+    title: Prefix key handling (default Ctrl+B, configurable, double-press passthrough)
+    status: ok
+    tasks:
+      - mux-prefix-latch
+      - mux-settings-prefix-key
+      - mux-tests
+    tests:
+      - TS-prefix-1
+      - TS-prefix-2
+      - TS-prefix-3
+      - TS-settings-1
+  FR9:
+    title: Status bar widget (egui) — session/window/clock from StatusUpdateMsg
+    status: ok
+    tasks:
+      - status-state-plumbing
+      - status-bar-widget
+      - status-idle-repaint
+      - status-tests
+    tests:
+      - TS-status-1
+      - TS-status-2
+  FR10:
+    title: Status bar settings (enabled, position top/bottom)
+    status: ok
+    tasks:
+      - status-settings-extension
+      - status-tests
+    tests:
+      - TS-status-3
+      - TS-settings-1
+  FR11:
+    title: Windows MS-IME preedit overlay via egui Ime event
+    status: ok
+    tasks:
+      - ime-preedit-state
+      - ime-cursor-renderer
+      - ime-app-routing
+      - ime-tests
+      - ime-manual-linux
+      - ime-manual-windows
+    tests:
+      - TS-ime-1
+      - TS-ime-3
+  FR12:
+    title: Windows MS-IME commit → PTY write (no bracketed wrap)
+    status: ok
+    tasks:
+      - ime-commit-path
+      - ime-app-routing
+      - ime-tests
+      - ime-manual-linux
+      - ime-manual-windows
+    tests:
+      - TS-ime-2
+  FR13:
+    title: settings.json additions (mux.prefix_key, statusbar.enabled, statusbar.position)
+    status: ok
+    tasks:
+      - mux-settings-prefix-key
+      - status-settings-extension
+    tests:
+      - TS-settings-1
+  NFR1:
+    title: Performance (snapshot < 200 ms, prefix detect < 5 ms, tab switch < 1 frame)
+    status: ok
+    tasks:
+      - gate-perf
+    tests:
+      - TS-perf-1
+      - TS-perf-2
+  NFR2:
+    title: 12h Claude Code session stability under mux (no crash, no screen loss, RSS < 50 MB/h)
+    status: ok
+    tasks:
+      - gate-soak
+    tests: []
+    notes: "Manual TS-manual-soak only; no automated TS-ID. Recorded in VERIFICATION_RESULT.md."
+  NFR3:
+    title: Linux fcitx5 IME parity with Phase 1
+    status: ok
+    tasks:
+      - ime-manual-linux
+    tests: []
+    notes: "Manual TS-manual-ime-linux only. Phase 1 acceptance preserved."
+  NFR4:
+    title: Workspace compatibility (src-tauri build/test green through Phase 4)
+    status: ok
+    tasks:
+      - mux-ipc-verify
+      - gate-final-build-test
+    tests: []
+    notes: "Build/test gates per sub-phase boundary; no dedicated TS-ID."
+  NFR5:
+    title: Module layout (crates/mux_ipc, native-poc/src/{mux,ime,ui/status_bar})
+    status: ok
+    tasks:
+      - mux-ipc-git-mv
+      - mux-client-wrapper
+      - ime-preedit-state
+      - status-bar-widget
+    tests: []
+    notes: "Validated by File Structure Verification in VERIFICATION.md."
+  NFR6:
+    title: Logging (prefix detect / attach / detach / window switch / snapshot apply)
+    status: ok
+    tasks:
+      - mux-client-wrapper
+      - mux-prefix-latch
+      - mux-tab-integration
+    tests: []
+    notes: "Validated by manual log inspection during TS-manual-mux-1 and TS-manual-soak."
