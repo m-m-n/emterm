@@ -166,7 +166,7 @@
 | ID | タイトル | 本セッションでの結果 |
 |----|----------|----------------------|
 | NFR1 | 60 FPS / 入力レイテンシ / 画像 ≤ 300ms | 🟡 Deferred (sub-phase 7 計測) |
-| NFR2 | 12+ h 安定性、画面消失なし | 🟡 **Partial**: sub-phase 0 の defer-surface-configure / Lost-Outdated-resilient は ✅ 実装済み (`native-poc/src/window_host.rs` で確認)。phase0-smoke-validate (3回連続起動 panic-free) は手動未確認、sub-phase 7 の 12h セッションも未実施 |
+| NFR2 | 12+ h 安定性、画面消失なし | 🟡 **Partial**: sub-phase 0 の defer-surface-configure / Lost-Outdated-resilient は ✅ 実装済み (`native-poc/src/window_host.rs` で確認)。**phase0-smoke-validate (3 回連続起動 panic-free) は本セッション追加検証で ✅ PASS** (host: `GDK_BACKEND=x11`、3/3 launch panic-free / no ERROR_SURFACE_LOST_KHR)。sub-phase 7 の 12h セッションは未実施 |
 | NFR3 | log + env_logger、`RUST_LOG=info/debug` | 🟡 Deferred (sub-phase 2 以降) |
 | NFR4 | モジュール構成 (Phase 1 layout + native-poc/src/image/) | 🟡 **Partial**: `crates/term_images` 抽出 (sub-phase 1) は ✅、`native-poc/src/image/` 追加は sub-phase 5 で deferred |
 | NFR5 | Linux 専用 | ✅ PASS (workspace は Linux ターゲットでビルド成功) |
@@ -281,7 +281,7 @@ VERIFICATION.md の「Manual Testing (E2E Not Possible)」と「Security Verific
 - [ ] PRIMARY auto-copy (選択 → 別ターミナルで middle-click paste) 🟡 Deferred (sub-phase 4)
 - [ ] CLIPBOARD コピー (Ctrl+Shift+C → 別アプリで Ctrl+v) 🟡 Deferred (sub-phase 4)
 - [ ] bracketed paste 動作確認 (vim insert mode へ複数行 paste) 🟡 Deferred (sub-phase 4)
-- [ ] **3 回連続起動 panic-free (sub-phase 0 surface-lost fix smoke)** 🟡 Deferred (本来 sub-phase 0 と並行で手動検証すべき項目だが本セッションでは未実施)
+- [x] **3 回連続起動 panic-free (sub-phase 0 surface-lost fix smoke)** ✅ **PASS** (本セッション追加検証: `GDK_BACKEND=x11 timeout 5s ./target/debug/emterm-native-poc` を 3 回連続、panic / ERROR_SURFACE_LOST_KHR ともに観測なし、host で window 起動目視確認済)
 - [ ] `cargo run -p emterm-native-poc` でインタラクティブシェル動作 🟡 Deferred (sub-phase 2 以降の入力ルーティング前提)
 
 ### 5.2 Security Verification — 4 items
@@ -335,7 +335,7 @@ VERIFICATION.md の「Manual Testing (E2E Not Possible)」と「Security Verific
   - → **preexisting regression と確定**
   - → **SC-6 を spec-updater で更新**、legacy E2E は gate から除外、新 gate = `cargo test --workspace` に変更
   - → 新 gate 基準で **SC-6 は PASS** (cargo test --workspace exit 0 達成済)
-- **sub-phase 0 smoke validate (3 回連続起動 panic-free)** は **次セッションで手動検証が必要** (GUI 環境を要するため Docker 自動化不可)。
+- **sub-phase 0 smoke validate (3 回連続起動 panic-free)** は本セッション追加検証で ✅ **PASS** (host: `GDK_BACKEND=x11 timeout 5s ./target/debug/emterm-native-poc` × 3、panic / ERROR_SURFACE_LOST_KHR ともに観測なし)。なお Docker + Xvfb は Vulkan surface 拡張 (VK_KHR_surface 等) が image に不在で `create_surface_unsafe` で fail するため、native-poc 系の smoke は host 実行が必須。
 
 | 結論 | sdd.yaml verify status 推奨値 |
 |------|-------------------------------|

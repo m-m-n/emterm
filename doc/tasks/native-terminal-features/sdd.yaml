@@ -79,7 +79,10 @@ workflow:
       cargo test --workspace を新 gate に。除外理由 (preexisting + Phase 7 廃止予定 + app_lib 849 カバー)
       は SPEC.md SC-6 rationale 注記としてインライン化、IMPLEMENTATION.md/VERIFICATION.md も連鎖更新済。
       新 gate 基準で SC-6 は **PASS** (cargo test --workspace exit 0 達成)。
-      Phase 0 smoke (3 連続起動 panic-free) は GUI 環境を要するため Docker 自動化は不可、別途手動検証必要。
+      Phase 0 smoke (3 連続起動 panic-free) は本セッション追加検証で **PASS** (host: GDK_BACKEND=x11
+      timeout 5s ./target/debug/emterm-native-poc × 3、panic / ERROR_SURFACE_LOST_KHR ともに観測なし、
+      window 起動 host 目視確認済)。Docker + Xvfb は Vulkan surface 拡張不在で create_surface_unsafe
+      が fail するため native-poc smoke は host 必須と判明。
       Manual 19 件 (E2E Not Possible 11 + Security 4 + Performance 4) は Phase 2-7 未実装のため全件 deferred。
       FR1-FR14、TS-1-TS-45、SC-1/SC-2/SC-4/SC-5 の残部は Phase 2-7 で再評価。
       残課題は sub-phase 2-7 未実装のみ。

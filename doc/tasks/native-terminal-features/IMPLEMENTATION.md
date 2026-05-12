@@ -130,11 +130,11 @@ The SPEC enumerates seven Open Questions for the plan to settle. They are resolv
 **Dependencies**: Blocks all manual exercise of Phases 3–7. Code-wise independent from Phase 1 (workspace re-layout) and can run in parallel.
 
 **Testing Approach**:
-- Unit: a smoke test that constructs `WindowHost` against a headless event loop (best-effort; may stay a manual test on the dev machine if headless wgpu is not available in Docker).
-- Manual: 3-launch smoke check on Linux dev.
+- Unit: a smoke test that constructs `WindowHost` against a headless event loop is **not viable** — Docker + Xvfb lacks Vulkan surface extensions (VK_KHR_surface 等) so `wgpu::Instance::create_surface_unsafe` panics before reaching the Phase 0 deferred-configure path.
+- Manual: 3-launch smoke check on Linux dev host (required, Docker substitution rejected).
 
 **Acceptance Criteria**:
-- [ ] `cargo run -p emterm-native-poc` launches a window without panicking 3 times in a row.
+- [x] `cargo run -p emterm-native-poc` (or running `./target/debug/emterm-native-poc` with `GDK_BACKEND=x11`) launches a window without panicking 3 times in a row. ✅ **PASS (2026-05-12 host validation)**: 3/3 launches panic-free, no `ERROR_SURFACE_LOST_KHR`, window startup observed by developer.
 - [ ] Resizing the window does not regress the existing Lost/Outdated recovery branch.
 
 **Estimated Effort**: small.
