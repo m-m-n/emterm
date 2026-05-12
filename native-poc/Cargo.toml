@@ -33,6 +33,10 @@ portable-pty = "0.8"
 # Clipboard (Phase 4)
 arboard = "3"
 
+# OS notifications (Phase 6) — OSC 9. Linux uses D-Bus
+# org.freedesktop.Notifications.
+notify-rust = "4"
+
 # Unicode (Phase 3)
 unicode-width = "0.2"
 
