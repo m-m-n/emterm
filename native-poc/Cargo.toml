@@ -24,6 +24,9 @@ wry = "0.53"
 # term_core (Phase 6: replaces native-poc's stand-in parser/grid)
 term_core = { path = "../crates/term_core" }
 
+# term_images (Phase 5: inline Kitty / SIXEL image decoders + APC/DCS parsers)
+term_images = { path = "../crates/term_images" }
+
 # PTY (Phase 2)
 portable-pty = "0.8"
 

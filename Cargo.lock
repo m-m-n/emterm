@@ -1432,6 +1432,7 @@ dependencies = [
  "serde_json",
  "tao",
  "term_core",
+ "term_images",
  "unicode-width 0.2.2",
  "wgpu",
  "wry",
