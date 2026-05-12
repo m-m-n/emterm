@@ -93,10 +93,31 @@ workflow:
       cargo test --workspace 1653+ green、runtime debug log で typical interactive frame が
       1/31 dirty row、idle は skip、shell 多行更新で 31/31 を確認。
       ---
-      Manual 19 件 (E2E Not Possible 11 + Security 4 + Performance 4) は sub-phase 3-7 未実装のため
-      大部分が引き続き deferred。
-      FR2-FR14、TS-1-TS-45 の残部、SC-1/SC-2/SC-4/SC-5 は sub-phase 3-7 で再評価。
-      残課題は sub-phase 3-7 未実装。
+      sub-phase 3 (FR9 SGR full + FR2 cursor render + FR11 ambig width) を本セッション後半で実装、
+      commit 7ea11bc。resolve_cell_style で STYLE_BOLD/DIM/ITALIC/UNDERLINE/REVERSE/HIDDEN/
+      STRIKETHROUGH を全反映 (STYLE_BLINK は static、cursor blink と phase 競合回避)。
+      draw_cursor で get_cursor_visible/style/blink/fg を尊重、block/underline/bar shape、530ms
+      blink phase (BLINK_HALF_MS)、ctx.request_repaint_after で wake-up。AmbiguousWidthMode
+      (Narrow/Wide) on Settings、visible_width(ch, mode) で 1/2 cell 切替、wide cell rect は
+      2 column 分。native-poc 30 unit tests pass (新規 9 件: visible_width/blend_toward/
+      packed_to_egui)、cargo test --workspace 1662+ green、cargo fmt clean。
+      parser route (DECSCUSR / DECTCEM / OSC 22 / OSC 12) は term_core 改変が必要なため
+      sub-phase 6 (OSC matrix) に委譲、FR2 は renderer ready としてマーク。
+      double/curly underline + SGR 58 underline color は term_core STYLE_UNDERLINE 1 bit のみの
+      ため将来の term_core 拡張で再評価。
+      ---
+      X-button close hang fix (commit 0d2c879): sub-phase 3 smoke 中に判明した PTY 終了
+      デッドロックを修正。原因 (a): PtySession::Drop 中、input_tx field が drop 順序の関係で
+      生存→writer thread の input_rx.recv() が永久 block。原因 (b): Tab field 順が pty 先・
+      events 後で、reader EOF send が満杯チャンネル相手にブロックする可能性。修正: input_tx を
+      mem::replace で先行 close、Tab field を events 先・pty 後に reorder、reader EOF send を
+      try_send 化、CloseRequested ハンドラで app.tabs.clear() を明示。host で X ボタン後 prompt
+      promptly に戻ることを確認。
+      ---
+      Manual 19 件 (E2E Not Possible 11 + Security 4 + Performance 4) は sub-phase 4-7 未実装
+      のため大部分が引き続き deferred。
+      FR3-FR8, FR10, FR12-FR14、TS-1-TS-45 の残部、SC-1/SC-2/SC-4/SC-5 は sub-phase 4-7 で再評価。
+      残課題は sub-phase 4-7 未実装 + FR2 の parser route 配線 (sub-phase 6)。
 
 requirements:
   FR1:

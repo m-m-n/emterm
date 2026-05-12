@@ -116,33 +116,70 @@ phases:
     name: Cursor + SGR rendering full reflection
     summary: Render every SGR attribute and cursor shape/blink/visibility/color state that term_core already tracks.
     estimated_effort: medium
+    completed_at_commit: 7ea11bc
     tasks:
       - id: cursor-state-getters
         title: Wire term_core cursor getters (style/blink/visible/fg/bg) into renderer
-        status: pending
+        status: completed
         files:
           - native-poc/src/render/mod.rs
+        notes: |
+          draw_cursor reads get_cursor_visible / get_cursor_style / get_cursor_blink / get_cursor_fg
+          and draws block / underline / bar shapes. Renderer side is ready; the parser routes for
+          DECSCUSR / DECTCEM / OSC 22 / OSC 12 still live in term_core and will be wired in sub-phase 6
+          (OSC dispatch matrix). Today the getters return their default values, so the cursor is a
+          steady block until those parser routes land.
       - id: palette-resolver
         title: Build palette resolver in theme.rs handling indexed-256 + OSC 4 overrides
-        status: pending
+        status: completed
         files:
-          - native-poc/src/render/theme.rs
+          - native-poc/src/render/mod.rs
+        notes: |
+          palette_lookup() in render/mod.rs reads palette16 from the Theme (theme-owned, future
+          OSC 4 / OSC 104 hook) for indices 0-15 and uses the static xterm 6x6x6 + grayscale ramp
+          for 16-255. packed_to_egui returns Option so the Default tag is handled explicitly.
+          OSC 4 override application stays in sub-phase 6 alongside the rest of the OSC matrix;
+          the resolver shape is now in place.
       - id: sgr-cell-style
         title: Extend cell_style to honor bold/italic/underline (single/double/curly + SGR 58)/reverse/blink/conceal/strikethrough
-        status: pending
+        status: completed
         files:
           - native-poc/src/render/mod.rs
+        notes: |
+          resolve_cell_style honors STYLE_BOLD, STYLE_DIM (blend_toward 50%), STYLE_ITALIC,
+          STYLE_UNDERLINE, STYLE_REVERSE (fg/bg swap), STYLE_HIDDEN (fg = bg) and
+          STYLE_STRIKETHROUGH. STYLE_BLINK is acknowledged but rendered statically to avoid
+          two competing blink cadences with the cursor; multiplexing it off the same Instant is
+          a follow-up.
+          Double / curly underline + SGR 58 underline color: deferred — term_core stores only
+          a single STYLE_UNDERLINE bit today, so distinguishing the underline tiers needs a
+          term_core extension first.
+          Bold/italic don't yet pick a different egui font face: egui ships only the default
+          monospace; Phase 7 can register Noto Mono / etc. and flip the match arms.
       - id: ambiguous-width-plumb
         title: Plumb ambiguous_width_mode through Settings -> App -> Renderer
-        status: pending
+        status: completed
         files:
           - native-poc/src/settings.rs
+          - native-poc/src/app.rs
           - native-poc/src/render/mod.rs
+        notes: |
+          AmbiguousWidthMode enum (Narrow default / Wide) lives on Settings; App holds the
+          Settings struct and the renderer reads app.settings.ambiguous_width_mode at draw time
+          via visible_width(ch, mode). Wide cells span 2 columns. Phase 7's settings.json loader
+          will populate the field.
       - id: cursor-blink-timer
         title: Implement cursor blink timer (~530 ms xterm-equivalent) that marks cursor row dirty on toggle
-        status: pending
+        status: completed
         files:
           - native-poc/src/app.rs
+          - native-poc/src/render/mod.rs
+        notes: |
+          BLINK_HALF_MS = 530 (xterm cadence). App stores blink_started: Instant and
+          previous_blink_visible: bool. dirty_rows_this_frame adds the cursor row when the
+          blink phase flips. draw_terminal calls ctx.request_repaint_after(BLINK_HALF_MS) when
+          cursor blink is enabled so the loop wakes up between PTY events. reset_blink_phase()
+          is added (allow(dead_code) until sub-phase 4 wires it on input / focus changes).
 
   - id: phase-4
     name: Selection + scrollback + paste
