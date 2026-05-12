@@ -5,6 +5,7 @@ members = [
     "wasm",
     "crates/term_core",
     "crates/term_images",
+    "crates/mux_ipc",
     "native-poc",
 ]
 

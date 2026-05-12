@@ -1384,6 +1384,7 @@ dependencies = [
  "image",
  "libc",
  "log",
+ "mux_ipc",
  "png 0.17.16",
  "portable-pty",
  "predicates",
@@ -3200,6 +3201,16 @@ dependencies = [
  "serde",
  "thiserror 2.0.17",
  "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "mux_ipc"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "bincode",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

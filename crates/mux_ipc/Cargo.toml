@@ -1,0 +1,21 @@
+[package]
+name = "mux_ipc"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Shared mux IPC protocol data types used by the legacy Tauri build (src-tauri) and native-poc."
+
+[lib]
+name = "mux_ipc"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+base64 = "0.22"
+# Control-message payloads (e.g. HelloMsg, WelcomeMsg, SnapshotPayload) are
+# bincode-serialized inside MuxMessage::new_control / decode_control. Keep
+# bincode here so the protocol module remains self-contained.
+bincode = "1.3"
+
+[dev-dependencies]
+serde_json = "1.0"
