@@ -29,6 +29,7 @@ use term_images::image_proc::{DecodedImage, ImageDelete, ImageEvent, ImagePlacem
 /// Default per-tab image-memory quota (matches `Settings::image_memory_quota_mb`
 /// default of 320 MB). Independent constant so unit tests don't need to
 /// import the entire `Settings` struct.
+#[allow(dead_code)] // Settings provides the runtime value; this is the unit-test/fallback default.
 pub const DEFAULT_IMAGE_QUOTA_BYTES: u64 = 320 * 1024 * 1024;
 
 /// A placement enriched with per-frame pixel coordinates derived from the

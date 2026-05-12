@@ -11,8 +11,10 @@ use std::sync::Arc;
 use crossbeam_channel::Receiver;
 use parking_lot::Mutex;
 use term_core::terminal_core::TerminalCore;
+use term_images::image_proc::{ImageEvent, ImageProcessor};
 
 use crate::callbacks::{EmtermOscRequest, NativeCallbackState, NativeCallbacks};
+use crate::image::{parse as image_parse, split_image_events};
 use crate::pty::{ExitReason, PtyEvent, PtySession};
 
 // Default scrollback capacity now lives on `Settings` (`DEFAULT_SCROLLBACK_LINES`
@@ -37,6 +39,16 @@ pub struct Tab {
     /// Whether the alternate screen buffer is currently active for this tab.
     /// Updated by `pump()` after draining `core.take_mode_actions()`.
     pub alt_screen: bool,
+    /// Per-tab Kitty Graphics Protocol + SIXEL processor (CPU side).
+    /// `Tab::pump` drains `cb_state.pending_apc` / `pending_dcs` into this
+    /// to produce `ImageEvent`s. `Response` events are routed back to the
+    /// PTY (Kitty OK / error replies); everything else is queued in
+    /// `pending_image_events` for the GPU layer (owned by `WindowHost`)
+    /// to consume.
+    pub image_proc: ImageProcessor,
+    /// Image events the GPU layer (in `WindowHost`) has not yet ingested.
+    /// `Tab::drain_image_events` returns these.
+    pub pending_image_events: Vec<ImageEvent>,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -79,6 +91,8 @@ impl Tab {
             events: rx,
             exited: false,
             alt_screen: false,
+            image_proc: ImageProcessor::new(),
+            pending_image_events: Vec::new(),
         }
     }
 
@@ -132,6 +146,11 @@ impl Tab {
 
             // Send any device responses (e.g., DA1) back to the shell.
             let responses: Vec<Vec<u8>> = std::mem::take(&mut s.device_responses);
+            // Drain buffered image-protocol payloads so we can decode them
+            // outside the lock (the decoder needs cursor coords from `core`
+            // — see comment in `drain_and_decode_images` below).
+            let pending_apc: Vec<Vec<u8>> = std::mem::take(&mut s.pending_apc);
+            let pending_dcs: Vec<Vec<u8>> = std::mem::take(&mut s.pending_dcs);
             drop(s);
             if !responses.is_empty() {
                 for r in responses {
@@ -139,9 +158,73 @@ impl Tab {
                 }
                 changed = true;
             }
+            if !pending_apc.is_empty() || !pending_dcs.is_empty() {
+                if self.drain_and_decode_images(&pending_apc, &pending_dcs) {
+                    changed = true;
+                }
+            }
         }
 
         changed
+    }
+
+    /// Decode buffered APC / DCS payloads via `term_images::ImageProcessor`,
+    /// split off `ImageEvent::Response` and write the bytes back to the
+    /// shell (Kitty OK / error replies), and queue the remaining state
+    /// events in `pending_image_events` for the GPU layer to consume on
+    /// its next ingest pass.
+    ///
+    /// Cursor coordinates are read from `self.core` so the resulting
+    /// `Place` events anchor at the right cell. We snapshot them once at
+    /// the start of the call: in practice the buffered payloads were
+    /// produced by the same byte chunk that just landed, so the cursor
+    /// has not moved between APC parsing and decode here.
+    ///
+    /// Returns true when anything was decoded (caller can request a
+    /// redraw).
+    fn drain_and_decode_images(&mut self, apc: &[Vec<u8>], dcs: &[Vec<u8>]) -> bool {
+        if apc.is_empty() && dcs.is_empty() {
+            return false;
+        }
+        let (cursor_row, cursor_col) = {
+            let c = self.core.lock();
+            (c.get_cursor_row() as u32, c.get_cursor_col() as u32)
+        };
+
+        let mut all_events: Vec<ImageEvent> = Vec::new();
+        for bytes in apc {
+            let events =
+                image_parse::decode_apc(bytes, cursor_row, cursor_col, &mut self.image_proc);
+            all_events.extend(events);
+        }
+        for bytes in dcs {
+            let events =
+                image_parse::decode_dcs(bytes, cursor_row, cursor_col, &mut self.image_proc);
+            all_events.extend(events);
+        }
+        if all_events.is_empty() {
+            return false;
+        }
+
+        let (state_events, responses) = split_image_events(all_events);
+        // Route protocol responses (Kitty OK / error / query) back to the
+        // shell. SIXEL does not currently emit responses but the API is
+        // uniform.
+        for resp in responses {
+            self.write(resp.into_bytes());
+        }
+        if !state_events.is_empty() {
+            self.pending_image_events.extend(state_events);
+        }
+        true
+    }
+
+    /// Drain the queue of image-state events accumulated by `pump`.
+    /// `WindowHost` calls this once per frame and forwards the events to
+    /// `ImageLayer::ingest`, which handles GPU texture upload + LRU
+    /// eviction.
+    pub fn drain_image_events(&mut self) -> Vec<ImageEvent> {
+        std::mem::take(&mut self.pending_image_events)
     }
 
     pub fn write(&self, bytes: Vec<u8>) {
