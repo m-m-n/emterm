@@ -1,9 +1,10 @@
-# 検証結果レポート: native-terminal-features (Phase 0 + Phase 1)
+# 検証結果レポート: native-terminal-features (Phase 0 + Phase 1 + sub-phase 2/3)
 
-- **検証日時**: 2026-05-12 (再検証)
+- **検証日時**: 2026-05-12 (3 度目の再検証 / sdd.6 再実行)
 - **検証対象**: `doc/tasks/native-terminal-features/`
-- **完了コミット**: `d448a997616b4698788f3bbdcdcba0bdbdfeeb72`
-- **前回検証コミット**: `647a79baab2569de65ffd174f155ab6cddf0eff2`
+- **完了コミット**: `42637d881f42d9883bfd124fd12a4df1bbc305b4` (HEAD、本再検証時点)
+- **前回検証コミット**: `d448a997616b4698788f3bbdcdcba0bdbdfeeb72`
+- **2 回前検証コミット**: `647a79baab2569de65ffd174f155ab6cddf0eff2`
 - **VERIFICATION.md**: `doc/tasks/native-terminal-features/VERIFICATION.md`
 - **SPEC.md**: `doc/tasks/native-terminal-features/SPEC.md`
 - **IMPLEMENTATION.md**: `doc/tasks/native-terminal-features/IMPLEMENTATION.md`
@@ -12,7 +13,9 @@
 
 ## 1. Executive Summary
 
-本 SDD は `tmp/restruct.md` 7 phase 構成の **Phase 3** に該当し、Phase 3 自身が更に sub-phase 0〜7 に分割されている (multi-week scope)。本セッション (HEAD = 0d2c879) までに**完了している sub-phase は 0、1、2、3 (3 は renderer 側のみ; parser route は sub-phase 6 に委譲)**。sub-phase 4-7 は未実装で、複数の追加セッションを要する。
+本 SDD は `tmp/restruct.md` 7 phase 構成の **Phase 3** に該当し、Phase 3 自身が更に sub-phase 0〜7 に分割されている (multi-week scope)。本セッション (HEAD = 42637d8、再検証時点) までに**完了している sub-phase は 0、1、2、3 (3 は renderer 側のみ; parser route は sub-phase 6 に委譲)**。sub-phase 4-7 は未実装で、複数の追加セッションを要する。
+
+**2026-05-12 sdd.6 再実行 (3 度目)**: HEAD = 42637d8 (前回 verify 完了 = d448a99) で `/em-sdd:sdd doc/tasks/native-terminal-features/` を再起動。d448a99 → 42637d8 の差分は `6930b1c` (sub-phase 2 実装) / `a49b121` (sub-phase 2 docs) / `7ea11bc` (sub-phase 3 実装) / `0d2c879` (X-button close hang fix) / `42637d8` (sub-phase 3 + close-hang docs) — 全てが既に本ドキュメントの「特記事項」に記録済の内容。staleness 軽量再検証として `cargo build --workspace` (1m51s、warning のみ) と `cargo test --workspace` (1662 passed / 0 failed: 816 + 597 + 182 + 30 + 10 + 10 + 7 + 6 + 4 doctests) を再実行、いずれも PASS を確認。ファイル構造再確認: `crates/term_images/` 全ファイル / `native-poc/src/render/{mod,theme}.rs` (sub-phase 2/3 実装本体) / `native-poc/src/{app,settings,selection,window_host}.rs` の差分は IMPLEMENTATION.md の Phase 2/3 セクションと一致、`native-poc/src/image/` (Phase 5) は計画通り未作成。sub-phase 4-7 の新規実装は無いため verify 結論は前回と同じ (sub-phase 0-3 検証可能項目 PASS、sub-phase 4-7 deferred、verify status は `needs_update` 据置)。
 
 | 範囲 | 結果 |
 |------|------|
