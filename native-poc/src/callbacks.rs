@@ -44,6 +44,16 @@ pub struct NativeCallbackState {
     /// Device responses the terminal asked us to send back to the shell.
     /// `Tab::pump` drains this and feeds it into the PTY writer.
     pub device_responses: Vec<Vec<u8>>,
+    /// Pending APC (Kitty Graphics) payloads buffered by `on_apc`. Drained
+    /// by `Tab::pump` after locking `TerminalCore` so the cursor row/col
+    /// can be snapshotted and passed to `term_images::ImageProcessor`.
+    /// The callback itself only sees `&self` on `NativeCallbacks` and so
+    /// has no access to the core state — buffer-then-drain is the simplest
+    /// correct pattern.
+    pub pending_apc: Vec<Vec<u8>>,
+    /// Pending DCS (SIXEL) payloads, same buffering rationale as
+    /// `pending_apc`.
+    pub pending_dcs: Vec<Vec<u8>>,
 }
 
 /// `TerminalCallbacks` implementation for native consumers.
@@ -76,13 +86,17 @@ impl TerminalCallbacks for NativeCallbacks {
     }
 
     fn on_apc(&self, data: &[u8]) {
-        // PoC does not implement Kitty graphics (APC); log only.
-        log::debug!("APC received: {} bytes", data.len());
+        // Phase 5: buffer the payload; `Tab::pump` decodes it under the
+        // core lock so cursor coordinates are stable.
+        log::debug!("APC buffered: {} bytes", data.len());
+        self.state.lock().pending_apc.push(data.to_vec());
     }
 
     fn on_dcs(&self, data: &[u8]) {
-        // PoC does not implement Sixel (DCS); log only.
-        log::debug!("DCS received: {} bytes", data.len());
+        // Phase 5: buffer the payload; `Tab::pump` decodes it under the
+        // core lock so cursor coordinates are stable.
+        log::debug!("DCS buffered: {} bytes", data.len());
+        self.state.lock().pending_dcs.push(data.to_vec());
     }
 
     fn on_bell(&self) {
@@ -92,5 +106,63 @@ impl TerminalCallbacks for NativeCallbacks {
 
     fn on_device_response(&self, data: &[u8]) {
         self.state.lock().device_responses.push(data.to_vec());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cb() -> (NativeCallbacks, Arc<Mutex<NativeCallbackState>>) {
+        let s = Arc::new(Mutex::new(NativeCallbackState::default()));
+        (NativeCallbacks::new(s.clone()), s)
+    }
+
+    #[test]
+    fn on_apc_buffers_payload_into_pending_apc() {
+        let (n, s) = cb();
+        n.on_apc(b"Ga=q;");
+        let st = s.lock();
+        assert_eq!(st.pending_apc.len(), 1);
+        assert_eq!(st.pending_apc[0], b"Ga=q;".to_vec());
+        assert!(st.pending_dcs.is_empty());
+    }
+
+    #[test]
+    fn on_dcs_buffers_payload_into_pending_dcs() {
+        let (n, s) = cb();
+        n.on_dcs(b"0;0;0q");
+        let st = s.lock();
+        assert_eq!(st.pending_dcs.len(), 1);
+        assert_eq!(st.pending_dcs[0], b"0;0;0q".to_vec());
+        assert!(st.pending_apc.is_empty());
+    }
+
+    #[test]
+    fn on_apc_appends_in_order_across_multiple_calls() {
+        let (n, s) = cb();
+        n.on_apc(b"a");
+        n.on_apc(b"b");
+        n.on_apc(b"c");
+        let st = s.lock();
+        assert_eq!(
+            st.pending_apc,
+            vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+        );
+    }
+
+    #[test]
+    fn on_osc_title_still_populates_title() {
+        let (n, s) = cb();
+        n.on_osc(OSC_SET_TITLE, "hello");
+        assert_eq!(s.lock().title.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn on_bell_increments_counter() {
+        let (n, s) = cb();
+        n.on_bell();
+        n.on_bell();
+        assert_eq!(s.lock().bell_count, 2);
     }
 }

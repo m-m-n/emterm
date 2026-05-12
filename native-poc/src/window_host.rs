@@ -34,6 +34,8 @@ use tao::keyboard::Key as TaoKey;
 use tao::window::{Window, WindowBuilder};
 
 use crate::app::App;
+use crate::image::overlay::OverlayPipeline;
+use crate::image::ImageLayer;
 use crate::pty::input::{encode, Key, Modifiers};
 use crate::selection::{Pos, Selection, SelectionMode};
 
@@ -116,11 +118,23 @@ pub struct WindowHost {
     /// Lazily-initialized arboard clipboard. We only fail-loud once if the
     /// platform clipboard cannot be acquired (X11 without display, etc.).
     clipboard: Option<arboard::Clipboard>,
+    /// Phase 5: inline-image overlay (Kitty Graphics + SIXEL). Single
+    /// instance shared by all tabs — the per-tab `ImageProcessor` lives in
+    /// `Tab::image_proc` and produces `ImageEvent`s which are forwarded
+    /// here once per frame via `Tab::drain_image_events`.
+    image_layer: ImageLayer,
+    /// Reusable wgpu pipeline that draws every visible placement after
+    /// the egui pass on the same swapchain texture (`LoadOp::Load`).
+    overlay_pipeline: OverlayPipeline,
 }
 
 impl WindowHost {
     /// Build the window + GPU resources.
-    pub fn new(event_loop: &EventLoopWindowTarget<()>) -> Self {
+    ///
+    /// `image_quota_bytes` is the per-process cap on inline-image GPU
+    /// memory (sourced from `Settings::image_memory_quota_mb`); when the
+    /// cap is hit, the LRU-front image is evicted before any new upload.
+    pub fn new(event_loop: &EventLoopWindowTarget<()>, image_quota_bytes: u64) -> Self {
         let window = WindowBuilder::new()
             .with_title("eMterm PoC")
             .with_inner_size(tao::dpi::LogicalSize::new(960.0, 600.0))
@@ -203,6 +217,9 @@ impl WindowHost {
             }
         };
 
+        let image_layer = ImageLayer::new(image_quota_bytes);
+        let overlay_pipeline = OverlayPipeline::new(&device, format);
+
         Self {
             window,
             instance,
@@ -219,6 +236,8 @@ impl WindowHost {
             dragging: false,
             click_tracker: ClickTracker::default(),
             clipboard,
+            image_layer,
+            overlay_pipeline,
         }
     }
 
@@ -401,12 +420,30 @@ impl WindowHost {
             app.mark_full_redraw();
         }
 
+        // Phase 5: drain image events from every tab into the shared
+        // GPU `ImageLayer`. The drain must happen *before* the skip-frame
+        // check below because a new image arriving alone (no row dirty)
+        // still requires a frame to paint the overlay quad.
+        let mut have_pending_images = false;
+        for tab in app.tabs.iter_mut() {
+            let events = tab.drain_image_events();
+            if !events.is_empty() {
+                have_pending_images = true;
+                self.image_layer.ingest(events, &self.device, &self.queue);
+            }
+        }
+        // Keep image placements anchored to the current cell metrics —
+        // the renderer uses FALLBACK_CELL_W/H (Phase 4 placeholder).
+        self.image_layer
+            .recompute_pixel_dims(FALLBACK_CELL_W, FALLBACK_CELL_H);
+
         // Sub-phase 2 dirty-row diff: skip the entire egui+wgpu cycle when
         // nothing in the active tab needs to repaint. The first frame
         // (or any frame that follows a surface reconfigure) bypasses this
         // skip because `App::mark_full_redraw()` forces the dirty set to
-        // the full row range.
-        if !was_surface_dirty {
+        // the full row range. Phase 5: also bypass when there are pending
+        // image events to draw or any placements (re-paint over text).
+        if !was_surface_dirty && !have_pending_images {
             let dirty_count = if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
                 let dirty = app.dirty_rows_this_frame(&core);
@@ -422,7 +459,7 @@ impl WindowHost {
                 // on the `needs_full_redraw` flag bookkeeping for that.
                 None
             };
-            if matches!(dirty_count, Some(0)) {
+            if matches!(dirty_count, Some(0)) && self.image_layer.state.placement_count() == 0 {
                 return;
             }
         }
@@ -508,6 +545,39 @@ impl WindowHost {
                 .forget_lifetime();
             self.egui_renderer
                 .render(&mut pass, &paint_jobs, &screen_descriptor);
+        }
+
+        // Phase 5: image-overlay pass. Runs *after* egui with
+        // `LoadOp::Load` so the terminal cells egui just drew underneath
+        // are preserved, and the placement quads composit over them
+        // using premultiplied alpha-blend (configured on the pipeline).
+        if self.image_layer.state.placement_count() > 0 {
+            let commands = self.overlay_pipeline.build_frame(
+                &self.device,
+                &self.queue,
+                &self.image_layer,
+                self.surface_config.width,
+                self.surface_config.height,
+            );
+            if !commands.is_empty() {
+                let mut pass = encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("native-poc-image-overlay-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        occlusion_query_set: None,
+                        timestamp_writes: None,
+                    })
+                    .forget_lifetime();
+                self.overlay_pipeline.draw(&mut pass, &commands);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -617,7 +687,8 @@ fn tao_key_to_bytes(event: &tao::event::KeyEvent, mods: Modifiers) -> Option<Vec
 
 /// Run the event loop until the window is closed. Owns the App.
 pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
-    let mut host = WindowHost::new(&event_loop);
+    let image_quota_bytes = (app.settings.image_memory_quota_mb as u64) * 1024 * 1024;
+    let mut host = WindowHost::new(&event_loop, image_quota_bytes);
 
     // Push the initial grid size into the App before the first tab spawn.
     let (cols, rows) = host.grid_size();
