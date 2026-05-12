@@ -30,21 +30,19 @@ workflow:
     status: completed
     completed_at_commit: 647a79baab2569de65ffd174f155ab6cddf0eff2
   - id: implement
-    status: completed
-    completed_at_commit: 647a79baab2569de65ffd174f155ab6cddf0eff2
+    status: needs_update
+    completed_at_commit: 42637d881f42d9883bfd124fd12a4df1bbc305b4
     notes: |
-      Phase 0 (wgpu surface-init fix) + Phase 1 (term_images crate extraction)
-      completed. cargo test --workspace green (1646+ tests, 0 fail incl. 182
-      term_images, 849 app_lib, 597 term_core, 14 native-poc, 14 wasm).
-      Phase 0 manual smoke (3-launch panic-free) and Phase 1 legacy E2E
-      (./scripts/run-e2e-docker.sh) deferred to sdd.6 verify.
-      Phases 2-7 (dirty-row diff, cursor+SGR, selection+scrollback+paste,
-      inline image overlay, OSC dispatch matrix, 12h stability) are pending
-      future implementation sessions — multi-week scope per restruct.md
-      exceeds a single SDD run. /em-sdd:sdd re-run will resume from sdd.6
-      verify (needs_update).
+      Phase 0 (wgpu surface-init fix) + Phase 1 (term_images crate extraction) +
+      Phase 2 (FR1 dirty-row diff, commit 6930b1c) + Phase 3 partial (FR9 SGR +
+      FR2 cursor renderer + FR11 ambig width, commit 7ea11bc; FR2 parser route
+      は Phase 6 委譲) + X-button close hang fix (commit 0d2c879) completed.
+      cargo test --workspace green (1662+ tests, 0 fail).
+      Phases 4-7 (selection+scrollback+paste, inline image overlay, OSC dispatch
+      matrix, 12h stability) は 2026-05-12 セッションで着手開始。multi-week scope
+      のため複数セッションを跨ぐ可能性あり。
   - id: check
-    status: completed
+    status: needs_update
     completed_at_commit: 647a79baab2569de65ffd174f155ab6cddf0eff2
     notes: |
       Build/Test/Format: PASS (cargo build --workspace, 1646+ tests green,
@@ -57,7 +55,7 @@ workflow:
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: needs_update
-    completed_at_commit: d448a997616b4698788f3bbdcdcba0bdbdfeeb72
+    completed_at_commit: 42637d881f42d9883bfd124fd12a4df1bbc305b4
     notes: |
       d448a99 時点で再検証 (前回 647a79b の VERIFICATION_RESULT.md を更新)。
       staleness 軽量再検証: cargo build --workspace ✅ (1m26s)、cargo test --workspace ✅ (exit 0)。
@@ -118,6 +116,15 @@ workflow:
       のため大部分が引き続き deferred。
       FR3-FR8, FR10, FR12-FR14、TS-1-TS-45 の残部、SC-1/SC-2/SC-4/SC-5 は sub-phase 4-7 で再評価。
       残課題は sub-phase 4-7 未実装 + FR2 の parser route 配線 (sub-phase 6)。
+      ---
+      2026-05-12 sdd.6 再実行 (3 度目): HEAD = 42637d8 で `/em-sdd:sdd` 再起動。
+      staleness 軽量再検証 (cargo build --workspace ✅ 1m51s / cargo test --workspace ✅
+      1662 passed / 0 failed) を再実行し PASS 維持を確認。d448a99 → 42637d8 の差分
+      (6930b1c + a49b121 + 7ea11bc + 0d2c879 + 42637d8) は全て本 notes に記録済の
+      sub-phase 2/3 + close-hang fix + docs。新規実装無いため verify 結論は前回と同じ。
+      sub-phase 4-7 (FR3-FR8/FR10/FR12-FR14/NFR1/SC-4/SC-5/Manual 19 件) が引き続き
+      multi-week scope の Deferred のため verify status は `needs_update` 据置、
+      completed_at_commit を HEAD (42637d8) にバンプ。
 
 requirements:
   FR1:

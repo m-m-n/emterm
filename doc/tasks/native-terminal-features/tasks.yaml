@@ -188,39 +188,39 @@ phases:
     tasks:
       - id: selection-mode-extension
         title: Extend Selection struct with mode (Character/Word/Line) and word/line range resolution
-        status: pending
+        status: completed
         files:
           - native-poc/src/selection.rs
       - id: click-classifier
         title: Detect double/triple click using 500 ms window in window_host.rs
-        status: pending
+        status: completed
         files:
           - native-poc/src/window_host.rs
       - id: arboard-clipboard-hooks
         title: Hook PRIMARY auto-copy on mouse-up; CLIPBOARD on Ctrl+Shift+C; paste on Ctrl+Shift+V/middle-click
-        status: pending
+        status: completed
         files:
           - native-poc/src/window_host.rs
           - native-poc/src/selection.rs
       - id: bracketed-paste
         title: Implement bracketed_paste helper + sanitize_bracket_sequences; read DECSET 2004 from term_core
-        status: pending
+        status: completed
         files:
           - native-poc/src/selection.rs
           - native-poc/src/pty/mod.rs
       - id: scrollback-state-machine
         title: Introduce ScrollPosition enum (Live | OffsetFromLive) in app.rs with alt-screen suppression and auto-follow rule
-        status: pending
+        status: completed
         files:
           - native-poc/src/app.rs
       - id: scrollback-keybindings
         title: Route wheel / Shift+PageUp/Down / Shift+Home/End to ScrollPosition
-        status: pending
+        status: completed
         files:
           - native-poc/src/window_host.rs
       - id: scrollback-settings
         title: Add scrollback_lines setting (default 10000) and plumb to ring_buffer cap at Tab::spawn_shell
-        status: pending
+        status: completed
         files:
           - native-poc/src/settings.rs
           - native-poc/src/tabs.rs
