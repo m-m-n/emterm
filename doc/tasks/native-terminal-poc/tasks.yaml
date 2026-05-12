@@ -1,0 +1,305 @@
+schema_version: 1
+feature: native-terminal-poc
+
+phases:
+  - id: phase-1
+    name: Project scaffolding and window host
+    summary: Stand up the native-poc Cargo project with a tao window and egui+wgpu surface rendering a placeholder UI.
+    estimated_effort: small
+    tasks:
+      - id: scaffold-cargo-project
+        title: Create native-poc Cargo project and base files
+        status: completed
+        files:
+          - native-poc/Cargo.toml
+          - native-poc/README.md
+          - .gitignore
+      - id: boot-tao-event-loop
+        title: Boot tao event loop with a single window
+        status: completed
+        files:
+          - native-poc/src/main.rs
+          - native-poc/src/window_host.rs
+      - id: attach-wgpu-surface
+        title: Acquire wgpu adapter/device and attach surface
+        status: completed
+        files:
+          - native-poc/src/window_host.rs
+      - id: wgpu-surface-recovery
+        title: Handle SurfaceError::Lost / OutOfMemory by recreating the surface
+        status: completed
+        files:
+          - native-poc/src/window_host.rs
+      - id: wire-egui-integration
+        title: Integrate egui with tao+wgpu glue
+        status: completed
+        files:
+          - native-poc/src/window_host.rs
+      - id: render-placeholder-ui
+        title: Draw a placeholder UI
+        status: completed
+        files:
+          - native-poc/src/app.rs
+          - native-poc/src/window_host.rs
+      - id: initialize-logging
+        title: Initialize env_logger with origin tagging
+        status: completed
+        files:
+          - native-poc/src/logging.rs
+          - native-poc/src/main.rs
+
+  - id: phase-2
+    name: PTY bridge
+    summary: Spawn a real shell PTY, run reader/writer threads, and round-trip raw bytes to a placeholder buffer.
+    estimated_effort: medium
+    tasks:
+      - id: spawn-pty
+        title: Spawn PTY pair and child shell
+        status: completed
+        files:
+          - native-poc/src/pty/mod.rs
+          - native-poc/src/tabs.rs
+      - id: pty-reader-thread
+        title: Reader thread emits bytes and signals redraw
+        status: completed
+        files:
+          - native-poc/src/pty/mod.rs
+      - id: pty-writer-thread
+        title: Writer thread drains bounded input queue
+        status: completed
+        files:
+          - native-poc/src/pty/mod.rs
+      - id: key-encoder
+        title: Encode key events to PTY bytes
+        status: completed
+        files:
+          - native-poc/src/pty/input.rs
+      - id: resize-plumbing
+        title: Window resize → PTY size update
+        status: completed
+        files:
+          - native-poc/src/window_host.rs
+          - native-poc/src/pty/mod.rs
+      - id: pty-lifecycle-teardown
+        title: SIGHUP child and join threads on close
+        status: completed
+        files:
+          - native-poc/src/pty/mod.rs
+          - native-poc/src/tabs.rs
+      - id: pty-eof-handling
+        title: Map PTY EOF / read error to TabExited event, drain writer, leave other tabs untouched
+        status: completed
+        files:
+          - native-poc/src/pty/mod.rs
+          - native-poc/src/tabs.rs
+          - native-poc/src/app.rs
+
+  - id: phase-3
+    name: Minimal ANSI parser and grid
+    summary: Replace the raw byte buffer with a parser-driven grid covering the C0/CSI/OSC subset.
+    estimated_effort: large
+    tasks:
+      - id: parser-state-machine
+        title: State machine skeleton (Ground / Esc / CSI / OSC)
+        status: completed
+        files:
+          - native-poc/src/parser/mod.rs
+      - id: parser-c0
+        title: C0 control handlers
+        status: completed
+        files:
+          - native-poc/src/parser/c0.rs
+      - id: parser-csi-cursor-erase
+        title: CSI cursor and erase handlers
+        status: completed
+        files:
+          - native-poc/src/parser/csi.rs
+      - id: parser-csi-sgr
+        title: CSI SGR color and attribute handlers
+        status: completed
+        files:
+          - native-poc/src/parser/csi.rs
+      - id: parser-scroll-altscreen
+        title: DECSTBM and alt-screen modes
+        status: completed
+        files:
+          - native-poc/src/parser/csi.rs
+          - native-poc/src/grid/altscreen.rs
+      - id: parser-osc-basic-and-ext
+        title: OSC 0/2 and emterm-ext dispatch hook
+        status: completed
+        files:
+          - native-poc/src/parser/osc.rs
+      - id: grid-and-scrollback
+        title: Grid state and scrollback ring buffer
+        status: completed
+        files:
+          - native-poc/src/grid/mod.rs
+          - native-poc/src/grid/scrollback.rs
+
+  - id: phase-4
+    name: Rendering, selection, clipboard, paste
+    summary: Per-frame grid render plus mouse selection, system clipboard, and bracketed paste support.
+    estimated_effort: medium
+    tasks:
+      - id: per-frame-render
+        title: Grid-to-egui per-frame draw
+        status: completed
+        files:
+          - native-poc/src/render/mod.rs
+          - native-poc/src/window_host.rs
+      - id: theme-palette
+        title: Color and font resolution defaults
+        status: completed
+        files:
+          - native-poc/src/render/theme.rs
+      - id: selection-state
+        title: Anchor/extent selection state
+        status: completed
+        files:
+          - native-poc/src/selection.rs
+      - id: copy-shortcut
+        title: Ctrl+Shift+C copy via arboard
+        status: pending
+        files:
+          - native-poc/src/selection.rs
+          - native-poc/src/window_host.rs
+      - id: paste-shortcut
+        title: Ctrl+Shift+V paste with bracketed paste honoring
+        status: pending
+        files:
+          - native-poc/src/window_host.rs
+          - native-poc/src/pty/input.rs
+
+  - id: phase-5
+    name: Tabs
+    summary: Multiple PTYs, tab bar widget, and central keybinding map.
+    estimated_effort: small_to_medium
+    tasks:
+      - id: tab-vector-in-app
+        title: Maintain a vector of tabs with an active index
+        status: pending
+        files:
+          - native-poc/src/app.rs
+          - native-poc/src/tabs.rs
+      - id: tab-bar-widget
+        title: egui tab bar widget
+        status: pending
+        files:
+          - native-poc/src/ui/tab_bar.rs
+      - id: keybindings-map
+        title: Central keybinding map (Ctrl+Shift+T/W/Tab/Shift+Tab)
+        status: pending
+        files:
+          - native-poc/src/ui/keybinds.rs
+      - id: tab-focus-routing
+        title: Route input to the active tab
+        status: pending
+        files:
+          - native-poc/src/window_host.rs
+      - id: empty-window-policy
+        title: Close window on last-tab close
+        status: pending
+        files:
+          - native-poc/src/app.rs
+
+  - id: phase-6
+    name: OSC extension → Wry Markdown viewer
+    summary: Decode the emterm Markdown OSC payload and spawn a Wry viewer reusing the existing HTML harness.
+    estimated_effort: medium
+    tasks:
+      - id: osc-decode
+        title: Decode emterm Markdown OSC payload
+        status: pending
+        files:
+          - native-poc/src/parser/osc.rs
+      - id: main-thread-queue-drain
+        title: Drain ViewerRequest queue on the main thread
+        status: pending
+        files:
+          - native-poc/src/app.rs
+          - native-poc/src/viewer/mod.rs
+      - id: wry-markdown-spawner
+        title: Spawn a Wry window with embedded HTML harness
+        status: pending
+        files:
+          - native-poc/src/viewer/markdown.rs
+      - id: payload-injection
+        title: Inject Markdown payload via init script
+        status: pending
+        files:
+          - native-poc/src/viewer/markdown.rs
+      - id: viewer-lifecycle
+        title: Track open viewers and reap on close
+        status: pending
+        files:
+          - native-poc/src/viewer/mod.rs
+
+  - id: phase-7
+    name: Settings.json loader and fcitx5 IME
+    summary: Apply existing settings.json at startup; hook fcitx5 IME via egui, fall back to tao raw-IME if needed.
+    estimated_effort: medium
+    tasks:
+      - id: settings-model
+        title: PoC subset settings model
+        status: pending
+        files:
+          - native-poc/src/settings.rs
+      - id: settings-locate-and-parse
+        title: Locate and parse existing settings.json with serde
+        status: pending
+        files:
+          - native-poc/src/settings.rs
+      - id: settings-apply
+        title: Apply font/palette/scrollback overrides
+        status: pending
+        files:
+          - native-poc/src/render/theme.rs
+          - native-poc/src/grid/scrollback.rs
+      - id: ime-egui-builtin
+        title: Hook egui IME preedit/commit events
+        status: pending
+        files:
+          - native-poc/src/window_host.rs
+          - native-poc/src/tabs.rs
+      - id: ime-tao-raw-fallback
+        title: Conditional tao raw-IME glue (only if egui IME is insufficient)
+        status: pending
+        files:
+          - native-poc/src/ime/linux_fcitx5.rs
+
+  - id: phase-8
+    name: Verification and PoC measurements
+    summary: Walk the VERIFICATION.md checklist, run the 8h Claude Code session, sample build times, and author VERIFICATION_RESULT.md.
+    estimated_effort: medium
+    tasks:
+      - id: verification-checklist-walkthrough
+        title: Execute manual checklist
+        status: pending
+        files:
+          - doc/tasks/native-terminal-poc/VERIFICATION_RESULT.md
+      - id: long-run-claude-code
+        title: 8h Claude Code session with memory snapshots
+        status: pending
+        files:
+          - doc/tasks/native-terminal-poc/VERIFICATION_RESULT.md
+      - id: build-time-sampling
+        title: cargo build sampling vs current Tauri build
+        status: pending
+        files:
+          - doc/tasks/native-terminal-poc/VERIFICATION_RESULT.md
+      - id: viewer-stress-test
+        title: Rapid viewer open/close
+        status: pending
+        files:
+          - doc/tasks/native-terminal-poc/VERIFICATION_RESULT.md
+      - id: resilience-checks
+        title: Walk TS-27 (minimize), TS-28 (wgpu device loss), TS-29 (PTY abnormal termination)
+        status: pending
+        files:
+          - doc/tasks/native-terminal-poc/VERIFICATION_RESULT.md
+      - id: write-verification-result
+        title: Author VERIFICATION_RESULT.md with Go/No-Go
+        status: pending
+        files:
+          - doc/tasks/native-terminal-poc/VERIFICATION_RESULT.md

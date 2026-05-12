@@ -242,10 +242,12 @@ mod tests {
 
         let result = registry.send("session-1", vec![0x61]);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Writer channel closed"),);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Writer channel closed"),
+        );
     }
 
     /// Mock writer that records all written data for test verification.

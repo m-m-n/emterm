@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 #[cfg(feature = "gui")]
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(feature = "gui")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "gui")]
@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 #[cfg(feature = "gui")]
-use super::passthrough_scanner::PassthroughScanner;
-#[cfg(feature = "gui")]
 use super::SessionId;
+#[cfg(feature = "gui")]
+use super::passthrough_scanner::PassthroughScanner;
 
 /// Default raw passthrough capacity for non-mux sessions (4 MiB).
 pub const HIDDEN_PASSTHROUGH_CAPACITY_NONMUX: usize = 4 * 1024 * 1024;

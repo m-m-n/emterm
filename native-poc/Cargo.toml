@@ -1,0 +1,58 @@
+[package]
+name = "emterm-native-poc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native terminal + Wry viewer hybrid PoC for eMterm restructuring"
+
+[[bin]]
+name = "emterm-native-poc"
+path = "src/main.rs"
+
+[dependencies]
+# Window + event loop (tao matches workspace tauri 2.9.5 transitive)
+tao = "0.34"
+
+# GPU surface + egui rendering
+wgpu = "22"
+egui = "0.29"
+egui-wgpu = "0.29"
+
+# WebView for Markdown viewer (Phase 6) — matches workspace tauri 2.9.5 transitive
+wry = "0.53"
+
+# term_core (Phase 6: replaces native-poc's stand-in parser/grid)
+term_core = { path = "../crates/term_core" }
+
+# PTY (Phase 2)
+portable-pty = "0.8"
+
+# Clipboard (Phase 4)
+arboard = "3"
+
+# Unicode (Phase 3)
+unicode-width = "0.2"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Serialization (Phase 7)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Utilities
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+pollster = "0.4"
+raw-window-handle = "0.6"
+bytes = "1"
+base64 = "0.22"
+once_cell = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# NOTE: dev/release profiles are managed at the workspace root Cargo.toml
+# since Phase 6. Per-package profile sections produce warnings and are
+# ignored by Cargo when a workspace root profile exists.

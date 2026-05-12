@@ -39,7 +39,7 @@ pub use session::PtySession;
 #[cfg(feature = "gui")]
 pub use shell::detect_default_shell;
 pub use visibility::{
-    RawPassthroughBuffer, HIDDEN_PASSTHROUGH_CAPACITY_MUX, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX,
+    HIDDEN_PASSTHROUGH_CAPACITY_MUX, HIDDEN_PASSTHROUGH_CAPACITY_NONMUX, RawPassthroughBuffer,
 };
 #[cfg(feature = "gui")]
 pub use visibility::{SessionVisibilityState, VisibilityRegistry};

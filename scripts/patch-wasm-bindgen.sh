@@ -29,12 +29,28 @@ if ! grep -q '__wbg_reset' "$WASM_JS"; then
 }'
   EXPORT_LINE='export { initSync, __wbg_init as default, __wbg_reset as reset };'
 
-  # Use awk to replace the export line (more robust than sed for multiline)
+  # wasm-bindgen emits either of two export forms depending on version:
+  #   Old (<= 0.2.99): `export { initSync, __wbg_init as default };`
+  #   New (>= 0.2.100): `export { initSync };` followed by
+  #                     `export default __wbg_init;` on the next line.
+  # The awk script handles both shapes.
   awk -v reset="$RESET_FN" -v exportline="$EXPORT_LINE" '
     /^export \{ initSync, __wbg_init as default \};$/ {
       print reset
       print ""
       print exportline
+      next
+    }
+    /^export \{ initSync \};$/ {
+      print reset
+      print ""
+      print exportline
+      seen_init = 1
+      next
+    }
+    seen_init && /^export default __wbg_init;$/ {
+      # Skip — combined into the merged export line above.
+      seen_init = 0
       next
     }
     { print }
