@@ -36,11 +36,37 @@ cargo test -p emterm-native-poc
 cargo fmt --all
 ```
 
-## Known limits (PoC scope)
+## Phase 3 feature matrix (`native-terminal-features` SDD)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Dirty-row diff render (FR1) | ✅ Phase 2 | `App::dirty_rows_this_frame`, frame-level skip when empty, `EMTERM_FULL_REDRAW=1` to disable |
+| SGR full reflection (FR9) | ✅ Phase 3 | bold / dim / italic / underline / reverse / hidden / strikethrough; double / curly underline + SGR 58 deferred until `term_core` expands |
+| Cursor render (FR2) | ✅ Phase 3 | DECSCUSR / DECTCEM / OSC 12 honored by renderer; parser route via OSC 22 / DECSCUSR landed in Phase 6 |
+| Ambiguous width (FR11) | ✅ Phase 3 | `Settings::ambiguous_width_mode` (`Narrow` / `Wide`) |
+| Selection (FR3) | ✅ Phase 4 | character / word / line modes (500 ms click classifier); PRIMARY auto-copy + Ctrl+Shift+C |
+| Paste (FR4) | ✅ Phase 4 | Ctrl+Shift+V (CLIPBOARD) + middle-click (PRIMARY); bracketed paste wrap per DECSET 2004; `\e[201~` sanitization |
+| Scrollback (FR5) | ✅ Phase 4 | `Settings::scrollback_lines` (default 10000); `ScrollPosition` enum; alt-screen suppression |
+| Inline image: Kitty (FR6) | ✅ Phase 5 | `ImageLayer` + wgpu textured-quad pipeline (Rgba8UnormSrgb, source-over); LRU + 320 MB quota |
+| Inline image: SIXEL (FR7) | ✅ Phase 5 | Same pipeline; DCS path |
+| OSC dispatch matrix (FR8) | ✅ Phase 6 | All action types: 0/1/2/4/7/8/9/10/11/12/22/52/104/110/111/112/133/100/101/255 |
+| Resize / reflow / image follow (FR10) | ✅ Phase 4+5 | `ImageLayer::recompute_pixel_dims` on resize |
+| OSC 9 notifications (FR12) | ✅ Phase 6 | `notify-rust 4.x`; in-process `(title, body)` dedupe within 1 s |
+| OSC 52 clipboard (FR13) | ✅ Phase 6 | `Settings::{clipboard_read_osc52, clipboard_max_size_osc52}` policy gate (defaults: true / 10 MiB) |
+| Long-run stability (FR14) | 🟡 Phase 7 manual | 12+ h Claude Code session on host (RSS / GPU samples at 4 h / 8 h / 12 h) |
+
+### Build / test status (workspace gate)
+
+- `cargo build --workspace`: PASS
+- `cargo test --workspace`: 1801 passed / 0 failed (816 app_lib + 597 term_core + 182 term_images + 169 native-poc + 37 ancillary)
+- `cargo fmt --all -- --check`: PASS
+- `cargo clippy -p emterm-native-poc`: 19 dead-code warnings (forward-staged Theme/CursorStyle/renderer wiring); no errors
+
+## Known limits (Phase 3 follow-up)
 
 - Linux only (Ubuntu 22.04 family). No macOS, no Windows.
-- No inline images (Kitty/SIXEL out of scope).
-- No mux / no split panes.
-- Existing `wasm/src/` parser is **not** reused; a minimal new parser lives in
-  `src/parser/`.
-- E2E suite (`e2e-tests/`) is unrelated and stays on the Tauri build.
+- `Theme::apply_osc` mutates the OSC color cache; the renderer still reads `Theme::default()` for palette resolution. Wiring the per-tab live `Theme` into `render/mod.rs` is the next Phase 3 follow-up (no SDD change required).
+- OSC 52 read/write buffers (`pending_clipboard_writes`/`pending_clipboard_reads`) are drained on the UI thread in `window_host` follow-up; policy gate is fully in place.
+- `NotifyRustSink` requires a D-Bus session (unavailable inside Docker). `TestSink` covers automated coverage; the user smoke-tests on host.
+- E2E suite (`e2e-tests/`) targets the legacy Tauri WebView build only (SC-6 rationale).
+- 12+ h Claude Code session is the only remaining manual gate (Phase 7).

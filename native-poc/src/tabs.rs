@@ -184,10 +184,10 @@ impl Tab {
                 }
                 changed = true;
             }
-            if !pending_apc.is_empty() || !pending_dcs.is_empty() {
-                if self.drain_and_decode_images(&pending_apc, &pending_dcs) {
-                    changed = true;
-                }
+            if (!pending_apc.is_empty() || !pending_dcs.is_empty())
+                && self.drain_and_decode_images(&pending_apc, &pending_dcs)
+            {
+                changed = true;
             }
         }
 

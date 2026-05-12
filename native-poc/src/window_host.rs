@@ -288,8 +288,8 @@ impl WindowHost {
         let h = self.surface_config.height.max(1);
         // Reserve ~36 px for the top bar.
         let usable_h = h.saturating_sub(36).max(FALLBACK_CELL_H);
-        let cols = (w / FALLBACK_CELL_W).max(20).min(500) as u16;
-        let rows = (usable_h / FALLBACK_CELL_H).max(5).min(200) as u16;
+        let cols = (w / FALLBACK_CELL_W).clamp(20, 500) as u16;
+        let rows = (usable_h / FALLBACK_CELL_H).clamp(5, 200) as u16;
         (cols, rows)
     }
 
