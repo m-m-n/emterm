@@ -462,6 +462,15 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
         }
         Event::WindowEvent { event, .. } => match event {
             WindowEvent::CloseRequested => {
+                // Tao's `event_loop.run` is `-> !` and terminates the
+                // process without dropping the closure's captures, so we
+                // tear down PTY-owning tabs explicitly here. Otherwise
+                // the kill + reader/writer thread join from
+                // `PtySession::Drop` either races with process exit (PTY
+                // threads leak briefly) or makes the WM probe time out
+                // while the window is being destroyed.
+                log::info!("native-poc: CloseRequested → shutting down PTY tabs");
+                app.tabs.clear();
                 *control_flow = ControlFlow::Exit;
             }
             WindowEvent::Resized(new_size) => {
