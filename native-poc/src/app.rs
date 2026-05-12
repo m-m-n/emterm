@@ -7,6 +7,7 @@
 //! renderer to skip frames that wouldn't change a pixel.
 //! Later phases extend this with a viewer registry and settings.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use term_core::terminal_core::TerminalCore;
@@ -48,9 +49,11 @@ pub struct App {
     /// Active mouse selection on the active tab, if any. Phase 4 owns this;
     /// later phases may move it per-tab when tabs preserve selection.
     pub selection: Option<Selection>,
-    /// Runtime settings (ambiguous-width policy and future fields).
-    /// Loaded from `settings.json` in Phase 7; today initialized to default.
-    pub settings: Settings,
+    /// Runtime settings (ambiguous-width policy, OSC 52 policy, and
+    /// future fields). Loaded from `settings.json` in Phase 7; today
+    /// initialized to default. Wrapped in `Arc` so the per-tab
+    /// `NativeCallbacks` can share an immutable view without copying.
+    pub settings: Arc<Settings>,
     /// Scrollback position. `Live` = auto-follow; `OffsetFromLive(n)` = the
     /// viewport is pinned `n` rows above the live tail.
     pub scroll_position: ScrollPosition,
@@ -105,7 +108,7 @@ impl App {
             active: 0,
             cell_size: GridDims::default(),
             selection: None,
-            settings: Settings::new(),
+            settings: Arc::new(Settings::new()),
             scroll_position: ScrollPosition::Live,
             alt_screen: false,
             blink_started: Instant::now(),
@@ -145,6 +148,7 @@ impl App {
             dims.cols,
             dims.rows,
             self.settings.scrollback_lines,
+            self.settings.clone(),
         );
         self.tabs.push(tab);
         self.active = 0;
