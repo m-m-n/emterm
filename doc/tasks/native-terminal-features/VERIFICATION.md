@@ -240,3 +240,35 @@ Phase 3 adds **no new E2E specs**: no headless driver covers tao+wgpu+egui. Manu
 - **Files modified (Phase 5)**: `native-poc/Cargo.toml` (term_images dep), `native-poc/src/main.rs` (module declaration), `native-poc/src/settings.rs` (image_memory_quota_mb), `native-poc/src/callbacks.rs` (pending_apc/dcs buffers), `native-poc/src/tabs.rs` (ImageProcessor + drain_and_decode_images + drain_image_events), `native-poc/src/window_host.rs` (ImageLayer + OverlayPipeline + image-overlay render pass).
 - **Existing E2E regression**: not re-run for Phase 5 in isolation; deferred to Phase 7 (per SPEC.md SC-6 rationale, legacy E2E is out of this SDD's gate, and tauri-driver-based E2E requires the legacy WebView build which is unaffected by native-poc changes).
 - **Known deferred**: image animation (Kitty `a=f`/`a=a`/`a=c`) — `ImageEvent::Animation` is logged at debug level and not applied to the GPU layer in Phase 5; tracked for a follow-up phase. Plumbing is in place (`split_image_events` + `ingest_state_events` already handle the variant cleanly).
+
+## Implementation Results — Phase 6 (OSC dispatch matrix + notifications + clipboard policy)
+
+- **Build**: `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo build -p emterm-native-poc"` exit 0; full workspace `cargo build --workspace` exit 0.
+- **Tests**: `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --workspace"` exit 0.
+  - native-poc went from 104 → 169 passing tests (+65 new tests across `callbacks::tests`, `render::theme::tests`, and `settings::tests`). Per-crate counts: app_lib 816+10+10+7+6, term_core 597, term_images 182, wasm 4, emterm-native-poc 169. Total: 1801 passing (vs. 1736 Phase 5 baseline).
+  - Specific TS coverage added:
+    - TS-1 (`OSC 0` → `state.title + state.icon_name`) — `callbacks::tests::osc_0_sets_title_and_icon`.
+    - TS-2 (`OSC 1` icon-only, log) — `callbacks::tests::osc_1_sets_icon_name_only`.
+    - TS-3 (`OSC 2` title-only) — `callbacks::tests::osc_2_sets_title_only`.
+    - TS-4 (`OSC 4` palette set) — `callbacks::tests::osc_4_sets_palette_and_marks_theme_dirty` + `render::theme::tests::apply_osc_4_*` (3 variants).
+    - TS-5 (`OSC 7` cwd capture) — `callbacks::tests::osc_7_sets_cwd`.
+    - TS-6 (`OSC 8` log-only) — `callbacks::tests::osc_8_is_logged_only`.
+    - TS-7 (`OSC 9` notify with rate-limit) — `callbacks::tests::osc_9_emits_notification` + `osc_9_no_separator_uses_fallback_title` + `rate_limiter_dedupes_identical_pair_within_window` + `rate_limiter_allows_after_window_elapsed` + `rate_limiter_distinct_pairs_not_deduped`.
+    - TS-8, TS-9, TS-10 (`OSC 10/11/12` fg/bg/cursor) — `callbacks::tests::osc_10_sets_fg_and_marks_theme_dirty` etc. + `render::theme::tests::apply_osc_{10,11,12}_*` (4 variants).
+    - TS-11 (`OSC 22` cursor style) — `callbacks::tests::osc_22_updates_cursor_style` + `render::theme::tests::apply_osc_22_{block,underline,bar,empty,invalid}`.
+    - TS-12 (`OSC 52` deny on read disabled) — `callbacks::tests::osc_52_query_denied_when_read_disabled`.
+    - TS-13 (`OSC 52` allow within default policy) — `callbacks::tests::osc_52_write_default_allows_within_quota` + `osc_52_query_default_allows_read` + `osc_52_write_denied_when_over_quota` + `osc_52_clear_pushes_empty_write` + `parse_osc52_*` (4 variants).
+    - TS-14..TS-17 (`OSC 104/110/111/112` resets) — `callbacks::tests::osc_{104,110,111,112}_resets_*` + `render::theme::tests::apply_osc_{104,110,111,112}_*`.
+    - TS-18 (`OSC 133` prompt mark) — `callbacks::tests::osc_133_{a_records_prompt_start,b_c_d_records_each,d_with_nonzero_exit_code}` + `parse_osc133_unknown_returns_none`.
+    - TS-19 (`OSC 100` viewer queue) — `callbacks::tests::osc_100_emterm_extension_pushes_to_queue`.
+    - TS-20 (`OSC 101` iTerm2 log) — `callbacks::tests::osc_101_iterm2_is_logged_only`.
+    - TS-21 (`OSC 255` unknown warn) — `callbacks::tests::osc_255_unknown_is_logged_only`.
+    - TS-35 (Settings defaults for OSC 52 fields mirror legacy) — `settings::tests::default_clipboard_read_osc52_is_true` + `default_clipboard_max_size_osc52_is_10_mib`.
+- **Code quality**: `cargo fmt --all -- --check` exit 0 (no diff). Clippy not re-run (per Phase 5 / Phase 7 deferral policy — only the same dead-code warning kinds as already present).
+- **Files created (Phase 6)**: none.
+- **Files modified (Phase 6)**: `native-poc/Cargo.toml` (notify-rust = "4"), `native-poc/src/render/theme.rs` (CursorStyle enum, palette256 overlay, cursor_fg, Theme::apply_osc + parse_color_spec), `native-poc/src/settings.rs` (clipboard_read_osc52 + clipboard_max_size_osc52 mirroring legacy field names), `native-poc/src/callbacks.rs` (full OSC matrix + NotificationSink trait + NotifyRustSink + NotificationRateLimiter with injectable clock + PromptMark + OSC 52 policy gate), `native-poc/src/tabs.rs` (Tab now owns Arc<Mutex<Theme>>; pump drains theme_dirty + mark_all_dirty), `native-poc/src/app.rs` (settings: Arc<Settings>).
+- **Existing E2E regression**: not re-run for Phase 6 in isolation; deferred to Phase 7 (legacy E2E excluded per SPEC.md SC-6 rationale; native-poc has no headless driver).
+- **Known deferred**:
+  - OSC 52 _write/read_ side effects to `arboard` happen on the UI thread; `Tab::pump` currently buffers `pending_clipboard_writes` / `pending_clipboard_reads` but the UI-thread drain that posts the OSC 52 query response back through the PTY is wired up in a follow-up sub-phase (`arboard::Clipboard` is not `Sync`, so the integration belongs in `window_host`).
+  - The renderer still constructs `Theme::default()` per-frame; `Tab.theme: Arc<Mutex<Theme>>` is plumbed and `theme_dirty` already triggers `mark_all_dirty`, but the render path itself reads the shared theme in a separate follow-up. The OSC color/style state is fully captured today (visible via tests).
+  - `NotifyRustSink` is wired but never instantiated from tests; Docker E2E does not exercise D-Bus. Manual verification (`printf '\033]9;hello\007'`) is the FR12 acceptance gate and runs as part of Phase 7.
