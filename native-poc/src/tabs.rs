@@ -16,6 +16,8 @@ use term_images::image_proc::{ImageEvent, ImageProcessor};
 use crate::callbacks::{EmtermOscRequest, NativeCallbackState, NativeCallbacks};
 use crate::image::{parse as image_parse, split_image_events};
 use crate::pty::{ExitReason, PtyEvent, PtySession};
+use crate::render::theme::Theme;
+use crate::settings::Settings;
 
 // Default scrollback capacity now lives on `Settings` (`DEFAULT_SCROLLBACK_LINES`
 // in `crate::settings`); the caller passes the desired value into
@@ -25,6 +27,15 @@ pub struct Tab {
     pub title: String,
     pub core: Arc<Mutex<TerminalCore>>,
     pub cb_state: Arc<Mutex<NativeCallbackState>>,
+    /// Per-tab theme. OSC 4/10/11/12/22/104/110/111/112 mutate this in
+    /// place through `NativeCallbacks::handle_theme`; the renderer reads
+    /// the same `Arc<Mutex<Theme>>` so updates take effect on the next
+    /// frame. Phase 6 only wires the dirty-flag and mutation path —
+    /// rendering still reads `Theme::default()` until the wiring change
+    /// lands in a later sub-phase. The Arc is shared so it stays alive
+    /// for the lifetime of the tab.
+    #[allow(dead_code)] // Phase 3 renderer wiring will read this.
+    pub theme: Arc<Mutex<Theme>>,
     // Drop order matters: `events` must drop before `pty`. Struct fields
     // drop in declaration order, so `events` (the Receiver) closing first
     // disconnects the bounded(256) channel from the reader/writer side.
@@ -68,6 +79,7 @@ impl Tab {
         cols: u16,
         rows: u16,
         scrollback_lines: u32,
+        settings: Arc<Settings>,
     ) -> Self {
         let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(256);
         let pty = match PtySession::spawn(cols, rows, tx) {
@@ -81,12 +93,18 @@ impl Tab {
         // Construct the core and install our native callbacks.
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
         let cb_state = Arc::new(Mutex::new(NativeCallbackState::default()));
-        core.callbacks = Some(Box::new(NativeCallbacks::new(cb_state.clone())));
+        let theme = Arc::new(Mutex::new(Theme::default()));
+        core.callbacks = Some(Box::new(NativeCallbacks::new(
+            cb_state.clone(),
+            theme.clone(),
+            settings,
+        )));
 
         Self {
             title: title.into(),
             core: Arc::new(Mutex::new(core)),
             cb_state,
+            theme,
             pty,
             events: rx,
             exited: false,
@@ -151,7 +169,15 @@ impl Tab {
             // — see comment in `drain_and_decode_images` below).
             let pending_apc: Vec<Vec<u8>> = std::mem::take(&mut s.pending_apc);
             let pending_dcs: Vec<Vec<u8>> = std::mem::take(&mut s.pending_dcs);
+            // Phase 6: drain the theme-dirty latch. When an OSC 4/10/11/12/
+            // 22/104/110/111/112 mutated the shared `Theme`, every row
+            // must repaint with the new palette on the next frame.
+            let theme_changed = std::mem::take(&mut s.theme_dirty);
             drop(s);
+            if theme_changed {
+                self.core.lock().mark_all_dirty();
+                changed = true;
+            }
             if !responses.is_empty() {
                 for r in responses {
                     self.write(r);

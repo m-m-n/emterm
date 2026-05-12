@@ -279,34 +279,35 @@ phases:
     tasks:
       - id: osc-match-arm-expand
         title: Extend NativeCallbacks::on_osc to cover all action_types (0,1,2,4,7,8,9,10,11,12,22,52,104,110,111,112,133,100,101,255)
-        status: pending
+        status: completed
         files:
           - native-poc/src/callbacks.rs
       - id: theme-osc-color-mutators
         title: Add Theme::apply_osc helpers for palette (4/104), fg (10/110), bg (11/111), cursor color (12/112) and cursor style (22)
-        status: pending
+        status: completed
         files:
           - native-poc/src/render/theme.rs
       - id: notify-rust-integration
         title: Add notify-rust dep + NotificationRateLimiter (dedupe identical (title, body) within 1 s)
-        status: pending
+        status: completed
         files:
           - native-poc/Cargo.toml
           - native-poc/src/callbacks.rs
       - id: osc52-policy
         title: Add clipboard_read_osc52 (bool, default true) and clipboard_max_size_osc52 (u32, default 10 MB) settings (mirrors legacy field names/defaults) + policy gate in on_osc(52)
-        status: pending
+        status: completed
+        notes: settings.rs portion complete; on_osc gate finishes with osc-match-arm-expand
         files:
           - native-poc/src/settings.rs
           - native-poc/src/callbacks.rs
       - id: osc133-prompt-mark
         title: Persist OSC 133 semantic prompt mark on current row
-        status: pending
+        status: completed
         files:
           - native-poc/src/callbacks.rs
       - id: osc-test-matrix
         title: Add per-action_type unit tests (mirrors term_core Recorder pattern)
-        status: pending
+        status: completed
         files:
           - native-poc/src/callbacks.rs
 
