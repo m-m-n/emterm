@@ -83,9 +83,20 @@ workflow:
       timeout 5s ./target/debug/emterm-native-poc × 3、panic / ERROR_SURFACE_LOST_KHR ともに観測なし、
       window 起動 host 目視確認済)。Docker + Xvfb は Vulkan surface 拡張不在で create_surface_unsafe
       が fail するため native-poc smoke は host 必須と判明。
-      Manual 19 件 (E2E Not Possible 11 + Security 4 + Performance 4) は Phase 2-7 未実装のため全件 deferred。
-      FR1-FR14、TS-1-TS-45、SC-1/SC-2/SC-4/SC-5 の残部は Phase 2-7 で再評価。
-      残課題は sub-phase 2-7 未実装のみ。
+      ---
+      sub-phase 2 (FR1 dirty-row diff renderer) を本セッション後半で実装、commit 6930b1c。
+      App::dirty_rows_this_frame で union (term_core dirty + cursor history + selection history)、
+      window_host::render で empty なら egui+wgpu サイクル全スキップ (egui immediate-mode 制約で
+      per-row mesh skip は将来最適化に延期、frame-level skip で代替)、record_render_state で
+      previous_cursor / previous_selection 保存と core.clear_dirty()。EMTERM_FULL_REDRAW=1 で
+      最適化 OFF (triage 用)。native-poc 21 unit tests pass (新規 7 件 dirty tracking)、
+      cargo test --workspace 1653+ green、runtime debug log で typical interactive frame が
+      1/31 dirty row、idle は skip、shell 多行更新で 31/31 を確認。
+      ---
+      Manual 19 件 (E2E Not Possible 11 + Security 4 + Performance 4) は sub-phase 3-7 未実装のため
+      大部分が引き続き deferred。
+      FR2-FR14、TS-1-TS-45 の残部、SC-1/SC-2/SC-4/SC-5 は sub-phase 3-7 で再評価。
+      残課題は sub-phase 3-7 未実装。
 
 requirements:
   FR1:

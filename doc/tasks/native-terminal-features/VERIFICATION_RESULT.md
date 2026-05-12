@@ -18,7 +18,7 @@
 |------|------|
 | sub-phase 0 (wgpu surface-init fix / `surface_dirty` 遅延 configure + Lost/Outdated 復帰) | ✅ PASS |
 | sub-phase 1 (`term_images` crate 抽出 / src-tauri からの `git mv` + 再エクスポート) | ✅ PASS |
-| sub-phase 2 (FR1 dirty-row diff renderer)                                            | 🟡 Deferred |
+| sub-phase 2 (FR1 dirty-row diff renderer)                                            | ✅ PASS (commit 6930b1c) |
 | sub-phase 3 (FR2 cursor 本実装 + FR9 SGR + FR11 ambiguous width)                     | 🟡 Deferred |
 | sub-phase 4 (FR3 selection + FR4 paste + FR5 scrollback)                             | 🟡 Deferred |
 | sub-phase 5 (FR6 Kitty + FR7 SIXEL native overlay + FR10 image follow)               | 🟡 Deferred |
@@ -121,7 +121,9 @@
 | `native-poc/src/selection.rs` 拡張 (word/line/bracketed paste) | 🟡 未拡張 | sub-phase 4 |
 | `native-poc/src/settings.rs` 拡張 (scrollback / image_quota / ambiguous_width / clipboard_*) | 🟡 stub のまま (`//! settings.json loader. Phase 7.`) | sub-phase 4-6 |
 | `native-poc/src/tabs.rs` 拡張 (cwd / scrollback / ImageEvent::Response drain) | 🟡 未拡張 | sub-phase 4-5 |
-| `native-poc/src/render/mod.rs` 拡張 (dirty-row diff / full SGR / cursor / image overlay) | 🟡 minimal stub のまま | sub-phase 2-3-5 |
+| `native-poc/src/render/mod.rs` 拡張 (dirty-row diff / full SGR / cursor / image overlay) | 🟡 sub-phase 2 部分完了 (doc comment 更新、frame-level skip 戦略の記録)、SGR / cursor / image は未着手 | sub-phase 2 ✅ / sub-phase 3-5 🟡 |
+| `native-poc/src/app.rs` dirty 追跡 state 拡張 (sub-phase 2) | ✅ 完了 (commit 6930b1c) | sub-phase 2 |
+| `native-poc/src/window_host.rs` frame-skip ロジック (sub-phase 2) | ✅ 完了 (commit 6930b1c) | sub-phase 2 |
 | `native-poc/src/render/theme.rs` 拡張 (palette / fg / bg / cursor の OSC 連動) | 🟡 Phase 1 PoC の minimal 16色 palette のまま | sub-phase 3 |
 | `native-poc/README.md` Phase 3 機能マトリクス | 🟡 未更新 | sub-phase 5/7 |
 
@@ -146,7 +148,7 @@
 
 | ID | タイトル | 対応 sub-phase | 本セッションでの結果 |
 |----|----------|----------------|----------------------|
-| FR1 | dirty-row diff rendering | sub-phase 2 | 🟡 Deferred |
+| FR1 | dirty-row diff rendering | sub-phase 2 | ✅ PASS (commit 6930b1c) — App::dirty_rows_this_frame で union 計算、record_render_state で clear_dirty、window_host render() で empty なら全フレームスキップ。7 unit tests + runtime debug log 検証済 |
 | FR2 | カーソル本実装 (DECSCUSR/OSC22/OSC12/DECTCEM) | sub-phase 3 | 🟡 Deferred |
 | FR3 | 選択本実装 (char/word/line, PRIMARY auto-copy, Ctrl+Shift+C) | sub-phase 4 | 🟡 Deferred |
 | FR4 | ペースト + bracketed paste (DECSET 2004) | sub-phase 4 | 🟡 Deferred |
