@@ -4,6 +4,15 @@
 //! (`get_cell_char`, `get_cell_fg/bg/flags`, `get_cursor_*`) instead of the
 //! Phase 1 PoC's bespoke `Grid` type. Colors are decoded from the packed
 //! `u32` returned by `get_cell_fg/bg`.
+//!
+//! Sub-phase 2 (dirty-row diff): the per-cell loop below still iterates the
+//! full grid on every invocation, but the caller (`window_host::render`)
+//! now skips the entire egui run when `App::dirty_rows_this_frame` is empty.
+//! egui's immediate-mode pipeline rebuilds tessellation per frame, so true
+//! per-row skipping requires a persistent offscreen target — that lives in
+//! a future sub-phase. Today the savings come from frame-level skip plus
+//! `term_core::clear_dirty()` consumption synchronized with each rendered
+//! frame.
 
 pub mod theme;
 
