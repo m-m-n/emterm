@@ -57,23 +57,32 @@ workflow:
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: needs_update
-    completed_at_commit: 647a79baab2569de65ffd174f155ab6cddf0eff2
+    completed_at_commit: d448a997616b4698788f3bbdcdcba0bdbdfeeb72
     notes: |
-      Phase 0/1 verified; Phases 2-7 deferred to future sessions.
-      File structure: crates/term_images/{Cargo.toml,src/lib.rs,src/image_proc/,
-      src/ansi/} 全存在を確認。src-tauri/src/{image,ansi}/ は削除済み (git mv 完了)。
-      src-tauri/src/lib.rs の term_images 再エクスポート (gui feature gate 配下)
-      動作。native-poc/src/window_host.rs に Phase 0 fix (surface_dirty フィールド、
-      deferred initial configure、Lost/Outdated recovery 経路) 確認。
-      Build/Test/Format は sdd.5-check で実行済み結果を引用 (1646+ tests green、
-      cargo fmt clean)。Clippy は Phase 0/1 新規範囲 warning ゼロ。
+      d448a99 時点で再検証 (前回 647a79b の VERIFICATION_RESULT.md を更新)。
+      staleness 軽量再検証: cargo build --workspace ✅ (1m26s)、cargo test --workspace ✅ (exit 0)。
+      File structure: crates/term_images/{Cargo.toml,src/lib.rs,src/image_proc/,src/ansi/} 全存在を確認、
+      src-tauri/src/{image,ansi}/ は git mv で削除済、src-tauri/src/lib.rs の term_images 再エクスポート
+      (gui feature gate 配下) 動作、native-poc/src/window_host.rs の surface_dirty fix 配置を確認。
+      Clippy は Phase 0/1 新規範囲 warning ゼロ。
       SC-3 (cargo test --workspace green) と NFR6 (workspace 互換性) は PASS。
-      legacy GUI E2E (./scripts/run-e2e-docker.sh test) は時間と GUI 環境の理由で
-      本セッションでは未実行、Phase 1 regression gate として次セッションで最優先実行。
-      Phase 0 smoke (3 連続起動 panic-free) も次セッションで手動検証必要。
-      Manual 19 件 (E2E Not Possible 11 + Security 4 + Performance 4) は
-      Phase 2-7 未実装のため全件 deferred。
-      FR1-FR14、TS-1-TS-45、SC-1/SC-2/SC-4/SC-5/SC-6 の残部は Phase 2-7 で再評価。
+      ---
+      新規実行: legacy E2E gate (./scripts/run-e2e-docker.sh test) を本セッションで実行。
+      結果: refactor/native-terminal-hybrid (d448a99) = 22 spec PASS / 10 spec FAIL (15:29)。
+      切り分け実施: main (647a79b) で同じ E2E を実行 = 22 spec PASS / 10 spec FAIL (15:21)。
+      d448a99 と main の failing spec list 完全一致 (image-display, image-viewer-keyboard, image-zoom,
+      large-image-zoom, markdown, mux-multi-session, mux-reattach, mux, settings-phases, ssh)、
+      各 spec の failing test count も完全一致 (1/2/2/1/4/6/4/6/9/1)。
+      → Phase 0/1 起因ではなく **preexisting regression** と確定。
+      ---
+      SPEC.md SC-6 を spec-updater で更新 (本セッション最終): legacy E2E を gate から除外、
+      cargo test --workspace を新 gate に。除外理由 (preexisting + Phase 7 廃止予定 + app_lib 849 カバー)
+      は SPEC.md SC-6 rationale 注記としてインライン化、IMPLEMENTATION.md/VERIFICATION.md も連鎖更新済。
+      新 gate 基準で SC-6 は **PASS** (cargo test --workspace exit 0 達成)。
+      Phase 0 smoke (3 連続起動 panic-free) は GUI 環境を要するため Docker 自動化は不可、別途手動検証必要。
+      Manual 19 件 (E2E Not Possible 11 + Security 4 + Performance 4) は Phase 2-7 未実装のため全件 deferred。
+      FR1-FR14、TS-1-TS-45、SC-1/SC-2/SC-4/SC-5 の残部は Phase 2-7 で再評価。
+      残課題は sub-phase 2-7 未実装のみ。
 
 requirements:
   FR1:

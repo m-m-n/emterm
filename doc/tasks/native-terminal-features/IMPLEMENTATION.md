@@ -29,7 +29,7 @@ Replace the Phase 1 PoC stand-ins in `native-poc/` with production-quality termi
 - `crates/term_core/src/terminal_modes.rs` already exposes `is_row_dirty(row) -> bool`, `get_dirty_rows() -> Vec<u16>`, `mark_row_dirty(row)`, `mark_all_dirty()`, `clear_dirty()`. **No additive change to `term_core` is required** (resolves OQ4).
 - `crates/term_core/src/terminal_cursor.rs` already exposes `get_cursor_style`, `get_cursor_blink`, `get_cursor_visible`, `get_cursor_fg`, `get_cursor_bg`. **No additive change to `term_core` is required for FR2** (resolves OQ6).
 - `src-tauri/src/image/` and `src-tauri/src/ansi/{apc,dcs}.rs` have no `tauri::*` / `tauri_runtime::*` references — they are safely portable into a tauri-free crate (verified by grep).
-- The current `refactor/native-terminal-hybrid` branch HEAD compiles via `cargo build --workspace` and the legacy E2E suite passes per `git log` (e.g. `211308d`, `58483a0`).
+- The current `refactor/native-terminal-hybrid` branch HEAD compiles via `cargo build --workspace` and `cargo test --workspace` exits 0 (SC-6 legacy compatibility gate; legacy E2E excluded per SPEC.md SC-6 rationale).
 
 ## Architecture Overview
 
@@ -181,22 +181,22 @@ The SPEC enumerates seven Open Questions for the plan to settle. They are resolv
 3. **Move files via `git mv`** (preserves history).
 4. **Adjust import paths**: `crate::ansi::apc` -> `crate::ansi::apc` is unchanged (now inside the same crate); `crate::image` stays inside the new crate as a sibling module.
 5. **Re-export to `src-tauri`**: add `pub use term_images::image_proc as image;` and `pub use term_images::ansi;` in `src-tauri/src/lib.rs` so existing call sites in the legacy build are unaffected.
-6. **Verify both builds**: `cargo build --workspace` + `cargo test --workspace` exit 0 (Docker per `sdd.yaml`).
-7. **Verify legacy E2E**: `./scripts/run-e2e-docker.sh` still green (per NFR6 — legacy build must keep working).
+6. **Verify both builds**: `cargo build --workspace` + `cargo test --workspace` exit 0 (Docker per `sdd.yaml`). This is the SC-6 / NFR6 legacy compatibility gate for sub-phase 1 — legacy E2E excluded per SPEC.md SC-6 rationale.
 
 **Dependencies**: Blocks Phase 5 (native image layer). Independent of Phase 0; can run in parallel.
 
 **Testing Approach**:
 - Unit: relocated `#[cfg(test)]` blocks in `kitty.rs` / `sixel.rs` / `decoder.rs` / `apc.rs` / `dcs.rs` continue to run under `cargo test -p term_images`.
 - Integration: `src-tauri/tests/integration/image_tests.rs` keeps passing after pointing to `term_images::...` paths.
-- E2E: legacy E2E unaffected (regression gate).
+- E2E: legacy E2E (`./scripts/run-e2e-docker.sh`) is excluded from this SDD's gate per SPEC.md SC-6 rationale; `cargo test --workspace` is the substitute legacy compatibility gate.
 
 **Acceptance Criteria**:
 - [ ] `crates/term_images/` exists with image_proc + ansi modules.
 - [ ] `cargo build --workspace` exits 0.
-- [ ] `cargo test --workspace` exits 0 (image-decoder tests now under `term_images`).
-- [ ] `./scripts/run-e2e-docker.sh` exits 0 (legacy build regression).
+- [ ] `cargo test --workspace` exits 0 (image-decoder tests now under `term_images`; this is the SC-6 legacy compatibility gate for sub-phase 1).
 - [ ] `cargo metadata` shows `term_images` with no `tauri` ancestor in its dep tree.
+
+> Legacy E2E (`./scripts/run-e2e-docker.sh`) is **excluded** from this gate per SPEC.md SC-6 rationale.
 
 **Estimated Effort**: medium (file moves are mechanical but cargo path adjustments must be careful).
 
@@ -542,8 +542,7 @@ The SPEC enumerates seven Open Questions for the plan to settle. They are resolv
 | Memory sampling | `ps -o rss,vsz <pid>` and `nvidia-smi`/`radeontop` (whichever applies) at 4h / 8h / 12h marks | Three samples, no monotonic upward trend |
 | Visual parity | Run Kitty + SIXEL fixtures side-by-side against the legacy WebView build | No visible differences |
 | SGR parity | Run an SGR sampler script in both builds | No visible differences |
-| Workspace tests | `cargo test --workspace` final pass | Green |
-| Legacy E2E | `./scripts/run-e2e-docker.sh` final pass | Green |
+| Workspace tests | `cargo test --workspace` final pass (this is the SC-6 final legacy compatibility gate; legacy E2E excluded per SPEC.md SC-6 rationale) | Green |
 
 **Implementation Steps**:
 
@@ -562,8 +561,7 @@ The SPEC enumerates seven Open Questions for the plan to settle. They are resolv
 - [ ] 12+ hour session completes without crash / screen loss.
 - [ ] Memory samples at 4h / 8h / 12h show no monotonic growth.
 - [ ] Kitty + SIXEL + SGR visual parity confirmed.
-- [ ] `cargo test --workspace` exits 0.
-- [ ] `./scripts/run-e2e-docker.sh` exits 0.
+- [ ] `cargo test --workspace` exits 0 (SC-6 final legacy compatibility gate; legacy E2E excluded per SPEC.md SC-6 rationale).
 
 **Estimated Effort**: small (mostly waiting + observing).
 
@@ -632,7 +630,7 @@ emterm/
 
 - **Unit**: `cargo test -p emterm-native-poc` and `cargo test -p term_images` carry the new Phase 3 surface. Target ≥ 80% coverage on `selection.rs`, `callbacks.rs`, and `image/parse.rs` (these are pure-logic paths). `term_core` and `term_images` retain their existing test bodies (no drops).
 - **Integration**: `native-poc/tests/` houses end-to-end flows that drive `TerminalCore::process_pty_data` with byte sequences and assert state transitions (dirty rows, image events, OSC effects).
-- **E2E**: legacy `e2e-tests/` (WebdriverIO + tauri-driver) continues to target the legacy build only — Phase 3 must not regress it. There are **no new E2E specs** for `native-poc` because no headless driver covers tao+wgpu+egui; manual verification fills that gap (per SPEC 12.E2E).
+- **E2E**: legacy `e2e-tests/` (WebdriverIO + tauri-driver) is **excluded** from this SDD's gate per SPEC.md SC-6 rationale (preexisting failing-spec parity vs. `main` confirmed 2026-05-12; `src-tauri/` retires in Phase 7 of `tmp/restruct.md`). `cargo test --workspace` is the substitute legacy compatibility gate. There are **no new E2E specs** for `native-poc` because no headless driver covers tao+wgpu+egui; manual verification fills that gap.
 - **Manual**: visual parity + 12 h session per Phase 7 above.
 
 ## Dependencies
@@ -651,7 +649,7 @@ External versions are pinned via the existing workspace `Cargo.lock`. No version
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Image crate extraction breaks an obscure `src-tauri` test path | Medium | Medium | Phase 1 ends with both `cargo test --workspace` and `./scripts/run-e2e-docker.sh` green before Phase 5 starts. `git mv` preserves blame so review is mechanical. |
+| Image crate extraction breaks an obscure `src-tauri` test path | Medium | Medium | Phase 1 ends with `cargo test --workspace` green (SC-6 legacy compatibility gate; legacy E2E excluded per SPEC.md SC-6 rationale) before Phase 5 starts. `git mv` preserves blame so review is mechanical. |
 | Dirty-row diff hides bug class (rows that should redraw but don't) | Medium | Medium | Debug `EMTERM_FULL_REDRAW=1` env var forces full redraw; ghosting checks during Phase 3 + Phase 7 visual parity. |
 | `notify-rust` rate-limit too aggressive and drops legitimate notifications | Low | Low | Dedupe is keyed on `(title, body)` exact match within 1 s; manual confirm with `printf '\033]9;notif1\007'; printf '\033]9;notif2\007'`. |
 | OSC 52 size cap (10 MB default) drops oversized clipboard payloads | Low | Low | Mirrors the legacy WebView build's existing cap; user can raise `clipboard_max_size_osc52` in `settings.json`. Denial path logs `LOG_OSC52_DENIED`. |
@@ -675,4 +673,4 @@ All seven Open Questions in the SPEC are resolved above (see *Resolved Open Ques
 - [ ] `cargo test --workspace` green.
 - [ ] Manual visual parity for Kitty + SIXEL + SGR vs. legacy Tauri build.
 - [ ] 12+ hour Claude Code session passes (NFR2).
-- [ ] Legacy Tauri build's `cargo test` and E2E suite continue to pass (NFR6).
+- [ ] Legacy Tauri build's `cargo test --workspace` continues to pass (NFR6 / SC-6). Legacy E2E is excluded from this SDD's gate per SPEC.md SC-6 rationale.

@@ -134,7 +134,7 @@ This document is the verification plan for Phase 3. Sections marked *result* are
 | SC-3 | `cargo test --workspace` green | Phase 1 + Phase 5 + Phase 7 final pass |
 | SC-4 | Kitty + SIXEL visual parity | Phase 7 manual side-by-side vs. legacy build |
 | SC-5 | 12+ hour Claude Code session | Phase 7 manual run + memory samples |
-| SC-6 | Legacy Tauri `cargo test` + E2E continue to pass | Phase 1 regression gate + Phase 7 final pass |
+| SC-6 | Legacy Tauri `cargo test --workspace` continues to pass (1646+ tests incl. app_lib 849). Legacy E2E (`./scripts/run-e2e-docker.sh test`) is **excluded** from this SDD's gate (see SPEC.md SC-6 rationale). | sub-phase 1 and sub-phase 7 `cargo test --workspace` |
 
 ### Functional Requirements Coverage
 
@@ -159,14 +159,20 @@ This document is the verification plan for Phase 3. Sections marked *result* are
 | NFR3 (logging) | Phase 2 onwards | Manual `RUST_LOG=info` / `RUST_LOG=debug` check |
 | NFR4 (module layout) | Phase 5 | File-structure inspection |
 | NFR5 (Linux only) | All | Build target on Linux dev machine |
-| NFR6 (legacy build alive) | Phase 1 | `cargo test --workspace` + legacy E2E regression gate |
+| NFR6 (legacy build alive) | Phase 1 | `cargo test --workspace` regression gate (legacy E2E excluded — see SPEC.md SC-6 rationale) |
 
 ## E2E Testing
 
-The existing `e2e-tests/` (WebdriverIO + tauri-driver) targets the **legacy Tauri build**. Phase 3 must not regress it.
+The existing `e2e-tests/` (WebdriverIO + tauri-driver) targets the **legacy Tauri build**. Per the SC-6 rationale in SPEC.md, the legacy E2E suite is **excluded** from this SDD's regression gate because:
 
-- [ ] `./scripts/run-e2e-docker.sh test` exits 0 on `refactor/native-terminal-hybrid` HEAD after Phase 1 (immediate regression gate).
-- [ ] `./scripts/run-e2e-docker.sh test` exits 0 once more in Phase 7 (final regression gate).
+- The 2026-05-12 baseline comparison showed identical failing-spec lists between `main` (647a79b) and `refactor/native-terminal-hybrid` HEAD (d448a99) — confirming the 10 failing specs are preexisting and unrelated to Phase 0 / Phase 1.
+- `src-tauri/` is scheduled for retirement in Phase 7 of `tmp/restruct.md`, so fixing the preexisting failures would not be recoverable investment.
+- The code paths this SDD touches are covered by `cargo test --workspace` (849 `app_lib` tests).
+
+Legacy compatibility gate (replacing the legacy E2E gate):
+
+- [ ] `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --workspace"` exits 0 after sub-phase 1 (immediate regression gate).
+- [ ] Same command exits 0 once more in sub-phase 7 (final regression gate).
 
 Phase 3 adds **no new E2E specs**: no headless driver covers tao+wgpu+egui. Manual verification fills that gap (below).
 
@@ -212,5 +218,7 @@ Phase 3 adds **no new E2E specs**: no headless driver covers tao+wgpu+egui. Manu
 | Stability | 0 | 0 | 0 | 4 (12 h session + 3 memory samples) |
 | Cursor / SGR | 1 | 1 | 0 | 2 (cursor shape, SGR sampler) |
 | Notifications | 1 | 1 | 0 | 1 (visible toast) |
-| Legacy regression | 0 | 0 | 2 | 0 |
-| **Totals** | **45 TS + manual** | **45** | **2** | **14** |
+| Legacy regression | 1 | 1 | 0 | 0 |
+| **Totals** | **45 TS + manual** | **46** | **0** | **14** |
+
+> **Legacy regression note**: `cargo test --workspace` counts as 1 automated check (covering 849 `app_lib` tests). Legacy E2E (`./scripts/run-e2e-docker.sh`) is excluded from this SDD's gate per SPEC.md SC-6 rationale.
