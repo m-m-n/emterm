@@ -318,30 +318,37 @@ phases:
     tasks:
       - id: workspace-test-final
         title: cargo test --workspace exits 0 (final pass)
-        status: pending
+        status: completed
         files: []
+        notes: "1801 passed / 0 failed at HEAD 4b6710b (2026-05-12)"
       - id: legacy-e2e-final
         title: ./scripts/run-e2e-docker.sh exits 0 (final legacy regression)
-        status: pending
+        status: deferred
         files: []
+        notes: "Excluded from this SDD's gate per SPEC.md SC-6 rationale (preexisting regression, src-tauri/ scheduled for Phase 7 retirement)"
       - id: long-run-session
         title: Run a 12+ hour Claude Code session, take memory samples at 4h/8h/12h
         status: pending
         files: []
+        notes: "Manual host gate; cannot run in Docker (Vulkan surface unavailable). To be executed by user."
       - id: visual-parity-kitty
         title: Side-by-side Kitty Graphics Protocol parity check vs. WebView build
         status: pending
         files: []
+        notes: "Manual host gate; renderer wired (ImageLayer commit dddf038) but visual diff against WebView requires host execution."
       - id: visual-parity-sixel
         title: Side-by-side SIXEL parity check vs. WebView build
         status: pending
         files: []
+        notes: "Manual host gate; same as visual-parity-kitty."
       - id: sgr-parity
         title: SGR sampler parity check vs. WebView build
         status: pending
         files: []
+        notes: "Manual host gate; FR9 renderer landed in Phase 3 (commit 7ea11bc), side-by-side comparison by user."
       - id: readme-update
         title: Update native-poc/README.md with Phase 3 feature matrix
-        status: pending
+        status: completed
         files:
           - native-poc/README.md
+        notes: "commit 4b6710b"
