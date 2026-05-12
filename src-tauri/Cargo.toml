@@ -65,6 +65,11 @@ flate2 = "1"
 # extracted into a workspace crate so native-poc can consume them without
 # pulling in tauri.
 term_images = { path = "../crates/term_images" }
+# Phase 4-A (mux-tabs-windows-ime): protocol-only types extracted into a
+# workspace crate so native-poc can speak the same mux wire format without
+# pulling in tauri. Server framing (codec/connection) intentionally stays in
+# src-tauri.
+mux_ipc = { path = "../crates/mux_ipc" }
 clap = { version = "4.5.54", features = ["derive"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 rust-i18n = "3"
