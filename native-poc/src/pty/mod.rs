@@ -118,6 +118,15 @@ impl PtySession {
         }
     }
 
+    /// Paste-aware write: sanitizes embedded bracketed-paste end markers
+    /// and (optionally) wraps the body in `ESC[200~ … ESC[201~` so the
+    /// shell can distinguish a paste from typed input. `bracketed`
+    /// reflects DECSET 2004 on the active `TerminalCore`.
+    pub fn write_paste(&self, text: &str, bracketed: bool) {
+        let wrapped = crate::selection::bracketed_paste(text, bracketed);
+        self.write(wrapped.into_bytes());
+    }
+
     /// Update the PTY size. Called on window resize.
     pub fn resize(&self, cols: u16, rows: u16) {
         let master = self.master.lock();
