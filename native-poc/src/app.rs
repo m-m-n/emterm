@@ -7,10 +7,17 @@
 //! renderer to skip frames that wouldn't change a pixel.
 //! Later phases extend this with a viewer registry and settings.
 
+use std::time::Instant;
+
 use term_core::terminal_core::TerminalCore;
 
 use crate::selection::Selection;
+use crate::settings::Settings;
 use crate::tabs::Tab;
+
+/// Cursor blink half-period in milliseconds. 530 ms matches xterm's
+/// `cursorBlinkXOR` interval; one full on/off cycle is `2 * BLINK_HALF_MS`.
+pub const BLINK_HALF_MS: u128 = 530;
 
 pub struct App {
     pub tabs: Vec<Tab>,
@@ -21,6 +28,15 @@ pub struct App {
     /// Active mouse selection on the active tab, if any. Phase 4 owns this;
     /// later phases may move it per-tab when tabs preserve selection.
     pub selection: Option<Selection>,
+    /// Runtime settings (ambiguous-width policy and future fields).
+    /// Loaded from `settings.json` in Phase 7; today initialized to default.
+    pub settings: Settings,
+    /// Reference point for cursor-blink phase computation.
+    blink_started: Instant,
+    /// Cursor-blink "visible" phase observed during the previous render.
+    /// When the phase flips, the cursor row joins the dirty union so the
+    /// renderer can paint/erase the cursor overlay.
+    previous_blink_visible: bool,
     /// Cursor row/col from the previous rendered frame. The renderer dirties
     /// this row so a moved cursor doesn't ghost the old position.
     previous_cursor: Option<(u16, u16)>,
@@ -61,11 +77,34 @@ impl App {
             active: 0,
             cell_size: GridDims::default(),
             selection: None,
+            settings: Settings::new(),
+            blink_started: Instant::now(),
+            previous_blink_visible: true,
             previous_cursor: None,
             previous_selection: None,
             needs_full_redraw: true,
             force_full_redraw,
         }
+    }
+
+    /// True when the cursor should currently render its glyph. When the
+    /// terminal disables blink the cursor is always considered visible
+    /// here (terminal-visibility is gated separately in `draw_cursor`).
+    pub fn blink_visible_now(&self, blink_enabled: bool) -> bool {
+        if !blink_enabled {
+            return true;
+        }
+        let phase = self.blink_started.elapsed().as_millis() / BLINK_HALF_MS;
+        phase % 2 == 0
+    }
+
+    /// Reset the blink reference to "now" so the cursor enters its visible
+    /// half-cycle. Use this when the user does something that should
+    /// re-pin attention to the cursor (typing, paste, tab switch).
+    #[allow(dead_code)]
+    pub fn reset_blink_phase(&mut self) {
+        self.blink_started = Instant::now();
+        self.previous_blink_visible = true;
     }
 
     /// Spawn the initial shell tab. Called once at startup.
@@ -134,7 +173,8 @@ impl App {
 
     /// Compute the rows that must be repainted on the next frame. Union of:
     /// 1. `term_core::get_dirty_rows()` for cell-level edits
-    /// 2. previous + current cursor row (to clear cursor ghost on move)
+    /// 2. previous + current cursor row (to clear cursor ghost on move,
+    ///    or to flip the cursor in/out of view on blink phase change)
     /// 3. previous + current selection rows (to clear highlight on shrink)
     ///
     /// Returns a sorted, deduplicated `Vec`. Returns `0..rows` when
@@ -157,10 +197,17 @@ impl App {
             }
         };
 
-        // Cursor history: previous + current.
-        push_unique(&mut set, core.get_cursor_row());
+        // Cursor history: previous + current. Also include the cursor row
+        // when the blink phase flips so the cursor overlay can repaint or
+        // erase without leaving a stale glyph.
+        let cursor_row = core.get_cursor_row();
+        push_unique(&mut set, cursor_row);
         if let Some((prev_row, _)) = self.previous_cursor {
             push_unique(&mut set, prev_row);
+        }
+        let blink_enabled = core.get_cursor_blink();
+        if blink_enabled && self.blink_visible_now(blink_enabled) != self.previous_blink_visible {
+            push_unique(&mut set, cursor_row);
         }
 
         // Selection history: union of previous + current.
@@ -186,11 +233,13 @@ impl App {
     }
 
     /// Called after the renderer consumed the dirty set. Stores current
-    /// cursor/selection for next-frame ghost prevention, clears the
-    /// `needs_full_redraw` flag, and clears the core's dirty bits.
+    /// cursor/selection/blink-phase for next-frame ghost prevention,
+    /// clears the `needs_full_redraw` flag, and clears the core's dirty
+    /// bits.
     pub fn record_render_state(&mut self, core: &mut TerminalCore) {
         self.previous_cursor = Some((core.get_cursor_row(), core.get_cursor_col()));
         self.previous_selection = self.selection;
+        self.previous_blink_visible = self.blink_visible_now(core.get_cursor_blink());
         self.needs_full_redraw = false;
         core.clear_dirty();
     }
@@ -202,6 +251,7 @@ impl App {
     pub fn record_render_state_no_tab(&mut self) {
         self.previous_cursor = None;
         self.previous_selection = None;
+        self.previous_blink_visible = true;
         self.needs_full_redraw = false;
     }
 }
