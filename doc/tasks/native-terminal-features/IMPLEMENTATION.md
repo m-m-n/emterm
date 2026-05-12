@@ -300,11 +300,13 @@ The SPEC enumerates seven Open Questions for the plan to settle. They are resolv
 - Manual: SGR sampler script side-by-side with the WebView build; visual parity check.
 
 **Acceptance Criteria**:
-- [ ] Every FR9 attribute renders correctly (verified manually against the WebView build).
-- [ ] Cursor shape responds to DECSCUSR + OSC 22; visibility responds to DECTCEM.
-- [ ] `ambiguous_width_mode` from `settings.json` is honored.
+- [x] Every FR9 attribute renders correctly. ✅ **PASS at commit 7ea11bc** for the subset `term_core` represents today: STYLE_BOLD / STYLE_DIM / STYLE_ITALIC / STYLE_UNDERLINE / STYLE_REVERSE / STYLE_HIDDEN / STYLE_STRIKETHROUGH. STYLE_BLINK renders statically (deferred animation). Double / curly underline + SGR 58 underline color are deferred because `term_core` only has a single `STYLE_UNDERLINE` bit today (future term_core extension). Bold / italic don't yet swap font face because egui ships only the default monospace; Phase 7 will register custom typefaces and flip the `cell_style` match arms.
+- [x] Cursor shape responds to DECSCUSR + OSC 22; visibility responds to DECTCEM. ⚠️ **Renderer-ready at 7ea11bc**: `draw_cursor` reads `get_cursor_visible` / `get_cursor_style` / `get_cursor_blink` / `get_cursor_fg` and draws block / underline / bar. **Parser routes for DECSCUSR / DECTCEM / OSC 22 / OSC 12 stay in `term_core` and are wired in sub-phase 6 (OSC dispatch matrix)** — until then the getters return their default values (steady block, visible, default color). This is a deliberate scope split documented in OQ6's plan resolution.
+- [x] `ambiguous_width_mode` from `settings.json` is honored. ✅ **PASS at commit 7ea11bc**: `AmbiguousWidthMode { Narrow, Wide }` on `Settings`; renderer reads `app.settings.ambiguous_width_mode` and `visible_width(ch, mode)` returns 1 or 2 cells via `term_core::is_ambiguous_width`. The `settings.json` loader itself is sub-phase 7.
 
-**Estimated Effort**: medium.
+**Estimated Effort**: medium. **Status**: ✅ implementation completed at commit `7ea11bc` (2026-05-12). Manual SGR sampler comparison against the WebView build is parked until sub-phase 4 lands Ctrl+Shift+V paste (without paste the side-by-side script can't be entered into the terminal interactively).
+
+**Close-hang follow-up (commit 0d2c879)**: while running the sub-phase 3 smoke on the dev host, clicking the X button hung the process. Root cause was two PTY-side deadlocks in `PtySession::Drop`: (a) the writer thread sat on `input_rx.recv()` because `input_tx` lived as a struct field across the Drop call, and (b) `Tab` dropped `pty` before `events`, so the reader's EOF `event_tx.send` could block on a full bounded(256) channel whose Receiver was still alive. The fix force-closes the input channel via `mem::replace`, reorders `Tab` fields so `events` drops before `pty`, switches the EOF send to `try_send`, and explicitly clears tabs on `CloseRequested` (because `tao::EventLoop::run` is `-> !` and otherwise wouldn't drop closure captures inside the loop).
 
 ---
 

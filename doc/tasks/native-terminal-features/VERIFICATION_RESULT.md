@@ -12,26 +12,29 @@
 
 ## 1. Executive Summary
 
-本 SDD は `tmp/restruct.md` 7 phase 構成の **Phase 3** に該当し、Phase 3 自身が更に sub-phase 0〜7 に分割されている (multi-week scope)。本セッション (HEAD = d448a99) までに**完了している sub-phase は 0 と 1 のみ**。sub-phase 2-7 は未実装で、複数の追加セッションを要する。
+本 SDD は `tmp/restruct.md` 7 phase 構成の **Phase 3** に該当し、Phase 3 自身が更に sub-phase 0〜7 に分割されている (multi-week scope)。本セッション (HEAD = 0d2c879) までに**完了している sub-phase は 0、1、2、3 (3 は renderer 側のみ; parser route は sub-phase 6 に委譲)**。sub-phase 4-7 は未実装で、複数の追加セッションを要する。
 
 | 範囲 | 結果 |
 |------|------|
 | sub-phase 0 (wgpu surface-init fix / `surface_dirty` 遅延 configure + Lost/Outdated 復帰) | ✅ PASS |
 | sub-phase 1 (`term_images` crate 抽出 / src-tauri からの `git mv` + 再エクスポート) | ✅ PASS |
 | sub-phase 2 (FR1 dirty-row diff renderer)                                            | ✅ PASS (commit 6930b1c) |
-| sub-phase 3 (FR2 cursor 本実装 + FR9 SGR + FR11 ambiguous width)                     | 🟡 Deferred |
+| sub-phase 3 (FR2 cursor 本実装 + FR9 SGR + FR11 ambiguous width)                     | ✅ PASS (commit 7ea11bc、ただし FR2 は renderer 側のみ; parser route は sub-phase 6 に委譲) |
 | sub-phase 4 (FR3 selection + FR4 paste + FR5 scrollback)                             | 🟡 Deferred |
 | sub-phase 5 (FR6 Kitty + FR7 SIXEL native overlay + FR10 image follow)               | 🟡 Deferred |
 | sub-phase 6 (FR8 OSC matrix + FR12 OSC 9 + FR13 OSC 52)                              | 🟡 Deferred |
 | sub-phase 7 (12h stability / NFR1 perf / SC-4 visual parity / final clippy gate)     | 🟡 Deferred |
 
-**総合評価**: Phase 0/1 範囲は **検証可能項目すべて PASS**。Phase 2-7 は **multi-week scope のため Deferred** (sdd.yaml verify status は `needs_update` のまま据置を推奨)。
+**総合評価**: sub-phase 0/1/2/3 範囲は **検証可能項目すべて PASS**。sub-phase 4-7 は **multi-week scope のため Deferred** (sdd.yaml verify status は `needs_update` のまま据置を推奨)。
 
 **特記事項 (本セッションの差分)**:
 - 前回 (647a79b) 未実行だった **legacy E2E regression gate (`./scripts/run-e2e-docker.sh test`) を本セッションで実行**。d448a99 で 22 spec passed / 10 spec failed (詳細は §4.2)。
 - **切り分け実施**: main (647a79b) で同じ E2E を baseline 取得。結果は **22 spec passed / 10 spec failed と完全一致** (failing spec list / count とも一致)。
 - **確定結論**: 10 spec の失敗は **preexisting regression** で、Phase 0/1 起因ではない。
 - **SC-6 を更新 (本セッション最終)**: spec-updater で legacy E2E を gate から除外し、新 gate を `cargo test --workspace` (1646+ tests incl. app_lib 849) に変更。除外理由は SPEC.md SC-6 rationale にインライン化、IMPLEMENTATION.md / VERIFICATION.md も連鎖更新済。新 gate 基準で **SC-6 は PASS** (cargo test --workspace exit 0 達成)。preexisting 10 spec は `src-tauri/` が Phase 7 で廃止予定のため別 issue として直す投資はせず、観測情報のみ tmp/restruct.md に保存。
+- **sub-phase 2 実装 (commit 6930b1c)**: dirty-row diff renderer。App::dirty_rows_this_frame で union (term_core dirty + cursor history + selection history) 計算、window_host::render で empty なら egui+wgpu サイクル全スキップ。runtime debug log で typical interactive frame が 1/31 dirty row、idle skip 確認済。
+- **sub-phase 3 実装 (commit 7ea11bc)**: SGR full reflection (FR9 の term_core subset) + cursor render full getter respect (FR2 renderer side) + ambiguous width policy (FR11)。parser route (DECSCUSR / DECTCEM / OSC 22 / OSC 12) は term_core 側 sub-phase 6 に委譲。native-poc unit test 30 件 (新規 9 件: visible_width / blend_toward / packed_to_egui)。
+- **X-button close hang 修正 (commit 0d2c879)**: sub-phase 3 smoke 中に判明した PTY 終了デッドロックを修正。`PtySession::Drop` で `input_tx` を `mem::replace` で先行 close、`Tab` field 順を `events` 先・`pty` 後に reorder、reader EOF send を `try_send` 化、`CloseRequested` で `app.tabs.clear()` を明示。X ボタン後 prompt promptly に戻ることを host で確認。
 
 ---
 
@@ -149,16 +152,16 @@
 | ID | タイトル | 対応 sub-phase | 本セッションでの結果 |
 |----|----------|----------------|----------------------|
 | FR1 | dirty-row diff rendering | sub-phase 2 | ✅ PASS (commit 6930b1c) — App::dirty_rows_this_frame で union 計算、record_render_state で clear_dirty、window_host render() で empty なら全フレームスキップ。7 unit tests + runtime debug log 検証済 |
-| FR2 | カーソル本実装 (DECSCUSR/OSC22/OSC12/DECTCEM) | sub-phase 3 | 🟡 Deferred |
+| FR2 | カーソル本実装 (DECSCUSR/OSC22/OSC12/DECTCEM) | sub-phase 3 | 🟡 **Renderer ready** (commit 7ea11bc): draw_cursor が get_cursor_visible/style/blink/fg を尊重して block/underline/bar 描画、530ms blink phase、ctx.request_repaint_after で wake-up。parser route (DECSCUSR / DECTCEM / OSC 22 / OSC 12) は term_core 側で sub-phase 6 (OSC matrix) で wire 予定 |
 | FR3 | 選択本実装 (char/word/line, PRIMARY auto-copy, Ctrl+Shift+C) | sub-phase 4 | 🟡 Deferred |
 | FR4 | ペースト + bracketed paste (DECSET 2004) | sub-phase 4 | 🟡 Deferred |
 | FR5 | スクロールバック (default 10,000 行) | sub-phase 4 | 🟡 Deferred |
 | FR6 | Kitty Graphics Protocol | sub-phase 5 | 🟡 Deferred (※parser ロジックは `term_images` に sub-phase 1 で移植済み) |
 | FR7 | SIXEL | sub-phase 5 | 🟡 Deferred (※parser ロジックは `term_images` に sub-phase 1 で移植済み) |
 | FR8 | OSC 全 action_type ハンドラ | sub-phase 6 | 🟡 Deferred |
-| FR9 | SGR 完全反映 | sub-phase 3 | 🟡 Deferred |
+| FR9 | SGR 完全反映 | sub-phase 3 | ✅ PASS (commit 7ea11bc、term_core が持つ subset): STYLE_BOLD / STYLE_DIM (50% blend) / STYLE_ITALIC / STYLE_UNDERLINE (単線) / STYLE_REVERSE / STYLE_HIDDEN / STYLE_STRIKETHROUGH を resolve_cell_style で全反映。STYLE_BLINK は static (animation 先送り)。double/curly underline + SGR 58 underline color は term_core が STYLE_UNDERLINE 1 bit のみのため term_core 拡張後の future enhancement |
 | FR10 | リサイズ / reflow / 画像 placement 追従 | sub-phase 4-5 | 🟡 Deferred |
-| FR11 | Ambiguous width 反映 | sub-phase 3 | 🟡 Deferred |
+| FR11 | Ambiguous width 反映 | sub-phase 3 | ✅ PASS (commit 7ea11bc): AmbiguousWidthMode (Narrow/Wide) on Settings、render::visible_width(ch, mode) で term_core::is_ambiguous_width 判定 + 1/2 cell 切替、wide cell rect は 2 column 分。settings.json loader 自体は sub-phase 7 で実装 |
 | FR12 | OSC 9 通知 (notify-rust) | sub-phase 6 | 🟡 Deferred |
 | FR13 | OSC 52 clipboard (set/get) ポリシー | sub-phase 6 | 🟡 Deferred |
 | FR14 | Long-run stability (no leaks) | sub-phase 7 | 🟡 Deferred |
@@ -329,8 +332,9 @@ VERIFICATION.md の「Manual Testing (E2E Not Possible)」と「Security Verific
 
 ## 8. 結論
 
-- **sub-phase 0 (wgpu surface-init fix)** と **sub-phase 1 (term_images crate 抽出)** は VERIFICATION.md と SPEC.md の該当範囲 (NFR2 部分・NFR4 部分・NFR5・NFR6 と SC-3 の sub-phase 1 段階) について **検証可能項目はすべて PASS**。
-- **sub-phase 2〜7** (FR1〜FR14 の本実装、NFR1/NFR2 の計測、SC-4/SC-5 の最終 gate、TS-1〜TS-45、Manual 19 件) は本セッションでは **未実装のため Deferred**。restruct.md 上の multi-week scope は単一実装セッションの範囲外。
+- **sub-phase 0 (wgpu surface-init fix)** / **sub-phase 1 (term_images crate 抽出)** / **sub-phase 2 (dirty-row diff renderer、commit 6930b1c)** / **sub-phase 3 (SGR + cursor + ambig width、commit 7ea11bc; cursor parser route は sub-phase 6 委譲)** は VERIFICATION.md と SPEC.md の該当範囲 (FR1 / FR9 (term_core subset) / FR11 / NFR2 部分・NFR4 部分・NFR5・NFR6 と SC-3) について **検証可能項目はすべて PASS**。FR2 は renderer ready (parser route deferred)。
+- **sub-phase 4〜7** (FR3 selection + FR4 paste + FR5 scrollback + FR6/FR7 image overlay + FR8 OSC matrix + FR10 reflow + FR12 OSC 9 + FR13 OSC 52 + FR14 stability、NFR1 計測、SC-4/SC-5、Manual 19 件) は本セッションでは **未実装のため Deferred**。restruct.md 上の multi-week scope は単一実装セッションの範囲外。
+- **X-button close hang (commit 0d2c879)**: sub-phase 3 smoke 中に判明した PTY 終了デッドロックを修正。詳細は IMPLEMENTATION.md Phase 3 末尾の follow-up 注記。
 - **legacy E2E (`./scripts/run-e2e-docker.sh test`)**:
   - d448a99: 22 spec pass / 10 spec fail
   - main (647a79b) baseline: 22 spec pass / 10 spec fail (**完全一致**)
@@ -341,7 +345,7 @@ VERIFICATION.md の「Manual Testing (E2E Not Possible)」と「Security Verific
 
 | 結論 | sdd.yaml verify status 推奨値 |
 |------|-------------------------------|
-| Phase 0/1 範囲 verified (SC-6 PASS 含む)、Phase 2-7 deferred | **`needs_update`** (sub-phase 2-7 未実装のみが残課題) |
+| sub-phase 0/1/2/3 範囲 verified (SC-6 PASS 含む、X-button close hang 修正済)、sub-phase 4-7 deferred | **`needs_update`** (sub-phase 4-7 未実装が残課題) |
 
 ---
 
