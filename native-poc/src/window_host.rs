@@ -210,8 +210,38 @@ impl WindowHost {
         // whenever a previous frame returned `Lost` / `Outdated`. We
         // reconfigure with the current physical size before acquiring the
         // next swapchain texture.
+        let was_surface_dirty = self.surface_dirty;
         if self.surface_dirty {
             self.reconfigure_surface();
+            // Reconfiguring the swapchain produces a fresh-but-uninitialized
+            // surface texture; the next present needs a full paint.
+            app.mark_full_redraw();
+        }
+
+        // Sub-phase 2 dirty-row diff: skip the entire egui+wgpu cycle when
+        // nothing in the active tab needs to repaint. The first frame
+        // (or any frame that follows a surface reconfigure) bypasses this
+        // skip because `App::mark_full_redraw()` forces the dirty set to
+        // the full row range.
+        if !was_surface_dirty {
+            let dirty_count = if let Some(tab) = app.active_tab() {
+                let core = tab.core.lock();
+                let dirty = app.dirty_rows_this_frame(&core);
+                let rows = core.rows();
+                log::debug!(
+                    "native-poc: dirty rows this frame = {} / {}",
+                    dirty.len(),
+                    rows
+                );
+                Some(dirty.len())
+            } else {
+                // No tab: still render once to draw the hint message; rely
+                // on the `needs_full_redraw` flag bookkeeping for that.
+                None
+            };
+            if matches!(dirty_count, Some(0)) {
+                return;
+            }
         }
 
         let raw_input = self.build_raw_input();
@@ -302,6 +332,21 @@ impl WindowHost {
 
         for id in &textures_delta.free {
             self.egui_renderer.free_texture(id);
+        }
+
+        // Sub-phase 2: snapshot cursor/selection, clear the core's dirty
+        // bits, and drop the `needs_full_redraw` flag. The next frame will
+        // be skipped entirely unless something dirties a row again. We
+        // clone the `Arc<Mutex<TerminalCore>>` first so the immutable
+        // borrow of `app` ends before the mutable `record_render_state`
+        // call.
+        let core_arc = app.active_tab().map(|t| t.core.clone());
+        match core_arc {
+            Some(arc) => {
+                let mut core = arc.lock();
+                app.record_render_state(&mut core);
+            }
+            None => app.record_render_state_no_tab(),
         }
     }
 
