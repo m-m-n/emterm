@@ -33,12 +33,20 @@ impl AmbiguousWidthMode {
 /// terminal core. Mirrors the legacy WebView build (10 000).
 pub const DEFAULT_SCROLLBACK_LINES: u32 = 10_000;
 
+/// Default per-tab image-memory budget in megabytes. Mirrors the
+/// `src-tauri` build's image cache quota.
+pub const DEFAULT_IMAGE_MEMORY_QUOTA_MB: u32 = 320;
+
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub ambiguous_width_mode: AmbiguousWidthMode,
     /// Maximum number of rows preserved above the viewport before old lines
     /// are dropped. Plumbed to `TerminalCore::new` at tab spawn time.
     pub scrollback_lines: u32,
+    /// Per-tab cap on image-overlay GPU memory in megabytes. Plumbed to
+    /// `ImageLayer::new(quota_bytes)` at tab spawn time. Eviction is
+    /// least-recently-used (see `crate::image::ImageLayerState`).
+    pub image_memory_quota_mb: u32,
 }
 
 impl Default for Settings {
@@ -46,6 +54,7 @@ impl Default for Settings {
         Self {
             ambiguous_width_mode: AmbiguousWidthMode::default(),
             scrollback_lines: DEFAULT_SCROLLBACK_LINES,
+            image_memory_quota_mb: DEFAULT_IMAGE_MEMORY_QUOTA_MB,
         }
     }
 }
@@ -64,5 +73,11 @@ mod tests {
     fn default_scrollback_lines_is_ten_thousand() {
         let s = Settings::new();
         assert_eq!(s.scrollback_lines, 10_000);
+    }
+
+    #[test]
+    fn default_image_memory_quota_is_320_mb() {
+        let s = Settings::new();
+        assert_eq!(s.image_memory_quota_mb, 320);
     }
 }

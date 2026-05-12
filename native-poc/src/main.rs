@@ -2,6 +2,7 @@ use tao::event_loop::EventLoop;
 
 mod app;
 mod callbacks;
+mod image;
 mod logging;
 mod render;
 mod tabs;
