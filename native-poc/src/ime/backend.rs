@@ -170,14 +170,21 @@ pub fn build_platform_backend(
     window: Option<RawWindowHandle>,
     display: Option<RawDisplayHandle>,
 ) -> Result<Box<dyn ImeBackend>, ImeInitError> {
+    // Phase 4-G-B: Linux X11 (XIM) backend probe. tao 0.34 reports
+    // `RawDisplayHandle::Xlib` when the user runs under an X server
+    // (including XWayland).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(RawDisplayHandle::Xlib(_)) = display {
+            return crate::ime::x11::X11Backend::init(window, display)
+                .map(|b| Box::new(b) as Box<dyn ImeBackend>);
+        }
+    }
+
+    // Phase 4-G-C / 4-G-D will add the Wayland + Windows probes
+    // below.
+
     let _ = (window, display);
-
-    // Phase 4-G-B / 4-G-C / 4-G-D will edit this function to probe
-    // `RawDisplayHandle::Xlib`, `RawDisplayHandle::Wayland`, and
-    // `RawWindowHandle::Win32` respectively and route to the
-    // appropriate `*Backend::init`. Until those phases land, the
-    // factory always falls back to `NullBackend` via the caller.
-
     Err(ImeInitError::Unavailable(
         "no platform backend compiled in".to_string(),
     ))
