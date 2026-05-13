@@ -28,13 +28,12 @@ term_core = { path = "../crates/term_core" }
 term_images = { path = "../crates/term_images" }
 
 # mux_ipc (Phase 4-A): shared protocol types used by the legacy Tauri build
-# and native-poc. native-poc speaks bincode + 4-byte big-endian length prefix
-# directly against the daemon's `MuxMessage`-framed Unix socket.
+# and native-poc. Phase 4-C (APC redesign): native-poc consumes only the
+# `protocol` module — APC payloads embedded in the PTY stream are decoded
+# via `MuxMessage::from_apc` and applied to the active tab. The Unix socket
+# segment of the protocol is owned by the legacy `emterm mux` bridge CLI
+# (see `doc/tasks/mux-inband-protocol/SPEC.md`).
 mux_ipc = { path = "../crates/mux_ipc" }
-
-# Phase 4-C: bincode for control-message payloads. Matches the version pinned
-# by `mux_ipc` so wire formats stay byte-for-byte identical.
-bincode = "1.3"
 
 # PTY (Phase 2)
 portable-pty = "0.8"
