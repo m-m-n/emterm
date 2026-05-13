@@ -80,7 +80,17 @@ impl PtySession {
             })
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        let cmd = CommandBuilder::new(shell);
+        let mut cmd = CommandBuilder::new(shell);
+        // Strip multiplexer-injected env vars: the shell we spawn here is a
+        // fresh child of native-poc, not of any outer mux/tmux session. Leaving
+        // these set would (a) make `emterm mux` refuse to start with
+        // "Cannot nest mux sessions (EMTERM_MUX is set)", and (b) make tmux-
+        // aware CLI commands wrap responses in DCS passthrough when they
+        // shouldn't.
+        cmd.env_remove("EMTERM_MUX");
+        cmd.env_remove("EMTERM_MUX_SOCKET");
+        cmd.env_remove("TMUX");
+        cmd.env_remove("TMUX_PANE");
         let child = pair
             .slave
             .spawn_command(cmd)
