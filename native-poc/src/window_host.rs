@@ -793,6 +793,23 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
                     alt: state.alt_key(),
                 };
             }
+            // Phase 4-E: route platform IME commit text (Linux fcitx5,
+            // Windows MS-IME) through the IME commit path so it is
+            // sanitized and dispatched exactly once. tao 0.34 only
+            // surfaces the commit string here; preedit feedback (the
+            // underline overlay) is driven by egui's `ImeEvent::Preedit`
+            // when richer IME plumbing is available — the routing
+            // layer in `App` is in place for that future wiring.
+            WindowEvent::ReceivedImeText(text) => {
+                app.on_ime_commit(&text);
+                host.window().request_redraw();
+            }
+            // Focus loss / window deactivation → clear any in-progress
+            // preedit overlay so a stale composition doesn't ghost the
+            // cursor after the user tabs away.
+            WindowEvent::Focused(focused) if !focused => {
+                app.on_ime_focus_lost();
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 // Phase 4 chords intercept the generic encoder path:
                 //   Ctrl+Shift+C  → copy current selection to CLIPBOARD

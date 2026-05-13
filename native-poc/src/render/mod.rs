@@ -27,6 +27,7 @@
 //! (no animation) to avoid two competing blink phases against the
 //! cursor; revisit when sub-phase 6 fires.
 
+pub mod cursor;
 pub mod theme;
 
 use std::time::Duration;
@@ -107,6 +108,28 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
                 let mode = app.settings.ambiguous_width_mode;
                 draw_grid(ui, &core, app.selection.as_ref(), &theme, mode);
                 draw_cursor(ui, &core, &theme, app);
+                // Phase 4-E: preedit underline overlay. Drawn after the
+                // cursor so it sits on top of (or beneath, depending on
+                // cursor style) the active cell highlight.
+                if tab.preedit_state.active() {
+                    let origin = ui.min_rect().min + Vec2::new(LEFT_PAD, TOP_PAD);
+                    let cursor_color = rgb_to_egui(theme.fg);
+                    let metrics = crate::render::cursor::FontMetrics {
+                        cell_w: CELL_W,
+                        cell_h: CELL_H,
+                        left_pad: 0.0,
+                        top_pad: 0.0,
+                    };
+                    crate::render::cursor::draw_cursor_with_preedit(
+                        ui.painter(),
+                        tab.preedit_state.anchor(),
+                        tab.preedit_state.text(),
+                        metrics,
+                        core.cols(),
+                        cursor_color,
+                        origin,
+                    );
+                }
             } else {
                 ui.colored_label(Color32::LIGHT_GRAY, "no tab — shell may have exited");
             }

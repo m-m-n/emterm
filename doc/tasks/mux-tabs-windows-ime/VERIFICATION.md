@@ -13,6 +13,12 @@
 - **Linux**: required on every sub-phase boundary.
 - **Windows**: required at end of Phase 4-E; cross-build via `cargo build --workspace --target x86_64-pc-windows-msvc` or native build on a Windows host.
 
+### Results (auto-scope, through Phase 4-E)
+
+- `cargo build --workspace` → exit 0 (Linux/Docker).
+- Phase 4-E build warning count: 12 (down from 15 baseline at Phase 4-D commit f14f7ba — preedit code removed two `#[allow(dead_code)]` previously needed elsewhere).
+- Windows build is deferred to the manual host gate; the `cfg(windows)` compile-only smoke test in `ime::commit` covers Event::Ime variant shape.
+
 ## Test Verification
 
 - **Command**: `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --workspace"`
@@ -55,6 +61,12 @@
 
 - **Format**: `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo fmt --all -- --check"` exits 0.
 - **Static analysis**: `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo clippy -p emterm-native-poc -p mux_ipc -- -D warnings"` exits 0. Forward-staged dead-code may exist in `term_core` (preexisting) and is out of scope.
+
+### Results (auto-scope, through Phase 4-E)
+
+- `cargo fmt --all -- --check` → clean (exit 0).
+- `cargo clippy -p emterm-native-poc -p mux_ipc --no-deps -- -D warnings` → identical 19-error baseline preserved (every error string matches Phase 4-D byte-for-byte; zero new clippy warnings introduced by Phase 4-E). The `--no-deps` flag is required because workspace clippy currently surfaces 24 preexisting term_core errors that are out of scope for this phase.
+- Phase 4-E test count delta: +42 tests (1898 → 1940 workspace total).
 
 ## File Structure Verification
 

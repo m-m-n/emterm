@@ -158,29 +158,44 @@ phases:
     tasks:
       - id: ime-preedit-state
         title: "Preedit state struct + sanitization (C0/C1 drop)"
+        status: completed
         files:
           - native-poc/src/ime/preedit.rs
           - native-poc/src/ime/mod.rs
       - id: ime-commit-path
         title: "Commit dispatch writes sanitized bytes to active PTY"
+        status: completed
         files:
           - native-poc/src/ime/commit.rs
       - id: ime-cursor-renderer
         title: "Cursor renderer extension for preedit underline overlay"
+        status: completed
         files:
           - native-poc/src/render/cursor.rs
       - id: ime-app-routing
         title: "Route egui::Event::Ime to ime module"
+        status: completed
         files:
           - native-poc/src/app.rs
+          - native-poc/src/tabs.rs
+          - native-poc/src/window_host.rs
+          - native-poc/src/render/mod.rs
+          - native-poc/src/main.rs
       - id: ime-tests
         title: "TS-ime-1/2/3"
+        status: completed
         files: []
+      # Manual host gates — deferred to host execution. The auto agent
+      # cannot drive a real fcitx5 / MS-IME session inside Docker.
       - id: ime-manual-linux
         title: "Manual TS-manual-ime-linux (fcitx5 parity)"
+        status: deferred_manual
+        notes: "Requires host execution under a real fcitx5 session; not runnable from Docker / sub-agent."
         files: []
       - id: ime-manual-windows
         title: "Manual TS-manual-ime-windows (preedit + commit)"
+        status: deferred_manual
+        notes: "Requires Windows host with MS-IME enabled; not runnable from Docker / sub-agent. cfg(windows) compile-only smoke covers Event::Ime variant shape."
         files: []
 
   - id: phase-4-f
