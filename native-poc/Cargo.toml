@@ -68,6 +68,13 @@ once_cell = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Phase 4-G-B: XIM bindings (Linux X11 IME). Dynamic loading via x11-dl
+# means a non-X11 host (pure Wayland with no Xlib runtime) does not fail
+# at link time — the backend falls back to NullBackend at init() when
+# the X server is unreachable.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11-dl = "2"
+
 # NOTE: dev/release profiles are managed at the workspace root Cargo.toml
 # since Phase 6. Per-package profile sections produce warnings and are
 # ignored by Cargo when a workspace root profile exists.

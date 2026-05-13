@@ -1439,6 +1439,7 @@ dependencies = [
  "unicode-width 0.2.2",
  "wgpu",
  "wry",
+ "x11-dl",
 ]
 
 [[package]]

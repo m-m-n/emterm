@@ -20,7 +20,10 @@ pub mod preedit;
 pub mod backend;
 pub mod null;
 
-// Phase 4-G-B / 4-G-C / 4-G-D will add OS-specific submodules:
-//   #[cfg(all(unix, not(target_os = "macos")))] pub mod x11;
+// Phase 4-G-B: Linux X11 (XIM) backend.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod x11;
+
+// Phase 4-G-C / 4-G-D will add the remaining OS-specific submodules:
 //   #[cfg(all(unix, not(target_os = "macos")))] pub mod wayland;
 //   #[cfg(windows)] pub mod windows;
