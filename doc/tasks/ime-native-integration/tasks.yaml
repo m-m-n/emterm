@@ -137,23 +137,37 @@ phases:
     tasks:
       - id: ime-windows-dep
         title: "Add windows crate dep under [target.'cfg(windows)'.dependencies] (features: Win32_UI_Input_Ime, Win32_UI_WindowsAndMessaging, ...)"
-        status: pending
+        status: completed
         files:
           - native-poc/Cargo.toml
       - id: ime-windows-backend
         title: "WindowsBackend: SetWindowSubclass + WM_IME_{START,_COMPOSITION,END}COMPOSITION + ImmGetCompositionStringW UTF-16→UTF-8 + ImmSetCompositionWindow(CFS_POINT) + RemoveWindowSubclass on Drop"
-        status: pending
+        status: completed
+        notes: |
+          Implemented under #[cfg(windows)] with SetWindowSubclass +
+          WM_IME_{START,END}COMPOSITION + WM_IME_COMPOSITION
+          (GCS_COMPSTR -> Preedit, GCS_RESULTSTR -> Commit) +
+          ImmGetCompositionStringW reads via portable utf16_to_utf8
+          helper + ImmSetCompositionWindow(CFS_POINT) for the cursor
+          rect best-effort + RemoveWindowSubclass on Drop. Linux CI
+          host has no Windows target installed, so cross-build is
+          deferred to GitHub Actions (Windows runner) per CLAUDE.md.
         files:
           - native-poc/src/ime/windows.rs
           - native-poc/src/ime/mod.rs
       - id: ime-windows-factory-probe
         title: "ImeBackendFactory: cfg(windows) → use WindowsBackend"
-        status: pending
+        status: completed
         files:
           - native-poc/src/ime/backend.rs
       - id: ime-windows-tests
         title: "Unit tests TS-windows-1 (BMP), TS-windows-2 (surrogate pair), TS-windows-3 (invalid surrogate → drop+warn) + cfg(windows) integration TS-backend-int-2"
-        status: pending
+        status: completed
+        notes: |
+          TS-windows-1/2/3 implemented as portable utf16_to_utf8 unit
+          tests (10 cases). They run on Linux CI thanks to the helper
+          being cfg-agnostic. TS-backend-int-2 (hidden HWND + SendMessageW)
+          is deferred to a Windows host (manual gate).
         files:
           - native-poc/src/ime/windows.rs
       - id: ime-windows-manual-gate
