@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use egui::ViewportId;
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::ScreenDescriptor;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tao::dpi::{PhysicalPosition, PhysicalSize};
 use tao::event::{ElementState, Event, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget};
@@ -36,6 +37,7 @@ use tao::window::{Window, WindowBuilder};
 use crate::app::App;
 use crate::image::overlay::OverlayPipeline;
 use crate::image::ImageLayer;
+use crate::ime::backend::{build_backend, KeyDispatchResult, ProcessEnv, RawKeyEvent};
 use crate::pty::input::{encode, Key, Modifiers};
 use crate::selection::{Pos, Selection, SelectionMode};
 
@@ -677,6 +679,27 @@ fn tao_key_to_egui(logical: &TaoKey) -> Option<egui::Key> {
     }
 }
 
+/// Extract the OS-level physical key / scan code from a tao `KeyEvent`.
+/// Phase 4-G-A captures it into [`RawKeyEvent`] so OS IME backends
+/// (notably the X11 `XKeyPressedEvent` synthesis path in Phase 4-G-B)
+/// can rehydrate the original scan code without re-querying tao
+/// internals.
+///
+/// tao does not expose the raw scancode publicly on every platform, so
+/// we hash the `PhysicalKey` debug representation as a stable stand-in.
+/// The exact value is opaque to the App; backends that actually need a
+/// real X11 keycode reconstruct it from their own platform layer.
+fn tao_physical_key_code(event: &tao::event::KeyEvent) -> u32 {
+    // We use Debug of `PhysicalKey` as a stable seed. The hash is
+    // platform-stable for a given build because PhysicalKey is an enum
+    // with named variants.
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    format!("{:?}", event.physical_key).hash(&mut h);
+    h.finish() as u32
+}
+
 /// Translate a tao `KeyEvent` into the PoC's `(Key, Modifiers)` pair and
 /// produce the PTY byte sequence. Returns `None` for events that should be
 /// ignored (e.g. modifier-only presses).
@@ -746,6 +769,21 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
     app.cell_size = crate::app::GridDims { cols, rows };
     app.spawn_initial_tab();
 
+    // Phase 4-G-A: resolve the IME backend now that the tao window
+    // (and therefore the raw-window/display handle pair) exists. The
+    // factory consults `EMTERM_NATIVE_IME`, `settings.ime.native_integration`
+    // and the OS-specific probe (added in 4-G-B/C/D). On any failure
+    // it returns `NullBackend` + a single warn log.
+    let window_handle = host.window().window_handle().ok().map(|h| h.as_raw());
+    let display_handle = host.window().display_handle().ok().map(|h| h.as_raw());
+    let backend = build_backend(
+        window_handle,
+        display_handle,
+        &app.settings.ime,
+        &ProcessEnv,
+    );
+    app.set_ime_backend(backend);
+
     // Poll the PTY event channels at a steady cadence even when there are no
     // window events, so shell output is rendered promptly.
     event_loop.run(move |event, _, control_flow| match event {
@@ -755,9 +793,21 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
         }
         Event::NewEvents(StartCause::ResumeTimeReached { .. })
         | Event::NewEvents(StartCause::Poll) => {
+            // Phase 4-G-A: drain any pending IME events from the
+            // active backend into the existing on_ime_* routes before
+            // touching PTY output. A real backend may have queued
+            // events while we were idle; the NullBackend always
+            // returns an empty drain so this is a cheap no-op when
+            // disabled.
+            if app.pump_ime() {
+                host.window().request_redraw();
+            }
             if app.pump_all() {
                 host.window().request_redraw();
             }
+            // Cursor cell may have moved as a side effect of pumps;
+            // notify the IME backend if the (row, col) changed.
+            app.notify_cursor_rect_if_changed(FALLBACK_CELL_W, FALLBACK_CELL_H);
             if app.tabs.is_empty() {
                 *control_flow = ControlFlow::Exit;
             } else {
@@ -802,24 +852,58 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
                     alt: state.alt_key(),
                 };
             }
-            // Phase 4-E: route platform IME commit text (Linux fcitx5,
-            // Windows MS-IME) through the IME commit path so it is
-            // sanitized and dispatched exactly once. tao 0.34 only
-            // surfaces the commit string here; preedit feedback (the
-            // underline overlay) is driven by egui's `ImeEvent::Preedit`
-            // when richer IME plumbing is available — the routing
-            // layer in `App` is in place for that future wiring.
+            // Phase 4-E + 4-G: route platform IME commit text. Under
+            // `NullBackend` (env / settings disabled, or no real
+            // backend compiled in) this is the only path that carries
+            // commit text — same behavior as Phase 4. Under a real
+            // backend (X11 XIM / Wayland zwp_text_input_v3 / Windows
+            // IMM32), `ReceivedImeText` is suppressed because the
+            // backend emits `ImeEvent::Commit` through `pump_ime` and
+            // letting both fire would double-deliver the same text
+            // (SPEC.md FR9).
             WindowEvent::ReceivedImeText(text) => {
-                app.on_ime_commit(&text);
-                host.window().request_redraw();
+                if app.ime_is_null() {
+                    app.on_ime_commit(&text);
+                    host.window().request_redraw();
+                } else {
+                    log::debug!(
+                        "ReceivedImeText ignored (real IME backend active; commit comes via pump)"
+                    );
+                }
             }
             // Focus loss / window deactivation → clear any in-progress
             // preedit overlay so a stale composition doesn't ghost the
-            // cursor after the user tabs away.
-            WindowEvent::Focused(focused) if !focused => {
-                app.on_ime_focus_lost();
+            // cursor after the user tabs away. Also forward focus
+            // state to the IME backend so it can `XUnsetICFocus` /
+            // `disable` / etc. on the IM server side.
+            WindowEvent::Focused(focused) => {
+                app.notify_ime_focus(focused);
+                if !focused {
+                    app.on_ime_focus_lost();
+                }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // Phase 4-G: offer the raw key event to the IME
+                // backend first. `Consumed` means the IM server
+                // swallowed the key (composition open, candidate
+                // chosen) and we must skip both the keybinds
+                // dispatcher and the generic encoder; the resulting
+                // `ImeEvent::Commit` / `Preedit` will arrive via
+                // `pump_ime` on the next tick. `Passthrough` lets the
+                // existing Phase 4 path run unchanged.
+                let raw_key = RawKeyEvent {
+                    physical_key_code: tao_physical_key_code(&event),
+                    state_pressed: true,
+                    mods: host.current_mods,
+                };
+                if matches!(
+                    app.dispatch_key_event_via_ime(&raw_key),
+                    KeyDispatchResult::Consumed
+                ) {
+                    host.window().request_redraw();
+                    return;
+                }
+
                 // Phase 4 chords intercept the generic encoder path:
                 //   Ctrl+Shift+C  → copy current selection to CLIPBOARD
                 //   Ctrl+Shift+V  → paste CLIPBOARD into PTY (bracketed if 2004)
