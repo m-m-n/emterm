@@ -565,6 +565,62 @@ impl App {
         self.needs_full_redraw = false;
     }
 
+    /// Phase 4-E: route an `egui::Event::Ime(ImeEvent::Preedit(_))`
+    /// payload to the active tab's preedit state. The anchor is the
+    /// current cursor cell of the active tab's `TerminalCore`. No-op
+    /// when there is no active tab.
+    ///
+    /// tao 0.34 only surfaces `WindowEvent::ReceivedImeText` (commit);
+    /// this method is the routing point for future preedit plumbing
+    /// (richer IME via egui's `ImeEvent::Preedit` once available) and
+    /// is exercised directly by the unit tests.
+    #[allow(dead_code)]
+    pub fn on_ime_preedit(&mut self, text: &str) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        let anchor = {
+            let core = tab.core.lock();
+            crate::ime::preedit::Anchor {
+                row: core.get_cursor_row(),
+                col: core.get_cursor_col(),
+            }
+        };
+        tab.preedit_state.set(text, anchor);
+        // The renderer skips frames when no row is dirty; force the
+        // cursor row into the dirty set so the underline overlay
+        // repaints immediately.
+        self.needs_full_redraw = true;
+    }
+
+    /// Phase 4-E: route an `egui::Event::Ime(ImeEvent::Commit(_))`
+    /// payload to the active tab. Sanitizes the bytes via
+    /// `ime::commit::write_commit` (same sanitizer the preedit state
+    /// uses) and writes them to the active PTY exactly once. Then
+    /// clears the preedit state so the overlay disappears. No-op when
+    /// there is no active tab.
+    pub fn on_ime_commit(&mut self, text: &str) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if let Some(pty) = tab.pty.as_ref() {
+            if let Err(e) = crate::ime::commit::write_commit(pty, text) {
+                log::warn!("ime commit write failed: {e}");
+            }
+        }
+        tab.preedit_state.clear();
+        self.needs_full_redraw = true;
+    }
+
+    /// Phase 4-E: clear the active tab's preedit state. Called on
+    /// focus loss and on active tab close.
+    pub fn on_ime_focus_lost(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.preedit_state.clear();
+            self.needs_full_redraw = true;
+        }
+    }
+
     /// Phase 4-C: act on a mux OSC 777 action for the tab at `tab_idx`.
     ///
     /// - `Attach{socket, session_id}` — pauses the native PTY, opens a
@@ -1001,5 +1057,105 @@ mod tests {
         let exit = app.apply_tab_event(crate::ui::TabEvent::Switch(1));
         assert!(!exit);
         assert_eq!(app.active, 1);
+    }
+
+    // ── Phase 4-E: IME preedit/commit routing ────────────────────────
+
+    #[test]
+    fn ime_preedit_no_active_tab_is_noop() {
+        let mut app = App::new();
+        // No spawn → no tabs. Must not panic.
+        app.on_ime_preedit("abc");
+    }
+
+    #[test]
+    fn ime_preedit_updates_active_tab_state() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.on_ime_preedit("hi");
+        let tab = app.active_tab().unwrap();
+        assert!(tab.preedit_state.active());
+        assert_eq!(tab.preedit_state.text(), "hi");
+    }
+
+    #[test]
+    fn ime_preedit_anchors_to_current_cursor() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        // Move cursor to (row=2, col=3) via CSI CUP.
+        {
+            let tab = app.active_tab().unwrap();
+            tab.core.lock().process_pty_data(b"\x1b[3;4H");
+        }
+        app.on_ime_preedit("xy");
+        let tab = app.active_tab().unwrap();
+        let a = tab.preedit_state.anchor();
+        assert_eq!(a.row, 2);
+        assert_eq!(a.col, 3);
+    }
+
+    #[test]
+    fn ime_preedit_sanitizes_control_bytes() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        // ESC must NOT survive into the preedit overlay text.
+        app.on_ime_preedit("a\x1bb");
+        assert_eq!(app.active_tab().unwrap().preedit_state.text(), "ab");
+    }
+
+    #[test]
+    fn ime_commit_clears_preedit_state() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.on_ime_preedit("abc");
+        assert!(app.active_tab().unwrap().preedit_state.active());
+        app.on_ime_commit("abc");
+        assert!(!app.active_tab().unwrap().preedit_state.active());
+    }
+
+    #[test]
+    fn ime_commit_no_active_tab_is_noop() {
+        let mut app = App::new();
+        app.on_ime_commit("abc");
+    }
+
+    #[test]
+    fn ime_focus_lost_clears_preedit() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.on_ime_preedit("xy");
+        assert!(app.active_tab().unwrap().preedit_state.active());
+        app.on_ime_focus_lost();
+        assert!(!app.active_tab().unwrap().preedit_state.active());
+    }
+
+    #[test]
+    fn ime_preedit_requests_full_redraw() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        // Clear the initial full-redraw flag so we can observe the
+        // routing-time mutation.
+        {
+            let arc = app.active_tab().unwrap().core.clone();
+            let mut core = arc.lock();
+            app.record_render_state(&mut core);
+        }
+        assert!(!app.needs_full_redraw);
+        app.on_ime_preedit("ab");
+        assert!(app.needs_full_redraw);
+    }
+
+    #[test]
+    fn ime_commit_requests_full_redraw() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let arc = app.active_tab().unwrap().core.clone();
+            let mut core = arc.lock();
+            app.record_render_state(&mut core);
+        }
+        assert!(!app.needs_full_redraw);
+        app.on_ime_commit("a");
+        assert!(app.needs_full_redraw);
     }
 }

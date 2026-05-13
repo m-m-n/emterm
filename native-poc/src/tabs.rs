@@ -77,6 +77,11 @@ pub struct Tab {
     /// daemon. Phase 4-D's status-bar widget (`ui::status_bar`) reads
     /// this through `App::status_bar_state()`.
     pub mux_status_state: Option<StatusUpdateMsg>,
+    /// Phase 4-E: per-tab IME preedit composition state. Driven by
+    /// `egui::Event::Ime(ImeEvent::Preedit/Commit)` events routed
+    /// through `App` and rendered as an underline overlay by
+    /// `render::cursor::draw_cursor_with_preedit`.
+    pub preedit_state: crate::ime::preedit::State,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -132,6 +137,7 @@ impl Tab {
             #[cfg(unix)]
             mux_client: None,
             mux_status_state: None,
+            preedit_state: crate::ime::preedit::State::default(),
         }
     }
 
