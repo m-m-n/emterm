@@ -15,12 +15,10 @@ use term_images::image_proc::{ImageEvent, ImageProcessor};
 
 use crate::callbacks::{EmtermOscRequest, NativeCallbackState, NativeCallbacks};
 use crate::image::{parse as image_parse, split_image_events};
-#[cfg(unix)]
-use crate::mux::client::{ChannelEvent, Client as MuxClient};
 use crate::pty::{ExitReason, PtyEvent, PtySession};
 use crate::render::theme::Theme;
 use crate::settings::Settings;
-use mux_ipc::protocol::{MessageType, MuxMessage, StatusUpdateMsg};
+use mux_ipc::protocol::{MessageType, MuxMessage, StatusUpdateMsg, WelcomeMsg};
 
 // Default scrollback capacity now lives on `Settings` (`DEFAULT_SCROLLBACK_LINES`
 // in `crate::settings`); the caller passes the desired value into
@@ -65,14 +63,10 @@ pub struct Tab {
     pub pending_image_events: Vec<ImageEvent>,
     /// When `Some(name)`, this tab is attached to a remote mux session
     /// and the tab bar prefixes the title with `[mux:<name>]`. Phase
-    /// 4-B introduces the field; Phase 4-C populates it when the mux
-    /// client successfully attaches.
+    /// 4-B introduces the field; Phase 4-C (APC redesign) populates it
+    /// from the daemon's `Welcome::Accepted.sessions[active]` arriving
+    /// as an APC frame inside the PTY output.
     pub mux_session_name: Option<String>,
-    /// Phase 4-C: the live mux client when this tab is attached to a
-    /// remote session. `None` in native PTY mode. Wrapped in `Option`
-    /// so detach is a `take()`.
-    #[cfg(unix)]
-    pub mux_client: Option<MuxClient>,
     /// Phase 4-C: most recent status-update payload received from the
     /// daemon. Phase 4-D's status-bar widget (`ui::status_bar`) reads
     /// this through `App::status_bar_state()`.
@@ -134,40 +128,18 @@ impl Tab {
             image_proc: ImageProcessor::new(),
             pending_image_events: Vec::new(),
             mux_session_name: None,
-            #[cfg(unix)]
-            mux_client: None,
             mux_status_state: None,
             preedit_state: crate::ime::preedit::State::default(),
         }
     }
 
-    /// Attach this tab to a live mux client. The native PTY must already be
-    /// paused (call [`Tab::pause_native_pty`] first) so the byte ordering
-    /// stays consistent. Sets `mux_session_name` so the tab bar can
-    /// render the `[mux:<name>]` prefix from Phase 4-B.
-    #[cfg(unix)]
-    pub fn attach_mux(&mut self, client: MuxClient) {
-        self.mux_session_name = Some(client.session_id().to_string());
-        self.mux_client = Some(client);
-    }
-
-    /// Detach from the mux client. Returns the previously-held handle so
-    /// the caller can `shutdown` it on its own thread (avoids blocking the
-    /// UI thread on the RX join). After this returns:
-    ///
-    /// 1. The caller drains the native PTY ring buffer.
-    /// 2. The caller replays the drained bytes into `core` via
-    ///    `process_pty_data`.
-    /// 3. The caller calls [`Tab::resume_native_pty`].
-    #[cfg(unix)]
-    pub fn detach_mux(&mut self) -> Option<MuxClient> {
-        self.mux_session_name = None;
-        self.mux_status_state = None;
-        self.mux_client.take()
-    }
-
     /// Pause the native PTY reader. Subsequent PTY output goes into the
     /// per-session ring buffer until [`Tab::resume_native_pty`] is called.
+    /// Phase 4-C kept this in place for a future "freeze native output
+    /// while mux owns the screen" affordance; the APC-redesigned mux
+    /// path does not currently invoke it (the bridge CLI runs in the
+    /// same PTY, so there is no second stream to pause).
+    #[allow(dead_code)]
     pub fn pause_native_pty(&self) {
         if let Some(p) = &self.pty {
             p.set_paused(true);
@@ -175,8 +147,10 @@ impl Tab {
     }
 
     /// Drain the ring buffer and replay the bytes into `core`, then resume
-    /// the native PTY reader. Called from `App::on_mux_osc(Detach)` after
-    /// the mux client has been shut down.
+    /// the native PTY reader. Counterpart of [`Tab::pause_native_pty`];
+    /// unused in the APC-redesigned mux path but retained for the same
+    /// future-use rationale.
+    #[allow(dead_code)]
     pub fn resume_native_pty(&mut self) {
         if let Some(p) = &self.pty {
             let drained = p.drain_ring();
@@ -194,76 +168,65 @@ impl Tab {
         }
     }
 
-    /// Pump any messages that have arrived from the mux daemon. Returns true
-    /// if anything changed (caller should request a redraw). `core` is
-    /// updated through `reset_and_replay` on each `Snapshot`; the latest
-    /// `StatusUpdateMsg` is cached on `mux_status_state` for Phase 4-D.
-    #[cfg(unix)]
-    pub fn pump_mux(&mut self) -> bool {
-        // Drain messages first so we don't hold an immutable borrow of
-        // `self.mux_client` across the subsequent mutation in
-        // `apply_mux_message`.
-        let mut buffered: Vec<MuxMessage> = Vec::new();
-        let mut detach_after = false;
-        if let Some(client) = self.mux_client.as_ref() {
-            while let Some(evt) = client.try_recv() {
-                match evt {
-                    ChannelEvent::Message(msg) => buffered.push(msg),
-                    ChannelEvent::Closed { reason } => {
-                        log::warn!("mux client disconnected for tab {:?}: {reason}", self.title);
-                        detach_after = true;
-                        break;
-                    }
-                }
-            }
-        }
-        let mut changed = false;
-        for msg in buffered {
-            if self.apply_mux_message(msg) {
-                changed = true;
-            }
-        }
-        if detach_after {
-            // The daemon closed mid-session — fall back to native PTY mode.
-            if let Some(client) = self.detach_mux() {
-                std::thread::spawn(move || client.shutdown());
-            }
-            self.resume_native_pty();
-            changed = true;
-        }
-        changed
-    }
-
-    /// Route one mux message into the appropriate state. Returns true if
-    /// the visible state changed.
-    #[cfg(unix)]
-    fn apply_mux_message(&mut self, msg: MuxMessage) -> bool {
+    /// Route one decoded mux message into this tab. Called by `App::pump_all`
+    /// after the APC decoder ([`crate::mux::apc::try_decode_emterm_mux`])
+    /// produced a typed `MuxMessage`. Returns true when the visible state
+    /// changed (caller schedules a redraw).
+    ///
+    /// `Snapshot` payloads are raw PTY-shaped bytes the daemon captured
+    /// from the active window — they are replayed into `term_core` via
+    /// `reset_and_replay`. Everything else either updates a side-channel
+    /// (status bar, session name) or is logged and ignored — the bridge
+    /// CLI continues to own the underlying socket protocol, so native-poc
+    /// only needs to react to messages that mutate its own state.
+    pub fn apply_mux_message(&mut self, msg: MuxMessage) -> bool {
         match msg.msg_type {
-            MessageType::PtyOutput => {
-                self.core.lock().process_pty_data(&msg.payload);
-                true
-            }
-            MessageType::Snapshot => {
-                // Daemon sends raw bytes representing the active window's
-                // visible grid; replay from scratch.
+            MessageType::Snapshot | MessageType::SnapshotRestore => {
                 self.core.lock().reset_and_replay(&msg.payload);
+                log::debug!(
+                    "mux apc: applied {:?} ({} bytes) for tab {:?}",
+                    msg.msg_type,
+                    msg.payload.len(),
+                    self.title
+                );
                 true
             }
-            MessageType::StatusUpdate => {
-                if let Some(payload) = msg.decode_payload::<StatusUpdateMsg>() {
+            MessageType::StatusUpdate => match msg.decode_payload::<StatusUpdateMsg>() {
+                Some(payload) => {
                     self.mux_status_state = Some(payload);
                     true
-                } else {
-                    log::warn!("mux: malformed StatusUpdate payload");
+                }
+                None => {
+                    log::warn!("mux apc: malformed StatusUpdate payload");
                     false
                 }
-            }
+            },
+            MessageType::Welcome => match msg.decode_payload::<WelcomeMsg>() {
+                Some(WelcomeMsg::Accepted { sessions, .. }) => {
+                    let active = sessions.first().map(|s| s.name.clone());
+                    if let Some(name) = active {
+                        log::info!("mux apc: tab {:?} attached to session {name}", self.title);
+                        self.mux_session_name = Some(name);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Some(WelcomeMsg::Rejected { reason }) => {
+                    log::warn!("mux apc: handshake rejected: {reason}");
+                    false
+                }
+                None => {
+                    log::warn!("mux apc: malformed Welcome payload");
+                    false
+                }
+            },
             MessageType::PtyExited => {
-                log::info!("mux: remote pane exited for tab {:?}", self.title);
+                log::info!("mux apc: remote pane exited for tab {:?}", self.title);
                 false
             }
             other => {
-                log::debug!("mux: unhandled message type {other:?}");
+                log::debug!("mux apc: unhandled message type {other:?}");
                 false
             }
         }
@@ -350,8 +313,18 @@ impl Tab {
                 }
                 changed = true;
             }
-            if (!pending_apc.is_empty() || !pending_dcs.is_empty())
-                && self.drain_and_decode_images(&pending_apc, &pending_dcs)
+            // Split the APC stream: payloads addressed to the `emterm-mux;`
+            // inband protocol are decoded and applied to this tab's state;
+            // everything else (Kitty graphics) falls through to the image
+            // pipeline. `pending_dcs` is image-only (SIXEL).
+            let (image_apc, mux_messages) = partition_apc_for_mux(pending_apc);
+            for msg in mux_messages {
+                if self.apply_mux_message(msg) {
+                    changed = true;
+                }
+            }
+            if (!image_apc.is_empty() || !pending_dcs.is_empty())
+                && self.drain_and_decode_images(&image_apc, &pending_dcs)
             {
                 changed = true;
             }
@@ -437,12 +410,30 @@ impl Tab {
     pub fn drain_osc(&self) -> Vec<EmtermOscRequest> {
         std::mem::take(&mut self.cb_state.lock().osc_queue)
     }
+}
 
-    /// Phase 4-C: drain parsed mux OSC 777 actions. The App layer routes
-    /// `Attach` / `Detach` actions into `Tab::attach_mux` / `Tab::detach_mux`.
-    pub fn drain_mux_actions(&self) -> Vec<crate::mux::osc777::MuxOscAction> {
-        std::mem::take(&mut self.cb_state.lock().pending_mux_actions)
+/// Split a drained `pending_apc` buffer into the (image-pipeline,
+/// mux-message) halves. APC payloads that start with `emterm-mux;` are
+/// decoded into typed `MuxMessage`s via
+/// [`crate::mux::apc::try_decode_emterm_mux`]; the rest pass through to
+/// the existing Kitty Graphics decoder. Decode failures on a clearly
+/// mux-prefixed payload are dropped (the helper already logs at `warn`)
+/// rather than fed to the image pipeline — they cannot be valid Kitty.
+fn partition_apc_for_mux(apc: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, Vec<MuxMessage>) {
+    let mut images: Vec<Vec<u8>> = Vec::with_capacity(apc.len());
+    let mut mux: Vec<MuxMessage> = Vec::new();
+    for payload in apc {
+        if payload.starts_with(b"emterm-mux;") {
+            if let Some(msg) = crate::mux::apc::try_decode_emterm_mux(&payload) {
+                mux.push(msg);
+            }
+            // Malformed mux payload — already logged inside the decoder;
+            // do NOT forward to the image pipeline.
+        } else {
+            images.push(payload);
+        }
     }
+    (images, mux)
 }
 
 /// Scan a `take_mode_actions()` payload for buffer-switch markers and

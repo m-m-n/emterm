@@ -311,31 +311,13 @@ impl App {
     pub fn pump_all(&mut self) -> bool {
         let mut changed = false;
         for tab in &mut self.tabs {
+            // Phase 4-C (APC redesign): `Tab::pump` already routes
+            // APC-encoded mux messages into the tab's own state via
+            // `apply_mux_message` (see `crate::mux::apc`). There is no
+            // separate `pump_mux` pass — the bridge CLI runs inside the
+            // same PTY, so a single drain is sufficient.
             if tab.pump() {
                 changed = true;
-            }
-            #[cfg(unix)]
-            if tab.pump_mux() {
-                changed = true;
-            }
-        }
-        // Phase 4-C: drain mux OSC 777 actions per tab and act on them.
-        // We collect indices first so the action loop can mutate tabs.
-        #[cfg(unix)]
-        {
-            let action_indices: Vec<usize> = self
-                .tabs
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| !t.cb_state.lock().pending_mux_actions.is_empty())
-                .map(|(i, _)| i)
-                .collect();
-            for idx in action_indices {
-                let actions = self.tabs[idx].drain_mux_actions();
-                for action in actions {
-                    self.on_mux_osc(idx, action);
-                    changed = true;
-                }
             }
         }
         // Mirror the active tab's alt-screen flag onto the App so the
@@ -616,74 +598,20 @@ impl App {
         }
     }
 
-    /// Phase 4-C: act on a mux OSC 777 action for the tab at `tab_idx`.
+    /// Phase 4-C (APC redesign): route one decoded `MuxMessage` to the
+    /// tab at `tab_idx`. The actual routing logic lives on `Tab` so the
+    /// tab can mutate its own grid / status state directly — this
+    /// wrapper exists primarily as the test seam and as a stable name
+    /// for future cross-tab mux behavior.
     ///
-    /// - `Attach{socket, session_id}` — pauses the native PTY, opens a
-    ///   `UnixStream` to `socket`, performs the Hello/Attach handshake,
-    ///   and stores the client on the tab. The first `Snapshot` message
-    ///   to arrive will be applied via `term_core::reset_and_replay`
-    ///   inside `Tab::pump_mux`.
-    /// - `Detach` — sends a Detach message, shuts down the client,
-    ///   drains the ring buffer into `term_core`, and resumes the
-    ///   native PTY reader.
-    ///
-    /// Connection failures (daemon not listening, socket missing) are
-    /// logged at warn and leave the tab in native-PTY mode. The user is
-    /// not notified other than via the log — Phase 4-D's status bar
-    /// widget will eventually surface a transient banner.
-    #[cfg(unix)]
-    pub fn on_mux_osc(&mut self, tab_idx: usize, action: crate::mux::osc777::MuxOscAction) {
-        use crate::mux::client::Client as MuxClient;
-        use crate::mux::osc777::MuxOscAction;
-        use mux_ipc::protocol::{MessageType, MuxMessage};
-
+    /// Returns `true` when the tab's visible state changed (the caller
+    /// should request a redraw).
+    pub fn on_mux_message(&mut self, tab_idx: usize, msg: mux_ipc::protocol::MuxMessage) -> bool {
         let Some(tab) = self.tabs.get_mut(tab_idx) else {
-            log::warn!("on_mux_osc: tab_idx {tab_idx} out of range");
-            return;
+            log::warn!("on_mux_message: tab_idx {tab_idx} out of range");
+            return false;
         };
-
-        match action {
-            MuxOscAction::Attach { socket, session_id } => {
-                // Pause the native PTY BEFORE opening the client so any
-                // chunk read after this point lands in the ring buffer
-                // rather than mid-render into the active grid.
-                tab.pause_native_pty();
-                match MuxClient::connect(&socket, session_id.clone()) {
-                    Ok(client) => {
-                        log::info!(
-                            "mux: tab {tab_idx} attached to session {session_id} \
-                             at {}",
-                            socket.display()
-                        );
-                        tab.attach_mux(client);
-                    }
-                    Err(e) => {
-                        log::warn!("mux: tab {tab_idx} attach failed (session={session_id}): {e}");
-                        // Resume the native PTY — we never successfully
-                        // entered mux mode.
-                        tab.resume_native_pty();
-                    }
-                }
-            }
-            MuxOscAction::Detach => {
-                if let Some(client) = tab.detach_mux() {
-                    // Best-effort: tell the daemon we are leaving. We do
-                    // not block on the daemon's ack because the wire shape
-                    // is async-by-design.
-                    let _ = client.send(&MuxMessage::control(
-                        MessageType::Detach,
-                        0,
-                        &"detach".to_string(),
-                    ));
-                    // Move the shutdown off the UI thread; joining the RX
-                    // thread can take a few milliseconds and we never
-                    // want to block frame production on it.
-                    std::thread::spawn(move || client.shutdown());
-                }
-                tab.resume_native_pty();
-                log::info!("mux: tab {tab_idx} detached");
-            }
-        }
+        tab.apply_mux_message(msg)
     }
 }
 
@@ -1152,5 +1080,82 @@ mod tests {
         assert!(!app.needs_full_redraw);
         app.on_ime_commit("a");
         assert!(app.needs_full_redraw);
+    }
+
+    // ── Phase 4-C (APC redesign): mux message routing ────────────────
+
+    /// TS-mux-msg-1: `App::on_mux_message` applies a `Snapshot` to the
+    /// target tab's `TerminalCore` via `reset_and_replay`. The grid
+    /// content visible afterward must reflect the replayed bytes.
+    #[test]
+    fn on_mux_message_snapshot_resets_and_replays_into_core() {
+        use mux_ipc::protocol::{MessageType, MuxMessage};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+
+        // Prime the grid with something the snapshot must overwrite.
+        {
+            let tab = app.active_tab().unwrap();
+            tab.core.lock().process_pty_data(b"BEFORE");
+        }
+
+        // Snapshot payload: clear + print "AFTER" at home.
+        let mut payload: Vec<u8> = Vec::new();
+        payload.extend_from_slice(b"\x1b[2J\x1b[H");
+        payload.extend_from_slice(b"AFTER");
+
+        let msg = MuxMessage {
+            msg_type: MessageType::Snapshot,
+            pane_id: 0,
+            payload,
+        };
+        let changed = app.on_mux_message(0, msg);
+        assert!(changed, "Snapshot must mark state changed");
+
+        // The first 5 cells of row 0 should now spell A F T E R.
+        let tab = app.active_tab().unwrap();
+        let core = tab.core.lock();
+        let row0: String = (0..5).map(|c| core.get_cell_char(c, 0)).collect();
+        assert_eq!(row0, "AFTER");
+    }
+
+    /// TS-mux-msg-2: `App::on_mux_message` updates `mux_status_state`
+    /// on the target tab when handed a `StatusUpdate`.
+    #[test]
+    fn on_mux_message_status_update_caches_payload_on_tab() {
+        use mux_ipc::protocol::{MessageType, MuxMessage, StatusUpdateMsg};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+
+        let payload = StatusUpdateMsg {
+            left: "[default] *win1 win2".to_string(),
+            right: "12:34".to_string(),
+        };
+        let msg = MuxMessage::control(MessageType::StatusUpdate, 0, &payload);
+        let changed = app.on_mux_message(0, msg);
+        assert!(changed);
+
+        let tab = app.active_tab().unwrap();
+        let cached = tab.mux_status_state.as_ref().expect("status cached");
+        assert_eq!(cached.left, payload.left);
+        assert_eq!(cached.right, payload.right);
+    }
+
+    /// `App::on_mux_message` with an out-of-range tab index is a no-op
+    /// (logs a warning) and never panics.
+    #[test]
+    fn on_mux_message_out_of_range_returns_false() {
+        use mux_ipc::protocol::{MessageType, MuxMessage};
+
+        let mut app = App::new();
+        // No tabs spawned.
+        let msg = MuxMessage {
+            msg_type: MessageType::Snapshot,
+            pane_id: 0,
+            payload: b"hello".to_vec(),
+        };
+        assert!(!app.on_mux_message(0, msg));
     }
 }

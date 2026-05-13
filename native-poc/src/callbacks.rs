@@ -258,10 +258,6 @@ pub struct NativeCallbackState {
     /// `TerminalCore::mark_all_dirty` so the next frame repaints with
     /// the new palette.
     pub theme_dirty: bool,
-    /// Phase 4-C: parsed mux OSC 777 actions waiting for the app layer
-    /// to act on (attach / detach). The callback parses the payload here
-    /// so the app loop can act under its own locking discipline.
-    pub pending_mux_actions: Vec<crate::mux::osc777::MuxOscAction>,
 }
 
 /// `TerminalCallbacks` implementation for native consumers.
@@ -452,24 +448,13 @@ impl TerminalCallbacks for NativeCallbacks {
             OSC_CLIPBOARD => self.handle_clipboard(data),
             OSC_SEMANTIC_PROMPT => self.handle_semantic_prompt(data),
             OSC_EMTERM_EXTENSION => {
-                // Phase 4-C: try the mux sub-protocol first. If the payload
-                // is addressed to mux (`emterm;mux;…`) we surface a typed
-                // action; anything else falls back to the viewer queue.
-                match crate::mux::osc777::parse(data) {
-                    Ok(action) => {
-                        self.state.lock().pending_mux_actions.push(action);
-                    }
-                    Err(crate::mux::osc777::MuxOscError::NotMuxPrefix) => {
-                        // Not addressed to mux — keep legacy emterm-extension
-                        // routing for the (Phase 5+) Wry viewer spawner.
-                        self.state.lock().osc_queue.push(EmtermOscRequest {
-                            payload: data.to_string(),
-                        });
-                    }
-                    Err(e) => {
-                        log::warn!("OSC 777 (mux): rejecting payload: {e}");
-                    }
-                }
+                // Phase 4-C (APC redesign): mux no longer rides on OSC 777.
+                // Control messages now flow via APC `emterm-mux;<base64>` in
+                // the PTY stream (see `crate::mux::apc`). OSC 777 retains
+                // its legacy role as the emterm-extension viewer trigger.
+                self.state.lock().osc_queue.push(EmtermOscRequest {
+                    payload: data.to_string(),
+                });
             }
             OSC_ITERM2 => {
                 // OQ7: log only — no inline-image subset is implemented.
