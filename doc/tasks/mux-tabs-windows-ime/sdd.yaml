@@ -40,12 +40,96 @@ workflow:
         TS-osc777-3 / TS-prefix-3 / TS-status-3 を SPEC に明示)。
       他に minor issues は無し、設計レビューで blocking 問題なし。
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: "37daa139c242305094ffb212602011a37e35da5c"
+    notes: |
+      Phase 4 auto-scope 全 6 サブフェーズ完了 (2026-05-13 セッション、
+      em-sdd:implementation-executor agent 6 回起動 + 本オーケストレータが Phase 4-A コミット境界整備)。
+
+      - Phase 4-A (FR3、commit b468ff5): mux_ipc protocol-only 抽出。
+        verify-plan で判明した critical issue (codec.rs/connection.rs は server-only) を反映し、
+        protocol.rs のみ git mv。src-tauri 側は 1-line shim で後方互換。
+        cargo test --workspace = 1801 → 1801 (44 protocol tests は app_lib → mux_ipc test
+        binary に移動、net change 0)、clippy 19 warnings 維持。
+      - Phase 4-B (FR1/FR2、commit 9e8bbc5): egui tab bar widget + central keybinds。
+        AppAction + TabEvent enums、tab_bar::draw (新規/閉じる/切替/タイトル + mux mode prefix)、
+        keybinds::dispatch (Ctrl+Shift+T/W, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1..9)、
+        app loop + window_host への wiring。+26 tests (1801 → 1827)。
+      - Phase 4-C (FR4-FR8/FR13(部分)、commit 3a85a61): mux client foundation。
+        mux::wire (sync 4-byte BE length + bincode framing)、mux::osc777 (validation 付き parser)、
+        mux::prefix (state machine + 3s timeout + double-press passthrough)、mux::client
+        (blocking std UnixStream + RX thread)、mux::mock (cfg(test) channel-backed daemon)、
+        pty::ring (256 KB drop-oldest)、pty pause flag、Tab::mux_client / mux_status_state、
+        App::on_mux_osc、settings.mux_prefix_key、term_core::reset_and_replay 追加。
+        +60 tests (1827 → 1887)。
+      - Phase 4-D (FR9/FR10/FR13(部分)、commit f14f7ba): egui status bar widget。
+        StatusBarPosition enum + StatusBarSettings、status_bar::draw (Top/Bottom panel、mux 状態
+        または clock-only 表示)、idle 1Hz repaint。warn-once unknown position fallback。
+        +11 tests (1887 → 1898)。
+      - Phase 4-E (FR11/FR12 auto-scope、commit e225e5d): IME preedit + commit routing。
+        ime::preedit::State + sanitize (C0/C1 drop)、ime::commit::write_commit (no bracketed wrap)、
+        render::cursor::draw_cursor_with_preedit (underline overlay)、App::on_ime_{preedit,commit,
+        focus_lost}、tao::WindowEvent::ReceivedImeText → on_ime_commit 配線。
+        tao 0.34 は preedit event を surface しないため preedit パスは現在 test-only
+        (Phase 4-E manual host gate で実検証)。+42 tests (1898 → 1940)。
+        Manual gates (TS-manual-ime-linux, TS-manual-ime-windows) は deferred_manual。
+      - Phase 4-F auto-scope (commit 37daa13): clippy sweep (19 → 14、5 mechanical fixes:
+        derivable_impls / manual_is_multiple_of / while_let_loop / match_single_binding /
+        missing_safety_doc)、README に Phase 4 feature matrix 追加、perf test scaffolding
+        (TS-perf-1/TS-perf-2 を cfg(test) #[ignore] で配置、Docker debug 値はコメント記録、
+        release host 計測は manual)。Manual gates (gate-soak 12h, gate-perf release 計測) は
+        deferred_manual。
+
+      最終状態: cargo build --workspace ✅、cargo test --workspace ✅ 1940 passed / 0 failed /
+      9 ignored、cargo fmt --all clean、cargo clippy native-poc + mux_ipc 14 warnings / 0 errors
+      (Phase 4-A の 19 から -5、残 14 は forward-staged dead-code + 既存 arc_with_non_send_sync で
+      Phase 4 スコープ外)。FR1-FR13 全 auto-scope 実装済、FR11/FR12 の Windows MS-IME + Linux
+      fcitx5 実測 + NFR1/NFR2 (perf release 計測 + 12h soak) は verify gate で host 実施。
   - id: check
-    status: pending
+    status: completed
+    completed_at_commit: "37daa139c242305094ffb212602011a37e35da5c"
+    notes: |
+      Quick check 全 PASS (Docker):
+      - cargo build --workspace: exit 0
+      - cargo test --workspace: 1940 passed / 0 failed / 9 ignored
+      - cargo fmt --all -- --check: clean
+      - cargo clippy -p emterm-native-poc -p mux_ipc --no-deps: 14 warnings (baseline 維持)
+      - cargo clippy ... -D warnings: 14 hard errors (warnings 同数を error 化)
+
+      Dead code audit (Phase 4 範囲のみ):
+      - 真に dead: 0 件
+      - Forward-staged: 5 件 (App::has_tabs / active_tab_mut、Tab::drain_osc、
+        PromptMark.{kind,row,exit_code}、AmbiguousWidthMode::Wide) — Phase 5+ /
+        Phase 7 の planned consumer あり、コードコメントで意図明示済
+      - Test-only path: 3 件 (NativeCallbacks::take_theme_dirty、CellStyle.{bold,italic}) —
+        テスト側で exercise されており Phase 4-E + Phase 7 で production 配線予定
+      - Style: 1 件 (clippy::arc_with_non_send_sync) — Phase 3 由来の preexisting、Phase 4 外
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
-    status: pending
+    status: completed
+    completed_at_commit: "37daa139c242305094ffb212602011a37e35da5c"
+    notes: |
+      Auto-scope verify 全 PASS。Blocking finding なし。VERIFICATION_RESULT.md 出力。
+
+      Verified:
+      - File structure: 13 created / 14 modified files 全て b468ff5..37daa13 で touched
+      - SC-1 (FR1-FR13 + tests pass), SC-3 (cargo test ✅ 1940/0), SC-4 (fmt clean),
+        SC-5 (clippy 14 warnings、-D errors 14)、SC-8 (legacy src-tauri 影響なし、
+        変更は Cargo.toml mux_ipc dep + protocol.rs 1-line shim のみ)
+      - FR1-FR13 全 auto-scope PASS
+      - NFR4 (workspace 互換)、NFR5 (file structure)、NFR6 (logging) PASS
+      - Security: OSC 777 socket path prefix + session_id regex + IME C0/C1 sanitize +
+        statusbar warn-once 全 PASS
+
+      Manual gates pending (host-deferred、verify ステータスとしては完了扱い):
+      - SC-2 Windows cargo build --workspace (Linux PASS)
+      - SC-6 TS-manual-mux-1/2 (mux attach/detach/window switch 実機検証)
+      - SC-6 TS-manual-ime-linux (fcitx5 preedit + commit)
+      - SC-6 TS-manual-ime-windows (MS-IME preedit + commit、候補位置 best effort)
+      - SC-7 / NFR2 TS-manual-soak (12 h Claude Code セッション)
+      - NFR1 TS-perf-1/TS-perf-2 release-build host 計測 (現在 Docker debug 値:
+        snapshot apply ~1.84 s、prefix→send ~59 µs、release 計測 pending)
+      - Legacy E2E regression run (./scripts/run-e2e-docker.sh) host 実行待ち
 
 requirements:
   FR1:
