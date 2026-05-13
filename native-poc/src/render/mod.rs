@@ -92,6 +92,13 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
         crate::ui::tab_bar::draw(ctx, &items, app.active)
     };
 
+    // Phase 4-D: status-bar panel. Inserted before the central panel
+    // (egui sizes top/bottom panels first, then the central panel
+    // takes the remaining rect). The widget itself decides top vs
+    // bottom from settings.
+    let status_state = app.status_bar_state();
+    crate::ui::status_bar::draw(ctx, &status_state, &app.settings);
+
     egui::CentralPanel::default()
         .frame(egui::Frame::default().fill(rgb_to_egui(theme.bg)))
         .show(ctx, |ui| {
@@ -116,6 +123,14 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
         if core.get_cursor_blink() {
             ctx.request_repaint_after(Duration::from_millis(BLINK_HALF_MS as u64));
         }
+    }
+
+    // Phase 4-D: when the status bar is enabled, schedule a 1 Hz
+    // wake-up so the local clock ticks even on otherwise-idle frames.
+    // Active PTY output / cursor blink already drive higher-rate
+    // repaint; this is the floor.
+    if app.settings.statusbar.enabled {
+        ctx.request_repaint_after(Duration::from_secs(1));
     }
 
     tab_event

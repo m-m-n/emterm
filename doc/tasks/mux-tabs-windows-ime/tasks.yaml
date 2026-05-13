@@ -127,24 +127,29 @@ phases:
     tasks:
       - id: status-settings-extension
         title: "settings.statusbar.enabled + position (with validation warn)"
+        status: completed
         files:
           - native-poc/src/settings.rs
       - id: status-state-plumbing
         title: "Per-tab StatusBarState updated by Mux Client RX path"
+        status: completed
         files:
           - native-poc/src/app.rs
           - native-poc/src/tabs.rs
       - id: status-bar-widget
         title: "egui top/bottom panel widget"
+        status: completed
         files:
           - native-poc/src/ui/status_bar.rs
           - native-poc/src/ui/mod.rs
       - id: status-idle-repaint
         title: "1 Hz repaint scheduling for idle clock-only updates"
+        status: completed
         files:
-          - native-poc/src/app.rs
+          - native-poc/src/render/mod.rs
       - id: status-tests
         title: "TS-status-1/2/3, TS-settings-1"
+        status: completed
         files: []
 
   - id: phase-4-e
