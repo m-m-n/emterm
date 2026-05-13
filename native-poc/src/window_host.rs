@@ -685,9 +685,18 @@ fn tao_key_to_bytes(event: &tao::event::KeyEvent, mods: Modifiers) -> Option<Vec
         TaoKey::Character(s) => {
             let mut chars = s.chars();
             let c = chars.next()?;
-            // Multi-character "Character" entries (rare; dead keys) — only
-            // forward the first codepoint in Phase 2. Phase 7 IME path
-            // handles composed input.
+            // Printable characters without Ctrl/Alt are delivered via
+            // `WindowEvent::ReceivedImeText` on Linux X11/Wayland (tao 0.34
+            // fires it for ALL text input, not just IME compositions).
+            // Encoding them here would double-deliver each keystroke
+            // (issue surfaced in TS-manual-ime-linux 2026-05-13). Return
+            // None so the ReceivedImeText path owns plain text input; we
+            // only encode here when a Ctrl or Alt modifier is held, since
+            // those chords (e.g. Ctrl+C, Alt+b) are not surfaced as
+            // ReceivedImeText.
+            if !mods.ctrl && !mods.alt {
+                return None;
+            }
             Key::Char(c)
         }
         TaoKey::Enter => Key::Enter,
