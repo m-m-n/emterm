@@ -179,10 +179,14 @@ pub fn build_platform_backend(
             return crate::ime::x11::X11Backend::init(window, display)
                 .map(|b| Box::new(b) as Box<dyn ImeBackend>);
         }
+        // Phase 4-G-C: Wayland probe.
+        if let Some(RawDisplayHandle::Wayland(_)) = display {
+            return crate::ime::wayland::WaylandBackend::init(window, display)
+                .map(|b| Box::new(b) as Box<dyn ImeBackend>);
+        }
     }
 
-    // Phase 4-G-C / 4-G-D will add the Wayland + Windows probes
-    // below.
+    // Phase 4-G-D will add the Windows probe below.
 
     let _ = (window, display);
     Err(ImeInitError::Unavailable(

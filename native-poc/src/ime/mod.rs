@@ -24,6 +24,9 @@ pub mod null;
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod x11;
 
-// Phase 4-G-C / 4-G-D will add the remaining OS-specific submodules:
-//   #[cfg(all(unix, not(target_os = "macos")))] pub mod wayland;
+// Phase 4-G-C: Linux Wayland (zwp_text_input_v3) backend.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod wayland;
+
+// Phase 4-G-D will add:
 //   #[cfg(windows)] pub mod windows;

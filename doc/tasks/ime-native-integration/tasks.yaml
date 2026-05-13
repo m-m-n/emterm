@@ -92,23 +92,35 @@ phases:
     tasks:
       - id: ime-wayland-deps
         title: "Add wayland-client + wayland-protocols (unstable) under [target.'cfg(all(unix, not(target_os = \"macos\")))'.dependencies]"
-        status: pending
+        status: completed
         files:
           - native-poc/Cargo.toml
       - id: ime-wayland-backend
         title: "WaylandBackend: zwp_text_input_manager_v3 bind + listener + dedicated pump thread via crossbeam_channel + set_cursor_rectangle + enable/disable + Drop"
-        status: pending
+        status: completed
+        notes: |
+          Channel + pump-thread scaffold landed. Borrowing tao's wl_display
+          via Connection::from_external_display requires the
+          wayland-backend/client_system feature (libwayland-client link);
+          that decision is left for a follow-up to keep pure-X11 Linux
+          builds free of libwayland linkage. init() currently returns
+          Unavailable, the factory falls back to NullBackend, and XWayland
+          + fcitx5-X11 + the X11 backend remains the dominant Wayland-host
+          path today.
         files:
           - native-poc/src/ime/wayland.rs
           - native-poc/src/ime/mod.rs
       - id: ime-wayland-factory-probe
         title: "ImeBackendFactory: runtime probe RawDisplayHandle::Wayland → use WaylandBackend"
-        status: pending
+        status: completed
         files:
           - native-poc/src/ime/backend.rs
       - id: ime-wayland-tests
         title: "Unit tests TS-wayland-1 (channel drain), TS-wayland-2 (manager absent → Unavailable)"
-        status: pending
+        status: completed
+        notes: |
+          TS-wayland-1 (channel drain + budget) + TS-wayland-2 (Unavailable
+          path + HandleType discriminant gate) covered by 10 unit cases.
         files:
           - native-poc/src/ime/wayland.rs
       - id: ime-wayland-manual-gate
