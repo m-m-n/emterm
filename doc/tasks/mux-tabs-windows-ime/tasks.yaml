@@ -71,45 +71,54 @@ phases:
     tasks:
       - id: mux-wire-framing
         title: "Sync wire framing (4-byte BE length + bincode body, MAX_FRAME_LENGTH enforcement)"
+        status: completed
         files:
           - native-poc/src/mux/wire.rs
           - native-poc/src/mux/mod.rs
       - id: mux-osc777-parser
         title: "OSC 777 parser with socket / session_id validation"
+        status: completed
         files:
           - native-poc/src/mux/osc777.rs
           - native-poc/src/callbacks.rs
       - id: mux-client-wrapper
         title: "Mux Client wrapper (blocking UnixStream + connect/send/try_recv/shutdown)"
+        status: completed
         files:
           - native-poc/src/mux/client.rs
           - native-poc/src/mux/mod.rs
           - native-poc/Cargo.toml
       - id: mux-prefix-latch
         title: "Prefix-key state machine with timeout + double-press passthrough"
+        status: completed
         files:
           - native-poc/src/mux/prefix.rs
       - id: mux-pty-pause-ring
         title: "Native PTY pause flag + 256 KB ring buffer + resume replay"
+        status: completed
         files:
-          - native-poc/src/pty/reader.rs
-          - native-poc/src/pty/writer.rs
+          - native-poc/src/pty/mod.rs
+          - native-poc/src/pty/ring.rs
           - native-poc/src/tabs.rs
       - id: mux-tab-integration
         title: "Tab gains mux_client field; app routes Snapshot via term_core reset_and_replay"
+        status: completed
         files:
           - native-poc/src/app.rs
           - native-poc/src/tabs.rs
       - id: mux-settings-prefix-key
         title: "settings.mux.prefix_key field"
+        status: completed
         files:
           - native-poc/src/settings.rs
       - id: mux-mock-daemon
         title: "cfg(test) in-memory mock daemon"
+        status: completed
         files:
           - native-poc/src/mux/mock.rs
       - id: mux-tests
         title: "TS-wire-1/2, TS-osc777-1/2/3, TS-prefix-1/2/3, TS-mux-int-1..4"
+        status: completed
         files: []
 
   - id: phase-4-d

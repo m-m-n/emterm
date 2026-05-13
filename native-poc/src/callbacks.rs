@@ -258,6 +258,10 @@ pub struct NativeCallbackState {
     /// `TerminalCore::mark_all_dirty` so the next frame repaints with
     /// the new palette.
     pub theme_dirty: bool,
+    /// Phase 4-C: parsed mux OSC 777 actions waiting for the app layer
+    /// to act on (attach / detach). The callback parses the payload here
+    /// so the app loop can act under its own locking discipline.
+    pub pending_mux_actions: Vec<crate::mux::osc777::MuxOscAction>,
 }
 
 /// `TerminalCallbacks` implementation for native consumers.
@@ -447,9 +451,26 @@ impl TerminalCallbacks for NativeCallbacks {
             OSC_NOTIFICATION => self.handle_notify(data),
             OSC_CLIPBOARD => self.handle_clipboard(data),
             OSC_SEMANTIC_PROMPT => self.handle_semantic_prompt(data),
-            OSC_EMTERM_EXTENSION => self.state.lock().osc_queue.push(EmtermOscRequest {
-                payload: data.to_string(),
-            }),
+            OSC_EMTERM_EXTENSION => {
+                // Phase 4-C: try the mux sub-protocol first. If the payload
+                // is addressed to mux (`emterm;mux;…`) we surface a typed
+                // action; anything else falls back to the viewer queue.
+                match crate::mux::osc777::parse(data) {
+                    Ok(action) => {
+                        self.state.lock().pending_mux_actions.push(action);
+                    }
+                    Err(crate::mux::osc777::MuxOscError::NotMuxPrefix) => {
+                        // Not addressed to mux — keep legacy emterm-extension
+                        // routing for the (Phase 5+) Wry viewer spawner.
+                        self.state.lock().osc_queue.push(EmtermOscRequest {
+                            payload: data.to_string(),
+                        });
+                    }
+                    Err(e) => {
+                        log::warn!("OSC 777 (mux): rejecting payload: {e}");
+                    }
+                }
+            }
             OSC_ITERM2 => {
                 // OQ7: log only — no inline-image subset is implemented.
                 log::warn!("OSC 1337 (iTerm2) ignored: {} bytes", data.len());

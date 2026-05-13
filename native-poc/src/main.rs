@@ -10,6 +10,7 @@ mod window_host;
 
 // Phase 2+ modules — declared but empty for now so the tree compiles when
 // later phases land. (Each file is a stub describing its responsibility.)
+mod mux;
 mod pty;
 mod selection;
 mod settings;
