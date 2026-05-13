@@ -191,6 +191,13 @@ impl Tab {
                 );
                 true
             }
+            MessageType::PtyOutput => {
+                // The daemon's continuous PTY stream: feed it into term_core
+                // as a normal byte stream (NOT a reset). Without this the
+                // mux session looks frozen after the initial Snapshot.
+                self.core.lock().process_pty_data(&msg.payload);
+                true
+            }
             MessageType::StatusUpdate => match msg.decode_payload::<StatusUpdateMsg>() {
                 Some(payload) => {
                     self.mux_status_state = Some(payload);
