@@ -59,7 +59,7 @@ workflow:
       VERIFICATION 64, sdd.yaml 45, tasks.yaml 11 出現箇所すべて整合)。
   - id: implement
     status: completed
-    completed_at_commit: "PLACEHOLDER_REPLACE_AFTER_COMMIT"
+    completed_at_commit: "d50ecff"
     notes: |
       Phase 4-G-A (29daa51): ImeBackend trait + ImeEvent + KeyDispatchResult
         + ImeInitError + RawKeyEvent + NullBackend (passthrough) + factory
