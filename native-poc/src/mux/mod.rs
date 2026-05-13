@@ -36,3 +36,9 @@ pub mod client;
 
 #[cfg(test)]
 pub mod mock;
+
+// Phase 4-F: perf scaffolding for TS-perf-1 (snapshot apply latency) and
+// TS-perf-2 (prefix follow-up → wire round trip). `#[ignore]` by default;
+// run with `cargo test -p emterm-native-poc -- --ignored`.
+#[cfg(test)]
+mod perf_tests;
