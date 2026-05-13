@@ -107,9 +107,30 @@ workflow:
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: completed
-    completed_at_commit: "37daa139c242305094ffb212602011a37e35da5c"
+    completed_at_commit: "c894ea1"
     notes: |
-      Auto-scope verify 全 PASS。Blocking finding なし。VERIFICATION_RESULT.md 出力。
+      2026-05-13 (redesign + IME downgrade): Phase 4-C を APC inband protocol
+      ベースに再設計、Phase 4-E IME を tao 0.34 制約で N/A にダウングレード。
+
+      - c894ea1 refactor(native-poc): Phase 4-C redesign。client/wire/osc777/mock/
+        perf_tests 削除、mux::apc + Tab::apply_mux_message + App::on_mux_message を
+        新規追加。net test delta: 1940 → 1922 passed / 7 ignored (-18 wire/mock/osc777/
+        perf-2、+10 TS-apc-1..4 + TS-mux-msg-1/2 + on_mux_message OOR)。
+        clippy 14 warnings 維持、fmt clean。
+      - 3fcc7ef fix(native-poc): Linux X11 double-input regression fix。tao 0.34 が
+        ReceivedImeText を全 printable キーストロークで発火するため、KeyboardInput
+        の Character 分岐を Ctrl/Alt 無しでは return None するように修正。
+      - FR4 を「mux attach via APC inband protocol」に書き換え、FR5/FR6/FR7 を Phase
+        5+ に延期 (legacy GUI も per-window detach via OSC を出していなかった)、
+        FR8 は「passthrough」と明示 (prefix::Latch は forward-staged 維持)。
+      - FR11/FR12 manual gates (TS-manual-ime-linux / -windows) を tao 0.34 制約で
+        N/A に。auto-scope wiring (ime::preedit + commit + on_ime_preedit/commit/
+        focus_lost + render::cursor::draw_cursor_with_preedit) はそのまま存続、
+        WebView ハイブリッド fallback or tao 置換待ち。
+      - SPEC.md / IMPLEMENTATION.md / VERIFICATION.md / VERIFICATION_RESULT.md /
+        tasks.yaml を同期更新。
+
+      初回 verify (37daa13): Auto-scope verify 全 PASS。Blocking finding なし。VERIFICATION_RESULT.md 出力。
 
       Verified:
       - File structure: 13 created / 14 modified files 全て b468ff5..37daa13 で touched
@@ -165,55 +186,56 @@ requirements:
     tests:
       - TS-mux-1
   FR4:
-    title: mux attach (OSC 777 parsing + sync wire framing + socket connect + snapshot apply)
+    title: mux attach via APC inband protocol (bridge CLI runs inside PTY)
     status: ok
     tasks:
-      - mux-wire-framing
-      - mux-osc777-parser
-      - mux-client-wrapper
+      - mux-apc-decoder
       - mux-tab-integration
       - mux-tests
     tests:
-      - TS-osc777-1
-      - TS-osc777-3
-      - TS-wire-1
-      - TS-wire-2
-      - TS-mux-int-1
-      - TS-mux-int-2
+      - TS-apc-1
+      - TS-apc-2
+      - TS-apc-3
+      - TS-apc-4
+      - TS-mux-msg-1
+      - TS-mux-msg-2
+    notes: |
+      Redesigned 2026-05-13. The legacy `emterm mux` CLI runs as a bridge inside
+      a regular PTY and emits `ESC _ emterm-mux;<base64(frame_body)> ESC \` APC
+      sequences. native-poc decodes them via `mux::apc::try_decode_emterm_mux`
+      and routes through `App::on_mux_message` → `Tab::apply_mux_message`.
+      native-poc never opens the daemon Unix socket itself.
   FR5:
-    title: mux detach (prefix d + replay native PTY ring buffer + resume reader)
-    status: ok
-    tasks:
-      - mux-prefix-latch
-      - mux-pty-pause-ring
-      - mux-tab-integration
-      - mux-tests
-    tests:
-      - TS-osc777-2
-      - TS-prefix-1
-      - TS-mux-int-1
-      - TS-mux-int-4
+    title: mux detach
+    status: deferred
+    tasks: []
+    tests: []
+    notes: |
+      Phase 4-C redesign (2026-05-13): detach keystroke (`Ctrl+B d`) is written
+      to the PTY as ordinary bytes; the bridge CLI consumes it on stdin like
+      tmux. The legacy GUI did not expose per-window detach via OSC either.
+      Deferred to Phase 5+ if dedicated GUI-side detach intercept is needed.
   FR6:
-    title: mux window switch (prefix n/p/0-9)
-    status: ok
-    tasks:
-      - mux-prefix-latch
-      - mux-client-wrapper
-      - mux-tests
-    tests:
-      - TS-prefix-1
-      - TS-mux-int-1
+    title: mux window switch
+    status: deferred
+    tasks: []
+    tests: []
+    notes: |
+      Phase 4-C redesign: window-switch keystrokes (`Ctrl+B n/p/<digit>`) flow
+      through PTY to the bridge CLI; daemon reactions return as APC `Snapshot`
+      frames. Deferred to Phase 5+ for GUI-side intercept.
   FR7:
     title: Native PTY pause/resume during mux (256 KB ring buffer)
-    status: ok
-    tasks:
-      - mux-pty-pause-ring
-      - mux-tab-integration
-      - mux-tests
-    tests:
-      - TS-mux-int-4
+    status: deferred
+    tasks: []
+    tests: []
+    notes: |
+      Phase 4-C redesign: the bridge CLI shares the same PTY native-poc renders,
+      so there is no second stream to pause. `Tab::pause_native_pty` /
+      `resume_native_pty` + `pty::ring` stay in tree under `#[allow(dead_code)]`
+      for a future "freeze native output while mux owns the screen" affordance.
   FR8:
-    title: Prefix key handling (default Ctrl+B, configurable, double-press passthrough)
+    title: Prefix key handling (Latch state machine + settings; current behavior is passthrough)
     status: ok
     tasks:
       - mux-prefix-latch
@@ -224,6 +246,10 @@ requirements:
       - TS-prefix-2
       - TS-prefix-3
       - TS-settings-1
+    notes: |
+      Phase 4-C redesign: `mux::prefix::Latch` is implemented and unit-tested,
+      but the keybinds dispatch passes the chord through to the PTY (bridge CLI
+      consumes it). The Latch is forward-staged for a future GUI-side intercept.
   FR9:
     title: Status bar widget (egui) — session/window/clock from StatusUpdateMsg
     status: ok
@@ -245,29 +271,39 @@ requirements:
       - TS-status-3
       - TS-settings-1
   FR11:
-    title: Windows MS-IME preedit overlay via egui Ime event
+    title: IME preedit overlay via egui Ime event (auto-scope wired; manual gates N/A)
     status: ok
     tasks:
       - ime-preedit-state
       - ime-cursor-renderer
       - ime-app-routing
       - ime-tests
-      - ime-manual-linux
-      - ime-manual-windows
     tests:
       - TS-ime-1
       - TS-ime-3
+    notes: |
+      Auto-scope (preedit state + sanitize + cursor renderer + App routing) is
+      implemented and unit-tested. **Manual gates `TS-manual-ime-linux` /
+      `TS-manual-ime-windows` are N/A under tao 0.34**: no XIM integration on
+      Linux (fcitx5 / IBus can't reach native-poc) and no IMM32/TSF preedit
+      surfacing on Windows. Production IME requires a WebView hybrid fallback
+      or a tao replacement.
   FR12:
-    title: Windows MS-IME commit → PTY write (no bracketed wrap)
+    title: IME commit → PTY write (no bracketed wrap; auto-scope wired; manual gates N/A)
     status: ok
     tasks:
       - ime-commit-path
       - ime-app-routing
       - ime-tests
-      - ime-manual-linux
-      - ime-manual-windows
     tests:
       - TS-ime-2
+    notes: |
+      Auto-scope (`ime::commit::write_commit` + `App::on_ime_commit` ↔
+      `WindowEvent::ReceivedImeText`) is implemented and unit-tested. Manual
+      gate N/A under tao 0.34 (same limitation as FR11). On Linux X11 tao 0.34
+      also fires `ReceivedImeText` for every printable keystroke; commit
+      `3fcc7ef` gates the `KeyboardInput` Character branch on Ctrl/Alt to
+      prevent the resulting double-input.
   FR13:
     title: settings.json additions (mux.prefix_key, statusbar.enabled, statusbar.position)
     status: ok
@@ -293,11 +329,16 @@ requirements:
     notes: "Manual TS-manual-soak only; no automated TS-ID. Recorded in VERIFICATION_RESULT.md."
   NFR3:
     title: Linux fcitx5 IME parity with Phase 1
-    status: ok
-    tasks:
-      - ime-manual-linux
+    status: deferred
+    tasks: []
     tests: []
-    notes: "Manual TS-manual-ime-linux only. Phase 1 acceptance preserved."
+    notes: |
+      **N/A under tao 0.34** (2026-05-13). tao 0.34 does not integrate with XIM,
+      so fcitx5 / IBus on X11 / Wayland cannot deliver preedit / commit events
+      to the native-poc window. Phase 1 acceptance does not apply because the
+      Phase 1 WebView build received IME events via WebKitGTK's native pipeline,
+      which tao 0.34 does not replicate. Re-evaluate when WebView hybrid
+      fallback or tao replacement lands.
   NFR4:
     title: Workspace compatibility (src-tauri build/test green through Phase 4)
     status: ok

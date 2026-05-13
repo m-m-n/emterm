@@ -1,10 +1,10 @@
 # Verification Result: mux Client + Tab Bar UI + Windows IME (Phase 4)
 
 **Feature**: mux-tabs-windows-ime
-**Verified at commit**: `37daa13` (HEAD on branch `refactor/native-terminal-hybrid`)
-**Phase 4 commit range**: `b468ff5..37daa13` (4-A → 4-F)
-**Verification date**: 2026-05-13
-**Verification scope**: Phase 4 auto-scope (manual host gates explicitly deferred)
+**Verified at commit**: `37daa13` (Phase 4 auto-scope) + `3fcc7ef` (Linux double-input fix) + `c894ea1` (Phase 4-C APC redesign) on branch `refactor/native-terminal-hybrid`
+**Phase 4 commit range**: `b468ff5..37daa13` (initial 4-A → 4-F) + `3fcc7ef..c894ea1` (post-auto-scope corrections)
+**Verification date**: 2026-05-13 (re-verified after redesign 2026-05-13)
+**Verification scope**: Phase 4 auto-scope (manual host gates explicitly deferred; FR11/FR12 manual gates downgraded to N/A under tao 0.34)
 
 ---
 
@@ -23,7 +23,7 @@ The fast quality gates were verified by `sdd.5-check` at commit `37daa13`
 (see `sdd.yaml.workflow[check].notes`):
 
 - `cargo build --workspace` → exit 0
-- `cargo test --workspace` → **1940 passed / 0 failed / 9 ignored**
+- `cargo test --workspace` → **1922 passed / 0 failed / 7 ignored** (post-redesign; the Phase 4-F baseline of 1940/9 included 18 wire/mock/osc777/perf-2 tests that no longer exist + 2 perf #[ignore] entries; the 10 net-new APC tests offset most of the loss)
 - `cargo fmt --all -- --check` → clean
 - `cargo clippy -p emterm-native-poc -p mux_ipc --no-deps` → 14 warnings, 0 hard errors
   (with `-D warnings`, the same 14 warnings promote to errors as expected;
@@ -38,23 +38,31 @@ security verification that cannot be expressed as a build gate.
 
 ## 1. File Structure Verification — **PASS**
 
-### Files to Create (13/13 present)
+### Files to Create (post-redesign 2026-05-13)
 
-| Phase | Path | Present |
-|-------|------|---------|
-| 4-A | `crates/mux_ipc/Cargo.toml` | ✓ |
-| 4-A | `crates/mux_ipc/src/lib.rs` | ✓ |
-| 4-A | `crates/mux_ipc/src/protocol.rs` | ✓ (moved from src-tauri) |
-| 4-C | `native-poc/src/mux/mod.rs` | ✓ |
-| 4-C | `native-poc/src/mux/wire.rs` | ✓ |
-| 4-C | `native-poc/src/mux/osc777.rs` | ✓ |
-| 4-C | `native-poc/src/mux/client.rs` | ✓ |
-| 4-C | `native-poc/src/mux/prefix.rs` | ✓ |
-| 4-C | `native-poc/src/mux/mock.rs` | ✓ |
-| 4-E | `native-poc/src/ime/mod.rs` | ✓ |
-| 4-E | `native-poc/src/ime/preedit.rs` | ✓ |
-| 4-E | `native-poc/src/ime/commit.rs` | ✓ |
-| 4-D | `native-poc/src/ui/status_bar.rs` | ✓ |
+| Phase | Path | Present | Notes |
+|-------|------|---------|-------|
+| 4-A | `crates/mux_ipc/Cargo.toml` | ✓ | |
+| 4-A | `crates/mux_ipc/src/lib.rs` | ✓ | |
+| 4-A | `crates/mux_ipc/src/protocol.rs` | ✓ | moved from src-tauri |
+| 4-C | `native-poc/src/mux/mod.rs` | ✓ | exports `apc` + `prefix` |
+| 4-C | `native-poc/src/mux/apc.rs` | ✓ | redesigned 2026-05-13 — APC payload decoder |
+| 4-C | `native-poc/src/mux/prefix.rs` | ✓ | forward-staged under the redesign |
+| 4-E | `native-poc/src/ime/mod.rs` | ✓ | |
+| 4-E | `native-poc/src/ime/preedit.rs` | ✓ | |
+| 4-E | `native-poc/src/ime/commit.rs` | ✓ | |
+| 4-D | `native-poc/src/ui/status_bar.rs` | ✓ | |
+
+Removed by the 2026-05-13 redesign (incorrect direction in original
+Phase 4-C — the legacy mux protocol does not flow over a direct
+GUI-side UnixStream + OSC 777 attach trigger; it flows over APC inside
+the bridge CLI's PTY):
+
+- `native-poc/src/mux/wire.rs` (sync length-prefix + bincode framing)
+- `native-poc/src/mux/client.rs` (blocking std UnixStream client)
+- `native-poc/src/mux/osc777.rs` (OSC 777 attach/detach parser)
+- `native-poc/src/mux/mock.rs` (in-memory mock daemon)
+- `native-poc/src/mux/perf_tests.rs` (TS-perf-2 depended on wire+mock)
 
 ### Files to Modify (14/14 touched in Phase 4 commit range)
 
@@ -111,15 +119,13 @@ exactly. No missing files. NFR5 (module layout) satisfied.
 | **FR1** tab bar widget | TS-tab-1, TS-tab-2, TS-tab-3 | PASS | `native-poc/src/ui/tab_bar.rs` test fns: `clicking_close_on_first_tab_emits_close_zero`, `clicking_inactive_tab_emits_switch`, `clicking_plus_emits_new`, `render_label_renders_mux_prefix` (`[mux:foo] nvim`). |
 | **FR2** tab keybinds | TS-kb-1 | PASS | `native-poc/src/ui/keybinds.rs` table-driven dispatch tests for `Ctrl+Shift+T/W`, `Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+1..9` clamping, `Ctrl+Shift+1` passthrough. |
 | **FR3** mux_ipc extraction | TS-mux-1 | PASS | `git mv` preserved test count (44 protocol tests live in `mux_ipc` test binary post-extraction; workspace net 0). Shim at `src-tauri/src/mux/ipc/protocol.rs` is 1 line: `pub use mux_ipc::protocol::*;`. |
-| **FR4** mux attach | TS-osc777-1, TS-osc777-3, TS-wire-1, TS-wire-2, TS-mux-int-1, TS-mux-int-2 | PASS | OSC parser: `parses_attach_with_tmp_socket`, `parses_attach_with_xdg_runtime_dir`, `rejects_unknown_action`, etc. Wire: `round_trip_pty_output`, `encode_rejects_oversized_payload`, `read_rejects_oversized_advertised_length`. Integration via `mux::mock` + `client::tests`: `handshake_sends_hello_and_attach`, `client_send_is_visible_to_server`. |
-| **FR5** mux detach | TS-osc777-2, TS-prefix-1, TS-mux-int-1, TS-mux-int-4 | PASS | `parses_detach`, prefix latch tests, `server_disconnect_emits_closed_event`, pty/ring tests (8 unit tests). App-level detach logs `mux: tab {tab_idx} detached` at `app.rs:684`. |
-| **FR6** mux window switch | TS-prefix-1, TS-mux-int-1 | PASS | Prefix follow-up keys `n`/`p`/`<digit>` covered by `Latch` tests; `client::tests::server_pushed_status_update_arrives_via_try_recv` validates the snapshot pull path. |
-| **FR7** native PTY pause | TS-mux-int-4 | PASS | `native-poc/src/pty/ring.rs` — 8 unit tests for the 256 KiB drop-oldest ring buffer + pause/resume semantics. `Tab::pause_native_pty / resume_native_pty` wired into the attach flow at `app.rs:651` / `:685`. |
-| **FR8** prefix key handling | TS-prefix-1, TS-prefix-2, TS-prefix-3, TS-settings-1 | PASS | `native-poc/src/mux/prefix.rs`: `double_prefix_emits_literal`, latch-timeout test, single-press arm test. Settings default `Ctrl+B` verified by `default_mux_prefix_key_is_ctrl_b`. |
+| **FR4** mux attach (APC inband) | TS-apc-1/2/3/4, TS-mux-msg-1/2 | PASS (redesigned 2026-05-13) | `mux::apc::try_decode_emterm_mux` decodes `emterm-mux;<base64>` APC payloads emitted by the legacy `emterm mux` bridge CLI running inside the same PTY; `App::on_mux_message` routes the decoded `MuxMessage` via `Tab::apply_mux_message` (Snapshot → `term_core::reset_and_replay`; StatusUpdate → `mux_status_state`; Welcome → `mux_session_name`). native-poc never opens the daemon socket. |
+| **FR5** mux detach / FR6 window switch / FR7 native-PTY pause | (no auto tests under the redesign) | Deferred to Phase 5+ | Detach + window-switch keystrokes (`Ctrl+B d`, `Ctrl+B n` …) are written to the PTY as ordinary bytes — the bridge CLI sees them on stdin exactly like tmux, and the daemon's reaction returns to native-poc as subsequent APC `Snapshot` / `StatusUpdate` frames. The native-poc-side `Tab::detach_mux` / `pause_native_pty` ring buffer + `App::on_mux_osc` from the original Phase 4-C were removed (the legacy GUI did not expose per-window detach via OSC either). `pause_native_pty` / `resume_native_pty` + `pty::ring` stay in tree under `#[allow(dead_code)]` as forward-staged scaffolding. |
+| **FR8** prefix key handling (passthrough) | TS-prefix-1, TS-prefix-2, TS-prefix-3, TS-settings-1 | PASS | `mux::prefix::Latch` + `parse_prefix_key` are exercised by `double_prefix_emits_literal`, the latch-timeout test, and the single-press arm test. The chord is currently *passed through* to the PTY (the bridge CLI sees it), not intercepted in the GUI — `Latch` is wired up but the keybinds dispatch does not call into it yet (forward-staged). Settings default `Ctrl+B` verified by `default_mux_prefix_key_is_ctrl_b`. |
 | **FR9** status bar widget | TS-status-1, TS-status-2 | PASS | `renders_session_window_list_and_clock_in_mux_mode`, `renders_only_clock_when_no_mux_state`. |
 | **FR10** status bar settings | TS-status-3, TS-settings-1 | PASS | `StatusBarPosition::parse_or_warn` covers Top / Bottom / case-insensitive / whitespace / fallback-to-bottom-on-unknown, with a `warn_unknown_position_once` log-once helper. |
-| **FR11** IME preedit | TS-ime-1, TS-ime-3 | PASS | `native-poc/src/ime/preedit.rs`: 7 tests for sanitize (`sanitize_passes_plain_ascii`, `_passes_cjk`, `_passes_tab_and_newline`, `_drops_c0_controls`, `_drops_c1_controls`, `_drops_null_byte`, `_keeps_higher_codepoints`, `_empty_string_is_empty`) + `set_marks_state_active_and_sanitizes` + `sanitize_helper_shared_with_commit_path`. |
-| **FR12** IME commit | TS-ime-2 | PASS | `native-poc/src/ime/commit.rs`: 7 tests including `commit_writes_plain_ascii_once`, `commit_writes_utf8_bytes`, `commit_strips_c0_before_write`, `commit_strips_c1_before_write`, `commit_does_not_wrap_in_bracketed_paste`. |
+| **FR11** IME preedit | TS-ime-1, TS-ime-3 (auto) | PASS (auto-scope) / **manual gate N/A (tao 0.34 limitation)** | `ime::preedit::State` + sanitize + `render::cursor::draw_cursor_with_preedit` + `App::on_ime_preedit` are wired and unit-tested. tao 0.34 has no XIM integration, so on Linux X11 / Wayland fcitx5 / IBus cannot deliver preedit events to native-poc; on Windows tao 0.34 does not surface IMM32 / TSF preedit text either. The auto-scope is "configured but unverifiable end-to-end"; production IME requires the WebView hybrid fallback (`tmp/restruct.md`) or a tao replacement. |
+| **FR12** IME commit | TS-ime-2 (auto) | PASS (auto-scope) / **manual gate N/A (tao 0.34 limitation)** | `ime::commit::write_commit` is unit-tested and wired through `App::on_ime_commit` ↔ `WindowEvent::ReceivedImeText`. On Linux X11, tao 0.34 also fires `ReceivedImeText` for every printable keystroke — commit `3fcc7ef` gates the `KeyboardInput` Character branch on Ctrl/Alt to prevent the resulting double-input. Real-IME-composition manual verification is blocked by the same tao 0.34 limitation as FR11. |
 | **FR13** settings additions | TS-settings-1 | PASS | `Settings::default` carries `mux_prefix_key: "Ctrl+B"` + `statusbar: StatusBarSettings::default()` (`enabled: true`, `position: Bottom`). Backward compat: missing keys parse to defaults (covered by serde defaults; `default_*` tests). |
 
 ### Non-Functional Requirements
@@ -141,10 +147,10 @@ These items require a native window with GPU surface + IME — the Docker
 verification environment cannot drive them. They are tracked here so the
 host engineer can execute them and append results.
 
-- [ ] **TS-manual-mux-1** — Launch native-poc on Linux host. `emterm mux new`, attach via OSC 777, confirm snapshot draws, switch windows with `prefix n/p/0..9`. Inspect log file (`~/.local/share/net.laser5.app.emterm/logs/emterm.log`) for the six NFR6 log sites.
-- [ ] **TS-manual-mux-2** — Detach via `prefix d`, re-attach via `emterm mux attach`, confirm grid state is preserved across detach + reattach.
-- [ ] **TS-manual-ime-linux** — Linux host with fcitx5: type Japanese, verify preedit overlay + commit (Phase 1 parity).
-- [ ] **TS-manual-ime-windows** — Windows 10/11 host with MS-IME: preedit + commit. Candidate window position is best effort.
+- [ ] **TS-manual-mux-1** — Launch native-poc on Linux host. Run `emterm mux new` at the shell prompt, confirm APC-decoded `StatusUpdate` appears in the status bar, switch windows with `Ctrl+B n/p/<digit>` (bytes flow to the bridge CLI; daemon reactions return as APC `Snapshot` frames). Inspect `~/.local/share/net.laser5.app.emterm/logs/emterm.log` for the `mux apc:` log sites.
+- [ ] **TS-manual-mux-2** — Press `Ctrl+B d` (bridge CLI exits, prompt returns). Run `emterm mux attach <id>`, confirm grid state is restored from snapshot.
+- [x] **TS-manual-ime-linux** — **N/A — tao 0.34 limitation** (2026-05-13). tao 0.34 has no XIM integration; fcitx5 / IBus on X11 / Wayland cannot deliver preedit / commit events to native-poc. Auto-scope wiring stays in place pending a WebView hybrid fallback or a tao replacement.
+- [x] **TS-manual-ime-windows** — **N/A — tao 0.34 limitation** (2026-05-13). tao 0.34 does not surface IMM32 / TSF preedit text or expose `ImmSetCompositionWindow`. Same fallback trigger as Linux.
 - [ ] **TS-manual-soak** — 12 h Claude Code session under mux. Sample RSS hourly (`ps -o rss= -p <pid>`). Record any crash or screen-loss event.
 - [x] **TS-perf-1 (release)** — 2026-05-13 計測完了。avg 222 ms (1 MiB) ≈ 212 ms/MB。SPEC 200 ms に対し ~6% over の borderline。perf 改善は Phase 5+/Phase 7 budget。詳細は §5。
 - [x] **TS-perf-2 (release)** — 2026-05-13 計測完了。9 µs (target < 5 ms、~550× 余裕)。PASS。
@@ -248,10 +254,12 @@ preexisting style, documented in `sdd.yaml.workflow[check].notes`.
 ## Appendix A — Phase 4 Commit Range
 
 ```
+c894ea1 refactor(native-poc): redesign mux integration around APC inband protocol (Phase 4-C correction)
+3fcc7ef fix(native-poc): suppress double key input on Linux (tao 0.34 ReceivedImeText overlap)
 37daa13 feat(native-poc): Phase 4-F final gates (clippy sweep + README + perf scaffolding)
 e225e5d feat(native-poc): IME preedit + commit routing (Phase 4-E auto-scope)
 f14f7ba feat(native-poc): egui status bar widget (Phase 4-D)
-3a85a61 feat(native-poc): mux client + prefix state machine (Phase 4-C)
+3a85a61 feat(native-poc): mux client + prefix state machine (Phase 4-C — superseded by c894ea1)
 9e8bbc5 feat(native-poc): tab bar widget + central keybinds (Phase 4-B)
 b468ff5 refactor(mux): extract mux_ipc protocol crate (Phase 4-A)
 ```

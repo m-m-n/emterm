@@ -66,59 +66,46 @@ phases:
         files: []
 
   - id: phase-4-c
-    name: "mux client + prefix state machine"
-    estimated_effort: large
+    name: "mux integration via APC inband protocol (redesigned 2026-05-13)"
+    estimated_effort: medium
+    notes: |
+      The original Phase 4-C landed a direct UnixStream client + OSC 777 attach
+      trigger. That misread the legacy mux spec — the real protocol runs as
+      APC `ESC _ emterm-mux;<base64> ESC \` inside the bridge CLI's PTY. The
+      redesigned scope decodes those APCs and routes the resulting MuxMessage
+      into the active tab; native-poc never opens the daemon socket itself.
     tasks:
-      - id: mux-wire-framing
-        title: "Sync wire framing (4-byte BE length + bincode body, MAX_FRAME_LENGTH enforcement)"
+      - id: mux-apc-decoder
+        title: "APC payload decoder (try_decode_emterm_mux)"
         status: completed
         files:
-          - native-poc/src/mux/wire.rs
+          - native-poc/src/mux/apc.rs
           - native-poc/src/mux/mod.rs
-      - id: mux-osc777-parser
-        title: "OSC 777 parser with socket / session_id validation"
-        status: completed
-        files:
-          - native-poc/src/mux/osc777.rs
-          - native-poc/src/callbacks.rs
-      - id: mux-client-wrapper
-        title: "Mux Client wrapper (blocking UnixStream + connect/send/try_recv/shutdown)"
-        status: completed
-        files:
-          - native-poc/src/mux/client.rs
-          - native-poc/src/mux/mod.rs
-          - native-poc/Cargo.toml
       - id: mux-prefix-latch
-        title: "Prefix-key state machine with timeout + double-press passthrough"
+        title: "Prefix-key state machine (forward-staged under the redesign)"
         status: completed
         files:
           - native-poc/src/mux/prefix.rs
-      - id: mux-pty-pause-ring
-        title: "Native PTY pause flag + 256 KB ring buffer + resume replay"
-        status: completed
-        files:
-          - native-poc/src/pty/mod.rs
-          - native-poc/src/pty/ring.rs
-          - native-poc/src/tabs.rs
       - id: mux-tab-integration
-        title: "Tab gains mux_client field; app routes Snapshot via term_core reset_and_replay"
+        title: "Tab::apply_mux_message + App::on_mux_message + APC partition in Tab::pump"
         status: completed
         files:
           - native-poc/src/app.rs
           - native-poc/src/tabs.rs
+          - native-poc/src/callbacks.rs
       - id: mux-settings-prefix-key
         title: "settings.mux.prefix_key field"
         status: completed
         files:
           - native-poc/src/settings.rs
-      - id: mux-mock-daemon
-        title: "cfg(test) in-memory mock daemon"
-        status: completed
-        files:
-          - native-poc/src/mux/mock.rs
       - id: mux-tests
-        title: "TS-wire-1/2, TS-osc777-1/2/3, TS-prefix-1/2/3, TS-mux-int-1..4"
+        title: "TS-apc-1..4, TS-prefix-1/2/3, TS-mux-msg-1/2"
         status: completed
+        files: []
+      - id: mux-removed-modules
+        title: "Removed by redesign: wire.rs, client.rs, osc777.rs, mock.rs, perf_tests.rs"
+        status: completed
+        notes: "Tracked here so impact-analysis tooling still sees the historical scope."
         files: []
 
   - id: phase-4-d
@@ -185,18 +172,36 @@ phases:
         title: "TS-ime-1/2/3"
         status: completed
         files: []
-      # Manual host gates — deferred to host execution. The auto agent
-      # cannot drive a real fcitx5 / MS-IME session inside Docker.
+      # Manual host gates — downgraded 2026-05-13 to N/A under tao 0.34.
       - id: ime-manual-linux
-        title: "Manual TS-manual-ime-linux (fcitx5 parity)"
-        status: deferred_manual
-        notes: "Requires host execution under a real fcitx5 session; not runnable from Docker / sub-agent."
+        title: "Manual TS-manual-ime-linux (fcitx5 parity) — N/A: tao 0.34 limitation"
+        status: not_applicable
+        notes: |
+          tao 0.34 has no XIM integration, so fcitx5 / IBus on X11 / Wayland
+          cannot deliver preedit / commit events to native-poc. Auto-scope
+          wiring stays in tree; production IME requires WebView hybrid
+          fallback or a tao replacement.
         files: []
       - id: ime-manual-windows
-        title: "Manual TS-manual-ime-windows (preedit + commit)"
-        status: deferred_manual
-        notes: "Requires Windows host with MS-IME enabled; not runnable from Docker / sub-agent. cfg(windows) compile-only smoke covers Event::Ime variant shape."
+        title: "Manual TS-manual-ime-windows (preedit + commit) — N/A: tao 0.34 limitation"
+        status: not_applicable
+        notes: |
+          tao 0.34 does not surface IMM32 / TSF preedit text or expose
+          `ImmSetCompositionWindow`. Auto-scope wiring stays in tree;
+          production IME requires WebView hybrid fallback or a tao replacement.
         files: []
+      - id: ime-linux-double-input-fix
+        title: "Fix Linux double-input regression (KeyboardInput Character vs ReceivedImeText)"
+        status: completed
+        notes: |
+          2026-05-13 (commit 3fcc7ef). On X11 / Wayland tao 0.34 fires
+          ReceivedImeText for every printable keystroke; the KeyboardInput
+          path was also encoding TaoKey::Character, causing each ASCII key to
+          be written twice to the PTY. Fix gates the Character branch on
+          Ctrl/Alt being held — those chords are not surfaced as
+          ReceivedImeText and must continue to be encoded there.
+        files:
+          - native-poc/src/window_host.rs
 
   - id: phase-4-f
     name: "long-run stability + final gates"

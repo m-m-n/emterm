@@ -181,9 +181,43 @@ Bottom-up extraction first (`mux_ipc` crate), then UI surface (tab bar / keybind
 
 ---
 
-### Phase 4-C: Mux Client (Attach / Detach / Window Switch) + Prefix State Machine
+### Phase 4-C: Mux Integration via APC Inband Protocol
 
-**Goal**: Implement `native-poc/src/mux/*` so a tab can attach to an emterm mux daemon over Unix socket, switch windows via prefix keys, and detach back to the native PTY.
+> **Redesigned 2026-05-13** — the original Phase 4-C (direct Unix-socket
+> client + OSC 777 attach trigger) was a misreading of the legacy mux
+> spec. The corrected design routes mux protocol bytes through the PTY
+> stream via APC `ESC _ emterm-mux;<base64> ESC \` sequences (see
+> `doc/tasks/mux-inband-protocol/SPEC.md`). This section describes the
+> redesigned scope; the historical Phase 4-C sub-section below is kept
+> for context but the modules it describes were removed in the
+> redesigned commit.
+
+**Goal**: native-poc decodes APC `emterm-mux;<base64>` frames that the
+legacy `emterm mux` bridge CLI emits inside an ordinary PTY, and routes
+the resulting `MuxMessage`s into the active tab's state (`term_core`
+grid replay for `Snapshot`, status-bar cache for `StatusUpdate`,
+session-name extraction for `Welcome`). native-poc never opens the
+daemon's Unix socket itself.
+
+**Files Created (redesign)**:
+- `native-poc/src/mux/apc.rs` — `try_decode_emterm_mux(&[u8]) -> Option<MuxMessage>`.
+
+**Files Modified (redesign)**:
+- `native-poc/src/mux/mod.rs` — exports `apc` + retained `prefix`; `#![allow(dead_code)]` for forward-staged `Latch`.
+- `native-poc/src/callbacks.rs` — OSC 777 reverts to its legacy emterm-extension viewer role; `pending_mux_actions` removed.
+- `native-poc/src/tabs.rs` — `Tab::apply_mux_message` (public, called from `App::on_mux_message` and `Tab::pump`); `partition_apc_for_mux` splits drained APC payloads between mux + image pipelines.
+- `native-poc/src/app.rs` — `App::on_mux_message(tab_idx, MuxMessage)`; `pump_all` no longer has a separate `pump_mux` pass.
+- `native-poc/Cargo.toml` — drop bincode dep (no longer used directly; `mux_ipc` carries it transitively).
+
+**Files Removed (redesign)**:
+- `native-poc/src/mux/client.rs`, `wire.rs`, `osc777.rs`, `mock.rs`, `perf_tests.rs`.
+
+**Tests**:
+- New: TS-apc-1 (round-trip), TS-apc-2 (Kitty + vendor passthrough), TS-apc-3 (malformed), TS-apc-4 (empty / bare / non-UTF8), TS-mux-msg-1 (Snapshot through core), TS-mux-msg-2 (StatusUpdate cache).
+- Removed: TS-wire-1/2, TS-osc777-1/2/3, TS-mux-int-1..4, TS-perf-2.
+- Retained: TS-prefix-1/2/3 (Latch is forward-staged, exercised by tests only).
+
+> Historical Phase 4-C scope (replaced by the redesign above):
 
 **Files to Create**:
 - `native-poc/src/mux/mod.rs` — module root.
@@ -330,9 +364,33 @@ Bottom-up extraction first (`mux_ipc` crate), then UI surface (tab bar / keybind
 
 ---
 
-### Phase 4-E: Windows MS-IME Verification + Linux fcitx5 Parity
+### Phase 4-E: IME Auto-Scope (preedit overlay + commit routing) — tao 0.34 limitation downgrade
 
-**Goal**: Implement preedit overlay + commit handling via egui's IME events and confirm Windows MS-IME `preedit` + `commit` work. Re-verify Linux fcitx5 has not regressed.
+> **Status downgrade 2026-05-13** — the manual gates
+> `TS-manual-ime-linux` / `TS-manual-ime-windows` are **N/A** under tao
+> 0.34 (the window/event-loop crate native-poc uses). tao 0.34 does not
+> integrate with XIM on Linux X11 / Wayland, so fcitx5 / IBus cannot
+> deliver preedit / commit events to native-poc at all; on Windows it
+> does not surface the IMM32 / TSF preedit text and provides no way to
+> position the candidate window. The auto-scope `ime::preedit::State`
+> + `ime::commit::write_commit` + `render::cursor::draw_cursor_with_preedit`
+> + `App::on_ime_{preedit,commit,focus_lost}` wiring is still in place
+> and exercised by `TS-ime-1/2/3`, so the routing is ready the moment
+> the window stack changes (WebView hybrid fallback or a tao
+> replacement). Until then the auto-scope is "configured but
+> unverifiable end-to-end".
+>
+> Additional fix landed 2026-05-13 (commit `3fcc7ef`): on Linux X11 /
+> Wayland tao 0.34 fires `WindowEvent::ReceivedImeText` for **every**
+> printable keystroke, not just IME compositions. The Phase 4-E
+> `KeyboardInput` path was also encoding `TaoKey::Character`, causing
+> each plain-ASCII key to be written to the PTY twice. The fix gates
+> the `KeyboardInput` Character branch on Ctrl/Alt being held — those
+> chords (Ctrl+C, Alt+b, etc.) are not surfaced as ReceivedImeText and
+> must continue to be encoded there. Plain printable keys are now owned
+> exclusively by the ReceivedImeText path.
+
+**Goal**: Implement preedit overlay + commit handling via egui's IME events. Manual MS-IME / fcitx5 verification is gated by tao 0.34; see the limitation note above.
 
 **Files to Create**:
 - `native-poc/src/ime/mod.rs` — module root.
