@@ -48,6 +48,79 @@ pub const DEFAULT_CLIPBOARD_MAX_SIZE_OSC52: u32 = 10 * 1024 * 1024;
 /// cannot lock the user out of mux mode.
 pub const DEFAULT_MUX_PREFIX_KEY: &str = "Ctrl+B";
 
+/// Position of the egui status-bar widget relative to the terminal grid.
+/// `Top` inserts an [`egui::TopBottomPanel::top`]; `Bottom` inserts an
+/// [`egui::TopBottomPanel::bottom`]. Phase 4-D introduces this; later
+/// phases (settings-UI) may surface a runtime toggle.
+///
+/// `Top` is constructed today only by [`StatusBarPosition::parse_or_warn`]
+/// (Phase 7 will route `settings.json` through that helper). Until then
+/// the bin path always sees `Bottom`, so we silence the dead-code lint
+/// on the variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatusBarPosition {
+    #[allow(dead_code)] // Phase 7: settings.json loader will construct this.
+    Top,
+    #[default]
+    Bottom,
+}
+
+impl StatusBarPosition {
+    /// Parse the textual spec from `settings.json`. Unknown values fall back
+    /// to [`StatusBarPosition::Bottom`] and emit a single `warn`-level log
+    /// for the duration of the process (subsequent unknown values are
+    /// silently coerced). The warn-once latch is process-wide so a typo
+    /// repeated across reloads doesn't flood the log.
+    #[allow(dead_code)] // Phase 7: settings.json loader will call this.
+    pub fn parse_or_warn(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "top" => Self::Top,
+            "bottom" => Self::Bottom,
+            other => {
+                warn_unknown_position_once(other);
+                Self::Bottom
+            }
+        }
+    }
+}
+
+/// Process-wide latch for the "unknown statusbar.position" warning so a
+/// typo in `settings.json` is logged once, not once per frame / reload.
+#[allow(dead_code)] // Phase 7: invoked from settings.json loader via parse_or_warn.
+fn warn_unknown_position_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.statusbar.position: unknown value {:?}, falling back to \"bottom\"",
+            owned
+        );
+    });
+}
+
+/// Statusbar-related settings. Phase 4-D introduces the
+/// `enabled` + `position` pair. Backward compatibility: an existing
+/// `settings.json` without a `statusbar` key MUST still parse — see
+/// [`Settings::default`] which seeds these to their built-in defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatusBarSettings {
+    /// When `false`, the status-bar widget is not inserted at all (the
+    /// central terminal panel covers the full window). Default: `true`.
+    pub enabled: bool,
+    /// Panel placement; see [`StatusBarPosition`]. Default: `Bottom`.
+    pub position: StatusBarPosition,
+}
+
+impl Default for StatusBarSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            position: StatusBarPosition::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub ambiguous_width_mode: AmbiguousWidthMode,
@@ -73,6 +146,10 @@ pub struct Settings {
     /// [`DEFAULT_MUX_PREFIX_KEY`] and never mutated.
     #[allow(dead_code)] // Phase 4-D status bar / settings UI will consume this.
     pub mux_prefix_key: String,
+    /// Status-bar widget configuration. See [`StatusBarSettings`]. Phase
+    /// 4-D introduces this; today the value is always the default until
+    /// Phase 7 wires `settings.json` loading.
+    pub statusbar: StatusBarSettings,
 }
 
 impl Default for Settings {
@@ -84,6 +161,7 @@ impl Default for Settings {
             clipboard_read_osc52: true,
             clipboard_max_size_osc52: DEFAULT_CLIPBOARD_MAX_SIZE_OSC52,
             mux_prefix_key: DEFAULT_MUX_PREFIX_KEY.to_string(),
+            statusbar: StatusBarSettings::default(),
         }
     }
 }
@@ -138,5 +216,69 @@ mod tests {
         let chord =
             crate::mux::prefix::parse_prefix_key(&s.mux_prefix_key).expect("parse default chord");
         assert_eq!(chord, crate::mux::prefix::PrefixChord::default());
+    }
+
+    // ── TS-settings-1: statusbar defaults + position fallback ───────────
+
+    #[test]
+    fn default_statusbar_is_enabled_at_bottom() {
+        let s = Settings::new();
+        assert!(
+            s.statusbar.enabled,
+            "statusbar.enabled must default to true"
+        );
+        assert_eq!(
+            s.statusbar.position,
+            StatusBarPosition::Bottom,
+            "statusbar.position must default to Bottom"
+        );
+    }
+
+    #[test]
+    fn statusbar_position_parses_top_and_bottom() {
+        assert_eq!(
+            StatusBarPosition::parse_or_warn("top"),
+            StatusBarPosition::Top
+        );
+        assert_eq!(
+            StatusBarPosition::parse_or_warn("Top"),
+            StatusBarPosition::Top
+        );
+        assert_eq!(
+            StatusBarPosition::parse_or_warn("BOTTOM"),
+            StatusBarPosition::Bottom
+        );
+        assert_eq!(
+            StatusBarPosition::parse_or_warn("  bottom  "),
+            StatusBarPosition::Bottom
+        );
+    }
+
+    #[test]
+    fn statusbar_position_unknown_falls_back_to_bottom() {
+        // The first unknown value triggers a `warn!` (latched by `Once`);
+        // subsequent calls still coerce to Bottom but do not re-warn. We
+        // assert the coercion contract only (Once side-effect is observed
+        // by reading the log; not under test here).
+        assert_eq!(
+            StatusBarPosition::parse_or_warn("middle"),
+            StatusBarPosition::Bottom
+        );
+        assert_eq!(
+            StatusBarPosition::parse_or_warn("side"),
+            StatusBarPosition::Bottom
+        );
+        assert_eq!(
+            StatusBarPosition::parse_or_warn(""),
+            StatusBarPosition::Bottom
+        );
+    }
+
+    #[test]
+    fn statusbar_settings_default_round_trip() {
+        // The Default impl on StatusBarSettings must match the value seeded
+        // into the parent Settings struct so callers can compare safely.
+        let s = Settings::new();
+        assert_eq!(s.statusbar, StatusBarSettings::default());
     }
 }

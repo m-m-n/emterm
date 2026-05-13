@@ -74,9 +74,8 @@ pub struct Tab {
     #[cfg(unix)]
     pub mux_client: Option<MuxClient>,
     /// Phase 4-C: most recent status-update payload received from the
-    /// daemon. The Phase 4-D status bar widget renders this; today only
-    /// the storage is populated.
-    #[allow(dead_code)] // Phase 4-D will consume this.
+    /// daemon. Phase 4-D's status-bar widget (`ui::status_bar`) reads
+    /// this through `App::status_bar_state()`.
     pub mux_status_state: Option<StatusUpdateMsg>,
 }
 

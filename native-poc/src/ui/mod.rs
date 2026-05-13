@@ -14,6 +14,7 @@
 //! them rather than redefining them.
 
 pub mod keybinds;
+pub mod status_bar;
 pub mod tab_bar;
 
 /// User intents originating from the global keybind layer.

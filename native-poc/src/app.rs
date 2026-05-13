@@ -273,6 +273,36 @@ impl App {
         !self.tabs.is_empty()
     }
 
+    /// Phase 4-D: project the active tab + the current wall clock into a
+    /// [`crate::ui::status_bar::StatusBarState`] for the status-bar
+    /// widget. When the active tab is attached to a mux session
+    /// (`mux_session_name` is `Some` and a `StatusUpdateMsg` has been
+    /// received) the `mux` field is populated; otherwise only the
+    /// clock is rendered.
+    pub fn status_bar_state(&self) -> crate::ui::status_bar::StatusBarState {
+        use crate::ui::status_bar::{MuxStatus, StatusBarState};
+        use std::time::SystemTime;
+
+        let clock_hhmmss = crate::ui::status_bar::format_local_clock(SystemTime::now());
+
+        let mux = self.active_tab().and_then(|t| {
+            // Both pieces are required: the session name confirms the
+            // tab is in mux mode, and the StatusUpdateMsg supplies the
+            // window-list / right-segment strings rendered by the
+            // widget. The daemon always pushes at least one update on
+            // attach, so the typical attached state has both.
+            match (&t.mux_session_name, &t.mux_status_state) {
+                (Some(name), Some(status)) => Some(MuxStatus {
+                    session_name: name.clone(),
+                    status: status.clone(),
+                }),
+                _ => None,
+            }
+        });
+
+        StatusBarState { mux, clock_hhmmss }
+    }
+
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
     }
