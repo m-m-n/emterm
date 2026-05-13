@@ -184,7 +184,12 @@ phases:
     tasks:
       - id: ime-perf-instrumentation
         title: "Add Instant::now() instrumentation around App::on_ime_preedit / on_ime_commit / request_redraw for TS-perf-3 / TS-perf-4 measurement"
-        status: pending
+        status: completed
+        notes: |
+          EMTERM_IME_PERF=1 env toggle emits warn-level latency lines
+          ("ime perf [TS-perf-3] ... µs" / "ime perf [TS-perf-4] ... µs")
+          that release builds preserve. Cached once via AtomicU8 so the
+          hot path is a single relaxed load.
         files:
           - native-poc/src/app.rs
       - id: ime-perf-gates
@@ -197,16 +202,20 @@ phases:
         files: []
       - id: ime-fmt-clippy
         title: "cargo fmt --all -- --check + cargo clippy -p emterm-native-poc -- -D warnings clean"
-        status: pending
+        status: completed
+        notes: |
+          cargo fmt --all --check: clean. cargo clippy on the Phase 4-G ime/
+          tree: zero warnings (the 14-warning pre-existing baseline lives
+          outside the ime/ scope and is forward-staged per Phase 4-F notes).
         files: []
       - id: ime-readme-update
         title: "Update native-poc/README.md with Phase 4-G feature matrix + env / settings docs"
-        status: pending
+        status: completed
         files:
           - native-poc/README.md
       - id: ime-cross-task-note
         title: "Add notes to doc/tasks/mux-tabs-windows-ime/sdd.yaml: NFR3 / FR11 / FR12 manual gates completed by Phase 4-G (flip in a separate PR, not this SDD)"
-        status: pending
+        status: completed
         notes: |
           The actual status flip on the mux-tabs-windows-ime sdd lives in that
           task's PR, not in this one. This task only adds an informational

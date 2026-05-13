@@ -288,6 +288,14 @@ requirements:
       Linux (fcitx5 / IBus can't reach native-poc) and no IMM32/TSF preedit
       surfacing on Windows. Production IME requires a WebView hybrid fallback
       or a tao replacement.
+
+      **2026-05-14 cross-task update**: Phase 4-G
+      (`doc/tasks/ime-native-integration/`) lands the native IME backends
+      (X11 XIM auto, Wayland scaffold, Windows IMM32 cfg(windows)) without
+      replacing tao. The Phase 4 manual gates `TS-manual-ime-linux` and
+      `TS-manual-ime-windows` are completed by Phase 4-G's TS-manual-ime-x11
+      / x11-ibus / windows. The actual `status: deferred → ok` flip on this
+      SDD lives in a separate PR (informational note only here).
   FR12:
     title: IME commit → PTY write (no bracketed wrap; auto-scope wired; manual gates N/A)
     status: ok
@@ -304,6 +312,15 @@ requirements:
       also fires `ReceivedImeText` for every printable keystroke; commit
       `3fcc7ef` gates the `KeyboardInput` Character branch on Ctrl/Alt to
       prevent the resulting double-input.
+
+      **2026-05-14 cross-task update**: Phase 4-G
+      (`doc/tasks/ime-native-integration/`) routes commit events from the
+      native IME backends (X11 XmbLookupString direct commit, Windows
+      `WM_IME_COMPOSITION` `GCS_RESULTSTR`) through the unchanged Phase 4-E
+      `ime::commit::write_commit` path. `WindowEvent::ReceivedImeText` is
+      gated on `App::ime_is_null()` so a real backend's pump-fed commit
+      doesn't double-deliver with the fallback path. Real-host commit
+      verification is covered by Phase 4-G's TS-manual-ime-windows.
   FR13:
     title: settings.json additions (mux.prefix_key, statusbar.enabled, statusbar.position)
     status: ok
@@ -339,6 +356,14 @@ requirements:
       Phase 1 WebView build received IME events via WebKitGTK's native pipeline,
       which tao 0.34 does not replicate. Re-evaluate when WebView hybrid
       fallback or tao replacement lands.
+
+      **2026-05-14 cross-task update**: Phase 4-G
+      (`doc/tasks/ime-native-integration/`) lands a native XIM client on top
+      of tao 0.34 (`ime/x11.rs` via `x11-dl`) without replacing tao. The Phase
+      4-G NFR8 manual gate (`TS-manual-ime-x11` against the Phase 1 fcitx5
+      acceptance criteria) is the replacement for this deferred entry. The
+      `status: deferred → ok` flip on this SDD lives in a separate PR
+      (informational note only here).
   NFR4:
     title: Workspace compatibility (src-tauri build/test green through Phase 4)
     status: ok

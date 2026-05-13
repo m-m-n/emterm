@@ -24,7 +24,10 @@
 
 #![allow(dead_code)] // Many helpers are exercised only on Windows hosts.
 
-use super::backend::ImeEvent;
+// `ImeEvent` is re-exported by `super::backend` and only referenced
+// from the `#[cfg(windows)] mod platform` body; the top-level
+// `use` would warn on non-Windows targets, so the import lives
+// inside the platform module itself.
 
 /// Convert a slice of UTF-16 code units into a UTF-8 `String`,
 /// dropping invalid surrogates with a `warn` log (`IME_E401`).

@@ -672,8 +672,16 @@ impl App {
     /// this method is the routing point for future preedit plumbing
     /// (richer IME via egui's `ImeEvent::Preedit` once available) and
     /// is exercised directly by the unit tests.
+    ///
+    /// Phase 4-G-E: when `EMTERM_IME_PERF=1` is set, the entry time
+    /// is captured via `Instant::now()` and the delta to
+    /// `needs_full_redraw = true` is logged at warn level so TS-perf-3
+    /// can be measured on a release host (release builds drop debug
+    /// + log levels below warn).
     #[allow(dead_code)]
     pub fn on_ime_preedit(&mut self, text: &str) {
+        let perf = ime_perf_enabled();
+        let t0 = perf.then(Instant::now);
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
@@ -689,6 +697,12 @@ impl App {
         // cursor row into the dirty set so the underline overlay
         // repaints immediately.
         self.needs_full_redraw = true;
+        if let Some(start) = t0 {
+            log::warn!(
+                "ime perf [TS-perf-3] on_ime_preedit → needs_full_redraw: {} µs",
+                start.elapsed().as_micros()
+            );
+        }
     }
 
     /// Phase 4-E: route an `egui::Event::Ime(ImeEvent::Commit(_))`
@@ -697,7 +711,14 @@ impl App {
     /// uses) and writes them to the active PTY exactly once. Then
     /// clears the preedit state so the overlay disappears. No-op when
     /// there is no active tab.
+    ///
+    /// Phase 4-G-E: when `EMTERM_IME_PERF=1` is set, the entry time
+    /// is captured via `Instant::now()` and the delta to the
+    /// `PtySession::write` return is logged at warn level so
+    /// TS-perf-4 can be measured on a release host.
     pub fn on_ime_commit(&mut self, text: &str) {
+        let perf = ime_perf_enabled();
+        let t0 = perf.then(Instant::now);
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
@@ -708,6 +729,12 @@ impl App {
         }
         tab.preedit_state.clear();
         self.needs_full_redraw = true;
+        if let Some(start) = t0 {
+            log::warn!(
+                "ime perf [TS-perf-4] on_ime_commit → PtySession::write: {} µs",
+                start.elapsed().as_micros()
+            );
+        }
     }
 
     /// Phase 4-E: clear the active tab's preedit state. Called on
@@ -739,6 +766,27 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Phase 4-G-E performance instrumentation gate. Returns `true` when
+/// the env `EMTERM_IME_PERF=1` is set. Cached on first call so the
+/// hot path (called once per preedit / commit event) is a single
+/// atomic load.
+fn ime_perf_enabled() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static CACHED: AtomicU8 = AtomicU8::new(0); // 0 = unset, 1 = false, 2 = true
+    match CACHED.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let enabled = std::env::var("EMTERM_IME_PERF")
+                .ok()
+                .map(|v| v == "1")
+                .unwrap_or(false);
+            CACHED.store(if enabled { 2 } else { 1 }, Ordering::Relaxed);
+            enabled
+        }
     }
 }
 

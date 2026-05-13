@@ -332,13 +332,11 @@ impl ImeBackend for X11Backend {
             )
         };
 
-        if status == xlib::XLookupChars || status == xlib::XLookupBoth {
-            if n > 0 {
-                let bytes = &buf[..n as usize];
-                if let Ok(s) = std::str::from_utf8(bytes) {
-                    self.push_commit(s.to_string());
-                    return KeyDispatchResult::Consumed;
-                }
+        if (status == xlib::XLookupChars || status == xlib::XLookupBoth) && n > 0 {
+            let bytes = &buf[..n as usize];
+            if let Ok(s) = std::str::from_utf8(bytes) {
+                self.push_commit(s.to_string());
+                return KeyDispatchResult::Consumed;
             }
         }
 

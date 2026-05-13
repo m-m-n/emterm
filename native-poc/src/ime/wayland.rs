@@ -37,7 +37,9 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+#[cfg(test)]
+use crossbeam_channel::unbounded;
+use crossbeam_channel::{Receiver, Sender};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use super::backend::{
