@@ -147,8 +147,11 @@ These items require a native window with GPU surface + IME — the Docker
 verification environment cannot drive them. They are tracked here so the
 host engineer can execute them and append results.
 
-- [ ] **TS-manual-mux-1** — Launch native-poc on Linux host. Run `emterm mux new` at the shell prompt, confirm APC-decoded `StatusUpdate` appears in the status bar, switch windows with `Ctrl+B n/p/<digit>` (bytes flow to the bridge CLI; daemon reactions return as APC `Snapshot` frames). Inspect `~/.local/share/net.laser5.app.emterm/logs/emterm.log` for the `mux apc:` log sites.
-- [ ] **TS-manual-mux-2** — Press `Ctrl+B d` (bridge CLI exits, prompt returns). Run `emterm mux attach <id>`, confirm grid state is restored from snapshot.
+- [~] **TS-manual-mux-1** — **部分検証 (2026-05-13)**: APC 検出は動作 (`mux apc: tab "emterm mux attach" attached to session default` ログ確認、Welcome decode OK、`mux_session_name = Some("default")` 反映)。ただし Welcome 後の画面更新が起きず attach 後はシェルプロンプトが表示されない。修正中の課題:
+  - 修正済 (commit 68c6ef6): `EMTERM_MUX` env 継承で `emterm mux` が起動拒否される問題 (PTY spawn 時に env_remove)
+  - 修正済 (commit 68c6ef6): `MessageType::PtyOutput` を apply_mux_message が無視 → process_pty_data に流す
+  - 残課題: 上記 2 修正後も attach 後の画面表示が空。何の MessageType が流れているか debug ログでの切り分け要 / daemon が Snapshot 系を送る順序の調査 / render パイプライン到達確認。次セッションで再開
+- [ ] **TS-manual-mux-2** — TS-manual-mux-1 未完のため未着手。Press `Ctrl+B d` (bridge CLI exits, prompt returns). Run `emterm mux attach <id>`, confirm grid state is restored from snapshot.
 - [x] **TS-manual-ime-linux** — **N/A — tao 0.34 limitation** (2026-05-13). tao 0.34 has no XIM integration; fcitx5 / IBus on X11 / Wayland cannot deliver preedit / commit events to native-poc. Auto-scope wiring stays in place pending a WebView hybrid fallback or a tao replacement.
 - [x] **TS-manual-ime-windows** — **N/A — tao 0.34 limitation** (2026-05-13). tao 0.34 does not surface IMM32 / TSF preedit text or expose `ImmSetCompositionWindow`. Same fallback trigger as Linux.
 - [ ] **TS-manual-soak** — 12 h Claude Code session under mux. Sample RSS hourly (`ps -o rss= -p <pid>`). Record any crash or screen-loss event.
