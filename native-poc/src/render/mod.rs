@@ -199,13 +199,11 @@ fn draw_grid(
             }
 
             if !ch.is_empty() && ch != " " {
-                let font_id = match (style.bold, style.italic) {
-                    // egui doesn't ship a bold-italic / italic / bold
-                    // monospace face by default. We accept the visual
-                    // shortcut of falling back to the regular monospace
-                    // here; Phase 7 can register custom typefaces.
-                    _ => normal_font.clone(),
-                };
+                // egui doesn't ship a bold-italic / italic / bold
+                // monospace face by default. We accept the visual
+                // shortcut of falling back to the regular monospace
+                // here; Phase 7 can register custom typefaces.
+                let font_id = normal_font.clone();
                 painter.text(Pos2::new(x, y), Align2::LEFT_TOP, ch, font_id, style.fg);
             }
 

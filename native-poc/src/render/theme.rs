@@ -202,10 +202,7 @@ impl Theme {
         // Pairs of "index;spec[;index;spec...]"
         let mut tokens = data.split(';');
         let mut changed = false;
-        loop {
-            let Some(index_str) = tokens.next() else {
-                break;
-            };
+        while let Some(index_str) = tokens.next() {
             let Some(spec_str) = tokens.next() else { break };
             let Ok(index) = index_str.trim().parse::<usize>() else {
                 continue;

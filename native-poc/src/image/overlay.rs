@@ -82,8 +82,19 @@ unsafe impl bytemuck_compat::Zeroable for PlacementUniform {}
 /// straightforward `#[repr(C)]` with no padding gaps that matter.
 mod bytemuck_compat {
     /// Marker for types that can be safely re-interpreted as `&[u8]`.
+    ///
+    /// # Safety
+    ///
+    /// Implementors must guarantee that the type has a defined, padding-free
+    /// byte representation (`#[repr(C)]` or equivalent) and that every bit
+    /// pattern is a valid instance of the type.
     pub unsafe trait Pod: Copy + 'static {}
     /// Marker for types whose all-zero bit pattern is a valid value.
+    ///
+    /// # Safety
+    ///
+    /// Implementors must guarantee that an all-zero byte pattern produces a
+    /// valid instance of the type (no non-nullable references / niches).
     pub unsafe trait Zeroable: Sized {}
 
     /// Re-interpret a `Pod` slice as bytes.

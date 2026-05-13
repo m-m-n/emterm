@@ -28,16 +28,11 @@ pub const BLINK_HALF_MS: u128 = 530;
 /// `OffsetFromLive(n)` means the user has scrolled back `n` rows into
 /// scrollback. New PTY output preserves this offset so the user does not
 /// get yanked back to the bottom mid-read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollPosition {
+    #[default]
     Live,
     OffsetFromLive(u32),
-}
-
-impl Default for ScrollPosition {
-    fn default() -> Self {
-        ScrollPosition::Live
-    }
 }
 
 pub struct App {
@@ -128,7 +123,7 @@ impl App {
             return true;
         }
         let phase = self.blink_started.elapsed().as_millis() / BLINK_HALF_MS;
-        phase % 2 == 0
+        phase.is_multiple_of(2)
     }
 
     /// Reset the blink reference to "now" so the cursor enters its visible
