@@ -1,0 +1,180 @@
+# Tasks derived from IMPLEMENTATION.md.
+# Used by sdd.update-spec for impact analysis (sdd.yaml.requirements.{ID}.tasks references these IDs).
+
+phases:
+  - id: phase-4-g-a
+    name: "common backbone (ImeBackend trait + NullBackend + App pump + opt-out / fallback)"
+    estimated_effort: medium
+    tasks:
+      - id: ime-backend-trait
+        title: "Define ImeBackend trait + ImeEvent / KeyDispatchResult / ImeInitError / RawKeyEvent in ime::backend"
+        status: completed
+        files:
+          - native-poc/src/ime/backend.rs
+          - native-poc/src/ime/mod.rs
+      - id: ime-null-backend
+        title: "Implement NullBackend (passthrough only, used for opt-out and fallback)"
+        status: completed
+        files:
+          - native-poc/src/ime/null.rs
+          - native-poc/src/ime/mod.rs
+      - id: ime-settings-extension
+        title: "Add ImeSettings { native_integration: bool } + Settings field + Default::default() => true (Phase 7 が JSON ローダで exercise する shape pin)"
+        status: completed
+        files:
+          - native-poc/src/settings.rs
+      - id: ime-backend-factory
+        title: "ImeBackendFactory::build (env > settings > init-failure → NullBackend with single warn log)"
+        status: completed
+        files:
+          - native-poc/src/ime/backend.rs
+      - id: ime-app-pump-cursor
+        title: "App fields + pump_ime + notify_cursor_rect_if_changed + dispatch_key_event_via_ime helpers"
+        status: completed
+        files:
+          - native-poc/src/app.rs
+      - id: ime-window-host-hook
+        title: "Wire window_host: startup factory call, KeyboardInput backend-first dispatch, Focused notify_focus, ReceivedImeText gated on NullBackend, pump_ime per tick"
+        status: completed
+        files:
+          - native-poc/src/window_host.rs
+      - id: ime-backbone-tests
+        title: "Unit tests TS-backend-1..5, TS-cursor-1, TS-focus-1, TS-fallback-1..3, TS-settings-1, TS-route-1..2"
+        status: completed
+        files: []
+
+  - id: phase-4-g-b
+    name: "Linux X11 (XIM) backend — Go/No-Go decision point"
+    estimated_effort: large
+    tasks:
+      - id: ime-x11-dep
+        title: "Add x11-dl dep under [target.'cfg(all(unix, not(target_os = \"macos\")))'.dependencies]"
+        status: pending
+        files:
+          - native-poc/Cargo.toml
+      - id: ime-x11-backend
+        title: "X11Backend: XOpenIM + XCreateIC + IM callbacks + XFilterEvent + XmbLookupString + XICAttribute XNSpotLocation + XSetICFocus/XUnsetICFocus + Drop releases IC/IM"
+        status: pending
+        files:
+          - native-poc/src/ime/x11.rs
+          - native-poc/src/ime/mod.rs
+      - id: ime-x11-factory-probe
+        title: "ImeBackendFactory: runtime probe RawDisplayHandle::Xlib → use X11Backend"
+        status: pending
+        files:
+          - native-poc/src/ime/backend.rs
+      - id: ime-x11-tests
+        title: "Unit tests TS-x11-1 (keycode), TS-x11-2 (modifier mask) + #[ignore] integration TS-backend-int-1"
+        status: pending
+        files:
+          - native-poc/src/ime/x11.rs
+      - id: ime-x11-manual-gates
+        title: "Manual TS-manual-ime-x11 (fcitx5) + TS-manual-ime-x11-ibus (IBus) + TS-manual-ime-imserver-restart + TS-manual-ime-mux"
+        status: deferred_manual
+        notes: |
+          Requires Linux X11 host with fcitx5 and IBus installed.
+          Phase 1 fcitx5 acceptance criteria (doc/tasks/ime-input-support/SPEC.md US1-US5)
+          recorded as part of TS-manual-ime-x11.
+        files: []
+
+  - id: phase-4-g-c
+    name: "Linux Wayland (zwp_text_input_v3) backend"
+    estimated_effort: large
+    tasks:
+      - id: ime-wayland-deps
+        title: "Add wayland-client + wayland-protocols (unstable) under [target.'cfg(all(unix, not(target_os = \"macos\")))'.dependencies]"
+        status: pending
+        files:
+          - native-poc/Cargo.toml
+      - id: ime-wayland-backend
+        title: "WaylandBackend: zwp_text_input_manager_v3 bind + listener + dedicated pump thread via crossbeam_channel + set_cursor_rectangle + enable/disable + Drop"
+        status: pending
+        files:
+          - native-poc/src/ime/wayland.rs
+          - native-poc/src/ime/mod.rs
+      - id: ime-wayland-factory-probe
+        title: "ImeBackendFactory: runtime probe RawDisplayHandle::Wayland → use WaylandBackend"
+        status: pending
+        files:
+          - native-poc/src/ime/backend.rs
+      - id: ime-wayland-tests
+        title: "Unit tests TS-wayland-1 (channel drain), TS-wayland-2 (manager absent → Unavailable)"
+        status: pending
+        files:
+          - native-poc/src/ime/wayland.rs
+      - id: ime-wayland-manual-gate
+        title: "Manual TS-manual-ime-wayland on KDE Plasma 6 + Sway with fcitx5-wayland"
+        status: deferred_manual
+        notes: |
+          Requires Wayland session with fcitx5-wayland. GNOME is best-effort,
+          KDE Plasma 6 and Sway are the must-pass targets (SPEC.md OQ3).
+        files: []
+
+  - id: phase-4-g-d
+    name: "Windows IMM32 backend"
+    estimated_effort: large
+    tasks:
+      - id: ime-windows-dep
+        title: "Add windows crate dep under [target.'cfg(windows)'.dependencies] (features: Win32_UI_Input_Ime, Win32_UI_WindowsAndMessaging, ...)"
+        status: pending
+        files:
+          - native-poc/Cargo.toml
+      - id: ime-windows-backend
+        title: "WindowsBackend: SetWindowSubclass + WM_IME_{START,_COMPOSITION,END}COMPOSITION + ImmGetCompositionStringW UTF-16→UTF-8 + ImmSetCompositionWindow(CFS_POINT) + RemoveWindowSubclass on Drop"
+        status: pending
+        files:
+          - native-poc/src/ime/windows.rs
+          - native-poc/src/ime/mod.rs
+      - id: ime-windows-factory-probe
+        title: "ImeBackendFactory: cfg(windows) → use WindowsBackend"
+        status: pending
+        files:
+          - native-poc/src/ime/backend.rs
+      - id: ime-windows-tests
+        title: "Unit tests TS-windows-1 (BMP), TS-windows-2 (surrogate pair), TS-windows-3 (invalid surrogate → drop+warn) + cfg(windows) integration TS-backend-int-2"
+        status: pending
+        files:
+          - native-poc/src/ime/windows.rs
+      - id: ime-windows-manual-gate
+        title: "Manual TS-manual-ime-windows with MS-IME and Google IME"
+        status: deferred_manual
+        notes: |
+          Requires Windows 10/11 host with MS-IME + Google IME.
+          Candidate window position best effort (not gating).
+        files: []
+
+  - id: phase-4-g-e
+    name: "final gates + perf measurements + docs"
+    estimated_effort: small
+    tasks:
+      - id: ime-perf-instrumentation
+        title: "Add Instant::now() instrumentation around App::on_ime_preedit / on_ime_commit / request_redraw for TS-perf-3 / TS-perf-4 measurement"
+        status: pending
+        files:
+          - native-poc/src/app.rs
+      - id: ime-perf-gates
+        title: "TS-perf-3 (preedit < 30 ms), TS-perf-4 (commit < 5 ms), TS-perf-regression (IME-OFF +10% vs Phase 4 baseline)"
+        status: deferred_manual
+        notes: |
+          Requires release host execution on Linux X11. Baseline values from
+          doc/tasks/mux-tabs-windows-ime/VERIFICATION_RESULT.md are referenced
+          for TS-perf-regression comparison.
+        files: []
+      - id: ime-fmt-clippy
+        title: "cargo fmt --all -- --check + cargo clippy -p emterm-native-poc -- -D warnings clean"
+        status: pending
+        files: []
+      - id: ime-readme-update
+        title: "Update native-poc/README.md with Phase 4-G feature matrix + env / settings docs"
+        status: pending
+        files:
+          - native-poc/README.md
+      - id: ime-cross-task-note
+        title: "Add notes to doc/tasks/mux-tabs-windows-ime/sdd.yaml: NFR3 / FR11 / FR12 manual gates completed by Phase 4-G (flip in a separate PR, not this SDD)"
+        status: pending
+        notes: |
+          The actual status flip on the mux-tabs-windows-ime sdd lives in that
+          task's PR, not in this one. This task only adds an informational
+          note pointing at Phase 4-G as the resolution.
+        files:
+          - doc/tasks/mux-tabs-windows-ime/sdd.yaml

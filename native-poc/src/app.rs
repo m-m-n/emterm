@@ -12,6 +12,8 @@ use std::time::Instant;
 
 use term_core::terminal_core::TerminalCore;
 
+use crate::ime::backend::{ImeBackend, ImeEvent, KeyDispatchResult, RawKeyEvent, PUMP_BUDGET};
+use crate::ime::null::NullBackend;
 use crate::selection::Selection;
 use crate::settings::Settings;
 use crate::tabs::Tab;
@@ -75,6 +77,28 @@ pub struct App {
     /// Debug toggle (env `EMTERM_FULL_REDRAW=1`) that permanently disables
     /// the dirty-row optimization for triage.
     force_full_redraw: bool,
+    /// Phase 4-G: native IME backend. The App holds a `Box<dyn ImeBackend>`
+    /// so the OS-specific clients (X11 / Wayland / Windows) and the
+    /// passthrough `NullBackend` share the same seam. Default-constructed
+    /// to `NullBackend` so unit tests do not require window / display
+    /// handles; `window_host::run` replaces it with the factory-resolved
+    /// backend at startup via `App::set_ime_backend`.
+    ime_backend: Box<dyn ImeBackend>,
+    /// Last `(row, col)` reported to `ImeBackend::notify_cursor_rect`.
+    /// `None` until the first cell-position notification. Updated in
+    /// `notify_cursor_rect_if_changed` so we never spam the IM server
+    /// when the cursor stays put (SPEC.md FR7).
+    ime_last_cursor_cell: Option<(u16, u16)>,
+    /// Whether the active backend is the passthrough `NullBackend`. The
+    /// event loop uses this to decide whether `WindowEvent::ReceivedImeText`
+    /// should drive the commit path (NullBackend only) or be ignored
+    /// (real backend, which routes commits via `ImeEvent::Commit`). This
+    /// avoids double-committing the same composition (SPEC.md FR9).
+    ime_is_null: bool,
+    /// Whether the IME pump has already reported a budget-exceeded
+    /// drop. Latched so the warn log fires at most once per process
+    /// (`IME_E901`).
+    ime_overflow_warned: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +136,104 @@ impl App {
             previous_selection: None,
             needs_full_redraw: true,
             force_full_redraw,
+            ime_backend: Box::new(NullBackend::new()),
+            ime_last_cursor_cell: None,
+            ime_is_null: true,
+            ime_overflow_warned: false,
         }
+    }
+
+    /// Replace the IME backend installed by `App::new`. Called once by
+    /// `window_host::run` after the tao window exists and
+    /// `ImeBackendFactory::build` has chosen the right OS backend.
+    ///
+    /// Phase 4-G-A: any non-`NullBackend` backend reports its `name()`
+    /// via the trait. The App tracks whether the current backend is
+    /// the passthrough so the event-loop hook can gate
+    /// `WindowEvent::ReceivedImeText` (Phase 4 commit path) on
+    /// "NullBackend only" — real backends emit `ImeEvent::Commit`
+    /// instead.
+    pub fn set_ime_backend(&mut self, backend: Box<dyn ImeBackend>) {
+        self.ime_is_null = backend.name() == "null";
+        self.ime_backend = backend;
+    }
+
+    /// `true` when the currently installed backend is the passthrough
+    /// `NullBackend`. Used by `window_host` to decide whether
+    /// `WindowEvent::ReceivedImeText` should drive the commit path.
+    pub fn ime_is_null(&self) -> bool {
+        self.ime_is_null
+    }
+
+    /// Offer a raw key event to the active backend before the existing
+    /// `tao_key_to_bytes` path runs. Returns the backend's
+    /// `KeyDispatchResult`: `Consumed` → skip `tao_key_to_bytes`,
+    /// `Passthrough` → continue with the Phase 4 path. SPEC.md FR6.
+    pub fn dispatch_key_event_via_ime(&mut self, raw: &RawKeyEvent) -> KeyDispatchResult {
+        self.ime_backend.dispatch_key_event(raw)
+    }
+
+    /// Forward focus state to the active backend. Wired from
+    /// `WindowEvent::Focused(b)` in `window_host`. SPEC.md FR8.
+    pub fn notify_ime_focus(&mut self, focused: bool) {
+        self.ime_backend.notify_focus(focused);
+    }
+
+    /// Drain queued `ImeEvent`s from the active backend and route them
+    /// through the existing Phase 4-E layer
+    /// (`on_ime_preedit` / `on_ime_commit` / `on_ime_focus_lost`).
+    /// Bounded to `PUMP_BUDGET` events per tick; overflow is dropped
+    /// with a single warn log (latched). SPEC.md FR5 + IME_E901.
+    pub fn pump_ime(&mut self) -> bool {
+        let mut events: Vec<ImeEvent> = Vec::new();
+        self.ime_backend.pump(&mut events);
+        if events.is_empty() {
+            return false;
+        }
+        if events.len() >= PUMP_BUDGET && !self.ime_overflow_warned {
+            log::warn!(
+                "ime pump reached PUMP_BUDGET ({PUMP_BUDGET}); overflow events dropped (IME_E901)"
+            );
+            self.ime_overflow_warned = true;
+        }
+        let n = events.len();
+        for ev in events {
+            match ev {
+                ImeEvent::Preedit(text) => self.on_ime_preedit(&text),
+                ImeEvent::Commit(text) => self.on_ime_commit(&text),
+                ImeEvent::FocusOut => self.on_ime_focus_lost(),
+            }
+        }
+        log::debug!("ime pump routed {n} event(s)");
+        true
+    }
+
+    /// Push the active cursor cell (in pixels) to the IME backend
+    /// **only** when the (row, col) actually changed. Rate-limits the
+    /// `XICAttribute::XNSpotLocation` / `set_cursor_rectangle` /
+    /// `ImmSetCompositionWindow` calls so frequent redraws on a static
+    /// cursor don't flood the IM server. SPEC.md FR7.
+    ///
+    /// `cell_w_px` / `cell_h_px` are taken from the same fallback /
+    /// metric values `window_host` uses for grid sizing.
+    pub fn notify_cursor_rect_if_changed(&mut self, cell_w_px: u32, cell_h_px: u32) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let (row, col) = {
+            let core = tab.core.lock();
+            (core.get_cursor_row(), core.get_cursor_col())
+        };
+        if self.ime_last_cursor_cell == Some((row, col)) {
+            return;
+        }
+        self.ime_last_cursor_cell = Some((row, col));
+        let x = (col as i32) * (cell_w_px as i32);
+        // Reserve the same ~36 px top bar as `window_host::pixel_to_cell`
+        // so the spot location matches the on-screen cursor cell.
+        let y = (row as i32) * (cell_h_px as i32) + 36;
+        self.ime_backend
+            .notify_cursor_rect(x, y, cell_w_px as i32, cell_h_px as i32);
     }
 
     /// True when the cursor should currently render its glyph. When the
@@ -1157,5 +1278,212 @@ mod tests {
             payload: b"hello".to_vec(),
         };
         assert!(!app.on_mux_message(0, msg));
+    }
+
+    // ── Phase 4-G-A: ImeBackend wiring on App ────────────────────────
+
+    use crate::ime::backend::testing::{MockBackend, MockState};
+    use crate::ime::backend::{ImeEvent, KeyDispatchResult, RawKeyEvent};
+    use crate::pty::input::Modifiers;
+    use std::sync::{Arc, Mutex};
+
+    fn mock_app() -> (App, Arc<Mutex<MockState>>) {
+        let mut app = App::new();
+        let (mock, state) = MockBackend::new();
+        app.set_ime_backend(Box::new(mock));
+        (app, state)
+    }
+
+    fn raw(pressed: bool) -> RawKeyEvent {
+        RawKeyEvent {
+            physical_key_code: 0x26,
+            state_pressed: pressed,
+            mods: Modifiers::NONE,
+        }
+    }
+
+    // ── TS-backend-3: pump_ime routes events to on_ime_* ──────────
+
+    #[test]
+    fn pump_ime_routes_preedit_to_active_tab() {
+        let (mut app, state) = mock_app();
+        app.spawn_initial_tab();
+        state
+            .lock()
+            .unwrap()
+            .queue
+            .push(ImeEvent::Preedit("hi".into()));
+        let routed = app.pump_ime();
+        assert!(routed);
+        assert_eq!(app.active_tab().unwrap().preedit_state.text(), "hi");
+    }
+
+    #[test]
+    fn pump_ime_routes_commit_clears_preedit() {
+        let (mut app, state) = mock_app();
+        app.spawn_initial_tab();
+        // Stage a preedit so commit has something to clear.
+        app.on_ime_preedit("ab");
+        assert!(app.active_tab().unwrap().preedit_state.active());
+        state
+            .lock()
+            .unwrap()
+            .queue
+            .push(ImeEvent::Commit("ab".into()));
+        app.pump_ime();
+        assert!(!app.active_tab().unwrap().preedit_state.active());
+    }
+
+    #[test]
+    fn pump_ime_routes_focus_out_clears_preedit() {
+        let (mut app, state) = mock_app();
+        app.spawn_initial_tab();
+        app.on_ime_preedit("xy");
+        assert!(app.active_tab().unwrap().preedit_state.active());
+        state.lock().unwrap().queue.push(ImeEvent::FocusOut);
+        app.pump_ime();
+        assert!(!app.active_tab().unwrap().preedit_state.active());
+    }
+
+    #[test]
+    fn pump_ime_with_empty_queue_returns_false() {
+        let (mut app, _state) = mock_app();
+        app.spawn_initial_tab();
+        let routed = app.pump_ime();
+        assert!(!routed);
+    }
+
+    // ── TS-backend-4: Consumed result skips tao_key_to_bytes ──────
+
+    #[test]
+    fn dispatch_consumed_does_not_invoke_pty_path() {
+        // We assert on the dispatch result; the App caller (window_host)
+        // is the one that branches. Here we pin the contract that the
+        // App's helper returns the backend's result verbatim.
+        let (mut app, state) = mock_app();
+        state.lock().unwrap().next_dispatch = KeyDispatchResult::Consumed;
+        let r = app.dispatch_key_event_via_ime(&raw(true));
+        assert_eq!(r, KeyDispatchResult::Consumed);
+    }
+
+    // ── TS-backend-5: Passthrough lets caller run encoder path ─────
+
+    #[test]
+    fn dispatch_passthrough_returns_passthrough() {
+        // Default MockBackend state returns Passthrough.
+        let (mut app, _state) = mock_app();
+        let r = app.dispatch_key_event_via_ime(&raw(true));
+        assert_eq!(r, KeyDispatchResult::Passthrough);
+    }
+
+    // ── TS-cursor-1: notify_cursor_rect rate-limited on cell change
+
+    #[test]
+    fn notify_cursor_rect_fires_once_per_cell_change() {
+        let (mut app, state) = mock_app();
+        app.spawn_initial_tab();
+        // First call: cell (0,0) — should record one notification.
+        app.notify_cursor_rect_if_changed(9, 18);
+        assert_eq!(state.lock().unwrap().cursor_calls.len(), 1);
+        // Second call without cursor movement: must NOT fire again.
+        app.notify_cursor_rect_if_changed(9, 18);
+        assert_eq!(state.lock().unwrap().cursor_calls.len(), 1);
+        // Move the cursor → next call must fire.
+        {
+            let tab = app.active_tab().unwrap();
+            tab.core.lock().process_pty_data(b"\x1b[5;3H");
+        }
+        app.notify_cursor_rect_if_changed(9, 18);
+        assert_eq!(state.lock().unwrap().cursor_calls.len(), 2);
+    }
+
+    #[test]
+    fn notify_cursor_rect_uses_pixel_size_from_args() {
+        let (mut app, state) = mock_app();
+        app.spawn_initial_tab();
+        {
+            let tab = app.active_tab().unwrap();
+            tab.core.lock().process_pty_data(b"\x1b[3;4H"); // (row=2, col=3)
+        }
+        app.notify_cursor_rect_if_changed(9, 18);
+        let calls = &state.lock().unwrap().cursor_calls;
+        assert_eq!(calls.len(), 1);
+        // x = col * cell_w = 3 * 9 = 27. y = row * cell_h + 36 = 2 * 18 + 36 = 72.
+        assert_eq!(calls[0].0, 27);
+        assert_eq!(calls[0].1, 72);
+        assert_eq!(calls[0].2, 9);
+        assert_eq!(calls[0].3, 18);
+    }
+
+    #[test]
+    fn notify_cursor_rect_with_no_active_tab_is_noop() {
+        let (mut app, state) = mock_app();
+        // No spawn → no tabs.
+        app.notify_cursor_rect_if_changed(9, 18);
+        assert!(state.lock().unwrap().cursor_calls.is_empty());
+    }
+
+    // ── TS-focus-1: notify_ime_focus + on_ime_focus_lost wiring ─────
+
+    #[test]
+    fn notify_ime_focus_propagates_to_backend() {
+        let (mut app, state) = mock_app();
+        app.notify_ime_focus(true);
+        app.notify_ime_focus(false);
+        assert_eq!(state.lock().unwrap().focus_calls, vec![true, false]);
+    }
+
+    // ── TS-route-1 (regression of Phase 4-E): Preedit via pump → sanitize
+
+    #[test]
+    fn pump_ime_preedit_with_esc_is_sanitized_via_phase4e_layer() {
+        let (mut app, state) = mock_app();
+        app.spawn_initial_tab();
+        state
+            .lock()
+            .unwrap()
+            .queue
+            .push(ImeEvent::Preedit("a\x1bb".into()));
+        app.pump_ime();
+        // Phase 4-E sanitize must strip ESC (0x1b).
+        assert_eq!(app.active_tab().unwrap().preedit_state.text(), "ab");
+    }
+
+    // ── TS-route-2 (regression): Commit via pump → sanitize + no
+    //    bracketed-paste wrap. We can't easily inspect the real
+    //    PtySession bytes here, but the route is identical to the
+    //    direct `on_ime_commit` path which `ime::commit::tests`
+    //    already pins. The piece we *can* verify is that the pump
+    //    drops into `on_ime_commit` (preedit clears) and never panics
+    //    on control bytes.
+    #[test]
+    fn pump_ime_commit_with_esc_does_not_panic_and_clears_overlay() {
+        let (mut app, state) = mock_app();
+        app.spawn_initial_tab();
+        app.on_ime_preedit("draft");
+        state
+            .lock()
+            .unwrap()
+            .queue
+            .push(ImeEvent::Commit("a\x1bb".into()));
+        app.pump_ime();
+        assert!(!app.active_tab().unwrap().preedit_state.active());
+    }
+
+    // ── set_ime_backend updates ime_is_null flag ────────────────────
+
+    #[test]
+    fn default_app_holds_null_backend() {
+        let app = App::new();
+        assert!(app.ime_is_null());
+    }
+
+    #[test]
+    fn set_ime_backend_to_mock_clears_is_null_flag() {
+        let mut app = App::new();
+        assert!(app.ime_is_null());
+        let (mock, _) = MockBackend::new();
+        app.set_ime_backend(Box::new(mock));
+        assert!(!app.ime_is_null());
     }
 }

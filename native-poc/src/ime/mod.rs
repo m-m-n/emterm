@@ -1,4 +1,4 @@
-//! IME preedit + commit routing (Phase 4-E).
+//! IME preedit + commit routing (Phase 4-E) + native IME backends (Phase 4-G).
 //!
 //! `preedit::State` tracks the IME composition string that the renderer
 //! draws as an underline overlay under the active cursor cell. `commit`
@@ -8,10 +8,19 @@
 //! text and the bytes pushed to the PTY agree on which C0 / C1 controls
 //! are dropped.
 //!
-//! Phase 4-E auto-scope only covers the routing + rendering layer. The
-//! actual platform IME path (Linux fcitx5 via tao, Windows MS-IME via
-//! egui's IME hooks) is already wired up by Phase 1 — this module hangs
-//! state off the events the platform already delivers.
+//! Phase 4-G adds the `backend` + `null` (+ OS-specific) modules that
+//! implement platform IME clients on top of tao 0.34. The Phase 4-E
+//! routing layer (`preedit` + `commit`) is unchanged; backends simply
+//! funnel events into `App::on_ime_{preedit,commit,focus_lost}`.
 
 pub mod commit;
 pub mod preedit;
+
+// Phase 4-G-A: backend trait + NullBackend (passthrough).
+pub mod backend;
+pub mod null;
+
+// Phase 4-G-B / 4-G-C / 4-G-D will add OS-specific submodules:
+//   #[cfg(all(unix, not(target_os = "macos")))] pub mod x11;
+//   #[cfg(all(unix, not(target_os = "macos")))] pub mod wayland;
+//   #[cfg(windows)] pub mod windows;

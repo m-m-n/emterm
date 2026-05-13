@@ -99,6 +99,36 @@ fn warn_unknown_position_once(seen: &str) {
     });
 }
 
+/// IME-related settings. Phase 4-G introduces the `native_integration`
+/// toggle which controls whether `ImeBackendFactory` brings up a real
+/// platform IME client (X11 XIM / Wayland zwp_text_input_v3 / Windows
+/// IMM32) or installs a passthrough `NullBackend`.
+///
+/// Backward compatibility: an existing `settings.json` without an
+/// `ime` key MUST still parse — see [`Settings::default`] which seeds
+/// `ImeSettings::default()` (with `native_integration: true`). The
+/// JSON loader is Phase 7's responsibility; this struct only pins the
+/// shape today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImeSettings {
+    /// When `true`, native IME clients are initialized on startup. On
+    /// init failure (`XOpenIM` returns NULL, Wayland missing
+    /// `zwp_text_input_manager_v3`, `SetWindowSubclass` fails) the App
+    /// falls back to a `NullBackend` and behaves like Phase 4. When
+    /// `false`, the fallback is taken unconditionally (no native IME).
+    pub native_integration: bool,
+}
+
+impl Default for ImeSettings {
+    fn default() -> Self {
+        Self {
+            // Phase 4-G default: opt-in by default, opt-out via env
+            // (`EMTERM_NATIVE_IME=0`) or settings.
+            native_integration: true,
+        }
+    }
+}
+
 /// Statusbar-related settings. Phase 4-D introduces the
 /// `enabled` + `position` pair. Backward compatibility: an existing
 /// `settings.json` without a `statusbar` key MUST still parse — see
@@ -150,6 +180,12 @@ pub struct Settings {
     /// 4-D introduces this; today the value is always the default until
     /// Phase 7 wires `settings.json` loading.
     pub statusbar: StatusBarSettings,
+    /// IME backend configuration. See [`ImeSettings`]. Phase 4-G
+    /// introduces `native_integration` (default `true`). Phase 7 wires
+    /// JSON loading; until then `Settings::default()` exercises the
+    /// default shape only.
+    #[allow(dead_code)] // Phase 7: settings.json loader will populate this.
+    pub ime: ImeSettings,
 }
 
 impl Default for Settings {
@@ -162,6 +198,7 @@ impl Default for Settings {
             clipboard_max_size_osc52: DEFAULT_CLIPBOARD_MAX_SIZE_OSC52,
             mux_prefix_key: DEFAULT_MUX_PREFIX_KEY.to_string(),
             statusbar: StatusBarSettings::default(),
+            ime: ImeSettings::default(),
         }
     }
 }
@@ -280,5 +317,29 @@ mod tests {
         // into the parent Settings struct so callers can compare safely.
         let s = Settings::new();
         assert_eq!(s.statusbar, StatusBarSettings::default());
+    }
+
+    // ── TS-settings-1: ime.native_integration defaults to true ─────
+
+    /// `Settings::default().ime.native_integration` must default to `true`.
+    /// Phase 7 (JSON loader) will rely on this default when a settings file
+    /// omits the `ime` block or the `native_integration` key. Pinning the
+    /// shape here keeps the Phase 4-G factory's "opt-out only" contract.
+    #[test]
+    fn default_ime_native_integration_is_true() {
+        let s = Settings::new();
+        assert!(s.ime.native_integration);
+    }
+
+    #[test]
+    fn ime_settings_default_round_trip() {
+        let s = Settings::new();
+        assert_eq!(s.ime, ImeSettings::default());
+    }
+
+    #[test]
+    fn ime_settings_default_is_native_integration_true() {
+        let ime = ImeSettings::default();
+        assert!(ime.native_integration);
     }
 }

@@ -1,0 +1,267 @@
+schema_version: 1
+feature: ime-native-integration
+created: 2026-05-13
+
+project:
+  components:
+    main:
+      language: rust
+      # Workspace-wide. Phase 4-G extends `native-poc/` only; legacy `src-tauri/`
+      # must keep compiling and testing as in Phase 4.
+      build_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo build --workspace\""
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --workspace\""
+      format_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo fmt --all\""
+      # Legacy E2E is preexisting regression gate only; Phase 4-G verifies its
+      # own scope via cargo test --workspace + manual IME host gates.
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "9f290ab28a4d683bf92465417dd8955dc168eaf2"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
+    status: completed
+    completed_at_commit: "9f290ab28a4d683bf92465417dd8955dc168eaf2"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "9f290ab28a4d683bf92465417dd8955dc168eaf2"
+    notes: |
+      整合性検証で critical issue 2 件 + minor 1 件を検出し、その場で修正:
+        1. SPEC.md §API Design の `RawKeyEvent::mods` 型が
+           `crate::callbacks::Modifiers` を参照していたが、native-poc には
+           `callbacks::Modifiers` は存在せず実体は `crate::pty::input::Modifiers`。
+           SPEC.md L256 / L271 と修正。
+        2. IMPLEMENTATION.md / tasks.yaml の `ime-raw-window-handle-dep`
+           ("raw-window-handle を direct dep に昇格") タスクが不要。
+           現 `native-poc/Cargo.toml:63` で `raw-window-handle = "0.6"` を
+           既に direct dep として宣言済。tasks.yaml のタスク削除、
+           IMPLEMENTATION.md の Files to Modify / Complete File Structure /
+           Dependencies テーブル / §4-G-A Dependencies を修正。
+        3. (minor) Phase 4-G スコープと既存 settings.rs の Phase 7 委譲設計の
+           整合化。SPEC FR10 / TS-settings-1 / IMPLEMENTATION §4-G-A の
+           settings 関連記述を「`ImeSettings` 構造体定義 + `Default::default()`
+           で `true`、JSON load は Phase 7 委譲、Phase 4-G では default
+           経路のみ exercise」という線で SPEC.md / VERIFICATION.md /
+           IMPLEMENTATION.md / tasks.yaml を統一。
+
+      設計レビューで blocking 問題なし。Open question として記録:
+        - Wayland / Windows backend が `dispatch_key_event` 常時 Passthrough
+          → ASCII 文字は `ReceivedImeText` ルートに残るので、IME composition 中の
+            文字キーで二重入力が起きないか実装検証要 (4-G-C / 4-G-D
+            Implementation Steps / Risk Assessment に既に記載済、追加修正不要)。
+
+      これら 3 件の修正に伴い SPEC.md / IMPLEMENTATION.md / VERIFICATION.md /
+      tasks.yaml を整合更新済。sdd.yaml requirements 配列の typo / 参照不能は無し。
+      FR1-FR10 / NFR1-NFR8 の tasks / tests マッピングは tasks.yaml /
+      VERIFICATION.md と一致を確認 (TS-* IDs: SPEC 35, IMPLEMENTATION 47,
+      VERIFICATION 64, sdd.yaml 45, tasks.yaml 11 出現箇所すべて整合)。
+  - id: implement
+    status: in_progress
+  - id: check
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+
+requirements:
+  FR1:
+    title: XIM client (Linux X11) reaching fcitx5 / IBus via XOpenIM/XCreateIC/XFilterEvent
+    status: ok
+    tasks:
+      - ime-x11-dep
+      - ime-x11-backend
+      - ime-x11-factory-probe
+      - ime-x11-tests
+      - ime-x11-manual-gates
+    tests:
+      - TS-x11-1
+      - TS-x11-2
+      - TS-backend-int-1
+      - TS-manual-ime-x11
+      - TS-manual-ime-x11-ibus
+  FR2:
+    title: zwp_text_input_v3 client (Linux Wayland) with own event pump thread
+    status: ok
+    tasks:
+      - ime-wayland-deps
+      - ime-wayland-backend
+      - ime-wayland-factory-probe
+      - ime-wayland-tests
+      - ime-wayland-manual-gate
+    tests:
+      - TS-wayland-1
+      - TS-wayland-2
+      - TS-manual-ime-wayland
+  FR3:
+    title: IMM32 client (Windows) via SetWindowSubclass + WM_IME_* interception
+    status: ok
+    tasks:
+      - ime-windows-dep
+      - ime-windows-backend
+      - ime-windows-factory-probe
+      - ime-windows-tests
+      - ime-windows-manual-gate
+    tests:
+      - TS-windows-1
+      - TS-windows-2
+      - TS-windows-3
+      - TS-backend-int-2
+      - TS-manual-ime-windows
+  FR4:
+    title: ImeBackend trait + ImeEvent / KeyDispatchResult / ImeInitError surface
+    status: ok
+    tasks:
+      - ime-backend-trait
+      - ime-null-backend
+      - ime-backbone-tests
+    tests:
+      - TS-backend-1
+      - TS-backend-2
+      - TS-backend-3
+  FR5:
+    title: Routing backend events into existing App::on_ime_{preedit,commit,focus_lost}
+    status: ok
+    tasks:
+      - ime-app-pump-cursor
+      - ime-window-host-hook
+      - ime-backbone-tests
+    tests:
+      - TS-backend-3
+      - TS-route-1
+      - TS-route-2
+  FR6:
+    title: Key event interception (IME first, fallback to tao_key_to_bytes)
+    status: ok
+    tasks:
+      - ime-window-host-hook
+      - ime-app-pump-cursor
+      - ime-x11-backend
+      - ime-backbone-tests
+      - ime-x11-tests
+    tests:
+      - TS-backend-4
+      - TS-backend-5
+      - TS-x11-1
+      - TS-x11-2
+  FR7:
+    title: Cursor rectangle reporting to active backend (rate-limited to cell-change)
+    status: ok
+    tasks:
+      - ime-app-pump-cursor
+      - ime-x11-backend
+      - ime-wayland-backend
+      - ime-windows-backend
+      - ime-backbone-tests
+    tests:
+      - TS-cursor-1
+      - TS-manual-ime-x11
+      - TS-manual-ime-wayland
+      - TS-manual-ime-windows
+  FR8:
+    title: Focus management (notify_focus + on_ime_focus_lost wiring)
+    status: ok
+    tasks:
+      - ime-window-host-hook
+      - ime-x11-backend
+      - ime-wayland-backend
+      - ime-windows-backend
+      - ime-backbone-tests
+    tests:
+      - TS-focus-1
+      - TS-manual-ime-imserver-restart
+  FR9:
+    title: Opt-out / fallback (EMTERM_NATIVE_IME env + settings.ime.native_integration + init-failure auto-fallback)
+    status: ok
+    tasks:
+      - ime-null-backend
+      - ime-settings-extension
+      - ime-backend-factory
+      - ime-backbone-tests
+    tests:
+      - TS-fallback-1
+      - TS-fallback-2
+      - TS-fallback-3
+      - TS-manual-ime-fallback
+  FR10:
+    title: Settings schema additions (ime.native_integration)
+    status: ok
+    tasks:
+      - ime-settings-extension
+      - ime-backbone-tests
+    tests:
+      - TS-settings-1
+  NFR1:
+    title: Performance — preedit overlay redraw < 30 ms (Linux X11 release host)
+    status: ok
+    tasks:
+      - ime-perf-instrumentation
+      - ime-perf-gates
+    tests:
+      - TS-perf-3
+  NFR2:
+    title: Performance — commit → PtySession::write < 5 ms
+    status: ok
+    tasks:
+      - ime-perf-instrumentation
+      - ime-perf-gates
+    tests:
+      - TS-perf-4
+  NFR3:
+    title: Performance — IME-OFF key-down latency within +10% of Phase 4 baseline
+    status: ok
+    tasks:
+      - ime-window-host-hook
+      - ime-perf-gates
+    tests:
+      - TS-perf-regression
+      - TS-backend-5
+  NFR4:
+    title: Stability — IME backend init failure must not crash native-poc; IM server death falls back within one tick
+    status: ok
+    tasks:
+      - ime-backend-factory
+      - ime-x11-backend
+      - ime-wayland-backend
+      - ime-windows-backend
+    tests:
+      - TS-fallback-3
+      - TS-manual-ime-imserver-restart
+  NFR5:
+    title: Workspace compatibility — cargo build/test --workspace stays green, src-tauri untouched
+    status: ok
+    tasks:
+      - ime-fmt-clippy
+    tests: []
+  NFR6:
+    title: Module layout (native-poc/src/ime/{backend,null,x11,wayland,windows}.rs; existing preedit/commit unchanged)
+    status: ok
+    tasks:
+      - ime-backend-trait
+      - ime-null-backend
+      - ime-x11-backend
+      - ime-wayland-backend
+      - ime-windows-backend
+    tests: []
+  NFR7:
+    title: Logging (init success / fallback / reconnect at log::warn with reason)
+    status: ok
+    tasks:
+      - ime-backend-factory
+      - ime-x11-backend
+      - ime-wayland-backend
+      - ime-windows-backend
+    tests:
+      - TS-fallback-3
+      - TS-manual-ime-fallback
+      - TS-manual-ime-imserver-restart
+  NFR8:
+    title: Linux fcitx5 IME parity with Phase 1 WebView build (Phase 4 NFR3 follow-up)
+    status: ok
+    tasks:
+      - ime-x11-backend
+      - ime-x11-manual-gates
+    tests:
+      - TS-manual-ime-x11
+      - TS-manual-ime-mux
