@@ -465,9 +465,18 @@ impl WindowHost {
         }
 
         let raw_input = self.build_raw_input();
+        let mut tab_event: Option<crate::ui::TabEvent> = None;
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            crate::render::draw_placeholder(ctx, app);
+            tab_event = crate::render::draw_placeholder(ctx, app);
         });
+        // Apply any tab bar interaction emitted this frame. Closing
+        // the last tab returns `true` and the next event loop tick
+        // observes `app.tabs.is_empty()` to exit the window.
+        if let Some(evt) = tab_event {
+            let _ = app.apply_tab_event(evt);
+            // Tab roster changed; force a full redraw next frame.
+            app.mark_full_redraw();
+        }
         let paint_jobs = self
             .egui_ctx
             .tessellate(full_output.shapes, self.pixels_per_point);
@@ -635,6 +644,39 @@ impl WindowHost {
     }
 }
 
+/// Translate a tao logical key into the subset of `egui::Key` consumed
+/// by `crate::ui::keybinds::dispatch`. Returns `None` for keys that the
+/// dispatcher does not bind (the caller falls through to PTY input).
+///
+/// Only the keys referenced by the Phase 4-B keybind table are mapped
+/// (T, W, Tab, Num0..Num9); everything else is intentionally unmapped
+/// so the PTY passthrough path stays the default.
+fn tao_key_to_egui(logical: &TaoKey) -> Option<egui::Key> {
+    match logical {
+        TaoKey::Tab => Some(egui::Key::Tab),
+        TaoKey::Character(s) => {
+            let mut chars = s.chars();
+            let c = chars.next()?;
+            match c.to_ascii_lowercase() {
+                't' => Some(egui::Key::T),
+                'w' => Some(egui::Key::W),
+                '0' => Some(egui::Key::Num0),
+                '1' => Some(egui::Key::Num1),
+                '2' => Some(egui::Key::Num2),
+                '3' => Some(egui::Key::Num3),
+                '4' => Some(egui::Key::Num4),
+                '5' => Some(egui::Key::Num5),
+                '6' => Some(egui::Key::Num6),
+                '7' => Some(egui::Key::Num7),
+                '8' => Some(egui::Key::Num8),
+                '9' => Some(egui::Key::Num9),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Translate a tao `KeyEvent` into the PoC's `(Key, Modifiers)` pair and
 /// produce the PTY byte sequence. Returns `None` for events that should be
 /// ignored (e.g. modifier-only presses).
@@ -761,7 +803,26 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
                 //   Shift+End     → scroll back to live tail
                 let handled = handle_special_chord(&event, host.current_mods, &mut host, &mut app);
                 if !handled {
-                    if let Some(bytes) = tao_key_to_bytes(&event, host.current_mods) {
+                    // Phase 4-B: global keybinds (tab roster) take
+                    // priority over the generic PTY encoder. We
+                    // translate the tao logical key + current
+                    // modifiers into the egui types expected by
+                    // `ui::keybinds::dispatch`, and apply the action
+                    // through `App::apply_action`. Only when dispatch
+                    // returns `None` do we fall through to PTY input.
+                    let egui_mods = egui::Modifiers {
+                        ctrl: host.current_mods.ctrl,
+                        shift: host.current_mods.shift,
+                        alt: host.current_mods.alt,
+                        command: false,
+                        mac_cmd: false,
+                    };
+                    let action = tao_key_to_egui(&event.logical_key)
+                        .and_then(|k| crate::ui::keybinds::dispatch(egui_mods, k));
+                    if let Some(act) = action {
+                        let _ = app.apply_action(act);
+                        app.mark_full_redraw();
+                    } else if let Some(bytes) = tao_key_to_bytes(&event, host.current_mods) {
                         if let Some(tab) = app.active_tab() {
                             tab.write(bytes);
                         }

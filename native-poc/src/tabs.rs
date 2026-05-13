@@ -60,6 +60,11 @@ pub struct Tab {
     /// Image events the GPU layer (in `WindowHost`) has not yet ingested.
     /// `Tab::drain_image_events` returns these.
     pub pending_image_events: Vec<ImageEvent>,
+    /// When `Some(name)`, this tab is attached to a remote mux session
+    /// and the tab bar prefixes the title with `[mux:<name>]`. Phase
+    /// 4-B introduces the field; Phase 4-C populates it when the mux
+    /// client successfully attaches.
+    pub mux_session_name: Option<String>,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -111,6 +116,18 @@ impl Tab {
             alt_screen: false,
             image_proc: ImageProcessor::new(),
             pending_image_events: Vec::new(),
+            mux_session_name: None,
+        }
+    }
+
+    /// Title rendered by the tab bar. Currently identical to
+    /// `self.title` — the `[mux:<session>]` prefix is applied by the
+    /// widget (see `ui::tab_bar::render_label`).
+    pub fn display_title(&self) -> &str {
+        if self.title.is_empty() {
+            "shell"
+        } else {
+            self.title.as_str()
         }
     }
 

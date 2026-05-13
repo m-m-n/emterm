@@ -156,6 +156,119 @@ impl App {
         self.needs_full_redraw = true;
     }
 
+    /// Spawn an additional shell tab, switch to it, and request a
+    /// repaint. Used by `AppAction::NewTab` and `TabEvent::New`.
+    pub fn spawn_new_tab(&mut self) {
+        let dims = self.cell_size;
+        let tab = Tab::spawn_shell(
+            "shell",
+            dims.cols,
+            dims.rows,
+            self.settings.scrollback_lines,
+            self.settings.clone(),
+        );
+        self.tabs.push(tab);
+        self.active = self.tabs.len() - 1;
+        self.needs_full_redraw = true;
+    }
+
+    /// Close the tab at `idx`. Returns `true` when the close emptied
+    /// the tabs vector, signaling the app loop that the window should
+    /// exit. `tabs.is_empty()` is the same signal; this is a
+    /// convenience for code that needs to branch immediately after
+    /// the close.
+    pub fn close_tab(&mut self, idx: usize) -> bool {
+        if idx >= self.tabs.len() {
+            return self.tabs.is_empty();
+        }
+        // Drop the tab — its `PtySession::Drop` impl kills the child
+        // and joins reader/writer threads.
+        self.tabs.remove(idx);
+        if self.tabs.is_empty() {
+            self.active = 0;
+            self.needs_full_redraw = true;
+            return true;
+        }
+        if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        } else if idx < self.active {
+            // Removed tab was to the left of the active one; shift left.
+            self.active -= 1;
+        }
+        self.needs_full_redraw = true;
+        false
+    }
+
+    /// Switch to the tab at `idx` (no-op for out-of-range / same idx).
+    pub fn switch_to_tab(&mut self, idx: usize) {
+        if idx >= self.tabs.len() || idx == self.active {
+            return;
+        }
+        self.active = idx;
+        self.needs_full_redraw = true;
+    }
+
+    /// Apply a [`crate::ui::TabEvent`] emitted by the tab bar widget.
+    /// Returns `true` when the resulting state should exit the window
+    /// (i.e. the last tab was closed).
+    pub fn apply_tab_event(&mut self, evt: crate::ui::TabEvent) -> bool {
+        match evt {
+            crate::ui::TabEvent::New => {
+                self.spawn_new_tab();
+                false
+            }
+            crate::ui::TabEvent::Close(idx) => self.close_tab(idx),
+            crate::ui::TabEvent::Switch(idx) => {
+                self.switch_to_tab(idx);
+                false
+            }
+        }
+    }
+
+    /// Apply a global keybind [`crate::ui::AppAction`]. Returns `true`
+    /// when the resulting state should exit the window.
+    pub fn apply_action(&mut self, action: crate::ui::AppAction) -> bool {
+        match action {
+            crate::ui::AppAction::NewTab => {
+                self.spawn_new_tab();
+                false
+            }
+            crate::ui::AppAction::CloseTab => {
+                let idx = self.active;
+                self.close_tab(idx)
+            }
+            crate::ui::AppAction::NextTab => {
+                if self.tabs.is_empty() {
+                    return false;
+                }
+                let next = (self.active + 1) % self.tabs.len();
+                self.switch_to_tab(next);
+                false
+            }
+            crate::ui::AppAction::PrevTab => {
+                if self.tabs.is_empty() {
+                    return false;
+                }
+                let prev = if self.active == 0 {
+                    self.tabs.len() - 1
+                } else {
+                    self.active - 1
+                };
+                self.switch_to_tab(prev);
+                false
+            }
+            crate::ui::AppAction::JumpTab(n) => {
+                if self.tabs.is_empty() {
+                    return false;
+                }
+                // n is 1-based and clamped to the existing range.
+                let idx = (n.saturating_sub(1) as usize).min(self.tabs.len() - 1);
+                self.switch_to_tab(idx);
+                false
+            }
+        }
+    }
+
     pub fn has_tabs(&self) -> bool {
         !self.tabs.is_empty()
     }
@@ -644,5 +757,126 @@ mod tests {
         assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(4));
         // Viewport content shifted underneath us, so a repaint is needed.
         assert!(app.needs_full_redraw);
+    }
+
+    // ── Phase 4-B: tab event + AppAction routing ─────────────
+
+    /// TS-tab-2 (App half): closing the last tab empties the tabs
+    /// vector. The run loop in `window_host` translates an empty
+    /// `app.tabs` into `ControlFlow::Exit` (see `run` in
+    /// `window_host.rs`), so this is the `ExitWindow` signal.
+    #[test]
+    fn closing_last_tab_signals_exit_window() {
+        let mut app = App::new();
+        // Manually push a Tab-like value would require a PTY; instead
+        // we exercise the `close_tab` path on a synthetic tabs vector.
+        // Tab::spawn_shell is fine in tests — it returns pty=None when
+        // spawn fails, but the tab itself is constructed.
+        app.spawn_initial_tab();
+        assert_eq!(app.tabs.len(), 1, "exactly one tab after init");
+        let exit = app.close_tab(0);
+        assert!(exit, "closing the last tab must return true");
+        assert!(app.tabs.is_empty(), "tabs vector must be empty after close");
+
+        // The same routing via TabEvent must agree.
+        let mut app2 = App::new();
+        app2.spawn_initial_tab();
+        let exit2 = app2.apply_tab_event(crate::ui::TabEvent::Close(0));
+        assert!(exit2);
+        assert!(app2.tabs.is_empty());
+    }
+
+    #[test]
+    fn close_tab_in_middle_shifts_active_left_when_needed() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.spawn_new_tab();
+        assert_eq!(app.tabs.len(), 3);
+        app.active = 2;
+        // Close idx 0 → active was 2, now should be 1.
+        let exit = app.close_tab(0);
+        assert!(!exit);
+        assert_eq!(app.active, 1);
+        assert_eq!(app.tabs.len(), 2);
+    }
+
+    #[test]
+    fn close_tab_clamps_active_when_closing_the_active_last_one() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.active = 1;
+        let exit = app.close_tab(1);
+        assert!(!exit);
+        // Active falls back to the new last tab.
+        assert_eq!(app.active, 0);
+        assert_eq!(app.tabs.len(), 1);
+    }
+
+    #[test]
+    fn next_tab_wraps_at_end() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.active = 1;
+        let exit = app.apply_action(crate::ui::AppAction::NextTab);
+        assert!(!exit);
+        assert_eq!(app.active, 0);
+    }
+
+    #[test]
+    fn prev_tab_wraps_at_start() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.active = 0;
+        let exit = app.apply_action(crate::ui::AppAction::PrevTab);
+        assert!(!exit);
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn jump_tab_clamps_to_existing_range() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        // Only two tabs; Ctrl+9 should clamp to the last (idx 1).
+        let exit = app.apply_action(crate::ui::AppAction::JumpTab(9));
+        assert!(!exit);
+        assert_eq!(app.active, 1);
+        // Ctrl+1 jumps to idx 0.
+        app.apply_action(crate::ui::AppAction::JumpTab(1));
+        assert_eq!(app.active, 0);
+    }
+
+    #[test]
+    fn new_tab_action_appends_and_switches() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let before = app.tabs.len();
+        let exit = app.apply_action(crate::ui::AppAction::NewTab);
+        assert!(!exit);
+        assert_eq!(app.tabs.len(), before + 1);
+        assert_eq!(app.active, app.tabs.len() - 1);
+    }
+
+    #[test]
+    fn close_tab_action_can_signal_exit() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let exit = app.apply_action(crate::ui::AppAction::CloseTab);
+        assert!(exit);
+    }
+
+    #[test]
+    fn tab_event_switch_changes_active_without_exit() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.active = 0;
+        let exit = app.apply_tab_event(crate::ui::TabEvent::Switch(1));
+        assert!(!exit);
+        assert_eq!(app.active, 1);
     }
 }

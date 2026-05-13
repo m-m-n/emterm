@@ -63,28 +63,34 @@ struct CellStyle {
 
 /// Phase-1 placeholder kept for compatibility; routes to the real renderer
 /// when a tab exists.
-pub fn draw_placeholder(ctx: &egui::Context, app: &App) {
-    draw_terminal(ctx, app);
+pub fn draw_placeholder(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEvent> {
+    draw_terminal(ctx, app)
 }
 
-/// Draw the active tab. If no tabs exist, draws a hint message.
-pub fn draw_terminal(ctx: &egui::Context, app: &App) {
+/// Draw the active tab. If no tabs exist, draws a hint message. The
+/// caller is responsible for applying the returned `TabEvent` (if
+/// any) — typically by calling `App::apply_tab_event` post-frame.
+pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEvent> {
     let theme = Theme::default();
 
-    egui::TopBottomPanel::top("native-poc-top-bar").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            for (i, tab) in app.tabs.iter().enumerate() {
-                let label = if i == app.active {
-                    format!("[{}]", tab.title)
-                } else {
-                    tab.title.clone()
-                };
-                ui.label(label);
-                ui.separator();
+    // Phase 4-B: real tab bar widget. We build a lightweight view-
+    // model from the live tabs vector once per frame.
+    let items: Vec<crate::ui::tab_bar::TabBarItem> = app
+        .tabs
+        .iter()
+        .map(|t| {
+            let mut item = crate::ui::tab_bar::TabBarItem::new(t.display_title());
+            if let Some(name) = &t.mux_session_name {
+                item = item.with_mux_session(name.clone());
             }
-            ui.label(format!("{}x{}", app.cell_size.cols, app.cell_size.rows));
-        });
-    });
+            item
+        })
+        .collect();
+    let tab_event = if items.is_empty() {
+        None
+    } else {
+        crate::ui::tab_bar::draw(ctx, &items, app.active)
+    };
 
     egui::CentralPanel::default()
         .frame(egui::Frame::default().fill(rgb_to_egui(theme.bg)))
@@ -111,6 +117,8 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) {
             ctx.request_repaint_after(Duration::from_millis(BLINK_HALF_MS as u64));
         }
     }
+
+    tab_event
 }
 
 fn draw_grid(

@@ -39,23 +39,30 @@ phases:
     tasks:
       - id: tab-define-app-action
         title: "Define AppAction + TabEvent enums"
+        status: completed
         files:
           - native-poc/src/ui/mod.rs
       - id: tab-bar-widget
         title: "Implement egui tab bar (new/close/switch/title)"
+        status: completed
         files:
           - native-poc/src/ui/tab_bar.rs
       - id: tab-keybinds-dispatch
         title: "Implement keybinds dispatch table (Ctrl+Shift+T/W, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1..9)"
+        status: completed
         files:
           - native-poc/src/ui/keybinds.rs
       - id: tab-wire-app-loop
         title: "Wire tab bar + keybinds into app loop"
+        status: completed
         files:
           - native-poc/src/app.rs
           - native-poc/src/tabs.rs
+          - native-poc/src/window_host.rs
+          - native-poc/src/render/mod.rs
       - id: tab-unit-tests
         title: "Unit tests TS-tab-1/2/3, TS-kb-1"
+        status: completed
         files: []
 
   - id: phase-4-c
