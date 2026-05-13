@@ -8,6 +8,7 @@ node_modules/
 dist/
 build/
 target/
+target-host/
 src-tauri/target/
 wasm/pkg/
 wasm/target/
