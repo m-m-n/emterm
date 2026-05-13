@@ -27,6 +27,15 @@ term_core = { path = "../crates/term_core" }
 # term_images (Phase 5: inline Kitty / SIXEL image decoders + APC/DCS parsers)
 term_images = { path = "../crates/term_images" }
 
+# mux_ipc (Phase 4-A): shared protocol types used by the legacy Tauri build
+# and native-poc. native-poc speaks bincode + 4-byte big-endian length prefix
+# directly against the daemon's `MuxMessage`-framed Unix socket.
+mux_ipc = { path = "../crates/mux_ipc" }
+
+# Phase 4-C: bincode for control-message payloads. Matches the version pinned
+# by `mux_ipc` so wire formats stay byte-for-byte identical.
+bincode = "1.3"
+
 # PTY (Phase 2)
 portable-pty = "0.8"
 

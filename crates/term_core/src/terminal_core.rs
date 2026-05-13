@@ -271,6 +271,18 @@ impl TerminalCore {
 
     // ── Reset ────────────────────────────────────────────
 
+    /// Reset the grid + parser to the post-construction state, then feed
+    /// `bytes` through `process_pty_data` so the resulting state reflects a
+    /// fresh replay of that byte stream.
+    ///
+    /// Introduced for native-poc's mux-mode attach: after the daemon sends
+    /// a `Snapshot`, the client wants to discard whatever the native PTY
+    /// painted previously and paint the snapshot bytes from scratch.
+    pub fn reset_and_replay(&mut self, bytes: &[u8]) {
+        self.reset();
+        self.process_pty_data(bytes);
+    }
+
     pub fn reset(&mut self) {
         let total = self.rows as usize * self.cols as usize;
         self.ring_cells = vec![Cell::EMPTY; total];
@@ -839,6 +851,29 @@ mod tests {
         let consumed = core.process_pty_data(data);
         assert_eq!(consumed, data.len());
         assert!(core.mode_actions.is_empty());
+    }
+
+    #[test]
+    fn test_reset_and_replay_paints_only_replay_bytes() {
+        let mut core = TerminalCore::new(80, 24, 100);
+        core.process_pty_data(b"old data");
+        // Sanity: first cell now holds 'o'.
+        assert_eq!(core.get_cell_char(0, 0), "o");
+        // Replay a different stream.
+        core.reset_and_replay(b"NEW");
+        assert_eq!(core.get_cell_char(0, 0), "N");
+        assert_eq!(core.get_cell_char(1, 0), "E");
+        assert_eq!(core.get_cell_char(2, 0), "W");
+        // Cell 3 must be empty after reset (no leftover from "old data").
+        assert_eq!(core.get_cell_char(3, 0), " ");
+    }
+
+    #[test]
+    fn test_reset_and_replay_empty_bytes_clears_grid() {
+        let mut core = TerminalCore::new(80, 24, 100);
+        core.process_pty_data(b"junk");
+        core.reset_and_replay(b"");
+        assert_eq!(core.get_cell_char(0, 0), " ");
     }
 
     #[test]

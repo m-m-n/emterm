@@ -15,9 +15,12 @@ use term_images::image_proc::{ImageEvent, ImageProcessor};
 
 use crate::callbacks::{EmtermOscRequest, NativeCallbackState, NativeCallbacks};
 use crate::image::{parse as image_parse, split_image_events};
+#[cfg(unix)]
+use crate::mux::client::{ChannelEvent, Client as MuxClient};
 use crate::pty::{ExitReason, PtyEvent, PtySession};
 use crate::render::theme::Theme;
 use crate::settings::Settings;
+use mux_ipc::protocol::{MessageType, MuxMessage, StatusUpdateMsg};
 
 // Default scrollback capacity now lives on `Settings` (`DEFAULT_SCROLLBACK_LINES`
 // in `crate::settings`); the caller passes the desired value into
@@ -65,6 +68,16 @@ pub struct Tab {
     /// 4-B introduces the field; Phase 4-C populates it when the mux
     /// client successfully attaches.
     pub mux_session_name: Option<String>,
+    /// Phase 4-C: the live mux client when this tab is attached to a
+    /// remote session. `None` in native PTY mode. Wrapped in `Option`
+    /// so detach is a `take()`.
+    #[cfg(unix)]
+    pub mux_client: Option<MuxClient>,
+    /// Phase 4-C: most recent status-update payload received from the
+    /// daemon. The Phase 4-D status bar widget renders this; today only
+    /// the storage is populated.
+    #[allow(dead_code)] // Phase 4-D will consume this.
+    pub mux_status_state: Option<StatusUpdateMsg>,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -117,6 +130,137 @@ impl Tab {
             image_proc: ImageProcessor::new(),
             pending_image_events: Vec::new(),
             mux_session_name: None,
+            #[cfg(unix)]
+            mux_client: None,
+            mux_status_state: None,
+        }
+    }
+
+    /// Attach this tab to a live mux client. The native PTY must already be
+    /// paused (call [`Tab::pause_native_pty`] first) so the byte ordering
+    /// stays consistent. Sets `mux_session_name` so the tab bar can
+    /// render the `[mux:<name>]` prefix from Phase 4-B.
+    #[cfg(unix)]
+    pub fn attach_mux(&mut self, client: MuxClient) {
+        self.mux_session_name = Some(client.session_id().to_string());
+        self.mux_client = Some(client);
+    }
+
+    /// Detach from the mux client. Returns the previously-held handle so
+    /// the caller can `shutdown` it on its own thread (avoids blocking the
+    /// UI thread on the RX join). After this returns:
+    ///
+    /// 1. The caller drains the native PTY ring buffer.
+    /// 2. The caller replays the drained bytes into `core` via
+    ///    `process_pty_data`.
+    /// 3. The caller calls [`Tab::resume_native_pty`].
+    #[cfg(unix)]
+    pub fn detach_mux(&mut self) -> Option<MuxClient> {
+        self.mux_session_name = None;
+        self.mux_status_state = None;
+        self.mux_client.take()
+    }
+
+    /// Pause the native PTY reader. Subsequent PTY output goes into the
+    /// per-session ring buffer until [`Tab::resume_native_pty`] is called.
+    pub fn pause_native_pty(&self) {
+        if let Some(p) = &self.pty {
+            p.set_paused(true);
+        }
+    }
+
+    /// Drain the ring buffer and replay the bytes into `core`, then resume
+    /// the native PTY reader. Called from `App::on_mux_osc(Detach)` after
+    /// the mux client has been shut down.
+    pub fn resume_native_pty(&mut self) {
+        if let Some(p) = &self.pty {
+            let drained = p.drain_ring();
+            if !drained.is_empty() {
+                self.core.lock().process_pty_data(&drained);
+            }
+            if p.ring_overflowed() {
+                log::warn!(
+                    "mux pause ring buffer overflowed; some native PTY output \
+                     was discarded for tab {:?}",
+                    self.title
+                );
+            }
+            p.set_paused(false);
+        }
+    }
+
+    /// Pump any messages that have arrived from the mux daemon. Returns true
+    /// if anything changed (caller should request a redraw). `core` is
+    /// updated through `reset_and_replay` on each `Snapshot`; the latest
+    /// `StatusUpdateMsg` is cached on `mux_status_state` for Phase 4-D.
+    #[cfg(unix)]
+    pub fn pump_mux(&mut self) -> bool {
+        // Drain messages first so we don't hold an immutable borrow of
+        // `self.mux_client` across the subsequent mutation in
+        // `apply_mux_message`.
+        let mut buffered: Vec<MuxMessage> = Vec::new();
+        let mut detach_after = false;
+        if let Some(client) = self.mux_client.as_ref() {
+            while let Some(evt) = client.try_recv() {
+                match evt {
+                    ChannelEvent::Message(msg) => buffered.push(msg),
+                    ChannelEvent::Closed { reason } => {
+                        log::warn!("mux client disconnected for tab {:?}: {reason}", self.title);
+                        detach_after = true;
+                        break;
+                    }
+                }
+            }
+        }
+        let mut changed = false;
+        for msg in buffered {
+            if self.apply_mux_message(msg) {
+                changed = true;
+            }
+        }
+        if detach_after {
+            // The daemon closed mid-session — fall back to native PTY mode.
+            if let Some(client) = self.detach_mux() {
+                std::thread::spawn(move || client.shutdown());
+            }
+            self.resume_native_pty();
+            changed = true;
+        }
+        changed
+    }
+
+    /// Route one mux message into the appropriate state. Returns true if
+    /// the visible state changed.
+    #[cfg(unix)]
+    fn apply_mux_message(&mut self, msg: MuxMessage) -> bool {
+        match msg.msg_type {
+            MessageType::PtyOutput => {
+                self.core.lock().process_pty_data(&msg.payload);
+                true
+            }
+            MessageType::Snapshot => {
+                // Daemon sends raw bytes representing the active window's
+                // visible grid; replay from scratch.
+                self.core.lock().reset_and_replay(&msg.payload);
+                true
+            }
+            MessageType::StatusUpdate => {
+                if let Some(payload) = msg.decode_payload::<StatusUpdateMsg>() {
+                    self.mux_status_state = Some(payload);
+                    true
+                } else {
+                    log::warn!("mux: malformed StatusUpdate payload");
+                    false
+                }
+            }
+            MessageType::PtyExited => {
+                log::info!("mux: remote pane exited for tab {:?}", self.title);
+                false
+            }
+            other => {
+                log::debug!("mux: unhandled message type {other:?}");
+                false
+            }
         }
     }
 
@@ -287,6 +431,12 @@ impl Tab {
     /// into the Wry viewer spawner.
     pub fn drain_osc(&self) -> Vec<EmtermOscRequest> {
         std::mem::take(&mut self.cb_state.lock().osc_queue)
+    }
+
+    /// Phase 4-C: drain parsed mux OSC 777 actions. The App layer routes
+    /// `Attach` / `Detach` actions into `Tab::attach_mux` / `Tab::detach_mux`.
+    pub fn drain_mux_actions(&self) -> Vec<crate::mux::osc777::MuxOscAction> {
+        std::mem::take(&mut self.cb_state.lock().pending_mux_actions)
     }
 }
 

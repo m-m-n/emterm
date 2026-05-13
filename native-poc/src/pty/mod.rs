@@ -7,14 +7,18 @@
 //! retargeting the `on_bytes` callback at the parser entry point.
 
 pub mod input;
+pub mod ring;
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::{bounded, Receiver, Sender};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+
+use self::ring::RingBuffer;
 
 /// Events emitted from a PTY session up to the App.
 #[derive(Debug)]
@@ -47,6 +51,14 @@ pub struct PtySession {
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     reader_join: Option<JoinHandle<()>>,
     writer_join: Option<JoinHandle<()>>,
+    /// Phase 4-C: when `true`, the reader thread routes incoming PTY bytes
+    /// into [`ring`] instead of emitting them as `PtyEvent::Data`. Toggled
+    /// by [`set_paused`]; observed by the reader on every chunk.
+    paused: Arc<AtomicBool>,
+    /// Phase 4-C: drop-oldest ring buffer that absorbs PTY output while
+    /// `paused` is true. Drained by the app layer on detach so the data
+    /// can be replayed into `term_core`.
+    ring: Arc<Mutex<RingBuffer>>,
 }
 
 impl PtySession {
@@ -87,11 +99,16 @@ impl PtySession {
 
         let (input_tx, input_rx) = bounded::<Vec<u8>>(256);
 
+        let paused = Arc::new(AtomicBool::new(false));
+        let ring = Arc::new(Mutex::new(RingBuffer::default()));
+
         let reader_event_tx = event_tx.clone();
+        let reader_paused = paused.clone();
+        let reader_ring = ring.clone();
         let reader_join = std::thread::Builder::new()
             .name("native-poc-pty-reader".into())
             .spawn(move || {
-                reader_loop(&mut *reader, reader_event_tx);
+                reader_loop(&mut *reader, reader_event_tx, reader_paused, reader_ring);
             })
             .expect("spawn reader thread");
 
@@ -108,7 +125,39 @@ impl PtySession {
             child: Arc::new(Mutex::new(child)),
             reader_join: Some(reader_join),
             writer_join: Some(writer_join),
+            paused,
+            ring,
         })
+    }
+
+    /// Flip the pause flag. When `true`, the reader thread routes incoming
+    /// PTY bytes into the per-session ring buffer instead of emitting them
+    /// as `PtyEvent::Data`. The next chunk picks up the new state — there
+    /// is no per-byte handshake, so a tiny race (one chunk in flight) is
+    /// possible. The caller flips this **before** swapping in the mux
+    /// client so any chunk that slips through still ends up in the buffer.
+    pub fn set_paused(&self, value: bool) {
+        self.paused.store(value, Ordering::SeqCst);
+    }
+
+    /// Returns the current pause state. Used by tests and by the app layer
+    /// to decide whether to drain on detach.
+    #[allow(dead_code)] // Reserved for diagnostic UI.
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Drain the ring buffer. Called on detach so the bytes can be replayed
+    /// into `term_core` before the reader resumes feeding `PtyEvent::Data`.
+    pub fn drain_ring(&self) -> Vec<u8> {
+        self.ring.lock().drain()
+    }
+
+    /// True if the ring buffer dropped at least one byte since the last
+    /// drain. Used by the app layer to surface a transient warning banner
+    /// (mux session output exceeded the 256 KiB cache).
+    pub fn ring_overflowed(&self) -> bool {
+        self.ring.lock().overflowed()
     }
 
     /// Send bytes to the shell. Drops with a warn log if the queue is full.
@@ -176,7 +225,12 @@ impl Drop for PtySession {
     }
 }
 
-fn reader_loop(reader: &mut dyn Read, event_tx: Sender<PtyEvent>) {
+fn reader_loop(
+    reader: &mut dyn Read,
+    event_tx: Sender<PtyEvent>,
+    paused: Arc<AtomicBool>,
+    ring: Arc<Mutex<RingBuffer>>,
+) {
     let mut buf = [0u8; 8192];
     loop {
         match reader.read(&mut buf) {
@@ -193,7 +247,15 @@ fn reader_loop(reader: &mut dyn Read, event_tx: Sender<PtyEvent>) {
                 break;
             }
             Ok(n) => {
-                let payload = buf[..n].to_vec();
+                let slice = &buf[..n];
+                if paused.load(Ordering::SeqCst) {
+                    // Mux mode: route into the ring buffer instead of the
+                    // event channel. We do not block the channel side at
+                    // all — the app layer drains the ring on detach.
+                    ring.lock().push(slice);
+                    continue;
+                }
+                let payload = slice.to_vec();
                 if event_tx.send(PtyEvent::Data(payload)).is_err() {
                     // Receiver dropped; nothing to do.
                     break;
@@ -255,8 +317,10 @@ mod tests {
 
         let mut reader = pty.master.try_clone_reader().unwrap();
         let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(64);
+        let paused = Arc::new(AtomicBool::new(false));
+        let ring = Arc::new(Mutex::new(RingBuffer::default()));
         let join = std::thread::spawn(move || {
-            reader_loop(&mut *reader, tx);
+            reader_loop(&mut *reader, tx, paused, ring);
         });
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -283,5 +347,141 @@ mod tests {
             text.contains("hello"),
             "expected 'hello' in pty output, got: {text:?}"
         );
+    }
+
+    /// Helper: a `Read` impl that returns a single canned chunk, then waits
+    /// for permission to return EOF. Lets the reader-loop test inspect
+    /// intermediate state without racing against `Ok(0)`.
+    struct ScriptedReader {
+        chunks: std::sync::Mutex<std::collections::VecDeque<Vec<u8>>>,
+        eof_after: std::sync::Mutex<bool>,
+    }
+
+    impl ScriptedReader {
+        fn new(chunks: Vec<Vec<u8>>) -> Self {
+            Self {
+                chunks: std::sync::Mutex::new(chunks.into_iter().collect()),
+                eof_after: std::sync::Mutex::new(false),
+            }
+        }
+        fn allow_eof(&self) {
+            *self.eof_after.lock().unwrap() = true;
+        }
+    }
+
+    impl Read for &ScriptedReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                let mut chunks = self.chunks.lock().unwrap();
+                if let Some(chunk) = chunks.pop_front() {
+                    let n = chunk.len().min(buf.len());
+                    buf[..n].copy_from_slice(&chunk[..n]);
+                    return Ok(n);
+                }
+                drop(chunks);
+                if *self.eof_after.lock().unwrap() {
+                    return Ok(0);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    // ── TS-mux-int-4 helper: pause + ring buffer + resume ────────────────
+
+    #[test]
+    fn reader_routes_to_channel_when_unpaused() {
+        let script = std::sync::Arc::new(ScriptedReader::new(vec![b"hello".to_vec()]));
+        let script_for_thread = script.clone();
+        let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(8);
+        let paused = Arc::new(AtomicBool::new(false));
+        let ring = Arc::new(Mutex::new(RingBuffer::default()));
+        let ring_clone = ring.clone();
+        let join = std::thread::spawn(move || {
+            let mut reader = &*script_for_thread;
+            reader_loop(&mut reader, tx, paused, ring_clone);
+        });
+
+        let evt = rx.recv_timeout(Duration::from_secs(1)).expect("data event");
+        match evt {
+            PtyEvent::Data(b) => assert_eq!(b, b"hello".to_vec()),
+            other => panic!("expected Data, got {other:?}"),
+        }
+        // Ring buffer must be untouched in unpaused mode.
+        assert!(ring.lock().is_empty());
+        script.allow_eof();
+        let _ = join.join();
+    }
+
+    #[test]
+    fn reader_routes_to_ring_buffer_when_paused() {
+        let script = std::sync::Arc::new(ScriptedReader::new(vec![b"PAUSED".to_vec()]));
+        let script_for_thread = script.clone();
+        let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(8);
+        let paused = Arc::new(AtomicBool::new(true));
+        let ring = Arc::new(Mutex::new(RingBuffer::default()));
+        let ring_clone = ring.clone();
+        let join = std::thread::spawn(move || {
+            let mut reader = &*script_for_thread;
+            reader_loop(&mut reader, tx, paused, ring_clone);
+        });
+
+        // Give the reader a moment to consume the chunk.
+        std::thread::sleep(Duration::from_millis(50));
+        // Channel must be empty (no Data events).
+        assert!(rx.try_recv().is_err());
+        // Ring buffer must hold the chunk.
+        let drained = ring.lock().drain();
+        assert_eq!(drained, b"PAUSED".to_vec());
+
+        script.allow_eof();
+        let _ = join.join();
+    }
+
+    #[test]
+    fn pause_flag_change_takes_effect_per_read() {
+        // Stronger sequencing than the round-trip test: we start in
+        // paused mode, observe chunk1 in the ring, flip to unpaused, then
+        // observe chunk2 on the channel. Each chunk is fed only after the
+        // previous one was observed, removing any race window.
+        let script = std::sync::Arc::new(ScriptedReader::new(vec![b"FIRST".to_vec()]));
+        let script_for_thread = script.clone();
+        let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(8);
+        let paused = Arc::new(AtomicBool::new(true));
+        let paused_clone = paused.clone();
+        let ring = Arc::new(Mutex::new(RingBuffer::default()));
+        let ring_clone = ring.clone();
+        let join = std::thread::spawn(move || {
+            let mut reader = &*script_for_thread;
+            reader_loop(&mut reader, tx, paused_clone, ring_clone);
+        });
+
+        // Wait until the paused chunk is in the ring.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if !ring.lock().is_empty() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "ring stayed empty");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let drained = ring.lock().drain();
+        assert_eq!(drained, b"FIRST".to_vec());
+        assert!(rx.try_recv().is_err(), "no data on channel while paused");
+
+        // Flip and feed a second chunk via the script's queue.
+        paused.store(false, Ordering::SeqCst);
+        script.chunks.lock().unwrap().push_back(b"SECOND".to_vec());
+
+        let evt = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("chunk on channel after resume");
+        match evt {
+            PtyEvent::Data(b) => assert_eq!(b, b"SECOND".to_vec()),
+            other => panic!("expected Data, got {other:?}"),
+        }
+
+        script.allow_eof();
+        let _ = join.join();
     }
 }

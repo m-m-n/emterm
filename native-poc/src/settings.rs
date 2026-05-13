@@ -41,6 +41,13 @@ pub const DEFAULT_IMAGE_MEMORY_QUOTA_MB: u32 = 320;
 /// legacy `src-tauri/src/commands/config/settings.rs::default_clipboard_max_size_osc52`.
 pub const DEFAULT_CLIPBOARD_MAX_SIZE_OSC52: u32 = 10 * 1024 * 1024;
 
+/// Default prefix-key chord for mux mode. Matches the legacy WebView build
+/// and the common tmux default. Parsed by
+/// `crate::mux::prefix::parse_prefix_key` at startup; an invalid value falls
+/// back to this default with a `warn` log so a typo in `settings.json`
+/// cannot lock the user out of mux mode.
+pub const DEFAULT_MUX_PREFIX_KEY: &str = "Ctrl+B";
+
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub ambiguous_width_mode: AmbiguousWidthMode,
@@ -59,6 +66,13 @@ pub struct Settings {
     /// Maximum payload size accepted by OSC 52 in bytes. Payloads above
     /// this cap are dropped and `LOG_OSC52_DENIED` is emitted.
     pub clipboard_max_size_osc52: u32,
+    /// Prefix-key chord for mux mode. Stored as a textual spec (e.g.
+    /// `"Ctrl+B"`) and parsed at startup by
+    /// `crate::mux::prefix::parse_prefix_key`. Phase 7 will surface this in
+    /// `settings.json`; today the field is populated from
+    /// [`DEFAULT_MUX_PREFIX_KEY`] and never mutated.
+    #[allow(dead_code)] // Phase 4-D status bar / settings UI will consume this.
+    pub mux_prefix_key: String,
 }
 
 impl Default for Settings {
@@ -69,6 +83,7 @@ impl Default for Settings {
             image_memory_quota_mb: DEFAULT_IMAGE_MEMORY_QUOTA_MB,
             clipboard_read_osc52: true,
             clipboard_max_size_osc52: DEFAULT_CLIPBOARD_MAX_SIZE_OSC52,
+            mux_prefix_key: DEFAULT_MUX_PREFIX_KEY.to_string(),
         }
     }
 }
@@ -105,5 +120,23 @@ mod tests {
     fn default_clipboard_max_size_osc52_is_10_mib() {
         let s = Settings::new();
         assert_eq!(s.clipboard_max_size_osc52, 10 * 1024 * 1024);
+    }
+
+    // ── TS-settings-1: mux.prefix_key default ────────────────────────────
+
+    #[test]
+    fn default_mux_prefix_key_is_ctrl_b() {
+        let s = Settings::new();
+        assert_eq!(s.mux_prefix_key, "Ctrl+B");
+    }
+
+    #[test]
+    fn default_mux_prefix_key_parses_to_default_chord() {
+        // Cross-check: the default spec must parse cleanly under the
+        // prefix-key parser introduced in Phase 4-C.
+        let s = Settings::new();
+        let chord =
+            crate::mux::prefix::parse_prefix_key(&s.mux_prefix_key).expect("parse default chord");
+        assert_eq!(chord, crate::mux::prefix::PrefixChord::default());
     }
 }

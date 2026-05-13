@@ -1417,6 +1417,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
+ "bincode",
  "bytes",
  "crossbeam-channel",
  "egui",
@@ -1424,6 +1425,7 @@ dependencies = [
  "env_logger",
  "libc",
  "log",
+ "mux_ipc",
  "notify-rust",
  "once_cell",
  "parking_lot",
