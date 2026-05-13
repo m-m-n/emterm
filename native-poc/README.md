@@ -73,6 +73,26 @@ cargo fmt --all
 | IME preedit + commit (Phase 4-E) | ✅ auto / 🟡 manual | `ime/preedit.rs` + `commit.rs` + cursor-underline overlay; C0 (except `\t`,`\n`) and C1 sanitised. Linux fcitx5 parity + Windows MS-IME long-run deferred to host execution |
 | Final gates (Phase 4-F) | ✅ auto / 🟡 manual | `cargo fmt --all --check`, `cargo build --workspace`, `cargo test --workspace`, `cargo clippy -p emterm-native-poc -p mux_ipc -- -D warnings` (style fixes applied; remaining 14 warnings are forward-staged dead code documented per commit). 12 h soak (`TS-manual-soak`) + TS-perf-1/2 host measurements deferred to host execution. `mux::perf_tests` scaffolds the harness with `#[ignore]` markers |
 
+## Phase 4-G feature matrix (`ime-native-integration` SDD)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Common backbone (Phase 4-G-A) | ✅ auto | `ime/backend.rs` (`ImeBackend` trait + `ImeEvent` + `KeyDispatchResult` + `ImeInitError` + `RawKeyEvent`) + `ime/null.rs` (`NullBackend` passthrough) + factory (`build_backend` resolves env > settings > init failure → `NullBackend`) + `App` plumbing (`set_ime_backend` / `pump_ime` / `dispatch_key_event_via_ime` / `notify_cursor_rect_if_changed` / `notify_ime_focus`) + `window_host` per-tick `pump_ime` + `ReceivedImeText` gated on `ime_is_null()` |
+| Linux X11 (XIM) backend (Phase 4-G-B) | ✅ auto / 🟡 manual | `ime/x11.rs` via `x11-dl 2`. `XOpenIM` + `XCreateIC` (`XIMPreeditNothing` + `XIMStatusNothing` — candidate window owned by IM server popup); `XFilterEvent` + `XmbLookupString` direct commit; `XSetICFocus` / `XUnsetICFocus`; `XSetICValues` with `spotLocation` for candidate tracking. Manual `TS-manual-ime-x11`, `TS-manual-ime-x11-ibus`, `TS-manual-ime-imserver-restart`, `TS-manual-ime-mux` deferred to a Linux X11 host with fcitx5 / IBus |
+| Linux Wayland (zwp_text_input_v3) backend (Phase 4-G-C) | 🟡 scaffold / 🟡 manual | `ime/wayland.rs` with `crossbeam_channel` pump-thread infrastructure + factory probe. `init` currently returns `Unavailable` pending the `wl_display` borrow via `wayland-backend/client_system` (deferred so pure-X11 Linux builds stay libwayland-free). XWayland + fcitx5-X11 sessions still get the X11 backend via the X11 probe |
+| Windows IMM32 backend (Phase 4-G-D) | ✅ auto (Linux CI) / 🟡 cross-build + manual | `ime/windows.rs` (`#[cfg(windows)]`) with `SetWindowSubclass` + `WM_IME_{START,END}COMPOSITION` + `WM_IME_COMPOSITION` (`GCS_COMPSTR` → `ImeEvent::Preedit`, `GCS_RESULTSTR` → `ImeEvent::Commit`) + `ImmGetCompositionStringW` + portable `utf16_to_utf8` helper (BMP / surrogate pair / invalid surrogate IME_E401). `ImmSetCompositionWindow(CFS_POINT)` for candidate window. `RemoveWindowSubclass` on Drop. Cross-build deferred to GitHub Actions Windows runner; manual `TS-manual-ime-windows` deferred to a Windows host with MS-IME / Google IME |
+| Final gates (Phase 4-G-E) | ✅ auto / 🟡 manual | `cargo fmt --all --check`, `cargo test --workspace`, `cargo clippy -p emterm-native-poc -- -D warnings` (Phase 4-G ime/ tree clean; pre-existing 14-warning baseline outside Phase 4-G scope). TS-perf-3 / TS-perf-4 / TS-perf-regression release-host measurements deferred (toggle via `EMTERM_IME_PERF=1` env var to emit warn-level latency lines). |
+
+### Phase 4-G env vars + settings
+
+- `EMTERM_NATIVE_IME=0` — disables native IME integration unconditionally; the App falls back to `NullBackend` + Phase 4 behavior (`WindowEvent::ReceivedImeText` → `on_ime_commit`). Emits exactly one warn log on startup.
+- `settings.ime.native_integration` (`bool`, default `true`) — same effect via `settings.json` (Phase 7 wires JSON parsing; Phase 4-G pins the struct shape).
+- `EMTERM_IME_PERF=1` — emits warn-level latency micros for TS-perf-3 (`on_ime_preedit → needs_full_redraw`) and TS-perf-4 (`on_ime_commit → PtySession::write`) so release-host measurements can be collected without recompilation.
+
+### Phase 4-E auto-scope contract
+
+Phase 4-G must not modify `ime/preedit.rs`, `ime/commit.rs`, or `render/cursor.rs::draw_cursor_with_preedit`. Backends push `ImeEvent::Preedit` / `Commit` / `FocusOut` into the App's pump; the App routes them through the unchanged Phase 4-E layer. `git diff` for the three files is empty across every Phase 4-G commit.
+
 ## Known limits (Phase 3 follow-up)
 
 - Linux only (Ubuntu 22.04 family). No macOS, no Windows.

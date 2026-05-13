@@ -58,7 +58,105 @@ workflow:
       VERIFICATION.md と一致を確認 (TS-* IDs: SPEC 35, IMPLEMENTATION 47,
       VERIFICATION 64, sdd.yaml 45, tasks.yaml 11 出現箇所すべて整合)。
   - id: implement
-    status: in_progress
+    status: completed
+    completed_at_commit: "PLACEHOLDER_REPLACE_AFTER_COMMIT"
+    notes: |
+      Phase 4-G-A (29daa51): ImeBackend trait + ImeEvent + KeyDispatchResult
+        + ImeInitError + RawKeyEvent + NullBackend (passthrough) + factory
+        (build_backend resolves env > settings > init failure → NullBackend
+        + single warn log) + App plumbing (ime_backend slot, pump_ime,
+        dispatch_key_event_via_ime, notify_cursor_rect_if_changed cell-diff
+        rate-limited, notify_ime_focus, ime_is_null) + window_host wiring
+        (factory call at startup via raw-window-handle 0.6
+        HasWindowHandle/HasDisplayHandle, KeyboardInput backend-first
+        dispatch with Consumed short-circuit, Focused notify, per-tick
+        pump_ime, ReceivedImeText gated on ime_is_null). Settings: added
+        ImeSettings { native_integration: bool } default true with #[allow(
+        dead_code) // Phase 7] for the JSON loader. 27 new unit tests:
+        TS-backend-1..5, TS-cursor-1, TS-focus-1, TS-fallback-1..3,
+        TS-settings-1, TS-route-1..2 + factory display + mock backend
+        budget + null backend edge cases.
+
+      Phase 4-G-B (393224d): Linux X11 (XIM) backend via x11-dl 2 dynamic
+        loading. Input style XIMPreeditNothing|XIMStatusNothing (IM-server
+        candidate window popup); XOpenIM + XCreateIC + XSetICFocus +
+        XUnsetICFocus + XSetICValues spotLocation + XFilterEvent +
+        XmbLookupString direct commit + Drop releases XDestroyIC +
+        XCloseIM cleanly. Display is borrowed from tao (raw-window-handle
+        Xlib variant), never closed. 11 pure-function unit tests
+        (TS-x11-1 keycode mapping deterministic + in X11 [8,255] range,
+        TS-x11-2 ShiftMask/ControlMask/Mod1Mask individually + combined,
+        XKeyEvent synthesis carries modifier mask + KeyPress/KeyRelease
+        type tag). TS-backend-int-1 (xvfb + stub IM responder) + manual
+        TS-manual-ime-x11 / x11-ibus / imserver-restart / mux deferred
+        to a Linux X11 host with fcitx5 / IBus.
+
+      Phase 4-G-C (e69d7b2): Linux Wayland (zwp_text_input_v3) scaffold.
+        Channel + pump-thread infrastructure landed via crossbeam_channel
+        + PumpThread (parked sleep until shutdown atomic flag); factory
+        probe routes RawDisplayHandle::Wayland → WaylandBackend::init;
+        dispatch_key_event always Passthrough (Wayland keyboard listener
+        is truth source); notify_cursor_rect / notify_focus record latest
+        state; Drop joins pump thread cleanly. init() currently returns
+        Unavailable pending the wl_display borrow via
+        wayland-backend/client_system feature (deferred to keep pure-X11
+        Linux builds libwayland-free). 10 unit tests (TS-wayland-1 pump
+        drains channel + budget, TS-wayland-2 HandleType discriminant +
+        Unavailable variant pin, dispatch passthrough, cursor/focus
+        recording, drop joins). XWayland + fcitx5-X11 sessions still get
+        the X11 backend via the X11 probe today.
+
+      Phase 4-G-D (fbcfe02): Windows IMM32 backend gated under
+        #[cfg(windows)] (windows crate 0.58 with Win32_Foundation +
+        Win32_UI_Input_Ime + Win32_UI_WindowsAndMessaging + Win32_UI_Shell
+        + Win32_Globalization features). SetWindowSubclass + WM_IME_
+        {START,END}COMPOSITION + WM_IME_COMPOSITION (GCS_COMPSTR ->
+        ImeEvent::Preedit, GCS_RESULTSTR -> ImeEvent::Commit) +
+        ImmGetCompositionStringW + portable utf16_to_utf8 helper +
+        ImmSetCompositionWindow(CFS_POINT) cursor tracking +
+        RemoveWindowSubclass on Drop + thread-local IME_QUEUE drained by
+        pump (PUMP_BUDGET + 2 * PUMP_BUDGET soft cap on push). 10 portable
+        unit tests run on Linux CI (TS-windows-1 BMP ASCII + "日本語" +
+        intentional U+FFFD; TS-windows-2 surrogate pair 😀 + mixed BMP +
+        surrogate; TS-windows-3 lone high/low surrogate -> None +
+        partial-garbage best effort + IME_E401 warn). Windows cross-build
+        deferred to GitHub Actions windows-latest runner; TS-backend-int-2
+        + TS-manual-ime-windows deferred to a Windows host.
+
+      Phase 4-G-E: EMTERM_IME_PERF=1 env toggle adds warn-level latency
+        instrumentation (TS-perf-3 / TS-perf-4 release-host measurement
+        without recompilation). README.md gets a Phase 4-G feature matrix
+        + env / settings docs + Phase 4-E contract reminder. Cross-task
+        notes added to doc/tasks/mux-tabs-windows-ime/sdd.yaml on FR11 /
+        FR12 / NFR3 pointing at Phase 4-G as the resolution (informational
+        only; the status flip lives in a separate PR per task description).
+        cargo fmt --all --check clean; cargo build --workspace exit 0;
+        cargo test --workspace 2011 / 0 / 0 (up from Phase 4 baseline of
+        1940, +71 IME backbone + backend tests); clippy on the Phase 4-G
+        ime/ tree is clean (the 14-warning pre-existing baseline outside
+        the ime/ scope is forward-staged per Phase 4-F precedent).
+
+      Phase 4-E auto-scope contract: git diff for
+        native-poc/src/ime/{preedit,commit}.rs and
+        native-poc/src/render/cursor.rs is empty across all five Phase 4-G
+        commits.
+
+      Deferred (manual / cross-platform host):
+        - TS-manual-ime-x11, TS-manual-ime-x11-ibus,
+          TS-manual-ime-imserver-restart, TS-manual-ime-mux
+          (Linux X11 + fcitx5 / IBus host)
+        - TS-manual-ime-wayland
+          (Linux Wayland + fcitx5-wayland host; KDE Plasma 6 + Sway)
+        - TS-manual-ime-windows
+          (Windows 10/11 + MS-IME / Google IME host)
+        - TS-manual-ime-fallback (any host with EMTERM_NATIVE_IME=0)
+        - TS-perf-3, TS-perf-4, TS-perf-regression
+          (Linux X11 release host with EMTERM_IME_PERF=1)
+        - TS-backend-int-1 (X11 + xvfb stub IM responder)
+        - TS-backend-int-2 (Windows hidden HWND + SendMessageW)
+        - cargo build --target x86_64-pc-windows-msvc --workspace
+          (GitHub Actions windows-latest runner; Linux CI has no Windows
+          target installed)
   - id: check
     status: pending
   - id: verify

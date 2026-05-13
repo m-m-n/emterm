@@ -23,6 +23,12 @@ pub enum ImeEvent {
     /// Finalized composition bytes to write to the active PTY.
     Commit(String),
     /// IM server signaled focus-out / disable; clear preedit overlay.
+    /// Currently produced only by the test-only `MockBackend` queue
+    /// (the X11 / Wayland / Windows backends rely on the App's own
+    /// `WindowEvent::Focused(false)` route via `on_ime_focus_lost`).
+    /// Kept on the enum so future IM-server-side focus-out
+    /// notifications have a route into the pump pipeline.
+    #[allow(dead_code)]
     FocusOut,
 }
 
