@@ -72,8 +72,11 @@ libc = "0.2"
 # means a non-X11 host (pure Wayland with no Xlib runtime) does not fail
 # at link time — the backend falls back to NullBackend at init() when
 # the X server is unreachable.
+# Phase 4-G-C: Wayland zwp_text_input_v3 bindings.
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 x11-dl = "2"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.31", features = ["unstable", "client"] }
 
 # NOTE: dev/release profiles are managed at the workspace root Cargo.toml
 # since Phase 6. Per-package profile sections produce warnings and are
