@@ -28,5 +28,8 @@ pub mod x11;
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod wayland;
 
-// Phase 4-G-D will add:
-//   #[cfg(windows)] pub mod windows;
+// Phase 4-G-D: Windows IMM32 backend. The module is compiled on
+// non-Windows targets too (with a stub `WindowsBackend` type) so the
+// cross-platform UTF-16 → UTF-8 helper unit tests still run on
+// Linux CI.
+pub mod windows;

@@ -186,7 +186,14 @@ pub fn build_platform_backend(
         }
     }
 
-    // Phase 4-G-D will add the Windows probe below.
+    // Phase 4-G-D: Windows IMM32.
+    #[cfg(windows)]
+    {
+        if let Some(RawWindowHandle::Win32(_)) = window {
+            return crate::ime::windows::WindowsBackend::init(window, display)
+                .map(|b| Box::new(b) as Box<dyn ImeBackend>);
+        }
+    }
 
     let _ = (window, display);
     Err(ImeInitError::Unavailable(
