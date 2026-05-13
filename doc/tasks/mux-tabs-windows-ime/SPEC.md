@@ -66,15 +66,13 @@ As a Windows user, I want to use MS-IME so that Japanese input works in native-p
 - **FR1: egui tab bar widget** — Implements `native_poc::ui::tab_bar::draw()` in egui with new / close / switch buttons, title rendering, and a visual indicator for the active tab. Drag-to-reorder and right-click context menu are out of scope.
 - **FR2: Tab keybinds** — `Ctrl+Shift+T` new tab, `Ctrl+Shift+W` close tab, `Ctrl+Tab` next, `Ctrl+Shift+Tab` previous, `Ctrl+1..9` jump. Implemented in `native_poc::ui::keybinds`.
 - **FR3: `crates/mux_ipc/` extraction (scope-limited)** — `git mv src-tauri/src/mux/ipc/protocol.rs crates/mux_ipc/src/protocol.rs`. `codec.rs` (tokio_util-based server framing) and `connection.rs` (server-side handler containing `crate::mux::session::*` references and the per-client accept loop) **stay in `src-tauri`** because they embed server-only logic; moving them would drag the entire src-tauri mux runtime across the boundary. `pty_spawn.rs`, `handlers.rs`, `reattach.rs`, `statusbar.rs` also stay (Tauri-bound). `crates/mux_ipc/Cargo.toml` is created (pure `base64` + `serde` + `serde_derive` deps, NO tokio); workspace root adds it as a member; `src-tauri/src/mux/ipc/protocol.rs` becomes a 1-line shim `pub use mux_ipc::protocol::*;` for backward compatibility. native-poc writes its own blocking client (see FR4 / file structure) using std `UnixStream` + custom length-prefix framing + `bincode` over `mux_ipc::protocol::MuxMessage`.
-- **FR4: mux attach (OSC 777)** — Native-poc parses `OSC 777 ; emterm ; mux ; attach ; <socket> ; <session_id> ST` via `term_core` OSC dispatch (already in place from Phase 3). The handler validates `<socket>` against the allowed prefixes `/tmp/emterm-mux/` and `$XDG_RUNTIME_DIR/emterm-mux/`, validates `<session_id>` against `^[A-Za-z0-9_-]{1,64}$`, then connects via `mux_ipc::connection::Client::connect(socket, session_id)`.
-- **FR5: mux detach** — `prefix d` sends `ControlMsg::Detach` to the daemon, closes the client, and resumes the original PTY reader. The original tab/title is restored. Pending mux frames are dropped.
-- **FR6: mux window switch** — `prefix n / p / <digit>` sends `ControlMsg::SelectWindow { kind: Next | Prev | Index(u8) }`; the daemon replies with a fresh `Snapshot` that replaces the on-screen `term_core` grid via the existing `term_core::reset_and_replay(...)` API (added if missing).
-- **FR7: native PTY pause during mux** — When mux mode is entered, the per-tab native PTY reader thread is paused via an `AtomicBool` flag. Bytes still arriving from the native PTY are accumulated into a bounded ring buffer (256 KB, drop-oldest) so a `Detach` does not deadlock the writer. On detach, the ring buffer is replayed into `term_core`.
-- **FR8: prefix key handling** — Prefix key is processed entirely in native-poc (no daemon roundtrip). Default `Ctrl+B`. Configurable via `settings.mux.prefix_key` (see Settings Schema). A double-press sends the prefix literally to the PTY (legacy parity). When mux mode is not active, the prefix is forwarded to PTY unchanged.
+- **FR4: mux attach via APC inband protocol** — The legacy `emterm mux` CLI is the bridge to the daemon's Unix socket and runs inside a regular PTY (the user types `emterm mux new` or `emterm mux attach <id>` at the shell prompt). The bridge translates daemon `MuxMessage` frames into APC `ESC _ emterm-mux;<base64(frame_body)> ESC \` sequences and writes them to its stdout, which is the same PTY native-poc is rendering. native-poc therefore consumes mux state by detecting the `emterm-mux;` APC payload in the PTY stream (via `term_core::TerminalCallbacks::on_apc`), decoding it with `mux_ipc::protocol::MuxMessage::from_apc`, and routing the resulting message through `App::on_mux_message` / `Tab::apply_mux_message`. native-poc never opens the daemon's Unix socket itself. See `doc/tasks/mux-inband-protocol/SPEC.md` for the full wire format.
+- **FR5: mux detach / window switch / native PTY pause — deferred to Phase 5+** — In the APC redesign these flows belong to the bridge CLI (`Ctrl+B d`, `Ctrl+B n`, etc. are written to the PTY as ordinary bytes and the bridge sees them on stdin). The legacy GUI itself does not currently emit dedicated detach / window-switch control frames; the daemon's authoritative reaction to the keystrokes is delivered to native-poc via subsequent APC `Snapshot` / `StatusUpdate` messages. The original FR5–FR7 native-poc-side hooks (`Tab::detach_mux`, `pause_native_pty` + 256 KB ring buffer replay, `App::on_mux_osc`) were therefore removed in the redesign. `Tab::pause_native_pty` / `resume_native_pty` and the ring buffer remain in source (gated `#[allow(dead_code)]`) as forward-staged scaffolding for a future "freeze native output while mux owns the screen" affordance.
+- **FR8: prefix key handling — keystroke passthrough** — The prefix key (default `Ctrl+B`, configurable via `settings.mux.prefix_key`) is currently a *passthrough* on the GUI side: native-poc writes the bytes the user typed (`0x02 d`, `0x02 n`, etc.) to the PTY, the bridge CLI sees them on its stdin exactly like tmux would, and the daemon responds with APC `Snapshot` / `StatusUpdate` frames. `mux::prefix::Latch` is implemented (`TS-prefix-1/2/3` exercise it) but not yet wired into the keybinds dispatch — it remains forward-staged for the case where the GUI itself needs to intercept the chord (e.g. to open a native window picker).
 - **FR9: status bar widget** — Bottom (or top) egui panel that decodes `StatusUpdateMsg` from the daemon and renders session name, window list (active starred), and local clock (1-second tick via `ctx.request_repaint_after`).
 - **FR10: status bar settings** — `settings.statusbar.enabled` (bool, default `true`), `settings.statusbar.position` (`"top"` | `"bottom"`, default `"bottom"`).
-- **FR11: Windows MS-IME preedit** — `egui::Event::Ime(ImeEvent::Preedit(text))` is rendered as an overlay at the cursor cell with an underline. Existing `native_poc::render::cursor` is extended (not duplicated).
-- **FR12: Windows MS-IME commit** — `egui::Event::Ime(ImeEvent::Commit(text))` writes `text.as_bytes()` to the active PTY via the existing pty writer channel. Bracketed paste wrapping is NOT applied (commits are user typing, not paste).
+- **FR11: IME preedit — auto-scope wired; manual gate N/A (tao 0.34 limitation)** — `ime::preedit::State` + `render::cursor::draw_cursor_with_preedit` + the `App::on_ime_preedit` route are implemented and exercised by `TS-ime-1` / `TS-ime-3`. **However:** tao 0.34 (the window/event-loop crate native-poc uses) does not integrate with XIM, so on Linux X11 / Wayland fcitx5 and IBus cannot deliver preedit / commit events to the native-poc process at all. On Windows, tao 0.34 does not surface the IMM32 / TSF preedit text either; only the final commit reaches `WindowEvent::ReceivedImeText` (and even then, the candidate window appears at the wrong position because tao does not expose `ImmSetCompositionWindow`). Manual gates `TS-manual-ime-linux` and `TS-manual-ime-windows` are therefore **N/A — tao 0.34 limitation**; making IME usable on either platform requires either a tao replacement or the WebView hybrid fallback (`tmp/restruct.md` risk table).
+- **FR12: IME commit — auto-scope wired; manual gate N/A (tao 0.34 limitation)** — `egui::Event::Ime(ImeEvent::Commit(text))` is implemented in `ime::commit::write_commit` (bracketed-paste wrapping is **not** applied — commits are user typing). The route is exercised by `TS-ime-2`. The same tao 0.34 limitation as FR11 applies to the manual gate; today on Linux X11 every printable keystroke also fires `WindowEvent::ReceivedImeText`, which is what makes the commit path appear to work for ASCII but does not exercise a real IME composition.
 - **FR13: settings additions** — `settings.json` schema extended with `mux.prefix_key`, `statusbar.enabled`, `statusbar.position`. Backward compatible (missing keys → defaults).
 
 ### Non-Functional Requirements
@@ -274,8 +272,12 @@ No new environment variables. Existing `EMTERM_MUX=1` / `EMTERM_MUX_SOCKET=<path
 ### Unit Tests
 
 - [ ] **TS-mux-1**: `crates/mux_ipc::protocol` — preexisting `src-tauri/src/mux/ipc/protocol.rs` unit tests pass after `git mv` (zero behavior change).
-- [ ] **TS-wire-1**: `native_poc::mux::wire` round-trips a `MuxMessage` via length-prefix + bincode without loss.
-- [ ] **TS-wire-2**: `native_poc::mux::wire` rejects frames larger than `MAX_FRAME_LENGTH` with a typed error.
+- [ ] **TS-apc-1**: `mux::apc::try_decode_emterm_mux` decodes a well-formed `emterm-mux;<base64(MuxMessage::to_frame_body())>` payload into the expected `MuxMessage` (covers `StatusUpdate` + `PtyOutput` shapes).
+- [ ] **TS-apc-2**: Non-mux APC payloads (Kitty Graphics `G,...`, vendor-specific) return `None` so the existing image pipeline keeps receiving them unchanged.
+- [ ] **TS-apc-3**: Malformed mux payloads — invalid base64 after the prefix, or a truncated frame body (< 5 bytes after decode) — return `None` and emit a `warn` log.
+- [ ] **TS-apc-4**: Empty / bare-prefix-only / non-UTF8 payloads return `None`.
+- [ ] **TS-mux-msg-1**: `App::on_mux_message` with `MessageType::Snapshot` resets and replays the payload through `term_core` (verified by inspecting the grid contents).
+- [ ] **TS-mux-msg-2**: `App::on_mux_message` with `MessageType::StatusUpdate` caches the decoded `StatusUpdateMsg` on the target tab's `mux_status_state`.
 - [ ] **TS-tab-1**: `tab_bar::draw` produces expected `TabEvent` for simulated egui input (new, close, switch).
 - [ ] **TS-tab-2**: closing the last tab emits an `AppEvent::ExitWindow` (Phase 1 parity).
 - [ ] **TS-tab-3**: when a tab is in mux mode, its title is rendered with the `[mux:<session>]` prefix.
@@ -283,9 +285,6 @@ No new environment variables. Existing `EMTERM_MUX=1` / `EMTERM_MUX_SOCKET=<path
 - [ ] **TS-prefix-1**: prefix state machine: single `Ctrl+B` arms, then next key (`d`, `n`, `p`, digit) triggers action.
 - [ ] **TS-prefix-2**: double prefix (`Ctrl+B Ctrl+B`) sends literal `0x02` to PTY when armed.
 - [ ] **TS-prefix-3**: prefix latch armed without follow-up within 3 s auto-cancels (literal byte not sent).
-- [ ] **TS-osc777-1**: valid `OSC 777 ; emterm ; mux ; attach ; <socket> ; <session_id> ST` parses into the attach action.
-- [ ] **TS-osc777-2**: detach OSC (`OSC 777 ; emterm ; mux ; detach ST`) is parsed and triggers detach.
-- [ ] **TS-osc777-3**: invalid socket path (outside allowed prefixes) or session ID (not matching pattern) is rejected.
 - [ ] **TS-status-1**: `status_bar::draw` renders correctly for representative `StatusUpdateMsg` values.
 - [ ] **TS-status-2**: when no mux state is present, only clock is rendered (and only if `statusbar.enabled`).
 - [ ] **TS-status-3**: `statusbar.enabled = false` produces no panel at all; unknown `position` falls back to bottom with warn log.
@@ -296,10 +295,11 @@ No new environment variables. Existing `EMTERM_MUX=1` / `EMTERM_MUX_SOCKET=<path
 
 ### Integration Tests
 
-- [ ] **TS-mux-int-1**: `native_poc::mux::mock` in-memory daemon: client `connect → Hello → Snapshot → SelectWindow → Snapshot → Detach` round-trips with no protocol errors and produces correct `term_core` state transitions.
-- [ ] **TS-mux-int-2**: client `connect` to nonexistent socket returns `ConnectError::Io(ENOENT)` and leaves the app in a recoverable state (tab stays in native PTY mode).
-- [ ] **TS-mux-int-3**: daemon-side abrupt close mid-session is observed as `ServerToClient` channel closure; client resumes native PTY mode automatically.
-- [ ] **TS-mux-int-4**: native PTY pause/resume: bytes arriving while paused accumulate in the 256 KB ring buffer; on detach, ring buffer replay restores screen.
+- [ ] **TS-mux-msg-1** / **TS-mux-msg-2**: covered above — exercise the `App::on_mux_message` end-to-end seam (APC bytes → `Tab` state mutation).
+
+(The original Phase 4-C TS-mux-int-1..4 cases targeted a direct UnixStream
+client + mock daemon that the APC redesign removed; their replacements are
+TS-apc-1..4 + TS-mux-msg-1/2 above.)
 
 ### E2E Tests
 
@@ -307,10 +307,10 @@ No new environment variables. Existing `EMTERM_MUX=1` / `EMTERM_MUX_SOCKET=<path
 **Run command**: `./scripts/run-e2e-docker.sh` (legacy only — still gated for `src-tauri` regression).
 
 - [ ] Existing legacy E2E tests pass without regression on `cargo test --workspace` (`src-tauri` unchanged).
-- [ ] **TS-manual-mux-1** (host): launch native-poc, `emterm mux new`, attach via OSC 777, verify snapshot draws and prefix keys work.
-- [ ] **TS-manual-mux-2** (host): detach with `prefix d` from native-poc, re-attach via `emterm mux attach`, verify state is preserved across detach/reattach.
-- [ ] **TS-manual-ime-linux** (host): Linux fcitx5 preedit + commit (Phase 1 parity).
-- [ ] **TS-manual-ime-windows** (Windows VM or hardware): MS-IME preedit + commit (gating).
+- [ ] **TS-manual-mux-1** (host): launch native-poc, run `emterm mux new` at the shell prompt, verify (a) the prompt returns inside the same PTY (this confirms the bridge CLI is up), (b) APC-decoded `StatusUpdate` messages appear in the status bar, (c) `Ctrl+B n` / `Ctrl+B p` / `Ctrl+B <digit>` switch windows by way of the daemon-pushed `Snapshot` frames replayed through `Tab::apply_mux_message`.
+- [ ] **TS-manual-mux-2** (host): inside the same `emterm mux` session, press `Ctrl+B d` (the bridge CLI sees this byte and exits cleanly); confirm the shell prompt re-appears, then run `emterm mux attach <id>` and verify the previous screen state is restored from the daemon snapshot.
+- [ ] **TS-manual-ime-linux**: **N/A — tao 0.34 limitation.** tao 0.34 does not integrate with XIM, so fcitx5 / IBus on X11 / Wayland cannot deliver preedit / commit events to the native-poc window. Today on X11, `WindowEvent::ReceivedImeText` fires for every printable keystroke (Phase 4-C `4d3934c` fix gates the `KeyboardInput` path on Ctrl/Alt to prevent the resulting double-input). A real IME composition is not reachable from this window stack — re-evaluate when the WebView hybrid fallback or a tao replacement lands.
+- [ ] **TS-manual-ime-windows**: **N/A — tao 0.34 limitation.** tao 0.34 does not expose the IMM32 / TSF preedit text to the application; only the committed text reaches `WindowEvent::ReceivedImeText`, and the candidate window position cannot be steered (no `ImmSetCompositionWindow` plumbing). Same re-evaluation trigger as Linux.
 
 ### Edge Cases
 

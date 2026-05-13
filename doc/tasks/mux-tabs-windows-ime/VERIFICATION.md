@@ -31,8 +31,12 @@
 | ID | Scenario | Expected Result | Test Type |
 |----|----------|-----------------|-----------|
 | TS-mux-1 | `crates/mux_ipc::protocol` after `git mv`: all preexisting `src-tauri/src/mux/ipc/protocol.rs` unit tests pass | Test count and pass/fail unchanged | Unit |
-| TS-wire-1 | `native_poc::mux::wire` round-trips a `MuxMessage` via length-prefix + bincode without loss | Encode → decode returns equivalent message | Unit |
-| TS-wire-2 | `native_poc::mux::wire` rejects frames larger than `MAX_FRAME_LENGTH` | Returns `WireError::FrameTooLarge` | Unit |
+| TS-apc-1 | `mux::apc::try_decode_emterm_mux` round-trips a well-formed `emterm-mux;<base64>` payload into a `MuxMessage` | Decoded message matches original | Unit |
+| TS-apc-2 | Kitty Graphics + vendor-specific APC payloads return `None` | Image pipeline keeps seeing them | Unit |
+| TS-apc-3 | Invalid base64 / truncated frame body → `None` + warn log | No panic, no false positive | Unit |
+| TS-apc-4 | Empty / bare-prefix / non-UTF8 payloads → `None` | Boundary inputs handled | Unit |
+| TS-mux-msg-1 | `App::on_mux_message` with `Snapshot` resets and replays via `term_core::reset_and_replay` | Grid contents reflect the payload | Unit (App-level integration) |
+| TS-mux-msg-2 | `App::on_mux_message` with `StatusUpdate` caches the decoded `StatusUpdateMsg` on the target tab | `Tab::mux_status_state` populated | Unit (App-level integration) |
 | TS-tab-1 | `tab_bar::draw` returns expected `TabEvent` for new/close/switch simulated input | Event matches input | Unit |
 | TS-tab-2 | Closing the last tab emits `AppEvent::ExitWindow` | Event observed | Unit |
 | TS-tab-3 | Tab in mux mode renders title with `[mux:<session>]` prefix | Title string matches expected prefix | Unit |
@@ -40,9 +44,6 @@
 | TS-prefix-1 | Prefix state machine: single `Ctrl+B` arms; next valid key triggers action | Latch + action match table | Unit |
 | TS-prefix-2 | Double prefix sends literal `0x02` to PTY | PTY writer receives `0x02` exactly once | Unit |
 | TS-prefix-3 | Prefix latch timeout (3 s) cancels armed state | Subsequent keys are passthrough | Unit |
-| TS-osc777-1 | Valid `OSC 777 ; emterm ; mux ; attach ; <socket> ; <id> ST` parses + validates | `MuxOscAction::Attach{socket,id}` returned | Unit |
-| TS-osc777-2 | Detach OSC parses | `MuxOscAction::Detach` returned | Unit |
-| TS-osc777-3 | Invalid socket path / session ID rejected | `None`/`Err`; warn log | Unit |
 | TS-status-1 | `status_bar::draw` renders for representative `StatusUpdateMsg` | egui panel content matches expected | Unit |
 | TS-status-2 | Status bar shows only clock when no mux state present | Panel does not show session/window strip | Unit |
 | TS-status-3 | `statusbar.enabled = false` hides the panel | No panel inserted | Unit |
@@ -50,12 +51,12 @@
 | TS-ime-2 | `Ime::Commit(text)` enqueues bytes to active PTY writer (mocked) | Exactly one write | Unit |
 | TS-ime-3 | Preedit containing C0/C1 bytes is sanitized before rendering | Control chars stripped | Unit |
 | TS-settings-1 | Missing `mux.prefix_key` / `statusbar.*` fields fall back to defaults | Settings struct holds defaults; no parse error | Unit |
-| TS-mux-int-1 | Mock daemon round trip: connect → Hello → Snapshot → SelectWindow → Snapshot → Detach | All exchanges complete; grid state matches snapshots | Integration |
-| TS-mux-int-2 | Connect to nonexistent socket | `ConnectError::Io(ENOENT)`; tab stays in native PTY mode | Integration |
-| TS-mux-int-3 | Daemon-side abrupt close | Client observes channel close; falls back to native PTY | Integration |
-| TS-mux-int-4 | Pause/resume: bytes during pause accumulate in 256 KB ring buffer; resume replays | No byte loss on detach | Integration |
-| TS-perf-1 | Snapshot apply latency for 1 MB snapshot | < 200 ms on dev machine | Performance |
-| TS-perf-2 | Prefix detect → daemon send round trip | < 5 ms | Performance |
+| TS-perf-1 | Snapshot apply latency for 1 MB snapshot via `term_core::reset_and_replay` | < 200 ms on dev machine | Performance |
+
+(Replaced by the redesign: TS-wire-1/2, TS-osc777-1/2/3, TS-mux-int-1..4,
+TS-perf-2 targeted the direct UnixStream + mock daemon path that no longer
+exists. Their concerns are covered by TS-apc-1..4 + TS-mux-msg-1/2 +
+existing `mux_ipc::protocol` round-trip tests.)
 
 ## Code Quality Verification
 
@@ -76,11 +77,11 @@
 - `crates/mux_ipc/src/lib.rs` — module root, `pub mod protocol;` (Phase 4-A).
 - `crates/mux_ipc/src/protocol.rs` — moved from `src-tauri/src/mux/ipc/protocol.rs` (Phase 4-A).
 - `native-poc/src/mux/mod.rs` (Phase 4-C).
-- `native-poc/src/mux/wire.rs` (Phase 4-C, sync length-prefix + bincode framing).
-- `native-poc/src/mux/osc777.rs` (Phase 4-C).
-- `native-poc/src/mux/client.rs` (Phase 4-C, blocking std UnixStream).
-- `native-poc/src/mux/prefix.rs` (Phase 4-C).
-- `native-poc/src/mux/mock.rs` (Phase 4-C, cfg(test)).
+- `native-poc/src/mux/apc.rs` (Phase 4-C redesign 2026-05-13 — APC payload decoder).
+- `native-poc/src/mux/prefix.rs` (Phase 4-C; forward-staged under the redesign).
+
+(Removed by the redesign: `wire.rs`, `client.rs`, `osc777.rs`, `mock.rs`,
+`perf_tests.rs`. Tracked in Appendix A of VERIFICATION_RESULT.md.)
 - `native-poc/src/ime/mod.rs` (Phase 4-E).
 - `native-poc/src/ime/preedit.rs` (Phase 4-E).
 - `native-poc/src/ime/commit.rs` (Phase 4-E).
@@ -157,10 +158,10 @@ The project E2E framework (`./scripts/run-e2e-docker.sh`) targets the legacy Tau
 
 ## Manual Testing (E2E Not Possible)
 
-- [ ] **TS-manual-mux-1**: launch native-poc, run `emterm mux new`, attach via OSC 777, confirm snapshot draws, switch windows with prefix `n/p/0-9`. Result captured in VERIFICATION_RESULT.md.
-- [ ] **TS-manual-mux-2**: detach via `prefix d`, re-attach via `emterm mux attach`, confirm state is preserved.
-- [ ] **TS-manual-ime-linux**: launch on Linux with fcitx5, type Japanese, verify preedit + commit (Phase 1 parity).
-- [ ] **TS-manual-ime-windows**: launch on Windows with MS-IME, type Japanese, verify preedit + commit. Candidate position is best effort.
+- [ ] **TS-manual-mux-1**: launch native-poc, run `emterm mux new` at the shell prompt, confirm APC-decoded `StatusUpdate` appears in the status bar, switch windows with `Ctrl+B n/p/<digit>` (the bytes go to the bridge CLI via PTY stdin; the daemon's reaction returns as APC `Snapshot` frames). Result captured in VERIFICATION_RESULT.md.
+- [ ] **TS-manual-mux-2**: press `Ctrl+B d` (bridge CLI exits); confirm prompt returns. Re-run `emterm mux attach <id>` and confirm the prior screen state is restored from the snapshot.
+- [ ] **TS-manual-ime-linux**: **N/A — tao 0.34 limitation.** tao 0.34 has no XIM integration, so fcitx5 / IBus on X11 / Wayland cannot deliver preedit / commit events to the native-poc window. The auto-scope `ime::*` wiring is verified by `TS-ime-1/2/3`; production use is gated on the WebView hybrid fallback (`tmp/restruct.md`) or a tao replacement.
+- [ ] **TS-manual-ime-windows**: **N/A — tao 0.34 limitation.** tao 0.34 does not surface the IMM32 / TSF preedit text or expose `ImmSetCompositionWindow`. Same fallback trigger as Linux.
 - [ ] **TS-manual-soak**: 12 h Claude Code session under mux. Sample RSS hourly (`ps -o rss= -p <pid>` snapshots). Record any crash / screen-loss event.
 
 ## Performance Verification
