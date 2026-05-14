@@ -1,224 +1,167 @@
-# Tasks derived from IMPLEMENTATION.md.
+# Tasks derived from IMPLEMENTATION.md (Phase 4-G redesign).
 # Used by sdd.update-spec for impact analysis (sdd.yaml.requirements.{ID}.tasks references these IDs).
+#
+# Redesign note: 前 Phase 4-G の自前 XIM / Wayland / IMM32 タスク (ime-x11-*, ime-wayland-*,
+# ime-windows-*, ime-perf-*) は本ファイルで削除されている。winit 移行に伴う新 phase 4-G-1..4
+# のタスクで置き換える。
 
 phases:
-  - id: phase-4-g-a
-    name: "common backbone (ImeBackend trait + NullBackend + App pump + opt-out / fallback)"
-    estimated_effort: medium
+  - id: phase-4-g-1
+    name: "Cleanup: 自前 XIM / Wayland / IMM32 backend 削除"
+    estimated_effort: small
     tasks:
-      - id: ime-backend-trait
-        title: "Define ImeBackend trait + ImeEvent / KeyDispatchResult / ImeInitError / RawKeyEvent in ime::backend"
+      - id: ime-cleanup-delete-files
+        title: "Delete native-poc/src/ime/{x11,wayland,windows}.rs"
         status: completed
         files:
-          - native-poc/src/ime/backend.rs
+          - native-poc/src/ime/x11.rs
+          - native-poc/src/ime/wayland.rs
+          - native-poc/src/ime/windows.rs
+      - id: ime-cleanup-mod-rs
+        title: "Remove pub mod x11/wayland/windows from native-poc/src/ime/mod.rs (keep backend/null/preedit/commit re-exports)"
+        status: completed
+        files:
           - native-poc/src/ime/mod.rs
-      - id: ime-null-backend
-        title: "Implement NullBackend (passthrough only, used for opt-out and fallback)"
-        status: completed
-        files:
-          - native-poc/src/ime/null.rs
-          - native-poc/src/ime/mod.rs
-      - id: ime-settings-extension
-        title: "Add ImeSettings { native_integration: bool } + Settings field + Default::default() => true (Phase 7 が JSON ローダで exercise する shape pin)"
-        status: completed
-        files:
-          - native-poc/src/settings.rs
-      - id: ime-backend-factory
-        title: "ImeBackendFactory::build (env > settings > init-failure → NullBackend with single warn log)"
-        status: completed
-        files:
-          - native-poc/src/ime/backend.rs
-      - id: ime-app-pump-cursor
-        title: "App fields + pump_ime + notify_cursor_rect_if_changed + dispatch_key_event_via_ime helpers"
-        status: completed
-        files:
-          - native-poc/src/app.rs
-      - id: ime-window-host-hook
-        title: "Wire window_host: startup factory call, KeyboardInput backend-first dispatch, Focused notify_focus, ReceivedImeText gated on NullBackend, pump_ime per tick"
-        status: completed
-        files:
-          - native-poc/src/window_host.rs
-      - id: ime-backbone-tests
-        title: "Unit tests TS-backend-1..5, TS-cursor-1, TS-focus-1, TS-fallback-1..3, TS-settings-1, TS-route-1..2"
-        status: completed
-        files: []
-
-  - id: phase-4-g-b
-    name: "Linux X11 (XIM) backend — Go/No-Go decision point"
-    estimated_effort: large
-    tasks:
-      - id: ime-x11-dep
-        title: "Add x11-dl dep under [target.'cfg(all(unix, not(target_os = \"macos\")))'.dependencies]"
+      - id: ime-cleanup-cargo-deps
+        title: "Remove x11-dl / wayland-client / wayland-protocols / windows crates from native-poc/Cargo.toml"
         status: completed
         files:
           - native-poc/Cargo.toml
-      - id: ime-x11-backend
-        title: "X11Backend: XOpenIM + XCreateIC + IM callbacks + XFilterEvent + XmbLookupString + XICAttribute XNSpotLocation + XSetICFocus/XUnsetICFocus + Drop releases IC/IM"
-        status: completed
-        notes: |
-          Input style is XIMPreeditNothing|XIMStatusNothing (root-window preedit).
-          IM-server-side candidate popup; preedit-callbacks path is left for a
-          future enhancement. The TS-backend-int-1 #[ignore] harness against
-          a stub IM responder is deferred to manual host gates.
-        files:
-          - native-poc/src/ime/x11.rs
-          - native-poc/src/ime/mod.rs
-      - id: ime-x11-factory-probe
-        title: "ImeBackendFactory: runtime probe RawDisplayHandle::Xlib → use X11Backend"
+      - id: ime-cleanup-factory-stub
+        title: "Reduce build_backend in ime/backend.rs to env+settings check then return Unavailable → NullBackend until winit bridge lands in 4-G-3"
         status: completed
         files:
           - native-poc/src/ime/backend.rs
-      - id: ime-x11-tests
-        title: "Unit tests TS-x11-1 (keycode), TS-x11-2 (modifier mask) + #[ignore] integration TS-backend-int-1"
+      - id: ime-cleanup-build-green
+        title: "cargo build --workspace + cargo test --workspace + cargo fmt --all green after deletions; ~33 unit + 2 integration tests removed (TS-x11/wayland/windows + TS-backend-int)"
         status: completed
-        notes: |
-          TS-x11-1 (keycode mapping) + TS-x11-2 (modifier mask) implemented
-          as pure-function unit tests with 11 total cases. TS-backend-int-1
-          (xvfb + stub IM responder integration) is deferred to manual gates.
+        files: []
+
+  - id: phase-4-g-2
+    name: "winit 0.30.9 migration (windowing only, no IME wiring yet)"
+    estimated_effort: large
+    tasks:
+      - id: ime-winit-cargo
+        title: "Cargo.toml: remove tao = 0.34, add winit = 0.30.9 (default-features=false, features=[rwh_06, x11, wayland])"
+        status: needs_update
         files:
-          - native-poc/src/ime/x11.rs
-      - id: ime-x11-manual-gates
-        title: "Manual TS-manual-ime-x11 (fcitx5) + TS-manual-ime-x11-ibus (IBus) + TS-manual-ime-imserver-restart + TS-manual-ime-mux"
-        status: deferred_manual
+          - native-poc/Cargo.toml
+      - id: ime-winit-event-loop
+        title: "main.rs: tao::EventLoop → winit::EventLoop (run_app ApplicationHandler or run closure; final pick at 4-G-2 implementation)"
+        status: needs_update
+        files:
+          - native-poc/src/main.rs
+      - id: ime-winit-window-host-rewrite
+        title: "window_host.rs: rewrite ~200 lines of tao API → winit API (Window/Event/WindowEvent/KeyEvent/ElementState/Key, wgpu surface via raw-window-handle 0.6, drop ReceivedImeText handler — Ime::Commit will replace in 4-G-3)"
+        status: needs_update
+        files:
+          - native-poc/src/window_host.rs
+      - id: ime-winit-key-to-bytes
+        title: "Rename tao_key_to_bytes → winit_key_to_bytes; rewrite modifier mapping against winit::keyboard::Modifiers; preserve `!ctrl && !alt && Character` early-None guard"
+        status: needs_update
+        files:
+          - native-poc/src/app.rs
+      - id: ime-winit-app-types
+        title: "Replace tao::event::KeyEvent references in app.rs and ime/backend.rs (RawKeyEvent::winit_event) with winit::event::KeyEvent"
+        status: needs_update
+        files:
+          - native-poc/src/app.rs
+          - native-poc/src/ime/backend.rs
+      - id: ime-winit-wgpu-surface
+        title: "Verify wgpu::Instance::create_surface(&window) works via raw-window-handle 0.6 with Arc<Window>"
+        status: needs_update
+        files: []
+      - id: ime-winit-build-green
+        title: "cargo build --workspace + cargo test --workspace green; perf must stay within Phase 4 +10% (host-deferred verification)"
+        status: needs_update
+        files: []
+
+  - id: phase-4-g-3
+    name: "winit IME bridge + Ghostty state machine"
+    estimated_effort: medium
+    tasks:
+      - id: ime-bridge-create
+        title: "Create native-poc/src/ime/winit_bridge.rs implementing ImeBackend trait + im_composing/in_keyevent state machine"
+        status: needs_update
+        files:
+          - native-poc/src/ime/winit_bridge.rs
+      - id: ime-bridge-mod-rs
+        title: "Add pub mod winit_bridge to native-poc/src/ime/mod.rs"
+        status: needs_update
+        files:
+          - native-poc/src/ime/mod.rs
+      - id: ime-bridge-factory
+        title: "backend.rs: build_backend resolves env > settings > WinitImeBridge::init(window) → NullBackend on init failure (single warn log)"
+        status: needs_update
+        files:
+          - native-poc/src/ime/backend.rs
+      - id: ime-bridge-window-host-ime-wiring
+        title: "window_host.rs: route WindowEvent::Ime(_) → WinitImeBridge::on_winit_ime; pass both Pressed/Released KeyboardInput through dispatch_key_event_via_ime; route notify_cursor_rect_if_changed → Window::set_ime_cursor_area"
+        status: needs_update
+        files:
+          - native-poc/src/window_host.rs
+      - id: ime-bridge-app-dispatch-release
+        title: "app.rs: ensure dispatch_key_event_via_ime accepts and forwards Released key events (Ghostty modifier-only-release criterion)"
+        status: needs_update
+        files:
+          - native-poc/src/app.rs
+      - id: ime-bridge-tests
+        title: "Unit tests TS-winit-1..7 (Enabled/Preedit/Commit/Disabled mapping, state machine idempotency, modifier release, cursor rect dedup)"
+        status: needs_update
+        files:
+          - native-poc/src/ime/winit_bridge.rs
+      - id: ime-bridge-int-tests
+        title: "Integration tests TS-winit-int-1 (#[ignore] Xvfb attach + Ime::Disabled assertion) / TS-winit-int-2 (#[cfg(windows)] host-deferred)"
+        status: needs_update
+        files:
+          - native-poc/src/ime/winit_bridge.rs
+
+  - id: phase-4-g-4
+    name: "Manual gate re-execution via winit + perf + docs"
+    estimated_effort: medium
+    tasks:
+      - id: ime-redesign-manual-x11
+        title: "TS-manual-ime-x11 + TS-manual-ime-x11-ibus + TS-manual-ime-imserver-restart + TS-manual-ime-mux on Linux X11 + fcitx5 / IBus host"
+        status: needs_update
         notes: |
           Requires Linux X11 host with fcitx5 and IBus installed.
           Phase 1 fcitx5 acceptance criteria (doc/tasks/ime-input-support/SPEC.md US1-US5)
-          recorded as part of TS-manual-ime-x11.
+          recorded as part of TS-manual-ime-x11 (NFR8).
         files: []
-
-  - id: phase-4-g-c
-    name: "Linux Wayland (zwp_text_input_v3) backend"
-    estimated_effort: large
-    tasks:
-      - id: ime-wayland-deps
-        title: "Add wayland-client + wayland-protocols (unstable) under [target.'cfg(all(unix, not(target_os = \"macos\")))'.dependencies]"
-        status: completed
-        files:
-          - native-poc/Cargo.toml
-      - id: ime-wayland-backend
-        title: "WaylandBackend: zwp_text_input_manager_v3 bind + listener + dedicated pump thread via crossbeam_channel + set_cursor_rectangle + enable/disable + Drop"
-        status: completed
+      - id: ime-redesign-manual-wayland
+        title: "TS-manual-ime-wayland on KDE Plasma 6 (KWin) + Sway with fcitx5-wayland — winit native Wayland path"
+        status: needs_update
         notes: |
-          Channel + pump-thread scaffold landed. Borrowing tao's wl_display
-          via Connection::from_external_display requires the
-          wayland-backend/client_system feature (libwayland-client link);
-          that decision is left for a follow-up to keep pure-X11 Linux
-          builds free of libwayland linkage. init() currently returns
-          Unavailable, the factory falls back to NullBackend, and XWayland
-          + fcitx5-X11 + the X11 backend remains the dominant Wayland-host
-          path today.
-        files:
-          - native-poc/src/ime/wayland.rs
-          - native-poc/src/ime/mod.rs
-      - id: ime-wayland-factory-probe
-        title: "ImeBackendFactory: runtime probe RawDisplayHandle::Wayland → use WaylandBackend"
-        status: completed
-        files:
-          - native-poc/src/ime/backend.rs
-      - id: ime-wayland-tests
-        title: "Unit tests TS-wayland-1 (channel drain), TS-wayland-2 (manager absent → Unavailable)"
-        status: completed
-        notes: |
-          TS-wayland-1 (channel drain + budget) + TS-wayland-2 (Unavailable
-          path + HandleType discriminant gate) covered by 10 unit cases.
-        files:
-          - native-poc/src/ime/wayland.rs
-      - id: ime-wayland-manual-gate
-        title: "Manual TS-manual-ime-wayland on KDE Plasma 6 + Sway with fcitx5-wayland"
-        status: deferred_manual
-        notes: |
-          Requires Wayland session with fcitx5-wayland. GNOME is best-effort,
-          KDE Plasma 6 and Sway are the must-pass targets (SPEC.md OQ3).
+          Requires Wayland session with fcitx5-wayland.
+          KDE Plasma 6 and Sway must-pass, GNOME best-effort.
         files: []
-
-  - id: phase-4-g-d
-    name: "Windows IMM32 backend"
-    estimated_effort: large
-    tasks:
-      - id: ime-windows-dep
-        title: "Add windows crate dep under [target.'cfg(windows)'.dependencies] (features: Win32_UI_Input_Ime, Win32_UI_WindowsAndMessaging, ...)"
-        status: completed
-        files:
-          - native-poc/Cargo.toml
-      - id: ime-windows-backend
-        title: "WindowsBackend: SetWindowSubclass + WM_IME_{START,_COMPOSITION,END}COMPOSITION + ImmGetCompositionStringW UTF-16→UTF-8 + ImmSetCompositionWindow(CFS_POINT) + RemoveWindowSubclass on Drop"
-        status: completed
+      - id: ime-redesign-manual-windows
+        title: "TS-manual-ime-windows on Windows 10/11 with MS-IME + Google IME (winit IMM32 path)"
+        status: needs_update
         notes: |
-          Implemented under #[cfg(windows)] with SetWindowSubclass +
-          WM_IME_{START,END}COMPOSITION + WM_IME_COMPOSITION
-          (GCS_COMPSTR -> Preedit, GCS_RESULTSTR -> Commit) +
-          ImmGetCompositionStringW reads via portable utf16_to_utf8
-          helper + ImmSetCompositionWindow(CFS_POINT) for the cursor
-          rect best-effort + RemoveWindowSubclass on Drop. Linux CI
-          host has no Windows target installed, so cross-build is
-          deferred to GitHub Actions (Windows runner) per CLAUDE.md.
-        files:
-          - native-poc/src/ime/windows.rs
-          - native-poc/src/ime/mod.rs
-      - id: ime-windows-factory-probe
-        title: "ImeBackendFactory: cfg(windows) → use WindowsBackend"
-        status: completed
-        files:
-          - native-poc/src/ime/backend.rs
-      - id: ime-windows-tests
-        title: "Unit tests TS-windows-1 (BMP), TS-windows-2 (surrogate pair), TS-windows-3 (invalid surrogate → drop+warn) + cfg(windows) integration TS-backend-int-2"
-        status: completed
-        notes: |
-          TS-windows-1/2/3 implemented as portable utf16_to_utf8 unit
-          tests (10 cases). They run on Linux CI thanks to the helper
-          being cfg-agnostic. TS-backend-int-2 (hidden HWND + SendMessageW)
-          is deferred to a Windows host (manual gate).
-        files:
-          - native-poc/src/ime/windows.rs
-      - id: ime-windows-manual-gate
-        title: "Manual TS-manual-ime-windows with MS-IME and Google IME"
-        status: deferred_manual
-        notes: |
-          Requires Windows 10/11 host with MS-IME + Google IME.
-          Candidate window position best effort (not gating).
+          Requires Windows host. Candidate window position best effort (not gating).
+          Cross-build cargo build --target x86_64-pc-windows-msvc verified on
+          GitHub Actions windows-latest runner.
         files: []
-
-  - id: phase-4-g-e
-    name: "final gates + perf measurements + docs"
-    estimated_effort: small
-    tasks:
-      - id: ime-perf-instrumentation
-        title: "Add Instant::now() instrumentation around App::on_ime_preedit / on_ime_commit / request_redraw for TS-perf-3 / TS-perf-4 measurement"
-        status: completed
+      - id: ime-redesign-manual-fallback
+        title: "TS-manual-ime-fallback on any host with EMTERM_NATIVE_IME=0"
+        status: needs_update
+        files: []
+      - id: ime-redesign-perf-gates
+        title: "TS-perf-3 (preedit <30 ms), TS-perf-4 (commit <5 ms), TS-perf-regression (IME-OFF +10% vs Phase 4 baseline) on Linux X11 release host with EMTERM_IME_PERF=1"
+        status: needs_update
         notes: |
-          EMTERM_IME_PERF=1 env toggle emits warn-level latency lines
-          ("ime perf [TS-perf-3] ... µs" / "ime perf [TS-perf-4] ... µs")
-          that release builds preserve. Cached once via AtomicU8 so the
-          hot path is a single relaxed load.
-        files:
-          - native-poc/src/app.rs
-      - id: ime-perf-gates
-        title: "TS-perf-3 (preedit < 30 ms), TS-perf-4 (commit < 5 ms), TS-perf-regression (IME-OFF +10% vs Phase 4 baseline)"
-        status: deferred_manual
-        notes: |
-          Requires release host execution on Linux X11. Baseline values from
+          Release host execution required. Baseline values from
           doc/tasks/mux-tabs-windows-ime/VERIFICATION_RESULT.md are referenced
-          for TS-perf-regression comparison.
+          for TS-perf-regression comparison. winit migration is part of the
+          regression measurement.
         files: []
-      - id: ime-fmt-clippy
-        title: "cargo fmt --all -- --check + cargo clippy -p emterm-native-poc -- -D warnings clean"
-        status: completed
-        notes: |
-          cargo fmt --all --check: clean. cargo clippy on the Phase 4-G ime/
-          tree: zero warnings (the 14-warning pre-existing baseline lives
-          outside the ime/ scope and is forward-staged per Phase 4-F notes).
-        files: []
-      - id: ime-readme-update
-        title: "Update native-poc/README.md with Phase 4-G feature matrix + env / settings docs"
-        status: completed
+      - id: ime-redesign-readme-update
+        title: "Update native-poc/README.md Phase 4-G feature matrix to reflect winit 採択方針"
+        status: needs_update
         files:
           - native-poc/README.md
-      - id: ime-cross-task-note
-        title: "Add notes to doc/tasks/mux-tabs-windows-ime/sdd.yaml: NFR3 / FR11 / FR12 manual gates completed by Phase 4-G (flip in a separate PR, not this SDD)"
-        status: completed
-        notes: |
-          The actual status flip on the mux-tabs-windows-ime sdd lives in that
-          task's PR, not in this one. This task only adds an informational
-          note pointing at Phase 4-G as the resolution.
-        files:
-          - doc/tasks/mux-tabs-windows-ime/sdd.yaml
+      - id: ime-redesign-final-gates
+        title: "cargo fmt --all -- --check + cargo clippy -p emterm-native-poc -- -D warnings clean across redesigned tree"
+        status: needs_update
+        files: []

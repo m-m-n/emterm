@@ -8,10 +8,12 @@
 //! text and the bytes pushed to the PTY agree on which C0 / C1 controls
 //! are dropped.
 //!
-//! Phase 4-G adds the `backend` + `null` (+ OS-specific) modules that
-//! implement platform IME clients on top of tao 0.34. The Phase 4-E
-//! routing layer (`preedit` + `commit`) is unchanged; backends simply
-//! funnel events into `App::on_ime_{preedit,commit,focus_lost}`.
+//! Phase 4-G adds the `backend` + `null` modules that implement a
+//! platform-neutral seam between [`crate::app::App`] and OS IME clients.
+//! After the 2026-05-14 redesign, the only real platform backend is the
+//! winit-driven `winit_bridge` (added in Phase 4-G-3); the previous
+//! `x11` / `wayland` / `windows` modules were removed because tao 0.34
+//! does not expose XKB keycodes, which broke self-built XIM.
 
 pub mod commit;
 pub mod preedit;
@@ -19,17 +21,3 @@ pub mod preedit;
 // Phase 4-G-A: backend trait + NullBackend (passthrough).
 pub mod backend;
 pub mod null;
-
-// Phase 4-G-B: Linux X11 (XIM) backend.
-#[cfg(all(unix, not(target_os = "macos")))]
-pub mod x11;
-
-// Phase 4-G-C: Linux Wayland (zwp_text_input_v3) backend.
-#[cfg(all(unix, not(target_os = "macos")))]
-pub mod wayland;
-
-// Phase 4-G-D: Windows IMM32 backend. The module is compiled on
-// non-Windows targets too (with a stub `WindowsBackend` type) so the
-// cross-platform UTF-16 → UTF-8 helper unit tests still run on
-// Linux CI.
-pub mod windows;
