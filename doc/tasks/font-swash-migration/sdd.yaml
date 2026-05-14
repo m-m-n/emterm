@@ -1,0 +1,272 @@
+schema_version: 1
+feature: font-swash-migration
+created: 2026-05-14
+
+project:
+  components:
+    main:
+      language: rust
+      # native-poc を主対象とする。CLAUDE.md / restruct.md の方針に従い、
+      # 既存 src-tauri / wasm / crates 配下のテストは regression gate として
+      # workspace 全体を回す。
+      build_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo build --workspace\""
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --workspace\""
+      format_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo fmt --all\""
+      # フォントレンダリングは tauri-driver から検証不可。E2E は対象外、host
+      # manual gate (TS-manual-font-*) で代替する。既存 E2E スイートは regression
+      # gate として残すが、本 SDD 内では新規スペックを追加しない。
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: needs_update
+    completed_at_commit: "5c54d1af980c109ee15668ec55633b44ea382cd1"
+    notes: |
+      Phase 4-G (ime-native-integration) 完了直後 (HEAD = 5c54d1a) の作成。
+      restruct.md の Phase 4-H セクションを設計入力とした。バンドル方針
+      (Noto Sans CJK JP + Noto Color Emoji を SIL OFL 1.1 で同梱、
+      Segoe UI Emoji はシステム参照のみ) と ab_glyph 並走期間 (Phase 4-H
+      で flag 追加、Phase 7 で削除) は restruct.md から reasonable call で確定。
+
+      2026-05-15 update-spec: Option 3 (terminal grid 描画パスを 1 から
+      custom wgpu pass で新規構築) を確定。FR12 (Terminal grid wgpu render
+      pass) を新規追加、Go/No-Go ゲート G1-G5 を明示化、Out-of-Scope に
+      絵文字フォント自動取得戦略を追記。SPEC.md は section-level update で
+      改訂済 (FR12 追加 / Open Question FR3 detail 解決 / Architecture 図 +
+      Data Flow + File Structure + Implementation Phases 改訂 / Success
+      Criteria に G1-G5 追加 + FR2-FR12 化)。
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: needs_update
+    completed_at_commit: "5c54d1af980c109ee15668ec55633b44ea382cd1"
+    notes: |
+      2026-05-15 update-spec: Option 3 反映で IMPLEMENTATION.md に Phase 4-H
+      セクション新設 (TerminalGridPass + WGSL + window_host integration +
+      painter.text 撤去 + startup rasterizer selection)。Phase 2/3/4 の
+      renderer 配線手順を Phase 4-H に集約 (Phase 2/3/4 はそれぞれ
+      foundation only に再定義)。VERIFICATION.md に TS-font-13/14 +
+      TS-font-int-4 + Go/No-Go gates G1-G5 + SC-10 を追加。
+  - id: verify-plan
+    status: needs_update
+    completed_at_commit: "5c54d1af980c109ee15668ec55633b44ea382cd1"
+    notes: |
+      2026-05-15 update-spec: SPEC/IMPL/VERIFICATION の整合性を再確認する
+      ため needs_update。FR12 新規 + 旧 Open Question (FR3 detail) 解決
+      の影響を含む。
+  - id: implement
+    status: needs_update
+    notes: |
+      自動化可能な実装範囲は完了 (18/27 task completed、cargo test --workspace
+      2009/2009 PASS、baseline 1985 → +24 新規テスト、cargo fmt PASS)。
+      以下タスクは Option 3 (Phase 4-H) または環境依存で未完:
+        Phase 4-H 新規構築 (Option 3、未着手): terminal-grid-pass-wgsl /
+          terminal-grid-pass-pipeline / terminal-grid-pass-vertex-buffer /
+          terminal-grid-pass-struct / window-host-grid-pass-integration /
+          migrate-draw-grid-to-new-pass / remove-painter-text-from-draw-grid /
+          startup-rasterizer-selection (Phase 4 から 4-H へ移管)
+        Phase 2/3 既存 deferred (Option 3 で置換): renderer-cache-wiring /
+          fallback-renderer-wiring — Option 3 では「draw_grid 全撤去」となり
+          partial wiring の意義消失。Phase 4-H tasks に役割が吸収された
+        環境依存 (5): windows-segoe-emoji-secondary / manual-gate-startup-perf /
+          manual-gate-linux-x11 / manual-gate-linux-wayland /
+          manual-gate-windows — host (X11/Wayland/Windows) で実施
+        最終更新 (1): restruct-status-update — Phase 4-H 完了マーク
+      新規ファイル: native-poc/src/render/font/{mod,traits,atlas,cache,
+        ab_glyph_adapter,resolver,fallback,swash_adapter}.rs +
+        native-poc/examples/swash_emoji.rs + assets/fonts/{NotoColorEmoji.ttf,
+        NotoSansCJKjp-Regular.otf,LICENSE,README.md}
+      修正: native-poc/Cargo.toml (swash 0.1.18 pin + zeno + fontdb + png
+        dev-dep) / src/render/mod.rs / src/settings.rs
+  - id: check
+    status: pending
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: pending
+
+requirements:
+  # ============================================================================
+  # Functional Requirements (SPEC.md FR1-FR11)
+  # ============================================================================
+  FR1:
+    title: swash + zeno evaluation PoC (examples/swash_emoji.rs)
+    status: ok
+    tasks:
+      - poc-bundle-emoji-font
+      - poc-add-swash-zeno-deps
+      - poc-swash-emoji-example
+      - poc-decision-note
+    tests:
+      - TS-font-int-1
+  FR2:
+    title: Glyph trait + atlas split (per-cell drawing through trait)
+    status: ok
+    tasks:
+      - font-module-skeleton
+      - glyph-cache-impl
+      - migrate-draw-grid-to-new-pass
+    tests:
+      - TS-font-3
+      - TS-font-6
+      - TS-font-7
+  FR3:
+    title: Texture atlas with Alpha (R8) and Rgba (RGBA8) regions
+    status: ok
+    tasks:
+      - two-region-atlas
+    tests:
+      - TS-font-6
+  FR4:
+    title: swash adapter (Shaper + Render, color/mono routing)
+    status: ok
+    tasks:
+      - swash-adapter
+    tests:
+      - TS-font-8
+      - TS-font-9
+  FR5:
+    title: ab_glyph adapter retained as parallel Glyph implementation
+    status: ok
+    tasks:
+      - ab-glyph-adapter
+    tests:
+      - TS-font-7
+      - TS-font-int-3
+  FR6:
+    title: Settings::font_engine flag (Swash default / AbGlyph fallback)
+    status: ok
+    tasks:
+      - settings-font-engine-enum
+      - startup-rasterizer-selection
+    tests:
+      - TS-font-1
+      - TS-font-2
+      - TS-font-int-3
+    notes: |
+      startup-rasterizer-selection は Phase 4 から Phase 4-H (Option 3) へ
+      移管。TerminalGridPass 構築時に rasterizer を渡すため、phase: 4 →
+      phase: 4-h に再配置済 (tasks.yaml 参照)。
+  FR7:
+    title: Font resolution via fontdb (system scan + bundled registration)
+    status: ok
+    tasks:
+      - add-fontdb-dep
+      - font-resolver
+    tests:
+      - TS-font-10
+      - TS-font-int-2
+  FR8:
+    title: Fallback chain (base → CJK → emoji) with per-codepoint memoization
+    status: ok
+    tasks:
+      - fallback-chain
+      - migrate-draw-grid-to-new-pass
+    tests:
+      - TS-font-4
+      - TS-font-5
+    notes: |
+      fallback-renderer-wiring (Phase 3 deferred) は Option 3 で役割が
+      migrate-draw-grid-to-new-pass (Phase 4-H) に吸収された。前者は
+      tasks.yaml 上で status: superseded として保持し、後者を実 consumer
+      として参照する。
+  FR9:
+    title: Settings schema additions (font_family_fallback, emoji_font, variable_font_axes)
+    status: ok
+    tasks:
+      - settings-font-schema-additions
+    tests:
+      - TS-font-2
+  FR10:
+    title: Theme::{font_family, font_size_pt} dead_code resolution (renderer reads via Theme)
+    status: ok
+    tasks:
+      - theme-dead-code-removal
+      - renderer-theme-wiring
+    tests:
+      - TS-font-11
+      - TS-font-12
+  FR11:
+    title: Bundled fonts (Noto Sans CJK JP + Noto Color Emoji) + Windows Segoe UI Emoji system fallback
+    status: ok
+    tasks:
+      - poc-bundle-emoji-font
+      - bundle-cjk-font
+      - windows-segoe-emoji-secondary
+    tests:
+      - TS-font-10
+  FR12:
+    title: Terminal grid wgpu render pass (Option 3 — custom pass built from scratch)
+    status: ok
+    tasks:
+      - terminal-grid-pass-wgsl
+      - terminal-grid-pass-pipeline
+      - terminal-grid-pass-vertex-buffer
+      - terminal-grid-pass-struct
+      - window-host-grid-pass-integration
+      - migrate-draw-grid-to-new-pass
+      - remove-painter-text-from-draw-grid
+      - startup-rasterizer-selection
+    tests:
+      - TS-font-13
+      - TS-font-14
+      - TS-font-int-2
+      - TS-font-int-4
+      - TS-manual-font-linux-x11
+
+  # ============================================================================
+  # Non-Functional Requirements (SPEC.md NFR1-NFR6)
+  # ============================================================================
+  NFR1:
+    title: Startup font scan < 500 ms (release)
+    status: ok
+    tasks:
+      - perf-instrumentation
+      - manual-gate-startup-perf
+    tests:
+      - TS-font-perf-1
+      - TS-manual-font-startup-perf
+  NFR2:
+    title: Glyph rasterize < 5 ms/glyph on cache miss (release); cache hit parity with ab_glyph
+    status: ok
+    tasks:
+      - perf-instrumentation
+      - manual-gate-startup-perf
+    tests:
+      - TS-font-perf-2
+  NFR3:
+    title: Stability — swash failure must not crash; ab_glyph escape hatch alive; swash version pinned
+    status: ok
+    tasks:
+      - poc-add-swash-zeno-deps
+      - ab-glyph-adapter
+      - startup-rasterizer-selection
+    tests:
+      - TS-font-int-3
+  NFR4:
+    title: Maintainability — glyph cache size / hit-rate observability
+    status: ok
+    tasks:
+      - glyph-cache-impl
+    tests:
+      - TS-font-3
+  NFR5:
+    title: License compliance — SIL OFL 1.1 bundled, Segoe UI Emoji system-only
+    status: ok
+    tasks:
+      - poc-bundle-emoji-font
+      - bundle-cjk-font
+      - windows-segoe-emoji-secondary
+    tests: []
+  NFR6:
+    title: Platform coverage — Linux X11 primary host gate; Windows deferred-compatible; macOS out of scope
+    status: ok
+    tasks:
+      - manual-gate-linux-x11
+      - manual-gate-linux-wayland
+      - manual-gate-windows
+      - restruct-status-update
+    tests:
+      - TS-manual-font-linux-x11
+      - TS-manual-font-linux-x11-fallback
+      - TS-manual-font-linux-wayland
+      - TS-manual-font-windows
