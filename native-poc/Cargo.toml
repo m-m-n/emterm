@@ -10,8 +10,13 @@ name = "emterm-native-poc"
 path = "src/main.rs"
 
 [dependencies]
-# Window + event loop (tao matches workspace tauri 2.9.5 transitive)
-tao = "0.34"
+# Window + event loop. Phase 4-G-2 redesign (2026-05-14) replaced
+# tao 0.34 with winit 0.30.9. tao did not expose XKB keycodes, breaking
+# self-built XIM; winit provides native IME via WindowEvent::Ime on
+# X11 / Wayland / Windows. default-features=false drops Android/iOS;
+# we keep rwh_06 (raw-window-handle 0.6) for wgpu surface integration
+# and x11 + wayland for Linux platform support.
+winit = { version = "0.30.9", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 
 # GPU surface + egui rendering
 wgpu = "22"

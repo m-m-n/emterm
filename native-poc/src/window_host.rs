@@ -1,25 +1,28 @@
-//! tao window + wgpu surface + egui integration.
+//! winit window + wgpu surface + egui integration.
 //!
-//! This module owns the GPU surface lifecycle and translates tao events into
-//! egui inputs. The egui<->tao glue is intentionally minimal because no
-//! published crate covers the tao+wgpu+egui combination as of this writing.
+//! This module owns the GPU surface lifecycle and translates winit events
+//! into egui inputs. The egui<->winit glue is intentionally minimal because
+//! no published crate covers the winit+wgpu+egui combination as of this
+//! writing (egui_winit exists but pulls in trackpad/file-drop helpers we
+//! do not need).
 //!
 //! Phase 1 responsibilities:
-//! - Create a tao window via the supplied event loop.
+//! - Create a winit window via the supplied event loop.
 //! - Acquire a wgpu adapter/device and attach a surface.
 //! - Recreate the surface on `SurfaceError::Lost` / `OutOfMemory`.
 //! - Drive a per-frame egui pass that renders a placeholder UI.
 //!
 //! Phase 2 additions:
-//! - Translate tao `KeyboardInput` events to PTY bytes via `pty::input`.
+//! - Translate winit `KeyboardInput` events to PTY bytes via `pty::input`.
 //! - Forward bytes to the active tab.
 //! - Compute grid (cols, rows) from the window's pixel size and propagate to
 //!   PTYs on resize.
 //!
-//! Later phases extend this with:
-//! - Driving the Grid render call (Phase 4).
-//! - Mouse selection + clipboard (Phase 4).
-//! - IME hooks (Phase 7).
+//! Phase 4-G redesign (2026-05-14): migrated from tao 0.34 to winit 0.30.
+//! tao does not expose XKB keycodes, breaking self-built XIM. winit hosts
+//! IME natively via `WindowEvent::Ime`; the Phase 4-G-3 bridge wires those
+//! events into the existing Phase 4-E `on_ime_preedit / on_ime_commit /
+//! on_ime_focus_lost` plumbing.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -28,11 +31,12 @@ use egui::ViewportId;
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::ScreenDescriptor;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use tao::dpi::{PhysicalPosition, PhysicalSize};
-use tao::event::{ElementState, Event, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget};
-use tao::keyboard::Key as TaoKey;
-use tao::window::{Window, WindowBuilder};
+use winit::application::ApplicationHandler;
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
+use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::app::App;
 use crate::image::overlay::OverlayPipeline;
@@ -136,13 +140,14 @@ impl WindowHost {
     /// `image_quota_bytes` is the per-process cap on inline-image GPU
     /// memory (sourced from `Settings::image_memory_quota_mb`); when the
     /// cap is hit, the LRU-front image is evicted before any new upload.
-    pub fn new(event_loop: &EventLoopWindowTarget<()>, image_quota_bytes: u64) -> Self {
-        let window = WindowBuilder::new()
+    pub fn new(event_loop: &ActiveEventLoop, image_quota_bytes: u64) -> Self {
+        let attrs = WindowAttributes::default()
             .with_title("eMterm PoC")
-            .with_inner_size(tao::dpi::LogicalSize::new(960.0, 600.0))
-            .with_min_inner_size(tao::dpi::LogicalSize::new(320.0, 200.0))
-            .build(event_loop)
-            .expect("native-poc: failed to create tao window");
+            .with_inner_size(LogicalSize::new(960.0, 600.0))
+            .with_min_inner_size(LogicalSize::new(320.0, 200.0));
+        let window = event_loop
+            .create_window(attrs)
+            .expect("native-poc: failed to create winit window");
         let window = Arc::new(window);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -245,6 +250,15 @@ impl WindowHost {
 
     pub fn window(&self) -> &Window {
         &self.window
+    }
+
+    /// Hand a clone of the `Arc<Window>` to callers that need to retain
+    /// the handle themselves (Phase 4-G-3 passes this to
+    /// `WinitImeBridge::init` so the bridge can call
+    /// `Window::set_ime_cursor_area`).
+    #[allow(dead_code)]
+    pub fn window_arc(&self) -> Arc<Window> {
+        self.window.clone()
     }
 
     /// Reconfigure the wgpu surface for the current window size.
@@ -614,7 +628,7 @@ impl WindowHost {
         }
     }
 
-    /// Translate tao state into a minimal `egui::RawInput`. Phase 1 only
+    /// Translate winit state into a minimal `egui::RawInput`. Phase 1 only
     /// needs screen-rect + pixels-per-point; later phases populate events.
     fn build_raw_input(&self) -> egui::RawInput {
         let size = self.window.inner_size();
@@ -646,17 +660,17 @@ impl WindowHost {
     }
 }
 
-/// Translate a tao logical key into the subset of `egui::Key` consumed
+/// Translate a winit logical key into the subset of `egui::Key` consumed
 /// by `crate::ui::keybinds::dispatch`. Returns `None` for keys that the
 /// dispatcher does not bind (the caller falls through to PTY input).
 ///
 /// Only the keys referenced by the Phase 4-B keybind table are mapped
 /// (T, W, Tab, Num0..Num9); everything else is intentionally unmapped
 /// so the PTY passthrough path stays the default.
-fn tao_key_to_egui(logical: &TaoKey) -> Option<egui::Key> {
+fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
     match logical {
-        TaoKey::Tab => Some(egui::Key::Tab),
-        TaoKey::Character(s) => {
+        WinitKey::Named(NamedKey::Tab) => Some(egui::Key::Tab),
+        WinitKey::Character(s) => {
             let mut chars = s.chars();
             let c = chars.next()?;
             match c.to_ascii_lowercase() {
@@ -679,20 +693,17 @@ fn tao_key_to_egui(logical: &TaoKey) -> Option<egui::Key> {
     }
 }
 
-/// Extract the OS-level physical key / scan code from a tao `KeyEvent`.
-/// Phase 4-G-A captures it into [`RawKeyEvent`] so OS IME backends
-/// (notably the X11 `XKeyPressedEvent` synthesis path in Phase 4-G-B)
-/// can rehydrate the original scan code without re-querying tao
-/// internals.
+/// Extract the OS-level physical key / scan code from a winit `KeyEvent`.
+/// Phase 4-G-A captures it into [`RawKeyEvent`] so any future IME backend
+/// can stash the original scan code without re-querying winit internals.
 ///
-/// tao does not expose the raw scancode publicly on every platform, so
+/// winit does not expose the raw scancode publicly on every platform, so
 /// we hash the `PhysicalKey` debug representation as a stable stand-in.
 /// The exact value is opaque to the App; backends that actually need a
-/// real X11 keycode reconstruct it from their own platform layer.
-fn tao_physical_key_code(event: &tao::event::KeyEvent) -> u32 {
-    // We use Debug of `PhysicalKey` as a stable seed. The hash is
-    // platform-stable for a given build because PhysicalKey is an enum
-    // with named variants.
+/// real X11 keycode reconstruct it from their own platform layer. The
+/// Phase 4-G-3 `WinitImeBridge` ignores this field — winit hands `KeyEvent`
+/// directly through `dispatch_key_event_via_ime` if/when needed.
+fn winit_physical_key_code(event: &KeyEvent) -> u32 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
@@ -700,55 +711,62 @@ fn tao_physical_key_code(event: &tao::event::KeyEvent) -> u32 {
     h.finish() as u32
 }
 
-/// Translate a tao `KeyEvent` into the PoC's `(Key, Modifiers)` pair and
+/// Translate a winit `KeyEvent` into the PoC's `(Key, Modifiers)` pair and
 /// produce the PTY byte sequence. Returns `None` for events that should be
 /// ignored (e.g. modifier-only presses).
-fn tao_key_to_bytes(event: &tao::event::KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
+///
+/// On winit the printable text of a key press is exposed via
+/// `KeyEvent::text` (already UTF-8). For non-chord plain text (no
+/// Ctrl/Alt held) we forward that string verbatim so layout-specific
+/// glyphs, dead-key composition results, and shifted symbols all reach
+/// the PTY. For chords (Ctrl+C, Alt+b) we go through the `encode`
+/// path with the named-key dispatch table.
+fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
+    // Fast path for plain printable text — winit already accounts for the
+    // current keyboard layout (X11 / Wayland / Win32). When IME is
+    // composing, winit suppresses `text` and routes the result via
+    // `WindowEvent::Ime` instead, so this branch never double-delivers.
+    if !mods.ctrl && !mods.alt {
+        if let Some(text) = &event.text {
+            if !text.is_empty() {
+                return Some(text.as_bytes().to_vec());
+            }
+        }
+    }
+
     let key = match &event.logical_key {
-        TaoKey::Character(s) => {
+        WinitKey::Character(s) => {
             let mut chars = s.chars();
             let c = chars.next()?;
-            // Printable characters without Ctrl/Alt are delivered via
-            // `WindowEvent::ReceivedImeText` on Linux X11/Wayland (tao 0.34
-            // fires it for ALL text input, not just IME compositions).
-            // Encoding them here would double-deliver each keystroke
-            // (issue surfaced in TS-manual-ime-linux 2026-05-13). Return
-            // None so the ReceivedImeText path owns plain text input; we
-            // only encode here when a Ctrl or Alt modifier is held, since
-            // those chords (e.g. Ctrl+C, Alt+b) are not surfaced as
-            // ReceivedImeText.
-            if !mods.ctrl && !mods.alt {
-                return None;
-            }
             Key::Char(c)
         }
-        TaoKey::Enter => Key::Enter,
-        TaoKey::Tab => Key::Tab,
-        TaoKey::Backspace => Key::Backspace,
-        TaoKey::Escape => Key::Escape,
-        TaoKey::Space => Key::Char(' '),
-        TaoKey::ArrowUp => Key::Up,
-        TaoKey::ArrowDown => Key::Down,
-        TaoKey::ArrowLeft => Key::Left,
-        TaoKey::ArrowRight => Key::Right,
-        TaoKey::Home => Key::Home,
-        TaoKey::End => Key::End,
-        TaoKey::PageUp => Key::PageUp,
-        TaoKey::PageDown => Key::PageDown,
-        TaoKey::Delete => Key::Delete,
-        TaoKey::Insert => Key::Insert,
-        TaoKey::F1 => Key::F(1),
-        TaoKey::F2 => Key::F(2),
-        TaoKey::F3 => Key::F(3),
-        TaoKey::F4 => Key::F(4),
-        TaoKey::F5 => Key::F(5),
-        TaoKey::F6 => Key::F(6),
-        TaoKey::F7 => Key::F(7),
-        TaoKey::F8 => Key::F(8),
-        TaoKey::F9 => Key::F(9),
-        TaoKey::F10 => Key::F(10),
-        TaoKey::F11 => Key::F(11),
-        TaoKey::F12 => Key::F(12),
+        WinitKey::Named(NamedKey::Enter) => Key::Enter,
+        WinitKey::Named(NamedKey::Tab) => Key::Tab,
+        WinitKey::Named(NamedKey::Backspace) => Key::Backspace,
+        WinitKey::Named(NamedKey::Escape) => Key::Escape,
+        WinitKey::Named(NamedKey::Space) => Key::Char(' '),
+        WinitKey::Named(NamedKey::ArrowUp) => Key::Up,
+        WinitKey::Named(NamedKey::ArrowDown) => Key::Down,
+        WinitKey::Named(NamedKey::ArrowLeft) => Key::Left,
+        WinitKey::Named(NamedKey::ArrowRight) => Key::Right,
+        WinitKey::Named(NamedKey::Home) => Key::Home,
+        WinitKey::Named(NamedKey::End) => Key::End,
+        WinitKey::Named(NamedKey::PageUp) => Key::PageUp,
+        WinitKey::Named(NamedKey::PageDown) => Key::PageDown,
+        WinitKey::Named(NamedKey::Delete) => Key::Delete,
+        WinitKey::Named(NamedKey::Insert) => Key::Insert,
+        WinitKey::Named(NamedKey::F1) => Key::F(1),
+        WinitKey::Named(NamedKey::F2) => Key::F(2),
+        WinitKey::Named(NamedKey::F3) => Key::F(3),
+        WinitKey::Named(NamedKey::F4) => Key::F(4),
+        WinitKey::Named(NamedKey::F5) => Key::F(5),
+        WinitKey::Named(NamedKey::F6) => Key::F(6),
+        WinitKey::Named(NamedKey::F7) => Key::F(7),
+        WinitKey::Named(NamedKey::F8) => Key::F(8),
+        WinitKey::Named(NamedKey::F9) => Key::F(9),
+        WinitKey::Named(NamedKey::F10) => Key::F(10),
+        WinitKey::Named(NamedKey::F11) => Key::F(11),
+        WinitKey::Named(NamedKey::F12) => Key::F(12),
         _ => return None,
     };
     let bytes = encode(key, mods);
@@ -759,145 +777,134 @@ fn tao_key_to_bytes(event: &tao::event::KeyEvent, mods: Modifiers) -> Option<Vec
     }
 }
 
-/// Run the event loop until the window is closed. Owns the App.
-pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
-    let image_quota_bytes = (app.settings.image_memory_quota_mb as u64) * 1024 * 1024;
-    let mut host = WindowHost::new(&event_loop, image_quota_bytes);
+/// `ApplicationHandler` impl driving the App + WindowHost on winit 0.30.
+///
+/// winit 0.30 replaced the closure-based event-loop API with the
+/// `ApplicationHandler` trait. `resumed` creates the window the first
+/// time the platform is ready, `window_event` mirrors what used to be
+/// the inner `match event` arm, and `about_to_wait` does the periodic
+/// pump (PTY drain, IME pump, cursor-rect notification) that the old
+/// `StartCause::Poll` path handled.
+struct PocApp {
+    app: App,
+    host: Option<WindowHost>,
+}
 
-    // Push the initial grid size into the App before the first tab spawn.
-    let (cols, rows) = host.grid_size();
-    app.cell_size = crate::app::GridDims { cols, rows };
-    app.spawn_initial_tab();
-
-    // Phase 4-G-A: resolve the IME backend now that the tao window
-    // (and therefore the raw-window/display handle pair) exists. The
-    // factory consults `EMTERM_NATIVE_IME`, `settings.ime.native_integration`
-    // and the OS-specific probe (added in 4-G-B/C/D). On any failure
-    // it returns `NullBackend` + a single warn log.
-    let window_handle = host.window().window_handle().ok().map(|h| h.as_raw());
-    let display_handle = host.window().display_handle().ok().map(|h| h.as_raw());
-    let backend = build_backend(
-        window_handle,
-        display_handle,
-        &app.settings.ime,
-        &ProcessEnv,
-    );
-    app.set_ime_backend(backend);
-
-    // Poll the PTY event channels at a steady cadence even when there are no
-    // window events, so shell output is rendered promptly.
-    event_loop.run(move |event, _, control_flow| match event {
-        Event::NewEvents(StartCause::Init) => {
-            *control_flow =
-                ControlFlow::WaitUntil(std::time::Instant::now() + Duration::from_millis(16));
+impl ApplicationHandler for PocApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.host.is_some() {
+            // Re-entering `Resumed` is an Android lifecycle artifact;
+            // desktop winit only fires this once at startup. Keep the
+            // existing host so a stray resume does not reinitialize the
+            // surface (the PoC has no Android target).
+            return;
         }
-        Event::NewEvents(StartCause::ResumeTimeReached { .. })
-        | Event::NewEvents(StartCause::Poll) => {
-            // Phase 4-G-A: drain any pending IME events from the
-            // active backend into the existing on_ime_* routes before
-            // touching PTY output. A real backend may have queued
-            // events while we were idle; the NullBackend always
-            // returns an empty drain so this is a cheap no-op when
-            // disabled.
-            if app.pump_ime() {
-                host.window().request_redraw();
-            }
-            if app.pump_all() {
-                host.window().request_redraw();
-            }
-            // Cursor cell may have moved as a side effect of pumps;
-            // notify the IME backend if the (row, col) changed.
-            app.notify_cursor_rect_if_changed(FALLBACK_CELL_W, FALLBACK_CELL_H);
-            if app.tabs.is_empty() {
-                *control_flow = ControlFlow::Exit;
-            } else {
-                *control_flow =
-                    ControlFlow::WaitUntil(std::time::Instant::now() + Duration::from_millis(16));
-            }
-        }
-        Event::WindowEvent { event, .. } => match event {
+        let image_quota_bytes = (self.app.settings.image_memory_quota_mb as u64) * 1024 * 1024;
+        let host = WindowHost::new(event_loop, image_quota_bytes);
+
+        // Push the initial grid size into the App before the first tab spawn.
+        let (cols, rows) = host.grid_size();
+        self.app.cell_size = crate::app::GridDims { cols, rows };
+        self.app.spawn_initial_tab();
+
+        // Phase 4-G: resolve the IME backend now that the winit window
+        // (and therefore the raw-window/display handle pair) exists.
+        // Phase 4-G-1 reduced the factory to always return Unavailable
+        // → NullBackend; Phase 4-G-3 swaps in the WinitImeBridge once
+        // it lands.
+        let window_handle = host.window().window_handle().ok().map(|h| h.as_raw());
+        let display_handle = host.window().display_handle().ok().map(|h| h.as_raw());
+        let backend = build_backend(
+            window_handle,
+            display_handle,
+            &self.app.settings.ime,
+            &ProcessEnv,
+        );
+        self.app.set_ime_backend(backend);
+
+        host.window().request_redraw();
+        event_loop.set_control_flow(ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_millis(16),
+        ));
+        self.host = Some(host);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        let Some(host) = self.host.as_mut() else {
+            return;
+        };
+        match event {
             WindowEvent::CloseRequested => {
-                // Tao's `event_loop.run` is `-> !` and terminates the
-                // process without dropping the closure's captures, so we
-                // tear down PTY-owning tabs explicitly here. Otherwise
-                // the kill + reader/writer thread join from
-                // `PtySession::Drop` either races with process exit (PTY
-                // threads leak briefly) or makes the WM probe time out
-                // while the window is being destroyed.
+                // winit's `EventLoop::run_app` returns control to the
+                // caller, but PTY-owning tabs would otherwise be dropped
+                // on the unwind. Tear them down explicitly so the kill
+                // + reader/writer thread join from `PtySession::Drop`
+                // happens before the WM destroys the window.
                 log::info!("native-poc: CloseRequested → shutting down PTY tabs");
-                app.tabs.clear();
-                *control_flow = ControlFlow::Exit;
+                self.app.tabs.clear();
+                event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
                 host.resize(new_size);
                 let (cols, rows) = host.grid_size();
-                app.set_grid_size(cols, rows);
+                self.app.set_grid_size(cols, rows);
                 host.window().request_redraw();
             }
-            WindowEvent::ScaleFactorChanged {
-                scale_factor,
-                new_inner_size,
-                ..
-            } => {
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 host.pixels_per_point = scale_factor as f32;
-                host.resize(*new_inner_size);
+                let size = host.window().inner_size();
+                host.resize(size);
                 let (cols, rows) = host.grid_size();
-                app.set_grid_size(cols, rows);
+                self.app.set_grid_size(cols, rows);
                 host.window().request_redraw();
             }
             WindowEvent::ModifiersChanged(state) => {
+                let s: ModifiersState = state.state();
                 host.current_mods = Modifiers {
-                    ctrl: state.control_key(),
-                    shift: state.shift_key(),
-                    alt: state.alt_key(),
+                    ctrl: s.contains(ModifiersState::CONTROL),
+                    shift: s.contains(ModifiersState::SHIFT),
+                    alt: s.contains(ModifiersState::ALT),
                 };
             }
-            // Phase 4-E + 4-G: route platform IME commit text. Under
-            // `NullBackend` (env / settings disabled, or no real
-            // backend compiled in) this is the only path that carries
-            // commit text — same behavior as Phase 4. Under a real
-            // backend (X11 XIM / Wayland zwp_text_input_v3 / Windows
-            // IMM32), `ReceivedImeText` is suppressed because the
-            // backend emits `ImeEvent::Commit` through `pump_ime` and
-            // letting both fire would double-deliver the same text
-            // (SPEC.md FR9).
-            WindowEvent::ReceivedImeText(text) => {
-                if app.ime_is_null() {
-                    app.on_ime_commit(&text);
-                    host.window().request_redraw();
-                } else {
-                    log::debug!(
-                        "ReceivedImeText ignored (real IME backend active; commit comes via pump)"
-                    );
-                }
+            // Phase 4-G-2: winit no longer surfaces a `ReceivedImeText`
+            // variant; printable text is delivered via `KeyEvent::text`
+            // (handled in `winit_key_to_bytes`). For composition winit
+            // emits `WindowEvent::Ime { Preedit, Commit, Disabled }`,
+            // which Phase 4-G-3's `WinitImeBridge` will route into the
+            // existing `on_ime_*` plumbing. Until that phase lands we
+            // ignore IME events here so NullBackend stays passive.
+            WindowEvent::Ime(_) => {
+                // Phase 4-G-3 hook point — left as a no-op until the
+                // WinitImeBridge lands. NullBackend cannot do anything
+                // useful with these events.
             }
             // Focus loss / window deactivation → clear any in-progress
             // preedit overlay so a stale composition doesn't ghost the
             // cursor after the user tabs away. Also forward focus
-            // state to the IME backend so it can `XUnsetICFocus` /
-            // `disable` / etc. on the IM server side.
+            // state to the IME backend so it can disable/enable IME on
+            // the IM-server side.
             WindowEvent::Focused(focused) => {
-                app.notify_ime_focus(focused);
+                self.app.notify_ime_focus(focused);
                 if !focused {
-                    app.on_ime_focus_lost();
+                    self.app.on_ime_focus_lost();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                // Phase 4-G: offer the raw key event to the IME
-                // backend first. `Consumed` means the IM server
-                // swallowed the key (composition open, candidate
-                // chosen) and we must skip both the keybinds
-                // dispatcher and the generic encoder; the resulting
-                // `ImeEvent::Commit` / `Preedit` will arrive via
-                // `pump_ime` on the next tick. `Passthrough` lets the
-                // existing Phase 4 path run unchanged.
+                // Phase 4-G: offer the raw key event to the IME backend
+                // first. `Consumed` means the IM server swallowed the
+                // key (composition open, candidate chosen) and we must
+                // skip both the keybinds dispatcher and the generic
+                // encoder; the resulting `ImeEvent::Commit` / `Preedit`
+                // will arrive via `pump_ime` on the next tick.
+                // `Passthrough` lets the existing Phase 4 path run
+                // unchanged.
                 let raw_key = RawKeyEvent {
-                    physical_key_code: tao_physical_key_code(&event),
+                    physical_key_code: winit_physical_key_code(&event),
                     state_pressed: true,
                     mods: host.current_mods,
                 };
                 if matches!(
-                    app.dispatch_key_event_via_ime(&raw_key),
+                    self.app.dispatch_key_event_via_ime(&raw_key),
                     KeyDispatchResult::Consumed
                 ) {
                     host.window().request_redraw();
@@ -911,15 +918,10 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
                 //   Shift+PageDown → scroll forward one page
                 //   Shift+Home    → scroll to top of scrollback
                 //   Shift+End     → scroll back to live tail
-                let handled = handle_special_chord(&event, host.current_mods, &mut host, &mut app);
+                let handled = handle_special_chord(&event, host.current_mods, host, &mut self.app);
                 if !handled {
                     // Phase 4-B: global keybinds (tab roster) take
-                    // priority over the generic PTY encoder. We
-                    // translate the tao logical key + current
-                    // modifiers into the egui types expected by
-                    // `ui::keybinds::dispatch`, and apply the action
-                    // through `App::apply_action`. Only when dispatch
-                    // returns `None` do we fall through to PTY input.
+                    // priority over the generic PTY encoder.
                     let egui_mods = egui::Modifiers {
                         ctrl: host.current_mods.ctrl,
                         shift: host.current_mods.shift,
@@ -927,25 +929,38 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
                         command: false,
                         mac_cmd: false,
                     };
-                    let action = tao_key_to_egui(&event.logical_key)
+                    let action = winit_key_to_egui(&event.logical_key)
                         .and_then(|k| crate::ui::keybinds::dispatch(egui_mods, k));
                     if let Some(act) = action {
-                        let _ = app.apply_action(act);
-                        app.mark_full_redraw();
-                    } else if let Some(bytes) = tao_key_to_bytes(&event, host.current_mods) {
-                        if let Some(tab) = app.active_tab() {
+                        let _ = self.app.apply_action(act);
+                        self.app.mark_full_redraw();
+                    } else if let Some(bytes) = winit_key_to_bytes(&event, host.current_mods) {
+                        if let Some(tab) = self.app.active_tab() {
                             tab.write(bytes);
                         }
                     }
                 }
                 host.window().request_redraw();
             }
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Released => {
+                // Phase 4-G-3: forward releases too so the
+                // WinitImeBridge can observe Ghostty-style
+                // modifier-only release events (fcitx5 toggles on bare
+                // modifier release). The Phase 4-G-1 NullBackend
+                // ignores releases.
+                let raw_key = RawKeyEvent {
+                    physical_key_code: winit_physical_key_code(&event),
+                    state_pressed: false,
+                    mods: host.current_mods,
+                };
+                let _ = self.app.dispatch_key_event_via_ime(&raw_key);
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 host.cursor_pos = position;
                 if host.dragging {
-                    let (row, col) = host.pixel_to_cell(position, &app);
-                    if let Some(sel) = app.selection.as_mut() {
-                        if let Some(tab) = app.tabs.get(app.active) {
+                    let (row, col) = host.pixel_to_cell(position, &self.app);
+                    if let Some(sel) = self.app.selection.as_mut() {
+                        if let Some(tab) = self.app.tabs.get(self.app.active) {
                             let core = tab.core.lock();
                             sel.extend(Pos { row, col }, &core);
                         }
@@ -955,25 +970,23 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
             }
             WindowEvent::MouseInput { state, button, .. } => match (button, state) {
                 (MouseButton::Left, ElementState::Pressed) => {
-                    let (row, col) = host.pixel_to_cell(host.cursor_pos, &app);
+                    let (row, col) = host.pixel_to_cell(host.cursor_pos, &self.app);
                     let cls = host.click_tracker.classify(Instant::now(), row, col);
                     let mut sel = Selection::new_with_mode(Pos { row, col }, cls.mode);
-                    // For Word / Line, snap immediately at press.
                     if cls.mode != SelectionMode::Character {
-                        if let Some(tab) = app.tabs.get(app.active) {
+                        if let Some(tab) = self.app.tabs.get(self.app.active) {
                             let core = tab.core.lock();
                             sel.extend(Pos { row, col }, &core);
                         }
                     }
-                    app.selection = Some(sel);
+                    self.app.selection = Some(sel);
                     host.dragging = true;
                     host.window().request_redraw();
                 }
                 (MouseButton::Left, ElementState::Released) => {
                     host.dragging = false;
-                    // PRIMARY auto-copy on mouse-up.
-                    if let Some(sel) = app.selection {
-                        if let Some(tab) = app.tabs.get(app.active) {
+                    if let Some(sel) = self.app.selection {
+                        if let Some(tab) = self.app.tabs.get(self.app.active) {
                             let core = tab.core.lock();
                             let text = sel.resolve(&core);
                             drop(core);
@@ -983,7 +996,7 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
                 }
                 (MouseButton::Middle, ElementState::Pressed) => {
                     if let Some(text) = host.get_primary() {
-                        host.deliver_paste(&app, &text);
+                        host.deliver_paste(&self.app, &text);
                     }
                 }
                 _ => {}
@@ -992,42 +1005,78 @@ pub fn run(event_loop: EventLoop<()>, mut app: App) -> ! {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => (p.y as f32) / (FALLBACK_CELL_H as f32),
-                    _ => 0.0,
                 };
-                // Convention: positive = scroll up (away from user) ⇒ into scrollback.
                 let step = 3u32;
                 if lines > 0.0 {
-                    app.scroll_up_by(step);
+                    self.app.scroll_up_by(step);
                     host.window().request_redraw();
                 } else if lines < 0.0 {
-                    app.scroll_down_by(step);
+                    self.app.scroll_down_by(step);
                     host.window().request_redraw();
                 }
             }
+            WindowEvent::RedrawRequested => {
+                host.render(&mut self.app);
+            }
             _ => {}
-        },
-        Event::MainEventsCleared if app.pump_all() => {
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(host) = self.host.as_mut() else {
+            return;
+        };
+        // Phase 4-G: drain any pending IME events from the active
+        // backend into the existing on_ime_* routes before touching
+        // PTY output. A real backend may have queued events while we
+        // were idle; the NullBackend always returns an empty drain so
+        // this is a cheap no-op when disabled.
+        if self.app.pump_ime() {
             host.window().request_redraw();
         }
-        Event::RedrawRequested(_) => {
-            host.render(&mut app);
+        if self.app.pump_all() {
+            host.window().request_redraw();
         }
-        _ => {}
-    });
+        // Cursor cell may have moved as a side effect of pumps; notify
+        // the IME backend if the (row, col) changed.
+        self.app
+            .notify_cursor_rect_if_changed(FALLBACK_CELL_W, FALLBACK_CELL_H);
+        if self.app.tabs.is_empty() {
+            event_loop.exit();
+            return;
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_millis(16),
+        ));
+    }
+}
+
+/// Run the event loop until the window is closed. Owns the App.
+pub fn run(event_loop: EventLoop<()>, app: App) -> ! {
+    let mut handler = PocApp { app, host: None };
+    if let Err(e) = event_loop.run_app(&mut handler) {
+        log::error!("native-poc: winit event loop returned an error: {e}");
+    }
+    // Drop the PTY-owning tabs explicitly before the process exits so
+    // reader/writer threads can shut down cleanly; without this they
+    // outlive `main` and produce noisy platform-specific cleanup
+    // warnings.
+    drop(handler);
+    std::process::exit(0);
 }
 
 /// Intercept Phase 4 chords. Returns `true` when the event was consumed
 /// (the generic encoder should not run).
 fn handle_special_chord(
-    event: &tao::event::KeyEvent,
+    event: &KeyEvent,
     mods: Modifiers,
     host: &mut WindowHost,
     app: &mut App,
 ) -> bool {
-    // Clipboard chords need Ctrl+Shift+<char>. tao reports the Character
-    // logical key for letter keys.
+    // Clipboard chords need Ctrl+Shift+<char>. winit reports the
+    // Character logical key for letter keys.
     if mods.ctrl && mods.shift {
-        if let TaoKey::Character(s) = &event.logical_key {
+        if let WinitKey::Character(s) = &event.logical_key {
             let lower = s.to_ascii_lowercase();
             match lower.as_str() {
                 "c" => {
@@ -1055,22 +1104,22 @@ fn handle_special_chord(
 
     // Scrollback chords use Shift + nav keys.
     if mods.shift && !mods.ctrl && !mods.alt {
-        match event.logical_key {
-            TaoKey::PageUp => {
+        match &event.logical_key {
+            WinitKey::Named(NamedKey::PageUp) => {
                 let rows = app.cell_size.rows.max(1) as u32;
                 app.scroll_up_by(rows);
                 return true;
             }
-            TaoKey::PageDown => {
+            WinitKey::Named(NamedKey::PageDown) => {
                 let rows = app.cell_size.rows.max(1) as u32;
                 app.scroll_down_by(rows);
                 return true;
             }
-            TaoKey::Home => {
+            WinitKey::Named(NamedKey::Home) => {
                 app.scroll_to_top();
                 return true;
             }
-            TaoKey::End => {
+            WinitKey::Named(NamedKey::End) => {
                 app.scroll_to_live();
                 return true;
             }
