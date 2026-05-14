@@ -1,4 +1,4 @@
-use tao::event_loop::EventLoop;
+use winit::event_loop::EventLoop;
 
 mod app;
 mod callbacks;
@@ -20,9 +20,9 @@ mod viewer;
 
 fn main() {
     logging::init();
-    log::info!("native-poc starting");
+    log::info!("native-poc starting (winit 0.30 backend)");
 
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoop::new().expect("native-poc: failed to create winit event loop");
     let app = app::App::new();
     window_host::run(event_loop, app);
 }

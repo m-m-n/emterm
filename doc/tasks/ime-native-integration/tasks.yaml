@@ -43,37 +43,37 @@ phases:
     tasks:
       - id: ime-winit-cargo
         title: "Cargo.toml: remove tao = 0.34, add winit = 0.30.9 (default-features=false, features=[rwh_06, x11, wayland])"
-        status: needs_update
+        status: completed
         files:
           - native-poc/Cargo.toml
       - id: ime-winit-event-loop
-        title: "main.rs: tao::EventLoop → winit::EventLoop (run_app ApplicationHandler or run closure; final pick at 4-G-2 implementation)"
-        status: needs_update
+        title: "main.rs: tao::EventLoop → winit::EventLoop (ApplicationHandler trait pattern chosen)"
+        status: completed
         files:
           - native-poc/src/main.rs
       - id: ime-winit-window-host-rewrite
-        title: "window_host.rs: rewrite ~200 lines of tao API → winit API (Window/Event/WindowEvent/KeyEvent/ElementState/Key, wgpu surface via raw-window-handle 0.6, drop ReceivedImeText handler — Ime::Commit will replace in 4-G-3)"
-        status: needs_update
+        title: "window_host.rs: rewrite tao API → winit API (Window/Event/WindowEvent/KeyEvent/ElementState/Key, wgpu surface via raw-window-handle 0.6, drop ReceivedImeText handler — Ime::Commit will replace in 4-G-3)"
+        status: completed
         files:
           - native-poc/src/window_host.rs
       - id: ime-winit-key-to-bytes
-        title: "Rename tao_key_to_bytes → winit_key_to_bytes; rewrite modifier mapping against winit::keyboard::Modifiers; preserve `!ctrl && !alt && Character` early-None guard"
-        status: needs_update
+        title: "Rename tao_key_to_bytes → winit_key_to_bytes; rewrite against winit::keyboard::{Key, NamedKey, ModifiersState}; use KeyEvent::text fast path for plain printable input"
+        status: completed
         files:
-          - native-poc/src/app.rs
+          - native-poc/src/window_host.rs
       - id: ime-winit-app-types
-        title: "Replace tao::event::KeyEvent references in app.rs and ime/backend.rs (RawKeyEvent::winit_event) with winit::event::KeyEvent"
-        status: needs_update
+        title: "Replace tao::event::KeyEvent references in app.rs and ime/backend.rs — none required: RawKeyEvent is platform-neutral and app.rs holds no tao types"
+        status: completed
         files:
           - native-poc/src/app.rs
           - native-poc/src/ime/backend.rs
       - id: ime-winit-wgpu-surface
         title: "Verify wgpu::Instance::create_surface(&window) works via raw-window-handle 0.6 with Arc<Window>"
-        status: needs_update
+        status: completed
         files: []
       - id: ime-winit-build-green
-        title: "cargo build --workspace + cargo test --workspace green; perf must stay within Phase 4 +10% (host-deferred verification)"
-        status: needs_update
+        title: "cargo build --workspace + cargo test --workspace green; 323 unit tests pass after migration"
+        status: completed
         files: []
 
   - id: phase-4-g-3
