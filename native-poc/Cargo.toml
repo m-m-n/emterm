@@ -68,25 +68,10 @@ once_cell = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# Phase 4-G-B: XIM bindings (Linux X11 IME). Dynamic loading via x11-dl
-# means a non-X11 host (pure Wayland with no Xlib runtime) does not fail
-# at link time — the backend falls back to NullBackend at init() when
-# the X server is unreachable.
-# Phase 4-G-C: Wayland zwp_text_input_v3 bindings.
-[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
-x11-dl = "2"
-wayland-client = "0.31"
-wayland-protocols = { version = "0.31", features = ["unstable", "client"] }
-
-# Phase 4-G-D: Windows IMM32 + window subclass for native IME.
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
-    "Win32_Foundation",
-    "Win32_UI_Input_Ime",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_Shell",
-    "Win32_Globalization",
-] }
+# Phase 4-G-1 redesign (2026-05-14): removed x11-dl / wayland-client /
+# wayland-protocols / windows. The self-built XIM / zwp_text_input_v3 /
+# IMM32 clients did not work in practice because tao 0.34 does not
+# expose XKB keycodes; Phase 4-G-3 routes IME through winit instead.
 
 # NOTE: dev/release profiles are managed at the workspace root Cargo.toml
 # since Phase 6. Per-package profile sections produce warnings and are

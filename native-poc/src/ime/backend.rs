@@ -1,13 +1,18 @@
 //! Phase 4-G-A: `ImeBackend` trait + ancillary types.
 //!
 //! The trait is the *only* seam between [`crate::app::App`] and the OS
-//! IME clients (`X11Backend` / `WaylandBackend` / `WindowsBackend`). The
-//! App holds a `Box<dyn ImeBackend>`, calls `dispatch_key_event` first
-//! on every keyboard input, and drains queued events once per
-//! event-loop tick via `pump`.
+//! IME client. The App holds a `Box<dyn ImeBackend>`, calls
+//! `dispatch_key_event` first on every keyboard input, and drains
+//! queued events once per event-loop tick via `pump`.
+//!
+//! After the 2026-05-14 redesign, the production platform backend is
+//! the winit-driven `WinitImeBridge` (added in Phase 4-G-3). Until that
+//! phase lands, [`build_platform_backend`] returns
+//! `Err(ImeInitError::Unavailable(_))` and the factory falls back to
+//! [`crate::ime::null::NullBackend`], matching Phase 4 behaviour.
 //!
 //! See `doc/tasks/ime-native-integration/SPEC.md` §API Design and
-//! §FR4-FR9.
+//! §FR4-FR13.
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
@@ -83,8 +88,8 @@ pub struct RawKeyEvent {
     pub mods: Modifiers,
 }
 
-/// OS-side IME client. Implemented by `NullBackend` (always available),
-/// `X11Backend`, `WaylandBackend`, `WindowsBackend`.
+/// OS-side IME client. Implemented by `NullBackend` (always available)
+/// and, from Phase 4-G-3 onwards, `WinitImeBridge`.
 ///
 /// Object-safety: `init` is intentionally **not** part of this trait so
 /// the App can store a `Box<dyn ImeBackend>` regardless of the concrete
@@ -161,46 +166,20 @@ pub fn build_backend(
     }
 }
 
-/// Build the OS-appropriate platform backend. Phase 4-G-A scaffolds
-/// the dispatcher; the concrete OS backends are added in later phases:
+/// Build the OS-appropriate platform backend.
 ///
-/// - 4-G-B: `RawDisplayHandle::Xlib` → `X11Backend`
-/// - 4-G-C: `RawDisplayHandle::Wayland` → `WaylandBackend`
-/// - 4-G-D: `cfg(windows)` → `WindowsBackend`
-///
-/// Until those phases land, this returns
-/// `Err(ImeInitError::Unavailable("no platform backend compiled in"))`
-/// so the factory falls back to `NullBackend` and the App behavior
-/// matches Phase 4 exactly.
+/// Phase 4-G-1 (cleanup) removed the self-built X11 / Wayland / Windows
+/// IME clients because tao 0.34 does not expose XKB keycodes, which
+/// broke XmbLookupString. Phase 4-G-3 will re-introduce a single
+/// `WinitImeBridge` once the project migrates to winit 0.30 (Phase
+/// 4-G-2). Until then this function unconditionally returns
+/// `Err(ImeInitError::Unavailable(_))` so the factory falls back to
+/// [`crate::ime::null::NullBackend`] and the App behaviour matches
+/// Phase 4 exactly.
 pub fn build_platform_backend(
     window: Option<RawWindowHandle>,
     display: Option<RawDisplayHandle>,
 ) -> Result<Box<dyn ImeBackend>, ImeInitError> {
-    // Phase 4-G-B: Linux X11 (XIM) backend probe. tao 0.34 reports
-    // `RawDisplayHandle::Xlib` when the user runs under an X server
-    // (including XWayland).
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        if let Some(RawDisplayHandle::Xlib(_)) = display {
-            return crate::ime::x11::X11Backend::init(window, display)
-                .map(|b| Box::new(b) as Box<dyn ImeBackend>);
-        }
-        // Phase 4-G-C: Wayland probe.
-        if let Some(RawDisplayHandle::Wayland(_)) = display {
-            return crate::ime::wayland::WaylandBackend::init(window, display)
-                .map(|b| Box::new(b) as Box<dyn ImeBackend>);
-        }
-    }
-
-    // Phase 4-G-D: Windows IMM32.
-    #[cfg(windows)]
-    {
-        if let Some(RawWindowHandle::Win32(_)) = window {
-            return crate::ime::windows::WindowsBackend::init(window, display)
-                .map(|b| Box::new(b) as Box<dyn ImeBackend>);
-        }
-    }
-
     let _ = (window, display);
     Err(ImeInitError::Unavailable(
         "no platform backend compiled in".to_string(),
