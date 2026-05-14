@@ -1,0 +1,212 @@
+schema_version: 1
+feature: font-swash-migration
+
+# Each task ID is referenced from sdd.yaml.requirements.{FR/NFR}.tasks.
+# Phase grouping mirrors IMPLEMENTATION.md.
+
+phases:
+  - id: phase-1
+    name: "swash + zeno evaluation PoC"
+    tasks:
+      - id: poc-bundle-emoji-font
+        title: "Bundle Noto Color Emoji + LICENSE under assets/fonts/"
+        phase: 1
+        status: completed
+      - id: poc-add-swash-zeno-deps
+        title: "Add swash (pinned = 0.1.x) + zeno to native-poc/Cargo.toml"
+        phase: 1
+        status: completed
+      - id: poc-swash-emoji-example
+        title: "Implement native-poc/examples/swash_emoji.rs and PoC PNG output"
+        phase: 1
+        status: completed
+      - id: poc-decision-note
+        title: "Append PoC outcome note (proceed-with-swash / pivot-to-cosmic-text) to IMPLEMENTATION.md"
+        phase: 1
+        status: completed
+
+  - id: phase-2
+    name: "Glyph trait + atlas split"
+    tasks:
+      - id: font-module-skeleton
+        title: "Create render/font/ module skeleton (mod.rs + traits.rs + types)"
+        phase: 2
+        status: completed
+      - id: glyph-cache-impl
+        title: "Implement GlyphCache with hit/miss + sentinel + observable accessors"
+        phase: 2
+        status: completed
+      - id: two-region-atlas
+        title: "Implement alpha (R8) + rgba (RGBA8) atlas with upload routing"
+        phase: 2
+        status: completed
+      - id: ab-glyph-adapter
+        title: "Wrap existing ab_glyph path in AbGlyphRasterizer (None for CJK/emoji)"
+        phase: 2
+        status: completed
+      - id: renderer-cache-wiring
+        title: "Replace direct ab_glyph use in render/mod.rs with cache lookup (ASCII parity)"
+        phase: 2
+        status: superseded
+        superseded_by: migrate-draw-grid-to-new-pass
+        notes: |
+          Superseded 2026-05-15 by Option 3. Partial wiring through the existing
+          painter.text() path is no longer the plan; the whole draw_grid cell
+          loop migrates into TerminalGridPass (Phase 4-H). The actual consumer
+          of the cache is migrate-draw-grid-to-new-pass.
+
+  - id: phase-3
+    name: "swash adapter + font resolution + fallback chain"
+    tasks:
+      - id: bundle-cjk-font
+        title: "Bundle NotoSansCJKjp-Regular.otf + update assets/fonts/README.md (SHA-256 + version)"
+        phase: 3
+        status: completed
+      - id: add-fontdb-dep
+        title: "Add fontdb dependency to native-poc/Cargo.toml"
+        phase: 3
+        status: completed
+      - id: font-resolver
+        title: "Implement render/font/resolver.rs (fontdb scan + bundled registration + warn-log on failure)"
+        phase: 3
+        status: completed
+      - id: swash-adapter
+        title: "Implement render/font/swash_adapter.rs (Shaper + Render; Alpha/RGBA routing via color-table detection)"
+        phase: 3
+        status: completed
+      - id: fallback-chain
+        title: "Implement render/font/fallback.rs (base → CJK → emoji walk + (font, codepoint) memoization)"
+        phase: 3
+        status: completed
+      - id: fallback-renderer-wiring
+        title: "Wire fallback chain into render/mod.rs per grapheme cluster"
+        phase: 3
+        status: superseded
+        superseded_by: migrate-draw-grid-to-new-pass
+        notes: |
+          Superseded 2026-05-15 by Option 3. The fallback chain is consumed
+          directly by TerminalGridPass::prepare (Phase 4-H), not by an
+          intermediate render/mod.rs wiring layer.
+      - id: windows-segoe-emoji-secondary
+        title: "Append Segoe UI Emoji (system lookup, not bundled) as Windows-only secondary fallback"
+        phase: 3
+        status: deferred
+        notes: |
+          Resolver scaffolding (FontRole::Secondary) is in place. Windows-only
+          probe wiring will be added in a follow-up under #[cfg(windows)].
+
+  - id: phase-4
+    name: "Settings integration + Theme dead_code resolution"
+    tasks:
+      - id: settings-font-engine-enum
+        title: "Add FontEngine enum (Swash default / AbGlyph fallback) to settings.rs"
+        phase: 4
+        status: completed
+      - id: settings-font-schema-additions
+        title: "Add font_family_fallback / emoji_font / variable_font_axes fields with parse-or-warn"
+        phase: 4
+        status: completed
+      - id: theme-dead-code-removal
+        title: "Remove #[allow(dead_code)] on Theme::font_family / Theme::font_size_pt"
+        phase: 4
+        status: completed
+        notes: |
+          Verified by grep: no #[allow(dead_code)] markers on those fields
+          at HEAD. TS-font-12 confirms the renderer reads them live.
+      - id: renderer-theme-wiring
+        title: "Replace FONT_SIZE constant + FontFamily::Monospace literal in render/mod.rs with Theme fields"
+        phase: 4
+        status: completed
+
+  - id: phase-4-h
+    name: "Terminal grid wgpu render pass — Option 3 (FR12)"
+    tasks:
+      - id: terminal-grid-pass-wgsl
+        title: "Author WGSL shader for terminal grid pass (atlas-page branching, fg modulation, decorations)"
+        phase: 4-h
+        status: pending
+      - id: terminal-grid-pass-pipeline
+        title: "Build wgpu render pipeline + bind group layout for TerminalGridPass"
+        phase: 4-h
+        status: pending
+      - id: terminal-grid-pass-vertex-buffer
+        title: "Implement instance vertex buffer (per-cell quad instance data)"
+        phase: 4-h
+        status: pending
+      - id: terminal-grid-pass-struct
+        title: "Implement TerminalGridPass struct (new / prepare / draw API)"
+        phase: 4-h
+        status: pending
+      - id: window-host-grid-pass-integration
+        title: "Integrate TerminalGridPass into window_host frame loop (clear -> grid -> egui Load -> image Load)"
+        phase: 4-h
+        status: pending
+      - id: migrate-draw-grid-to-new-pass
+        title: "Migrate selection / underline / strikethrough (and per-cell drawing) from draw_grid into TerminalGridPass"
+        phase: 4-h
+        status: pending
+        notes: |
+          Supersedes renderer-cache-wiring (Phase 2 deferred) and
+          fallback-renderer-wiring (Phase 3 deferred). FallbackChain +
+          GlyphCache are consumed by TerminalGridPass::prepare.
+      - id: remove-painter-text-from-draw-grid
+        title: "Remove painter.text() / decoration-line / background-rect calls from render/mod.rs::draw_grid (after G1+G2 pass)"
+        phase: 4-h
+        status: pending
+        notes: |
+          Final step of Phase 4-H. Gated on the Go/No-Go gates G1 (Noto
+          Color Emoji visible) and G2 (CJK legible). Also deletes the
+          FONT_SIZE constant + FontFamily::Monospace literal.
+      - id: startup-rasterizer-selection
+        title: "Branch on Settings::font_engine in app.rs to construct Swash or AbGlyph rasterizer + hand it to TerminalGridPass"
+        phase: 4-h
+        status: pending
+        notes: |
+          Moved 2026-05-15 from Phase 4 to Phase 4-H (Option 3). The
+          FontEngine enum + Settings field are already in place; the
+          branch lives next to TerminalGridPass construction in app.rs.
+
+  - id: phase-5
+    name: "Host manual gates + perf verification"
+    tasks:
+      - id: perf-instrumentation
+        title: "Implement EMTERM_FONT_PERF=1 env-gated logging (startup scan duration + per-glyph rasterize)"
+        phase: 5
+        status: completed
+        notes: |
+          Implemented in render/font/cache.rs (per-glyph rasterize) and
+          render/font/resolver.rs (startup scan total). Both gated on
+          EMTERM_FONT_PERF != "0".
+      - id: manual-gate-linux-x11
+        title: "Run TS-manual-font-linux-x11 + TS-manual-font-linux-x11-fallback; record logs under doc/tasks/font-swash-migration/manual/"
+        phase: 5
+        status: deferred
+        notes: |
+          Manual host gate: deferred to a separate manual session under
+          the operator's X11 + fcitx5 host. Renderer integration
+          (renderer-cache-wiring / fallback-renderer-wiring) is the
+          gating prerequisite.
+      - id: manual-gate-linux-wayland
+        title: "Run TS-manual-font-linux-wayland (GDK_BACKEND=x11)"
+        phase: 5
+        status: deferred
+      - id: manual-gate-windows
+        title: "Run TS-manual-font-windows or formally defer with documented next-step"
+        phase: 5
+        status: deferred
+        notes: |
+          Formally deferred: no Windows host available in this session.
+          Re-run after Phase 5 renderer integration.
+      - id: manual-gate-startup-perf
+        title: "Run TS-manual-font-startup-perf and confirm NFR1 (< 500 ms) + NFR2 (< 5 ms/glyph)"
+        phase: 5
+        status: deferred
+        notes: |
+          Perf instrumentation is in place; the actual host run is part of
+          the manual gate session.
+      - id: restruct-status-update
+        title: "Flip Phase 4-H status row in tmp/restruct.md on completion"
+        phase: 5
+        status: deferred
+        notes: |
+          Flipped after manual host gates pass on the operator's host.
