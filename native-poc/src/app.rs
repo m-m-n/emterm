@@ -179,6 +179,13 @@ impl App {
         self.ime_backend.notify_focus(focused);
     }
 
+    /// Forward a winit `WindowEvent::Ime` payload to the active
+    /// backend. The default `ImeBackend::on_winit_ime` impl is a
+    /// no-op; only `WinitImeBridge` overrides it. SPEC.md FR11.
+    pub fn pass_winit_ime(&mut self, ime: &winit::event::Ime) {
+        self.ime_backend.on_winit_ime(ime);
+    }
+
     /// Drain queued `ImeEvent`s from the active backend and route them
     /// through the existing Phase 4-E layer
     /// (`on_ime_preedit` / `on_ime_commit` / `on_ime_focus_lost`).

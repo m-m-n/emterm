@@ -21,3 +21,6 @@ pub mod preedit;
 // Phase 4-G-A: backend trait + NullBackend (passthrough).
 pub mod backend;
 pub mod null;
+
+// Phase 4-G-3: winit IME bridge (X11 / Wayland / Windows via winit 0.30).
+pub mod winit_bridge;
