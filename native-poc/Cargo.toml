@@ -70,6 +70,23 @@ bytes = "1"
 base64 = "0.22"
 once_cell = "1"
 
+# Font rasterizer stack (Phase 4-H / font-swash-migration).
+# swash is pinned at = 0.1.x per NFR3 (single-maintainer churn guard);
+# zeno is its companion vector → bitmap rasterizer; fontdb enumerates the
+# host font database and registers our bundled fonts as primary fallbacks.
+swash = "=0.1.18"
+zeno = "0.2"
+fontdb = "0.21"
+
+# ab_glyph is the legacy fallback rasterizer (FR5 escape hatch). It is
+# already pulled in transitively through egui; the direct dep here pins
+# the adapter against a known API surface.
+ab_glyph = "0.2"
+
+[dev-dependencies]
+# PNG encoder used by examples/swash_emoji.rs (PoC PNG dump, FR1).
+png = "0.17"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

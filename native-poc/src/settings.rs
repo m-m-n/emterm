@@ -99,6 +99,51 @@ fn warn_unknown_position_once(seen: &str) {
     });
 }
 
+/// Font rasterizer engine selector (Phase 4-H / font-swash-migration FR6).
+///
+/// `Swash` is the default and exercises swash + zeno + fontdb for CJK +
+/// color emoji coverage. `AbGlyph` keeps the legacy ab_glyph path live as
+/// an escape hatch when a swash bug is suspected. Selection happens once
+/// at startup; runtime hot-swap is intentionally not supported (per FR6
+/// and NFR3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontEngine {
+    #[default]
+    Swash,
+    AbGlyph,
+}
+
+impl FontEngine {
+    /// Parse the textual spec from `settings.json`. Unknown values fall
+    /// back to [`FontEngine::Swash`] and emit a single `warn`-level log
+    /// for the process lifetime (subsequent unknown values silently
+    /// coerce). Matches the `StatusBarPosition::parse_or_warn` pattern.
+    #[allow(dead_code)] // Phase 7: settings.json loader will call this.
+    pub fn parse_or_warn(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "swash" => Self::Swash,
+            "ab_glyph" | "abglyph" => Self::AbGlyph,
+            other => {
+                warn_unknown_font_engine_once(other);
+                Self::Swash
+            }
+        }
+    }
+}
+
+#[allow(dead_code)] // Phase 7: invoked from settings.json loader via parse_or_warn.
+fn warn_unknown_font_engine_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.font_engine: unknown value {:?}, falling back to \"swash\"",
+            owned
+        );
+    });
+}
+
 /// IME-related settings. Phase 4-G introduces the `native_integration`
 /// toggle which controls whether `ImeBackendFactory` brings up a real
 /// platform IME client (X11 XIM / Wayland zwp_text_input_v3 / Windows
@@ -154,6 +199,24 @@ impl Default for StatusBarSettings {
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub ambiguous_width_mode: AmbiguousWidthMode,
+    /// Font rasterizer engine. See [`FontEngine`]. Defaults to `Swash`
+    /// per FR6.
+    pub font_engine: FontEngine,
+    /// Ordered list of additional font families (after the base font and
+    /// before the bundled CJK / emoji fonts) to consult during fallback
+    /// resolution. Each entry is a fontdb family name.
+    #[allow(dead_code)] // Phase 7: settings.json loader will populate this.
+    pub font_family_fallback: Vec<String>,
+    /// Explicit emoji font family override. When `None`, the bundled
+    /// Noto Color Emoji is used (plus Segoe UI Emoji as a Windows
+    /// secondary fallback).
+    #[allow(dead_code)] // Phase 7: settings.json loader will populate this.
+    pub emoji_font: Option<String>,
+    /// Variable-font axis settings (e.g. `("wght", 700.0)`). Currently
+    /// captured for forward compatibility; swash adapter wiring lands
+    /// later.
+    #[allow(dead_code)] // Phase 7+: variable font axis support.
+    pub variable_font_axes: std::collections::HashMap<String, f32>,
     /// Maximum number of rows preserved above the viewport before old lines
     /// are dropped. Plumbed to `TerminalCore::new` at tab spawn time.
     pub scrollback_lines: u32,
@@ -192,6 +255,10 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             ambiguous_width_mode: AmbiguousWidthMode::default(),
+            font_engine: FontEngine::default(),
+            font_family_fallback: Vec::new(),
+            emoji_font: None,
+            variable_font_axes: std::collections::HashMap::new(),
             scrollback_lines: DEFAULT_SCROLLBACK_LINES,
             image_memory_quota_mb: DEFAULT_IMAGE_MEMORY_QUOTA_MB,
             clipboard_read_osc52: true,
@@ -341,5 +408,55 @@ mod tests {
     fn ime_settings_default_is_native_integration_true() {
         let ime = ImeSettings::default();
         assert!(ime.native_integration);
+    }
+
+    // ── font-swash-migration: FontEngine + font-related Settings ────────
+
+    /// TS-font-1: `FontEngine::default()` is `Swash`.
+    #[test]
+    fn font_engine_default_is_swash() {
+        assert_eq!(FontEngine::default(), FontEngine::Swash);
+    }
+
+    /// TS-font-2: parse `"ab_glyph"` succeeds; unknown values warn-log
+    /// and fall back to Swash.
+    #[test]
+    fn font_engine_parses_known_values() {
+        assert_eq!(FontEngine::parse_or_warn("swash"), FontEngine::Swash);
+        assert_eq!(FontEngine::parse_or_warn("ab_glyph"), FontEngine::AbGlyph);
+        assert_eq!(FontEngine::parse_or_warn("AbGlyph"), FontEngine::AbGlyph);
+        assert_eq!(FontEngine::parse_or_warn("  swash  "), FontEngine::Swash);
+    }
+
+    #[test]
+    fn font_engine_unknown_falls_back_to_swash() {
+        assert_eq!(FontEngine::parse_or_warn("blink"), FontEngine::Swash);
+        assert_eq!(FontEngine::parse_or_warn(""), FontEngine::Swash);
+    }
+
+    /// FR9 / Settings schema additions: the new font-related fields exist
+    /// on Settings and carry sensible defaults.
+    #[test]
+    fn settings_carry_font_engine_default_swash() {
+        let s = Settings::new();
+        assert_eq!(s.font_engine, FontEngine::Swash);
+    }
+
+    #[test]
+    fn settings_font_family_fallback_default_empty() {
+        let s = Settings::new();
+        assert!(s.font_family_fallback.is_empty());
+    }
+
+    #[test]
+    fn settings_emoji_font_default_none() {
+        let s = Settings::new();
+        assert!(s.emoji_font.is_none());
+    }
+
+    #[test]
+    fn settings_variable_font_axes_default_empty() {
+        let s = Settings::new();
+        assert!(s.variable_font_axes.is_empty());
     }
 }

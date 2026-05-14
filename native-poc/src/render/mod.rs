@@ -28,6 +28,7 @@
 //! cursor; revisit when sub-phase 6 fires.
 
 pub mod cursor;
+pub mod font;
 pub mod theme;
 
 use std::time::Duration;
@@ -47,9 +48,23 @@ use crate::settings::AmbiguousWidthMode;
 
 const CELL_W: f32 = 8.5; // logical pixels per cell
 const CELL_H: f32 = 17.0;
-const FONT_SIZE: f32 = 13.0;
 const TOP_PAD: f32 = 4.0;
 const LEFT_PAD: f32 = 4.0;
+
+/// Build the egui `FontId` to use for cell glyph drawing. Phase 4-H
+/// removes the prior `FONT_SIZE = 13.0` constant + hard-coded
+/// `FontFamily::Monospace` literal in favour of reading both from the
+/// active `Theme`. Names other than `"monospace"` route through
+/// `FontFamily::Name(...)`; the loader is responsible for registering
+/// custom faces via `egui::Context::set_fonts` before the first draw.
+fn cell_font_id(theme: &Theme) -> FontId {
+    let family = if theme.font_family.eq_ignore_ascii_case("monospace") {
+        FontFamily::Monospace
+    } else {
+        FontFamily::Name(theme.font_family.clone().into())
+    };
+    FontId::new(theme.font_size_pt, family)
+}
 
 /// Per-cell paint parameters resolved from a `term_core` cell + active
 /// palette + selection state.
@@ -169,7 +184,7 @@ fn draw_grid(
     let origin = ui.min_rect().min + Vec2::new(LEFT_PAD, TOP_PAD);
     let painter = ui.painter();
 
-    let normal_font = FontId::new(FONT_SIZE, FontFamily::Monospace);
+    let normal_font = cell_font_id(theme);
 
     let cols = core.cols();
     let rows = core.rows();
@@ -504,5 +519,41 @@ mod tests {
         let packed = 0x02_AA_BB_CC; // tag=2, r=AA, g=BB, b=CC
         let c = packed_to_egui(packed, Rgb::WHITE, &theme).unwrap();
         assert_eq!((c.r(), c.g(), c.b()), (0xAA, 0xBB, 0xCC));
+    }
+
+    // ── font-swash-migration: Theme dead_code resolution (FR10) ────────
+
+    /// TS-font-11: `Theme::default().font_family` is `"monospace"` and
+    /// `font_size_pt` is `13.0` (regression guard).
+    #[test]
+    fn theme_default_font_family_is_monospace() {
+        let t = Theme::default();
+        assert_eq!(t.font_family, "monospace");
+        assert!((t.font_size_pt - 13.0).abs() < f32::EPSILON);
+    }
+
+    /// TS-font-12: Renderer reads `Theme::font_family` + `Theme::font_size_pt`
+    /// (not deleted FONT_SIZE constant / hard-coded `FontFamily::Monospace`).
+    /// Construct a Theme with sentinel values and assert that the
+    /// resulting `cell_font_id` carries them.
+    #[test]
+    fn renderer_reads_theme_font_family_and_size() {
+        let mut t = Theme::default();
+        t.font_family = "TestSentinelFont".into();
+        t.font_size_pt = 17.0;
+        let font = cell_font_id(&t);
+        assert!((font.size - 17.0).abs() < f32::EPSILON);
+        match font.family {
+            FontFamily::Name(name) => assert_eq!(&*name, "TestSentinelFont"),
+            other => panic!("expected FontFamily::Name, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn renderer_routes_monospace_default_to_monospace_family() {
+        let t = Theme::default();
+        let font = cell_font_id(&t);
+        assert!((font.size - 13.0).abs() < f32::EPSILON);
+        assert_eq!(font.family, FontFamily::Monospace);
     }
 }
