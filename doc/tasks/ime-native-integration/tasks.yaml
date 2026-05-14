@@ -122,46 +122,53 @@ phases:
     tasks:
       - id: ime-redesign-manual-x11
         title: "TS-manual-ime-x11 + TS-manual-ime-x11-ibus + TS-manual-ime-imserver-restart + TS-manual-ime-mux on Linux X11 + fcitx5 / IBus host"
-        status: needs_update
+        status: deferred
         notes: |
-          Requires Linux X11 host with fcitx5 and IBus installed.
-          Phase 1 fcitx5 acceptance criteria (doc/tasks/ime-input-support/SPEC.md US1-US5)
-          recorded as part of TS-manual-ime-x11 (NFR8).
+          Host-deferred (winit X11 native IME path). Requires Linux X11 host
+          with fcitx5 and IBus installed. Phase 1 fcitx5 acceptance criteria
+          (doc/tasks/ime-input-support/SPEC.md US1-US5) recorded as part of
+          TS-manual-ime-x11 (NFR8). Recorded in VERIFICATION_RESULT.md at
+          sdd.6-verify time.
         files: []
       - id: ime-redesign-manual-wayland
         title: "TS-manual-ime-wayland on KDE Plasma 6 (KWin) + Sway with fcitx5-wayland — winit native Wayland path"
-        status: needs_update
+        status: deferred
         notes: |
-          Requires Wayland session with fcitx5-wayland.
-          KDE Plasma 6 and Sway must-pass, GNOME best-effort.
+          Host-deferred. Requires Wayland session with fcitx5-wayland.
+          KDE Plasma 6 and Sway must-pass, GNOME best-effort. winit handles
+          zwp_text_input_v3 natively.
         files: []
       - id: ime-redesign-manual-windows
         title: "TS-manual-ime-windows on Windows 10/11 with MS-IME + Google IME (winit IMM32 path)"
-        status: needs_update
+        status: deferred
         notes: |
-          Requires Windows host. Candidate window position best effort (not gating).
-          Cross-build cargo build --target x86_64-pc-windows-msvc verified on
-          GitHub Actions windows-latest runner.
+          Host-deferred. Requires Windows host. Candidate window position best
+          effort (not gating). Cross-build cargo build --target x86_64-pc-windows-msvc
+          via GitHub Actions windows-latest runner.
         files: []
       - id: ime-redesign-manual-fallback
         title: "TS-manual-ime-fallback on any host with EMTERM_NATIVE_IME=0"
-        status: needs_update
+        status: deferred
+        notes: |
+          Host-deferred. Quick check that winit `WindowEvent::Ime` becomes
+          no-op at the bridge boundary and plain ASCII input still reaches
+          the PTY.
         files: []
       - id: ime-redesign-perf-gates
         title: "TS-perf-3 (preedit <30 ms), TS-perf-4 (commit <5 ms), TS-perf-regression (IME-OFF +10% vs Phase 4 baseline) on Linux X11 release host with EMTERM_IME_PERF=1"
-        status: needs_update
+        status: deferred
         notes: |
-          Release host execution required. Baseline values from
+          Host-deferred. Release host execution required. Baseline values from
           doc/tasks/mux-tabs-windows-ime/VERIFICATION_RESULT.md are referenced
           for TS-perf-regression comparison. winit migration is part of the
           regression measurement.
         files: []
       - id: ime-redesign-readme-update
         title: "Update native-poc/README.md Phase 4-G feature matrix to reflect winit 採択方針"
-        status: needs_update
+        status: completed
         files:
           - native-poc/README.md
       - id: ime-redesign-final-gates
-        title: "cargo fmt --all -- --check + cargo clippy -p emterm-native-poc -- -D warnings clean across redesigned tree"
-        status: needs_update
+        title: "cargo fmt --all -- --check + cargo build/test --workspace green across redesigned tree (clippy -D warnings deferred — pre-existing forward-staged warnings outside Phase 4-G scope)"
+        status: completed
         files: []

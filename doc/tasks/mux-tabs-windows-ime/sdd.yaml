@@ -296,6 +296,16 @@ requirements:
       `TS-manual-ime-windows` are completed by Phase 4-G's TS-manual-ime-x11
       / x11-ibus / windows. The actual `status: deferred → ok` flip on this
       SDD lives in a separate PR (informational note only here).
+
+      **2026-05-14 second redesign**: Phase 4-G was further redesigned the
+      same day after the self-built XIM client was found broken (tao 0.34
+      hashes XKB keycodes; `XmbLookupString` always returned 0 chars). The
+      redesign migrates the windowing layer to **winit 0.30.9** and replaces
+      `ime/{x11,wayland,windows}.rs` with a single `WinitImeBridge` that
+      forwards `WindowEvent::Ime { Enabled, Preedit, Commit, Disabled }`
+      into the unchanged Phase 4-E plumbing. The Phase 4 limitation cited
+      above ("no XIM integration on Linux") is resolved via winit's native
+      IME path, not by self-built clients.
   FR12:
     title: IME commit → PTY write (no bracketed wrap; auto-scope wired; manual gates N/A)
     status: ok
@@ -321,6 +331,15 @@ requirements:
       gated on `App::ime_is_null()` so a real backend's pump-fed commit
       doesn't double-deliver with the fallback path. Real-host commit
       verification is covered by Phase 4-G's TS-manual-ime-windows.
+
+      **2026-05-14 second redesign**: post-winit-migration the
+      `WindowEvent::ReceivedImeText` variant no longer exists. Plain
+      printable input now arrives via `KeyEvent::text` (handled by
+      `winit_key_to_bytes`); composition results arrive via
+      `WindowEvent::Ime::Commit`, which `WinitImeBridge` translates to
+      `ImeEvent::Commit` → `App::on_ime_commit` → `write_commit`. The
+      `App::ime_is_null()` gating becomes a no-op because the bridge
+      itself swallows IME events under NullBackend.
   FR13:
     title: settings.json additions (mux.prefix_key, statusbar.enabled, statusbar.position)
     status: ok
@@ -364,6 +383,14 @@ requirements:
       acceptance criteria) is the replacement for this deferred entry. The
       `status: deferred → ok` flip on this SDD lives in a separate PR
       (informational note only here).
+
+      **2026-05-14 second redesign**: the self-built XIM client was removed
+      after it was found inoperative (tao XKB keycode opacity → 0-char
+      XmbLookupString). The redesigned Phase 4-G migrates to **winit 0.30.9**
+      and delegates X11 / Wayland / Windows IME to winit's native pipeline
+      (which is the same library route WezTerm / Alacritty / Ghostty
+      converged on). The NFR8 fcitx5 parity gate now runs against the winit
+      path.
   NFR4:
     title: Workspace compatibility (src-tauri build/test green through Phase 4)
     status: ok
