@@ -1,17 +1,18 @@
-# Implementation Plan: Native IME Integration (Phase 4-G)
+# Implementation Plan: Native IME Integration (Phase 4-G, **redesigned**)
 
 ## Overview
 
-native-poc 側で X11 (XIM) / Wayland (zwp_text_input_v3) / Windows (IMM32) の IME クライアントを自前実装し、Phase 4-E で配線済みの `App::on_ime_{preedit,commit,focus_lost}` をそのまま受け側として再利用する。Phase 4 で deferred になった `NFR3 (Linux fcitx5 IME parity)` および `FR11 / FR12` の manual gate を達成する。
+Phase 4-G の **redesign** 後の実装計画。tao 0.34 + 自前 XIM / Wayland / IMM32 backend を捨て、`winit 0.30.9` に移行する。Phase 4-E の auto-scope (`ime::preedit::State` / `ime::commit::write_commit` / `App::on_ime_*` / `render::cursor::draw_cursor_with_preedit`) は不変、`ImeBackend` trait + `NullBackend` + settings (`ImeSettings`) は保持。新規 `WinitImeBridge` が winit の `WindowEvent::Ime` を Phase 4-E ルーティングに流す。
 
 ## Objectives
 
-- Linux X11 + fcitx5 / IBus で preedit / commit / IME on-off が動作する状態にする
-- Linux Wayland + fcitx5-wayland で同等の動作を実現する
-- Windows + MS-IME / Google IME で preedit / commit が動作する状態にする
-- `EMTERM_NATIVE_IME` 環境変数 / `settings.ime.native_integration` で明示的にフォールバックできる経路を残し、IM サーバ未起動でもターミナルが落ちないことを保証する
-- Phase 4-E の auto-scope (`ime::preedit::State`, `ime::commit::write_commit`, `render::cursor::draw_cursor_with_preedit`, `App::on_ime_*`) を変更しない
-- 旧 `src-tauri` の build / test を一切触らない
+- 自前 XIM 関連ファイル / 依存をすべて削除し、`cargo test --workspace` green を維持
+- tao 0.34 → winit 0.30.9 へ event loop / window / wgpu surface / raw-window-handle 0.6 経路を移行
+- winit `WindowEvent::Ime` を Phase 4-E ルーティング層に薄く接続するブリッジ実装
+- Ghostty 由来のステートマシン (`im_composing` + `in_keyevent`) で commit と key event の二重消費を防ぐ
+- Linux X11 + fcitx5 / IBus、Linux Wayland + fcitx5-wayland、Windows + MS-IME / Google IME の manual gate を winit 経路で達成
+- Phase 4-E auto-scope ファイル diff empty を維持
+- 旧 `src-tauri` build / test を一切触らない
 
 ## Prerequisites
 
@@ -25,365 +26,327 @@ native-poc 側で X11 (XIM) / Wayland (zwp_text_input_v3) / Windows (IMM32) の 
 
 ### Dependencies
 
-- Phase 4 (`doc/tasks/mux-tabs-windows-ime/`) 完了。とくに以下は変更しない:
-  - `native-poc/src/ime/{preedit.rs, commit.rs, mod.rs}` の既存内容 (Phase 4-E 範囲は再エクスポートの追加のみ可)
-  - `App::on_ime_preedit / on_ime_commit / on_ime_focus_lost`
+- 前 Phase 4-G コミット (6 コミット, `9f290ab..dbfb25b`) が landed 済みであること。`native-poc/src/ime/{backend,null,x11,wayland,windows}.rs` が存在し `cargo test --workspace` が 2011 件 green。本 redesign はそこから減算 + winit 追加で再構築する
+- 以下は変更しない:
+  - `native-poc/src/ime/{preedit.rs, commit.rs, mod.rs(preedit/commit re-export 部分)}`
+  - `App::on_ime_preedit / on_ime_commit / on_ime_focus_lost` のシグネチャ
   - `render::cursor::draw_cursor_with_preedit`
-- `raw-window-handle` 0.6 が workspace 依存にあること (tao 0.34 経由で取得可)
-- `crossbeam-channel` が workspace 依存にあること (Wayland thread → main thread)
+  - `native-poc/src/settings.rs` の `ImeSettings { native_integration: bool }`
+- `raw-window-handle` 0.6 が workspace 依存にあること
 
 ## Architecture Overview
 
 ### Technology Stack
 
 - **Language**: Rust (workspace pinned)
-- **Window / Event loop**: tao 0.34 (継続使用)
-- **IME プロトコル実装**:
-  - Linux X11: `x11-dl` (dynamic loading)
-  - Linux Wayland: `wayland-client` + `wayland-protocols` (`unstable` feature)
-  - Windows: `windows` crate (IMM32 + `SetWindowSubclass`)
+- **Window / Event loop**: **winit 0.30.9** (`default-features = false, features = ["rwh_06", "x11", "wayland"]`) — tao 0.34 から置換
+- **IME 統合**: winit `WindowEvent::Ime { Enabled, Preedit, Commit, Disabled }` (X11 / Wayland / Windows 統合カバー)
 - **Key libraries (既存)**: `raw-window-handle`, `crossbeam-channel`, `log`
 
 ### Design Approach
 
-ボトムアップ + 段階リリース。最初に `ImeBackend` trait + `NullBackend` + App-side pump + opt-out / fallback 配線をすべて入れ、IME 動作を一切変えない (regression なし) ことを保証する。そのあと OS ごとに backend 実装を追加する。各 OS の go/no-go は manual gate で判断する。
+トップダウン + 段階リリース。
 
-Phase 4-E の sanitize / write_commit / focus_lost ルーティングはそのままで、各 backend は `ImeEvent` を queue に積み、`App::pump_ime` が drain して既存の `on_ime_*` に流すだけ。これにより SPEC.md「Phase 4-E の auto-scope を変更しない」契約を担保する。
+1. まず自前 XIM 関連を削除し (cleanup)、NullBackend のみで動作する状態に戻す
+2. 次に tao → winit に windowing を移行 (IME 接続なし、素の打鍵のみ確認)
+3. 続いて `WinitImeBridge` を新規実装し、Ghostty 由来のステートマシンで winit IME を Phase 4-E に接続
+4. 最後に manual gate を winit 経路で再実施
+
+各段階の Go / No-Go は `cargo test --workspace` green + (3) 以降は手動 IME gate で判定する。Phase 4-E sanitize / write_commit / focus_lost ルーティングはすべて不変。
 
 ### Component Interaction
 
 ```
-[tao::EventLoop]
-  WindowEvent::KeyboardInput ──▶ ImeBackend::dispatch_key_event
-                                    ├─ Consumed   → (skip tao_key_to_bytes)
-                                    └─ Passthrough → 既存 tao_key_to_bytes パス
-  WindowEvent::Focused(b)    ──▶ ImeBackend::notify_focus(b)
-                                    + (b == false) App::on_ime_focus_lost
-  WindowEvent::ReceivedImeText ──▶ App::on_ime_commit (NullBackend fallback パスのみ)
+[winit::EventLoop]
+  WindowEvent::KeyboardInput { state: Pressed | Released } ─▶ ImeBackend::dispatch_key_event
+                                    ├─ im_composing == true → Consumed (skip winit_key_to_bytes)
+                                    └─ im_composing == false → Passthrough → winit_key_to_bytes
+  WindowEvent::Ime(Enabled)        ─▶ WinitImeBridge::on_winit_ime → im_composing = true
+  WindowEvent::Ime(Preedit(text))  ─▶ queue.push(ImeEvent::Preedit(text))
+  WindowEvent::Ime(Commit(text))   ─▶ queue.push(ImeEvent::Commit(text)) + im_composing = false
+  WindowEvent::Ime(Disabled)       ─▶ queue.push(ImeEvent::FocusOut) + im_composing = false
+  WindowEvent::Focused(b)          ─▶ ImeBackend::notify_focus(b) + (b == false) App::on_ime_focus_lost
 
 [event-loop tick]
-  ImeBackend::pump(&mut events)
-    └─▶ App drains:
-          ImeEvent::Preedit(s)   → App::on_ime_preedit(&s)
-          ImeEvent::Commit(s)    → App::on_ime_commit(&s)
-          ImeEvent::FocusOut     → App::on_ime_focus_lost()
+  ImeBackend::pump(&mut events) → App drains:
+    ImeEvent::Preedit(s)   → App::on_ime_preedit(&s)
+    ImeEvent::Commit(s)    → App::on_ime_commit(&s)
+    ImeEvent::FocusOut     → App::on_ime_focus_lost()
 
 [App per-frame cursor diff]
   cursor cell (row, col) 変化時 → ImeBackend::notify_cursor_rect(x, y, w, h)
+                                  → Window::set_ime_cursor_area(...)
 ```
 
 ## Implementation Phases
 
-### Sub-Phase 4-G-A: 共通基盤 (ImeBackend trait + NullBackend + App pump + opt-out / fallback)
+### Sub-Phase 4-G-1: Cleanup (自前 XIM 関連削除)
 
-**Goal**: backend 抽象と App-side pump を入れ、`EMTERM_NATIVE_IME` env / `settings.ime.native_integration` / 初期化失敗 → `NullBackend` フォールバックを成立させる。OS backend はまだ未実装 (どの環境でも実質 Phase 4 と同じ動作)。
+**Goal**: 自前 XIM / Wayland / IMM32 のコードと依存を削除し、`cargo test --workspace` green を維持する。
 
-**Files to Create**:
-- `native-poc/src/ime/backend.rs` — `ImeBackend` trait, `ImeEvent` enum, `KeyDispatchResult` enum, `ImeInitError` enum, `RawKeyEvent` adapter, `ImeBackendFactory` (`Box<dyn ImeBackend>` を返す startup-side コンストラクタ)
-- `native-poc/src/ime/null.rs` — `NullBackend` (passthrough only)
-- `native-poc/src/ime/settings.rs` (もしくは既存 `settings.rs` への extension で吸収) — `ImeSettings { native_integration: bool }` 構造体 + デフォルト + validation
+**Files to Delete**:
+- `native-poc/src/ime/x11.rs` (約 470 行 + テスト)
+- `native-poc/src/ime/wayland.rs` (約 280 行 + テスト)
+- `native-poc/src/ime/windows.rs` (約 320 行 + テスト)
 
 **Files to Modify**:
-- `native-poc/src/ime/mod.rs` — `pub mod backend; pub mod null;` の追加と OS 別 cfg backend の `pub mod` 追加 (中身は次 Phase で実装)。既存の `preedit` / `commit` 再エクスポートは保持
-- `native-poc/src/settings.rs` — `ImeSettings { native_integration: bool }` 構造体追加 + `Settings` への field 追加 + `Default::default()` で `native_integration: true`。`settings.json` からの実 load は Phase 7 のローダ実装に委ねる (現 `Settings` は他フィールド同様 `#[allow(dead_code)] // Phase 7` 扱い)。Phase 4-G では `Settings::default()` 経路でのみアクセスされる
-- `native-poc/src/app.rs` — `App` に `ime_backend: Box<dyn ImeBackend>` フィールド追加、`App::pump_ime` (event drain) 追加、`App::notify_cursor_rect_if_changed`(cell-diff 駆動) 追加、`App::dispatch_key_event_via_ime(...)` ヘルパ追加。既存の `on_ime_*` メソッドは変更しない
-- `native-poc/src/window_host.rs` — startup で `ImeBackendFactory::build()` を呼び `App` に注入、`KeyboardInput` ハンドラを `ImeBackend::dispatch_key_event` 優先に変更 (Passthrough のときのみ既存 `tao_key_to_bytes` へ)、`Focused(b)` ハンドラから `ImeBackend::notify_focus(b)` を呼ぶ、event-loop tick の終端で `App::pump_ime` を呼ぶ。`ReceivedImeText` は **NullBackend が active な時のみ** 既存パス (`on_ime_commit`) に流す (実 backend active 時は `Commit` イベントが Backend から来るので二重コミットを避ける)
-- `native-poc/Cargo.toml` — IME backend 関連 dep 追加 (詳細は各 OS phase)。`raw-window-handle` は既に direct dep (`Cargo.toml:63`、Phase 3 系で導入済) なので追加変更不要
+- `native-poc/src/ime/mod.rs` — `pub mod x11; pub mod wayland; pub mod windows;` 削除 (`backend` / `null` / `preedit` / `commit` 再エクスポートは保持)
+- `native-poc/src/ime/backend.rs` — `build_backend` factory の `RawDisplayHandle::Xlib` / `Wayland` probe + `#[cfg(windows)]` 経路を削除。当面は無条件で `Err(ImeInitError::Unavailable("no platform backend; pending winit bridge"))` → NullBackend に倒す
+- `native-poc/Cargo.toml` — 以下の deps を削除:
+  - `[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]` 配下の `x11-dl`, `wayland-client`, `wayland-protocols`
+  - `[target.'cfg(windows)'.dependencies]` 配下の `windows`
+- `native-poc/src/window_host.rs` — `RawDisplayHandle` / `RawWindowHandle` を backend factory に渡している箇所は **保持** (winit 移行後に再利用)、ただし backend factory 呼出引数は temporary に dummy または保留扱い
 
-**Key Components**:
+**Key Components Removed**:
 
-| Component | Responsibility | Precondition | Postcondition |
-|-----------|----------------|--------------|---------------|
-| `ImeBackend` (trait) | OS 別 IME 実装の唯一の seam | n/a | App から backend 種別を意識せず使える |
-| `NullBackend` | passthrough のみ (`dispatch_key_event` → Passthrough、`pump` → 空 vec) | n/a | Phase 4 と完全同等の挙動 |
-| `ImeBackendFactory::build(window, display, settings, env)` | env > settings > 初期化失敗判定で適切な backend を返す | startup で window handle 取得済み | `Box<dyn ImeBackend>`; 失敗時は `NullBackend` + warn 一発 |
-| `App::pump_ime()` | tick ごとに `ime_backend.pump(&mut events)` → 各 event を `on_ime_*` にルーティング | backend 注入済み | events queue 空 (最大 1024 件/tick で打ち切り、超過分は warn IME_E901) |
-| `App::notify_cursor_rect_if_changed()` | cursor cell が変わった時のみ `notify_cursor_rect` を呼ぶ | tab が存在 | rate-limited、毎フレーム呼ばない |
-| `ImeSettings { native_integration: bool }` | settings.json の `ime` セクション | settings 読込済み | デフォルト true; 不正値で warn + true |
+| Component | Reason |
+|-----------|--------|
+| `X11Backend` (XOpenIM/XCreateIC/XFilterEvent/XmbLookupString + synthetic XKeyEvent + XICAttribute) | tao が XKB keycode を公開しないので XmbLookupString が 0 chars を返す |
+| `WaylandBackend` (zwp_text_input_v3 scaffold + pump thread + crossbeam_channel) | winit が zwp_text_input_v3 をネイティブ処理する |
+| `WindowsBackend` (SetWindowSubclass + WM_IME_* + ImmGetCompositionStringW + utf16_to_utf8) | winit が IMM32 をネイティブ処理する |
 
-**Processing Flow** (opt-out / fallback decision tree):
+**Tests Removed**:
 
-1. startup で `ImeBackendFactory::build` を呼ぶ
-   - 分岐1: `EMTERM_NATIVE_IME=0` (env) が set されている
-      → `NullBackend` を返し warn 一発 (`"ime: native integration disabled (env)"`)
-   - 分岐2: `settings.ime.native_integration == false`
-      → `NullBackend` を返し warn 一発 (`"ime: native integration disabled (settings)"`)
-   - 分岐3: 上記いずれでもない
-      → 実 backend のコンストラクタを試行
-        - 成功 → 実 backend (info ログ一発: `"ime: <protocol> initialized"`)
-        - 失敗 (`ImeInitError`) → `NullBackend` + warn 一発 (`"ime: native integration disabled (<reason>)"`)
-2. event-loop tick 終端で `App::pump_ime()` を呼ぶ
-   - backend からの transport error 検出 (`pump` が err を内部 log + queue 空で返した複数 tick 連続など) は次フェーズ (4-G-B 以降) で具体化。基盤フェーズでは hook だけ用意
+- `TS-x11-1`, `TS-x11-2` (11 cases) — keycode / modifier mapping
+- `TS-wayland-1`, `TS-wayland-2` (10 cases) — pump drain / HandleType
+- `TS-windows-1`, `TS-windows-2`, `TS-windows-3` (10 cases) — utf16_to_utf8
+- `TS-backend-int-1`, `TS-backend-int-2` (`#[ignore]` integration)
+- `TS-manual-ime-*` のうち自前 XIM 起源項目は **Phase 4-G-4 で winit 経路で再定義**
+
+合計 削除: 約 31 unit tests + 2 integration tests。
+
+**Tests Retained**:
+
+- `TS-backend-1..5`, `TS-cursor-1`, `TS-focus-1`, `TS-fallback-1..3`, `TS-settings-1`, `TS-route-1..2` (Phase 4-G-A 由来の backbone tests、全 12 件)
 
 **Implementation Steps**:
 
-1. **trait + 列挙型を定義** — `ImeBackend`, `ImeEvent`, `KeyDispatchResult`, `ImeInitError`, `RawKeyEvent` を `ime::backend` に追加。SPEC.md §API Design に従う
-2. **NullBackend 実装** — すべて no-op / 空 vec を返す。`ImeBackend::init` は常に `Ok(NullBackend)`
-3. **settings に `ime.native_integration` を追加** — `ImeSettings` 構造体 + `Settings` フィールド + `Default` で `true`。JSON parse は Phase 7 で実装するので Phase 4-G では `Default::default()` のみ exercise する (他フィールド同様 `#[allow(dead_code)] // Phase 7`)。`ImeBackendFactory::build` から `Settings::ime.native_integration` を参照する
-4. **App に IME backend スロット + pump + cursor-rect diff を追加** — `App::pump_ime`, `App::notify_cursor_rect_if_changed`, `App::dispatch_key_event_via_ime`
-5. **window_host の event loop に hook** — startup factory 呼び出し、`KeyboardInput` を backend dispatch 優先に、`Focused` を backend に通知、`ReceivedImeText` を NullBackend 時のみ既存パスに、tick 終端で `pump_ime`
-6. **regression unit tests** — TS-backend-1..5, TS-cursor-1, TS-focus-1, TS-fallback-1..3, TS-settings-1, TS-route-1..2
+1. **ファイル削除** — `git rm native-poc/src/ime/{x11,wayland,windows}.rs`
+2. **mod.rs から該当 `pub mod` を削除** — `backend` / `null` / `preedit` / `commit` の再エクスポートのみ残す
+3. **`backend.rs` の factory を簡略化** — `build_backend(_window, _display, settings, env)` は引き続き受け取るが、本体は env / settings check のあと最終的に `Err(ImeInitError::Unavailable("winit bridge not yet wired (Phase 4-G-3)"))` → `NullBackend` で warn 一発
+4. **`Cargo.toml` 依存削除** — `x11-dl`, `wayland-client`, `wayland-protocols`, `windows` を削除
+5. **`window_host.rs` の backend factory 呼出引数は保留** — winit 移行で再利用するので削除しない、ただし `RawDisplayHandle::Xlib` / `Wayland` の compile-time 依存が消えるので import を整理
+6. **`cargo build --workspace` / `cargo test --workspace` green を確認** — workspace test 数は 2011 - (31 + 2) ≒ 1978 程度に減る (NullBackend / route / settings / fallback / cursor / focus / backbone は維持)
 
-**Dependencies**: Phase 4-E の auto-scope 完了が前提。`tao_key_to_bytes` の Ctrl/Alt-only Character ガード (`3fcc7ef`) は保持。`raw-window-handle` 0.6 は既に native-poc の direct dep (今回新規追加なし)
+**Dependencies**: 前 Phase 4-G が landed 済みであること
 
 **Testing Approach**:
-- Unit: TS-backend-1..5 (NullBackend / MockBackend 経由), TS-cursor-1, TS-focus-1, TS-fallback-1..3, TS-settings-1, TS-route-1..2 (Phase 4-E の regression guard)
-- Integration: 該当なし (実 IM サーバ未投入)
-- E2E: 該当なし (legacy E2E は Tauri のみ)
-- Manual: 該当なし
+- Unit: 保持テスト 12 件すべて green
+- Integration: 削除済
+- E2E: 該当なし
+- Manual: 該当なし (Phase 4-G-4 でまとめて再実施)
 
 **Acceptance Criteria**:
-- [ ] `cargo test --workspace` exit 0、新規 +12 件以上
-- [ ] Phase 4-E の `ime::{preedit, commit}` ファイルが diff で content 変更ゼロ (`git diff` で確認)
-- [ ] `EMTERM_NATIVE_IME=0` で起動 → NullBackend + warn 一発
-- [ ] `Settings::default()` を改変して `ime.native_integration = false` にした状態で起動 → NullBackend + warn 一発 (Phase 7 で実 JSON ローダから設定される経路の test surrogate)
-- [ ] env / settings 設定なし → NullBackend (まだ実 backend が存在しないため) + warn 一発 (`Unavailable("no platform backend compiled in")` 相当)、ターミナル動作は Phase 4 と完全同等
+- [ ] `git ls-files native-poc/src/ime/` に `x11.rs`, `wayland.rs`, `windows.rs` が存在しない
+- [ ] `grep -E 'x11-dl|wayland-client|wayland-protocols|"windows"' native-poc/Cargo.toml` が一致なし
+- [ ] `cargo test --workspace` exit 0、新規 ±0 件 (保持テストのみ)
+- [ ] `cargo fmt --all -- --check` clean
+- [ ] Phase 4-E の `ime::{preedit, commit}` ファイル content 不変
 
-**Estimated Effort**: medium
+**Estimated Effort**: small (削除中心 + factory 微調整)
 
 ---
 
-### Sub-Phase 4-G-B: Linux X11 (XIM) backend
+### Sub-Phase 4-G-2: winit 移行 (windowing only)
 
-**Goal**: Phase 4-G の Go / No-Go 判定対象。fcitx5 / IBus と XIM で対話する `X11Backend` を実装し、`TS-manual-ime-x11` / `TS-manual-ime-x11-ibus` を達成する。
-
-**Files to Create**:
-- `native-poc/src/ime/x11.rs` — `X11Backend` 本体 (XIM open / IC create / XFilterEvent / XmbLookupString / IM callbacks / XSetICFocus / XUnsetICFocus / XICAttribute XNSpotLocation / `Drop` で XDestroyIC + XCloseIM)
+**Goal**: tao 0.34 → winit 0.30.9 に windowing を移行。IME は NullBackend のままで、素の打鍵 + winit `WindowEvent::ReceivedCharacter` 相当 (winit 0.30 では `Ime::Commit` 経路) が動くことを確認する。**IME backend には接続しない**。
 
 **Files to Modify**:
-- `native-poc/src/ime/mod.rs` — `#[cfg(all(unix, not(target_os = "macos")))] pub mod x11;`
-- `native-poc/src/ime/backend.rs` — `ImeBackendFactory::build` 内で `RawDisplayHandle::Xlib(_)` を runtime probe し `X11Backend::init` を呼ぶ
-- `native-poc/Cargo.toml` — `[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]` に `x11-dl = "2"` を追加
+- `native-poc/Cargo.toml` — `tao = "0.34"` 削除、`winit = "0.30.9"` 追加 (`default-features = false, features = ["rwh_06", "x11", "wayland"]`)
+- `native-poc/src/main.rs` — `tao::EventLoop` → `winit::EventLoop`、`EventLoop::run` クロージャまたは `ApplicationHandler` trait に書き換え
+- `native-poc/src/window_host.rs` — 約 200 行の書き換え:
+  - `tao::window::WindowBuilder` → `winit::window::WindowAttributes` + `EventLoop::create_window`
+  - `tao::event::Event` → `winit::event::Event`
+  - `tao::event::WindowEvent` → `winit::event::WindowEvent`
+  - `tao::event::KeyEvent` → `winit::event::KeyEvent`
+  - `tao::keyboard::Key` → `winit::keyboard::Key`
+  - `tao::event::ElementState` → `winit::event::ElementState`
+  - `tao::event::WindowEvent::ReceivedImeText(text)` → 当面無視 (winit 0.30 ではこの variant が存在しない、`Ime::Commit` が代替で Phase 4-G-3 で接続)
+  - `tao::dpi::PhysicalSize` → `winit::dpi::PhysicalSize`
+  - `raw-window-handle 0.6` 経由の wgpu surface 作成は維持 (`HasWindowHandle` / `HasDisplayHandle` trait の trait bound は両方互換)
+- `native-poc/src/app.rs` — `tao::event::KeyEvent` 参照を `winit::event::KeyEvent` に置換、`tao_key_to_bytes` を `winit_key_to_bytes` に rename + 内部の modifier mapping を winit 版に rewrite
+- `native-poc/src/ime/backend.rs` — `RawKeyEvent::tao_event: &'a tao::event::KeyEvent` → `winit_event: &'a winit::event::KeyEvent`
+- `native-poc/Cargo.toml` — `tao` 削除 (workspace dep でない場合)、egui-tao 等 tao を transitive に引きずる依存があるか確認 (本 Phase で wgpu に直接 surface を作る形に変更されている前提)
 
 **Key Components**:
 
 | Component | Responsibility | Precondition | Postcondition |
 |-----------|----------------|--------------|---------------|
-| `X11Backend::init(window, display)` | tao が握る X11 Display を borrow し、`XOpenIM` + `XCreateIC` で IC をセットアップ | `RawDisplayHandle::Xlib`, `RawWindowHandle::Xlib`, X11 IM サーバ起動済み | 成功時 IC ready、失敗時 `ImeInitError::{Unavailable, HandleType, PlatformError}` |
-| `X11Backend::dispatch_key_event(raw)` | tao の KeyEvent から synthetic `XKeyPressedEvent` を組み立て `XFilterEvent` に渡す | `init` 成功済み | filtered → `Consumed` + (callback 経由で後で `ImeEvent::Commit/Preedit` が pump で取得される) / not filtered → `Passthrough` |
-| `X11Backend::pump(events)` | IM callbacks から積まれた `ImeEvent` を drain | dispatch_key_event 呼出後 | events vec に push (最大 1024 件/tick、超過は drop + warn IME_E901) |
-| `X11Backend::notify_cursor_rect` | `XICAttribute` の `XNSpotLocation` 更新 | IC 生成済 | 候補ウィンドウがカーソル近傍に出る (best effort) |
-| `X11Backend::notify_focus(true/false)` | `XSetICFocus` / `XUnsetICFocus` | IC 生成済 | IM サーバが focus state を把握する |
-| `X11Backend::drop` | `XDestroyIC` + `XCloseIM` | IC / IM 保持 | リソース解放 |
+| `winit::EventLoop` | event loop の root | n/a | tao::EventLoop と同等の挙動 |
+| `winit::window::Window` | window handle (`Arc<Window>` で wgpu surface と共有) | event loop 作成済み | tao::Window と同等の挙動 |
+| `winit_key_to_bytes` | winit::KeyEvent → PTY bytes 変換 | KeyboardInput 到達 | tao_key_to_bytes と同等の出力 (modifier ガード `!ctrl && !alt` の早期 None は維持) |
+| wgpu surface 作成 | `wgpu::Instance::create_surface(&window)` 経由で raw-window-handle 0.6 を使う | window 作成済み | tao 版と同等の surface |
+
+**Processing Flow** (素の打鍵):
+
+1. winit `EventLoop::run` がイベントを poll
+2. `WindowEvent::KeyboardInput { state: Pressed, event, .. }` → `ImeBackend::dispatch_key_event` (現状 NullBackend なので常に `Passthrough`)
+3. `Passthrough` → `winit_key_to_bytes(event, modifiers)` → PTY write
+4. `WindowEvent::Ime(_)` は当面無視 (NullBackend が `set_ime_allowed(false)` 相当の挙動で発火しない、または発火しても backend が受け取らない)
+
+**Implementation Steps**:
+
+1. **Cargo.toml の置換** — `tao = "0.34"` 削除 + `winit = "0.30.9"` 追加
+2. **main.rs の event loop 立ち上げ書き換え** — `winit::EventLoop::new()` (Result) + `event_loop.run_app(app)` または `event_loop.run(|event, target| { ... })`
+3. **window_host.rs の event 種別マッピング表に従う書き換え** — `tao::event::WindowEvent` の各 variant を winit 対応 variant に対応付け
+4. **`winit_key_to_bytes` rewrite** — winit `KeyEvent::logical_key` (`Key::Character(_)` / `Key::Named(_)`) + `Modifiers` の組み合わせから PTY bytes を生成。tao 版の `!mods.ctrl && !mods.alt && physical == Character` 早期 None ガードを保持
+5. **wgpu surface 作成検証** — `Arc<Window>` を共有して `Instance::create_surface(window.clone())` で surface 作成が成功すること
+6. **build / test** — `cargo build --workspace` + `cargo test --workspace` exit 0、既存テストは backbone 12 件のみ green でよい
+
+**Dependencies**: 4-G-1 完了
+
+**Testing Approach**:
+- Unit: 既存 12 件が green を維持。新規追加なし (winit_key_to_bytes 単体テストは tao_key_to_bytes 由来の既存テストを rename + 期待値見直しで対応、件数±0)
+- Integration: 該当なし
+- E2E: 該当なし
+- Manual: host-deferred (Phase 4-G-4 で実施)
+
+**Acceptance Criteria**:
+- [ ] `cargo build --workspace` exit 0
+- [ ] `cargo test --workspace` exit 0
+- [ ] `cargo fmt --all -- --check` clean
+- [ ] `native-poc/Cargo.toml` に `tao` 依存がない、`winit = "0.30.9"` がある
+- [ ] 起動時に native-poc が winit 経由でウィンドウを表示し、素の英数字打鍵が PTY に届く (host-deferred 確認、ただしユニットレベルで `winit_key_to_bytes` の出力が一致する)
+- [ ] Phase 4-E ファイル diff empty を維持
+
+**Estimated Effort**: large (約 200 行の書き換え + wgpu surface 整合性確認)
+
+---
+
+### Sub-Phase 4-G-3: winit IME bridge 実装
+
+**Goal**: `WinitImeBridge` を新規実装し、winit `WindowEvent::Ime` を `ImeEvent` に変換して App::on_ime_* に接続する。Ghostty 由来のステートマシン (`im_composing` + `in_keyevent`) で commit と key event の二重消費を防ぐ。
+
+**Files to Create**:
+- `native-poc/src/ime/winit_bridge.rs` — `WinitImeBridge` 本体 (winit Ime → ImeEvent 変換 + ステートマシン + `set_ime_cursor_area` 呼出)
+
+**Files to Modify**:
+- `native-poc/src/ime/mod.rs` — `pub mod winit_bridge;` 追加
+- `native-poc/src/ime/backend.rs` — `build_backend` factory が `Arc<winit::window::Window>` を引数に取り、`WinitImeBridge::init(window)` を呼ぶ。`ImeInitError::Unavailable` 時は NullBackend にフォールバック
+- `native-poc/src/window_host.rs` — `WindowEvent::Ime(ime)` を `WinitImeBridge::on_winit_ime(&ime)` に転送、`KeyboardInput` の press / release 両方を `dispatch_key_event_via_ime` に通す、`Window::set_ime_cursor_area` を `notify_cursor_rect` 経由で呼ぶ
+- `native-poc/src/app.rs` — `dispatch_key_event_via_ime` がリリースキーも通すよう確認 (既存実装は press のみだったかもしれないため見直し)
+
+**Key Components**:
+
+| Component | Responsibility | Precondition | Postcondition |
+|-----------|----------------|--------------|---------------|
+| `WinitImeBridge::init(window: Arc<Window>)` | `Window::set_ime_allowed(true)` を呼んで IME を enable | window 作成済み | bridge instance ready、winit IME path 有効 |
+| `WinitImeBridge::on_winit_ime(&Ime)` | winit `Ime` variant を `ImeEvent` にマップ、`im_composing` フラグ更新 | bridge active | queue に `ImeEvent` が積まれる |
+| `WinitImeBridge::dispatch_key_event(raw)` | `im_composing` が true なら `Consumed`、false なら `Passthrough` を返す | dispatch_key_event_via_ime から呼ばれる | state machine による振り分け |
+| `WinitImeBridge::pump(events)` | queue を drain | n/a | events vec に push (最大 1024 件/tick、超過は warn IME_E901) |
+| `WinitImeBridge::notify_cursor_rect` | `last_cursor_rect` と異なる時のみ `Window::set_ime_cursor_area` 呼出 | bridge active | 候補ウィンドウがカーソル近傍に出る |
+| `WinitImeBridge::notify_focus(b)` | `Window::set_ime_allowed(b)` で IME を on/off | bridge active | focus 取得時に IME が attach、focus 喪失時に detach |
+| `WinitImeBridge::drop` | `Window::set_ime_allowed(false)` | bridge active | winit が IC / subclass を自動解放 |
 
 **Processing Flow** (preedit + commit):
 
-1. `WindowEvent::KeyboardInput` 到達
-2. `App` が `ImeBackend::dispatch_key_event` を呼ぶ (window_host で 4-G-A で追加した hook)
-3. `X11Backend::dispatch_key_event`:
-   - 分岐1: tao key event から `XKeyPressedEvent` を組み立てる (keycode は tao の physical_key / scancode から逆算、modifier は `XKeyEvent::state` に詰める)
-   - 分岐2: `XFilterEvent(&mut synthetic, window)` を呼ぶ
-     - 戻り値 true → `XmbLookupString` で direct commit (status == `XLookupChars`) かどうかを確認、direct commit があれば `ImeEvent::Commit(text)` を queue へ; なければ後続 IM callback (`Preedit*Callback` / `StatusCallback`) で `ImeEvent::Preedit` / `ImeEvent::Commit` が積まれる。`KeyDispatchResult::Consumed` を返す
-     - 戻り値 false → `KeyDispatchResult::Passthrough` を返す (App は既存 `tao_key_to_bytes` に流す)
-4. tick 終端の `pump` で queue を drain
-5. App が `on_ime_preedit` / `on_ime_commit` を呼ぶ → 既存 `sanitize` 経由
+1. ユーザーがトグルキー (Ctrl+Space / 半角/全角) を押す
+2. winit が `WindowEvent::Ime(Ime::Enabled)` を発火
+3. `WinitImeBridge::on_winit_ime` が `im_composing = true` をセット
+4. ユーザーが "nihongo" と打鍵 → winit が `WindowEvent::KeyboardInput` + `WindowEvent::Ime(Ime::Preedit("にほんご", _))` を発火
+5. `dispatch_key_event` は `im_composing == true` なので `Consumed` を返し、`winit_key_to_bytes` は呼ばれない
+6. `on_winit_ime(Ime::Preedit(_))` が `ImeEvent::Preedit("にほんご")` を queue に積む
+7. tick 終端で `pump` が drain → `App::on_ime_preedit("にほんご")` → Phase 4-E `sanitize` → `preedit::State::set`
+8. ユーザーが Space で変換、Enter で確定 → winit が `WindowEvent::Ime(Ime::Commit("日本語"))` を発火
+9. `on_winit_ime` が `ImeEvent::Commit("日本語")` を queue に積み、`im_composing = false`
+10. tick 終端で `pump` → `App::on_ime_commit("日本語")` → `commit::write_commit` → PTY
+
+**Processing Flow** (modifier 単独 release):
+
+1. ユーザーが Shift キー単独を押して離す (fcitx5 では IM 切替に使われる場合あり)
+2. winit が `WindowEvent::KeyboardInput { state: Released, logical_key: Key::Named(NamedKey::Shift), .. }` を発火
+3. `dispatch_key_event` がこの release event も処理 (Ghostty 流: press / release 両方通す)
+4. `im_composing == false` の場合は `Passthrough` を返し、`winit_key_to_bytes` は modifier 単独 release では何も出さない (既存ガードと整合)
 
 **Processing Flow** (IM サーバ突然死):
 
-1. `XFilterEvent` 中に X 接続が落ちる、または `XCloseIM` が呼ばれた状態を検出
-2. `X11Backend::pump` が backend health flag を false にする
-3. `App` 側で health == false を検出したら `App::on_ime_focus_lost()` を呼んで preedit クリア
-4. window_host が次の event-loop tick で `ImeBackendFactory::build` を再呼出 (focus-in トリガで再接続) → 失敗ならそのまま `NullBackend` 継続、成功なら再接続
+1. fcitx5 が kill された / クラッシュした
+2. winit / X11 / Wayland 経由で `WindowEvent::Ime(Ime::Disabled)` が発火
+3. `on_winit_ime(Ime::Disabled)` が `ImeEvent::FocusOut` を queue に積み、`im_composing = false`
+4. tick 終端で `pump` → `App::on_ime_focus_lost` → preedit クリア
+5. fcitx5 を再起動 → ユーザーが native-poc を blur / refocus → winit が `Ime::Enabled` を再発火、復帰
 
 **Implementation Steps**:
 
-1. **X11 ハンドル取得** — `raw-window-handle::RawDisplayHandle::Xlib`, `RawWindowHandle::Xlib` を probe。それ以外は `ImeInitError::HandleType` を返す
-2. **XIM open + IC create** — `XOpenIM` + `XCreateIC` (style: `XIMPreeditCallbacks | XIMStatusCallbacks` を最優先、フォールバック `XIMPreeditNothing | XIMStatusNothing`)
-3. **IM callbacks 配線** — preedit start / draw / done / caret、status start / draw / done を callback で受けて internal queue に積む
-4. **dispatch_key_event + XFilterEvent + XmbLookupString** — synthetic XKeyPressedEvent 経由のフィルタ + direct commit 取り出し
-5. **notify_cursor_rect / notify_focus + Drop** — IC attribute 更新 + リソース解放
-6. **Integration test TS-backend-int-1** — `#[ignore]` 付きで xvfb-run + minimal stub IM responder で commit が pump に届くまで E2E (`cargo test --ignored ime_x11_*` で起動)
+1. **`winit_bridge.rs` 新規作成** — `WinitImeBridge` 構造体 + `ImeBackend` trait 実装 + state machine 内部関数
+2. **`backend.rs::build_backend` 改修** — env / settings check のあと `WinitImeBridge::init(window)` を呼ぶ。失敗時は NullBackend + warn 一発
+3. **`window_host.rs` で IME event を bridge にルーティング** — `WindowEvent::Ime(ime)` → `bridge.on_winit_ime(&ime)`
+4. **`KeyboardInput` の release も dispatch_key_event_via_ime に通す** — Ghostty 流のステートマシンを成立させるため
+5. **`Window::set_ime_cursor_area` の呼出経路を確認** — `App::notify_cursor_rect_if_changed` → `bridge.notify_cursor_rect` → `window.set_ime_cursor_area(Position, Size)`
+6. **`TS-winit-1..7` ユニットテスト** — bridge の state machine 単体テスト
 
-**Dependencies**: 4-G-A 完了が前提。`raw-window-handle` direct dep が必要
-
-**Testing Approach**:
-- Unit: 内部の XKeyPressedEvent 組み立て (tao key → keycode 変換) の純粋関数化を行い、その関数を unit test (TS-x11-1: ASCII letter のマッピング、TS-x11-2: modifier mask)
-- Integration: TS-backend-int-1 (`#[ignore]`, Docker host + xvfb)
-- Manual: TS-manual-ime-x11 (fcitx5), TS-manual-ime-x11-ibus (IBus), TS-manual-ime-imserver-restart, TS-manual-ime-mux
-
-**Acceptance Criteria**:
-- [ ] `cargo build --workspace` (Linux) exit 0
-- [ ] `cargo test --workspace` exit 0
-- [ ] TS-manual-ime-x11 で fcitx5 経由の "nihongo" → "日本語" 入力が成立
-- [ ] TS-manual-ime-x11-ibus で IBus 経由でも同等
-- [ ] TS-manual-ime-imserver-restart: fcitx5 kill 後に fallback、再起動 + focus 再取得で復帰
-- [ ] TS-manual-ime-mux: mux session 内でも commit が PTY (mux 経由) に届く
-- [ ] Phase 1 fcitx5 acceptance criteria (`doc/tasks/ime-input-support/SPEC.md` US1-US5) パス
-
-**Estimated Effort**: large
-
----
-
-### Sub-Phase 4-G-C: Linux Wayland (zwp_text_input_v3) backend
-
-**Goal**: Wayland セッションで `WaylandBackend` を実装し、`TS-manual-ime-wayland` を達成する。
-
-**Files to Create**:
-- `native-poc/src/ime/wayland.rs` — `WaylandBackend` 本体 (`zwp_text_input_manager_v3` bind / `zwp_text_input_v3` listener / 専用 event pump スレッド / `crossbeam_channel` 経由で main thread と通信 / `set_cursor_rectangle` / `enable` / `disable` / `Drop` で `destroy`)
-
-**Files to Modify**:
-- `native-poc/src/ime/mod.rs` — `#[cfg(all(unix, not(target_os = "macos")))] pub mod wayland;`
-- `native-poc/src/ime/backend.rs` — `ImeBackendFactory::build` 内で `RawDisplayHandle::Wayland(_)` を runtime probe し `WaylandBackend::init` を呼ぶ (X11 probe より先または後の優先順位は env display backend に従う; runtime で来た handle variant をそのまま使う)
-- `native-poc/Cargo.toml` — `[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]` に `wayland-client = "0.31"` + `wayland-protocols = { version = "0.31", features = ["unstable"] }` を追加
-
-**Key Components**:
-
-| Component | Responsibility | Precondition | Postcondition |
-|-----------|----------------|--------------|---------------|
-| `WaylandBackend::init(window, display)` | tao の Wayland display proxy を取得、`zwp_text_input_manager_v3` global を bind | `RawDisplayHandle::Wayland`, compositor に `zwp_text_input_manager_v3` 存在 | text-input 起動 + pump スレッド起動 / 失敗時 `ImeInitError::Unavailable` |
-| `WaylandPumpThread` | Wayland 専用 event loop (`Connection::dispatch`) を回し、`commit_string` / `preedit_string` / `done` を crossbeam channel に push | スレッド起動 + Wayland connection 取得済 | channel に `ImeEvent` 流入 |
-| `WaylandBackend::pump(events)` | crossbeam_channel から `ImeEvent` を drain | スレッド稼働中 | events vec に push (最大 1024 件/tick、超過は drop + warn IME_E901) |
-| `WaylandBackend::notify_cursor_rect` | `set_cursor_rectangle(x, y, w, h)` (main thread から発行可能。これは proxy method なので thread-safe wrapper を経由) | text-input enabled | 候補ウィンドウが追従 |
-| `WaylandBackend::notify_focus(true/false)` | `enable` / `disable` イベント送信 | text-input bind 済 | IM が focus を把握 |
-| `WaylandBackend::dispatch_key_event` | 常に `Passthrough` を返す (Wayland では keyboard listener が真の入力ソース。tao の KeyboardInput はそのまま PTY に流す) | n/a | tao_key_to_bytes が走る。preedit 中の文字キーは Phase 4 同様 `ReceivedImeText` 経由でなく `Commit` 経由で来るので二重コミット回避は `App::pump_ime` 側のロジックで担保 |
-| `WaylandBackend::drop` | text-input destroy + pump スレッド join | リソース保持 | クリーンアップ |
-
-**Processing Flow**:
-
-1. `WaylandPumpThread` が `Connection::dispatch` で blocking。`preedit_string` / `commit_string` / `done` を listener で受ける
-2. listener: `preedit_string` → `ImeEvent::Preedit(text)` を channel に push、`commit_string` → `ImeEvent::Commit(text)` を push、`done` で flush
-3. main thread の tick 終端で `WaylandBackend::pump` が channel から drain → `App` が `on_ime_*` を呼ぶ
-4. cursor 移動時に main thread から `set_cursor_rectangle` を発行
-
-**Implementation Steps**:
-
-1. **Wayland display proxy 取得** — `raw-window-handle::RawDisplayHandle::Wayland` から `wl_display` ポインタを取得、`Connection::from_external_display` で `wayland-client` の Connection に変換
-2. **text-input-manager bind + text-input 生成** — registry をスキャン、`zwp_text_input_manager_v3` 不在は `Unavailable`
-3. **pump スレッド起動** — `crossbeam_channel::unbounded::<ImeEvent>()` で送受、listener コードを別スレッドで blocking dispatch
-4. **focus / cursor rect / drain** — `notify_focus` で `enable`/`disable`、`notify_cursor_rect` で `set_cursor_rectangle`、`pump` で channel drain
-5. **Drop でクリーンアップ** — text-input destroy + pump スレッド join
-6. **regression / smoke tests** — pump スレッドの起動と channel 通信を mock compositor なしで検証する unit (`WaylandBackend::pump` を direct channel push でテスト): TS-wayland-1 (`#[cfg(test)]` で内部 channel に push したものが pump で drain される)
-
-**Dependencies**: 4-G-A 完了が前提。`wayland-client` / `wayland-protocols` 新規 dep
+**Dependencies**: 4-G-2 完了
 
 **Testing Approach**:
-- Unit: TS-wayland-1 (channel drain), TS-wayland-2 (`Unavailable` 経路: registry に manager がない時 `init` が `Unavailable` を返す — manager presence flag を `#[cfg(test)]` で注入可能にする)
-- Integration: 該当なし (実 compositor 必須、host gate に降りる)
-- Manual: TS-manual-ime-wayland (KDE Plasma 6 / Sway + fcitx5-wayland)
-
-**Acceptance Criteria**:
-- [ ] `cargo build --workspace` (Linux) exit 0、Wayland feature 有効
-- [ ] `cargo test --workspace` exit 0
-- [ ] TS-manual-ime-wayland on KDE Plasma 6 (KWin) で "nihongo" → "日本語" 成立
-- [ ] TS-manual-ime-wayland on Sway で同等
-- [ ] compositor が `zwp_text_input_manager_v3` を持たない時は warn + NullBackend にフォールバック (ターミナルは継続)
-
-**Estimated Effort**: large
-
----
-
-### Sub-Phase 4-G-D: Windows IMM32 backend
-
-**Goal**: Windows で `WindowsBackend` を実装し、`TS-manual-ime-windows` を達成する。
-
-**Files to Create**:
-- `native-poc/src/ime/windows.rs` — `WindowsBackend` 本体 (`SetWindowSubclass` で wndproc 差し替え / `WM_IME_STARTCOMPOSITION` / `WM_IME_COMPOSITION` (`GCS_COMPSTR` / `GCS_RESULTSTR`) / `WM_IME_ENDCOMPOSITION` の購読 / `ImmGetCompositionStringW` で UTF-16 → UTF-8 / `ImmSetCompositionWindow` で `CFS_POINT` 報告 / `RemoveWindowSubclass` で `Drop`)
-
-**Files to Modify**:
-- `native-poc/src/ime/mod.rs` — `#[cfg(windows)] pub mod windows;`
-- `native-poc/src/ime/backend.rs` — `ImeBackendFactory::build` 内で `cfg(windows)` の時 `WindowsBackend::init` を呼ぶ
-- `native-poc/Cargo.toml` — `[target.'cfg(windows)'.dependencies]` に `windows = { version = "0.58", features = [...] }` を追加 (`Win32_UI_Input_Ime`, `Win32_UI_WindowsAndMessaging`, `Win32_UI_Shell` 系)
-
-**Key Components**:
-
-| Component | Responsibility | Precondition | Postcondition |
-|-----------|----------------|--------------|---------------|
-| `WindowsBackend::init(window, display)` | `RawWindowHandle::Win32` から HWND を取得、`SetWindowSubclass` を installation | tao が Win32 window を生成済み | subclass installed / 失敗時 `ImeInitError::PlatformError` |
-| `subclass wndproc` | `WM_IME_*` を識別、`ImmGetCompositionStringW` で文字列取得、UTF-16 → UTF-8、`ImeEvent` を thread-local queue に push、他メッセージは `DefSubclassProc` | subclass installed | tao は変更なく動作 |
-| `WindowsBackend::pump(events)` | thread-local queue を drain | wndproc が events を積んだ後 | events vec に push (最大 1024 件/tick、超過は drop + warn IME_E901) |
-| `WindowsBackend::notify_cursor_rect` | `ImmSetCompositionWindow(CFS_POINT, x, y)` | composition open または無条件 | 候補ウィンドウがカーソル近傍に出る (best effort) |
-| `WindowsBackend::notify_focus(true/false)` | n/a (subclass が `WM_SETFOCUS` / `WM_KILLFOCUS` を `DefSubclassProc` に流すだけで OS が処理する) | n/a | focus は OS 任せ |
-| `WindowsBackend::dispatch_key_event` | 常に `Passthrough` を返す (IMM32 は `WM_KEYDOWN` を independently に解釈して `WM_IME_*` を発火するため、tao の KeyboardInput とは独立) | n/a | tao_key_to_bytes が走る。preedit 中の文字キーは `WM_IME_COMPOSITION` で `Commit` 経由になるので、`tao_key_to_bytes` 側で同じキーが encode されないこと (要確認 — 実装中に Win32 で `WM_KEYDOWN` の tao 透過挙動を検証、二重入力が出るなら `App::pump_ime` 側で commit 直後の同等 ASCII を suppress するロジックを入れる) |
-| `WindowsBackend::drop` | `RemoveWindowSubclass` | subclass installed | tao wndproc が pristine 状態に戻る |
-
-**Processing Flow**:
-
-1. OS が `WM_IME_STARTCOMPOSITION` を送信 → subclass: `ImeEvent::Preedit("")` を push、`DefSubclassProc` で tao にも流す
-2. OS が `WM_IME_COMPOSITION` (`GCS_COMPSTR`) を送信 → subclass: `ImmGetCompositionStringW(GCS_COMPSTR)` で UTF-16 取得 → UTF-8 変換 → `ImeEvent::Preedit(text)` を push、`DefSubclassProc`
-3. OS が `WM_IME_COMPOSITION` (`GCS_RESULTSTR`) を送信 → subclass: 同様に `GCS_RESULTSTR` を取得し `ImeEvent::Commit(text)` を push
-4. OS が `WM_IME_ENDCOMPOSITION` を送信 → subclass はそのまま `DefSubclassProc`
-5. main thread の tick 終端で `pump` が thread-local queue を drain → App routes to `on_ime_*`
-
-**Implementation Steps**:
-
-1. **HWND 取得 + subclass install** — `raw-window-handle::RawWindowHandle::Win32` 経由で HWND、`SetWindowSubclass` 呼出
-2. **wndproc 実装** — `WM_IME_*` 分岐、`ImmGetCompositionStringW` 呼出 (バッファサイズ取得 → UTF-16 取得 → UTF-8 変換)、`ImeEvent` push、それ以外は `DefSubclassProc`
-3. **UTF-16 → UTF-8 変換** — `String::from_utf16` を使い、失敗時は drop + warn (IME_E401)
-4. **notify_cursor_rect** — `ImmGetContext` → `ImmSetCompositionWindow(CFS_POINT)` → `ImmReleaseContext`
-5. **Drop** — `RemoveWindowSubclass`
-6. **Integration test TS-backend-int-2** — `#[cfg(windows)]` + hidden HWND + `SendMessageW` で `WM_IME_COMPOSITION` を疑似送信し、pump 経由で `ImeEvent::Commit` が届くまで E2E
-
-**Dependencies**: 4-G-A 完了が前提。`windows` crate 新規 dep
-
-**Testing Approach**:
-- Unit: UTF-16 → UTF-8 変換ヘルパ (TS-windows-1: BMP), TS-windows-2 (Surrogate pair), TS-windows-3 (invalid surrogate → drop + warn)
-- Integration: TS-backend-int-2 (`#[cfg(windows)]` + hidden window)
-- Manual: TS-manual-ime-windows (MS-IME + Google IME)
-
-**Acceptance Criteria**:
-- [ ] `cargo build --target x86_64-pc-windows-msvc --workspace` exit 0 (host または cross)
-- [ ] `cargo test --workspace` exit 0
-- [ ] TS-manual-ime-windows with MS-IME: "nihongo" → "日本語" 成立、preedit overlay と commit がそれぞれ 1 回ずつ
-- [ ] TS-manual-ime-windows with Google IME: 同等
-- [ ] 候補ウィンドウがカーソル近傍に出る (best effort、gating ではない)
-
-**Estimated Effort**: large
-
----
-
-### Sub-Phase 4-G-E: 最終ゲート + パフォーマンス計測 + ドキュメント
-
-**Goal**: パフォーマンスゲート、clippy / fmt、Phase 4 manual gate のクロスタスク更新、README 更新。
-
-**Files to Create**:
-- (なし; ドキュメント更新のみ)
-
-**Files to Modify**:
-- `native-poc/README.md` — Phase 4-G feature matrix (Linux X11 / Wayland / Windows + fallback) と env / settings 説明を追記
-- `doc/tasks/ime-native-integration/VERIFICATION_RESULT.md` — sdd.6-verify が作成 (この phase では作らない)
-- 必要に応じて `doc/tasks/mux-tabs-windows-ime/sdd.yaml` の NFR3 / FR11 / FR12 manual gate を notes だけ追記 (本 SDD の責務外なので「ゲート flip は別 PR で」と memo)
-
-**Key Components**:
-
-| Component | Responsibility | Precondition | Postcondition |
-|-----------|----------------|--------------|---------------|
-| performance harness (instrumented binary) | `App::on_ime_preedit` 入口と `WindowHost::request_redraw` 間の `Instant::now()` delta を log | release build | TS-perf-3 / TS-perf-4 / TS-perf-regression の数値を記録 |
-| final gate | `cargo fmt --all --check`, `cargo clippy -p emterm-native-poc -- -D warnings`, `cargo build --workspace`, `cargo test --workspace` | 全 sub-phase merged | exit 0 |
-| README 更新 | Phase 4-G の feature matrix と env / settings | implementation 完了 | matrix 更新 |
-
-**Processing Flow**:
-
-1. release build で TS-perf-3 / TS-perf-4 を計測 (Linux X11 host)、結果を `tmp/phase-4g-perf.txt` 等に保存
-2. Phase 4 の `TS-perf-1` / `TS-perf-2` を re-run、Phase 4 baseline と比較 (+10% 以内)
-3. fmt / clippy / build / test 最終ゲート
-4. README に Phase 4-G feature matrix と env / settings の使い方を追記
-5. VERIFICATION_RESULT.md は sdd.6-verify で作成 (本 phase の責務ではない)
-
-**Implementation Steps**:
-
-1. **Performance instrumentation** — `App::on_ime_preedit` / `App::on_ime_commit` 入口で `Instant::now()` を log::debug (release では出ないので、TS-perf-3/4 計測時のみ `log::warn` 一時化 or feature gate)
-2. **fmt + clippy sweep** — mechanical fixes
-3. **README 更新** — Phase 4-G の feature matrix
-4. **Phase 4 cross-task notes** — `doc/tasks/mux-tabs-windows-ime/sdd.yaml` に「NFR3 / FR11 / FR12 は Phase 4-G で完遂、別 PR で flip 予定」のメモ (本 SDD では flip しない)
-
-**Dependencies**: 4-G-A〜4-G-D が完了済み
-
-**Testing Approach**:
-- Unit / Integration: 再実行
+- Unit: TS-winit-1..7 (7 件)、既存 12 件は green を維持
+- Integration: TS-winit-int-1 (`#[ignore]`、Linux X11 Xvfb 上で `Ime::Disabled` 通知が来ることを確認)、TS-winit-int-2 (`#[cfg(windows)]`、host-deferred)
 - E2E: 該当なし
-- Manual: TS-perf-3 / TS-perf-4 / TS-perf-regression を release host で計測
+- Manual: Phase 4-G-4 でまとめて実施
 
 **Acceptance Criteria**:
-- [ ] `cargo fmt --all -- --check` exit 0
-- [ ] `cargo clippy -p emterm-native-poc -- -D warnings` exit 0 (forward-staged な warning は notes に記録した上で許容)
-- [ ] `cargo build --workspace` exit 0
-- [ ] `cargo test --workspace` exit 0
-- [ ] TS-perf-3: preedit redraw < 30 ms (Linux X11 release host)
-- [ ] TS-perf-4: commit → PtySession::write < 5 ms
-- [ ] TS-perf-regression: IME-OFF key 入力 latency が Phase 4 baseline + 10% 以内
-- [ ] README Phase 4-G matrix 更新済み
+- [ ] `native-poc/src/ime/winit_bridge.rs` が存在し、`ImeBackend` trait を実装
+- [ ] `cargo test --workspace` exit 0、新規 +7 件以上
+- [ ] `cargo clippy -p emterm-native-poc -- -D warnings` clean
+- [ ] `EMTERM_NATIVE_IME=0` で起動 → NullBackend + warn 一発 (回帰なし)
+- [ ] `Settings::default()` ime.native_integration = false → NullBackend
+- [ ] Phase 4-E ファイル diff empty を維持
 
-**Estimated Effort**: small (実装はほぼなく、計測 + ドキュメント中心)
+**Estimated Effort**: medium (実装は小さいが state machine の検証 + winit_bridge 単体テストで時間が必要)
+
+---
+
+### Sub-Phase 4-G-4: Manual gate 再実施
+
+**Goal**: TS-manual-ime-* を winit 経路で再実施し、Phase 1 WebView IME parity (NFR8) を達成。VERIFICATION_RESULT.md に結果を追記。
+
+**Files to Modify**:
+- `doc/tasks/ime-native-integration/VERIFICATION_RESULT.md` — winit 経路での manual gate 結果を追記 (sdd.6-verify が記録)
+- `native-poc/README.md` — Phase 4-G feature matrix を winit 採択方針に更新
+
+**Manual Gates**:
+
+1. **TS-manual-ime-x11** (Linux X11 + fcitx5 host)
+   - `EMTERM_NATIVE_IME=1` (default) で起動
+   - Ctrl+Space で fcitx5 トグル、"nihongo" → "日本語" 変換
+   - 期待: preedit overlay 表示、`Enter` で commit が PTY に exactly once 届く
+   - Ctrl+C / 矢印 / Esc / Tab がパススルー
+2. **TS-manual-ime-x11-ibus** (Linux X11 + IBus host) — 同上を IBus で
+3. **TS-manual-ime-wayland** (Linux Wayland + fcitx5-wayland) — KDE Plasma 6 + Sway の 2 環境
+4. **TS-manual-ime-windows** (Windows + MS-IME / Google IME)
+5. **TS-manual-ime-fallback** (任意 host with `EMTERM_NATIVE_IME=0`) — warn 一発 + fallback 動作
+6. **TS-manual-ime-imserver-restart** (Linux X11) — fcitx5 kill → `Ime::Disabled` warn log → 再起動 + refocus で復帰
+7. **TS-manual-ime-mux** (Linux X11 + fcitx5 + `emterm mux attach`) — mux session 内での IME 動作
+
+**Performance Gates**:
+
+- **TS-perf-3**: preedit redraw < 30 ms (Linux X11 release host, `EMTERM_IME_PERF=1`)
+- **TS-perf-4**: commit → `PtySession::write` < 5 ms
+- **TS-perf-regression**: IME-OFF key-down → PTY write が Phase 4 baseline +10% 以内 (winit 移行込み)
+
+**Implementation Steps**:
+
+1. **release build を host で実行** — `cargo build --release -p emterm-native-poc` (Linux / Windows)
+2. **Linux X11 + fcitx5 host で gate 1, 2, 6, 7 を実施** — 結果を VERIFICATION_RESULT.md に追記
+3. **Linux Wayland host で gate 3 を実施**
+4. **Windows host で gate 4 を実施** (cross-build または windows-latest CI)
+5. **任意 host で gate 5 を実施**
+6. **TS-perf-3 / TS-perf-4 / TS-perf-regression を `EMTERM_IME_PERF=1` で計測** — warn-log から μs 値を抽出
+7. **README.md 更新** — Phase 4-G feature matrix を winit 採択方針に書き換え
+
+**Dependencies**: 4-G-3 完了
+
+**Testing Approach**:
+- Unit / Integration: 再 run (regression 確認)
+- E2E: 該当なし
+- Manual: 全 7 manual gate + 3 perf gate
+
+**Acceptance Criteria**:
+- [ ] TS-manual-ime-x11 / x11-ibus / wayland / windows / fallback / imserver-restart / mux すべて pass
+- [ ] TS-perf-3 (< 30 ms), TS-perf-4 (< 5 ms), TS-perf-regression (+10% 以内) 達成
+- [ ] Phase 1 fcitx5 acceptance criteria (`doc/tasks/ime-input-support/SPEC.md` US1-US5) パス (NFR8)
+- [ ] README.md Phase 4-G matrix が winit 採択方針に更新
+
+**Estimated Effort**: medium (host 実機作業)
 
 ---
 
@@ -391,88 +354,90 @@ Phase 4-E の sanitize / write_commit / focus_lost ルーティングはその�
 
 ```
 native-poc/
-├── Cargo.toml                           # MODIFY: [target.'cfg(all(unix, not(target_os="macos")))'.dependencies] +x11-dl,
-│                                        #                                                              +wayland-client,
-│                                        #                                                              +wayland-protocols,
-│                                        #         [target.'cfg(windows)'.dependencies] +windows
-│                                        #         (raw-window-handle 0.6 は既に direct dep)
-├── README.md                            # MODIFY (4-G-E): Phase 4-G feature matrix
+├── Cargo.toml                           # MODIFY:
+│                                        #   ADD:    winit = "0.30.9" (default-features=false, features=["rwh_06","x11","wayland"])
+│                                        #   REMOVE: tao = "0.34"
+│                                        #   REMOVE: x11-dl, wayland-client, wayland-protocols (Linux)
+│                                        #   REMOVE: windows (Windows)
+│                                        #   KEEP:   raw-window-handle, crossbeam-channel
+├── README.md                            # MODIFY (4-G-4): Phase 4-G winit feature matrix
 └── src/
-    ├── app.rs                           # MODIFY (4-G-A): ime_backend field + pump_ime + cursor diff
-    ├── window_host.rs                   # MODIFY (4-G-A): startup factory, KeyboardInput dispatch, Focused notify, pump_ime tick
-    ├── settings.rs                      # MODIFY (4-G-A): ime.native_integration: bool (default true)
+    ├── main.rs                          # MODIFY (4-G-2): tao::EventLoop → winit::EventLoop
+    ├── app.rs                           # MODIFY (4-G-2): tao 型参照を winit に置換 (本体は不変)
+    ├── window_host.rs                   # MODIFY (4-G-2 + 4-G-3): tao API → winit API + WindowEvent::Ime ルーティング
+    ├── settings.rs                      # UNCHANGED: ImeSettings は Phase 4-G オリジナル維持
     └── ime/
-        ├── mod.rs                       # MODIFY: pub mod backend; pub mod null; + cfg backends
+        ├── mod.rs                       # MODIFY (4-G-1 + 4-G-3): x11/wayland/windows mod 削除、winit_bridge 追加
         ├── preedit.rs                   # UNCHANGED (Phase 4-E auto-scope)
         ├── commit.rs                    # UNCHANGED (Phase 4-E auto-scope)
-        ├── backend.rs                   # NEW (4-G-A): trait + enums + factory
-        ├── null.rs                      # NEW (4-G-A): NullBackend
-        ├── x11.rs                       # NEW (4-G-B): X11Backend (cfg unix, not macos)
-        ├── wayland.rs                   # NEW (4-G-C): WaylandBackend (cfg unix, not macos)
-        └── windows.rs                   # NEW (4-G-D): WindowsBackend (cfg windows)
+        ├── backend.rs                   # MODIFY (4-G-1 + 4-G-3): factory probe を winit に集約
+        ├── null.rs                      # UNCHANGED
+        ├── winit_bridge.rs              # NEW (4-G-3): WinitImeBridge + state machine
+        ├── x11.rs                       # DELETED (4-G-1)
+        ├── wayland.rs                   # DELETED (4-G-1)
+        └── windows.rs                   # DELETED (4-G-1)
 ```
 
 ## Testing Strategy
 
-- **Unit**: backend 抽象 / NullBackend / settings / fallback / route guard / 各 OS の純粋関数 (X11 keycode 変換、UTF-16 → UTF-8 変換、Wayland channel drain)
-  - TS-backend-1..5, TS-cursor-1, TS-focus-1, TS-fallback-1..3, TS-settings-1, TS-route-1..2 (4-G-A)
-  - TS-x11-1..2 (4-G-B)
-  - TS-wayland-1..2 (4-G-C)
-  - TS-windows-1..3 (4-G-D)
-- **Integration**: 実 OS / IM サーバ依存があるものは `#[ignore]` 付きで harness を入れる
-  - TS-backend-int-1 (X11, xvfb + stub IM responder) — 4-G-B
-  - TS-backend-int-2 (Windows, hidden HWND + `SendMessageW`) — 4-G-D
-- **E2E**: 既存 `./scripts/run-e2e-docker.sh` は legacy Tauri 向けで native-poc には適用外。Phase 4-G では new E2E は追加しない (regression 検査として既存 fail list と差分なしを確認)
-- **Manual**: host 実機 gate
-  - TS-manual-ime-x11, TS-manual-ime-x11-ibus, TS-manual-ime-imserver-restart, TS-manual-ime-mux (4-G-B)
-  - TS-manual-ime-wayland (4-G-C)
-  - TS-manual-ime-windows (4-G-D)
-  - TS-manual-ime-fallback (4-G-A 以降どこでも)
-  - TS-perf-3, TS-perf-4, TS-perf-regression (4-G-E)
+- **Unit**: backend 抽象 / NullBackend / settings / fallback / route guard (Phase 4-G-A 由来 12 件保持) + winit_bridge state machine (新規 7 件)
+  - 保持: TS-backend-1..5, TS-cursor-1, TS-focus-1, TS-fallback-1..3, TS-settings-1, TS-route-1..2 (4-G-A 起源、全 phase で green)
+  - 新規: TS-winit-1..7 (4-G-3)
+  - 削除: TS-x11-1..2, TS-wayland-1..2, TS-windows-1..3 (4-G-1 で削除)
+- **Integration**: 実 OS / IM サーバ依存があるものは `#[ignore]` 付き harness
+  - 新規: TS-winit-int-1 (Linux X11 Xvfb, `#[ignore]`) — 4-G-3
+  - 新規: TS-winit-int-2 (`#[cfg(windows)]`, host-deferred) — 4-G-3
+  - 削除: TS-backend-int-1, TS-backend-int-2 (4-G-1 で削除)
+- **E2E**: 既存 `./scripts/run-e2e-docker.sh` は legacy Tauri 向けで native-poc には適用外
+- **Manual**: host 実機 gate (Phase 4-G-4 でまとめて再実施)
+  - TS-manual-ime-x11, TS-manual-ime-x11-ibus, TS-manual-ime-wayland, TS-manual-ime-windows, TS-manual-ime-fallback, TS-manual-ime-imserver-restart, TS-manual-ime-mux (winit 経路で再定義)
+  - TS-perf-3, TS-perf-4, TS-perf-regression
 
 ## Dependencies
 
 | Package | Version | Purpose | Target |
 |---------|---------|---------|--------|
-| `x11-dl` | 2 | XIM bindings (dynamic loading) | `cfg(all(unix, not(target_os = "macos")))` |
-| `wayland-client` | 0.31 | Wayland IPC | 同上 |
-| `wayland-protocols` | 0.31 (`unstable` feature) | `zwp_text_input_v3` | 同上 |
-| `windows` | 0.58 | IMM32 + `SetWindowSubclass` | `cfg(windows)` |
-| `raw-window-handle` | 0.6 (既存 direct dep、追加変更なし) | window / display handle | all |
-| `crossbeam-channel` | (既存) | Wayland thread → main thread の event 受け渡し | `cfg(all(unix, not(target_os = "macos")))` |
+| `winit` | 0.30.9 | event loop, window, IME 統合 | all |
+| `raw-window-handle` | 0.6 (既存 direct dep) | window / display handle | all |
+| `crossbeam-channel` | (既存) | 既存用途のみ (Wayland pump thread は不要) | all |
 
-新規 third-party crate: `x11-dl`, `wayland-client`, `wayland-protocols`, `windows`。
+**削除**:
+- `tao` 0.34 (winit に置換)
+- `x11-dl` 2 (winit が X11 IME を内部実装)
+- `wayland-client` 0.31 (同上 Wayland)
+- `wayland-protocols` 0.31 (同上)
+- `windows` 0.58 (winit が IMM32 を内部実装)
 
 ## Risk Assessment
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| tao 0.34 が X11 内部で別 `XOpenDisplay` を握っていて競合 | 中 | 高 | tao の Display を `raw-window-handle::RawDisplayHandle::Xlib` 経由で borrow。second `XOpenDisplay` は呼ばない。それでも競合する場合は X11 backend 全体を `XSync` で fence する fallback を準備 |
-| Wayland compositor によって `zwp_text_input_v3` の挙動差 | 中 | 中 | KDE Plasma 6 と Sway を最初の Go ターゲットにし、GNOME は best effort |
-| `SetWindowSubclass` が tao の event dispatch と相互作用して挙動が壊れる | 低 | 中 | 全 message を `DefSubclassProc` に forward (`WM_IME_*` だけ peek)。tao の wndproc には影響しない |
-| Wayland pump スレッドの crossbeam_channel 不整合 / Drop 順 | 中 | 中 | Drop で channel sender を先に close → pump スレッド `recv` が `RecvError` で抜ける → join。テストで lifecycle pin |
-| 4-G-A の `KeyboardInput` パス変更で IME-OFF regression | 中 | 高 | TS-backend-5 + TS-perf-regression で gating。NullBackend active 時は Phase 4 と完全同一の経路を維持 (`dispatch_key_event` が常に `Passthrough` → 既存 `tao_key_to_bytes`) |
-| Windows で `WM_KEYDOWN` の tao 経路と `WM_IME_COMPOSITION` の Commit 経路が二重入力 | 中 | 中 | manual gate で確認、必要なら `App::pump_ime` 側で commit 直後の同 ASCII keydown を suppress するロジック追加 (4-G-D の Implementation Steps 段階で再評価) |
-| TS-perf-3 が 30 ms を満たさない | 低 | 中 | rate-limit (`notify_cursor_rect` の cell-diff)、pump 件数上限 1024、event-loop の `request_redraw` 頻度を見直す。それでも超える場合は Phase 4 baseline との差分原因を切り分けて報告 |
+| winit 0.30 への移行で wgpu surface 作成手順が変わる | 中 | 高 | raw-window-handle 0.6 経由なので `Arc<Window>` を直接 surface に渡せる。winit / wgpu 公式 example で確認 |
+| winit `KeyEvent` → PTY bytes 変換で tao 版と微妙に異なる挙動 | 中 | 中 | 既存 `tao_key_to_bytes` のユニットテストを winit 版に rewrite し、同じ期待値で green を確認 |
+| winit が compositor 都合で `Ime::Enabled` を発火しない (古い GNOME 等) | 中 | 中 | `set_ime_allowed(true)` を呼んだあと `Ime::Disabled` のみ来るケースを想定。bridge は state machine で空回りするだけ、ターミナルは動く。manual gate で確認 |
+| winit 0.30 の API breaking changes (event loop の `ControlFlow` 廃止等) | 高 | 中 | winit 0.30 changelog を確認、`EventLoop::run_app` (ApplicationHandler trait) または `EventLoop::run` クロージャを採択 |
+| Ghostty 由来 state machine の `Ime::Commit` 直後の release suppress が壊れる | 中 | 中 | `TS-winit-5` (idempotency) + `TS-winit-6` (modifier release) を pin。manual gate で二重入力なしを確認 |
+| winit の `set_ime_cursor_area` シグネチャ (Position + Size) が tao の XICAttribute / IMM32 と異なる | 低 | 低 | winit doc を確認、`PhysicalPosition` + `PhysicalSize` をピクセル座標で渡す |
+| Windows での winit IME が IMM32 か TSF か | 低 | 低 | winit 0.30 は IMM32 採択 (TSF は別途 PR で議論中)。MS-IME / Google IME はどちらでも動く |
 
 ## Open Questions
 
-- [ ] OQ1: X11 crate 選定は `x11-dl` を採択 (SPEC.md §Open Questions OQ1 と整合)。`x11rb` は XIM サポートが薄いため不採用
-- [ ] OQ2: Wayland binding は `wayland-client` 直叩きを採択 (SPEC.md OQ2 と整合)。`smithay-client-toolkit` は overkill
-- [ ] OQ3: Wayland compositor 最低保証は KDE Plasma 6 + Sway。GNOME は best effort (SPEC.md OQ3)
-- [ ] OQ4: Windows TSF は Phase 4-G スコープ外。IMM32 で不足が判明したら別 SDD (SPEC.md OQ4)
-- [ ] OQ5: `notify_cursor_rect` のサブセル精度は不要 (cell-aligned で十分。SPEC.md OQ5)
-- [ ] **Implementation-specific**: 4-G-D 時点で確認すべき項目 — Windows で `WM_IME_COMPOSITION` の commit 文字に対応する `WM_KEYDOWN` を tao が同時に `KeyboardInput` として App に届けるかどうか。届く場合は二重入力になるので、`pump_ime` か `dispatch_key_event` 側で suppress する
-- [ ] **Implementation-specific**: 4-G-B で X11 IM サーバ突然死後の reconnect トリガ — focus-in イベント時に再 init を試みるか、event-loop tick 毎にバックオフ付きで再試行するかは 4-G-B 実装時に決定
+- [ ] **OQ1**: winit 0.30 の `ApplicationHandler` trait vs `EventLoop::run` クロージャ式 — どちらを採択するか。4-G-2 移行時に決定。`ApplicationHandler` のほうが clean だが、既存 `window_host.rs` の構造との fit を見て判断
+- [ ] **OQ2**: tao を transitive に引きずる依存があるか (例: egui-tao 経由)。ある場合は 4-G-2 で同時に対処 (egui-wgpu 等に置換)
+- [ ] **OQ3**: winit features 構成 — `x11` / `wayland` を明示 enable、`rwh_06` は必須、`serde` 不要。`mint` も不要
+- [ ] **OQ4**: Wayland compositor 最低保証 — KDE Plasma 6 + Sway。GNOME は best effort (winit 経路でも同じ)
+- [ ] **OQ5**: Windows TSF は本 redesign スコープ外。IMM32 (winit 経由) で不足が判明したら別 SDD
+- [ ] **OQ6**: `notify_cursor_rect` のサブセル精度は不要 (cell-aligned で十分)
 
 ## Success Metrics
 
-- [ ] FR1-FR10 / NFR1-NFR8 すべて実装 + tests / manual gate でカバー
+- [ ] FR4-FR13 すべて実装 + tests / manual gate でカバー (旧 FR1-FR3 は削除済)
 - [ ] `cargo build --workspace` (Linux + Windows) exit 0
 - [ ] `cargo test --workspace` exit 0
 - [ ] `cargo fmt --all -- --check` clean
-- [ ] `cargo clippy -p emterm-native-poc -- -D warnings` clean (forward-staged warning は notes に明記すれば許容)
-- [ ] TS-manual-ime-x11 / TS-manual-ime-x11-ibus / TS-manual-ime-wayland / TS-manual-ime-windows / TS-manual-ime-fallback / TS-manual-ime-imserver-restart / TS-manual-ime-mux すべて pass
+- [ ] `cargo clippy -p emterm-native-poc -- -D warnings` clean
+- [ ] TS-manual-ime-x11 / TS-manual-ime-x11-ibus / TS-manual-ime-wayland / TS-manual-ime-windows / TS-manual-ime-fallback / TS-manual-ime-imserver-restart / TS-manual-ime-mux すべて pass (winit 経路)
 - [ ] TS-perf-3 (< 30 ms), TS-perf-4 (< 5 ms), TS-perf-regression (+10% 以内) 達成
-- [ ] Phase 4-E `ime::{preedit, commit}` のファイル content が unchanged (`git diff` で確認)
+- [ ] Phase 4-E `ime::{preedit, commit}` / `render/cursor.rs` のファイル content が unchanged
 - [ ] 旧 `src-tauri` build / test affected なし (NFR5)
+- [ ] 旧 `ime::{x11, wayland, windows}` が `git ls-files` に存在しない
