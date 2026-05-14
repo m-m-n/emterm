@@ -81,38 +81,38 @@ phases:
     estimated_effort: medium
     tasks:
       - id: ime-bridge-create
-        title: "Create native-poc/src/ime/winit_bridge.rs implementing ImeBackend trait + im_composing/in_keyevent state machine"
-        status: needs_update
+        title: "Create native-poc/src/ime/winit_bridge.rs implementing ImeBackend trait + im_composing state machine + BridgeWindow abstraction"
+        status: completed
         files:
           - native-poc/src/ime/winit_bridge.rs
       - id: ime-bridge-mod-rs
         title: "Add pub mod winit_bridge to native-poc/src/ime/mod.rs"
-        status: needs_update
+        status: completed
         files:
           - native-poc/src/ime/mod.rs
       - id: ime-bridge-factory
-        title: "backend.rs: build_backend resolves env > settings > WinitImeBridge::init(window) → NullBackend on init failure (single warn log)"
-        status: needs_update
+        title: "backend.rs: new build_backend_with_window(Arc<Window>, settings, env) entry resolves env > settings > WinitImeBridge::init(window) → NullBackend on init failure"
+        status: completed
         files:
           - native-poc/src/ime/backend.rs
       - id: ime-bridge-window-host-ime-wiring
-        title: "window_host.rs: route WindowEvent::Ime(_) → WinitImeBridge::on_winit_ime; pass both Pressed/Released KeyboardInput through dispatch_key_event_via_ime; route notify_cursor_rect_if_changed → Window::set_ime_cursor_area"
-        status: needs_update
+        title: "window_host.rs: route WindowEvent::Ime(ime) → App::pass_winit_ime; pass both Pressed/Released KeyboardInput through dispatch_key_event_via_ime; build_backend_with_window at startup"
+        status: completed
         files:
           - native-poc/src/window_host.rs
       - id: ime-bridge-app-dispatch-release
-        title: "app.rs: ensure dispatch_key_event_via_ime accepts and forwards Released key events (Ghostty modifier-only-release criterion)"
-        status: needs_update
+        title: "app.rs: add pass_winit_ime helper that forwards winit::event::Ime to ImeBackend::on_winit_ime (default no-op for NullBackend / MockBackend)"
+        status: completed
         files:
           - native-poc/src/app.rs
       - id: ime-bridge-tests
-        title: "Unit tests TS-winit-1..7 (Enabled/Preedit/Commit/Disabled mapping, state machine idempotency, modifier release, cursor rect dedup)"
-        status: needs_update
+        title: "Unit tests TS-winit-1..7 (Enabled/Preedit/Commit/Disabled mapping, state machine idempotency, modifier release, cursor rect dedup); +4 lifecycle tests"
+        status: completed
         files:
           - native-poc/src/ime/winit_bridge.rs
       - id: ime-bridge-int-tests
-        title: "Integration tests TS-winit-int-1 (#[ignore] Xvfb attach + Ime::Disabled assertion) / TS-winit-int-2 (#[cfg(windows)] host-deferred)"
-        status: needs_update
+        title: "Integration markers TS-winit-int-1 (#[ignore] Xvfb attach) / TS-winit-int-2 (#[cfg(windows)] host-deferred)"
+        status: completed
         files:
           - native-poc/src/ime/winit_bridge.rs
 

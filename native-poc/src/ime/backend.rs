@@ -118,10 +118,21 @@ pub trait ImeBackend: Send {
     /// single warn log.
     fn pump(&mut self, events: &mut Vec<ImeEvent>);
 
-    /// Stable name used in startup / fallback logs ("null", "x11",
-    /// "wayland", "windows"). Useful for asserting in tests which
-    /// concrete backend was installed.
+    /// Stable name used in startup / fallback logs ("null", "winit",
+    /// ...). Useful for asserting in tests which concrete backend was
+    /// installed.
     fn name(&self) -> &'static str;
+
+    /// Hook for the winit `WindowEvent::Ime` payload. The default
+    /// implementation drops the event (NullBackend, MockBackend); only
+    /// [`crate::ime::winit_bridge::WinitImeBridge`] overrides it to
+    /// translate the variant into [`ImeEvent`]s. Routed from
+    /// `window_host` once per `WindowEvent::Ime` arrival. The
+    /// `&winit::event::Ime` argument is read-only so the trait stays
+    /// object-safe.
+    fn on_winit_ime(&mut self, _ime: &winit::event::Ime) {
+        // Default: ignore. Real backends override.
+    }
 }
 
 /// Max events drained from any single backend per pump call. See
@@ -166,24 +177,54 @@ pub fn build_backend(
     }
 }
 
-/// Build the OS-appropriate platform backend.
+/// Build the OS-appropriate platform backend without a winit window.
 ///
-/// Phase 4-G-1 (cleanup) removed the self-built X11 / Wayland / Windows
-/// IME clients because tao 0.34 does not expose XKB keycodes, which
-/// broke XmbLookupString. Phase 4-G-3 will re-introduce a single
-/// `WinitImeBridge` once the project migrates to winit 0.30 (Phase
-/// 4-G-2). Until then this function unconditionally returns
+/// This variant exists for backwards-compatible call sites (chiefly the
+/// Phase 4-G-A unit tests, which assert the env / settings short-circuits
+/// without spinning up a real window). It always returns
 /// `Err(ImeInitError::Unavailable(_))` so the factory falls back to
-/// [`crate::ime::null::NullBackend`] and the App behaviour matches
-/// Phase 4 exactly.
+/// [`crate::ime::null::NullBackend`] when no winit handle is available.
+///
+/// Production startup uses [`build_backend_with_window`] from
+/// `window_host::run`, which calls [`crate::ime::winit_bridge::WinitImeBridge::init`]
+/// on the real winit window.
 pub fn build_platform_backend(
     window: Option<RawWindowHandle>,
     display: Option<RawDisplayHandle>,
 ) -> Result<Box<dyn ImeBackend>, ImeInitError> {
     let _ = (window, display);
     Err(ImeInitError::Unavailable(
-        "no platform backend compiled in".to_string(),
+        "winit window required (use build_backend_with_window)".to_string(),
     ))
+}
+
+/// Startup factory variant that consumes a real `Arc<winit::window::Window>`
+/// and builds the [`crate::ime::winit_bridge::WinitImeBridge`] on top of it.
+/// Same env / settings short-circuits as [`build_backend`]; on
+/// `WinitImeBridge::init` failure the App still gets [`crate::ime::null::NullBackend`].
+pub fn build_backend_with_window(
+    window: std::sync::Arc<winit::window::Window>,
+    settings: &crate::settings::ImeSettings,
+    env: &dyn EnvLookup,
+) -> Box<dyn ImeBackend> {
+    if matches!(env.get("EMTERM_NATIVE_IME"), Some(ref v) if v == "0") {
+        log::warn!("ime: native integration disabled (env)");
+        return Box::new(crate::ime::null::NullBackend::new());
+    }
+    if !settings.native_integration {
+        log::warn!("ime: native integration disabled (settings)");
+        return Box::new(crate::ime::null::NullBackend::new());
+    }
+    match crate::ime::winit_bridge::WinitImeBridge::init(window) {
+        Ok(b) => {
+            log::info!("ime: {} initialized", b.name());
+            Box::new(b)
+        }
+        Err(e) => {
+            log::warn!("ime: native integration disabled ({e})");
+            Box::new(crate::ime::null::NullBackend::new())
+        }
+    }
 }
 
 /// Tiny indirection over `std::env::var` so tests can drive the

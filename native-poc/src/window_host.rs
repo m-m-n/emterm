@@ -30,7 +30,6 @@ use std::time::{Duration, Instant};
 use egui::ViewportId;
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::ScreenDescriptor;
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -41,7 +40,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 use crate::app::App;
 use crate::image::overlay::OverlayPipeline;
 use crate::image::ImageLayer;
-use crate::ime::backend::{build_backend, KeyDispatchResult, ProcessEnv, RawKeyEvent};
+use crate::ime::backend::{build_backend_with_window, KeyDispatchResult, ProcessEnv, RawKeyEvent};
 use crate::pty::input::{encode, Key, Modifiers};
 use crate::selection::{Pos, Selection, SelectionMode};
 
@@ -807,19 +806,13 @@ impl ApplicationHandler for PocApp {
         self.app.cell_size = crate::app::GridDims { cols, rows };
         self.app.spawn_initial_tab();
 
-        // Phase 4-G: resolve the IME backend now that the winit window
-        // (and therefore the raw-window/display handle pair) exists.
-        // Phase 4-G-1 reduced the factory to always return Unavailable
-        // → NullBackend; Phase 4-G-3 swaps in the WinitImeBridge once
-        // it lands.
-        let window_handle = host.window().window_handle().ok().map(|h| h.as_raw());
-        let display_handle = host.window().display_handle().ok().map(|h| h.as_raw());
-        let backend = build_backend(
-            window_handle,
-            display_handle,
-            &self.app.settings.ime,
-            &ProcessEnv,
-        );
+        // Phase 4-G-3: resolve the IME backend now that the winit
+        // window exists. The factory consults `EMTERM_NATIVE_IME` and
+        // `settings.ime.native_integration`, then either installs a
+        // `WinitImeBridge` (real backend) or falls back to
+        // `NullBackend` on init failure.
+        let backend =
+            build_backend_with_window(host.window_arc(), &self.app.settings.ime, &ProcessEnv);
         self.app.set_ime_backend(backend);
 
         host.window().request_redraw();
@@ -866,17 +859,16 @@ impl ApplicationHandler for PocApp {
                     alt: s.contains(ModifiersState::ALT),
                 };
             }
-            // Phase 4-G-2: winit no longer surfaces a `ReceivedImeText`
-            // variant; printable text is delivered via `KeyEvent::text`
-            // (handled in `winit_key_to_bytes`). For composition winit
-            // emits `WindowEvent::Ime { Preedit, Commit, Disabled }`,
-            // which Phase 4-G-3's `WinitImeBridge` will route into the
-            // existing `on_ime_*` plumbing. Until that phase lands we
-            // ignore IME events here so NullBackend stays passive.
-            WindowEvent::Ime(_) => {
-                // Phase 4-G-3 hook point — left as a no-op until the
-                // WinitImeBridge lands. NullBackend cannot do anything
-                // useful with these events.
+            // Phase 4-G-3: winit surfaces composition events via
+            // `WindowEvent::Ime { Enabled, Preedit, Commit, Disabled }`.
+            // Route them to the active backend; `WinitImeBridge`
+            // translates each variant into `ImeEvent`s consumed by
+            // `App::pump_ime` on the next tick. `NullBackend`
+            // overrides the trait default with a no-op, so this is
+            // safe to call unconditionally.
+            WindowEvent::Ime(ime) => {
+                self.app.pass_winit_ime(&ime);
+                host.window().request_redraw();
             }
             // Focus loss / window deactivation → clear any in-progress
             // preedit overlay so a stale composition doesn't ghost the
