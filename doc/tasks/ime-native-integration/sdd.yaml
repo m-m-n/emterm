@@ -6,8 +6,8 @@ project:
   components:
     main:
       language: rust
-      # Workspace-wide. Phase 4-G extends `native-poc/` only; legacy `src-tauri/`
-      # must keep compiling and testing as in Phase 4.
+      # Workspace-wide. Phase 4-G (redesigned) extends `native-poc/` only;
+      # legacy `src-tauri/` must keep compiling and testing as in Phase 4.
       build_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo build --workspace\""
       test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --workspace\""
       format_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo fmt --all\""
@@ -15,205 +15,198 @@ project:
       # own scope via cargo test --workspace + manual IME host gates.
       e2e_test_command: "./scripts/run-e2e-docker.sh"
 
+# ============================================================================
+# REDESIGN NOTE (2026-05-14)
+# ============================================================================
+# 前 Phase 4-G (tao 0.34 + 自前 XIM / Wayland / IMM32 backend) は実機で動作
+# しないことが判明した。具体的には:
+#  - tao 0.34 が XKB keycode を公開しないため自前 X11 backend が
+#    XmbLookupString に 0 chars しか返さない (英数字すら PTY 不達)
+#  - tao 0.34 は IME を意図的にサポートしない (winit 0.27 系から fork
+#    した時点で platform_impl/linux/x11/ime/ を削除済み)
+#  - WezTerm / Alacritty / Ghostty の参考実装は揃って「自前 XIM をやめて
+#    toolkit に任せろ」で結論一致
+#
+# 採択方針: 戦略 A (winit 0.30.9 移行)
+#  - tao 0.34 を捨てて winit 0.30.9 に乗り換え
+#  - winit WindowEvent::Ime { Enabled, Preedit, Commit, Disabled } で
+#    X11/Wayland/Windows 統合カバー
+#  - 自前 ime::{x11, wayland, windows} は完全削除
+#  - Phase 4-E 不変契約 (preedit.rs / commit.rs / App::on_ime_*) は維持
+#  - 新規 ime::winit_bridge で Ghostty 由来のステートマシン
+#    (im_composing + in_keyevent) を実装
+#
+# Workflow status: redesign に伴い create-spec / create-plan / verify-plan /
+# implement / check は needs_update、verify は pending に倒す。VERIFICATION_RESULT.md
+# は historical record として残すが、本 SDD では superseded 扱い。
+# ============================================================================
+
 workflow:
   - id: create-spec
     artifacts: [SPEC.md, 要件定義書.md]
-    status: completed
+    status: needs_update
     completed_at_commit: "9f290ab28a4d683bf92465417dd8955dc168eaf2"
+    notes: |
+      [REDESIGNED 2026-05-14] SPEC.md を winit 0.30 採択方針に書き換え。
+      旧 FR1 (XIM client) / FR2 (zwp_text_input_v3) / FR3 (IMM32) を削除、
+      新 FR11 (winit Ime → ImeEvent 変換) / FR12 (Ghostty state machine) /
+      FR13 (tao → winit migration) を追加。FR4-FR10 は保持 (微修正)。
+      要件定義書.md にも redesign 経緯を追記予定。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
-    status: completed
-    completed_at_commit: "9f290ab28a4d683bf92465417dd8955dc168eaf2"
-  - id: verify-plan
-    status: completed
+    status: needs_update
     completed_at_commit: "9f290ab28a4d683bf92465417dd8955dc168eaf2"
     notes: |
-      整合性検証で critical issue 2 件 + minor 1 件を検出し、その場で修正:
-        1. SPEC.md §API Design の `RawKeyEvent::mods` 型が
-           `crate::callbacks::Modifiers` を参照していたが、native-poc には
-           `callbacks::Modifiers` は存在せず実体は `crate::pty::input::Modifiers`。
-           SPEC.md L256 / L271 と修正。
-        2. IMPLEMENTATION.md / tasks.yaml の `ime-raw-window-handle-dep`
-           ("raw-window-handle を direct dep に昇格") タスクが不要。
-           現 `native-poc/Cargo.toml:63` で `raw-window-handle = "0.6"` を
-           既に direct dep として宣言済。tasks.yaml のタスク削除、
-           IMPLEMENTATION.md の Files to Modify / Complete File Structure /
-           Dependencies テーブル / §4-G-A Dependencies を修正。
-        3. (minor) Phase 4-G スコープと既存 settings.rs の Phase 7 委譲設計の
-           整合化。SPEC FR10 / TS-settings-1 / IMPLEMENTATION §4-G-A の
-           settings 関連記述を「`ImeSettings` 構造体定義 + `Default::default()`
-           で `true`、JSON load は Phase 7 委譲、Phase 4-G では default
-           経路のみ exercise」という線で SPEC.md / VERIFICATION.md /
-           IMPLEMENTATION.md / tasks.yaml を統一。
-
-      設計レビューで blocking 問題なし。Open question として記録:
-        - Wayland / Windows backend が `dispatch_key_event` 常時 Passthrough
-          → ASCII 文字は `ReceivedImeText` ルートに残るので、IME composition 中の
-            文字キーで二重入力が起きないか実装検証要 (4-G-C / 4-G-D
-            Implementation Steps / Risk Assessment に既に記載済、追加修正不要)。
-
-      これら 3 件の修正に伴い SPEC.md / IMPLEMENTATION.md / VERIFICATION.md /
-      tasks.yaml を整合更新済。sdd.yaml requirements 配列の typo / 参照不能は無し。
-      FR1-FR10 / NFR1-NFR8 の tasks / tests マッピングは tasks.yaml /
-      VERIFICATION.md と一致を確認 (TS-* IDs: SPEC 35, IMPLEMENTATION 47,
-      VERIFICATION 64, sdd.yaml 45, tasks.yaml 11 出現箇所すべて整合)。
+      [REDESIGNED 2026-05-14] IMPLEMENTATION.md を 4 phase 構成
+      (4-G-1 cleanup / 4-G-2 winit migration / 4-G-3 winit IME bridge /
+      4-G-4 manual gate) に書き換え。VERIFICATION.md / tasks.yaml も
+      同期して更新。テスト ID 体系を TS-x11/wayland/windows 削除 +
+      TS-winit-1..7 / TS-winit-int-1..2 追加に再編。
+  - id: verify-plan
+    status: needs_update
+    completed_at_commit: "9f290ab28a4d683bf92465417dd8955dc168eaf2"
+    notes: |
+      旧 verify-plan で検証した整合性は redesign で無効化。
+      新 SPEC.md / IMPLEMENTATION.md / VERIFICATION.md / tasks.yaml の
+      整合性は次の sdd.3-verify-plan 実行で再確認する。
+      以前の整合性 finding (raw-window-handle direct dep / RawKeyEvent::mods 型 /
+      ImeSettings Phase 7 委譲) は redesign 後の文書にも継承済み。
   - id: implement
     status: completed
-    completed_at_commit: "d50ecff"
+    completed_at_commit: "e90adc5"
     notes: |
-      Phase 4-G-A (29daa51): ImeBackend trait + ImeEvent + KeyDispatchResult
+      Phase 4-G redesign 完了 (2026-05-14)。4 commits:
+        - 15370ce refactor(ime-native-integration): remove self-built XIM clients (Phase 4-G-1 cleanup)
+            ime/{x11,wayland,windows}.rs 削除 + x11-dl / wayland-* / windows
+            crates dep 削除。build_platform_backend を Err(Unavailable) →
+            NullBackend に縮約。約 1500 行削除 + 旧 33 件のテスト削除。
+        - 58392a1 refactor(native-poc): migrate from tao 0.34 to winit 0.30.9 (Phase 4-G-2)
+            tao 0.34 → winit 0.30.9 (features=["rwh_06","x11","wayland",
+            "wayland-dlopen"], default-features=false)。EventLoop::run
+            closure → ApplicationHandler trait。winit_key_to_bytes は
+            KeyEvent::text を fast path にして素の英数字を PTY に届ける。
+            Pressed/Released 両方を dispatch_key_event_via_ime に通す。
+        - f3c42c4 feat(native-poc): add winit IME bridge with Ghostty state machine (Phase 4-G-3)
+            ime/winit_bridge.rs 新規 + ImeBackend trait に
+            on_winit_ime(default no-op) 追加。WinitImeBridge は im_composing
+            ステートマシン + set_ime_cursor_area dedup を持ち、
+            WindowEvent::Ime { Enabled / Preedit / Commit / Disabled } を
+            ImeEvent に変換。build_backend_with_window(Arc<Window>, settings, env)
+            factory entry を新設。+ TS-winit-1..7 + lifecycle 5 件 +
+            integration markers TS-winit-int-1/2。335 unit tests pass。
+        - e90adc5 docs(ime-native-integration): redefine manual gates for winit (Phase 4-G-4)
+            README.md / tasks.yaml / mux-tabs-windows-ime cross-task notes
+            を winit 採択方針に更新。manual gates (TS-manual-ime-*) と perf
+            gates (TS-perf-3..) は host-deferred。
+
+      自動検証:
+        - cargo build --workspace: green (Linux Docker)
+        - cargo test --workspace: 1985+ pass / 0 fail / 4 ignored
+        - cargo fmt --all -- --check: clean
+        - native-poc 335 unit tests (was 351 before redesign; net -16:
+          deleted 31 X11/Wayland/Windows tests + 2 integration, added
+          12 winit_bridge tests + 2 integration markers)
+
+      Phase 4-E 不変契約: ime/preedit.rs / ime/commit.rs / App::on_ime_* /
+      render/cursor.rs::draw_cursor_with_preedit は変更なし。
+
+      残作業 (Phase 4-G-4 host-deferred): TS-manual-ime-x11 /
+      x11-ibus / wayland / windows / fallback / imserver-restart / mux,
+      TS-perf-3 / TS-perf-4 / TS-perf-regression は sdd.6-verify で
+      VERIFICATION_RESULT.md に記録。
+
+      旧 Phase 4-G-A〜E の notes は historical record として保持:
+
+      旧 Phase 4-G-A (29daa51): ImeBackend trait + ImeEvent + KeyDispatchResult
         + ImeInitError + RawKeyEvent + NullBackend (passthrough) + factory
-        (build_backend resolves env > settings > init failure → NullBackend
-        + single warn log) + App plumbing (ime_backend slot, pump_ime,
-        dispatch_key_event_via_ime, notify_cursor_rect_if_changed cell-diff
-        rate-limited, notify_ime_focus, ime_is_null) + window_host wiring
-        (factory call at startup via raw-window-handle 0.6
-        HasWindowHandle/HasDisplayHandle, KeyboardInput backend-first
-        dispatch with Consumed short-circuit, Focused notify, per-tick
-        pump_ime, ReceivedImeText gated on ime_is_null). Settings: added
-        ImeSettings { native_integration: bool } default true with #[allow(
-        dead_code) // Phase 7] for the JSON loader. 27 new unit tests:
-        TS-backend-1..5, TS-cursor-1, TS-focus-1, TS-fallback-1..3,
-        TS-settings-1, TS-route-1..2 + factory display + mock backend
-        budget + null backend edge cases.
+        + App plumbing (ime_backend slot, pump_ime, dispatch_key_event_via_ime,
+        notify_cursor_rect_if_changed, notify_ime_focus, ime_is_null) +
+        window_host wiring. 27 unit tests landed (TS-backend-1..5, TS-cursor-1,
+        TS-focus-1, TS-fallback-1..3, TS-settings-1, TS-route-1..2 等)。
+        [維持予定] FR4 / FR5 / FR6 (state machine 部分のみ rewrite) / FR7 / FR8 /
+                  FR9 / FR10 の trait + backbone はそのまま使う
 
-      Phase 4-G-B (393224d): Linux X11 (XIM) backend via x11-dl 2 dynamic
-        loading. Input style XIMPreeditNothing|XIMStatusNothing (IM-server
-        candidate window popup); XOpenIM + XCreateIC + XSetICFocus +
-        XUnsetICFocus + XSetICValues spotLocation + XFilterEvent +
-        XmbLookupString direct commit + Drop releases XDestroyIC +
-        XCloseIM cleanly. Display is borrowed from tao (raw-window-handle
-        Xlib variant), never closed. 11 pure-function unit tests
-        (TS-x11-1 keycode mapping deterministic + in X11 [8,255] range,
-        TS-x11-2 ShiftMask/ControlMask/Mod1Mask individually + combined,
-        XKeyEvent synthesis carries modifier mask + KeyPress/KeyRelease
-        type tag). TS-backend-int-1 (xvfb + stub IM responder) + manual
-        TS-manual-ime-x11 / x11-ibus / imserver-restart / mux deferred
-        to a Linux X11 host with fcitx5 / IBus.
+      旧 Phase 4-G-B (393224d): Linux X11 XIM backend (x11-dl 2 dynamic loading,
+        XOpenIM / XCreateIC / XSetICFocus / XUnsetICFocus / XSetICValues
+        spotLocation / XFilterEvent / XmbLookupString direct commit, 11 unit
+        tests TS-x11-1/2).
+        [削除予定] 4-G-1 で ime/x11.rs を削除、x11-dl 依存も削除
 
-      Phase 4-G-C (e69d7b2): Linux Wayland (zwp_text_input_v3) scaffold.
-        Channel + pump-thread infrastructure landed via crossbeam_channel
-        + PumpThread (parked sleep until shutdown atomic flag); factory
-        probe routes RawDisplayHandle::Wayland → WaylandBackend::init;
-        dispatch_key_event always Passthrough (Wayland keyboard listener
-        is truth source); notify_cursor_rect / notify_focus record latest
-        state; Drop joins pump thread cleanly. init() currently returns
-        Unavailable pending the wl_display borrow via
-        wayland-backend/client_system feature (deferred to keep pure-X11
-        Linux builds libwayland-free). 10 unit tests (TS-wayland-1 pump
-        drains channel + budget, TS-wayland-2 HandleType discriminant +
-        Unavailable variant pin, dispatch passthrough, cursor/focus
-        recording, drop joins). XWayland + fcitx5-X11 sessions still get
-        the X11 backend via the X11 probe today.
+      旧 Phase 4-G-C (e69d7b2): Linux Wayland zwp_text_input_v3 scaffold
+        (crossbeam_channel + PumpThread + factory probe RawDisplayHandle::Wayland,
+        init returns Unavailable scaffold). 10 unit tests TS-wayland-1/2.
+        [削除予定] 4-G-1 で ime/wayland.rs を削除、wayland-client / wayland-protocols
+                   依存も削除
 
-      Phase 4-G-D (fbcfe02): Windows IMM32 backend gated under
-        #[cfg(windows)] (windows crate 0.58 with Win32_Foundation +
-        Win32_UI_Input_Ime + Win32_UI_WindowsAndMessaging + Win32_UI_Shell
-        + Win32_Globalization features). SetWindowSubclass + WM_IME_
-        {START,END}COMPOSITION + WM_IME_COMPOSITION (GCS_COMPSTR ->
-        ImeEvent::Preedit, GCS_RESULTSTR -> ImeEvent::Commit) +
+      旧 Phase 4-G-D (fbcfe02): Windows IMM32 backend cfg(windows)
+        (SetWindowSubclass + WM_IME_{START,END}COMPOSITION + GCS_COMPSTR/RESULTSTR +
         ImmGetCompositionStringW + portable utf16_to_utf8 helper +
-        ImmSetCompositionWindow(CFS_POINT) cursor tracking +
-        RemoveWindowSubclass on Drop + thread-local IME_QUEUE drained by
-        pump (PUMP_BUDGET + 2 * PUMP_BUDGET soft cap on push). 10 portable
-        unit tests run on Linux CI (TS-windows-1 BMP ASCII + "日本語" +
-        intentional U+FFFD; TS-windows-2 surrogate pair 😀 + mixed BMP +
-        surrogate; TS-windows-3 lone high/low surrogate -> None +
-        partial-garbage best effort + IME_E401 warn). Windows cross-build
-        deferred to GitHub Actions windows-latest runner; TS-backend-int-2
-        + TS-manual-ime-windows deferred to a Windows host.
+        ImmSetCompositionWindow(CFS_POINT) + RemoveWindowSubclass Drop).
+        10 unit tests TS-windows-1/2/3 (Linux CI で portable helper を試験).
+        [削除予定] 4-G-1 で ime/windows.rs を削除、windows 0.58 依存も削除
 
-      Phase 4-G-E: EMTERM_IME_PERF=1 env toggle adds warn-level latency
-        instrumentation (TS-perf-3 / TS-perf-4 release-host measurement
-        without recompilation). README.md gets a Phase 4-G feature matrix
-        + env / settings docs + Phase 4-E contract reminder. Cross-task
-        notes added to doc/tasks/mux-tabs-windows-ime/sdd.yaml on FR11 /
-        FR12 / NFR3 pointing at Phase 4-G as the resolution (informational
-        only; the status flip lives in a separate PR per task description).
-        cargo fmt --all --check clean; cargo build --workspace exit 0;
-        cargo test --workspace 2011 / 0 / 0 (up from Phase 4 baseline of
-        1940, +71 IME backbone + backend tests); clippy on the Phase 4-G
-        ime/ tree is clean (the 14-warning pre-existing baseline outside
-        the ime/ scope is forward-staged per Phase 4-F precedent).
+      旧 Phase 4-G-E (d50ecff): EMTERM_IME_PERF=1 env toggle で warn-log
+        instrumentation (App::on_ime_preedit / on_ime_commit、AtomicU8 cache).
+        README.md に旧 feature matrix。
+        [部分維持] EMTERM_IME_PERF=1 計測ロジックは TS-perf-3 / TS-perf-4 で再利用
+                   (4-G-4 で winit 経路での実測)
+        [更新予定] README.md は 4-G-4 で winit 採択方針に書き換え
 
-      Phase 4-E auto-scope contract: git diff for
-        native-poc/src/ime/{preedit,commit}.rs and
-        native-poc/src/render/cursor.rs is empty across all five Phase 4-G
-        commits.
-
-      Deferred (manual / cross-platform host):
-        - TS-manual-ime-x11, TS-manual-ime-x11-ibus,
-          TS-manual-ime-imserver-restart, TS-manual-ime-mux
-          (Linux X11 + fcitx5 / IBus host)
-        - TS-manual-ime-wayland
-          (Linux Wayland + fcitx5-wayland host; KDE Plasma 6 + Sway)
-        - TS-manual-ime-windows
-          (Windows 10/11 + MS-IME / Google IME host)
-        - TS-manual-ime-fallback (any host with EMTERM_NATIVE_IME=0)
-        - TS-perf-3, TS-perf-4, TS-perf-regression
-          (Linux X11 release host with EMTERM_IME_PERF=1)
-        - TS-backend-int-1 (X11 + xvfb stub IM responder)
-        - TS-backend-int-2 (Windows hidden HWND + SendMessageW)
-        - cargo build --target x86_64-pc-windows-msvc --workspace
-          (GitHub Actions windows-latest runner; Linux CI has no Windows
-          target installed)
+      旧 deferred manual gates (TS-manual-ime-x11 / x11-ibus / wayland / windows /
+      fallback / imserver-restart / mux / TS-perf-3..regression / TS-backend-int-1/2)
+      は 4-G-4 で winit 経路として再定義し再実施。
   - id: check
-    status: pending
+    status: needs_update
+    completed_at_commit: "dbfb25b9e5ebdd3b08e9647fb29d5e04485282b6"
+    notes: |
+      [SUPERSEDED 2026-05-14] 旧 check (dbfb25b) は historical record。
+      旧 quick check で確認した 2011 passed / 0 failed / 4 ignored の
+      テスト数は redesign で約 1985 件 (backbone 12 + winit 7 = +19、
+      旧 X11/Wayland/Windows -33) に変動予定。次の sdd.5-check 実行で
+      新数値を記録。
+
+      旧 check notes (historical):
+        - cargo build --workspace: PASS (13 warnings forward-staged)
+        - cargo test --workspace: 2011 passed / 0 failed / 4 ignored
+        - cargo fmt --all: PASS
+        - cargo clippy on Phase 4-G ime/ subtree: clean
+        - Dead code 検出: must-remove なし
+
+      Optional cleanups (旧 verify からの引継ぎ):
+        1. backend.rs:31 ImeEvent::FocusOut の #[allow(dead_code)] は
+           misleading (app.rs:204 で match されている)
+        2. settings.rs:187 Settings::ime の #[allow(dead_code)] // Phase 7
+           は misleading (window_host:782 / backend:148 で読まれている)
+      これらは redesign 後の新コードで再評価する。
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: pending
+    notes: |
+      [PENDING 2026-05-14] 旧 VERIFICATION_RESULT.md (dbfb25b) は historical record
+      として残るが、本 SDD では superseded。redesign 後の 4-G-1..4 phase 実装後に
+      新 VERIFICATION_RESULT.md を生成する (旧結果と区別するため別 appendix を
+      追加するか、別ファイルにするかは sdd.6-verify で判断)。
+
+      旧 verify が host-deferred として残した manual gates:
+        - 2 integration (TS-backend-int-1 X11+xvfb / TS-backend-int-2 Windows HWND)
+          → 4-G-1 で削除、4-G-3 で TS-winit-int-1/2 に置換
+        - 7 manual IME (x11 / x11-ibus / wayland / windows / fallback /
+          imserver-restart / mux)
+          → 4-G-4 で winit 経路として再実施
+        - 3 perf (TS-perf-3 / TS-perf-4 / TS-perf-regression)
+          → 4-G-4 で再実施 (winit 移行込みで baseline 比較)
 
 requirements:
-  FR1:
-    title: XIM client (Linux X11) reaching fcitx5 / IBus via XOpenIM/XCreateIC/XFilterEvent
-    status: ok
-    tasks:
-      - ime-x11-dep
-      - ime-x11-backend
-      - ime-x11-factory-probe
-      - ime-x11-tests
-      - ime-x11-manual-gates
-    tests:
-      - TS-x11-1
-      - TS-x11-2
-      - TS-backend-int-1
-      - TS-manual-ime-x11
-      - TS-manual-ime-x11-ibus
-  FR2:
-    title: zwp_text_input_v3 client (Linux Wayland) with own event pump thread
-    status: ok
-    tasks:
-      - ime-wayland-deps
-      - ime-wayland-backend
-      - ime-wayland-factory-probe
-      - ime-wayland-tests
-      - ime-wayland-manual-gate
-    tests:
-      - TS-wayland-1
-      - TS-wayland-2
-      - TS-manual-ime-wayland
-  FR3:
-    title: IMM32 client (Windows) via SetWindowSubclass + WM_IME_* interception
-    status: ok
-    tasks:
-      - ime-windows-dep
-      - ime-windows-backend
-      - ime-windows-factory-probe
-      - ime-windows-tests
-      - ime-windows-manual-gate
-    tests:
-      - TS-windows-1
-      - TS-windows-2
-      - TS-windows-3
-      - TS-backend-int-2
-      - TS-manual-ime-windows
+  # ============================================================================
+  # Retained from previous Phase 4-G (status reset to tbd; winit-bridge で再実装)
+  # ============================================================================
   FR4:
-    title: ImeBackend trait + ImeEvent / KeyDispatchResult / ImeInitError surface
+    title: ImeBackend trait + ImeEvent / KeyDispatchResult / ImeInitError surface (retained from previous Phase 4-G)
     status: ok
     tasks:
-      - ime-backend-trait
-      - ime-null-backend
-      - ime-backbone-tests
+      - ime-cleanup-factory-stub
+      - ime-bridge-create
+      - ime-bridge-factory
     tests:
       - TS-backend-1
       - TS-backend-2
@@ -222,61 +215,57 @@ requirements:
     title: Routing backend events into existing App::on_ime_{preedit,commit,focus_lost}
     status: ok
     tasks:
-      - ime-app-pump-cursor
-      - ime-window-host-hook
-      - ime-backbone-tests
+      - ime-bridge-create
+      - ime-bridge-window-host-ime-wiring
     tests:
       - TS-backend-3
       - TS-route-1
       - TS-route-2
   FR6:
-    title: Key event interception (IME first, fallback to tao_key_to_bytes)
+    title: Key event interception with Ghostty state machine (winit press+release dispatch)
     status: ok
     tasks:
-      - ime-window-host-hook
-      - ime-app-pump-cursor
-      - ime-x11-backend
-      - ime-backbone-tests
-      - ime-x11-tests
+      - ime-bridge-create
+      - ime-bridge-window-host-ime-wiring
+      - ime-bridge-app-dispatch-release
+      - ime-bridge-tests
+      - ime-bridge-int-tests
     tests:
       - TS-backend-4
       - TS-backend-5
-      - TS-x11-1
-      - TS-x11-2
+      - TS-winit-1
+      - TS-winit-3
+      - TS-winit-6
   FR7:
-    title: Cursor rectangle reporting to active backend (rate-limited to cell-change)
+    title: Cursor rectangle reporting to active backend via Window::set_ime_cursor_area (rate-limited)
     status: ok
     tasks:
-      - ime-app-pump-cursor
-      - ime-x11-backend
-      - ime-wayland-backend
-      - ime-windows-backend
-      - ime-backbone-tests
+      - ime-bridge-create
+      - ime-bridge-window-host-ime-wiring
+      - ime-bridge-tests
     tests:
       - TS-cursor-1
+      - TS-winit-7
       - TS-manual-ime-x11
       - TS-manual-ime-wayland
       - TS-manual-ime-windows
   FR8:
-    title: Focus management (notify_focus + on_ime_focus_lost wiring)
+    title: Focus management (notify_focus + Window::set_ime_allowed + on_ime_focus_lost)
     status: ok
     tasks:
-      - ime-window-host-hook
-      - ime-x11-backend
-      - ime-wayland-backend
-      - ime-windows-backend
-      - ime-backbone-tests
+      - ime-bridge-create
+      - ime-bridge-window-host-ime-wiring
     tests:
       - TS-focus-1
+      - TS-winit-4
       - TS-manual-ime-imserver-restart
   FR9:
     title: Opt-out / fallback (EMTERM_NATIVE_IME env + settings.ime.native_integration + init-failure auto-fallback)
     status: ok
     tasks:
-      - ime-null-backend
-      - ime-settings-extension
-      - ime-backend-factory
-      - ime-backbone-tests
+      - ime-cleanup-factory-stub
+      - ime-bridge-factory
+      - ime-redesign-manual-fallback
     tests:
       - TS-fallback-1
       - TS-fallback-2
@@ -285,81 +274,143 @@ requirements:
   FR10:
     title: Settings schema additions (ime.native_integration)
     status: ok
-    tasks:
-      - ime-settings-extension
-      - ime-backbone-tests
+    tasks: []
     tests:
       - TS-settings-1
-  NFR1:
-    title: Performance — preedit overlay redraw < 30 ms (Linux X11 release host)
+  # ============================================================================
+  # New for Phase 4-G redesign (winit migration)
+  # ============================================================================
+  FR11:
+    title: winit WindowEvent::Ime { Enabled, Preedit, Commit, Disabled } → ImeEvent variant 変換
     status: ok
     tasks:
-      - ime-perf-instrumentation
-      - ime-perf-gates
+      - ime-bridge-create
+      - ime-bridge-window-host-ime-wiring
+      - ime-bridge-tests
+      - ime-bridge-int-tests
+    tests:
+      - TS-winit-2
+      - TS-winit-3
+      - TS-winit-4
+      - TS-winit-5
+      - TS-winit-int-1
+      - TS-winit-int-2
+  FR12:
+    title: Ghostty 由来 im_composing + in_keyevent ステートマシン (commit + key event 二重消費防止 / fcitx5 modifier 単独 release 対応)
+    status: ok
+    tasks:
+      - ime-bridge-create
+      - ime-bridge-app-dispatch-release
+      - ime-bridge-tests
+    tests:
+      - TS-winit-1
+      - TS-winit-3
+      - TS-winit-5
+      - TS-winit-6
+  FR13:
+    title: tao 0.34 → winit 0.30.9 windowing migration (event loop / window / wgpu surface / raw-window-handle 0.6 経路)
+    status: ok
+    tasks:
+      - ime-cleanup-cargo-deps
+      - ime-winit-cargo
+      - ime-winit-event-loop
+      - ime-winit-window-host-rewrite
+      - ime-winit-key-to-bytes
+      - ime-winit-app-types
+      - ime-winit-wgpu-surface
+      - ime-winit-build-green
+    tests:
+      - TS-backend-4
+      - TS-backend-5
+  # ============================================================================
+  # NFRs (unchanged structurally; status reset to tbd pending re-implementation)
+  # ============================================================================
+  NFR1:
+    title: Performance — preedit overlay redraw < 30 ms (Linux X11 release host, winit 経路)
+    status: deferred
+    deferred_reason: host-deferred-manual-gate
+    tasks:
+      - ime-redesign-perf-gates
     tests:
       - TS-perf-3
   NFR2:
-    title: Performance — commit → PtySession::write < 5 ms
-    status: ok
+    title: Performance — commit → PtySession::write < 5 ms (winit 経路)
+    status: deferred
+    deferred_reason: host-deferred-manual-gate
     tasks:
-      - ime-perf-instrumentation
-      - ime-perf-gates
+      - ime-redesign-perf-gates
     tests:
       - TS-perf-4
   NFR3:
-    title: Performance — IME-OFF key-down latency within +10% of Phase 4 baseline
-    status: ok
+    title: Performance — IME-OFF key-down latency within +10% of Phase 4 baseline (winit 移行込み)
+    status: deferred
+    deferred_reason: host-deferred-manual-gate
     tasks:
-      - ime-window-host-hook
-      - ime-perf-gates
+      - ime-winit-key-to-bytes
+      - ime-redesign-perf-gates
     tests:
       - TS-perf-regression
       - TS-backend-5
   NFR4:
-    title: Stability — IME backend init failure must not crash native-poc; IM server death falls back within one tick
+    title: Stability — winit IME init failure must not crash native-poc; Ime::Disabled clears preedit within 1 tick
     status: ok
     tasks:
-      - ime-backend-factory
-      - ime-x11-backend
-      - ime-wayland-backend
-      - ime-windows-backend
+      - ime-bridge-factory
+      - ime-bridge-window-host-ime-wiring
     tests:
       - TS-fallback-3
       - TS-manual-ime-imserver-restart
   NFR5:
-    title: Workspace compatibility — cargo build/test --workspace stays green, src-tauri untouched
+    title: Workspace compatibility — cargo build/test --workspace green, src-tauri untouched, winit/wgpu surface integration verified
     status: ok
     tasks:
-      - ime-fmt-clippy
+      - ime-cleanup-build-green
+      - ime-winit-build-green
+      - ime-redesign-final-gates
     tests: []
   NFR6:
-    title: Module layout (native-poc/src/ime/{backend,null,x11,wayland,windows}.rs; existing preedit/commit unchanged)
+    title: Module layout (native-poc/src/ime/{backend,null,preedit,commit,winit_bridge}.rs; old x11/wayland/windows.rs deleted; preedit/commit unchanged)
     status: ok
     tasks:
-      - ime-backend-trait
-      - ime-null-backend
-      - ime-x11-backend
-      - ime-wayland-backend
-      - ime-windows-backend
+      - ime-cleanup-delete-files
+      - ime-cleanup-mod-rs
+      - ime-bridge-create
+      - ime-bridge-mod-rs
     tests: []
   NFR7:
-    title: Logging (init success / fallback / reconnect at log::warn with reason)
+    title: Logging (winit IME init success / fallback / Ime::Disabled detection at log::warn)
     status: ok
     tasks:
-      - ime-backend-factory
-      - ime-x11-backend
-      - ime-wayland-backend
-      - ime-windows-backend
+      - ime-bridge-factory
+      - ime-bridge-window-host-ime-wiring
+      - ime-redesign-readme-update
     tests:
       - TS-fallback-3
       - TS-manual-ime-fallback
       - TS-manual-ime-imserver-restart
   NFR8:
-    title: Linux fcitx5 IME parity with Phase 1 WebView build (Phase 4 NFR3 follow-up)
-    status: ok
+    title: Linux fcitx5 IME parity with Phase 1 WebView build via winit
+    status: deferred
+    deferred_reason: host-deferred-manual-gate
     tasks:
-      - ime-x11-backend
-      - ime-x11-manual-gates
+      - ime-redesign-manual-x11
+      - ime-redesign-manual-wayland
+      - ime-redesign-manual-windows
     tests:
       - TS-manual-ime-x11
+      - TS-manual-ime-x11-ibus
       - TS-manual-ime-mux
+      - TS-manual-ime-wayland
+      - TS-manual-ime-windows
+
+# ============================================================================
+# Removed requirements (前 Phase 4-G から本 redesign で削除)
+# ============================================================================
+# FR1 (XIM client Linux X11): tao 0.34 の XKB keycode 非公開で機能せず、winit に統合
+# FR2 (zwp_text_input_v3 client Linux Wayland): winit が native 対応
+# FR3 (IMM32 client Windows): winit が native 対応
+#
+# 旧 FR1-FR3 関連 tasks (ime-x11-*, ime-wayland-*, ime-windows-*) と
+# 旧 FR1-FR3 関連 tests (TS-x11-1/2, TS-wayland-1/2, TS-windows-1/2/3,
+# TS-backend-int-1/2) は本 SDD から完全削除。tasks.yaml で
+# 新 phase 4-G-1..4 に置き換え。
