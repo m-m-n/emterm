@@ -75,17 +75,26 @@ cargo fmt --all
 
 ## Phase 4-G feature matrix (`ime-native-integration` SDD)
 
+> **Redesign note (2026-05-14)**: the original Phase 4-G shipped a self-built
+> XIM / zwp_text_input_v3 / IMM32 stack on tao 0.34. That stack did not work
+> in practice because tao 0.34 does not expose XKB keycodes, so `XmbLookupString`
+> always returned 0 chars. The redesign migrates the windowing layer to
+> **winit 0.30.9**, which handles X11 / Wayland / Windows IME natively via
+> `WindowEvent::Ime`, and replaces the self-built backends with a thin
+> `WinitImeBridge`. Phase 4-E (`ime/preedit.rs`, `ime/commit.rs`,
+> `App::on_ime_*`, `render/cursor.rs::draw_cursor_with_preedit`) is unchanged.
+
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Common backbone (Phase 4-G-A) | ✅ auto | `ime/backend.rs` (`ImeBackend` trait + `ImeEvent` + `KeyDispatchResult` + `ImeInitError` + `RawKeyEvent`) + `ime/null.rs` (`NullBackend` passthrough) + factory (`build_backend` resolves env > settings > init failure → `NullBackend`) + `App` plumbing (`set_ime_backend` / `pump_ime` / `dispatch_key_event_via_ime` / `notify_cursor_rect_if_changed` / `notify_ime_focus`) + `window_host` per-tick `pump_ime` + `ReceivedImeText` gated on `ime_is_null()` |
-| Linux X11 (XIM) backend (Phase 4-G-B) | ✅ auto / 🟡 manual | `ime/x11.rs` via `x11-dl 2`. `XOpenIM` + `XCreateIC` (`XIMPreeditNothing` + `XIMStatusNothing` — candidate window owned by IM server popup); `XFilterEvent` + `XmbLookupString` direct commit; `XSetICFocus` / `XUnsetICFocus`; `XSetICValues` with `spotLocation` for candidate tracking. Manual `TS-manual-ime-x11`, `TS-manual-ime-x11-ibus`, `TS-manual-ime-imserver-restart`, `TS-manual-ime-mux` deferred to a Linux X11 host with fcitx5 / IBus |
-| Linux Wayland (zwp_text_input_v3) backend (Phase 4-G-C) | 🟡 scaffold / 🟡 manual | `ime/wayland.rs` with `crossbeam_channel` pump-thread infrastructure + factory probe. `init` currently returns `Unavailable` pending the `wl_display` borrow via `wayland-backend/client_system` (deferred so pure-X11 Linux builds stay libwayland-free). XWayland + fcitx5-X11 sessions still get the X11 backend via the X11 probe |
-| Windows IMM32 backend (Phase 4-G-D) | ✅ auto (Linux CI) / 🟡 cross-build + manual | `ime/windows.rs` (`#[cfg(windows)]`) with `SetWindowSubclass` + `WM_IME_{START,END}COMPOSITION` + `WM_IME_COMPOSITION` (`GCS_COMPSTR` → `ImeEvent::Preedit`, `GCS_RESULTSTR` → `ImeEvent::Commit`) + `ImmGetCompositionStringW` + portable `utf16_to_utf8` helper (BMP / surrogate pair / invalid surrogate IME_E401). `ImmSetCompositionWindow(CFS_POINT)` for candidate window. `RemoveWindowSubclass` on Drop. Cross-build deferred to GitHub Actions Windows runner; manual `TS-manual-ime-windows` deferred to a Windows host with MS-IME / Google IME |
-| Final gates (Phase 4-G-E) | ✅ auto / 🟡 manual | `cargo fmt --all --check`, `cargo test --workspace`, `cargo clippy -p emterm-native-poc -- -D warnings` (Phase 4-G ime/ tree clean; pre-existing 14-warning baseline outside Phase 4-G scope). TS-perf-3 / TS-perf-4 / TS-perf-regression release-host measurements deferred (toggle via `EMTERM_IME_PERF=1` env var to emit warn-level latency lines). |
+| Cleanup (Phase 4-G-1) | ✅ auto | Removed `ime/{x11,wayland,windows}.rs` (~1500 lines + tests). Dropped `x11-dl`, `wayland-client`, `wayland-protocols`, `windows` crates from `native-poc/Cargo.toml`. `build_platform_backend` reduced to `Err(Unavailable)` → `NullBackend` until 4-G-3. |
+| winit migration (Phase 4-G-2) | ✅ auto / 🟡 manual | tao 0.34 → winit 0.30.9 (`default-features=false`, `features=["rwh_06","x11","wayland","wayland-dlopen"]`). `EventLoop::run` closure → `ApplicationHandler` trait. `WindowEvent::ReceivedImeText` removed (winit replaces it with `KeyEvent::text` + `WindowEvent::Ime`). `winit_key_to_bytes` honors `KeyEvent::text` so plain printable input still reaches the PTY. wgpu surface unchanged via raw-window-handle 0.6. Manual host-deferred gate: 素の打鍵が PTY に届く確認 (`EMTERM_NATIVE_IME=0`). |
+| Common backbone (Phase 4-G-A — retained from previous Phase 4-G) | ✅ auto | `ime/backend.rs` (`ImeBackend` trait + `ImeEvent` + `KeyDispatchResult` + `ImeInitError` + `RawKeyEvent`) + `ime/null.rs` (`NullBackend` passthrough) + factory + `App` plumbing. Trait gains a default `on_winit_ime` no-op so NullBackend / MockBackend stay valid; `WinitImeBridge` overrides it. |
+| winit IME bridge (Phase 4-G-3) | ✅ auto / 🟡 manual | `ime/winit_bridge.rs`: `WinitImeBridge` with Ghostty-derived state machine (`im_composing` flag + `set_ime_cursor_area` dedup). Translates `WindowEvent::Ime { Enabled, Preedit, Commit, Disabled }` into `ImeEvent`s pumped through `App::pump_ime`. Linux X11, Linux Wayland, and Windows IMM32 are all handled by winit's internal IME stack — no per-platform code in native-poc. Manual `TS-manual-ime-x11 / x11-ibus / wayland / windows / fallback / imserver-restart / mux` deferred to a host with fcitx5 / IBus / MS-IME / Google IME (winit path). |
+| Manual + perf gates (Phase 4-G-4) | 🟡 manual | TS-perf-3 (preedit redraw < 30 ms), TS-perf-4 (commit → PtySession::write < 5 ms), TS-perf-regression (IME-OFF latency within Phase 4 baseline +10%, winit migration included). Toggle via `EMTERM_IME_PERF=1`. All host-deferred. |
 
 ### Phase 4-G env vars + settings
 
-- `EMTERM_NATIVE_IME=0` — disables native IME integration unconditionally; the App falls back to `NullBackend` + Phase 4 behavior (`WindowEvent::ReceivedImeText` → `on_ime_commit`). Emits exactly one warn log on startup.
+- `EMTERM_NATIVE_IME=0` — disables native IME integration unconditionally; the App falls back to `NullBackend` and winit's `WindowEvent::Ime` events become no-ops at the bridge boundary. Emits exactly one warn log on startup.
 - `settings.ime.native_integration` (`bool`, default `true`) — same effect via `settings.json` (Phase 7 wires JSON parsing; Phase 4-G pins the struct shape).
 - `EMTERM_IME_PERF=1` — emits warn-level latency micros for TS-perf-3 (`on_ime_preedit → needs_full_redraw`) and TS-perf-4 (`on_ime_commit → PtySession::write`) so release-host measurements can be collected without recompilation.
 
