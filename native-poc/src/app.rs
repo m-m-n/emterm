@@ -10,12 +10,17 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use parking_lot::Mutex;
 use term_core::terminal_core::TerminalCore;
 
 use crate::ime::backend::{ImeBackend, ImeEvent, KeyDispatchResult, RawKeyEvent, PUMP_BUDGET};
 use crate::ime::null::NullBackend;
+use crate::render::font::cache::GlyphCache;
+use crate::render::font::fallback::FallbackChain;
+use crate::render::font::resolver::Resolver;
+use crate::render::font::traits::{FontId, GlyphRasterizer};
 use crate::selection::Selection;
-use crate::settings::Settings;
+use crate::settings::{FontEngine, Settings};
 use crate::tabs::Tab;
 
 /// Cursor blink half-period in milliseconds. 530 ms matches xterm's
@@ -99,6 +104,21 @@ pub struct App {
     /// drop. Latched so the warn log fires at most once per process
     /// (`IME_E901`).
     ime_overflow_warned: bool,
+    /// Phase 4-H (font-swash-migration FR12): font stack shared with
+    /// the `TerminalGridPass`. The rasterizer is selected once at
+    /// startup based on `Settings::font_engine` (Swash default /
+    /// AbGlyph escape hatch). `GlyphCache` lives behind a mutex so the
+    /// same handle can be reused across frames; `FallbackChain` is
+    /// immutable after `new` returns and is wrapped in an `Arc` so the
+    /// renderer pass can hold its own clone.
+    pub font_resolver: Arc<Resolver>,
+    pub font_fallback: Arc<FallbackChain>,
+    pub font_cache: Arc<Mutex<GlyphCache>>,
+    pub font_rasterizer: Arc<dyn GlyphRasterizer>,
+    /// `FontId` returned by the resolver for the bundled CJK base font.
+    /// `TerminalGridPass` uses this as the chain root when no user font
+    /// override is registered.
+    pub font_base_id: FontId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,12 +142,15 @@ impl App {
         if force_full_redraw {
             log::warn!("EMTERM_FULL_REDRAW=1: dirty-row optimization disabled");
         }
+        let settings = Arc::new(Settings::new());
+        let (font_resolver, font_fallback, font_cache, font_rasterizer, font_base_id) =
+            Self::build_font_stack(&settings);
         Self {
             tabs: Vec::new(),
             active: 0,
             cell_size: GridDims::default(),
             selection: None,
-            settings: Arc::new(Settings::new()),
+            settings,
             scroll_position: ScrollPosition::Live,
             alt_screen: false,
             blink_started: Instant::now(),
@@ -140,7 +163,85 @@ impl App {
             ime_last_cursor_cell: None,
             ime_is_null: true,
             ime_overflow_warned: false,
+            font_resolver,
+            font_fallback,
+            font_cache,
+            font_rasterizer,
+            font_base_id,
         }
+    }
+
+    /// Phase 4-H startup wiring (FR12 + FR6 + FR7 + FR11). Build the
+    /// resolver, register bundled fonts, branch on
+    /// `Settings::font_engine` to construct either the Swash or AbGlyph
+    /// rasterizer, build the fallback chain, and seed the glyph cache.
+    /// The returned tuple is owned by `App`; the renderer's
+    /// `TerminalGridPass` borrows clones of each `Arc`.
+    fn build_font_stack(
+        settings: &Settings,
+    ) -> (
+        Arc<Resolver>,
+        Arc<FallbackChain>,
+        Arc<Mutex<GlyphCache>>,
+        Arc<dyn GlyphRasterizer>,
+        FontId,
+    ) {
+        let mut resolver = Resolver::new();
+        let (cjk_id, emoji_id) = resolver.register_bundled();
+        // System font scan: best-effort, logged on failure. Scanning is
+        // suppressed in tests to keep `cargo test` deterministic and
+        // fast; the resolver's `scan_system_fonts` already guards against
+        // panics, so production runs do not need a flag here.
+        #[cfg(not(test))]
+        resolver.scan_system_fonts();
+
+        let rasterizer: Arc<dyn GlyphRasterizer> = match settings.font_engine {
+            FontEngine::Swash => {
+                let swash = Arc::new(crate::render::font::swash_adapter::SwashRasterizer::new());
+                swash.ingest_resolver(&resolver);
+                swash
+            }
+            FontEngine::AbGlyph => {
+                // ab_glyph escape hatch: we wrap the bundled CJK font
+                // (which carries a Latin sub-set) so ASCII still
+                // renders. CJK / emoji return None and the fallback
+                // chain stops — that is the documented degradation
+                // path (FR5).
+                match crate::render::font::ab_glyph_adapter::AbGlyphRasterizer::from_static_bytes(
+                    crate::render::font::resolver::BUNDLED_CJK_FONT,
+                    cjk_id,
+                ) {
+                    Some(r) => {
+                        log::info!("font_engine = ab_glyph (escape hatch); CJK / emoji may tofu");
+                        Arc::new(r)
+                    }
+                    None => {
+                        log::warn!(
+                            "font.unknown_engine: ab_glyph failed to parse bundled CJK; falling back to swash"
+                        );
+                        let swash =
+                            Arc::new(crate::render::font::swash_adapter::SwashRasterizer::new());
+                        swash.ingest_resolver(&resolver);
+                        swash
+                    }
+                }
+            }
+        };
+
+        // Fallback chain rooted at the bundled CJK font (it contains a
+        // Latin sub-set, so ASCII is covered without a separate base
+        // font being registered). Emoji is the next chain entry; the
+        // resolver-driven extras add any user-supplied fallbacks +
+        // Windows secondary fonts on platforms where those are
+        // registered.
+        let chain = FallbackChain::new(cjk_id, [emoji_id]);
+        (
+            Arc::new(resolver),
+            Arc::new(chain),
+            Arc::new(Mutex::new(GlyphCache::new())),
+            rasterizer,
+            cjk_id,
+        )
     }
 
     /// Replace the IME backend installed by `App::new`. Called once by

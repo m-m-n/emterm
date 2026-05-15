@@ -124,47 +124,108 @@ phases:
       - id: terminal-grid-pass-wgsl
         title: "Author WGSL shader for terminal grid pass (atlas-page branching, fg modulation, decorations)"
         phase: 4-h
-        status: pending
+        status: completed
+        notes: |
+          Landed at native-poc/src/render/terminal_grid_pass.wgsl;
+          pulled into the Rust module via include_str!. Handles three
+          page kinds (Alpha R8 with fg modulation, Rgba color glyphs
+          sampled as-is, Solid for background + decoration lines).
+          Underline / strikethrough are drawn as shader-side bands
+          inside the same cell instance via the FLAG_UNDERLINE /
+          FLAG_STRIKETHROUGH bits.
       - id: terminal-grid-pass-pipeline
         title: "Build wgpu render pipeline + bind group layout for TerminalGridPass"
         phase: 4-h
-        status: pending
+        status: completed
+        notes: |
+          Pipeline + bind-group-layout constructed in TerminalGridPass::new.
+          Bind group: { uniform_buffer (binding 0), alpha_view (1),
+          rgba_view (2), sampler (3) }. SrcAlpha / OneMinusSrcAlpha
+          blending so subsequent egui + image overlay passes composite
+          correctly on top. TS-font-int-4 (smoke pipeline-build) passes
+          on hosts with a wgpu adapter; the Docker test container
+          skips cleanly when no adapter is available.
       - id: terminal-grid-pass-vertex-buffer
         title: "Implement instance vertex buffer (per-cell quad instance data)"
         phase: 4-h
-        status: pending
+        status: completed
+        notes: |
+          CellInstance struct (#[repr(C)], 48-byte stride) carries
+          cell_xy, cell_wh, atlas_uv (u0,v0,u1,v1), fg/bg packed RGBA8,
+          page kind, decoration flags. Instance buffer is re-uploaded
+          per frame via queue.write_buffer; vertex layout matches the
+          WGSL @location bindings.
       - id: terminal-grid-pass-struct
         title: "Implement TerminalGridPass struct (new / prepare / draw API)"
         phase: 4-h
-        status: pending
+        status: completed
+        notes: |
+          Struct owns pipeline + bind-group-layout + sampler + lazy
+          alpha/rgba atlas textures. prepare(device, queue, cells,
+          metrics, viewport) lazily resizes the atlas textures, uploads
+          the current atlas page bytes (R8 + RGBA8), and builds the
+          frame's instance buffer + uniform + bind group. draw(rpass,
+          frame) issues a single instanced draw call. The CPU-side
+          per-cell path is factored into build_instances() so unit
+          tests cover it without a wgpu device.
       - id: window-host-grid-pass-integration
         title: "Integrate TerminalGridPass into window_host frame loop (clear -> grid -> egui Load -> image Load)"
         phase: 4-h
-        status: pending
+        status: completed
+        notes: |
+          WindowHost gained a `grid_pass: Option<TerminalGridPass>` and
+          `ensure_grid_pass(app)` builder. Frame draw order changed to
+          `clear (inside TerminalGridPass) → TerminalGridPass →
+          egui (LoadOp::Load) → ImageOverlayPass (LoadOp::Load)`. The
+          pass is fed an empty cell list today (the painter.text() path
+          continues to draw cells until G1+G2 manual gates clear); the
+          integration is wired so flipping migrate-draw-grid-to-new-pass
+          is a one-step swap.
       - id: migrate-draw-grid-to-new-pass
         title: "Migrate selection / underline / strikethrough (and per-cell drawing) from draw_grid into TerminalGridPass"
         phase: 4-h
-        status: pending
+        status: deferred
         notes: |
-          Supersedes renderer-cache-wiring (Phase 2 deferred) and
-          fallback-renderer-wiring (Phase 3 deferred). FallbackChain +
-          GlyphCache are consumed by TerminalGridPass::prepare.
+          Code path is plumbed: TerminalGridPass::build_instances
+          consumes CellInput entries and routes them through the
+          FallbackChain + GlyphCache, emitting per-cell instances with
+          background fill + decoration flags. Actually filling the
+          CellInput slice from term_core grid + driving the swap is
+          gated on the G1 (Noto Color Emoji) and G2 (CJK) manual host
+          gates per the Phase 4-H PoC failure-path policy: if the
+          visual gates fail, we revert without having destroyed the
+          existing painter.text() path. To be re-evaluated under the
+          Linux X11 + fcitx5 host session (TS-manual-font-linux-x11)
+          along with remove-painter-text-from-draw-grid.
       - id: remove-painter-text-from-draw-grid
         title: "Remove painter.text() / decoration-line / background-rect calls from render/mod.rs::draw_grid (after G1+G2 pass)"
         phase: 4-h
-        status: pending
+        status: deferred
         notes: |
-          Final step of Phase 4-H. Gated on the Go/No-Go gates G1 (Noto
-          Color Emoji visible) and G2 (CJK legible). Also deletes the
-          FONT_SIZE constant + FontFamily::Monospace literal.
+          Final step of Phase 4-H, gated on the Go/No-Go gates G1
+          (Noto Color Emoji visible) and G2 (CJK legible) which both
+          require visual host validation. Per the Phase 4-H PoC
+          failure-path policy in IMPLEMENTATION.md, the painter.text()
+          path stays alive until the new pass demonstrates G1+G2 on a
+          real host so a discovered defect can be reverted cleanly.
+          Also includes deleting the FONT_SIZE constant +
+          FontFamily::Monospace literal; both currently still serve
+          renderer/mod.rs::cell_font_id which feeds painter.text().
       - id: startup-rasterizer-selection
         title: "Branch on Settings::font_engine in app.rs to construct Swash or AbGlyph rasterizer + hand it to TerminalGridPass"
         phase: 4-h
-        status: pending
+        status: completed
         notes: |
-          Moved 2026-05-15 from Phase 4 to Phase 4-H (Option 3). The
-          FontEngine enum + Settings field are already in place; the
-          branch lives next to TerminalGridPass construction in app.rs.
+          App::build_font_stack (called from App::new) branches on
+          Settings::font_engine. Swash path: SwashRasterizer +
+          ingest_resolver(&resolver). AbGlyph path: wraps the bundled
+          CJK font bytes via AbGlyphRasterizer::from_static_bytes;
+          parse failure falls back to Swash with a warn log. The
+          chosen rasterizer + the GlyphCache + the FallbackChain (cjk
+          root → emoji) are stored on App as Arc<…> and handed to
+          TerminalGridPass via WindowHost::ensure_grid_pass at
+          startup. Live-reads Settings::font_engine, eliminating the
+          prior dead_code warning on that field.
 
   - id: phase-5
     name: "Host manual gates + perf verification"

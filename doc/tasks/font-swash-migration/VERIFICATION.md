@@ -19,7 +19,7 @@ Result placeholder (filled in by sdd.4-implement / sdd.6-verify):
 ## Test Verification
 
 - **Command**: `docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --workspace"`
-- **Coverage target**: minimum 80% on the new `render/font/` module; workspace test count stays at parity with the Phase 4-G ~1985-test baseline (new tests add, no regressions).
+- **Coverage target**: minimum 80% on the new `render/font/` module; workspace test count stays at parity with the Phase 4-G ~1985-test baseline (new tests add, no regressions). Current actual: **2017 passed** (Phase 4-H pass: +8 over the prior 2009 baseline).
 
 ### Test Scenarios from SPEC.md
 
@@ -76,13 +76,14 @@ Result placeholders:
 - `native-poc/src/render/font/swash_adapter.rs` — swash + zeno rasterizer.
 - `native-poc/src/render/font/resolver.rs` — fontdb scan + bundled registration.
 - `native-poc/src/render/font/fallback.rs` — fallback chain + memoization.
+- `native-poc/src/render/terminal_grid_pass.rs` (Phase 4-H) — custom wgpu render pass; pipeline + bind group + instance buffer + prepare/draw API.
+- `native-poc/src/render/terminal_grid_pass.wgsl` (Phase 4-H, OR `include_str!` inline inside `terminal_grid_pass.rs`) — WGSL shader: atlas-page (Alpha R8 vs RGBA8) branching, fg modulation, decoration lines.
 
 ### Files to Modify
 
 - `native-poc/src/settings.rs` — add `FontEngine` enum + `font_engine` / `font_family_fallback` / `emoji_font` / `variable_font_axes` fields with parse-or-warn logic.
 - `native-poc/src/render/mod.rs` — delete `FONT_SIZE` constant + `FontFamily::Monospace` literal (Phase 4-H); remove `painter.text()` / decoration-line / background-rect calls from `draw_grid`; read `Theme::font_family` / `Theme::font_size_pt`.
 - `native-poc/src/render/theme.rs` — drop `#[allow(dead_code)]` on `font_family` and `font_size_pt`.
-- `native-poc/src/render/terminal_grid_pass.rs` (NEW, Phase 4-H) — custom wgpu render pass; pipeline + bind group + instance buffer + WGSL shader (inline or sibling `.wgsl`).
 - `native-poc/src/window_host.rs` — insert `TerminalGridPass` into frame draw order: `clear → TerminalGridPass → egui (LoadOp::Load) → ImageOverlayPass (LoadOp::Load)`.
 - `native-poc/src/app.rs` — startup rasterizer selection based on `Settings::font_engine`; build resolver + fallback chain; construct `TerminalGridPass` with the chosen rasterizer.
 - `tmp/restruct.md` — flip Phase 4-H status row on completion.
@@ -198,7 +199,7 @@ All manual gates are run on real hosts. Logs / screenshots are stored under `doc
 
 ### Test Result
 
-- `cargo test --workspace` — **2009 passed** / 0 failed / 6 ignored (baseline at Phase 4-G was ~1985; this SDD adds 24 new tests, no regressions).
+- `cargo test --workspace` — **2017 passed** / 0 failed / 6 ignored (baseline at Phase 4-G was ~1985; this SDD adds 32 new tests, no regressions). Phase 4-H pass adds 8 tests on top of the prior 2009-test count.
 - New unit tests added by this SDD:
   - `render/font/traits.rs` — `font_id_sentinel_default_is_zero`, `glyph_bitmap_bytes_per_pixel_alpha_is_1`, `glyph_bitmap_bytes_per_pixel_rgba_is_4`, `glyph_bitmap_is_empty_for_zero_dim`.
   - `render/font/atlas.rs` — `upload_routes_to_correct_page` (TS-font-6), `empty_bitmap_returns_empty_region`, `row_wrap_advances_cursor_y`, `grows_when_row_overflows_height`.
@@ -209,8 +210,11 @@ All manual gates are run on real hosts. Logs / screenshots are stored under `doc
   - `render/font/swash_adapter.rs` — `swash_rasters_ascii_alpha` (TS-font-8), `swash_rasters_emoji_rgba` (TS-font-9), `unknown_font_id_returns_none`, `has_codepoint_for_emoji_font_covers_grin`.
   - `settings.rs` — `font_engine_default_is_swash` (TS-font-1), `font_engine_parses_known_values` (TS-font-2), `font_engine_unknown_falls_back_to_swash` (TS-font-2), `settings_carry_font_engine_default_swash`, `settings_font_family_fallback_default_empty`, `settings_emoji_font_default_none`, `settings_variable_font_axes_default_empty`.
   - `render/mod.rs` — `theme_default_font_family_is_monospace` (TS-font-11), `renderer_reads_theme_font_family_and_size` (TS-font-12), `renderer_routes_monospace_default_to_monospace_family`.
+  - `render/terminal_grid_pass.rs` (Phase 4-H additions) — `build_instances_one_per_non_empty_cell` (TS-font-13), `build_instances_records_page_kind_per_glyph` (TS-font-14), `integration_swash_renders_cjk_cell_cpu_side` (TS-font-int-2), `pack_rgba_byte_order_is_little_endian_rgba`, `cell_instance_stride_matches_layout`, `empty_cells_produce_no_instances`, `decoration_flags_emit_solid_instances`, `pipeline_builds_against_wgpu_device` (TS-font-int-4; smoke pipeline-build, skipped cleanly on hosts without a wgpu adapter such as the Docker e2e container).
 - Integration: `cargo run -p emterm-native-poc --example swash_emoji` produced `native-poc/target/swash_emoji.png` (159 × 150 RGBA8, 24 087 bytes, `Content::Color`) — TS-font-int-1 PASS.
-- TS-font-int-2 / TS-font-int-3 (headless render of a single cell with swash / ab_glyph engine): _deferred together with renderer-cache-wiring; the foundation layers they exercise (cache + fallback + adapters) are unit-tested directly._
+- TS-font-int-2 (Phase 4-H): headless construction of `TerminalGridPass::build_instances` against the swash engine produces exactly one non-empty instance for a single cell containing `U+3042` (あ). The instance carries `page == Alpha` (CJK fonts are monochrome) and a non-empty UV rect. No panic on the swash path.
+- TS-font-int-3 (ab_glyph engine, same cell): the `AbGlyphRasterizer::from_static_bytes(BUNDLED_CJK_FONT, …)` path returns `Some` for ASCII codepoints carried by the Noto Sans CJK JP Latin sub-set; CJK / emoji return `None` and the cache stores the missing sentinel. The renderer-level integration mirrors TS-font-int-2 with no panic; visible CJK output requires the Swash engine (escape hatch is documented to tofu on CJK).
+- TS-font-int-4 (Phase 4-H): `TerminalGridPass::new` against a real wgpu device succeeds. In the Docker e2e container no wgpu adapter is available, so the test prints a skip message and returns OK; the same test is re-run on a real host as part of the Linux X11 manual gate session.
 
 ### Format / Clippy Result
 
@@ -229,6 +233,10 @@ All manual gates are run on real hosts. Logs / screenshots are stored under `doc
 
 ## Known Limitations
 
-- **Phase 4-H pending (Option 3)**: the new `TerminalGridPass` (FR12) — custom wgpu render pass + WGSL shader + `window_host` integration + `painter.text` removal + startup rasterizer selection — has not been implemented yet. Decision adopted 2026-05-15: build the cell renderer from scratch rather than retro-fitting the foundation onto egui's text path. PoC failure path (G1 or G2 unmet) is documented in IMPLEMENTATION.md Phase 4-H.
-- **Manual host gates (TS-manual-font-*)** are deferred to a follow-up host session after Phase 4-H. The perf instrumentation that backs TS-font-perf-1 / TS-font-perf-2 is in place (`EMTERM_FONT_PERF=1` log lines in `render/font/cache.rs` and `render/font/resolver.rs`).
+- **Phase 4-H code path landed, two follow-ups gated on host gates**:
+  - **`TerminalGridPass`** (struct, pipeline, bind group layout, WGSL shader, instance vertex buffer, `prepare` / `draw` API) is implemented in `native-poc/src/render/terminal_grid_pass.rs` + `.wgsl`. `window_host::render` runs it before the egui pass with `LoadOp::Clear`; the egui pass and the existing image overlay pass both switched to `LoadOp::Load`. `App::build_font_stack` branches on `Settings::font_engine` and constructs either `SwashRasterizer` or `AbGlyphRasterizer`; the chosen rasterizer + `GlyphCache` + `FallbackChain` are stored on `App` and consumed by `TerminalGridPass`.
+  - **`migrate-draw-grid-to-new-pass`** (Phase 4-H tasks.yaml): deferred. `TerminalGridPass::build_instances` exists and is unit-tested (TS-font-13 / TS-font-14); the cell loop in `render/mod.rs::draw_grid` is **not** yet feeding it. The painter.text() / decoration-line / background-rect calls still drive the visible output. Switching the renderer over is a single-file edit, gated on the G1 (Noto Color Emoji) + G2 (CJK) manual host gate so a discovered defect can be reverted without breaking the visible terminal (PoC failure-path policy from IMPLEMENTATION.md Phase 4-H).
+  - **`remove-painter-text-from-draw-grid`** (Phase 4-H tasks.yaml): deferred. Final step of Phase 4-H. Deletes the `FONT_SIZE` constant + `FontFamily::Monospace` literal and the egui-side text / line / rect calls. Runs immediately after `migrate-draw-grid-to-new-pass` once G1+G2 pass.
+- **Manual host gates (TS-manual-font-*)** are deferred to a follow-up host session. The perf instrumentation that backs TS-font-perf-1 / TS-font-perf-2 is in place (`EMTERM_FONT_PERF=1` log lines in `render/font/cache.rs` and `render/font/resolver.rs`).
 - **Windows secondary fallback (`Segoe UI Emoji`)** is scaffolded via `FontRole::Secondary` in the resolver but not wired into the chain on Windows. Add under `#[cfg(windows)]` when the platform comes online.
+- **`cargo clippy --workspace -- -D warnings`** still fails on a small pre-existing set of style lints in `crates/term_core` (`manual_div_ceil`, `manual_memcpy`, `collapsible_match`, `needless_range_loop`, ...) that are unrelated to this SDD. New Phase 4-H code is clippy-clean. To be cleared in a separate housekeeping pass.
