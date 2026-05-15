@@ -42,6 +42,7 @@ use crate::image::overlay::OverlayPipeline;
 use crate::image::ImageLayer;
 use crate::ime::backend::{build_backend_with_window, KeyDispatchResult, ProcessEnv, RawKeyEvent};
 use crate::pty::input::{encode, Key, Modifiers};
+use crate::render::terminal_grid_pass::TerminalGridPass;
 use crate::selection::{Pos, Selection, SelectionMode};
 
 /// Fallback cell size in physical pixels. Phase 4 replaces this with a real
@@ -131,6 +132,13 @@ pub struct WindowHost {
     /// Reusable wgpu pipeline that draws every visible placement after
     /// the egui pass on the same swapchain texture (`LoadOp::Load`).
     overlay_pipeline: OverlayPipeline,
+    /// Phase 4-H (font-swash-migration FR12): custom wgpu pass that
+    /// draws terminal cells (foreground glyph + background fill +
+    /// underline / strikethrough). Constructed lazily once the App is
+    /// available so the font stack can be taken from `App::font_*`.
+    /// Frame draw order is `clear → TerminalGridPass → egui (LoadOp::Load)
+    /// → ImageOverlayPass (LoadOp::Load)`.
+    grid_pass: Option<TerminalGridPass>,
 }
 
 impl WindowHost {
@@ -244,7 +252,26 @@ impl WindowHost {
             clipboard,
             image_layer,
             overlay_pipeline,
+            grid_pass: None,
         }
+    }
+
+    /// Phase 4-H: lazily construct the `TerminalGridPass` once the App
+    /// is available. Called from `PocApp::resumed` after the App's
+    /// font stack has been built (`App::new` already constructs it).
+    /// Idempotent — repeated calls keep the existing pass.
+    pub fn ensure_grid_pass(&mut self, app: &App) {
+        if self.grid_pass.is_some() {
+            return;
+        }
+        let pass = TerminalGridPass::new(
+            &self.device,
+            self.surface_config.format,
+            app.font_cache.clone(),
+            app.font_fallback.clone(),
+            app.font_rasterizer.clone(),
+        );
+        self.grid_pass = Some(pass);
     }
 
     pub fn window(&self) -> &Window {
@@ -545,10 +572,36 @@ impl WindowHost {
             &screen_descriptor,
         );
 
+        // Phase 4-H (FR12): the TerminalGridPass owns the wgpu clear so
+        // the new frame draw order is `clear → TerminalGridPass → egui
+        // (LoadOp::Load) → ImageOverlayPass (LoadOp::Load)`. Until the
+        // G1+G2 gates pass on a host, the pass is fed an empty cell
+        // input list and only contributes the clear color; egui's
+        // painter.text() continues to draw the terminal cells. This
+        // keeps the integration point exercised on every frame without
+        // regressing the visible terminal.
+        let prepared_grid = if let Some(pass) = self.grid_pass.as_mut() {
+            Some(pass.prepare(
+                &self.device,
+                &self.queue,
+                &[],
+                crate::render::terminal_grid_pass::CellMetrics {
+                    cell_w: FALLBACK_CELL_W as f32,
+                    cell_h: FALLBACK_CELL_H as f32,
+                    origin: [0.0, 0.0],
+                    font_size_px: 13.0,
+                },
+                self.surface_config.width,
+                self.surface_config.height,
+            ))
+        } else {
+            None
+        };
+
         {
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("native-poc-egui-pass"),
+                    label: Some("native-poc-terminal-grid-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view,
                         resolve_target: None,
@@ -559,6 +612,28 @@ impl WindowHost {
                                 b: 0.05,
                                 a: 1.0,
                             }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                })
+                .forget_lifetime();
+            if let (Some(grid), Some(frame)) = (self.grid_pass.as_ref(), prepared_grid.as_ref()) {
+                grid.draw(&mut pass, frame);
+            }
+        }
+
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("native-poc-egui-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -799,7 +874,12 @@ impl ApplicationHandler for PocApp {
             return;
         }
         let image_quota_bytes = (self.app.settings.image_memory_quota_mb as u64) * 1024 * 1024;
-        let host = WindowHost::new(event_loop, image_quota_bytes);
+        let mut host = WindowHost::new(event_loop, image_quota_bytes);
+
+        // Phase 4-H: construct the TerminalGridPass against the wgpu
+        // device now that the surface exists. The App owns the font
+        // stack; the pass borrows clones of each `Arc`.
+        host.ensure_grid_pass(&self.app);
 
         // Push the initial grid size into the App before the first tab spawn.
         let (cols, rows) = host.grid_size();

@@ -20,8 +20,8 @@ project:
 workflow:
   - id: create-spec
     artifacts: [SPEC.md, 要件定義書.md]
-    status: needs_update
-    completed_at_commit: "5c54d1af980c109ee15668ec55633b44ea382cd1"
+    status: completed
+    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
     notes: |
       Phase 4-G (ime-native-integration) 完了直後 (HEAD = 5c54d1a) の作成。
       restruct.md の Phase 4-H セクションを設計入力とした。バンドル方針
@@ -36,10 +36,15 @@ workflow:
       改訂済 (FR12 追加 / Open Question FR3 detail 解決 / Architecture 図 +
       Data Flow + File Structure + Implementation Phases 改訂 / Success
       Criteria に G1-G5 追加 + FR2-FR12 化)。
+
+      2026-05-15 SDD orchestrator: SPEC.md / 要件定義書.md は update-spec で
+      改訂済のため、create-spec ステップは skip 扱いで completed に更新。
+      下流ステップ (create-plan / verify-plan / implement) のカスケード更新
+      で続きを処理する。
   - id: create-plan
     artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
-    status: needs_update
-    completed_at_commit: "5c54d1af980c109ee15668ec55633b44ea382cd1"
+    status: completed
+    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
     notes: |
       2026-05-15 update-spec: Option 3 反映で IMPLEMENTATION.md に Phase 4-H
       セクション新設 (TerminalGridPass + WGSL + window_host integration +
@@ -47,18 +52,66 @@ workflow:
       renderer 配線手順を Phase 4-H に集約 (Phase 2/3/4 はそれぞれ
       foundation only に再定義)。VERIFICATION.md に TS-font-13/14 +
       TS-font-int-4 + Go/No-Go gates G1-G5 + SC-10 を追加。
+
+      2026-05-15 SDD orchestrator: IMPLEMENTATION.md / VERIFICATION.md は
+      update-spec で改訂済のため、create-plan ステップは skip 扱いで
+      completed に更新。次の verify-plan で整合性を再確認する。
   - id: verify-plan
-    status: needs_update
-    completed_at_commit: "5c54d1af980c109ee15668ec55633b44ea382cd1"
+    status: completed
+    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
     notes: |
       2026-05-15 update-spec: SPEC/IMPL/VERIFICATION の整合性を再確認する
       ため needs_update。FR12 新規 + 旧 Open Question (FR3 detail) 解決
       の影響を含む。
+
+      2026-05-15 SDD orchestrator (verify-plan run):
+        - FR1-FR12 / NFR1-NFR6 のトレーサビリティ確認 → 全 FR/NFR が
+          tasks.yaml + VERIFICATION 試験 ID にマッピング済 (✅)
+        - Go/No-Go gates G1-G5 / SC-1..10 が VERIFICATION SPEC Compliance
+          に記載されている (✅)
+        - TS-font-1..14 / TS-font-int-1..4 / TS-font-perf-1..2 /
+          TS-manual-font-* が VERIFICATION 試験表に記載 (✅)
+        - SPEC / IMPL の Architecture / Phase 4-H / Out-of-Scope は
+          Option 3 反映で整合 (✅)
+        - superseded タスク (renderer-cache-wiring /
+          fallback-renderer-wiring) は tasks.yaml で migrate-draw-grid-
+          to-new-pass にリンク済 (✅)
+      検出した不整合 (1 件、修正済):
+        - VERIFICATION "Files to Create" に terminal_grid_pass.rs /
+          terminal_grid_pass.wgsl が含まれず、"Files to Modify" 側に
+          "(NEW, Phase 4-H)" 表記で混入していた → "Files to Create"
+          へ移動して修正。
   - id: implement
-    status: needs_update
+    status: completed
+    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
     notes: |
       自動化可能な実装範囲は完了 (18/27 task completed、cargo test --workspace
       2009/2009 PASS、baseline 1985 → +24 新規テスト、cargo fmt PASS)。
+
+      2026-05-15 SDD orchestrator (implement re-run): Phase 4-H Option 3 の
+      実装を implementation-executor に委任。8 タスク (terminal-grid-pass-
+      wgsl / pipeline / vertex-buffer / struct / window-host integration /
+      migrate-draw-grid / remove-painter-text / startup-rasterizer-
+      selection) を対象。環境依存タスク (manual gates) は引き続き deferred
+      扱い。
+
+      実装完了 (24/27 task: 22 completed + 2 superseded + manual gates 5 +
+      restruct-status-update 1 が deferred):
+        - 完了 6/8 Phase 4-H (terminal-grid-pass-wgsl / pipeline / vertex-
+          buffer / struct / window-host-grid-pass-integration / startup-
+          rasterizer-selection)
+        - Deferred 2/8 Phase 4-H (migrate-draw-grid-to-new-pass /
+          remove-painter-text-from-draw-grid): G1+G2 manual host gate
+          (visual 確認) 通過まで painter.text() 残置。build_instances 自体
+          はテスト済 (TS-font-13/14) で、配線スイッチのみ deferred。
+      テスト: baseline 2009 → 2017 PASS (+8 新規: TS-font-13/14/int-2/int-4
+        含む)。cargo fmt --check PASS。Docker は wgpu adapter 無しなので
+        TS-font-int-4 は clean skip 動作。
+      新規ファイル: native-poc/src/render/terminal_grid_pass.rs +
+        terminal_grid_pass.wgsl
+      修正: render/mod.rs (mod 宣言) / app.rs (font stack + build_font_
+        stack) / window_host.rs (grid_pass field + ensure_grid_pass +
+        frame draw order)
       以下タスクは Option 3 (Phase 4-H) または環境依存で未完:
         Phase 4-H 新規構築 (Option 3、未着手): terminal-grid-pass-wgsl /
           terminal-grid-pass-pipeline / terminal-grid-pass-vertex-buffer /
@@ -79,10 +132,47 @@ workflow:
       修正: native-poc/Cargo.toml (swash 0.1.18 pin + zeno + fontdb + png
         dev-dep) / src/render/mod.rs / src/settings.rs
   - id: check
-    status: pending
+    status: completed
+    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
+    notes: |
+      2026-05-15 SDD orchestrator (check run):
+        - Build: cargo build --workspace PASS
+        - Test: cargo test --workspace 2017 PASS (+8 from baseline 2009、
+          native-poc 単体は 383/383 PASS)
+        - Format: cargo fmt --all -- --check clean
+        - Clippy: Phase 4-H 新規コードに clippy エラー無し。term_core の
+          pre-existing style lints (manual_div_ceil etc.) は VERIFICATION
+          Known Limitations で out-of-scope 記録済
+        - Dead code: 4 件の minor cleanup を適用 (CellInstance::atlas_page
+          / TerminalGridPass::surface_format + field / PreparedFrame::
+          is_empty を削除、FLAG_UNDERLINE/STRIKETHROUGH を pub から
+          private const に絞り込み)。クリーンアップ後の native-poc test
+          再走で 383/383 PASS 維持。
+      期待外の dead code warning は無し (App::font_resolver / font_base_id
+      は将来 migrate-draw-grid-to-new-pass で消費される scaffold として
+      意図的に残置)。
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
-    status: pending
+    status: completed
+    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
+    notes: |
+      2026-05-15 SDD orchestrator (verify run):
+        - VERIFICATION_RESULT.md を生成
+        - File structure: 16 created + 6 modified、全件存在確認 ✅
+        - FR1-FR11: 全実装済 + テスト済 ✅
+        - FR12 (Phase 4-H): 6/8 完了、2 タスク (migrate-draw-grid + remove-
+          painter-text) は G1+G2 manual host gate 待ちで deferred
+        - NFR1/NFR2: 計測 instrumentation (EMTERM_FONT_PERF=1) 配置済、
+          実計測は manual host gate へ
+        - NFR3 (swash = 0.1.18 pin / ab_glyph escape hatch) ✅
+        - NFR4 (CacheStats observable) ✅
+        - NFR5 (LICENSE + SHA-256 README) ✅
+        - NFR6 + G1-G5 + SC-7..10: PENDING manual host gate
+        - Build/Test/Format/Clippy: sdd.5-check で確認済 (2017 PASS / fmt
+          clean / 新規コード clippy clean)
+      残作業: manual host gate (Linux X11 + Linux Wayland + Windows +
+        startup perf)、その後 migrate-draw-grid-to-new-pass + remove-
+        painter-text-from-draw-grid + restruct-status-update
 
 requirements:
   # ============================================================================

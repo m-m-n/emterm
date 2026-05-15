@@ -29,6 +29,7 @@
 
 pub mod cursor;
 pub mod font;
+pub mod terminal_grid_pass;
 pub mod theme;
 
 use std::time::Duration;
