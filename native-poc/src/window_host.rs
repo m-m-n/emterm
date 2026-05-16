@@ -101,15 +101,40 @@ impl ClickTracker {
 
 /// Owns the window, the wgpu surface, the egui context, and the
 /// egui-wgpu renderer.
+///
+/// Field declaration order is also the drop order — wgpu resources that
+/// depend on the surface / device / window are declared first so they
+/// run their destructors before the underlying `Surface`, `Instance`,
+/// and `Window` go away. In particular: the `Surface<'static>` we
+/// constructed via `create_surface_unsafe` from `&Window` references the
+/// window's native handle; tearing the window down before the surface
+/// produces a use-after-free on the Vulkan WSI side and was the cause
+/// of the segfault observed when closing the title-bar X button. See
+/// `Drop` impl below for the explicit shutdown handshake.
 pub struct WindowHost {
-    window: Arc<Window>,
-    instance: wgpu::Instance,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    egui_ctx: egui::Context,
+    /// Phase 4-H (font-swash-migration FR12): custom wgpu pass that
+    /// draws terminal cells (foreground glyph + background fill +
+    /// underline / strikethrough). Constructed lazily once the App is
+    /// available so the font stack can be taken from `App::font_*`.
+    /// Frame draw order is `clear → TerminalGridPass → egui (LoadOp::Load)
+    /// → ImageOverlayPass (LoadOp::Load)`.
+    grid_pass: Option<TerminalGridPass>,
+    /// Reusable wgpu pipeline that draws every visible placement after
+    /// the egui pass on the same swapchain texture (`LoadOp::Load`).
+    overlay_pipeline: OverlayPipeline,
+    /// Phase 5: inline-image overlay (Kitty Graphics + SIXEL). Single
+    /// instance shared by all tabs — the per-tab `ImageProcessor` lives in
+    /// `Tab::image_proc` and produces `ImageEvent`s which are forwarded
+    /// here once per frame via `Tab::drain_image_events`.
+    image_layer: ImageLayer,
     egui_renderer: egui_wgpu::Renderer,
+    egui_ctx: egui::Context,
+    surface_config: wgpu::SurfaceConfiguration,
+    queue: wgpu::Queue,
+    device: wgpu::Device,
+    surface: wgpu::Surface<'static>,
+    instance: wgpu::Instance,
+    window: Arc<Window>,
     pixels_per_point: f32,
     /// True when the surface must be recreated on the next frame (e.g. after
     /// `SurfaceError::Lost`).
@@ -124,21 +149,6 @@ pub struct WindowHost {
     /// Lazily-initialized arboard clipboard. We only fail-loud once if the
     /// platform clipboard cannot be acquired (X11 without display, etc.).
     clipboard: Option<arboard::Clipboard>,
-    /// Phase 5: inline-image overlay (Kitty Graphics + SIXEL). Single
-    /// instance shared by all tabs — the per-tab `ImageProcessor` lives in
-    /// `Tab::image_proc` and produces `ImageEvent`s which are forwarded
-    /// here once per frame via `Tab::drain_image_events`.
-    image_layer: ImageLayer,
-    /// Reusable wgpu pipeline that draws every visible placement after
-    /// the egui pass on the same swapchain texture (`LoadOp::Load`).
-    overlay_pipeline: OverlayPipeline,
-    /// Phase 4-H (font-swash-migration FR12): custom wgpu pass that
-    /// draws terminal cells (foreground glyph + background fill +
-    /// underline / strikethrough). Constructed lazily once the App is
-    /// available so the font stack can be taken from `App::font_*`.
-    /// Frame draw order is `clear → TerminalGridPass → egui (LoadOp::Load)
-    /// → ImageOverlayPass (LoadOp::Load)`.
-    grid_pass: Option<TerminalGridPass>,
 }
 
 impl WindowHost {
@@ -940,6 +950,14 @@ impl ApplicationHandler for PocApp {
                 // happens before the WM destroys the window.
                 log::info!("native-poc: CloseRequested → shutting down PTY tabs");
                 self.app.tabs.clear();
+                // Drop the wgpu Surface (and the rest of WindowHost) while
+                // winit's EventLoop is still alive. The Vulkan WSI surface
+                // is tied to the X11 display connection that EventLoop
+                // owns; if we let WindowHost outlive the EventLoop, the
+                // surface destructor calls into a freed display and
+                // segfaults. Same reason applies to the egui-wgpu
+                // Renderer, ImageLayer textures, and the Window arc.
+                self.host = None;
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
@@ -1139,12 +1157,30 @@ impl ApplicationHandler for PocApp {
         self.app
             .notify_cursor_rect_if_changed(FALLBACK_CELL_W, FALLBACK_CELL_H);
         if self.app.tabs.is_empty() {
+            // Same teardown handshake as the CloseRequested path: drop
+            // the wgpu / window resources before EventLoop unwinds so
+            // the Vulkan WSI surface destructor sees a live X11
+            // connection.
+            self.host = None;
             event_loop.exit();
             return;
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(16),
         ));
+    }
+
+    /// winit calls this once after `event_loop.exit()` and before
+    /// `run_app` returns. Use it as a defense-in-depth shutdown step
+    /// for any code path that flagged exit without zeroing `self.host`
+    /// (e.g. future error-path exits). The Vulkan / X11 teardown must
+    /// happen while EventLoop is still alive — see the field-order
+    /// note on `WindowHost`.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.host.is_some() {
+            log::info!("native-poc: exiting handler dropping WindowHost");
+            self.host = None;
+        }
     }
 }
 
