@@ -453,9 +453,39 @@ impl TerminalGridPass {
         let v0 = region.y as f32;
         let u1 = (region.x + region.width) as f32;
         let v1 = (region.y + region.height) as f32;
+        // Place the glyph quad at its natural bitmap size + bearing
+        // offset inside the cell rather than stretching the bitmap to
+        // fill the entire cell. Without this, glyphs with intrinsically
+        // different widths / heights (CJK ≈ 13×13, '!' ≈ 4×12, 'g' has a
+        // descender) all get squashed to the same `cell_w × cell_h`
+        // rectangle — that uneven distortion was the user-visible
+        // "ガタガタ" symptom.
+        //
+        // Vertical origin: we approximate the font baseline as
+        // `cell_top + size_px * 0.8` (typical monospace ascent ratio).
+        // The bitmap sits at `baseline - bearing_top`. The bundled fonts
+        // ship without per-face metrics on the API boundary, so this
+        // approximation is "good enough" for the host gate — a real
+        // ascent / line-height plumb is tracked as a follow-up.
+        let glyph_w = region.width as f32;
+        let glyph_h = region.height as f32;
+        let baseline = y + size_px * 0.8;
+        let glyph_x = x + region.bearing_left as f32;
+        let glyph_y = baseline - region.bearing_top as f32;
+        // Discard if the glyph quad has zero area or falls completely
+        // outside the cell (e.g. zero-width joiners that the rasterizer
+        // failed to suppress upstream).
+        if glyph_w <= 0.0 || glyph_h <= 0.0 {
+            return None;
+        }
+        // Suppress unused-arg warning: cell width is consumed when the
+        // shader maps `cell_local` for decoration lines; the glyph quad
+        // sits inside that cell.
+        let _ = w;
+        let _ = h;
         Some(CellInstance {
-            cell_xy: [x, y],
-            cell_wh: [w, h],
+            cell_xy: [glyph_x, glyph_y],
+            cell_wh: [glyph_w, glyph_h],
             atlas_uv: [u0, v0, u1, v1],
             fg_rgba: pack_rgba(cell.fg_rgba),
             bg_rgba: pack_rgba(cell.bg_rgba),
@@ -773,9 +803,14 @@ mod tests {
                                         AtlasFormat::Alpha => PAGE_ALPHA,
                                         AtlasFormat::Rgba => PAGE_RGBA,
                                     };
+                                    let glyph_w = region.width as f32;
+                                    let glyph_h = region.height as f32;
+                                    let baseline = y + metrics.font_size_px * 0.8;
+                                    let glyph_x = x + region.bearing_left as f32;
+                                    let glyph_y = baseline - region.bearing_top as f32;
                                     out.push(CellInstance {
-                                        cell_xy: [x, y],
-                                        cell_wh: [w, h],
+                                        cell_xy: [glyph_x, glyph_y],
+                                        cell_wh: [glyph_w, glyph_h],
                                         atlas_uv: [
                                             region.x as f32,
                                             region.y as f32,

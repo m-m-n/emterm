@@ -108,6 +108,93 @@ impl Resolver {
         (cjk, emoji)
     }
 
+    /// Try to load a specific system font family with its file bytes and
+    /// register it under the given role. Returns the assigned `FontId` if
+    /// the family was found and bytes were successfully read. Returns
+    /// `None` (and logs a warn) when the family is absent or the source
+    /// could not be loaded.
+    ///
+    /// Phase 4-H follow-up: the legacy `scan_system_fonts` registers
+    /// monospace family names with empty byte buffers (the swash adapter
+    /// skips those), so it cannot reach the rasterizer. This helper is the
+    /// pragmatic path until a richer system-font pipeline lands — callers
+    /// pass the canonical family name (e.g. `"Inconsolata"`,
+    /// `"Noto Sans JP"`) and we eagerly read the file into memory so the
+    /// swash adapter can ingest it via `ingest_resolver`.
+    pub fn register_system_family(&mut self, family: &str, role: FontRole) -> Option<FontId> {
+        if let Some(existing) = self.by_family.get(family).copied() {
+            if let Some(entry) = self.by_id.get(&existing) {
+                if !entry.bytes.is_empty() {
+                    return Some(existing);
+                }
+            }
+        }
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        let face = db.faces().find(|f| {
+            f.families
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(family))
+        })?;
+        let source = face.source.clone();
+        let index = face.index;
+        let bytes: Arc<[u8]> = match source {
+            fontdb::Source::Binary(b) => {
+                let raw: &[u8] = b.as_ref().as_ref();
+                Arc::<[u8]>::from(raw)
+            }
+            fontdb::Source::File(path) => match std::fs::read(&path) {
+                Ok(buf) => Arc::<[u8]>::from(buf.as_slice()),
+                Err(e) => {
+                    log::warn!(
+                        "font.system_family.read_failed: family={} path={} err={}",
+                        family,
+                        path.display(),
+                        e
+                    );
+                    return None;
+                }
+            },
+            fontdb::Source::SharedFile(path, shared) => {
+                let raw: &[u8] = shared.as_ref().as_ref();
+                if raw.is_empty() {
+                    match std::fs::read(&path) {
+                        Ok(buf) => Arc::<[u8]>::from(buf.as_slice()),
+                        Err(e) => {
+                            log::warn!(
+                                "font.system_family.read_failed: family={} path={} err={}",
+                                family,
+                                path.display(),
+                                e
+                            );
+                            return None;
+                        }
+                    }
+                } else {
+                    Arc::<[u8]>::from(raw)
+                }
+            }
+        };
+        if bytes.is_empty() {
+            log::warn!("font.system_family.empty_bytes: family={}", family);
+            return None;
+        }
+        // .ttc / .otc collections expose multiple faces in a single file;
+        // we currently only ingest face 0 in the swash path. Warn (but
+        // still register) so we can revisit if multi-face collections
+        // become important.
+        if index != 0 {
+            log::warn!(
+                "font.system_family.non_zero_face_index: family={} index={} (only face 0 will rasterize)",
+                family,
+                index
+            );
+        }
+        // Overwrite any prior (empty-bytes) entry under this family name.
+        self.by_family.remove(family);
+        Some(self.register_bytes(role, family.to_string(), bytes))
+    }
+
     /// Scan host fonts via fontdb and append unique monospace families as
     /// `FontRole::Base` candidates. On any panic / IO failure the scan is
     /// suppressed and `scan_failed()` returns `true`; bundled fonts

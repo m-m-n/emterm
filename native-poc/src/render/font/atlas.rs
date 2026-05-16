@@ -22,6 +22,16 @@ pub struct AtlasRegion {
     pub y: u32,
     pub width: u32,
     pub height: u32,
+    /// Horizontal offset from the pen position to the left edge of the
+    /// glyph bitmap. Copied from `GlyphBitmap::bearing.0`. Used by the
+    /// render pass to place the glyph quad at its natural location inside
+    /// the terminal cell instead of stretching it to fill the cell rect.
+    pub bearing_left: i32,
+    /// Vertical offset from the baseline to the top edge of the glyph
+    /// bitmap. Positive when the glyph sits above the baseline (the
+    /// common case for Latin / CJK letters). Copied from
+    /// `GlyphBitmap::bearing.1`.
+    pub bearing_top: i32,
 }
 
 impl AtlasRegion {
@@ -125,6 +135,8 @@ impl Page {
                 y: 0,
                 width: 0,
                 height: 0,
+                bearing_left: 0,
+                bearing_top: 0,
             };
         }
         let w = bitmap.width;
@@ -153,6 +165,8 @@ impl Page {
                     y: 0,
                     width: 0,
                     height: 0,
+                    bearing_left: 0,
+                    bearing_top: 0,
                 };
             }
         }
@@ -176,6 +190,8 @@ impl Page {
             y,
             width: w,
             height: h,
+            bearing_left: bitmap.bearing.0,
+            bearing_top: bitmap.bearing.1,
         }
     }
 }
@@ -298,6 +314,8 @@ mod tests {
             y: 0,
             width: 0,
             height: 0,
+            bearing_left: 0,
+            bearing_top: 0,
         };
         for _ in 0..5 {
             last = atlas.upload(&alpha_bitmap(64, 16, 0xFF));

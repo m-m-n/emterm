@@ -123,6 +123,8 @@ impl GlyphCache {
                         y: 0,
                         width: 0,
                         height: 0,
+                        bearing_left: 0,
+                        bearing_top: 0,
                     })
                 }
                 Slot::Missing => {
@@ -162,6 +164,8 @@ impl GlyphCache {
                     y: 0,
                     width: 0,
                     height: 0,
+                    bearing_left: 0,
+                    bearing_top: 0,
                 })
             }
             Some(bitmap) => {

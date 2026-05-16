@@ -186,12 +186,31 @@ impl App {
         Arc<dyn GlyphRasterizer>,
         FontId,
     ) {
+        use crate::render::font::resolver::FontRole;
+
         let mut resolver = Resolver::new();
-        let (cjk_id, emoji_id) = resolver.register_bundled();
-        // System font scan: best-effort, logged on failure. Scanning is
-        // suppressed in tests to keep `cargo test` deterministic and
-        // fast; the resolver's `scan_system_fonts` already guards against
-        // panics, so production runs do not need a flag here.
+        let (bundled_cjk_id, emoji_id) = resolver.register_bundled();
+
+        // Temporary host-font preferences (Phase 4-H follow-up): pick
+        // Inconsolata for the monospace Latin base + Noto Sans JP for the
+        // CJK fallback when those families are present on the system. The
+        // bundled CJK font's Latin sub-set is not monospaced, so falling
+        // back to it for ASCII produces visibly jagged grid alignment.
+        // When the requested families are absent we silently degrade to
+        // the bundled CJK font as the base.
+        #[cfg(not(test))]
+        let inconsolata_id = resolver.register_system_family("Inconsolata", FontRole::Base);
+        #[cfg(test)]
+        let inconsolata_id: Option<FontId> = None;
+
+        #[cfg(not(test))]
+        let noto_sans_jp_id = resolver.register_system_family("Noto Sans JP", FontRole::Cjk);
+        #[cfg(test)]
+        let noto_sans_jp_id: Option<FontId> = None;
+
+        // Best-effort wider system scan (logged at WARN on failure;
+        // family-name only, byte loading is deferred). Tests skip the
+        // scan to keep cargo test deterministic.
         #[cfg(not(test))]
         resolver.scan_system_fonts();
 
@@ -209,7 +228,7 @@ impl App {
                 // path (FR5).
                 match crate::render::font::ab_glyph_adapter::AbGlyphRasterizer::from_static_bytes(
                     crate::render::font::resolver::BUNDLED_CJK_FONT,
-                    cjk_id,
+                    bundled_cjk_id,
                 ) {
                     Some(r) => {
                         log::info!("font_engine = ab_glyph (escape hatch); CJK / emoji may tofu");
@@ -228,19 +247,37 @@ impl App {
             }
         };
 
-        // Fallback chain rooted at the bundled CJK font (it contains a
-        // Latin sub-set, so ASCII is covered without a separate base
-        // font being registered). Emoji is the next chain entry; the
-        // resolver-driven extras add any user-supplied fallbacks +
-        // Windows secondary fonts on platforms where those are
-        // registered.
-        let chain = FallbackChain::new(cjk_id, [emoji_id]);
+        // Pick the chain root: prefer Inconsolata (monospace Latin) when
+        // it loaded successfully; otherwise the bundled CJK font remains
+        // the base so ASCII still renders (just less prettily).
+        let base_id = inconsolata_id.unwrap_or(bundled_cjk_id);
+        let mut extras: Vec<FontId> = Vec::new();
+        if let Some(jp) = noto_sans_jp_id {
+            extras.push(jp);
+        }
+        if base_id != bundled_cjk_id {
+            // Keep the bundled CJK font as a last-resort CJK fallback
+            // (covers KR / TC / SC / extended CJK that NSJP omits).
+            extras.push(bundled_cjk_id);
+        }
+        extras.push(emoji_id);
+        if let Some(id) = inconsolata_id {
+            log::info!("font.base = Inconsolata (id={:?})", id);
+        } else {
+            log::warn!(
+                "font.base = bundled Noto Sans CJK JP (Inconsolata not found on host; ASCII will not be monospaced)"
+            );
+        }
+        if let Some(id) = noto_sans_jp_id {
+            log::info!("font.jp = Noto Sans JP (id={:?})", id);
+        }
+        let chain = FallbackChain::new(base_id, extras);
         (
             Arc::new(resolver),
             Arc::new(chain),
             Arc::new(Mutex::new(GlyphCache::new())),
             rasterizer,
-            cjk_id,
+            base_id,
         )
     }
 
