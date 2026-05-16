@@ -118,28 +118,11 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
             if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
                 draw_cursor(ui, &core, &theme, app);
-                // Phase 4-E: preedit underline overlay. Drawn after the
-                // cursor so it sits on top of (or beneath, depending on
-                // cursor style) the active cell highlight.
-                if tab.preedit_state.active() {
-                    let origin = ui.min_rect().min + Vec2::new(LEFT_PAD, TOP_PAD);
-                    let cursor_color = rgb_to_egui(theme.fg);
-                    let metrics = crate::render::cursor::FontMetrics {
-                        cell_w: CELL_W,
-                        cell_h: CELL_H,
-                        left_pad: 0.0,
-                        top_pad: 0.0,
-                    };
-                    crate::render::cursor::draw_cursor_with_preedit(
-                        ui.painter(),
-                        tab.preedit_state.anchor(),
-                        tab.preedit_state.text(),
-                        metrics,
-                        core.cols(),
-                        cursor_color,
-                        origin,
-                    );
-                }
+                // Preedit rendering is owned by the wgpu cell pass via
+                // `apply_preedit_overlay` (reverse-video cells). The
+                // legacy egui underline overlay was removed so it
+                // doesn't stack on top of the inline reverse-video
+                // composition cells.
             } else {
                 ui.colored_label(Color32::LIGHT_GRAY, "no tab — shell may have exited");
             }
@@ -205,12 +188,106 @@ pub fn collect_cell_inputs(
                 underline: style.underline,
                 strikethrough: style.strikethrough,
                 draw_background: style.bg != bg_default,
+                bg_extend_below: 0.0,
+                fit_glyph_to_cell: false,
             });
 
             col = col.saturating_add(cell_width_cells.max(1) as u16);
         }
     }
     out
+}
+
+/// Overlay an in-progress IME preedit composition onto an existing
+/// `Vec<CellInput>` produced by [`collect_cell_inputs`].
+///
+/// Replaces the cells starting at `anchor` with one entry per character
+/// of `text`, drawn in reverse video (theme.fg as background, theme.bg
+/// as foreground) so composition stands out against the surrounding
+/// committed text. Ambiguous-width characters (e.g. ▽ U+25BD) are
+/// forced to a 1-cell footprint with their glyphs scaled to fit.
+/// Wraps to the next row when the composition exceeds the right edge.
+///
+/// `bg_extend_below_px` extends the reverse-video bg quad downward by
+/// the given physical-pixel amount so glyph descenders that rasterize
+/// past `cell_h` are covered by the inverted background. Caller
+/// supplies a value already scaled by `pixels_per_point`.
+pub fn apply_preedit_overlay(
+    cells: &mut Vec<CellInput>,
+    anchor: crate::ime::preedit::Anchor,
+    text: &str,
+    theme: &Theme,
+    cols: u16,
+    rows: u16,
+    bg_extend_below_px: f32,
+) {
+    if text.is_empty() || cols == 0 || rows == 0 {
+        return;
+    }
+    let bg_default = rgb_to_egui(theme.bg);
+    let fg_preedit = rgb_to_egui(theme.bg);
+    let bg_preedit = rgb_to_egui(theme.fg);
+    let bg_extend_below = bg_extend_below_px.max(0.0);
+
+    let mut row = anchor.row.min(rows.saturating_sub(1));
+    let mut col = anchor.col.min(cols.saturating_sub(1));
+    let mut overlay: Vec<CellInput> = Vec::new();
+
+    for ch in text.chars() {
+        if row >= rows {
+            break;
+        }
+        let s: String = ch.to_string();
+        // Force ambiguous-width chars (e.g. ▽) to 1 cell so the
+        // composition footprint matches the user's visual expectation
+        // of "1 character = 1 cell" during preedit.
+        let w = visible_width(&s, AmbiguousWidthMode::Narrow).max(1) as u16;
+        if col + w > cols {
+            row = row.saturating_add(1);
+            col = 0;
+            if row >= rows {
+                break;
+            }
+        }
+        overlay.push(CellInput {
+            col,
+            row,
+            width_cells: w as u8,
+            glyph: s,
+            fg_rgba: color32_to_rgba(fg_preedit),
+            bg_rgba: color32_to_rgba(bg_preedit),
+            underline: false,
+            strikethrough: false,
+            draw_background: bg_preedit != bg_default,
+            bg_extend_below,
+            fit_glyph_to_cell: true,
+        });
+        col = col.saturating_add(w);
+    }
+
+    if overlay.is_empty() {
+        return;
+    }
+
+    // Remove any existing cells whose footprint overlaps a preedit cell
+    // so the same column isn't drawn twice (the wgpu pass instances each
+    // CellInput in submission order without a depth test).
+    use std::collections::HashSet;
+    let mut occupied: HashSet<(u16, u16)> = HashSet::new();
+    for o in &overlay {
+        for k in 0..o.width_cells.max(1) as u16 {
+            occupied.insert((o.row, o.col.saturating_add(k)));
+        }
+    }
+    cells.retain(|c| {
+        for k in 0..c.width_cells.max(1) as u16 {
+            if occupied.contains(&(c.row, c.col.saturating_add(k))) {
+                return false;
+            }
+        }
+        true
+    });
+    cells.extend(overlay);
 }
 
 /// Pack an `egui::Color32` (already non-premultiplied RGBA8) into the

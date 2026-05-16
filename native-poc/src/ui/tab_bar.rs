@@ -32,7 +32,7 @@ use egui::{Align, Color32, Layout, RichText, ScrollArea, Sense, Stroke, Ui, Vec2
 use super::TabEvent;
 
 /// Fixed visual height of the tab strip in egui logical points.
-const TAB_BAR_HEIGHT: f32 = 28.0;
+pub const TAB_BAR_HEIGHT: f32 = 28.0;
 /// Minimum width of a single tab button before horizontal scroll
 /// kicks in.
 const MIN_TAB_WIDTH: f32 = 80.0;

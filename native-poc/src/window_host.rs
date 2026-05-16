@@ -337,18 +337,21 @@ impl WindowHost {
     pub fn grid_size(&self) -> (u16, u16) {
         let w = self.surface_config.width.max(1);
         let h = self.surface_config.height.max(1);
-        // Reserve ~36 px for the top bar.
-        let usable_h = h.saturating_sub(36).max(FALLBACK_CELL_H);
+        // Reserve the tab-bar widget's actual height (logical points)
+        // for the top bar.
+        let top_bar = crate::ui::tab_bar::TAB_BAR_HEIGHT as u32;
+        let usable_h = h.saturating_sub(top_bar).max(FALLBACK_CELL_H);
         let cols = (w / FALLBACK_CELL_W).clamp(20, 500) as u16;
         let rows = (usable_h / FALLBACK_CELL_H).clamp(5, 200) as u16;
         (cols, rows)
     }
 
     /// Map a physical pixel position to a grid cell `(row, col)`. The top
-    /// bar reserved by `grid_size` accounts for `~36 px`; we use the same
-    /// offset so the cursor lands on the visually-correct row.
+    /// bar reserved by `grid_size` accounts for the tab-bar widget's
+    /// height; we use the same offset so the cursor lands on the
+    /// visually-correct row.
     fn pixel_to_cell(&self, pos: PhysicalPosition<f64>, app: &App) -> (u16, u16) {
-        let top_bar_px = 36.0_f64;
+        let top_bar_px = crate::ui::tab_bar::TAB_BAR_HEIGHT as f64;
         let x = (pos.x.max(0.0)) / (FALLBACK_CELL_W as f64);
         let y = ((pos.y - top_bar_px).max(0.0)) / (FALLBACK_CELL_H as f64);
         let cols = app.cell_size.cols.max(1);
@@ -593,20 +596,41 @@ impl WindowHost {
             let width_mode = app.settings.ambiguous_width_mode;
             let cell_inputs = if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
-                crate::render::collect_cell_inputs(
+                let mut inputs = crate::render::collect_cell_inputs(
                     &core,
                     &theme,
                     app.selection.as_ref(),
                     width_mode,
-                )
+                );
+                // IME preedit overlay (Phase 4-G): paint composition
+                // glyphs inline at the anchor so the user can see what
+                // they are typing. Without this only fcitx5's candidate
+                // window hints at composition state.
+                if tab.preedit_state.active() {
+                    // No bg extension: glyph is clamped inside the
+                    // cell rect by `fit_glyph_to_cell` so the
+                    // reverse-video bg never has to spill into the
+                    // next row to cover descenders.
+                    crate::render::apply_preedit_overlay(
+                        &mut inputs,
+                        tab.preedit_state.anchor(),
+                        tab.preedit_state.text(),
+                        &theme,
+                        core.cols(),
+                        core.rows(),
+                        0.0,
+                    );
+                }
+                inputs
             } else {
                 Vec::new()
             };
             // Cell metrics match `render/mod.rs::CELL_W / CELL_H` so the
             // wgpu-rendered cells line up with the egui-side cursor and
             // preedit overlays. The vertical origin reserves the same
-            // ~36 px the tab bar occupies (see `pixel_to_cell`) plus
-            // the `TOP_PAD` egui uses inside the central panel.
+            // logical-px the tab bar widget actually occupies (see
+            // `crate::ui::tab_bar::TAB_BAR_HEIGHT`) plus the `TOP_PAD`
+            // egui uses inside the central panel.
             //
             // HiDPI: the swapchain is sized in physical pixels while
             // `CELL_W / CELL_H / LEFT_PAD / TOP_PAD` are logical
@@ -615,7 +639,6 @@ impl WindowHost {
             // length we hand wgpu (cell rect + origin + glyph
             // rasterize size) so cells line up with the egui-side
             // cursor / preedit on 2.0× hosts.
-            const TAB_BAR_PX: f32 = 36.0;
             let scale = self.pixels_per_point.max(1.0);
             Some(pass.prepare(
                 &self.device,
@@ -626,7 +649,7 @@ impl WindowHost {
                     cell_h: crate::render::CELL_H * scale,
                     origin: [
                         crate::render::LEFT_PAD * scale,
-                        (TAB_BAR_PX + crate::render::TOP_PAD) * scale,
+                        (crate::ui::tab_bar::TAB_BAR_HEIGHT + crate::render::TOP_PAD) * scale,
                     ],
                     font_size_px: theme.font_size_pt * scale,
                 },
