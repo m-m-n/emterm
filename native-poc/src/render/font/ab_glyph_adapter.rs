@@ -10,7 +10,7 @@
 
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 
-use super::traits::{AtlasFormat, FontId, GlyphBitmap, GlyphRasterizer, ShapedGlyph};
+use super::traits::{AtlasFormat, FontId, FontMetrics, GlyphBitmap, GlyphRasterizer, ShapedGlyph};
 
 /// Adapter wrapping a single ab_glyph font with a fixed `FontId`.
 ///
@@ -122,6 +122,21 @@ impl GlyphRasterizer for AbGlyphRasterizer {
             Some(c) => self.font.glyph_id(c).0 != 0,
             None => false,
         }
+    }
+
+    fn font_metrics(&self, font: FontId, size_px: f32) -> Option<FontMetrics> {
+        if font != self.font_id {
+            return None;
+        }
+        let scaled = self.font.as_scaled(PxScale::from(size_px));
+        Some(FontMetrics {
+            ascent: scaled.ascent(),
+            // ab_glyph reports `descent` as a negative value (distance
+            // *down* from the baseline). The trait contract expects a
+            // positive number, so flip the sign.
+            descent: (-scaled.descent()).max(0.0),
+            line_gap: scaled.line_gap().max(0.0),
+        })
     }
 }
 
