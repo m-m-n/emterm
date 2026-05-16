@@ -608,23 +608,27 @@ impl WindowHost {
             // ~36 px the tab bar occupies (see `pixel_to_cell`) plus
             // the `TOP_PAD` egui uses inside the central panel.
             //
-            // HiDPI follow-up: the swapchain is sized in physical pixels
-            // while `CELL_W / CELL_H` are logical pixels. egui scales
-            // its pass via `pixels_per_point` in the `ScreenDescriptor`.
-            // For the G1+G2 host gate (1.0× X11) the two coincide. On
-            // higher-DPI hosts the grid pass needs to multiply metrics
-            // (and `font_size_px`) by `pixels_per_point` — track in a
-            // follow-up task.
+            // HiDPI: the swapchain is sized in physical pixels while
+            // `CELL_W / CELL_H / LEFT_PAD / TOP_PAD` are logical
+            // pixels. egui scales its pass via `pixels_per_point` in
+            // the `ScreenDescriptor`; we apply the same scale to every
+            // length we hand wgpu (cell rect + origin + glyph
+            // rasterize size) so cells line up with the egui-side
+            // cursor / preedit on 2.0× hosts.
             const TAB_BAR_PX: f32 = 36.0;
+            let scale = self.pixels_per_point.max(1.0);
             Some(pass.prepare(
                 &self.device,
                 &self.queue,
                 &cell_inputs,
                 crate::render::terminal_grid_pass::CellMetrics {
-                    cell_w: crate::render::CELL_W,
-                    cell_h: crate::render::CELL_H,
-                    origin: [crate::render::LEFT_PAD, TAB_BAR_PX + crate::render::TOP_PAD],
-                    font_size_px: theme.font_size_pt,
+                    cell_w: crate::render::CELL_W * scale,
+                    cell_h: crate::render::CELL_H * scale,
+                    origin: [
+                        crate::render::LEFT_PAD * scale,
+                        (TAB_BAR_PX + crate::render::TOP_PAD) * scale,
+                    ],
+                    font_size_px: theme.font_size_pt * scale,
                 },
                 self.surface_config.width,
                 self.surface_config.height,
