@@ -42,6 +42,13 @@ pub struct Theme {
     /// 16..255 is the xterm 256-color cube/grayscale formula).
     pub palette256: Box<[Option<Rgb>; 256]>,
     pub cursor_style: CursorStyle,
+    /// Theme-requested font family. Currently informational only after
+    /// Phase 4-H: the `TerminalGridPass` resolves fonts through the
+    /// `Resolver` + `FallbackChain` registered at startup, not via the
+    /// Theme. A follow-up will plumb this string into
+    /// `Resolver::by_family` so the user's theme choice influences the
+    /// fallback chain root.
+    #[allow(dead_code)]
     pub font_family: String,
     pub font_size_pt: f32,
 }

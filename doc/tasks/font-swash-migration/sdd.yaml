@@ -83,8 +83,33 @@ workflow:
           へ移動して修正。
   - id: implement
     status: completed
-    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
+    completed_at_commit: "35acea77924b61bfd873988ddcbe26d4c570e036"
     notes: |
+      2026-05-15 manual host gate (Linux X11 + radv) で TerminalGridPass
+      配線未完を確認: 日本語 tofu + emoji 描画なし。原因は migrate-draw-
+      grid-to-new-pass + remove-painter-text-from-draw-grid を deferred
+      にしたまま painter.text() で描画していたため。deferred 条件
+      (G1+G2 manual gate 通過) が鶏卵問題だったので解除し、両タスクを
+      今回の implement re-run で実施する。
+
+      2026-05-15 implementation-executor (migration run):
+        - migrate-draw-grid-to-new-pass: `render::collect_cell_inputs(core,
+          theme, selection, width_mode)` を render/mod.rs に新設、
+          window_host.rs::render から毎フレーム呼んで TerminalGridPass::
+          prepare() に流す配線完了。draw_grid 関数自体を削除。
+        - remove-painter-text-from-draw-grid: painter.text / line_segment /
+          rect_filled (selection は除外) を削除。FONT_SIZE 定数 +
+          FontFamily::Monospace literal も削除。CentralPanel fill を
+          Color32::TRANSPARENT に変更。
+      テスト: 2017 → 2019 PASS (-2 retired + +4 新規: collect_cell_inputs
+        系)。cargo fmt --check clean、cargo clippy --no-deps 新規警告なし。
+      フォローアップ (本 SDD スコープ外):
+        - Theme::font_family が dead_code に降格 (Resolver の by_family
+          lookup を将来配線する想定で #[allow(dead_code)] 残置)
+        - HiDPI scaling: cell sizes と font_size_px は logical px 単位、
+          swapchain は physical px。1.0× ホストでは一致。次反復で対応
+        - tab-bar offset 36px 定数 → 動的取得に変える余地あり
+
       自動化可能な実装範囲は完了 (18/27 task completed、cargo test --workspace
       2009/2009 PASS、baseline 1985 → +24 新規テスト、cargo fmt PASS)。
 
@@ -133,8 +158,34 @@ workflow:
         dev-dep) / src/render/mod.rs / src/settings.rs
   - id: check
     status: completed
-    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
+    completed_at_commit: "35acea77924b61bfd873988ddcbe26d4c570e036"
     notes: |
+      2026-05-15 manual gate 結果を受けて再オープン (migrate + remove-
+      painter-text 実施後に再検証)。
+
+      2026-05-15 SDD orchestrator (check re-run):
+        - Build: cargo build --workspace PASS
+        - Test: 2019 PASS (+2 from prior 2017 baseline: -2 retired
+          renderer_reads_theme_* + +4 collect_cell_inputs_*)
+        - Format: cargo fmt --all -- --check clean
+        - Clippy: Phase 4-H 変更ファイル (render/mod.rs, window_host.rs,
+          terminal_grid_pass.rs, theme.rs) に新規警告なし。src-tauri の
+          pre-existing clippy エラー (sftp/upload, reader 等) は本 SDD
+          スコープ外
+        - Grep 検証 OK: painter.text 削除確認 / FONT_SIZE +
+          FontFamily::Monospace 削除確認 / fn draw_grid 削除確認 /
+          collect_cell_inputs 関数 + 呼び出し配線確認
+      Dead code 追加クリーンアップ (2 件):
+        - CellStyle::bold / italic に #[allow(dead_code)] 付与 (将来の
+          Resolver weight/style 配線で活きる予定、Theme::font_family と
+          同じ扱い)
+        - window_host.rs window_arc() の stale #[allow(dead_code)] を削除
+          (line 921 で build_backend_with_window から呼ばれているため)
+      Out-of-scope / 別途追跡:
+        - Theme::cursor_style の dead read (OSC 22 で mutate されるが
+          renderer は core.get_cursor_style() を参照、本マイグレーション
+          起因ではないので別途)
+
       2026-05-15 SDD orchestrator (check run):
         - Build: cargo build --workspace PASS
         - Test: cargo test --workspace 2017 PASS (+8 from baseline 2009、
@@ -154,8 +205,28 @@ workflow:
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: completed
-    completed_at_commit: "c6e64580f1efb726ccdcc8f2f231fec9ed471b3e"
+    completed_at_commit: "35acea77924b61bfd873988ddcbe26d4c570e036"
     notes: |
+      2026-05-15 manual gate 結果を受けて再オープン (migrate + remove-
+      painter-text 実施後に G1/G2 を含めた再検証を行う)。
+
+      2026-05-15 SDD orchestrator (verify re-run, post-migration):
+        - VERIFICATION_RESULT.md 更新: FR12 6/8 → 8/8、SC-10 PARTIAL →
+          PASS、test count 2017 → 2019 反映
+        - Grep 検証 OK: painter.text() / fn draw_grid / FONT_SIZE /
+          FontFamily::Monospace 全て削除確認、collect_cell_inputs は
+          render/mod.rs:180 で定義 + window_host.rs:584-612 で呼び出し
+        - tasks.yaml: migrate-draw-grid-to-new-pass +
+          remove-painter-text-from-draw-grid は既に completed (実装中に
+          implementation-executor が更新済)
+      残作業 (manual gate / 環境依存):
+        - TS-manual-font-linux-x11 (+ fallback): G1 (emoji color) + G2
+          (CJK 読める) + G3 (cell 幅) を視覚確認
+        - TS-manual-font-linux-wayland (GDK_BACKEND=x11)
+        - TS-manual-font-windows / windows-segoe-emoji-secondary
+        - TS-manual-font-startup-perf (NFR1 < 500ms)
+        - restruct-status-update (tmp/restruct.md の Phase 4-H 完了マーク)
+
       2026-05-15 SDD orchestrator (verify run):
         - VERIFICATION_RESULT.md を生成
         - File structure: 16 created + 6 modified、全件存在確認 ✅
