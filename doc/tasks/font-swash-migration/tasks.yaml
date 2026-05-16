@@ -184,33 +184,42 @@ phases:
       - id: migrate-draw-grid-to-new-pass
         title: "Migrate selection / underline / strikethrough (and per-cell drawing) from draw_grid into TerminalGridPass"
         phase: 4-h
-        status: deferred
+        status: completed
         notes: |
-          Code path is plumbed: TerminalGridPass::build_instances
-          consumes CellInput entries and routes them through the
-          FallbackChain + GlyphCache, emitting per-cell instances with
-          background fill + decoration flags. Actually filling the
-          CellInput slice from term_core grid + driving the swap is
-          gated on the G1 (Noto Color Emoji) and G2 (CJK) manual host
-          gates per the Phase 4-H PoC failure-path policy: if the
-          visual gates fail, we revert without having destroyed the
-          existing painter.text() path. To be re-evaluated under the
-          Linux X11 + fcitx5 host session (TS-manual-font-linux-x11)
-          along with remove-painter-text-from-draw-grid.
+          Completed 2026-05-15. The chicken-and-egg deferral (G1+G2
+          could not pass while the new pass was fed an empty cell
+          list) was dissolved by the user's host gate run, which
+          confirmed CJK / emoji were tofu because painter.text() was
+          still the only glyph source. Design choice: cell-input
+          snapshotting lives in `render::collect_cell_inputs(core,
+          theme, selection, width_mode) -> Vec<CellInput>`, called
+          inline from `WindowHost::render` before `TerminalGridPass::
+          prepare`. Selection retains the existing fg/bg swap in
+          `resolve_cell_style` (no separate selection quad). Cursor
+          stays on the egui side per SPEC. Cell metrics (`CELL_W`,
+          `CELL_H`, `LEFT_PAD`, `TOP_PAD`) became `pub const` on
+          `render` so window_host can compose them with the empirical
+          36 px tab-bar offset for the grid pass origin.
       - id: remove-painter-text-from-draw-grid
         title: "Remove painter.text() / decoration-line / background-rect calls from render/mod.rs::draw_grid (after G1+G2 pass)"
         phase: 4-h
-        status: deferred
+        status: completed
         notes: |
-          Final step of Phase 4-H, gated on the Go/No-Go gates G1
-          (Noto Color Emoji visible) and G2 (CJK legible) which both
-          require visual host validation. Per the Phase 4-H PoC
-          failure-path policy in IMPLEMENTATION.md, the painter.text()
-          path stays alive until the new pass demonstrates G1+G2 on a
-          real host so a discovered defect can be reverted cleanly.
-          Also includes deleting the FONT_SIZE constant +
-          FontFamily::Monospace literal; both currently still serve
-          renderer/mod.rs::cell_font_id which feeds painter.text().
+          Completed 2026-05-15. Deleted from `render/mod.rs`: the
+          entire `draw_grid` function, the `cell_font_id` helper, and
+          the `FontFamily` / `FontId` / `Align2` imports. The egui
+          `CentralPanel::frame` fill now uses `Color32::TRANSPARENT`
+          so the wgpu-rendered cells are visible through it; the
+          cursor + IME preedit overlays still draw on top via egui.
+          Verified by grep: no `painter.text(` / `FONT_SIZE` /
+          `FontFamily::Monospace` remain in `render/mod.rs`.
+          `Theme::font_family` gained `#[allow(dead_code)]` with a
+          note for the follow-up Resolver wiring; `Theme::font_size_pt`
+          is read live via `CellMetrics::font_size_px` in
+          `WindowHost::render`. Renderer TS-font-12 was retired (it
+          asserted on `cell_font_id`); four new tests cover
+          `collect_cell_inputs` (one-per-cell coverage, wide-cell
+          advance, decoration flags, background-fill gating).
       - id: startup-rasterizer-selection
         title: "Branch on Settings::font_engine in app.rs to construct Swash or AbGlyph rasterizer + hand it to TerminalGridPass"
         phase: 4-h

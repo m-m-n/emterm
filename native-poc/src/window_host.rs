@@ -282,7 +282,6 @@ impl WindowHost {
     /// the handle themselves (Phase 4-G-3 passes this to
     /// `WinitImeBridge::init` so the bridge can call
     /// `Window::set_ime_cursor_area`).
-    #[allow(dead_code)]
     pub fn window_arc(&self) -> Arc<Window> {
         self.window.clone()
     }
@@ -572,24 +571,50 @@ impl WindowHost {
             &screen_descriptor,
         );
 
-        // Phase 4-H (FR12): the TerminalGridPass owns the wgpu clear so
-        // the new frame draw order is `clear → TerminalGridPass → egui
-        // (LoadOp::Load) → ImageOverlayPass (LoadOp::Load)`. Until the
-        // G1+G2 gates pass on a host, the pass is fed an empty cell
-        // input list and only contributes the clear color; egui's
-        // painter.text() continues to draw the terminal cells. This
-        // keeps the integration point exercised on every frame without
-        // regressing the visible terminal.
+        // Phase 4-H (FR12): build the per-cell input list against the
+        // active tab's core + selection + theme, then hand it to
+        // `TerminalGridPass::prepare`. The pass clears the swapchain to
+        // the theme background and emits one instanced draw call for
+        // every visible cell (background + glyph + decorations). egui
+        // runs second with `LoadOp::Load` and draws the UI overlay
+        // (tab bar / status bar / cursor / IME preedit) on top.
         let prepared_grid = if let Some(pass) = self.grid_pass.as_mut() {
+            let theme = crate::render::theme::Theme::default();
+            let width_mode = app.settings.ambiguous_width_mode;
+            let cell_inputs = if let Some(tab) = app.active_tab() {
+                let core = tab.core.lock();
+                crate::render::collect_cell_inputs(
+                    &core,
+                    &theme,
+                    app.selection.as_ref(),
+                    width_mode,
+                )
+            } else {
+                Vec::new()
+            };
+            // Cell metrics match `render/mod.rs::CELL_W / CELL_H` so the
+            // wgpu-rendered cells line up with the egui-side cursor and
+            // preedit overlays. The vertical origin reserves the same
+            // ~36 px the tab bar occupies (see `pixel_to_cell`) plus
+            // the `TOP_PAD` egui uses inside the central panel.
+            //
+            // HiDPI follow-up: the swapchain is sized in physical pixels
+            // while `CELL_W / CELL_H` are logical pixels. egui scales
+            // its pass via `pixels_per_point` in the `ScreenDescriptor`.
+            // For the G1+G2 host gate (1.0× X11) the two coincide. On
+            // higher-DPI hosts the grid pass needs to multiply metrics
+            // (and `font_size_px`) by `pixels_per_point` — track in a
+            // follow-up task.
+            const TAB_BAR_PX: f32 = 36.0;
             Some(pass.prepare(
                 &self.device,
                 &self.queue,
-                &[],
+                &cell_inputs,
                 crate::render::terminal_grid_pass::CellMetrics {
-                    cell_w: FALLBACK_CELL_W as f32,
-                    cell_h: FALLBACK_CELL_H as f32,
-                    origin: [0.0, 0.0],
-                    font_size_px: 13.0,
+                    cell_w: crate::render::CELL_W,
+                    cell_h: crate::render::CELL_H,
+                    origin: [crate::render::LEFT_PAD, TAB_BAR_PX + crate::render::TOP_PAD],
+                    font_size_px: theme.font_size_pt,
                 },
                 self.surface_config.width,
                 self.surface_config.height,

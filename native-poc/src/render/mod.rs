@@ -34,7 +34,7 @@ pub mod theme;
 
 use std::time::Duration;
 
-use egui::{Align2, Color32, FontFamily, FontId, Pos2, Rect, Stroke, Vec2};
+use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use term_core::cell::{
     STYLE_BLINK, STYLE_BOLD, STYLE_DIM, STYLE_HIDDEN, STYLE_ITALIC, STYLE_REVERSE,
     STYLE_STRIKETHROUGH, STYLE_UNDERLINE,
@@ -43,36 +43,26 @@ use term_core::terminal_core::TerminalCore;
 use term_core::{char_width, is_ambiguous_width};
 
 use crate::app::{App, BLINK_HALF_MS};
+use crate::render::terminal_grid_pass::CellInput;
 use crate::render::theme::{Rgb, Theme};
 use crate::selection::Selection;
 use crate::settings::AmbiguousWidthMode;
 
-const CELL_W: f32 = 8.5; // logical pixels per cell
-const CELL_H: f32 = 17.0;
-const TOP_PAD: f32 = 4.0;
-const LEFT_PAD: f32 = 4.0;
-
-/// Build the egui `FontId` to use for cell glyph drawing. Phase 4-H
-/// removes the prior `FONT_SIZE = 13.0` constant + hard-coded
-/// `FontFamily::Monospace` literal in favour of reading both from the
-/// active `Theme`. Names other than `"monospace"` route through
-/// `FontFamily::Name(...)`; the loader is responsible for registering
-/// custom faces via `egui::Context::set_fonts` before the first draw.
-fn cell_font_id(theme: &Theme) -> FontId {
-    let family = if theme.font_family.eq_ignore_ascii_case("monospace") {
-        FontFamily::Monospace
-    } else {
-        FontFamily::Name(theme.font_family.clone().into())
-    };
-    FontId::new(theme.font_size_pt, family)
-}
+pub const CELL_W: f32 = 8.5; // logical pixels per cell
+pub const CELL_H: f32 = 17.0;
+pub const TOP_PAD: f32 = 4.0;
+pub const LEFT_PAD: f32 = 4.0;
 
 /// Per-cell paint parameters resolved from a `term_core` cell + active
 /// palette + selection state.
 struct CellStyle {
     fg: Color32,
     bg: Color32,
+    // Read by future Resolver-driven weight / style selection; the prior
+    // painter.text() path read these for egui font face, which is now gone.
+    #[allow(dead_code)]
     bold: bool,
+    #[allow(dead_code)]
     italic: bool,
     underline: bool,
     strikethrough: bool,
@@ -117,12 +107,16 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
     crate::ui::status_bar::draw(ctx, &status_state, &app.settings);
 
     egui::CentralPanel::default()
-        .frame(egui::Frame::default().fill(rgb_to_egui(theme.bg)))
+        // Phase 4-H (FR12): the central panel no longer paints the cell
+        // background — `TerminalGridPass` clears the swapchain to the
+        // theme background and emits per-cell solid quads where the SGR
+        // bg differs. Using `Color32::TRANSPARENT` keeps egui's overlay
+        // (cursor + IME preedit underline) on top of the wgpu-rendered
+        // cells without painting an opaque rect that would hide them.
+        .frame(egui::Frame::default().fill(Color32::TRANSPARENT))
         .show(ctx, |ui| {
             if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
-                let mode = app.settings.ambiguous_width_mode;
-                draw_grid(ui, &core, app.selection.as_ref(), &theme, mode);
                 draw_cursor(ui, &core, &theme, app);
                 // Phase 4-E: preedit underline overlay. Drawn after the
                 // cursor so it sits on top of (or beneath, depending on
@@ -175,77 +169,55 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
     tab_event
 }
 
-fn draw_grid(
-    ui: &mut egui::Ui,
+/// Walk the terminal grid and build a `Vec<CellInput>` suitable for
+/// [`crate::render::terminal_grid_pass::TerminalGridPass::prepare`].
+///
+/// Phase 4-H (FR12): the cell loop that used to call `painter.text()` /
+/// `painter.line_segment()` / `painter.rect_filled()` now emits per-cell
+/// inputs consumed by the custom wgpu pass. Selection is encoded via the
+/// existing fg/bg swap in [`resolve_cell_style`] (no separate selection
+/// quad). Cursor stays on the egui side.
+pub fn collect_cell_inputs(
     core: &TerminalCore,
-    selection: Option<&Selection>,
     theme: &Theme,
+    selection: Option<&Selection>,
     width_mode: AmbiguousWidthMode,
-) {
-    let origin = ui.min_rect().min + Vec2::new(LEFT_PAD, TOP_PAD);
-    let painter = ui.painter();
-
-    let normal_font = cell_font_id(theme);
-
+) -> Vec<CellInput> {
     let cols = core.cols();
     let rows = core.rows();
+    let bg_default = rgb_to_egui(theme.bg);
+    let mut out: Vec<CellInput> = Vec::with_capacity((cols as usize) * (rows as usize));
 
     for row in 0..rows {
         let mut col = 0u16;
         while col < cols {
             let style = resolve_cell_style(core, theme, col, row, selection);
-
-            // Compute pixel rect for this cell. Wide / ambiguous-wide cells
-            // span 2 columns; we still draw one glyph but advance `col`
-            // by 2 so the next column starts past the wide cell.
             let ch = core.get_cell_char(col, row);
             let cell_width_cells = visible_width(&ch, width_mode);
-            let x = origin.x + col as f32 * CELL_W;
-            let y = origin.y + row as f32 * CELL_H;
-            let rect = Rect::from_min_size(
-                Pos2::new(x, y),
-                Vec2::new(CELL_W * cell_width_cells as f32, CELL_H),
-            );
 
-            // Background: paint whenever it differs from the panel bg, OR
-            // when this cell is part of the selection (already handled by
-            // resolve_cell_style swapping fg/bg).
-            if style.bg != rgb_to_egui(theme.bg) {
-                painter.rect_filled(rect, 0.0, style.bg);
-            }
-
-            if !ch.is_empty() && ch != " " {
-                // egui doesn't ship a bold-italic / italic / bold
-                // monospace face by default. We accept the visual
-                // shortcut of falling back to the regular monospace
-                // here; Phase 7 can register custom typefaces.
-                let font_id = normal_font.clone();
-                painter.text(Pos2::new(x, y), Align2::LEFT_TOP, ch, font_id, style.fg);
-            }
-
-            // Underline: a 1-px line just below the baseline. egui's
-            // monospace baseline sits around y + CELL_H * 0.78; we keep
-            // it inside the cell box.
-            if style.underline {
-                let uy = y + CELL_H - 2.0;
-                painter.line_segment(
-                    [Pos2::new(x, uy), Pos2::new(x + CELL_W, uy)],
-                    Stroke::new(1.0, style.fg),
-                );
-            }
-
-            // Strikethrough: horizontal line at the cell midpoint.
-            if style.strikethrough {
-                let sy = y + CELL_H * 0.55;
-                painter.line_segment(
-                    [Pos2::new(x, sy), Pos2::new(x + CELL_W, sy)],
-                    Stroke::new(1.0, style.fg),
-                );
-            }
+            out.push(CellInput {
+                col,
+                row,
+                width_cells: cell_width_cells.max(1),
+                glyph: ch,
+                fg_rgba: color32_to_rgba(style.fg),
+                bg_rgba: color32_to_rgba(style.bg),
+                underline: style.underline,
+                strikethrough: style.strikethrough,
+                draw_background: style.bg != bg_default,
+            });
 
             col = col.saturating_add(cell_width_cells.max(1) as u16);
         }
     }
+    out
+}
+
+/// Pack an `egui::Color32` (already non-premultiplied RGBA8) into the
+/// little-endian `[r, g, b, a]` layout the `CellInput` carries. The shader
+/// re-expands this via `unpack4x8unorm`.
+fn color32_to_rgba(c: Color32) -> [u8; 4] {
+    [c.r(), c.g(), c.b(), c.a()]
 }
 
 /// Cursor overlay: shape from `get_cursor_style`, blink from
@@ -533,28 +505,82 @@ mod tests {
         assert!((t.font_size_pt - 13.0).abs() < f32::EPSILON);
     }
 
-    /// TS-font-12: Renderer reads `Theme::font_family` + `Theme::font_size_pt`
-    /// (not deleted FONT_SIZE constant / hard-coded `FontFamily::Monospace`).
-    /// Construct a Theme with sentinel values and assert that the
-    /// resulting `cell_font_id` carries them.
+    // ── Phase 4-H: collect_cell_inputs ────────────────────────────────
+
+    /// `collect_cell_inputs` produces exactly `cols * rows` entries —
+    /// one per logical cell — even when the grid is mostly blank. The
+    /// `TerminalGridPass::build_instances` consumer filters
+    /// whitespace / empty clusters internally, so the renderer can
+    /// pass the full grid through without an extra pre-filter pass.
     #[test]
-    fn renderer_reads_theme_font_family_and_size() {
-        let mut t = Theme::default();
-        t.font_family = "TestSentinelFont".into();
-        t.font_size_pt = 17.0;
-        let font = cell_font_id(&t);
-        assert!((font.size - 17.0).abs() < f32::EPSILON);
-        match font.family {
-            FontFamily::Name(name) => assert_eq!(&*name, "TestSentinelFont"),
-            other => panic!("expected FontFamily::Name, got {:?}", other),
-        }
+    fn collect_cell_inputs_emits_one_entry_per_cell() {
+        let mut core = TerminalCore::new(5, 2, 100);
+        core.process_pty_data(b"ABCDE");
+        let theme = Theme::default();
+        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow);
+        // 5 cols × 2 rows = 10 cell entries.
+        assert_eq!(inputs.len(), 10);
+        // Row 0 should carry the literal glyphs in column order.
+        let row0: String = inputs
+            .iter()
+            .filter(|c| c.row == 0)
+            .map(|c| c.glyph.as_str())
+            .collect();
+        assert_eq!(row0, "ABCDE");
     }
 
+    /// Wide CJK cells advance the iterator by two columns and report
+    /// `width_cells = 2`. The cell at `col+1` would normally be the
+    /// trailing half of the wide glyph; `collect_cell_inputs` skips it
+    /// (`col` advances past it) so a single instance covers the whole
+    /// wide rectangle.
     #[test]
-    fn renderer_routes_monospace_default_to_monospace_family() {
-        let t = Theme::default();
-        let font = cell_font_id(&t);
-        assert!((font.size - 13.0).abs() < f32::EPSILON);
-        assert_eq!(font.family, FontFamily::Monospace);
+    fn collect_cell_inputs_handles_wide_cells() {
+        let mut core = TerminalCore::new(4, 1, 100);
+        core.process_pty_data("あA".as_bytes());
+        let theme = Theme::default();
+        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow);
+        assert_eq!(inputs[0].glyph, "あ");
+        assert_eq!(inputs[0].width_cells, 2);
+        // Column 2 holds the 'A'; column 1 was skipped (trailing half of あ).
+        let a = inputs.iter().find(|c| c.glyph == "A").expect("A present");
+        assert_eq!(a.col, 2);
+        assert_eq!(a.width_cells, 1);
+    }
+
+    /// Decoration flags propagate from `STYLE_UNDERLINE` /
+    /// `STYLE_STRIKETHROUGH` SGR bits onto the `CellInput`.
+    #[test]
+    fn collect_cell_inputs_propagates_decoration_flags() {
+        let mut core = TerminalCore::new(3, 1, 100);
+        // SGR 4 = underline; SGR 9 = strikethrough.
+        core.process_pty_data(b"\x1b[4mU\x1b[0m\x1b[9mS\x1b[0mN");
+        let theme = Theme::default();
+        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow);
+        let u = inputs.iter().find(|c| c.glyph == "U").expect("U present");
+        let s = inputs.iter().find(|c| c.glyph == "S").expect("S present");
+        let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
+        assert!(u.underline);
+        assert!(!u.strikethrough);
+        assert!(s.strikethrough);
+        assert!(!s.underline);
+        assert!(!n.underline);
+        assert!(!n.strikethrough);
+    }
+
+    /// Non-default background colors set `draw_background = true`; the
+    /// default-background cells leave it `false` so the wgpu pass can
+    /// skip the background quad (the swapchain clear covers it).
+    #[test]
+    fn collect_cell_inputs_draw_background_only_when_non_default() {
+        let mut core = TerminalCore::new(3, 1, 100);
+        // SGR 41 = red background.
+        core.process_pty_data(b"\x1b[41mR\x1b[0mN");
+        let theme = Theme::default();
+        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow);
+        let r = inputs.iter().find(|c| c.glyph == "R").expect("R present");
+        let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
+        assert!(r.draw_background);
+        assert!(!n.draw_background);
     }
 }
