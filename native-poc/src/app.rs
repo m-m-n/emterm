@@ -374,9 +374,10 @@ impl App {
         }
         self.ime_last_cursor_cell = Some((row, col));
         let x = (col as i32) * (cell_w_px as i32);
-        // Reserve the same ~36 px top bar as `window_host::pixel_to_cell`
+        // Reserve the same tab-bar height as `window_host::pixel_to_cell`
         // so the spot location matches the on-screen cursor cell.
-        let y = (row as i32) * (cell_h_px as i32) + 36;
+        let top_bar = crate::ui::tab_bar::TAB_BAR_HEIGHT as i32;
+        let y = (row as i32) * (cell_h_px as i32) + top_bar;
         self.ime_backend
             .notify_cursor_rect(x, y, cell_w_px as i32, cell_h_px as i32);
     }

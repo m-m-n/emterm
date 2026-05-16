@@ -109,6 +109,18 @@ pub struct CellInput {
     pub underline: bool,
     pub strikethrough: bool,
     pub draw_background: bool,
+    /// Extra height (in logical pixels, scaled by the same factor the
+    /// caller passed for `cell_h`) added to the bg quad below the cell
+    /// rect. Used by the IME preedit overlay so a reverse-video bg
+    /// covers CJK glyph descenders that naturally rasterize past
+    /// `cell_h`. `0.0` for ordinary cells.
+    pub bg_extend_below: f32,
+    /// Clamp the glyph quad's width / height to the cell rect when
+    /// `true`. Used by the IME preedit overlay so ambiguous-width
+    /// glyphs (e.g. ▽ U+25BD) whose natural bitmap exceeds 1 cell are
+    /// scaled down to fit. `false` for ordinary cells (preserves
+    /// natural glyph metrics for accurate text rendering).
+    pub fit_glyph_to_cell: bool,
 }
 
 /// Cell metrics used by [`TerminalGridPass::prepare`] when converting
@@ -388,10 +400,14 @@ impl TerminalGridPass {
             let w = metrics.cell_w * (cell.width_cells.max(1) as f32);
             let h = metrics.cell_h;
             // Background quad first (rendered underneath the glyph).
+            // `bg_extend_below` extends the bg downward so reverse-video
+            // preedit cells cover CJK glyph descenders that naturally
+            // rasterize past `cell_h`.
             if cell.draw_background {
+                let bg_h = h + cell.bg_extend_below.max(0.0);
                 out.push(CellInstance {
                     cell_xy: [x, y],
-                    cell_wh: [w, h],
+                    cell_wh: [w, bg_h],
                     atlas_uv: [0.0, 0.0, 0.0, 0.0],
                     fg_rgba: pack_rgba(cell.bg_rgba),
                     bg_rgba: pack_rgba(cell.bg_rgba),
@@ -493,11 +509,43 @@ impl TerminalGridPass {
         // fill the cell. Baseline is anchored to the BASE font's real
         // ascent so all glyphs share a consistent horizontal line, with
         // `v_pad` centering the line vertically inside the cell.
-        let glyph_w = region.width as f32;
-        let glyph_h = region.height as f32;
+        let mut glyph_w = region.width as f32;
+        let mut glyph_h = region.height as f32;
         let baseline = y + v_pad + base_ascent;
-        let glyph_x = x + region.bearing_left as f32;
-        let glyph_y = baseline - region.bearing_top as f32;
+        let mut glyph_x = x + region.bearing_left as f32;
+        let mut glyph_y = baseline - region.bearing_top as f32;
+        // IME preedit overlay (`fit_glyph_to_cell = true`): force the
+        // glyph quad to sit entirely within the cell rect. Required so
+        // (a) ambiguous-width shapes (▽ U+25BD) whose bitmap is wider
+        // than the 1-cell footprint don't bleed sideways, and (b) CJK
+        // glyphs whose descenders rasterize past `cell_h` are scaled
+        // back inside the reverse-video bg instead of leaking onto the
+        // next row's dark default background.
+        if cell.fit_glyph_to_cell && glyph_w > 0.0 && glyph_h > 0.0 {
+            // First: horizontal scale so the bitmap fits the cell width.
+            let sx = (w / glyph_w).min(1.0);
+            // Second: vertical scale so the bitmap fits the cell height
+            // *measured against where the glyph currently lands*. We
+            // include the offset above the cell top (baseline placement
+            // can leave the bitmap top above `y`) and below the cell
+            // bottom (descender past `y + h`).
+            let top_overflow = (y - glyph_y).max(0.0);
+            let bottom_overflow = ((glyph_y + glyph_h) - (y + h)).max(0.0);
+            let sy = if top_overflow + bottom_overflow > 0.0 {
+                (h / (glyph_h + top_overflow + bottom_overflow)).min(1.0)
+            } else {
+                1.0
+            };
+            let scale = sx.min(sy);
+            if scale < 1.0 {
+                glyph_w *= scale;
+                glyph_h *= scale;
+                // Re-center horizontally; re-anchor vertically so the
+                // scaled glyph sits inside the cell rect.
+                glyph_x = x + (w - glyph_w) * 0.5;
+                glyph_y = y + (h - glyph_h) * 0.5;
+            }
+        }
         if glyph_w <= 0.0 || glyph_h <= 0.0 {
             return None;
         }
@@ -896,6 +944,8 @@ mod tests {
             underline: false,
             strikethrough: false,
             draw_background: false,
+            bg_extend_below: 0.0,
+            fit_glyph_to_cell: false,
         }
     }
 
@@ -967,6 +1017,8 @@ mod tests {
                 underline: false,
                 strikethrough: false,
                 draw_background: false,
+                bg_extend_below: 0.0,
+                fit_glyph_to_cell: false,
             },
         ];
         let inst = helper_build_instances(&*raster, &chain, &cache, &cells, metrics());
@@ -1000,6 +1052,8 @@ mod tests {
             underline: false,
             strikethrough: false,
             draw_background: false,
+            bg_extend_below: 0.0,
+            fit_glyph_to_cell: false,
         }];
         let raster_ref: &dyn GlyphRasterizer = &*swash;
         let inst = helper_build_instances(
