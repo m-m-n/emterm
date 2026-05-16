@@ -362,6 +362,26 @@ impl TerminalGridPass {
     pub fn build_instances(&self, cells: &[CellInput], metrics: CellMetrics) -> Vec<CellInstance> {
         let mut out = Vec::with_capacity(cells.len() * 2);
         let mut cache = self.cache.lock();
+        // Pre-compute the per-cell baseline using the base font's real
+        // ascent + line height. Without this we used the rough
+        // `size_px * 0.8` approximation in every glyph, which made
+        // glyphs from fonts with different intrinsic ascents
+        // (Inconsolata vs Noto Sans JP vs Noto Color Emoji) drift
+        // visibly inside the cell.
+        let base_metrics = self
+            .rasterizer
+            .font_metrics(self.fallback.base(), metrics.font_size_px);
+        let base_ascent = base_metrics
+            .map(|m| m.ascent)
+            .unwrap_or(metrics.font_size_px * 0.8);
+        let base_line_height = base_metrics
+            .map(|m| m.line_height())
+            .unwrap_or(metrics.font_size_px);
+        // Center the line vertically inside the cell so cells with a
+        // small font but tall cell (e.g. cell_h=17 / line_height≈16)
+        // get balanced top / bottom padding instead of the text being
+        // anchored to the very top.
+        let v_pad = ((metrics.cell_h - base_line_height) * 0.5).max(0.0);
         for cell in cells {
             let x = metrics.origin[0] + cell.col as f32 * metrics.cell_w;
             let y = metrics.origin[1] + cell.row as f32 * metrics.cell_h;
@@ -381,9 +401,17 @@ impl TerminalGridPass {
             }
             // Glyph quad. Empty / whitespace clusters skip this.
             if !cell.glyph.is_empty() && cell.glyph != " " {
-                if let Some(instance) =
-                    self.glyph_instance(&mut cache, cell, x, y, w, h, metrics.font_size_px)
-                {
+                if let Some(instance) = self.glyph_instance(
+                    &mut cache,
+                    cell,
+                    x,
+                    y,
+                    w,
+                    h,
+                    metrics.font_size_px,
+                    base_ascent,
+                    v_pad,
+                ) {
                     out.push(instance);
                 }
             }
@@ -420,6 +448,11 @@ impl TerminalGridPass {
     /// Resolve a single cell's glyph to a `CellInstance`. Returns `None`
     /// when no font in the fallback chain covers the cluster — caller
     /// emits no glyph instance (background + decoration still fire).
+    ///
+    /// `base_ascent` and `v_pad` are pre-computed by the caller from
+    /// the base font's real metrics so all glyphs in the grid share a
+    /// consistent baseline regardless of which fallback font supplied
+    /// the bitmap.
     fn glyph_instance(
         &self,
         cache: &mut GlyphCache,
@@ -429,6 +462,8 @@ impl TerminalGridPass {
         w: f32,
         h: f32,
         size_px: f32,
+        base_ascent: f32,
+        v_pad: f32,
     ) -> Option<CellInstance> {
         let first_cp = cell.glyph.chars().next()? as u32;
         let font_id = self.fallback.resolve(&*self.rasterizer, first_cp)?;
@@ -455,26 +490,14 @@ impl TerminalGridPass {
         let v1 = (region.y + region.height) as f32;
         // Place the glyph quad at its natural bitmap size + bearing
         // offset inside the cell rather than stretching the bitmap to
-        // fill the entire cell. Without this, glyphs with intrinsically
-        // different widths / heights (CJK ≈ 13×13, '!' ≈ 4×12, 'g' has a
-        // descender) all get squashed to the same `cell_w × cell_h`
-        // rectangle — that uneven distortion was the user-visible
-        // "ガタガタ" symptom.
-        //
-        // Vertical origin: we approximate the font baseline as
-        // `cell_top + size_px * 0.8` (typical monospace ascent ratio).
-        // The bitmap sits at `baseline - bearing_top`. The bundled fonts
-        // ship without per-face metrics on the API boundary, so this
-        // approximation is "good enough" for the host gate — a real
-        // ascent / line-height plumb is tracked as a follow-up.
+        // fill the cell. Baseline is anchored to the BASE font's real
+        // ascent so all glyphs share a consistent horizontal line, with
+        // `v_pad` centering the line vertically inside the cell.
         let glyph_w = region.width as f32;
         let glyph_h = region.height as f32;
-        let baseline = y + size_px * 0.8;
+        let baseline = y + v_pad + base_ascent;
         let glyph_x = x + region.bearing_left as f32;
         let glyph_y = baseline - region.bearing_top as f32;
-        // Discard if the glyph quad has zero area or falls completely
-        // outside the cell (e.g. zero-width joiners that the rasterizer
-        // failed to suppress upstream).
         if glyph_w <= 0.0 || glyph_h <= 0.0 {
             return None;
         }
@@ -774,6 +797,14 @@ mod tests {
     ) -> Vec<CellInstance> {
         let mut out = Vec::with_capacity(cells.len() * 2);
         let mut cache_lock = cache.lock();
+        let base_metrics = rasterizer.font_metrics(fallback.base(), metrics.font_size_px);
+        let base_ascent = base_metrics
+            .map(|m| m.ascent)
+            .unwrap_or(metrics.font_size_px * 0.8);
+        let base_line_height = base_metrics
+            .map(|m| m.line_height())
+            .unwrap_or(metrics.font_size_px);
+        let v_pad = ((metrics.cell_h - base_line_height) * 0.5).max(0.0);
         for cell in cells {
             let x = metrics.origin[0] + cell.col as f32 * metrics.cell_w;
             let y = metrics.origin[1] + cell.row as f32 * metrics.cell_h;
@@ -805,7 +836,7 @@ mod tests {
                                     };
                                     let glyph_w = region.width as f32;
                                     let glyph_h = region.height as f32;
-                                    let baseline = y + metrics.font_size_px * 0.8;
+                                    let baseline = y + v_pad + base_ascent;
                                     let glyph_x = x + region.bearing_left as f32;
                                     let glyph_y = baseline - region.bearing_top as f32;
                                     out.push(CellInstance {

@@ -22,7 +22,7 @@ use swash::zeno::{Format, Vector};
 use swash::FontRef;
 
 use super::resolver::{RegisteredFont, Resolver};
-use super::traits::{AtlasFormat, FontId, GlyphBitmap, GlyphRasterizer, ShapedGlyph};
+use super::traits::{AtlasFormat, FontId, FontMetrics, GlyphBitmap, GlyphRasterizer, ShapedGlyph};
 
 /// A registered font's byte storage + cached offset/key needed by swash.
 #[derive(Clone)]
@@ -223,6 +223,23 @@ impl GlyphRasterizer for SwashRasterizer {
             None => return false,
         };
         face.charmap().map(c) != 0
+    }
+
+    fn font_metrics(&self, font: FontId, size_px: f32) -> Option<FontMetrics> {
+        let inner = self.inner.lock();
+        let swash_font = inner.fonts.get(&font)?;
+        let face = swash_font.font_ref();
+        let m = face.metrics(&[]);
+        let upem = m.units_per_em as f32;
+        if upem <= 0.0 || size_px <= 0.0 {
+            return None;
+        }
+        let scale = size_px / upem;
+        Some(FontMetrics {
+            ascent: m.ascent * scale,
+            descent: m.descent * scale,
+            line_gap: m.leading * scale,
+        })
     }
 }
 

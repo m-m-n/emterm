@@ -74,6 +74,31 @@ pub struct ShapedGlyph {
     pub size_px: f32,
 }
 
+/// Per-font vertical metrics in pixels at a given size. Used by the
+/// render pass to anchor glyphs to a consistent baseline inside each
+/// terminal cell — without it, glyphs from different fonts (or
+/// different scripts inside the same font) drift up / down because
+/// `bearing_top` is meaningful only relative to a known baseline.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontMetrics {
+    /// Pixels from baseline to the top of the typical uppercase letter.
+    /// Positive (i.e. distance upward from the baseline).
+    pub ascent: f32,
+    /// Pixels from baseline to the bottom of a typical descender.
+    /// Positive (i.e. distance downward from the baseline).
+    pub descent: f32,
+    /// Recommended additional line gap, in pixels. Often zero for
+    /// monospaced coding fonts.
+    pub line_gap: f32,
+}
+
+impl FontMetrics {
+    /// Total recommended line height: `ascent + descent + line_gap`.
+    pub fn line_height(&self) -> f32 {
+        self.ascent + self.descent + self.line_gap
+    }
+}
+
 /// Minimal glyph engine surface.
 ///
 /// All methods must be safe to call from the renderer thread.  Adapters
@@ -111,6 +136,20 @@ pub trait GlyphRasterizer: Send + Sync {
         self.shape(&cluster, font, 16.0)
             .iter()
             .any(|g| g.glyph_id != 0)
+    }
+
+    /// Return the vertical metrics for `font` at `size_px`, or `None`
+    /// when the font is unknown. The render pass uses this to anchor
+    /// glyphs to a per-cell baseline; the default implementation falls
+    /// back to a heuristic (`ascent ≈ 0.8 * size_px`,
+    /// `descent ≈ 0.2 * size_px`, no extra line gap) so adapters that
+    /// have no real metrics still produce something reasonable.
+    fn font_metrics(&self, _font: FontId, size_px: f32) -> Option<FontMetrics> {
+        Some(FontMetrics {
+            ascent: size_px * 0.8,
+            descent: size_px * 0.2,
+            line_gap: 0.0,
+        })
     }
 }
 
