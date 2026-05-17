@@ -363,9 +363,16 @@ impl App {
     /// `ImmSetCompositionWindow` calls so frequent redraws on a static
     /// cursor don't flood the IM server. SPEC.md FR7.
     ///
-    /// `cell_w_px` / `cell_h_px` are taken from the same fallback /
-    /// metric values `window_host` uses for grid sizing.
-    pub fn notify_cursor_rect_if_changed(&mut self, cell_w_px: u32, cell_h_px: u32) {
+    /// `cell_w_px` / `cell_h_px` and `origin_x_px` / `origin_y_px` must
+    /// match what `window_host` actually uses to lay out the grid; the
+    /// computed cursor rect is in physical pixels.
+    pub fn notify_cursor_rect_if_changed(
+        &mut self,
+        cell_w_px: u32,
+        cell_h_px: u32,
+        origin_x_px: i32,
+        origin_y_px: i32,
+    ) {
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
@@ -377,11 +384,8 @@ impl App {
             return;
         }
         self.ime_last_cursor_cell = Some((row, col));
-        let x = (col as i32) * (cell_w_px as i32);
-        // Reserve the same tab-bar height as `window_host::pixel_to_cell`
-        // so the spot location matches the on-screen cursor cell.
-        let top_bar = crate::ui::tab_bar::TAB_BAR_HEIGHT as i32;
-        let y = (row as i32) * (cell_h_px as i32) + top_bar;
+        let x = (col as i32) * (cell_w_px as i32) + origin_x_px;
+        let y = (row as i32) * (cell_h_px as i32) + origin_y_px;
         self.ime_backend
             .notify_cursor_rect(x, y, cell_w_px as i32, cell_h_px as i32);
     }
@@ -1581,17 +1585,17 @@ mod tests {
         let (mut app, state) = mock_app();
         app.spawn_initial_tab();
         // First call: cell (0,0) — should record one notification.
-        app.notify_cursor_rect_if_changed(9, 18);
+        app.notify_cursor_rect_if_changed(9, 18, 0, 28);
         assert_eq!(state.lock().unwrap().cursor_calls.len(), 1);
         // Second call without cursor movement: must NOT fire again.
-        app.notify_cursor_rect_if_changed(9, 18);
+        app.notify_cursor_rect_if_changed(9, 18, 0, 28);
         assert_eq!(state.lock().unwrap().cursor_calls.len(), 1);
         // Move the cursor → next call must fire.
         {
             let tab = app.active_tab().unwrap();
             tab.core.lock().process_pty_data(b"\x1b[5;3H");
         }
-        app.notify_cursor_rect_if_changed(9, 18);
+        app.notify_cursor_rect_if_changed(9, 18, 0, 28);
         assert_eq!(state.lock().unwrap().cursor_calls.len(), 2);
     }
 
@@ -1603,12 +1607,13 @@ mod tests {
             let tab = app.active_tab().unwrap();
             tab.core.lock().process_pty_data(b"\x1b[3;4H"); // (row=2, col=3)
         }
-        app.notify_cursor_rect_if_changed(9, 18);
+        app.notify_cursor_rect_if_changed(9, 18, 4, 32);
         let calls = &state.lock().unwrap().cursor_calls;
         assert_eq!(calls.len(), 1);
-        // x = col * cell_w = 3 * 9 = 27. y = row * cell_h + 36 = 2 * 18 + 36 = 72.
-        assert_eq!(calls[0].0, 27);
-        assert_eq!(calls[0].1, 72);
+        // x = col * cell_w + origin_x = 3 * 9 + 4 = 31.
+        // y = row * cell_h + origin_y = 2 * 18 + 32 = 68.
+        assert_eq!(calls[0].0, 31);
+        assert_eq!(calls[0].1, 68);
         assert_eq!(calls[0].2, 9);
         assert_eq!(calls[0].3, 18);
     }
@@ -1617,7 +1622,7 @@ mod tests {
     fn notify_cursor_rect_with_no_active_tab_is_noop() {
         let (mut app, state) = mock_app();
         // No spawn → no tabs.
-        app.notify_cursor_rect_if_changed(9, 18);
+        app.notify_cursor_rect_if_changed(9, 18, 0, 28);
         assert!(state.lock().unwrap().cursor_calls.is_empty());
     }
 

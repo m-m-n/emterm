@@ -45,11 +45,6 @@ use crate::pty::input::{encode, Key, Modifiers};
 use crate::render::terminal_grid_pass::TerminalGridPass;
 use crate::selection::{Pos, Selection, SelectionMode};
 
-/// Fallback cell size in physical pixels. Phase 4 replaces this with a real
-/// font-metrics-derived value.
-const FALLBACK_CELL_W: u32 = 9;
-const FALLBACK_CELL_H: u32 = 18;
-
 /// Maximum time between successive clicks that still counts as a "multi-click".
 /// Within this window the click counter increments; beyond it the counter
 /// resets to 1. 500 ms matches xterm's `multiClickTime` default.
@@ -332,28 +327,51 @@ impl WindowHost {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    /// Compute grid (cols, rows) from the current window pixel size using a
-    /// fallback cell size. Phase 4 replaces this with the real font metrics.
+    /// Cell metrics in **physical pixels**, matching what
+    /// `TerminalGridPass::prepare` is fed (see render path:
+    /// `CELL_W * scale`, `CELL_H * scale`, origin =
+    /// `(LEFT_PAD * scale, (TAB_BAR_HEIGHT + TOP_PAD) * scale)`).
+    ///
+    /// Returns `(cell_w_px, cell_h_px, origin_x_px, origin_y_px)`. All
+    /// values are floats so the per-row stepping stays sub-pixel
+    /// accurate — using rounded integers causes the click-to-cell hit
+    /// test to drift further from the visual cell every row, which is
+    /// exactly the bug `pixel_to_cell` used to hit by dividing by 18
+    /// while cells were drawn at 17 px.
+    fn cell_metrics_px(&self) -> (f64, f64, f64, f64) {
+        let scale = self.pixels_per_point.max(1.0) as f64;
+        let cell_w = (crate::render::CELL_W as f64) * scale;
+        let cell_h = (crate::render::CELL_H as f64) * scale;
+        let origin_x = (crate::render::LEFT_PAD as f64) * scale;
+        let origin_y =
+            ((crate::ui::tab_bar::TAB_BAR_HEIGHT as f64) + (crate::render::TOP_PAD as f64)) * scale;
+        (cell_w, cell_h, origin_x, origin_y)
+    }
+
+    /// Compute grid (cols, rows) from the current window pixel size,
+    /// using the real cell metrics so the PTY size agrees with the
+    /// number of cells the renderer actually paints.
     pub fn grid_size(&self) -> (u16, u16) {
-        let w = self.surface_config.width.max(1);
-        let h = self.surface_config.height.max(1);
-        // Reserve the tab-bar widget's actual height (logical points)
-        // for the top bar.
-        let top_bar = crate::ui::tab_bar::TAB_BAR_HEIGHT as u32;
-        let usable_h = h.saturating_sub(top_bar).max(FALLBACK_CELL_H);
-        let cols = (w / FALLBACK_CELL_W).clamp(20, 500) as u16;
-        let rows = (usable_h / FALLBACK_CELL_H).clamp(5, 200) as u16;
+        let w = self.surface_config.width.max(1) as f64;
+        let h = self.surface_config.height.max(1) as f64;
+        let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px();
+        // Usable area starts after the top bar + top pad and the left
+        // pad; floor the resulting cell count so partial trailing cells
+        // (which would clip at the surface edge) don't get reported as
+        // a writable row/col.
+        let usable_w = (w - origin_x).max(cell_w);
+        let usable_h = (h - origin_y).max(cell_h);
+        let cols = (usable_w / cell_w).floor().clamp(20.0, 500.0) as u16;
+        let rows = (usable_h / cell_h).floor().clamp(5.0, 200.0) as u16;
         (cols, rows)
     }
 
-    /// Map a physical pixel position to a grid cell `(row, col)`. The top
-    /// bar reserved by `grid_size` accounts for the tab-bar widget's
-    /// height; we use the same offset so the cursor lands on the
-    /// visually-correct row.
+    /// Map a physical pixel position to a grid cell `(row, col)`,
+    /// honoring the same origin + cell metrics the renderer uses.
     fn pixel_to_cell(&self, pos: PhysicalPosition<f64>, app: &App) -> (u16, u16) {
-        let top_bar_px = crate::ui::tab_bar::TAB_BAR_HEIGHT as f64;
-        let x = (pos.x.max(0.0)) / (FALLBACK_CELL_W as f64);
-        let y = ((pos.y - top_bar_px).max(0.0)) / (FALLBACK_CELL_H as f64);
+        let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px();
+        let x = ((pos.x - origin_x).max(0.0)) / cell_w;
+        let y = ((pos.y - origin_y).max(0.0)) / cell_h;
         let cols = app.cell_size.cols.max(1);
         let rows = app.cell_size.rows.max(1);
         let col = (x as u32).min((cols - 1) as u32) as u16;
@@ -487,9 +505,13 @@ impl WindowHost {
             }
         }
         // Keep image placements anchored to the current cell metrics —
-        // the renderer uses FALLBACK_CELL_W/H (Phase 4 placeholder).
-        self.image_layer
-            .recompute_pixel_dims(FALLBACK_CELL_W, FALLBACK_CELL_H);
+        // must match what the grid pass actually draws, otherwise image
+        // overlays drift relative to text on HiDPI.
+        let (cell_w_px, cell_h_px, _, _) = self.cell_metrics_px();
+        self.image_layer.recompute_pixel_dims(
+            cell_w_px.round().max(1.0) as u32,
+            cell_h_px.round().max(1.0) as u32,
+        );
 
         // Sub-phase 2 dirty-row diff: skip the entire egui+wgpu cycle when
         // nothing in the active tab needs to repaint. The first frame
@@ -1146,7 +1168,10 @@ impl ApplicationHandler for PocApp {
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(p) => (p.y as f32) / (FALLBACK_CELL_H as f32),
+                    MouseScrollDelta::PixelDelta(p) => {
+                        let (_, cell_h_px, _, _) = host.cell_metrics_px();
+                        (p.y as f32) / (cell_h_px.max(1.0) as f32)
+                    }
                 };
                 let step = 3u32;
                 if lines > 0.0 {
@@ -1179,9 +1204,17 @@ impl ApplicationHandler for PocApp {
             host.window().request_redraw();
         }
         // Cursor cell may have moved as a side effect of pumps; notify
-        // the IME backend if the (row, col) changed.
-        self.app
-            .notify_cursor_rect_if_changed(FALLBACK_CELL_W, FALLBACK_CELL_H);
+        // the IME backend if the (row, col) changed. Use the same
+        // physical-pixel metrics + origin as the grid renderer so the
+        // IME spot lands on the actual cursor cell, not a HiDPI-off
+        // approximation.
+        let (cell_w_px, cell_h_px, origin_x_px, origin_y_px) = host.cell_metrics_px();
+        self.app.notify_cursor_rect_if_changed(
+            cell_w_px.round().max(1.0) as u32,
+            cell_h_px.round().max(1.0) as u32,
+            origin_x_px.round() as i32,
+            origin_y_px.round() as i32,
+        );
         if self.app.tabs.is_empty() {
             // Same teardown handshake as the CloseRequested path: drop
             // the wgpu / window resources before EventLoop unwinds so
