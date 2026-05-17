@@ -241,7 +241,10 @@ fn reader_loop(
     paused: Arc<AtomicBool>,
     ring: Arc<Mutex<RingBuffer>>,
 ) {
-    let mut buf = [0u8; 8192];
+    // 16KB read buffer (was 8KB): larger reads amortize the per-chunk
+    // cost in Tab::pump (process_pty_data + flush_grapheme_buffer +
+    // take_mode_actions + lock/unlock) when the producer is bursty.
+    let mut buf = [0u8; 16 * 1024];
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
