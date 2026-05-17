@@ -252,9 +252,20 @@ impl Tab {
 
     /// Drain pending PTY events into the terminal core. Returns true if
     /// anything changed (caller should request a redraw).
+    ///
+    /// Frame budget (FRAME_BUDGET_MS): bound how long one `pump` call
+    /// spends inside `process_pty_data`. Bursty producers like
+    /// `seq 1 10000000` would otherwise let a single pump tick eat the
+    /// whole frame and freeze input/render until the burst drained.
+    /// When the budget is exhausted we stop draining and request another
+    /// frame via `crate::wakeup::wake()` so the remainder is processed
+    /// on the next about_to_wait pass.
     pub fn pump(&mut self) -> bool {
+        const FRAME_BUDGET_MS: u128 = 12;
+        let start = std::time::Instant::now();
         let mut changed = false;
         let mut had_data = false;
+        let mut yielded = false;
         while let Ok(evt) = self.events.try_recv() {
             match evt {
                 PtyEvent::Data(bytes) => {
@@ -280,6 +291,10 @@ impl Tab {
                     }
                     had_data = true;
                     changed = true;
+                    if start.elapsed().as_millis() >= FRAME_BUDGET_MS {
+                        yielded = true;
+                        break;
+                    }
                 }
                 PtyEvent::Exited { reason } => {
                     match reason {
@@ -296,6 +311,12 @@ impl Tab {
             }
         }
         let _ = had_data; // reserved for future use (e.g. on_pty_output hook).
+
+        // Yielded mid-burst: schedule another wakeup so the next about_to_wait
+        // continues draining instead of waiting for the 16ms WaitUntil deadline.
+        if yielded {
+            crate::wakeup::wake();
+        }
 
         // Sync title from callback state if the shell sent a new one.
         {
