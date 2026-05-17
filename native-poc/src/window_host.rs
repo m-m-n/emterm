@@ -134,6 +134,16 @@ pub struct WindowHost {
     /// True when the surface must be recreated on the next frame (e.g. after
     /// `SurfaceError::Lost`).
     surface_dirty: bool,
+    /// Alacritty-style deferred resize: `WindowEvent::Resized` only flips
+    /// this flag and requests a redraw; the next `render()` call reads the
+    /// current `window.inner_size()` once and runs `surface.configure()` +
+    /// `app.set_grid_size()` together. This coalesces bursts of compositor
+    /// resize events (one configure per frame instead of one per event) and
+    /// avoids back-buffer locking when configure and draw happen out of
+    /// order on Wayland / X11. See
+    /// `wezterm/window/src/os/x11/window.rs:298` (coalesce) and
+    /// `alacritty/src/display/mod.rs:739` (defer-to-render).
+    pending_resize: bool,
     current_mods: Modifiers,
     /// Last cursor position in physical pixels (updated on `CursorMoved`).
     cursor_pos: PhysicalPosition<f64>,
@@ -205,14 +215,40 @@ impl WindowHost {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
+        // Prefer Mailbox over Fifo so window resize doesn't lag the mouse:
+        // Fifo blocks `Present` on the next vsync (≈16.7 ms at 60 Hz), so
+        // each compositor resize event has to wait a full frame before the
+        // window catches up. Mailbox queues the most recent submission
+        // non-blocking, replacing any older queued frame, which removes the
+        // vsync wall while still avoiding tearing on most desktops.
+        // Fall back to Immediate (allows tearing but never blocks) and
+        // finally Fifo (always supported by spec) when Mailbox is absent —
+        // some Mesa drivers / proprietary stacks only expose Fifo.
+        let present_mode = if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Immediate)
+        {
+            wgpu::PresentMode::Immediate
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+        log::info!("native-poc: surface present mode = {:?}", present_mode);
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
+            // Mailbox / Immediate keep the GPU queue shallow on their own;
+            // 2 keeps Fifo's existing pipelining intact.
             desired_maximum_frame_latency: 2,
         };
         // Phase 0: defer the very first `surface.configure` to the first
@@ -250,6 +286,7 @@ impl WindowHost {
             egui_renderer,
             pixels_per_point,
             surface_dirty: true,
+            pending_resize: false,
             current_mods: Modifiers::NONE,
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             dragging: false,
@@ -318,13 +355,36 @@ impl WindowHost {
         self.reconfigure_surface();
     }
 
-    pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        if new_size.width == 0 || new_size.height == 0 {
+    /// Mark the surface as needing a reconfigure on the next render.
+    ///
+    /// Alacritty-style deferred resize: the caller (winit `Resized` /
+    /// `ScaleFactorChanged` handlers) only flips the flag and requests a
+    /// redraw. The actual `surface.configure()` + PTY grid resize happens
+    /// once in [`apply_pending_resize`] at the head of [`render`].
+    pub fn request_resize(&mut self) {
+        self.pending_resize = true;
+    }
+
+    /// Consume `pending_resize` and apply the latest `window.inner_size()`.
+    ///
+    /// Called once per `render()` so a burst of compositor resize events
+    /// produces a single configure + PTY resize cycle aligned with the
+    /// frame boundary. Zero-sized windows (Windows minimize, Wayland hidden)
+    /// just clear the flag without reconfiguring.
+    fn apply_pending_resize(&mut self, app: &mut App) {
+        if !self.pending_resize {
             return;
         }
-        self.surface_config.width = new_size.width;
-        self.surface_config.height = new_size.height;
+        self.pending_resize = false;
+        let size = self.window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        self.surface_config.width = size.width;
+        self.surface_config.height = size.height;
         self.surface.configure(&self.device, &self.surface_config);
+        let (cols, rows) = self.grid_size();
+        app.set_grid_size(cols, rows);
     }
 
     /// Cell metrics in **physical pixels**, matching what
@@ -479,12 +539,29 @@ impl WindowHost {
 
     /// Run a single egui frame and present.
     pub fn render(&mut self, app: &mut App) {
+        // Alacritty-style deferred resize: apply pending window-size changes
+        // here, not inside the winit `Resized` handler. This coalesces
+        // bursts of compositor resize events into a single configure +
+        // PTY-resize per frame, and keeps `surface.configure()` paired with
+        // the swapchain acquire that follows so Wayland / X11 don't lock
+        // the back buffer between the two calls. Done before `surface_dirty`
+        // so a pending resize subsumes any prior Lost/Outdated reconfigure.
+        let had_pending_resize = self.pending_resize;
+        self.apply_pending_resize(app);
+        if had_pending_resize {
+            // Resize changes the swapchain extent; everything must repaint.
+            app.mark_full_redraw();
+            // We just reconfigured to the new size, so any earlier
+            // Lost/Outdated recovery request is now redundant.
+            self.surface_dirty = false;
+        }
+
         // Phase 0: lazy first-frame configure + recovery from Lost/Outdated.
         // `surface_dirty` is true on construction (deferred configure) and
         // whenever a previous frame returned `Lost` / `Outdated`. We
         // reconfigure with the current physical size before acquiring the
         // next swapchain texture.
-        let was_surface_dirty = self.surface_dirty;
+        let was_surface_dirty = self.surface_dirty || had_pending_resize;
         if self.surface_dirty {
             self.reconfigure_surface();
             // Reconfiguring the swapchain produces a fresh-but-uninitialized
@@ -1032,17 +1109,26 @@ impl ApplicationHandler for PocApp {
                 event_loop.exit();
             }
             WindowEvent::Resized(new_size) => {
-                host.resize(new_size);
-                let (cols, rows) = host.grid_size();
-                self.app.set_grid_size(cols, rows);
+                // Alacritty-style deferral: do not call `surface.configure()`
+                // or resize the PTY here. Both run together at the head of
+                // the next `render()` so a burst of compositor resize events
+                // collapses to one configure + one PTY ioctl per frame.
+                // Zero-size events (Windows minimize) are silently ignored
+                // by `apply_pending_resize`.
+                if new_size.width == 0 || new_size.height == 0 {
+                    return;
+                }
+                host.request_resize();
                 host.window().request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                // pixels_per_point is consumed by `cell_metrics_px` (IME
+                // spot, hit-test) which can run from `about_to_wait` between
+                // events, so update it immediately. The expensive surface
+                // configure + PTY grid resize stays deferred to render time
+                // for the same reasons as `Resized`.
                 host.pixels_per_point = scale_factor as f32;
-                let size = host.window().inner_size();
-                host.resize(size);
-                let (cols, rows) = host.grid_size();
-                self.app.set_grid_size(cols, rows);
+                host.request_resize();
                 host.window().request_redraw();
             }
             WindowEvent::ModifiersChanged(state) => {
