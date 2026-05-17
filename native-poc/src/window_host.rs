@@ -618,11 +618,33 @@ impl WindowHost {
             let width_mode = app.settings.ambiguous_width_mode;
             let cell_inputs = if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
+                // Decide whether to bake a filled block cursor into the
+                // grid: only when the cursor is terminal-visible, in
+                // block style (style != underline/bar), and currently in
+                // the "on" blink phase. Underline / bar shapes stay on
+                // the egui overlay side and pass `None`.
+                // Filled (reverse-video) block cursor is reserved for
+                // the focused window — matches WezTerm, where an
+                // unfocused window degrades to a hollow outline drawn
+                // by `draw_cursor`. Underline / bar shapes always go
+                // through the egui overlay and pass `None`.
+                let cursor_style = core.get_cursor_style();
+                let is_block_style = cursor_style != 1 && cursor_style != 2;
+                let block_cursor_cell = if app.window_focused
+                    && core.get_cursor_visible()
+                    && is_block_style
+                    && app.blink_visible_now(core.get_cursor_blink())
+                {
+                    Some((core.get_cursor_col(), core.get_cursor_row()))
+                } else {
+                    None
+                };
                 let mut inputs = crate::render::collect_cell_inputs(
                     &core,
                     &theme,
                     app.selection.as_ref(),
                     width_mode,
+                    block_cursor_cell,
                 );
                 // IME preedit overlay (Phase 4-G): paint composition
                 // glyphs inline at the anchor so the user can see what
@@ -1048,10 +1070,21 @@ impl ApplicationHandler for PocApp {
             // state to the IME backend so it can disable/enable IME on
             // the IM-server side.
             WindowEvent::Focused(focused) => {
+                self.app.window_focused = focused;
                 self.app.notify_ime_focus(focused);
                 if !focused {
                     self.app.on_ime_focus_lost();
+                } else {
+                    // Drop the user back into the cursor's "on" half-
+                    // cycle on focus regain so the filled block appears
+                    // immediately instead of waiting up to 530 ms for
+                    // the next blink boundary.
+                    self.app.reset_blink_phase();
                 }
+                // Cursor shape switches between filled (focused) and
+                // outline (unfocused), so we need a repaint on every
+                // focus transition.
+                host.window().request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 // Phase 4-G: offer the raw key event to the IME backend
@@ -1200,7 +1233,13 @@ impl ApplicationHandler for PocApp {
         // this is a cheap no-op when disabled.
         let ime_changed = self.app.pump_ime();
         let pty_changed = self.app.pump_all();
-        if ime_changed || pty_changed {
+        // Cursor blink advances on a 530 ms half-cycle (BLINK_HALF_MS).
+        // egui's request_repaint_after is silent (no callback bridges
+        // it back to winit), so we have to detect the phase flip
+        // ourselves and request a redraw — otherwise the cursor freezes
+        // at whatever phase the last paint landed on.
+        let blink_due = self.app.needs_blink_repaint();
+        if ime_changed || pty_changed || blink_due {
             host.window().request_redraw();
         }
         // Cursor cell may have moved as a side effect of pumps; notify

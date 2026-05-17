@@ -161,12 +161,20 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
 /// `painter.line_segment()` / `painter.rect_filled()` now emits per-cell
 /// inputs consumed by the custom wgpu pass. Selection is encoded via the
 /// existing fg/bg swap in [`resolve_cell_style`] (no separate selection
-/// quad). Cursor stays on the egui side.
+/// quad).
+///
+/// `block_cursor_cell` is `Some((col, row))` when a block-shaped cursor
+/// is currently visible (blink-on, style=block, terminal-visible). The
+/// matching cell gets its fg/bg swapped so it reads as a filled cursor
+/// with the glyph in inverted color — matching the WebView build's
+/// rendering. Underline / bar cursor shapes stay on the egui overlay
+/// side and pass `None` here.
 pub fn collect_cell_inputs(
     core: &TerminalCore,
     theme: &Theme,
     selection: Option<&Selection>,
     width_mode: AmbiguousWidthMode,
+    block_cursor_cell: Option<(u16, u16)>,
 ) -> Vec<CellInput> {
     let cols = core.cols();
     let rows = core.rows();
@@ -176,7 +184,10 @@ pub fn collect_cell_inputs(
     for row in 0..rows {
         let mut col = 0u16;
         while col < cols {
-            let style = resolve_cell_style(core, theme, col, row, selection);
+            let mut style = resolve_cell_style(core, theme, col, row, selection);
+            if block_cursor_cell == Some((col, row)) {
+                std::mem::swap(&mut style.fg, &mut style.bg);
+            }
             let ch = core.get_cell_char(col, row);
             let cell_width_cells = visible_width(&ch, width_mode);
 
@@ -321,12 +332,23 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
     if !core.get_cursor_visible() {
         return;
     }
-    let blink_enabled = core.get_cursor_blink();
-    if !app.blink_visible_now(blink_enabled) {
-        return;
+    // Blink only when focused. An unfocused window holds the cursor at
+    // its "on" phase so the steady outline is always visible — matches
+    // WezTerm.
+    if app.window_focused {
+        let blink_enabled = core.get_cursor_blink();
+        if !app.blink_visible_now(blink_enabled) {
+            return;
+        }
     }
 
-    let origin = ui.min_rect().min + Vec2::new(LEFT_PAD, TOP_PAD);
+    // Pin the cursor origin to the *same* logical-px anchor the wgpu
+    // grid pass uses (see `window_host::render`: origin =
+    // `(LEFT_PAD, TAB_BAR_HEIGHT + TOP_PAD) * scale`). Reading the
+    // origin from `ui.min_rect().min` introduced a couple-pixel drift
+    // whenever egui's central panel added implicit padding, which made
+    // the block cursor visibly overflow the bottom of its cell.
+    let origin = Pos2::new(LEFT_PAD, crate::ui::tab_bar::TAB_BAR_HEIGHT + TOP_PAD);
     let painter = ui.painter();
 
     let cx = origin.x + core.get_cursor_col() as f32 * CELL_W;
@@ -354,11 +376,23 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
             );
         }
         _ => {
-            // Block cursor as an outline so the underlying glyph stays
-            // legible. Phase 7 can switch to a filled rect with inverted
-            // fg when the OS focus state says we own focus.
-            let rect = Rect::from_min_size(Pos2::new(cx, cy), Vec2::new(CELL_W, CELL_H));
-            painter.rect_stroke(rect, 0.0, Stroke::new(1.0, cursor_color));
+            // Block cursor: focused → filled cell (the grid pass swaps
+            // fg/bg on the cursor cell, see `collect_cell_inputs`'s
+            // `block_cursor_cell` param). Unfocused → hollow outline
+            // here, matching WezTerm. egui 0.29 lacks
+            // `StrokeKind::Inside`, so a centered 1-px stroke would
+            // bleed half a pixel above / below the cell — inset the
+            // rect by half the stroke width to keep the visible
+            // outline flush with the IME reverse-video box.
+            if !app.window_focused {
+                const STROKE_W: f32 = 1.0;
+                let inset = STROKE_W * 0.5;
+                let rect = Rect::from_min_size(
+                    Pos2::new(cx + inset, cy + inset),
+                    Vec2::new(CELL_W - STROKE_W, CELL_H - STROKE_W),
+                );
+                painter.rect_stroke(rect, 0.0, Stroke::new(STROKE_W, cursor_color));
+            }
         }
     }
 }
@@ -610,7 +644,7 @@ mod tests {
         let mut core = TerminalCore::new(5, 2, 100);
         core.process_pty_data(b"ABCDE");
         let theme = Theme::default();
-        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow);
+        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None);
         // 5 cols × 2 rows = 10 cell entries.
         assert_eq!(inputs.len(), 10);
         // Row 0 should carry the literal glyphs in column order.
@@ -632,7 +666,7 @@ mod tests {
         let mut core = TerminalCore::new(4, 1, 100);
         core.process_pty_data("あA".as_bytes());
         let theme = Theme::default();
-        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow);
+        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None);
         assert_eq!(inputs[0].glyph, "あ");
         assert_eq!(inputs[0].width_cells, 2);
         // Column 2 holds the 'A'; column 1 was skipped (trailing half of あ).
@@ -649,7 +683,7 @@ mod tests {
         // SGR 4 = underline; SGR 9 = strikethrough.
         core.process_pty_data(b"\x1b[4mU\x1b[0m\x1b[9mS\x1b[0mN");
         let theme = Theme::default();
-        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow);
+        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None);
         let u = inputs.iter().find(|c| c.glyph == "U").expect("U present");
         let s = inputs.iter().find(|c| c.glyph == "S").expect("S present");
         let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
@@ -670,7 +704,7 @@ mod tests {
         // SGR 41 = red background.
         core.process_pty_data(b"\x1b[41mR\x1b[0mN");
         let theme = Theme::default();
-        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow);
+        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None);
         let r = inputs.iter().find(|c| c.glyph == "R").expect("R present");
         let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
         assert!(r.draw_background);

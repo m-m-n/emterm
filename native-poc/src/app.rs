@@ -64,6 +64,10 @@ pub struct App {
     /// `Tab::pump`. While true, scrollback inputs are suppressed and the
     /// position is pinned to `Live`.
     pub alt_screen: bool,
+    /// OS focus state. Updated from `WindowEvent::Focused`. WezTerm-style
+    /// rendering: focused → filled block cursor (fg/bg swap in grid pass),
+    /// unfocused → outline-only via the egui overlay.
+    pub window_focused: bool,
     /// Reference point for cursor-blink phase computation.
     blink_started: Instant,
     /// Cursor-blink "visible" phase observed during the previous render.
@@ -153,6 +157,7 @@ impl App {
             settings,
             scroll_position: ScrollPosition::Live,
             alt_screen: false,
+            window_focused: true,
             blink_started: Instant::now(),
             previous_blink_visible: true,
             previous_cursor: None,
@@ -403,11 +408,41 @@ impl App {
 
     /// Reset the blink reference to "now" so the cursor enters its visible
     /// half-cycle. Use this when the user does something that should
-    /// re-pin attention to the cursor (typing, paste, tab switch).
-    #[allow(dead_code)]
+    /// re-pin attention to the cursor (typing, paste, tab switch, focus
+    /// regain).
     pub fn reset_blink_phase(&mut self) {
         self.blink_started = Instant::now();
         self.previous_blink_visible = true;
+    }
+
+    /// True when the cursor's blink half-cycle has crossed a boundary
+    /// since the last paint and the cell needs to repaint to flip the
+    /// on/off state. The event loop polls this in `about_to_wait` so a
+    /// blinking cursor advances even when no PTY / IME / input event
+    /// would otherwise dirty a row. Without this, `egui_ctx`'s
+    /// `request_repaint_after` is silent (no callback bridges it back
+    /// to `window.request_redraw()`), so the cursor would freeze at
+    /// whatever phase the last paint landed on.
+    pub fn needs_blink_repaint(&self) -> bool {
+        // Blink is suppressed while the window is unfocused (the
+        // outline cursor stays steady). Skip waking up for blink
+        // transitions in that case — saves a redraw every 530 ms when
+        // the user is working in another window.
+        if !self.window_focused {
+            return false;
+        }
+        let Some(tab) = self.tabs.get(self.active) else {
+            return false;
+        };
+        let core = tab.core.lock();
+        if !core.get_cursor_visible() {
+            return false;
+        }
+        let blink_enabled = core.get_cursor_blink();
+        if !blink_enabled {
+            return false;
+        }
+        self.blink_visible_now(blink_enabled) != self.previous_blink_visible
     }
 
     /// Spawn the initial shell tab. Called once at startup.
