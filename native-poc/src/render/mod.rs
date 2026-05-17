@@ -27,6 +27,8 @@
 //! (no animation) to avoid two competing blink phases against the
 //! cursor; revisit when sub-phase 6 fires.
 
+pub mod block_drawing;
+pub mod box_drawing;
 pub mod cursor;
 pub mod font;
 pub mod terminal_grid_pass;
