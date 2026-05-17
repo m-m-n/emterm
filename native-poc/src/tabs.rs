@@ -97,7 +97,15 @@ impl Tab {
         scrollback_lines: u32,
         settings: Arc<Settings>,
     ) -> Self {
-        let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(256);
+        // bounded(4096): allows up to ~64MB of in-flight PTY chunks
+        // (4096 × 16KB reader buffer) before the reader thread blocks
+        // on send. The previous 256-slot queue (~4MB) made bursty
+        // producers like `seq 1 10000000` slow to a crawl because the
+        // shell side filled the queue inside a few milliseconds and
+        // then had to wait for the main thread to drain one frame's
+        // worth (12 ms budget) at a time. The trade-off is up to 64MB
+        // of resident memory per tab during a sustained burst.
+        let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(4096);
         let pty = match PtySession::spawn(cols, rows, tx) {
             Ok(p) => Some(p),
             Err(e) => {
@@ -262,56 +270,69 @@ impl Tab {
     /// on the next about_to_wait pass.
     pub fn pump(&mut self) -> bool {
         const FRAME_BUDGET_MS: u128 = 12;
+        // Coalesce target: drain as many Data chunks as the frame budget
+        // allows into one contiguous buffer, then run a SINGLE
+        // process_pty_data + flush_grapheme_buffer + take_mode_actions
+        // cycle. Per-chunk lock/flush/take overhead was the dominant
+        // cost when the shell wrote tiny lines (`seq` produced ~41
+        // bytes/chunk in benchmarking, so 200 chunks × 60µs overhead
+        // ate the whole 12ms budget per frame and capped throughput
+        // around 1MB/s). Coalescing makes one PTY chunk and 200 PTY
+        // chunks cost roughly the same.
+        const COALESCE_CAP: usize = 1024 * 1024;
         let start = std::time::Instant::now();
         let mut changed = false;
-        let mut had_data = false;
         let mut yielded = false;
+        let mut combined: Vec<u8> = Vec::new();
+        let mut saw_exit: Option<ExitReason> = None;
         while let Ok(evt) = self.events.try_recv() {
             match evt {
                 PtyEvent::Data(bytes) => {
-                    let mut c = self.core.lock();
-                    c.process_pty_data(&bytes);
-                    // Force-flush any grapheme cluster left buffered by
-                    // the parser (e.g. a lone emoji codepoint at the tail
-                    // of an IME-commit echo). Without this the cluster
-                    // sits in `grapheme_buffer` until the next non-extending
-                    // codepoint arrives, so the glyph stays invisible and
-                    // the cursor doesn't advance until the user types
-                    // something else (typical symptom: SKK `/smile` → 😄
-                    // only appears after pressing space). chunk-boundary
-                    // cluster splits (VS-16 arriving in the next chunk)
-                    // are theoretical for typical shell echoes (commits
-                    // arrive in a single PTY chunk), so the trade-off
-                    // favours instant feedback.
-                    c.flush_grapheme_buffer();
-                    let actions = c.take_mode_actions();
-                    drop(c);
-                    if let Some(new_alt) = parse_alt_screen_action(&actions) {
-                        self.alt_screen = new_alt;
+                    if combined.is_empty() {
+                        combined = bytes;
+                    } else {
+                        combined.extend_from_slice(&bytes);
                     }
-                    had_data = true;
-                    changed = true;
-                    if start.elapsed().as_millis() >= FRAME_BUDGET_MS {
+                    if combined.len() >= COALESCE_CAP
+                        || start.elapsed().as_millis() >= FRAME_BUDGET_MS
+                    {
                         yielded = true;
                         break;
                     }
                 }
                 PtyEvent::Exited { reason } => {
-                    match reason {
-                        ExitReason::Eof => {
-                            log::info!("tab {:?} exited: EOF", self.title)
-                        }
-                        ExitReason::ReadError(e) => {
-                            log::warn!("tab {:?} read error: {e}", self.title)
-                        }
-                    }
-                    self.exited = true;
-                    changed = true;
+                    saw_exit = Some(reason);
+                    break;
                 }
             }
         }
-        let _ = had_data; // reserved for future use (e.g. on_pty_output hook).
-
+        if !combined.is_empty() {
+            let mut c = self.core.lock();
+            c.process_pty_data(&combined);
+            // Force-flush any grapheme cluster left buffered by the
+            // parser (e.g. a lone emoji codepoint at the tail of an
+            // IME-commit echo). Without this the cluster sits in
+            // `grapheme_buffer` until the next non-extending codepoint
+            // arrives, so the glyph stays invisible and the cursor
+            // doesn't advance until the user types something else
+            // (typical symptom: SKK `/smile` → 😄 only appears after
+            // pressing space).
+            c.flush_grapheme_buffer();
+            let actions = c.take_mode_actions();
+            drop(c);
+            if let Some(new_alt) = parse_alt_screen_action(&actions) {
+                self.alt_screen = new_alt;
+            }
+            changed = true;
+        }
+        if let Some(reason) = saw_exit {
+            match reason {
+                ExitReason::Eof => log::info!("tab {:?} exited: EOF", self.title),
+                ExitReason::ReadError(e) => log::warn!("tab {:?} read error: {e}", self.title),
+            }
+            self.exited = true;
+            changed = true;
+        }
         // Yielded mid-burst: schedule another wakeup so the next about_to_wait
         // continues draining instead of waiting for the 16ms WaitUntil deadline.
         if yielded {
