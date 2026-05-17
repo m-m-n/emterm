@@ -16,6 +16,10 @@ use super::traits::{FontId, GlyphRasterizer};
 pub struct FallbackChain {
     base: FontId,
     chain: Vec<FontId>,
+    /// First emoji-role font discovered when the chain was constructed
+    /// via `from_resolver`. Used by `resolve_for_cluster` to short-circuit
+    /// to color emoji when the cluster explicitly requests it (VS-16).
+    emoji: Option<FontId>,
     memo: Mutex<HashMap<(FontId, u32), Option<FontId>>>,
 }
 
@@ -33,8 +37,20 @@ impl FallbackChain {
         Self {
             base,
             chain,
+            emoji: None,
             memo: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Mark a font in the chain as the preferred emoji font. Used by
+    /// `resolve_for_cluster` to short-circuit VS-16-bearing clusters to
+    /// color emoji instead of letting the per-codepoint walk pick the
+    /// BW base font for dual-presentation codepoints (e.g. U+26A0).
+    pub fn set_emoji(&mut self, id: FontId) {
+        self.emoji = Some(id);
+        // Memo entries computed before this hint don't know about the
+        // VS-16 short-circuit. Clear so subsequent resolves re-decide.
+        self.memo.lock().clear();
     }
 
     /// Build the canonical chain from a resolver: base → CJK → emoji.
@@ -49,13 +65,55 @@ impl FallbackChain {
         for f in resolver.by_role(FontRole::Cjk) {
             extras.push(f.id);
         }
+        let mut emoji: Option<FontId> = None;
         for f in resolver.by_role(FontRole::Emoji) {
+            if emoji.is_none() {
+                emoji = Some(f.id);
+            }
             extras.push(f.id);
         }
         for f in resolver.by_role(FontRole::Secondary) {
             extras.push(f.id);
         }
-        Self::new(base, extras)
+        let mut chain = Self::new(base, extras);
+        chain.emoji = emoji;
+        chain
+    }
+
+    /// Resolve a grapheme cluster to a font, preferring the emoji font
+    /// when the cluster explicitly requests emoji presentation via
+    /// VS-16 (U+FE0F). Falls back to the per-codepoint walk for the
+    /// cluster's first codepoint otherwise.
+    ///
+    /// Without this distinction, dual-presentation codepoints like
+    /// U+26A0 (warning sign) resolve to the BW base font even when the
+    /// cluster carries an explicit VS-16, because the base font reports
+    /// coverage for the bare codepoint.
+    pub fn resolve_for_cluster(
+        &self,
+        rasterizer: &dyn GlyphRasterizer,
+        cluster: &str,
+    ) -> Option<FontId> {
+        let mut first_cp: Option<u32> = None;
+        let mut has_vs16 = false;
+        for ch in cluster.chars() {
+            let cp = ch as u32;
+            if first_cp.is_none() {
+                first_cp = Some(cp);
+            }
+            if cp == 0xFE0F {
+                has_vs16 = true;
+            }
+        }
+        let first = first_cp?;
+        if has_vs16 {
+            if let Some(emoji) = self.emoji {
+                if rasterizer.has_codepoint(emoji, first) {
+                    return Some(emoji);
+                }
+            }
+        }
+        self.resolve(rasterizer, first)
     }
 
     pub fn base(&self) -> FontId {
