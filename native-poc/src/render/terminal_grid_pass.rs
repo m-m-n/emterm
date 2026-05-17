@@ -34,6 +34,11 @@ const PAGE_SOLID: u32 = 2;
 /// Decoration bit flags packed into the instance `flags` field.
 const FLAG_UNDERLINE: u32 = 1 << 0;
 const FLAG_STRIKETHROUGH: u32 = 1 << 1;
+/// Solid-page fg-color fill (procedural box-drawing strokes, block
+/// elements, shade alpha-blends). Without this flag a `PAGE_SOLID`
+/// instance falls into the background-fill branch and renders the
+/// cell's bg color — i.e. invisible.
+const FLAG_FG_FILL: u32 = 1 << 2;
 
 const SHADER_SRC: &str = include_str!("terminal_grid_pass.wgsl");
 
@@ -417,7 +422,46 @@ impl TerminalGridPass {
             }
             // Glyph quad. Empty / whitespace clusters skip this.
             if !cell.glyph.is_empty() && cell.glyph != " " {
-                if let Some(instance) = self.glyph_instance(
+                // Box-drawing short-circuit: stroke the cell rect with
+                // solid quads instead of rasterizing the font glyph so
+                // adjacent cells meet without hairline gaps. Falls
+                // through to the regular glyph path for non-box cps.
+                let first_cp = cell.glyph.chars().next().map(|c| c as u32).unwrap_or(0);
+                if let Some(rects) = super::box_drawing::rects_for(first_cp, w, h) {
+                    for (rx, ry, rw, rh) in rects {
+                        out.push(CellInstance {
+                            cell_xy: [x + rx, y + ry],
+                            cell_wh: [rw, rh],
+                            atlas_uv: [0.0, 0.0, 0.0, 0.0],
+                            fg_rgba: pack_rgba(cell.fg_rgba),
+                            bg_rgba: pack_rgba(cell.bg_rgba),
+                            page: PAGE_SOLID,
+                            flags: FLAG_FG_FILL,
+                        });
+                    }
+                } else if let Some((rects, alpha_override)) =
+                    super::block_drawing::rects_for(first_cp, w, h)
+                {
+                    // Shade characters supply an alpha override; we
+                    // preserve the cell's fg RGB and patch only the A
+                    // channel so the alpha-blend stage paints a
+                    // partially-transparent fg fill over the bg.
+                    let mut fg = cell.fg_rgba;
+                    if let Some(a) = alpha_override {
+                        fg[3] = a;
+                    }
+                    for (rx, ry, rw, rh) in rects {
+                        out.push(CellInstance {
+                            cell_xy: [x + rx, y + ry],
+                            cell_wh: [rw, rh],
+                            atlas_uv: [0.0, 0.0, 0.0, 0.0],
+                            fg_rgba: pack_rgba(fg),
+                            bg_rgba: pack_rgba(cell.bg_rgba),
+                            page: PAGE_SOLID,
+                            flags: FLAG_FG_FILL,
+                        });
+                    }
+                } else if let Some(instance) = self.glyph_instance(
                     &mut cache,
                     cell,
                     x,

@@ -95,7 +95,7 @@ fn vs_main(in: VsIn) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    // Solid page (background or decoration line).
+    // Solid page (background or decoration line or fg-fill stroke).
     if (in.page == 2u) {
         // Decoration lines: clip the visible band based on flags.
         if ((in.flags & 1u) != 0u) {
@@ -111,6 +111,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             if (in.cell_local.y < 0.52 || in.cell_local.y > 0.58) {
                 discard;
             }
+            return in.fg;
+        }
+        if ((in.flags & 4u) != 0u) {
+            // Foreground-color fill (box drawing strokes, block-element
+            // rects, shade alpha-blends). The instance carries the
+            // already-scaled rect in cell_xy/cell_wh; the shader just
+            // paints fg straight through the alpha blend stage.
             return in.fg;
         }
         // Plain background fill.
