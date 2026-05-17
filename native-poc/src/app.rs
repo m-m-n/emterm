@@ -271,7 +271,11 @@ impl App {
         if let Some(id) = noto_sans_jp_id {
             log::info!("font.jp = Noto Sans JP (id={:?})", id);
         }
-        let chain = FallbackChain::new(base_id, extras);
+        let mut chain = FallbackChain::new(base_id, extras);
+        // Mark the bundled emoji font as the preferred color-emoji source
+        // so VS-16-bearing clusters (e.g. ⚠️ = U+26A0 + U+FE0F) resolve
+        // to it instead of the BW base font that also covers U+26A0.
+        chain.set_emoji(emoji_id);
         (
             Arc::new(resolver),
             Arc::new(chain),

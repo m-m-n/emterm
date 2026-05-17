@@ -481,8 +481,12 @@ impl TerminalGridPass {
         base_ascent: f32,
         v_pad: f32,
     ) -> Option<CellInstance> {
-        let first_cp = cell.glyph.chars().next()? as u32;
-        let font_id = self.fallback.resolve(&*self.rasterizer, first_cp)?;
+        // Prefer the emoji font when the cluster carries VS-16, so that
+        // codepoints with dual presentation (e.g. U+26A0 warning sign)
+        // get the colored emoji glyph rather than the BW base-font one.
+        let font_id = self
+            .fallback
+            .resolve_for_cluster(&*self.rasterizer, &cell.glyph)?;
         let shaped = self.rasterizer.shape(&cell.glyph, font_id, size_px);
         let g = shaped.first()?;
         if g.glyph_id == 0 {
@@ -870,8 +874,7 @@ mod tests {
                 });
             }
             if !cell.glyph.is_empty() && cell.glyph != " " {
-                let first = cell.glyph.chars().next().unwrap() as u32;
-                if let Some(font_id) = fallback.resolve(rasterizer, first) {
+                if let Some(font_id) = fallback.resolve_for_cluster(rasterizer, &cell.glyph) {
                     let shaped = rasterizer.shape(&cell.glyph, font_id, metrics.font_size_px);
                     if let Some(g) = shaped.first() {
                         if g.glyph_id != 0 {
