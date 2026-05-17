@@ -52,6 +52,7 @@ notify-rust = "4"
 
 # Unicode (Phase 3)
 unicode-width = "0.2"
+unicode-segmentation = "1.12"
 
 # Logging
 log = "0.4"

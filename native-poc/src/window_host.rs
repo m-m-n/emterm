@@ -1173,10 +1173,9 @@ impl ApplicationHandler for PocApp {
         // PTY output. A real backend may have queued events while we
         // were idle; the NullBackend always returns an empty drain so
         // this is a cheap no-op when disabled.
-        if self.app.pump_ime() {
-            host.window().request_redraw();
-        }
-        if self.app.pump_all() {
+        let ime_changed = self.app.pump_ime();
+        let pty_changed = self.app.pump_all();
+        if ime_changed || pty_changed {
             host.window().request_redraw();
         }
         // Cursor cell may have moved as a side effect of pumps; notify

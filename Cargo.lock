@@ -1529,6 +1529,7 @@ dependencies = [
  "swash",
  "term_core",
  "term_images",
+ "unicode-segmentation",
  "unicode-width 0.2.2",
  "wgpu",
  "winit",

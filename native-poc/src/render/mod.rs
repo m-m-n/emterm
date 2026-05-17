@@ -233,15 +233,29 @@ pub fn apply_preedit_overlay(
     let mut col = anchor.col.min(cols.saturating_sub(1));
     let mut overlay: Vec<CellInput> = Vec::new();
 
-    for ch in text.chars() {
+    // Split on extended grapheme cluster boundaries so codepoint sequences
+    // that compose into a single visual glyph (emoji + VS-16, ZWJ
+    // sequences, regional indicator pairs, combining marks, …) land in
+    // one cell. Without this, e.g. "⚠️" (U+26A0 + U+FE0F) renders as the
+    // bare warning sign in one cell followed by an invisible variation
+    // selector glyph in the next.
+    use unicode_segmentation::UnicodeSegmentation;
+    for cluster in text.graphemes(true) {
         if row >= rows {
             break;
         }
-        let s: String = ch.to_string();
+        let s: String = cluster.to_string();
         // Force ambiguous-width chars (e.g. ▽) to 1 cell so the
         // composition footprint matches the user's visual expectation
         // of "1 character = 1 cell" during preedit.
-        let w = visible_width(&s, AmbiguousWidthMode::Narrow).max(1) as u16;
+        //
+        // VS-16 (U+FE0F) explicitly requests emoji presentation; widen
+        // to 2 cells so the colored emoji glyph (rather than the bare
+        // BW codepoint) gets a wide slot to render in. Mirrors
+        // `term_core::print_handler::flush_grapheme_buffer`.
+        let has_vs16 = cluster.chars().any(|c| c as u32 == 0xFE0F);
+        let w_raw = visible_width(&s, AmbiguousWidthMode::Narrow);
+        let w = if has_vs16 { 2u16 } else { w_raw.max(1) as u16 };
         if col + w > cols {
             row = row.saturating_add(1);
             col = 0;

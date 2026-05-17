@@ -260,10 +260,19 @@ impl Tab {
                 PtyEvent::Data(bytes) => {
                     let mut c = self.core.lock();
                     c.process_pty_data(&bytes);
-                    // Drain mode actions to keep our local alt-screen flag
-                    // synced. `process_pty_data` interrupts on buffer
-                    // switches, so subsequent chunks may need re-pumping —
-                    // that's already the case for the data loop above.
+                    // Force-flush any grapheme cluster left buffered by
+                    // the parser (e.g. a lone emoji codepoint at the tail
+                    // of an IME-commit echo). Without this the cluster
+                    // sits in `grapheme_buffer` until the next non-extending
+                    // codepoint arrives, so the glyph stays invisible and
+                    // the cursor doesn't advance until the user types
+                    // something else (typical symptom: SKK `/smile` → 😄
+                    // only appears after pressing space). chunk-boundary
+                    // cluster splits (VS-16 arriving in the next chunk)
+                    // are theoretical for typical shell echoes (commits
+                    // arrive in a single PTY chunk), so the trade-off
+                    // favours instant feedback.
+                    c.flush_grapheme_buffer();
                     let actions = c.take_mode_actions();
                     drop(c);
                     if let Some(new_alt) = parse_alt_screen_action(&actions) {

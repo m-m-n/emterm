@@ -270,6 +270,11 @@ fn reader_loop(
                     // Receiver dropped; nothing to do.
                     break;
                 }
+                // Pull the main event loop out of WaitUntil so the
+                // bytes are drained on the next about_to_wait pass
+                // instead of the 16 ms deadline. Critical for IME
+                // commit echoes on Wayland — see crate::wakeup.
+                crate::wakeup::wake();
             }
             Err(e) => {
                 let _ = event_tx.send(PtyEvent::Exited {
