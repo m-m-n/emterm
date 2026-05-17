@@ -544,10 +544,25 @@ impl TerminalGridPass {
             if scale < 1.0 {
                 glyph_w *= scale;
                 glyph_h *= scale;
-                // Re-center horizontally; re-anchor vertically so the
-                // scaled glyph sits inside the cell rect.
+                // Re-center horizontally inside the cell.
                 glyph_x = x + (w - glyph_w) * 0.5;
-                glyph_y = y + (h - glyph_h) * 0.5;
+                // Keep the baseline pinned so adjacent clusters with
+                // different bitmap heights still line up — otherwise
+                // each glyph would re-anchor to the cell's vertical
+                // center and the row's baseline would jitter cluster
+                // by cluster (visible as zig-zag during preedit).
+                let scaled_bearing_top = region.bearing_top as f32 * scale;
+                glyph_y = baseline - scaled_bearing_top;
+                // If the scaled glyph still overshoots the cell rect
+                // after baseline placement, clamp the top/bottom into
+                // the cell so the reverse-video bg keeps it contained.
+                let overshoot_top = (y - glyph_y).max(0.0);
+                let overshoot_bot = ((glyph_y + glyph_h) - (y + h)).max(0.0);
+                if overshoot_top > 0.0 {
+                    glyph_y += overshoot_top;
+                } else if overshoot_bot > 0.0 {
+                    glyph_y -= overshoot_bot;
+                }
             }
         }
         if glyph_w <= 0.0 || glyph_h <= 0.0 {
