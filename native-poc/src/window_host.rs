@@ -44,6 +44,7 @@ use crate::ime::backend::{build_backend_with_window, KeyDispatchResult, ProcessE
 use crate::pty::input::{encode, Key, Modifiers};
 use crate::render::terminal_grid_pass::TerminalGridPass;
 use crate::selection::{Pos, Selection, SelectionMode};
+use crate::ui::tab_bar_webview::{TabBarPayload, TabBarPayloadItem, TabBarWebView};
 
 /// Maximum time between successive clicks that still counts as a "multi-click".
 /// Within this window the click counter increments; beyond it the counter
@@ -1049,6 +1050,28 @@ fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
 struct PocApp {
     app: App,
     host: Option<WindowHost>,
+    /// Hybrid PoC tab bar — a wry WebView mounted as a child of the
+    /// main winit window. `None` when the platform refused to create
+    /// the webview (missing WebKitGTK at runtime, Wayland session,
+    /// …); the app keeps running with no tab strip in that case so
+    /// the terminal stays usable.
+    tab_bar: Option<TabBarWebView>,
+}
+
+/// Build the [`TabBarPayload`] mirror of the current tab roster.
+fn build_tab_payload(app: &App) -> TabBarPayload {
+    let items = app
+        .tabs
+        .iter()
+        .map(|t| TabBarPayloadItem {
+            title: t.display_title().to_string(),
+            mux_session_name: t.mux_session_name.clone(),
+        })
+        .collect();
+    TabBarPayload {
+        items,
+        active: app.active,
+    }
 }
 
 impl ApplicationHandler for PocApp {
@@ -1082,6 +1105,21 @@ impl ApplicationHandler for PocApp {
             build_backend_with_window(host.window_arc(), &self.app.settings.ime, &ProcessEnv);
         self.app.set_ime_backend(backend);
 
+        // Hybrid PoC: mount the WebView tab bar on top of the wgpu
+        // surface. Failure is non-fatal — the terminal stays usable
+        // without a tab strip (only Ctrl+Shift+T/W chords work in that
+        // mode). See `crate::ui::tab_bar_webview` for the platform
+        // limitations (Wayland child webviews, missing WebKitGTK, …).
+        match TabBarWebView::new(&host.window_arc()) {
+            Ok(mut bar) => {
+                bar.sync(&build_tab_payload(&self.app));
+                self.tab_bar = Some(bar);
+            }
+            Err(e) => {
+                log::warn!("native-poc: WebView tab bar unavailable: {e}");
+            }
+        }
+
         host.window().request_redraw();
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             Instant::now() + Duration::from_millis(16),
@@ -1102,6 +1140,10 @@ impl ApplicationHandler for PocApp {
                 // happens before the WM destroys the window.
                 log::info!("native-poc: CloseRequested → shutting down PTY tabs");
                 self.app.tabs.clear();
+                // Drop the WebView before the underlying window so its
+                // WebKitGTK widget can detach cleanly while the GTK
+                // display connection is still alive.
+                self.tab_bar = None;
                 // Drop the wgpu Surface (and the rest of WindowHost) while
                 // winit's EventLoop is still alive. The Vulkan WSI surface
                 // is tied to the X11 display connection that EventLoop
@@ -1123,6 +1165,12 @@ impl ApplicationHandler for PocApp {
                     return;
                 }
                 host.request_resize();
+                // Keep the WebView's width in sync with the window so
+                // the tab strip stretches across the entire title-bar
+                // row. Height stays fixed at `TAB_BAR_HEIGHT`.
+                if let Some(bar) = &self.tab_bar {
+                    bar.set_width(host.window());
+                }
                 host.window().request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -1133,6 +1181,9 @@ impl ApplicationHandler for PocApp {
                 // for the same reasons as `Resized`.
                 host.pixels_per_point = scale_factor as f32;
                 host.request_resize();
+                if let Some(bar) = &self.tab_bar {
+                    bar.set_width(host.window());
+                }
                 host.window().request_redraw();
             }
             WindowEvent::ModifiersChanged(state) => {
@@ -1313,6 +1364,42 @@ impl ApplicationHandler for PocApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Hybrid PoC: pump the GTK main loop so the WebView keeps
+        // painting and dispatching events. wry hosts WebKitGTK inside
+        // the GTK loop; winit drives its own event loop on Linux, so
+        // without this the WebView freezes (no JS, no IPC, no input).
+        // The pump is bounded by `events_pending`, so an idle GTK
+        // loop returns immediately. Safe to call even when the
+        // WebView failed to build — `gtk::init()` ran at startup.
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd",
+        ))]
+        {
+            while gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+        }
+
+        // Hybrid PoC: drain any pending TabEvents from the WebView's
+        // IPC channel and apply them before touching PTY pumps. A
+        // closed last tab will cause `apply_tab_event` to return
+        // false, which the existing `tabs.is_empty()` branch below
+        // turns into a clean event-loop exit.
+        let mut tab_roster_changed = false;
+        if let Some(bar) = &self.tab_bar {
+            while let Some(evt) = bar.try_recv() {
+                let _ = self.app.apply_tab_event(evt);
+                tab_roster_changed = true;
+            }
+        }
+        if tab_roster_changed {
+            self.app.mark_full_redraw();
+        }
+
         let Some(host) = self.host.as_mut() else {
             return;
         };
@@ -1332,6 +1419,16 @@ impl ApplicationHandler for PocApp {
         if ime_changed || pty_changed || blink_due {
             host.window().request_redraw();
         }
+        // Hybrid PoC: push the latest tab roster to the WebView when
+        // anything that affects the strip changed. `TabBarWebView::sync`
+        // deduplicates on the serialized JSON, so this is cheap when
+        // nothing material moved (PTY output that doesn't touch the
+        // title or roster).
+        if let Some(bar) = self.tab_bar.as_mut() {
+            if tab_roster_changed || pty_changed {
+                bar.sync(&build_tab_payload(&self.app));
+            }
+        }
         // Cursor cell may have moved as a side effect of pumps; notify
         // the IME backend if the (row, col) changed. Use the same
         // physical-pixel metrics + origin as the grid renderer so the
@@ -1348,7 +1445,10 @@ impl ApplicationHandler for PocApp {
             // Same teardown handshake as the CloseRequested path: drop
             // the wgpu / window resources before EventLoop unwinds so
             // the Vulkan WSI surface destructor sees a live X11
-            // connection.
+            // connection. The WebView tab bar is dropped first so its
+            // WebKitGTK widget detaches while the display connection
+            // is still alive.
+            self.tab_bar = None;
             self.host = None;
             event_loop.exit();
             return;
@@ -1365,6 +1465,10 @@ impl ApplicationHandler for PocApp {
     /// happen while EventLoop is still alive — see the field-order
     /// note on `WindowHost`.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.tab_bar.is_some() {
+            log::info!("native-poc: exiting handler dropping WebView tab bar");
+            self.tab_bar = None;
+        }
         if self.host.is_some() {
             log::info!("native-poc: exiting handler dropping WindowHost");
             self.host = None;
@@ -1374,7 +1478,11 @@ impl ApplicationHandler for PocApp {
 
 /// Run the event loop until the window is closed. Owns the App.
 pub fn run(event_loop: EventLoop<()>, app: App) -> ! {
-    let mut handler = PocApp { app, host: None };
+    let mut handler = PocApp {
+        app,
+        host: None,
+        tab_bar: None,
+    };
     if let Err(e) = event_loop.run_app(&mut handler) {
         log::error!("native-poc: winit event loop returned an error: {e}");
     }
