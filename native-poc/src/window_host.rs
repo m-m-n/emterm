@@ -31,7 +31,7 @@ use egui::ViewportId;
 use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::ScreenDescriptor;
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
@@ -237,7 +237,11 @@ impl WindowHost {
         } else {
             wgpu::PresentMode::Fifo
         };
-        log::info!("native-poc: surface present mode = {:?}", present_mode);
+        log::info!(
+            "native-poc: surface present mode = {:?} (available: {:?})",
+            present_mode,
+            surface_caps.present_modes
+        );
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
