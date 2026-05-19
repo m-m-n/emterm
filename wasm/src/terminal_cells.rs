@@ -194,7 +194,9 @@ impl TerminalCore {
         let mut h: u32 = 2166136261;
         for row in 0..self.rows {
             for col in 0..self.cols {
-                let Some(idx) = self.viewport_cell_offset(col, row) else { continue };
+                let Some(idx) = self.viewport_cell_offset(col, row) else {
+                    continue;
+                };
                 let cell = &self.ring_cells[idx];
                 let len = if cell.char_len == 0xFF {
                     16

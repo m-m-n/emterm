@@ -1177,7 +1177,7 @@ mod tests {
             core.set_cell(0, r, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
         core.scroll_up_internal(2); // 2 rows go to scrollback
-        // Each scrollback row has 10 SlimCells.
+                                    // Each scrollback row has 10 SlimCells.
         assert_eq!(core.slim_cell_total(), 20);
     }
 

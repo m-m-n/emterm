@@ -21,7 +21,7 @@
 /// - ring_head ∈ [0, rows)
 /// - scrollback_slim.len() == scrollback_wrapped.len() ≤ scrollback_capacity
 use crate::cell::*;
-use crate::slim_cell::{SlimCell, cell_to_slim, slim_overflow_str, slim_to_cell};
+use crate::slim_cell::{cell_to_slim, slim_overflow_str, slim_to_cell, SlimCell};
 use crate::terminal_core::TerminalCore;
 
 // ── Scroll Event ─────────────────────────────────────────
@@ -1094,7 +1094,7 @@ mod tests {
     #[test]
     fn test_eviction_releases_refcounts() {
         let mut core = TerminalCore::new(10, 3, 2); // capacity 2 scrollback rows
-        // Push 5 distinct rows; only the last 2 should remain.
+                                                    // Push 5 distinct rows; only the last 2 should remain.
         for i in 0..5u32 {
             // Use a unique style per row by varying RGB.
             core.set_cell(0, 0, "A", 1, 2, i as u8, 0, 0, 0, 0, 0, 0, 0);
