@@ -11,6 +11,7 @@ import type { TerminalState, MuxPaneGridState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import type { KeyboardHandler } from "../handlers/keyboard";
 import { SettingsService } from "../../settings/settings-service";
+import { recordEvent } from "../diagnostics-history";
 
 /**
  * Context needed by mux window manager functions.
@@ -223,6 +224,9 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     ` | corePtr=0x${(preCorePtr >>> 0).toString(16)}→0x${(postCorePtr >>> 0).toString(16)}` +
     ` | ptrChanged=${preCorePtr !== postCorePtr}`,
   );
+  try {
+    recordEvent("mux-switch", `paneId=${prePaneId}→${postPaneId}`);
+  } catch { /* never let diagnostics break mux switching */ }
   if (renderer) {
     // Arm the race detector with the new core's identity. Any subsequent
     // render() / forceRender() within the race window that lands on a

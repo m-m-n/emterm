@@ -193,9 +193,14 @@ export async function runPostRecoveryIpcHealthCheck(
   // the alive reply past the old 3 s threshold.
   const HEALTH_CHECK_TIMEOUT_MS = 10_000;
   // Grace window for replies that lost the race against the timeout
-  // fire by a handful of ms. Without this, a 2 ms latecomer trips a
-  // false exit identical to the original bug.
-  const LATE_ARRIVAL_GRACE_MS = 200;
+  // fire. Originally 200 ms (chosen to cover a 2 ms-class race), but
+  // production logs showed a reply arriving 224 ms after the timeout
+  // fire after the daemon had been silent for 4.5 h — heavy reinit
+  // work plus suspended-bridge wake-up can stack hundreds of ms on top
+  // of the 10 s timeout. 2000 ms keeps the user-visible exit path open
+  // for the genuinely-dead case while absorbing realistic post-recovery
+  // latency without false-positive mux teardown.
+  const LATE_ARRIVAL_GRACE_MS = 2_000;
   // Watch window equals the maximum wait — `finally` clears
   // `postRecoveryWatchUntil` immediately when the await chain ends,
   // so any tail beyond timeout+grace is unobservable.
