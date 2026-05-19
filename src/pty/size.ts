@@ -5,6 +5,8 @@
  * container size and character metrics.
  */
 
+import { recordEvent } from "../terminal-app/diagnostics-history";
+
 /**
  * Terminal size in columns and rows.
  */
@@ -167,8 +169,13 @@ export function observeContainerResize(
 
 		// Only call callback if dimensions actually changed
 		if (cols !== lastCols || rows !== lastRows) {
+			const fromCols = lastCols;
+			const fromRows = lastRows;
 			lastCols = cols;
 			lastRows = rows;
+			try {
+				recordEvent("resize", `${fromCols}x${fromRows}→${cols}x${rows}`);
+			} catch { /* never let diagnostics break resize */ }
 			onResize(cols, rows);
 		}
 	});

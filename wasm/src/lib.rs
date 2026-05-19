@@ -43,6 +43,20 @@ mod sgr;
 
 use wasm_bindgen::prelude::*;
 
+/// WASM module entry point — runs once per instance.
+///
+/// Installs `console_error_panic_hook` so any Rust panic surfaces in the
+/// browser console (and the frontend log forwarder) with a Rust-side
+/// stack trace instead of an opaque `RuntimeError: unreachable`.
+///
+/// Runs automatically on module instantiation, including on the reinit
+/// path after a WASM crash recovery — every fresh instance gets the
+/// hook installed without any JS-side coordination.
+#[wasm_bindgen(start)]
+pub fn wasm_main() {
+    console_error_panic_hook::set_once();
+}
+
 /// Trivial function to verify WASM pipeline works.
 #[wasm_bindgen]
 pub fn ping() -> u32 {
