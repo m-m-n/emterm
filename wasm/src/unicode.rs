@@ -323,7 +323,7 @@ mod tests {
         assert!(is_combining_char(0x0591)); // Hebrew accent etnahta
         assert!(is_combining_char(0x05BD)); // Hebrew point meteg
         assert!(is_combining_char(0x05C4)); // Hebrew mark upper dot
-        // Cyrillic
+                                            // Cyrillic
         assert!(is_combining_char(0x0483)); // Cyrillic combining titlo
     }
 
@@ -333,7 +333,7 @@ mod tests {
         assert!(is_combining_char(0x0711)); // Syriac letter superscript alaph
         assert!(is_combining_char(0x0730)); // Syriac pthaha above
         assert!(is_combining_char(0x074A)); // Syriac barrekh
-        // NKo
+                                            // NKo
         assert!(is_combining_char(0x07EB)); // NKo combining short high tone
         assert!(is_combining_char(0x07F3)); // NKo combining double dot above
     }
@@ -351,7 +351,7 @@ mod tests {
         // CJK ideographic combining marks
         assert!(is_combining_char(0x302A)); // Ideographic level tone mark
         assert!(is_combining_char(0x302F)); // Hangul double dot tone mark
-        // Japanese dakuten / handakuten
+                                            // Japanese dakuten / handakuten
         assert!(is_combining_char(0x3099)); // Combining katakana-hiragana voiced sound mark
         assert!(is_combining_char(0x309A)); // Combining katakana-hiragana semi-voiced sound mark
     }
@@ -362,9 +362,9 @@ mod tests {
         assert_eq!(char_width(0x0651), 0); // Arabic shadda
         assert_eq!(char_width(0x0615), 0); // Arabic small high tah
         assert_eq!(char_width(0x064B), 0); // Arabic fathatan
-        // Hebrew
+                                           // Hebrew
         assert_eq!(char_width(0x0591), 0); // Hebrew accent etnahta
-        // Devanagari
+                                           // Devanagari
         assert_eq!(char_width(0x094D), 0); // Devanagari sign virama
     }
 

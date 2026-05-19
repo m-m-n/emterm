@@ -201,7 +201,7 @@ mod tests {
     fn test_csi_internal_sgr() {
         let mut core = TerminalCore::new(80, 24, 0);
         core.handle_csi_internal(&[1], &[], b'm'); // Bold
-        // SGR applied (no crash)
+                                                   // SGR applied (no crash)
     }
 
     #[test]
