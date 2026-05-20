@@ -1,0 +1,109 @@
+schema_version: 1
+feature: mux-scrollback-retention
+created: 2026-05-11
+
+# Branch: feat/mux-scrollback-retention (4 commits ahead of main @ 2a0d903)
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    # SDD docs were first drafted on the prior `feature/mux-scrollback-retention`
+    # branch (commit 5d96523 on 2026-05-12) and cherry-picked onto this branch
+    # alongside the doc brush-up below.
+    completed_at_commit: 5d96523e7b0986c46879b1455e12d152d16b3279
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 5d96523e7b0986c46879b1455e12d152d16b3279
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 5d96523e7b0986c46879b1455e12d152d16b3279
+  - id: implement
+    status: completed
+    # Implementation was delivered in three phased commits on
+    # `feat/mux-scrollback-retention` (Phase A → B → chore → C).
+    # See tasks.yaml for the per-phase commit mapping.
+    completed_at_commit: a1321a7
+  - id: check
+    status: completed
+    # cargo build, cargo test mux:: (252/252), rustfmt --check all green
+    # at the Phase C commit.
+    completed_at_commit: a1321a7
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: a1321a7
+
+requirements:
+  FR1:
+    title: ScrollbackRingBuffer type (rename + relocate)
+    status: ok
+    tasks: [phase-b-relocate-to-muxpane]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6, TS-7, TS-8, TS-9, TS-10]
+  FR2:
+    title: Capacity constant 2 MiB (DEFAULT_SCROLLBACK_CAPACITY)
+    status: ok
+    # Phase A landed the 2 MiB value on the original DEFAULT_RING_CAPACITY;
+    # Phase B renamed it to DEFAULT_SCROLLBACK_CAPACITY in the new module.
+    tasks: [phase-a-cap-2mb, phase-b-relocate-to-muxpane]
+    tests: [TS-11]
+  FR3:
+    title: Pane-resident scrollback buffer
+    status: ok
+    tasks: [phase-b-relocate-to-muxpane]
+    tests: [TS-12, TS-17, TS-19]
+  FR4:
+    title: Always-on write regardless of attach state
+    status: ok
+    tasks: [phase-c-always-on-and-reorder]
+    tests: [TS-13, TS-14]
+  FR5:
+    title: Reattach send order (clear → scrollback → shadow → passthrough)
+    status: ok
+    tasks: [phase-c-always-on-and-reorder]
+    tests: [TS-15, TS-15b]
+  FR6:
+    title: Buffer lifetime equals pane lifetime (no clear on reattach)
+    status: ok
+    tasks: [phase-c-always-on-and-reorder]
+    tests: [TS-16, TS-16b]
+  FR7:
+    title: No ESC-boundary trimming (shadow snapshot guarantees final screen)
+    status: ok
+    tasks: [phase-c-always-on-and-reorder]
+    tests: [TS-15]
+  FR8:
+    title: Carry over existing ring buffer unit tests
+    status: ok
+    tasks: [phase-b-relocate-to-muxpane]
+    tests: [TS-1, TS-2, TS-3, TS-4, TS-5, TS-6, TS-7, TS-8, TS-9, TS-10]
+  FR9:
+    title: passthrough_data behavior unchanged
+    status: ok
+    tasks: [phase-c-always-on-and-reorder]
+    tests: [TS-15, TS-18]
+  NFR1:
+    title: Memory bounded to pane_count × 2 MiB
+    status: ok
+    tasks: [phase-a-cap-2mb, phase-b-relocate-to-muxpane]
+    tests: [TS-11]
+  NFR2:
+    title: Per-byte write overhead matches existing ring path
+    status: ok
+    tasks: [phase-c-always-on-and-reorder]
+    tests: []
+  NFR3:
+    title: IPC / WASM compatibility preserved
+    status: ok
+    tasks: [phase-c-always-on-and-reorder]
+    tests: [TS-18]
