@@ -122,31 +122,28 @@ pub(super) async fn collect_reattach_data(
                         continue;
                     }
 
-                    // Visible reattach: build snapshot and switch to Connected.
-                    let mut combined = build_shadow_parser_snapshot(&pane.shadow_parser);
-                    let is_alternate_screen = pane
-                        .shadow_parser
-                        .lock()
-                        .unwrap()
-                        .screen()
-                        .alternate_screen();
-                    let screen_len = combined.len();
+                    // Visible reattach: build the FR5-ordered resume snapshot
+                    // and switch to Connected. Order is
+                    //   ESC[H ESC[2J + scrollback + shadow + passthrough
+                    // so the scrollback bytes replay into the client's WASM
+                    // grid (populating its history) before the shadow snapshot
+                    // overwrites the visible screen with a known good final
+                    // state. Scrollback is read WITHOUT clearing (FR6: the
+                    // buffer lives for the lifetime of the pane).
+                    let (screen_data, is_alternate_screen) = {
+                        let parser = pane.shadow_parser.lock().unwrap();
+                        let screen = parser.screen();
+                        (screen.contents_formatted(), screen.alternate_screen())
+                    };
+                    let scrollback_data = pane.scrollback.lock().unwrap().read_all();
 
                     let mut target = pane.output_target.lock().unwrap();
                     let target_was = match &*target {
                         PaneOutputTarget::Connected(_) => "Connected",
                         PaneOutputTarget::Detached { .. } => "Detached",
                     };
-                    // Phase B: scrollback now lives on `pane.scrollback`. We
-                    // drain it on reattach so behavior matches the previous
-                    // per-detach-cycle ring (Phase C will switch to no-clear).
-                    let scrollback_data = {
-                        let mut sb = pane.scrollback.lock().unwrap();
-                        let buf = sb.read_all();
-                        sb.clear();
-                        buf
-                    };
                     *target = PaneOutputTarget::Connected(pane_output_tx.clone());
+                    drop(target);
 
                     // Drain the per-pane raw passthrough buffer so image /
                     // Markdown OSC byte runs captured while detached are
@@ -160,23 +157,23 @@ pub(super) async fn collect_reattach_data(
                     };
 
                     log::info!(
-                        "collect_reattach: pane {} was={}, screen={}B, scrollback={}B, passthrough={}B, total={}B, alt_screen={}, exited={}",
+                        "collect_reattach: pane {} was={}, scrollback={}B, screen={}B, passthrough={}B, total={}B, alt_screen={}, exited={}",
                         pane.id,
                         target_was,
-                        screen_len,
                         scrollback_data.len(),
+                        screen_data.len(),
                         passthrough_data.len(),
-                        screen_len + scrollback_data.len() + passthrough_data.len(),
+                        8 + scrollback_data.len() + screen_data.len() + passthrough_data.len(),
                         is_alternate_screen,
                         pane.exited
                     );
 
-                    // Reserve once for the combined payload. The shadow
-                    // snapshot only pre-reserves `screen_data.len() + 10`, so
-                    // without this growing `combined` would double-allocate
-                    // ~log2((scrollback + passthrough) / screen) times.
-                    combined.reserve(scrollback_data.len() + passthrough_data.len());
+                    let mut combined = Vec::with_capacity(
+                        8 + scrollback_data.len() + screen_data.len() + passthrough_data.len(),
+                    );
+                    combined.extend_from_slice(b"\x1b[H\x1b[2J");
                     combined.extend_from_slice(&scrollback_data);
+                    combined.extend_from_slice(&screen_data);
                     combined.extend_from_slice(&passthrough_data);
 
                     data.push((pane.id, combined));

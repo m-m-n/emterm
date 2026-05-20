@@ -210,25 +210,28 @@ pub fn evaluate_output_target(
                     EvalResult::Unchanged
                 }
                 None => {
-                    let mut snapshot = Vec::new();
-                    snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
+                    // Phase C FR5 order: clear → scrollback → shadow →
+                    // passthrough. Scrollback is read WITHOUT clearing (FR6:
+                    // the buffer lives for the lifetime of the pane).
                     let screen = pane
                         .shadow_parser
                         .lock()
                         .unwrap()
                         .screen()
                         .contents_formatted();
-                    snapshot.extend_from_slice(&screen);
-                    let buffered = {
-                        let mut sb = pane.scrollback.lock().unwrap();
-                        let buf = sb.read_all();
-                        sb.clear();
-                        buf
+                    let buffered = pane.scrollback.lock().unwrap().read_all();
+                    let passthrough = {
+                        let mut buf = pane.raw_passthrough.lock().unwrap();
+                        let bytes = buf.read_all();
+                        buf.clear();
+                        bytes
                     };
+                    let mut snapshot =
+                        Vec::with_capacity(8 + buffered.len() + screen.len() + passthrough.len());
+                    snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
                     snapshot.extend_from_slice(&buffered);
-                    let passthrough = pane.raw_passthrough.lock().unwrap().read_all();
+                    snapshot.extend_from_slice(&screen);
                     snapshot.extend_from_slice(&passthrough);
-                    pane.raw_passthrough.lock().unwrap().clear();
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
                     EvalResult::ResumeWithSnapshot { snapshot }
                 }
@@ -279,25 +282,27 @@ pub fn resume_pane_with_permit(
                 }
                 return ResumeOutcome::NoChange;
             }
-            let mut snapshot = Vec::new();
-            snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
+            // Phase C FR5 order: clear → scrollback → shadow → passthrough.
+            // Scrollback is read WITHOUT clearing (FR6).
             let screen = pane
                 .shadow_parser
                 .lock()
                 .unwrap()
                 .screen()
                 .contents_formatted();
-            snapshot.extend_from_slice(&screen);
-            let buffered = {
-                let mut sb = pane.scrollback.lock().unwrap();
-                let buf = sb.read_all();
-                sb.clear();
-                buf
+            let buffered = pane.scrollback.lock().unwrap().read_all();
+            let passthrough = {
+                let mut buf = pane.raw_passthrough.lock().unwrap();
+                let bytes = buf.read_all();
+                buf.clear();
+                bytes
             };
+            let mut snapshot =
+                Vec::with_capacity(8 + buffered.len() + screen.len() + passthrough.len());
+            snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
             snapshot.extend_from_slice(&buffered);
-            let passthrough = pane.raw_passthrough.lock().unwrap().read_all();
+            snapshot.extend_from_slice(&screen);
             snapshot.extend_from_slice(&passthrough);
-            pane.raw_passthrough.lock().unwrap().clear();
             permit.send(PtyOutputChunk {
                 pane_id: pane.id,
                 data: snapshot,
