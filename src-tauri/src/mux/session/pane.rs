@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::ring_buffer::DetachRingBuffer;
+use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
 use crate::pty::passthrough_scanner::PassthroughScanner;
-use crate::pty::visibility::{RawPassthroughBuffer, HIDDEN_PASSTHROUGH_CAPACITY_MUX};
+use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
 
 /// Pane identifier.
 pub type PaneId = u32;
@@ -90,7 +90,9 @@ impl DetachReason {
 /// Where the PTY reader thread sends output data.
 ///
 /// When a GUI client is connected, output goes directly to the channel.
-/// When disconnected, output accumulates in a ring buffer for later replay.
+/// When disconnected, the reader still drains the PTY but suppresses sends;
+/// the scrollback ring (Phase B: `MuxPane::scrollback`) captures recent
+/// bytes for replay on reattach.
 ///
 /// `Detached` carries identity (`owner`) and cause (`reason`) so a second
 /// connection cannot reclaim a pane that the first connection put into
@@ -100,16 +102,20 @@ impl DetachReason {
 pub enum PaneOutputTarget {
     /// Connected: send output to the GUI via channel.
     Connected(mpsc::Sender<PtyOutputChunk>),
-    /// Detached: buffer output in a ring buffer for replay on reattach.
+    /// Detached: the reader keeps draining the PTY into the per-pane
+    /// scrollback (`MuxPane::scrollback`) and `raw_passthrough`; no
+    /// channel send happens until the pane returns to `Connected`.
     Detached {
         reason: DetachReason,
         owner: Option<mpsc::Sender<PtyOutputChunk>>,
-        ring: DetachRingBuffer,
     },
 }
 
 /// Thread-safe shared reference to a pane's output target.
 pub type SharedOutputTarget = Arc<StdMutex<PaneOutputTarget>>;
+
+/// Thread-safe shared reference to a pane's scrollback ring buffer.
+pub type SharedScrollback = Arc<StdMutex<ScrollbackRingBuffer>>;
 
 /// Result of `evaluate_output_target`. Carries the resume snapshot bytes
 /// when the pane transitions Detached -> Connected so the handler can
@@ -170,18 +176,13 @@ pub fn evaluate_output_target(
                     *target = PaneOutputTarget::Detached {
                         reason,
                         owner: Some(owned_tx.clone()),
-                        ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
                     };
                     EvalResult::SwitchedToDetached
                 }
                 Some(_) => EvalResult::Unchanged,
             }
         }
-        PaneOutputTarget::Detached {
-            reason,
-            owner,
-            ring,
-        } => {
+        PaneOutputTarget::Detached { reason, owner } => {
             let owner_matches = match owner {
                 Some(o) => o.same_channel(owned_tx),
                 None => true,
@@ -218,11 +219,15 @@ pub fn evaluate_output_target(
                         .screen()
                         .contents_formatted();
                     snapshot.extend_from_slice(&screen);
-                    let buffered = ring.read_all();
+                    let buffered = {
+                        let mut sb = pane.scrollback.lock().unwrap();
+                        let buf = sb.read_all();
+                        sb.clear();
+                        buf
+                    };
                     snapshot.extend_from_slice(&buffered);
                     let passthrough = pane.raw_passthrough.lock().unwrap().read_all();
                     snapshot.extend_from_slice(&passthrough);
-                    ring.clear();
                     pane.raw_passthrough.lock().unwrap().clear();
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
                     EvalResult::ResumeWithSnapshot { snapshot }
@@ -258,11 +263,7 @@ pub fn resume_pane_with_permit(
     let mut target = pane.output_target.lock().unwrap();
     match &mut *target {
         PaneOutputTarget::Connected(_) => ResumeOutcome::NoChange,
-        PaneOutputTarget::Detached {
-            reason,
-            owner,
-            ring,
-        } => {
+        PaneOutputTarget::Detached { reason, owner } => {
             let owner_matches = match owner {
                 Some(o) => o.same_channel(owned_tx),
                 None => true,
@@ -287,11 +288,15 @@ pub fn resume_pane_with_permit(
                 .screen()
                 .contents_formatted();
             snapshot.extend_from_slice(&screen);
-            let buffered = ring.read_all();
+            let buffered = {
+                let mut sb = pane.scrollback.lock().unwrap();
+                let buf = sb.read_all();
+                sb.clear();
+                buf
+            };
             snapshot.extend_from_slice(&buffered);
             let passthrough = pane.raw_passthrough.lock().unwrap().read_all();
             snapshot.extend_from_slice(&passthrough);
-            ring.clear();
             pane.raw_passthrough.lock().unwrap().clear();
             permit.send(PtyOutputChunk {
                 pane_id: pane.id,
@@ -332,6 +337,11 @@ pub struct MuxPane {
     /// byte stream. Lives alongside `raw_passthrough` because partial
     /// sequences span multiple reader chunks.
     pub passthrough_scanner: Arc<StdMutex<PassthroughScanner>>,
+    /// Per-pane scrollback ring buffer. Holds recent PTY bytes for replay
+    /// on reattach. Phase B: the reader only writes here while the pane is
+    /// detached; Phase C will switch to always-on writes so pre-detach
+    /// scrollback is also retained.
+    pub scrollback: SharedScrollback,
 }
 
 impl MuxPane {
@@ -360,6 +370,9 @@ impl MuxPane {
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
             passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
+            scrollback: Arc::new(StdMutex::new(ScrollbackRingBuffer::new(
+                DEFAULT_SCROLLBACK_CAPACITY,
+            ))),
         }
     }
 
@@ -423,6 +436,9 @@ impl MuxPane {
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
             passthrough_scanner: Arc::new(StdMutex::new(PassthroughScanner::new())),
+            scrollback: Arc::new(StdMutex::new(ScrollbackRingBuffer::new(
+                DEFAULT_SCROLLBACK_CAPACITY,
+            ))),
         }
     }
 }
@@ -475,12 +491,13 @@ mod tests {
         // Channel capacity 1: second send should fail with Full
         let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
         // First send succeeds
-        assert!(tx
-            .try_send(PtyOutputChunk {
+        assert!(
+            tx.try_send(PtyOutputChunk {
                 pane_id: 1,
                 data: vec![1]
             })
-            .is_ok());
+            .is_ok()
+        );
         // Second send hits backpressure (channel full)
         let result = tx.try_send(PtyOutputChunk {
             pane_id: 1,
@@ -543,7 +560,6 @@ mod tests {
         Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::NetworkDetach,
             owner: None,
-            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
         }))
     }
 
@@ -601,14 +617,12 @@ mod tests {
     #[test]
     fn test_evaluate_output_target_detached_to_connected_returns_snapshot() {
         let (owned_tx, _rx) = mpsc::channel(16);
-        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-        ring.write(b"buffered-from-ring");
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::HiddenByVisibility,
             owner: Some(owned_tx.clone()),
-            ring,
         }));
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        pane.scrollback.lock().unwrap().write(b"buffered-from-ring");
         pane.shadow_parser.lock().unwrap().process(b"hello-shadow");
         pane.raw_passthrough
             .lock()
@@ -660,7 +674,6 @@ mod tests {
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::HiddenByVisibility,
             owner: Some(a_tx.clone()),
-            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
         }));
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
 
@@ -708,7 +721,6 @@ mod tests {
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::Both,
             owner: Some(a_tx.clone()),
-            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
         }));
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
 
@@ -758,14 +770,12 @@ mod tests {
     #[tokio::test]
     async fn test_resume_pane_with_permit_sends_then_swaps() {
         let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
-        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-        ring.write(b"ring-data");
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::HiddenByVisibility,
             owner: Some(owned_tx.clone()),
-            ring,
         }));
         let pane = MuxPane::new_test(7, 80, 24, target.clone());
+        pane.scrollback.lock().unwrap().write(b"ring-data");
         pane.shadow_parser.lock().unwrap().process(b"resume-shadow");
         pane.raw_passthrough
             .lock()
@@ -814,7 +824,6 @@ mod tests {
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::Both,
             owner: Some(owned_tx.clone()),
-            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
         }));
         let pane = MuxPane::new_test(8, 80, 24, target.clone());
 
@@ -857,7 +866,6 @@ mod tests {
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::HiddenByVisibility,
             owner: Some(a_tx.clone()),
-            ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
         }));
         let pane = MuxPane::new_test(10, 80, 24, target.clone());
 

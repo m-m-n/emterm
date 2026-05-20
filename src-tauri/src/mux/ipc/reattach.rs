@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use futures::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
 use super::protocol::*;
-use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
@@ -85,24 +84,21 @@ pub(super) async fn collect_reattach_data(
 
                     if !visible {
                         // FR13 hidden reattach: keep the pane Detached so the
-                        // reader keeps filling ring + raw_passthrough. Adopt
-                        // the caller as `owner` and set the reason to
+                        // reader keeps filling scrollback + raw_passthrough.
+                        // Adopt the caller as `owner` and set the reason to
                         // HiddenByVisibility so a subsequent
                         // SetVisibility(true) from this connection can
                         // resume it via `resume_pane_with_permit`. Existing
-                        // ring / raw_passthrough contents are preserved.
+                        // scrollback / raw_passthrough contents are preserved.
                         let mut target = pane.output_target.lock().unwrap();
                         match &mut *target {
                             PaneOutputTarget::Connected(_) => {
                                 *target = PaneOutputTarget::Detached {
                                     reason: DetachReason::HiddenByVisibility,
                                     owner: Some(pane_output_tx.clone()),
-                                    ring: DetachRingBuffer::new(
-                                        crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-                                    ),
                                 };
                             }
-                            PaneOutputTarget::Detached { reason, owner, .. } => {
+                            PaneOutputTarget::Detached { reason, owner } => {
                                 *reason = DetachReason::combine(
                                     *reason,
                                     DetachReason::HiddenByVisibility,
@@ -141,13 +137,14 @@ pub(super) async fn collect_reattach_data(
                         PaneOutputTarget::Connected(_) => "Connected",
                         PaneOutputTarget::Detached { .. } => "Detached",
                     };
-                    let ring_data = if let PaneOutputTarget::Detached { ref mut ring, .. } = *target
-                    {
-                        let buf = ring.read_all();
-                        ring.clear();
+                    // Phase B: scrollback now lives on `pane.scrollback`. We
+                    // drain it on reattach so behavior matches the previous
+                    // per-detach-cycle ring (Phase C will switch to no-clear).
+                    let scrollback_data = {
+                        let mut sb = pane.scrollback.lock().unwrap();
+                        let buf = sb.read_all();
+                        sb.clear();
                         buf
-                    } else {
-                        Vec::new()
                     };
                     *target = PaneOutputTarget::Connected(pane_output_tx.clone());
 
@@ -163,25 +160,23 @@ pub(super) async fn collect_reattach_data(
                     };
 
                     log::info!(
-                        "collect_reattach: pane {} was={}, screen={}B, ring={}B, passthrough={}B, total={}B, alt_screen={}, exited={}",
+                        "collect_reattach: pane {} was={}, screen={}B, scrollback={}B, passthrough={}B, total={}B, alt_screen={}, exited={}",
                         pane.id,
                         target_was,
                         screen_len,
-                        ring_data.len(),
+                        scrollback_data.len(),
                         passthrough_data.len(),
-                        screen_len + ring_data.len() + passthrough_data.len(),
+                        screen_len + scrollback_data.len() + passthrough_data.len(),
                         is_alternate_screen,
                         pane.exited
                     );
 
-                    // Ensure the ring buffer (up to 64MB) plus the
-                    // passthrough buffer fit without incremental
-                    // reallocation. `build_shadow_parser_snapshot` only
-                    // reserves `screen_data.len() + 10`, so without this the
-                    // reattach path would grow `combined` in
-                    // ~log2((ring + passthrough) / screen) doubling steps.
-                    combined.reserve(ring_data.len() + passthrough_data.len());
-                    combined.extend_from_slice(&ring_data);
+                    // Reserve once for the combined payload. The shadow
+                    // snapshot only pre-reserves `screen_data.len() + 10`, so
+                    // without this growing `combined` would double-allocate
+                    // ~log2((scrollback + passthrough) / screen) times.
+                    combined.reserve(scrollback_data.len() + passthrough_data.len());
+                    combined.extend_from_slice(&scrollback_data);
                     combined.extend_from_slice(&passthrough_data);
 
                     data.push((pane.id, combined));
@@ -200,7 +195,7 @@ pub(super) async fn collect_reattach_data(
 
 /// Maximum payload bytes per `PtyOutput` frame emitted during reattach replay.
 ///
-/// A pane's ring buffer can hold up to `DEFAULT_RING_CAPACITY` (64 MiB) but a
+/// A pane's ring buffer can hold up to `DEFAULT_SCROLLBACK_CAPACITY` (64 MiB) but a
 /// single codec frame must stay under `MAX_FRAME_LENGTH` (16 MiB). Chosen well
 /// below the codec cap so the 5-byte frame-body header plus any future growth
 /// stays safely within bounds.
@@ -280,7 +275,6 @@ pub(in crate::mux) async fn detach_session_panes(
                     *target = PaneOutputTarget::Detached {
                         reason: DetachReason::NetworkDetach,
                         owner: None,
-                        ring: DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY),
                     };
                     log::info!(
                         "detach_session_panes: pane {} switched {} -> Detached(NetworkDetach)",
@@ -394,20 +388,13 @@ mod tests {
     async fn test_collect_reattach_data_two_windows_detached() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
 
-        let mut ring1 = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-        ring1.write(b"hello from pane 1");
-        let mut ring2 = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-        ring2.write(b"hello from pane 2");
-
         let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::NetworkDetach,
             owner: None,
-            ring: ring1,
         }));
         let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::NetworkDetach,
             owner: None,
-            ring: ring2,
         }));
 
         let session_id;
@@ -418,7 +405,9 @@ mod tests {
             let w2 = m.create_window(session_id, "shell".to_string()).unwrap();
 
             let pane1 = make_test_pane_with_target(1, target1);
+            pane1.scrollback.lock().unwrap().write(b"hello from pane 1");
             let pane2 = make_test_pane_with_target(2, target2);
+            pane2.scrollback.lock().unwrap().write(b"hello from pane 2");
 
             let session = m.get_session_mut(session_id).unwrap();
             session.windows.get_mut(&w1).unwrap().add_pane(pane1);
@@ -843,12 +832,9 @@ mod tests {
     async fn test_collect_reattach_data_includes_raw_passthrough_and_clears_it() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
 
-        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-        ring.write(b"buffered-from-ring");
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::NetworkDetach,
             owner: None,
-            ring,
         }));
 
         let session_id;
@@ -857,7 +843,8 @@ mod tests {
             session_id = m.create_session("default".to_string());
             let wid = m.create_window(session_id, "shell".to_string()).unwrap();
             let pane = make_test_pane_with_target(1, target);
-            // Seed shadow + raw_passthrough as the reader thread would.
+            // Seed scrollback + shadow + raw_passthrough as the reader would.
+            pane.scrollback.lock().unwrap().write(b"buffered-from-ring");
             pane.shadow_parser
                 .lock()
                 .unwrap()
@@ -923,25 +910,25 @@ mod tests {
     async fn test_collect_reattach_data_hidden_keeps_detached_and_skips_snapshot() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
 
-        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-        ring.write(b"buffered-from-ring");
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::NetworkDetach,
             owner: None,
-            ring,
         }));
 
         let session_id;
+        let pane_scrollback;
         {
             let mut m = mgr.lock().await;
             session_id = m.create_session("default".to_string());
             let wid = m.create_window(session_id, "shell".to_string()).unwrap();
             let pane = make_test_pane_with_target(1, target.clone());
+            pane.scrollback.lock().unwrap().write(b"buffered-from-ring");
             pane.shadow_parser.lock().unwrap().process(b"shadow-state");
             pane.raw_passthrough
                 .lock()
                 .unwrap()
                 .append(b"\x1b_Gi=99;ZZ\x1b\\");
+            pane_scrollback = pane.scrollback.clone();
             m.get_session_mut(session_id)
                 .unwrap()
                 .windows
@@ -974,7 +961,13 @@ mod tests {
             }
             _ => panic!("hidden reattach must keep pane Detached"),
         }
-        // Ring + raw_passthrough must be preserved (NOT drained).
+        // Scrollback + raw_passthrough must be preserved (NOT drained).
+        let buf = pane_scrollback.lock().unwrap().read_all();
+        assert!(
+            buf.windows(b"buffered-from-ring".len())
+                .any(|w| w == b"buffered-from-ring"),
+            "scrollback must still hold buffered bytes"
+        );
         let m = mgr.lock().await;
         let pane = m
             .get_session(session_id)
@@ -987,17 +980,13 @@ mod tests {
             .values()
             .next()
             .unwrap();
-        match &*pane.output_target.lock().unwrap() {
-            PaneOutputTarget::Detached { ring, .. } => {
-                let buf = ring.read_all();
-                assert!(
-                    buf.windows(b"buffered-from-ring".len())
-                        .any(|w| w == b"buffered-from-ring"),
-                    "ring must still hold buffered bytes"
-                );
-            }
-            _ => panic!("expected Detached after hidden reattach"),
-        }
+        assert!(
+            matches!(
+                &*pane.output_target.lock().unwrap(),
+                PaneOutputTarget::Detached { .. }
+            ),
+            "expected Detached after hidden reattach"
+        );
         assert!(
             !pane.raw_passthrough.lock().unwrap().is_empty(),
             "raw_passthrough must NOT be cleared on hidden reattach"
@@ -1059,12 +1048,9 @@ mod tests {
     async fn test_collect_reattach_data_hidden_then_visible_round_trip() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
 
-        let mut ring = DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-        ring.write(b"ring-bytes");
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: DetachReason::NetworkDetach,
             owner: None,
-            ring,
         }));
 
         let session_id;
@@ -1073,6 +1059,7 @@ mod tests {
             session_id = m.create_session("default".to_string());
             let wid = m.create_window(session_id, "shell".to_string()).unwrap();
             let pane = make_test_pane_with_target(1, target.clone());
+            pane.scrollback.lock().unwrap().write(b"ring-bytes");
             pane.shadow_parser.lock().unwrap().process(b"shadow-x");
             m.get_session_mut(session_id)
                 .unwrap()

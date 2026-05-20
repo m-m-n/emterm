@@ -7,11 +7,10 @@ use std::sync::Mutex as StdMutex;
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::ring_buffer::DetachRingBuffer;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     DetachReason, MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget,
-    SharedShadowParser, SharedTitleSender, TitleChangeSender,
+    SharedScrollback, SharedShadowParser, SharedTitleSender, TitleChangeSender,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -137,6 +136,7 @@ pub(super) fn register_pane_and_start_reader(
     let title_sender = pane.title_sender.clone();
     let raw_passthrough = pane.raw_passthrough.clone();
     let passthrough_scanner = pane.passthrough_scanner.clone();
+    let scrollback = pane.scrollback.clone();
     // Store initial title_tx in the swappable sender (reattach will swap in a new one)
     *title_sender.lock().unwrap() = Some(title_tx.clone());
     window.add_pane(pane);
@@ -153,6 +153,7 @@ pub(super) fn register_pane_and_start_reader(
             title_sender,
             raw_passthrough,
             passthrough_scanner,
+            scrollback,
         );
     });
 
@@ -163,8 +164,13 @@ pub(super) fn register_pane_and_start_reader(
 /// Runs in a dedicated std::thread since PTY reads are blocking I/O.
 ///
 /// When the connected channel fails (GUI disconnected), the reader automatically
-/// switches to buffering mode using a ring buffer. The reader thread stays alive
-/// so the PTY process output is never lost.
+/// switches to buffering mode using the per-pane scrollback buffer. The reader
+/// thread stays alive so the PTY process output is never lost.
+///
+/// Phase B: bytes are written into `scrollback` only on the detached arms
+/// (matching the previous per-detach-cycle ring buffer behavior). Phase C
+/// will move the write above the `output_target` match so attach-time bytes
+/// are also retained.
 #[allow(clippy::too_many_arguments)]
 fn pty_reader_loop(
     pane_id: u32,
@@ -176,6 +182,7 @@ fn pty_reader_loop(
     title_sender: SharedTitleSender,
     raw_passthrough: SharedRawPassthrough,
     passthrough_scanner: SharedPassthroughScanner,
+    scrollback: SharedScrollback,
 ) {
     let mut buf = [0u8; 65536];
     loop {
@@ -258,11 +265,11 @@ fn pty_reader_loop(
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
                                     // Channel closed — switch to detached and
-                                    // capture passthrough bytes from this chunk.
-                                    let mut ring = DetachRingBuffer::new(
-                                        crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-                                    );
-                                    ring.write(data);
+                                    // capture the failing chunk into the
+                                    // per-pane scrollback (Phase B: same
+                                    // semantics as the old variant-local ring)
+                                    // plus passthrough bytes.
+                                    scrollback.lock().unwrap().write(data);
                                     capture_passthrough(
                                         pane_id,
                                         data,
@@ -272,14 +279,13 @@ fn pty_reader_loop(
                                     *target = PaneOutputTarget::Detached {
                                         reason: DetachReason::NetworkDetach,
                                         owner: None,
-                                        ring,
                                     };
                                     Some(Err(()))
                                 }
                             }
                         }
-                        PaneOutputTarget::Detached { ring, .. } => {
-                            ring.write(data);
+                        PaneOutputTarget::Detached { .. } => {
+                            scrollback.lock().unwrap().write(data);
                             capture_passthrough(
                                 pane_id,
                                 data,
@@ -297,14 +303,11 @@ fn pty_reader_loop(
                     if tx.blocking_send(chunk).is_err() {
                         log::info!("Pane {} switching to detached buffering mode", pane_id);
                         let mut target = output_target.lock().unwrap();
-                        let mut ring =
-                            DetachRingBuffer::new(crate::mux::ring_buffer::DEFAULT_RING_CAPACITY);
-                        ring.write(data);
+                        scrollback.lock().unwrap().write(data);
                         capture_passthrough(pane_id, data, &raw_passthrough, &passthrough_scanner);
                         *target = PaneOutputTarget::Detached {
                             reason: DetachReason::NetworkDetach,
                             owner: None,
-                            ring,
                         };
                     }
                 }
