@@ -16,7 +16,6 @@
 pub mod keybinds;
 pub mod status_bar;
 pub mod tab_bar;
-pub mod tab_bar_webview;
 
 /// User intents originating from the global keybind layer.
 ///

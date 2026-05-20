@@ -91,13 +91,6 @@ png = "0.17"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# wry's child WebView (used for the WebView tab bar in the hybrid PoC)
-# needs a live GTK main loop on Linux. We init gtk at startup and pump
-# `gtk::main_iteration_do(false)` from winit's `about_to_wait` so the
-# webkit2gtk widget keeps painting alongside the wgpu surface.
-[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
-gtk = "0.18"
-
 # Phase 4-G-1 redesign (2026-05-14): removed x11-dl / wayland-client /
 # wayland-protocols / windows. The self-built XIM / zwp_text_input_v3 /
 # IMM32 clients did not work in practice because tao 0.34 does not

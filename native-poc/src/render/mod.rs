@@ -82,27 +82,24 @@ pub fn draw_placeholder(ctx: &egui::Context, app: &App) -> Option<crate::ui::Tab
 pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEvent> {
     let theme = Theme::default();
 
-    // Hybrid PoC: the tab bar is no longer an egui widget — it lives
-    // in a wry::WebView mounted as a child of the same winit window
-    // (see `crate::ui::tab_bar_webview`). The window host reserves
-    // the top `TAB_BAR_HEIGHT` logical points for the webview, so all
-    // the existing layout math (cell origin, IME spot, hit test) keeps
-    // working unchanged. `tab_event` is always `None` here; the
-    // WebView's IPC handler pushes `TabEvent`s through a channel that
-    // the host drains in `about_to_wait`.
-    let tab_event: Option<crate::ui::TabEvent> = None;
-
-    // Hybrid PoC: reserve the top `TAB_BAR_HEIGHT` logical points for
-    // the wry WebView that draws on top of the wgpu surface. The
-    // placeholder panel paints nothing (fully transparent) but pushes
-    // egui's available area below the WebView strip so the CentralPanel
-    // — and any overlays we draw inside it — stay aligned with the
-    // existing `cell_metrics_px` math.
-    egui::TopBottomPanel::top("native-poc-tab-bar-reserve")
-        .frame(egui::Frame::default().fill(Color32::TRANSPARENT))
-        .show_separator_line(false)
-        .exact_height(crate::ui::tab_bar::TAB_BAR_HEIGHT)
-        .show(ctx, |_ui| {});
+    // Phase 4-B: real tab bar widget. We build a lightweight view-
+    // model from the live tabs vector once per frame.
+    let items: Vec<crate::ui::tab_bar::TabBarItem> = app
+        .tabs
+        .iter()
+        .map(|t| {
+            let mut item = crate::ui::tab_bar::TabBarItem::new(t.display_title());
+            if let Some(name) = &t.mux_session_name {
+                item = item.with_mux_session(name.clone());
+            }
+            item
+        })
+        .collect();
+    let tab_event = if items.is_empty() {
+        None
+    } else {
+        crate::ui::tab_bar::draw(ctx, &items, app.active)
+    };
 
     // Phase 4-D: status-bar panel. Inserted before the central panel
     // (egui sizes top/bottom panels first, then the central panel
