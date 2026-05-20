@@ -2,11 +2,15 @@
 //!
 //! When no GUI client is connected, PTY output is stored in the ring buffer.
 //! On reattach, the buffer contents are sent as delta bytes for replay.
-//! The buffer has a configurable capacity (default 64MB) and overwrites
+//! The buffer has a configurable capacity (default 2 MiB) and overwrites
 //! oldest data when full.
 
-/// Default ring buffer capacity: 64MB per pane.
-pub const DEFAULT_RING_CAPACITY: usize = 64 * 1024 * 1024;
+/// Default ring buffer capacity: 2 MiB per pane.
+///
+/// At ~206 columns this holds roughly 10,000 lines of scrollback worth of
+/// raw bytes. The cap keeps daemon memory predictable (pane_count × 2 MiB)
+/// — previously 64 MiB caused a 320 MiB spike across five detached panes.
+pub const DEFAULT_RING_CAPACITY: usize = 2 * 1024 * 1024;
 
 /// Circular byte buffer with fixed capacity.
 pub struct DetachRingBuffer {
