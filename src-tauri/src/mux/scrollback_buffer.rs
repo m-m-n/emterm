@@ -1,26 +1,33 @@
-//! Per-pane circular buffer for accumulating PTY output during detach.
+//! Per-pane circular scrollback buffer.
 //!
-//! When no GUI client is connected, PTY output is stored in the ring buffer.
-//! On reattach, the buffer contents are sent as delta bytes for replay.
+//! Held by `MuxPane` for the lifetime of the pane. PTY output flowing
+//! through the daemon is appended here so that on reattach the daemon can
+//! replay recent bytes to the freshly-attached client.
+//!
+//! In Phase B this buffer is still written only while the pane is detached
+//! (matching the previous detach-only behavior); Phase C will switch the
+//! reader to write unconditionally so that pre-detach scrollback is also
+//! retained.
+//!
 //! The buffer has a configurable capacity (default 2 MiB) and overwrites
 //! oldest data when full.
 
-/// Default ring buffer capacity: 2 MiB per pane.
+/// Default scrollback capacity: 2 MiB per pane.
 ///
 /// At ~206 columns this holds roughly 10,000 lines of scrollback worth of
 /// raw bytes. The cap keeps daemon memory predictable (pane_count × 2 MiB)
 /// — previously 64 MiB caused a 320 MiB spike across five detached panes.
-pub const DEFAULT_RING_CAPACITY: usize = 2 * 1024 * 1024;
+pub const DEFAULT_SCROLLBACK_CAPACITY: usize = 2 * 1024 * 1024;
 
 /// Circular byte buffer with fixed capacity.
-pub struct DetachRingBuffer {
+pub struct ScrollbackRingBuffer {
     buf: Vec<u8>,
     capacity: usize,
     write_pos: usize,
     len: usize,
 }
 
-impl DetachRingBuffer {
+impl ScrollbackRingBuffer {
     /// Create a new ring buffer with the specified capacity.
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -110,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_empty_buffer() {
-        let rb = DetachRingBuffer::new(1024);
+        let rb = ScrollbackRingBuffer::new(1024);
         assert!(rb.is_empty());
         assert_eq!(rb.len(), 0);
         assert_eq!(rb.read_all(), Vec::<u8>::new());
@@ -118,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_simple_write_read() {
-        let mut rb = DetachRingBuffer::new(1024);
+        let mut rb = ScrollbackRingBuffer::new(1024);
         rb.write(b"hello");
         assert_eq!(rb.len(), 5);
         assert_eq!(rb.read_all(), b"hello");
@@ -126,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_multiple_writes() {
-        let mut rb = DetachRingBuffer::new(1024);
+        let mut rb = ScrollbackRingBuffer::new(1024);
         rb.write(b"hello ");
         rb.write(b"world");
         assert_eq!(rb.len(), 11);
@@ -135,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_wrap_around() {
-        let mut rb = DetachRingBuffer::new(8);
+        let mut rb = ScrollbackRingBuffer::new(8);
         rb.write(b"ABCDEF"); // 6 bytes, pos=6
         rb.write(b"GHI"); // wraps: pos=1, overwrites first byte
         assert_eq!(rb.len(), 8); // capped at capacity
@@ -144,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_overflow_large_write() {
-        let mut rb = DetachRingBuffer::new(4);
+        let mut rb = ScrollbackRingBuffer::new(4);
         rb.write(b"ABCDEFGH"); // larger than capacity, keeps last 4
         assert_eq!(rb.len(), 4);
         assert_eq!(rb.read_all(), b"EFGH");
@@ -152,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_exact_capacity() {
-        let mut rb = DetachRingBuffer::new(4);
+        let mut rb = ScrollbackRingBuffer::new(4);
         rb.write(b"ABCD");
         assert_eq!(rb.len(), 4);
         assert_eq!(rb.read_all(), b"ABCD");
@@ -160,7 +167,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let mut rb = DetachRingBuffer::new(1024);
+        let mut rb = ScrollbackRingBuffer::new(1024);
         rb.write(b"data");
         rb.clear();
         assert!(rb.is_empty());
@@ -169,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_write_after_clear() {
-        let mut rb = DetachRingBuffer::new(1024);
+        let mut rb = ScrollbackRingBuffer::new(1024);
         rb.write(b"old data");
         rb.clear();
         rb.write(b"new data");
@@ -178,13 +185,13 @@ mod tests {
 
     #[test]
     fn test_capacity() {
-        let rb = DetachRingBuffer::new(4096);
+        let rb = ScrollbackRingBuffer::new(4096);
         assert_eq!(rb.capacity(), 4096);
     }
 
     #[test]
     fn test_repeated_small_writes_overflow() {
-        let mut rb = DetachRingBuffer::new(8);
+        let mut rb = ScrollbackRingBuffer::new(8);
         for i in 0..20u8 {
             rb.write(&[i]);
         }
