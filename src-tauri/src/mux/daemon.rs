@@ -10,8 +10,8 @@ use super::ipc::protocol::{MessageType, MuxMessage, RenameWindowMsg};
 use super::session::manager::SessionManager;
 use super::session::pane::TitleChangeSender;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 /// Daemon-level title channel capacity.
 const TITLE_CHANNEL_CAPACITY: usize = 64;
