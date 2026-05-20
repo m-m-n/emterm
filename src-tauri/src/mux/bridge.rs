@@ -277,8 +277,8 @@ where
     // Bidirectional forwarding: stdin -> daemon, daemon -> stdout
     log::info!("Starting bidirectional forwarding");
 
-    use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
     // Start with undetected transport. While undetected, send both OSC and APC.
     // Once the GUI sends its first message, lock to the detected transport.
     let transport = Arc::new(AtomicU8::new(TRANSPORT_UNDETECTED));
