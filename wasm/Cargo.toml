@@ -29,4 +29,4 @@ wasm-opt = false
 opt-level = "z"
 lto = true
 codegen-units = 1
-strip = "symbols"
+strip = "debuginfo"
