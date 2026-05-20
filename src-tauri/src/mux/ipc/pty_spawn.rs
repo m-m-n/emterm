@@ -212,6 +212,15 @@ fn pty_reader_loop(
             }
             Ok(n) => {
                 let data = &buf[..n];
+
+                // Phase C: always-on scrollback write. Capture every PTY
+                // chunk regardless of attach state so a later reattach can
+                // replay pre-detach history. Keep the lock scope to a single
+                // memcpy; the lock is uncontended on the steady-state path
+                // (only `collect_reattach_data` and `evaluate_output_target`
+                // also take it, both rare).
+                scrollback.lock().unwrap().write(data);
+
                 // Feed shadow parser and detect OSC title in a single lock scope
                 let title_changed = {
                     let mut parser = shadow_parser.lock().unwrap();
@@ -264,12 +273,10 @@ fn pty_reader_loop(
                                     Some(Ok((tx.clone(), chunk)))
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    // Channel closed — switch to detached and
-                                    // capture the failing chunk into the
-                                    // per-pane scrollback (Phase B: same
-                                    // semantics as the old variant-local ring)
-                                    // plus passthrough bytes.
-                                    scrollback.lock().unwrap().write(data);
+                                    // Channel closed — switch to detached.
+                                    // Scrollback was already captured above
+                                    // (Phase C always-on write); only the
+                                    // passthrough scan needs to run here.
                                     capture_passthrough(
                                         pane_id,
                                         data,
@@ -285,7 +292,8 @@ fn pty_reader_loop(
                             }
                         }
                         PaneOutputTarget::Detached { .. } => {
-                            scrollback.lock().unwrap().write(data);
+                            // Scrollback already captured above (FR4);
+                            // only passthrough bytes need separate capture.
                             capture_passthrough(
                                 pane_id,
                                 data,
@@ -303,7 +311,7 @@ fn pty_reader_loop(
                     if tx.blocking_send(chunk).is_err() {
                         log::info!("Pane {} switching to detached buffering mode", pane_id);
                         let mut target = output_target.lock().unwrap();
-                        scrollback.lock().unwrap().write(data);
+                        // Scrollback already captured above; only passthrough.
                         capture_passthrough(pane_id, data, &raw_passthrough, &passthrough_scanner);
                         *target = PaneOutputTarget::Detached {
                             reason: DetachReason::NetworkDetach,
