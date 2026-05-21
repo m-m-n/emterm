@@ -14,6 +14,7 @@
 //! them rather than redefining them.
 
 pub mod keybinds;
+pub mod md3;
 pub mod status_bar;
 pub mod tab_bar;
 
@@ -62,4 +63,9 @@ pub enum TabEvent {
     Close(usize),
     /// Switch to the tab at `index` (0-based) via mouse click.
     Switch(usize),
+    /// Drag-and-drop reorder: move the tab at `from` so that it lands at
+    /// `to`. Both indices are 0-based and refer to the current roster;
+    /// `to == from` and `to == from + 1` are no-ops (the tab would land
+    /// in the same slot).
+    Reorder { from: usize, to: usize },
 }

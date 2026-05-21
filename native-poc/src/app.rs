@@ -513,6 +513,50 @@ impl App {
         self.needs_full_redraw = true;
     }
 
+    /// Move the tab at `from` to land at position `to` (drag-and-drop
+    /// reorder). `to` is the **insertion index** into the post-removal
+    /// vector, in 0..=tabs.len(). No-op when:
+    ///
+    /// - `from` is out of range
+    /// - `to` falls on either side of `from` (would land in the same
+    ///   slot — `from` itself or immediately after it).
+    ///
+    /// The active index is fixed up so the same logical tab remains
+    /// active after the move.
+    pub fn reorder_tab(&mut self, from: usize, to: usize) {
+        if from >= self.tabs.len() {
+            return;
+        }
+        // Skip moves that would land the tab in its current slot.
+        if to == from || to == from + 1 {
+            return;
+        }
+        let to = to.min(self.tabs.len());
+        let tab = self.tabs.remove(from);
+        // After `remove`, indices >= `from` shifted down by 1; adjust
+        // the insertion point to match the user's intent.
+        let insert_at = if to > from { to - 1 } else { to };
+        self.tabs.insert(insert_at, tab);
+
+        // Fix up `self.active` so the logically-active tab follows the
+        // move. Four cases:
+        //   - The moved tab was active → it now lives at `insert_at`.
+        //   - Active was to the left of `from` and to the left of
+        //     `insert_at` → unchanged.
+        //   - Active was to the right of `from` and to the right of
+        //     `insert_at` → unchanged.
+        //   - Otherwise the active tab shifts by ±1.
+        if self.active == from {
+            self.active = insert_at;
+        } else if from < self.active && insert_at >= self.active {
+            self.active -= 1;
+        } else if from > self.active && insert_at <= self.active {
+            self.active += 1;
+        }
+
+        self.needs_full_redraw = true;
+    }
+
     /// Apply a [`crate::ui::TabEvent`] emitted by the tab bar widget.
     /// Returns `true` when the resulting state should exit the window
     /// (i.e. the last tab was closed).
@@ -525,6 +569,10 @@ impl App {
             crate::ui::TabEvent::Close(idx) => self.close_tab(idx),
             crate::ui::TabEvent::Switch(idx) => {
                 self.switch_to_tab(idx);
+                false
+            }
+            crate::ui::TabEvent::Reorder { from, to } => {
+                self.reorder_tab(from, to);
                 false
             }
         }
@@ -1272,6 +1320,74 @@ mod tests {
         // Active falls back to the new last tab.
         assert_eq!(app.active, 0);
         assert_eq!(app.tabs.len(), 1);
+    }
+
+    // ── TabEvent::Reorder — drag-and-drop reorder ──────────
+
+    #[test]
+    fn reorder_tab_moves_first_to_end_and_keeps_active_pointing_at_moved() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.spawn_new_tab();
+        assert_eq!(app.tabs.len(), 3);
+        app.active = 0;
+        // Drop the first tab past the last: insertion index 3 → after
+        // removal of slot 0 it lands at slot 2.
+        app.reorder_tab(0, 3);
+        assert_eq!(app.tabs.len(), 3, "tab count must not change");
+        assert_eq!(app.active, 2, "moved tab follows its new slot");
+    }
+
+    #[test]
+    fn reorder_tab_shifts_active_when_moving_a_tab_past_it() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.spawn_new_tab();
+        app.active = 1;
+        // Move tab 0 (not active) past the active one to the end.
+        // After removal, insert_at = 3 - 1 = 2. Active was 1, from(0)
+        // < active(1) and insert_at(2) >= active(1) → active shifts to 0.
+        app.reorder_tab(0, 3);
+        assert_eq!(app.active, 0);
+    }
+
+    #[test]
+    fn reorder_tab_ignores_no_op_targets() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.active = 1;
+        // to == from
+        app.reorder_tab(0, 0);
+        assert_eq!(app.active, 1);
+        // to == from + 1 (would land in the same slot)
+        app.reorder_tab(0, 1);
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn reorder_tab_ignores_out_of_range_from() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let active_before = app.active;
+        let len_before = app.tabs.len();
+        app.reorder_tab(42, 0);
+        assert_eq!(app.active, active_before);
+        assert_eq!(app.tabs.len(), len_before);
+    }
+
+    #[test]
+    fn apply_tab_event_routes_reorder_to_reorder_tab() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.spawn_new_tab();
+        app.active = 0;
+        let exit = app.apply_tab_event(crate::ui::TabEvent::Reorder { from: 0, to: 3 });
+        assert!(!exit);
+        assert_eq!(app.active, 2);
     }
 
     #[test]
