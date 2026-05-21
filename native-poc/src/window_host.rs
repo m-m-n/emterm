@@ -154,6 +154,12 @@ pub struct WindowHost {
     /// Lazily-initialized arboard clipboard. We only fail-loud once if the
     /// platform clipboard cannot be acquired (X11 without display, etc.).
     clipboard: Option<arboard::Clipboard>,
+    /// Pointer / scroll events accumulated between renders, drained by
+    /// `build_raw_input` so the egui-side widgets (tab bar, status bar,
+    /// future settings panel) can observe clicks / hovers / drags.
+    /// Without this, `build_raw_input` ships `events: vec![]` and egui
+    /// never sees pointer input even though winit already delivered it.
+    pending_egui_events: Vec<egui::Event>,
 }
 
 impl WindowHost {
@@ -299,6 +305,7 @@ impl WindowHost {
             image_layer,
             overlay_pipeline,
             grid_pass: None,
+            pending_egui_events: Vec::new(),
         }
     }
 
@@ -891,7 +898,7 @@ impl WindowHost {
 
     /// Translate winit state into a minimal `egui::RawInput`. Phase 1 only
     /// needs screen-rect + pixels-per-point; later phases populate events.
-    fn build_raw_input(&self) -> egui::RawInput {
+    fn build_raw_input(&mut self) -> egui::RawInput {
         let size = self.window.inner_size();
         let logical = size.to_logical::<f32>(self.pixels_per_point as f64);
         egui::RawInput {
@@ -911,13 +918,25 @@ impl WindowHost {
             time: None,
             predicted_dt: 1.0 / 60.0,
             modifiers: Default::default(),
-            events: Vec::new(),
+            events: std::mem::take(&mut self.pending_egui_events),
             hovered_files: Vec::new(),
             dropped_files: Vec::new(),
             focused: true,
             max_texture_side: Some(8192),
             system_theme: None,
         }
+    }
+}
+
+/// Translate a winit `MouseButton` to its `egui::PointerButton`
+/// equivalent. Returns `None` for buttons egui does not model (e.g.
+/// extra side buttons).
+fn winit_to_egui_button(b: MouseButton) -> Option<egui::PointerButton> {
+    match b {
+        MouseButton::Left => Some(egui::PointerButton::Primary),
+        MouseButton::Right => Some(egui::PointerButton::Secondary),
+        MouseButton::Middle => Some(egui::PointerButton::Middle),
+        _ => None,
     }
 }
 
@@ -1244,6 +1263,13 @@ impl ApplicationHandler for PocApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 host.cursor_pos = position;
+                // Forward to egui so the tab bar / status bar widgets
+                // observe hover + drag motion.
+                let logical = position.to_logical::<f32>(host.pixels_per_point as f64);
+                let egui_pos = egui::pos2(logical.x, logical.y);
+                host.pending_egui_events
+                    .push(egui::Event::PointerMoved(egui_pos));
+                host.window().request_redraw();
                 if host.dragging {
                     let (row, col) = host.pixel_to_cell(position, &self.app);
                     if let Some(sel) = self.app.selection.as_mut() {
@@ -1252,42 +1278,70 @@ impl ApplicationHandler for PocApp {
                             sel.extend(Pos { row, col }, &core);
                         }
                     }
-                    host.window().request_redraw();
                 }
             }
-            WindowEvent::MouseInput { state, button, .. } => match (button, state) {
-                (MouseButton::Left, ElementState::Pressed) => {
-                    let (row, col) = host.pixel_to_cell(host.cursor_pos, &self.app);
-                    let cls = host.click_tracker.classify(Instant::now(), row, col);
-                    let mut sel = Selection::new_with_mode(Pos { row, col }, cls.mode);
-                    if cls.mode != SelectionMode::Character {
-                        if let Some(tab) = self.app.tabs.get(self.app.active) {
-                            let core = tab.core.lock();
-                            sel.extend(Pos { row, col }, &core);
+            WindowEvent::MouseInput { state, button, .. } => {
+                // Forward to egui first so the tab bar / status bar can
+                // see the click before we decide whether to start a
+                // terminal selection.
+                let logical = host
+                    .cursor_pos
+                    .to_logical::<f32>(host.pixels_per_point as f64);
+                let egui_pos = egui::pos2(logical.x, logical.y);
+                if let Some(eb) = winit_to_egui_button(button) {
+                    host.pending_egui_events.push(egui::Event::PointerButton {
+                        pos: egui_pos,
+                        button: eb,
+                        pressed: matches!(state, ElementState::Pressed),
+                        modifiers: egui::Modifiers::default(),
+                    });
+                }
+                host.window().request_redraw();
+
+                // Clicks that land on the egui-owned strip (tab bar at the
+                // top, status bar at the bottom when enabled) must not
+                // also kick off a terminal selection — otherwise pressing
+                // the × on a tab would simultaneously start a selection
+                // on the cell behind it.
+                let tab_bar_h = crate::ui::tab_bar::TAB_BAR_HEIGHT;
+                let if_in_egui_strip = egui_pos.y < tab_bar_h;
+                if if_in_egui_strip {
+                    return;
+                }
+
+                match (button, state) {
+                    (MouseButton::Left, ElementState::Pressed) => {
+                        let (row, col) = host.pixel_to_cell(host.cursor_pos, &self.app);
+                        let cls = host.click_tracker.classify(Instant::now(), row, col);
+                        let mut sel = Selection::new_with_mode(Pos { row, col }, cls.mode);
+                        if cls.mode != SelectionMode::Character {
+                            if let Some(tab) = self.app.tabs.get(self.app.active) {
+                                let core = tab.core.lock();
+                                sel.extend(Pos { row, col }, &core);
+                            }
+                        }
+                        self.app.selection = Some(sel);
+                        host.dragging = true;
+                    }
+                    (MouseButton::Left, ElementState::Released) => {
+                        host.dragging = false;
+                        if let Some(sel) = self.app.selection {
+                            if let Some(tab) = self.app.tabs.get(self.app.active) {
+                                let core = tab.core.lock();
+                                let text = sel.resolve(&core);
+                                drop(core);
+                                host.set_primary(&text);
+                            }
                         }
                     }
-                    self.app.selection = Some(sel);
-                    host.dragging = true;
-                    host.window().request_redraw();
-                }
-                (MouseButton::Left, ElementState::Released) => {
-                    host.dragging = false;
-                    if let Some(sel) = self.app.selection {
-                        if let Some(tab) = self.app.tabs.get(self.app.active) {
-                            let core = tab.core.lock();
-                            let text = sel.resolve(&core);
-                            drop(core);
-                            host.set_primary(&text);
+                    (MouseButton::Middle, ElementState::Pressed) => {
+                        if let Some(text) = host.get_primary() {
+                            host.deliver_paste(&self.app, &text);
                         }
                     }
+                    _ => {}
                 }
-                (MouseButton::Middle, ElementState::Pressed) => {
-                    if let Some(text) = host.get_primary() {
-                        host.deliver_paste(&self.app, &text);
-                    }
-                }
-                _ => {}
-            },
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
