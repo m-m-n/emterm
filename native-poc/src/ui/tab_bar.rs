@@ -1,45 +1,65 @@
-//! Tab bar widget (Phase 4-B).
+//! Tab bar widget (Phase 4-B; MD3-aligned 2026-05-21).
 //!
-//! Renders an egui top panel with one button per tab plus a "+" affordance,
-//! and emits at most one [`TabEvent`] per frame so the app loop can apply
-//! the change atomically.
+//! Renders a top panel one row of tabs + a trailing "+" button, mirroring
+//! the WebView build's Material Design 3 tab strip (`src/styles/tab-bar.css`):
 //!
-//! The widget is decoupled from [`crate::tabs::Tab`] by taking a slice of
-//! lightweight [`TabBarItem`] values. The caller is expected to project
-//! its `Vec<Tab>` into a `Vec<TabBarItem>` once per frame. Tests construct
-//! these directly without needing a PTY or terminal core.
-//!
-//! Layout rules (TS-tab-2 / acceptance):
-//!
-//! - Fixed-height top panel.
-//! - One button per tab, equal width distributed across the available
-//!   space with `MIN_TAB_WIDTH` as the floor. When the total minimum
-//!   width exceeds the panel, egui's `ScrollArea` enables horizontal
-//!   scrolling.
-//! - Active tab is visually marked by an underline strip plus a slightly
-//!   elevated background.
-//! - Each tab carries a small "×" close affordance on its right edge.
-//! - The trailing "+" button appends a new tab.
+//! - 48 px tall strip with `surface-container` background and a 1 px
+//!   `outline-variant` bottom hairline.
+//! - Tabs distribute equally with a 120 px minimum width, padding 24 px
+//!   horizontally; horizontal scroll kicks in when the floor would
+//!   overflow.
+//! - Inactive tabs render with `on-surface-variant`; the active tab
+//!   switches to `primary` and grows a 3 px bottom indicator
+//!   (`width = cell - 32 px`, 3 px corner radius at the top).
+//! - Hover overlays a state-layer (currentColor at 8 % alpha) — same
+//!   formula as the WebView `.tab::before`.
 //!
 //! Title rendering (TS-tab-3):
 //!
 //! - When `mux_session_name` is `Some(name)`, the rendered title is
-//!   `[mux:name] <title>` (with a single space between the prefix and
-//!   the PTY title). When `None`, the title is rendered verbatim.
+//!   `[mux:name] <title>` (single space). When `None`, the title is
+//!   rendered verbatim.
+//!
+//! Icons (`"+"` / `"×"`) stay as monochrome glyphs for now; replacing
+//! them with real MD3 icons is tracked separately.
 
-use egui::{Align, Color32, Layout, RichText, ScrollArea, Sense, Stroke, Ui, Vec2};
+use egui::{Align, Color32, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
 
+use super::md3;
 use super::TabEvent;
 
 /// Fixed visual height of the tab strip in egui logical points.
-pub const TAB_BAR_HEIGHT: f32 = 28.0;
-/// Minimum width of a single tab button before horizontal scroll
-/// kicks in.
-const MIN_TAB_WIDTH: f32 = 80.0;
-/// Width reserved for the trailing "+" affordance.
-const NEW_TAB_BUTTON_WIDTH: f32 = 28.0;
-/// Internal padding inside a tab button.
-const TAB_INNER_PAD: f32 = 6.0;
+/// Matches `.tab-bar { height: 48px }` in the WebView build.
+pub const TAB_BAR_HEIGHT: f32 = 48.0;
+/// Minimum width of a single tab before horizontal scroll kicks in.
+/// Matches `.tab { min-width: 120px }`.
+const MIN_TAB_WIDTH: f32 = 120.0;
+/// Maximum width of a single tab.
+/// Matches `.tab { max-width: 300px }`.
+const MAX_TAB_WIDTH: f32 = 300.0;
+/// Horizontal padding inside each tab — matches `.tab { padding: 0 24px }`.
+const TAB_HORIZONTAL_PAD: f32 = 24.0;
+/// Width of the close-button column carved out of the right edge of each tab.
+const CLOSE_BUTTON_WIDTH: f32 = 24.0;
+/// Diameter of the trailing "+" icon button. Matches `.tab-button { 40x40 }`.
+const NEW_TAB_BUTTON_SIZE: f32 = 40.0;
+/// Horizontal padding either side of the fixed-button area.
+/// Matches `.tab-fixed-area { padding: 0 8px }`.
+const FIXED_AREA_PAD: f32 = 8.0;
+/// Height of the bottom 1 px hairline drawn under the strip.
+const HAIRLINE_HEIGHT: f32 = 1.0;
+/// Tab font size — matches `.tab { font-size: 14px }`.
+const TAB_FONT_SIZE: f32 = 14.0;
+/// Active-tab underline thickness. Matches `.tab.active::after { height: 3px }`.
+const ACTIVE_INDICATOR_HEIGHT: f32 = 3.0;
+/// Margin between the left/right edges of the cell and the active
+/// indicator, so its width matches the CSS `calc(100% - 32px)`.
+const ACTIVE_INDICATOR_SIDE_MARGIN: f32 = 16.0;
+/// Corner radius of the active indicator, mirroring `border-radius: 3px 3px 0 0`.
+const ACTIVE_INDICATOR_RADIUS: f32 = 3.0;
+/// Icon-button (state-layer) corner radius — MD3 uses a full pill so the
+/// 8 % overlay forms a circle inside the 40 px square.
+const ICON_BUTTON_RADIUS: f32 = NEW_TAB_BUTTON_SIZE / 2.0;
 
 /// Minimal projection of [`crate::tabs::Tab`] used by the tab bar.
 ///
@@ -82,31 +102,106 @@ pub fn render_label(item: &TabBarItem) -> String {
 /// [`TabEvent`] this frame.
 pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Option<TabEvent> {
     let mut event: Option<TabEvent> = None;
+
+    let frame = egui::Frame::none()
+        .fill(md3::SURFACE_CONTAINER)
+        .inner_margin(egui::Margin::ZERO);
+
     egui::TopBottomPanel::top("native-poc-tab-bar")
+        .frame(frame)
         .exact_height(TAB_BAR_HEIGHT)
+        .show_separator_line(false)
         .show(ctx, |ui| {
-            // Equal-width distribution sized to the panel; if the per-
-            // tab floor is exceeded by total tab width we wrap the
-            // strip in a horizontal `ScrollArea`.
-            let n = items.len().max(1) as f32;
+            ui.spacing_mut().item_spacing = Vec2::ZERO;
+
+            // Total room for the scrollable tab strip (everything minus the
+            // fixed "+" area on the right).
             let panel_w = ui.available_width();
-            let needed_w = MIN_TAB_WIDTH * n + NEW_TAB_BUTTON_WIDTH;
-            if needed_w > panel_w {
-                ScrollArea::horizontal()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        event = layout_tab_strip(ui, items, active_idx, MIN_TAB_WIDTH);
-                    });
-            } else {
-                let tab_width = ((panel_w - NEW_TAB_BUTTON_WIDTH) / n).max(MIN_TAB_WIDTH);
-                event = layout_tab_strip(ui, items, active_idx, tab_width);
-            }
+            let fixed_w = NEW_TAB_BUTTON_SIZE + FIXED_AREA_PAD * 2.0;
+            let scroll_w = (panel_w - fixed_w).max(0.0);
+
+            // Hairline at the very bottom — drawn last so it stays on top
+            // of the per-tab fills.
+            let panel_rect = ui.max_rect();
+
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                // ── Tab strip ───────────────────────────────────────
+                let n = items.len().max(1) as f32;
+                let ideal_w = (scroll_w / n).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH);
+                let needed_w = MIN_TAB_WIDTH * n;
+
+                // Horizontal scroll only engages when the floor (MIN ×
+                // count) exceeds the available strip width. Keeping the
+                // common path scroll-free preserves a predictable cell
+                // origin for the click-to-tab tests below.
+                if needed_w > scroll_w {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(scroll_w, TAB_BAR_HEIGHT),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ScrollArea::horizontal()
+                                .id_salt("native-poc-tab-strip")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                        event =
+                                            layout_tab_strip(ui, items, active_idx, MIN_TAB_WIDTH);
+                                    });
+                                });
+                        },
+                    );
+                } else {
+                    event = layout_tab_strip(ui, items, active_idx, ideal_w);
+                }
+
+                // ── Fixed-button area ("+") ─────────────────────────
+                ui.add_space(FIXED_AREA_PAD);
+                // 1 px vertical separator on the left edge of the fixed area
+                // mirrors `.tab-fixed-area { border-left }`.
+                let sep_x = ui.cursor().min.x - FIXED_AREA_PAD;
+                ui.painter().vline(
+                    sep_x,
+                    panel_rect.top()..=(panel_rect.bottom() - HAIRLINE_HEIGHT),
+                    Stroke::new(1.0, md3::OUTLINE_VARIANT),
+                );
+
+                let plus_resp = draw_icon_button(ui, "+", NEW_TAB_BUTTON_SIZE);
+                #[cfg(test)]
+                {
+                    tests::LAST_PLUS_RECT.with(|c| c.set(Some(plus_resp.rect)));
+                }
+                if plus_resp.clicked() && event.is_none() {
+                    event = Some(TabEvent::New);
+                }
+                ui.add_space(FIXED_AREA_PAD);
+            });
+
+            // Bottom 1 px hairline (outline-variant).
+            let painter = ui.painter();
+            let y = panel_rect.bottom() - HAIRLINE_HEIGHT / 2.0;
+            painter.hline(
+                panel_rect.left()..=panel_rect.right(),
+                y,
+                Stroke::new(HAIRLINE_HEIGHT, md3::OUTLINE_VARIANT),
+            );
         });
+
     event
 }
 
-/// Inner layout: lay out one button per tab + the "+" button at the
-/// right edge.
+/// Persistent key under which the current drag origin (`Option<usize>`)
+/// is stored in egui's frame memory. Survives across frames so the
+/// pending drag is observed by every layout pass until the pointer is
+/// released.
+const DRAG_FROM_KEY: &str = "native-poc-tab-drag-from";
+
+fn drag_state_id() -> egui::Id {
+    egui::Id::new(DRAG_FROM_KEY)
+}
+
+/// Inner layout: lay out one tab cell per item. Returns at most one
+/// [`TabEvent`] this frame.
 fn layout_tab_strip(
     ui: &mut Ui,
     items: &[TabBarItem],
@@ -114,111 +209,301 @@ fn layout_tab_strip(
     tab_width: f32,
 ) -> Option<TabEvent> {
     let mut event: Option<TabEvent> = None;
+    let drag_id = drag_state_id();
+    let mut drag_from: Option<usize> = ui.ctx().memory(|m| m.data.get_temp(drag_id));
 
-    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(0.0, 0.0);
+    // Capture cell rects locally so the post-loop drop-target math does
+    // not depend on the test-only thread_local hooks.
+    let mut cell_rects: Vec<Rect> = Vec::with_capacity(items.len());
 
-        for (i, item) in items.iter().enumerate() {
-            let close_w = 18.0;
-            // Reserve space for the close button plus padding.
-            let label_w = (tab_width - close_w - 2.0 * TAB_INNER_PAD)
-                .max(MIN_TAB_WIDTH - close_w - 2.0 * TAB_INNER_PAD);
+    #[cfg(test)]
+    tests::LAST_TAB_CELLS.with(|c| c.borrow_mut().clear());
+    #[cfg(test)]
+    tests::LAST_CLOSE_RECTS.with(|c| c.borrow_mut().clear());
 
-            let is_active = i == active_idx;
-            let (bg, underline) = if is_active {
-                (
-                    ui.visuals().widgets.active.bg_fill,
-                    Some(ui.visuals().selection.stroke),
-                )
-            } else {
-                (ui.visuals().widgets.inactive.bg_fill, None)
-            };
+    for (i, item) in items.iter().enumerate() {
+        let is_active = i == active_idx;
+        let cell_size = Vec2::new(tab_width, TAB_BAR_HEIGHT);
+        let (rect, cell_resp) = ui.allocate_exact_size(cell_size, Sense::click_and_drag());
 
-            let label = render_label(item);
-            let cell_size = Vec2::new(tab_width, TAB_BAR_HEIGHT);
+        cell_rects.push(rect);
+        #[cfg(test)]
+        tests::LAST_TAB_CELLS.with(|c| c.borrow_mut().push(rect));
 
-            let (rect, _) = ui.allocate_exact_size(cell_size, Sense::hover());
-            // Background fill for the whole cell so the active state
-            // shows behind both the title and the close button.
-            ui.painter().rect_filled(rect, 0.0, bg);
+        // Detect drag start. egui's `drag_started_by` fires the frame
+        // after the pointer exceeds the click-vs-drag distance, so a
+        // simple click does not enter drag mode.
+        if drag_from.is_none() && cell_resp.drag_started_by(egui::PointerButton::Primary) {
+            drag_from = Some(i);
+            ui.ctx()
+                .memory_mut(|m| m.data.insert_temp(drag_id, i as usize));
+        }
 
-            // Inner content: title label (left) + close × (right).
-            let label_rect = egui::Rect::from_min_size(
-                rect.min + Vec2::new(TAB_INNER_PAD, 2.0),
-                Vec2::new(label_w, TAB_BAR_HEIGHT - 4.0),
+        // Background — the strip itself inherits `surface-container` from
+        // the parent panel frame; we only paint the hover state-layer.
+        // Tabs currently being dragged dim slightly so the user knows
+        // which one they picked up.
+        let painter = ui.painter();
+        if drag_from == Some(i) {
+            painter.rect_filled(
+                rect,
+                Rounding::ZERO,
+                md3::state_layer(md3::PRIMARY, md3::STATE_LAYER_HOVER),
             );
-            let close_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.right() - TAB_INNER_PAD - close_w, rect.top() + 2.0),
-                Vec2::new(close_w, TAB_BAR_HEIGHT - 4.0),
+        } else if cell_resp.hovered() {
+            painter.rect_filled(
+                rect,
+                Rounding::ZERO,
+                md3::state_layer(
+                    if is_active {
+                        md3::PRIMARY
+                    } else {
+                        md3::ON_SURFACE_VARIANT
+                    },
+                    md3::STATE_LAYER_HOVER,
+                ),
             );
+        }
 
-            let title_label = if is_active {
-                RichText::new(label.clone()).strong()
-            } else {
-                RichText::new(label.clone())
-            };
-            let title_resp = ui.put(
-                label_rect,
-                egui::Label::new(title_label)
-                    .truncate()
-                    .selectable(false)
-                    .sense(Sense::click()),
-            );
-            if title_resp.clicked() && !is_active && event.is_none() {
+        // Label sub-rect (left of the close column). Drawn via the
+        // painter directly so the parent layout's cursor is not
+        // perturbed (ui.put would shift subsequent allocations).
+        let label_left = rect.left() + TAB_HORIZONTAL_PAD;
+        let label_right = rect.right() - CLOSE_BUTTON_WIDTH - 4.0;
+        let label_rect = Rect::from_min_max(
+            egui::pos2(label_left, rect.top()),
+            egui::pos2(label_right.max(label_left), rect.bottom()),
+        );
+
+        let label_text = render_label(item);
+        let text_color = if is_active {
+            md3::PRIMARY
+        } else {
+            md3::ON_SURFACE_VARIANT
+        };
+        let font_id = FontId::proportional(TAB_FONT_SIZE);
+        // egui has no native truncation helper for direct painter text,
+        // so we measure with `Fonts::layout_no_wrap` and ellipsize when
+        // the result overflows the label rect.
+        let max_w = label_rect.width().max(0.0);
+        let galley = ui.fonts(|fonts| {
+            let mut text = label_text.clone();
+            let mut galley = fonts.layout_no_wrap(text.clone(), font_id.clone(), text_color);
+            if galley.size().x > max_w && !text.is_empty() {
+                let ell = "…";
+                while text.chars().count() > 1 {
+                    text.pop();
+                    let candidate = format!("{text}{ell}");
+                    let g = fonts.layout_no_wrap(candidate, font_id.clone(), text_color);
+                    if g.size().x <= max_w {
+                        galley = g;
+                        break;
+                    }
+                }
+            }
+            galley
+        });
+        let text_x = label_rect.center().x - galley.size().x / 2.0;
+        let text_y = label_rect.center().y - galley.size().y / 2.0;
+        ui.painter()
+            .galley(egui::pos2(text_x, text_y), galley, text_color);
+
+        // Close ("×") sub-rect on the right edge — centered vertically.
+        let close_center = egui::pos2(
+            rect.right() - CLOSE_BUTTON_WIDTH / 2.0 - 4.0,
+            rect.center().y,
+        );
+        let close_rect = Rect::from_center_size(
+            close_center,
+            Vec2::new(CLOSE_BUTTON_WIDTH, CLOSE_BUTTON_WIDTH),
+        );
+        #[cfg(test)]
+        tests::LAST_CLOSE_RECTS.with(|c| c.borrow_mut().push(close_rect));
+
+        // Draw the "×" glyph (no separate interaction — `cell_resp`
+        // owns the whole cell's click input below).
+        let close_hovered = ui.rect_contains_pointer(close_rect) && cell_resp.hovered();
+        draw_close_glyph(ui, close_rect, text_color, close_hovered);
+
+        // Single click responder for the whole cell decides whether to
+        // close (×) or switch based on the pointer position. Skip when
+        // a drag is in flight — the release at the end of a drag must
+        // not double-fire a click.
+        if cell_resp.clicked() && drag_from.is_none() && event.is_none() {
+            let click_pos = cell_resp.interact_pointer_pos().unwrap_or_default();
+            if close_rect.contains(click_pos) {
+                event = Some(TabEvent::Close(i));
+            } else if !is_active {
                 event = Some(TabEvent::Switch(i));
             }
+        }
 
-            let close_resp = ui.put(close_rect, egui::Button::new("×").frame(false));
-            if close_resp.clicked() && event.is_none() {
-                event = Some(TabEvent::Close(i));
+        // Active-tab indicator: 3 px bar at the bottom, side-margined to
+        // match `width: calc(100% - 32px)`.
+        if is_active {
+            let painter = ui.painter();
+            let bar = Rect::from_min_max(
+                egui::pos2(
+                    rect.left() + ACTIVE_INDICATOR_SIDE_MARGIN,
+                    rect.bottom() - ACTIVE_INDICATOR_HEIGHT - HAIRLINE_HEIGHT,
+                ),
+                egui::pos2(
+                    rect.right() - ACTIVE_INDICATOR_SIDE_MARGIN,
+                    rect.bottom() - HAIRLINE_HEIGHT,
+                ),
+            );
+            painter.rect_filled(
+                bar,
+                Rounding {
+                    nw: ACTIVE_INDICATOR_RADIUS,
+                    ne: ACTIVE_INDICATOR_RADIUS,
+                    sw: 0.0,
+                    se: 0.0,
+                },
+                md3::PRIMARY,
+            );
+        }
+    }
+
+    // Post-loop: handle drag-in-progress (indicator) and drop (event).
+    if let Some(from) = drag_from {
+        // `latest_pos` survives across release frames, unlike
+        // `interact_pos` which returns `None` once the pointer leaves
+        // the interaction state (e.g. on the release frame itself).
+        let pointer_pos = ui.input(|i| i.pointer.latest_pos());
+        let target = pointer_pos.map(|p| drop_target_index(&cell_rects, p.x));
+
+        // Draw a vertical primary-coloured indicator at the drop slot.
+        if let Some(target) = target {
+            if let Some(indicator_x) = drop_indicator_x(&cell_rects, target) {
+                let y0 = cell_rects[0].top();
+                let y1 = cell_rects[0].bottom() - HAIRLINE_HEIGHT;
+                ui.painter()
+                    .vline(indicator_x, y0..=y1, Stroke::new(2.0, md3::PRIMARY));
             }
+        }
 
-            // Active-tab underline (drawn on top of the cell).
-            if let Some(stroke) = underline {
-                let y = rect.bottom() - 1.5;
-                ui.painter().line_segment(
-                    [
-                        egui::pos2(rect.left() + 2.0, y),
-                        egui::pos2(rect.right() - 2.0, y),
-                    ],
-                    Stroke::new(stroke.width.max(1.5), stroke.color),
-                );
-            } else {
-                let y = rect.bottom() - 0.5;
-                ui.painter().line_segment(
-                    [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                    Stroke::new(1.0, Color32::from_gray(40)),
-                );
+        // Release ends the drag. `drag_started_by` already guards the
+        // click-vs-drag threshold (egui's default 4 px), so by the
+        // time `drag_from` is set we know this was an actual drag.
+        // No separate threshold check is needed here, and one would be
+        // hostile to implement: `press_origin()` returns `None` on the
+        // release frame because the button is no longer held.
+        let released = ui.input(|i| i.pointer.any_released());
+        if released {
+            if let Some(to) = target {
+                if to != from && to != from + 1 {
+                    event = Some(TabEvent::Reorder { from, to });
+                }
             }
+            ui.ctx().memory_mut(|m| m.data.remove::<usize>(drag_id));
         }
-
-        // "+" — append a new tab. Allocate explicit size to keep the
-        // hit-box stable across screen widths (tests rely on this).
-        let plus_size = Vec2::new(NEW_TAB_BUTTON_WIDTH, TAB_BAR_HEIGHT - 4.0);
-        let plus_resp = ui.add_sized(plus_size, egui::Button::new("+"));
-        #[cfg(test)]
-        {
-            tests::LAST_PLUS_RECT.with(|c| c.set(Some(plus_resp.rect)));
-        }
-        if plus_resp.clicked() && event.is_none() {
-            event = Some(TabEvent::New);
-        }
-    });
+    }
 
     event
 }
 
+/// Compute the drop-target insertion index given the strip's cell
+/// rects and the pointer's current `x`. The result lies in
+/// `0..=cells.len()`. The pointer is considered to drop "before" a
+/// cell if it sits in that cell's left half, and "after" if it sits
+/// in the right half. Outside the strip, drops clamp to the closest
+/// edge.
+fn drop_target_index(cells: &[Rect], pointer_x: f32) -> usize {
+    if cells.is_empty() {
+        return 0;
+    }
+    if pointer_x < cells[0].left() {
+        return 0;
+    }
+    if pointer_x > cells[cells.len() - 1].right() {
+        return cells.len();
+    }
+    for (i, rect) in cells.iter().enumerate() {
+        if pointer_x < rect.center().x {
+            return i;
+        }
+    }
+    cells.len()
+}
+
+/// X position of the drop indicator for the given insertion index.
+/// `index == 0` → left edge of the first cell; `index == cells.len()`
+/// → right edge of the last cell; otherwise the boundary between
+/// `cells[index - 1]` and `cells[index]`.
+fn drop_indicator_x(cells: &[Rect], index: usize) -> Option<f32> {
+    if cells.is_empty() {
+        return None;
+    }
+    if index == 0 {
+        return Some(cells[0].left());
+    }
+    if index >= cells.len() {
+        return Some(cells[cells.len() - 1].right());
+    }
+    Some(cells[index].left())
+}
+
+/// Draw a 40 px square icon button (state-layer on hover, full-radius
+/// pill so the layer appears as a circle inside the cell).
+fn draw_icon_button(ui: &mut Ui, glyph: &str, size: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let painter = ui.painter();
+
+    if resp.hovered() {
+        painter.rect_filled(
+            rect,
+            Rounding::same(ICON_BUTTON_RADIUS),
+            md3::state_layer(md3::ON_SURFACE_VARIANT, md3::STATE_LAYER_HOVER),
+        );
+    }
+
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        glyph,
+        FontId::proportional(20.0),
+        md3::ON_SURFACE_VARIANT,
+    );
+
+    resp
+}
+
+/// Close affordance ("×") rendered inside an arbitrary rect (each tab
+/// reserves its own slot). Pure painter call — the parent cell owns
+/// the click input and dispatches based on pointer position.
+fn draw_close_glyph(ui: &mut Ui, rect: Rect, color: Color32, hovered: bool) {
+    let painter = ui.painter();
+
+    if hovered {
+        painter.rect_filled(
+            rect,
+            Rounding::same(rect.width() / 2.0),
+            md3::state_layer(color, md3::STATE_LAYER_HOVER),
+        );
+    }
+
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        "×",
+        FontId::proportional(16.0),
+        color,
+    );
+}
+
+use egui::Align2;
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect};
-    use std::cell::Cell;
+    use egui::{Event, Modifiers, PointerButton, Pos2, RawInput};
+    use std::cell::{Cell, RefCell};
 
-    // Test-only hook: the widget stores the rect of the "+" button in
-    // here at the end of every layout pass so tests can compute a
-    // synthetic click position deterministically.
     thread_local! {
         pub(super) static LAST_PLUS_RECT: Cell<Option<Rect>> = const { Cell::new(None) };
+        pub(super) static LAST_TAB_CELLS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
+        pub(super) static LAST_CLOSE_RECTS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
     }
 
     fn item(title: &str) -> TabBarItem {
@@ -229,15 +514,10 @@ mod tests {
         Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 100.0))
     }
 
-    /// Capture the screen position of the first hovered widget by
-    /// running one egui pass; useful for "where did the tab end up".
     fn pos_of_first_hovered(ctx: &egui::Context) -> Option<Pos2> {
         ctx.pointer_latest_pos()
     }
 
-    /// Drive a single egui frame: layout + a synthetic mouse press +
-    /// release at `click_pos`. Returns whatever `TabEvent` the widget
-    /// emitted across the two passes.
     fn run_with_click(
         items: &[TabBarItem],
         active_idx: usize,
@@ -245,8 +525,6 @@ mod tests {
     ) -> Option<TabEvent> {
         let ctx = egui::Context::default();
 
-        // First pass: lay out the widget so egui knows where the buttons
-        // are. Hover the pointer over the click target.
         let mut input1 = RawInput::default();
         input1.screen_rect = Some(screen_rect());
         input1.events.push(Event::PointerMoved(click_pos));
@@ -255,9 +533,6 @@ mod tests {
             captured = draw(ctx, items, active_idx);
         });
 
-        // Second pass: press + release at the same position. egui
-        // requires a press and a release in the same frame for
-        // `.clicked()` to fire.
         let mut input2 = RawInput::default();
         input2.screen_rect = Some(screen_rect());
         input2.events.push(Event::PointerMoved(click_pos));
@@ -276,7 +551,6 @@ mod tests {
         let mut second: Option<TabEvent> = None;
         let _ = ctx.run(input2, |ctx| {
             second = draw(ctx, items, active_idx);
-            // Silence unused-pos helper warning in some builds.
             let _ = pos_of_first_hovered(ctx);
         });
 
@@ -299,67 +573,132 @@ mod tests {
 
     #[test]
     fn render_label_keeps_default_shell_title() {
-        // Phase 4-B contract: Tab::title defaults to "shell" when no
-        // OSC title was set. The widget should not rewrite it.
         let it = item("shell");
         assert_eq!(render_label(&it), "shell");
     }
 
     // ── TS-tab-1: simulated interaction → TabEvent ──────────
 
-    #[test]
-    fn clicking_plus_emits_new() {
-        // The "+" button position depends on the panel's actual usable
-        // width (egui inserts side margins inside the top panel). We
-        // run one layout pass to record its rect, then click its
-        // centre on the second pass.
-        let items = vec![item("a"), item("b")];
-
-        // Pass 1: layout only — capture the rect.
+    /// Drive one layout-only frame to populate the test thread_local
+    /// rects (`+` button, tab cells, close hit-boxes), then return the
+    /// requested rect. Eliminates hard-coded screen coordinates and
+    /// keeps the tests robust against panel padding tweaks.
+    fn capture_rect_with<F>(items: &[TabBarItem], active_idx: usize, pick: F) -> Rect
+    where
+        F: Fn() -> Option<Rect>,
+    {
         let ctx = egui::Context::default();
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, &items, 0);
+            let _ = draw(ctx, items, active_idx);
         });
-        let rect = LAST_PLUS_RECT
-            .with(|c| c.get())
-            .expect("+ button rect should be captured during layout");
-        let click_pos = rect.center();
+        pick().expect("layout hook should have captured the rect")
+    }
 
-        // Pass 2 / 3: drive press + release at the centre.
-        let ev = run_with_click(&items, 0, click_pos);
+    fn plus_rect(items: &[TabBarItem], active_idx: usize) -> Rect {
+        capture_rect_with(items, active_idx, || LAST_PLUS_RECT.with(|c| c.get()))
+    }
+
+    fn tab_cell_rect(items: &[TabBarItem], active_idx: usize, i: usize) -> Rect {
+        capture_rect_with(items, active_idx, || {
+            LAST_TAB_CELLS.with(|c| c.borrow().get(i).copied())
+        })
+    }
+
+    fn close_rect_for(items: &[TabBarItem], active_idx: usize, i: usize) -> Rect {
+        capture_rect_with(items, active_idx, || {
+            LAST_CLOSE_RECTS.with(|c| c.borrow().get(i).copied())
+        })
+    }
+
+    #[test]
+    fn clicking_plus_emits_new() {
+        let items = vec![item("a"), item("b")];
+        let target = plus_rect(&items, 0).center();
+        let ev = run_with_click(&items, 0, target);
         assert_eq!(ev, Some(TabEvent::New));
     }
 
     #[test]
     fn clicking_inactive_tab_emits_switch() {
-        // Two tabs, ~ (800 - 28)/2 = ~386 px wide each. Aim for the
-        // middle of the second tab's title area, well away from its
-        // close-button column.
+        // Click the centre of tab 1's label sub-rect (i.e. the cell
+        // centre, well clear of the close column on the right).
         let items = vec![item("alpha"), item("beta")];
-        let ev = run_with_click(&items, 0, Pos2::new(450.0, 14.0));
+        let cell = tab_cell_rect(&items, 0, 1);
+        let click = Pos2::new(cell.left() + TAB_HORIZONTAL_PAD + 4.0, cell.center().y);
+        let ev = run_with_click(&items, 0, click);
         assert_eq!(ev, Some(TabEvent::Switch(1)));
     }
 
     #[test]
-    fn clicking_close_on_first_tab_emits_close_zero() {
-        // Tab 0's close × sits near the right edge of its frame:
-        // roughly column = tab_width - inner_pad - close_w/2.
-        // tab_width ≈ (800 - 28) / 2 ≈ 386 ⇒ close near x ≈ 372.
+    fn tab_cells_lay_out_side_by_side_without_overlap() {
         let items = vec![item("alpha"), item("beta")];
-        let ev = run_with_click(&items, 0, Pos2::new(372.0, 14.0));
+        let _ = plus_rect(&items, 0);
+        let cells: Vec<_> = LAST_TAB_CELLS.with(|c| c.borrow().clone());
+        assert_eq!(cells.len(), 2);
+        assert!(
+            (cells[0].right() - cells[1].left()).abs() < 0.5,
+            "tab cells should sit edge-to-edge; got {:?} / {:?}",
+            cells[0],
+            cells[1]
+        );
+    }
+
+    #[test]
+    fn clicking_close_on_first_tab_emits_close_zero() {
+        // Click the centre of tab 0's close-button hit-box.
+        let items = vec![item("alpha"), item("beta")];
+        let target = close_rect_for(&items, 0, 0).center();
+        let ev = run_with_click(&items, 0, target);
         assert_eq!(ev, Some(TabEvent::Close(0)));
     }
 
-    // ── A "no items" edge case is not expected; draw() requires the
-    //    caller to keep at least one tab in the vector. We do guard
-    //    against div-by-zero internally via `.max(1)`.
+    // ── drop_target_index / drop_indicator_x ────────────────
+
+    fn rect(x0: f32, x1: f32) -> Rect {
+        Rect::from_min_max(Pos2::new(x0, 0.0), Pos2::new(x1, 48.0))
+    }
+
+    #[test]
+    fn drop_target_left_of_strip_clamps_to_zero() {
+        let cells = vec![rect(0.0, 100.0), rect(100.0, 200.0)];
+        assert_eq!(drop_target_index(&cells, -10.0), 0);
+    }
+
+    #[test]
+    fn drop_target_right_of_strip_returns_len() {
+        let cells = vec![rect(0.0, 100.0), rect(100.0, 200.0)];
+        assert_eq!(drop_target_index(&cells, 300.0), 2);
+    }
+
+    #[test]
+    fn drop_target_uses_cell_centre_as_boundary() {
+        // Cells: [0, 100] (centre 50), [100, 200] (centre 150)
+        let cells = vec![rect(0.0, 100.0), rect(100.0, 200.0)];
+        assert_eq!(drop_target_index(&cells, 49.0), 0, "left half of cell 0");
+        assert_eq!(drop_target_index(&cells, 51.0), 1, "right half of cell 0");
+        assert_eq!(drop_target_index(&cells, 149.0), 1, "left half of cell 1");
+        assert_eq!(drop_target_index(&cells, 151.0), 2, "right half of cell 1");
+    }
+
+    #[test]
+    fn drop_indicator_x_pins_to_cell_boundaries() {
+        let cells = vec![rect(0.0, 100.0), rect(100.0, 200.0)];
+        assert_eq!(drop_indicator_x(&cells, 0), Some(0.0));
+        assert_eq!(drop_indicator_x(&cells, 1), Some(100.0));
+        assert_eq!(drop_indicator_x(&cells, 2), Some(200.0));
+    }
+
+    #[test]
+    fn drop_indicator_x_empty_is_none() {
+        let cells: Vec<Rect> = Vec::new();
+        assert_eq!(drop_indicator_x(&cells, 0), None);
+    }
 
     #[test]
     fn draw_with_single_tab_does_not_panic_and_emits_nothing_without_click() {
         let items = vec![item("solo")];
-        // No click events — just lay out and assert no event escapes.
         let ctx = egui::Context::default();
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
