@@ -147,8 +147,16 @@ pub struct WindowHost {
     current_mods: Modifiers,
     /// Last cursor position in physical pixels (updated on `CursorMoved`).
     cursor_pos: PhysicalPosition<f64>,
-    /// Whether a left-button drag is in progress.
+    /// Whether the left button is currently held — used as the gate for
+    /// turning subsequent `CursorMoved` events into selection extends.
     dragging: bool,
+    /// Cell position at which the left button went down, kept until
+    /// either the pointer moves (the press is upgraded to a drag and a
+    /// Character-mode `Selection` is created) or the button is released
+    /// (treated as a click — no selection is materialized). Word and
+    /// line selections from double / triple click bypass this and
+    /// commit immediately, just like before.
+    pending_press_cell: Option<Pos>,
     /// Click tracker for double / triple click detection.
     click_tracker: ClickTracker,
     /// Lazily-initialized arboard clipboard. We only fail-loud once if the
@@ -300,6 +308,7 @@ impl WindowHost {
             current_mods: Modifiers::NONE,
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             dragging: false,
+            pending_press_cell: None,
             click_tracker: ClickTracker::default(),
             clipboard,
             image_layer,
@@ -1272,6 +1281,17 @@ impl ApplicationHandler for PocApp {
                 host.window().request_redraw();
                 if host.dragging {
                     let (row, col) = host.pixel_to_cell(position, &self.app);
+                    // First motion since the press in Character mode
+                    // upgrades the pending click into a real Selection.
+                    // Word / line selections (double / triple click)
+                    // were already committed at press time and the
+                    // pending_press_cell was cleared there.
+                    if self.app.selection.is_none() {
+                        if let Some(anchor) = host.pending_press_cell.take() {
+                            self.app.selection =
+                                Some(Selection::new_with_mode(anchor, SelectionMode::Character));
+                        }
+                    }
                     if let Some(sel) = self.app.selection.as_mut() {
                         if let Some(tab) = self.app.tabs.get(self.app.active) {
                             let core = tab.core.lock();
@@ -1313,18 +1333,36 @@ impl ApplicationHandler for PocApp {
                     (MouseButton::Left, ElementState::Pressed) => {
                         let (row, col) = host.pixel_to_cell(host.cursor_pos, &self.app);
                         let cls = host.click_tracker.classify(Instant::now(), row, col);
-                        let mut sel = Selection::new_with_mode(Pos { row, col }, cls.mode);
-                        if cls.mode != SelectionMode::Character {
+                        if cls.mode == SelectionMode::Character {
+                            // Single click in character mode: do not
+                            // materialize a one-cell selection yet — the
+                            // user may just be moving the cursor / focus
+                            // / clearing a prior selection. Record the
+                            // press cell so the first motion (if any)
+                            // can upgrade this into a real drag-select.
+                            self.app.selection = None;
+                            host.pending_press_cell = Some(Pos { row, col });
+                            host.window().request_redraw();
+                        } else {
+                            // Word (double click) / line (triple click)
+                            // commit immediately so a static click still
+                            // selects the targeted word or line.
+                            let mut sel = Selection::new_with_mode(Pos { row, col }, cls.mode);
                             if let Some(tab) = self.app.tabs.get(self.app.active) {
                                 let core = tab.core.lock();
                                 sel.extend(Pos { row, col }, &core);
                             }
+                            self.app.selection = Some(sel);
+                            host.pending_press_cell = None;
                         }
-                        self.app.selection = Some(sel);
                         host.dragging = true;
                     }
                     (MouseButton::Left, ElementState::Released) => {
                         host.dragging = false;
+                        // A press with no motion in Character mode left
+                        // selection == None (see the Pressed branch);
+                        // there is nothing to copy in that case.
+                        host.pending_press_cell = None;
                         if let Some(sel) = self.app.selection {
                             if let Some(tab) = self.app.tabs.get(self.app.active) {
                                 let core = tab.core.lock();
