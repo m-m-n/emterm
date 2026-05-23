@@ -25,27 +25,36 @@ use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
 /// Per-row visual height in egui logical points. Three rows render
 /// stacked; the panel height multiplies this by the number of
 /// visible rows.
-const ROW_HEIGHT: f32 = 22.0;
+pub const ROW_HEIGHT: f32 = 22.0;
 /// Default font size for App rows; OSC row also uses this unless the
 /// view model overrides `font_size`.
 const DEFAULT_FONT_SIZE: f32 = 12.0;
 
-/// Render the status bar. Returns immediately (no panel inserted)
-/// when `view_model.enabled` is false.
-pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
+/// Number of rows the status bar will paint for `view_model` this
+/// frame (0 when disabled or every row is auto-hidden).
+pub fn visible_row_count(view_model: &StatusBarViewModel) -> u32 {
     if !view_model.enabled {
-        return;
+        return 0;
     }
-
-    // Determine which rows render so we can size the panel
-    // correctly (egui top/bottom panels need a fixed height for
-    // multi-row layouts).
     let has_mux = view_model.mux_session_name.is_some();
     let osc_visible = view_model.osc.should_render(has_mux);
     let app1_visible = true; // FR12: App Line 1 always renders.
     let app2_visible = view_model.app_line2.has_content();
+    (osc_visible as u32) + (app1_visible as u32) + (app2_visible as u32)
+}
 
-    let visible_rows = (osc_visible as u32) + (app1_visible as u32) + (app2_visible as u32);
+/// Panel height in egui logical points. The terminal grid layout uses
+/// this to reserve room above/below the cell area so the bottom row
+/// never gets covered by the status-bar panel (and, when the panel
+/// sits on top, so cells don't render behind it).
+pub fn panel_height_logical(view_model: &StatusBarViewModel) -> f32 {
+    ROW_HEIGHT * visible_row_count(view_model) as f32
+}
+
+/// Render the status bar. Returns immediately (no panel inserted)
+/// when `view_model.enabled` is false.
+pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
+    let visible_rows = visible_row_count(view_model);
     if visible_rows == 0 {
         return;
     }
@@ -55,6 +64,11 @@ pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
         StatusBarPosition::Bottom => egui::TopBottomPanel::bottom("native-poc-status-bar"),
     };
     panel = panel.exact_height(ROW_HEIGHT * visible_rows as f32);
+
+    let app1_visible = true;
+    let app2_visible = view_model.app_line2.has_content();
+    let has_mux = view_model.mux_session_name.is_some();
+    let osc_visible = view_model.osc.should_render(has_mux);
 
     let font_size = view_model.font_size.unwrap_or(DEFAULT_FONT_SIZE);
 
