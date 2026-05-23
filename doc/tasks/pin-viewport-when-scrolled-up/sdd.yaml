@@ -1,0 +1,96 @@
+schema_version: 1
+feature: pin-viewport-when-scrolled-up
+created: 2026-05-23
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun run build"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 3cc2d73c0c593ced4f70c706cb7899c929945c17
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 3cc2d73c0c593ced4f70c706cb7899c929945c17
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 3cc2d73c0c593ced4f70c706cb7899c929945c17
+  - id: implement
+    status: completed
+    completed_at_commit: 3cc2d73c0c593ced4f70c706cb7899c929945c17
+  - id: check
+    status: completed
+    completed_at_commit: 3cc2d73c0c593ced4f70c706cb7899c929945c17
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 3cc2d73c0c593ced4f70c706cb7899c929945c17
+
+requirements:
+  FR1:
+    title: Pin offset on PTY scrollback growth
+    status: ok
+    tasks:
+      - phase1-scroll-pin-pure-function
+      - phase2-canvas-renderer-integration
+    tests:
+      - TS-1
+      - TS-7
+  FR2:
+    title: Follow-tail when offset is zero
+    status: ok
+    tasks:
+      - phase1-scroll-pin-pure-function
+      - phase2-canvas-renderer-integration
+    tests:
+      - TS-2
+  FR3:
+    title: Clamp at scrollback top
+    status: ok
+    tasks:
+      - phase1-scroll-pin-pure-function
+      - phase2-canvas-renderer-integration
+    tests:
+      - TS-3
+  FR4:
+    title: User-initiated scroll unchanged
+    status: ok
+    tasks:
+      - phase2-canvas-renderer-integration
+    tests: []
+  FR5:
+    title: Alt-screen unaffected
+    status: ok
+    tasks:
+      - phase1-scroll-pin-pure-function
+      - phase2-canvas-renderer-integration
+    tests:
+      - TS-5
+  FR6:
+    title: Partial scroll region unaffected
+    status: ok
+    tasks:
+      - phase1-scroll-pin-pure-function
+      - phase2-canvas-renderer-integration
+    tests:
+      - TS-6
+  NFR1:
+    title: Performance
+    status: ok
+    tasks:
+      - phase2-canvas-renderer-integration
+    tests: []
+  NFR2:
+    title: Compatibility
+    status: ok
+    tasks:
+      - phase2-canvas-renderer-integration
+    tests: []
