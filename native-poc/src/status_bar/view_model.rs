@@ -9,7 +9,12 @@ use crate::html::RichTextRun;
 use crate::settings::StatusBarPosition;
 
 /// 3-row layered model. `enabled = false` short-circuits drawing.
-#[derive(Debug, Clone, Default)]
+///
+/// `PartialEq` is provided so the render loop can compare the current
+/// frame's view model against the previous one and bypass the
+/// dirty-row skip optimization when status-bar content has changed
+/// (e.g. the wall clock ticked over) on an otherwise-idle PTY.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct StatusBarViewModel {
     pub enabled: bool,
     pub position: StatusBarPosition,
@@ -29,7 +34,7 @@ pub struct StatusBarViewModel {
 /// (no HTML, no styling). `forced_visible` reflects the OSC writer's
 /// most recent show/hide request; `None` means "auto" (visible only
 /// when at least one side is non-empty).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OscRow {
     pub left: String,
     pub right: String,
@@ -52,7 +57,7 @@ impl OscRow {
 
 /// App row (Lines 1 & 2). Each side is a pre-resolved styled run
 /// list ready for egui rendering.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppRow {
     pub left: Vec<RichTextRun>,
     pub right: Vec<RichTextRun>,

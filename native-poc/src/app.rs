@@ -135,6 +135,16 @@ pub struct App {
     /// `{git_branch}` providers read this through a `CwdSource` closure
     /// so worker threads stay isolated from `App`.
     pub active_cwd: Arc<Mutex<Option<String>>>,
+    /// View model rendered in the previous frame. Compared against the
+    /// freshly-built model in [`App::status_bar_view_model_changed`]
+    /// so the dirty-row skip path in `WindowHost::render` can bypass
+    /// the early return when only the status bar (e.g. the wall clock,
+    /// the git branch worker, or an OSC 777 push) changed since the
+    /// last frame. Without this, the provider-owned wake chain reaches
+    /// `user_event` -> `request_redraw` but the next `render()` call
+    /// observes `dirty_rows_this_frame() == 0` on an idle shell and
+    /// returns early, freezing the clock display.
+    previous_status_bar_view_model: Option<crate::status_bar::StatusBarViewModel>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,6 +214,7 @@ impl App {
             font_base_id,
             status_bar_runtime,
             active_cwd,
+            previous_status_bar_view_model: None,
         }
     }
 
@@ -691,6 +702,28 @@ impl App {
         )
     }
 
+    /// Build the current status-bar view model and compare it against
+    /// the snapshot stored in [`Self::previous_status_bar_view_model`].
+    ///
+    /// Returns `true` when the model differs from the previous frame
+    /// (or no previous frame was recorded yet). Called by
+    /// `WindowHost::render` so the dirty-row skip path bypasses its
+    /// early-return when the status bar's content has changed even
+    /// though no terminal cell needs to repaint — the canonical case
+    /// being the wall-clock `{time}` provider's per-second tick on an
+    /// otherwise-idle PTY.
+    ///
+    /// Constructing the view model here re-runs the per-frame resolve
+    /// cache; the second call inside `egui::run` hits that cache on
+    /// the no-change path, so the extra work is bounded to one
+    /// `VariableProvider::version` poll per registered variable.
+    pub fn status_bar_view_model_changed(&self) -> bool {
+        let current = self.status_bar_view_model();
+        match &self.previous_status_bar_view_model {
+            Some(prev) => *prev != current,
+            None => true,
+        }
+    }
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
     }
@@ -921,6 +954,7 @@ impl App {
         self.previous_cursor = Some((core.get_cursor_row(), core.get_cursor_col()));
         self.previous_selection = self.selection;
         self.previous_blink_visible = self.blink_visible_now(core.get_cursor_blink());
+        self.previous_status_bar_view_model = Some(self.status_bar_view_model());
         self.needs_full_redraw = false;
         core.clear_dirty();
     }
@@ -933,6 +967,7 @@ impl App {
         self.previous_cursor = None;
         self.previous_selection = None;
         self.previous_blink_visible = true;
+        self.previous_status_bar_view_model = Some(self.status_bar_view_model());
         self.needs_full_redraw = false;
     }
 

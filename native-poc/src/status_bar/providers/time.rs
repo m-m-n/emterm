@@ -18,6 +18,14 @@
 //! sleeps on a `Condvar::wait_timeout` so [`Drop`] can wake it
 //! immediately by flipping a stop flag and calling `notify_all`. The
 //! `JoinHandle` is then joined to guarantee no thread leaks (TS-perf-3).
+//!
+//! The timer thread is also the **sole owner of the version bump**.
+//! Each tick `fetch_add(1)` on `version` before calling `wake()` so
+//! the run-cache invalidates exactly once per interval. This keeps
+//! `VariableProvider::version()` a pure atomic load (matching the
+//! trait contract honored by every other provider) and removes the
+//! `SystemTime::now()` syscall from `version()`'s hot path — both
+//! `version()` and `get_value()` stay side-effect-free reads.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -52,11 +60,11 @@ pub struct TimeProvider {
     /// can mutate it (e.g. when the settings UI lands).
     format: Mutex<String>,
     /// Per-provider monotonic version counter. Phase F cache uses
-    /// this to invalidate stale runs.
-    version: AtomicU64,
-    /// Last rendered second (since epoch). Used to bump `version`
-    /// only when the visible value changes.
-    last_second: AtomicU64,
+    /// this to invalidate stale runs. `Arc` so the timer thread can
+    /// hold its own handle and bump the counter once per tick; the
+    /// `version()` trait method is then a pure atomic load and
+    /// `get_value()` never touches this counter.
+    version: Arc<AtomicU64>,
     /// Timer-thread coordination. `stop` is flipped to `true` by the
     /// `Drop` impl; the timer wakes from `Condvar::wait_timeout` and
     /// exits the loop. `cv` is the matching `(Mutex<()>, Condvar)`
@@ -79,8 +87,7 @@ impl TimeProvider {
     pub fn new(format: impl Into<String>) -> Self {
         Self {
             format: Mutex::new(format.into()),
-            version: AtomicU64::new(0),
-            last_second: AtomicU64::new(u64::MAX),
+            version: Arc::new(AtomicU64::new(0)),
             stop: Arc::new(AtomicBool::new(false)),
             cv: Arc::new((Mutex::new(()), Condvar::new())),
             join: Mutex::new(None),
@@ -101,9 +108,10 @@ impl TimeProvider {
     fn spawn_timer(&self, wake: WakeFn, interval: Duration) {
         let stop = self.stop.clone();
         let cv = self.cv.clone();
+        let version = self.version.clone();
         let handle = std::thread::Builder::new()
             .name("time-provider-timer".into())
-            .spawn(move || timer_loop(stop, cv, interval, wake))
+            .spawn(move || timer_loop(stop, cv, interval, wake, version))
             .expect("failed to spawn time-provider-timer");
         *self.join.lock().unwrap() = Some(handle);
     }
@@ -138,6 +146,7 @@ fn timer_loop(
     cv: Arc<(Mutex<()>, Condvar)>,
     interval: Duration,
     wake: WakeFn,
+    version: Arc<AtomicU64>,
 ) {
     let (m, cond) = &*cv;
     while !stop.load(Ordering::Relaxed) {
@@ -149,6 +158,13 @@ fn timer_loop(
         if stop.load(Ordering::Relaxed) {
             break;
         }
+        // Bump first, then wake: when the main thread services the
+        // resulting redraw, the run-cache's (template, version) key
+        // will already have shifted so the lookup misses and
+        // `get_value()` re-runs against the current `SystemTime`.
+        // Without the bump on this side, a cache hit would keep
+        // returning the previous tick's formatted string forever.
+        version.fetch_add(1, Ordering::Relaxed);
         wake();
     }
 }
@@ -159,16 +175,13 @@ impl VariableProvider for TimeProvider {
     }
 
     fn get_value(&self, _argument: Option<&str>) -> String {
+        // Pure read: the timer thread owns the version bump (see
+        // `timer_loop`). `get_value` only formats the current wall
+        // clock against the user's format spec.
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        // Bump the version counter when the wall-clock second crosses
-        // a boundary so Phase F's cache invalidates correctly.
-        let prev = self.last_second.swap(secs, Ordering::Relaxed);
-        if prev != secs {
-            self.version.fetch_add(1, Ordering::Relaxed);
-        }
         let fmt = self.format.lock().unwrap().clone();
         let (y, mo, d, h, mi, s) = local_components(secs as i64);
         format_with(&fmt, y, mo, d, h, mi, s)
@@ -179,6 +192,10 @@ impl VariableProvider for TimeProvider {
     }
 
     fn version(&self, _argument: Option<&str>) -> u64 {
+        // Pure atomic load matching the `VariableProvider` trait
+        // contract. The timer thread owns the per-tick bump (see
+        // `timer_loop`), so callers can poll `version()` as often as
+        // they want without producing any side effect.
         self.version.load(Ordering::Relaxed)
     }
 }
@@ -471,5 +488,63 @@ mod tests {
         std::thread::sleep(Duration::from_millis(40));
         drop(p);
         assert_eq!(count.load(Ordering::Relaxed), 0);
+    }
+
+    /// Regression for the cache-freeze bug: the timer thread MUST
+    /// bump `version` every tick so the `RunCacheKey`-based per-row
+    /// cache invalidates without depending on `get_value` being
+    /// called between ticks. Before this contract was enforced, the
+    /// status-bar clock froze on an idle PTY because the cache hit
+    /// kept returning the previous tick's run-list and `get_value`
+    /// (the only bump site at the time) was never reached.
+    #[test]
+    fn time_provider_timer_thread_bumps_version_per_tick_without_get_value() {
+        let (wake, _count) = counter_wake();
+        let p = TimeProvider::with_wake(
+            "HH:mm:ss",
+            wake,
+            RefreshConfig {
+                interval: Duration::from_millis(25),
+            },
+        );
+        let v0 = p.version(None);
+        // Wait long enough for ≥ 3 ticks (25 ms × 3 = 75 ms, give
+        // 160 ms of slack for slow CI runners). CRUCIALLY we never
+        // call `get_value` here — the only bump site under test is
+        // the timer thread.
+        std::thread::sleep(Duration::from_millis(160));
+        let v1 = p.version(None);
+        assert!(
+            v1 >= v0 + 3,
+            "expected ≥3 version bumps from timer alone (no get_value), got v0={v0} v1={v1}"
+        );
+        drop(p);
+    }
+
+    /// `VariableProvider::version` MUST be a pure atomic load. The
+    /// trait's other impls (`cwd`, `git_branch`, `command`) honor
+    /// that contract and the per-row cache assumes it. This test
+    /// pins it for `TimeProvider`: calling `version` repeatedly
+    /// against a parked-timer instance (1-minute interval) must not
+    /// advance the counter on its own. Without this guarantee the
+    /// `status_bar_view_model_changed` predicate in `App` becomes a
+    /// silently side-effecting call.
+    #[test]
+    fn time_provider_version_is_pure_load() {
+        let (wake, _count) = counter_wake();
+        let p = TimeProvider::with_wake(
+            "HH:mm:ss",
+            wake,
+            // Interval long enough that no timer tick fires during
+            // the test window.
+            RefreshConfig {
+                interval: Duration::from_secs(60),
+            },
+        );
+        let v0 = p.version(None);
+        for _ in 0..1000 {
+            assert_eq!(p.version(None), v0);
+        }
+        drop(p);
     }
 }
