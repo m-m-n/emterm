@@ -1450,6 +1450,22 @@ impl ApplicationHandler for PocApp {
         ));
     }
 
+    /// Phase E (TS-32): winit `EventLoopProxy::send_event(())` calls land
+    /// here. Without this override, the trait-default `user_event` is a
+    /// no-op and the provider-owned wake chain (`TimeProvider` timer
+    /// thread → `WakeFn` → `EventLoopProxy::send_event(())` → here →
+    /// `request_redraw`) is silently broken, freezing the status-bar
+    /// clock when the shell is idle.
+    ///
+    /// Defensive: if `self.host` is `None` (we are between
+    /// `Resumed`-time construction failure and process exit, or already
+    /// torn down in `CloseRequested`), this is a no-op.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        request_redraw_on_user_event(self.host.as_ref(), |host| {
+            host.window().request_redraw();
+        });
+    }
+
     /// winit calls this once after `event_loop.exit()` and before
     /// `run_app` returns. Use it as a defense-in-depth shutdown step
     /// for any code path that flagged exit without zeroing `self.host`
@@ -1461,6 +1477,22 @@ impl ApplicationHandler for PocApp {
             log::info!("native-poc: exiting handler dropping WindowHost");
             self.host = None;
         }
+    }
+}
+
+/// Pure-logic decision for `PocApp::user_event` (TS-32).
+///
+/// Extracted as a free function so unit tests can exercise the
+/// "redraw if host is present, no-op otherwise" contract without
+/// instantiating a real winit window (which requires an active
+/// event loop and a display). The `redraw` callback is invoked at
+/// most once, and only when `host` is `Some`.
+fn request_redraw_on_user_event<H, F>(host: Option<&H>, redraw: F)
+where
+    F: FnOnce(&H),
+{
+    if let Some(h) = host {
+        redraw(h);
     }
 }
 
@@ -1611,5 +1643,42 @@ mod tests {
         let cls = t.classify(t0 + Duration::from_millis(600), 5, 10);
         assert_eq!(cls.count, 1);
         assert_eq!(cls.mode, SelectionMode::Character);
+    }
+
+    /// TS-32 (host=Some): `PocApp::user_event` must call `request_redraw`
+    /// on the active window exactly once. We exercise the extracted
+    /// `request_redraw_on_user_event` helper because constructing a
+    /// real `winit::Window` here would require an active event loop +
+    /// display, which is unavailable in `cargo test`.
+    ///
+    /// A `Cell<u32>` counter stands in for the winit window's
+    /// `request_redraw()` side effect. Without the `user_event`
+    /// override the provider-owned wake chain (`WakeFn` →
+    /// `EventLoopProxy::send_event(())` → `user_event`) was silently
+    /// dropped, freezing the status-bar clock on idle (release-build
+    /// regression observed twice during sdd.6-verify).
+    #[test]
+    fn user_event_dispatches_redraw_when_host_present() {
+        use std::cell::Cell;
+        let redraws: Cell<u32> = Cell::new(0);
+        let host_stub: u8 = 0;
+        request_redraw_on_user_event(Some(&host_stub), |_| {
+            redraws.set(redraws.get() + 1);
+        });
+        assert_eq!(redraws.get(), 1);
+    }
+
+    /// TS-32 (host=None): before `Resumed` constructs the `WindowHost`
+    /// or after `CloseRequested` tears it down, `self.host` is `None`.
+    /// In that window `user_event` must be a no-op rather than panic.
+    #[test]
+    fn user_event_is_noop_when_host_absent() {
+        use std::cell::Cell;
+        let redraws: Cell<u32> = Cell::new(0);
+        let host: Option<&u8> = None;
+        request_redraw_on_user_event(host, |_| {
+            redraws.set(redraws.get() + 1);
+        });
+        assert_eq!(redraws.get(), 0);
     }
 }

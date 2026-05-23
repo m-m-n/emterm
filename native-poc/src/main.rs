@@ -2,6 +2,7 @@ use winit::event_loop::EventLoop;
 
 mod app;
 mod callbacks;
+mod html;
 mod image;
 mod logging;
 mod render;
@@ -15,6 +16,7 @@ mod mux;
 mod pty;
 mod selection;
 mod settings;
+mod status_bar;
 mod ui;
 mod viewer;
 mod wakeup;

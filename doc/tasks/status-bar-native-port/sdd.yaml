@@ -1,0 +1,271 @@
+schema_version: 1
+feature: status-bar-native-port
+created: 2026-05-22
+
+project:
+  components:
+    native-poc:
+      language: rust
+      # native-poc has its own target dirs per `.claude/rules/native-poc-build-location.md`.
+      # Quick checks use ./target; release goes to ./target-host.
+      build_command: "cd native-poc && CARGO_TARGET_DIR=./target cargo check"
+      test_command: "cd native-poc && CARGO_TARGET_DIR=./target cargo test --bin emterm-native-poc"
+      format_command: "cd native-poc && cargo fmt"
+      e2e_test_command: ""
+    legacy-tauri:
+      language: rust+typescript
+      build_command: "bun tauri build"
+      # Prefer Docker per CLAUDE.md to avoid corrupting host config/caches.
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cargo test --manifest-path src-tauri/Cargo.toml && bun test && bun run typecheck\""
+      format_command: "bun run format"
+      e2e_test_command: "./scripts/run-e2e-docker.sh"
+
+workflow:
+  - id: create-spec
+    artifacts:
+      - SPEC.md
+      - 要件定義書.md
+    status: completed
+    completed_at_commit: b1056917bd9ec0191d9c833fa8316901b53a99aa
+  - id: create-plan
+    artifacts:
+      - IMPLEMENTATION.md
+      - VERIFICATION.md
+      - tasks.yaml
+    status: completed
+    completed_at_commit: b1056917bd9ec0191d9c833fa8316901b53a99aa
+  - id: verify-plan
+    status: completed
+    completed_at_commit: b1056917bd9ec0191d9c833fa8316901b53a99aa
+  - id: implement
+    status: completed
+    completed_at_commit: b1056917bd9ec0191d9c833fa8316901b53a99aa
+  - id: check
+    status: completed
+    completed_at_commit: b1056917bd9ec0191d9c833fa8316901b53a99aa
+  - id: verify
+    artifacts:
+      - VERIFICATION_RESULT.md
+    status: completed
+    completed_at_commit: b1056917bd9ec0191d9c833fa8316901b53a99aa
+
+requirements:
+  FR1:
+    title: Layer Structure (3 rows, no surface tint, no animation)
+    status: ok
+    tasks:
+      - view-model-types
+      - status-bar-runtime
+      - app-view-model-integration
+      - ui-status-bar-3-row
+      - rewrite-phase4d-tests
+      - manual-smoke-checklist
+    tests:
+      - TS-25
+      - TS-26
+  FR2:
+    title: Template Engine ({var} and {cmd:name})
+    status: ok
+    tasks:
+      - template-engine-core
+      - template-engine-unit-tests
+      - status-bar-runtime
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+  FR3:
+    title: TimeProvider with configurable format and self-owned timer thread
+    status: ok
+    tasks:
+      - provider-time
+      - time-provider-timer-thread
+      - wakeup-injection
+      - template-engine-unit-tests
+      - application-handler-user-event
+    tests:
+      - TS-4
+      - TS-5
+      - TS-perf-3
+      - TS-29
+      - TS-30
+      - TS-32
+  FR4:
+    title: CwdProvider sourced from OSC 7 cache, event-driven wake
+    status: ok
+    tasks:
+      - provider-cwd
+      - cwd-provider-event-wake
+      - wakeup-injection
+      - template-engine-unit-tests
+      - manual-smoke-checklist
+      - application-handler-user-event
+    tests:
+      - TS-6
+      - TS-31
+      - TS-32
+  FR5:
+    title: GitBranchProvider with state color, worker thread + wake on refresh
+    status: ok
+    tasks:
+      - worker-thread-helpers
+      - provider-git-branch
+      - wakeup-injection
+      - template-engine-unit-tests
+      - status-bar-runtime
+      - application-handler-user-event
+    tests:
+      - TS-7
+      - TS-8
+      - TS-28
+      - TS-31
+      - TS-32
+  FR6:
+    title: CommandProvider with timeout, ~ expansion, wake on refresh
+    status: ok
+    tasks:
+      - settings-custom-command-type
+      - worker-thread-helpers
+      - provider-command
+      - wakeup-injection
+      - template-engine-unit-tests
+      - status-bar-runtime
+      - application-handler-user-event
+    tests:
+      - TS-9
+      - TS-10
+      - TS-28
+      - TS-31
+      - TS-32
+  FR7:
+    title: OSC 777;statusbar dispatcher (set/clear/show/hide)
+    status: ok
+    tasks:
+      - osc-layer-state
+      - osc-dispatcher-handle
+      - osc-try-dispatch-fn
+      - callbacks-wire-dispatcher
+      - osc-dispatcher-unit-tests
+      - status-bar-runtime
+      - manual-smoke-checklist
+    tests:
+      - TS-18
+      - TS-19
+      - TS-21
+      - TS-22
+  FR8:
+    title: HTML parser common foundation (inline subset)
+    status: ok
+    tasks:
+      - html-tokenizer
+      - html-node-and-csscolor
+      - html-parser-build
+      - html-to-rich-text-runs
+      - html-unit-tests
+    tests:
+      - TS-12
+      - TS-13
+      - TS-14
+      - TS-15
+      - TS-16
+      - TS-17
+  FR9:
+    title: HTML sanitizer for OSC route
+    status: ok
+    tasks:
+      - html-tokenizer
+      - html-strip-html-tags
+      - html-unit-tests
+      - osc-dispatcher-unit-tests
+    tests:
+      - TS-11
+      - TS-27
+  FR10:
+    title: Settings extension (templates, font_size, custom_commands, refresh_rates)
+    status: ok
+    tasks:
+      - settings-custom-command-type
+      - settings-status-bar-fields
+      - settings-default-impl
+      - settings-unit-tests
+    tests:
+      - TS-20
+  FR11:
+    title: Mux integration (3-layer coexistence, OSC layer fed by daemon)
+    status: ok
+    tasks:
+      - view-model-types
+      - app-view-model-integration
+      - mux-osc-integration
+      - rewrite-phase4d-tests
+      - manual-smoke-checklist
+    tests:
+      - TS-23
+      - TS-24
+  FR12:
+    title: Auto layer visibility (hide OSC / Line 2 when both sides empty)
+    status: ok
+    tasks:
+      - view-model-types
+      - ui-status-bar-3-row
+      - app-view-model-integration
+      - rewrite-phase4d-tests
+    tests:
+      - TS-25
+      - TS-26
+  NFR1:
+    title: Performance (no tokio, worker threads, run-list caching, provider-owned wake)
+    status: ok
+    tasks:
+      - worker-thread-helpers
+      - provider-git-branch
+      - provider-command
+      - status-bar-runtime
+      - provider-version-counters
+      - run-list-lru-cache
+      - wakeup-injection
+      - time-provider-timer-thread
+      - cwd-provider-event-wake
+      - render-remove-request-repaint-after
+      - application-handler-user-event
+    tests:
+      - TS-perf-1
+      - TS-perf-2
+      - TS-perf-3
+      - TS-29
+      - TS-31
+      - TS-32
+  NFR2:
+    title: Security (OSC tag-strip, command name validation, no shell)
+    status: ok
+    tasks:
+      - html-parser-build
+      - html-strip-html-tags
+      - provider-command
+      - osc-dispatcher-unit-tests
+      - manual-smoke-checklist
+    tests:
+      - TS-11
+      - TS-15
+      - TS-27
+  NFR3:
+    title: Platform (Linux + Windows, no macOS, libc gated)
+    status: ok
+    tasks:
+      - provider-time
+      - provider-cwd
+      - release-build
+    tests: []
+  NFR4:
+    title: Visual consistency (shared background, no animation)
+    status: ok
+    tasks:
+      - ui-status-bar-3-row
+      - manual-smoke-checklist
+    tests: []
+  NFR5:
+    title: Extensibility (HTML Node enum extensible for Markdown viewer)
+    status: ok
+    tasks:
+      - html-node-and-csscolor
+    tests: []
