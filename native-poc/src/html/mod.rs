@@ -1,0 +1,22 @@
+//! Inline-subset HTML parser + sanitizer shared by the native status
+//! bar and (in a follow-up phase) the native Markdown viewer.
+//!
+//! See `doc/tasks/status-bar-native-port/IMPLEMENTATION.md` Phase A
+//! for the design notes — in particular the lenient mode contract
+//! and the `Node` extensibility plan.
+
+pub mod parser;
+pub mod rich_text;
+pub mod sanitizer;
+pub mod tokenizer;
+
+pub use parser::{parse, CssColor};
+pub use rich_text::{to_rich_text_runs, RichTextRun};
+pub use sanitizer::strip_html_tags;
+
+// Future Markdown-viewer entry points; retained at the top-level
+// module so downstream callers (and tests) don't need to depend on
+// the internal layout. `#[allow(unused_imports)]` keeps the bin
+// target warning-clean.
+#[allow(unused_imports)]
+pub use parser::{parse_css_color, Node};

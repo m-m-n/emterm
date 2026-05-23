@@ -1,201 +1,194 @@
-//! Status-bar widget (Phase 4-D).
+//! Status-bar widget.
 //!
-//! Renders an [`egui::TopBottomPanel`] (top or bottom, per
-//! [`crate::settings::StatusBarPosition`]) containing — depending on the
-//! active tab's state:
+//! Renders a 3-row [`egui::TopBottomPanel`] (top or bottom, per
+//! [`crate::settings::StatusBarPosition`]). Rows top-to-bottom:
 //!
-//! - **Mux mode** (`StatusBarState::mux` is `Some`): session name +
-//!   daemon-supplied left/right segments (the daemon embeds the window
-//!   list with the active window flagged) + local-clock `HH:MM:SS`.
-//! - **Not in mux mode** (`StatusBarState::mux` is `None`): only the
-//!   local clock.
-//! - **Disabled** (`settings.statusbar.enabled = false`): no panel is
-//!   inserted at all, and the [`egui::CentralPanel`] covers the full
-//!   window. [`draw`] returns immediately in that case.
+//! 1. **App Line 1** — local templates resolved by the
+//!    `TemplateEngine` (typically `{time}` / `{cwd}`).
+//! 2. **App Line 2** — second template row, auto-hidden when both
+//!    sides are empty (FR12).
+//! 3. **OSC row** — mux daemon's `StatusUpdateMsg` if the active tab
+//!    is attached, otherwise the OSC 777;statusbar dispatcher's
+//!    layer state. Auto-hidden when empty unless `show` was
+//!    requested.
 //!
-//! The widget is intentionally pure: it receives all state through
-//! parameters and never reaches into `App`. The caller (the render
-//! pipeline in `render::draw_terminal`) is responsible for projecting
-//! the active tab into a [`StatusBarState`] once per frame.
-
-use std::time::SystemTime;
+//! The widget is pure over [`StatusBarViewModel`]; the render
+//! pipeline projects the active tab + runtime state into the view
+//! model once per frame.
 
 use egui::{Align, Color32, FontFamily, FontId, Layout, RichText};
-use mux_ipc::protocol::StatusUpdateMsg;
 
-use crate::settings::{Settings, StatusBarPosition};
+use crate::html::{CssColor, RichTextRun};
+use crate::settings::StatusBarPosition;
+use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
 
-/// Per-frame view-model for the status-bar widget. The caller projects
-/// the active tab + the wall clock into this struct once per frame.
-#[derive(Debug, Clone, Default)]
-pub struct StatusBarState {
-    /// When `Some`, the active tab is attached to a mux session. The
-    /// session name is rendered as the leading segment of the panel;
-    /// the daemon-supplied `left` / `right` strings carry the window
-    /// list / active-window marker.
-    pub mux: Option<MuxStatus>,
-    /// Local wall clock formatted as `HH:MM:SS`. The widget itself does
-    /// not query the clock so tests can drive deterministic values.
-    /// Use [`format_local_clock`] to produce this from
-    /// [`SystemTime::now`].
-    pub clock_hhmmss: String,
-}
+/// Per-row visual height in egui logical points. Three rows render
+/// stacked; the panel height multiplies this by the number of
+/// visible rows.
+const ROW_HEIGHT: f32 = 22.0;
+/// Default font size for App rows; OSC row also uses this unless the
+/// view model overrides `font_size`.
+const DEFAULT_FONT_SIZE: f32 = 12.0;
 
-/// View of an attached mux session for the status bar.
-#[derive(Debug, Clone)]
-pub struct MuxStatus {
-    /// Session name (e.g. `"main"`); from `Tab::mux_session_name`.
-    pub session_name: String,
-    /// Daemon-supplied status payload. The `left` string typically
-    /// holds the window list with the active window marked
-    /// (e.g. `"1:shell 2:nvim* 3:test"`); `right` holds the right-aligned
-    /// segment (e.g. hostname / battery). The widget renders both
-    /// verbatim.
-    pub status: StatusUpdateMsg,
-}
-
-/// Visual height of the status-bar strip in egui logical points.
-/// Matches the tab-bar height so vertical rhythm stays consistent.
-const STATUS_BAR_HEIGHT: f32 = 22.0;
-
-/// Render the status bar. Returns immediately (no panel inserted) when
-/// `settings.statusbar.enabled` is false.
-///
-/// This function is pure over `(state, settings)` — the only side
-/// effect is the egui draw-list mutation through `ctx`. The caller
-/// owns clock generation and `StatusUpdateMsg` plumbing.
-pub fn draw(ctx: &egui::Context, state: &StatusBarState, settings: &Settings) {
-    if !settings.statusbar.enabled {
+/// Render the status bar. Returns immediately (no panel inserted)
+/// when `view_model.enabled` is false.
+pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
+    if !view_model.enabled {
         return;
     }
 
-    let mut panel = match settings.statusbar.position {
+    // Determine which rows render so we can size the panel
+    // correctly (egui top/bottom panels need a fixed height for
+    // multi-row layouts).
+    let has_mux = view_model.mux_session_name.is_some();
+    let osc_visible = view_model.osc.should_render(has_mux);
+    let app1_visible = true; // FR12: App Line 1 always renders.
+    let app2_visible = view_model.app_line2.has_content();
+
+    let visible_rows = (osc_visible as u32) + (app1_visible as u32) + (app2_visible as u32);
+    if visible_rows == 0 {
+        return;
+    }
+
+    let mut panel = match view_model.position {
         StatusBarPosition::Top => egui::TopBottomPanel::top("native-poc-status-bar"),
         StatusBarPosition::Bottom => egui::TopBottomPanel::bottom("native-poc-status-bar"),
     };
-    panel = panel.exact_height(STATUS_BAR_HEIGHT);
+    panel = panel.exact_height(ROW_HEIGHT * visible_rows as f32);
+
+    let font_size = view_model.font_size.unwrap_or(DEFAULT_FONT_SIZE);
 
     panel.show(ctx, |ui| {
-        // Subtle background. We do not pin a specific color; egui's
-        // panel default already differentiates from the central panel.
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            // Use a slightly smaller monospace font so window-list
-            // segments line up cleanly. Tests inspect text content,
-            // not styling.
-            let font = FontId::new(12.0, FontFamily::Monospace);
-
-            match &state.mux {
-                Some(mux) => {
-                    // Session badge (leading).
-                    ui.label(
-                        RichText::new(format!("[mux:{}]", mux.session_name))
-                            .strong()
-                            .font(font.clone()),
-                    );
-                    // Daemon-supplied left segment (window list, active
-                    // window typically marked by the daemon — the widget
-                    // renders verbatim).
-                    if !mux.status.left.is_empty() {
-                        ui.label(RichText::new(&mux.status.left).font(font.clone()));
-                    }
-                    // Right-aligned cluster: daemon's `right` segment +
-                    // clock. We split right-to-left inside a
-                    // `right_to_left` layout so the clock sits flush
-                    // against the panel edge.
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(&state.clock_hhmmss)
-                                .font(font.clone())
-                                .color(Color32::LIGHT_GRAY),
-                        );
-                        if !mux.status.right.is_empty() {
-                            ui.add_space(8.0);
-                            ui.label(RichText::new(&mux.status.right).font(font.clone()));
-                        }
-                    });
-                }
-                None => {
-                    // No mux: only the clock, flush against the right
-                    // edge.
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(&state.clock_hhmmss)
-                                .font(font.clone())
-                                .color(Color32::LIGHT_GRAY),
-                        );
-                    });
-                }
+        ui.vertical(|ui| {
+            // Order top-to-bottom regardless of panel placement.
+            // App rows go above the OSC row so the daemon status
+            // sits closest to the screen edge (matches WebView).
+            if app1_visible {
+                draw_app_row(ui, &view_model.app_line1, font_size);
+            }
+            if app2_visible {
+                draw_app_row(ui, &view_model.app_line2, font_size);
+            }
+            if osc_visible {
+                draw_osc_row(
+                    ui,
+                    &view_model.osc,
+                    view_model.mux_session_name.as_deref(),
+                    font_size,
+                );
             }
         });
     });
 }
 
-/// Format a `SystemTime` as a local `HH:MM:SS` string.
-///
-/// On unix we use `libc::localtime_r` so the result respects the host
-/// `TZ`. On non-unix targets we fall back to UTC computed from
-/// `SystemTime::duration_since(UNIX_EPOCH)`; native-poc Phase 4 ships on
-/// Linux + Windows but the unix path covers Linux today and the Windows
-/// port (Phase 4-E) can extend this helper.
-pub fn format_local_clock(now: SystemTime) -> String {
-    let secs_since_epoch = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let (h, m, s) = local_hms(secs_since_epoch);
-    format!("{:02}:{:02}:{:02}", h, m, s)
+/// Render an App row: left runs flow left-to-right, right runs flow
+/// right-to-left. Shared with App Line 1 / 2.
+fn draw_app_row(ui: &mut egui::Ui, row: &AppRow, font_size: f32) {
+    let font = FontId::new(font_size, FontFamily::Monospace);
+    ui.horizontal(|ui| {
+        ui.set_min_height(ROW_HEIGHT);
+        ui.spacing_mut().item_spacing.x = 8.0;
+        // Left side, in source order.
+        draw_runs(ui, &row.left, &font);
+        // Right side aligned to the panel edge.
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            // Iterating left-to-right in a right-to-left layout
+            // produces the visually-expected right-aligned order
+            // when the runs are short; for longer run lists we
+            // reverse so the source order reads left-to-right on
+            // screen.
+            for run in row.right.iter().rev() {
+                emit_run(ui, run, &font);
+            }
+        });
+    });
 }
 
-#[cfg(unix)]
-fn local_hms(secs_since_epoch: i64) -> (u32, u32, u32) {
-    use std::mem::MaybeUninit;
-    // SAFETY: `libc::localtime_r` writes a full `tm` struct into the
-    // provided pointer; we pass a stack-allocated `MaybeUninit<tm>` and
-    // only read it if the call returns a non-null pointer.
-    let t: libc::time_t = secs_since_epoch as libc::time_t;
-    let mut tm_buf: MaybeUninit<libc::tm> = MaybeUninit::uninit();
-    let result = unsafe { libc::localtime_r(&t, tm_buf.as_mut_ptr()) };
-    if result.is_null() {
-        // Fall back to UTC arithmetic if the libc call fails (e.g. a
-        // pathological TZ env). Mirrors the non-unix path.
-        return utc_hms(secs_since_epoch);
+/// Render the OSC row. The mux session badge (`[mux:<name>]`) is
+/// prepended to the left side when present.
+fn draw_osc_row(ui: &mut egui::Ui, row: &OscRow, mux_session_name: Option<&str>, font_size: f32) {
+    let font = FontId::new(font_size, FontFamily::Monospace);
+    ui.horizontal(|ui| {
+        ui.set_min_height(ROW_HEIGHT);
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if let Some(name) = mux_session_name {
+            ui.label(
+                RichText::new(format!("[mux:{}]", name))
+                    .strong()
+                    .font(font.clone()),
+            );
+        }
+        if !row.left.is_empty() {
+            // OSC row text is post-strip plain text — render as a
+            // single label.
+            ui.label(RichText::new(&row.left).font(font.clone()));
+        }
+        if !row.right.is_empty() {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(
+                    RichText::new(&row.right)
+                        .font(font.clone())
+                        .color(Color32::LIGHT_GRAY),
+                );
+            });
+        }
+    });
+}
+
+fn draw_runs(ui: &mut egui::Ui, runs: &[RichTextRun], font: &FontId) {
+    for run in runs {
+        emit_run(ui, run, font);
     }
-    let tm = unsafe { tm_buf.assume_init() };
-    (tm.tm_hour as u32, tm.tm_min as u32, tm.tm_sec as u32)
 }
 
-#[cfg(not(unix))]
-fn local_hms(secs_since_epoch: i64) -> (u32, u32, u32) {
-    utc_hms(secs_since_epoch)
+fn emit_run(ui: &mut egui::Ui, run: &RichTextRun, font: &FontId) {
+    if run.line_break {
+        // We render run lists into a single horizontal strip, so
+        // line breaks degrade to a fixed-width gap. Multi-line OSC
+        // payloads are not in scope for the status bar.
+        ui.add_space(8.0);
+        return;
+    }
+    if run.text.is_empty() {
+        return;
+    }
+    let mut rt = RichText::new(&run.text).font(font.clone());
+    if run.bold {
+        rt = rt.strong();
+    }
+    if run.italic {
+        rt = rt.italics();
+    }
+    if run.underline {
+        rt = rt.underline();
+    }
+    if let Some(color) = &run.color {
+        rt = rt.color(css_color_to_color32(color));
+    }
+    ui.label(rt);
 }
 
-/// Compute HH:MM:SS in UTC by integer arithmetic on a Unix timestamp.
-/// Used as the non-unix fallback and as a backstop when `localtime_r`
-/// fails on unix.
-fn utc_hms(secs_since_epoch: i64) -> (u32, u32, u32) {
-    let day_secs = secs_since_epoch.rem_euclid(86_400) as u32;
-    let h = day_secs / 3600;
-    let m = (day_secs % 3600) / 60;
-    let s = day_secs % 60;
-    (h, m, s)
+fn css_color_to_color32(color: &CssColor) -> Color32 {
+    color.to_egui().unwrap_or(Color32::LIGHT_GRAY)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
     use egui::RawInput;
 
-    fn make_settings(enabled: bool, position: StatusBarPosition) -> Settings {
-        let mut s = Settings::new();
-        s.statusbar.enabled = enabled;
-        s.statusbar.position = position;
-        s
+    fn make_text_run(text: &str) -> RichTextRun {
+        RichTextRun {
+            text: text.to_string(),
+            bold: false,
+            italic: false,
+            underline: false,
+            color: None,
+            line_break: false,
+        }
     }
 
-    /// Walk the egui shape list produced by `draw` and concatenate every
-    /// rendered text run. We use this in TS-status-1/2 to assert that
-    /// substrings (session name, clock, etc.) made it into the frame.
     fn collected_text(items: &[egui::epaint::ClippedShape]) -> String {
         let mut out = String::new();
         for cs in items {
@@ -224,11 +217,7 @@ mod tests {
         }
     }
 
-    /// Drive one egui pass and return all clipped shapes.
-    fn run_one_frame(
-        state: &StatusBarState,
-        settings: &Settings,
-    ) -> Vec<egui::epaint::ClippedShape> {
+    fn run_one_frame(vm: &StatusBarViewModel) -> Vec<egui::epaint::ClippedShape> {
         let ctx = egui::Context::default();
         let mut input = RawInput::default();
         input.screen_rect = Some(egui::Rect::from_min_size(
@@ -236,22 +225,14 @@ mod tests {
             egui::vec2(800.0, 200.0),
         ));
         let output = ctx.run(input, |ctx| {
-            // Insert a central panel so the layout reflects real usage —
-            // the status bar widget reserves vertical space via
-            // `TopBottomPanel`, and the central panel takes the rest.
-            draw(ctx, state, settings);
+            draw(ctx, vm);
             egui::CentralPanel::default().show(ctx, |_ui| {});
         });
         output.shapes
     }
 
-    /// Run one egui pass and return:
-    /// 1. the clipped shape list (for text scraping)
-    /// 2. the central panel's `max_rect` after layout (used to detect
-    ///    whether the status-bar panel reserved any vertical space).
     fn run_with_central_rect(
-        state: &StatusBarState,
-        settings: &Settings,
+        vm: &StatusBarViewModel,
     ) -> (Vec<egui::epaint::ClippedShape>, egui::Rect) {
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 200.0));
@@ -259,7 +240,7 @@ mod tests {
         input.screen_rect = Some(screen);
         let mut central_rect = egui::Rect::NOTHING;
         let output = ctx.run(input, |ctx| {
-            draw(ctx, state, settings);
+            draw(ctx, vm);
             egui::CentralPanel::default().show(ctx, |ui| {
                 central_rect = ui.max_rect();
             });
@@ -267,125 +248,110 @@ mod tests {
         (output.shapes, central_rect)
     }
 
-    // ── TS-status-1: mux mode renders session + window list + clock ─────
-
+    // TS-23 (replacement): disabled view model inserts no panel.
     #[test]
-    fn renders_session_window_list_and_clock_in_mux_mode() {
-        let state = StatusBarState {
-            mux: Some(MuxStatus {
-                session_name: "main".to_string(),
-                // Daemon-rendered window list with active window
-                // marked by `*`. The widget renders the string
-                // verbatim.
-                status: StatusUpdateMsg {
-                    left: "1:shell 2:nvim* 3:test".to_string(),
-                    right: "host01".to_string(),
-                },
-            }),
-            clock_hhmmss: "12:34:56".to_string(),
+    fn disabled_view_model_does_not_insert_panel() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = false;
+        let (_shapes, central_off) = run_with_central_rect(&vm);
+
+        let mut vm_on = StatusBarViewModel::default();
+        vm_on.enabled = true;
+        vm_on.app_line1.left = vec![make_text_run("hi")];
+        let (_shapes_on, central_on) = run_with_central_rect(&vm_on);
+
+        assert!(
+            central_off.height() > central_on.height(),
+            "disabled status bar must leave the central panel taller \
+             (off={central_off:?}, on={central_on:?})"
+        );
+    }
+
+    // TS-24: App Line 1 always renders; App Line 2 hidden when empty.
+    #[test]
+    fn app_line2_auto_hides_when_empty() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("L1")];
+        // app_line2 left/right are empty
+        let (_shapes, central_one_row) = run_with_central_rect(&vm);
+
+        let mut vm_two = vm.clone();
+        vm_two.app_line2.left = vec![make_text_run("L2")];
+        let (_shapes_two, central_two_row) = run_with_central_rect(&vm_two);
+
+        // Adding a second row shrinks the central panel by ROW_HEIGHT.
+        assert!(
+            central_one_row.height() > central_two_row.height(),
+            "Adding App Line 2 must shrink central panel; \
+             one_row={central_one_row:?} two_row={central_two_row:?}"
+        );
+    }
+
+    // TS-25: OSC row populated from mux state shows session badge.
+    #[test]
+    fn mux_session_renders_badge_and_osc_text() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("L1")];
+        vm.mux_session_name = Some("main".to_string());
+        vm.osc = OscRow {
+            left: "1:shell 2:nvim*".to_string(),
+            right: "host01".to_string(),
+            forced_visible: Some(true),
         };
-        let settings = make_settings(true, StatusBarPosition::Bottom);
-        let shapes = run_one_frame(&state, &settings);
+        let shapes = run_one_frame(&vm);
         let text = collected_text(&shapes);
         assert!(
             text.contains("[mux:main]"),
             "session badge missing: {text:?}"
         );
-        assert!(text.contains("1:shell"), "first window missing: {text:?}");
-        assert!(
-            text.contains("2:nvim*"),
-            "active-window marker missing: {text:?}"
-        );
-        assert!(text.contains("3:test"), "third window missing: {text:?}");
+        assert!(text.contains("1:shell"), "window list missing: {text:?}");
         assert!(text.contains("host01"), "right segment missing: {text:?}");
-        assert!(text.contains("12:34:56"), "clock missing: {text:?}");
     }
 
-    // ── TS-status-2: non-mux mode shows only the clock ──────────────────
-
+    // TS-26: OSC row hidden when no content and no mux session.
     #[test]
-    fn renders_only_clock_when_no_mux_state() {
-        let state = StatusBarState {
-            mux: None,
-            clock_hhmmss: "01:02:03".to_string(),
-        };
-        let settings = make_settings(true, StatusBarPosition::Bottom);
-        let shapes = run_one_frame(&state, &settings);
+    fn osc_row_hidden_when_empty_and_no_mux() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("only_app_row")];
+        let shapes = run_one_frame(&vm);
         let text = collected_text(&shapes);
-        assert!(
-            text.contains("01:02:03"),
-            "clock must render in non-mux mode: {text:?}"
-        );
-        assert!(
-            !text.contains("[mux:"),
-            "no mux badge expected when state.mux is None: {text:?}"
-        );
+        // The text must show app row but no `[mux:` prefix.
+        assert!(text.contains("only_app_row"));
+        assert!(!text.contains("[mux:"));
     }
 
+    // OSC row sourced from the dispatcher (no mux) shows even
+    // without a session badge.
     #[test]
-    fn renders_only_clock_when_no_mux_state_and_position_top() {
-        let state = StatusBarState {
-            mux: None,
-            clock_hhmmss: "23:59:59".to_string(),
+    fn osc_row_from_dispatcher_renders_without_mux_badge() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("L1")];
+        vm.osc = OscRow {
+            left: "manual-left".to_string(),
+            right: "manual-right".to_string(),
+            forced_visible: Some(true),
         };
-        let settings = make_settings(true, StatusBarPosition::Top);
-        let shapes = run_one_frame(&state, &settings);
+        let shapes = run_one_frame(&vm);
         let text = collected_text(&shapes);
-        assert!(text.contains("23:59:59"));
+        assert!(text.contains("manual-left"));
+        assert!(text.contains("manual-right"));
+        assert!(!text.contains("[mux:"));
     }
 
-    // ── TS-status-3: enabled=false inserts no panel ─────────────────────
-
-    #[test]
-    fn disabled_status_bar_does_not_insert_panel() {
-        let state = StatusBarState {
-            mux: Some(MuxStatus {
-                session_name: "main".to_string(),
-                status: StatusUpdateMsg {
-                    left: "1:shell".to_string(),
-                    right: "host".to_string(),
-                },
-            }),
-            clock_hhmmss: "00:00:00".to_string(),
-        };
-        // Compare central-panel heights with vs without the status bar
-        // enabled. When disabled, the widget must not insert a panel —
-        // the central panel grows to exactly the same height it would
-        // have if `draw` had been a no-op (modulo egui's intrinsic
-        // margins, which are identical across both runs).
-        let disabled = make_settings(false, StatusBarPosition::Bottom);
-        let enabled = make_settings(true, StatusBarPosition::Bottom);
-        let (shapes_off, central_off) = run_with_central_rect(&state, &disabled);
-        let (_shapes_on, central_on) = run_with_central_rect(&state, &enabled);
-        assert!(
-            central_off.height() > central_on.height() + STATUS_BAR_HEIGHT - 1.0,
-            "disabled status bar must leave the central panel at least \
-             {STATUS_BAR_HEIGHT}px taller than the enabled case \
-             (off={central_off:?}, on={central_on:?})"
-        );
-        let text = collected_text(&shapes_off);
-        assert!(
-            !text.contains("[mux:main]"),
-            "no status text expected when disabled: {text:?}"
-        );
-        assert!(
-            !text.contains("00:00:00"),
-            "no clock expected when disabled: {text:?}"
-        );
-    }
-
+    // Enabled view model with content reserves panel height.
     #[test]
     fn enabled_status_bar_reserves_panel_height() {
-        // Sanity: enabling the widget reduces the central-panel height
-        // by approximately `STATUS_BAR_HEIGHT` vs the disabled case.
-        let state = StatusBarState {
-            mux: None,
-            clock_hhmmss: "00:00:00".to_string(),
-        };
-        let disabled = make_settings(false, StatusBarPosition::Bottom);
-        let enabled = make_settings(true, StatusBarPosition::Bottom);
-        let (_, central_off) = run_with_central_rect(&state, &disabled);
-        let (_, central_on) = run_with_central_rect(&state, &enabled);
+        let mut vm_off = StatusBarViewModel::default();
+        vm_off.enabled = false;
+        let mut vm_on = StatusBarViewModel::default();
+        vm_on.enabled = true;
+        vm_on.app_line1.left = vec![make_text_run("x")];
+        let (_, central_off) = run_with_central_rect(&vm_off);
+        let (_, central_on) = run_with_central_rect(&vm_on);
         assert!(
             central_off.height() > central_on.height(),
             "enabling the status bar must shrink the central panel \
@@ -393,29 +359,20 @@ mod tests {
         );
     }
 
-    // ── Clock formatter ─────────────────────────────────────────────────
-
+    // Both forced_visible=Some(false) skips OSC even when content is
+    // present.
     #[test]
-    fn utc_hms_from_known_epoch() {
-        // 1970-01-01T00:00:00Z
-        assert_eq!(utc_hms(0), (0, 0, 0));
-        // 1970-01-01T01:02:03Z = 3723 s
-        assert_eq!(utc_hms(3723), (1, 2, 3));
-        // 1970-01-01T23:59:59Z = 86399 s
-        assert_eq!(utc_hms(86_399), (23, 59, 59));
-        // 1970-01-02T00:00:00Z = 86400 s — day wraps to 0.
-        assert_eq!(utc_hms(86_400), (0, 0, 0));
-    }
-
-    #[test]
-    fn format_local_clock_returns_hhmmss_shape() {
-        // We can't pin a specific value without bringing TZ into the
-        // test, but we can assert the textual shape.
-        let s = format_local_clock(SystemTime::now());
-        assert_eq!(s.len(), 8, "format must be HH:MM:SS, got {s:?}");
-        let bytes = s.as_bytes();
-        assert_eq!(bytes[2], b':');
-        assert_eq!(bytes[5], b':');
-        assert!(s.chars().filter(|c| c.is_ascii_digit()).count() == 6);
+    fn osc_force_hide_skips_row() {
+        let mut vm = StatusBarViewModel::default();
+        vm.enabled = true;
+        vm.app_line1.left = vec![make_text_run("L1")];
+        vm.osc = OscRow {
+            left: "hidden".to_string(),
+            right: String::new(),
+            forced_visible: Some(false),
+        };
+        let shapes = run_one_frame(&vm);
+        let text = collected_text(&shapes);
+        assert!(!text.contains("hidden"));
     }
 }

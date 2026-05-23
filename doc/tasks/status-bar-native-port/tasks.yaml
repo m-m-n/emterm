@@ -1,0 +1,271 @@
+schema_version: 1
+feature: status-bar-native-port
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-a-html-parser
+    name: HTML Parser Foundation
+    goal: Reusable inline-subset HTML parser at native-poc/src/html/, ready for status bar and future Markdown viewer.
+    effort: medium
+    status: completed
+    depends_on: []
+    blocks: [phase-c-template-providers, phase-d-osc-dispatcher, phase-e-view-model-ui]
+    files_create:
+      - native-poc/src/html/mod.rs
+      - native-poc/src/html/tokenizer.rs
+      - native-poc/src/html/parser.rs
+      - native-poc/src/html/sanitizer.rs
+      - native-poc/src/html/rich_text.rs
+    files_modify:
+      - native-poc/src/main.rs   # or lib.rs: pub mod html;
+    tasks:
+      - id: html-tokenizer
+        title: Tokenizer for tags / entities / text (single-pass, lenient)
+        covers_fr: [FR8, FR9]
+      - id: html-node-and-csscolor
+        title: Node enum and CssColor type (extensible for Markdown viewer)
+        covers_fr: [FR8, NFR5]
+      - id: html-parser-build
+        title: Stack-based parser with script/style swallow and unknown-tag tolerance
+        covers_fr: [FR8, NFR2]
+      - id: html-strip-html-tags
+        title: strip_html_tags() preserving non-HTML angle brackets
+        covers_fr: [FR9, NFR2]
+      - id: html-to-rich-text-runs
+        title: AST -> Vec<RichTextRun> flattener
+        covers_fr: [FR8]
+      - id: html-unit-tests
+        title: Unit tests for parser / sanitizer / runs / entities / malformed input
+        covers_fr: [FR8, FR9]
+    tests:
+      - TS-11
+      - TS-12
+      - TS-13
+      - TS-14
+      - TS-15
+      - TS-16
+      - TS-17
+
+  - id: phase-b-settings
+    name: Settings Extension
+    goal: Extend StatusBarSettings with WebView-parity fields and add CustomCommand. No JSON loader.
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: [phase-c-template-providers, phase-e-view-model-ui]
+    files_create: []
+    files_modify:
+      - native-poc/src/settings.rs
+    tasks:
+      - id: settings-custom-command-type
+        title: Add CustomCommand struct (executable + interval_ms)
+        covers_fr: [FR6, FR10]
+      - id: settings-status-bar-fields
+        title: Extend StatusBarSettings with app_line1/2, time_format, font_size, custom_commands, refresh_rates
+        covers_fr: [FR10]
+      - id: settings-default-impl
+        title: Default impl matching SPEC FR10 defaults
+        covers_fr: [FR10]
+      - id: settings-unit-tests
+        title: Unit tests asserting default values
+        covers_fr: [FR10]
+    tests:
+      - TS-20
+
+  - id: phase-c-template-providers
+    name: Template Engine + Providers
+    goal: Resolve templates without UI integration. Includes 4 providers and worker-thread infrastructure. Each provider receives WakeFn via constructor; TimeProvider owns a timer thread; CwdProvider is event-driven (no thread); GitBranch / Command providers call wake() on refresh.
+    effort: large
+    status: completed
+    depends_on: [phase-a-html-parser, phase-b-settings]
+    blocks: [phase-e-view-model-ui]
+    files_create:
+      - native-poc/src/status_bar/mod.rs
+      - native-poc/src/status_bar/template_engine.rs
+      - native-poc/src/status_bar/providers/mod.rs
+      - native-poc/src/status_bar/providers/time.rs
+      - native-poc/src/status_bar/providers/cwd.rs
+      - native-poc/src/status_bar/providers/git_branch.rs
+      - native-poc/src/status_bar/providers/command.rs
+    files_modify:
+      - native-poc/src/main.rs    # pub mod status_bar;
+      - native-poc/src/wakeup.rs  # added WakeFn type alias + shared_wake_fn()
+    tasks:
+      - id: template-engine-core
+        title: VariableProvider trait + TemplateEngine (handwritten scanner, no regex crate)
+        covers_fr: [FR2]
+      - id: provider-time
+        title: TimeProvider with token-based format (libc::localtime_r / GetLocalTime)
+        covers_fr: [FR3, NFR3]
+        status: completed
+      - id: time-provider-timer-thread
+        title: TimeProvider self-owned timer thread calling WakeFn at refresh_rates["time"] (default 1000ms)
+        covers_fr: [FR3, NFR1]
+        status: completed
+      - id: provider-cwd
+        title: CwdProvider with basename extraction (/, C:\, file://, percent-decode)
+        covers_fr: [FR4, NFR3]
+        status: completed
+      - id: cwd-provider-event-wake
+        title: CwdProvider event-driven wake (no polling); set_cwd() called from OSC 7 path invokes WakeFn
+        covers_fr: [FR4, NFR1]
+        status: completed
+      - id: wakeup-injection
+        title: Inject WakeFn via constructor into every Provider (Time / Cwd / GitBranch / Command); StatusBarRuntime threads it through
+        covers_fr: [NFR1, FR3, FR4, FR5, FR6]
+        status: completed
+      - id: worker-thread-helpers
+        title: Sleep + spawn + 5s timeout + kill helpers for IO-bound providers (plumb WakeFn through)
+        covers_fr: [FR5, FR6, NFR1]
+        status: completed
+      - id: provider-git-branch
+        title: GitBranchProvider worker thread with state-color classification, calls WakeFn on refresh
+        covers_fr: [FR5, NFR1, NFR2]
+        status: completed
+      - id: provider-command
+        title: CommandProvider worker thread (name validation, ~/ expansion, interval clamp), calls WakeFn on refresh
+        covers_fr: [FR6, NFR2]
+        status: completed
+      - id: template-engine-unit-tests
+        title: Unit tests for engine + each provider (incl. wake-call assertions)
+        covers_fr: [FR2, FR3, FR4, FR5, FR6]
+        status: completed
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-9
+      - TS-10
+      - TS-28
+      - TS-perf-3
+      - TS-29
+      - TS-31
+
+  - id: phase-d-osc-dispatcher
+    name: OSC 777;statusbar Dispatcher
+    goal: Route OSC 777;statusbar to dedicated dispatcher without breaking existing markdown/image/viewer routes.
+    effort: medium
+    status: completed
+    depends_on: [phase-a-html-parser]
+    blocks: [phase-e-view-model-ui]
+    files_create:
+      - native-poc/src/status_bar/osc_dispatcher.rs
+    files_modify:
+      - native-poc/src/callbacks.rs
+    tasks:
+      - id: osc-layer-state
+        title: OscLayerState type (left/right/forced_visible)
+        covers_fr: [FR7]
+      - id: osc-dispatcher-handle
+        title: StatusBarOscDispatcher::handle (set/clear/show/hide + unknown ignore)
+        covers_fr: [FR7]
+      - id: osc-try-dispatch-fn
+        title: try_dispatch_statusbar(payload) with splitn-based content preservation
+        covers_fr: [FR7]
+      - id: callbacks-wire-dispatcher
+        title: NativeCallbacks::on_osc(OSC_EMTERM_EXTENSION) routes statusbar prefix; legacy path preserved
+        covers_fr: [FR7]
+      - id: osc-dispatcher-unit-tests
+        title: Unit + integration tests for routing fork and HTML stripping
+        covers_fr: [FR7, FR9, NFR2]
+    tests:
+      - TS-18
+      - TS-19
+      - TS-21
+      - TS-22
+      - TS-27
+
+  - id: phase-e-view-model-ui
+    name: View Model + UI Integration
+    goal: Replace Phase 4-D StatusBarState with 3-row ViewModel and 3-row egui layout; wire mux + OSC 777 inputs; inject WakeFn into StatusBarRuntime; remove render/mod.rs request_repaint_after; implement PocApp::user_event so that EventLoopProxy::send_event-driven wakes become redraw requests.
+    effort: large
+    status: completed
+    depends_on:
+      - phase-a-html-parser
+      - phase-b-settings
+      - phase-c-template-providers
+      - phase-d-osc-dispatcher
+    blocks: [phase-f-polish]
+    files_create:
+      - native-poc/src/status_bar/runtime.rs
+      - native-poc/src/status_bar/view_model.rs
+    files_modify:
+      - native-poc/src/app.rs
+      - native-poc/src/ui/status_bar.rs
+      - native-poc/src/render/mod.rs   # status_bar_state() -> status_bar_view_model() swap
+      - native-poc/src/callbacks.rs
+      - native-poc/src/tabs.rs    # CwdProvider wired through spawn_shell
+      - native-poc/src/window_host.rs  # ApplicationHandler::user_event override
+    tasks:
+      - id: view-model-types
+        title: StatusBarViewModel / OscRow / AppRow type definitions
+        covers_fr: [FR1, FR11, FR12]
+      - id: status-bar-runtime
+        title: StatusBarRuntime owning engine + providers + dispatcher; constructor takes WakeFn and threads it to every provider; Drop joins workers
+        covers_fr: [FR1, FR2, FR5, FR6, FR7, NFR1]
+        status: completed
+      - id: app-view-model-integration
+        title: App::status_bar_view_model() replaces status_bar_state(); per-frame snapshot; pass WakeFn into StatusBarRuntime at App construction
+        covers_fr: [FR1, FR11, FR12]
+        status: completed
+      - id: render-remove-request-repaint-after
+        title: Remove ctx.request_repaint_after(Duration::from_secs(1)) call in render/mod.rs; periodic redraw is now provider-owned via WakeFn
+        covers_fr: [NFR1, FR3]
+        status: completed
+      - id: ui-status-bar-3-row
+        title: ui::status_bar::draw rewritten for 3 rows + auto-hide + shared background
+        covers_fr: [FR1, FR12, NFR4]
+      - id: mux-osc-integration
+        title: OSC row sourced from tab.mux_status_state when present; cleared on disconnect
+        covers_fr: [FR11]
+      - id: rewrite-phase4d-tests
+        title: Adapt Phase 4-D existing tests to new ViewModel + integration tests
+        covers_fr: [FR1, FR11, FR12]
+      - id: application-handler-user-event
+        title: Implement PocApp::user_event in window_host.rs to call host.window().request_redraw(); closes the EventLoopProxy::send_event -> redraw chain so provider-owned wake actually triggers a frame
+        covers_fr: [NFR1, FR3, FR4, FR5, FR6]
+        status: completed
+    tests:
+      - TS-23
+      - TS-24
+      - TS-25
+      - TS-26
+      - TS-31
+      - TS-32
+
+  - id: phase-f-polish
+    name: Polish + Verification
+    goal: Run-list caching for NFR1, release build, manual smoke (including TS-30 idle-clock check).
+    effort: small
+    status: completed
+    depends_on: [phase-e-view-model-ui]
+    blocks: []
+    files_create: []
+    files_modify:
+      - native-poc/src/status_bar/runtime.rs
+      - native-poc/src/status_bar/providers/time.rs
+      - native-poc/src/status_bar/providers/cwd.rs
+      - native-poc/src/status_bar/providers/git_branch.rs
+      - native-poc/src/status_bar/providers/command.rs
+    tasks:
+      - id: provider-version-counters
+        title: Per-provider AtomicU64 version counter bumped on value change
+        covers_fr: [NFR1]
+      - id: run-list-lru-cache
+        title: LRU cache keyed by (template, version_tuple) for resolved RichTextRun
+        covers_fr: [NFR1]
+      - id: release-build
+        title: cd native-poc && CARGO_TARGET_DIR=./target-host cargo build --release
+        covers_fr: [NFR3]
+        status: completed
+      - id: manual-smoke-checklist
+        title: Run VERIFICATION.md manual smoke checklist on release binary (includes TS-30 idle-clock 10-second check after PocApp::user_event fix)
+        covers_fr: [FR1, FR4, FR7, FR11, NFR2, NFR4, FR3, NFR1]
+        status: pending
+    tests:
+      - TS-30

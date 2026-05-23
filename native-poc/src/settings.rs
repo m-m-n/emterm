@@ -174,17 +174,71 @@ impl Default for ImeSettings {
     }
 }
 
-/// Statusbar-related settings. Phase 4-D introduces the
-/// `enabled` + `position` pair. Backward compatibility: an existing
-/// `settings.json` without a `statusbar` key MUST still parse — see
+/// A single user-defined custom command for the
+/// `{cmd:<name>}` template variable. The command is run by the
+/// matching [`crate::status_bar::providers::CommandProvider`] worker
+/// thread on a fixed interval; its stdout's first line becomes the
+/// substituted value.
+///
+/// Name validation (`[a-zA-Z0-9_-]+`) is enforced by the worker layer
+/// before spawning, so an invalid name never reaches `Command::new`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomCommand {
+    /// Path or basename of the executable. Resolved via `PATH` unless
+    /// it contains a `/`. `~/` is expanded by the worker layer.
+    pub executable: String,
+    /// Re-run interval in milliseconds. Clamped to a minimum of
+    /// 1000 ms by the worker layer (SPEC FR6 / US3 acceptance
+    /// criteria). Defaults to 1000 ms when the field is omitted in
+    /// `settings.json` (Phase 7).
+    pub interval_ms: u64,
+}
+
+impl Default for CustomCommand {
+    fn default() -> Self {
+        Self {
+            executable: String::new(),
+            interval_ms: 1000,
+        }
+    }
+}
+
+/// Statusbar-related settings. Phase 4-D introduced `enabled` +
+/// `position`. The Status-Bar Native Port phase extends the shape to
+/// reach feature parity with the WebView build's status-bar
+/// configuration. Backward compatibility: an existing `settings.json`
+/// without a `statusbar` key MUST still parse — see
 /// [`Settings::default`] which seeds these to their built-in defaults.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Eq` is not derived because `font_size: Option<f32>` is not `Eq`.
+/// Equality comparisons in tests use `PartialEq`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct StatusBarSettings {
     /// When `false`, the status-bar widget is not inserted at all (the
     /// central terminal panel covers the full window). Default: `true`.
     pub enabled: bool,
     /// Panel placement; see [`StatusBarPosition`]. Default: `Bottom`.
     pub position: StatusBarPosition,
+    /// App Line 1 left-aligned template. Default `"{time}"`.
+    pub app_line1_left: String,
+    /// App Line 1 right-aligned template. Default `"{cwd}"`.
+    pub app_line1_right: String,
+    /// App Line 2 left-aligned template. Default empty (row hidden).
+    pub app_line2_left: String,
+    /// App Line 2 right-aligned template. Default empty (row hidden).
+    pub app_line2_right: String,
+    /// Time format spec consumed by `{time}`. Default `"HH:mm:ss"`.
+    pub time_format: String,
+    /// Optional font-size override in egui logical points. `None`
+    /// keeps the renderer's default.
+    pub font_size: Option<f32>,
+    /// User-defined custom commands keyed by template name. Look-up
+    /// happens via `{cmd:<name>}`.
+    pub custom_commands: std::collections::HashMap<String, CustomCommand>,
+    /// Per-provider refresh intervals (milliseconds). Recognised keys:
+    /// `"time"` (default 1000), `"git_branch"` (default 5000), plus any
+    /// custom command name. Unrecognised keys are ignored.
+    pub refresh_rates: std::collections::HashMap<String, u64>,
 }
 
 impl Default for StatusBarSettings {
@@ -192,6 +246,14 @@ impl Default for StatusBarSettings {
         Self {
             enabled: true,
             position: StatusBarPosition::default(),
+            app_line1_left: "{time}".to_string(),
+            app_line1_right: "{cwd}".to_string(),
+            app_line2_left: String::new(),
+            app_line2_right: String::new(),
+            time_format: "HH:mm:ss".to_string(),
+            font_size: None,
+            custom_commands: std::collections::HashMap::new(),
+            refresh_rates: std::collections::HashMap::new(),
         }
     }
 }
@@ -384,6 +446,53 @@ mod tests {
         // into the parent Settings struct so callers can compare safely.
         let s = Settings::new();
         assert_eq!(s.statusbar, StatusBarSettings::default());
+    }
+
+    // ── TS-20: status-bar settings extension defaults ─────────────────
+
+    #[test]
+    fn default_status_bar_app_line1_templates() {
+        let s = Settings::new();
+        assert_eq!(s.statusbar.app_line1_left, "{time}");
+        assert_eq!(s.statusbar.app_line1_right, "{cwd}");
+    }
+
+    #[test]
+    fn default_status_bar_app_line2_templates_are_empty() {
+        let s = Settings::new();
+        assert!(s.statusbar.app_line2_left.is_empty());
+        assert!(s.statusbar.app_line2_right.is_empty());
+    }
+
+    #[test]
+    fn default_status_bar_time_format_is_hhmmss() {
+        let s = Settings::new();
+        assert_eq!(s.statusbar.time_format, "HH:mm:ss");
+    }
+
+    #[test]
+    fn default_status_bar_font_size_is_none() {
+        let s = Settings::new();
+        assert!(s.statusbar.font_size.is_none());
+    }
+
+    #[test]
+    fn default_status_bar_custom_commands_is_empty() {
+        let s = Settings::new();
+        assert!(s.statusbar.custom_commands.is_empty());
+    }
+
+    #[test]
+    fn default_status_bar_refresh_rates_is_empty() {
+        let s = Settings::new();
+        assert!(s.statusbar.refresh_rates.is_empty());
+    }
+
+    #[test]
+    fn custom_command_default_interval_is_1000ms() {
+        let c = CustomCommand::default();
+        assert_eq!(c.interval_ms, 1000);
+        assert!(c.executable.is_empty());
     }
 
     // ── TS-settings-1: ime.native_integration defaults to true ─────

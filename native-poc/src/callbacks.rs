@@ -28,6 +28,8 @@ use term_core::callbacks::TerminalCallbacks;
 
 use crate::render::theme::Theme;
 use crate::settings::Settings;
+use crate::status_bar::osc_dispatcher::{try_dispatch_statusbar, StatusBarOscDispatcher};
+use crate::status_bar::providers::CwdProvider;
 
 // ── OSC action_type constants (matches term_core::osc_handler) ───────────
 
@@ -267,6 +269,17 @@ pub struct NativeCallbacks {
     settings: Arc<Settings>,
     sink: Arc<dyn NotificationSink>,
     rate_limiter: Arc<NotificationRateLimiter>,
+    /// Optional OSC `777;statusbar` dispatcher. When present, OSC 777
+    /// payloads addressed to `statusbar;…` are routed here before
+    /// falling through to the legacy `osc_queue`. Phase 4-D + Phase
+    /// D wire this; tests that don't exercise the status bar can
+    /// leave it `None`.
+    statusbar_dispatcher: Option<Arc<StatusBarOscDispatcher>>,
+    /// Optional status-bar CwdProvider. When present, OSC 7 updates
+    /// forward to `CwdProvider::set_cwd` which fires its injected
+    /// wake handle so the egui frame schedules a redraw without
+    /// polling (provider-ownership refresh-redraw).
+    cwd_provider: Option<Arc<CwdProvider>>,
 }
 
 impl NativeCallbacks {
@@ -299,7 +312,22 @@ impl NativeCallbacks {
             settings,
             sink,
             rate_limiter,
+            statusbar_dispatcher: None,
+            cwd_provider: None,
         }
+    }
+
+    /// Install a [`StatusBarOscDispatcher`] so that OSC 777 payloads
+    /// addressed to `statusbar;…` are routed to the status-bar runtime
+    /// instead of being pushed into `osc_queue`.
+    pub fn set_statusbar_dispatcher(&mut self, dispatcher: Arc<StatusBarOscDispatcher>) {
+        self.statusbar_dispatcher = Some(dispatcher);
+    }
+
+    /// Install the runtime's [`CwdProvider`] so OSC 7 updates fire
+    /// the provider's wake handle (no polling, event-driven redraw).
+    pub fn set_cwd_provider(&mut self, provider: Arc<CwdProvider>) {
+        self.cwd_provider = Some(provider);
     }
 
     fn mark_theme_dirty(&self) {
@@ -334,6 +362,14 @@ impl NativeCallbacks {
 
     fn handle_cwd(&self, data: &str) {
         self.state.lock().cwd = Some(data.to_string());
+        // Forward to the status-bar CwdProvider so the provider can
+        // bump its version counter and invoke its injected wake
+        // handle (provider-ownership refresh-redraw). Without this
+        // hook the status bar would only redraw on the next
+        // unrelated frame trigger.
+        if let Some(p) = &self.cwd_provider {
+            p.set_cwd(Some(data));
+        }
     }
 
     fn handle_theme(&self, action_type: u8, data: &str) {
@@ -452,6 +488,15 @@ impl TerminalCallbacks for NativeCallbacks {
                 // Control messages now flow via APC `emterm-mux;<base64>` in
                 // the PTY stream (see `crate::mux::apc`). OSC 777 retains
                 // its legacy role as the emterm-extension viewer trigger.
+                //
+                // Phase D (status-bar native port): payloads starting with
+                // `statusbar;` are routed to the dispatcher first; only
+                // unconsumed payloads fall through to the legacy queue.
+                if let Some(dispatcher) = self.statusbar_dispatcher.as_ref() {
+                    if try_dispatch_statusbar(dispatcher, data) {
+                        return;
+                    }
+                }
                 self.state.lock().osc_queue.push(EmtermOscRequest {
                     payload: data.to_string(),
                 });
@@ -884,6 +929,32 @@ mod tests {
         let s = h.state.lock();
         assert_eq!(s.osc_queue.len(), 1);
         assert_eq!(s.osc_queue[0].payload, "markdown;hello");
+    }
+
+    // ── Phase D: OSC 777 statusbar routing ────────────────────────────
+
+    #[test]
+    fn osc_100_with_statusbar_prefix_routes_to_dispatcher() {
+        let mut h = default_harness();
+        let dispatcher = Arc::new(StatusBarOscDispatcher::new());
+        h.cb.set_statusbar_dispatcher(dispatcher.clone());
+        h.cb.on_osc(OSC_EMTERM_EXTENSION, "statusbar;set;left;hi");
+        // Dispatched: state updated.
+        assert_eq!(dispatcher.snapshot().left, "hi");
+        // NOT pushed to osc_queue.
+        assert!(h.state.lock().osc_queue.is_empty());
+    }
+
+    #[test]
+    fn osc_100_without_statusbar_prefix_still_pushes_to_queue_when_dispatcher_present() {
+        let mut h = default_harness();
+        let dispatcher = Arc::new(StatusBarOscDispatcher::new());
+        h.cb.set_statusbar_dispatcher(dispatcher.clone());
+        h.cb.on_osc(OSC_EMTERM_EXTENSION, "markdown;hello");
+        assert_eq!(h.state.lock().osc_queue.len(), 1);
+        assert_eq!(h.state.lock().osc_queue[0].payload, "markdown;hello");
+        // Dispatcher untouched.
+        assert!(dispatcher.snapshot().left.is_empty());
     }
 
     #[test]

@@ -21,6 +21,7 @@ use crate::render::font::resolver::Resolver;
 use crate::render::font::traits::{FontId, GlyphRasterizer};
 use crate::selection::Selection;
 use crate::settings::{FontEngine, Settings};
+use crate::status_bar::StatusBarRuntime;
 use crate::tabs::Tab;
 
 /// Cursor blink half-period in milliseconds. 530 ms matches xterm's
@@ -115,6 +116,7 @@ pub struct App {
     /// same handle can be reused across frames; `FallbackChain` is
     /// immutable after `new` returns and is wrapped in an `Arc` so the
     /// renderer pass can hold its own clone.
+    #[allow(dead_code)]
     pub font_resolver: Arc<Resolver>,
     pub font_fallback: Arc<FallbackChain>,
     pub font_cache: Arc<Mutex<GlyphCache>>,
@@ -122,7 +124,17 @@ pub struct App {
     /// `FontId` returned by the resolver for the bundled CJK base font.
     /// `TerminalGridPass` uses this as the chain root when no user font
     /// override is registered.
+    #[allow(dead_code)]
     pub font_base_id: FontId,
+    /// Status-bar runtime (template engine + providers + OSC
+    /// dispatcher). Constructed once at startup; per-frame snapshots
+    /// flow through [`App::status_bar_view_model`].
+    pub status_bar_runtime: StatusBarRuntime,
+    /// Snapshot of the active tab's cwd, updated once per frame in
+    /// [`App::sync_active_cwd`]. The status-bar `{cwd}` /
+    /// `{git_branch}` providers read this through a `CwdSource` closure
+    /// so worker threads stay isolated from `App`.
+    pub active_cwd: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +161,23 @@ impl App {
         let settings = Arc::new(Settings::new());
         let (font_resolver, font_fallback, font_cache, font_rasterizer, font_base_id) =
             Self::build_font_stack(&settings);
+
+        // Per-frame cwd snapshot shared with status-bar providers. The
+        // app updates it in `sync_active_cwd` before the runtime is
+        // queried; the runtime hands a closure reading this `Arc` to
+        // the Cwd / GitBranch providers.
+        let active_cwd: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let cwd_for_source = active_cwd.clone();
+        let cwd_source: crate::status_bar::providers::CwdSource =
+            Arc::new(move || cwd_for_source.lock().clone());
+        // Hand the providers a clone of the global `wake` so each
+        // owns its own refresh-redraw seam (SPEC.md Notes section).
+        let status_bar_runtime = StatusBarRuntime::new(
+            &settings.statusbar,
+            cwd_source,
+            crate::wakeup::shared_wake_fn(),
+        );
+
         Self {
             tabs: Vec::new(),
             active: 0,
@@ -173,6 +202,8 @@ impl App {
             font_cache,
             font_rasterizer,
             font_base_id,
+            status_bar_runtime,
+            active_cwd,
         }
     }
 
@@ -308,6 +339,7 @@ impl App {
     /// `true` when the currently installed backend is the passthrough
     /// `NullBackend`. Used by `window_host` to decide whether
     /// `WindowEvent::ReceivedImeText` should drive the commit path.
+    #[allow(dead_code)] // exercised via tests; production caller is window_host
     pub fn ime_is_null(&self) -> bool {
         self.ime_is_null
     }
@@ -454,6 +486,8 @@ impl App {
             dims.rows,
             self.settings.scrollback_lines,
             self.settings.clone(),
+            Some(self.status_bar_runtime.dispatcher()),
+            Some(self.status_bar_runtime.cwd_provider()),
         );
         self.tabs.push(tab);
         self.active = 0;
@@ -471,6 +505,8 @@ impl App {
             dims.rows,
             self.settings.scrollback_lines,
             self.settings.clone(),
+            Some(self.status_bar_runtime.dispatcher()),
+            Some(self.status_bar_runtime.cwd_provider()),
         );
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
@@ -622,44 +658,44 @@ impl App {
         }
     }
 
+    #[allow(dead_code)] // retained for window_host / tests
     pub fn has_tabs(&self) -> bool {
         !self.tabs.is_empty()
     }
 
-    /// Phase 4-D: project the active tab + the current wall clock into a
-    /// [`crate::ui::status_bar::StatusBarState`] for the status-bar
-    /// widget. When the active tab is attached to a mux session
-    /// (`mux_session_name` is `Some` and a `StatusUpdateMsg` has been
-    /// received) the `mux` field is populated; otherwise only the
-    /// clock is rendered.
-    pub fn status_bar_state(&self) -> crate::ui::status_bar::StatusBarState {
-        use crate::ui::status_bar::{MuxStatus, StatusBarState};
-        use std::time::SystemTime;
+    /// Build a per-frame view model for the status-bar widget. The
+    /// runtime owns the template engine, providers, and OSC
+    /// dispatcher; this method just snapshots the active tab's mux
+    /// state into the runtime and refreshes the shared cwd cell.
+    ///
+    /// The render pipeline calls this once per frame and hands the
+    /// result to [`crate::ui::status_bar::draw`].
+    pub fn status_bar_view_model(&self) -> crate::status_bar::StatusBarViewModel {
+        // Refresh the cwd snapshot the providers read through their
+        // `CwdSource` closure. The lock is held only for the duration
+        // of the swap.
+        let active_cwd_value = self
+            .active_tab()
+            .and_then(|t| t.cb_state.lock().cwd.clone());
+        *self.active_cwd.lock() = active_cwd_value;
 
-        let clock_hhmmss = crate::ui::status_bar::format_local_clock(SystemTime::now());
+        let (mux_session_name, mux_status) = match self.active_tab() {
+            Some(t) => (t.mux_session_name.as_deref(), t.mux_status_state.as_ref()),
+            None => (None, None),
+        };
 
-        let mux = self.active_tab().and_then(|t| {
-            // Both pieces are required: the session name confirms the
-            // tab is in mux mode, and the StatusUpdateMsg supplies the
-            // window-list / right-segment strings rendered by the
-            // widget. The daemon always pushes at least one update on
-            // attach, so the typical attached state has both.
-            match (&t.mux_session_name, &t.mux_status_state) {
-                (Some(name), Some(status)) => Some(MuxStatus {
-                    session_name: name.clone(),
-                    status: status.clone(),
-                }),
-                _ => None,
-            }
-        });
-
-        StatusBarState { mux, clock_hhmmss }
+        self.status_bar_runtime.build_view_model(
+            &self.settings.statusbar,
+            mux_session_name,
+            mux_status,
+        )
     }
 
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
     }
 
+    #[allow(dead_code)] // retained for future mutation paths / tests
     pub fn active_tab_mut(&mut self) -> Option<&mut Tab> {
         self.tabs.get_mut(self.active)
     }
@@ -991,6 +1027,7 @@ impl App {
     ///
     /// Returns `true` when the tab's visible state changed (the caller
     /// should request a redraw).
+    #[allow(dead_code)] // retained for future mux pumping / tests
     pub fn on_mux_message(&mut self, tab_idx: usize, msg: mux_ipc::protocol::MuxMessage) -> bool {
         let Some(tab) = self.tabs.get_mut(tab_idx) else {
             log::warn!("on_mux_message: tab_idx {tab_idx} out of range");

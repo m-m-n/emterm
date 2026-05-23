@@ -96,6 +96,10 @@ impl Tab {
         rows: u16,
         scrollback_lines: u32,
         settings: Arc<Settings>,
+        statusbar_dispatcher: Option<
+            Arc<crate::status_bar::osc_dispatcher::StatusBarOscDispatcher>,
+        >,
+        cwd_provider: Option<Arc<crate::status_bar::providers::CwdProvider>>,
     ) -> Self {
         // bounded(4096): allows up to ~64MB of in-flight PTY chunks
         // (4096 × 16KB reader buffer) before the reader thread blocks
@@ -118,11 +122,14 @@ impl Tab {
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
         let cb_state = Arc::new(Mutex::new(NativeCallbackState::default()));
         let theme = Arc::new(Mutex::new(Theme::default()));
-        core.callbacks = Some(Box::new(NativeCallbacks::new(
-            cb_state.clone(),
-            theme.clone(),
-            settings,
-        )));
+        let mut callbacks = NativeCallbacks::new(cb_state.clone(), theme.clone(), settings);
+        if let Some(dispatcher) = statusbar_dispatcher {
+            callbacks.set_statusbar_dispatcher(dispatcher);
+        }
+        if let Some(provider) = cwd_provider {
+            callbacks.set_cwd_provider(provider);
+        }
+        core.callbacks = Some(Box::new(callbacks));
 
         Self {
             title: title.into(),

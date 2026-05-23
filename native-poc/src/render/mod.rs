@@ -105,8 +105,8 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
     // (egui sizes top/bottom panels first, then the central panel
     // takes the remaining rect). The widget itself decides top vs
     // bottom from settings.
-    let status_state = app.status_bar_state();
-    crate::ui::status_bar::draw(ctx, &status_state, &app.settings);
+    let status_vm = app.status_bar_view_model();
+    crate::ui::status_bar::draw(ctx, &status_vm);
 
     egui::CentralPanel::default()
         // Phase 4-H (FR12): the central panel no longer paints the cell
@@ -143,13 +143,14 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
         }
     }
 
-    // Phase 4-D: when the status bar is enabled, schedule a 1 Hz
-    // wake-up so the local clock ticks even on otherwise-idle frames.
-    // Active PTY output / cursor blink already drive higher-rate
-    // repaint; this is the floor.
-    if app.settings.statusbar.enabled {
-        ctx.request_repaint_after(Duration::from_secs(1));
-    }
+    // Status-bar periodic redraw is now provider-owned: each
+    // Provider that needs periodic updates (TimeProvider timer
+    // thread, GitBranch / Command worker threads) holds an
+    // `Arc<WakeFn>` and invokes it directly. Event-driven providers
+    // (CwdProvider) wake on OSC 7 receipt. `egui::Context::
+    // request_repaint_after` does not bridge to winit so the prior
+    // `request_repaint_after(Duration::from_secs(1))` floor was a
+    // no-op in release builds — see SPEC.md Notes section.
 
     tab_event
 }
