@@ -661,6 +661,17 @@ impl WindowHost {
         // skip because `App::mark_full_redraw()` forces the dirty set to
         // the full row range. Phase 5: also bypass when there are pending
         // image events to draw or any placements (re-paint over text).
+        //
+        // The status-bar carve-out: provider-owned wake chains
+        // (`TimeProvider` timer thread, `GitBranchProvider` worker,
+        // OSC 777 push) drive `EventLoopProxy::send_event(())` ->
+        // `user_event` -> `request_redraw`, but on an idle shell the
+        // resulting `render()` would observe `dirty_rows_this_frame()
+        // == 0` and short-circuit here, freezing the `{time}` display.
+        // `App::status_bar_view_model_changed` does the comparison
+        // against the previous frame's view model so the skip path
+        // only triggers when neither the terminal nor the status bar
+        // moved.
         if !was_surface_dirty && !have_pending_images {
             let dirty_count = if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
@@ -677,7 +688,11 @@ impl WindowHost {
                 // on the `needs_full_redraw` flag bookkeeping for that.
                 None
             };
-            if matches!(dirty_count, Some(0)) && self.image_layer.state.placement_count() == 0 {
+            let status_bar_changed = app.status_bar_view_model_changed();
+            if matches!(dirty_count, Some(0))
+                && self.image_layer.state.placement_count() == 0
+                && !status_bar_changed
+            {
                 return;
             }
         }
