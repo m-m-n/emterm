@@ -144,6 +144,13 @@ pub struct WindowHost {
     /// `wezterm/window/src/os/x11/window.rs:298` (coalesce) and
     /// `alacritty/src/display/mod.rs:739` (defer-to-render).
     pending_resize: bool,
+    /// Cached status-bar panel insets in egui logical points, refreshed
+    /// each frame from `App::status_bar_view_model`. Subtracted from the
+    /// usable grid area in [`grid_size`] (and added to `origin_y` when
+    /// the panel sits on top) so the terminal's bottom/top row never
+    /// renders behind the status-bar panel.
+    status_bar_top_inset_logical: f32,
+    status_bar_bot_inset_logical: f32,
     current_mods: Modifiers,
     /// Last cursor position in physical pixels (updated on `CursorMoved`).
     cursor_pos: PhysicalPosition<f64>,
@@ -305,6 +312,8 @@ impl WindowHost {
             pixels_per_point,
             surface_dirty: true,
             pending_resize: false,
+            status_bar_top_inset_logical: 0.0,
+            status_bar_bot_inset_logical: 0.0,
             current_mods: Modifiers::NONE,
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             dragging: false,
@@ -407,10 +416,33 @@ impl WindowHost {
         app.set_grid_size(cols, rows);
     }
 
+    /// Refresh `status_bar_*_inset_logical` from the active view model.
+    /// Called at the head of each `render()` (before
+    /// [`apply_pending_resize`]) so the PTY row count and the grid
+    /// origin stay in sync with the currently-rendered status-bar
+    /// panel. When the inset changes, flag a pending resize so the PTY
+    /// is reshaped before the next frame paints — otherwise the bottom
+    /// row would be hidden behind the panel for one frame.
+    fn refresh_status_bar_insets(&mut self, app: &App) {
+        let vm = app.status_bar_view_model();
+        let height = crate::ui::status_bar::panel_height_logical(&vm);
+        let (top, bot) = match vm.position {
+            crate::settings::StatusBarPosition::Top => (height, 0.0),
+            crate::settings::StatusBarPosition::Bottom => (0.0, height),
+        };
+        if (self.status_bar_top_inset_logical - top).abs() > f32::EPSILON
+            || (self.status_bar_bot_inset_logical - bot).abs() > f32::EPSILON
+        {
+            self.status_bar_top_inset_logical = top;
+            self.status_bar_bot_inset_logical = bot;
+            self.pending_resize = true;
+        }
+    }
+
     /// Cell metrics in **physical pixels**, matching what
     /// `TerminalGridPass::prepare` is fed (see render path:
     /// `CELL_W * scale`, `CELL_H * scale`, origin =
-    /// `(LEFT_PAD * scale, (TAB_BAR_HEIGHT + TOP_PAD) * scale)`).
+    /// `(LEFT_PAD * scale, (TAB_BAR_HEIGHT + STATUS_BAR_TOP + TOP_PAD) * scale)`).
     ///
     /// Returns `(cell_w_px, cell_h_px, origin_x_px, origin_y_px)`. All
     /// values are floats so the per-row stepping stays sub-pixel
@@ -423,8 +455,10 @@ impl WindowHost {
         let cell_w = (crate::render::CELL_W as f64) * scale;
         let cell_h = (crate::render::CELL_H as f64) * scale;
         let origin_x = (crate::render::LEFT_PAD as f64) * scale;
-        let origin_y =
-            ((crate::ui::tab_bar::TAB_BAR_HEIGHT as f64) + (crate::render::TOP_PAD as f64)) * scale;
+        let origin_y = ((crate::ui::tab_bar::TAB_BAR_HEIGHT as f64)
+            + (self.status_bar_top_inset_logical as f64)
+            + (crate::render::TOP_PAD as f64))
+            * scale;
         (cell_w, cell_h, origin_x, origin_y)
     }
 
@@ -435,12 +469,15 @@ impl WindowHost {
         let w = self.surface_config.width.max(1) as f64;
         let h = self.surface_config.height.max(1) as f64;
         let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px();
-        // Usable area starts after the top bar + top pad and the left
-        // pad; floor the resulting cell count so partial trailing cells
-        // (which would clip at the surface edge) don't get reported as
-        // a writable row/col.
+        let scale = self.pixels_per_point.max(1.0) as f64;
+        let bottom_inset_px = (self.status_bar_bot_inset_logical as f64) * scale;
+        // Usable area starts after the top bar (+ top status bar) +
+        // top pad and the left pad, and ends above the bottom status
+        // bar. Floor the resulting cell count so partial trailing
+        // cells (which would clip at the surface edge) don't get
+        // reported as a writable row/col.
         let usable_w = (w - origin_x).max(cell_w);
-        let usable_h = (h - origin_y).max(cell_h);
+        let usable_h = (h - origin_y - bottom_inset_px).max(cell_h);
         let cols = (usable_w / cell_w).floor().clamp(20.0, 500.0) as u16;
         let rows = (usable_h / cell_h).floor().clamp(5.0, 200.0) as u16;
         (cols, rows)
@@ -559,6 +596,14 @@ impl WindowHost {
 
     /// Run a single egui frame and present.
     pub fn render(&mut self, app: &mut App) {
+        // Refresh the cached status-bar insets first: the deferred-
+        // resize path below reads them to compute the PTY grid size,
+        // and the grid-pass origin in this same frame also reads them.
+        // A change here flips `pending_resize` so the PTY is reshaped
+        // in step with the panel growing / shrinking (e.g. when the
+        // mux session attaches and the OSC row pops in).
+        self.refresh_status_bar_insets(app);
+
         // Alacritty-style deferred resize: apply pending window-size changes
         // here, not inside the winit `Resized` handler. This coalesces
         // bursts of compositor resize events into a single configure +
@@ -710,6 +755,11 @@ impl WindowHost {
         // every visible cell (background + glyph + decorations). egui
         // runs second with `LoadOp::Load` and draws the UI overlay
         // (tab bar / status bar / cursor / IME preedit) on top.
+        //
+        // Origin/metrics captured before `grid_pass.as_mut()` so the
+        // mutable borrow doesn't conflict with `&self` on the metrics
+        // call inside the branch (both go through `cell_metrics_px`).
+        let (_, _, origin_x_px, origin_y_px) = self.cell_metrics_px();
         let prepared_grid = if let Some(pass) = self.grid_pass.as_mut() {
             let theme = crate::render::theme::Theme::default();
             let width_mode = app.settings.ambiguous_width_mode;
@@ -781,6 +831,11 @@ impl WindowHost {
             // rasterize size) so cells line up with the egui-side
             // cursor / preedit on 2.0× hosts.
             let scale = self.pixels_per_point.max(1.0);
+            // Origin already captured above and lines up with
+            // `cell_metrics_px` so the status-bar top inset (when
+            // configured) shifts cells down to sit below the panel —
+            // otherwise the top row would paint behind the egui
+            // status-bar.
             Some(pass.prepare(
                 &self.device,
                 &self.queue,
@@ -788,10 +843,7 @@ impl WindowHost {
                 crate::render::terminal_grid_pass::CellMetrics {
                     cell_w: crate::render::CELL_W * scale,
                     cell_h: crate::render::CELL_H * scale,
-                    origin: [
-                        crate::render::LEFT_PAD * scale,
-                        (crate::ui::tab_bar::TAB_BAR_HEIGHT + crate::render::TOP_PAD) * scale,
-                    ],
+                    origin: [origin_x_px as f32, origin_y_px as f32],
                     font_size_px: theme.font_size_pt * scale,
                 },
                 self.surface_config.width,
