@@ -160,7 +160,17 @@ impl Default for GridDims {
 }
 
 impl App {
+    /// Construct an `App` with built-in default settings. Retained for
+    /// tests; binary callers should prefer [`App::with_settings`] so
+    /// `settings.json` overrides are honored.
     pub fn new() -> Self {
+        Self::with_settings(Settings::new())
+    }
+
+    /// Construct an `App` from a pre-built [`Settings`]. `main.rs` calls
+    /// this with [`Settings::load_or_default`] so on-disk overrides
+    /// (`~/.config/net.laser5.app.emterm/settings.json`) take effect.
+    pub fn with_settings(settings: Settings) -> Self {
         let force_full_redraw = std::env::var("EMTERM_FULL_REDRAW")
             .ok()
             .map(|v| v == "1")
@@ -168,7 +178,7 @@ impl App {
         if force_full_redraw {
             log::warn!("EMTERM_FULL_REDRAW=1: dirty-row optimization disabled");
         }
-        let settings = Arc::new(Settings::new());
+        let settings = Arc::new(settings);
         let (font_resolver, font_fallback, font_cache, font_rasterizer, font_base_id) =
             Self::build_font_stack(&settings);
 
@@ -255,6 +265,22 @@ impl App {
         #[cfg(test)]
         let noto_sans_jp_id: Option<FontId> = None;
 
+        // Optional host-installed emoji font preference: when
+        // `settings.emoji_font` is set, try the named family and use it
+        // as the preferred color emoji source so users on platforms
+        // that ship a newer Noto Color Emoji (or a different family
+        // entirely, e.g. Apple Color Emoji on macOS) get the host
+        // glyphs instead of the bundled `NotoColorEmoji.ttf`. The
+        // bundled font remains in the chain as a last-resort fallback.
+        #[cfg(not(test))]
+        let host_emoji_id = settings
+            .emoji_font
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|family| resolver.register_system_family(family, FontRole::Emoji));
+        #[cfg(test)]
+        let host_emoji_id: Option<FontId> = None;
+
         // Best-effort wider system scan (logged at WARN on failure;
         // family-name only, byte loading is deferred). Tests skip the
         // scan to keep cargo test deterministic.
@@ -307,7 +333,14 @@ impl App {
             // (covers KR / TC / SC / extended CJK that NSJP omits).
             extras.push(bundled_cjk_id);
         }
+        // Host-installed emoji font (if any) takes precedence over the
+        // bundled one — both go in the chain so a codepoint absent
+        // from the host font still falls through to bundled.
+        if let Some(id) = host_emoji_id {
+            extras.push(id);
+        }
         extras.push(emoji_id);
+        let preferred_emoji_id = host_emoji_id.unwrap_or(emoji_id);
         if let Some(id) = inconsolata_id {
             log::info!("font.base = Inconsolata (id={:?})", id);
         } else {
@@ -318,11 +351,20 @@ impl App {
         if let Some(id) = noto_sans_jp_id {
             log::info!("font.jp = Noto Sans JP (id={:?})", id);
         }
+        match (host_emoji_id, settings.emoji_font.as_deref()) {
+            (Some(id), Some(family)) => log::info!("font.emoji = {} (id={:?})", family, id),
+            (None, Some(family)) => log::warn!(
+                "font.emoji = bundled Noto Color Emoji (requested {:?} not found on host)",
+                family
+            ),
+            _ => log::info!("font.emoji = bundled Noto Color Emoji (id={:?})", emoji_id),
+        }
         let mut chain = FallbackChain::new(base_id, extras);
-        // Mark the bundled emoji font as the preferred color-emoji source
-        // so VS-16-bearing clusters (e.g. ⚠️ = U+26A0 + U+FE0F) resolve
-        // to it instead of the BW base font that also covers U+26A0.
-        chain.set_emoji(emoji_id);
+        // Mark the preferred emoji font as the color-emoji source so
+        // VS-16-bearing clusters (e.g. ⚠️ = U+26A0 + U+FE0F) and bare
+        // pictographs (✅ U+2705, 🟢 U+1F7E2) resolve to it instead of
+        // the BW base / CJK fonts that may also cover those codepoints.
+        chain.set_emoji(preferred_emoji_id);
         (
             Arc::new(resolver),
             Arc::new(chain),

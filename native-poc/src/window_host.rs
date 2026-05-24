@@ -292,6 +292,7 @@ impl WindowHost {
         // used for in-flight surface loss, which is already covered.
 
         let egui_ctx = egui::Context::default();
+        configure_egui_emoji_fallback(&egui_ctx);
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
         let pixels_per_point = window.scale_factor() as f32;
@@ -1117,6 +1118,59 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
         }
         _ => None,
     }
+}
+
+/// Extend egui's default font families with the bundled CJK and
+/// outline-emoji fonts so the status bar (drawn with
+/// `FontFamily::Monospace`) can render Japanese and pictographs
+/// instead of tofu.
+///
+/// Two problems are addressed:
+///
+/// 1. egui's `FontDefinitions::default()` ships only `Hack` on the
+///    `Monospace` family, which covers ASCII + Latin extensions but
+///    no CJK. Any 日本語 in a `{cmd:…}` script's output would
+///    therefore render as tofu.
+/// 2. The same default registers BW emoji fonts on `Proportional`
+///    only; pictographs (✅ 🟢 ☂ etc.) fall off the end of the
+///    Monospace chain.
+///
+/// We register the bundled `NotoSansCJK-JP` and `NotoColorEmoji.ttf`
+/// (already linked in via [`crate::render::font::resolver`] for the
+/// terminal grid) and append them to both `Monospace` and
+/// `Proportional` so other egui surfaces (tab bar, title bar)
+/// inherit the same coverage.
+///
+/// Caveat: egui 0.29 / ab_glyph cannot raster color emoji
+/// (CBDT / COLR v1) — for the emoji font only the *monochrome
+/// outline* layer is reachable. Full color-emoji parity with the
+/// WebView build requires switching the status-bar text path to a
+/// swash-based custom painter, which is out of scope here.
+fn configure_egui_emoji_fallback(ctx: &egui::Context) {
+    use crate::render::font::resolver::{BUNDLED_CJK_FONT, BUNDLED_EMOJI_FONT};
+
+    const CJK_KEY: &str = "EmtermBundledCJK";
+    const EMOJI_KEY: &str = "EmtermBundledEmoji";
+
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        CJK_KEY.to_string(),
+        egui::FontData::from_static(BUNDLED_CJK_FONT),
+    );
+    fonts.font_data.insert(
+        EMOJI_KEY.to_string(),
+        egui::FontData::from_static(BUNDLED_EMOJI_FONT),
+    );
+
+    for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
+        let chain = fonts.families.entry(family).or_default();
+        for name in [CJK_KEY, EMOJI_KEY] {
+            if !chain.iter().any(|n| n == name) {
+                chain.push(name.to_string());
+            }
+        }
+    }
+    ctx.set_fonts(fonts);
 }
 
 /// Extract the OS-level physical key / scan code from a winit `KeyEvent`.

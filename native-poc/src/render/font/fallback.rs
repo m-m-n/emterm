@@ -128,15 +128,33 @@ impl FallbackChain {
     /// order, asking each rasterizer "do you cover this codepoint?".
     /// Memoizes the answer (including `None` for "all miss") per
     /// (base, codepoint).
+    ///
+    /// When `cp` lies in a pictographic range ([`is_pictographic`]) and
+    /// [`set_emoji`] has marked an emoji font, that font is checked
+    /// **first** so codepoints like ✅ U+2705 or 🟢 U+1F7E2 prefer the
+    /// color-emoji glyph even when a text font earlier in the chain
+    /// (Noto Sans JP carries BW glyphs for many of these) reports
+    /// coverage. The range is intentionally narrow so ASCII, Latin,
+    /// CJK ideographs, and box-drawing characters keep their text-font
+    /// resolution.
     pub fn resolve(&self, rasterizer: &dyn GlyphRasterizer, cp: u32) -> Option<FontId> {
         if let Some(cached) = self.memo.lock().get(&(self.base, cp)).copied() {
             return cached;
         }
         let mut answer: Option<FontId> = None;
-        for &font in &self.chain {
-            if rasterizer.has_codepoint(font, cp) {
-                answer = Some(font);
-                break;
+        if is_pictographic(cp) {
+            if let Some(emoji) = self.emoji {
+                if rasterizer.has_codepoint(emoji, cp) {
+                    answer = Some(emoji);
+                }
+            }
+        }
+        if answer.is_none() {
+            for &font in &self.chain {
+                if rasterizer.has_codepoint(font, cp) {
+                    answer = Some(font);
+                    break;
+                }
             }
         }
         self.memo.lock().insert((self.base, cp), answer);
@@ -151,6 +169,26 @@ impl FallbackChain {
     pub fn memo_len(&self) -> usize {
         self.memo.lock().len()
     }
+}
+
+/// Conservative pictographic-range test used by [`FallbackChain::resolve`]
+/// to decide whether the marked emoji font should be consulted before
+/// the regular chain. The range is intentionally narrow:
+///
+/// - Misc Symbols + Dingbats (U+2600..=U+27BF) — covers ✅ ✓ ☂ ☀ etc.
+///   that exist in both BW text fonts and color emoji fonts; we want
+///   the color variant when the cluster reaches the bare codepoint.
+/// - All BMP-plus codepoints at or above U+1F000 — the SMP "Emoticons"
+///   / "Pictographs" / "Transport" / "Symbols Ext-A/B" / "Flags" /
+///   "Regional Indicators" live here. ASCII (U+0000..=U+007F),
+///   Latin extensions, CJK ideographs (U+3000..=U+9FFF), Hangul,
+///   and box-drawing (U+2500..=U+25FF) are *outside* this set so
+///   they keep their regular text-font resolution.
+///
+/// Tests pin the boundary values so future tweaks notice when ASCII /
+/// CJK / box-drawing accidentally start preferring the emoji font.
+fn is_pictographic(cp: u32) -> bool {
+    matches!(cp, 0x2600..=0x27BF) || cp >= 0x1F000
 }
 
 #[cfg(test)]
@@ -228,5 +266,86 @@ mod tests {
     fn duplicate_chain_entries_are_dropped() {
         let chain = FallbackChain::new(FontId(1), [FontId(1), FontId(2), FontId(2)]);
         assert_eq!(chain.chain(), &[FontId(1), FontId(2)]);
+    }
+
+    /// Regression: when a CJK / text font earlier in the chain happens
+    /// to carry a BW glyph for a pictographic codepoint (✅ U+2705,
+    /// 🟢 U+1F7E2), the emoji font marked via `set_emoji` must still
+    /// win so the user sees color emoji.
+    #[test]
+    fn resolve_prefers_emoji_in_pictographic_range() {
+        // FontId(1) = base ASCII, FontId(2) = "CJK" that also carries
+        // BW glyphs for 0x2705 and 0x1F7E2, FontId(3) = emoji marked
+        // with `set_emoji` and covering the same pictographs.
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x41));
+        covers.insert((FontId(2), 0x3042));
+        covers.insert((FontId(2), 0x2705)); // BW ✓ in the CJK font
+        covers.insert((FontId(2), 0x1F7E2)); // BW 🟢 in the CJK font
+        covers.insert((FontId(3), 0x2705));
+        covers.insert((FontId(3), 0x1F7E2));
+        covers.insert((FontId(3), 0x1F600));
+        let raster = TableRasterizer { covers };
+
+        // Pictographs prefer the emoji font even though the CJK font
+        // would have matched first by chain order.
+        assert_eq!(chain.resolve(&raster, 0x2705), Some(FontId(3)));
+        assert_eq!(chain.resolve(&raster, 0x1F7E2), Some(FontId(3)));
+
+        // ASCII / CJK keep their previous fonts because the emoji
+        // font does not cover them.
+        assert_eq!(chain.resolve(&raster, 0x41), Some(FontId(1)));
+        assert_eq!(chain.resolve(&raster, 0x3042), Some(FontId(2)));
+    }
+
+    /// Regression: bundled `NotoColorEmoji.ttf` happens to carry glyphs
+    /// for some non-pictographic codepoints (e.g. ASCII digits used in
+    /// keycap clusters, or stray symbols in the Latin block). Before
+    /// the narrow [`is_pictographic`] check, the emoji-first preference
+    /// would shadow the regular text fonts for *every* codepoint the
+    /// emoji font happened to cover — leaving ordinary ASCII /
+    /// box-drawing letters rendered in the emoji font.
+    #[test]
+    fn resolve_does_not_prefer_emoji_outside_pictographic_range() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        // ASCII 'A' covered by both base AND emoji — base must win.
+        covers.insert((FontId(1), 0x41));
+        covers.insert((FontId(3), 0x41));
+        // Box drawing └ (U+2514) covered by base AND emoji — base wins.
+        covers.insert((FontId(1), 0x2514));
+        covers.insert((FontId(3), 0x2514));
+        // CJK U+3042 covered by CJK AND emoji — CJK wins.
+        covers.insert((FontId(2), 0x3042));
+        covers.insert((FontId(3), 0x3042));
+        let raster = TableRasterizer { covers };
+
+        assert_eq!(chain.resolve(&raster, 0x41), Some(FontId(1)));
+        assert_eq!(chain.resolve(&raster, 0x2514), Some(FontId(1)));
+        assert_eq!(chain.resolve(&raster, 0x3042), Some(FontId(2)));
+    }
+
+    /// Pin the boundary values of [`is_pictographic`] so a future tweak
+    /// that accidentally widens the range (and re-introduces the
+    /// "ASCII gets emoji glyph" regression) trips the test.
+    #[test]
+    fn is_pictographic_boundary_values() {
+        // Outside the range
+        assert!(!is_pictographic(0x0041)); // 'A'
+        assert!(!is_pictographic(0x3042)); // あ
+        assert!(!is_pictographic(0x2500)); // box drawing ─
+        assert!(!is_pictographic(0x25FF)); // last box drawing
+        assert!(!is_pictographic(0x1EFFF)); // just below SMP emoji block
+                                            // Inside the range
+        assert!(is_pictographic(0x2600)); // ☀ first dingbat-ish
+        assert!(is_pictographic(0x2705)); // ✅
+        assert!(is_pictographic(0x27BF)); // ➿ last dingbat
+        assert!(is_pictographic(0x1F000)); // 🀀
+        assert!(is_pictographic(0x1F600)); // 😀
+        assert!(is_pictographic(0x1F7E2)); // 🟢
+        assert!(is_pictographic(0x1FAFF)); // upper pictographs ext-A
     }
 }

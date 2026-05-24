@@ -34,6 +34,7 @@ fn main() {
     wakeup::install(Box::new(move || {
         let _ = proxy.send_event(());
     }));
-    let app = app::App::new();
+    let settings = settings::Settings::load_or_default();
+    let app = app::App::with_settings(settings);
     window_host::run(event_loop, app);
 }
