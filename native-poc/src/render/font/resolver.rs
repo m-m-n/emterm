@@ -94,15 +94,23 @@ impl Resolver {
 
     /// Register the two bundled fonts (Noto Sans CJK JP + Noto Color
     /// Emoji). Returns the assigned ids `(cjk, emoji)`.
+    ///
+    /// The family names carry a `(bundled)` suffix so a later
+    /// [`Resolver::register_system_family`] call for the same family
+    /// name (e.g. `"Noto Color Emoji"`) does not short-circuit on the
+    /// bundled entry — callers that explicitly want the host-installed
+    /// font (typically newer, with extended emoji coverage) get a
+    /// distinct `FontId` instead of being silently aliased back to the
+    /// bundled bytes.
     pub fn register_bundled(&mut self) -> (FontId, FontId) {
         let cjk = self.register_bytes(
             FontRole::Cjk,
-            "Noto Sans CJK JP",
+            "Noto Sans CJK JP (bundled)",
             Arc::<[u8]>::from(BUNDLED_CJK_FONT),
         );
         let emoji = self.register_bytes(
             FontRole::Emoji,
-            "Noto Color Emoji",
+            "Noto Color Emoji (bundled)",
             Arc::<[u8]>::from(BUNDLED_EMOJI_FONT),
         );
         (cjk, emoji)
@@ -308,7 +316,12 @@ mod tests {
     fn by_family_resolves_registered_name() {
         let mut r = Resolver::new();
         let _ = r.register_bundled();
-        let cjk = r.by_family("Noto Sans CJK JP").expect("CJK by family");
+        // Bundled families carry the `(bundled)` suffix so a later
+        // `register_system_family("Noto Color Emoji", …)` does not
+        // alias back to the bundled bytes.
+        let cjk = r
+            .by_family("Noto Sans CJK JP (bundled)")
+            .expect("CJK by family");
         assert_eq!(cjk.role, FontRole::Cjk);
     }
 

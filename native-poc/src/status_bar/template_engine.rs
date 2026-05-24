@@ -200,14 +200,60 @@ fn utf8_len(b: u8) -> usize {
 /// returns markup (e.g. a `{cmd:foo}` that prints `<b>x</b>` or
 /// `<script>...`) cannot inject styling or scripts through the
 /// downstream `html::parse` pass.
+///
+/// Provider output is also passed through [`strip_html_tags_naive`]
+/// first: many WebView-era `{cmd:…}` helper scripts emit inline
+/// `<span style="color:…">value</span>` for coloring (CO2, weather,
+/// etc.). Until the upstream HTML parser is plumbed through this path,
+/// the strip keeps the surrounding plain text readable instead of
+/// rendering the raw markup. The stripper is intentionally crude (no
+/// quoted-attribute awareness) and will be replaced once the real
+/// parser lands.
 fn push_styled(out: &mut String, value: &str, color: Option<&CssColor>) {
-    let escaped = escape_html(value);
+    let stripped = strip_html_tags_naive(value);
+    let escaped = escape_html(stripped.as_ref());
     if let Some(color) = color {
         let css = css_color_string(color);
         out.push_str(&format!(r#"<span style="color:{css}">{escaped}</span>"#));
     } else {
         out.push_str(&escaped);
     }
+}
+
+/// Strip every `<…>` block from `input`. Naive: no awareness of quoted
+/// attributes, comments, or CDATA. Borrowed return path when the input
+/// contains no `<` byte. Temporary; see [`push_styled`].
+fn strip_html_tags_naive(input: &str) -> Cow<'_, str> {
+    if !input.contains('<') {
+        return Cow::Borrowed(input);
+    }
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
+    let mut i = 0;
+    while i < len {
+        if bytes[i] == b'<' {
+            // Skip up to the next `>` (or EOF).
+            let mut j = i + 1;
+            while j < len && bytes[j] != b'>' {
+                j += 1;
+            }
+            if j >= len {
+                // Unterminated `<…`: preserve verbatim so the user can
+                // see the broken markup rather than silently dropping
+                // arbitrary trailing content.
+                out.push_str(&input[i..]);
+                break;
+            }
+            i = j + 1;
+        } else {
+            let cp_len = utf8_len(bytes[i]).max(1);
+            let end = (i + cp_len).min(len);
+            out.push_str(&input[i..end]);
+            i = end;
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// HTML-escape `&`, `<`, `>`, `"`, and `'`. Returns a borrow when
@@ -374,11 +420,13 @@ mod tests {
     /// A provider that returns markup-looking text (e.g. a custom
     /// `{cmd:foo}` whose stdout happens to print `<b>x</b>`) MUST NOT
     /// be able to inject styling or scripts through the downstream
-    /// `html::parse` pass. The engine HTML-escapes provider values
-    /// before embedding them into the output fragment, so the parser
-    /// sees the tags as literal text rather than markup.
+    /// `html::parse` pass. Until the real HTML parser is wired into
+    /// the status-bar path, [`push_styled`] strips `<…>` blocks before
+    /// HTML-escaping the residue, so a stray `<b>x</b>` reaches the
+    /// downstream parser as the plain text `x` — neither styled nor
+    /// rendered as literal `<b>x</b>`.
     #[test]
-    fn provider_value_containing_html_tags_is_escaped() {
+    fn provider_value_containing_html_tags_is_stripped() {
         use crate::html;
 
         let mut engine = TemplateEngine::new();
@@ -387,27 +435,25 @@ mod tests {
             value: "<b>x</b>".to_string(),
             color: None,
         }));
-        // The resolved HTML fragment must contain entity-escaped
-        // angle brackets, not raw `<b>`.
+        // The tag-stripper removes `<b>` and `</b>`; the residue is
+        // HTML-escaped (no entities to escape here) and appears as
+        // the literal text `x`.
         let resolved = engine.resolve("{cmd}");
-        assert_eq!(resolved, "&lt;b&gt;x&lt;/b&gt;");
+        assert_eq!(resolved, "x");
 
-        // Downstream parse + flatten yields a single non-bold run
-        // whose text is the literal `<b>x</b>` (entities decoded back
-        // by the tokenizer — the key contract is that the bold node
-        // never materializes).
+        // Downstream parse + flatten yields a single non-bold run.
         let nodes = html::parse(&resolved);
         let runs = html::to_rich_text_runs(&nodes);
         assert_eq!(runs.len(), 1);
         assert!(!runs[0].bold, "provider value must not become a bold run");
-        assert_eq!(runs[0].text, "<b>x</b>");
+        assert_eq!(runs[0].text, "x");
     }
 
-    /// The escape also applies inside the color-wrapping span branch
-    /// (FR-Security: untrusted text must not break out of the
-    /// `<span style="…">` wrapper or inject a nested tag).
+    /// The strip-and-escape also applies inside the color-wrapping
+    /// span branch (FR-Security: untrusted text must not break out of
+    /// the `<span style="…">` wrapper or inject a nested tag).
     #[test]
-    fn provider_value_with_html_inside_color_span_is_escaped() {
+    fn provider_value_with_html_inside_color_span_is_stripped() {
         let mut engine = TemplateEngine::new();
         engine.register(Arc::new(StaticProvider {
             name: "git_branch".to_string(),
@@ -415,12 +461,67 @@ mod tests {
             color: Some(CssColor::Named("red".to_string())),
         }));
         let r = engine.resolve("{git_branch}");
-        // `"` and `<` / `>` get entity-escaped; the wrapper span
-        // attribute stays intact and the injected `<script>` is
-        // neutralised.
+        // `<script>x</script>` is removed by the tag-stripper. The
+        // residue `main">` is HTML-escaped (`"` and `>` become
+        // entities) so the wrapper span attribute stays intact.
+        assert_eq!(r, r#"<span style="color:red">main&quot;&gt;x</span>"#);
+    }
+
+    // ── temporary HTML-tag stripper (CO2 / weather helper scripts) ─────
+
+    #[test]
+    fn provider_inline_span_color_is_stripped_to_plain_text() {
+        // Reproduces the user's CO2 helper which emits e.g.
+        // `CO2: <span style="color:tomato">1450</span>ppm` to colorize
+        // the value in the WebView build. Until the egui renderer
+        // wires through the real HTML parser, the strip step keeps the
+        // surrounding text readable.
+        let mut engine = TemplateEngine::new();
+        engine.register(Arc::new(StaticProvider {
+            name: "cmd".to_string(),
+            value: r#"CO2: <span style="color:tomato">1450</span>ppm"#.to_string(),
+            color: None,
+        }));
+        assert_eq!(engine.resolve("{cmd}"), "CO2: 1450ppm");
+    }
+
+    #[test]
+    fn strip_html_tags_naive_no_tags_is_borrowed() {
+        // Borrowed return path keeps the no-markup hot path allocation-free.
+        let s = "plain text";
+        let out = strip_html_tags_naive(s);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert_eq!(out, "plain text");
+    }
+
+    #[test]
+    fn strip_html_tags_naive_removes_simple_tags() {
+        assert_eq!(strip_html_tags_naive("a<b>x</b>c").as_ref(), "axc");
+        assert_eq!(strip_html_tags_naive("<br/>line").as_ref(), "line");
+        assert_eq!(strip_html_tags_naive("<p>1</p><p>2</p>").as_ref(), "12");
+    }
+
+    #[test]
+    fn strip_html_tags_naive_unterminated_tag_preserved() {
+        // An unterminated `<…` is preserved verbatim so the user can
+        // see the broken markup (this matches the doc comment on
+        // `strip_html_tags_naive`).
+        assert_eq!(strip_html_tags_naive("ok <unterm").as_ref(), "ok <unterm");
+    }
+
+    #[test]
+    fn strip_html_tags_naive_keeps_utf8_outside_tags() {
         assert_eq!(
-            r,
-            r#"<span style="color:red">main&quot;&gt;&lt;script&gt;x&lt;/script&gt;</span>"#
+            strip_html_tags_naive("こんにちは<b>世界</b>!").as_ref(),
+            "こんにちは世界!"
+        );
+    }
+
+    #[test]
+    fn strip_html_tags_naive_strips_attributes_with_spaces() {
+        assert_eq!(
+            strip_html_tags_naive(r#"<span style="color: red">x</span>"#).as_ref(),
+            "x"
         );
     }
 }

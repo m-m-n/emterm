@@ -336,6 +336,300 @@ impl Settings {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Load `settings.json` from the platform config dir; fall back to
+    /// [`Settings::default`] on any read / parse failure (logged at warn).
+    ///
+    /// The path is intentionally identical to the legacy Tauri WebView
+    /// build's `AppHandle::path().app_config_dir()` so a single
+    /// `settings.json` is shared by both binaries during the native-poc
+    /// transition:
+    /// - Linux:   `$XDG_CONFIG_HOME/net.laser5.app.emterm/settings.json`
+    ///            (default: `$HOME/.config/...`)
+    /// - Windows: `%APPDATA%\net.laser5.app.emterm\settings.json`
+    pub fn load_or_default() -> Self {
+        match settings_path() {
+            Some(p) => Self::load_from(&p),
+            None => {
+                log::warn!("settings: unable to resolve config dir; using defaults");
+                Self::default()
+            }
+        }
+    }
+
+    /// Read and merge a specific `settings.json` path into a fresh
+    /// [`Settings::default`]. Missing file → defaults (logged at info).
+    /// Unreadable / unparseable file → defaults (logged at warn).
+    pub fn load_from(path: &std::path::Path) -> Self {
+        let mut base = Self::default();
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                log::info!("settings: {} not found; using defaults", path.display());
+                return base;
+            }
+            Err(e) => {
+                log::warn!(
+                    "settings: failed to read {}: {}; using defaults",
+                    path.display(),
+                    e
+                );
+                return base;
+            }
+        };
+        match serde_json::from_slice::<RawSettings>(&bytes) {
+            Ok(raw) => {
+                raw.merge_into(&mut base);
+                log::info!("settings: loaded {}", path.display());
+            }
+            Err(e) => {
+                log::warn!(
+                    "settings: failed to parse {}: {}; using defaults",
+                    path.display(),
+                    e
+                );
+            }
+        }
+        base
+    }
+}
+
+/// Resolve the `settings.json` path on the current platform. Returns
+/// `None` only on unsupported targets (macOS / others); callers fall
+/// back to [`Settings::default`].
+fn settings_path() -> Option<std::path::PathBuf> {
+    const APP_ID: &str = "net.laser5.app.emterm";
+
+    #[cfg(target_os = "linux")]
+    {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .or_else(|| {
+                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+            })?;
+        Some(base.join(APP_ID).join("settings.json"))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var_os("APPDATA").map(std::path::PathBuf::from)?;
+        Some(base.join(APP_ID).join("settings.json"))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+// ============================================================
+// settings.json schema (deserialize side)
+// ============================================================
+//
+// `RawSettings` mirrors the on-disk JSON layout. Top-level keys match
+// the legacy Tauri WebView build (`src-tauri/.../config/settings.rs`'s
+// `AppSettings`) so a single `settings.json` works for both binaries.
+// native-poc-specific fields live under a dedicated `native_poc:` block
+// to avoid colliding with future src-tauri additions.
+//
+// Every field is `Option<_>` with `#[serde(default)]` on the struct, so:
+// - missing keys leave the corresponding `Settings` field untouched
+// - explicit `null` is treated as "absent" (Option = None)
+// - unknown keys are ignored (forward compatibility with newer
+//   src-tauri settings written by the legacy build)
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct RawSettings {
+    // ── src-tauri / WebView build compatible (flat keys) ──
+    scrollback_lines: Option<u32>,
+    clipboard_read_osc52: Option<bool>,
+    clipboard_max_size_osc52: Option<u32>,
+    font_family_primary: Option<String>,
+    font_family_secondary: Option<String>,
+    font_family_emoji: Option<String>,
+    mux: Option<RawMux>,
+
+    statusbar_enabled: Option<bool>,
+    statusbar_app_line1_left: Option<String>,
+    statusbar_app_line1_right: Option<String>,
+    statusbar_app_line2_left: Option<String>,
+    statusbar_app_line2_right: Option<String>,
+    statusbar_time_format: Option<String>,
+    statusbar_font_size: Option<f32>,
+    statusbar_custom_commands: Option<std::collections::HashMap<String, RawCustomCommand>>,
+    statusbar_refresh_rates: Option<std::collections::HashMap<String, u64>>,
+
+    // ── native-poc-specific (nested) ──
+    native_poc: Option<RawNativePoc>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct RawMux {
+    prefix: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawCustomCommand {
+    executable: String,
+    interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct RawNativePoc {
+    ambiguous_width_mode: Option<String>,
+    font_engine: Option<String>,
+    statusbar_position: Option<String>,
+    image_memory_quota_mb: Option<u32>,
+    ime: Option<RawIme>,
+    font_family_fallback: Option<Vec<String>>,
+    emoji_font: Option<String>,
+    variable_font_axes: Option<std::collections::HashMap<String, f32>>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct RawIme {
+    native_integration: Option<bool>,
+}
+
+impl RawSettings {
+    /// Apply every present field onto `dst`. Absent fields leave the
+    /// corresponding `Settings` field at its prior value (typically the
+    /// default that `dst` was seeded with).
+    fn merge_into(self, dst: &mut Settings) {
+        // ── flat keys (src-tauri compatible) ──
+        if let Some(v) = self.scrollback_lines {
+            dst.scrollback_lines = v;
+        }
+        if let Some(v) = self.clipboard_read_osc52 {
+            dst.clipboard_read_osc52 = v;
+        }
+        if let Some(v) = self.clipboard_max_size_osc52 {
+            dst.clipboard_max_size_osc52 = v;
+        }
+
+        // Font fallback derived from the src-tauri-compatible flat keys.
+        // primary -> secondary becomes `font_family_fallback`; the bundled
+        // CJK / emoji fonts continue to live at the resolver layer. If
+        // `native_poc.font_family_fallback` is also present it overrides
+        // this further down (explicit wins).
+        let mut fb = Vec::new();
+        if let Some(v) = self.font_family_primary.filter(|s| !s.trim().is_empty()) {
+            fb.push(v);
+        }
+        if let Some(v) = self.font_family_secondary.filter(|s| !s.trim().is_empty()) {
+            fb.push(v);
+        }
+        if !fb.is_empty() {
+            dst.font_family_fallback = fb;
+        }
+        if let Some(v) = self.font_family_emoji.filter(|s| !s.trim().is_empty()) {
+            dst.emoji_font = Some(v);
+        }
+
+        if let Some(mux) = self.mux {
+            if let Some(v) = mux.prefix.filter(|s| !s.trim().is_empty()) {
+                dst.mux_prefix_key = v;
+            }
+        }
+
+        // statusbar (flat src-tauri shape -> nested native-poc shape)
+        if let Some(v) = self.statusbar_enabled {
+            dst.statusbar.enabled = v;
+        }
+        if let Some(v) = self.statusbar_app_line1_left {
+            dst.statusbar.app_line1_left = v;
+        }
+        if let Some(v) = self.statusbar_app_line1_right {
+            dst.statusbar.app_line1_right = v;
+        }
+        if let Some(v) = self.statusbar_app_line2_left {
+            dst.statusbar.app_line2_left = v;
+        }
+        if let Some(v) = self.statusbar_app_line2_right {
+            dst.statusbar.app_line2_right = v;
+        }
+        if let Some(v) = self.statusbar_time_format {
+            dst.statusbar.time_format = v;
+        }
+        if let Some(v) = self.statusbar_font_size {
+            dst.statusbar.font_size = Some(v);
+        }
+        if let Some(v) = self.statusbar_custom_commands {
+            dst.statusbar.custom_commands = v
+                .into_iter()
+                .map(|(k, c)| {
+                    (
+                        k,
+                        CustomCommand {
+                            executable: c.executable,
+                            interval_ms: c.interval_ms.unwrap_or(1000),
+                        },
+                    )
+                })
+                .collect();
+        }
+        if let Some(v) = self.statusbar_refresh_rates {
+            dst.statusbar.refresh_rates = v;
+        }
+
+        // ── native_poc.* (explicit overrides win over flat keys) ──
+        if let Some(np) = self.native_poc {
+            if let Some(v) = np.ambiguous_width_mode {
+                dst.ambiguous_width_mode = parse_ambiguous_width_or_warn(&v);
+            }
+            if let Some(v) = np.font_engine {
+                dst.font_engine = FontEngine::parse_or_warn(&v);
+            }
+            if let Some(v) = np.statusbar_position {
+                dst.statusbar.position = StatusBarPosition::parse_or_warn(&v);
+            }
+            if let Some(v) = np.image_memory_quota_mb {
+                dst.image_memory_quota_mb = v;
+            }
+            if let Some(ime) = np.ime {
+                if let Some(b) = ime.native_integration {
+                    dst.ime.native_integration = b;
+                }
+            }
+            if let Some(v) = np.font_family_fallback {
+                dst.font_family_fallback = v;
+            }
+            if let Some(v) = np.emoji_font.filter(|s| !s.trim().is_empty()) {
+                dst.emoji_font = Some(v);
+            }
+            if let Some(v) = np.variable_font_axes {
+                dst.variable_font_axes = v;
+            }
+        }
+    }
+}
+
+fn parse_ambiguous_width_or_warn(spec: &str) -> AmbiguousWidthMode {
+    match spec.trim().to_ascii_lowercase().as_str() {
+        "wide" => AmbiguousWidthMode::Wide,
+        "narrow" => AmbiguousWidthMode::Narrow,
+        other => {
+            warn_unknown_ambiguous_width_once(other);
+            AmbiguousWidthMode::Narrow
+        }
+    }
+}
+
+fn warn_unknown_ambiguous_width_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.native_poc.ambiguous_width_mode: unknown value {:?}, falling back to \"narrow\"",
+            owned
+        );
+    });
 }
 
 #[cfg(test)]
@@ -567,5 +861,254 @@ mod tests {
     fn settings_variable_font_axes_default_empty() {
         let s = Settings::new();
         assert!(s.variable_font_axes.is_empty());
+    }
+
+    // ── settings.json loader (Phase 7) ─────────────────────────────────
+
+    fn load_json(s: &str) -> Settings {
+        let raw: RawSettings = serde_json::from_str(s).expect("parse RawSettings");
+        let mut base = Settings::default();
+        raw.merge_into(&mut base);
+        base
+    }
+
+    #[test]
+    fn loader_empty_object_keeps_all_defaults() {
+        let s = load_json("{}");
+        let d = Settings::default();
+        assert_eq!(s.scrollback_lines, d.scrollback_lines);
+        assert_eq!(s.image_memory_quota_mb, d.image_memory_quota_mb);
+        assert_eq!(s.clipboard_read_osc52, d.clipboard_read_osc52);
+        assert_eq!(s.clipboard_max_size_osc52, d.clipboard_max_size_osc52);
+        assert_eq!(s.mux_prefix_key, d.mux_prefix_key);
+        assert_eq!(s.ambiguous_width_mode, d.ambiguous_width_mode);
+        assert_eq!(s.font_engine, d.font_engine);
+        assert_eq!(s.statusbar, d.statusbar);
+        assert_eq!(s.ime, d.ime);
+    }
+
+    #[test]
+    fn loader_unknown_keys_are_ignored() {
+        // Forward compat: src-tauri may add keys native-poc does not yet
+        // consume. They must not break the loader.
+        let s = load_json(
+            r#"{"some_future_key": 42, "another": {"nested": true}, "scrollback_lines": 1234}"#,
+        );
+        assert_eq!(s.scrollback_lines, 1234);
+    }
+
+    #[test]
+    fn loader_explicit_null_falls_back_to_default() {
+        let s = load_json(r#"{"scrollback_lines": null, "clipboard_read_osc52": null}"#);
+        assert_eq!(s.scrollback_lines, DEFAULT_SCROLLBACK_LINES);
+        assert!(s.clipboard_read_osc52);
+    }
+
+    #[test]
+    fn loader_flat_keys_are_applied() {
+        let s = load_json(
+            r#"{
+                "scrollback_lines": 50000,
+                "clipboard_read_osc52": false,
+                "clipboard_max_size_osc52": 1024
+            }"#,
+        );
+        assert_eq!(s.scrollback_lines, 50_000);
+        assert!(!s.clipboard_read_osc52);
+        assert_eq!(s.clipboard_max_size_osc52, 1024);
+    }
+
+    #[test]
+    fn loader_mux_prefix_overrides_default() {
+        let s = load_json(r#"{"mux": {"prefix": "Ctrl+A"}}"#);
+        assert_eq!(s.mux_prefix_key, "Ctrl+A");
+    }
+
+    #[test]
+    fn loader_empty_mux_prefix_keeps_default() {
+        let s = load_json(r#"{"mux": {"prefix": ""}}"#);
+        assert_eq!(s.mux_prefix_key, DEFAULT_MUX_PREFIX_KEY);
+    }
+
+    #[test]
+    fn loader_flat_statusbar_keys_map_to_nested() {
+        let s = load_json(
+            r#"{
+                "statusbar_enabled": false,
+                "statusbar_app_line1_left": "{hostname}",
+                "statusbar_app_line1_right": "{git_branch}",
+                "statusbar_app_line2_left": "L2L",
+                "statusbar_app_line2_right": "L2R",
+                "statusbar_time_format": "HH:mm",
+                "statusbar_font_size": 18.5,
+                "statusbar_refresh_rates": {"time": 2000, "git_branch": 10000}
+            }"#,
+        );
+        assert!(!s.statusbar.enabled);
+        assert_eq!(s.statusbar.app_line1_left, "{hostname}");
+        assert_eq!(s.statusbar.app_line1_right, "{git_branch}");
+        assert_eq!(s.statusbar.app_line2_left, "L2L");
+        assert_eq!(s.statusbar.app_line2_right, "L2R");
+        assert_eq!(s.statusbar.time_format, "HH:mm");
+        assert_eq!(s.statusbar.font_size, Some(18.5));
+        assert_eq!(s.statusbar.refresh_rates.get("time"), Some(&2000));
+        assert_eq!(s.statusbar.refresh_rates.get("git_branch"), Some(&10000));
+    }
+
+    #[test]
+    fn loader_statusbar_custom_commands_default_interval_when_omitted() {
+        let s = load_json(
+            r#"{
+                "statusbar_custom_commands": {
+                    "weather": {"executable": "/usr/bin/curl"}
+                }
+            }"#,
+        );
+        let c = s.statusbar.custom_commands.get("weather").unwrap();
+        assert_eq!(c.executable, "/usr/bin/curl");
+        assert_eq!(c.interval_ms, 1000);
+    }
+
+    #[test]
+    fn loader_statusbar_custom_commands_explicit_interval_kept() {
+        let s = load_json(
+            r#"{
+                "statusbar_custom_commands": {
+                    "weather": {"executable": "x", "interval_ms": 30000}
+                }
+            }"#,
+        );
+        assert_eq!(
+            s.statusbar
+                .custom_commands
+                .get("weather")
+                .unwrap()
+                .interval_ms,
+            30_000
+        );
+    }
+
+    #[test]
+    fn loader_font_family_primary_secondary_populate_fallback() {
+        let s = load_json(
+            r#"{"font_family_primary": "JetBrains Mono", "font_family_secondary": "Noto Sans JP"}"#,
+        );
+        assert_eq!(
+            s.font_family_fallback,
+            vec!["JetBrains Mono".to_string(), "Noto Sans JP".to_string()]
+        );
+    }
+
+    #[test]
+    fn loader_blank_font_family_strings_are_dropped() {
+        let s = load_json(r#"{"font_family_primary": "  ", "font_family_secondary": ""}"#);
+        // Blank entries must not be pushed; the field stays empty
+        // (matching Settings::default()).
+        assert!(s.font_family_fallback.is_empty());
+    }
+
+    #[test]
+    fn loader_font_family_emoji_sets_emoji_font() {
+        let s = load_json(r#"{"font_family_emoji": "Apple Color Emoji"}"#);
+        assert_eq!(s.emoji_font, Some("Apple Color Emoji".to_string()));
+    }
+
+    #[test]
+    fn loader_native_poc_font_engine_overrides() {
+        let s = load_json(r#"{"native_poc": {"font_engine": "ab_glyph"}}"#);
+        assert_eq!(s.font_engine, FontEngine::AbGlyph);
+    }
+
+    #[test]
+    fn loader_native_poc_statusbar_position_overrides() {
+        let s = load_json(r#"{"native_poc": {"statusbar_position": "top"}}"#);
+        assert_eq!(s.statusbar.position, StatusBarPosition::Top);
+    }
+
+    #[test]
+    fn loader_native_poc_ambiguous_width_wide() {
+        let s = load_json(r#"{"native_poc": {"ambiguous_width_mode": "wide"}}"#);
+        assert_eq!(s.ambiguous_width_mode, AmbiguousWidthMode::Wide);
+    }
+
+    #[test]
+    fn loader_native_poc_ambiguous_width_unknown_falls_back_to_narrow() {
+        let s = load_json(r#"{"native_poc": {"ambiguous_width_mode": "huge"}}"#);
+        assert_eq!(s.ambiguous_width_mode, AmbiguousWidthMode::Narrow);
+    }
+
+    #[test]
+    fn loader_native_poc_image_memory_quota_overrides() {
+        let s = load_json(r#"{"native_poc": {"image_memory_quota_mb": 128}}"#);
+        assert_eq!(s.image_memory_quota_mb, 128);
+    }
+
+    #[test]
+    fn loader_native_poc_ime_native_integration_overrides() {
+        let s = load_json(r#"{"native_poc": {"ime": {"native_integration": false}}}"#);
+        assert!(!s.ime.native_integration);
+    }
+
+    #[test]
+    fn loader_native_poc_font_family_fallback_overrides_flat_keys() {
+        let s = load_json(
+            r#"{
+                "font_family_primary": "A",
+                "native_poc": {"font_family_fallback": ["X", "Y", "Z"]}
+            }"#,
+        );
+        assert_eq!(
+            s.font_family_fallback,
+            vec!["X".to_string(), "Y".to_string(), "Z".to_string()]
+        );
+    }
+
+    #[test]
+    fn loader_native_poc_variable_font_axes_overrides() {
+        let s = load_json(r#"{"native_poc": {"variable_font_axes": {"wght": 700.0}}}"#);
+        assert_eq!(s.variable_font_axes.get("wght").copied(), Some(700.0));
+    }
+
+    #[test]
+    fn load_from_missing_file_returns_defaults() {
+        let p = std::path::PathBuf::from("/tmp/__nonexistent_emterm_settings_xyz_998877.json");
+        // Defensive: ensure the path really does not exist.
+        let _ = std::fs::remove_file(&p);
+        let s = Settings::load_from(&p);
+        // Spot-check a couple of fields against Default.
+        assert_eq!(s.scrollback_lines, DEFAULT_SCROLLBACK_LINES);
+        assert_eq!(s.mux_prefix_key, DEFAULT_MUX_PREFIX_KEY);
+    }
+
+    #[test]
+    fn load_from_invalid_json_returns_defaults() {
+        let dir = std::env::temp_dir();
+        let p = dir.join(format!(
+            "emterm_settings_invalid_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&p, b"{ not json").expect("write tmp settings");
+        let s = Settings::load_from(&p);
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(s.scrollback_lines, DEFAULT_SCROLLBACK_LINES);
+    }
+
+    #[test]
+    fn load_from_valid_file_applies_overrides() {
+        let dir = std::env::temp_dir();
+        let p = dir.join(format!("emterm_settings_valid_{}.json", std::process::id()));
+        std::fs::write(
+            &p,
+            br#"{
+                "scrollback_lines": 7,
+                "native_poc": {"ambiguous_width_mode": "wide", "font_engine": "ab_glyph"}
+            }"#,
+        )
+        .expect("write tmp settings");
+        let s = Settings::load_from(&p);
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(s.scrollback_lines, 7);
+        assert_eq!(s.ambiguous_width_mode, AmbiguousWidthMode::Wide);
+        assert_eq!(s.font_engine, FontEngine::AbGlyph);
     }
 }
