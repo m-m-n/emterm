@@ -35,7 +35,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes, WindowId};
 
 use crate::app::App;
 use crate::image::overlay::OverlayPipeline;
@@ -49,6 +49,14 @@ use crate::selection::{Pos, Selection, SelectionMode};
 /// Within this window the click counter increments; beyond it the counter
 /// resets to 1. 500 ms matches xterm's `multiClickTime` default.
 const MULTI_CLICK_WINDOW_MS: u128 = 500;
+
+/// Hit-zone width for CSD edge / corner resize, expressed in egui logical
+/// points. 8 pt is the smallest band that's reliably grabbable with a
+/// mouse — the user's hand can overshoot the edge band before the
+/// cursor icon flips, so anything narrower than this manifested as
+/// "上下リサイズが効かない" because the pointer ended up in the
+/// title-bar / status-bar interior before reaching the resize zone.
+const RESIZE_EDGE_PX: f32 = 8.0;
 
 /// Tracks last-click metadata so a double / triple click can be detected by
 /// comparing time + position against the next press.
@@ -181,6 +189,18 @@ pub struct WindowHost {
     /// for the last-tab-closed path, so the wgpu / X11 resources
     /// unwind in the same order regardless of the close path.
     pending_close: bool,
+    /// Cached CSD resize direction under the pointer. Refreshed on
+    /// every `CursorMoved` (when not selection-dragging) so the next
+    /// left-press can hand the matching [`ResizeDirection`] to
+    /// `Window::drag_resize_window` without re-running the hit test.
+    /// `None` means the pointer is in the window interior — a press
+    /// falls through to the existing selection / tab-bar handlers.
+    current_resize_dir: Option<ResizeDirection>,
+    /// Last cursor icon pushed to winit. Cached so [`update_resize_hint`]
+    /// can skip the IPC round-trip when the icon would not change —
+    /// `set_cursor` is otherwise called on every `CursorMoved`, which
+    /// floods the compositor with redundant requests.
+    current_cursor: CursorIcon,
 }
 
 impl WindowHost {
@@ -333,6 +353,8 @@ impl WindowHost {
             grid_pass: None,
             pending_egui_events: Vec::new(),
             pending_close: false,
+            current_resize_dir: None,
+            current_cursor: CursorIcon::Default,
         }
     }
 
@@ -400,6 +422,64 @@ impl WindowHost {
                 }
             }
         }
+    }
+
+    /// Classify a pointer position (in egui logical points, relative to
+    /// the window's top-left) as one of the eight CSD resize directions,
+    /// or `None` when the pointer is in the window interior. The window
+    /// being maximized always returns `None` so a click on the title
+    /// bar of a maximized window stays a move/drag gesture rather than
+    /// a phantom resize against the screen edge.
+    fn resize_direction_at(&self, logical_x: f32, logical_y: f32) -> Option<ResizeDirection> {
+        if self.window.is_maximized() {
+            return None;
+        }
+        let size = self
+            .window
+            .inner_size()
+            .to_logical::<f32>(self.pixels_per_point as f64);
+        let dir = classify_resize_edge(
+            size.width,
+            size.height,
+            logical_x,
+            logical_y,
+            RESIZE_EDGE_PX,
+        )?;
+        // CSD title-bar carve-out: the title bar spans y ∈ [0,
+        // TITLE_BAR_HEIGHT) and hosts the Minimize / Maximize / Close
+        // buttons on its right side plus a drag-to-move affordance in
+        // the middle. If we let `North`/`NE`/`NW` fire anywhere inside
+        // that band, the top-right 8×8 corner would hijack the Close
+        // button and the rest of the bar would lose the move gesture.
+        // Restrict the top-edge resize to the outermost `RESIZE_EDGE_PX`
+        // strip — past that, the title bar wins and the user gets the
+        // expected drag-to-move / button-click semantics.
+        let title_bar_h = crate::ui::title_bar::TITLE_BAR_HEIGHT;
+        if logical_y >= RESIZE_EDGE_PX && logical_y < title_bar_h {
+            use ResizeDirection::*;
+            if matches!(dir, North | NorthEast | NorthWest) {
+                return None;
+            }
+        }
+        Some(dir)
+    }
+
+    /// Refresh the cached resize direction + pointer icon for a new
+    /// pointer position. Cheap to call on every `CursorMoved`: skips
+    /// the `set_cursor` IPC round-trip when the resulting icon would
+    /// match the one already in flight.
+    fn update_resize_hint(&mut self, logical_x: f32, logical_y: f32) {
+        let dir = self.resize_direction_at(logical_x, logical_y);
+        if dir == self.current_resize_dir {
+            return;
+        }
+        self.current_resize_dir = dir;
+        let icon = dir.map(CursorIcon::from).unwrap_or(CursorIcon::Default);
+        if icon == self.current_cursor {
+            return;
+        }
+        self.current_cursor = icon;
+        self.window.set_cursor(icon);
     }
 
     /// Reconfigure the wgpu surface for the current window size.
@@ -1461,6 +1541,20 @@ impl ApplicationHandler for PocApp {
                 };
                 let _ = self.app.dispatch_key_event_via_ime(&raw_key);
             }
+            WindowEvent::CursorLeft { .. } => {
+                // Reset the resize hint when the pointer leaves the
+                // window so the cached direction doesn't outlive its
+                // hit zone — without this, re-entering the interior
+                // through a non-edge route keeps the last edge's
+                // cursor + direction stuck (since `update_resize_hint`
+                // short-circuits when the new dir matches the cached
+                // one).
+                if host.current_resize_dir.is_some() || host.current_cursor != CursorIcon::Default {
+                    host.current_resize_dir = None;
+                    host.current_cursor = CursorIcon::Default;
+                    host.window.set_cursor(CursorIcon::Default);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 host.cursor_pos = position;
                 // Forward to egui so the tab bar / status bar widgets
@@ -1469,6 +1563,17 @@ impl ApplicationHandler for PocApp {
                 let egui_pos = egui::pos2(logical.x, logical.y);
                 host.pending_egui_events
                     .push(egui::Event::PointerMoved(egui_pos));
+                // CSD edge-resize hot zone: refresh the cached
+                // ResizeDirection + pointer icon so the next left-press
+                // can hand the matching direction to
+                // `Window::drag_resize_window`. Skipped while a
+                // terminal selection drag is in flight — the pointer
+                // can pass through an edge band on its way to the
+                // selection target, and swapping to a resize icon
+                // mid-drag would be jarring.
+                if !host.dragging {
+                    host.update_resize_hint(logical.x, logical.y);
+                }
                 host.window().request_redraw();
                 if host.dragging {
                     let (row, col) = host.pixel_to_cell(position, &self.app);
@@ -1492,6 +1597,21 @@ impl ApplicationHandler for PocApp {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                // CSD edge-resize: a left press on the edge hot zone
+                // hands off to the WM via `drag_resize_window`. Run
+                // before the egui forward so the tab bar / title bar
+                // never see a phantom click on the corner pixel they
+                // happen to overlap with the resize gutter, and skip
+                // the rest of this handler so no terminal selection
+                // gets started under the cursor.
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    if let Some(dir) = host.current_resize_dir {
+                        if let Err(e) = host.window.drag_resize_window(dir) {
+                            log::warn!("native-poc: drag_resize_window failed: {e}");
+                        }
+                        return;
+                    }
+                }
                 // Forward to egui first so the tab bar / status bar can
                 // see the click before we decide whether to start a
                 // terminal selection.
@@ -1675,6 +1795,46 @@ impl ApplicationHandler for PocApp {
             log::info!("native-poc: exiting handler dropping WindowHost");
             self.host = None;
         }
+    }
+}
+
+/// Classify a pointer position against a window of the given logical
+/// size as one of the eight CSD resize directions, or `None` when the
+/// pointer is inside the interior (away from every edge by at least
+/// `edge_px`) or outside the window entirely.
+///
+/// Pure over the inputs so the resize hot-zone math can be unit-tested
+/// without instantiating a real `winit::Window`. The caller layers the
+/// "maximized → never resize" rule on top — that condition is not
+/// expressible in terms of the geometry alone.
+fn classify_resize_edge(
+    width: f32,
+    height: f32,
+    x: f32,
+    y: f32,
+    edge_px: f32,
+) -> Option<ResizeDirection> {
+    // Reject negative coords (Wayland delivers them briefly on pointer
+    // leave) and positions past the far edge so we never latch a
+    // phantom direction with the pointer outside the window.
+    if x < 0.0 || y < 0.0 || x > width || y > height {
+        return None;
+    }
+    let near_left = x < edge_px;
+    let near_right = x > width - edge_px;
+    let near_top = y < edge_px;
+    let near_bottom = y > height - edge_px;
+    use ResizeDirection::*;
+    match (near_top, near_bottom, near_left, near_right) {
+        (true, _, true, _) => Some(NorthWest),
+        (true, _, _, true) => Some(NorthEast),
+        (_, true, true, _) => Some(SouthWest),
+        (_, true, _, true) => Some(SouthEast),
+        (true, _, _, _) => Some(North),
+        (_, true, _, _) => Some(South),
+        (_, _, true, _) => Some(West),
+        (_, _, _, true) => Some(East),
+        _ => None,
     }
 }
 
@@ -1864,6 +2024,66 @@ mod tests {
             redraws.set(redraws.get() + 1);
         });
         assert_eq!(redraws.get(), 1);
+    }
+
+    #[test]
+    fn resize_edge_interior_is_none() {
+        // Dead-center of a 800×600 window: nowhere near any edge.
+        assert_eq!(classify_resize_edge(800.0, 600.0, 400.0, 300.0, 6.0), None);
+    }
+
+    #[test]
+    fn resize_edge_corners_classify_to_diagonals() {
+        use ResizeDirection::*;
+        // Each corner pixel grabs the diagonal direction so the user
+        // can resize width + height together.
+        assert_eq!(
+            classify_resize_edge(800.0, 600.0, 1.0, 1.0, 6.0),
+            Some(NorthWest)
+        );
+        assert_eq!(
+            classify_resize_edge(800.0, 600.0, 799.0, 1.0, 6.0),
+            Some(NorthEast)
+        );
+        assert_eq!(
+            classify_resize_edge(800.0, 600.0, 1.0, 599.0, 6.0),
+            Some(SouthWest)
+        );
+        assert_eq!(
+            classify_resize_edge(800.0, 600.0, 799.0, 599.0, 6.0),
+            Some(SouthEast)
+        );
+    }
+
+    #[test]
+    fn resize_edge_sides_classify_to_cardinals() {
+        use ResizeDirection::*;
+        // Mid-edge sample on each of the four sides.
+        assert_eq!(
+            classify_resize_edge(800.0, 600.0, 400.0, 1.0, 6.0),
+            Some(North)
+        );
+        assert_eq!(
+            classify_resize_edge(800.0, 600.0, 400.0, 599.0, 6.0),
+            Some(South)
+        );
+        assert_eq!(
+            classify_resize_edge(800.0, 600.0, 1.0, 300.0, 6.0),
+            Some(West)
+        );
+        assert_eq!(
+            classify_resize_edge(800.0, 600.0, 799.0, 300.0, 6.0),
+            Some(East)
+        );
+    }
+
+    #[test]
+    fn resize_edge_outside_window_is_none() {
+        // Wayland can deliver negative or past-edge coords during
+        // pointer leave; both must yield `None` so the hot-zone
+        // cache doesn't latch a stale direction.
+        assert_eq!(classify_resize_edge(800.0, 600.0, -1.0, 300.0, 6.0), None);
+        assert_eq!(classify_resize_edge(800.0, 600.0, 400.0, 700.0, 6.0), None);
     }
 
     /// TS-32 (host=None): before `Resumed` constructs the `WindowHost`
