@@ -175,6 +175,12 @@ pub struct WindowHost {
     /// Without this, `build_raw_input` ships `events: vec![]` and egui
     /// never sees pointer input even though winit already delivered it.
     pending_egui_events: Vec<egui::Event>,
+    /// Set when the user clicks the CSD title-bar's `×` button. The
+    /// `about_to_wait` handler picks this up and runs the same
+    /// teardown handshake (drop `host` → `event_loop.exit()`) used
+    /// for the last-tab-closed path, so the wgpu / X11 resources
+    /// unwind in the same order regardless of the close path.
+    pending_close: bool,
 }
 
 impl WindowHost {
@@ -186,6 +192,7 @@ impl WindowHost {
     pub fn new(event_loop: &ActiveEventLoop, image_quota_bytes: u64) -> Self {
         let attrs = WindowAttributes::default()
             .with_title("eMterm PoC")
+            .with_decorations(false)
             .with_inner_size(LogicalSize::new(960.0, 600.0))
             .with_min_inner_size(LogicalSize::new(320.0, 200.0));
         let window = event_loop
@@ -324,6 +331,7 @@ impl WindowHost {
             overlay_pipeline,
             grid_pass: None,
             pending_egui_events: Vec::new(),
+            pending_close: false,
         }
     }
 
@@ -355,6 +363,42 @@ impl WindowHost {
     /// `Window::set_ime_cursor_area`).
     pub fn window_arc(&self) -> Arc<Window> {
         self.window.clone()
+    }
+
+    /// True when the CSD title bar's `×` was clicked this frame and
+    /// `about_to_wait` should drive the teardown handshake.
+    pub fn pending_close(&self) -> bool {
+        self.pending_close
+    }
+
+    /// Translate a [`crate::ui::TitleBarEvent`] into the matching
+    /// `winit::Window` action. `Close` is deferred — it just flips
+    /// `pending_close` so `about_to_wait` can run the teardown +
+    /// `event_loop.exit()` handshake in the same place as the
+    /// last-tab-closed path.
+    fn apply_title_bar_event(&mut self, evt: crate::ui::TitleBarEvent) {
+        use crate::ui::TitleBarEvent;
+        match evt {
+            TitleBarEvent::Minimize => {
+                self.window.set_minimized(true);
+            }
+            TitleBarEvent::MaximizeToggle => {
+                let was_maximized = self.window.is_maximized();
+                self.window.set_maximized(!was_maximized);
+            }
+            TitleBarEvent::Close => {
+                self.pending_close = true;
+                self.window.request_redraw();
+            }
+            TitleBarEvent::DragStart => {
+                // X11 / Wayland-backed winit hands the move loop to
+                // the WM. The Err arm covers headless / unsupported
+                // backends — log and continue rather than panic.
+                if let Err(e) = self.window.drag_window() {
+                    log::warn!("native-poc: drag_window failed: {e}");
+                }
+            }
+        }
     }
 
     /// Reconfigure the wgpu surface for the current window size.
@@ -442,7 +486,7 @@ impl WindowHost {
     /// Cell metrics in **physical pixels**, matching what
     /// `TerminalGridPass::prepare` is fed (see render path:
     /// `CELL_W * scale`, `CELL_H * scale`, origin =
-    /// `(LEFT_PAD * scale, (TAB_BAR_HEIGHT + STATUS_BAR_TOP + TOP_PAD) * scale)`).
+    /// `(LEFT_PAD * scale, (TITLE_BAR + TAB_BAR + STATUS_BAR_TOP + TOP_PAD) * scale)`).
     ///
     /// Returns `(cell_w_px, cell_h_px, origin_x_px, origin_y_px)`. All
     /// values are floats so the per-row stepping stays sub-pixel
@@ -455,7 +499,13 @@ impl WindowHost {
         let cell_w = (crate::render::CELL_W as f64) * scale;
         let cell_h = (crate::render::CELL_H as f64) * scale;
         let origin_x = (crate::render::LEFT_PAD as f64) * scale;
-        let origin_y = ((crate::ui::tab_bar::TAB_BAR_HEIGHT as f64)
+        // Vertical origin reserves room for every panel stacked above
+        // the terminal grid: the CSD title bar, the tab strip, an
+        // optional status-bar row pinned to the top, and the egui
+        // central panel's own TOP_PAD inset. Forgetting the title bar
+        // here makes the first cell render behind the tab strip.
+        let origin_y = ((crate::ui::title_bar::TITLE_BAR_HEIGHT as f64)
+            + (crate::ui::tab_bar::TAB_BAR_HEIGHT as f64)
             + (self.status_bar_top_inset_logical as f64)
             + (crate::render::TOP_PAD as f64))
             * scale;
@@ -698,14 +748,29 @@ impl WindowHost {
         }
 
         let raw_input = self.build_raw_input();
-        let mut tab_event: Option<crate::ui::TabEvent> = None;
+        let mut frame_events = crate::render::FrameEvents {
+            title: None,
+            tab: None,
+        };
+        // Snapshot the current maximized state so the title bar can
+        // swap its middle glyph between Maximize and Restore. Reading
+        // the window here (instead of inside `draw_placeholder`)
+        // keeps the render module free of winit dependencies.
+        let window_maximized = self.window.is_maximized();
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            tab_event = crate::render::draw_placeholder(ctx, app);
+            frame_events = crate::render::draw_placeholder(ctx, app, window_maximized);
         });
+        // CSD title-bar actions hit `winit::Window` directly except
+        // for Close, which defers to `about_to_wait` via
+        // `pending_close` so teardown follows the same handshake as
+        // the last-tab-closed path.
+        if let Some(evt) = frame_events.title {
+            self.apply_title_bar_event(evt);
+        }
         // Apply any tab bar interaction emitted this frame. Closing
         // the last tab returns `true` and the next event loop tick
         // observes `app.tabs.is_empty()` to exit the window.
-        if let Some(evt) = tab_event {
+        if let Some(evt) = frame_events.tab {
             let _ = app.apply_tab_event(evt);
             // Tab roster changed; force a full redraw next frame.
             app.mark_full_redraw();
@@ -869,6 +934,11 @@ impl WindowHost {
         };
 
         {
+            // Clear to the active theme's bg so the padding strip around
+            // the cell grid (TOP_PAD / LEFT_PAD and the right/bottom
+            // remainder rows) blends into the terminal background instead
+            // of showing as a visible rim around the content.
+            let theme_bg = crate::render::theme::Theme::default().bg;
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("native-poc-terminal-grid-pass"),
@@ -877,9 +947,9 @@ impl WindowHost {
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.05,
-                                g: 0.05,
-                                b: 0.05,
+                                r: theme_bg.0 as f64 / 255.0,
+                                g: theme_bg.1 as f64 / 255.0,
+                                b: theme_bg.2 as f64 / 255.0,
                                 a: 1.0,
                             }),
                             store: wgpu::StoreOp::Store,
@@ -1385,13 +1455,16 @@ impl ApplicationHandler for PocApp {
                 }
                 host.window().request_redraw();
 
-                // Clicks that land on the egui-owned strip (tab bar at the
-                // top, status bar at the bottom when enabled) must not
-                // also kick off a terminal selection — otherwise pressing
-                // the × on a tab would simultaneously start a selection
-                // on the cell behind it.
-                let tab_bar_h = crate::ui::tab_bar::TAB_BAR_HEIGHT;
-                let if_in_egui_strip = egui_pos.y < tab_bar_h;
+                // Clicks that land on the egui-owned strip (CSD title
+                // bar + tab bar at the top, status bar at the bottom
+                // when enabled) must not also kick off a terminal
+                // selection — otherwise pressing the × on a tab (or
+                // the close button on the title bar) would
+                // simultaneously start a selection on the cell behind
+                // it.
+                let top_strip_h =
+                    crate::ui::title_bar::TITLE_BAR_HEIGHT + crate::ui::tab_bar::TAB_BAR_HEIGHT;
+                let if_in_egui_strip = egui_pos.y < top_strip_h;
                 if if_in_egui_strip {
                     return;
                 }
@@ -1503,11 +1576,15 @@ impl ApplicationHandler for PocApp {
             origin_x_px.round() as i32,
             origin_y_px.round() as i32,
         );
-        if self.app.tabs.is_empty() {
+        if self.app.tabs.is_empty() || host.pending_close() {
             // Same teardown handshake as the CloseRequested path: drop
             // the wgpu / window resources before EventLoop unwinds so
             // the Vulkan WSI surface destructor sees a live X11
-            // connection.
+            // connection. Two close paths converge here:
+            //   - the last tab closed (`apply_tab_event` removed it), or
+            //   - the user clicked the CSD title-bar `×` (which sets
+            //     `pending_close` rather than touching the event loop
+            //     directly, so the drop order matches both other paths).
             self.host = None;
             event_loop.exit();
             return;

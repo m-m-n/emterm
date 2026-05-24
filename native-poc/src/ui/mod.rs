@@ -17,6 +17,7 @@ pub mod keybinds;
 pub mod md3;
 pub mod status_bar;
 pub mod tab_bar;
+pub mod title_bar;
 
 /// User intents originating from the global keybind layer.
 ///
@@ -47,6 +48,31 @@ pub enum AppAction {
     /// the **1-based** index as typed by the user; the app loop clamps
     /// it to the existing tab range (`min(n - 1, tabs.len() - 1)`).
     JumpTab(u8),
+}
+
+/// User intents originating from the custom (client-side) title bar.
+///
+/// The widget itself is pure (no winit calls); the app loop owns the
+/// `Window` handle and translates each variant into the corresponding
+/// `winit::window::Window` method. `Close` does NOT exit directly —
+/// the loop flips a `pending_close` flag and lets `about_to_wait`
+/// drive the same teardown handshake used for the last-tab path so
+/// the wgpu / X11 resources unwind in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleBarEvent {
+    /// `_` button — minimize to the taskbar.
+    Minimize,
+    /// `□` button — toggle between maximized and the previous floating
+    /// size. The widget does not track current state; the caller
+    /// inspects `window.is_maximized()` to pick the destination.
+    MaximizeToggle,
+    /// `×` button — request window close. Triggers the same teardown
+    /// path as the WM-supplied close button.
+    Close,
+    /// Primary-button press-and-drag over the title region. The
+    /// caller forwards this to `Window::drag_window()` so the WM
+    /// takes over the move loop.
+    DragStart,
 }
 
 /// User intents originating from the tab bar widget.

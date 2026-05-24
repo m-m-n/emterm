@@ -16,11 +16,12 @@
 //! pipeline projects the active tab + runtime state into the view
 //! model once per frame.
 
-use egui::{Align, Color32, FontFamily, FontId, Layout, RichText};
+use egui::{Align, Color32, FontFamily, FontId, Layout, Margin, RichText};
 
 use crate::html::{CssColor, RichTextRun};
 use crate::settings::StatusBarPosition;
 use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
+use crate::ui::md3;
 
 /// Per-row visual height in egui logical points. Three rows render
 /// stacked; the panel height multiplies this by the number of
@@ -63,7 +64,13 @@ pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
         StatusBarPosition::Top => egui::TopBottomPanel::top("native-poc-status-bar"),
         StatusBarPosition::Bottom => egui::TopBottomPanel::bottom("native-poc-status-bar"),
     };
-    panel = panel.exact_height(ROW_HEIGHT * visible_rows as f32);
+    let frame = egui::Frame::none()
+        .fill(md3::SURFACE_CONTAINER)
+        .inner_margin(Margin::ZERO);
+    panel = panel
+        .frame(frame)
+        .show_separator_line(false)
+        .exact_height(ROW_HEIGHT * visible_rows as f32);
 
     let app1_visible = true;
     let app2_visible = view_model.app_line2.has_content();
@@ -73,16 +80,14 @@ pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
     let font_size = view_model.font_size.unwrap_or(DEFAULT_FONT_SIZE);
 
     panel.show(ctx, |ui| {
+        // Drop the default vertical item_spacing so rows stack flush
+        // against each other and against the panel edges (the panel
+        // is fixed at ROW_HEIGHT × visible_rows).
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
         ui.vertical(|ui| {
-            // Order top-to-bottom regardless of panel placement.
-            // App rows go above the OSC row so the daemon status
-            // sits closest to the screen edge (matches WebView).
-            if app1_visible {
-                draw_app_row(ui, &view_model.app_line1, font_size);
-            }
-            if app2_visible {
-                draw_app_row(ui, &view_model.app_line2, font_size);
-            }
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            // FR1 layer order: OSC layer, App Line 1, App Line 2
+            // (top-to-bottom, regardless of panel placement).
             if osc_visible {
                 draw_osc_row(
                     ui,
@@ -90,6 +95,12 @@ pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
                     view_model.mux_session_name.as_deref(),
                     font_size,
                 );
+            }
+            if app1_visible {
+                draw_app_row(ui, &view_model.app_line1, font_size);
+            }
+            if app2_visible {
+                draw_app_row(ui, &view_model.app_line2, font_size);
             }
         });
     });
