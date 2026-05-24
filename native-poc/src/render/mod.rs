@@ -70,17 +70,37 @@ struct CellStyle {
     strikethrough: bool,
 }
 
+/// Bundle of widget events emitted by the chrome (title bar / tab
+/// bar) during a single frame. Either field may be `None` when no
+/// interaction landed this frame. The render loop applies them in
+/// the order: title bar → tab bar, mirroring their on-screen stack.
+pub struct FrameEvents {
+    pub title: Option<crate::ui::TitleBarEvent>,
+    pub tab: Option<crate::ui::TabEvent>,
+}
+
 /// Phase-1 placeholder kept for compatibility; routes to the real renderer
 /// when a tab exists.
-pub fn draw_placeholder(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEvent> {
-    draw_terminal(ctx, app)
+pub fn draw_placeholder(ctx: &egui::Context, app: &App, window_maximized: bool) -> FrameEvents {
+    draw_terminal(ctx, app, window_maximized)
 }
 
 /// Draw the active tab. If no tabs exist, draws a hint message. The
-/// caller is responsible for applying the returned `TabEvent` (if
-/// any) — typically by calling `App::apply_tab_event` post-frame.
-pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEvent> {
+/// caller is responsible for applying the returned events (if any) —
+/// title-bar actions hit `winit::Window` directly, tab-bar actions go
+/// through `App::apply_tab_event` post-frame.
+///
+/// `window_maximized` is forwarded to the CSD title bar so it can
+/// swap the maximize glyph for the restore (overlapped-squares) one
+/// when the window is already maximized.
+pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> FrameEvents {
     let theme = Theme::default();
+
+    // Custom CSD title bar — sits above everything else so its
+    // glyph buttons stay clickable regardless of tab / status state.
+    // The window runs with `with_decorations(false)`, so without this
+    // there would be no close / minimize / maximize affordance.
+    let title_event = crate::ui::title_bar::draw(ctx, "eMterm", window_maximized);
 
     // Phase 4-B: real tab bar widget. We build a lightweight view-
     // model from the live tabs vector once per frame.
@@ -115,7 +135,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
         // bg differs. Using `Color32::TRANSPARENT` keeps egui's overlay
         // (cursor + IME preedit underline) on top of the wgpu-rendered
         // cells without painting an opaque rect that would hide them.
-        .frame(egui::Frame::default().fill(Color32::TRANSPARENT))
+        .frame(egui::Frame::none().fill(Color32::TRANSPARENT))
         .show(ctx, |ui| {
             if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
@@ -152,7 +172,10 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App) -> Option<crate::ui::TabEve
     // `request_repaint_after(Duration::from_secs(1))` floor was a
     // no-op in release builds — see SPEC.md Notes section.
 
-    tab_event
+    FrameEvents {
+        title: title_event,
+        tab: tab_event,
+    }
 }
 
 /// Walk the terminal grid and build a `Vec<CellInput>` suitable for
@@ -344,12 +367,19 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
     }
 
     // Pin the cursor origin to the *same* logical-px anchor the wgpu
-    // grid pass uses (see `window_host::render`: origin =
-    // `(LEFT_PAD, TAB_BAR_HEIGHT + TOP_PAD) * scale`). Reading the
-    // origin from `ui.min_rect().min` introduced a couple-pixel drift
-    // whenever egui's central panel added implicit padding, which made
-    // the block cursor visibly overflow the bottom of its cell.
-    let origin = Pos2::new(LEFT_PAD, crate::ui::tab_bar::TAB_BAR_HEIGHT + TOP_PAD);
+    // grid pass uses (see `window_host::cell_metrics_px`: origin =
+    // `(LEFT_PAD, TITLE_BAR + TAB_BAR + status_top + TOP_PAD) * scale`).
+    // Reading the origin from `ui.min_rect().min` introduced a
+    // couple-pixel drift whenever egui's central panel added implicit
+    // padding, which made the block cursor visibly overflow the
+    // bottom of its cell. Status-bar top inset is omitted here on
+    // purpose: the egui cursor overlay is painted inside the central
+    // panel whose `min_rect` is already pushed down by the egui
+    // top-status panel, so adding the inset would double-count it.
+    let origin = Pos2::new(
+        LEFT_PAD,
+        crate::ui::title_bar::TITLE_BAR_HEIGHT + crate::ui::tab_bar::TAB_BAR_HEIGHT + TOP_PAD,
+    );
     let painter = ui.painter();
 
     let cx = origin.x + core.get_cursor_col() as f32 * CELL_W;
