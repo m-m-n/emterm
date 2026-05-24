@@ -20,10 +20,12 @@
 //!   `[mux:name] <title>` (single space). When `None`, the title is
 //!   rendered verbatim.
 //!
-//! Icons (`"+"` / `"×"`) stay as monochrome glyphs for now; replacing
-//! them with real MD3 icons is tracked separately.
+//! No per-tab close affordance: the WebView build does not show one
+//! either; tabs close via `Ctrl+Shift+W` (the keybind layer emits
+//! [`crate::ui::AppAction::CloseTab`]). The trailing `+` icon is
+//! drawn with `Painter::line_segment` so the visual is font-independent.
 
-use egui::{Align, Color32, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
+use egui::{Align, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
 
 use super::md3;
 use super::TabEvent;
@@ -39,10 +41,13 @@ const MIN_TAB_WIDTH: f32 = 120.0;
 const MAX_TAB_WIDTH: f32 = 300.0;
 /// Horizontal padding inside each tab — matches `.tab { padding: 0 24px }`.
 const TAB_HORIZONTAL_PAD: f32 = 24.0;
-/// Width of the close-button column carved out of the right edge of each tab.
-const CLOSE_BUTTON_WIDTH: f32 = 24.0;
 /// Diameter of the trailing "+" icon button. Matches `.tab-button { 40x40 }`.
 const NEW_TAB_BUTTON_SIZE: f32 = 40.0;
+/// Side length of the "+" glyph drawn inside the new-tab button.
+const PLUS_ICON_SIZE: f32 = 12.0;
+/// Stroke width of the "+" glyph. Matches `title_bar`'s icon stroke
+/// so the two affordances feel visually paired.
+const PLUS_ICON_STROKE_WIDTH: f32 = 1.0;
 /// Horizontal padding either side of the fixed-button area.
 /// Matches `.tab-fixed-area { padding: 0 8px }`.
 const FIXED_AREA_PAD: f32 = 8.0;
@@ -166,7 +171,7 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
                     Stroke::new(1.0, md3::OUTLINE_VARIANT),
                 );
 
-                let plus_resp = draw_icon_button(ui, "+", NEW_TAB_BUTTON_SIZE);
+                let plus_resp = draw_icon_button(ui, NEW_TAB_BUTTON_SIZE);
                 #[cfg(test)]
                 {
                     tests::LAST_PLUS_RECT.with(|c| c.set(Some(plus_resp.rect)));
@@ -218,8 +223,6 @@ fn layout_tab_strip(
 
     #[cfg(test)]
     tests::LAST_TAB_CELLS.with(|c| c.borrow_mut().clear());
-    #[cfg(test)]
-    tests::LAST_CLOSE_RECTS.with(|c| c.borrow_mut().clear());
 
     for (i, item) in items.iter().enumerate() {
         let is_active = i == active_idx;
@@ -265,11 +268,11 @@ fn layout_tab_strip(
             );
         }
 
-        // Label sub-rect (left of the close column). Drawn via the
-        // painter directly so the parent layout's cursor is not
-        // perturbed (ui.put would shift subsequent allocations).
+        // Label sub-rect. Drawn via the painter directly so the
+        // parent layout's cursor is not perturbed (ui.put would
+        // shift subsequent allocations).
         let label_left = rect.left() + TAB_HORIZONTAL_PAD;
-        let label_right = rect.right() - CLOSE_BUTTON_WIDTH - 4.0;
+        let label_right = rect.right() - TAB_HORIZONTAL_PAD;
         let label_rect = Rect::from_min_max(
             egui::pos2(label_left, rect.top()),
             egui::pos2(label_right.max(label_left), rect.bottom()),
@@ -308,34 +311,14 @@ fn layout_tab_strip(
         ui.painter()
             .galley(egui::pos2(text_x, text_y), galley, text_color);
 
-        // Close ("×") sub-rect on the right edge — centered vertically.
-        let close_center = egui::pos2(
-            rect.right() - CLOSE_BUTTON_WIDTH / 2.0 - 4.0,
-            rect.center().y,
-        );
-        let close_rect = Rect::from_center_size(
-            close_center,
-            Vec2::new(CLOSE_BUTTON_WIDTH, CLOSE_BUTTON_WIDTH),
-        );
-        #[cfg(test)]
-        tests::LAST_CLOSE_RECTS.with(|c| c.borrow_mut().push(close_rect));
-
-        // Draw the "×" glyph (no separate interaction — `cell_resp`
-        // owns the whole cell's click input below).
-        let close_hovered = ui.rect_contains_pointer(close_rect) && cell_resp.hovered();
-        draw_close_glyph(ui, close_rect, text_color, close_hovered);
-
-        // Single click responder for the whole cell decides whether to
-        // close (×) or switch based on the pointer position. Skip when
-        // a drag is in flight — the release at the end of a drag must
-        // not double-fire a click.
-        if cell_resp.clicked() && drag_from.is_none() && event.is_none() {
-            let click_pos = cell_resp.interact_pointer_pos().unwrap_or_default();
-            if close_rect.contains(click_pos) {
-                event = Some(TabEvent::Close(i));
-            } else if !is_active {
-                event = Some(TabEvent::Switch(i));
-            }
+        // Single click responder for the whole cell switches tabs.
+        // Skip when a drag is in flight — the release at the end of a
+        // drag must not double-fire a click. Close lives on the
+        // `Ctrl+Shift+W` keybind path; the WebView build has no
+        // per-tab `×` either, so we keep the cell click-surface
+        // dedicated to switching.
+        if cell_resp.clicked() && drag_from.is_none() && event.is_none() && !is_active {
+            event = Some(TabEvent::Switch(i));
         }
 
         // Active-tab indicator: 3 px bar at the bottom, side-margined to
@@ -444,9 +427,12 @@ fn drop_indicator_x(cells: &[Rect], index: usize) -> Option<f32> {
     Some(cells[index].left())
 }
 
-/// Draw a 40 px square icon button (state-layer on hover, full-radius
-/// pill so the layer appears as a circle inside the cell).
-fn draw_icon_button(ui: &mut Ui, glyph: &str, size: f32) -> egui::Response {
+/// Draw the trailing 40 px "+" icon button. The "+" is composed of
+/// two `line_segment` calls (vertical + horizontal stroke) so the
+/// glyph is font-independent and aligns visually with the
+/// `title_bar` icons. Hover swaps in the MD3 state-layer overlay
+/// inside a full-radius pill so the layer reads as a circle.
+fn draw_icon_button(ui: &mut Ui, size: f32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let painter = ui.painter();
 
@@ -458,41 +444,21 @@ fn draw_icon_button(ui: &mut Ui, glyph: &str, size: f32) -> egui::Response {
         );
     }
 
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        glyph,
-        FontId::proportional(20.0),
-        md3::ON_SURFACE_VARIANT,
+    let bbox = Rect::from_center_size(rect.center(), Vec2::splat(PLUS_ICON_SIZE));
+    let stroke = Stroke::new(PLUS_ICON_STROKE_WIDTH, md3::ON_SURFACE_VARIANT);
+    let cx = bbox.center().x;
+    let cy = bbox.center().y;
+    painter.line_segment(
+        [egui::pos2(bbox.left(), cy), egui::pos2(bbox.right(), cy)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(cx, bbox.top()), egui::pos2(cx, bbox.bottom())],
+        stroke,
     );
 
     resp
 }
-
-/// Close affordance ("×") rendered inside an arbitrary rect (each tab
-/// reserves its own slot). Pure painter call — the parent cell owns
-/// the click input and dispatches based on pointer position.
-fn draw_close_glyph(ui: &mut Ui, rect: Rect, color: Color32, hovered: bool) {
-    let painter = ui.painter();
-
-    if hovered {
-        painter.rect_filled(
-            rect,
-            Rounding::same(rect.width() / 2.0),
-            md3::state_layer(color, md3::STATE_LAYER_HOVER),
-        );
-    }
-
-    painter.text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        "×",
-        FontId::proportional(16.0),
-        color,
-    );
-}
-
-use egui::Align2;
 
 #[cfg(test)]
 mod tests {
@@ -503,7 +469,6 @@ mod tests {
     thread_local! {
         pub(super) static LAST_PLUS_RECT: Cell<Option<Rect>> = const { Cell::new(None) };
         pub(super) static LAST_TAB_CELLS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
-        pub(super) static LAST_CLOSE_RECTS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
     }
 
     fn item(title: &str) -> TabBarItem {
@@ -580,9 +545,9 @@ mod tests {
     // ── TS-tab-1: simulated interaction → TabEvent ──────────
 
     /// Drive one layout-only frame to populate the test thread_local
-    /// rects (`+` button, tab cells, close hit-boxes), then return the
-    /// requested rect. Eliminates hard-coded screen coordinates and
-    /// keeps the tests robust against panel padding tweaks.
+    /// rects (`+` button, tab cells), then return the requested
+    /// rect. Eliminates hard-coded screen coordinates and keeps the
+    /// tests robust against panel padding tweaks.
     fn capture_rect_with<F>(items: &[TabBarItem], active_idx: usize, pick: F) -> Rect
     where
         F: Fn() -> Option<Rect>,
@@ -603,12 +568,6 @@ mod tests {
     fn tab_cell_rect(items: &[TabBarItem], active_idx: usize, i: usize) -> Rect {
         capture_rect_with(items, active_idx, || {
             LAST_TAB_CELLS.with(|c| c.borrow().get(i).copied())
-        })
-    }
-
-    fn close_rect_for(items: &[TabBarItem], active_idx: usize, i: usize) -> Rect {
-        capture_rect_with(items, active_idx, || {
-            LAST_CLOSE_RECTS.with(|c| c.borrow().get(i).copied())
         })
     }
 
@@ -643,15 +602,6 @@ mod tests {
             cells[0],
             cells[1]
         );
-    }
-
-    #[test]
-    fn clicking_close_on_first_tab_emits_close_zero() {
-        // Click the centre of tab 0's close-button hit-box.
-        let items = vec![item("alpha"), item("beta")];
-        let target = close_rect_for(&items, 0, 0).center();
-        let ev = run_with_click(&items, 0, target);
-        assert_eq!(ev, Some(TabEvent::Close(0)));
     }
 
     // ── drop_target_index / drop_indicator_x ────────────────
