@@ -18,5 +18,18 @@
 			"WebFetch"
 		],
 		"deny": ["Bash(rm:*)"]
+	},
+	"hooks": {
+		"PostToolUse": [
+			{
+				"matcher": "Edit|Write|NotebookEdit",
+				"hooks": [
+					{
+						"type": "command",
+						"command": ".claude/hooks/check-rust-analyzer-mem.sh"
+					}
+				]
+			}
+		]
 	}
 }
