@@ -120,8 +120,17 @@ impl Tab {
 
         // Construct the core and install our native callbacks.
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
+        // Seed `cursor_blink` from settings before OSC / DECTCEM
+        // sequences have had a chance to override it; the default
+        // inside `TerminalCore` is `true`, so this only matters when
+        // `settings.json` opts out (`"cursor_blink": false`).
+        core.set_cursor_blink(settings.cursor_blink);
         let cb_state = Arc::new(Mutex::new(NativeCallbackState::default()));
-        let theme = Arc::new(Mutex::new(Theme::default()));
+        // Seed the theme from settings (font_size_pt + cursor_style)
+        // so the first frame renders at the user's configured size
+        // and cursor shape. OSC 4 / 10 / 11 / 12 / 22 may still
+        // mutate any field at runtime via `NativeCallbacks`.
+        let theme = Arc::new(Mutex::new(Theme::from_settings(settings.as_ref())));
         let mut callbacks = NativeCallbacks::new(cb_state.clone(), theme.clone(), settings);
         if let Some(dispatcher) = statusbar_dispatcher {
             callbacks.set_statusbar_dispatcher(dispatcher);

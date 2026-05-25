@@ -16,12 +16,27 @@
 //! pipeline projects the active tab + runtime state into the view
 //! model once per frame.
 
-use egui::{Align, Color32, FontFamily, FontId, Layout, Margin, RichText};
+use egui::{Align, Color32, FontFamily, FontId, Image, Layout, Margin, RichText, Vec2};
+use parking_lot::Mutex;
 
 use crate::html::{CssColor, RichTextRun};
+use crate::render::font::fallback::FallbackChain;
+use crate::render::font::traits::GlyphRasterizer;
 use crate::settings::StatusBarPosition;
 use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
+use crate::ui::emoji_cache::{split_segments, EmojiTextureCache, TextSegment};
 use crate::ui::md3;
+
+/// External handles the status-bar widget needs to render color
+/// emoji. The widget itself stays oblivious to wgpu / swash; it just
+/// asks the cache for a `TextureHandle` per emoji cluster.
+///
+/// Tests pass `None` so they don't need to stand up a real font stack.
+pub struct EmojiResources<'a> {
+    pub rasterizer: &'a dyn GlyphRasterizer,
+    pub fallback: &'a FallbackChain,
+    pub cache: &'a Mutex<EmojiTextureCache>,
+}
 
 /// Per-row visual height in egui logical points. Three rows render
 /// stacked; the panel height multiplies this by the number of
@@ -54,7 +69,15 @@ pub fn panel_height_logical(view_model: &StatusBarViewModel) -> f32 {
 
 /// Render the status bar. Returns immediately (no panel inserted)
 /// when `view_model.enabled` is false.
-pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
+///
+/// `emoji` is `Some` in production so color-emoji clusters render via
+/// swash-rasterized images; tests pass `None` to keep the egui-only
+/// text path in play.
+pub fn draw(
+    ctx: &egui::Context,
+    view_model: &StatusBarViewModel,
+    emoji: Option<&EmojiResources<'_>>,
+) {
     let visible_rows = visible_row_count(view_model);
     if visible_rows == 0 {
         return;
@@ -94,13 +117,14 @@ pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
                     &view_model.osc,
                     view_model.mux_session_name.as_deref(),
                     font_size,
+                    emoji,
                 );
             }
             if app1_visible {
-                draw_app_row(ui, &view_model.app_line1, font_size);
+                draw_app_row(ui, &view_model.app_line1, font_size, emoji);
             }
             if app2_visible {
-                draw_app_row(ui, &view_model.app_line2, font_size);
+                draw_app_row(ui, &view_model.app_line2, font_size, emoji);
             }
         });
     });
@@ -108,13 +132,18 @@ pub fn draw(ctx: &egui::Context, view_model: &StatusBarViewModel) {
 
 /// Render an App row: left runs flow left-to-right, right runs flow
 /// right-to-left. Shared with App Line 1 / 2.
-fn draw_app_row(ui: &mut egui::Ui, row: &AppRow, font_size: f32) {
+fn draw_app_row(
+    ui: &mut egui::Ui,
+    row: &AppRow,
+    font_size: f32,
+    emoji: Option<&EmojiResources<'_>>,
+) {
     let font = FontId::new(font_size, FontFamily::Monospace);
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
         ui.spacing_mut().item_spacing.x = 8.0;
         // Left side, in source order.
-        draw_runs(ui, &row.left, &font);
+        draw_runs(ui, &row.left, &font, emoji);
         // Right side aligned to the panel edge.
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             // Iterating left-to-right in a right-to-left layout
@@ -123,7 +152,7 @@ fn draw_app_row(ui: &mut egui::Ui, row: &AppRow, font_size: f32) {
             // reverse so the source order reads left-to-right on
             // screen.
             for run in row.right.iter().rev() {
-                emit_run(ui, run, &font);
+                emit_run(ui, run, &font, emoji);
             }
         });
     });
@@ -131,7 +160,13 @@ fn draw_app_row(ui: &mut egui::Ui, row: &AppRow, font_size: f32) {
 
 /// Render the OSC row. The mux session badge (`[mux:<name>]`) is
 /// prepended to the left side when present.
-fn draw_osc_row(ui: &mut egui::Ui, row: &OscRow, mux_session_name: Option<&str>, font_size: f32) {
+fn draw_osc_row(
+    ui: &mut egui::Ui,
+    row: &OscRow,
+    mux_session_name: Option<&str>,
+    font_size: f32,
+    emoji: Option<&EmojiResources<'_>>,
+) {
     let font = FontId::new(font_size, FontFamily::Monospace);
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
@@ -144,29 +179,43 @@ fn draw_osc_row(ui: &mut egui::Ui, row: &OscRow, mux_session_name: Option<&str>,
             );
         }
         if !row.left.is_empty() {
-            // OSC row text is post-strip plain text — render as a
-            // single label.
-            ui.label(RichText::new(&row.left).font(font.clone()));
+            // OSC row text is post-strip plain text — feed it through
+            // the same segmenter so color-emoji clusters become
+            // images instead of egui tofu.
+            emit_plain_text(ui, &row.left, &font, None, false, emoji);
         }
         if !row.right.is_empty() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(
-                    RichText::new(&row.right)
-                        .font(font.clone())
-                        .color(Color32::LIGHT_GRAY),
+                emit_plain_text(
+                    ui,
+                    &row.right,
+                    &font,
+                    Some(Color32::LIGHT_GRAY),
+                    false,
+                    emoji,
                 );
             });
         }
     });
 }
 
-fn draw_runs(ui: &mut egui::Ui, runs: &[RichTextRun], font: &FontId) {
+fn draw_runs(
+    ui: &mut egui::Ui,
+    runs: &[RichTextRun],
+    font: &FontId,
+    emoji: Option<&EmojiResources<'_>>,
+) {
     for run in runs {
-        emit_run(ui, run, font);
+        emit_run(ui, run, font, emoji);
     }
 }
 
-fn emit_run(ui: &mut egui::Ui, run: &RichTextRun, font: &FontId) {
+fn emit_run(
+    ui: &mut egui::Ui,
+    run: &RichTextRun,
+    font: &FontId,
+    emoji: Option<&EmojiResources<'_>>,
+) {
     if run.line_break {
         // We render run lists into a single horizontal strip, so
         // line breaks degrade to a fixed-width gap. Multi-line OSC
@@ -177,7 +226,61 @@ fn emit_run(ui: &mut egui::Ui, run: &RichTextRun, font: &FontId) {
     if run.text.is_empty() {
         return;
     }
-    let mut rt = RichText::new(&run.text).font(font.clone());
+    for segment in split_segments(&run.text) {
+        match segment {
+            TextSegment::Text(text) => {
+                emit_styled_text_span(ui, text, font, run);
+            }
+            TextSegment::Emoji(text) => {
+                emit_emoji_cluster_chain(ui, text, font, emoji, |ui, fallback_run| {
+                    emit_styled_text_span(ui, fallback_run, font, run);
+                });
+            }
+        }
+    }
+}
+
+/// Render a plain (post-strip) string with optional color and bold
+/// override. Used by the OSC row, which has no RichText styling but
+/// still needs color-emoji segmentation.
+fn emit_plain_text(
+    ui: &mut egui::Ui,
+    text: &str,
+    font: &FontId,
+    color: Option<Color32>,
+    bold: bool,
+    emoji: Option<&EmojiResources<'_>>,
+) {
+    for segment in split_segments(text) {
+        match segment {
+            TextSegment::Text(s) => {
+                let mut rt = RichText::new(s).font(font.clone());
+                if bold {
+                    rt = rt.strong();
+                }
+                if let Some(c) = color {
+                    rt = rt.color(c);
+                }
+                ui.label(rt);
+            }
+            TextSegment::Emoji(s) => {
+                emit_emoji_cluster_chain(ui, s, font, emoji, |ui, fallback_run| {
+                    let mut rt = RichText::new(fallback_run).font(font.clone());
+                    if bold {
+                        rt = rt.strong();
+                    }
+                    if let Some(c) = color {
+                        rt = rt.color(c);
+                    }
+                    ui.label(rt);
+                });
+            }
+        }
+    }
+}
+
+fn emit_styled_text_span(ui: &mut egui::Ui, text: &str, font: &FontId, run: &RichTextRun) {
+    let mut rt = RichText::new(text).font(font.clone());
     if run.bold {
         rt = rt.strong();
     }
@@ -191,6 +294,53 @@ fn emit_run(ui: &mut egui::Ui, run: &RichTextRun, font: &FontId) {
         rt = rt.color(css_color_to_color32(color));
     }
     ui.label(rt);
+}
+
+/// Walk an emoji span by grapheme cluster and emit one `Image` per
+/// cluster (via the texture cache). Clusters the cache cannot
+/// rasterize get re-rendered through `text_fallback`, which lets the
+/// caller preserve the surrounding row's styling.
+fn emit_emoji_cluster_chain<F>(
+    ui: &mut egui::Ui,
+    text: &str,
+    font: &FontId,
+    emoji: Option<&EmojiResources<'_>>,
+    mut text_fallback: F,
+) where
+    F: FnMut(&mut egui::Ui, &str),
+{
+    use unicode_segmentation::UnicodeSegmentation;
+
+    let Some(emoji) = emoji else {
+        // No cache available (tests / startup race) — degrade to
+        // egui text path.
+        text_fallback(ui, text);
+        return;
+    };
+
+    let display_size = Vec2::splat(font.size);
+    for cluster in text.graphemes(true) {
+        // Rasterize at the egui logical-point font size. On hi-DPI
+        // setups this produces a slightly soft image; matching ppp
+        // is a follow-up.
+        let handle = emoji.cache.lock().get_or_rasterize(
+            ui.ctx(),
+            emoji.rasterizer,
+            emoji.fallback,
+            cluster,
+            font.size,
+        );
+        match handle {
+            Some(texture) => {
+                ui.add(Image::new(&texture).fit_to_exact_size(display_size));
+            }
+            None => {
+                // Cluster missing from the emoji font — degrade to
+                // text so the user at least sees a placeholder.
+                text_fallback(ui, cluster);
+            }
+        }
+    }
 }
 
 fn css_color_to_color32(color: &CssColor) -> Color32 {
@@ -250,7 +400,7 @@ mod tests {
             egui::vec2(800.0, 200.0),
         ));
         let output = ctx.run(input, |ctx| {
-            draw(ctx, vm);
+            draw(ctx, vm, None);
             egui::CentralPanel::default().show(ctx, |_ui| {});
         });
         output.shapes
@@ -265,7 +415,7 @@ mod tests {
         input.screen_rect = Some(screen);
         let mut central_rect = egui::Rect::NOTHING;
         let output = ctx.run(input, |ctx| {
-            draw(ctx, vm);
+            draw(ctx, vm, None);
             egui::CentralPanel::default().show(ctx, |ui| {
                 central_rect = ui.max_rect();
             });

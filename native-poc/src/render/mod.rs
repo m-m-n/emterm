@@ -50,10 +50,54 @@ use crate::render::theme::{Rgb, Theme};
 use crate::selection::Selection;
 use crate::settings::AmbiguousWidthMode;
 
-pub const CELL_W: f32 = 8.5; // logical pixels per cell
-pub const CELL_H: f32 = 17.0;
-pub const TOP_PAD: f32 = 4.0;
-pub const LEFT_PAD: f32 = 4.0;
+/// Fallback cell width in logical pixels when the rasterizer can't
+/// measure "M" (e.g. test builds with a stub rasterizer that returns
+/// no glyphs). Picked to roughly match Inconsolata 13pt so failure
+/// modes still produce a usable grid.
+pub const FALLBACK_CELL_W: f32 = 8.5;
+/// Fallback cell height in logical pixels. Mirrors [`FALLBACK_CELL_W`]'s
+/// intent — used only when the rasterizer cannot supply metrics for
+/// the base font.
+pub const FALLBACK_CELL_H: f32 = 17.0;
+
+/// Compute the per-cell width and height (logical pixels) for a given
+/// font + size, mirroring the legacy WebView build's
+/// `ctx.measureText("M").width` / `ceil(ascent + descent)` path. The
+/// returned values are at egui's logical-pixel scale (1.0×); the
+/// renderer multiplies by `pixels_per_point` for the physical-pixel
+/// metrics handed to wgpu.
+///
+/// Returns the [`FALLBACK_CELL_W`] / [`FALLBACK_CELL_H`] pair when the
+/// rasterizer cannot shape "M" against the base font (typically only
+/// in test builds whose font stack has no registered glyphs).
+pub fn compute_cell_dims(
+    rasterizer: &dyn crate::render::font::traits::GlyphRasterizer,
+    fallback: &crate::render::font::fallback::FallbackChain,
+    font_size_px: f32,
+) -> (f32, f32) {
+    let base = fallback.base();
+    // Width: shape "M" against the base font and read the advance off
+    // the resulting glyph bitmap. For monospace coding fonts every
+    // glyph has the same advance, so the single-character probe is
+    // sufficient.
+    let advance = rasterizer
+        .shape("M", base, font_size_px)
+        .first()
+        .and_then(|g| rasterizer.raster(g.font, g.glyph_id, g.size_px))
+        .map(|b| b.advance)
+        .filter(|a| a.is_finite() && *a > 0.0)
+        .unwrap_or(FALLBACK_CELL_W);
+    // Height: ascent + descent matches the WebView build's
+    // `ceil(ascent + descent)`. `line_gap` is intentionally excluded
+    // so the grid stays tight (most monospace coding fonts ship a
+    // zero line gap anyway).
+    let height = rasterizer
+        .font_metrics(base, font_size_px)
+        .map(|m| (m.ascent + m.descent).ceil())
+        .filter(|h| h.is_finite() && *h > 0.0)
+        .unwrap_or(FALLBACK_CELL_H);
+    (advance, height)
+}
 
 /// Per-cell paint parameters resolved from a `term_core` cell + active
 /// palette + selection state.
@@ -94,7 +138,16 @@ pub fn draw_placeholder(ctx: &egui::Context, app: &App, window_maximized: bool) 
 /// swap the maximize glyph for the restore (overlapped-squares) one
 /// when the window is already maximized.
 pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> FrameEvents {
-    let theme = Theme::default();
+    // Per-frame theme seeded from settings (font_size_pt + cursor
+    // style). Active-tab OSC mutations live on `Tab::theme`; layering
+    // those on top of the settings-derived base lets OSC 4/10/11/12/22
+    // re-skin the running session without losing the user-configured
+    // font size. Falls back to the settings-only base when no tab is
+    // attached yet (initial frame).
+    let theme = match app.active_tab() {
+        Some(tab) => tab.theme.lock().clone(),
+        None => Theme::from_settings(app.settings.as_ref()),
+    };
 
     // Custom CSD title bar — sits above everything else so its
     // glyph buttons stay clickable regardless of tab / status state.
@@ -126,7 +179,12 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
     // takes the remaining rect). The widget itself decides top vs
     // bottom from settings.
     let status_vm = app.status_bar_view_model();
-    crate::ui::status_bar::draw(ctx, &status_vm);
+    let emoji_resources = crate::ui::status_bar::EmojiResources {
+        rasterizer: app.font_rasterizer.as_ref(),
+        fallback: &app.font_fallback,
+        cache: &app.emoji_texture_cache,
+    };
+    crate::ui::status_bar::draw(ctx, &status_vm, Some(&emoji_resources));
 
     egui::CentralPanel::default()
         // Phase 4-H (FR12): the central panel no longer paints the cell
@@ -376,14 +434,17 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
     // purpose: the egui cursor overlay is painted inside the central
     // panel whose `min_rect` is already pushed down by the egui
     // top-status panel, so adding the inset would double-count it.
+    let pad = app.settings.padding as f32;
     let origin = Pos2::new(
-        LEFT_PAD,
-        crate::ui::title_bar::TITLE_BAR_HEIGHT + crate::ui::tab_bar::TAB_BAR_HEIGHT + TOP_PAD,
+        pad,
+        crate::ui::title_bar::TITLE_BAR_HEIGHT + crate::ui::tab_bar::TAB_BAR_HEIGHT + pad,
     );
     let painter = ui.painter();
 
-    let cx = origin.x + core.get_cursor_col() as f32 * CELL_W;
-    let cy = origin.y + core.get_cursor_row() as f32 * CELL_H;
+    let cell_w = app.cell_w_logical;
+    let cell_h = app.cell_h_logical;
+    let cx = origin.x + core.get_cursor_col() as f32 * cell_w;
+    let cy = origin.y + core.get_cursor_row() as f32 * cell_h;
 
     let cursor_color = packed_to_egui(core.get_cursor_fg(), theme.fg, theme)
         .unwrap_or_else(|| rgb_to_egui(theme.fg));
@@ -393,16 +454,16 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
         // DECSCUSR land the mapping (block / underline / bar) becomes
         // observable here.
         1 => {
-            let uy = cy + CELL_H - 2.0;
+            let uy = cy + cell_h - 2.0;
             painter.line_segment(
-                [Pos2::new(cx, uy), Pos2::new(cx + CELL_W, uy)],
+                [Pos2::new(cx, uy), Pos2::new(cx + cell_w, uy)],
                 Stroke::new(2.0, cursor_color),
             );
         }
         2 => {
             // Vertical bar at the left edge of the cell.
             painter.line_segment(
-                [Pos2::new(cx, cy), Pos2::new(cx, cy + CELL_H)],
+                [Pos2::new(cx, cy), Pos2::new(cx, cy + cell_h)],
                 Stroke::new(2.0, cursor_color),
             );
         }
@@ -420,7 +481,7 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
                 let inset = STROKE_W * 0.5;
                 let rect = Rect::from_min_size(
                     Pos2::new(cx + inset, cy + inset),
-                    Vec2::new(CELL_W - STROKE_W, CELL_H - STROKE_W),
+                    Vec2::new(cell_w - STROKE_W, cell_h - STROKE_W),
                 );
                 painter.rect_stroke(rect, 0.0, Stroke::new(STROKE_W, cursor_color));
             }

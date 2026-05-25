@@ -37,6 +37,73 @@ pub const DEFAULT_SCROLLBACK_LINES: u32 = 10_000;
 /// `src-tauri` build's image cache quota.
 pub const DEFAULT_IMAGE_MEMORY_QUOTA_MB: u32 = 320;
 
+/// Default terminal cell font size in logical points. Matches the
+/// legacy WebView build's `font_size` default and the previous
+/// hard-coded `Theme::default().font_size_pt`.
+pub const DEFAULT_FONT_SIZE_PT: f32 = 13.0;
+
+/// CSS-compatible points-to-pixels conversion factor (1pt = 4/3 px at
+/// the 96-dpi reference resolution that browsers and the legacy
+/// WebView build assume). Used to translate `settings.font_size`
+/// (logical points) into the pixel size the rasterizer expects.
+///
+/// Mirrors `src/terminal/renderer-settings.ts::setFontSize` which
+/// applies the same `96 / 72` factor before handing the size to
+/// `ctx.font = "${px}px"`. Without this conversion, native-poc
+/// rasterizes at ~75% of the WebView build's visual size for the
+/// same `font_size: 13` settings value.
+pub const PT_TO_PX: f32 = 96.0 / 72.0;
+
+/// Default window inner padding (in logical pixels) around the
+/// terminal cell grid. Matches the legacy WebView build's `padding`
+/// default and the previous hard-coded `render::{TOP_PAD, LEFT_PAD}`.
+pub const DEFAULT_PADDING_PX: u32 = 4;
+
+/// Cursor visual style mirrored from the legacy WebView settings.
+/// Parsed from `settings.json`'s `cursor_style` string and projected
+/// onto `crate::render::theme::CursorStyle` at theme construction
+/// time (see [`From<CursorStyle> for crate::render::theme::CursorStyle`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorStyle {
+    #[default]
+    Block,
+    Underline,
+    Bar,
+}
+
+impl CursorStyle {
+    /// Parse the textual spec from `settings.json`. Unknown values
+    /// fall back to [`CursorStyle::Block`] and emit a single
+    /// `warn`-level log for the process lifetime (subsequent unknown
+    /// values silently coerce). Mirrors the `StatusBarPosition` /
+    /// `FontEngine` warn-once pattern.
+    pub fn parse_or_warn(spec: &str) -> Self {
+        // Accept aliases that the legacy build also accepts so a
+        // settings.json copied across versions parses cleanly.
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "block" => Self::Block,
+            "underline" | "underscore" => Self::Underline,
+            "bar" | "beam" | "ibeam" | "i-beam" | "vertical-bar" => Self::Bar,
+            other => {
+                warn_unknown_cursor_style_once(other);
+                Self::Block
+            }
+        }
+    }
+}
+
+fn warn_unknown_cursor_style_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.cursor_style: unknown value {:?}, falling back to \"block\"",
+            owned
+        );
+    });
+}
+
 /// Default maximum OSC 52 clipboard payload size (10 MiB). Mirrors the
 /// legacy `src-tauri/src/commands/config/settings.rs::default_clipboard_max_size_osc52`.
 pub const DEFAULT_CLIPBOARD_MAX_SIZE_OSC52: u32 = 10 * 1024 * 1024;
@@ -311,6 +378,24 @@ pub struct Settings {
     /// default shape only.
     #[allow(dead_code)] // Phase 7: settings.json loader will populate this.
     pub ime: ImeSettings,
+    /// Terminal cell font size in logical points. Mirrors the legacy
+    /// WebView build's `font_size`. Plumbed into
+    /// `crate::render::theme::Theme::font_size_pt` at tab spawn time
+    /// so `TerminalGridPass::CellMetrics::font_size_px` resolves to
+    /// this value × the host's `pixels_per_point`.
+    pub font_size: f32,
+    /// Inner padding (logical pixels) between the window edge and the
+    /// terminal cell grid. Plumbed into the renderer's `TOP_PAD` /
+    /// `LEFT_PAD` so the user-configured strip surrounds the grid.
+    pub padding: u32,
+    /// Cursor visual style. See [`CursorStyle`]. Plumbed into the
+    /// per-tab `Theme::cursor_style` at spawn time; OSC 22 may still
+    /// mutate it at runtime.
+    pub cursor_style: CursorStyle,
+    /// Whether the terminal cursor blinks. Plumbed into
+    /// `TerminalCore::set_cursor_blink` at tab spawn time; DECTCEM /
+    /// app-driven mode changes may still override at runtime.
+    pub cursor_blink: bool,
 }
 
 impl Default for Settings {
@@ -328,6 +413,10 @@ impl Default for Settings {
             mux_prefix_key: DEFAULT_MUX_PREFIX_KEY.to_string(),
             statusbar: StatusBarSettings::default(),
             ime: ImeSettings::default(),
+            font_size: DEFAULT_FONT_SIZE_PT,
+            padding: DEFAULT_PADDING_PX,
+            cursor_style: CursorStyle::default(),
+            cursor_blink: true,
         }
     }
 }
@@ -335,6 +424,14 @@ impl Default for Settings {
 impl Settings {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Terminal cell font size translated from logical points
+    /// (`self.font_size`) into the CSS-compatible pixel size the
+    /// rasterizer + cell metrics consume. See [`PT_TO_PX`] for the
+    /// conversion rationale.
+    pub fn font_size_px(&self) -> f32 {
+        self.font_size * PT_TO_PX
     }
 
     /// Load `settings.json` from the platform config dir; fall back to
@@ -449,6 +546,10 @@ struct RawSettings {
     font_family_primary: Option<String>,
     font_family_secondary: Option<String>,
     font_family_emoji: Option<String>,
+    font_size: Option<f32>,
+    padding: Option<u32>,
+    cursor_style: Option<String>,
+    cursor_blink: Option<bool>,
     mux: Option<RawMux>,
 
     statusbar_enabled: Option<bool>,
@@ -510,6 +611,31 @@ impl RawSettings {
         }
         if let Some(v) = self.clipboard_max_size_osc52 {
             dst.clipboard_max_size_osc52 = v;
+        }
+        if let Some(v) = self.font_size {
+            // `font_size` from `settings.json` is a logical-point value;
+            // sanitize against absurd inputs that would render an
+            // unusable grid (and would also break the cell-metrics
+            // computation). The legacy WebView build does the same
+            // clamp in `applySettings`.
+            if v.is_finite() && v > 0.0 {
+                dst.font_size = v;
+            } else {
+                log::warn!(
+                    "settings.font_size: invalid value {:?}, keeping default {}",
+                    v,
+                    DEFAULT_FONT_SIZE_PT
+                );
+            }
+        }
+        if let Some(v) = self.padding {
+            dst.padding = v;
+        }
+        if let Some(v) = self.cursor_style.filter(|s| !s.trim().is_empty()) {
+            dst.cursor_style = CursorStyle::parse_or_warn(&v);
+        }
+        if let Some(v) = self.cursor_blink {
+            dst.cursor_blink = v;
         }
 
         // Font fallback derived from the src-tauri-compatible flat keys.
@@ -1091,6 +1217,94 @@ mod tests {
         let s = Settings::load_from(&p);
         let _ = std::fs::remove_file(&p);
         assert_eq!(s.scrollback_lines, DEFAULT_SCROLLBACK_LINES);
+    }
+
+    // ── font_size / padding / cursor_style / cursor_blink loader ──────
+
+    #[test]
+    fn default_font_size_is_13() {
+        let s = Settings::new();
+        assert!((s.font_size - DEFAULT_FONT_SIZE_PT).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn default_padding_is_4() {
+        let s = Settings::new();
+        assert_eq!(s.padding, DEFAULT_PADDING_PX);
+    }
+
+    #[test]
+    fn default_cursor_style_is_block() {
+        let s = Settings::new();
+        assert_eq!(s.cursor_style, CursorStyle::Block);
+    }
+
+    #[test]
+    fn default_cursor_blink_is_true() {
+        let s = Settings::new();
+        assert!(s.cursor_blink);
+    }
+
+    #[test]
+    fn cursor_style_parses_known_values() {
+        assert_eq!(CursorStyle::parse_or_warn("block"), CursorStyle::Block);
+        assert_eq!(
+            CursorStyle::parse_or_warn("Underline"),
+            CursorStyle::Underline
+        );
+        assert_eq!(CursorStyle::parse_or_warn("BAR"), CursorStyle::Bar);
+        assert_eq!(CursorStyle::parse_or_warn("beam"), CursorStyle::Bar);
+        assert_eq!(CursorStyle::parse_or_warn("  block "), CursorStyle::Block);
+    }
+
+    #[test]
+    fn cursor_style_unknown_falls_back_to_block() {
+        assert_eq!(CursorStyle::parse_or_warn("rectangle"), CursorStyle::Block);
+        assert_eq!(CursorStyle::parse_or_warn(""), CursorStyle::Block);
+    }
+
+    #[test]
+    fn loader_font_size_overrides_default() {
+        let s = load_json(r#"{"font_size": 15.5}"#);
+        assert!((s.font_size - 15.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn loader_font_size_zero_or_negative_keeps_default() {
+        let s_zero = load_json(r#"{"font_size": 0}"#);
+        assert!((s_zero.font_size - DEFAULT_FONT_SIZE_PT).abs() < f32::EPSILON);
+        let s_neg = load_json(r#"{"font_size": -3}"#);
+        assert!((s_neg.font_size - DEFAULT_FONT_SIZE_PT).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn loader_padding_overrides_default() {
+        let s = load_json(r#"{"padding": 12}"#);
+        assert_eq!(s.padding, 12);
+    }
+
+    #[test]
+    fn loader_padding_zero_is_accepted() {
+        let s = load_json(r#"{"padding": 0}"#);
+        assert_eq!(s.padding, 0);
+    }
+
+    #[test]
+    fn loader_cursor_style_overrides_default() {
+        let s = load_json(r#"{"cursor_style": "bar"}"#);
+        assert_eq!(s.cursor_style, CursorStyle::Bar);
+    }
+
+    #[test]
+    fn loader_cursor_style_empty_keeps_default() {
+        let s = load_json(r#"{"cursor_style": ""}"#);
+        assert_eq!(s.cursor_style, CursorStyle::Block);
+    }
+
+    #[test]
+    fn loader_cursor_blink_can_be_disabled() {
+        let s = load_json(r#"{"cursor_blink": false}"#);
+        assert!(!s.cursor_blink);
     }
 
     #[test]

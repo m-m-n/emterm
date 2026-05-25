@@ -537,7 +537,7 @@ impl WindowHost {
         self.surface_config.width = size.width;
         self.surface_config.height = size.height;
         self.surface.configure(&self.device, &self.surface_config);
-        let (cols, rows) = self.grid_size();
+        let (cols, rows) = self.grid_size(app);
         app.set_grid_size(cols, rows);
     }
 
@@ -566,8 +566,9 @@ impl WindowHost {
 
     /// Cell metrics in **physical pixels**, matching what
     /// `TerminalGridPass::prepare` is fed (see render path:
-    /// `CELL_W * scale`, `CELL_H * scale`, origin =
-    /// `(LEFT_PAD * scale, (TITLE_BAR + TAB_BAR + STATUS_BAR_TOP + TOP_PAD) * scale)`).
+    /// `app.cell_w_logical * scale`, `app.cell_h_logical * scale`,
+    /// origin = `(padding * scale, (TITLE_BAR + TAB_BAR +
+    /// STATUS_BAR_TOP + padding) * scale)`).
     ///
     /// Returns `(cell_w_px, cell_h_px, origin_x_px, origin_y_px)`. All
     /// values are floats so the per-row stepping stays sub-pixel
@@ -575,20 +576,28 @@ impl WindowHost {
     /// test to drift further from the visual cell every row, which is
     /// exactly the bug `pixel_to_cell` used to hit by dividing by 18
     /// while cells were drawn at 17 px.
-    fn cell_metrics_px(&self) -> (f64, f64, f64, f64) {
+    fn cell_metrics_px(&self, app: &App) -> (f64, f64, f64, f64) {
         let scale = self.pixels_per_point.max(1.0) as f64;
-        let cell_w = (crate::render::CELL_W as f64) * scale;
-        let cell_h = (crate::render::CELL_H as f64) * scale;
-        let origin_x = (crate::render::LEFT_PAD as f64) * scale;
+        // Cell dims come from the App's startup measurement of the
+        // base font (see `App::with_settings` → `compute_cell_dims`)
+        // so they track `settings.font_size` instead of the legacy
+        // hard-coded 8.5×17.
+        let cell_w = (app.cell_w_logical as f64) * scale;
+        let cell_h = (app.cell_h_logical as f64) * scale;
+        // Inner padding comes from settings.padding (logical pixels);
+        // falls back to the renderer's default constants when the
+        // user hasn't overridden them.
+        let pad = (app.settings.padding as f64).max(0.0);
+        let origin_x = pad * scale;
         // Vertical origin reserves room for every panel stacked above
         // the terminal grid: the CSD title bar, the tab strip, an
-        // optional status-bar row pinned to the top, and the egui
-        // central panel's own TOP_PAD inset. Forgetting the title bar
+        // optional status-bar row pinned to the top, and the same
+        // user-configured padding inset. Forgetting the title bar
         // here makes the first cell render behind the tab strip.
         let origin_y = ((crate::ui::title_bar::TITLE_BAR_HEIGHT as f64)
             + (crate::ui::tab_bar::TAB_BAR_HEIGHT as f64)
             + (self.status_bar_top_inset_logical as f64)
-            + (crate::render::TOP_PAD as f64))
+            + pad)
             * scale;
         (cell_w, cell_h, origin_x, origin_y)
     }
@@ -596,10 +605,10 @@ impl WindowHost {
     /// Compute grid (cols, rows) from the current window pixel size,
     /// using the real cell metrics so the PTY size agrees with the
     /// number of cells the renderer actually paints.
-    pub fn grid_size(&self) -> (u16, u16) {
+    pub fn grid_size(&self, app: &App) -> (u16, u16) {
         let w = self.surface_config.width.max(1) as f64;
         let h = self.surface_config.height.max(1) as f64;
-        let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px();
+        let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px(app);
         let scale = self.pixels_per_point.max(1.0) as f64;
         let bottom_inset_px = (self.status_bar_bot_inset_logical as f64) * scale;
         // Usable area starts after the top bar (+ top status bar) +
@@ -617,7 +626,7 @@ impl WindowHost {
     /// Map a physical pixel position to a grid cell `(row, col)`,
     /// honoring the same origin + cell metrics the renderer uses.
     fn pixel_to_cell(&self, pos: PhysicalPosition<f64>, app: &App) -> (u16, u16) {
-        let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px();
+        let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px(app);
         let x = ((pos.x - origin_x).max(0.0)) / cell_w;
         let y = ((pos.y - origin_y).max(0.0)) / cell_h;
         let cols = app.cell_size.cols.max(1);
@@ -780,7 +789,7 @@ impl WindowHost {
         // Keep image placements anchored to the current cell metrics —
         // must match what the grid pass actually draws, otherwise image
         // overlays drift relative to text on HiDPI.
-        let (cell_w_px, cell_h_px, _, _) = self.cell_metrics_px();
+        let (cell_w_px, cell_h_px, _, _) = self.cell_metrics_px(app);
         self.image_layer.recompute_pixel_dims(
             cell_w_px.round().max(1.0) as u32,
             cell_h_px.round().max(1.0) as u32,
@@ -920,9 +929,16 @@ impl WindowHost {
         // Origin/metrics captured before `grid_pass.as_mut()` so the
         // mutable borrow doesn't conflict with `&self` on the metrics
         // call inside the branch (both go through `cell_metrics_px`).
-        let (_, _, origin_x_px, origin_y_px) = self.cell_metrics_px();
+        let (_, _, origin_x_px, origin_y_px) = self.cell_metrics_px(app);
         let prepared_grid = if let Some(pass) = self.grid_pass.as_mut() {
-            let theme = crate::render::theme::Theme::default();
+            // Theme is seeded from settings (font_size_pt + cursor
+            // style) and then overlaid with the active tab's OSC
+            // mutations when a tab is present, mirroring the layering
+            // `render::draw_terminal` uses for the egui overlay.
+            let theme = match app.active_tab() {
+                Some(tab) => tab.theme.lock().clone(),
+                None => crate::render::theme::Theme::from_settings(app.settings.as_ref()),
+            };
             let width_mode = app.settings.ambiguous_width_mode;
             let cell_inputs = if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
@@ -977,15 +993,16 @@ impl WindowHost {
             } else {
                 Vec::new()
             };
-            // Cell metrics match `render/mod.rs::CELL_W / CELL_H` so the
-            // wgpu-rendered cells line up with the egui-side cursor and
-            // preedit overlays. The vertical origin reserves the same
-            // logical-px the tab bar widget actually occupies (see
-            // `crate::ui::tab_bar::TAB_BAR_HEIGHT`) plus the `TOP_PAD`
-            // egui uses inside the central panel.
+            // Cell metrics come from `App::cell_w_logical` /
+            // `App::cell_h_logical` so the wgpu-rendered cells line up
+            // with the egui-side cursor and preedit overlays. The
+            // vertical origin reserves the same logical-px the tab bar
+            // widget actually occupies (see
+            // `crate::ui::tab_bar::TAB_BAR_HEIGHT`) plus the
+            // `settings.padding` strip applied inside `cell_metrics_px`.
             //
             // HiDPI: the swapchain is sized in physical pixels while
-            // `CELL_W / CELL_H / LEFT_PAD / TOP_PAD` are logical
+            // `cell_w_logical` / `cell_h_logical` / `padding` are logical
             // pixels. egui scales its pass via `pixels_per_point` in
             // the `ScreenDescriptor`; we apply the same scale to every
             // length we hand wgpu (cell rect + origin + glyph
@@ -1002,10 +1019,15 @@ impl WindowHost {
                 &self.queue,
                 &cell_inputs,
                 crate::render::terminal_grid_pass::CellMetrics {
-                    cell_w: crate::render::CELL_W * scale,
-                    cell_h: crate::render::CELL_H * scale,
+                    cell_w: app.cell_w_logical * scale,
+                    cell_h: app.cell_h_logical * scale,
                     origin: [origin_x_px as f32, origin_y_px as f32],
-                    font_size_px: theme.font_size_pt * scale,
+                    // `theme.font_size_pt` is in CSS-compatible points;
+                    // the rasterizer takes pixels, so apply the same
+                    // `pt → px` conversion the legacy WebView build
+                    // does (96/72). Without this the glyph atlas is
+                    // built at ~75% of the cell size.
+                    font_size_px: theme.font_size_px() * scale,
                 },
                 self.surface_config.width,
                 self.surface_config.height,
@@ -1019,7 +1041,10 @@ impl WindowHost {
             // the cell grid (TOP_PAD / LEFT_PAD and the right/bottom
             // remainder rows) blends into the terminal background instead
             // of showing as a visible rim around the content.
-            let theme_bg = crate::render::theme::Theme::default().bg;
+            let theme_bg = match app.active_tab() {
+                Some(tab) => tab.theme.lock().bg,
+                None => crate::render::theme::Theme::from_settings(app.settings.as_ref()).bg,
+            };
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("native-poc-terminal-grid-pass"),
@@ -1368,7 +1393,7 @@ impl ApplicationHandler for PocApp {
         host.ensure_grid_pass(&self.app);
 
         // Push the initial grid size into the App before the first tab spawn.
-        let (cols, rows) = host.grid_size();
+        let (cols, rows) = host.grid_size(&self.app);
         self.app.cell_size = crate::app::GridDims { cols, rows };
         self.app.spawn_initial_tab();
 
@@ -1698,7 +1723,7 @@ impl ApplicationHandler for PocApp {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => {
-                        let (_, cell_h_px, _, _) = host.cell_metrics_px();
+                        let (_, cell_h_px, _, _) = host.cell_metrics_px(&self.app);
                         (p.y as f32) / (cell_h_px.max(1.0) as f32)
                     }
                 };
@@ -1743,7 +1768,7 @@ impl ApplicationHandler for PocApp {
         // physical-pixel metrics + origin as the grid renderer so the
         // IME spot lands on the actual cursor cell, not a HiDPI-off
         // approximation.
-        let (cell_w_px, cell_h_px, origin_x_px, origin_y_px) = host.cell_metrics_px();
+        let (cell_w_px, cell_h_px, origin_x_px, origin_y_px) = host.cell_metrics_px(&self.app);
         self.app.notify_cursor_rect_if_changed(
             cell_w_px.round().max(1.0) as u32,
             cell_h_px.round().max(1.0) as u32,

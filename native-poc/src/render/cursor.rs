@@ -16,10 +16,10 @@ use egui::{Color32, Pos2, Stroke};
 
 use crate::ime::preedit::Anchor;
 
-/// Cell metrics expected by the overlay routines. Mirrors the constants
-/// in [`super`] (CELL_W / CELL_H / LEFT_PAD / TOP_PAD) but is passed in
-/// explicitly so the pure layout code is decoupled from those constants
-/// and can be unit-tested with fabricated values.
+/// Cell metrics expected by the overlay routines. Mirrors the values
+/// `App` carries (`cell_w_logical` / `cell_h_logical` / `padding`) but
+/// is passed in explicitly so the pure layout code is decoupled from
+/// the runtime container and can be unit-tested with fabricated values.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FontMetrics {
     pub cell_w: f32,

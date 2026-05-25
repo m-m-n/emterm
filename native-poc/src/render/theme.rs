@@ -53,6 +53,43 @@ pub struct Theme {
     pub font_size_pt: f32,
 }
 
+impl From<crate::settings::CursorStyle> for CursorStyle {
+    fn from(s: crate::settings::CursorStyle) -> Self {
+        match s {
+            crate::settings::CursorStyle::Block => CursorStyle::Block,
+            crate::settings::CursorStyle::Underline => CursorStyle::Underline,
+            crate::settings::CursorStyle::Bar => CursorStyle::Bar,
+        }
+    }
+}
+
+impl Theme {
+    /// Build a [`Theme`] seeded by the user's
+    /// [`crate::settings::Settings`]. Currently only the font-size and
+    /// cursor-style fields are settings-driven; everything else
+    /// (palette, fg/bg, font_family) falls back to
+    /// [`Theme::default`]. OSC handlers may still mutate any field at
+    /// runtime — the settings only provide the initial value.
+    pub fn from_settings(settings: &crate::settings::Settings) -> Self {
+        let mut t = Self::default();
+        t.font_size_pt = settings.font_size;
+        t.cursor_style = settings.cursor_style.into();
+        t
+    }
+
+    /// Font size translated from `font_size_pt` (logical points) into
+    /// CSS-compatible pixels (`pt * 96 / 72`), matching what
+    /// `settings.json` consumers expect (the legacy WebView build
+    /// applies the same conversion in `renderer-settings.ts`). The
+    /// rasterizer and cell-metrics calls take pixels, so callers that
+    /// previously used `font_size_pt` directly must switch to this
+    /// accessor or the glyphs render at ~75% of the legacy build's
+    /// size.
+    pub fn font_size_px(&self) -> f32 {
+        self.font_size_pt * crate::settings::PT_TO_PX
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         // Standard xterm-like 16-color palette.

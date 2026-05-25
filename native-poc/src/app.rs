@@ -23,6 +23,7 @@ use crate::selection::Selection;
 use crate::settings::{FontEngine, Settings};
 use crate::status_bar::StatusBarRuntime;
 use crate::tabs::Tab;
+use crate::ui::emoji_cache::EmojiTextureCache;
 
 /// Cursor blink half-period in milliseconds. 530 ms matches xterm's
 /// `cursorBlinkXOR` interval; one full on/off cycle is `2 * BLINK_HALF_MS`.
@@ -126,6 +127,25 @@ pub struct App {
     /// override is registered.
     #[allow(dead_code)]
     pub font_base_id: FontId,
+    /// Per-cell width in egui logical pixels (1.0× scale). Computed
+    /// once at startup from the base font's advance for "M" at
+    /// `settings.font_size`. The renderer multiplies by
+    /// `pixels_per_point` for the physical-pixel `CellMetrics` handed
+    /// to wgpu. Mirrors the legacy WebView build's
+    /// `ctx.measureText("M").width` so settings.json's `font_size`
+    /// produces visually-matching cells across both binaries.
+    pub cell_w_logical: f32,
+    /// Per-cell height in egui logical pixels (1.0× scale). Computed
+    /// once at startup from the base font's ascent + descent at
+    /// `settings.font_size`. See [`Self::cell_w_logical`].
+    pub cell_h_logical: f32,
+    /// Color-emoji texture cache for the status bar. egui's text path
+    /// (ab_glyph) cannot raster CBDT/COLR glyphs, so the widget walks
+    /// each run via [`crate::ui::emoji_cache::split_segments`] and
+    /// substitutes a swash-rasterized `egui::Image` for emoji spans.
+    /// The cache lives behind a `Mutex` so the renderer can take it
+    /// from `&App` (mirroring `font_cache`).
+    pub emoji_texture_cache: Arc<Mutex<EmojiTextureCache>>,
     /// Status-bar runtime (template engine + providers + OSC
     /// dispatcher). Constructed once at startup; per-frame snapshots
     /// flow through [`App::status_bar_view_model`].
@@ -178,9 +198,43 @@ impl App {
         if force_full_redraw {
             log::warn!("EMTERM_FULL_REDRAW=1: dirty-row optimization disabled");
         }
+        // Surface the user-configured terminal settings so a
+        // typo / unexpected default is visible in the log instead of
+        // silently rendering at the wrong size or with the wrong
+        // cursor shape. Mirrors the existing `font.base / font.jp /
+        // font.emoji` lines emitted by `build_font_stack` below.
+        log::info!(
+            "settings: font_size={}pt padding={}px cursor_style={:?} cursor_blink={}",
+            settings.font_size,
+            settings.padding,
+            settings.cursor_style,
+            settings.cursor_blink
+        );
         let settings = Arc::new(settings);
         let (font_resolver, font_fallback, font_cache, font_rasterizer, font_base_id) =
             Self::build_font_stack(&settings);
+
+        // Compute per-cell logical-pixel dimensions from the freshly
+        // built font stack so the grid matches the legacy WebView
+        // build's `ctx.measureText("M")` path. Done after the font
+        // stack so the rasterizer + fallback chain are available.
+        // `font_size_px()` applies the CSS-compatible `pt → px`
+        // conversion (96/72) that the legacy WebView build does in
+        // `renderer-settings.ts` — without it, native-poc rasterizes
+        // at ~75% of the WebView size for the same settings value.
+        let font_size_px = settings.font_size_px();
+        let (cell_w_logical, cell_h_logical) = crate::render::compute_cell_dims(
+            font_rasterizer.as_ref(),
+            font_fallback.as_ref(),
+            font_size_px,
+        );
+        log::info!(
+            "cell metrics: {}x{} logical px (font_size={}pt = {}px)",
+            cell_w_logical,
+            cell_h_logical,
+            settings.font_size,
+            font_size_px
+        );
 
         // Per-frame cwd snapshot shared with status-bar providers. The
         // app updates it in `sync_active_cwd` before the runtime is
@@ -222,6 +276,9 @@ impl App {
             font_cache,
             font_rasterizer,
             font_base_id,
+            cell_w_logical,
+            cell_h_logical,
+            emoji_texture_cache: Arc::new(Mutex::new(EmojiTextureCache::new())),
             status_bar_runtime,
             active_cwd,
             previous_status_bar_view_model: None,
@@ -243,25 +300,45 @@ impl App {
         Arc<dyn GlyphRasterizer>,
         FontId,
     ) {
+        #[cfg(not(test))]
         use crate::render::font::resolver::FontRole;
 
         let mut resolver = Resolver::new();
         let (bundled_cjk_id, emoji_id) = resolver.register_bundled();
 
-        // Temporary host-font preferences (Phase 4-H follow-up): pick
-        // Inconsolata for the monospace Latin base + Noto Sans JP for the
-        // CJK fallback when those families are present on the system. The
-        // bundled CJK font's Latin sub-set is not monospaced, so falling
-        // back to it for ASCII produces visibly jagged grid alignment.
-        // When the requested families are absent we silently degrade to
-        // the bundled CJK font as the base.
+        // Host-font preferences sourced from `settings.font_family_fallback`:
+        //   fallback[0] -> base (Latin / monospace)
+        //   fallback[1] -> CJK fallback
+        // Built-in defaults ("Inconsolata" / "Noto Sans JP") apply
+        // when `settings.json` does not override them, matching the
+        // resolved family list the legacy WebView build picks for the
+        // same configuration. The bundled CJK font's Latin sub-set is
+        // not monospaced, so falling back to it for ASCII produces
+        // visibly jagged grid alignment — the resolver returns `None`
+        // when the requested family is absent on the host, and the
+        // chain root degrades to the bundled CJK font in that case
+        // (see `base_id` below).
         #[cfg(not(test))]
-        let inconsolata_id = resolver.register_system_family("Inconsolata", FontRole::Base);
+        let base_family = settings
+            .font_family_fallback
+            .first()
+            .map(String::as_str)
+            .unwrap_or("Inconsolata")
+            .to_string();
+        #[cfg(not(test))]
+        let cjk_family = settings
+            .font_family_fallback
+            .get(1)
+            .map(String::as_str)
+            .unwrap_or("Noto Sans JP")
+            .to_string();
+        #[cfg(not(test))]
+        let inconsolata_id = resolver.register_system_family(&base_family, FontRole::Base);
         #[cfg(test)]
         let inconsolata_id: Option<FontId> = None;
 
         #[cfg(not(test))]
-        let noto_sans_jp_id = resolver.register_system_family("Noto Sans JP", FontRole::Cjk);
+        let noto_sans_jp_id = resolver.register_system_family(&cjk_family, FontRole::Cjk);
         #[cfg(test)]
         let noto_sans_jp_id: Option<FontId> = None;
 
@@ -341,15 +418,23 @@ impl App {
         }
         extras.push(emoji_id);
         let preferred_emoji_id = host_emoji_id.unwrap_or(emoji_id);
+        #[cfg(not(test))]
         if let Some(id) = inconsolata_id {
-            log::info!("font.base = Inconsolata (id={:?})", id);
+            log::info!("font.base = {} (id={:?})", base_family, id);
         } else {
             log::warn!(
-                "font.base = bundled Noto Sans CJK JP (Inconsolata not found on host; ASCII will not be monospaced)"
+                "font.base = bundled Noto Sans CJK JP ({:?} not found on host; ASCII will not be monospaced)",
+                base_family
             );
         }
+        #[cfg(not(test))]
         if let Some(id) = noto_sans_jp_id {
-            log::info!("font.jp = Noto Sans JP (id={:?})", id);
+            log::info!("font.jp = {} (id={:?})", cjk_family, id);
+        } else {
+            log::warn!(
+                "font.jp = bundled Noto Sans CJK JP ({:?} not found on host)",
+                cjk_family
+            );
         }
         match (host_emoji_id, settings.emoji_font.as_deref()) {
             (Some(id), Some(family)) => log::info!("font.emoji = {} (id={:?})", family, id),
