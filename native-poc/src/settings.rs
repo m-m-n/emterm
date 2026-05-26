@@ -396,6 +396,167 @@ pub struct Settings {
     /// `TerminalCore::set_cursor_blink` at tab spawn time; DECTCEM /
     /// app-driven mode changes may still override at runtime.
     pub cursor_blink: bool,
+    /// UI brightness mode. `Light`/`Dark`/`System`. The MD3 palette in
+    /// `ui::md3` is currently dark-only; `Light`/`System` are captured
+    /// for forward compatibility but log a warn-once when first seen.
+    pub ui_theme: UiTheme,
+    /// MD3 accent color preset for the UI chrome. Swaps `md3::PRIMARY`
+    /// at runtime so tab indicator / focused borders pick up the user's
+    /// hue choice.
+    pub ui_theme_preset: UiThemePreset,
+    /// UI font family override for the egui-rendered chrome (title bar /
+    /// tab bar / status bar). Empty string keeps egui's bundled default.
+    /// Currently captured only — wiring into `FontDefinitions` is a
+    /// follow-up.
+    #[allow(dead_code)]
+    pub ui_font_family: String,
+    /// Terminal color-scheme preset name. When non-empty and matched
+    /// either by [`COLOR_SCHEME_PRESETS`] or by [`Settings::custom_color_schemes`],
+    /// drives `Theme::{fg, bg, cursor_fg, palette16}` at spawn time.
+    pub terminal_color_scheme: String,
+    /// User-defined terminal color schemes. Looked up by name from
+    /// `terminal_color_scheme`. User schemes override preset names of
+    /// the same value.
+    pub custom_color_schemes: Vec<UserColorScheme>,
+    /// Scrollbar visibility policy. The native-poc terminal viewport does
+    /// not yet expose a scrollbar widget — captured here so a future
+    /// scrollbar implementation can read the user's choice without a
+    /// schema migration.
+    #[allow(dead_code)]
+    pub show_scrollbar: ScrollbarMode,
+    /// Whether the tab bar is drawn. `false` hides it entirely; the
+    /// central terminal panel takes the freed vertical space.
+    pub show_tab_bar: bool,
+    /// When `true`, SGR `bold` promotes indexed ANSI colors 0-7 to their
+    /// bright variants (8-15) on the foreground. Matches xterm's
+    /// historical behavior and the WebView build's default. Plumbed into
+    /// `Theme::bold_brightens_ansi_colors` at spawn time.
+    pub bold_brightens_ansi_colors: bool,
+}
+
+/// UI brightness mode mirrored from the legacy WebView settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UiTheme {
+    Light,
+    Dark,
+    #[default]
+    System,
+}
+
+impl UiTheme {
+    pub fn parse_or_warn(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "light" => Self::Light,
+            "dark" => Self::Dark,
+            "system" | "" => Self::System,
+            other => {
+                warn_unknown_ui_theme_once(other);
+                Self::System
+            }
+        }
+    }
+}
+
+fn warn_unknown_ui_theme_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.ui_theme: unknown value {:?}, falling back to \"system\"",
+            owned
+        );
+    });
+}
+
+/// MD3 accent-color preset mirrored from the legacy WebView settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UiThemePreset {
+    #[default]
+    Purple,
+    Blue,
+    Green,
+    Orange,
+    Pink,
+}
+
+impl UiThemePreset {
+    pub fn parse_or_warn(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "purple" | "" => Self::Purple,
+            "blue" => Self::Blue,
+            "green" => Self::Green,
+            "orange" => Self::Orange,
+            "pink" => Self::Pink,
+            other => {
+                warn_unknown_ui_theme_preset_once(other);
+                Self::Purple
+            }
+        }
+    }
+}
+
+fn warn_unknown_ui_theme_preset_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.ui_theme_preset: unknown value {:?}, falling back to \"purple\"",
+            owned
+        );
+    });
+}
+
+/// Scrollbar visibility policy mirrored from the legacy WebView settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollbarMode {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl ScrollbarMode {
+    #[allow(dead_code)]
+    pub fn parse_or_warn(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "auto" | "" => Self::Auto,
+            "always" => Self::Always,
+            "never" => Self::Never,
+            other => {
+                warn_unknown_scrollbar_mode_once(other);
+                Self::Auto
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn warn_unknown_scrollbar_mode_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.show_scrollbar: unknown value {:?}, falling back to \"auto\"",
+            owned
+        );
+    });
+}
+
+/// User-defined terminal color scheme. Mirrors
+/// `src-tauri/src/commands/config/types.rs::UserColorScheme`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserColorScheme {
+    pub name: String,
+    pub foreground: String,
+    pub background: String,
+    pub cursor: String,
+    pub selection: String,
+    /// 16 ANSI colors (`#RRGGBB`). Entries beyond 16 are ignored; fewer
+    /// than 16 entries leaves the trailing slots at the xterm default.
+    pub ansi_colors: Vec<String>,
 }
 
 impl Default for Settings {
@@ -417,6 +578,14 @@ impl Default for Settings {
             padding: DEFAULT_PADDING_PX,
             cursor_style: CursorStyle::default(),
             cursor_blink: true,
+            ui_theme: UiTheme::default(),
+            ui_theme_preset: UiThemePreset::default(),
+            ui_font_family: String::new(),
+            terminal_color_scheme: String::new(),
+            custom_color_schemes: Vec::new(),
+            show_scrollbar: ScrollbarMode::default(),
+            show_tab_bar: true,
+            bold_brightens_ansi_colors: true,
         }
     }
 }
@@ -562,8 +731,33 @@ struct RawSettings {
     statusbar_custom_commands: Option<std::collections::HashMap<String, RawCustomCommand>>,
     statusbar_refresh_rates: Option<std::collections::HashMap<String, u64>>,
 
+    // ── UI chrome ──
+    ui_theme: Option<String>,
+    ui_theme_preset: Option<String>,
+    ui_font_family: Option<String>,
+    terminal_color_scheme: Option<String>,
+    custom_color_schemes: Option<Vec<RawUserColorScheme>>,
+    show_scrollbar: Option<String>,
+    show_tab_bar: Option<bool>,
+    bold_brightens_ansi_colors: Option<bool>,
+
     // ── native-poc-specific (nested) ──
     native_poc: Option<RawNativePoc>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawUserColorScheme {
+    name: String,
+    #[serde(default)]
+    foreground: String,
+    #[serde(default)]
+    background: String,
+    #[serde(default)]
+    cursor: String,
+    #[serde(default)]
+    selection: String,
+    #[serde(default)]
+    ansi_colors: Vec<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -701,6 +895,42 @@ impl RawSettings {
         }
         if let Some(v) = self.statusbar_refresh_rates {
             dst.statusbar.refresh_rates = v;
+        }
+
+        // ── UI chrome ──
+        if let Some(v) = self.ui_theme {
+            dst.ui_theme = UiTheme::parse_or_warn(&v);
+        }
+        if let Some(v) = self.ui_theme_preset {
+            dst.ui_theme_preset = UiThemePreset::parse_or_warn(&v);
+        }
+        if let Some(v) = self.ui_font_family.filter(|s| !s.trim().is_empty()) {
+            dst.ui_font_family = v;
+        }
+        if let Some(v) = self.terminal_color_scheme {
+            dst.terminal_color_scheme = v;
+        }
+        if let Some(v) = self.custom_color_schemes {
+            dst.custom_color_schemes = v
+                .into_iter()
+                .map(|r| UserColorScheme {
+                    name: r.name,
+                    foreground: r.foreground,
+                    background: r.background,
+                    cursor: r.cursor,
+                    selection: r.selection,
+                    ansi_colors: r.ansi_colors,
+                })
+                .collect();
+        }
+        if let Some(v) = self.show_scrollbar {
+            dst.show_scrollbar = ScrollbarMode::parse_or_warn(&v);
+        }
+        if let Some(v) = self.show_tab_bar {
+            dst.show_tab_bar = v;
+        }
+        if let Some(v) = self.bold_brightens_ansi_colors {
+            dst.bold_brightens_ansi_colors = v;
         }
 
         // ── native_poc.* (explicit overrides win over flat keys) ──

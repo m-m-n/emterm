@@ -594,8 +594,9 @@ impl WindowHost {
         // optional status-bar row pinned to the top, and the same
         // user-configured padding inset. Forgetting the title bar
         // here makes the first cell render behind the tab strip.
+        let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.settings.show_tab_bar) as f64;
         let origin_y = ((crate::ui::title_bar::TITLE_BAR_HEIGHT as f64)
-            + (crate::ui::tab_bar::TAB_BAR_HEIGHT as f64)
+            + tab_h
             + (self.status_bar_top_inset_logical as f64)
             + pad)
             * scale;
@@ -1661,8 +1662,8 @@ impl ApplicationHandler for PocApp {
                 // the close button on the title bar) would
                 // simultaneously start a selection on the cell behind
                 // it.
-                let top_strip_h =
-                    crate::ui::title_bar::TITLE_BAR_HEIGHT + crate::ui::tab_bar::TAB_BAR_HEIGHT;
+                let top_strip_h = crate::ui::title_bar::TITLE_BAR_HEIGHT
+                    + crate::ui::tab_bar::effective_tab_bar_height(self.app.settings.show_tab_bar);
                 let if_in_egui_strip = egui_pos.y < top_strip_h;
                 if if_in_egui_strip {
                     return;

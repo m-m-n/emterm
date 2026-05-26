@@ -88,7 +88,7 @@ pub fn draw(
         StatusBarPosition::Bottom => egui::TopBottomPanel::bottom("native-poc-status-bar"),
     };
     let frame = egui::Frame::none()
-        .fill(md3::SURFACE_CONTAINER)
+        .fill(md3::surface_container())
         .inner_margin(Margin::ZERO);
     panel = panel
         .frame(frame)
