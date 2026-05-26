@@ -62,13 +62,27 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    /// Spawn a shell. `$SHELL` is preferred; falls back to `/bin/sh`.
-    /// `event_tx` receives `PtyEvent` items.
-    pub fn spawn(cols: u16, rows: u16, event_tx: Sender<PtyEvent>) -> std::io::Result<Self> {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-            // Phase 6 NFR: Linux-only PoC, but keep the fallback explicit.
-            "/bin/sh".to_string()
-        });
+    /// Spawn a shell. Selection order:
+    ///   1. `shell_path` argument when non-empty (from `settings.shell_path`),
+    ///   2. `$SHELL` environment variable,
+    ///   3. `/bin/sh` fallback.
+    /// `shell_args` is appended verbatim to the resulting argv. `event_tx`
+    /// receives `PtyEvent` items.
+    pub fn spawn(
+        cols: u16,
+        rows: u16,
+        event_tx: Sender<PtyEvent>,
+        shell_path: &str,
+        shell_args: &[String],
+    ) -> std::io::Result<Self> {
+        let shell = if !shell_path.trim().is_empty() {
+            shell_path.to_string()
+        } else {
+            std::env::var("SHELL").unwrap_or_else(|_| {
+                // Phase 6 NFR: Linux-only PoC, but keep the fallback explicit.
+                "/bin/sh".to_string()
+            })
+        };
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -81,6 +95,9 @@ impl PtySession {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         let mut cmd = CommandBuilder::new(shell);
+        for arg in shell_args {
+            cmd.arg(arg);
+        }
         // Strip multiplexer-injected env vars: the shell we spawn here is a
         // fresh child of native-poc, not of any outer mux/tmux session. Leaving
         // these set would (a) make `emterm mux` refuse to start with

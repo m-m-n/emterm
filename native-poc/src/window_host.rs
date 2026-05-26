@@ -1546,9 +1546,27 @@ impl ApplicationHandler for PocApp {
                     if let Some(act) = action {
                         let _ = self.app.apply_action(act);
                         self.app.mark_full_redraw();
-                    } else if let Some(bytes) = winit_key_to_bytes(&event, host.current_mods) {
-                        if let Some(tab) = self.app.active_tab() {
-                            tab.write(bytes);
+                    } else {
+                        // `shift_enter_as_alt_enter`: when the user has
+                        // opted in, present `Shift+Enter` to the shell
+                        // as `Alt+Enter` (M-RET) so editor multi-line
+                        // continuation bindings fire. Only the bare
+                        // Shift-on-Enter case is rewritten — Ctrl/Alt
+                        // already pass through unchanged.
+                        let mut mods = host.current_mods;
+                        if self.app.settings.shift_enter_as_alt_enter
+                            && mods.shift
+                            && !mods.ctrl
+                            && !mods.alt
+                            && matches!(event.logical_key, WinitKey::Named(NamedKey::Enter))
+                        {
+                            mods.shift = false;
+                            mods.alt = true;
+                        }
+                        if let Some(bytes) = winit_key_to_bytes(&event, mods) {
+                            if let Some(tab) = self.app.active_tab() {
+                                tab.write(bytes);
+                            }
                         }
                     }
                 }
@@ -1709,12 +1727,23 @@ impl ApplicationHandler for PocApp {
                                 let text = sel.resolve(&core);
                                 drop(core);
                                 host.set_primary(&text);
+                                // `copy_on_select` opts into mirroring the
+                                // selection to the system CLIPBOARD as
+                                // well, matching the WebView build's
+                                // toggle. PRIMARY is always updated above
+                                // so the middle-click flow keeps working
+                                // regardless.
+                                if self.app.settings.copy_on_select && !text.is_empty() {
+                                    host.set_clipboard(&text);
+                                }
                             }
                         }
                     }
                     (MouseButton::Middle, ElementState::Pressed) => {
-                        if let Some(text) = host.get_primary() {
-                            host.deliver_paste(&self.app, &text);
+                        if self.app.settings.middle_click_paste {
+                            if let Some(text) = host.get_primary() {
+                                host.deliver_paste(&self.app, &text);
+                            }
                         }
                     }
                     _ => {}
@@ -1728,7 +1757,11 @@ impl ApplicationHandler for PocApp {
                         (p.y as f32) / (cell_h_px.max(1.0) as f32)
                     }
                 };
-                let step = 3u32;
+                // `settings.scroll_speed` is clamped to 1..=10 by the
+                // loader, so it's safe to feed directly into the scroll
+                // helpers (a runaway typo can't fly the viewport 1000
+                // rows per notch).
+                let step = self.app.settings.scroll_speed.max(1);
                 if lines > 0.0 {
                     self.app.scroll_up_by(step);
                     host.window().request_redraw();
