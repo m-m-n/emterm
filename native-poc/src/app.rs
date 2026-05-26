@@ -210,6 +210,27 @@ impl App {
             settings.cursor_style,
             settings.cursor_blink
         );
+        log::info!(
+            "settings: ui_theme={:?} ui_theme_preset={:?} show_tab_bar={} terminal_color_scheme={:?}",
+            settings.ui_theme,
+            settings.ui_theme_preset,
+            settings.show_tab_bar,
+            settings.terminal_color_scheme
+        );
+        // Seed the MD3 accent slot before any widget runs. `OnceLock`
+        // means subsequent calls (e.g. a reload path) are no-ops, which
+        // matches the WebView build's startup-only behavior for the UI
+        // theme preset.
+        crate::ui::md3::set_primary_preset(settings.ui_theme_preset);
+        // `ui::md3` is dark-only today; surface a one-line note when the
+        // user explicitly asked for `light` so the discrepancy is visible
+        // instead of being silently ignored. A future `md3_light` module
+        // will pick up the same setting.
+        if settings.ui_theme == crate::settings::UiTheme::Light {
+            log::warn!(
+                "settings.ui_theme=Light: native-poc UI palette is dark-only; rendering chrome in dark anyway"
+            );
+        }
         let settings = Arc::new(settings);
         let (font_resolver, font_fallback, font_cache, font_rasterizer, font_base_id) =
             Self::build_font_stack(&settings);

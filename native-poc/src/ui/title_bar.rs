@@ -57,7 +57,13 @@ const CLOSE_HOVER_BG: Color32 = Color32::from_rgb(0xC4, 0x2B, 0x1C);
 /// title-bar background, so we use the next-brighter surface step
 /// outright. Reads as a clear "I'm hoverable" cue without competing
 /// visually with the red close affordance.
-const CONTROL_HOVER_BG: Color32 = md3::SURFACE_CONTAINER_HIGHEST;
+/// Hover overlay for the minimize / maximize buttons. Resolved at
+/// call-time via [`md3::surface_container_highest`] so the user's
+/// `ui_theme_preset` choice tints the hover step alongside the rest of
+/// the chrome.
+fn control_hover_bg() -> Color32 {
+    md3::surface_container_highest()
+}
 
 /// One of the four CSD button glyphs. The maximize button switches
 /// between [`Maximize`] and [`Restore`] based on the current window
@@ -89,7 +95,7 @@ pub fn draw(ctx: &egui::Context, title: &str, is_maximized: bool) -> Option<Titl
     let mut event: Option<TitleBarEvent> = None;
 
     let frame = egui::Frame::none()
-        .fill(md3::SURFACE_CONTAINER_LOW)
+        .fill(md3::surface_container_low())
         .inner_margin(egui::Margin::ZERO);
 
     egui::TopBottomPanel::top("native-poc-title-bar")
@@ -99,7 +105,7 @@ pub fn draw(ctx: &egui::Context, title: &str, is_maximized: bool) -> Option<Titl
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing = Vec2::ZERO;
             let panel_rect = ui.max_rect();
-            let panel_bg = md3::SURFACE_CONTAINER_LOW;
+            let panel_bg = md3::surface_container_low();
 
             // Right-to-left layout so the controls cluster on the right
             // edge and we can give the title / drag affordance the
@@ -148,7 +154,7 @@ pub fn draw(ctx: &egui::Context, title: &str, is_maximized: bool) -> Option<Titl
                         Align2::LEFT_CENTER,
                         title,
                         FontId::proportional(TITLE_FONT_SIZE),
-                        md3::ON_SURFACE_VARIANT,
+                        md3::on_surface_variant(),
                     );
                 }
             });
@@ -159,7 +165,7 @@ pub fn draw(ctx: &egui::Context, title: &str, is_maximized: bool) -> Option<Titl
             painter.hline(
                 panel_rect.left()..=panel_rect.right(),
                 panel_rect.bottom() - 0.5,
-                Stroke::new(1.0, md3::OUTLINE_VARIANT),
+                Stroke::new(1.0, md3::outline_variant()),
             );
         });
 
@@ -185,7 +191,7 @@ fn draw_button(ui: &mut Ui, kind: ButtonKind, danger: bool, panel_bg: Color32) -
         let bg = if danger {
             CLOSE_HOVER_BG
         } else {
-            CONTROL_HOVER_BG
+            control_hover_bg()
         };
         painter.rect_filled(rect, Rounding::ZERO, bg);
         bg
@@ -200,10 +206,10 @@ fn draw_button(ui: &mut Ui, kind: ButtonKind, danger: bool, panel_bg: Color32) -
         if danger {
             Color32::WHITE
         } else {
-            md3::ON_SURFACE
+            md3::on_surface()
         }
     } else {
-        md3::ON_SURFACE_VARIANT
+        md3::on_surface_variant()
     };
     let stroke = Stroke::new(ICON_STROKE_WIDTH, icon_color);
     let bbox = Rect::from_center_size(rect.center(), Vec2::splat(ICON_SIZE));

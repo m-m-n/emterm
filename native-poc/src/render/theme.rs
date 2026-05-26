@@ -51,6 +51,12 @@ pub struct Theme {
     #[allow(dead_code)]
     pub font_family: String,
     pub font_size_pt: f32,
+    /// Whether the SGR `bold` attribute promotes indexed ANSI colors 0-7
+    /// to their bright variants (8-15). Seeded from
+    /// `settings.bold_brightens_ansi_colors`; xterm's historical default
+    /// is `true`. Applied after `reverse` (foreground only) in
+    /// `resolve_cell_style`.
+    pub bold_brightens_ansi_colors: bool,
 }
 
 impl From<crate::settings::CursorStyle> for CursorStyle {
@@ -74,6 +80,8 @@ impl Theme {
         let mut t = Self::default();
         t.font_size_pt = settings.font_size;
         t.cursor_style = settings.cursor_style.into();
+        t.bold_brightens_ansi_colors = settings.bold_brightens_ansi_colors;
+        apply_color_scheme(&mut t, settings);
         t
     }
 
@@ -120,6 +128,7 @@ impl Default for Theme {
             cursor_style: CursorStyle::default(),
             font_family: "monospace".into(),
             font_size_pt: 13.0,
+            bold_brightens_ansi_colors: true,
         }
     }
 }
@@ -341,6 +350,228 @@ impl Theme {
             changed
         }
     }
+}
+
+// ============================================================
+// Color-scheme presets (settings.json `terminal_color_scheme`)
+// ============================================================
+//
+// Mirrors the WebView build's `src/terminal/colors.ts::COLOR_SCHEME_PRESETS`.
+// `name` is the on-disk identifier; `palette16` / `fg` / `bg` / `cursor_fg`
+// map straight onto Theme fields.
+
+struct ColorSchemePreset {
+    name: &'static str,
+    fg: Rgb,
+    bg: Rgb,
+    cursor: Rgb,
+    palette16: [Rgb; 16],
+}
+
+const COLOR_SCHEME_PRESETS: &[ColorSchemePreset] = &[
+    ColorSchemePreset {
+        name: "emterm",
+        fg: Rgb(0xee, 0xee, 0xee),
+        bg: Rgb(0x00, 0x00, 0x00),
+        cursor: Rgb(0x00, 0x80, 0x00),
+        palette16: [
+            Rgb(0x00, 0x00, 0x00),
+            Rgb(0xcd, 0x00, 0x00),
+            Rgb(0x00, 0xcd, 0x00),
+            Rgb(0xcd, 0xcd, 0x00),
+            Rgb(0x00, 0x00, 0xee),
+            Rgb(0xcd, 0x00, 0xcd),
+            Rgb(0x00, 0xcd, 0xcd),
+            Rgb(0xe5, 0xe5, 0xe5),
+            Rgb(0x7f, 0x7f, 0x7f),
+            Rgb(0xff, 0x00, 0x00),
+            Rgb(0x00, 0xff, 0x00),
+            Rgb(0xff, 0xff, 0x00),
+            Rgb(0x5c, 0x5c, 0xff),
+            Rgb(0xff, 0x00, 0xff),
+            Rgb(0x00, 0xff, 0xff),
+            Rgb(0xff, 0xff, 0xff),
+        ],
+    },
+    ColorSchemePreset {
+        name: "solarized-dark",
+        fg: Rgb(0x83, 0x94, 0x96),
+        bg: Rgb(0x00, 0x2b, 0x36),
+        cursor: Rgb(0x83, 0x94, 0x96),
+        palette16: [
+            Rgb(0x07, 0x36, 0x42),
+            Rgb(0xdc, 0x32, 0x2f),
+            Rgb(0x85, 0x99, 0x00),
+            Rgb(0xb5, 0x89, 0x00),
+            Rgb(0x26, 0x8b, 0xd2),
+            Rgb(0xd3, 0x36, 0x82),
+            Rgb(0x2a, 0xa1, 0x98),
+            Rgb(0xee, 0xe8, 0xd5),
+            Rgb(0x00, 0x2b, 0x36),
+            Rgb(0xcb, 0x4b, 0x16),
+            Rgb(0x58, 0x6e, 0x75),
+            Rgb(0x65, 0x7b, 0x83),
+            Rgb(0x83, 0x94, 0x96),
+            Rgb(0x6c, 0x71, 0xc4),
+            Rgb(0x93, 0xa1, 0xa1),
+            Rgb(0xfd, 0xf6, 0xe3),
+        ],
+    },
+    ColorSchemePreset {
+        name: "solarized-light",
+        fg: Rgb(0x65, 0x7b, 0x83),
+        bg: Rgb(0xfd, 0xf6, 0xe3),
+        cursor: Rgb(0x65, 0x7b, 0x83),
+        palette16: [
+            Rgb(0x07, 0x36, 0x42),
+            Rgb(0xdc, 0x32, 0x2f),
+            Rgb(0x85, 0x99, 0x00),
+            Rgb(0xb5, 0x89, 0x00),
+            Rgb(0x26, 0x8b, 0xd2),
+            Rgb(0xd3, 0x36, 0x82),
+            Rgb(0x2a, 0xa1, 0x98),
+            Rgb(0xee, 0xe8, 0xd5),
+            Rgb(0x00, 0x2b, 0x36),
+            Rgb(0xcb, 0x4b, 0x16),
+            Rgb(0x58, 0x6e, 0x75),
+            Rgb(0x65, 0x7b, 0x83),
+            Rgb(0x83, 0x94, 0x96),
+            Rgb(0x6c, 0x71, 0xc4),
+            Rgb(0x93, 0xa1, 0xa1),
+            Rgb(0xfd, 0xf6, 0xe3),
+        ],
+    },
+    ColorSchemePreset {
+        name: "monokai",
+        fg: Rgb(0xf8, 0xf8, 0xf2),
+        bg: Rgb(0x27, 0x28, 0x22),
+        cursor: Rgb(0xf8, 0xf8, 0xf0),
+        palette16: [
+            Rgb(0x27, 0x28, 0x22),
+            Rgb(0xf9, 0x26, 0x72),
+            Rgb(0xa6, 0xe2, 0x2e),
+            Rgb(0xf4, 0xbf, 0x75),
+            Rgb(0x66, 0xd9, 0xef),
+            Rgb(0xae, 0x81, 0xff),
+            Rgb(0xa1, 0xef, 0xe4),
+            Rgb(0xf8, 0xf8, 0xf2),
+            Rgb(0x75, 0x71, 0x5e),
+            Rgb(0xf9, 0x26, 0x72),
+            Rgb(0xa6, 0xe2, 0x2e),
+            Rgb(0xf4, 0xbf, 0x75),
+            Rgb(0x66, 0xd9, 0xef),
+            Rgb(0xae, 0x81, 0xff),
+            Rgb(0xa1, 0xef, 0xe4),
+            Rgb(0xf9, 0xf8, 0xf5),
+        ],
+    },
+    ColorSchemePreset {
+        name: "dracula",
+        fg: Rgb(0xf8, 0xf8, 0xf2),
+        bg: Rgb(0x28, 0x2a, 0x36),
+        cursor: Rgb(0xf8, 0xf8, 0xf2),
+        palette16: [
+            Rgb(0x21, 0x22, 0x2c),
+            Rgb(0xff, 0x55, 0x55),
+            Rgb(0x50, 0xfa, 0x7b),
+            Rgb(0xf1, 0xfa, 0x8c),
+            Rgb(0xbd, 0x93, 0xf9),
+            Rgb(0xff, 0x79, 0xc6),
+            Rgb(0x8b, 0xe9, 0xfd),
+            Rgb(0xf8, 0xf8, 0xf2),
+            Rgb(0x6c, 0x71, 0xc4),
+            Rgb(0xff, 0x66, 0x66),
+            Rgb(0x69, 0xff, 0x94),
+            Rgb(0xff, 0xff, 0xb6),
+            Rgb(0xd6, 0xac, 0xff),
+            Rgb(0xff, 0x92, 0xdf),
+            Rgb(0xa4, 0xff, 0xff),
+            Rgb(0xff, 0xff, 0xff),
+        ],
+    },
+    ColorSchemePreset {
+        name: "nord",
+        fg: Rgb(0xd8, 0xde, 0xe9),
+        bg: Rgb(0x2e, 0x34, 0x40),
+        cursor: Rgb(0xd8, 0xde, 0xe9),
+        palette16: [
+            Rgb(0x3b, 0x42, 0x52),
+            Rgb(0xbf, 0x61, 0x6a),
+            Rgb(0xa3, 0xbe, 0x8c),
+            Rgb(0xeb, 0xcb, 0x8b),
+            Rgb(0x81, 0xa1, 0xc1),
+            Rgb(0xb4, 0x8e, 0xad),
+            Rgb(0x88, 0xc0, 0xd0),
+            Rgb(0xe5, 0xe9, 0xf0),
+            Rgb(0x4c, 0x56, 0x6a),
+            Rgb(0xbf, 0x61, 0x6a),
+            Rgb(0xa3, 0xbe, 0x8c),
+            Rgb(0xeb, 0xcb, 0x8b),
+            Rgb(0x81, 0xa1, 0xc1),
+            Rgb(0xb4, 0x8e, 0xad),
+            Rgb(0x8f, 0xbc, 0xbb),
+            Rgb(0xec, 0xef, 0xf4),
+        ],
+    },
+];
+
+/// Apply `settings.terminal_color_scheme` to `theme`. User-defined
+/// schemes in `settings.custom_color_schemes` win over built-in presets
+/// of the same name, matching the WebView build (`initial-settings.ts`).
+/// Unknown / empty names leave `theme` untouched.
+fn apply_color_scheme(theme: &mut Theme, settings: &crate::settings::Settings) {
+    let name = settings.terminal_color_scheme.trim();
+    if name.is_empty() {
+        return;
+    }
+
+    if let Some(user) = settings
+        .custom_color_schemes
+        .iter()
+        .find(|s| s.name == name)
+    {
+        apply_user_scheme(theme, user);
+        return;
+    }
+
+    if let Some(preset) = COLOR_SCHEME_PRESETS.iter().find(|p| p.name == name) {
+        theme.fg = preset.fg;
+        theme.bg = preset.bg;
+        theme.cursor_fg = preset.cursor;
+        theme.palette16 = preset.palette16;
+        return;
+    }
+
+    warn_unknown_color_scheme_once(name);
+}
+
+fn apply_user_scheme(theme: &mut Theme, user: &crate::settings::UserColorScheme) {
+    if let Some(rgb) = parse_color_spec(&user.foreground) {
+        theme.fg = rgb;
+    }
+    if let Some(rgb) = parse_color_spec(&user.background) {
+        theme.bg = rgb;
+    }
+    if let Some(rgb) = parse_color_spec(&user.cursor) {
+        theme.cursor_fg = rgb;
+    }
+    for (i, spec) in user.ansi_colors.iter().take(16).enumerate() {
+        if let Some(rgb) = parse_color_spec(spec) {
+            theme.palette16[i] = rgb;
+        }
+    }
+}
+
+fn warn_unknown_color_scheme_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.terminal_color_scheme: unknown name {:?}, keeping defaults",
+            owned
+        );
+    });
 }
 
 #[cfg(test)]

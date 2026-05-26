@@ -33,6 +33,17 @@ use super::TabEvent;
 /// Fixed visual height of the tab strip in egui logical points.
 /// Matches `.tab-bar { height: 48px }` in the WebView build.
 pub const TAB_BAR_HEIGHT: f32 = 48.0;
+
+/// Effective tab-bar height for layout math, accounting for
+/// `settings.show_tab_bar`. Returns 0 when the bar is hidden so the
+/// terminal grid / cursor overlay use the freed vertical space.
+pub fn effective_tab_bar_height(show_tab_bar: bool) -> f32 {
+    if show_tab_bar {
+        TAB_BAR_HEIGHT
+    } else {
+        0.0
+    }
+}
 /// Minimum width of a single tab before horizontal scroll kicks in.
 /// Matches `.tab { min-width: 120px }`.
 const MIN_TAB_WIDTH: f32 = 120.0;
@@ -109,7 +120,7 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
     let mut event: Option<TabEvent> = None;
 
     let frame = egui::Frame::none()
-        .fill(md3::SURFACE_CONTAINER)
+        .fill(md3::surface_container())
         .inner_margin(egui::Margin::ZERO);
 
     egui::TopBottomPanel::top("native-poc-tab-bar")
@@ -168,7 +179,7 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
                 ui.painter().vline(
                     sep_x,
                     panel_rect.top()..=(panel_rect.bottom() - HAIRLINE_HEIGHT),
-                    Stroke::new(1.0, md3::OUTLINE_VARIANT),
+                    Stroke::new(1.0, md3::outline_variant()),
                 );
 
                 let plus_resp = draw_icon_button(ui, NEW_TAB_BUTTON_SIZE);
@@ -188,7 +199,7 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
             painter.hline(
                 panel_rect.left()..=panel_rect.right(),
                 y,
-                Stroke::new(HAIRLINE_HEIGHT, md3::OUTLINE_VARIANT),
+                Stroke::new(HAIRLINE_HEIGHT, md3::outline_variant()),
             );
         });
 
@@ -251,7 +262,7 @@ fn layout_tab_strip(
             painter.rect_filled(
                 rect,
                 Rounding::ZERO,
-                md3::state_layer(md3::PRIMARY, md3::STATE_LAYER_HOVER),
+                md3::state_layer(md3::primary(), md3::STATE_LAYER_HOVER),
             );
         } else if cell_resp.hovered() {
             painter.rect_filled(
@@ -259,9 +270,9 @@ fn layout_tab_strip(
                 Rounding::ZERO,
                 md3::state_layer(
                     if is_active {
-                        md3::PRIMARY
+                        md3::primary()
                     } else {
-                        md3::ON_SURFACE_VARIANT
+                        md3::on_surface_variant()
                     },
                     md3::STATE_LAYER_HOVER,
                 ),
@@ -280,9 +291,9 @@ fn layout_tab_strip(
 
         let label_text = render_label(item);
         let text_color = if is_active {
-            md3::PRIMARY
+            md3::primary()
         } else {
-            md3::ON_SURFACE_VARIANT
+            md3::on_surface_variant()
         };
         let font_id = FontId::proportional(TAB_FONT_SIZE);
         // egui has no native truncation helper for direct painter text,
@@ -343,7 +354,7 @@ fn layout_tab_strip(
                     sw: 0.0,
                     se: 0.0,
                 },
-                md3::PRIMARY,
+                md3::primary(),
             );
         }
     }
@@ -362,7 +373,7 @@ fn layout_tab_strip(
                 let y0 = cell_rects[0].top();
                 let y1 = cell_rects[0].bottom() - HAIRLINE_HEIGHT;
                 ui.painter()
-                    .vline(indicator_x, y0..=y1, Stroke::new(2.0, md3::PRIMARY));
+                    .vline(indicator_x, y0..=y1, Stroke::new(2.0, md3::primary()));
             }
         }
 
@@ -440,12 +451,12 @@ fn draw_icon_button(ui: &mut Ui, size: f32) -> egui::Response {
         painter.rect_filled(
             rect,
             Rounding::same(ICON_BUTTON_RADIUS),
-            md3::state_layer(md3::ON_SURFACE_VARIANT, md3::STATE_LAYER_HOVER),
+            md3::state_layer(md3::on_surface_variant(), md3::STATE_LAYER_HOVER),
         );
     }
 
     let bbox = Rect::from_center_size(rect.center(), Vec2::splat(PLUS_ICON_SIZE));
-    let stroke = Stroke::new(PLUS_ICON_STROKE_WIDTH, md3::ON_SURFACE_VARIANT);
+    let stroke = Stroke::new(PLUS_ICON_STROKE_WIDTH, md3::on_surface_variant());
     let cx = bbox.center().x;
     let cy = bbox.center().y;
     painter.line_segment(

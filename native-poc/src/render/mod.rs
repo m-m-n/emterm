@@ -168,7 +168,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             item
         })
         .collect();
-    let tab_event = if items.is_empty() {
+    let tab_event = if items.is_empty() || !app.settings.show_tab_bar {
         None
     } else {
         crate::ui::tab_bar::draw(ctx, &items, app.active)
@@ -435,10 +435,8 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
     // panel whose `min_rect` is already pushed down by the egui
     // top-status panel, so adding the inset would double-count it.
     let pad = app.settings.padding as f32;
-    let origin = Pos2::new(
-        pad,
-        crate::ui::title_bar::TITLE_BAR_HEIGHT + crate::ui::tab_bar::TAB_BAR_HEIGHT + pad,
-    );
+    let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.settings.show_tab_bar);
+    let origin = Pos2::new(pad, crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad);
     let painter = ui.painter();
 
     let cell_w = app.cell_w_logical;
@@ -497,10 +495,8 @@ fn resolve_cell_style(
     selection: Option<&Selection>,
 ) -> CellStyle {
     let flags = core.get_cell_flags(col, row);
-    let fg = packed_to_egui(core.get_cell_fg(col, row), theme.fg, theme)
-        .unwrap_or_else(|| rgb_to_egui(theme.fg));
-    let bg = packed_to_egui(core.get_cell_bg(col, row), theme.bg, theme)
-        .unwrap_or_else(|| rgb_to_egui(theme.bg));
+    let packed_fg = core.get_cell_fg(col, row);
+    let packed_bg = core.get_cell_bg(col, row);
 
     let bold = (flags & STYLE_BOLD) != 0;
     let dim = (flags & STYLE_DIM) != 0;
@@ -514,9 +510,31 @@ fn resolve_cell_style(
     let hidden = (flags & STYLE_HIDDEN) != 0;
     let strikethrough = (flags & STYLE_STRIKETHROUGH) != 0;
 
-    // Reverse: swap fg/bg BEFORE selection / hidden / dim handling so the
-    // later transforms operate on the perceived foreground.
-    let (mut fg, mut bg) = if reverse { (bg, fg) } else { (fg, bg) };
+    // Reverse: swap source packed colors BEFORE bold-brighten / decoding
+    // so the bold-brighten promotion sees the perceived foreground (FR7
+    // in the WebView build: bold-brighten is foreground-only and applies
+    // *after* reverse).
+    let (effective_fg_packed, effective_bg_packed) = if reverse {
+        (packed_bg, packed_fg)
+    } else {
+        (packed_fg, packed_bg)
+    };
+
+    // Bold-brightens: when `settings.bold_brightens_ansi_colors` is on
+    // and the cell's foreground is an indexed color in `0..8`, promote
+    // it to the bright variant (`idx + 8`). Truecolor / default-tag
+    // foregrounds are untouched. Mirrors
+    // `attributes.ts::getEffectiveForeground` in the WebView build.
+    let effective_fg_packed = if bold && theme.bold_brightens_ansi_colors {
+        bold_brighten_packed(effective_fg_packed)
+    } else {
+        effective_fg_packed
+    };
+
+    let mut fg = packed_to_egui(effective_fg_packed, theme.fg, theme)
+        .unwrap_or_else(|| rgb_to_egui(theme.fg));
+    let mut bg = packed_to_egui(effective_bg_packed, theme.bg, theme)
+        .unwrap_or_else(|| rgb_to_egui(theme.bg));
 
     // Selection: invert again on top of any reverse already in effect.
     let selected = selection.map(|s| s.contains(row, col)).unwrap_or(false);
@@ -582,6 +600,22 @@ fn visible_width(ch: &str, mode: AmbiguousWidthMode) -> u8 {
 /// Returns `None` only for the `Default` tag, in which case the caller
 /// substitutes the active palette fallback. `tag` legend:
 /// `0`=default, `1`=indexed (the index lives in `r`), `2`=truecolor RGB.
+/// Promote indexed-color packed value 0-7 → 8-15 (xterm "bold brightens"
+/// behavior). Truecolor / default-tag values pass through unchanged so
+/// the caller can apply this unconditionally to bolded foregrounds.
+fn bold_brighten_packed(packed: u32) -> u32 {
+    let tag = (packed >> 24) as u8;
+    if tag != 1 {
+        return packed;
+    }
+    let idx = (packed >> 16) as u8;
+    if idx >= 8 {
+        return packed;
+    }
+    // Clear the old index byte and write idx+8 back into the same slot.
+    (packed & 0xFF00_FFFF) | ((idx as u32 + 8) << 16)
+}
+
 fn packed_to_egui(packed: u32, _fallback: Rgb, theme: &Theme) -> Option<Color32> {
     let tag = (packed >> 24) as u8;
     let r = (packed >> 16) as u8;
@@ -686,6 +720,44 @@ mod tests {
         assert_eq!(m.r(), 100);
         assert_eq!(m.g(), 50);
         assert_eq!(m.b(), 25);
+    }
+
+    #[test]
+    fn bold_brighten_packed_promotes_indexed_0_7() {
+        // tag=1 (indexed), index=3 (yellow) → index=11 (bright yellow)
+        let packed_red = (1u32 << 24) | (1u32 << 16);
+        assert_eq!(
+            bold_brighten_packed(packed_red),
+            (1u32 << 24) | (9u32 << 16)
+        );
+
+        let packed_yellow = (1u32 << 24) | (3u32 << 16);
+        assert_eq!(
+            bold_brighten_packed(packed_yellow),
+            (1u32 << 24) | (11u32 << 16)
+        );
+    }
+
+    #[test]
+    fn bold_brighten_packed_leaves_already_bright_alone() {
+        // index 8..16 are already bright; pass through unchanged.
+        let packed = (1u32 << 24) | (10u32 << 16);
+        assert_eq!(bold_brighten_packed(packed), packed);
+    }
+
+    #[test]
+    fn bold_brighten_packed_leaves_truecolor_alone() {
+        // tag=2 (truecolor); RGB bits live where the indexed-form `index`
+        // byte does, so blindly adding 8 would corrupt the red channel.
+        let packed = (2u32 << 24) | 0x00_AA_BB_CC;
+        assert_eq!(bold_brighten_packed(packed), packed);
+    }
+
+    #[test]
+    fn bold_brighten_packed_leaves_default_tag_alone() {
+        // tag=0 (default fg). bold_brighten must not mutate.
+        let packed = 0u32;
+        assert_eq!(bold_brighten_packed(packed), packed);
     }
 
     #[test]
