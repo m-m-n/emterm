@@ -110,13 +110,14 @@ impl Tab {
         // worth (12 ms budget) at a time. The trade-off is up to 64MB
         // of resident memory per tab during a sustained burst.
         let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(4096);
-        let pty = match PtySession::spawn(cols, rows, tx) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                log::error!("failed to spawn shell PTY: {e}");
-                None
-            }
-        };
+        let pty =
+            match PtySession::spawn(cols, rows, tx, &settings.shell_path, &settings.shell_args) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    log::error!("failed to spawn shell PTY: {e}");
+                    None
+                }
+            };
 
         // Construct the core and install our native callbacks.
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);

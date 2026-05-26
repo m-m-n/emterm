@@ -432,6 +432,51 @@ pub struct Settings {
     /// historical behavior and the WebView build's default. Plumbed into
     /// `Theme::bold_brightens_ansi_colors` at spawn time.
     pub bold_brightens_ansi_colors: bool,
+    /// Default shell executable for newly spawned tabs. Empty string
+    /// keeps the historical `$SHELL` / `/bin/sh` fallback in
+    /// `PtySession::spawn`.
+    pub shell_path: String,
+    /// Argv tail passed to the spawned shell after the executable. Each
+    /// entry becomes a separate argv slot.
+    pub shell_args: Vec<String>,
+    /// Number of grid rows scrolled per wheel notch when the mouse
+    /// wheel delivers one line. Clamped at the call site to keep the
+    /// behavior identical to the WebView build.
+    pub scroll_speed: u32,
+    /// When `true`, releasing a left-click selection also copies the
+    /// resolved text to the system CLIPBOARD selection (the PRIMARY
+    /// selection is always updated regardless).
+    pub copy_on_select: bool,
+    /// When `true`, a middle-click pastes the current PRIMARY selection
+    /// into the terminal. When `false`, middle-click is a no-op.
+    pub middle_click_paste: bool,
+    /// When `true`, `Shift+Enter` is delivered as `Alt+Enter`. Helps
+    /// integrate with editors / shells that bind a multi-line
+    /// continuation on `M-RET`.
+    pub shift_enter_as_alt_enter: bool,
+    /// Bell action when the terminal receives `BEL` (`0x07`). One of
+    /// `Sound`, `Visual`, `None`. The native-poc renderer does not yet
+    /// implement either side, so this field is captured for forward
+    /// compatibility only (see `Settings::default`).
+    #[allow(dead_code)]
+    pub bell_action: BellAction,
+    /// Whether to auto-detect URLs in the terminal grid and underline
+    /// them on hover. native-poc has no link detector yet; captured for
+    /// forward compatibility.
+    #[allow(dead_code)]
+    pub url_detection: bool,
+    /// Whether to auto-detect file paths in the terminal grid and
+    /// underline them on hover. native-poc has no path detector yet.
+    #[allow(dead_code)]
+    pub file_path_detection: bool,
+    /// Whether the prompt-folding affordance is enabled. native-poc
+    /// does not implement folding yet.
+    #[allow(dead_code)]
+    pub fold_enabled: bool,
+    /// Editor command template (e.g. `code --goto {file}:{line}:{col}`).
+    /// Consumed by the future file-path-detection click handler.
+    #[allow(dead_code)]
+    pub editor_command: String,
 }
 
 /// UI brightness mode mirrored from the legacy WebView settings.
@@ -545,6 +590,47 @@ fn warn_unknown_scrollbar_mode_once(seen: &str) {
     });
 }
 
+/// Bell action mirrored from the legacy WebView settings. native-poc
+/// does not yet ring a sound or flash a visual cue; the value is stored
+/// so a future implementation can read it without a settings-schema
+/// migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)]
+pub enum BellAction {
+    Sound,
+    #[default]
+    Visual,
+    None,
+}
+
+impl BellAction {
+    #[allow(dead_code)]
+    pub fn parse_or_warn(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "sound" => Self::Sound,
+            "visual" | "" => Self::Visual,
+            "none" => Self::None,
+            other => {
+                warn_unknown_bell_action_once(other);
+                Self::Visual
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn warn_unknown_bell_action_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.bell_action: unknown value {:?}, falling back to \"visual\"",
+            owned
+        );
+    });
+}
+
 /// User-defined terminal color scheme. Mirrors
 /// `src-tauri/src/commands/config/types.rs::UserColorScheme`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -586,6 +672,17 @@ impl Default for Settings {
             show_scrollbar: ScrollbarMode::default(),
             show_tab_bar: true,
             bold_brightens_ansi_colors: true,
+            shell_path: String::new(),
+            shell_args: Vec::new(),
+            scroll_speed: 3,
+            copy_on_select: false,
+            middle_click_paste: true,
+            shift_enter_as_alt_enter: true,
+            bell_action: BellAction::default(),
+            url_detection: true,
+            file_path_detection: true,
+            fold_enabled: true,
+            editor_command: "code --goto {file}:{line}:{col}".to_string(),
         }
     }
 }
@@ -740,6 +837,23 @@ struct RawSettings {
     show_scrollbar: Option<String>,
     show_tab_bar: Option<bool>,
     bold_brightens_ansi_colors: Option<bool>,
+
+    // ── Terminal behavior ──
+    shell_path: Option<String>,
+    shell_args: Option<Vec<String>>,
+    scroll_speed: Option<u32>,
+    copy_on_select: Option<bool>,
+    middle_click_paste: Option<bool>,
+    shift_enter_as_alt_enter: Option<bool>,
+    bell_action: Option<String>,
+    url_detection: Option<bool>,
+    file_path_detection: Option<bool>,
+    fold_enabled: Option<bool>,
+    editor_command: Option<String>,
+    /// src-tauri-flat ambiguous-width toggle. `true` ≡ `Wide`, `false` ≡
+    /// `Narrow`. `native_poc.ambiguous_width_mode` (string form) wins
+    /// over this when both are present.
+    ambiguous_width: Option<bool>,
 
     // ── native-poc-specific (nested) ──
     native_poc: Option<RawNativePoc>,
@@ -931,6 +1045,56 @@ impl RawSettings {
         }
         if let Some(v) = self.bold_brightens_ansi_colors {
             dst.bold_brightens_ansi_colors = v;
+        }
+
+        // ── Terminal behavior ──
+        if let Some(v) = self.shell_path.filter(|s| !s.trim().is_empty()) {
+            dst.shell_path = v;
+        }
+        if let Some(v) = self.shell_args {
+            dst.shell_args = v;
+        }
+        if let Some(v) = self.scroll_speed {
+            // Mirrors src-tauri's MIN/MAX (1..=10). Out-of-range values
+            // are clamped so a typo can't lock the wheel at 0 or fly the
+            // viewport at e.g. 1000 lines/notch.
+            dst.scroll_speed = v.clamp(1, 10);
+        }
+        if let Some(v) = self.copy_on_select {
+            dst.copy_on_select = v;
+        }
+        if let Some(v) = self.middle_click_paste {
+            dst.middle_click_paste = v;
+        }
+        if let Some(v) = self.shift_enter_as_alt_enter {
+            dst.shift_enter_as_alt_enter = v;
+        }
+        if let Some(v) = self.bell_action {
+            dst.bell_action = BellAction::parse_or_warn(&v);
+        }
+        if let Some(v) = self.url_detection {
+            dst.url_detection = v;
+        }
+        if let Some(v) = self.file_path_detection {
+            dst.file_path_detection = v;
+        }
+        if let Some(v) = self.fold_enabled {
+            dst.fold_enabled = v;
+        }
+        if let Some(v) = self.editor_command.filter(|s| !s.trim().is_empty()) {
+            dst.editor_command = v;
+        }
+        // Flat-key bridge: only seed the native-poc enum when the user
+        // hasn't already set the more explicit `native_poc.ambiguous_width_mode`
+        // string. The native_poc block runs *after* this, so if both are
+        // present the string form wins, matching the "explicit overrides
+        // flat keys" pattern used elsewhere in this loader.
+        if let Some(v) = self.ambiguous_width {
+            dst.ambiguous_width_mode = if v {
+                AmbiguousWidthMode::Wide
+            } else {
+                AmbiguousWidthMode::Narrow
+            };
         }
 
         // ── native_poc.* (explicit overrides win over flat keys) ──
