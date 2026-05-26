@@ -769,10 +769,10 @@ mod tests {
     #[test]
     fn packed_to_egui_indexed_uses_theme_palette() {
         let theme = Theme::default();
-        // index = 1 (red) → palette16[1] = Rgb(0xcd, 0x00, 0x00).
+        // index = 1 (red) → palette16[1] = WezTerm scheme Rgb(0xff, 0x00, 0x00).
         let packed = 0x01_01_00_00; // tag=1, r=1
         let c = packed_to_egui(packed, Rgb::WHITE, &theme).unwrap();
-        assert_eq!(c.r(), 0xcd);
+        assert_eq!(c.r(), 0xff);
         assert_eq!(c.g(), 0x00);
         assert_eq!(c.b(), 0x00);
     }

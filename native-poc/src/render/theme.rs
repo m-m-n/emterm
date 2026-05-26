@@ -13,7 +13,13 @@
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {
+    // Generic high-contrast constants. Kept for callers that want a
+    // palette-independent neutral; the terminal's actual default fg/bg/
+    // cursor live in `DEFAULT_TERMINAL_FG` / `DEFAULT_TERMINAL_BG` /
+    // `DEFAULT_TERMINAL_CURSOR_FG`.
+    #[allow(dead_code)]
     pub const BLACK: Rgb = Rgb(0, 0, 0);
+    #[allow(dead_code)]
     pub const WHITE: Rgb = Rgb(0xee, 0xee, 0xee);
 }
 
@@ -98,32 +104,45 @@ impl Theme {
     }
 }
 
+/// Default ANSI palette + fg/bg/cursor for the `emterm` color scheme.
+/// Mirrors the WebView build's `src/terminal/colors.ts::PALETTE_16` and
+/// `DEFAULT_FOREGROUND` so a tab spawned with no `terminal_color_scheme`
+/// matches the WezTerm-ish look the WebView ships by default.
+pub const DEFAULT_PALETTE16: [Rgb; 16] = [
+    // Standard colors (0-7) — WezTerm scheme
+    Rgb(0x00, 0x00, 0x00), // 0  black
+    Rgb(0xff, 0x00, 0x00), // 1  red
+    Rgb(0x00, 0xdd, 0x00), // 2  green
+    Rgb(0xee, 0xee, 0x00), // 3  yellow
+    Rgb(0x40, 0x40, 0xff), // 4  blue
+    Rgb(0xff, 0x00, 0xff), // 5  magenta
+    Rgb(0x00, 0xdd, 0xdd), // 6  cyan
+    Rgb(0xde, 0xda, 0xcf), // 7  white
+    // Bright colors (8-15) — WezTerm scheme
+    Rgb(0x55, 0x55, 0x55), // 8  bright black
+    Rgb(0xff, 0x60, 0x60), // 9  bright red
+    Rgb(0x60, 0xff, 0x60), // 10 bright green
+    Rgb(0xff, 0xff, 0x60), // 11 bright yellow
+    Rgb(0x60, 0x60, 0xff), // 12 bright blue
+    Rgb(0xff, 0x60, 0xff), // 13 bright magenta
+    Rgb(0x60, 0xff, 0xff), // 14 bright cyan
+    Rgb(0xff, 0xff, 0xff), // 15 bright white
+];
+
+/// Default terminal foreground (matches WebView's `DEFAULT_FOREGROUND`).
+pub const DEFAULT_TERMINAL_FG: Rgb = Rgb(0x40, 0xff, 0x40);
+/// Default terminal background.
+pub const DEFAULT_TERMINAL_BG: Rgb = Rgb(0x00, 0x00, 0x00);
+/// Default cursor foreground (matches WebView's `emterm` preset cursor).
+pub const DEFAULT_TERMINAL_CURSOR_FG: Rgb = Rgb(0x00, 0x80, 0x00);
+
 impl Default for Theme {
     fn default() -> Self {
-        // Standard xterm-like 16-color palette.
-        let palette16 = [
-            Rgb(0x00, 0x00, 0x00), // 0  black
-            Rgb(0xcd, 0x00, 0x00), // 1  red
-            Rgb(0x00, 0xcd, 0x00), // 2  green
-            Rgb(0xcd, 0xcd, 0x00), // 3  yellow
-            Rgb(0x00, 0x00, 0xee), // 4  blue
-            Rgb(0xcd, 0x00, 0xcd), // 5  magenta
-            Rgb(0x00, 0xcd, 0xcd), // 6  cyan
-            Rgb(0xe5, 0xe5, 0xe5), // 7  white
-            Rgb(0x7f, 0x7f, 0x7f), // 8  bright black
-            Rgb(0xff, 0x00, 0x00), // 9  bright red
-            Rgb(0x00, 0xff, 0x00), // 10 bright green
-            Rgb(0xff, 0xff, 0x00), // 11 bright yellow
-            Rgb(0x5c, 0x5c, 0xff), // 12 bright blue
-            Rgb(0xff, 0x00, 0xff), // 13 bright magenta
-            Rgb(0x00, 0xff, 0xff), // 14 bright cyan
-            Rgb(0xff, 0xff, 0xff), // 15 bright white
-        ];
         Self {
-            fg: Rgb::WHITE,
-            bg: Rgb::BLACK,
-            cursor_fg: Rgb::WHITE,
-            palette16,
+            fg: DEFAULT_TERMINAL_FG,
+            bg: DEFAULT_TERMINAL_BG,
+            cursor_fg: DEFAULT_TERMINAL_CURSOR_FG,
+            palette16: DEFAULT_PALETTE16,
             palette256: Box::new([None; 256]),
             cursor_style: CursorStyle::default(),
             font_family: "monospace".into(),
@@ -207,7 +226,7 @@ fn parse_hash(s: &str) -> Option<Rgb> {
 
 impl Theme {
     /// Default cursor foreground color (used by OSC 112).
-    pub const DEFAULT_CURSOR_FG: Rgb = Rgb::WHITE;
+    pub const DEFAULT_CURSOR_FG: Rgb = DEFAULT_TERMINAL_CURSOR_FG;
 
     /// Apply an OSC color/style mutation.
     ///
@@ -236,11 +255,11 @@ impl Theme {
             22 => self.apply_cursor_style(data),
             104 => self.apply_palette_reset(data),
             110 => {
-                self.fg = Rgb::WHITE;
+                self.fg = DEFAULT_TERMINAL_FG;
                 true
             }
             111 => {
-                self.bg = Rgb::BLACK;
+                self.bg = DEFAULT_TERMINAL_BG;
                 true
             }
             112 => {
@@ -371,27 +390,10 @@ struct ColorSchemePreset {
 const COLOR_SCHEME_PRESETS: &[ColorSchemePreset] = &[
     ColorSchemePreset {
         name: "emterm",
-        fg: Rgb(0xee, 0xee, 0xee),
-        bg: Rgb(0x00, 0x00, 0x00),
-        cursor: Rgb(0x00, 0x80, 0x00),
-        palette16: [
-            Rgb(0x00, 0x00, 0x00),
-            Rgb(0xcd, 0x00, 0x00),
-            Rgb(0x00, 0xcd, 0x00),
-            Rgb(0xcd, 0xcd, 0x00),
-            Rgb(0x00, 0x00, 0xee),
-            Rgb(0xcd, 0x00, 0xcd),
-            Rgb(0x00, 0xcd, 0xcd),
-            Rgb(0xe5, 0xe5, 0xe5),
-            Rgb(0x7f, 0x7f, 0x7f),
-            Rgb(0xff, 0x00, 0x00),
-            Rgb(0x00, 0xff, 0x00),
-            Rgb(0xff, 0xff, 0x00),
-            Rgb(0x5c, 0x5c, 0xff),
-            Rgb(0xff, 0x00, 0xff),
-            Rgb(0x00, 0xff, 0xff),
-            Rgb(0xff, 0xff, 0xff),
-        ],
+        fg: DEFAULT_TERMINAL_FG,
+        bg: DEFAULT_TERMINAL_BG,
+        cursor: DEFAULT_TERMINAL_CURSOR_FG,
+        palette16: DEFAULT_PALETTE16,
     },
     ColorSchemePreset {
         name: "solarized-dark",
@@ -754,7 +756,7 @@ mod tests {
         let mut t = Theme::default();
         t.fg = Rgb(1, 2, 3);
         assert!(t.apply_osc(110, ""));
-        assert_eq!(t.fg, Rgb::WHITE);
+        assert_eq!(t.fg, DEFAULT_TERMINAL_FG);
     }
 
     #[test]
@@ -762,7 +764,7 @@ mod tests {
         let mut t = Theme::default();
         t.bg = Rgb(1, 2, 3);
         assert!(t.apply_osc(111, ""));
-        assert_eq!(t.bg, Rgb::BLACK);
+        assert_eq!(t.bg, DEFAULT_TERMINAL_BG);
     }
 
     #[test]

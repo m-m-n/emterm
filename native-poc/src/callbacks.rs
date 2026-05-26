@@ -869,7 +869,7 @@ mod tests {
         let h = default_harness();
         h.theme.lock().fg = Rgb(1, 2, 3);
         h.cb.on_osc(OSC_RESET_FG, "");
-        assert_eq!(h.theme.lock().fg, Rgb::WHITE);
+        assert_eq!(h.theme.lock().fg, crate::render::theme::DEFAULT_TERMINAL_FG);
         assert!(h.cb.take_theme_dirty());
     }
 
