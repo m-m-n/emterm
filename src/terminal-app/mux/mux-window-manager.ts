@@ -224,15 +224,18 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
       console.warn(
         `[DIAG-MUX-GRID] freshBranch` +
         ` | paneId=${newPaneId}` +
-        ` | activeCorePtrBeforeReset=${fmtPtr(branchActivePtr)}` +
+        ` | activeCorePtrBefore=${fmtPtr(branchActivePtr)}` +
         ` | callsite=switchMuxWindow` +
         ` | reason=noSavedState`,
       );
-      state.getWasmCore().reset();
+      // Allocate a fresh per-pane WasmGrid. Reusing the shared active core
+      // via .reset() would let subsequent saveMuxPaneState() calls capture
+      // the SAME WasmGrid instance across panes, surfacing as cross-pane
+      // content bleed and eventual WASM heap corruption.
+      createFreshMuxGrid(ctx);
       const windows = ctx.getMuxWindows();
       state._title = windows[ctx.getActiveMuxWindowIndex()]?.name ?? "";
       state._iconName = "";
-      ctx.registerCoreCallbacks(state.getActiveCore());
     }
   }
 
@@ -985,15 +988,16 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
     console.warn(
       `[DIAG-MUX-GRID] freshBranch` +
       ` | paneId=${paneId}` +
-      ` | activeCorePtrBeforeReset=${fmtPtr(branchActivePtr)}` +
+      ` | activeCorePtrBefore=${fmtPtr(branchActivePtr)}` +
       ` | callsite=handleRemoteSwitchWindow` +
       ` | reason=noSavedState`,
     );
-    state.getWasmCore().reset();
+    // Allocate a fresh per-pane WasmGrid (see switchMuxWindow's matching
+    // branch for the rationale — .reset() shares the core across panes).
+    createFreshMuxGrid(ctx);
     const windows = ctx.getMuxWindows();
     state._title = windows[ctx.getActiveMuxWindowIndex()]?.name ?? "";
     state._iconName = "";
-    ctx.registerCoreCallbacks(state.getActiveCore());
   }
 
   // Reconcile restored grid dimensions with the current terminal size.
