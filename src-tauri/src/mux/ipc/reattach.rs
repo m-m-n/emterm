@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use futures::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::Mutex;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
@@ -192,7 +192,7 @@ pub(super) async fn collect_reattach_data(
 
 /// Maximum payload bytes per `PtyOutput` frame emitted during reattach replay.
 ///
-/// A pane's ring buffer can hold up to `DEFAULT_SCROLLBACK_CAPACITY` (64 MiB) but a
+/// A pane's ring buffer can hold up to `DEFAULT_SCROLLBACK_CAPACITY` but a
 /// single codec frame must stay under `MAX_FRAME_LENGTH` (16 MiB). Chosen well
 /// below the codec cap so the 5-byte frame-body header plus any future growth
 /// stays safely within bounds.
