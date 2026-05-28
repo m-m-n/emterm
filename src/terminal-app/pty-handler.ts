@@ -15,6 +15,7 @@ import { handleMuxApc } from "../terminal/handlers/apc_handlers";
 import type { MuxApcContext } from "../terminal/handlers/apc_handlers";
 import { muxLog } from "../terminal/mux/mux-logger";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { snapshotForCrash, recordEvent } from "./diagnostics-history";
 
 /**
  * Stateful APC/OSC parser that buffers incomplete sequences across PTY read chunks.
@@ -443,6 +444,16 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     console.warn(
       `[WARN][FRONTEND] ${reason} — attempting recovery (${wasmRecoveryAttempts}/${MAX_WASM_RECOVERY_ATTEMPTS}) | visibilityState=${vs} hidden=${hidden}`,
     );
+    // Dump pre-crash context — heap trend and event timeline — so the
+    // post-mortem doesn't have to grep across thousands of heartbeat lines
+    // to reconstruct what was happening in the seconds preceding the crash.
+    // Single warn line keeps it adjacent to the crash banner above.
+    try {
+      console.warn(
+        `[WARN][FRONTEND] [DIAG-RECOVERY] pre-crash context | ${snapshotForCrash()}`,
+      );
+    } catch { /* never let diagnostics break recovery */ }
+    recordEvent("recovery", `attempt=${wasmRecoveryAttempts} manual=${isManual}`);
 
     // Stop cursor blink during recovery to prevent WASM access on stale/freed state
     try {

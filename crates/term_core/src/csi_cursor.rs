@@ -1,5 +1,5 @@
 /// CSI cursor handlers: CUU, CUD, CUF, CUB, CNL, CPL, CHA, CUP, VPA.
-use crate::terminal_core::{MODE_ORIGIN, TerminalCore};
+use crate::terminal_core::{TerminalCore, MODE_ORIGIN};
 
 impl TerminalCore {
     /// Convert 1-indexed ANSI col parameter to 0-indexed, clamped.
@@ -127,7 +127,7 @@ impl TerminalCore {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal_core::{MODE_ORIGIN, TerminalCore};
+    use crate::terminal_core::{TerminalCore, MODE_ORIGIN};
 
     // ── Sprint 3: CSI Cursor handler tests ──────────────────
 

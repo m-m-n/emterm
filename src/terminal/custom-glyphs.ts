@@ -931,24 +931,26 @@ export const POWERLINE_SYMBOLS: Record<string, PowerlineDefinition> = {
 };
 
 /**
- * Braille pattern bit positions.
- * Braille patterns (U+2800-U+28FF) are encoded as 8-bit patterns.
+ * Braille pattern dot positions in an 8x8 octant grid.
+ * Coordinates are the top-left of each dot's anchor octant.
  *
- * Dot positions (standard Braille cell):
+ * Layout (matches xterm.js): left column at col=1, right column at col=5,
+ * rows at 0/2/4/6, with 0.1 * cellHeight padding applied vertically.
+ *
  *   [1] [4]     bits 0, 3
  *   [2] [5]     bits 1, 4
  *   [3] [6]     bits 2, 5
  *   [7] [8]     bits 6, 7
  */
 const BRAILLE_DOT_POSITIONS = [
-	{ col: 0, row: 0 }, // bit 0 - dot 1
-	{ col: 0, row: 1 }, // bit 1 - dot 2
-	{ col: 0, row: 2 }, // bit 2 - dot 3
-	{ col: 1, row: 0 }, // bit 3 - dot 4
-	{ col: 1, row: 1 }, // bit 4 - dot 5
-	{ col: 1, row: 2 }, // bit 5 - dot 6
-	{ col: 0, row: 3 }, // bit 6 - dot 7
-	{ col: 1, row: 3 }, // bit 7 - dot 8
+	{ col: 1, row: 0 }, // bit 0 - dot 1
+	{ col: 1, row: 2 }, // bit 1 - dot 2
+	{ col: 1, row: 4 }, // bit 2 - dot 3
+	{ col: 5, row: 0 }, // bit 3 - dot 4
+	{ col: 5, row: 2 }, // bit 4 - dot 5
+	{ col: 5, row: 4 }, // bit 5 - dot 6
+	{ col: 1, row: 6 }, // bit 6 - dot 7
+	{ col: 5, row: 6 }, // bit 7 - dot 8
 ];
 
 /**
@@ -960,7 +962,9 @@ export function isBraillePattern(char: string): boolean {
 }
 
 /**
- * Draw a Braille pattern as a 2x4 grid of filled blocks.
+ * Draw a Braille pattern as a 2x4 grid of filled circular dots.
+ * Mirrors xterm.js's CustomGlyphRasterizer.drawBrailleCharacter so the
+ * spinners (e.g. `⠋`) render as discrete dots rather than connected blocks.
  */
 export function drawBraillePattern(
 	ctx: CanvasRenderingContext2D,
@@ -974,18 +978,20 @@ export function drawBraillePattern(
 	if (code === undefined) return;
 
 	const pattern = code - 0x2800;
-	const dotWidth = cellWidth / 2;
-	const dotHeight = cellHeight / 4;
+	const xEighth = cellWidth / 8;
+	const paddingY = cellHeight * 0.1;
+	const usableHeight = cellHeight * 0.8;
+	const yEighth = usableHeight / 8;
+	const radius = Math.min(xEighth, yEighth);
 
 	for (let i = 0; i < 8; i++) {
 		if (pattern & (1 << i)) {
 			const pos = BRAILLE_DOT_POSITIONS[i]!;
-			ctx.fillRect(
-				Math.round(x + pos.col * dotWidth),
-				Math.round(y + pos.row * dotHeight),
-				Math.ceil(dotWidth),
-				Math.ceil(dotHeight)
-			);
+			const cx = x + (pos.col + 1) * xEighth;
+			const cy = y + paddingY + (pos.row + 1) * yEighth;
+			ctx.beginPath();
+			ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+			ctx.fill();
 		}
 	}
 }

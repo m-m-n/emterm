@@ -1,0 +1,10 @@
+tasks:
+  - id: phase1-scroll-pin-pure-function
+    title: "補正ロジックの純粋関数化と単体テスト追加（TS-1〜TS-6, TDD）"
+    status: completed
+  - id: phase2-canvas-renderer-integration
+    title: "CanvasRenderer への prevScrollbackLength と adjustScrollOffsetForGrowth 組込（render() / forceRender() 冒頭）"
+    status: completed
+  - id: phase3-e2e-scroll-pin-spec
+    title: "E2E spec 追加（scroll-pin.e2e.js）— スクロールアップ中の PTY バーストで固定行が動かないことを screenshot 比較で検証（TS-7）"
+    status: completed

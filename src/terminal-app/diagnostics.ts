@@ -26,6 +26,7 @@ import type { PtyHandlerHandle } from "./pty-handler";
 import { getMuxSwitchCountWithin, getLastMuxSwitchAt } from "./mux/mux-window-manager";
 import { getSlowRenderCountWithin, getSlowProcessCountWithin } from "./pty-handler";
 import { getWasmMemoryBytes } from "../terminal/wasm/loader";
+import { recordHeapSample } from "./diagnostics-history";
 
 /**
  * Read-only access the diagnostics timers need from the host TerminalApp.
@@ -148,6 +149,15 @@ export class DiagnosticsController {
       // processPendingData isn't running. lastChunkAgoMs == -1 means no
       // chunk has been received since spawn.
       const recv = ctx.getPtyClient()?.getRecvStats();
+
+      // Feed the diagnostics history ring so a future WASM crash log can
+      // dump the recent heap + recv trend in a single line.
+      recordHeapSample({
+        t: now,
+        heapMB: wasmHeapMB,
+        recvCount: recv?.count ?? -1,
+        recvBytes: recv?.bytes ?? -1,
+      });
       const recvCount = recv?.count ?? -1;
       const recvBytes = recv?.bytes ?? -1;
       const lastChunkAgoMs = recv && recv.lastRecvAt > 0

@@ -7,7 +7,7 @@ mod bridge;
 pub mod cli;
 pub mod daemon;
 pub mod ipc;
-pub mod ring_buffer;
+pub mod scrollback_buffer;
 pub mod session;
 pub mod snapshot;
 pub mod tmux_conf;

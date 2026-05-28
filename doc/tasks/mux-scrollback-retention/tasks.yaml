@@ -1,0 +1,89 @@
+schema_version: 1
+feature: mux-scrollback-retention
+
+# Implementation was delivered as three phased commits on
+# `feat/mux-scrollback-retention`. Each phase is independently
+# compile-and-test green; the chore commit only carries cargo-fmt
+# drift cleanup picked up alongside Phase B.
+
+tasks:
+  - id: phase-a-cap-2mb
+    phase: A
+    title: "Cap detach ring buffer at 2 MiB per pane (was 64 MiB)"
+    status: completed
+    commit: 7b668f3
+    files:
+      modify:
+        - src-tauri/src/mux/ring_buffer.rs
+    acceptance:
+      - "DEFAULT_RING_CAPACITY equals 2 * 1024 * 1024"
+      - "cargo test mux:: green"
+      - "Behavior otherwise unchanged (still detach-only buffering)"
+
+  - id: phase-b-relocate-to-muxpane
+    phase: B
+    title: "Move buffer to MuxPane.scrollback (rename + reposition, write timing preserved)"
+    status: completed
+    commit: dbe85b0
+    files:
+      create:
+        - src-tauri/src/mux/scrollback_buffer.rs
+      modify:
+        - src-tauri/src/mux/mod.rs
+        - src-tauri/src/mux/session/pane.rs
+        - src-tauri/src/mux/ipc/handlers.rs
+        - src-tauri/src/mux/ipc/pty_spawn.rs
+        - src-tauri/src/mux/ipc/reattach.rs
+      remove:
+        - src-tauri/src/mux/ring_buffer.rs
+    acceptance:
+      - "MuxPane carries scrollback field allocated at construction"
+      - "PaneOutputTarget::Detached no longer holds ring"
+      - "Write timing unchanged (Phase B writes only in detach arms)"
+      - "Reattach send order unchanged (shadow → scrollback)"
+      - "cargo test mux:: 252/252 green"
+
+  - id: phase-b-fmt-drift
+    phase: chore
+    title: "Apply cargo fmt drift picked up alongside Phase B"
+    status: completed
+    commit: fda9e26
+    files:
+      modify:
+        - src-tauri/src/mux/bridge.rs
+        - src-tauri/src/mux/cli.rs
+        - src-tauri/src/mux/daemon.rs
+        - src-tauri/src/mux/ipc/codec.rs
+        - src-tauri/src/mux/ipc/connection.rs
+        - src-tauri/src/mux/ipc/protocol.rs
+        - src-tauri/src/mux/session/manager.rs
+        - src-tauri/src/mux/tmux_conf/converter.rs
+    acceptance:
+      - "Mechanical import-order / line-wrap fixes only, no semantic change"
+
+  - id: phase-c-always-on-and-reorder
+    phase: C
+    title: "Always-on scrollback write + reattach FR5 order + no-clear semantics"
+    status: completed
+    commit: a1321a7
+    files:
+      modify:
+        - src-tauri/src/mux/ipc/pty_spawn.rs
+        - src-tauri/src/mux/ipc/reattach.rs
+        - src-tauri/src/mux/session/pane.rs
+    acceptance:
+      - "scrollback.write called at top of pty_reader_loop, before output_target match"
+      - "Per-arm scrollback.write calls in Closed/Detached/backpressure arms removed (no double-write)"
+      - "collect_reattach_data emits ESC[H ESC[2J → scrollback → shadow → passthrough"
+      - "resume_pane_with_permit emits the same FR5 order"
+      - "evaluate_output_target hidden→visible snapshot uses the same FR5 order"
+      - "scrollback.clear() is NOT called on reattach (buffer lifetime = pane lifetime)"
+      - "cargo test mux:: 252/252 green"
+
+# Note: the original plan listed five tasks (rename-buffer-module,
+# relocate-buffer-to-pane, always-on-scrollback-write,
+# reattach-snapshot-reorder, test-additions-and-cleanup). The delivered
+# split collapsed them into three logical phases A/B/C because Phase B's
+# struct refactor and Phase C's reorder share the same compilation
+# unit on several files, and the test additions naturally landed
+# alongside the code they cover.

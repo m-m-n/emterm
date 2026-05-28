@@ -19,6 +19,19 @@
 
 import type { PtyClient } from "./client";
 import type { MuxClient } from "../terminal/mux/mux-client";
+import { recordEvent } from "../terminal-app/diagnostics-history";
+
+/**
+ * Wrapper that never lets a diagnostics history failure propagate into
+ * the visibility hot path. The ring buffer never throws in practice,
+ * but the broader visibility logic must remain robust to any future
+ * regression in the shared module.
+ */
+function recordEventSafe(kind: string, detail: string): void {
+  try {
+    recordEvent(kind, detail);
+  } catch { /* never let diagnostics break visibility */ }
+}
 
 /** Debounce window for visible -> hidden. Visible is immediate. */
 export const HIDE_DEBOUNCE_MS = 1000;
@@ -405,6 +418,7 @@ export class VisibilityController {
         console.warn(
           `[WARN][FRONTEND] [DIAG-IDLE] visibility→visible at ${nowIso} | hiddenForMs=${hiddenForMs}`,
         );
+        recordEventSafe("visibility", `visible hiddenFor=${hiddenForMs}ms`);
       } else {
         // No prior hidden was recorded — initial dispatch right after start(),
         // typically during fresh app startup. Emit explicit (initial) marker
@@ -412,12 +426,14 @@ export class VisibilityController {
         console.warn(
           `[WARN][FRONTEND] [DIAG-IDLE] visibility→visible (initial) at ${nowIso}`,
         );
+        recordEventSafe("visibility", "visible (initial)");
       }
     } else {
       this.hiddenSincePerfMs = perfNow;
       console.warn(
         `[WARN][FRONTEND] [DIAG-IDLE] visibility→hidden at ${nowIso} | reason=${this.hiddenReason()}`,
       );
+      recordEventSafe("visibility", `hidden reason=${this.hiddenReason()}`);
     }
   }
 
