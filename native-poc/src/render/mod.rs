@@ -27,6 +27,7 @@
 //! (no animation) to avoid two competing blink phases against the
 //! cursor; revisit when sub-phase 6 fires.
 
+pub mod app_icon;
 pub mod block_drawing;
 pub mod box_drawing;
 pub mod cursor;
@@ -153,7 +154,8 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
     // glyph buttons stay clickable regardless of tab / status state.
     // The window runs with `with_decorations(false)`, so without this
     // there would be no close / minimize / maximize affordance.
-    let title_event = crate::ui::title_bar::draw(ctx, "eMterm", window_maximized);
+    let icon = app_icon::texture_id(ctx);
+    let title_event = crate::ui::title_bar::draw(ctx, "eMterm", window_maximized, icon);
 
     // Phase 4-B: real tab bar widget. We build a lightweight view-
     // model from the live tabs vector once per frame.
