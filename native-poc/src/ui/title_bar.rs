@@ -4,7 +4,8 @@
 //! strip when the window runs with `with_decorations(false)`. Layout
 //! mirrors the conventional Linux/Windows CSD pattern:
 //!
-//! - Left: app title (`title` argument).
+//! - Left: app icon (supplied by the caller as a prepared
+//!   [`egui::TextureId`]) followed by the app title (`title` argument).
 //! - Right: three primitive-drawn glyph buttons — minimize, maximize
 //!   (switches to a restore-style overlapped pair when the window is
 //!   already maximized), and close. The close button gets a red
@@ -23,7 +24,9 @@
 //! calls). The caller owns the `Window` handle and translates the
 //! returned [`TitleBarEvent`] into the corresponding winit API.
 
-use egui::{Align, Align2, Color32, FontId, Layout, Rect, Rounding, Sense, Stroke, Ui, Vec2};
+use egui::{
+    Align, Align2, Color32, FontId, Layout, Rect, Rounding, Sense, Stroke, TextureId, Ui, Vec2,
+};
 
 use super::md3;
 use super::TitleBarEvent;
@@ -45,9 +48,15 @@ const ICON_STROKE_WIDTH: f32 = 1.0;
 /// Pixel offset between the two overlapped squares of the restore
 /// icon. Small enough that both squares still fit inside `ICON_SIZE`.
 const RESTORE_OFFSET: f32 = 2.5;
-/// Left inset for the title text so it doesn't sit flush with the
-/// window edge.
+/// Left inset for the icon so it doesn't sit flush with the window
+/// edge. The title text follows the icon.
 const TITLE_LEFT_PAD: f32 = 12.0;
+/// On-screen size of the square app icon, in egui logical points.
+/// Smaller than `TITLE_BAR_HEIGHT` so it reads as an icon with breathing
+/// room rather than filling the bar edge-to-edge.
+const ICON_DISPLAY_SIZE: f32 = 18.0;
+/// Gap between the app icon and the title text.
+const ICON_TITLE_GAP: f32 = 8.0;
 /// Hover overlay for the close button — saturated red so a stray
 /// pointer doesn't accidentally dismiss the window without a clear
 /// affordance change.
@@ -91,7 +100,18 @@ enum ButtonKind {
 /// and restore glyphs but does NOT change which event is emitted —
 /// `MaximizeToggle` always fires and the caller picks the
 /// destination state via `winit::Window::is_maximized()`.
-pub fn draw(ctx: &egui::Context, title: &str, is_maximized: bool) -> Option<TitleBarEvent> {
+///
+/// `icon` is the caller-prepared app-icon texture (see
+/// [`crate::render::app_icon`]). When `Some`, it is drawn at the left of
+/// the bar ahead of the title; when `None`, only the title shows. The
+/// widget never loads or rasterizes the asset itself, keeping it pure
+/// over its inputs.
+pub fn draw(
+    ctx: &egui::Context,
+    title: &str,
+    is_maximized: bool,
+    icon: Option<TextureId>,
+) -> Option<TitleBarEvent> {
     let mut event: Option<TitleBarEvent> = None;
 
     let frame = egui::Frame::none()
@@ -145,12 +165,27 @@ pub fn draw(ctx: &egui::Context, title: &str, is_maximized: bool) -> Option<Titl
                         event = Some(TitleBarEvent::DragStart);
                     }
 
-                    // Title glyph painted directly via the painter so
-                    // the layout cursor stays put and the drag rect
-                    // covers the whole left half.
+                    // App icon + title painted directly via the painter
+                    // so the layout cursor stays put and the drag rect
+                    // covers the whole left half. The icon texture is
+                    // prepared by the caller (render::app_icon).
                     let painter = ui.painter();
+                    let mut text_left = drag_rect.left() + TITLE_LEFT_PAD;
+                    if let Some(tex_id) = icon {
+                        let icon_rect = Rect::from_center_size(
+                            egui::pos2(text_left + ICON_DISPLAY_SIZE / 2.0, drag_rect.center().y),
+                            Vec2::splat(ICON_DISPLAY_SIZE),
+                        );
+                        painter.image(
+                            tex_id,
+                            icon_rect,
+                            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                        text_left = icon_rect.right() + ICON_TITLE_GAP;
+                    }
                     painter.text(
-                        egui::pos2(drag_rect.left() + TITLE_LEFT_PAD, drag_rect.center().y),
+                        egui::pos2(text_left, drag_rect.center().y),
                         Align2::LEFT_CENTER,
                         title,
                         FontId::proportional(TITLE_FONT_SIZE),
@@ -275,7 +310,7 @@ mod tests {
         input1.events.push(Event::PointerMoved(click_pos));
         let mut ev1: Option<TitleBarEvent> = None;
         let _ = ctx.run(input1, |ctx| {
-            ev1 = draw(ctx, "eMterm", is_maximized);
+            ev1 = draw(ctx, "eMterm", is_maximized, None);
         });
 
         let mut input2 = RawInput::default();
@@ -295,7 +330,7 @@ mod tests {
         });
         let mut ev2: Option<TitleBarEvent> = None;
         let _ = ctx.run(input2, |ctx| {
-            ev2 = draw(ctx, "eMterm", is_maximized);
+            ev2 = draw(ctx, "eMterm", is_maximized, None);
         });
         ev2.or(ev1)
     }

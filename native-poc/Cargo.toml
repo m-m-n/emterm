@@ -84,6 +84,13 @@ fontdb = "0.21"
 # the adapter against a known API surface.
 ab_glyph = "0.2"
 
+# SVG rasterizer for the window-chrome app icon (render::app_icon). The
+# icon source is the git-tracked assets/eMterm.svg (the PNG variants under
+# src-tauri/icons/ are gitignored build artifacts). default-features =
+# false drops the text/font and raster-image features — eMterm.svg is pure
+# vector (paths, rects, gradients), so only the core renderer is needed.
+resvg = { version = "0.44", default-features = false }
+
 [dev-dependencies]
 # PNG encoder used by examples/swash_emoji.rs (PoC PNG dump, FR1).
 png = "0.17"
