@@ -713,9 +713,6 @@ mod tests {
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
             owner: Some(owned_tx.clone()),
-            ring: crate::mux::ring_buffer::DetachRingBuffer::new(
-                crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-            ),
         }));
         let session_id = {
             let mut m = mgr.lock().await;
@@ -797,9 +794,6 @@ mod tests {
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
             owner: Some(owned_tx.clone()),
-            ring: crate::mux::ring_buffer::DetachRingBuffer::new(
-                crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-            ),
         }));
         let session_id = {
             let mut m = mgr.lock().await;
@@ -832,16 +826,10 @@ mod tests {
         let target1: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
             owner: Some(owned_tx.clone()),
-            ring: crate::mux::ring_buffer::DetachRingBuffer::new(
-                crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-            ),
         }));
         let target2: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
             reason: crate::mux::session::pane::DetachReason::HiddenByVisibility,
             owner: Some(owned_tx.clone()),
-            ring: crate::mux::ring_buffer::DetachRingBuffer::new(
-                crate::mux::ring_buffer::DEFAULT_RING_CAPACITY,
-            ),
         }));
         let session_id = {
             let mut m = mgr.lock().await;

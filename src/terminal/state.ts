@@ -902,6 +902,15 @@ export class TerminalState implements TerminalStateAccessor {
     const cols = this.cols;
     const rows = this.rows;
 
+    // Log the constructor args before the call. When `terminalcore_new`
+    // throws Out-of-bounds, the stack trace alone gives no hint at the
+    // input — emitting cols/rows/scrollback here lets a future bug report
+    // identify whether degenerate values (e.g. 0, negative-after-cast, or
+    // an extreme scrollback) are involved.
+    console.warn(
+      `[WARN][FRONTEND] [DIAG-RECOVERY] recreateWasmCore | cols=${cols} rows=${rows} maxScrollbackLines=${this.maxScrollbackLines}`,
+    );
+
     try {
       // Dispose broken grids
       try { this.primaryWasmGrid?.dispose(); } catch { /* already broken */ }

@@ -11,6 +11,7 @@ import type { TerminalState, MuxPaneGridState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
 import type { KeyboardHandler } from "../handlers/keyboard";
 import { SettingsService } from "../../settings/settings-service";
+import { recordEvent } from "../diagnostics-history";
 
 /**
  * Context needed by mux window manager functions.
@@ -69,8 +70,19 @@ export function createFreshMuxGrid(ctx: MuxWindowManagerContext): void {
   ctx.flushPtyPendingData();
   const cols = state.getWasmCore().cols();
   const rows = state.getWasmCore().rows();
+  const oldPtr = corePtrOf(state.getActiveCore());
   const newGrid = new WasmGrid(cols, rows, 10000);
+  const newPtr = corePtrOf(newGrid.core);
   state.swapPrimaryGrid(newGrid);
+  const postSwapPtr = corePtrOf(state.getActiveCore());
+  console.warn(
+    `[DIAG-MUX-GRID] createFresh` +
+    ` | oldActivePtr=${fmtPtr(oldPtr)}` +
+    ` | newGridPtr=${fmtPtr(newPtr)}` +
+    ` | postSwapActivePtr=${fmtPtr(postSwapPtr)}` +
+    ` | cols=${cols} rows=${rows}` +
+    ` | reused=${oldPtr === newPtr}`,
+  );
   ctx.registerCoreCallbacks(state.getActiveCore());
   const renderer = ctx.getRenderer();
   if (renderer) {
@@ -84,6 +96,32 @@ export function createFreshMuxGrid(ctx: MuxWindowManagerContext): void {
  *  pointing at the old one. */
 function corePtrOf(core: unknown): number {
   return (core as { __wbg_ptr?: number } | null)?.__wbg_ptr ?? -1;
+}
+
+/** Format a pointer (as returned by corePtrOf) for logging. */
+function fmtPtr(ptr: number): string {
+  return `0x${(ptr >>> 0).toString(16)}`;
+}
+
+/** Log a MuxPaneGridState save/restore so we can confirm whether multiple
+ *  panes are unexpectedly sharing the same WasmGrid instance after a WASM
+ *  recovery. Emits primary + alternate __wbg_ptr alongside the paneId and
+ *  call-site so the resulting log trail can be diffed across panes. */
+function logGridSnapshot(
+  action: "save" | "restore",
+  paneId: number,
+  snapshot: MuxPaneGridState,
+  callsite: string,
+): void {
+  const primaryPtr = corePtrOf(snapshot.primaryGrid.core);
+  const altPtr = snapshot.alternateGrid ? corePtrOf(snapshot.alternateGrid.core) : -1;
+  console.warn(
+    `[DIAG-MUX-GRID] ${action} | paneId=${paneId}` +
+    ` | primaryPtr=${fmtPtr(primaryPtr)}` +
+    ` | altPtr=${fmtPtr(altPtr)}` +
+    ` | useAlt=${snapshot.useAlternate}` +
+    ` | callsite=${callsite}`,
+  );
 }
 
 /** Wall-clock (perf clock) timestamp of the last completed mux switch. Read
@@ -156,12 +194,13 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
   if (previousIndex != null) {
     const prevPaneId = muxPaneIds[previousIndex];
     if (prevPaneId != null) {
-      muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
+      const snapshot = state.saveMuxPaneState();
+      muxPaneGrids.set(prevPaneId, snapshot);
+      logGridSnapshot("save", prevPaneId, snapshot, "switchMuxWindow");
       // Clear callbacks on saved grids to prevent OSC events from inactive panes
       // leaking into the shared pendingOscQueue and polluting the active window's title
-      const saved = muxPaneGrids.get(prevPaneId)!;
-      saved.primaryGrid.core.clear_callbacks();
-      saved.alternateGrid?.core.clear_callbacks();
+      snapshot.primaryGrid.core.clear_callbacks();
+      snapshot.alternateGrid?.core.clear_callbacks();
     }
   }
 
@@ -174,17 +213,29 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     const savedState = muxPaneGrids.get(newPaneId);
     if (savedState) {
       muxPaneGrids.delete(newPaneId);
+      logGridSnapshot("restore", newPaneId, savedState, "switchMuxWindow");
       state.restoreMuxPaneState(savedState);
       ctx.registerCoreCallbacks(state.getActiveCore());
     } else {
       // No saved state (first visit, e.g. after reattach). Seed the title
       // from the daemon-provided window name so syncWindowTitleFromState
       // does not overwrite muxWindows[i].name with the "Terminal" fallback.
-      state.getWasmCore().reset();
+      const branchActivePtr = corePtrOf(state.getActiveCore());
+      console.warn(
+        `[DIAG-MUX-GRID] freshBranch` +
+        ` | paneId=${newPaneId}` +
+        ` | activeCorePtrBefore=${fmtPtr(branchActivePtr)}` +
+        ` | callsite=switchMuxWindow` +
+        ` | reason=noSavedState`,
+      );
+      // Allocate a fresh per-pane WasmGrid. Reusing the shared active core
+      // via .reset() would let subsequent saveMuxPaneState() calls capture
+      // the SAME WasmGrid instance across panes, surfacing as cross-pane
+      // content bleed and eventual WASM heap corruption.
+      createFreshMuxGrid(ctx);
       const windows = ctx.getMuxWindows();
       state._title = windows[ctx.getActiveMuxWindowIndex()]?.name ?? "";
       state._iconName = "";
-      ctx.registerCoreCallbacks(state.getActiveCore());
     }
   }
 
@@ -223,6 +274,9 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
     ` | corePtr=0x${(preCorePtr >>> 0).toString(16)}→0x${(postCorePtr >>> 0).toString(16)}` +
     ` | ptrChanged=${preCorePtr !== postCorePtr}`,
   );
+  try {
+    recordEvent("mux-switch", `paneId=${prePaneId}→${postPaneId}`);
+  } catch { /* never let diagnostics break mux switching */ }
   if (renderer) {
     // Arm the race detector with the new core's identity. Any subsequent
     // render() / forceRender() within the race window that lands on a
@@ -564,11 +618,12 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
     if (wasReattachingThisCall) {
       ctx.processPtyPendingDataNow();
     }
-    muxPaneGrids.set(prevPaneId, state!.saveMuxPaneState());
+    const snapshot = state!.saveMuxPaneState();
+    muxPaneGrids.set(prevPaneId, snapshot);
+    logGridSnapshot("save", prevPaneId, snapshot, "handleMuxPaneCreated");
     // Clear callbacks on saved grids to prevent OSC leaking from inactive panes
-    const saved = muxPaneGrids.get(prevPaneId)!;
-    saved.primaryGrid.core.clear_callbacks();
-    saved.alternateGrid?.core.clear_callbacks();
+    snapshot.primaryGrid.core.clear_callbacks();
+    snapshot.alternateGrid?.core.clear_callbacks();
     // Reset shared title state so the NEW window doesn't inherit the
     // previous pane's title via initialName / dedup. The previous pane's
     // title is preserved inside its saved MuxPaneGridState.
@@ -908,11 +963,12 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
   const previousIndex = ctx.getActiveMuxWindowIndex();
   const prevPaneId = muxPaneIds[previousIndex];
   if (prevPaneId != null) {
-    muxPaneGrids.set(prevPaneId, state.saveMuxPaneState());
+    const snapshot = state.saveMuxPaneState();
+    muxPaneGrids.set(prevPaneId, snapshot);
+    logGridSnapshot("save", prevPaneId, snapshot, "handleRemoteSwitchWindow");
     // Clear callbacks on saved grids to prevent OSC leaking from inactive panes
-    const saved = muxPaneGrids.get(prevPaneId)!;
-    saved.primaryGrid.core.clear_callbacks();
-    saved.alternateGrid?.core.clear_callbacks();
+    snapshot.primaryGrid.core.clear_callbacks();
+    snapshot.alternateGrid?.core.clear_callbacks();
   }
 
   // Discard any buffered PTY data from the previous pane
@@ -924,14 +980,24 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
   const savedState = muxPaneGrids.get(paneId);
   if (savedState) {
     muxPaneGrids.delete(paneId);
+    logGridSnapshot("restore", paneId, savedState, "handleRemoteSwitchWindow");
     state.restoreMuxPaneState(savedState);
     ctx.registerCoreCallbacks(state.getActiveCore());
   } else {
-    state.getWasmCore().reset();
+    const branchActivePtr = corePtrOf(state.getActiveCore());
+    console.warn(
+      `[DIAG-MUX-GRID] freshBranch` +
+      ` | paneId=${paneId}` +
+      ` | activeCorePtrBefore=${fmtPtr(branchActivePtr)}` +
+      ` | callsite=handleRemoteSwitchWindow` +
+      ` | reason=noSavedState`,
+    );
+    // Allocate a fresh per-pane WasmGrid (see switchMuxWindow's matching
+    // branch for the rationale — .reset() shares the core across panes).
+    createFreshMuxGrid(ctx);
     const windows = ctx.getMuxWindows();
     state._title = windows[ctx.getActiveMuxWindowIndex()]?.name ?? "";
     state._iconName = "";
-    ctx.registerCoreCallbacks(state.getActiveCore());
   }
 
   // Reconcile restored grid dimensions with the current terminal size.

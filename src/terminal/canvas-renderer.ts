@@ -25,6 +25,7 @@ import type { ITerminalRenderer } from "./renderer-interface.ts";
 import type { RendererSettings } from "../settings/settings-applier";
 import type { TerminalState } from "./state.ts";
 import type { SearchMatch } from "./search/search-state.ts";
+import { computeAdjustedScrollOffset } from "./scroll-pin.ts";
 import { getLogicalLine } from "./url-detector.ts";
 import {
 	type TextSpan,
@@ -254,6 +255,11 @@ export class CanvasRenderer implements ITerminalRenderer {
 
 	/** Current scroll offset (number of lines scrolled back from bottom). */
 	private scrollOffset: number = 0;
+
+	/** Last observed `state.getScrollbackLength()`, used to pin the viewport
+	 *  when scrollback grows beneath a user that has scrolled up. See
+	 *  doc/tasks/pin-viewport-when-scrolled-up/SPEC.md (FR1〜FR6). */
+	private prevScrollbackLength: number = 0;
 
 	/** Visible lines resolved for the current render pass (scroll-aware). */
 	private renderVisibleLines: (LineAccessor | null)[] | null = null;
@@ -604,6 +610,30 @@ export class CanvasRenderer implements ITerminalRenderer {
 	}
 
 	/**
+	 * Pin the viewport on PTY-driven scrollback growth.
+	 *
+	 * Observes the delta between the previously seen scrollback length and
+	 * the current one; if scrollOffset > 0 and scrollback grew, scrollOffset
+	 * is increased by the delta (clamped to the current scrollback length)
+	 * so that the topmost visible absolute row stays put. See
+	 * doc/tasks/pin-viewport-when-scrolled-up/SPEC.md.
+	 *
+	 * Idempotent within the same frame: a second call observes Δ === 0
+	 * because the first call wrote `prevScrollbackLength` back to the
+	 * current value.
+	 */
+	private adjustScrollOffsetForGrowth(state: TerminalState): void {
+		const sbLen = state.getScrollbackLength();
+		const { nextScrollOffset, nextPrevSbLen } = computeAdjustedScrollOffset(
+			this.prevScrollbackLength,
+			sbLen,
+			this.scrollOffset,
+		);
+		this.scrollOffset = nextScrollOffset;
+		this.prevScrollbackLength = nextPrevSbLen;
+	}
+
+	/**
 	 * Render immediately (synchronously) using dirty-row differential path.
 	 */
 	renderImmediate(state: TerminalState): void {
@@ -627,6 +657,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 		if (!this.pendingState || !this.pendingState.isReady()) {
 			return;
 		}
+
+		// Pin viewport to current absolute rows when scrollback grew beneath
+		// a scrolled-up user. Must run before any scrollOffset reads below.
+		this.adjustScrollOffsetForGrowth(this.pendingState);
 
 		// Track rAF interval for the heartbeat: a gap >> 16 ms during an
 		// active rendering sequence means the main thread or compositor was
@@ -950,6 +984,10 @@ export class CanvasRenderer implements ITerminalRenderer {
 	forceRender(state: TerminalState): void {
 		this.pendingState = state;
 		this.checkRaceWithLastReset(state, "forceRender");
+		// Pin viewport when scrollback grew beneath a scrolled-up user.
+		// Same-frame double calls (render()→forceRender()) are no-ops because
+		// the first call rebases prevScrollbackLength to currSbLen.
+		this.adjustScrollOffsetForGrowth(state);
 		// Diagnostic counters reset at the top so every forceRender call
 		// produces a fresh snapshot. Fields are mutated below in the bg/text
 		// passes and read by mux-window-manager.ts on freeze investigation.

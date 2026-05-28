@@ -96,7 +96,7 @@ fn charset_byte_to_value(byte: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal_core::{MODE_ORIGIN, TerminalCore};
+    use crate::terminal_core::{TerminalCore, MODE_ORIGIN};
 
     // ── SaveCursor / RestoreCursor ──────────────────────
 

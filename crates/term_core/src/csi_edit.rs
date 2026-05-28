@@ -147,7 +147,7 @@ mod tests {
         core.set_scroll_region(0, 4);
         core.set_cursor(0, 3);
         core.handle_insert_lines(100); // Much more than available
-        // Should not panic
+                                       // Should not panic
         assert_eq!(core.get_cell_char(0, 3), " ");
     }
 
