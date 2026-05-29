@@ -16,7 +16,7 @@
 //! pipeline projects the active tab + runtime state into the view
 //! model once per frame.
 
-use egui::{Align, Color32, FontFamily, FontId, Image, Layout, Margin, RichText, Vec2};
+use egui::{Align, Color32, FontFamily, FontId, Image, Layout, Margin, RichText};
 use parking_lot::Mutex;
 
 use crate::html::{CssColor, RichTextRun};
@@ -143,7 +143,13 @@ fn draw_app_row(
     let font = FontId::new(font_size, FontFamily::Monospace);
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
-        ui.spacing_mut().item_spacing.x = 8.0;
+        // No inter-widget spacing: a row's runs / text / emoji segments
+        // form one continuous string (like the WebView, where a layer's
+        // left/right section is a single text node). Separators such as
+        // " | " already live in the template text, so an extra 8px gap
+        // between every segment — and especially around each emoji
+        // `Image` — would make the row read as disjoint chips.
+        ui.spacing_mut().item_spacing.x = 0.0;
         // Left side, in source order.
         draw_runs(ui, &row.left, &font, emoji);
         // Right side aligned to the panel edge.
@@ -172,13 +178,18 @@ fn draw_osc_row(
     let font = FontId::new(font_size, FontFamily::Monospace);
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
-        ui.spacing_mut().item_spacing.x = 8.0;
+        // See `draw_app_row`: segments are one continuous string.
+        ui.spacing_mut().item_spacing.x = 0.0;
         if let Some(name) = mux_session_name {
             ui.label(
                 RichText::new(format!("[mux:{}]", name))
                     .strong()
                     .font(font.clone()),
             );
+            // Keep the badge visually separate from the window list.
+            if !row.left.is_empty() {
+                ui.add_space(8.0);
+            }
         }
         if !row.left.is_empty() {
             // OSC row text is post-strip plain text — feed it through
@@ -320,21 +331,46 @@ fn emit_emoji_cluster_chain<F>(
         return;
     };
 
-    let display_size = Vec2::splat(font.size);
+    // Rasterize at physical-pixel resolution (logical size ×
+    // pixels_per_point) and blit the texture 1:1 — display each glyph
+    // at its real texel dimensions ÷ ppp so egui never up/down-scales
+    // it. Forcing a fixed `font.size` square via `fit_to_exact_size`
+    // squished swash's (slightly larger, non-square) emoji bitmap.
+    //
+    // We also snap the paint rect's origin to the physical-pixel grid.
+    // `texels / ppp` is an exact-integer physical size, so snapping the
+    // origin lands both edges on pixel boundaries — without it the
+    // sub-pixel x offset of each cluster in the horizontal strip made
+    // `TextureOptions::LINEAR` blend with neighbouring texels, so the
+    // same cached glyph looked crisp at one x and blurry at another.
+    let ppp = ui.ctx().pixels_per_point();
+    // Emoji are sized off the CSS-compatible point value, matching the
+    // WebView: there a color emoji fills the `font-size` em box, which
+    // the browser scales by 96/72 (pt -> px). egui's `font.size` is
+    // already in logical points (px-equivalent), so without the
+    // `PT_TO_PX` factor the glyph renders 72/96 smaller than the
+    // WebView. The cache supersamples + Lanczos3-downscales internally
+    // so this target size stays sharp.
+    let emoji_pt = font.size * crate::settings::PT_TO_PX;
+    let raster_px = emoji_pt * ppp;
+    let snap = |v: f32| (v * ppp).round() / ppp;
     for cluster in text.graphemes(true) {
-        // Rasterize at the egui logical-point font size. On hi-DPI
-        // setups this produces a slightly soft image; matching ppp
-        // is a follow-up.
         let handle = emoji.cache.lock().get_or_rasterize(
             ui.ctx(),
             emoji.rasterizer,
             emoji.fallback,
             cluster,
-            font.size,
+            raster_px,
         );
         match handle {
             Some(texture) => {
-                ui.add(Image::new(&texture).fit_to_exact_size(display_size));
+                let size_pts = texture.size_vec2() / ppp;
+                let (rect, _resp) = ui.allocate_exact_size(size_pts, egui::Sense::hover());
+                let snapped = egui::Rect::from_min_size(
+                    egui::pos2(snap(rect.min.x), snap(rect.min.y)),
+                    size_pts,
+                );
+                Image::new(&texture).paint_at(ui, snapped);
             }
             None => {
                 // Cluster missing from the emoji font — degrade to
@@ -352,7 +388,7 @@ fn css_color_to_color32(color: &CssColor) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
+    use crate::status_bar::{OscRow, StatusBarViewModel};
     use egui::RawInput;
 
     fn make_text_run(text: &str) -> RichTextRun {

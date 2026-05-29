@@ -1536,6 +1536,7 @@ dependencies = [
  "egui-wgpu",
  "env_logger",
  "fontdb",
+ "image",
  "libc",
  "log",
  "mux_ipc",

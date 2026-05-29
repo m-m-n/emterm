@@ -141,6 +141,14 @@ impl EmojiTextureCache {
     }
 }
 
+/// Resolution swash rasterizes color emoji at before the Lanczos3
+/// downscale. swash's `StrikeWith::BestFit` only single-tap-bilinears
+/// the 128px CBDT strike, which softens badly at the ~10x reductions
+/// the status bar needs (128px → ~12px). Rasterizing near the strike's
+/// native size keeps swash's own scaling gentle, then we Lanczos3 the
+/// large part — matching the WebView/Skia area-averaging quality.
+const HQ_SOURCE_PX: f32 = 96.0;
+
 fn rasterize_to_texture(
     ctx: &Context,
     rasterizer: &dyn GlyphRasterizer,
@@ -149,24 +157,89 @@ fn rasterize_to_texture(
     size_px: f32,
 ) -> Option<TextureHandle> {
     let font_id = fallback.resolve_for_cluster(rasterizer, cluster)?;
-    let shaped = rasterizer.shape(cluster, font_id, size_px);
+
+    // Color emoji (RGBA, bitmap-strike sourced) benefit from the
+    // supersample + Lanczos3 path; alpha glyphs (outline fonts) scale
+    // cleanly at the target size already, so rasterize those directly.
+    // When the requested size is already >= the HQ source, swash's
+    // scaling is gentle enough — skip the extra downscale.
+    let supersample = size_px < HQ_SOURCE_PX;
+    let raster_at = if supersample { HQ_SOURCE_PX } else { size_px };
+
+    let shaped = rasterizer.shape(cluster, font_id, raster_at);
     let glyph = shaped.into_iter().next()?;
     let bitmap = rasterizer.raster(glyph.font, glyph.glyph_id, glyph.size_px)?;
     if bitmap.width == 0 || bitmap.height == 0 {
         return None;
     }
-    let rgba = match bitmap.format {
+    let src_rgba = match bitmap.format {
         AtlasFormat::Rgba => bitmap.pixels,
         AtlasFormat::Alpha => alpha_to_rgba(&bitmap.pixels),
     };
-    let image =
-        ColorImage::from_rgba_unmultiplied([bitmap.width as usize, bitmap.height as usize], &rgba);
+
+    // Downscale RGBA color glyphs to the target size with Lanczos3.
+    // Alpha glyphs were rasterized at the target size already.
+    let (w, h, rgba) = if supersample && bitmap.format == AtlasFormat::Rgba {
+        let scale = size_px / raster_at;
+        let dst_w = ((bitmap.width as f32 * scale).round() as u32).max(1);
+        let dst_h = ((bitmap.height as f32 * scale).round() as u32).max(1);
+        let resized = lanczos3_downscale_rgba(bitmap.width, bitmap.height, &src_rgba, dst_w, dst_h);
+        (dst_w, dst_h, resized)
+    } else {
+        (bitmap.width, bitmap.height, src_rgba)
+    };
+
+    let image = ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
     let name = format!(
         "emoji:{}@{}",
         cluster.chars().next().map(|c| c as u32).unwrap_or(0),
         size_px.round().max(1.0) as u32
     );
     Some(ctx.load_texture(name, image, TextureOptions::LINEAR))
+}
+
+/// Lanczos3 downscale of a straight-alpha RGBA buffer. Alpha is
+/// premultiplied before resampling and un-premultiplied after so the
+/// transparent emoji border doesn't bleed dark/colored fringes into
+/// the visible pixels (straight-alpha resampling would average RGB
+/// from fully-transparent texels).
+fn lanczos3_downscale_rgba(
+    src_w: u32,
+    src_h: u32,
+    src_rgba: &[u8],
+    dst_w: u32,
+    dst_h: u32,
+) -> Vec<u8> {
+    use image::{imageops::resize, imageops::FilterType, ImageBuffer, Rgba};
+
+    // Premultiply.
+    let mut pm = Vec::with_capacity(src_rgba.len());
+    for px in src_rgba.chunks_exact(4) {
+        let a = px[3] as u16;
+        pm.push((px[0] as u16 * a / 255) as u8);
+        pm.push((px[1] as u16 * a / 255) as u8);
+        pm.push((px[2] as u16 * a / 255) as u8);
+        pm.push(px[3]);
+    }
+    // `pm` is built directly above as exactly `src_w * src_h * 4` bytes, so
+    // `from_raw` cannot fail. Assert it rather than returning a src-sized
+    // buffer the caller would feed to `ColorImage` against the (different)
+    // dst dimensions, which egui would reject with a panic.
+    let src: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(src_w, src_h, pm)
+        .expect("premultiplied RGBA buffer is exactly src_w*src_h*4 bytes");
+    let dst = resize(&src, dst_w, dst_h, FilterType::Lanczos3);
+
+    // Un-premultiply.
+    let mut out = dst.into_raw();
+    for px in out.chunks_exact_mut(4) {
+        let a = px[3] as u16;
+        if a > 0 {
+            px[0] = ((px[0] as u16 * 255 + a / 2) / a).min(255) as u8;
+            px[1] = ((px[1] as u16 * 255 + a / 2) / a).min(255) as u8;
+            px[2] = ((px[2] as u16 * 255 + a / 2) / a).min(255) as u8;
+        }
+    }
+    out
 }
 
 /// Promote a single-channel alpha bitmap (returned by swash for fonts
