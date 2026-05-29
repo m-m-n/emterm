@@ -695,6 +695,9 @@ This task keeps it that way. All async behavior is thread-based.
   worker threading
 - `libc` (unix) / `winapi` (windows, gated) — local time
 - Existing `egui` 0.29 — RichText composition
+- `image` 0.25 (default-features = false) — Lanczos3 downscale for color
+  emoji; accepted as a hard need (swash bilinear strike scaling is too soft
+  at the status bar's ~10x reduction)
 
 No new crates unless implementation discovers a hard need. Specifically:
 - **No `regex` crate.** Template variable scanner is handwritten (less
@@ -888,6 +891,9 @@ verification is via `cargo test` and manual run from
 - [ ] All functional requirements (FR1–FR12) implemented and tested
 - [ ] All listed test scenarios pass (`cargo test` from `native-poc/`)
 - [ ] No new external crates added (verified via `Cargo.toml` diff review)
+      — exception: `image` (default-features = false) is accepted as a hard
+      need for high-quality Lanczos3 color-emoji downscale; swash's bilinear
+      strike scaling is too soft at the status bar's ~10x reduction
 - [ ] Native-poc launches with status bar showing time + cwd by default
 - [ ] `OSC 777;statusbar;set;left;X` updates the OSC layer (manual smoke)
 - [ ] `OSC 777;markdown;...` still triggers the emterm-extension queue

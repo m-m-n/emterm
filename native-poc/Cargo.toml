@@ -84,6 +84,15 @@ fontdb = "0.21"
 # the adapter against a known API surface.
 ab_glyph = "0.2"
 
+# High-quality image resampling for color-emoji downscale
+# (ui::emoji_cache). swash's `StrikeWith::BestFit` does a single-tap
+# bilinear from the 128px CBDT strike, which softens badly at the ~10x
+# reductions the status bar needs; we instead rasterize large and
+# Lanczos3-downscale to match the WebView/Skia quality. default-features
+# = false drops every codec — we only use `imageops::resize` over an
+# in-memory RGBA buffer, no encode/decode.
+image = { version = "0.25", default-features = false }
+
 # SVG rasterizer for the window-chrome app icon (render::app_icon). The
 # icon source is the git-tracked assets/eMterm.svg (the PNG variants under
 # src-tauri/icons/ are gitignored build artifacts). default-features =
