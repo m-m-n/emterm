@@ -89,7 +89,9 @@ pub fn draw(
     };
     let frame = egui::Frame::none()
         .fill(md3::surface_container())
-        .inner_margin(Margin::ZERO);
+        // Match the WebView's per-row `padding: 0 8px`: inset content
+        // 8px horizontally so text isn't flush against the panel edge.
+        .inner_margin(Margin::symmetric(8.0, 0.0));
     panel = panel
         .frame(frame)
         .show_separator_line(false)
