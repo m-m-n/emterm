@@ -31,6 +31,7 @@ pub mod app_icon;
 pub mod block_drawing;
 pub mod box_drawing;
 pub mod cursor;
+pub mod emoji_resample;
 pub mod font;
 pub mod terminal_grid_pass;
 pub mod theme;
