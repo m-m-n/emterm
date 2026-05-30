@@ -365,6 +365,23 @@ fn emit_emoji_cluster_chain<F>(
         match handle {
             Some(texture) => {
                 let size_pts = texture.size_vec2() / ppp;
+                // Align the layout cursor to the physical-pixel grid
+                // BEFORE allocating, so the reserved slot and the painted
+                // rect share the same grid-snapped origin — otherwise the
+                // glyph paints up to half a pixel off its allocated slot
+                // relative to adjacent text. `size_pts` is an exact
+                // integer pixel count (texels / ppp), so once the origin
+                // is aligned the advance keeps the next widget on-grid
+                // too. `add_space` only moves forward, hence `ceil`; this
+                // is meaningful only in a left-to-right layout (the
+                // right-to-left sections fall back to paint-only snap).
+                if ui.layout().main_dir() == egui::Direction::LeftToRight {
+                    let cursor_x = ui.cursor().min.x;
+                    let pad = (cursor_x * ppp).ceil() / ppp - cursor_x;
+                    if pad > 0.0 {
+                        ui.add_space(pad);
+                    }
+                }
                 let (rect, _resp) = ui.allocate_exact_size(size_pts, egui::Sense::hover());
                 let snapped = egui::Rect::from_min_size(
                     egui::pos2(snap(rect.min.x), snap(rect.min.y)),
