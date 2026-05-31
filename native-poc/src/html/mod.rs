@@ -14,9 +14,13 @@ pub use parser::{parse, CssColor};
 pub use rich_text::{to_rich_text_runs, RichTextRun};
 pub use sanitizer::strip_html_tags;
 
-// Future Markdown-viewer entry points; retained at the top-level
-// module so downstream callers (and tests) don't need to depend on
-// the internal layout. `#[allow(unused_imports)]` keeps the bin
-// target warning-clean.
+// Facade re-exports consumed by the status-bar layer (template engine's
+// `<font>` sanitizer) and reserved for the future Markdown viewer. Kept
+// at the top-level module so downstream callers don't depend on the
+// internal submodule layout — the shared foundation stays free to
+// reorganize. `#[allow(unused_imports)]` keeps the bin target
+// warning-clean when a given consumer build doesn't touch all of them.
 #[allow(unused_imports)]
 pub use parser::{parse_css_color, Node};
+#[allow(unused_imports)]
+pub use tokenizer::{tokenize, Token};

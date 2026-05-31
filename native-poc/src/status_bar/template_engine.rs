@@ -24,7 +24,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::html::CssColor;
+use crate::html::{parse_css_color, tokenize, CssColor, Token};
 
 /// Provider trait. Implementations return cached values; any IO
 /// happens out-of-band on a worker thread.
@@ -194,66 +194,92 @@ fn utf8_len(b: u8) -> usize {
     }
 }
 
-/// Push the substituted text into `out`, wrapping in
-/// `<span style="color:#rrggbb">…</span>` when a color is supplied.
-/// The text is HTML-escaped before being embedded so a provider that
-/// returns markup (e.g. a `{cmd:foo}` that prints `<b>x</b>` or
-/// `<script>...`) cannot inject styling or scripts through the
-/// downstream `html::parse` pass.
+/// Push the substituted provider value into `out`, honouring the
+/// status-bar color markup `<font color="…">…</font>` (see
+/// `project_native_status_bar_color_markup`).
 ///
-/// Provider output is also passed through [`strip_html_tags_naive`]
-/// first: many WebView-era `{cmd:…}` helper scripts emit inline
-/// `<span style="color:…">value</span>` for coloring (CO2, weather,
-/// etc.). Until the upstream HTML parser is plumbed through this path,
-/// the strip keeps the surrounding plain text readable instead of
-/// rendering the raw markup. The stripper is intentionally crude (no
-/// quoted-attribute awareness) and will be replaced once the real
-/// parser lands.
+/// The value is sanitized by [`sanitize_provider_value`]: only `<font>`
+/// tags survive (with a re-validated `color` attribute), every other
+/// tag is dropped, and all text is HTML-escaped. So a `{cmd:foo}` that
+/// prints `<font color="limegreen">594</font>` colors `594`, while one
+/// that prints `<b>x</b>` or `<script>…</script>` cannot inject bold,
+/// styling, or scripts through the downstream `html::parse` pass.
+///
+/// When the provider also supplies a `color` hint via `get_color`
+/// (e.g. `git_branch`), the sanitized value is wrapped in an outer
+/// `<font color="…">` so the whole substitution is colored.
 fn push_styled(out: &mut String, value: &str, color: Option<&CssColor>) {
-    let stripped = strip_html_tags_naive(value);
-    let escaped = escape_html(stripped.as_ref());
+    let sanitized = sanitize_provider_value(value);
     if let Some(color) = color {
         let css = css_color_string(color);
-        out.push_str(&format!(r#"<span style="color:{css}">{escaped}</span>"#));
+        out.push_str(&format!(r#"<font color="{css}">{sanitized}</font>"#));
     } else {
-        out.push_str(&escaped);
+        out.push_str(&sanitized);
     }
 }
 
-/// Strip every `<…>` block from `input`. Naive: no awareness of quoted
-/// attributes, comments, or CDATA. Borrowed return path when the input
-/// contains no `<` byte. Temporary; see [`push_styled`].
-fn strip_html_tags_naive(input: &str) -> Cow<'_, str> {
-    if !input.contains('<') {
-        return Cow::Borrowed(input);
+/// Sanitize a provider value into the restricted markup the status bar
+/// accepts: `<font color="…">…</font>` plus plain (escaped) text.
+///
+/// - `<font>` open/close tags survive. The `color` attribute is
+///   re-validated through [`parse_css_color`] and re-serialized from the
+///   parsed value, so a crafted attribute (e.g. `color='x"><script>'`)
+///   cannot break out of the tag. A `<font>` whose `color` is missing
+///   or unparseable is dropped (its text children still survive).
+/// - Every other tag (`<b>`, `<span>`, `<script>`, …) is dropped so a
+///   `{cmd}` cannot smuggle styling or scripts past this boundary.
+/// - All text is HTML-escaped so the downstream `html::parse` pass sees
+///   literal characters, not markup.
+fn sanitize_provider_value(value: &str) -> String {
+    // Fast path: no markup at all. Most provider values are plain text
+    // (clock, hostname, load average), so avoid tokenizing them.
+    if !value.contains('<') {
+        return escape_html(value).into_owned();
     }
-    let bytes = input.as_bytes();
-    let len = bytes.len();
-    let mut out = String::with_capacity(len);
-    let mut i = 0;
-    while i < len {
-        if bytes[i] == b'<' {
-            // Skip up to the next `>` (or EOF).
-            let mut j = i + 1;
-            while j < len && bytes[j] != b'>' {
-                j += 1;
+    let mut out = String::with_capacity(value.len());
+    // Track, per open `<font>`, whether we actually emitted an opening
+    // tag, so a matching `</font>` is emitted only when its open was —
+    // keeping the output balanced (a `<font>` with an unusable color
+    // emits neither tag, so its close must be suppressed too).
+    let mut font_stack: Vec<bool> = Vec::new();
+    for tok in tokenize(value) {
+        match tok {
+            Token::Text(s) => out.push_str(&escape_html(&s)),
+            Token::TagOpen { name, attrs } if name == "font" => {
+                match attrs.get("color").and_then(|c| parse_css_color(c)) {
+                    Some(color) => {
+                        out.push_str(&format!(r#"<font color="{}">"#, css_color_string(&color)));
+                        font_stack.push(true);
+                    }
+                    // A `<font>` without a usable color contributes no
+                    // tag; its inner text still flows through.
+                    None => font_stack.push(false),
+                }
             }
-            if j >= len {
-                // Unterminated `<…`: preserve verbatim so the user can
-                // see the broken markup rather than silently dropping
-                // arbitrary trailing content.
-                out.push_str(&input[i..]);
-                break;
+            Token::TagClose { name } if name == "font" => {
+                // Emit the close only if its matching open was emitted.
+                // A stray `</font>` (no open) is dropped.
+                if font_stack.pop() == Some(true) {
+                    out.push_str("</font>");
+                }
             }
-            i = j + 1;
-        } else {
-            let cp_len = utf8_len(bytes[i]).max(1);
-            let end = (i + cp_len).min(len);
-            out.push_str(&input[i..end]);
-            i = end;
+            // Drop every other tag (and self-closing `<font/>`, which is
+            // nonsensical for coloring).
+            _ => {}
         }
     }
-    Cow::Owned(out)
+    // Close any `<font>` the provider opened but left unclosed. Without
+    // this, a `{cmd}` emitting malformed markup (e.g. `<font color="red">x`
+    // with no close) yields a dangling open tag; the downstream lenient
+    // `html::parse` then extends that color to EOF, bleeding it across the
+    // rest of the status-bar line (and later substitutions). Emit one
+    // `</font>` per still-open emitted tag so the fragment is balanced.
+    for emitted in font_stack.into_iter().rev() {
+        if emitted {
+            out.push_str("</font>");
+        }
+    }
+    out
 }
 
 /// HTML-escape `&`, `<`, `>`, `"`, and `'`. Returns a borrow when
@@ -362,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_wraps_value_in_span_when_color_present() {
+    fn resolve_wraps_value_in_font_when_color_present() {
         let mut engine = TemplateEngine::new();
         engine.register(Arc::new(StaticProvider {
             name: "git_branch".to_string(),
@@ -374,7 +400,49 @@ mod tests {
             }),
         }));
         let r = engine.resolve("{git_branch}");
-        assert_eq!(r, r#"<span style="color:#4caf50">main</span>"#);
+        // `r##"…"##`: the expected string contains `"#` (the `"#4caf50`),
+        // which would prematurely close a single-hash raw string.
+        assert_eq!(r, r##"<font color="#4caf50">main</font>"##);
+    }
+
+    #[test]
+    fn resolve_passes_font_color_markup_through() {
+        // A `{cmd}` that emits the status-bar color markup keeps its
+        // `<font color>` so the downstream parser colors the value.
+        // Mirrors the real co2.sh output.
+        let mut engine = TemplateEngine::new();
+        engine.register(Arc::new(StaticProvider {
+            name: "cmd".to_string(),
+            value: r#"CO2: <font color="limegreen">594</font>ppm"#.to_string(),
+            color: None,
+        }));
+        let r = engine.resolve("{cmd}");
+        assert_eq!(r, r#"CO2: <font color="limegreen">594</font>ppm"#);
+
+        // End-to-end: parse + flatten yields a colored middle run.
+        use crate::html;
+        let runs = html::to_rich_text_runs(&html::parse(&r));
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[1].text, "594");
+        assert_eq!(
+            runs[1].color,
+            Some(CssColor::Named("limegreen".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_font_color_attribute_is_revalidated() {
+        // A crafted color attribute must not break out of the tag: the
+        // value is re-parsed and re-serialized from the parsed color.
+        let mut engine = TemplateEngine::new();
+        engine.register(Arc::new(StaticProvider {
+            name: "cmd".to_string(),
+            value: r#"<font color="red&quot;&gt;&lt;b&gt;">x</font>"#.to_string(),
+            color: None,
+        }));
+        // The bogus color fails `parse_css_color`, so no `<font>` tag is
+        // emitted; the inner text survives unstyled.
+        assert_eq!(engine.resolve("{cmd}"), "x");
     }
 
     #[test]
@@ -417,16 +485,14 @@ mod tests {
         assert_eq!(engine.resolve("{x}"), "new");
     }
 
-    /// A provider that returns markup-looking text (e.g. a custom
-    /// `{cmd:foo}` whose stdout happens to print `<b>x</b>`) MUST NOT
-    /// be able to inject styling or scripts through the downstream
-    /// `html::parse` pass. Until the real HTML parser is wired into
-    /// the status-bar path, [`push_styled`] strips `<…>` blocks before
-    /// HTML-escaping the residue, so a stray `<b>x</b>` reaches the
-    /// downstream parser as the plain text `x` — neither styled nor
-    /// rendered as literal `<b>x</b>`.
+    /// A provider that returns non-font markup (e.g. a custom
+    /// `{cmd:foo}` whose stdout prints `<b>x</b>`) MUST NOT inject
+    /// styling or scripts through the downstream `html::parse` pass.
+    /// `sanitize_provider_value` drops every non-`<font>` tag, so a
+    /// stray `<b>x</b>` reaches the parser as the plain text `x` —
+    /// neither bold nor rendered as literal `<b>x</b>`.
     #[test]
-    fn provider_value_containing_html_tags_is_stripped() {
+    fn provider_value_with_non_font_tags_is_neutralized() {
         use crate::html;
 
         let mut engine = TemplateEngine::new();
@@ -435,9 +501,7 @@ mod tests {
             value: "<b>x</b>".to_string(),
             color: None,
         }));
-        // The tag-stripper removes `<b>` and `</b>`; the residue is
-        // HTML-escaped (no entities to escape here) and appears as
-        // the literal text `x`.
+        // `<b>`/`</b>` are dropped; the residue is the literal text `x`.
         let resolved = engine.resolve("{cmd}");
         assert_eq!(resolved, "x");
 
@@ -449,11 +513,11 @@ mod tests {
         assert_eq!(runs[0].text, "x");
     }
 
-    /// The strip-and-escape also applies inside the color-wrapping
-    /// span branch (FR-Security: untrusted text must not break out of
-    /// the `<span style="…">` wrapper or inject a nested tag).
+    /// Sanitization also applies inside the color-wrapping `<font>`
+    /// branch (FR-Security: untrusted text must not break out of the
+    /// `<font color="…">` wrapper or inject a nested tag).
     #[test]
-    fn provider_value_with_html_inside_color_span_is_stripped() {
+    fn provider_value_with_html_inside_color_font_is_sanitized() {
         let mut engine = TemplateEngine::new();
         engine.register(Arc::new(StaticProvider {
             name: "git_branch".to_string(),
@@ -461,21 +525,17 @@ mod tests {
             color: Some(CssColor::Named("red".to_string())),
         }));
         let r = engine.resolve("{git_branch}");
-        // `<script>x</script>` is removed by the tag-stripper. The
-        // residue `main">` is HTML-escaped (`"` and `>` become
-        // entities) so the wrapper span attribute stays intact.
-        assert_eq!(r, r#"<span style="color:red">main&quot;&gt;x</span>"#);
+        // `<script>x</script>` is dropped; the residue `main">` is
+        // HTML-escaped (`"` and `>` become entities) so the wrapper
+        // `<font>` attribute stays intact.
+        assert_eq!(r, r#"<font color="red">main&quot;&gt;x</font>"#);
     }
 
-    // ── temporary HTML-tag stripper (CO2 / weather helper scripts) ─────
-
     #[test]
-    fn provider_inline_span_color_is_stripped_to_plain_text() {
-        // Reproduces the user's CO2 helper which emits e.g.
-        // `CO2: <span style="color:tomato">1450</span>ppm` to colorize
-        // the value in the WebView build. Until the egui renderer
-        // wires through the real HTML parser, the strip step keeps the
-        // surrounding text readable.
+    fn provider_inline_non_font_color_is_stripped_to_plain_text() {
+        // A WebView-era helper that still emits `<span style="color:…">`
+        // (the old convention) loses the color but keeps the text — the
+        // span tag is not in the status-bar allowlist (`<font>` only).
         let mut engine = TemplateEngine::new();
         engine.register(Arc::new(StaticProvider {
             name: "cmd".to_string(),
@@ -486,42 +546,67 @@ mod tests {
     }
 
     #[test]
-    fn strip_html_tags_naive_no_tags_is_borrowed() {
-        // Borrowed return path keeps the no-markup hot path allocation-free.
-        let s = "plain text";
-        let out = strip_html_tags_naive(s);
-        assert!(matches!(out, Cow::Borrowed(_)));
-        assert_eq!(out, "plain text");
+    fn sanitize_plain_text_has_no_tags() {
+        assert_eq!(sanitize_provider_value("plain text"), "plain text");
     }
 
     #[test]
-    fn strip_html_tags_naive_removes_simple_tags() {
-        assert_eq!(strip_html_tags_naive("a<b>x</b>c").as_ref(), "axc");
-        assert_eq!(strip_html_tags_naive("<br/>line").as_ref(), "line");
-        assert_eq!(strip_html_tags_naive("<p>1</p><p>2</p>").as_ref(), "12");
-    }
-
-    #[test]
-    fn strip_html_tags_naive_unterminated_tag_preserved() {
-        // An unterminated `<…` is preserved verbatim so the user can
-        // see the broken markup (this matches the doc comment on
-        // `strip_html_tags_naive`).
-        assert_eq!(strip_html_tags_naive("ok <unterm").as_ref(), "ok <unterm");
-    }
-
-    #[test]
-    fn strip_html_tags_naive_keeps_utf8_outside_tags() {
+    fn sanitize_keeps_font_color_drops_others() {
         assert_eq!(
-            strip_html_tags_naive("こんにちは<b>世界</b>!").as_ref(),
+            sanitize_provider_value(r#"a<font color="red">b</font><b>c</b>"#),
+            r#"a<font color="red">b</font>c"#
+        );
+    }
+
+    #[test]
+    fn sanitize_keeps_utf8_outside_tags() {
+        assert_eq!(
+            sanitize_provider_value("こんにちは<b>世界</b>!"),
             "こんにちは世界!"
         );
     }
 
     #[test]
-    fn strip_html_tags_naive_strips_attributes_with_spaces() {
+    fn sanitize_closes_unclosed_font() {
+        // A provider that opens `<font>` without closing it (malformed /
+        // truncated output) must NOT leave a dangling open tag — otherwise
+        // the downstream lenient parser bleeds the color to EOF.
         assert_eq!(
-            strip_html_tags_naive(r#"<span style="color: red">x</span>"#).as_ref(),
-            "x"
+            sanitize_provider_value(r#"<font color="red">x"#),
+            r#"<font color="red">x</font>"#
+        );
+    }
+
+    #[test]
+    fn sanitize_closes_multiple_unclosed_fonts_in_order() {
+        // Nested unclosed fonts each get a matching close, innermost first.
+        assert_eq!(
+            sanitize_provider_value(r#"<font color="red">a<font color="blue">b"#),
+            r#"<font color="red">a<font color="blue">b</font></font>"#
+        );
+    }
+
+    #[test]
+    fn sanitize_unclosed_font_does_not_bleed_into_trailing_template() {
+        // End-to-end: an unclosed provider font must not color the literal
+        // template text that follows the substitution.
+        use crate::html;
+        let mut engine = TemplateEngine::new();
+        engine.register(Arc::new(StaticProvider {
+            name: "cmd".to_string(),
+            value: r#"<font color="red">594"#.to_string(),
+            color: None,
+        }));
+        let resolved = engine.resolve("{cmd} ppm");
+        let runs = html::to_rich_text_runs(&html::parse(&resolved));
+        // The trailing " ppm" must be an uncolored run, not red.
+        let trailing = runs
+            .iter()
+            .find(|r| r.text.contains("ppm"))
+            .expect("trailing text run missing");
+        assert!(
+            trailing.color.is_none(),
+            "color bled into trailing template text: {trailing:?}"
         );
     }
 }

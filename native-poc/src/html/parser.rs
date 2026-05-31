@@ -112,6 +112,16 @@ where
                         let children = parse_children(iter, Some("span"));
                         out.push(Node::Span { color, children });
                     }
+                    "font" => {
+                        // `<font color="…">` — the status-bar color markup
+                        // (see `project_native_status_bar_color_markup`). Only
+                        // the `color` attribute is honoured; every other
+                        // attribute (`size`, `face`, …) is intentionally
+                        // ignored so the tag's sole effect is text color.
+                        let color = extract_color_from_attr(&attrs);
+                        let children = parse_children(iter, Some("font"));
+                        out.push(Node::Span { color, children });
+                    }
                     _ => {
                         // Unknown tag: emit children as-is (transparent).
                         let children = parse_children(iter, Some(&name));
@@ -170,6 +180,14 @@ fn extract_color_from_style(attrs: &HashMap<String, String>) -> Option<CssColor>
         }
     }
     None
+}
+
+/// Parse a CSS color from a `<font color="…">` attribute. Returns
+/// `None` when the attribute is missing or the value is not a color we
+/// understand. Unlike [`extract_color_from_style`], the value is the
+/// raw color expression (no `color:` prefix / `;` separators).
+fn extract_color_from_attr(attrs: &HashMap<String, String>) -> Option<CssColor> {
+    parse_css_color(attrs.get("color")?)
 }
 
 /// Parse a CSS color literal. Supports `#RGB`, `#RRGGBB`,
@@ -256,6 +274,11 @@ fn named_css_color(name: &str) -> Option<egui::Color32> {
         "gray" | "grey" => (128, 128, 128),
         "lightgray" | "lightgrey" => (211, 211, 211),
         "darkgray" | "darkgrey" => (169, 169, 169),
+        // Names used by the status-bar sensor scripts (co2 / weather /
+        // claude-usage / nature-remo / hardware).
+        "limegreen" => (50, 205, 50),
+        "gold" => (255, 215, 0),
+        "tomato" => (255, 99, 71),
         "orange" => (255, 165, 0),
         "purple" => (128, 0, 128),
         "pink" => (255, 192, 203),
@@ -335,6 +358,78 @@ mod tests {
                 g: 20,
                 b: 30
             })
+        );
+    }
+
+    #[test]
+    fn parse_font_with_color_named() {
+        let nodes = parse(r#"<font color="red">x</font>"#);
+        assert_eq!(
+            nodes,
+            vec![Node::Span {
+                color: Some(CssColor::Named("red".to_string())),
+                children: vec![Node::Text("x".to_string())],
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_font_with_color_hex() {
+        // `r##"…"##`: the value `="#ff0000"` contains the `"#` sequence,
+        // which would prematurely close a single-hash raw string.
+        let nodes = parse(r##"<font color="#ff0000">x</font>"##);
+        let Node::Span { color, .. } = &nodes[0] else {
+            panic!()
+        };
+        assert_eq!(
+            color,
+            &Some(CssColor::Hex {
+                r: 0xff,
+                g: 0,
+                b: 0
+            })
+        );
+    }
+
+    #[test]
+    fn parse_font_honours_color_only_ignoring_other_attrs() {
+        // `size` / `face` must have no effect: the only thing a
+        // status-bar `<font>` may do is set the text color.
+        let nodes = parse(r#"<font color="green" size="7" face="Arial">x</font>"#);
+        let Node::Span { color, children } = &nodes[0] else {
+            panic!()
+        };
+        assert_eq!(color, &Some(CssColor::Named("green".to_string())));
+        assert_eq!(children, &vec![Node::Text("x".to_string())]);
+    }
+
+    #[test]
+    fn parse_font_without_color_is_transparent_span() {
+        let nodes = parse("<font>x</font>");
+        assert_eq!(
+            nodes,
+            vec![Node::Span {
+                color: None,
+                children: vec![Node::Text("x".to_string())],
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_font_mixed_with_plain_text() {
+        // Mirrors the real co2.sh output shape:
+        // `CO2: <font color="limegreen">594</font>ppm`
+        let nodes = parse(r#"CO2: <font color="limegreen">594</font>ppm"#);
+        assert_eq!(
+            nodes,
+            vec![
+                Node::Text("CO2: ".to_string()),
+                Node::Span {
+                    color: Some(CssColor::Named("limegreen".to_string())),
+                    children: vec![Node::Text("594".to_string())],
+                },
+                Node::Text("ppm".to_string()),
+            ]
         );
     }
 
@@ -436,5 +531,23 @@ mod tests {
     fn css_color_to_egui_named_unknown_returns_none() {
         let c = CssColor::Named("not-a-color".to_string());
         assert_eq!(c.to_egui(), None);
+    }
+
+    #[test]
+    fn css_color_to_egui_status_bar_script_names() {
+        // The sensor scripts rely on these names; a missing entry would
+        // silently drop the color (None → theme fallback).
+        assert_eq!(
+            CssColor::Named("limegreen".to_string()).to_egui(),
+            Some(egui::Color32::from_rgb(50, 205, 50))
+        );
+        assert_eq!(
+            CssColor::Named("gold".to_string()).to_egui(),
+            Some(egui::Color32::from_rgb(255, 215, 0))
+        );
+        assert_eq!(
+            CssColor::Named("tomato".to_string()).to_egui(),
+            Some(egui::Color32::from_rgb(255, 99, 71))
+        );
     }
 }

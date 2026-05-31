@@ -120,8 +120,12 @@ HTML parsers.
   `[a-zA-Z_][a-zA-Z0-9_]*(?::[a-zA-Z0-9_-]+)?`. Resolve via registered
   providers. Unknown variables resolve to empty string. Providers that
   expose a color value (`get_color() -> Option<CssColor>`) get wrapped in
-  `<span style="color:...">value</span>` so the HTML parser can colorize
-  the run.
+  `<font color="...">value</font>` so the HTML parser can colorize
+  the run. Provider/`{cmd}` output is sanitized (`sanitize_provider_value`)
+  to a `<font color>`-only subset: only `<font>` with a re-validated
+  `color` attribute survives, every other tag (incl. `<span style>`) is
+  dropped to plain text, all text is HTML-escaped, and unclosed `<font>`
+  tags are balanced so a color cannot bleed past the substitution.
 
 - **FR3: TimeProvider** — Format current local time using these tokens:
   `YYYY MM DD HH hh mm ss A`. Replace longest tokens first. Default format
@@ -205,6 +209,8 @@ HTML parsers.
     and **MUST be parseable to a future variant without breaking the
     public API** (e.g. add `Node::Block { kind, children }` later).
   - `<script>` / `<style>` tags drop both the tags and their contents.
+  - `<font color="...">` maps to `Span { color, children }` (status-bar
+    color markup); only the `color` attribute is honored.
   - HTML entities (`&amp; &lt; &gt; &quot; &apos; &#NN;`) decoded.
 
 - **FR9: HTML Sanitizer (OSC route)** — A standalone helper
@@ -287,11 +293,15 @@ HTML parsers.
   fails again. See "Notes" below.
 
 - **NFR2 - Security:** OSC 777 content is fully tag-stripped (no inline
-  HTML allowed from external scripts). Custom commands accept a single
-  executable path with `~/` expansion only — no shell invocation, no
-  argument injection. Command name validation rejects characters outside
-  `[a-zA-Z0-9_-]`. `<script>` and `<style>` blocks are dropped from the
-  HTML AST entirely.
+  HTML allowed from external scripts). Custom command (`{cmd}`) output is
+  sanitized to a `<font color>`-only subset (`sanitize_provider_value`):
+  the `color` attribute is re-validated and re-serialized so a crafted
+  attribute cannot break out of the tag, every other tag is dropped, text
+  is HTML-escaped, and unclosed `<font>` tags are balanced. Custom
+  commands accept a single executable path with `~/` expansion only — no
+  shell invocation, no argument injection. Command name validation rejects
+  characters outside `[a-zA-Z0-9_-]`. `<script>` and `<style>` blocks are
+  dropped from the HTML AST entirely.
 
 - **NFR3 - Platform:** Linux and Windows only (no macOS, matches
   project-wide policy). Unix paths use `libc::localtime_r`; Windows uses
@@ -361,7 +371,7 @@ egui draw_terminal
           for side in [Left, Right]:
               template_engine.resolve(template)
                 → providers[var].get_value()
-                → wrap in <span color> if get_color() Some
+                → wrap in <font color> if get_color() Some
               html_parser.parse(resolved)
               cache_if_unchanged()
   → ui::status_bar::draw(ctx, view_model, settings)
@@ -516,7 +526,7 @@ impl TemplateEngine {
     pub fn has_provider(&self, name: &str) -> bool;
 
     /// Resolve a template into an HTML-bearing string.
-    /// Colors from providers wrap the value in `<span style="color:...">`.
+    /// Colors from providers wrap the value in `<font color="...">`.
     pub fn resolve(&self, template: &str) -> String;
 }
 ```
@@ -626,9 +636,9 @@ pub fn strip_html_tags(input: &str) -> String;
 - `<script>` and `<style>` start a "swallow until matching close" mode
 - Unknown tags: keep their children, drop the tag wrapper (matches lenient
   browser behavior; safer than failing closed)
-- Attribute parsing: only `style` on `<span>` is interpreted today
-  (`color: ...`); future variants can extend this without touching the
-  surface API
+- Attribute parsing: `color` on `<font>` and `style` (`color: ...`) on
+  `<span>` are interpreted today; both map to `Span { color }`. Future
+  variants can extend this without touching the surface API
 
 ### GitBranchProvider Threading
 
@@ -743,8 +753,10 @@ native-poc/src/
       duplicates included
 - [ ] `TemplateEngine::resolve` substitutes registered providers
 - [ ] `TemplateEngine::resolve` returns "" for unknown variable
-- [ ] `TemplateEngine::resolve` wraps value in `<span style="color:...">`
+- [ ] `TemplateEngine::resolve` wraps value in `<font color="...">`
       when provider supplies a color
+- [ ] `sanitize_provider_value` keeps `<font color>`, drops other tags,
+      and closes unclosed `<font>` so color does not bleed
 - [ ] `TimeProvider::format` handles all tokens (YYYY MM DD HH hh mm ss A)
 - [ ] `TimeProvider::format` AM / PM boundary at noon / midnight
 - [ ] `CwdProvider` extracts basename from `/home/me`,
@@ -756,6 +768,7 @@ native-poc/src/
 - [ ] `strip_html_tags` removes `<script>...</script>` body, keeps text,
       preserves `1 < 2`
 - [ ] `html::parse` returns `Span` for `<span style="color:#fff">x</span>`
+- [ ] `html::parse` returns `Span` for `<font color="#fff">x</font>`
 - [ ] `html::parse` parses nested `<b><i>x</i></b>`
 - [ ] `html::parse` decodes `&amp; &lt; &gt; &#65;`
 - [ ] `html::parse` drops `<script>` content entirely
