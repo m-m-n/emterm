@@ -173,6 +173,23 @@ mod tests {
     }
 
     #[test]
+    fn flatten_font_color_produces_colored_run() {
+        // End-to-end: `<font color>` flows parse → flatten and carries
+        // its color through to the run list (the status-bar color path).
+        let runs = to_rich_text_runs(&parse(r#"CO2: <font color="limegreen">594</font>ppm"#));
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].text, "CO2: ");
+        assert!(runs[0].color.is_none());
+        assert_eq!(runs[1].text, "594");
+        assert_eq!(
+            runs[1].color,
+            Some(CssColor::Named("limegreen".to_string()))
+        );
+        assert_eq!(runs[2].text, "ppm");
+        assert!(runs[2].color.is_none());
+    }
+
+    #[test]
     fn flatten_inner_color_wins_over_outer() {
         let runs = to_rich_text_runs(&parse(
             r#"<span style="color:red"><span style="color:blue">x</span></span>"#,
