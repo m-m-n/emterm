@@ -234,14 +234,40 @@ impl StatusBarRuntime {
     }
 }
 
+/// Hard cap on the character length of an OSC status-bar section
+/// (`left` / `right`) accepted at the view-model boundary.
+///
+/// OSC layer content is terminal-controlled — a mux daemon or any
+/// program writing the status-bar OSC sequence supplies it, so it is
+/// attacker-influenceable. The drawer only ever paints a half-row
+/// prefix (a few hundred grapheme cells at most), so a payload far
+/// beyond that is never visible; capping here keeps an adversarial
+/// multi-megabyte payload from forcing per-frame atomization and
+/// measurement work downstream. The cap is generous (well past any
+/// real status line) and truncates on a `char` boundary so it never
+/// splits a UTF-8 sequence.
+const OSC_SECTION_CHAR_CAP: usize = 4096;
+
+/// Truncate `s` to at most [`OSC_SECTION_CHAR_CAP`] characters on a
+/// char boundary, returning the original allocation when it already
+/// fits (no copy on the common path).
+fn cap_osc_section(s: String) -> String {
+    // `char_indices().nth(cap)` is the byte offset of the (cap+1)-th
+    // char; `None` means the string has ≤ cap chars and needs no cut.
+    match s.char_indices().nth(OSC_SECTION_CHAR_CAP) {
+        Some((byte_idx, _)) => s[..byte_idx].to_string(),
+        None => s,
+    }
+}
+
 fn build_osc_row(
     layer: &Arc<Mutex<OscLayerState>>,
     mux_status: Option<&mux_ipc::protocol::StatusUpdateMsg>,
 ) -> OscRow {
     if let Some(mux) = mux_status {
         return OscRow {
-            left: mux.left.clone(),
-            right: mux.right.clone(),
+            left: cap_osc_section(mux.left.clone()),
+            right: cap_osc_section(mux.right.clone()),
             // Daemon-supplied state always renders; setting
             // `forced_visible = Some(true)` keeps the auto-hide rule
             // out of the way.
@@ -250,8 +276,8 @@ fn build_osc_row(
     }
     let state = layer.lock().clone();
     OscRow {
-        left: state.left,
-        right: state.right,
+        left: cap_osc_section(state.left),
+        right: cap_osc_section(state.right),
         forced_visible: state.forced_visible,
     }
 }
@@ -323,6 +349,35 @@ mod tests {
 
     fn noop_wake() -> WakeFn {
         Arc::new(|| ())
+    }
+
+    #[test]
+    fn cap_osc_section_leaves_short_strings_untouched() {
+        let s = "1:shell 2:nvim* host01".to_string();
+        assert_eq!(cap_osc_section(s.clone()), s);
+    }
+
+    #[test]
+    fn cap_osc_section_truncates_overlong_input_on_char_boundary() {
+        // A multibyte fill so a naive byte cut would split a codepoint.
+        let long: String = "あ".repeat(OSC_SECTION_CHAR_CAP * 2);
+        let capped = cap_osc_section(long);
+        assert_eq!(capped.chars().count(), OSC_SECTION_CHAR_CAP);
+        // Still valid UTF-8 (no split codepoint) — every char is 'あ'.
+        assert!(capped.chars().all(|c| c == 'あ'));
+    }
+
+    #[test]
+    fn build_osc_row_caps_terminal_controlled_sections() {
+        let huge = "x".repeat(OSC_SECTION_CHAR_CAP + 5000);
+        let layer = Arc::new(Mutex::new(OscLayerState {
+            left: huge.clone(),
+            right: huge,
+            forced_visible: Some(true),
+        }));
+        let row = build_osc_row(&layer, None);
+        assert_eq!(row.left.chars().count(), OSC_SECTION_CHAR_CAP);
+        assert_eq!(row.right.chars().count(), OSC_SECTION_CHAR_CAP);
     }
 
     #[test]

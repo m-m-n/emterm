@@ -175,6 +175,12 @@ impl FallbackChain {
 /// to decide whether the marked emoji font should be consulted before
 /// the regular chain. The range is intentionally narrow:
 ///
+/// - Watch / hourglass (U+231A..=U+231B), media + clock controls
+///   (U+23E9..=U+23F3, e.g. ⏰ ⏳) and pause/stop/record
+///   (U+23F8..=U+23FA) — these live in the Miscellaneous Technical
+///   block but are color-emoji in Noto; the surrounding technical
+///   symbols are not, so the emoji-font `has_codepoint` check still
+///   routes non-emoji to the text chain.
 /// - Misc Symbols + Dingbats (U+2600..=U+27BF) — covers ✅ ✓ ☂ ☀ etc.
 ///   that exist in both BW text fonts and color emoji fonts; we want
 ///   the color variant when the cluster reaches the bare codepoint.
@@ -187,8 +193,43 @@ impl FallbackChain {
 ///
 /// Tests pin the boundary values so future tweaks notice when ASCII /
 /// CJK / box-drawing accidentally start preferring the emoji font.
-fn is_pictographic(cp: u32) -> bool {
-    matches!(cp, 0x2600..=0x27BF) || cp >= 0x1F000
+///
+/// The BMP spans below mirror the singletons + ranges of the Unicode
+/// `Emoji` property that live below U+1F000 (the SMP blocks are caught
+/// wholesale by the `>= 0x1F000` tail). The list is deliberately
+/// generous: a codepoint only *prefers* the emoji font here, and the
+/// preference is a no-op unless that font actually covers the glyph
+/// (`resolve` falls through to the text chain otherwise). Block-drawing
+/// (U+2580..=U+259F) is intentionally excluded so progress-bar glyphs
+/// like `░▒▓█` keep their crisp text/`block_drawing` rendering.
+///
+/// `crate::ui::emoji_cache::cluster_is_emoji` calls into this function
+/// so the two stay in sync; it adds the cluster-level modifiers (VS-16,
+/// keycap) that only make sense across a whole grapheme.
+pub(crate) fn is_pictographic(cp: u32) -> bool {
+    matches!(cp,
+        0x00A9 | 0x00AE                  // © ®
+        | 0x203C | 0x2049                // ‼ ⁉
+        | 0x2122 | 0x2139                // ™ ℹ
+        | 0x2194..=0x2199                // ↔ ↕ ↖ ↗ ↘ ↙
+        | 0x21A9..=0x21AA                // ↩ ↪
+        | 0x231A..=0x231B                // ⌚ ⌛
+        | 0x2328                         // ⌨
+        | 0x23CF                         // ⏏
+        | 0x23E9..=0x23F3                // ⏩‥⏳ media + clocks
+        | 0x23F8..=0x23FA                // ⏸ ⏹ ⏺
+        | 0x24C2                         // Ⓜ
+        | 0x25AA..=0x25AB                // ▪ ▫
+        | 0x25B6 | 0x25C0                // ▶ ◀
+        | 0x25FB..=0x25FE                // ◻ ◼ ◽ ◾
+        | 0x2600..=0x27BF                // misc symbols + dingbats
+        | 0x2934..=0x2935                // ⤴ ⤵
+        | 0x2B05..=0x2B07                // ⬅ ⬆ ⬇
+        | 0x2B1B..=0x2B1C                // ⬛ ⬜
+        | 0x2B50 | 0x2B55                // ⭐ ⭕
+        | 0x3030 | 0x303D                // 〰 〽
+        | 0x3297 | 0x3299                // ㊗ ㊙
+    ) || cp >= 0x1F000
 }
 
 #[cfg(test)]
@@ -338,8 +379,27 @@ mod tests {
         assert!(!is_pictographic(0x3042)); // あ
         assert!(!is_pictographic(0x2500)); // box drawing ─
         assert!(!is_pictographic(0x25FF)); // last box drawing
+                                           // Block-drawing must stay text-rendered: the status-bar
+                                           // progress bars are built from these (`░▒▓█`), and a color
+                                           // emoji glyph would wreck the bar. Pin the whole block.
+        assert!(!is_pictographic(0x2580)); // ▀ upper half block
+        assert!(!is_pictographic(0x2588)); // █ full block
+        assert!(!is_pictographic(0x2591)); // ░ light shade (the bar's empty cell)
+        assert!(!is_pictographic(0x2593)); // ▓ dark shade
+        assert!(!is_pictographic(0x259F)); // last block-drawing
+        assert!(!is_pictographic(0x2300)); // ⌀ diameter sign (technical, BW)
+        assert!(!is_pictographic(0x2319)); // just below the watch span
+        assert!(!is_pictographic(0x23E8)); // just below the clock-control span
+        assert!(!is_pictographic(0x23F4)); // ⏴ BW arrow, just above ⏳
         assert!(!is_pictographic(0x1EFFF)); // just below SMP emoji block
                                             // Inside the range
+        assert!(is_pictographic(0x231A)); // ⌚ watch
+        assert!(is_pictographic(0x231B)); // ⌛ hourglass
+        assert!(is_pictographic(0x23E9)); // ⏩ fast-forward
+        assert!(is_pictographic(0x23F0)); // ⏰ alarm clock
+        assert!(is_pictographic(0x23F3)); // ⏳ hourglass-flowing (the status-bar case)
+        assert!(is_pictographic(0x23F8)); // ⏸ pause
+        assert!(is_pictographic(0x23FA)); // ⏺ record
         assert!(is_pictographic(0x2600)); // ☀ first dingbat-ish
         assert!(is_pictographic(0x2705)); // ✅
         assert!(is_pictographic(0x27BF)); // ➿ last dingbat

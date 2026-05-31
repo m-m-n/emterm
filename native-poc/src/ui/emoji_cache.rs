@@ -31,16 +31,29 @@ use crate::render::font::fallback::FallbackChain;
 use crate::render::font::traits::{AtlasFormat, GlyphRasterizer};
 
 /// Pre-filter: a grapheme cluster is a color-emoji candidate when any
-/// of its codepoints lies in a pictographic range or carries VS-16.
+/// of its codepoints is pictographic or carries an emoji-forming
+/// modifier.
 ///
-/// Mirrors `crate::render::font::fallback::is_pictographic` (which is
-/// private). Keeping a duplicate here avoids forcing a chain lookup
-/// for every ASCII letter every frame — only candidates are routed
-/// through the (memoizing) [`FallbackChain::resolve_for_cluster`].
+/// The per-codepoint range test is delegated to
+/// [`crate::render::font::fallback::is_pictographic`] so the two paths
+/// share one source of truth. On top of that we recognise the
+/// cluster-level modifiers that only make sense across a whole
+/// grapheme:
+/// - **VS-16** (U+FE0F) — the emoji-presentation selector that turns a
+///   dual-presentation base (e.g. `⏏\u{FE0F}`) into color emoji.
+/// - **Keycap** (U+20E3) — the combining enclosing keycap, e.g.
+///   `1\u{FE0F}\u{20E3}` (`1️⃣`), whose base is a plain ASCII digit.
+/// - **Regional indicators** (U+1F1E6..=U+1F1FF) — already caught by
+///   `is_pictographic`'s `>= 0x1F000` tail, listed here for clarity.
+///
+/// This is only a prefilter: a candidate still has to be covered by the
+/// emoji font (`FallbackChain::resolve_for_cluster`) to render as color,
+/// so a generous match never mis-paints a non-emoji glyph.
 pub fn cluster_is_emoji(cluster: &str) -> bool {
+    use crate::render::font::fallback::is_pictographic;
     cluster.chars().any(|ch| {
         let cp = ch as u32;
-        matches!(cp, 0x2600..=0x27BF) || cp >= 0x1F000 || cp == 0xFE0F
+        is_pictographic(cp) || cp == 0xFE0F || cp == 0x20E3
     })
 }
 
