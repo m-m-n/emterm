@@ -14,6 +14,7 @@ import type { WasmGrid } from "./wasm/terminal-core.ts";
 import { setCellSizePxOnGrid } from "./state-wasm-sync.ts";
 import type { SemanticZoneTracker } from "./semantic-zone.ts";
 import type { FoldManager } from "./fold-manager.ts";
+import type { ScrollStateTarget } from "./state-mux-pane-scroll.ts";
 
 /**
  * Snapshot of a mux pane's grid state (primary + alternate screen).
@@ -35,6 +36,15 @@ export interface MuxPaneGridState {
     mouseEncoding: MouseEncoding;
     cursorKeys: CursorKeysMode;
   };
+  /** Renderer scroll offset at the time of save. mux shares a single renderer
+   *  across panes, so this is captured from the renderer passed to
+   *  saveMuxPaneState (ScrollStateTarget). Defaults to 0 for fresh/unsaved
+   *  panes or when no renderer is available. See state-mux-pane-scroll.ts (FR1). */
+  scrollOffset: number;
+  /** Renderer scroll-pin baseline (prevScrollbackLength) at the time of save.
+   *  Restored alongside scrollOffset so per-pane scroll-pin correction uses the
+   *  right baseline after the pane becomes active again (FR2). */
+  scrollPinBaseline: number;
 }
 
 /**
@@ -55,7 +65,10 @@ export interface MuxSaveContext {
  * immediately replace them via swap or restore so no concurrent mutation
  * occurs.
  */
-export function saveMuxPaneState(ctx: MuxSaveContext): MuxPaneGridState {
+export function saveMuxPaneState(
+  ctx: MuxSaveContext,
+  scrollTarget?: ScrollStateTarget,
+): MuxPaneGridState {
   return {
     primaryGrid: ctx.primaryWasmGrid!,
     alternateGrid: ctx.alternateWasmGrid,
@@ -67,6 +80,12 @@ export function saveMuxPaneState(ctx: MuxSaveContext): MuxPaneGridState {
       mouseEncoding: ctx.modes.mouseEncoding,
       cursorKeys: ctx.modes.cursorKeys,
     },
+    // Scroll position is owned by the (mux-shared) renderer, not TerminalState.
+    // Captured here from the supplied ScrollStateTarget so the snapshot is fully
+    // built in one place. Falls back to 0 for fresh/unsaved panes or when no
+    // renderer is available.
+    scrollOffset: scrollTarget?.getScrollOffset() ?? 0,
+    scrollPinBaseline: scrollTarget?.getScrollPinBaseline() ?? 0,
   };
 }
 

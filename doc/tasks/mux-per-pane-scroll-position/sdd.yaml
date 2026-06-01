@@ -1,0 +1,68 @@
+schema_version: 1
+feature: mux-per-pane-scroll-position
+created: 2026-06-01
+
+project:
+  components:
+    main:
+      language: TypeScript
+      build_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"bun run typecheck\""
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"bun test\""
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 69f80087c4f5096ea8607746c71333b0f1d4e51a
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 69f80087c4f5096ea8607746c71333b0f1d4e51a
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 69f80087c4f5096ea8607746c71333b0f1d4e51a
+  - id: implement
+    status: completed
+    completed_at_commit: 69f80087c4f5096ea8607746c71333b0f1d4e51a
+  - id: check
+    status: completed
+    completed_at_commit: 69f80087c4f5096ea8607746c71333b0f1d4e51a
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 69f80087c4f5096ea8607746c71333b0f1d4e51a
+
+requirements:
+  FR1:
+    title: mux pane 切替時にスクロール位置を pane ごとに保存・復元する
+    status: ok
+    tasks:
+      - phase1
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-5
+  FR2:
+    title: 背景 pane の出力時、保存されたスクロール位置に既存 scroll-pin 挙動を適用する
+    status: ok
+    tasks:
+      - phase2
+    tests:
+      - TS-4
+  NFR1:
+    title: スクロール位置の保存・復元は性能影響が無視できること
+    status: ok
+    tasks:
+      - phase1
+    tests: []
+  NFR2:
+    title: 通常タブ (mux 非使用) のスクロール位置分離に回帰がないこと
+    status: ok
+    tasks:
+      - phase1
+      - phase2
+    tests:
+      - TS-6

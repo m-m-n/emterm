@@ -9,6 +9,11 @@ import { MuxMessageType } from "../../terminal/mux/mux-client";
 import type { MuxClient, MuxWindowInfo } from "../../terminal/mux/mux-client";
 import type { TerminalState, MuxPaneGridState } from "../../terminal/state";
 import type { ITerminalRenderer } from "../../terminal";
+import {
+  applyScrollState,
+  resetScrollState,
+  type ScrollStateTarget,
+} from "../../terminal/state-mux-pane-scroll";
 import type { KeyboardHandler } from "../handlers/keyboard";
 import { SettingsService } from "../../settings/settings-service";
 import { recordEvent } from "../diagnostics-history";
@@ -86,6 +91,12 @@ export function createFreshMuxGrid(ctx: MuxWindowManagerContext): void {
   ctx.registerCoreCallbacks(state.getActiveCore());
   const renderer = ctx.getRenderer();
   if (renderer) {
+    // Fresh pane starts at the bottom: reset the shared renderer's scroll
+    // position and scroll-pin baseline so the previous pane's values are not
+    // carried over (FR1/FR2). mux pane scroll baseline is outside the
+    // ITerminalRenderer contract; the CanvasRenderer instance structurally
+    // satisfies ScrollStateTarget.
+    resetScrollState(renderer as unknown as ScrollStateTarget);
     renderer.forceRender(state);
   }
 }
@@ -194,7 +205,13 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
   if (previousIndex != null) {
     const prevPaneId = muxPaneIds[previousIndex];
     if (prevPaneId != null) {
-      const snapshot = state.saveMuxPaneState();
+      // mux pane scroll baseline is outside the ITerminalRenderer contract;
+      // the CanvasRenderer instance structurally satisfies ScrollStateTarget.
+      const prevRenderer = ctx.getRenderer() as unknown as ScrollStateTarget | null;
+      // saveMuxPaneState records the (mux-shared) renderer's scroll position into
+      // the snapshot so the outgoing pane's scroll-up position is restored later
+      // (FR1/FR2). Falls back to 0 when no renderer is available.
+      const snapshot = state.saveMuxPaneState(prevRenderer ?? undefined);
       muxPaneGrids.set(prevPaneId, snapshot);
       logGridSnapshot("save", prevPaneId, snapshot, "switchMuxWindow");
       // Clear callbacks on saved grids to prevent OSC events from inactive panes
@@ -216,6 +233,13 @@ export function switchMuxWindow(ctx: MuxWindowManagerContext, previousIndex?: nu
       logGridSnapshot("restore", newPaneId, savedState, "switchMuxWindow");
       state.restoreMuxPaneState(savedState);
       ctx.registerCoreCallbacks(state.getActiveCore());
+      // Restore the renderer's scroll position to this pane's saved value.
+      // Applied after restoreMuxPaneState so setScrollOffset clamps against
+      // the restored buffer's scrollback length (FR1/FR2).
+      // mux pane scroll baseline is outside the ITerminalRenderer contract;
+      // the CanvasRenderer instance structurally satisfies ScrollStateTarget.
+      const restoreRenderer = ctx.getRenderer() as unknown as ScrollStateTarget | null;
+      if (restoreRenderer) applyScrollState(savedState, restoreRenderer);
     } else {
       // No saved state (first visit, e.g. after reattach). Seed the title
       // from the daemon-provided window name so syncWindowTitleFromState
@@ -618,7 +642,10 @@ export function handleMuxPaneCreated(ctx: MuxWindowManagerContext, paneId: numbe
     if (wasReattachingThisCall) {
       ctx.processPtyPendingDataNow();
     }
-    const snapshot = state!.saveMuxPaneState();
+    // mux pane scroll baseline is outside the ITerminalRenderer contract;
+    // the CanvasRenderer instance structurally satisfies ScrollStateTarget.
+    const prevRenderer = ctx.getRenderer() as unknown as ScrollStateTarget | null;
+    const snapshot = state!.saveMuxPaneState(prevRenderer ?? undefined);
     muxPaneGrids.set(prevPaneId, snapshot);
     logGridSnapshot("save", prevPaneId, snapshot, "handleMuxPaneCreated");
     // Clear callbacks on saved grids to prevent OSC leaking from inactive panes
@@ -963,7 +990,10 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
   const previousIndex = ctx.getActiveMuxWindowIndex();
   const prevPaneId = muxPaneIds[previousIndex];
   if (prevPaneId != null) {
-    const snapshot = state.saveMuxPaneState();
+    // mux pane scroll baseline is outside the ITerminalRenderer contract;
+    // the CanvasRenderer instance structurally satisfies ScrollStateTarget.
+    const prevRenderer = ctx.getRenderer() as unknown as ScrollStateTarget | null;
+    const snapshot = state.saveMuxPaneState(prevRenderer ?? undefined);
     muxPaneGrids.set(prevPaneId, snapshot);
     logGridSnapshot("save", prevPaneId, snapshot, "handleRemoteSwitchWindow");
     // Clear callbacks on saved grids to prevent OSC leaking from inactive panes
@@ -983,6 +1013,10 @@ export function handleRemoteSwitchWindow(ctx: MuxWindowManagerContext, paneId: n
     logGridSnapshot("restore", paneId, savedState, "handleRemoteSwitchWindow");
     state.restoreMuxPaneState(savedState);
     ctx.registerCoreCallbacks(state.getActiveCore());
+    // mux pane scroll baseline is outside the ITerminalRenderer contract;
+    // the CanvasRenderer instance structurally satisfies ScrollStateTarget.
+    const restoreRenderer = ctx.getRenderer() as unknown as ScrollStateTarget | null;
+    if (restoreRenderer) applyScrollState(savedState, restoreRenderer);
   } else {
     const branchActivePtr = corePtrOf(state.getActiveCore());
     console.warn(
