@@ -1305,6 +1305,27 @@ export class CanvasRenderer implements ITerminalRenderer {
 		this.scrollOffset = Math.max(0, Math.min(offset, maxOffset));
 	}
 
+	/**
+	 * Get the scroll-pin baseline (last observed scrollback length).
+	 * Exposed so the mux window manager can save/restore it per pane: the
+	 * baseline is what scroll-pin correction measures growth against, and
+	 * without per-pane save/restore a background pane's growth would be
+	 * compared to the wrong pane's baseline. See doc/tasks/
+	 * mux-per-pane-scroll-position (FR2).
+	 */
+	getScrollPinBaseline(): number {
+		return this.prevScrollbackLength;
+	}
+
+	/**
+	 * Set the scroll-pin baseline directly. Used by mux pane restore so the
+	 * next adjustScrollOffsetForGrowth measures growth against this pane's own
+	 * baseline rather than the previously active pane's.
+	 */
+	setScrollPinBaseline(baseline: number): void {
+		this.prevScrollbackLength = Math.max(0, baseline);
+	}
+
 	// ── Search highlights ─────────────────────────────────────
 
 	setSearchHighlights(matches: SearchMatch[], currentIndex: number): void {
