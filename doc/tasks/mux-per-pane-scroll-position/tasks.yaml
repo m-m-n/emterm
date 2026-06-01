@@ -1,0 +1,7 @@
+tasks:
+  - - id: phase1
+      title: "Phase 1: Per-pane scroll offset save/restore (FR1)"
+      status: completed
+  - - id: phase2
+      title: "Phase 2: Per-pane scroll-pin baseline save/restore (FR2)"
+      status: completed
