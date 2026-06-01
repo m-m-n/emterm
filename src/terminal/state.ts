@@ -51,6 +51,7 @@ import {
   swapPrimaryGrid as swapPrimaryGridFn,
   type MuxPaneGridState,
 } from "./state-mux-pane.ts";
+import type { ScrollStateTarget } from "./state-mux-pane-scroll.ts";
 import {
   bindPrimaryEvictCallback,
   buildFreshPrimary,
@@ -301,15 +302,18 @@ export class TerminalState implements TerminalStateAccessor {
    * Save the current pane's full grid state (primary + alternate) for mux switching.
    * Delegates to state-mux-pane module.
    */
-  saveMuxPaneState(): MuxPaneGridState {
-    return saveMuxPaneStateFn({
-      primaryWasmGrid: this.primaryWasmGrid,
-      alternateWasmGrid: this.alternateWasmGrid,
-      useAlternate: this.useAlternate,
-      title: this._title,
-      iconName: this._iconName,
-      modes: this.modes,
-    });
+  saveMuxPaneState(scrollTarget?: ScrollStateTarget): MuxPaneGridState {
+    return saveMuxPaneStateFn(
+      {
+        primaryWasmGrid: this.primaryWasmGrid,
+        alternateWasmGrid: this.alternateWasmGrid,
+        useAlternate: this.useAlternate,
+        title: this._title,
+        iconName: this._iconName,
+        modes: this.modes,
+      },
+      scrollTarget,
+    );
   }
 
   /**
