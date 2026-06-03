@@ -3,7 +3,7 @@
 /// Extracted from terminal_core.rs: get/set cursor position, style, colors,
 /// flags, and save/restore cursor state.
 use crate::cell::*;
-use crate::terminal_core::{CursorState, TerminalCore, MODE_ORIGIN};
+use crate::terminal_core::{CursorState, MODE_ORIGIN, TerminalCore};
 
 impl TerminalCore {
     // ── Cursor ───────────────────────────────────────────

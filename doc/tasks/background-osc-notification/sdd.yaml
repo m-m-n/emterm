@@ -1,0 +1,103 @@
+schema_version: 1
+feature: background-osc-notification
+created: 2026-06-03
+
+project:
+  components:
+    backend:
+      language: rust
+      build_command: "cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    frontend:
+      language: typescript
+      build_command: "bun run typecheck"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 4c8d057983efbab0dffb1e6e2b0e2fe85c1b890c
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 4c8d057983efbab0dffb1e6e2b0e2fe85c1b890c
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 4c8d057983efbab0dffb1e6e2b0e2fe85c1b890c
+  - id: implement
+    status: completed
+    completed_at_commit: 4c8d057983efbab0dffb1e6e2b0e2fe85c1b890c
+  - id: check
+    status: completed
+    completed_at_commit: 4c8d057983efbab0dffb1e6e2b0e2fe85c1b890c
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 4c8d057983efbab0dffb1e6e2b0e2fe85c1b890c
+
+requirements:
+  FR1:
+    title: Hidden-window OSC 9 notification detection (process_hidden scan)
+    status: ok
+    tasks: [phase-1-scanner-osc9, phase-2-hidden-delivery]
+    tests: [TS-8, TS-10]
+  FR2:
+    title: mux detached-pane OSC 9 detection and forward to GUI
+    status: ok
+    tasks: [phase-1-scanner-osc9, phase-3-mux-delivery]
+    tests: [TS-9, TS-11, TS-14]
+  FR3:
+    title: Non-active regular tab notification (guarantee + regression)
+    status: ok
+    tasks: [phase-4-regular-tab-verify]
+    tests: [TS-13]
+  FR4:
+    title: Progress sequences (OSC 9;4) excluded from background notification
+    status: ok
+    tasks: [phase-1-scanner-osc9]
+    tests: [TS-3]
+  FR5:
+    title: No duplicate firing on resume/reattach (exclude from replay)
+    status: ok
+    tasks: [phase-1-scanner-osc9, phase-2-hidden-delivery, phase-3-mux-delivery]
+    tests: [TS-7]
+  FR6:
+    title: Notification content "eMterm"/message and permission respected
+    status: ok
+    tasks: [phase-2-hidden-delivery, phase-3-mux-delivery]
+    tests: [TS-10, TS-11, TS-12]
+  FR7:
+    title: BEL/ST termination and chunk-split recovery
+    status: ok
+    tasks: [phase-1-scanner-osc9]
+    tests: [TS-1, TS-2, TS-4]
+  NFR1:
+    title: Per-byte overhead comparable to PassthroughScanner; no foreground impact
+    status: ok
+    tasks: [phase-1-scanner-osc9]
+    tests: []
+  NFR2:
+    title: Bounded partial buffer via PARTIAL_SEQUENCE_MAX
+    status: ok
+    tasks: [phase-1-scanner-osc9]
+    tests: [TS-5]
+  NFR3:
+    title: OS notification fired only from GUI process; daemon forwards
+    status: ok
+    tasks: [phase-2-hidden-delivery, phase-3-mux-delivery]
+    tests: [TS-9, TS-11]
+  NFR4:
+    title: Linux/Windows only (no macOS)
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: Foreground OSC 9 behavior unchanged (no double notification)
+    status: ok
+    tasks: [phase-2-hidden-delivery, phase-3-mux-delivery]
+    tests: [TS-14]

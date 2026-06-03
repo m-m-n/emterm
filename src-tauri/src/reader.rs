@@ -16,6 +16,29 @@ const HALF_HIGH_WATER_BYTES: usize = HIGH_WATER_BYTES / 2;
 /// keeping up at this level — useful to see right before a stall.
 const THREE_QUARTER_HIGH_WATER_BYTES: usize = HIGH_WATER_BYTES * 3 / 4;
 
+/// Emit an `osc_notification` event to the frontend for each recognized
+/// OSC 9 desktop-notification message produced on the hidden processing path.
+///
+/// Mirrors the existing `app.emit(...)` pattern used for `pty_exit`. The
+/// frontend listener fires the OS notification via the permission-gated
+/// `sendNotification` sink. These events are fire-and-forget side effects and
+/// are NOT part of the resume/replay stream, so no duplicate fires on resume.
+fn emit_osc_notifications(app: &AppHandle, session_id: &str, messages: Vec<String>) {
+    for message in messages {
+        let payload = OscNotificationPayload {
+            session_id: session_id.to_string(),
+            message,
+        };
+        if let Err(e) = app.emit("osc_notification", payload) {
+            log::warn!(
+                "[WARN][BACKEND] reader: failed to emit osc_notification for session {}: {}",
+                session_id,
+                e
+            );
+        }
+    }
+}
+
 /// Spawns a dedicated thread to read output from a PTY session.
 ///
 /// This thread continuously reads from the PTY and sends raw bytes via Channel:
@@ -240,7 +263,8 @@ pub fn spawn_reader_thread(
                     // add_sent + wait_for_drain entirely.
                     if let Some(vis) = visibility.as_ref() {
                         if !vis.is_visible() {
-                            vis.process_hidden(&batch);
+                            let notifications = vis.process_hidden(&batch);
+                            emit_osc_notifications(&app, &session_id, notifications);
                             continue;
                         }
                     }
@@ -314,7 +338,8 @@ pub fn spawn_reader_thread(
                         // we held belongs on the hidden path now.
                         if let Some(vis) = visibility.as_ref() {
                             if !vis.is_visible() {
-                                vis.process_hidden(&batch);
+                                let notifications = vis.process_hidden(&batch);
+                                emit_osc_notifications(&app, &session_id, notifications);
                                 continue;
                             }
                         }

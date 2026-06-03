@@ -20,6 +20,16 @@ pub type TitleChangeSender = mpsc::Sender<(PaneId, String)>;
 /// Set to Some(tx) when a GUI client is connected; None when detached.
 pub type SharedTitleSender = Arc<StdMutex<Option<TitleChangeSender>>>;
 
+/// Channel for OSC 9 desktop-notification messages detected on a pane's
+/// background (Detached) output (pane_id, message).
+pub type NotificationSender = mpsc::Sender<(PaneId, String)>;
+
+/// Daemon-lifetime notification sender shared with each pane reader thread.
+/// Unlike `SharedTitleSender`, this is always populated (the daemon-level
+/// channel lives as long as the daemon), so a Detached pane can surface a
+/// notification even when no GUI client is currently attached.
+pub type SharedNotificationSender = Arc<StdMutex<Option<NotificationSender>>>;
+
 /// Thread-safe shared reference to a shadow VT100 parser.
 pub type SharedShadowParser = Arc<StdMutex<vt100::Parser>>;
 
@@ -334,6 +344,10 @@ pub struct MuxPane {
     pub title: Arc<StdMutex<Option<String>>>,
     /// Swappable title change sender (reader thread reads from this on each title change).
     pub title_sender: SharedTitleSender,
+    /// Daemon-lifetime notification sender. The reader thread forwards OSC 9
+    /// desktop notifications detected on Detached output through this channel
+    /// so the daemon can relay them to the GUI client.
+    pub notification_sender: SharedNotificationSender,
     /// Per-pane raw passthrough buffer for image / Markdown OSC sequences
     /// captured while the pane is detached (network detach OR client hidden).
     /// Drained into the reattach / resume snapshot.
@@ -371,6 +385,7 @@ impl MuxPane {
             cwd: Arc::new(StdMutex::new(None)),
             title: Arc::new(StdMutex::new(None)),
             title_sender: Arc::new(StdMutex::new(None)),
+            notification_sender: Arc::new(StdMutex::new(None)),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
@@ -437,6 +452,7 @@ impl MuxPane {
             cwd: Arc::new(StdMutex::new(None)),
             title: Arc::new(StdMutex::new(None)),
             title_sender: Arc::new(StdMutex::new(None)),
+            notification_sender: Arc::new(StdMutex::new(None)),
             raw_passthrough: Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),

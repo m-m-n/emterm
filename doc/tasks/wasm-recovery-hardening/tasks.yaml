@@ -1,0 +1,10 @@
+tasks:
+  - id: phase1-fix-reset-and-build-guard
+    title: "patch-wasm-bindgen.sh の __wbg_reset から heap/heap_next 参照を除去し、注入コードの参照識別子をビルド時検査するガードを追加（FR1, FR2 / TS-1, TS-2, TS-8, TS-9）"
+    status: completed
+  - id: phase2-detect-exports-lost-crash
+    title: "tryRecoverFromWasmCrash の分類条件に exports消失型 TypeError（terminalcore_ プレフィックス判定）を追加（FR3 / TS-3, TS-4）"
+    status: completed
+  - id: phase3-cap-total-scrollback
+    title: "全ペイン合計の scrollback 総量上限と最古行 eviction を実装（上限メトリクス・値の決定含む）（FR4, NFR2 / TS-5, TS-6, TS-7）"
+    status: completed

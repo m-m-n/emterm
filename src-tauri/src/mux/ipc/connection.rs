@@ -24,7 +24,7 @@ use super::protocol::*;
 use super::reattach::detach_session_panes;
 use super::statusbar::{StatusBarEngine, execute_command};
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{PtyOutputChunk, TitleChangeSender};
+use crate::mux::session::pane::{NotificationSender, PtyOutputChunk, TitleChangeSender};
 
 /// Handshake timeout: client must send Hello within this duration.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,6 +41,7 @@ pub async fn handle_connection<S>(
     session_manager: Arc<Mutex<SessionManager>>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     daemon_title_tx: TitleChangeSender,
+    daemon_notification_tx: NotificationSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -119,6 +120,7 @@ pub async fn handle_connection<S>(
             &session_manager,
             &shutdown_tx,
             &daemon_title_tx,
+            &daemon_notification_tx,
         )
         .await;
         return;
@@ -140,6 +142,10 @@ pub async fn handle_connection<S>(
     // RenameWindow happens via notify_rx, which is populated by the daemon
     // task when it updates window.name.
     let title_tx = daemon_title_tx;
+    // Daemon-lifetime notification sender: panes created on this connection
+    // forward Detached-pane OSC 9 notifications through it; the daemon
+    // notification task relays them to the GUI client (FR2).
+    let notification_tx = daemon_notification_tx;
 
     // NOTE: Reattach data is NOT sent here. The client must send an Attach
     // message after its output stream is ready. This eliminates the timing
@@ -263,6 +269,7 @@ pub async fn handle_connection<S>(
                             &mut statusbar_engine,
                             &pane_cwd_map,
                             &title_tx,
+                            &notification_tx,
                             &mut kick_rx,
                             &visible_state,
                         ).await {
@@ -482,6 +489,7 @@ async fn handle_cli_client<S>(
     session_manager: &Arc<Mutex<SessionManager>>,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
     daemon_title_tx: &TitleChangeSender,
+    daemon_notification_tx: &NotificationSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -522,6 +530,7 @@ async fn handle_cli_client<S>(
                 &pane_output_tx,
                 active_session_id,
                 daemon_title_tx,
+                daemon_notification_tx,
             )
             .await;
 
@@ -628,6 +637,7 @@ async fn route_message<S>(
     statusbar_engine: &mut StatusBarEngine,
     pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
     title_tx: &TitleChangeSender,
+    notification_tx: &NotificationSender,
     kick_rx: &mut Option<oneshot::Receiver<()>>,
     visible_state: &Arc<AtomicBool>,
 ) -> Result<(), bool>
@@ -643,6 +653,7 @@ where
                 pane_output_tx,
                 *active_session_id,
                 title_tx,
+                notification_tx,
             )
             .await?;
             // Register pane cwd Arcs for newly created panes

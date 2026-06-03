@@ -185,6 +185,12 @@ impl SessionVisibilityState {
     ///   1. feed the shadow parser
     ///   2. extract passthrough sequences (Kitty / SIXEL / OSC 9999) and
     ///      append to the raw passthrough buffer
+    ///   3. surface any recognized OSC 9 desktop-notification messages
+    ///
+    /// Returns the recognized OSC 9 notification messages (FR1). These are
+    /// side-effect events and are deliberately kept OUT of the raw passthrough
+    /// buffer so they fire once and are never replayed on resume (FR5). The
+    /// caller (reader thread) forwards them to the frontend notification sink.
     ///
     /// Bytes are NOT forwarded to the frontend channel.
     ///
@@ -194,9 +200,9 @@ impl SessionVisibilityState {
     /// parser is rebuilt at its previous dimensions; the snapshot for the
     /// next visible-resume will reflect a cleared screen rather than
     /// crashing the process.
-    pub fn process_hidden(&self, data: &[u8]) {
+    pub fn process_hidden(&self, data: &[u8]) -> Vec<String> {
         if data.is_empty() {
-            return;
+            return Vec::new();
         }
         let mut inner = self.inner.lock().expect("visibility state poisoned");
         let shadow_ref = &mut inner.shadow;
@@ -219,6 +225,7 @@ impl SessionVisibilityState {
                 );
             }
         }
+        inner.scanner.take_notifications()
     }
 
     /// Feed the shadow parser while visible.
@@ -672,6 +679,49 @@ mod visibility_state_tests {
         s.process_hidden(b"x");
         let snap = s.set_visible_and_take_snapshot().expect("snapshot");
         assert!(snap.starts_with(b"\x1b[H\x1b[2J"));
+    }
+
+    /// TS-8: process_hidden surfaces an OSC 9 notification message and does
+    /// NOT add it to the passthrough buffer (so it is never replayed).
+    #[test]
+    fn visibility_process_hidden_surfaces_osc9_notification() {
+        let s = SessionVisibilityState::new(80, 24, 4096);
+        s.set_hidden();
+        let notifications = s.process_hidden(b"work\x1b]9;build done\x07more");
+        assert_eq!(notifications, vec!["build done".to_string()]);
+        // The OSC 9 bytes must NOT be in the resume snapshot passthrough.
+        let snap = s.set_visible_and_take_snapshot().expect("snapshot");
+        let snap_str = String::from_utf8_lossy(&snap);
+        assert!(
+            !snap_str.contains("\x1b]9;build done"),
+            "OSC 9 notification must not be replayed in the snapshot"
+        );
+    }
+
+    /// TS-3 / FR4: process_hidden does NOT surface a progress sequence.
+    #[test]
+    fn visibility_process_hidden_ignores_osc9_progress() {
+        let s = SessionVisibilityState::new(80, 24, 4096);
+        s.set_hidden();
+        let notifications = s.process_hidden(b"\x1b]9;4;1;50\x07");
+        assert!(
+            notifications.is_empty(),
+            "progress sequence must not surface a notification"
+        );
+    }
+
+    /// FR5: a notification surfaced while hidden is not re-surfaced when the
+    /// next hidden batch contains no new OSC 9, and is absent from the resume
+    /// snapshot — so window restore cannot replay it.
+    #[test]
+    fn visibility_process_hidden_notification_not_resurfaced() {
+        let s = SessionVisibilityState::new(80, 24, 4096);
+        s.set_hidden();
+        let first = s.process_hidden(b"\x1b]9;done\x07");
+        assert_eq!(first, vec!["done".to_string()]);
+        // Subsequent hidden batch without OSC 9: no notification re-emitted.
+        let second = s.process_hidden(b"plain output\r\n");
+        assert!(second.is_empty());
     }
 
     #[test]
