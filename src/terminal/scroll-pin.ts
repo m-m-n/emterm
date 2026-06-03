@@ -10,10 +10,14 @@
  *
  * Behavior:
  *   - Δ = currSbLen - prevSbLen
- *   - Δ <= 0 (clear, alt-screen no-op, resize that shrinks scrollback,
- *     partial DECSTBM scroll region without push, etc.):
- *       scrollOffset is left unchanged, prevSbLen is re-baselined to
+ *   - Δ < 0 (scrollback shrank: clear, alt-screen no-op, resize that
+ *     shrinks scrollback, active eviction, partial DECSTBM scroll region
+ *     without push, etc.):
+ *       scrollOffset is clamped to currSbLen so a scrolled-up viewport
+ *       can't point past the new top; prevSbLen is re-baselined to
  *       currSbLen. (FR4 reset cases / FR5 / FR6)
+ *   - Δ == 0 (no change) or scrollOffset === 0 (follow-the-tail):
+ *       scrollOffset is left unchanged, prevSbLen re-baselined.
  *   - Δ > 0 && scrollOffset === 0:
  *       follow-the-tail mode; scrollOffset stays 0 (FR2).
  *   - Δ > 0 && scrollOffset > 0:
@@ -31,7 +35,16 @@ export function computeAdjustedScrollOffset(
 ): AdjustedScrollOffset {
 	const delta = currSbLen - prevSbLen;
 
-	if (delta <= 0 || scrollOffset === 0) {
+	if (delta < 0) {
+		// Scrollback shrank (clear, resize, or active eviction): clamp the
+		// offset so a scrolled-up viewport can't point past the new top.
+		return {
+			nextScrollOffset: scrollOffset > currSbLen ? currSbLen : scrollOffset,
+			nextPrevSbLen: currSbLen,
+		};
+	}
+
+	if (delta === 0 || scrollOffset === 0) {
 		return {
 			nextScrollOffset: scrollOffset,
 			nextPrevSbLen: currSbLen,

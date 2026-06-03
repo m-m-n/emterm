@@ -1,5 +1,5 @@
-use super::state::State;
 use super::Parser;
+use super::state::State;
 use crate::parser_types::ParsedAction;
 
 impl Parser {

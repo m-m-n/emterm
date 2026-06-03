@@ -14,18 +14,22 @@ if [ ! -f "$WASM_JS" ]; then
 fi
 
 # --- Patch JS ---
+# Identifiers reset by the injected __wbg_reset body. Each MUST be declared in
+# the generated module, otherwise the runtime reset() throws ReferenceError and
+# WASM auto-recovery silently breaks. The post-patch guard below enforces this.
+# NOTE: `heap` / `heap_next` were removed — current wasm-bindgen no longer emits
+# the legacy object table, so resetting them would ReferenceError.
+RESET_IDENTIFIERS='wasm cachedDataViewMemory0 cachedUint16ArrayMemory0 cachedUint8ArrayMemory0 WASM_VECTOR_LEN'
+
 if ! grep -q '__wbg_reset' "$WASM_JS"; then
-  # Build the reset function and updated export line
+  # Build the reset function and updated export line.
+  # Reset only state that the current generated module actually declares.
   RESET_FN='function __wbg_reset() {
     wasm = undefined;
     cachedDataViewMemory0 = null;
     cachedUint16ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     WASM_VECTOR_LEN = 0;
-    heap.length = 128;
-    heap.fill(undefined);
-    heap.push(undefined, null, true, false);
-    heap_next = heap.length;
 }'
   EXPORT_LINE='export { initSync, __wbg_init as default, __wbg_reset as reset };'
 
@@ -47,6 +51,29 @@ if ! grep -q '__wbg_reset' "$WASM_JS"; then
     exit 1
   fi
 fi
+
+# --- Post-patch guard (FR2) ---
+# Every identifier the injected __wbg_reset writes MUST be declared/defined in
+# the generated module. If wasm-bindgen output drifts and drops one, fail the
+# build here (non-zero) naming the missing identifier, so recovery never
+# silently breaks at runtime again.
+guard_failed=0
+for ident in $RESET_IDENTIFIERS; do
+  # A declaration looks like `let <ident>`, `var <ident>`, `const <ident>`,
+  # or appears in a combined declarator list `let a, <ident>;`.
+  if grep -Eq "(^|[^A-Za-z0-9_])(let|var|const)[[:space:]]+([A-Za-z0-9_]+[[:space:]]*,[[:space:]]*)*${ident}([[:space:]]*[,;=]|[[:space:]]*$)" "$WASM_JS"; then
+    continue
+  fi
+  echo "Error: __wbg_reset references identifier '${ident}' which is not declared in $WASM_JS" >&2
+  echo "       wasm-bindgen output likely drifted; update RESET_FN / RESET_IDENTIFIERS in $0" >&2
+  guard_failed=1
+done
+
+if [ "$guard_failed" -ne 0 ]; then
+  echo "Error: patch guard failed — injected reset references missing identifier(s)" >&2
+  exit 1
+fi
+echo "Patch guard passed: __wbg_reset references only declared identifiers"
 
 # --- Patch d.ts ---
 if [ -f "$WASM_DTS" ] && ! grep -q 'export function reset' "$WASM_DTS"; then

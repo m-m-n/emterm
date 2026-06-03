@@ -21,7 +21,7 @@
 /// - ring_head ∈ [0, rows)
 /// - scrollback_slim.len() == scrollback_wrapped.len() ≤ scrollback_capacity
 use crate::cell::*;
-use crate::slim_cell::{cell_to_slim, slim_overflow_str, slim_to_cell, SlimCell};
+use crate::slim_cell::{SlimCell, cell_to_slim, slim_overflow_str, slim_to_cell};
 use crate::terminal_core::TerminalCore;
 
 // ── Scroll Event ─────────────────────────────────────────
@@ -443,6 +443,37 @@ impl TerminalCore {
         }
         self.scrollback_wrapped.clear();
         self.mark_all_dirty();
+    }
+
+    /// Bounded scrollback eviction (FR4): drop oldest scrollback rows until the
+    /// scrollback length is at most `target_len`, releasing intern refcounts for
+    /// each dropped row. Used by the cross-pane global scrollback budget
+    /// enforcer to shed memory pressure from the oldest history.
+    ///
+    /// No-op when current length is already ≤ `target_len`. Returns the number
+    /// of rows evicted.
+    pub fn evict_oldest_scrollback(&mut self, target_len: u32) -> u32 {
+        let target = target_len as usize;
+        let current = self.scrollback_slim.len();
+        if current <= target {
+            return 0;
+        }
+        let to_evict = current - target;
+        let mut evicted = 0u32;
+        for _ in 0..to_evict {
+            match self.scrollback_slim.pop_front() {
+                Some(old) => {
+                    self.release_slim_row(&old);
+                    self.scrollback_wrapped.pop_front();
+                    evicted += 1;
+                }
+                None => break,
+            }
+        }
+        if evicted > 0 {
+            self.mark_all_dirty();
+        }
+        evicted
     }
 
     /// Resize with reflow. Returns packed cursor: (col << 16) | row.
@@ -1091,10 +1122,81 @@ mod tests {
         assert_eq!(core.styles.live_entries(), 1);
     }
 
+    // ── Bounded eviction (FR4) tests ────────────────────────
+
+    #[test]
+    fn test_evict_oldest_scrollback_to_target() {
+        let mut core = TerminalCore::new(10, 3, 100);
+        // Push 5 distinct rows into scrollback.
+        for i in 0..5u32 {
+            core.set_cell(0, 0, &i.to_string(), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            core.scroll_up_internal(1);
+        }
+        assert_eq!(core.get_scrollback_length(), 5);
+        // "0","1","2","3","4" oldest-first.
+        assert_eq!(core.get_scrollback_text(0), "0");
+
+        // Evict down to 2 lines: drops the 3 oldest ("0","1","2").
+        let evicted = core.evict_oldest_scrollback(2);
+        assert_eq!(evicted, 3);
+        assert_eq!(core.get_scrollback_length(), 2);
+        assert_eq!(core.get_scrollback_text(0), "3");
+        assert_eq!(core.get_scrollback_text(1), "4");
+    }
+
+    #[test]
+    fn test_evict_oldest_scrollback_noop_when_below_target() {
+        let mut core = TerminalCore::new(10, 3, 100);
+        for i in 0..3u32 {
+            core.set_cell(0, 0, &i.to_string(), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            core.scroll_up_internal(1);
+        }
+        assert_eq!(core.get_scrollback_length(), 3);
+        // Target above current → no eviction.
+        let evicted = core.evict_oldest_scrollback(10);
+        assert_eq!(evicted, 0);
+        assert_eq!(core.get_scrollback_length(), 3);
+        // Target equal to current → no eviction.
+        let evicted = core.evict_oldest_scrollback(3);
+        assert_eq!(evicted, 0);
+        assert_eq!(core.get_scrollback_length(), 3);
+    }
+
+    #[test]
+    fn test_evict_oldest_scrollback_releases_refcounts() {
+        let mut core = TerminalCore::new(10, 3, 100);
+        // 5 rows each with a distinct style.
+        for i in 0..5u32 {
+            core.set_cell(0, 0, "A", 1, 2, i as u8, 0, 0, 0, 0, 0, 0, 0);
+            core.scroll_up_internal(1);
+        }
+        assert_eq!(core.get_scrollback_length(), 5);
+        core.evict_oldest_scrollback(2);
+        assert_eq!(core.get_scrollback_length(), 2);
+        // Only the 2 surviving rows' styles (+ default) remain live.
+        assert!(
+            core.styles.live_entries() <= 3,
+            "got {} live styles",
+            core.styles.live_entries()
+        );
+    }
+
+    #[test]
+    fn test_evict_oldest_scrollback_to_zero() {
+        let mut core = TerminalCore::new(10, 3, 100);
+        for i in 0..4u32 {
+            core.set_cell(0, 0, &i.to_string(), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            core.scroll_up_internal(1);
+        }
+        let evicted = core.evict_oldest_scrollback(0);
+        assert_eq!(evicted, 4);
+        assert_eq!(core.get_scrollback_length(), 0);
+    }
+
     #[test]
     fn test_eviction_releases_refcounts() {
         let mut core = TerminalCore::new(10, 3, 2); // capacity 2 scrollback rows
-                                                    // Push 5 distinct rows; only the last 2 should remain.
+        // Push 5 distinct rows; only the last 2 should remain.
         for i in 0..5u32 {
             // Use a unique style per row by varying RGB.
             core.set_cell(0, 0, "A", 1, 2, i as u8, 0, 0, 0, 0, 0, 0, 0);

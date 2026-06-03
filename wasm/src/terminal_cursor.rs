@@ -5,7 +5,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::cell::*;
-use crate::terminal_core::{CursorState, TerminalCore, MODE_ORIGIN};
+use crate::terminal_core::{CursorState, MODE_ORIGIN, TerminalCore};
 
 #[wasm_bindgen]
 impl TerminalCore {
