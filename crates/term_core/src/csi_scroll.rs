@@ -57,7 +57,7 @@ mod tests {
         }
         let result = core.handle_scroll_up(1);
         assert_eq!(result, 0); // WASM handled internally
-                               // Row 2 should now have old row 3 content
+        // Row 2 should now have old row 3 content
         assert_eq!(core.get_cell_char(0, 2), "3");
         // Last row in region should be blank
         assert_eq!(core.get_cell_char(0, 7), " ");
@@ -74,8 +74,8 @@ mod tests {
         }
         let result = core.handle_scroll_up(3);
         assert_eq!(result, 0); // Always 0 (WASM-internal)
-                               // No scrollback since scrollback_lines=0 (at capacity)
-                               // Viewport rows shifted up by 3
+        // No scrollback since scrollback_lines=0 (at capacity)
+        // Viewport rows shifted up by 3
         assert_eq!(core.get_cell_char(0, 0), "D"); // old row 3
         assert_eq!(core.get_cell_char(0, 1), "E"); // old row 4
         assert_eq!(core.get_cell_char(0, 2), " "); // cleared

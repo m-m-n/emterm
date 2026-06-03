@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { validateSocketPath, parseMuxOsc, decodeStatusUpdateMsg, decodeWelcomeMsg, MuxMessageType } from "./mux-client";
+import { validateSocketPath, parseMuxOsc, decodeStatusUpdateMsg, decodeBincodeString, decodeWelcomeMsg, MuxClient, MuxMessageType } from "./mux-client";
 
 describe("validateSocketPath", () => {
   test("rejects path traversal", () => {
@@ -80,6 +80,86 @@ describe("MuxMessageType", () => {
 
   test("MoveWindow has correct value", () => {
     expect(MuxMessageType.MoveWindow).toBe(0x1a);
+  });
+
+  test("Notify has correct value", () => {
+    expect(MuxMessageType.Notify).toBe(0x1c);
+  });
+});
+
+describe("decodeBincodeString", () => {
+  /** Helper: encode a string as bincode (u64 LE length + UTF-8 bytes). */
+  function encodeBincodeString(s: string): Uint8Array {
+    const encoded = new TextEncoder().encode(s);
+    const buf = new Uint8Array(8 + encoded.length);
+    const view = new DataView(buf.buffer);
+    view.setBigUint64(0, BigInt(encoded.length), true);
+    buf.set(encoded, 8);
+    return buf;
+  }
+
+  test("decodes an ASCII message", () => {
+    expect(decodeBincodeString(encodeBincodeString("build done"))).toBe("build done");
+  });
+
+  test("decodes a unicode message", () => {
+    expect(decodeBincodeString(encodeBincodeString("ビルド完了 🎉"))).toBe("ビルド完了 🎉");
+  });
+
+  test("decodes an empty message", () => {
+    expect(decodeBincodeString(encodeBincodeString(""))).toBe("");
+  });
+
+  test("returns null on a truncated frame", () => {
+    expect(decodeBincodeString(new Uint8Array([1, 2, 3]))).toBeNull();
+  });
+});
+
+describe("MuxClient Notify dispatch", () => {
+  /** Helper: encode a bincode String payload (u64 LE length + UTF-8 bytes). */
+  function encodeBincodeString(s: string): Uint8Array {
+    const encoded = new TextEncoder().encode(s);
+    const buf = new Uint8Array(8 + encoded.length);
+    new DataView(buf.buffer).setBigUint64(0, BigInt(encoded.length), true);
+    buf.set(encoded, 8);
+    return buf;
+  }
+
+  test("TS-11: Notify message invokes the onNotify callback with the message", () => {
+    const client = new MuxClient();
+    const received: string[] = [];
+    client.setOnNotify((message) => received.push(message));
+
+    client.handleIncomingApc(
+      MuxMessageType.Notify,
+      7,
+      encodeBincodeString("deploy finished"),
+    );
+
+    expect(received).toEqual(["deploy finished"]);
+  });
+
+  test("TS-12: with no onNotify callback set, dispatch does not throw", () => {
+    const client = new MuxClient();
+    expect(() =>
+      client.handleIncomingApc(
+        MuxMessageType.Notify,
+        7,
+        encodeBincodeString("ignored"),
+      ),
+    ).not.toThrow();
+  });
+
+  test("a truncated Notify payload does not invoke the callback", () => {
+    const client = new MuxClient();
+    let calls = 0;
+    client.setOnNotify(() => {
+      calls += 1;
+    });
+
+    client.handleIncomingApc(MuxMessageType.Notify, 7, new Uint8Array([1, 2]));
+
+    expect(calls).toBe(0);
   });
 });
 

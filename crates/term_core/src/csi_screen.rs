@@ -241,7 +241,7 @@ mod tests {
         }
         core.set_cursor(7, 0);
         core.handle_erase_characters(100); // More than remaining
-                                           // Cols 0-6 still 'H'
+        // Cols 0-6 still 'H'
         for c in 0..7 {
             assert_eq!(core.get_cell_char(c, 0), "H");
         }

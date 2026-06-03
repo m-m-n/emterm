@@ -18,8 +18,8 @@ use super::reattach::{
 };
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    PaneId, PtyOutputChunk, SharedShadowParser, TitleChangeSender, evaluate_output_target,
-    resume_pane_with_permit,
+    NotificationSender, PaneId, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
+    evaluate_output_target, resume_pane_with_permit,
 };
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
@@ -34,6 +34,7 @@ pub(super) async fn handle_create_window<S>(
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     active_session_id: u32,
     title_tx: &TitleChangeSender,
+    notification_tx: &NotificationSender,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -87,6 +88,7 @@ where
         spawned,
         pane_output_tx,
         title_tx,
+        notification_tx,
     ) {
         Some(id) => id,
         None => {

@@ -5,7 +5,7 @@
 //! - PTY data uses raw bytes payload
 //! - Control messages use bincode-serialized payload
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 
 /// Protocol version for handshake compatibility check.
@@ -60,6 +60,9 @@ pub enum MessageType {
     RequestPaneSnapshot = 0x19,
     MoveWindow = 0x1A,
     SetVisibility = 0x1B,
+    /// Daemon-originated desktop notification (OSC 9) detected on a Detached
+    /// pane. Forwarded to the GUI client, which fires the OS notification.
+    Notify = 0x1C,
 }
 
 impl MessageType {
@@ -91,6 +94,7 @@ impl MessageType {
             0x19 => Some(Self::RequestPaneSnapshot),
             0x1A => Some(Self::MoveWindow),
             0x1B => Some(Self::SetVisibility),
+            0x1C => Some(Self::Notify),
             _ => None,
         }
     }
@@ -183,6 +187,17 @@ pub struct StatusUpdateMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameWindowMsg {
     pub name: String,
+}
+
+/// Desktop-notification request pushed from daemon to GUI.
+///
+/// Carries the OSC 9 message body recognized on a Detached pane. The GUI
+/// client fires the OS notification (permission-gated). Decoded on the
+/// frontend as a bincode `String` (u64 LE length + UTF-8 bytes), matching
+/// the existing `RenameWindowMsg` wire shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifyMsg {
+    pub message: String,
 }
 
 /// SetVisibility payload (1 byte: 0x01 = visible, 0x00 = hidden).
@@ -356,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_message_type_round_trip() {
-        for i in 0x01..=0x1Bu8 {
+        for i in 0x01..=0x1Cu8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed -- must return None
                 continue;
@@ -367,8 +382,39 @@ mod tests {
         assert!(MessageType::from_u8(0x00).is_none());
         assert!(MessageType::from_u8(0x11).is_none());
         assert_eq!(MessageType::from_u8(0x1B), Some(MessageType::SetVisibility));
-        assert!(MessageType::from_u8(0x1c).is_none());
+        assert_eq!(MessageType::from_u8(0x1C), Some(MessageType::Notify));
+        assert!(MessageType::from_u8(0x1d).is_none());
         assert!(MessageType::from_u8(0xff).is_none());
+    }
+
+    #[test]
+    fn test_notify_message_type() {
+        assert_eq!(MessageType::from_u8(0x1C), Some(MessageType::Notify));
+        assert_eq!(MessageType::Notify as u8, 0x1C);
+    }
+
+    #[test]
+    fn test_notify_msg_round_trip() {
+        let msg = NotifyMsg {
+            message: "build done".to_string(),
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: NotifyMsg = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.message, "build done");
+    }
+
+    #[test]
+    fn test_notify_msg_via_mux_message() {
+        let notify = NotifyMsg {
+            message: "ビルド完了 🎉".to_string(),
+        };
+        let msg = MuxMessage::control(MessageType::Notify, 7, &notify);
+        let body = msg.to_frame_body();
+        let parsed = MuxMessage::from_frame_body(&body).unwrap();
+        assert_eq!(parsed.msg_type, MessageType::Notify);
+        assert_eq!(parsed.pane_id, 7);
+        let decoded: NotifyMsg = parsed.decode_payload().unwrap();
+        assert_eq!(decoded.message, "ビルド完了 🎉");
     }
 
     #[test]
@@ -700,7 +746,7 @@ mod tests {
 
     #[test]
     fn test_apc_round_trip_all_message_types() {
-        for i in 0x01..=0x1Bu8 {
+        for i in 0x01..=0x1Cu8 {
             if i == 0x11 {
                 // 0x11 (SplitPane) was removed
                 continue;

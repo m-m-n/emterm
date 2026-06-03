@@ -44,6 +44,19 @@ pub struct TabCountChangedPayload {
     pub count: usize,
 }
 
+/// Payload for the `osc_notification` event.
+///
+/// Emitted from the reader thread when an `OSC 9 ; <message>` desktop
+/// notification is recognized on the background (hidden) processing path.
+/// The frontend listener fires the OS desktop notification via the existing
+/// `sendNotification` sink (permission-gated). Notifications are
+/// fire-and-forget side effects and are NOT part of the resume/replay stream.
+#[derive(Serialize, Clone)]
+pub struct OscNotificationPayload {
+    pub session_id: String,
+    pub message: String,
+}
+
 /// Payload for image_event IPC channel.
 ///
 /// Wraps an `ImageEvent` with the associated session ID for routing

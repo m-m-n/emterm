@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use crate::cell::{Cell, PackedColor};
 use crate::char_table::CharTable;
-use crate::slim_cell::{cell_to_slim, slim_to_cell, SlimCell};
+use crate::slim_cell::{SlimCell, cell_to_slim, slim_to_cell};
 use crate::style_table::StyleTable;
 
 #[cfg(test)]

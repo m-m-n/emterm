@@ -3,6 +3,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   calculateTerminalSize,
   measureCharacterSize,
@@ -56,12 +57,14 @@ import {
   type PtyHandlerHandle,
 } from "./pty-handler";
 import { processPendingOscQueue, type OscHandlerContext } from "./osc-handler";
+import { ScrollbackBudgetEnforcer, type ScrollbackPane } from "./mux-scrollback-budget";
 import { setupResizeObserver, handleCharSizeChange, type ResizeHandlerContext } from "./resize-handler";
 import { handleBell, handleWheel, handleMiddleClickPaste } from "./ui-handler";
 import { wireInputEvents } from "./input-wiring";
 import { setupOverlayBindings } from "./overlay-setup";
 import { setupSftpFileDrop } from "./sftp-setup";
 import { buildVisibilityController } from "./visibility-setup";
+import { registerBackgroundNotificationListener } from "../terminal/background-notification-listener";
 import { DiagnosticsController } from "./diagnostics";
 import { registerCoreCallbacks as registerCoreCallbacksImpl } from "./core-callbacks";
 import {
@@ -107,6 +110,8 @@ export class TerminalApp {
   public muxStatusUpdateCallback: ((msg: { left: string; right: string }) => void) | null = null;
   private muxClient: MuxClient | null = null;
   private visibilityController: VisibilityController | null = null;
+  /** Unlisten for the backend `osc_notification` (hidden-window) event. */
+  private backgroundNotificationUnlisten: (() => void) | null = null;
   private inMuxMode = false;
   private muxWindows: { id: number; name: string }[] = [];
   private activeMuxWindowIndex = 0;
@@ -117,6 +122,13 @@ export class TerminalApp {
   private muxPaneGrids: Map<number, import("../terminal/state").MuxPaneGridState> = new Map(); // Full pane state per pane
   private muxOriginalGrid: WasmGrid | null = null; // Original grid saved before mux mode
   private muxDetachedGrids: Map<string, Uint8Array> = new Map(); // Saved snapshots across detach/reattach (keyed by socket+session)
+  /**
+   * Cross-pane global scrollback budget enforcer (FR4). Gated on a coarse
+   * growth cadence so the PTY hot path is untouched (NFR2). Tracks the
+   * previous aggregate scrollback length to feed the growth counter.
+   */
+  private scrollbackBudgetEnforcer = new ScrollbackBudgetEnforcer();
+  private lastAggregateScrollbackLength = 0;
   /**
    * After a viaReinit WASM recovery completes, this is set to a deadline
    * (Date.now() + N) during which incoming mux traffic is counted for
@@ -316,6 +328,28 @@ export class TerminalApp {
       getPtyClient: () => this.ptyClient,
       getMuxClient: () => this.muxClient,
     });
+
+    // Background OSC 9 notification listener (FR1): the backend reader emits
+    // `osc_notification` when an OSC 9 desktop notification is recognized
+    // while the window is hidden. Fire the OS notification via the shared
+    // permission-gated sink. Fire-and-forget; not part of resume replay.
+    // Scope to this tab's PTY session: app.emit broadcasts to every tab's
+    // listener, so without this predicate one OSC 9 would fire one OS
+    // notification per open tab. `undefined` keeps the default sink.
+    registerBackgroundNotificationListener(
+      listen,
+      undefined,
+      (sessionId) => sessionId === this.ptyClient?.getSessionId(),
+    )
+      .then((unlisten) => {
+        this.backgroundNotificationUnlisten = unlisten;
+      })
+      .catch((err) => {
+        console.warn(
+          "[WARN][FRONTEND] registerBackgroundNotificationListener failed:",
+          err,
+        );
+      });
 
     // Initialize IME handler
     // Use container id or generate unique id for debugging
@@ -522,6 +556,7 @@ export class TerminalApp {
       getMuxApcContext: () => this.imageHandler?.getMuxApcContext() ?? null,
       isTabActive: () => this._tabActive,
       onRecovered: (viaReinit) => this.onWasmRecovered(viaReinit),
+      enforceScrollbackBudget: () => this.enforceScrollbackBudget(),
     });
 
     // Route renderer-side WASM crashes (render, renderImmediate, cursor blink)
@@ -529,6 +564,62 @@ export class TerminalApp {
     this.renderer?.setWasmRecoveryCallback((error) =>
       this.ptyHandlerHandle?.tryRecoverFromWasmCrash(error) ?? false,
     );
+  }
+
+  /**
+   * Collect the live, scrollback-bearing WASM grids across all panes. Only the
+   * primary grid of each pane retains scrollback (the alternate buffer never
+   * does). The active pane's primary grid plus every mux pane's primary grid
+   * are gathered and de-duplicated (the active pane is also present in
+   * muxPaneGrids while in mux mode). Detached panes are frozen serialized
+   * snapshots that do not grow, so they are excluded.
+   */
+  private collectLiveScrollbackPanes(): ScrollbackPane[] {
+    const seen = new Set<WasmGrid>();
+    const panes: ScrollbackPane[] = [];
+    const add = (grid: WasmGrid | null | undefined) => {
+      if (grid && !seen.has(grid)) {
+        seen.add(grid);
+        panes.push(grid);
+      }
+    };
+    add(this.state?.getPrimaryWasmGrid() ?? null);
+    for (const paneState of this.muxPaneGrids.values()) {
+      add(paneState.primaryGrid);
+    }
+    return panes;
+  }
+
+  /**
+   * Coarse-cadence cross-pane scrollback budget enforcement (FR4 / NFR2).
+   * Invoked once per processPendingData drain cycle — NOT per PTY byte. Feeds
+   * the aggregate scrollback growth into the enforcer's growth counter and only
+   * runs the full scan + eviction when enough new scrollback has accumulated.
+   */
+  private enforceScrollbackBudget(): void {
+    const panes = this.collectLiveScrollbackPanes();
+    let aggregate = 0;
+    for (const pane of panes) aggregate += pane.getScrollbackLength();
+
+    const growth = aggregate - this.lastAggregateScrollbackLength;
+    this.lastAggregateScrollbackLength = aggregate;
+
+    // Only feed positive growth into the coarse cadence; shrinkage (eviction,
+    // clear) does not warrant a check.
+    const ready =
+      growth > 0
+        ? this.scrollbackBudgetEnforcer.noteScrollbackGrowth(growth)
+        : this.scrollbackBudgetEnforcer.shouldEnforce();
+    if (!ready) return;
+
+    const evicted = this.scrollbackBudgetEnforcer.enforce(panes);
+    if (evicted > 0) {
+      // Re-baseline so the freed lines are not re-counted as growth next cycle.
+      this.lastAggregateScrollbackLength = Math.max(0, aggregate - evicted);
+      console.warn(
+        `[WARN][FRONTEND] scrollback budget enforced — evicted ${evicted} line(s) across ${panes.length} pane(s)`,
+      );
+    }
   }
 
   /**
@@ -1007,6 +1098,14 @@ export class TerminalApp {
     // setVisibility callbacks don't race with `dispose`.
     this.visibilityController?.stop();
     this.visibilityController = null;
+
+    // Remove the backend `osc_notification` listener.
+    try {
+      this.backgroundNotificationUnlisten?.();
+    } catch {
+      /* ignore */
+    }
+    this.backgroundNotificationUnlisten = null;
 
     // Remove PTY-handler-owned document/window listeners (visibilitychange,
     // Tauri focus) before tearing down the PTY client itself.
