@@ -42,6 +42,7 @@ export const MuxMessageType = {
   RequestPaneSnapshot: 0x19,
   MoveWindow: 0x1a,
   SetVisibility: 0x1b,
+  Notify: 0x1c,
 } as const;
 
 /** Connection state for the mux client. */
@@ -339,6 +340,7 @@ export class MuxClient {
   private onStatusUpdate: ((msg: { left: string; right: string }) => void) | null = null;
   private onSwitchWindow: ((paneId: number) => void) | null = null;
   private onWindowRenamed: ((windowId: number, name: string) => void) | null = null;
+  private onNotify: ((message: string) => void) | null = null;
 
   get state(): MuxConnectionState {
     return this._state;
@@ -491,6 +493,16 @@ export class MuxClient {
           }
         }
         break;
+      case MuxMessageType.Notify: {
+        // Daemon-originated OSC 9 desktop notification from a Detached pane.
+        // Payload is bincode NotifyMsg: u64 LE message_len + UTF-8 bytes.
+        const message = decodeBincodeString(data);
+        if (message !== null) {
+          muxLog.info(`Notify from daemon: pane=${paneId} message="${message}"`);
+          this.onNotify?.(message);
+        }
+        break;
+      }
       default:
         // Other message types - log and ignore
         muxLog.debug(`Mux APC: unhandled type 0x${msgType.toString(16)} pane=${paneId}`);
@@ -530,6 +542,14 @@ export class MuxClient {
   /** Set callback for daemon-initiated window rename (OSC title detected by daemon). */
   setOnWindowRenamed(callback: (windowId: number, name: string) => void): void {
     this.onWindowRenamed = callback;
+  }
+
+  /**
+   * Set callback for daemon-originated desktop notifications (OSC 9 detected
+   * on a Detached pane). The callback fires the OS notification sink.
+   */
+  setOnNotify(callback: (message: string) => void): void {
+    this.onNotify = callback;
   }
 
   /** Send RequestStatusUpdate (0x17) to daemon with empty payload. */
@@ -621,4 +641,18 @@ export function decodeStatusUpdateMsg(data: Uint8Array): { left: string; right: 
   const right = new TextDecoder().decode(data.slice(offset, offset + rightLen));
 
   return { left, right };
+}
+
+/**
+ * Decode a single bincode-serialized `String` payload (u64 LE length + UTF-8).
+ *
+ * Used for `NotifyMsg { message: String }` (and matches the `RenameWindowMsg`
+ * name field wire shape). Returns null on a truncated/invalid frame.
+ */
+export function decodeBincodeString(data: Uint8Array): string | null {
+  if (data.length < 8) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const len = Number(view.getBigUint64(0, true));
+  if (8 + len > data.length) return null;
+  return new TextDecoder().decode(data.slice(8, 8 + len));
 }

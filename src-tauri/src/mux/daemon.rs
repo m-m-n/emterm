@@ -6,15 +6,19 @@
 use std::path::PathBuf;
 
 use super::ipc::connection::handle_connection;
-use super::ipc::protocol::{MessageType, MuxMessage, RenameWindowMsg};
+use super::ipc::protocol::{MessageType, MuxMessage, NotifyMsg, RenameWindowMsg};
 use super::session::manager::SessionManager;
-use super::session::pane::TitleChangeSender;
+use super::session::pane::{NotificationSender, TitleChangeSender};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
 /// Daemon-level title channel capacity.
 const TITLE_CHANNEL_CAPACITY: usize = 64;
+
+/// Daemon-level notification channel capacity (OSC 9 desktop notifications
+/// detected on Detached panes).
+const NOTIFICATION_CHANNEL_CAPACITY: usize = 64;
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -254,6 +258,16 @@ pub async fn run_daemon() -> anyhow::Result<()> {
         mpsc::channel(TITLE_CHANNEL_CAPACITY);
     tokio::spawn(run_title_update_task(session_manager.clone(), title_rx));
 
+    // Daemon-level notification channel: pane reader threads forward OSC 9
+    // desktop notifications detected on Detached output here; the task
+    // broadcasts them to connected GUI clients via notify_tx (FR2, NFR3).
+    let (notification_tx, notification_rx): (NotificationSender, mpsc::Receiver<(u32, String)>) =
+        mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+    tokio::spawn(run_notification_task(
+        session_manager.clone(),
+        notification_rx,
+    ));
+
     // Shutdown signal: sent by handle_destroy_pane/handle_destroy_window when all sessions empty
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
@@ -270,7 +284,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone()));
+                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
@@ -335,6 +349,16 @@ pub async fn run_daemon() -> anyhow::Result<()> {
         mpsc::channel(TITLE_CHANNEL_CAPACITY);
     tokio::spawn(run_title_update_task(session_manager.clone(), title_rx));
 
+    // Daemon-level notification channel: pane reader threads forward OSC 9
+    // desktop notifications detected on Detached output here; the task
+    // broadcasts them to connected GUI clients via notify_tx (FR2, NFR3).
+    let (notification_tx, notification_rx): (NotificationSender, mpsc::Receiver<(u32, String)>) =
+        mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
+    tokio::spawn(run_notification_task(
+        session_manager.clone(),
+        notification_rx,
+    ));
+
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
     // First iteration claims exclusive pipe ownership to prevent hijacking
@@ -350,7 +374,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = server.connect() => {
                 match result {
                     Ok(()) => {
-                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone()));
+                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone()));
                     }
                     Err(e) => {
                         log::error!("Pipe accept error: {}", e);
@@ -436,6 +460,45 @@ async fn run_title_update_task(
         apply_title_change(&session_manager, pane_id, new_title).await;
     }
     log::info!("Title update task exiting");
+}
+
+/// Broadcast a Detached-pane OSC 9 notification to connected GUI clients.
+///
+/// The notification is sent via the SessionManager `notify_tx` broadcast; the
+/// per-connection select! loop forwards it to its GUI client. If no GUI client
+/// is currently subscribed the broadcast simply has no receivers (the
+/// notification is fire-and-forget; FR5 keeps it out of any replay buffer, so
+/// nothing replays it later). The GUI fires the OS notification (NFR3).
+async fn relay_notification(
+    session_manager: &Arc<Mutex<SessionManager>>,
+    pane_id: u32,
+    message: String,
+) {
+    let notify_tx = {
+        let mgr = session_manager.lock().await;
+        mgr.notify_tx().clone()
+    };
+    let payload = NotifyMsg { message };
+    let msg = MuxMessage::control(MessageType::Notify, pane_id, &payload);
+    if let Err(e) = notify_tx.send(msg) {
+        log::debug!("relay_notification: no active subscribers: {}", e);
+    }
+}
+
+/// Run the daemon-level notification relay task.
+///
+/// Consumes `(pane_id, message)` from Detached pane reader threads and
+/// broadcasts each as a `Notify` control message to GUI clients. Exits when
+/// all senders are dropped (daemon shutdown).
+async fn run_notification_task(
+    session_manager: Arc<Mutex<SessionManager>>,
+    mut notification_rx: mpsc::Receiver<(u32, String)>,
+) {
+    log::info!("Notification relay task started");
+    while let Some((pane_id, message)) = notification_rx.recv().await {
+        relay_notification(&session_manager, pane_id, message).await;
+    }
+    log::info!("Notification relay task exiting");
 }
 
 /// Close all PTYs in all sessions for graceful daemon shutdown.

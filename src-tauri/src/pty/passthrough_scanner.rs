@@ -7,10 +7,20 @@
 //! on resume to re-render images and rich content, so we sniff them out
 //! here and stash them in the per-session passthrough buffer.
 //!
-//! Three sequence kinds are extracted:
+//! Three sequence kinds are extracted into the replayable passthrough output:
 //! - Kitty graphics APC: `ESC _ G ... ESC \`
 //! - SIXEL DCS:          `ESC P ... q ... ESC \`
 //! - emterm OSC 9999:    `ESC ] 9999 ; ... ESC \` (Markdown protocol)
+//!
+//! In addition the scanner recognizes desktop-notification sequences:
+//! - OSC 9 notification: `ESC ] 9 ; <message> (BEL | ESC \)`
+//!
+//! Notifications are NOT replayable passthrough: they are side-effect events
+//! that must fire exactly once and must never be added to the resume/replay
+//! byte stream (FR5). They are therefore reported through a SEPARATE channel
+//! (`take_notifications`) from the replay bytes returned by `process`.
+//! `OSC 9 ; 4 ; ...` is a progress-bar sequence and is excluded from
+//! notification recognition (FR4).
 //!
 //! The scanner is stateful so a sequence that crosses a chunk boundary is
 //! still recovered. If a partial sequence grows beyond `PARTIAL_SEQUENCE_MAX`
@@ -45,6 +55,10 @@ pub struct PassthroughScanner {
     /// True after we've already warned about a single partial-buffer
     /// overflow; rearmed by `reset_partial`.
     overflow_warned: bool,
+    /// Recognized OSC 9 notification messages awaiting delivery. Kept
+    /// strictly separate from the replayable passthrough output so they are
+    /// fired once and never replayed (FR5). Drained by `take_notifications`.
+    notifications: Vec<String>,
 }
 
 impl PassthroughScanner {
@@ -53,7 +67,16 @@ impl PassthroughScanner {
             state: State::Idle,
             partial: Vec::new(),
             overflow_warned: false,
+            notifications: Vec::new(),
         }
+    }
+
+    /// Drain and return all OSC 9 notification messages recognized since the
+    /// last call. These are side-effect events (desktop notifications), NOT
+    /// replayable passthrough bytes, so the caller must route them to the
+    /// notification sink and must not add them to any resume/replay buffer.
+    pub fn take_notifications(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notifications)
     }
 
     /// Returns the current size of the in-flight partial buffer. Test-only
@@ -150,13 +173,53 @@ impl PassthroughScanner {
                 let terminated_st = self.is_st_terminator();
                 let terminated_bel = b == 0x07;
                 if terminated_st || terminated_bel {
-                    // Commit only if the OSC param starts with "9999;".
                     // partial layout: ESC ] <body...> [terminator]
                     if self.partial.starts_with(b"\x1b]9999;") {
+                        // emterm Markdown protocol: replayable passthrough.
                         out.extend_from_slice(&self.partial);
+                    } else if self.partial.starts_with(b"\x1b]9;") {
+                        // OSC 9 desktop notification (NOT replay; FR5).
+                        self.record_osc9_notification(terminated_st, terminated_bel);
                     }
                     self.reset_partial();
                 }
+            }
+        }
+    }
+
+    /// Extract the OSC 9 notification message from `self.partial` and, unless
+    /// it is a progress sequence (`4;` prefix), queue it for delivery.
+    ///
+    /// `self.partial` layout at call time is:
+    ///   `ESC ] 9 ; <body> <terminator>`
+    /// where the terminator is a single BEL byte or the two-byte ST (`ESC \`).
+    /// The notification message is `<body>` (the bytes after `9;` up to the
+    /// terminator). Invalid UTF-8 in the body is dropped (no notification).
+    fn record_osc9_notification(&mut self, terminated_st: bool, terminated_bel: bool) {
+        // Prefix length of `ESC ] 9 ;` is 4 bytes.
+        const PREFIX_LEN: usize = 4;
+        let term_len = if terminated_st {
+            2 // ESC \
+        } else if terminated_bel {
+            1 // BEL
+        } else {
+            return;
+        };
+        let total = self.partial.len();
+        if total < PREFIX_LEN + term_len {
+            return;
+        }
+        let body = &self.partial[PREFIX_LEN..total - term_len];
+        // Progress sequences (`OSC 9 ; 4 ; ...`) are not notifications (FR4).
+        if body.starts_with(b"4;") {
+            return;
+        }
+        match std::str::from_utf8(body) {
+            Ok(msg) => self.notifications.push(msg.to_string()),
+            Err(_) => {
+                log::warn!(
+                    "[WARN][BACKEND] passthrough_scanner: OSC 9 notification body is not valid UTF-8; dropped"
+                );
             }
         }
     }
@@ -291,6 +354,117 @@ mod tests {
         let mut s = PassthroughScanner::new();
         let out = s.process(b"\x1bP$tnotsixel\x1b\\");
         assert!(out.is_empty());
+    }
+
+    // ---- OSC 9 notification recognition (Phase 1) ----
+
+    #[test]
+    fn osc9_notification_bel_terminated_is_recognized() {
+        // TS-1: OSC 9 ; msg terminated by BEL.
+        let mut s = PassthroughScanner::new();
+        let out = s.process(b"\x1b]9;build done\x07");
+        // Notifications are NOT replayable passthrough output.
+        assert!(out.is_empty(), "OSC 9 must not appear in replay output");
+        assert_eq!(s.take_notifications(), vec!["build done".to_string()]);
+        // Draining empties the queue.
+        assert!(s.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn osc9_notification_st_terminated_is_recognized() {
+        // TS-2: OSC 9 ; msg terminated by ST (ESC \).
+        let mut s = PassthroughScanner::new();
+        let out = s.process(b"\x1b]9;all tests passed\x1b\\");
+        assert!(out.is_empty());
+        assert_eq!(s.take_notifications(), vec!["all tests passed".to_string()]);
+    }
+
+    #[test]
+    fn osc9_progress_is_not_a_notification() {
+        // TS-3: OSC 9 ; 4 ; 1 ; 50 (progress) must NOT fire a notification.
+        let mut s = PassthroughScanner::new();
+        let out = s.process(b"\x1b]9;4;1;50\x07");
+        assert!(out.is_empty());
+        assert!(
+            s.take_notifications().is_empty(),
+            "progress sequence must not be a notification"
+        );
+    }
+
+    #[test]
+    fn osc9_split_across_chunks_is_recovered() {
+        // TS-4: OSC 9 split across chunk boundaries.
+        let mut s = PassthroughScanner::new();
+        let out1 = s.process(b"prefix\x1b]9;deploy ");
+        assert!(out1.is_empty());
+        assert!(s.take_notifications().is_empty(), "no completion yet");
+        let out2 = s.process(b"finished\x07suffix");
+        assert!(out2.is_empty());
+        assert_eq!(s.take_notifications(), vec!["deploy finished".to_string()]);
+    }
+
+    #[test]
+    fn osc9_empty_message_is_recognized() {
+        // Edge case: OSC 9 ; <empty> then terminator. No crash; empty body.
+        let mut s = PassthroughScanner::new();
+        let out = s.process(b"\x1b]9;\x07");
+        assert!(out.is_empty());
+        assert_eq!(s.take_notifications(), vec![String::new()]);
+    }
+
+    #[test]
+    fn osc0_title_is_not_a_notification() {
+        // TS-6: OSC 0 ; title and other OSC are not notifications.
+        let mut s = PassthroughScanner::new();
+        let out = s.process(b"\x1b]0;my title\x07");
+        assert!(out.is_empty());
+        assert!(s.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn osc9999_markdown_is_replay_not_notification() {
+        // TS-7: OSC 9999 stays in replay output; never a notification.
+        let mut s = PassthroughScanner::new();
+        let out = s.process(b"\x1b]9999;emterm-md;begin\x1b\\");
+        assert_eq!(out, b"\x1b]9999;emterm-md;begin\x1b\\");
+        assert!(s.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn osc9_notification_and_replay_passthrough_are_separated() {
+        // TS-7: a chunk mixing image passthrough and an OSC 9 notification
+        // keeps the two on separate channels.
+        let mut s = PassthroughScanner::new();
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\x1b_Gi=1;A\x1b\\"); // Kitty (replay)
+        data.extend_from_slice(b"text");
+        data.extend_from_slice(b"\x1b]9;ping\x07"); // notification
+        data.extend_from_slice(b"\x1b]9999;md\x07"); // Markdown (replay)
+        let out = s.process(&data);
+        let mut expected_replay = Vec::new();
+        expected_replay.extend_from_slice(b"\x1b_Gi=1;A\x1b\\");
+        expected_replay.extend_from_slice(b"\x1b]9999;md\x07");
+        assert_eq!(out, expected_replay, "replay must exclude OSC 9");
+        assert_eq!(s.take_notifications(), vec!["ping".to_string()]);
+    }
+
+    #[test]
+    fn multiple_osc9_notifications_in_one_chunk() {
+        let mut s = PassthroughScanner::new();
+        let out = s.process(b"\x1b]9;first\x07\x1b]9;second\x1b\\");
+        assert!(out.is_empty());
+        assert_eq!(
+            s.take_notifications(),
+            vec!["first".to_string(), "second".to_string()]
+        );
+    }
+
+    #[test]
+    fn osc9_notification_with_unicode_body() {
+        let mut s = PassthroughScanner::new();
+        let out = s.process("\x1b]9;ビルド完了 🎉\x07".as_bytes());
+        assert!(out.is_empty());
+        assert_eq!(s.take_notifications(), vec!["ビルド完了 🎉".to_string()]);
     }
 
     #[test]

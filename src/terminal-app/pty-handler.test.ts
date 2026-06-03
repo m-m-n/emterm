@@ -47,6 +47,7 @@ mock.module("../terminal/handlers/apc_handlers", () => ({
 
 mock.module("../terminal/mux/mux-logger", () => ({
   muxLog: {
+    info: mock(() => {}),
     debug: mock(() => {}),
     warn: mock(() => {}),
     error: mock(() => {}),

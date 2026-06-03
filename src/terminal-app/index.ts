@@ -3,6 +3,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   calculateTerminalSize,
   measureCharacterSize,
@@ -63,6 +64,7 @@ import { wireInputEvents } from "./input-wiring";
 import { setupOverlayBindings } from "./overlay-setup";
 import { setupSftpFileDrop } from "./sftp-setup";
 import { buildVisibilityController } from "./visibility-setup";
+import { registerBackgroundNotificationListener } from "../terminal/background-notification-listener";
 import { DiagnosticsController } from "./diagnostics";
 import { registerCoreCallbacks as registerCoreCallbacksImpl } from "./core-callbacks";
 import {
@@ -108,6 +110,8 @@ export class TerminalApp {
   public muxStatusUpdateCallback: ((msg: { left: string; right: string }) => void) | null = null;
   private muxClient: MuxClient | null = null;
   private visibilityController: VisibilityController | null = null;
+  /** Unlisten for the backend `osc_notification` (hidden-window) event. */
+  private backgroundNotificationUnlisten: (() => void) | null = null;
   private inMuxMode = false;
   private muxWindows: { id: number; name: string }[] = [];
   private activeMuxWindowIndex = 0;
@@ -324,6 +328,28 @@ export class TerminalApp {
       getPtyClient: () => this.ptyClient,
       getMuxClient: () => this.muxClient,
     });
+
+    // Background OSC 9 notification listener (FR1): the backend reader emits
+    // `osc_notification` when an OSC 9 desktop notification is recognized
+    // while the window is hidden. Fire the OS notification via the shared
+    // permission-gated sink. Fire-and-forget; not part of resume replay.
+    // Scope to this tab's PTY session: app.emit broadcasts to every tab's
+    // listener, so without this predicate one OSC 9 would fire one OS
+    // notification per open tab. `undefined` keeps the default sink.
+    registerBackgroundNotificationListener(
+      listen,
+      undefined,
+      (sessionId) => sessionId === this.ptyClient?.getSessionId(),
+    )
+      .then((unlisten) => {
+        this.backgroundNotificationUnlisten = unlisten;
+      })
+      .catch((err) => {
+        console.warn(
+          "[WARN][FRONTEND] registerBackgroundNotificationListener failed:",
+          err,
+        );
+      });
 
     // Initialize IME handler
     // Use container id or generate unique id for debugging
@@ -1072,6 +1098,14 @@ export class TerminalApp {
     // setVisibility callbacks don't race with `dispose`.
     this.visibilityController?.stop();
     this.visibilityController = null;
+
+    // Remove the backend `osc_notification` listener.
+    try {
+      this.backgroundNotificationUnlisten?.();
+    } catch {
+      /* ignore */
+    }
+    this.backgroundNotificationUnlisten = null;
 
     // Remove PTY-handler-owned document/window listeners (visibilitychange,
     // Tauri focus) before tearing down the PTY client itself.

@@ -6,6 +6,7 @@
 
 import { MuxClient, MuxMessageType, decodeWelcomeMsg } from "../../terminal/mux/mux-client";
 import { muxLog } from "../../terminal/mux/mux-logger";
+import { sendNotification } from "../../terminal/osc-notification";
 import type { MuxSessionInfo } from "../../terminal/mux/mux-client";
 import type { MuxAction } from "../../terminal/mux/prefix-key";
 import type { PtyClient } from "../../pty/client";
@@ -342,6 +343,13 @@ export async function enterMuxMode(ctx: MuxSessionContext, _socketPath: string, 
       muxWindows[idx]!.name = name;
       ctx.emitMuxStateChange();
     }
+  });
+
+  // Set up daemon-originated desktop notification handler (OSC 9 detected on
+  // a Detached pane). Fire the OS notification via the permission-gated sink
+  // (FR2). Fire-and-forget; not part of any reattach replay (FR5).
+  client.setOnNotify((message: string) => {
+    void sendNotification("eMterm", message);
   });
 
   // Set up detached handler
