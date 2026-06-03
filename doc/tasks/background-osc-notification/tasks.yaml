@@ -1,0 +1,59 @@
+schema_version: 1
+feature: background-osc-notification
+
+tasks:
+  - id: phase-1-scanner-osc9
+    phase: 1
+    title: "Recognize OSC 9 notifications in the background scan (separate from replay output)"
+    status: completed
+    files:
+      modify:
+        - src-tauri/src/pty/passthrough_scanner.rs
+    acceptance:
+      - "OSC 9 ; msg recognized as notification for both BEL and ST terminators"
+      - "OSC 9 ; 4 ; ... (progress) is NOT recognized as a notification"
+      - "Notification output is separate from replay-passthrough output"
+      - "Chunk-split OSC 9 recovered; overflow past PARTIAL_SEQUENCE_MAX dropped with single warn"
+      - "Existing image/SIXEL/Markdown extraction tests still pass"
+
+  - id: phase-2-hidden-delivery
+    phase: 2
+    title: "Hidden-window notification delivery (process_hidden -> reader event -> frontend sink)"
+    status: completed
+    files:
+      modify:
+        - src-tauri/src/pty/visibility.rs
+        - src-tauri/src/reader.rs
+        - src/terminal-app/
+    acceptance:
+      - "process_hidden surfaces notification messages without adding them to the passthrough buffer"
+      - "reader emits a frontend-bound notification event for each message"
+      - "frontend listener calls sendNotification; permission denied -> no notification"
+      - "no duplicate notification on window restore"
+
+  - id: phase-3-mux-delivery
+    phase: 3
+    title: "mux detached-pane notification delivery (pane scan -> control message -> mux-client sink)"
+    status: completed
+    files:
+      modify:
+        - src-tauri/src/mux/ipc/pty_spawn.rs
+        - src-tauri/src/mux/ipc/protocol.rs
+        - src-tauri/src/mux/ipc/connection.rs
+        - src/terminal/mux/mux-client.ts
+    acceptance:
+      - "pane reader loop recognizes OSC 9 notifications for detached panes"
+      - "notification is forwarded ONLY for Detached output; active/Connected panes are not forwarded (no double-fire)"
+      - "a notification control message is forwarded to the connected GUI client"
+      - "mux-client dispatch maps the message to sendNotification; permission gating respected"
+      - "no duplicate notification on reattach; unknown message type tolerated by peers"
+
+  - id: phase-4-regular-tab-verify
+    phase: 4
+    title: "Verify non-active regular tab fires OSC 9 (regression test; wiring only if needed)"
+    status: completed
+    files:
+      modify: []
+    acceptance:
+      - "regression test asserts a non-active regular tab fires the OSC 9 notification callback"
+      - "if it does not fire, minimal wiring added and recorded in IMPLEMENTATION.md Phase 4"

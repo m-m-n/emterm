@@ -9,8 +9,9 @@ use tokio::sync::mpsc;
 
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    DetachReason, MuxPane, PaneId, PaneOutputTarget, PtyOutputChunk, SharedOutputTarget,
-    SharedScrollback, SharedShadowParser, SharedTitleSender, TitleChangeSender,
+    DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget, PtyOutputChunk,
+    SharedNotificationSender, SharedOutputTarget, SharedScrollback, SharedShadowParser,
+    SharedTitleSender, TitleChangeSender,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -108,6 +109,7 @@ pub(super) fn register_pane_and_start_reader(
     spawned: SpawnedPty,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     title_tx: &TitleChangeSender,
+    notification_tx: &NotificationSender,
 ) -> Option<PaneId> {
     // Verify session/window exist before allocating pane ID
     {
@@ -134,11 +136,14 @@ pub(super) fn register_pane_and_start_reader(
     let pane_cwd = pane.cwd.clone();
     let pane_title = pane.title.clone();
     let title_sender = pane.title_sender.clone();
+    let notification_sender = pane.notification_sender.clone();
     let raw_passthrough = pane.raw_passthrough.clone();
     let passthrough_scanner = pane.passthrough_scanner.clone();
     let scrollback = pane.scrollback.clone();
     // Store initial title_tx in the swappable sender (reattach will swap in a new one)
     *title_sender.lock().unwrap() = Some(title_tx.clone());
+    // The notification channel lives for the daemon lifetime; populate it once.
+    *notification_sender.lock().unwrap() = Some(notification_tx.clone());
     window.add_pane(pane);
 
     let reader = spawned.reader;
@@ -151,6 +156,7 @@ pub(super) fn register_pane_and_start_reader(
             pane_cwd,
             pane_title,
             title_sender,
+            notification_sender,
             raw_passthrough,
             passthrough_scanner,
             scrollback,
@@ -180,6 +186,7 @@ fn pty_reader_loop(
     pane_cwd: Arc<std::sync::Mutex<Option<String>>>,
     last_title: Arc<std::sync::Mutex<Option<String>>>,
     title_sender: SharedTitleSender,
+    notification_sender: SharedNotificationSender,
     raw_passthrough: SharedRawPassthrough,
     passthrough_scanner: SharedPassthroughScanner,
     scrollback: SharedScrollback,
@@ -282,6 +289,7 @@ fn pty_reader_loop(
                                         data,
                                         &raw_passthrough,
                                         &passthrough_scanner,
+                                        &notification_sender,
                                     );
                                     *target = PaneOutputTarget::Detached {
                                         reason: DetachReason::NetworkDetach,
@@ -299,6 +307,7 @@ fn pty_reader_loop(
                                 data,
                                 &raw_passthrough,
                                 &passthrough_scanner,
+                                &notification_sender,
                             );
                             None
                         }
@@ -312,7 +321,13 @@ fn pty_reader_loop(
                         log::info!("Pane {} switching to detached buffering mode", pane_id);
                         let mut target = output_target.lock().unwrap();
                         // Scrollback already captured above; only passthrough.
-                        capture_passthrough(pane_id, data, &raw_passthrough, &passthrough_scanner);
+                        capture_passthrough(
+                            pane_id,
+                            data,
+                            &raw_passthrough,
+                            &passthrough_scanner,
+                            &notification_sender,
+                        );
                         *target = PaneOutputTarget::Detached {
                             reason: DetachReason::NetworkDetach,
                             owner: None,
@@ -334,17 +349,47 @@ fn pty_reader_loop(
 }
 
 /// Run `data` through the per-pane passthrough scanner and append any
-/// completed image / Markdown OSC sequences to the per-pane raw buffer.
+/// completed image / Markdown OSC sequences to the per-pane raw buffer. Any
+/// recognized OSC 9 desktop-notification messages are forwarded through
+/// `notification_sender` to the daemon (which relays them to the GUI client).
 ///
-/// Called from the Detached arms of `pty_reader_loop`. Logs a single warn
-/// when the buffer drops the oldest captured bytes due to capacity overflow.
+/// Called ONLY from the Detached arms of `pty_reader_loop`. On the Connected
+/// arm the scanner is never run, so an active pane's OSC 9 is handled solely
+/// by the GUI foreground WASM path — this is what prevents double-firing
+/// (FR5 / NFR5 / TS-14). Notifications are side-effect events: they are NOT
+/// added to `raw_passthrough`, so a reattach replay never re-fires them.
+///
+/// Logs a single warn when the buffer drops the oldest captured bytes due to
+/// capacity overflow.
 fn capture_passthrough(
     pane_id: PaneId,
     data: &[u8],
     raw_passthrough: &SharedRawPassthrough,
     passthrough_scanner: &SharedPassthroughScanner,
+    notification_sender: &SharedNotificationSender,
 ) {
-    let extracted = passthrough_scanner.lock().unwrap().process(data);
+    let (extracted, notifications) = {
+        let mut scanner = passthrough_scanner.lock().unwrap();
+        let extracted = scanner.process(data);
+        (extracted, scanner.take_notifications())
+    };
+
+    // Forward desktop notifications detected while detached (FR2). Kept out
+    // of raw_passthrough so they never replay on reattach (FR5).
+    if !notifications.is_empty() {
+        if let Some(tx) = notification_sender.lock().unwrap().as_ref() {
+            for message in notifications {
+                if let Err(e) = tx.try_send((pane_id, message)) {
+                    log::warn!(
+                        "[WARN][BACKEND] mux pane {} notification channel send failed: {}",
+                        pane_id,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
     if extracted.is_empty() {
         return;
     }
@@ -362,20 +407,30 @@ mod tests {
     use super::*;
     use crate::pty::visibility::HIDDEN_PASSTHROUGH_CAPACITY_MUX;
 
-    fn shared_buffer() -> (SharedRawPassthrough, SharedPassthroughScanner) {
+    type TestRig = (
+        SharedRawPassthrough,
+        SharedPassthroughScanner,
+        SharedNotificationSender,
+        mpsc::Receiver<(PaneId, String)>,
+    );
+
+    fn shared_buffer() -> TestRig {
+        let (notif_tx, notif_rx) = mpsc::channel::<(PaneId, String)>(16);
         (
             Arc::new(StdMutex::new(RawPassthroughBuffer::new(
                 HIDDEN_PASSTHROUGH_CAPACITY_MUX,
             ))),
             Arc::new(StdMutex::new(PassthroughScanner::new())),
+            Arc::new(StdMutex::new(Some(notif_tx))),
+            notif_rx,
         )
     }
 
     /// TS-19: passthrough sequences feed raw_passthrough while detached.
     #[test]
     fn capture_passthrough_appends_completed_kitty_apc() {
-        let (buf, scanner) = shared_buffer();
-        capture_passthrough(7, b"\x1b_Gi=1;ZZ\x1b\\", &buf, &scanner);
+        let (buf, scanner, notif, _rx) = shared_buffer();
+        capture_passthrough(7, b"\x1b_Gi=1;ZZ\x1b\\", &buf, &scanner, &notif);
         let stored = buf.lock().unwrap().read_all();
         assert!(
             stored
@@ -389,11 +444,11 @@ mod tests {
     /// the scanner is stateful and shared.
     #[test]
     fn capture_passthrough_handles_chunk_boundary() {
-        let (buf, scanner) = shared_buffer();
-        capture_passthrough(7, b"\x1b_Gi=1;Z", &buf, &scanner);
+        let (buf, scanner, notif, _rx) = shared_buffer();
+        capture_passthrough(7, b"\x1b_Gi=1;Z", &buf, &scanner, &notif);
         // Mid-sequence: nothing complete yet.
         assert_eq!(buf.lock().unwrap().len(), 0);
-        capture_passthrough(7, b"Z\x1b\\", &buf, &scanner);
+        capture_passthrough(7, b"Z\x1b\\", &buf, &scanner, &notif);
         let stored = buf.lock().unwrap().read_all();
         assert!(
             stored
@@ -407,8 +462,50 @@ mod tests {
     /// the raw buffer.
     #[test]
     fn capture_passthrough_ignores_plain_text() {
-        let (buf, scanner) = shared_buffer();
-        capture_passthrough(7, b"hello world\n", &buf, &scanner);
+        let (buf, scanner, notif, _rx) = shared_buffer();
+        capture_passthrough(7, b"hello world\n", &buf, &scanner, &notif);
         assert_eq!(buf.lock().unwrap().len(), 0);
+    }
+
+    /// TS-9: a Detached pane emitting `OSC 9 ; msg` forwards a notification
+    /// through the notification channel and does NOT add it to raw_passthrough.
+    #[test]
+    fn capture_passthrough_forwards_osc9_notification() {
+        let (buf, scanner, notif, mut rx) = shared_buffer();
+        capture_passthrough(7, b"\x1b]9;deploy done\x07", &buf, &scanner, &notif);
+        // Notification forwarded.
+        let (pane_id, message) = rx.try_recv().expect("notification must be forwarded");
+        assert_eq!(pane_id, 7);
+        assert_eq!(message, "deploy done");
+        // Must NOT be in raw_passthrough (no replay on reattach).
+        assert_eq!(
+            buf.lock().unwrap().len(),
+            0,
+            "OSC 9 notification must not enter raw_passthrough"
+        );
+    }
+
+    /// FR4: a progress sequence on a Detached pane is not forwarded.
+    #[test]
+    fn capture_passthrough_ignores_osc9_progress() {
+        let (buf, scanner, notif, mut rx) = shared_buffer();
+        capture_passthrough(7, b"\x1b]9;4;1;50\x07", &buf, &scanner, &notif);
+        assert!(
+            rx.try_recv().is_err(),
+            "progress sequence must not forward a notification"
+        );
+        assert_eq!(buf.lock().unwrap().len(), 0);
+    }
+
+    /// A chunk-split OSC 9 notification is forwarded once the closing chunk
+    /// arrives, because the scanner is stateful and shared.
+    #[test]
+    fn capture_passthrough_forwards_chunk_split_osc9() {
+        let (buf, scanner, notif, mut rx) = shared_buffer();
+        capture_passthrough(7, b"\x1b]9;long ", &buf, &scanner, &notif);
+        assert!(rx.try_recv().is_err(), "no completion yet");
+        capture_passthrough(7, b"message\x1b\\", &buf, &scanner, &notif);
+        let (_pane_id, message) = rx.try_recv().expect("notification after closing chunk");
+        assert_eq!(message, "long message");
     }
 }
