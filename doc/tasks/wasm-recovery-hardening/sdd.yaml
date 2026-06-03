@@ -1,0 +1,100 @@
+schema_version: 1
+feature: wasm-recovery-hardening
+created: 2026-06-02
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun run build:wasm"
+      test_command: "bun test"
+      format_command: "bun run typecheck"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+    wasm:
+      language: rust
+      build_command: "cargo build --manifest-path wasm/Cargo.toml"
+      test_command: "cargo test --manifest-path wasm/Cargo.toml"
+      format_command: "cargo fmt --manifest-path wasm/Cargo.toml"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: bc712579c6a4d06662dad59dea13356d8df999ad
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: bc712579c6a4d06662dad59dea13356d8df999ad
+  - id: verify-plan
+    status: completed
+    completed_at_commit: bc712579c6a4d06662dad59dea13356d8df999ad
+  - id: implement
+    status: completed
+    completed_at_commit: bc712579c6a4d06662dad59dea13356d8df999ad
+  - id: check
+    status: completed
+    completed_at_commit: bc712579c6a4d06662dad59dea13356d8df999ad
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: bc712579c6a4d06662dad59dea13356d8df999ad
+
+requirements:
+  FR1:
+    title: Remove stale heap references from __wbg_reset
+    status: ok
+    tasks:
+      - phase1-fix-reset-and-build-guard
+    tests:
+      - TS-1
+      - TS-2
+  FR2:
+    title: Build-time patch guard for injected reset references
+    status: ok
+    tasks:
+      - phase1-fix-reset-and-build-guard
+    tests:
+      - TS-8
+      - TS-9
+  FR3:
+    title: Detect exports-lost crashes (terminalcore_ TypeError)
+    status: ok
+    tasks:
+      - phase2-detect-exports-lost-crash
+    tests:
+      - TS-3
+      - TS-4
+  FR4:
+    title: Cap total scrollback across panes
+    status: ok
+    tasks:
+      - phase3-cap-total-scrollback
+    tests:
+      - TS-5
+      - TS-6
+      - TS-7
+  NFR1:
+    title: Availability - auto-recovery without manual restart
+    status: ok
+    tasks:
+      - phase1-fix-reset-and-build-guard
+      - phase2-detect-exports-lost-crash
+    tests:
+      - TS-2
+      - TS-3
+      - TS-10
+      - TS-11
+  NFR2:
+    title: Performance - no hot-path overhead from scrollback cap
+    status: ok
+    tasks:
+      - phase3-cap-total-scrollback
+    tests:
+      - TS-12
+  NFR3:
+    title: Maintainability - traceable recovery logs, build-time drift detection
+    status: ok
+    tasks:
+      - phase1-fix-reset-and-build-guard
+    tests:
+      - TS-9

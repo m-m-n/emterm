@@ -1,5 +1,5 @@
 use super::state::State;
-use super::{Parser, MAX_DCS_LEN};
+use super::{MAX_DCS_LEN, Parser};
 use crate::parser_types::ParsedAction;
 
 impl Parser {

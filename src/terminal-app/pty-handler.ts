@@ -157,6 +157,14 @@ export interface PtyHandlerContext {
    * content replay (e.g., mux RequestPaneSnapshot) if applicable.
    */
   onRecovered?: (viaReinit: boolean) => void;
+  /**
+   * Coarse-cadence hook (FR4 / NFR2) invoked once per processPendingData drain
+   * cycle — NOT per PTY byte. The implementation feeds a growth counter and only
+   * runs the cross-pane scrollback-budget scan + eviction when enough scrollback
+   * has accumulated since the last check. Optional so tests / non-mux paths can
+   * omit it.
+   */
+  enforceScrollbackBudget?: () => void;
 }
 
 /**
@@ -400,11 +408,17 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
     // - RuntimeError: memory corruption (e.g., after long idle)
     // - "recursive use of an object": wasm-bindgen borrow flag stuck after crash
     // - "WASM not initialized": previous recovery failed, primaryWasmGrid is null
+    // - exports-lost TypeError: after a crash the bundle's wasm alias loses its
+    //   exports, so the next call surfaces as a TypeError naming a missing
+    //   `terminalcore_*` export (e.g. "undefined is not an object
+    //   ('d0.terminalcore_render')"). Key on the stable wasm-bindgen export
+    //   prefix `terminalcore_`, NOT the bundle-dependent local alias (`d0`).
     const isWasmCrash = error instanceof WebAssembly.RuntimeError;
     const msg = error instanceof Error ? error.message : String(error);
     const isBorrowError = msg.includes("recursive use of an object");
     const isWasmUninitialized = msg.includes("WASM not initialized");
-    if (!isWasmCrash && !isBorrowError && !isWasmUninitialized) return false;
+    const isExportsLost = error instanceof TypeError && msg.includes("terminalcore_");
+    if (!isWasmCrash && !isBorrowError && !isWasmUninitialized && !isExportsLost) return false;
 
     // Idempotency: suppress duplicate triggers while a prior recovery is
     // either in flight or has already given up permanently.
@@ -746,6 +760,11 @@ export async function setupPtyHandlers(ctx: PtyHandlerContext): Promise<PtyHandl
           }
         }
       }
+
+      // FR4 / NFR2: cross-pane scrollback budget enforcement runs once per
+      // drain cycle (coarse), never per PTY byte. The hook itself gates on a
+      // growth counter so the scan + eviction is rare.
+      ctx.enforceScrollbackBudget?.();
 
       // Diagnostic: log total processing time
       const processingTime = performance.now() - processingStart;

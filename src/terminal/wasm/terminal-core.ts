@@ -371,6 +371,15 @@ export class WasmGrid {
 		this.core.clear_scrollback();
 	}
 
+	/**
+	 * Bounded scrollback eviction (FR4): drop oldest scrollback rows until the
+	 * scrollback length is at most `targetLen`. Returns the number of rows
+	 * evicted. Used by the cross-pane global scrollback budget enforcer.
+	 */
+	evictOldestScrollback(targetLen: number): number {
+		return this.core.evict_oldest_scrollback(targetLen >>> 0);
+	}
+
 	getScrollbackRowPacked(index: number): Uint8Array {
 		return this.core.get_scrollback_row_packed(index);
 	}

@@ -49,10 +49,24 @@ describe("computeAdjustedScrollOffset", () => {
 		expect(result.nextPrevSbLen).toBe(110);
 	});
 
-	test("TS-4: prev=50, curr=0 (clear) → scrollOffset unchanged, prev re-baselines to 0", () => {
+	test("TS-4: prev=50, curr=0 (clear), scrollOffset > currSbLen → clamped to 0, prev re-baselines to 0", () => {
 		const result = computeAdjustedScrollOffset(50, 0, 7);
-		expect(result.nextScrollOffset).toBe(7);
+		expect(result.nextScrollOffset).toBe(0);
 		expect(result.nextPrevSbLen).toBe(0);
+	});
+
+	test("TS-4c: active eviction shrinks scrollback, scrollOffset > currSbLen → clamp to currSbLen", () => {
+		// Cross-pane budget eviction trims the oldest rows; a scrolled-up
+		// offset that now exceeds the new length is clamped to it.
+		const result = computeAdjustedScrollOffset(700, 400, 500);
+		expect(result.nextScrollOffset).toBe(400);
+		expect(result.nextPrevSbLen).toBe(400);
+	});
+
+	test("TS-4d: scrollback shrinks but scrollOffset <= currSbLen → unchanged (pin preserved)", () => {
+		const result = computeAdjustedScrollOffset(700, 400, 300);
+		expect(result.nextScrollOffset).toBe(300);
+		expect(result.nextPrevSbLen).toBe(400);
 	});
 
 	test("TS-4b: 後続 growth で誤補正なし (clear 直後の次フレーム)", () => {

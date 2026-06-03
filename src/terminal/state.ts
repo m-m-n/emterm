@@ -299,6 +299,15 @@ export class TerminalState implements TerminalStateAccessor {
   }
 
   /**
+   * Get the primary WASM grid, where scrollback history lives. The alternate
+   * buffer never retains scrollback, so the cross-pane scrollback budget (FR4)
+   * only ever needs the primary grid. Returns null before initialization.
+   */
+  getPrimaryWasmGrid(): WasmGrid | null {
+    return this.primaryWasmGrid;
+  }
+
+  /**
    * Save the current pane's full grid state (primary + alternate) for mux switching.
    * Delegates to state-mux-pane module.
    */

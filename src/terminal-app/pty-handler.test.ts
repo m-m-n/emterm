@@ -187,7 +187,22 @@ describe("setupPtyHandlers — tryRecoverFromWasmCrash", () => {
     handle.destroy();
   });
 
-  it("returns false and performs no recovery for unrelated errors", async () => {
+  it("TS-3: classifies an exports-lost TypeError (message contains terminalcore_) as a WASM crash", async () => {
+    const { ctx, recreateSpy } = createContext();
+    const handle = await setupPtyHandlers(ctx);
+
+    // Exports-lost crash: the bundle's local wasm alias loses its exports, so a
+    // call surfaces as e.g. "undefined is not an object (d0.terminalcore_render)".
+    const handled = handle.tryRecoverFromWasmCrash(
+      new TypeError("undefined is not an object (evaluating 'd0.terminalcore_process_pty_data')"),
+    );
+    expect(handled).toBe(true);
+    expect(recreateSpy).toHaveBeenCalledTimes(1);
+
+    handle.destroy();
+  });
+
+  it("TS-4: returns false and performs no recovery for an unrelated TypeError (no terminalcore_)", async () => {
     const { ctx, stopCursorBlink, recreateSpy, forceRender } = createContext();
     const handle = await setupPtyHandlers(ctx);
 
