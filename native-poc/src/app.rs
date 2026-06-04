@@ -58,6 +58,12 @@ pub struct App {
     /// initialized to default. Wrapped in `Arc` so the per-tab
     /// `NativeCallbacks` can share an immutable view without copying.
     pub settings: Arc<Settings>,
+    /// Resolved keyboard-chord table, parsed once from
+    /// `settings.keybinds` at construction. The keyboard handler in
+    /// `window_host` matches incoming events against this for tab-roster
+    /// actions (`new_tab` / `close_tab` / `next_tab` / `prev_tab`) and
+    /// clipboard chords (`copy` / `paste`).
+    pub keybinds: crate::ui::keybinds::KeybindTable,
     /// Scrollback position. `Live` = auto-follow; `OffsetFromLive(n)` = the
     /// viewport is pinned `n` rows above the live tail.
     pub scroll_position: ScrollPosition,
@@ -232,6 +238,10 @@ impl App {
             );
         }
         let settings = Arc::new(settings);
+        // Resolve the user-configured chord table once. Unparseable
+        // specs fall back to their built-in defaults with a warn log
+        // (see `KeybindTable::from_settings`).
+        let keybinds = crate::ui::keybinds::KeybindTable::from_settings(&settings.keybinds);
         let (font_resolver, font_fallback, font_cache, font_rasterizer, font_base_id) =
             Self::build_font_stack(&settings);
 
@@ -279,6 +289,7 @@ impl App {
             cell_size: GridDims::default(),
             selection: None,
             settings,
+            keybinds,
             scroll_position: ScrollPosition::Live,
             alt_screen: false,
             window_focused: true,

@@ -241,6 +241,109 @@ impl Default for ImeSettings {
     }
 }
 
+/// Keyboard-shortcut chord specs mirrored from the legacy WebView
+/// build's `AppSettings.keybinds`. Each field holds the textual chord
+/// (e.g. `"Ctrl+Shift+C"`) exactly as written in `settings.json`; the
+/// strings are parsed into [`crate::ui::keybinds::Chord`]s by
+/// `KeybindTable::from_settings` at startup.
+///
+/// Only a subset of these actions is dispatched by native-poc today
+/// (`copy`, `paste`, `new_tab`, `close_tab`, `next_tab`, `prev_tab`).
+/// The remaining specs are captured for forward compatibility so a
+/// `settings.json` shared with the WebView build round-trips without
+/// data loss; each carries an `#[allow(dead_code)]` until a native-poc
+/// feature consumes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeybindSettings {
+    /// Copy the current selection to the system clipboard.
+    pub copy: String,
+    /// Paste the system clipboard into the active terminal.
+    pub paste: String,
+    /// Select the entire terminal buffer. Captured for forward
+    /// compatibility; native-poc has no select-all action yet.
+    #[allow(dead_code)]
+    pub select_all: String,
+    /// Open the in-terminal search overlay. Captured for forward
+    /// compatibility; native-poc has no search overlay yet.
+    #[allow(dead_code)]
+    pub search: String,
+    /// Open a new tab in the focused window.
+    pub new_tab: String,
+    /// Open a new tab in a new window. Captured for forward
+    /// compatibility; native-poc has no multi-window support yet.
+    #[allow(dead_code)]
+    pub new_tab_global: String,
+    /// Close the active tab.
+    pub close_tab: String,
+    /// Switch to the next tab.
+    pub next_tab: String,
+    /// Switch to the previous tab.
+    pub prev_tab: String,
+    /// Increase the terminal font size. Captured for forward
+    /// compatibility; native-poc has no runtime zoom yet.
+    #[allow(dead_code)]
+    pub zoom_in: String,
+    /// Decrease the terminal font size. Captured for forward
+    /// compatibility; native-poc has no runtime zoom yet.
+    #[allow(dead_code)]
+    pub zoom_out: String,
+    /// Reset the terminal font size. Captured for forward
+    /// compatibility; native-poc has no runtime zoom yet.
+    #[allow(dead_code)]
+    pub zoom_reset: String,
+    /// Toggle full-screen mode. Captured for forward compatibility;
+    /// native-poc has no full-screen toggle yet.
+    #[allow(dead_code)]
+    pub toggle_fullscreen: String,
+    /// Open the settings panel. Captured for forward compatibility;
+    /// native-poc has no settings panel yet.
+    #[allow(dead_code)]
+    pub open_settings: String,
+    /// Toggle the tab bar visibility. Captured for forward
+    /// compatibility; native-poc has no runtime tab-bar toggle yet.
+    #[allow(dead_code)]
+    pub toggle_tab_bar: String,
+    /// Jump to the previous shell prompt. Captured for forward
+    /// compatibility; native-poc has no prompt detection yet.
+    #[allow(dead_code)]
+    pub jump_to_prev_prompt: String,
+    /// Jump to the next shell prompt. Captured for forward
+    /// compatibility; native-poc has no prompt detection yet.
+    #[allow(dead_code)]
+    pub jump_to_next_prompt: String,
+    /// Open the profile selector. Captured for forward compatibility;
+    /// native-poc has no profile selector yet.
+    #[allow(dead_code)]
+    pub profile_selector: String,
+}
+
+impl Default for KeybindSettings {
+    fn default() -> Self {
+        // Defaults mirror `src-tauri`'s `AppSettings.keybinds` exactly so
+        // a single `settings.json` behaves identically across both builds.
+        Self {
+            copy: "Ctrl+Shift+C".to_string(),
+            paste: "Ctrl+Shift+V".to_string(),
+            select_all: "Ctrl+Shift+A".to_string(),
+            search: "Ctrl+Shift+F".to_string(),
+            new_tab: "Ctrl+Shift+T".to_string(),
+            new_tab_global: "Ctrl+Shift+G".to_string(),
+            close_tab: "Ctrl+Shift+W".to_string(),
+            next_tab: "Ctrl+PageDown".to_string(),
+            prev_tab: "Ctrl+PageUp".to_string(),
+            zoom_in: "Ctrl+Plus".to_string(),
+            zoom_out: "Ctrl+Minus".to_string(),
+            zoom_reset: "Ctrl+0".to_string(),
+            toggle_fullscreen: "F11".to_string(),
+            open_settings: "Ctrl+,".to_string(),
+            toggle_tab_bar: "Ctrl+Shift+B".to_string(),
+            jump_to_prev_prompt: "Ctrl+Shift+ArrowUp".to_string(),
+            jump_to_next_prompt: "Ctrl+Shift+ArrowDown".to_string(),
+            profile_selector: "Ctrl+Shift+P".to_string(),
+        }
+    }
+}
+
 /// A single user-defined custom command for the
 /// `{cmd:<name>}` template variable. The command is run by the
 /// matching [`crate::status_bar::providers::CommandProvider`] worker
@@ -372,6 +475,10 @@ pub struct Settings {
     /// 4-D introduces this; today the value is always the default until
     /// Phase 7 wires `settings.json` loading.
     pub statusbar: StatusBarSettings,
+    /// Keyboard-shortcut chord specs. See [`KeybindSettings`]. Parsed
+    /// into a [`crate::ui::keybinds::KeybindTable`] at startup so the
+    /// dispatcher can match against user-configured chords.
+    pub keybinds: KeybindSettings,
     /// IME backend configuration. See [`ImeSettings`]. Phase 4-G
     /// introduces `native_integration` (default `true`). Phase 7 wires
     /// JSON loading; until then `Settings::default()` exercises the
@@ -659,6 +766,7 @@ impl Default for Settings {
             clipboard_max_size_osc52: DEFAULT_CLIPBOARD_MAX_SIZE_OSC52,
             mux_prefix_key: DEFAULT_MUX_PREFIX_KEY.to_string(),
             statusbar: StatusBarSettings::default(),
+            keybinds: KeybindSettings::default(),
             ime: ImeSettings::default(),
             font_size: DEFAULT_FONT_SIZE_PT,
             padding: DEFAULT_PADDING_PX,
@@ -817,6 +925,7 @@ struct RawSettings {
     cursor_style: Option<String>,
     cursor_blink: Option<bool>,
     mux: Option<RawMux>,
+    keybinds: Option<RawKeybinds>,
 
     statusbar_enabled: Option<bool>,
     statusbar_app_line1_left: Option<String>,
@@ -878,6 +987,34 @@ struct RawUserColorScheme {
 #[serde(default)]
 struct RawMux {
     prefix: Option<String>,
+}
+
+/// Deserialize side of the nested `"keybinds"` block. Mirrors
+/// `src-tauri`'s `AppSettings.keybinds` (snake_case string values).
+/// Every field is `Option<String>` with `#[serde(default)]` so missing
+/// keys, explicit `null`, and unknown keys all leave the corresponding
+/// [`KeybindSettings`] field at its default.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct RawKeybinds {
+    copy: Option<String>,
+    paste: Option<String>,
+    select_all: Option<String>,
+    search: Option<String>,
+    new_tab: Option<String>,
+    new_tab_global: Option<String>,
+    close_tab: Option<String>,
+    next_tab: Option<String>,
+    prev_tab: Option<String>,
+    zoom_in: Option<String>,
+    zoom_out: Option<String>,
+    zoom_reset: Option<String>,
+    toggle_fullscreen: Option<String>,
+    open_settings: Option<String>,
+    toggle_tab_bar: Option<String>,
+    jump_to_prev_prompt: Option<String>,
+    jump_to_next_prompt: Option<String>,
+    profile_selector: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -968,6 +1105,66 @@ impl RawSettings {
         if let Some(mux) = self.mux {
             if let Some(v) = mux.prefix.filter(|s| !s.trim().is_empty()) {
                 dst.mux_prefix_key = v;
+            }
+        }
+
+        // keybinds (nested, snake_case). Blank / whitespace-only specs
+        // are dropped so a `"copy": ""` entry keeps the default chord
+        // (matching the `mux.prefix` treatment above).
+        if let Some(kb) = self.keybinds {
+            if let Some(v) = kb.copy.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.copy = v;
+            }
+            if let Some(v) = kb.paste.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.paste = v;
+            }
+            if let Some(v) = kb.select_all.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.select_all = v;
+            }
+            if let Some(v) = kb.search.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.search = v;
+            }
+            if let Some(v) = kb.new_tab.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.new_tab = v;
+            }
+            if let Some(v) = kb.new_tab_global.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.new_tab_global = v;
+            }
+            if let Some(v) = kb.close_tab.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.close_tab = v;
+            }
+            if let Some(v) = kb.next_tab.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.next_tab = v;
+            }
+            if let Some(v) = kb.prev_tab.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.prev_tab = v;
+            }
+            if let Some(v) = kb.zoom_in.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.zoom_in = v;
+            }
+            if let Some(v) = kb.zoom_out.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.zoom_out = v;
+            }
+            if let Some(v) = kb.zoom_reset.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.zoom_reset = v;
+            }
+            if let Some(v) = kb.toggle_fullscreen.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.toggle_fullscreen = v;
+            }
+            if let Some(v) = kb.open_settings.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.open_settings = v;
+            }
+            if let Some(v) = kb.toggle_tab_bar.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.toggle_tab_bar = v;
+            }
+            if let Some(v) = kb.jump_to_prev_prompt.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.jump_to_prev_prompt = v;
+            }
+            if let Some(v) = kb.jump_to_next_prompt.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.jump_to_next_prompt = v;
+            }
+            if let Some(v) = kb.profile_selector.filter(|s| !s.trim().is_empty()) {
+                dst.keybinds.profile_selector = v;
             }
         }
 
@@ -1718,5 +1915,76 @@ mod tests {
         assert_eq!(s.scrollback_lines, 7);
         assert_eq!(s.ambiguous_width_mode, AmbiguousWidthMode::Wide);
         assert_eq!(s.font_engine, FontEngine::AbGlyph);
+    }
+
+    // ── keybinds defaults + loader ─────────────────────────────────────
+
+    #[test]
+    fn default_keybinds_match_src_tauri() {
+        let kb = Settings::new().keybinds;
+        assert_eq!(kb.copy, "Ctrl+Shift+C");
+        assert_eq!(kb.paste, "Ctrl+Shift+V");
+        assert_eq!(kb.select_all, "Ctrl+Shift+A");
+        assert_eq!(kb.search, "Ctrl+Shift+F");
+        assert_eq!(kb.new_tab, "Ctrl+Shift+T");
+        assert_eq!(kb.new_tab_global, "Ctrl+Shift+G");
+        assert_eq!(kb.close_tab, "Ctrl+Shift+W");
+        assert_eq!(kb.next_tab, "Ctrl+PageDown");
+        assert_eq!(kb.prev_tab, "Ctrl+PageUp");
+        assert_eq!(kb.zoom_in, "Ctrl+Plus");
+        assert_eq!(kb.zoom_out, "Ctrl+Minus");
+        assert_eq!(kb.zoom_reset, "Ctrl+0");
+        assert_eq!(kb.toggle_fullscreen, "F11");
+        assert_eq!(kb.open_settings, "Ctrl+,");
+        assert_eq!(kb.toggle_tab_bar, "Ctrl+Shift+B");
+        assert_eq!(kb.jump_to_prev_prompt, "Ctrl+Shift+ArrowUp");
+        assert_eq!(kb.jump_to_next_prompt, "Ctrl+Shift+ArrowDown");
+        assert_eq!(kb.profile_selector, "Ctrl+Shift+P");
+    }
+
+    #[test]
+    fn keybinds_default_round_trip() {
+        let s = Settings::new();
+        assert_eq!(s.keybinds, KeybindSettings::default());
+    }
+
+    #[test]
+    fn loader_keybinds_override_only_specified_keys() {
+        let s = load_json(r#"{"keybinds": {"new_tab": "Ctrl+Shift+N", "copy": "Ctrl+Insert"}}"#);
+        // Overridden keys take the new spec.
+        assert_eq!(s.keybinds.new_tab, "Ctrl+Shift+N");
+        assert_eq!(s.keybinds.copy, "Ctrl+Insert");
+        // Everything else stays at the default.
+        let d = KeybindSettings::default();
+        assert_eq!(s.keybinds.paste, d.paste);
+        assert_eq!(s.keybinds.close_tab, d.close_tab);
+        assert_eq!(s.keybinds.next_tab, d.next_tab);
+        assert_eq!(s.keybinds.prev_tab, d.prev_tab);
+    }
+
+    #[test]
+    fn loader_keybinds_blank_specs_keep_defaults() {
+        let s = load_json(r#"{"keybinds": {"copy": "", "paste": "   ", "new_tab": "Ctrl+T"}}"#);
+        let d = KeybindSettings::default();
+        // Blank / whitespace-only specs are dropped.
+        assert_eq!(s.keybinds.copy, d.copy);
+        assert_eq!(s.keybinds.paste, d.paste);
+        // A non-blank spec still applies.
+        assert_eq!(s.keybinds.new_tab, "Ctrl+T");
+    }
+
+    #[test]
+    fn loader_keybinds_null_keeps_defaults() {
+        let s = load_json(r#"{"keybinds": null}"#);
+        assert_eq!(s.keybinds, KeybindSettings::default());
+    }
+
+    #[test]
+    fn loader_keybinds_unknown_keys_do_not_panic() {
+        let s =
+            load_json(r#"{"keybinds": {"some_future_action": "Ctrl+Z", "copy": "Ctrl+Insert"}}"#);
+        // Unknown keys are ignored; known keys still apply.
+        assert_eq!(s.keybinds.copy, "Ctrl+Insert");
+        assert_eq!(s.keybinds.paste, KeybindSettings::default().paste);
     }
 }
