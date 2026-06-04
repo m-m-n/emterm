@@ -29,6 +29,22 @@ use crate::ui::emoji_cache::EmojiTextureCache;
 /// `cursorBlinkXOR` interval; one full on/off cycle is `2 * BLINK_HALF_MS`.
 pub const BLINK_HALF_MS: u128 = 530;
 
+/// Per-step change applied by the `ZoomIn` / `ZoomOut` keybinds, in
+/// logical points.
+pub const FONT_SIZE_PT_STEP: f32 = 1.0;
+/// Lower clamp for the runtime terminal font size (logical points).
+pub const FONT_SIZE_PT_MIN: f32 = 6.0;
+/// Upper clamp for the runtime terminal font size (logical points).
+pub const FONT_SIZE_PT_MAX: f32 = 72.0;
+
+/// Clamp a candidate terminal font size (logical points) into
+/// [`FONT_SIZE_PT_MIN`]..=[`FONT_SIZE_PT_MAX`]. Split out as a pure
+/// function so the zoom clamp can be unit-tested without constructing a
+/// full `App` (which builds the font stack and a status-bar runtime).
+pub fn clamp_font_size_pt(pt: f32) -> f32 {
+    pt.clamp(FONT_SIZE_PT_MIN, FONT_SIZE_PT_MAX)
+}
+
 /// Where the viewport currently sits relative to the live tail.
 ///
 /// `Live` means the user is tracking new output (auto-follow). When PTY
@@ -145,6 +161,21 @@ pub struct App {
     /// once at startup from the base font's ascent + descent at
     /// `settings.font_size`. See [`Self::cell_w_logical`].
     pub cell_h_logical: f32,
+    /// Runtime terminal font size in logical points. Seeded from
+    /// `settings.font_size` at startup and mutated by the zoom keybinds
+    /// (`ZoomIn` / `ZoomOut` / `ZoomReset`). Kept distinct from
+    /// `settings.font_size` (the persisted baseline) so `ZoomReset` can
+    /// restore the configured value and new tabs can inherit the live
+    /// zoom level. `cell_w_logical` / `cell_h_logical` and every tab's
+    /// `Theme::font_size_pt` are re-derived from this whenever it
+    /// changes (see [`Self::set_font_size_pt`]).
+    pub runtime_font_size_pt: f32,
+    /// Runtime tab-bar visibility, toggled by the `ToggleTabBar`
+    /// keybind. Seeded from `settings.show_tab_bar`; the renderer and
+    /// the grid-size / hit-test paths read this instead of the
+    /// persisted setting so the toggle takes effect without rewriting
+    /// `settings.json`.
+    pub show_tab_bar: bool,
     /// Color-emoji texture cache for the status bar. egui's text path
     /// (ab_glyph) cannot raster CBDT/COLR glyphs, so the widget walks
     /// each run via [`crate::ui::emoji_cache::split_segments`] and
@@ -283,6 +314,13 @@ impl App {
             crate::wakeup::shared_wake_fn(),
         );
 
+        // Seed the runtime view state from settings before the `Arc`
+        // moves into the struct literal's `settings` field (the literal
+        // initializes fields in source order, so a later
+        // `settings.font_size` read would be a use-after-move).
+        let runtime_font_size_pt = settings.font_size;
+        let show_tab_bar = settings.show_tab_bar;
+
         Self {
             tabs: Vec::new(),
             active: 0,
@@ -310,6 +348,8 @@ impl App {
             font_base_id,
             cell_w_logical,
             cell_h_logical,
+            runtime_font_size_pt,
+            show_tab_bar,
             emoji_texture_cache: Arc::new(Mutex::new(EmojiTextureCache::new())),
             status_bar_runtime,
             active_cwd,
@@ -678,6 +718,13 @@ impl App {
             Some(self.status_bar_runtime.dispatcher()),
             Some(self.status_bar_runtime.cwd_provider()),
         );
+        // A fresh tab seeds its theme from `settings.font_size`; carry
+        // the live zoom level over so a tab opened after the user zoomed
+        // matches the existing tabs instead of snapping back to the
+        // configured baseline.
+        if (self.runtime_font_size_pt - self.settings.font_size).abs() >= f32::EPSILON {
+            tab.theme.lock().font_size_pt = self.runtime_font_size_pt;
+        }
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         self.needs_full_redraw = true;
@@ -825,7 +872,117 @@ impl App {
                 self.switch_to_tab(idx);
                 false
             }
+            crate::ui::AppAction::SelectAll => {
+                self.select_all();
+                false
+            }
+            // The remaining view-level actions need the host's
+            // `winit::window::Window` handle and/or the deferred-resize
+            // machinery, so the keyboard handler in `window_host`
+            // dispatches them directly against `WindowHost` instead of
+            // routing them here. They are listed explicitly (rather than
+            // a catch-all) so a future variant cannot silently fall into
+            // a no-op arm.
+            crate::ui::AppAction::ZoomIn
+            | crate::ui::AppAction::ZoomOut
+            | crate::ui::AppAction::ZoomReset
+            | crate::ui::AppAction::ToggleFullscreen
+            | crate::ui::AppAction::ToggleTabBar => false,
         }
+    }
+
+    /// Select the entire visible viewport of the active tab. The
+    /// selection spans `(0, 0)` to `(rows - 1, cols - 1)` in the active
+    /// tab's `TerminalCore` cell coordinates. No-op when there is no
+    /// active tab or the grid is empty.
+    ///
+    /// Coordinate-system note: [`crate::selection::Pos`] addresses
+    /// **viewport** cells (the same space the mouse-selection path in
+    /// `window_host` produces via `pixel_to_cell`), not absolute
+    /// scrollback rows. "Select all" therefore covers the on-screen
+    /// rows only; scrollback above the viewport is not included. A
+    /// scrollback-aware select-all would need `Pos` to carry an
+    /// absolute row, which the PoC selection model does not yet
+    /// express.
+    pub fn select_all(&mut self) {
+        let Some(tab) = self.tabs.get(self.active) else {
+            return;
+        };
+        let (cols, rows) = {
+            let core = tab.core.lock();
+            (core.cols(), core.rows())
+        };
+        if cols == 0 || rows == 0 {
+            return;
+        }
+        self.selection = Some(Selection {
+            anchor: crate::selection::Pos { row: 0, col: 0 },
+            extent: crate::selection::Pos {
+                row: rows - 1,
+                col: cols - 1,
+            },
+            mode: crate::selection::SelectionMode::Character,
+        });
+        self.needs_full_redraw = true;
+    }
+
+    /// Increase the runtime terminal font size by one point (clamped to
+    /// [`FONT_SIZE_PT_MIN`]..=[`FONT_SIZE_PT_MAX`]). Returns `true` when
+    /// the size actually changed so the caller can reshape the grid.
+    pub fn zoom_in(&mut self) -> bool {
+        self.set_font_size_pt(self.runtime_font_size_pt + FONT_SIZE_PT_STEP)
+    }
+
+    /// Decrease the runtime terminal font size by one point (clamped).
+    /// Returns `true` when the size actually changed.
+    pub fn zoom_out(&mut self) -> bool {
+        self.set_font_size_pt(self.runtime_font_size_pt - FONT_SIZE_PT_STEP)
+    }
+
+    /// Reset the runtime terminal font size back to the configured
+    /// `settings.font_size`. Returns `true` when the size actually
+    /// changed.
+    pub fn zoom_reset(&mut self) -> bool {
+        self.set_font_size_pt(self.settings.font_size)
+    }
+
+    /// Set the runtime terminal font size to `new_pt` (clamped to
+    /// [`FONT_SIZE_PT_MIN`]..=[`FONT_SIZE_PT_MAX`]). On a real change:
+    /// re-derive `cell_w_logical` / `cell_h_logical` from the font stack
+    /// at the new pixel size, push the new point size into every tab's
+    /// `Theme` (leaving the rest of each theme's OSC-mutated state
+    /// intact), force a full redraw, and return `true`. Returns `false`
+    /// (no mutation) when the clamped target equals the current size.
+    ///
+    /// The PTY grid is *not* reshaped here — the caller (`window_host`)
+    /// owns the window pixel size and triggers a deferred resize so the
+    /// new cell metrics produce the right `(cols, rows)` on the next
+    /// frame.
+    pub fn set_font_size_pt(&mut self, new_pt: f32) -> bool {
+        let clamped = clamp_font_size_pt(new_pt);
+        if (clamped - self.runtime_font_size_pt).abs() < f32::EPSILON {
+            return false;
+        }
+        self.runtime_font_size_pt = clamped;
+        // Re-derive cell metrics at the new size. `font_size_px` applies
+        // the same 96/72 pt→px conversion `settings.font_size_px()` uses
+        // at startup so the grid stays consistent with the WebView build.
+        let new_px = clamped * crate::settings::PT_TO_PX;
+        let (cell_w, cell_h) = crate::render::compute_cell_dims(
+            self.font_rasterizer.as_ref(),
+            self.font_fallback.as_ref(),
+            new_px,
+        );
+        self.cell_w_logical = cell_w;
+        self.cell_h_logical = cell_h;
+        // Push the new point size into every tab's theme. Only
+        // `font_size_pt` is touched so OSC-driven palette / cursor
+        // mutations a tab accumulated are preserved.
+        for tab in &self.tabs {
+            tab.theme.lock().font_size_pt = clamped;
+        }
+        self.needs_full_redraw = true;
+        true
     }
 
     #[allow(dead_code)] // retained for window_host / tests
@@ -2070,5 +2227,104 @@ mod tests {
         let (mock, _) = MockBackend::new();
         app.set_ime_backend(Box::new(mock));
         assert!(!app.ime_is_null());
+    }
+
+    // ── Zoom: clamp + runtime font size ───────────────────────────────
+
+    #[test]
+    fn clamp_font_size_pt_bounds() {
+        // Below the floor clamps up; above the ceiling clamps down; a
+        // value inside the range is returned unchanged.
+        assert_eq!(clamp_font_size_pt(1.0), FONT_SIZE_PT_MIN);
+        assert_eq!(clamp_font_size_pt(1000.0), FONT_SIZE_PT_MAX);
+        assert_eq!(clamp_font_size_pt(12.0), 12.0);
+        assert_eq!(clamp_font_size_pt(FONT_SIZE_PT_MIN), FONT_SIZE_PT_MIN);
+        assert_eq!(clamp_font_size_pt(FONT_SIZE_PT_MAX), FONT_SIZE_PT_MAX);
+    }
+
+    #[test]
+    fn zoom_seeds_runtime_size_from_settings() {
+        let app = App::new();
+        assert_eq!(app.runtime_font_size_pt, app.settings.font_size);
+    }
+
+    #[test]
+    fn zoom_in_increments_by_one_point() {
+        let mut app = App::new();
+        let before = app.runtime_font_size_pt;
+        assert!(app.zoom_in());
+        assert!((app.runtime_font_size_pt - (before + FONT_SIZE_PT_STEP)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn zoom_out_decrements_by_one_point() {
+        let mut app = App::new();
+        let before = app.runtime_font_size_pt;
+        assert!(app.zoom_out());
+        assert!((app.runtime_font_size_pt - (before - FONT_SIZE_PT_STEP)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn zoom_reset_restores_settings_size() {
+        let mut app = App::new();
+        let baseline = app.settings.font_size;
+        let _ = app.zoom_in();
+        let _ = app.zoom_in();
+        assert!(app.zoom_reset());
+        assert!((app.runtime_font_size_pt - baseline).abs() < f32::EPSILON);
+        // Resetting again is a no-op (already at the baseline).
+        assert!(!app.zoom_reset());
+    }
+
+    #[test]
+    fn zoom_clamps_at_ceiling_and_floor() {
+        let mut app = App::new();
+        // Drive up to the ceiling; the step that would exceed it returns
+        // false (no change) once clamped.
+        app.runtime_font_size_pt = FONT_SIZE_PT_MAX;
+        assert!(!app.zoom_in(), "already at ceiling: no change expected");
+        assert_eq!(app.runtime_font_size_pt, FONT_SIZE_PT_MAX);
+        // Same at the floor.
+        app.runtime_font_size_pt = FONT_SIZE_PT_MIN;
+        assert!(!app.zoom_out(), "already at floor: no change expected");
+        assert_eq!(app.runtime_font_size_pt, FONT_SIZE_PT_MIN);
+    }
+
+    #[test]
+    fn set_font_size_pt_no_change_returns_false() {
+        let mut app = App::new();
+        let cur = app.runtime_font_size_pt;
+        assert!(!app.set_font_size_pt(cur));
+    }
+
+    // ── Tab-bar runtime toggle ────────────────────────────────────────
+
+    #[test]
+    fn show_tab_bar_seeds_from_settings() {
+        let app = App::new();
+        assert_eq!(app.show_tab_bar, app.settings.show_tab_bar);
+    }
+
+    // ── Select-all ────────────────────────────────────────────────────
+
+    #[test]
+    fn select_all_without_active_tab_is_noop() {
+        let mut app = App::new();
+        // No tabs spawned (App::new does not call spawn_initial_tab).
+        assert!(app.tabs.is_empty());
+        app.select_all();
+        assert!(
+            app.selection.is_none(),
+            "select_all with no active tab must not set a selection"
+        );
+    }
+
+    #[test]
+    fn select_all_action_routes_through_apply_action() {
+        let mut app = App::new();
+        // With no tabs this is a no-op, but it must not panic and must
+        // report `false` (no exit request).
+        let exit = app.apply_action(crate::ui::AppAction::SelectAll);
+        assert!(!exit);
     }
 }

@@ -171,7 +171,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             item
         })
         .collect();
-    let tab_event = if items.is_empty() || !app.settings.show_tab_bar {
+    let tab_event = if items.is_empty() || !app.show_tab_bar {
         None
     } else {
         crate::ui::tab_bar::draw(ctx, &items, app.active)
@@ -438,7 +438,7 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
     // panel whose `min_rect` is already pushed down by the egui
     // top-status panel, so adding the inset would double-count it.
     let pad = app.settings.padding as f32;
-    let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.settings.show_tab_bar);
+    let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
     let origin = Pos2::new(pad, crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad);
     let painter = ui.painter();
 

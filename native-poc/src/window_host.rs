@@ -425,6 +425,22 @@ impl WindowHost {
         }
     }
 
+    /// Toggle borderless full-screen for the window. When already
+    /// full-screen, restore windowed mode (`None`); otherwise enter
+    /// `Borderless(None)` so winit picks the window's current monitor.
+    /// The resulting `WindowEvent::Resized` drives the deferred
+    /// `apply_pending_resize`, so the grid reshapes on the next frame
+    /// without any extra plumbing here.
+    fn toggle_fullscreen(&self) {
+        use winit::window::Fullscreen;
+        if self.window.fullscreen().is_some() {
+            self.window.set_fullscreen(None);
+        } else {
+            self.window
+                .set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
+    }
+
     /// Classify a pointer position (in egui logical points, relative to
     /// the window's top-left) as one of the eight CSD resize directions,
     /// or `None` when the pointer is in the window interior. The window
@@ -595,7 +611,7 @@ impl WindowHost {
         // optional status-bar row pinned to the top, and the same
         // user-configured padding inset. Forgetting the title bar
         // here makes the first cell render behind the tab strip.
-        let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.settings.show_tab_bar) as f64;
+        let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar) as f64;
         let origin_y = ((crate::ui::title_bar::TITLE_BAR_HEIGHT as f64)
             + tab_h
             + (self.status_bar_top_inset_logical as f64)
@@ -936,10 +952,17 @@ impl WindowHost {
             // Theme is seeded from settings (font_size_pt + cursor
             // style) and then overlaid with the active tab's OSC
             // mutations when a tab is present, mirroring the layering
-            // `render::draw_terminal` uses for the egui overlay.
+            // `render::draw_terminal` uses for the egui overlay. The
+            // no-tab fallback overrides `font_size_pt` with the live
+            // zoom level so the grid pass agrees with `cell_w_logical` /
+            // `cell_h_logical` (also re-derived from the runtime size).
             let theme = match app.active_tab() {
                 Some(tab) => tab.theme.lock().clone(),
-                None => crate::render::theme::Theme::from_settings(app.settings.as_ref()),
+                None => {
+                    let mut t = crate::render::theme::Theme::from_settings(app.settings.as_ref());
+                    t.font_size_pt = app.runtime_font_size_pt;
+                    t
+                }
             };
             let width_mode = app.settings.ambiguous_width_mode;
             let cell_inputs = if let Some(tab) = app.active_tab() {
@@ -1639,8 +1662,47 @@ impl ApplicationHandler for PocApp {
                         crate::ui::keybinds::dispatch(&self.app.keybinds, egui_mods, k)
                     });
                     if let Some(act) = action {
-                        let _ = self.app.apply_action(act);
-                        self.app.mark_full_redraw();
+                        // View-level actions that need the window handle
+                        // or the deferred-resize machinery are applied
+                        // against `host` here; everything else routes
+                        // through `App::apply_action`.
+                        match act {
+                            crate::ui::AppAction::ToggleFullscreen => {
+                                host.toggle_fullscreen();
+                                self.app.mark_full_redraw();
+                            }
+                            crate::ui::AppAction::ZoomIn => {
+                                if self.app.zoom_in() {
+                                    host.request_resize();
+                                    self.app.mark_full_redraw();
+                                }
+                            }
+                            crate::ui::AppAction::ZoomOut => {
+                                if self.app.zoom_out() {
+                                    host.request_resize();
+                                    self.app.mark_full_redraw();
+                                }
+                            }
+                            crate::ui::AppAction::ZoomReset => {
+                                if self.app.zoom_reset() {
+                                    host.request_resize();
+                                    self.app.mark_full_redraw();
+                                }
+                            }
+                            crate::ui::AppAction::ToggleTabBar => {
+                                self.app.show_tab_bar = !self.app.show_tab_bar;
+                                // The tab strip's row count changed, so the
+                                // grid origin / available rows shift: defer
+                                // a resize so the PTY is reshaped before the
+                                // next frame paints.
+                                host.request_resize();
+                                self.app.mark_full_redraw();
+                            }
+                            other => {
+                                let _ = self.app.apply_action(other);
+                                self.app.mark_full_redraw();
+                            }
+                        }
                     } else {
                         // `shift_enter_as_alt_enter`: when the user has
                         // opted in, present `Shift+Enter` to the shell
@@ -1776,7 +1838,7 @@ impl ApplicationHandler for PocApp {
                 // simultaneously start a selection on the cell behind
                 // it.
                 let top_strip_h = crate::ui::title_bar::TITLE_BAR_HEIGHT
-                    + crate::ui::tab_bar::effective_tab_bar_height(self.app.settings.show_tab_bar);
+                    + crate::ui::tab_bar::effective_tab_bar_height(self.app.show_tab_bar);
                 let if_in_egui_strip = egui_pos.y < top_strip_h;
                 if if_in_egui_strip {
                     return;

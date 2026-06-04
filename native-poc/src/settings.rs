@@ -247,21 +247,21 @@ impl Default for ImeSettings {
 /// strings are parsed into [`crate::ui::keybinds::Chord`]s by
 /// `KeybindTable::from_settings` at startup.
 ///
-/// Only a subset of these actions is dispatched by native-poc today
-/// (`copy`, `paste`, `new_tab`, `close_tab`, `next_tab`, `prev_tab`).
-/// The remaining specs are captured for forward compatibility so a
-/// `settings.json` shared with the WebView build round-trips without
-/// data loss; each carries an `#[allow(dead_code)]` until a native-poc
-/// feature consumes it.
+/// A subset of these actions is dispatched by native-poc today
+/// (`copy`, `paste`, `new_tab`, `close_tab`, `next_tab`, `prev_tab`,
+/// `select_all`, `zoom_in`, `zoom_out`, `zoom_reset`,
+/// `toggle_fullscreen`, `toggle_tab_bar`). The remaining specs are
+/// captured for forward compatibility so a `settings.json` shared with
+/// the WebView build round-trips without data loss; each carries an
+/// `#[allow(dead_code)]` until a native-poc feature consumes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeybindSettings {
     /// Copy the current selection to the system clipboard.
     pub copy: String,
     /// Paste the system clipboard into the active terminal.
     pub paste: String,
-    /// Select the entire terminal buffer. Captured for forward
-    /// compatibility; native-poc has no select-all action yet.
-    #[allow(dead_code)]
+    /// Select the entire visible viewport of the active tab. Dispatched
+    /// to `AppAction::SelectAll`.
     pub select_all: String,
     /// Open the in-terminal search overlay. Captured for forward
     /// compatibility; native-poc has no search overlay yet.
@@ -279,29 +279,24 @@ pub struct KeybindSettings {
     pub next_tab: String,
     /// Switch to the previous tab.
     pub prev_tab: String,
-    /// Increase the terminal font size. Captured for forward
-    /// compatibility; native-poc has no runtime zoom yet.
-    #[allow(dead_code)]
+    /// Increase the runtime terminal font size by one point (clamped).
+    /// Dispatched to `AppAction::ZoomIn`.
     pub zoom_in: String,
-    /// Decrease the terminal font size. Captured for forward
-    /// compatibility; native-poc has no runtime zoom yet.
-    #[allow(dead_code)]
+    /// Decrease the runtime terminal font size by one point (clamped).
+    /// Dispatched to `AppAction::ZoomOut`.
     pub zoom_out: String,
-    /// Reset the terminal font size. Captured for forward
-    /// compatibility; native-poc has no runtime zoom yet.
-    #[allow(dead_code)]
+    /// Reset the runtime terminal font size to `settings.font_size`.
+    /// Dispatched to `AppAction::ZoomReset`.
     pub zoom_reset: String,
-    /// Toggle full-screen mode. Captured for forward compatibility;
-    /// native-poc has no full-screen toggle yet.
-    #[allow(dead_code)]
+    /// Toggle borderless full-screen mode. Dispatched to
+    /// `AppAction::ToggleFullscreen`.
     pub toggle_fullscreen: String,
     /// Open the settings panel. Captured for forward compatibility;
     /// native-poc has no settings panel yet.
     #[allow(dead_code)]
     pub open_settings: String,
-    /// Toggle the tab bar visibility. Captured for forward
-    /// compatibility; native-poc has no runtime tab-bar toggle yet.
-    #[allow(dead_code)]
+    /// Toggle the tab bar visibility. Dispatched to
+    /// `AppAction::ToggleTabBar`.
     pub toggle_tab_bar: String,
     /// Jump to the previous shell prompt. Captured for forward
     /// compatibility; native-poc has no prompt detection yet.

@@ -34,9 +34,11 @@ use super::TabEvent;
 /// Matches `.tab-bar { height: 48px }` in the WebView build.
 pub const TAB_BAR_HEIGHT: f32 = 48.0;
 
-/// Effective tab-bar height for layout math, accounting for
-/// `settings.show_tab_bar`. Returns 0 when the bar is hidden so the
-/// terminal grid / cursor overlay use the freed vertical space.
+/// Effective tab-bar height for layout math, accounting for the runtime
+/// tab-bar visibility (`App::show_tab_bar`, seeded from
+/// `settings.show_tab_bar` and flipped by the `ToggleTabBar` keybind).
+/// Returns 0 when the bar is hidden so the terminal grid / cursor
+/// overlay use the freed vertical space.
 pub fn effective_tab_bar_height(show_tab_bar: bool) -> f32 {
     if show_tab_bar {
         TAB_BAR_HEIGHT
