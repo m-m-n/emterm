@@ -44,6 +44,7 @@ use crate::ime::backend::{build_backend_with_window, KeyDispatchResult, ProcessE
 use crate::pty::input::{encode, Key, Modifiers};
 use crate::render::terminal_grid_pass::TerminalGridPass;
 use crate::selection::{Pos, Selection, SelectionMode};
+use crate::ui::keybinds::Chord;
 
 /// Maximum time between successive clicks that still counts as a "multi-click".
 /// Within this window the click counter increments; beyond it the counter
@@ -1193,22 +1194,53 @@ fn winit_to_egui_button(b: MouseButton) -> Option<egui::PointerButton> {
     }
 }
 
-/// Translate a winit logical key into the subset of `egui::Key` consumed
-/// by `crate::ui::keybinds::dispatch`. Returns `None` for keys that the
-/// dispatcher does not bind (the caller falls through to PTY input).
+/// Translate a winit logical key into the `egui::Key` consumed by
+/// `crate::ui::keybinds::dispatch` and `handle_special_chord`. Returns
+/// `None` for keys that no chord can reference (the caller falls through
+/// to PTY input).
 ///
-/// Only the keys referenced by the Phase 4-B keybind table are mapped
-/// (T, W, Tab, Num0..Num9); everything else is intentionally unmapped
-/// so the PTY passthrough path stays the default.
+/// The mapped set covers every main key the settings-driven keybind
+/// parser can produce (`parse_main_key`): ASCII letters / digits, the
+/// symbol keys, the navigation / editing named keys, and F1..F12.
 fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
     match logical {
-        WinitKey::Named(NamedKey::Tab) => Some(egui::Key::Tab),
         WinitKey::Character(s) => {
             let mut chars = s.chars();
             let c = chars.next()?;
-            match c.to_ascii_lowercase() {
-                't' => Some(egui::Key::T),
-                'w' => Some(egui::Key::W),
+            let lower = c.to_ascii_lowercase();
+            if lower.is_ascii_alphabetic() {
+                // Allocation-free mapping — avoids a heap String per keystroke.
+                return match lower {
+                    'a' => Some(egui::Key::A),
+                    'b' => Some(egui::Key::B),
+                    'c' => Some(egui::Key::C),
+                    'd' => Some(egui::Key::D),
+                    'e' => Some(egui::Key::E),
+                    'f' => Some(egui::Key::F),
+                    'g' => Some(egui::Key::G),
+                    'h' => Some(egui::Key::H),
+                    'i' => Some(egui::Key::I),
+                    'j' => Some(egui::Key::J),
+                    'k' => Some(egui::Key::K),
+                    'l' => Some(egui::Key::L),
+                    'm' => Some(egui::Key::M),
+                    'n' => Some(egui::Key::N),
+                    'o' => Some(egui::Key::O),
+                    'p' => Some(egui::Key::P),
+                    'q' => Some(egui::Key::Q),
+                    'r' => Some(egui::Key::R),
+                    's' => Some(egui::Key::S),
+                    't' => Some(egui::Key::T),
+                    'u' => Some(egui::Key::U),
+                    'v' => Some(egui::Key::V),
+                    'w' => Some(egui::Key::W),
+                    'x' => Some(egui::Key::X),
+                    'y' => Some(egui::Key::Y),
+                    'z' => Some(egui::Key::Z),
+                    _ => None,
+                };
+            }
+            match lower {
                 '0' => Some(egui::Key::Num0),
                 '1' => Some(egui::Key::Num1),
                 '2' => Some(egui::Key::Num2),
@@ -1219,9 +1251,59 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
                 '7' => Some(egui::Key::Num7),
                 '8' => Some(egui::Key::Num8),
                 '9' => Some(egui::Key::Num9),
+                '+' => Some(egui::Key::Plus),
+                '-' => Some(egui::Key::Minus),
+                ',' => Some(egui::Key::Comma),
+                '.' => Some(egui::Key::Period),
+                '/' => Some(egui::Key::Slash),
+                '\\' => Some(egui::Key::Backslash),
+                '=' => Some(egui::Key::Equals),
+                ';' => Some(egui::Key::Semicolon),
+                ':' => Some(egui::Key::Colon),
                 _ => None,
             }
         }
+        WinitKey::Named(named) => match named {
+            NamedKey::Tab => Some(egui::Key::Tab),
+            NamedKey::PageUp => Some(egui::Key::PageUp),
+            NamedKey::PageDown => Some(egui::Key::PageDown),
+            NamedKey::Home => Some(egui::Key::Home),
+            NamedKey::End => Some(egui::Key::End),
+            NamedKey::ArrowUp => Some(egui::Key::ArrowUp),
+            NamedKey::ArrowDown => Some(egui::Key::ArrowDown),
+            NamedKey::ArrowLeft => Some(egui::Key::ArrowLeft),
+            NamedKey::ArrowRight => Some(egui::Key::ArrowRight),
+            NamedKey::Enter => Some(egui::Key::Enter),
+            NamedKey::Escape => Some(egui::Key::Escape),
+            NamedKey::Backspace => Some(egui::Key::Backspace),
+            NamedKey::Delete => Some(egui::Key::Delete),
+            NamedKey::Insert => Some(egui::Key::Insert),
+            NamedKey::Space => Some(egui::Key::Space),
+            NamedKey::F1 => Some(egui::Key::F1),
+            NamedKey::F2 => Some(egui::Key::F2),
+            NamedKey::F3 => Some(egui::Key::F3),
+            NamedKey::F4 => Some(egui::Key::F4),
+            NamedKey::F5 => Some(egui::Key::F5),
+            NamedKey::F6 => Some(egui::Key::F6),
+            NamedKey::F7 => Some(egui::Key::F7),
+            NamedKey::F8 => Some(egui::Key::F8),
+            NamedKey::F9 => Some(egui::Key::F9),
+            NamedKey::F10 => Some(egui::Key::F10),
+            NamedKey::F11 => Some(egui::Key::F11),
+            NamedKey::F12 => Some(egui::Key::F12),
+            // F13–F20 are accepted by parse_main_key in keybinds.rs;
+            // extend here so a configured F13–F20 chord can reach dispatch
+            // at runtime instead of silently falling through to PTY input.
+            NamedKey::F13 => Some(egui::Key::F13),
+            NamedKey::F14 => Some(egui::Key::F14),
+            NamedKey::F15 => Some(egui::Key::F15),
+            NamedKey::F16 => Some(egui::Key::F16),
+            NamedKey::F17 => Some(egui::Key::F17),
+            NamedKey::F18 => Some(egui::Key::F18),
+            NamedKey::F19 => Some(egui::Key::F19),
+            NamedKey::F20 => Some(egui::Key::F20),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1523,17 +1605,29 @@ impl ApplicationHandler for PocApp {
                     return;
                 }
 
-                // Phase 4 chords intercept the generic encoder path:
-                //   Ctrl+Shift+C  → copy current selection to CLIPBOARD
-                //   Ctrl+Shift+V  → paste CLIPBOARD into PTY (bracketed if 2004)
-                //   Shift+PageUp  → scroll back one page
+                // Translate the logical key once; the result is shared by
+                // `handle_special_chord` (clipboard chords) and the
+                // settings-driven keybinds dispatch that follows, avoiding
+                // a second translation on every keystroke.
+                //
+                // Special chords intercept the generic encoder path. The
+                // clipboard chords are settings-driven (`keybinds.copy` /
+                // `keybinds.paste`, defaults shown); the scrollback chords
+                // are fixed native-poc conventions:
+                //   keybinds.copy  (default Ctrl+Shift+C) → copy selection to CLIPBOARD
+                //   keybinds.paste (default Ctrl+Shift+V) → paste CLIPBOARD into PTY (bracketed if 2004)
+                //   Shift+PageUp   → scroll back one page
                 //   Shift+PageDown → scroll forward one page
-                //   Shift+Home    → scroll to top of scrollback
-                //   Shift+End     → scroll back to live tail
-                let handled = handle_special_chord(&event, host.current_mods, host, &mut self.app);
+                //   Shift+Home     → scroll to top of scrollback
+                //   Shift+End      → scroll back to live tail
+                let egui_key = winit_key_to_egui(&event.logical_key);
+                let handled =
+                    handle_special_chord(&event, host.current_mods, egui_key, host, &mut self.app);
                 if !handled {
-                    // Phase 4-B: global keybinds (tab roster) take
-                    // priority over the generic PTY encoder.
+                    // Settings-driven global keybinds (tab roster) take
+                    // priority over the generic PTY encoder. The chord
+                    // table comes from `settings.keybinds` (resolved into
+                    // `App::keybinds` at startup).
                     let egui_mods = egui::Modifiers {
                         ctrl: host.current_mods.ctrl,
                         shift: host.current_mods.shift,
@@ -1541,8 +1635,9 @@ impl ApplicationHandler for PocApp {
                         command: false,
                         mac_cmd: false,
                     };
-                    let action = winit_key_to_egui(&event.logical_key)
-                        .and_then(|k| crate::ui::keybinds::dispatch(egui_mods, k));
+                    let action = egui_key.and_then(|k| {
+                        crate::ui::keybinds::dispatch(&self.app.keybinds, egui_mods, k)
+                    });
                     if let Some(act) = action {
                         let _ = self.app.apply_action(act);
                         self.app.mark_full_redraw();
@@ -1929,38 +2024,46 @@ pub fn run(event_loop: EventLoop<()>, app: App) -> ! {
 
 /// Intercept Phase 4 chords. Returns `true` when the event was consumed
 /// (the generic encoder should not run).
+///
+/// `egui_key` is the pre-computed result of `winit_key_to_egui` for this
+/// event, passed in so the caller can reuse the same value for the
+/// keybinds dispatch path without a second translation.
 fn handle_special_chord(
     event: &KeyEvent,
     mods: Modifiers,
+    egui_key: Option<egui::Key>,
     host: &mut WindowHost,
     app: &mut App,
 ) -> bool {
-    // Clipboard chords need Ctrl+Shift+<char>. winit reports the
-    // Character logical key for letter keys.
-    if mods.ctrl && mods.shift {
-        if let WinitKey::Character(s) = &event.logical_key {
-            let lower = s.to_ascii_lowercase();
-            match lower.as_str() {
-                "c" => {
-                    // Copy current selection to CLIPBOARD.
-                    if let Some(sel) = app.selection {
-                        if let Some(tab) = app.tabs.get(app.active) {
-                            let core = tab.core.lock();
-                            let text = sel.resolve(&core);
-                            drop(core);
-                            host.set_clipboard(&text);
-                        }
-                    }
-                    return true;
+    // Clipboard chords are settings-driven (`keybinds.copy` /
+    // `keybinds.paste`). Build the incoming chord from the winit event +
+    // modifiers and compare against the resolved table.
+    if let Some(key) = egui_key {
+        let chord = Chord {
+            ctrl: mods.ctrl,
+            shift: mods.shift,
+            alt: mods.alt,
+            key,
+        };
+        if chord == app.keybinds.copy {
+            // Copy current selection to CLIPBOARD. We consume the chord
+            // even when there is no active selection so the configured
+            // copy key never leaks through to the PTY.
+            if let Some(sel) = app.selection {
+                if let Some(tab) = app.tabs.get(app.active) {
+                    let core = tab.core.lock();
+                    let text = sel.resolve(&core);
+                    drop(core);
+                    host.set_clipboard(&text);
                 }
-                "v" => {
-                    if let Some(text) = host.get_clipboard() {
-                        host.deliver_paste(app, &text);
-                    }
-                    return true;
-                }
-                _ => {}
             }
+            return true;
+        }
+        if chord == app.keybinds.paste {
+            if let Some(text) = host.get_clipboard() {
+                host.deliver_paste(app, &text);
+            }
+            return true;
         }
     }
 
@@ -2157,5 +2260,44 @@ mod tests {
             redraws.set(redraws.get() + 1);
         });
         assert_eq!(redraws.get(), 0);
+    }
+
+    /// Verify that winit_key_to_egui covers every function key F1..=F20.
+    ///
+    /// parse_main_key in keybinds.rs accepts F1..=F20 as valid chord keys.
+    /// This test keeps the two domains in sync: if either side drifts, this
+    /// test will catch it before a user-configured F13–F20 shortcut silently
+    /// falls through to PTY input at runtime.
+    #[test]
+    fn winit_key_to_egui_covers_f1_through_f20() {
+        let pairs: &[(WinitKey, egui::Key)] = &[
+            (WinitKey::Named(NamedKey::F1), egui::Key::F1),
+            (WinitKey::Named(NamedKey::F2), egui::Key::F2),
+            (WinitKey::Named(NamedKey::F3), egui::Key::F3),
+            (WinitKey::Named(NamedKey::F4), egui::Key::F4),
+            (WinitKey::Named(NamedKey::F5), egui::Key::F5),
+            (WinitKey::Named(NamedKey::F6), egui::Key::F6),
+            (WinitKey::Named(NamedKey::F7), egui::Key::F7),
+            (WinitKey::Named(NamedKey::F8), egui::Key::F8),
+            (WinitKey::Named(NamedKey::F9), egui::Key::F9),
+            (WinitKey::Named(NamedKey::F10), egui::Key::F10),
+            (WinitKey::Named(NamedKey::F11), egui::Key::F11),
+            (WinitKey::Named(NamedKey::F12), egui::Key::F12),
+            (WinitKey::Named(NamedKey::F13), egui::Key::F13),
+            (WinitKey::Named(NamedKey::F14), egui::Key::F14),
+            (WinitKey::Named(NamedKey::F15), egui::Key::F15),
+            (WinitKey::Named(NamedKey::F16), egui::Key::F16),
+            (WinitKey::Named(NamedKey::F17), egui::Key::F17),
+            (WinitKey::Named(NamedKey::F18), egui::Key::F18),
+            (WinitKey::Named(NamedKey::F19), egui::Key::F19),
+            (WinitKey::Named(NamedKey::F20), egui::Key::F20),
+        ];
+        for (winit_key, expected) in pairs {
+            assert_eq!(
+                winit_key_to_egui(winit_key),
+                Some(*expected),
+                "winit_key_to_egui({winit_key:?}) did not return {expected:?}"
+            );
+        }
     }
 }
