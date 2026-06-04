@@ -27,12 +27,13 @@ pub mod title_bar;
 /// The app loop is responsible for translating the resulting action
 /// into mutations on the tabs vector (or PTY writes).
 ///
-/// Note: every variant carries a `*Tab` suffix because Phase 4-B only
-/// binds tab-roster actions globally. Later phases will introduce
-/// non-tab actions (prefix latch, status bar toggle); we keep the
-/// `clippy::enum_variant_names` allow until that diversification
-/// happens so the variant names stay self-describing at call sites.
-#[allow(clippy::enum_variant_names)]
+/// The variant set spans both tab-roster actions (resolved from
+/// `settings.keybinds` or the built-in `Ctrl+Tab` / `Ctrl+1..9`
+/// conventions) and the view-level actions ported from the WebView
+/// build (`SelectAll`, the zoom trio, `ToggleFullscreen`,
+/// `ToggleTabBar`). The latter need window / host resources, so the
+/// keyboard handler dispatches them at the `window_host` layer rather
+/// than through `App::apply_action`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
     /// Ctrl+Shift+T — spawn a new shell tab and switch to it.
@@ -49,6 +50,26 @@ pub enum AppAction {
     /// the **1-based** index as typed by the user; the app loop clamps
     /// it to the existing tab range (`min(n - 1, tabs.len() - 1)`).
     JumpTab(u8),
+    /// Ctrl+Shift+A — select the entire visible viewport of the active
+    /// tab. Handled in `App::apply_action`.
+    SelectAll,
+    /// Ctrl+Plus — increase the terminal font size by one point
+    /// (clamped). Handled at the `window_host` layer because the cell
+    /// metrics + PTY grid must be reshaped after the change.
+    ZoomIn,
+    /// Ctrl+Minus — decrease the terminal font size by one point
+    /// (clamped). See [`AppAction::ZoomIn`].
+    ZoomOut,
+    /// Ctrl+0 — reset the terminal font size back to the configured
+    /// `settings.font_size`. See [`AppAction::ZoomIn`].
+    ZoomReset,
+    /// F11 — toggle borderless full-screen. Handled at the
+    /// `window_host` layer (needs the `winit::window::Window` handle).
+    ToggleFullscreen,
+    /// Ctrl+Shift+B — toggle the tab bar's visibility. Handled at the
+    /// `window_host` layer so the grid can be reshaped for the
+    /// reclaimed / surrendered row.
+    ToggleTabBar,
 }
 
 /// User intents originating from the custom (client-side) title bar.

@@ -2,25 +2,37 @@
 //!
 //! Phase 4-B implemented a pure mapping from `(egui::Modifiers,
 //! egui::Key)` to [`AppAction`] with a hard-coded chord table. This
-//! module now drives the tab-roster chords from `settings.json`'s
+//! module now drives the tab-roster + view chords from `settings.json`'s
 //! `keybinds.*` block via a [`KeybindTable`]: `new_tab`, `close_tab`,
-//! `next_tab`, and `prev_tab` are resolved from user-configured chord
-//! specs at startup. (`copy` / `paste` live one layer up in
-//! `window_host::handle_special_chord`.)
+//! `next_tab`, `prev_tab`, `select_all`, the zoom trio,
+//! `toggle_fullscreen`, and `toggle_tab_bar` are resolved from
+//! user-configured chord specs at startup. (`copy` / `paste` live one
+//! layer up in `window_host::handle_special_chord`.)
 //!
 //! The dispatcher stays state-free apart from the borrowed
 //! [`KeybindTable`], so it can be exercised directly from unit tests by
 //! constructing synthetic `(table, mods, key)` triples — no egui
-//! context, no tabs vector, no PTY required.
+//! context, no tabs vector, no PTY required. The resulting `AppAction`
+//! is then applied either through `App::apply_action`
+//! (`NewTab` / `CloseTab` / `NextTab` / `PrevTab` / `JumpTab` /
+//! `SelectAll`) or at the `window_host` layer for actions that need the
+//! `winit::window::Window` or host resize machinery
+//! (`ToggleFullscreen` / `ToggleTabBar` / the zoom trio).
 //!
 //! Settings-driven bindings (default specs shown):
 //!
-//! | Action     | Default spec    | `AppAction` |
-//! |------------|-----------------|-------------|
-//! | `new_tab`  | `Ctrl+Shift+T`  | `NewTab`    |
-//! | `close_tab`| `Ctrl+Shift+W`  | `CloseTab`  |
-//! | `next_tab` | `Ctrl+PageDown` | `NextTab`   |
-//! | `prev_tab` | `Ctrl+PageUp`   | `PrevTab`   |
+//! | Action              | Default spec    | `AppAction`        |
+//! |---------------------|-----------------|--------------------|
+//! | `new_tab`           | `Ctrl+Shift+T`  | `NewTab`           |
+//! | `close_tab`         | `Ctrl+Shift+W`  | `CloseTab`         |
+//! | `next_tab`          | `Ctrl+PageDown` | `NextTab`          |
+//! | `prev_tab`          | `Ctrl+PageUp`   | `PrevTab`          |
+//! | `select_all`        | `Ctrl+Shift+A`  | `SelectAll`        |
+//! | `zoom_in`           | `Ctrl+Plus`     | `ZoomIn`           |
+//! | `zoom_out`          | `Ctrl+Minus`    | `ZoomOut`          |
+//! | `zoom_reset`        | `Ctrl+0`        | `ZoomReset`        |
+//! | `toggle_fullscreen` | `F11`           | `ToggleFullscreen` |
+//! | `toggle_tab_bar`    | `Ctrl+Shift+B`  | `ToggleTabBar`     |
 //!
 //! Built-in bindings (native-poc conventions, not in `settings.json`,
 //! never `alt`):
@@ -217,6 +229,12 @@ pub struct KeybindTable {
     pub close_tab: Chord,
     pub next_tab: Chord,
     pub prev_tab: Chord,
+    pub select_all: Chord,
+    pub zoom_in: Chord,
+    pub zoom_out: Chord,
+    pub zoom_reset: Chord,
+    pub toggle_fullscreen: Chord,
+    pub toggle_tab_bar: Chord,
 }
 
 impl KeybindTable {
@@ -233,6 +251,12 @@ impl KeybindTable {
             close_tab: resolve("close_tab", &kb.close_tab),
             next_tab: resolve("next_tab", &kb.next_tab),
             prev_tab: resolve("prev_tab", &kb.prev_tab),
+            select_all: resolve("select_all", &kb.select_all),
+            zoom_in: resolve("zoom_in", &kb.zoom_in),
+            zoom_out: resolve("zoom_out", &kb.zoom_out),
+            zoom_reset: resolve("zoom_reset", &kb.zoom_reset),
+            toggle_fullscreen: resolve("toggle_fullscreen", &kb.toggle_fullscreen),
+            toggle_tab_bar: resolve("toggle_tab_bar", &kb.toggle_tab_bar),
         };
         // Matching is first-wins (`handle_special_chord` checks copy /
         // paste before `dispatch` walks the tab actions), so two actions
@@ -253,8 +277,10 @@ impl KeybindTable {
     /// Pairs of actions whose resolved chords collide, as
     /// `(winner, loser)` in runtime match priority (copy and paste are
     /// checked in `handle_special_chord` before [`dispatch`] walks
-    /// new_tab → close_tab → next_tab → prev_tab). Pure so tests can
-    /// assert collision detection without capturing logs.
+    /// new_tab → close_tab → next_tab → prev_tab → select_all →
+    /// zoom_in → zoom_out → zoom_reset → toggle_fullscreen →
+    /// toggle_tab_bar). Pure so tests can assert collision detection
+    /// without capturing logs.
     fn collisions(&self) -> Vec<(&'static str, &'static str)> {
         let entries = [
             ("copy", self.copy),
@@ -263,6 +289,12 @@ impl KeybindTable {
             ("close_tab", self.close_tab),
             ("next_tab", self.next_tab),
             ("prev_tab", self.prev_tab),
+            ("select_all", self.select_all),
+            ("zoom_in", self.zoom_in),
+            ("zoom_out", self.zoom_out),
+            ("zoom_reset", self.zoom_reset),
+            ("toggle_fullscreen", self.toggle_fullscreen),
+            ("toggle_tab_bar", self.toggle_tab_bar),
         ];
         let mut out = Vec::new();
         for i in 0..entries.len() {
@@ -316,7 +348,13 @@ fn default_spec_for(action: &str) -> &'static str {
         "close_tab" => "Ctrl+Shift+W",
         "next_tab" => "Ctrl+PageDown",
         "prev_tab" => "Ctrl+PageUp",
-        // Unreachable: `resolve` is only called with the six names above.
+        "select_all" => "Ctrl+Shift+A",
+        "zoom_in" => "Ctrl+Plus",
+        "zoom_out" => "Ctrl+Minus",
+        "zoom_reset" => "Ctrl+0",
+        "toggle_fullscreen" => "F11",
+        "toggle_tab_bar" => "Ctrl+Shift+B",
+        // Unreachable: `resolve` is only called with the names above.
         _ => "Ctrl+Shift+T",
     }
 }
@@ -361,6 +399,24 @@ pub fn dispatch(table: &KeybindTable, mods: Modifiers, key: Key) -> Option<AppAc
     }
     if chord == table.prev_tab {
         return Some(AppAction::PrevTab);
+    }
+    if chord == table.select_all {
+        return Some(AppAction::SelectAll);
+    }
+    if chord == table.zoom_in {
+        return Some(AppAction::ZoomIn);
+    }
+    if chord == table.zoom_out {
+        return Some(AppAction::ZoomOut);
+    }
+    if chord == table.zoom_reset {
+        return Some(AppAction::ZoomReset);
+    }
+    if chord == table.toggle_fullscreen {
+        return Some(AppAction::ToggleFullscreen);
+    }
+    if chord == table.toggle_tab_bar {
+        return Some(AppAction::ToggleTabBar);
     }
 
     // 2. Built-in native-poc conventions (never alt). These are not
@@ -468,15 +524,26 @@ mod tests {
 
     #[test]
     fn ctrl_zero_is_not_a_jump() {
-        // Phase 4-B intentionally binds 1..=9; Ctrl+0 stays free and
-        // falls through to the PTY.
+        // The built-in jump table binds 1..=9 only; Ctrl+0 is never a
+        // JumpTab. It now resolves to the settings-driven `zoom_reset`
+        // chord (default `Ctrl+0`) rather than falling through to the
+        // PTY — assert it is specifically not a JumpTab here, and let
+        // `default_ctrl_zero_is_zoom_reset` cover the positive mapping.
+        assert_ne!(
+            dispatch(
+                &KeybindTable::default(),
+                mods(true, false, false),
+                Key::Num0
+            ),
+            Some(AppAction::JumpTab(0))
+        );
         assert_eq!(
             dispatch(
                 &KeybindTable::default(),
                 mods(true, false, false),
                 Key::Num0
             ),
-            None
+            Some(AppAction::ZoomReset)
         );
     }
 
@@ -713,5 +780,187 @@ mod tests {
         kb.new_tab = "Ctrl+Shift+C".to_string();
         let table = KeybindTable::from_settings(&kb);
         assert_eq!(table.collisions(), vec![("copy", "new_tab")]);
+    }
+
+    // ── view-level actions: dispatch on the default table ──────────────
+
+    #[test]
+    fn default_ctrl_shift_a_is_select_all() {
+        assert_eq!(
+            dispatch(&KeybindTable::default(), mods(true, true, false), Key::A),
+            Some(AppAction::SelectAll)
+        );
+    }
+
+    #[test]
+    fn default_ctrl_plus_is_zoom_in() {
+        assert_eq!(
+            dispatch(
+                &KeybindTable::default(),
+                mods(true, false, false),
+                Key::Plus
+            ),
+            Some(AppAction::ZoomIn)
+        );
+    }
+
+    #[test]
+    fn default_ctrl_minus_is_zoom_out() {
+        assert_eq!(
+            dispatch(
+                &KeybindTable::default(),
+                mods(true, false, false),
+                Key::Minus
+            ),
+            Some(AppAction::ZoomOut)
+        );
+    }
+
+    #[test]
+    fn default_ctrl_zero_is_zoom_reset() {
+        // Ctrl+0 is now bound to ZoomReset (it was unbound in Phase 4-B,
+        // see `ctrl_zero_is_not_a_jump`, which asserts it does NOT jump).
+        assert_eq!(
+            dispatch(
+                &KeybindTable::default(),
+                mods(true, false, false),
+                Key::Num0
+            ),
+            Some(AppAction::ZoomReset)
+        );
+    }
+
+    #[test]
+    fn default_f11_is_toggle_fullscreen() {
+        assert_eq!(
+            dispatch(
+                &KeybindTable::default(),
+                mods(false, false, false),
+                Key::F11
+            ),
+            Some(AppAction::ToggleFullscreen)
+        );
+    }
+
+    #[test]
+    fn default_ctrl_shift_b_is_toggle_tab_bar() {
+        assert_eq!(
+            dispatch(&KeybindTable::default(), mods(true, true, false), Key::B),
+            Some(AppAction::ToggleTabBar)
+        );
+    }
+
+    // ── from_settings: new fields resolve + fall back ──────────────────
+
+    #[test]
+    fn from_settings_resolves_view_action_fields() {
+        let kb = KeybindSettings::default();
+        let table = KeybindTable::from_settings(&kb);
+        assert_eq!(
+            table.select_all,
+            Chord {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                key: Key::A
+            }
+        );
+        assert_eq!(
+            table.zoom_in,
+            Chord {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                key: Key::Plus
+            }
+        );
+        assert_eq!(
+            table.zoom_out,
+            Chord {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                key: Key::Minus
+            }
+        );
+        assert_eq!(
+            table.zoom_reset,
+            Chord {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                key: Key::Num0
+            }
+        );
+        assert_eq!(
+            table.toggle_fullscreen,
+            Chord {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                key: Key::F11
+            }
+        );
+        assert_eq!(
+            table.toggle_tab_bar,
+            Chord {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                key: Key::B
+            }
+        );
+    }
+
+    #[test]
+    fn from_settings_custom_zoom_in_chord() {
+        let mut kb = KeybindSettings::default();
+        kb.zoom_in = "Ctrl+Equals".to_string();
+        let table = KeybindTable::from_settings(&kb);
+        assert_eq!(
+            dispatch(&table, mods(true, false, false), Key::Equals),
+            Some(AppAction::ZoomIn)
+        );
+        // The old default no longer maps to ZoomIn.
+        assert_eq!(dispatch(&table, mods(true, false, false), Key::Plus), None);
+    }
+
+    #[test]
+    fn from_settings_unparseable_view_action_falls_back() {
+        let mut kb = KeybindSettings::default();
+        kb.toggle_fullscreen = "not a chord!!".to_string();
+        kb.select_all = "Ctrl+Bogus".to_string();
+        let table = KeybindTable::from_settings(&kb);
+        // Each falls back to its built-in default spec.
+        assert_eq!(
+            table.toggle_fullscreen,
+            Chord {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                key: Key::F11
+            }
+        );
+        assert_eq!(
+            table.select_all,
+            Chord {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                key: Key::A
+            }
+        );
+    }
+
+    // ── parse_chord: the new default specs specifically ────────────────
+
+    #[test]
+    fn parse_chord_view_action_default_specs() {
+        assert_eq!(parse_chord("Ctrl+Shift+A").unwrap().key, Key::A);
+        assert_eq!(parse_chord("Ctrl+Plus").unwrap().key, Key::Plus);
+        assert_eq!(parse_chord("Ctrl+Minus").unwrap().key, Key::Minus);
+        assert_eq!(parse_chord("Ctrl+0").unwrap().key, Key::Num0);
+        assert_eq!(parse_chord("F11").unwrap().key, Key::F11);
+        assert_eq!(parse_chord("Ctrl+Shift+B").unwrap().key, Key::B);
     }
 }
