@@ -20,6 +20,11 @@ pub struct FallbackChain {
     /// via `from_resolver`. Used by `resolve_for_cluster` to short-circuit
     /// to color emoji when the cluster explicitly requests it (VS-16).
     emoji: Option<FontId>,
+    /// Regular-face → Bold-face substitutions. After a cluster resolves
+    /// to a font, callers rendering a bold cell swap in the registered
+    /// bold variant (when one exists) via [`FallbackChain::bold_variant`].
+    /// Fonts without an entry render bold cells with their regular face.
+    bold_variants: HashMap<FontId, FontId>,
     memo: Mutex<HashMap<(FontId, u32), Option<FontId>>>,
 }
 
@@ -38,6 +43,7 @@ impl FallbackChain {
             base,
             chain,
             emoji: None,
+            bold_variants: HashMap::new(),
             memo: Mutex::new(HashMap::new()),
         }
     }
@@ -114,6 +120,18 @@ impl FallbackChain {
             }
         }
         self.resolve(rasterizer, first)
+    }
+
+    /// Register `bold` as the bold-face substitute for `regular`. No memo
+    /// invalidation needed: resolution always happens on regular faces
+    /// and the substitution is applied after the fact.
+    pub fn set_bold_variant(&mut self, regular: FontId, bold: FontId) {
+        self.bold_variants.insert(regular, bold);
+    }
+
+    /// The bold-face substitute for `id`, when one was registered.
+    pub fn bold_variant(&self, id: FontId) -> Option<FontId> {
+        self.bold_variants.get(&id).copied()
     }
 
     pub fn base(&self) -> FontId {
@@ -271,6 +289,16 @@ mod tests {
         covers.insert((FontId(3), 0x1F600));
         let raster = TableRasterizer { covers };
         (chain, raster)
+    }
+
+    /// Bold variant registration: registered ids round-trip, unknown ids
+    /// return None so callers keep the regular face.
+    #[test]
+    fn bold_variant_roundtrip_and_miss() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2)]);
+        chain.set_bold_variant(FontId(1), FontId(9));
+        assert_eq!(chain.bold_variant(FontId(1)), Some(FontId(9)));
+        assert_eq!(chain.bold_variant(FontId(2)), None);
     }
 
     /// TS-font-4: ASCII → base; U+3042 → CJK.

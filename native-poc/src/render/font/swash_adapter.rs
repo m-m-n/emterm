@@ -24,6 +24,24 @@ use swash::FontRef;
 use super::resolver::{RegisteredFont, Resolver};
 use super::traits::{AtlasFormat, FontId, FontMetrics, GlyphBitmap, GlyphRasterizer, ShapedGlyph};
 
+/// Faux-bold strength (px, per side) applied to outline rasterization to
+/// approximate FreeType's CFF stem darkening. Scales with the rasterize
+/// size and is capped so large glyphs don't turn into faux bold. Set
+/// `EMTERM_STEM_DARKEN` (absolute px, e.g. `0.3`; `0` disables) to tune.
+fn stem_darken_strength(size_px: f32) -> f32 {
+    use std::sync::OnceLock;
+    static OVERRIDE: OnceLock<Option<f32>> = OnceLock::new();
+    let ov = OVERRIDE.get_or_init(|| {
+        std::env::var("EMTERM_STEM_DARKEN")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+    });
+    if let Some(v) = *ov {
+        return v.max(0.0);
+    }
+    (size_px * 0.0145).clamp(0.0, 0.4)
+}
+
 /// A registered font's byte storage + cached offset/key needed by swash.
 #[derive(Clone)]
 struct SwashFont {
@@ -168,7 +186,11 @@ impl GlyphRasterizer for SwashRasterizer {
             .scale_ctx
             .builder(face)
             .size(size_px)
-            .hint(false)
+            // Hinting ON: snaps stems to the pixel grid the same way the
+            // WebView build's FreeType path does. At terminal sizes
+            // (~17 px) unhinted outlines smear across pixel boundaries
+            // and read as thin / washed-out.
+            .hint(true)
             .build();
         // Source order: when the font has color tables, try the color
         // sources first; otherwise go straight to the alpha outline. This
@@ -185,6 +207,14 @@ impl GlyphRasterizer for SwashRasterizer {
         let image = Render::new(sources)
             .format(Format::Alpha)
             .offset(Vector::ZERO)
+            // Approximate FreeType's CFF stem darkening (the WebView
+            // build renders text through WebKitGTK → FreeType, which
+            // thickens small glyphs by ~0.4 px so they don't wash out
+            // on dark backgrounds under gamma-space blending). Without
+            // this, swash's outlines rasterize noticeably thinner and
+            // lighter than the WebView build at terminal sizes. Only
+            // outline sources embolden; color bitmaps are unaffected.
+            .embolden(stem_darken_strength(size_px))
             .render(&mut scaler, glyph_id as u16)?;
         let w = image.placement.width;
         let h = image.placement.height;

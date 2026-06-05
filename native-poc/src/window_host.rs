@@ -257,11 +257,18 @@ impl WindowHost {
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
+        // Prefer a NON-sRGB surface. All of our color sources (theme
+        // palette, egui paint, glyph fg/bg) are sRGB-encoded byte values;
+        // we want them written to the framebuffer verbatim, matching the
+        // WebView build's Canvas 2D gamma-space pipeline. An *sRGB*
+        // surface would treat shader output as linear and re-encode it,
+        // brightening every mid-tone on screen (and egui itself warns
+        // "egui prefers Rgba8Unorm or Bgra8Unorm" for the same reason).
         let format = surface_caps
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
         // Prefer Mailbox over Fifo so window resize doesn't lag the mouse:

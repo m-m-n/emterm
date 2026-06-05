@@ -724,8 +724,9 @@ impl ImageLayer {
 }
 
 /// Upload an un-premultiplied RGBA8 image to a fresh wgpu texture with
-/// the `Rgba8UnormSrgb` view format (resolved OQ5 in the implementation
-/// plan).
+/// the `Rgba8Unorm` view format (revising OQ5: the surface is non-sRGB,
+/// so sRGB-encoded image bytes must pass through sampling un-decoded to
+/// reach the screen verbatim).
 fn upload_rgba_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -742,7 +743,7 @@ fn upload_rgba_texture(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
