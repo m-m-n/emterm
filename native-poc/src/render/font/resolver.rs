@@ -47,6 +47,23 @@ pub struct RegisteredFont {
     pub bytes: Arc<[u8]>,
 }
 
+/// Rank a face within a family for [`Resolver::register_system_family`]:
+/// lower is better. Mirrors a simplified CSS font-matching order
+/// (stretch > style > weight) so a family installed with many faces
+/// resolves to the upright face closest to `target_weight` instead of
+/// whichever face the system scan happens to enumerate first.
+fn face_match_penalty(
+    weight: u16,
+    target_weight: u16,
+    style_normal: bool,
+    stretch_normal: bool,
+) -> u32 {
+    let stretch_penalty: u32 = if stretch_normal { 0 } else { 2000 };
+    let style_penalty: u32 = if style_normal { 0 } else { 1000 };
+    let weight_dist = (weight as i32 - target_weight as i32).unsigned_abs();
+    stretch_penalty + style_penalty + weight_dist
+}
+
 /// Font resolver / registry.
 ///
 /// All registration happens at startup. Lookups are read-only afterwards.
@@ -130,7 +147,29 @@ impl Resolver {
     /// `"Noto Sans JP"`) and we eagerly read the file into memory so the
     /// swash adapter can ingest it via `ingest_resolver`.
     pub fn register_system_family(&mut self, family: &str, role: FontRole) -> Option<FontId> {
-        if let Some(existing) = self.by_family.get(family).copied() {
+        self.register_system_family_at_weight(family, role, 400, None, family)
+    }
+
+    /// Like [`Resolver::register_system_family`] but selects the family's
+    /// Bold face (target weight 700). Returns `None` when the family has
+    /// no face of weight ≥ 600 — callers should treat that as "no real
+    /// bold available" and keep using the regular face. The font is
+    /// registered under `"{family} (bold)"` so `by_family` lookups for
+    /// the regular face never alias to the bold bytes.
+    pub fn register_system_family_bold(&mut self, family: &str, role: FontRole) -> Option<FontId> {
+        let registry_name = format!("{family} (bold)");
+        self.register_system_family_at_weight(family, role, 700, Some(600), &registry_name)
+    }
+
+    fn register_system_family_at_weight(
+        &mut self,
+        family: &str,
+        role: FontRole,
+        target_weight: u16,
+        min_weight: Option<u16>,
+        registry_name: &str,
+    ) -> Option<FontId> {
+        if let Some(existing) = self.by_family.get(registry_name).copied() {
             if let Some(entry) = self.by_id.get(&existing) {
                 if !entry.bytes.is_empty() {
                     return Some(existing);
@@ -139,11 +178,36 @@ impl Resolver {
         }
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
-        let face = db.faces().find(|f| {
-            f.families
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(family))
-        })?;
+        // A family can ship many faces (Google's Inconsolata installs
+        // Thin..Black all under the family name "Inconsolata"); picking
+        // the first enumerated face made the base font an arbitrary
+        // weight — often Bold, rendering every cell as if SGR bold were
+        // set. Select the best face instead: normal stretch/style first,
+        // then the weight closest to `target_weight`.
+        let face = db
+            .faces()
+            .filter(|f| {
+                f.families
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(family))
+            })
+            .min_by_key(|f| {
+                face_match_penalty(
+                    f.weight.0,
+                    target_weight,
+                    f.style == fontdb::Style::Normal,
+                    f.stretch == fontdb::Stretch::Normal,
+                )
+            })?;
+        // Bold lookups require a genuinely heavy face: a family that only
+        // ships Regular would otherwise "win" the weight-700 query with
+        // its 400 face and the renderer would re-register the regular
+        // bytes as a phantom bold.
+        if let Some(min) = min_weight {
+            if face.weight.0 < min {
+                return None;
+            }
+        }
         let source = face.source.clone();
         let index = face.index;
         let bytes: Arc<[u8]> = match source {
@@ -198,9 +262,9 @@ impl Resolver {
                 index
             );
         }
-        // Overwrite any prior (empty-bytes) entry under this family name.
-        self.by_family.remove(family);
-        Some(self.register_bytes(role, family.to_string(), bytes))
+        // Overwrite any prior (empty-bytes) entry under this registry name.
+        self.by_family.remove(registry_name);
+        Some(self.register_bytes(role, registry_name.to_string(), bytes))
     }
 
     /// Scan host fonts via fontdb and append unique monospace families as
@@ -329,5 +393,46 @@ mod tests {
     fn scan_failed_starts_false() {
         let r = Resolver::new();
         assert!(!r.scan_failed());
+    }
+
+    // ── face_match_penalty ──────────────────────────────────
+
+    /// Regular (400, upright, normal stretch) beats every other weight
+    /// in the family — Bold must not win the base-font slot.
+    #[test]
+    fn face_match_penalty_prefers_regular_weight() {
+        let regular = face_match_penalty(400, 400, true, true);
+        for w in [100u16, 200, 300, 500, 600, 700, 800, 900] {
+            assert!(
+                regular < face_match_penalty(w, 400, true, true),
+                "weight {} unexpectedly ranked at least as good as Regular",
+                w
+            );
+        }
+    }
+
+    /// An italic or condensed Regular ranks below any upright
+    /// normal-stretch weight (stretch > style > weight ordering).
+    #[test]
+    fn face_match_penalty_orders_stretch_over_style_over_weight() {
+        let upright_black = face_match_penalty(900, 400, true, true);
+        let italic_regular = face_match_penalty(400, 400, false, true);
+        let condensed_regular = face_match_penalty(400, 400, true, false);
+        assert!(upright_black < italic_regular);
+        assert!(italic_regular < condensed_regular);
+    }
+
+    /// With a bold target (700) the true Bold face wins over both the
+    /// Regular face and heavier siblings like ExtraBold/Black.
+    #[test]
+    fn face_match_penalty_bold_target_prefers_700() {
+        let bold = face_match_penalty(700, 700, true, true);
+        for w in [100u16, 200, 300, 400, 500, 600, 800, 900] {
+            assert!(
+                bold < face_match_penalty(w, 700, true, true),
+                "weight {} unexpectedly ranked at least as good as Bold",
+                w
+            );
+        }
     }
 }

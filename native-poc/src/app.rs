@@ -409,10 +409,25 @@ impl App {
         #[cfg(test)]
         let inconsolata_id: Option<FontId> = None;
 
+        // SGR-bold faces: register the real Bold cut of the base / CJK
+        // families when the host has one. `None` (family ships no face
+        // of weight ≥ 600) simply leaves bold cells on the regular face.
+        #[cfg(not(test))]
+        let base_bold_id = inconsolata_id
+            .and_then(|_| resolver.register_system_family_bold(&base_family, FontRole::Base));
+        #[cfg(test)]
+        let base_bold_id: Option<FontId> = None;
+
         #[cfg(not(test))]
         let noto_sans_jp_id = resolver.register_system_family(&cjk_family, FontRole::Cjk);
         #[cfg(test)]
         let noto_sans_jp_id: Option<FontId> = None;
+
+        #[cfg(not(test))]
+        let cjk_bold_id = noto_sans_jp_id
+            .and_then(|_| resolver.register_system_family_bold(&cjk_family, FontRole::Cjk));
+        #[cfg(test)]
+        let cjk_bold_id: Option<FontId> = None;
 
         // Optional host-installed emoji font preference: when
         // `settings.emoji_font` is set, try the named family and use it
@@ -522,6 +537,23 @@ impl App {
         // pictographs (✅ U+2705, 🟢 U+1F7E2) resolve to it instead of
         // the BW base / CJK fonts that may also cover those codepoints.
         chain.set_emoji(preferred_emoji_id);
+        // Wire the real bold faces so SGR-bold cells render with them.
+        #[cfg(not(test))]
+        if let (Some(regular), Some(bold)) = (inconsolata_id, base_bold_id) {
+            chain.set_bold_variant(regular, bold);
+            log::info!("font.base.bold = {} (id={:?})", base_family, bold);
+        }
+        #[cfg(not(test))]
+        if let (Some(regular), Some(bold)) = (noto_sans_jp_id, cjk_bold_id) {
+            chain.set_bold_variant(regular, bold);
+            log::info!("font.jp.bold = {} (id={:?})", cjk_family, bold);
+        }
+        #[cfg(test)]
+        {
+            // Silence unused-variable lints in the test cfg where the
+            // bold ids are compile-time `None`.
+            let _ = (base_bold_id, cjk_bold_id);
+        }
         (
             Arc::new(resolver),
             Arc::new(chain),

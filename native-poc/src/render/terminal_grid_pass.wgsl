@@ -133,9 +133,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(in.fg.rgb * a, in.fg.a * a);
     }
 
-    // RGBA glyph: sample the color atlas directly. The atlas page is
-    // already in linear premultiplied bytes (Rgba8UnormSrgb storage), so
-    // we hand the result straight to the blend stage.
+    // RGBA glyph: sample the color atlas directly. The atlas page holds
+    // sRGB-encoded premultiplied bytes in Rgba8Unorm (non-sRGB) storage,
+    // so sampling returns them un-decoded and the blend stage composites
+    // in gamma space — matching the WebView build's Canvas 2D pipeline
+    // and the non-sRGB surface format.
     let uv = in.uv / u.rgba_atlas;
     let c = textureSample(t_rgba, s_atlas, uv);
     return c;

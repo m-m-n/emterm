@@ -126,6 +126,11 @@ pub struct CellInput {
     /// scaled down to fit. `false` for ordinary cells (preserves
     /// natural glyph metrics for accurate text rendering).
     pub fit_glyph_to_cell: bool,
+    /// SGR bold: render the glyph with the resolved font's bold face
+    /// when one is registered on the fallback chain (see
+    /// `FallbackChain::bold_variant`). Fonts without a bold variant
+    /// keep their regular face.
+    pub bold: bool,
 }
 
 /// Cell metrics used by [`TerminalGridPass::prepare`] when converting
@@ -531,6 +536,16 @@ impl TerminalGridPass {
         let font_id = self
             .fallback
             .resolve_for_cluster(&*self.rasterizer, &cell.glyph)?;
+        // SGR bold: swap in the resolved font's real bold face when one
+        // is registered (e.g. Inconsolata → Inconsolata Bold). Coverage
+        // is resolved on the regular face; the bold face of the same
+        // family carries the same repertoire. Fonts without a bold
+        // variant (bundled CJK, emoji) keep their regular face.
+        let font_id = if cell.bold {
+            self.fallback.bold_variant(font_id).unwrap_or(font_id)
+        } else {
+            font_id
+        };
         let shaped = self.rasterizer.shape(&cell.glyph, font_id, size_px);
         let g = shaped.first()?;
         if g.glyph_id == 0 {
@@ -612,6 +627,16 @@ impl TerminalGridPass {
         if glyph_w <= 0.0 || glyph_h <= 0.0 {
             return None;
         }
+        // Snap the glyph quad to the physical pixel grid. The cell pitch
+        // is fractional (e.g. 8.667 px), so unrounded quad origins land
+        // between pixels and the Linear atlas sample smears every glyph
+        // by a pixel — visibly blurry/washed-out at terminal sizes. The
+        // quad size stays at the bitmap's integer size, so a snapped
+        // origin gives an exact 1:1 texel-to-pixel mapping. Background
+        // quads intentionally stay fractional (rounding them would open
+        // hairline gaps between adjacent cells).
+        let glyph_x = glyph_x.round();
+        let glyph_y = glyph_y.round();
         // Suppress unused-arg warning: cell width is consumed when the
         // shader maps `cell_local` for decoration lines; the glyph quad
         // sits inside that cell.
@@ -686,7 +711,12 @@ impl TerminalGridPass {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                // Non-sRGB on purpose: the atlas holds sRGB-encoded
+                // premultiplied bytes and the surface is non-sRGB, so the
+                // bytes must pass through sampling un-decoded to land on
+                // screen verbatim (gamma-space pipeline, matching the
+                // WebView build).
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -1008,6 +1038,7 @@ mod tests {
             draw_background: false,
             bg_extend_below: 0.0,
             fit_glyph_to_cell: false,
+            bold: false,
         }
     }
 
@@ -1081,6 +1112,7 @@ mod tests {
                 draw_background: false,
                 bg_extend_below: 0.0,
                 fit_glyph_to_cell: false,
+                bold: false,
             },
         ];
         let inst = helper_build_instances(&*raster, &chain, &cache, &cells, metrics());
@@ -1116,6 +1148,7 @@ mod tests {
             draw_background: false,
             bg_extend_below: 0.0,
             fit_glyph_to_cell: false,
+            bold: false,
         }];
         let raster_ref: &dyn GlyphRasterizer = &*swash;
         let inst = helper_build_instances(
@@ -1235,7 +1268,7 @@ mod gpu_tests {
         let cache = Arc::new(Mutex::new(GlyphCache::new()));
         let _pass = TerminalGridPass::new(
             &device,
-            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Bgra8Unorm,
             cache,
             chain,
             swash as Arc<dyn GlyphRasterizer>,

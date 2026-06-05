@@ -288,6 +288,7 @@ pub fn collect_cell_inputs(
                 draw_background: style.bg != bg_default,
                 bg_extend_below: 0.0,
                 fit_glyph_to_cell: false,
+                bold: style.bold,
             });
 
             col = col.saturating_add(cell_width_cells.max(1) as u16);
@@ -373,6 +374,7 @@ pub fn apply_preedit_overlay(
             draw_background: bg_preedit != bg_default,
             bg_extend_below,
             fit_glyph_to_cell: true,
+            bold: false,
         });
         col = col.saturating_add(w);
     }
