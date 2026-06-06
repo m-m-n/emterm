@@ -26,10 +26,13 @@ use super::font::traits::{AtlasFormat, GlyphRasterizer};
 
 /// Page index encoded into each instance for the WGSL shader. 0 == Alpha
 /// (R8, modulated by fg), 1 == Rgba (RGBA8, sampled as-is), 2 == solid
-/// fill (no atlas read; used for background quads + decoration lines).
+/// fill (no atlas read; used for background quads + decoration lines),
+/// 3 == Subpixel (RGBA8 coverage mask on the RGBA page; per-channel
+/// fg/bg blend in the shader — LCD anti-aliasing).
 const PAGE_ALPHA: u32 = 0;
 const PAGE_RGBA: u32 = 1;
 const PAGE_SOLID: u32 = 2;
+const PAGE_SUBPIXEL: u32 = 3;
 
 /// Decoration bit flags packed into the instance `flags` field.
 const FLAG_UNDERLINE: u32 = 1 << 0;
@@ -174,6 +177,9 @@ pub struct TerminalGridPass {
     /// Active rasterizer (Swash or AbGlyph, picked at startup from
     /// `Settings::font_engine`).
     rasterizer: Arc<dyn GlyphRasterizer>,
+    /// The atlas content generation that the GPU textures currently reflect.
+    /// `None` until the first upload has been performed.
+    uploaded_generation: Option<u64>,
 }
 
 /// Output of a single [`TerminalGridPass::prepare`] call. Held by the
@@ -372,6 +378,7 @@ impl TerminalGridPass {
             cache,
             fallback,
             rasterizer,
+            uploaded_generation: None,
         }
     }
 
@@ -559,6 +566,7 @@ impl TerminalGridPass {
         let page = match region.format {
             AtlasFormat::Alpha => PAGE_ALPHA,
             AtlasFormat::Rgba => PAGE_RGBA,
+            AtlasFormat::Subpixel => PAGE_SUBPIXEL,
         };
         // UV rect inside the atlas page; converted from pixel space to
         // normalized [0..1] in the vertex shader using the uniform-side
@@ -635,12 +643,41 @@ impl TerminalGridPass {
         // origin gives an exact 1:1 texel-to-pixel mapping. Background
         // quads intentionally stay fractional (rounding them would open
         // hairline gaps between adjacent cells).
-        let glyph_x = glyph_x.round();
+        let mut glyph_x = glyph_x.round();
         let glyph_y = glyph_y.round();
-        // Suppress unused-arg warning: cell width is consumed when the
-        // shader maps `cell_local` for decoration lines; the glyph quad
-        // sits inside that cell.
-        let _ = w;
+        let mut glyph_w = glyph_w;
+        let mut u0 = u0;
+        let mut u1 = u1;
+        // Subpixel glyphs: clip the quad horizontally to the cell rect.
+        // swash's hinted bitmaps can be wider than the cell (Inconsolata
+        // 'm' / 'w' at 13 pt: left=-1, width=11 vs 9-px cells), and the
+        // subpixel shader composites the FULL quad against the cell's bg
+        // color opaquely — an overhanging quad would paint this cell's
+        // bg outside the cell, visible as a 1-px bg-colored fringe next
+        // to reverse-video runs (e.g. ls's /dev/shm highlight). Alpha /
+        // RGBA pages alpha-blend (bg never leaks), so they keep the
+        // natural overhang like the WebView build's Canvas fillText.
+        if page == PAGE_SUBPIXEL {
+            // Snap the cell bounds to the pixel grid before clipping. The
+            // glyph quad is already pixel-snapped (integer origin + integer
+            // bitmap width from .round() above), so comparing it against
+            // UNrounded fractional cell bounds (which occur under fractional
+            // HiDPI scale factors where cell_w = cell_w_logical × ppp) would
+            // shave a sub-pixel sliver off every glyph and shift the UV off
+            // the 1:1 texel mapping, causing per-glyph blur. Snapping makes
+            // the comparison integer-vs-integer: fitting glyphs pass through
+            // untouched and only true ≥1px overhang is trimmed.
+            if let Some((cx, cw, cu0, cu1)) =
+                clip_quad_to_cell_x(glyph_x, glyph_w, u0, u1, x.round(), (x + w).round())
+            {
+                glyph_x = cx;
+                glyph_w = cw;
+                u0 = cu0;
+                u1 = cu1;
+            } else {
+                return None;
+            }
+        }
         let _ = h;
         Some(CellInstance {
             cell_xy: [glyph_x, glyph_y],
@@ -676,10 +713,18 @@ impl TerminalGridPass {
             };
         }
         // Sync the GPU atlas textures with the CPU atlas bytes.
-        let (alpha_dim, rgba_dim) = {
+        let (alpha_dim, rgba_dim, generation) = {
             let cache = self.cache.lock();
-            (cache.atlas().alpha_dim(), cache.atlas().rgba_dim())
+            (
+                cache.atlas().alpha_dim(),
+                cache.atlas().rgba_dim(),
+                cache.atlas().generation(),
+            )
         };
+        // Track whether either texture was (re)created this call. A freshly
+        // created texture has undefined/zeroed contents and must be uploaded
+        // regardless of the atlas generation counter.
+        let mut texture_recreated = false;
         if Some(alpha_dim) != Some(self.alpha_dim) || self.alpha_texture.is_none() {
             self.alpha_dim = alpha_dim;
             let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -698,6 +743,7 @@ impl TerminalGridPass {
             });
             self.alpha_view = Some(tex.create_view(&wgpu::TextureViewDescriptor::default()));
             self.alpha_texture = Some(tex);
+            texture_recreated = true;
         }
         if Some(rgba_dim) != Some(self.rgba_dim) || self.rgba_texture.is_none() {
             self.rgba_dim = rgba_dim;
@@ -722,11 +768,15 @@ impl TerminalGridPass {
             });
             self.rgba_view = Some(tex.create_view(&wgpu::TextureViewDescriptor::default()));
             self.rgba_texture = Some(tex);
+            texture_recreated = true;
         }
-        // Upload the freshest atlas snapshot every frame. The atlases are
-        // small (< a few MiB at typical terminal sizes) and the upload is
-        // dominated by glyph rasterize cost; correctness first.
-        {
+        // Upload atlas pages only when the atlas content generation advanced
+        // (new glyphs were rasterized) or a texture was (re)created this call.
+        // Steady-state frames pay zero atlas upload bandwidth — this matters
+        // because subpixel masks moved common text glyphs onto the 4-byte-per-
+        // pixel RGBA page, making unconditional uploads expensive.
+        let needs_upload = self.uploaded_generation != Some(generation) || texture_recreated;
+        if needs_upload {
             let cache = self.cache.lock();
             if let Some(tex) = self.alpha_texture.as_ref() {
                 queue.write_texture(
@@ -770,6 +820,7 @@ impl TerminalGridPass {
                     },
                 );
             }
+            self.uploaded_generation = Some(generation);
         }
 
         let uniform = FrameUniform {
@@ -859,6 +910,47 @@ impl TerminalGridPass {
 /// shader can unpack it via `unpack4x8unorm`.
 fn pack_rgba(rgba: [u8; 4]) -> u32 {
     (rgba[3] as u32) << 24 | (rgba[2] as u32) << 16 | (rgba[1] as u32) << 8 | (rgba[0] as u32)
+}
+
+/// Clip a glyph quad horizontally to `[cell_left, cell_right]`, trimming
+/// the atlas UV range proportionally so the remaining quad keeps its 1:1
+/// texel mapping. Returns `None` when nothing of the quad survives.
+///
+/// Used by the subpixel path only: the subpixel fragment shader writes
+/// `fg*mask + bg*(1-mask)` opaquely across the whole quad, so a quad
+/// overhanging its cell would paint the cell's bg color outside the
+/// cell. Quads that already fit pass through unchanged.
+fn clip_quad_to_cell_x(
+    glyph_x: f32,
+    glyph_w: f32,
+    u0: f32,
+    u1: f32,
+    cell_left: f32,
+    cell_right: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    if glyph_w <= 0.0 {
+        return None;
+    }
+    let texels_per_px = (u1 - u0) / glyph_w;
+    let mut x = glyph_x;
+    let mut w = glyph_w;
+    let mut nu0 = u0;
+    let mut nu1 = u1;
+    let left_trim = cell_left - x;
+    if left_trim > 0.0 {
+        nu0 += left_trim * texels_per_px;
+        x += left_trim;
+        w -= left_trim;
+    }
+    let right_trim = (x + w) - cell_right;
+    if right_trim > 0.0 {
+        nu1 -= right_trim * texels_per_px;
+        w -= right_trim;
+    }
+    if w <= 0.0 {
+        return None;
+    }
+    Some((x, w, nu0, nu1))
 }
 
 #[cfg(test)]
@@ -973,6 +1065,7 @@ mod tests {
                                     let page = match region.format {
                                         AtlasFormat::Alpha => PAGE_ALPHA,
                                         AtlasFormat::Rgba => PAGE_RGBA,
+                                        AtlasFormat::Subpixel => PAGE_SUBPIXEL,
                                     };
                                     let glyph_w = region.width as f32;
                                     let glyph_h = region.height as f32;
@@ -1122,6 +1215,101 @@ mod tests {
         assert_eq!(inst[1].page, PAGE_RGBA);
     }
 
+    // ── clip_quad_to_cell_x ──────────────────────────────────
+
+    /// A quad already inside the cell passes through untouched.
+    #[test]
+    fn clip_quad_inside_cell_is_unchanged() {
+        let r = clip_quad_to_cell_x(10.0, 8.0, 0.0, 8.0, 9.0, 18.0);
+        assert_eq!(r, Some((10.0, 8.0, 0.0, 8.0)));
+    }
+
+    /// The call site in `glyph_instance` snaps fractional cell bounds via
+    /// `.round()` before passing them to `clip_quad_to_cell_x`. This test
+    /// demonstrates that contract: a pixel-snapped quad (glyph_x=11.0,
+    /// glyph_w=8.0) that fits perfectly inside a fractional-scale cell
+    /// [10.75, 19.5] would be wrongly trimmed if the raw bounds were passed,
+    /// but after the call-site snap to [11.0, 20.0] the quad passes through
+    /// unchanged (no sub-pixel sliver is shaved off).
+    #[test]
+    fn clip_quad_call_site_snaps_fractional_cell_bounds() {
+        let (glyph_x, glyph_w) = (11.0_f32, 8.0_f32);
+        let (u0, u1) = (0.0_f32, 8.0_f32);
+        // Raw fractional cell bounds (1.5× HiDPI example).
+        let cell_left_raw = 10.75_f32;
+        let cell_right_raw = 19.5_f32;
+        // Without snapping, left_trim = 10.75 - 11.0 = -0.25 (no left clip),
+        // but right_trim = (11.0+8.0) - 19.5 = -0.5, which is also ≤ 0, so
+        // the raw bounds actually pass here too — the real hazard is when the
+        // fractional cell_left > glyph_x, which shaves the left side.
+        // Use a case where the fractional left is strictly above glyph_x:
+        // cell [11.25, 20.0] → left_trim = 0.25 → wrong UV shift without snap.
+        let cell_left_frac = 11.25_f32;
+        let cell_right_frac = 20.0_f32;
+        // Without snap: left_trim > 0 → quad and UV are modified (wrong).
+        let without_snap =
+            clip_quad_to_cell_x(glyph_x, glyph_w, u0, u1, cell_left_frac, cell_right_frac);
+        assert_ne!(
+            without_snap,
+            Some((glyph_x, glyph_w, u0, u1)),
+            "raw fractional bounds wrongly trim a fitting quad"
+        );
+        // With snap (as the call site does): [11.25.round(), 20.0.round()] = [11.0, 20.0].
+        let with_snap = clip_quad_to_cell_x(
+            glyph_x,
+            glyph_w,
+            u0,
+            u1,
+            cell_left_frac.round(),
+            cell_right_frac.round(),
+        );
+        assert_eq!(
+            with_snap,
+            Some((glyph_x, glyph_w, u0, u1)),
+            "snapped bounds leave a fitting pixel-aligned quad unchanged"
+        );
+        let _ = (cell_left_raw, cell_right_raw); // documented above; not used in assertions
+    }
+
+    /// Inconsolata 'm' at 13 pt: bearing −1, bitmap 11 px wide in a 9-px
+    /// cell. Both overhangs trim, and the UV range shrinks by the same
+    /// amount on each side (1:1 texel mapping preserved).
+    #[test]
+    fn clip_quad_overhang_trims_both_sides_and_uv() {
+        // Cell [9, 18), quad [8, 19) → clipped to [9, 18).
+        let r = clip_quad_to_cell_x(8.0, 11.0, 100.0, 111.0, 9.0, 18.0);
+        let (x, w, u0, u1) = r.expect("clipped quad survives");
+        assert_eq!((x, w), (9.0, 9.0));
+        assert_eq!((u0, u1), (101.0, 110.0));
+    }
+
+    /// A quad entirely outside the cell clips to nothing.
+    #[test]
+    fn clip_quad_outside_cell_returns_none() {
+        assert_eq!(clip_quad_to_cell_x(20.0, 5.0, 0.0, 5.0, 0.0, 9.0), None);
+        assert_eq!(clip_quad_to_cell_x(0.0, 0.0, 0.0, 0.0, 0.0, 9.0), None);
+    }
+
+    /// Subpixel-mode swash output routes to the PAGE_SUBPIXEL shader
+    /// branch (per-channel fg/bg compositing).
+    #[test]
+    fn integration_swash_subpixel_maps_to_subpixel_page() {
+        let mut resolver = Resolver::new();
+        let (cjk_id, emoji_id) = resolver.register_bundled();
+        let swash = Arc::new(SwashRasterizer::with_subpixel(true));
+        swash.ingest_resolver(&resolver);
+        let chain = Arc::new(FallbackChain::new(cjk_id, [emoji_id]));
+        let cache = Arc::new(Mutex::new(GlyphCache::new()));
+        let cells = vec![ascii_cell(0, 0, "d")];
+        let raster_ref: &dyn GlyphRasterizer = &*swash;
+        let inst = helper_build_instances(raster_ref, &chain, &cache, &cells, metrics());
+        assert_eq!(inst.len(), 1, "exactly one glyph instance for 'd'");
+        assert_eq!(
+            inst[0].page, PAGE_SUBPIXEL,
+            "subpixel raster must select the subpixel shader page"
+        );
+    }
+
     /// TS-font-int-2: headless render of a single cell containing U+3042
     /// using the swash engine. The pass emits a non-empty instance and
     /// does not panic.
@@ -1130,7 +1318,7 @@ mod tests {
         // Build a swash rasterizer + resolver against the bundled fonts.
         let mut resolver = Resolver::new();
         let (cjk_id, emoji_id) = resolver.register_bundled();
-        let swash = Arc::new(SwashRasterizer::new());
+        let swash = Arc::new(SwashRasterizer::with_subpixel(false));
         swash.ingest_resolver(&resolver);
         // Chain: cjk first (no base font registered against swash here,
         // so 'A' would tofu — TS-font-int-2 only tests U+3042).

@@ -455,6 +455,14 @@ impl App {
             FontEngine::Swash => {
                 let swash = Arc::new(crate::render::font::swash_adapter::SwashRasterizer::new());
                 swash.ingest_resolver(&resolver);
+                log::info!(
+                    "font.antialias = {}",
+                    if swash.subpixel() {
+                        "subpixel-rgb"
+                    } else {
+                        "grayscale (EMTERM_SUBPIXEL=0)"
+                    }
+                );
                 swash
             }
             FontEngine::AbGlyph => {

@@ -181,6 +181,10 @@ fn rasterize_to_texture(
     let src_rgba = match bitmap.format {
         AtlasFormat::Rgba => bitmap.pixels,
         AtlasFormat::Alpha => alpha_to_rgba(&bitmap.pixels),
+        // Subpixel masks carry per-channel coverage; this egui-texture
+        // path has no bg color to blend against, so collapse to a
+        // grayscale alpha (the G channel = unshifted center sample).
+        AtlasFormat::Subpixel => subpixel_to_rgba(&bitmap.pixels),
     };
 
     // Downscale RGBA color glyphs to the target size with Lanczos3.
@@ -214,6 +218,21 @@ fn alpha_to_rgba(alpha: &[u8]) -> Vec<u8> {
         out.push(255);
         out.push(255);
         out.push(a);
+    }
+    out
+}
+
+/// Collapse an RGB subpixel-coverage mask to opaque-white RGBA using the
+/// G channel (the unshifted center sample) as alpha. Used when a
+/// subpixel-rasterized outline glyph lands on the egui texture path,
+/// which has no known bg color for per-channel compositing.
+fn subpixel_to_rgba(mask: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(mask.len());
+    for px in mask.chunks_exact(4) {
+        out.push(255);
+        out.push(255);
+        out.push(255);
+        out.push(px[1]);
     }
     out
 }
