@@ -23,16 +23,20 @@ pub struct FontId(pub u32);
 /// `Alpha` glyphs live in an R8 (single-channel) texture and are colored
 /// per-cell via the cell's foreground SGR color. `Rgba` glyphs are color
 /// bitmaps (Noto Color Emoji CBDT, COLR v1) and are sampled as-is.
+/// `Subpixel` glyphs are RGB subpixel-coverage masks (LCD anti-aliasing):
+/// 4 bytes per pixel, stored on the RGBA page, composited per channel
+/// against the cell's bg color in the shader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AtlasFormat {
     Alpha,
     Rgba,
+    Subpixel,
 }
 
 /// Output of a single-glyph rasterize call.
 ///
 /// `pixels.len()` is always `width * height * bytes_per_pixel(format)`:
-/// 1 for Alpha, 4 for Rgba.
+/// 1 for Alpha, 4 for Rgba / Subpixel.
 #[derive(Debug, Clone)]
 pub struct GlyphBitmap {
     pub format: AtlasFormat,
@@ -53,7 +57,7 @@ impl GlyphBitmap {
     pub fn bytes_per_pixel(&self) -> usize {
         match self.format {
             AtlasFormat::Alpha => 1,
-            AtlasFormat::Rgba => 4,
+            AtlasFormat::Rgba | AtlasFormat::Subpixel => 4,
         }
     }
 

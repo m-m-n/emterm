@@ -82,11 +82,18 @@ pub fn compute_cell_dims(
     // the resulting glyph bitmap. For monospace coding fonts every
     // glyph has the same advance, so the single-character probe is
     // sufficient.
+    //
+    // Rounded to whole pixels: the WebView build's `measureText("M")`
+    // goes through FreeType under full hinting, which grid-fits the
+    // advance to an integer (13 pt Inconsolata: 8.667 → 9 px). Using the
+    // font's raw fractional advance made every cell ~1/3 px narrower
+    // than the WebView build, read as "the right side of each cell is
+    // missing a pixel" (glyph inked edge-to-edge with no gap).
     let advance = rasterizer
         .shape("M", base, font_size_px)
         .first()
         .and_then(|g| rasterizer.raster(g.font, g.glyph_id, g.size_px))
-        .map(|b| b.advance)
+        .map(|b| b.advance.round().max(1.0))
         .filter(|a| a.is_finite() && *a > 0.0)
         .unwrap_or(FALLBACK_CELL_W);
     // Height: ascent + descent matches the WebView build's

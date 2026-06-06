@@ -49,6 +49,20 @@ impl AtlasRegion {
 /// the cursor wraps to a new row at the previous row's `max_y`. When the
 /// next row would overflow the page height the page grows (doubling the
 /// page height up to `MAX_PAGE_DIM`).
+///
+/// # Format field: physical stride descriptor, not logical content type
+///
+/// `Page::format` records the *physical byte layout* of the page buffer
+/// (how many bytes per pixel), not the logical content type of every region
+/// stored in it.  Concretely, the `Rgba` page (4 bpp) stores both
+/// `AtlasFormat::Rgba` color bitmaps and `AtlasFormat::Subpixel` coverage
+/// masks — they share the same 4-byte stride.
+///
+/// Consumers that need to know how to interpret or route a specific region
+/// MUST read `AtlasRegion::format` (the bitmap's own format, preserved
+/// through upload), not `Page::format`.  Reading the page format for that
+/// purpose would silently misroute subpixel glyphs to the color-glyph
+/// shader path.
 #[derive(Debug)]
 struct Page {
     format: AtlasFormat,
@@ -73,7 +87,7 @@ impl Page {
     fn new(format: AtlasFormat) -> Self {
         let bpp = match format {
             AtlasFormat::Alpha => 1,
-            AtlasFormat::Rgba => 4,
+            AtlasFormat::Rgba | AtlasFormat::Subpixel => 4,
         };
         Self {
             format,
@@ -90,7 +104,7 @@ impl Page {
     fn bytes_per_pixel(&self) -> u32 {
         match self.format {
             AtlasFormat::Alpha => 1,
-            AtlasFormat::Rgba => 4,
+            AtlasFormat::Rgba | AtlasFormat::Subpixel => 4,
         }
     }
 
@@ -127,10 +141,20 @@ impl Page {
     }
 
     fn upload(&mut self, bitmap: &GlyphBitmap) -> AtlasRegion {
-        debug_assert_eq!(bitmap.format, self.format);
+        // Subpixel masks share the RGBA page (same 4-byte stride), so the
+        // page format and the bitmap format only need to agree on bpp.
+        // The region keeps the *bitmap's* format so the renderer can pick
+        // the right shader path (fg-modulate vs as-is vs subpixel blend).
+        debug_assert_eq!(
+            bitmap.bytes_per_pixel(),
+            self.bytes_per_pixel() as usize,
+            "bitmap bpp must match page bpp ({:?} into {:?} page)",
+            bitmap.format,
+            self.format,
+        );
         if bitmap.is_empty() {
             return AtlasRegion {
-                format: self.format,
+                format: bitmap.format,
                 x: 0,
                 y: 0,
                 width: 0,
@@ -160,7 +184,7 @@ impl Page {
                     self.cursor_y,
                 );
                 return AtlasRegion {
-                    format: self.format,
+                    format: bitmap.format,
                     x: 0,
                     y: 0,
                     width: 0,
@@ -185,7 +209,7 @@ impl Page {
             self.row_height = h;
         }
         AtlasRegion {
-            format: self.format,
+            format: bitmap.format,
             x,
             y,
             width: w,
@@ -197,10 +221,22 @@ impl Page {
 }
 
 /// Atlas owning one Alpha page + one Rgba page.
+///
+/// The Alpha page stores `AtlasFormat::Alpha` (R8) bitmaps.  The Rgba page
+/// is shared by both `AtlasFormat::Rgba` color bitmaps and
+/// `AtlasFormat::Subpixel` coverage masks — both use a 4-byte stride and
+/// therefore fit the same physical page.  `AtlasRegion::format` is the
+/// authoritative per-region discriminator: always use it (not the page's
+/// `format` field) to decide how to interpret or route a region.
 #[derive(Debug)]
 pub struct Atlas {
     alpha: Page,
     rgba: Page,
+    /// Monotonically increasing counter. Advances every time new glyph bytes
+    /// are blitted into either page. The renderer uses this to skip the
+    /// per-frame GPU `write_texture` upload when nothing changed since the
+    /// last upload (steady-state frames pay zero atlas bandwidth).
+    generation: u64,
 }
 
 impl Default for Atlas {
@@ -214,15 +250,36 @@ impl Atlas {
         Self {
             alpha: Page::new(AtlasFormat::Alpha),
             rgba: Page::new(AtlasFormat::Rgba),
+            generation: 0,
         }
     }
 
     /// Upload a glyph bitmap, routing to the correct format's page.
+    /// Subpixel masks live on the RGBA page (same 4-byte stride); the
+    /// returned region's `format` distinguishes them for the shader.
+    ///
+    /// Increments `generation` when new bytes are blitted (i.e. the returned
+    /// region is non-empty). Empty returns (zero-size bitmaps and cap-hit
+    /// failures) write no bytes and leave the generation unchanged.
     pub fn upload(&mut self, bitmap: &GlyphBitmap) -> AtlasRegion {
-        match bitmap.format {
+        let region = match bitmap.format {
             AtlasFormat::Alpha => self.alpha.upload(bitmap),
-            AtlasFormat::Rgba => self.rgba.upload(bitmap),
+            AtlasFormat::Rgba | AtlasFormat::Subpixel => self.rgba.upload(bitmap),
+        };
+        if !region.is_empty() {
+            self.generation += 1;
         }
+        region
+    }
+
+    /// Returns the current content generation counter.
+    ///
+    /// Advances every time new glyph bytes are blitted into either page, so
+    /// the renderer can skip the per-frame GPU `write_texture` upload when
+    /// nothing changed since the last upload (steady-state frames pay zero
+    /// atlas bandwidth).
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Read-only view of the Alpha page bytes (renderer uses this to
@@ -275,6 +332,31 @@ mod tests {
             advance: w as f32,
             pixels: vec![fill; (w * h * 4) as usize],
         }
+    }
+
+    /// Subpixel masks ride the RGBA page (4-byte stride) but the region
+    /// retains the Subpixel format for the shader's page selection.
+    #[test]
+    fn subpixel_upload_shares_rgba_page_keeps_format() {
+        let mut atlas = Atlas::new();
+        let sub = GlyphBitmap {
+            format: AtlasFormat::Subpixel,
+            width: 4,
+            height: 4,
+            bearing: (0, 0),
+            advance: 4.0,
+            pixels: vec![0xEE; 4 * 4 * 4],
+        };
+        let first = atlas.upload(&rgba_bitmap(4, 4, 0xCC));
+        let second = atlas.upload(&sub);
+        assert_eq!(second.format, AtlasFormat::Subpixel);
+        // Packed onto the same page: the second region advances the same
+        // row cursor the first one started.
+        assert_eq!(second.y, first.y);
+        assert_eq!(second.x, first.x + first.width);
+        let (rw, _) = atlas.rgba_dim();
+        let idx = (second.y * rw + second.x) as usize * 4;
+        assert_eq!(atlas.rgba_bytes()[idx], 0xEE);
     }
 
     /// TS-font-6: Atlas upload routes Alpha → R8 page; Rgba → RGBA8 page.
@@ -342,5 +424,39 @@ mod tests {
             ah
         );
         assert!(!atlas.cap_hit());
+    }
+
+    /// Generation starts at 0; increments on non-empty uploads; stays the
+    /// same for empty (zero-size) uploads.
+    #[test]
+    fn generation_increments_only_on_non_empty_upload() {
+        let mut atlas = Atlas::new();
+        assert_eq!(
+            atlas.generation(),
+            0,
+            "fresh atlas must start at generation 0"
+        );
+
+        atlas.upload(&alpha_bitmap(4, 4, 0xFF));
+        assert_eq!(
+            atlas.generation(),
+            1,
+            "non-empty upload must increment generation"
+        );
+
+        atlas.upload(&alpha_bitmap(4, 4, 0xFF));
+        assert_eq!(
+            atlas.generation(),
+            2,
+            "second non-empty upload must increment again"
+        );
+
+        // Empty bitmap (width == 0) returns an empty region; generation stays.
+        atlas.upload(&alpha_bitmap(0, 4, 0));
+        assert_eq!(
+            atlas.generation(),
+            2,
+            "empty upload must not increment generation"
+        );
     }
 }

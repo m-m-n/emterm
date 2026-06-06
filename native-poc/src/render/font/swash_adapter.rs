@@ -24,11 +24,15 @@ use swash::FontRef;
 use super::resolver::{RegisteredFont, Resolver};
 use super::traits::{AtlasFormat, FontId, FontMetrics, GlyphBitmap, GlyphRasterizer, ShapedGlyph};
 
-/// Faux-bold strength (px, per side) applied to outline rasterization to
-/// approximate FreeType's CFF stem darkening. Scales with the rasterize
-/// size and is capped so large glyphs don't turn into faux bold. Set
-/// `EMTERM_STEM_DARKEN` (absolute px, e.g. `0.3`; `0` disables) to tune.
-fn stem_darken_strength(size_px: f32) -> f32 {
+/// Faux-bold strength (px, per side) applied to outline rasterization.
+/// Default 0: FreeType disables CFF stem darkening entirely under full
+/// hinting (the desktop's `font-hinting=full`), so the WebView build
+/// renders without it — any embolden here reads as fatter-than-WebView
+/// strokes, most visibly as dark text on light backgrounds (e.g. ls's
+/// other-writable dir highlight). The earlier "swash looks thin" symptom
+/// that motivated darkening was the sRGB double-encode, fixed separately.
+/// Set `EMTERM_STEM_DARKEN` (absolute px, e.g. `0.3`) to re-enable.
+fn stem_darken_strength(_size_px: f32) -> f32 {
     use std::sync::OnceLock;
     static OVERRIDE: OnceLock<Option<f32>> = OnceLock::new();
     let ov = OVERRIDE.get_or_init(|| {
@@ -36,10 +40,19 @@ fn stem_darken_strength(size_px: f32) -> f32 {
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
     });
-    if let Some(v) = *ov {
-        return v.max(0.0);
+    match *ov {
+        Some(v) => v.max(0.0),
+        None => 0.0,
     }
-    (size_px * 0.0145).clamp(0.0, 0.4)
+}
+
+/// `EMTERM_SUBPIXEL` env toggle: `0` disables RGB subpixel AA (grayscale
+/// fallback for displays / users where LCD rendering is undesirable).
+/// Anything else — including unset — enables it.
+fn subpixel_enabled_from_env() -> bool {
+    std::env::var("EMTERM_SUBPIXEL")
+        .map(|v| v != "0")
+        .unwrap_or(true)
 }
 
 /// A registered font's byte storage + cached offset/key needed by swash.
@@ -50,6 +63,13 @@ struct SwashFont {
     /// True when the font has at least one color-table (CBDT, CBLC, COLR,
     /// or SVG). Used to pick the rasterize source list.
     has_color: bool,
+    /// True when the face's OS/2 weight is >= 600 (Bold-ish). Stem
+    /// darkening is skipped for these faces: FreeType's CFF darkening
+    /// fades out toward heavy weights (its purpose is keeping *thin*
+    /// stems from washing out), and embolden-ing an already-bold face
+    /// fills counters and welds adjacent glyphs together at terminal
+    /// sizes.
+    is_bold: bool,
 }
 
 impl SwashFont {
@@ -71,13 +91,31 @@ struct Inner {
 /// Swash adapter shared across the renderer.
 pub struct SwashRasterizer {
     inner: Mutex<Inner>,
+    /// RGB subpixel anti-aliasing (LCD rendering) for monochrome outline
+    /// glyphs. Matches the WebView build, which renders through
+    /// WebKitGTK → FreeType with the desktop's `font-antialiasing=rgba`
+    /// setting: each of R/G/B is rasterized at a ∓1/3-px horizontal
+    /// offset, tripling the effective horizontal resolution. Disabled
+    /// (grayscale) with `EMTERM_SUBPIXEL=0`.
+    subpixel: bool,
 }
 
 impl SwashRasterizer {
     pub fn new() -> Self {
+        Self::with_subpixel(subpixel_enabled_from_env())
+    }
+
+    /// Explicit subpixel toggle (test helper + future settings hook).
+    pub fn with_subpixel(subpixel: bool) -> Self {
         Self {
             inner: Mutex::new(Inner::default()),
+            subpixel,
         }
+    }
+
+    /// True when monochrome glyphs rasterize as RGB subpixel masks.
+    pub fn subpixel(&self) -> bool {
+        self.subpixel
     }
 
     /// Register every parseable font held by `resolver` into this adapter.
@@ -117,10 +155,14 @@ impl SwashRasterizer {
         // Emoji has color; Noto Sans CJK JP does not). The probe is
         // narrow enough that it does not slow startup measurably.
         let has_color = probe_color_support(&bytes);
+        let is_bold = FontRef::from_index(&bytes, 0)
+            .map(|f| f.attributes().weight().0 >= 600)
+            .unwrap_or(false);
         let entry = SwashFont {
             bytes,
             offset: 0,
             has_color,
+            is_bold,
         };
         inner.fonts.insert(font.id, entry);
     }
@@ -204,23 +246,41 @@ impl GlyphRasterizer for SwashRasterizer {
         } else {
             &[Source::Outline]
         };
+        // Monochrome outlines rasterize as RGB subpixel masks when LCD
+        // rendering is on (zeno renders each channel at a ∓0.3-px
+        // horizontal offset — RGB stripe order). Color sources ignore
+        // the format and still come back as `Content::Color`.
+        let mask_format = if self.subpixel {
+            Format::Subpixel
+        } else {
+            Format::Alpha
+        };
+        // Approximate FreeType's CFF stem darkening (the WebView
+        // build renders text through WebKitGTK → FreeType, which
+        // thickens small glyphs by ~0.4 px so they don't wash out
+        // on dark backgrounds under gamma-space blending). Without
+        // this, swash's outlines rasterize noticeably thinner and
+        // lighter than the WebView build at terminal sizes. Only
+        // outline sources embolden; color bitmaps are unaffected.
+        // Bold faces skip darkening entirely — FreeType fades it out
+        // toward heavy weights, and darkening an already-bold face
+        // welds adjacent glyphs together at the terminal cell pitch.
+        let darken = if swash_font.is_bold {
+            0.0
+        } else {
+            stem_darken_strength(size_px)
+        };
         let image = Render::new(sources)
-            .format(Format::Alpha)
+            .format(mask_format)
             .offset(Vector::ZERO)
-            // Approximate FreeType's CFF stem darkening (the WebView
-            // build renders text through WebKitGTK → FreeType, which
-            // thickens small glyphs by ~0.4 px so they don't wash out
-            // on dark backgrounds under gamma-space blending). Without
-            // this, swash's outlines rasterize noticeably thinner and
-            // lighter than the WebView build at terminal sizes. Only
-            // outline sources embolden; color bitmaps are unaffected.
-            .embolden(stem_darken_strength(size_px))
+            .embolden(darken)
             .render(&mut scaler, glyph_id as u16)?;
         let w = image.placement.width;
         let h = image.placement.height;
         let format = match image.content {
             Content::Color => AtlasFormat::Rgba,
-            _ => AtlasFormat::Alpha,
+            Content::SubpixelMask => AtlasFormat::Subpixel,
+            Content::Mask => AtlasFormat::Alpha,
         };
         // For Alpha output swash may still emit a Mask buffer (1 BPP);
         // either way, the `data` length matches `w*h*bpp`.
@@ -317,7 +377,9 @@ mod tests {
     use super::*;
 
     fn rasterizer_with_emoji() -> SwashRasterizer {
-        let r = SwashRasterizer::new();
+        // Explicit grayscale so the assertions stay deterministic
+        // regardless of the EMTERM_SUBPIXEL env default.
+        let r = SwashRasterizer::with_subpixel(false);
         r.register_bytes(
             FontId(1),
             Arc::<[u8]>::from(super::super::resolver::BUNDLED_EMOJI_FONT),
@@ -326,7 +388,16 @@ mod tests {
     }
 
     fn rasterizer_with_cjk() -> SwashRasterizer {
-        let r = SwashRasterizer::new();
+        let r = SwashRasterizer::with_subpixel(false);
+        r.register_bytes(
+            FontId(1),
+            Arc::<[u8]>::from(super::super::resolver::BUNDLED_CJK_FONT),
+        );
+        r
+    }
+
+    fn subpixel_rasterizer_with_cjk() -> SwashRasterizer {
+        let r = SwashRasterizer::with_subpixel(true);
         r.register_bytes(
             FontId(1),
             Arc::<[u8]>::from(super::super::resolver::BUNDLED_CJK_FONT),
@@ -369,9 +440,38 @@ mod tests {
         assert!(any_color, "emoji bitmap had only zero RGB bytes");
     }
 
+    /// Subpixel mode rasterizes monochrome outlines as 4-byte-per-pixel
+    /// RGB coverage masks whose left/right edges carry asymmetric R/B
+    /// values (the ∓0.3-px channel offsets) — the property that makes
+    /// LCD rendering visibly smoother than grayscale.
+    #[test]
+    fn swash_rasters_ascii_subpixel_mask() {
+        let r = subpixel_rasterizer_with_cjk();
+        let cluster_glyphs = r.shape("d", FontId(1), 17.0);
+        assert!(!cluster_glyphs.is_empty(), "shape returned no glyphs");
+        let g = cluster_glyphs[0];
+        let bitmap = r
+            .raster(g.font, g.glyph_id, g.size_px)
+            .expect("subpixel raster");
+        assert_eq!(bitmap.format, AtlasFormat::Subpixel);
+        assert_eq!(
+            bitmap.pixels.len(),
+            (bitmap.width * bitmap.height * 4) as usize,
+            "subpixel mask must be 4 bytes per pixel"
+        );
+        let any_asymmetric = bitmap
+            .pixels
+            .chunks_exact(4)
+            .any(|px| px[0] != px[2] && (px[0] > 0 || px[2] > 0));
+        assert!(
+            any_asymmetric,
+            "subpixel mask must have at least one R≠B edge pixel"
+        );
+    }
+
     #[test]
     fn unknown_font_id_returns_none() {
-        let r = SwashRasterizer::new();
+        let r = SwashRasterizer::with_subpixel(false);
         assert!(r.raster(FontId(99), 1, 13.0).is_none());
     }
 

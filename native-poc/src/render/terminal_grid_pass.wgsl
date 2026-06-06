@@ -11,6 +11,8 @@
 //   0 = Alpha (R8, fg modulation)
 //   1 = Rgba (RGBA8, sampled as-is)
 //   2 = Solid (no atlas read; used for background + decoration lines)
+//   3 = Subpixel (RGBA8 coverage mask on the RGBA page; per-channel
+//       fg/bg blend — LCD anti-aliasing)
 //
 // Decoration flags packed into `flags`:
 //   bit 0 = underline (1-px line at the cell bottom)
@@ -131,6 +133,29 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         // Pre-multiplied alpha so the SrcAlpha / OneMinusSrcAlpha blend
         // composites correctly over the cleared / lower passes.
         return vec4<f32>(in.fg.rgb * a, in.fg.a * a);
+    }
+
+    if (in.page == 3u) {
+        // Subpixel glyph (LCD anti-aliasing): the RGBA page holds a
+        // per-channel coverage mask (R/G/B rasterized at ∓1/3-px
+        // horizontal offsets). Per-channel coverage is folded into a
+        // single coverage alpha `a` (the strongest channel) so that
+        // mask==0 texels stay fully transparent — overhanging quads
+        // (descenders, CJK glyphs taller than the cell) no longer paint
+        // this cell's bg over neighboring rows. Where the quad sits on
+        // this cell's own bg quad (dst == bg) the SrcAlpha /
+        // OneMinusSrcAlpha blend resolves to exactly
+        //   fg*mask + bg*(1-mask)
+        // — identical to the previous opaque per-channel composite.
+        let uv = in.uv / u.rgba_atlas;
+        let mask = textureSample(t_rgba, s_atlas, uv).rgb;
+        // Coverage alpha: the strongest channel.
+        let a = max(mask.r, max(mask.g, mask.b));
+        if (a <= 0.0) {
+            discard;
+        }
+        let rgb = (in.fg.rgb * mask + in.bg.rgb * (vec3<f32>(a) - mask)) / a;
+        return vec4<f32>(rgb, a);
     }
 
     // RGBA glyph: sample the color atlas directly. The atlas page holds
