@@ -561,21 +561,19 @@ pub struct Settings {
     #[allow(dead_code)]
     pub bell_action: BellAction,
     /// Whether to auto-detect URLs in the terminal grid and underline
-    /// them on hover. native-poc has no link detector yet; captured for
-    /// forward compatibility.
-    #[allow(dead_code)]
+    /// them on hover. Consumed by `crate::links::find_link_at` (hover
+    /// underline) and the Ctrl+click open path in `window_host`.
     pub url_detection: bool,
     /// Whether to auto-detect file paths in the terminal grid and
-    /// underline them on hover. native-poc has no path detector yet.
-    #[allow(dead_code)]
+    /// underline them on hover. Consumed alongside `url_detection`.
     pub file_path_detection: bool,
     /// Whether the prompt-folding affordance is enabled. native-poc
     /// does not implement folding yet.
     #[allow(dead_code)]
     pub fold_enabled: bool,
     /// Editor command template (e.g. `code --goto {file}:{line}:{col}`).
-    /// Consumed by the future file-path-detection click handler.
-    #[allow(dead_code)]
+    /// Consumed by the Ctrl+click file-path open path in `window_host`
+    /// via `crate::links::build_editor_command`.
     pub editor_command: String,
 }
 

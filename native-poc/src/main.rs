@@ -5,6 +5,7 @@ mod bell;
 mod callbacks;
 mod html;
 mod image;
+mod links;
 mod logging;
 mod render;
 mod tabs;

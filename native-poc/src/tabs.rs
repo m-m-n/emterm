@@ -96,6 +96,12 @@ const MODE_ACTION_TS_FALLBACK_A: u8 = 0xFF;
 const MODE_ACTION_TS_FALLBACK_B: u8 = 0xFE;
 
 impl Tab {
+    // Each argument maps to a distinct construction input (grid dims,
+    // settings, the two optional status-bar runtime handles, and the
+    // shared notification sink); grouping them into a struct would only
+    // move the same fields behind a builder for the two call sites in
+    // `App`, so the flat signature is kept.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn_shell(
         title: impl Into<String>,
         cols: u16,
@@ -106,6 +112,7 @@ impl Tab {
             Arc<crate::status_bar::osc_dispatcher::StatusBarOscDispatcher>,
         >,
         cwd_provider: Option<Arc<crate::status_bar::providers::CwdProvider>>,
+        notification_sink: Arc<dyn crate::callbacks::NotificationSink>,
     ) -> Self {
         // bounded(4096): allows up to ~64MB of in-flight PTY chunks
         // (4096 × 16KB reader buffer) before the reader thread blocks
@@ -138,7 +145,8 @@ impl Tab {
         // and cursor shape. OSC 4 / 10 / 11 / 12 / 22 may still
         // mutate any field at runtime via `NativeCallbacks`.
         let theme = Arc::new(Mutex::new(Theme::from_settings(settings.as_ref())));
-        let mut callbacks = NativeCallbacks::new(cb_state.clone(), theme.clone(), settings);
+        let mut callbacks =
+            NativeCallbacks::new(cb_state.clone(), theme.clone(), settings, notification_sink);
         if let Some(dispatcher) = statusbar_dispatcher {
             callbacks.set_statusbar_dispatcher(dispatcher);
         }

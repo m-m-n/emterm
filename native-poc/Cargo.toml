@@ -54,6 +54,11 @@ notify-rust = "4"
 unicode-width = "0.2"
 unicode-segmentation = "1.12"
 
+# URL / file-path link detection (links.rs). Version matches the
+# workspace's transitive `regex` (1.12.x, already in Cargo.lock) so no
+# new major is pulled into the build graph.
+regex = "1"
+
 # Logging
 log = "0.4"
 env_logger = "0.11"
@@ -107,6 +112,13 @@ png = "0.17"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# URL opener for Ctrl+click links (window_host::open_url). Uses
+# ShellExecuteW, which takes the URL as a parameter and never routes it
+# through cmd.exe parsing — `cmd /c start <url>` would let cmd
+# metacharacters (`&`, `|`, `^`) in a PTY-supplied URL inject commands.
+opener = "0.7"
 
 # Phase 4-G-1 redesign (2026-05-14): removed x11-dl / wayland-client /
 # wayland-protocols / windows. The self-built XIM / zwp_text_input_v3 /
