@@ -68,6 +68,7 @@ As a developer, I want to configure which editor command is used when clicking f
   - Join CWD + relative path for relative paths
   - Use absolute paths as-is
   - If CWD is empty, pass relative path as-is to editor
+  - After the existence check, canonicalize the resolved path to an absolute path before substituting it into the editor command (see Security Considerations)
 
 ### Non-Functional Requirements
 
@@ -249,7 +250,7 @@ async fn open_file_in_editor(program: String, args: Vec<String>) -> Result<(), S
 
 ## Security Considerations
 
-- **Command Injection:** File paths must be sanitized before being inserted into the editor command template. Use proper argument escaping or pass arguments as an array rather than shell string.
+- **Command Injection:** File paths must be sanitized before being inserted into the editor command template. Use proper argument escaping or pass arguments as an array rather than shell string. Canonicalize the path to an absolute path before substitution so a path beginning with `-` is not interpreted as an editor option.
 - **Path Traversal:** Not a significant concern since we're opening files in an editor (read-only navigation, not file modification).
 - **Input Validation:** Validate that line and column numbers are positive integers.
 

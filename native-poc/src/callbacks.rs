@@ -284,17 +284,22 @@ pub struct NativeCallbacks {
 }
 
 impl NativeCallbacks {
-    /// Construct callbacks with the production `NotifyRustSink`.
+    /// Construct callbacks with a caller-supplied notification `sink`.
+    ///
+    /// `App` builds one production [`NotifyRustSink`] and clones the same
+    /// `Arc` into every tab, so the OSC 9 path and the link-handling path
+    /// (`WindowHost::open_file_in_editor`) share a single sink instance.
     pub fn new(
         state: Arc<Mutex<NativeCallbackState>>,
         theme: Arc<Mutex<Theme>>,
         settings: Arc<Settings>,
+        sink: Arc<dyn NotificationSink>,
     ) -> Self {
         Self::with_sink(
             state,
             theme,
             settings,
-            Arc::new(NotifyRustSink),
+            sink,
             Arc::new(NotificationRateLimiter::with_default_clock()),
         )
     }

@@ -24,6 +24,7 @@
 //! events into the existing Phase 4-E `on_ime_preedit / on_ime_commit /
 //! on_ime_focus_lost` plumbing.
 
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -202,6 +203,41 @@ pub struct WindowHost {
     /// `set_cursor` is otherwise called on every `CursorMoved`, which
     /// floods the compositor with redundant requests.
     current_cursor: CursorIcon,
+    /// Link-hover state (URL / file-path auto-detection). Refreshed only
+    /// when the pointer crosses into a new grid cell so the detection
+    /// regex doesn't run per pixel.
+    hover: HoverState,
+    /// True while the pointer is inside the window. Set to `true` by
+    /// `CursorMoved` (there is no `CursorEntered` handler) and to `false`
+    /// by `CursorLeft`. Used to gate PTY-output re-detection in
+    /// `about_to_wait`: when the pointer has left the window there is
+    /// nothing to underline, so we skip the `find_link_at` work entirely.
+    pointer_in_window: bool,
+}
+
+/// Cached link-hover state for the active tab's grid. Mirrors the
+/// WebView build's `LinkHandler`: a detected link under the pointer gets
+/// its physical cells underlined (hover-only, no Ctrl), and the pointer
+/// turns into a hand cursor while Ctrl is held over a link (Ctrl is what
+/// arms the click-to-open).
+#[derive(Default)]
+struct HoverState {
+    /// Grid cell the last detection ran for (`None` = pointer outside the
+    /// grid / no detection yet). Used to skip re-running detection on
+    /// sub-cell pointer motion.
+    cell: Option<(u16, u16)>,
+    /// Physical cell spans of the link currently under the pointer
+    /// (`(row, col_start, col_end)`), empty when no link is hovered. Read
+    /// by the grid pass to underline the matched cells.
+    link_cells: Vec<(u16, u16, u16)>,
+    /// The detected link itself, reused by the Ctrl+click handler so the
+    /// click doesn't have to re-run detection for the same cell.
+    link: Option<crate::links::DetectedLink>,
+    /// Cached logical-line text for the last cell that ran detection.
+    /// PTY-output re-detection skips `find_link_at` when this matches the
+    /// current line text — meaning the PTY changed but not on the hovered
+    /// line — to avoid per-frame regex work under a stationary pointer.
+    last_line_text: Option<String>,
 }
 
 impl WindowHost {
@@ -363,6 +399,8 @@ impl WindowHost {
             pending_close: false,
             current_resize_dir: None,
             current_cursor: CursorIcon::Default,
+            hover: HoverState::default(),
+            pointer_in_window: false,
         }
     }
 
@@ -504,6 +542,298 @@ impl WindowHost {
         }
         self.current_cursor = icon;
         self.window.set_cursor(icon);
+    }
+
+    /// Map a physical pixel position to a grid cell, returning `None`
+    /// when the pointer is outside the terminal grid area (over the CSD
+    /// title bar / tab strip, in the left/top padding, or below/right of
+    /// the last cell). Unlike [`pixel_to_cell`] this does *not* clamp to
+    /// the grid — a clamped row/col would make the top strip read as
+    /// row 0 col 0 and falsely underline a link there. Mirrors the
+    /// WebView `LinkHandler`'s `displayRow < 0 || >= rows` guard.
+    fn pixel_to_grid_cell(&self, pos: PhysicalPosition<f64>, app: &App) -> Option<(u16, u16)> {
+        let (cell_w, cell_h, origin_x, origin_y) = self.cell_metrics_px(app);
+        if cell_w <= 0.0 || cell_h <= 0.0 {
+            return None;
+        }
+        if pos.x < origin_x || pos.y < origin_y {
+            return None;
+        }
+        let cols = app.cell_size.cols;
+        let rows = app.cell_size.rows;
+        if cols == 0 || rows == 0 {
+            return None;
+        }
+        let col = ((pos.x - origin_x) / cell_w).floor() as i64;
+        let row = ((pos.y - origin_y) / cell_h).floor() as i64;
+        if col < 0 || row < 0 || col >= cols as i64 || row >= rows as i64 {
+            return None;
+        }
+        Some((row as u16, col as u16))
+    }
+
+    /// Recompute the link-hover state for the current pointer position.
+    /// Runs the detection regex only when the pointer crosses into a new
+    /// grid cell (or leaves the grid); requests a redraw when the
+    /// underlined span changes so the renderer repaints. Also refreshes
+    /// the pointer icon (hand while Ctrl is held over a link).
+    ///
+    /// No-op for detection when both `url_detection` and
+    /// `file_path_detection` are off, but the cursor icon is still
+    /// reset so a stale hand cursor doesn't linger.
+    fn refresh_link_hover(&mut self, app: &App) {
+        let detect_urls = app.settings.url_detection;
+        let detect_paths = app.settings.file_path_detection;
+
+        let new_cell = self.pixel_to_grid_cell(self.cursor_pos, app);
+
+        // Re-run detection only when the target cell changed. The cursor
+        // icon (Ctrl-dependent) is refreshed every call so toggling Ctrl
+        // over a held position flips the hand on/off without motion.
+        if new_cell != self.hover.cell {
+            self.hover.cell = new_cell;
+            let prev_cells = std::mem::take(&mut self.hover.link_cells);
+            self.hover.link = None;
+            self.hover.last_line_text = None;
+
+            if (detect_urls || detect_paths) && !app.alt_screen {
+                if let (Some((row, col)), Some(tab)) = (new_cell, app.active_tab()) {
+                    let core = tab.core.lock();
+                    // Cache the logical-line text so PTY-output re-detection
+                    // can skip `find_link_at` when the hovered line is
+                    // unchanged.
+                    self.hover.last_line_text = Some(crate::links::logical_line_text(&core, row));
+                    if let Some(link) =
+                        crate::links::find_link_at(&core, row, col, detect_urls, detect_paths)
+                    {
+                        self.hover.link_cells = link.cells.clone();
+                        self.hover.link = Some(link);
+                    }
+                }
+            }
+
+            if prev_cells != self.hover.link_cells {
+                self.window().request_redraw();
+            }
+        }
+
+        self.update_link_cursor();
+    }
+
+    /// Re-run link detection after a PTY update *only* when the hovered
+    /// logical line actually changed under a stationary pointer.
+    ///
+    /// Called from the event loop's `about_to_wait` when `pty_changed &&
+    /// pointer_in_window && !dragging`. The staleness check (compare the
+    /// current logical-line text against the cached `last_line_text`) is
+    /// owned here, alongside [`refresh_link_hover`], so the
+    /// `HoverState` fields (`cell` / `last_line_text`) are never touched
+    /// from the event loop body — that keeps the cache-invalidation
+    /// policy in one place instead of duplicated across both sites.
+    ///
+    /// Applies the same detection gate as [`refresh_link_hover`]
+    /// (`url_detection || file_path_detection`, and not on the alt
+    /// screen) before doing any per-frame work, so high-throughput PTY
+    /// output under a stationary pointer skips the `logical_line_text`
+    /// allocation entirely when detection is disabled.
+    fn refresh_link_hover_on_pty_change(&mut self, app: &App) {
+        // Alt-screen: clear any underline cache carried over from the normal
+        // screen to prevent hover-underline bleed onto alt-screen content.
+        // invalidate_link_hover is a no-op when link_cells is already empty,
+        // so this is cheap on frames where no link was hovered.
+        if app.alt_screen {
+            self.invalidate_link_hover();
+            return;
+        }
+
+        let detect_urls = app.settings.url_detection;
+        let detect_paths = app.settings.file_path_detection;
+        if !detect_urls && !detect_paths {
+            return;
+        }
+
+        // Content-change guard: fetch the current logical-line text first.
+        // If it matches the cache, the hovered line is unchanged and
+        // `find_link_at` can be skipped entirely (avoiding the per-frame
+        // alloc + regex during high-throughput output like `tail -f` or a
+        // build log). Only when the text actually changed do we clear
+        // `hover.cell` and let `refresh_link_hover` re-run detection.
+        if let Some((row, _col)) = self.hover.cell {
+            let current_text = match app.active_tab() {
+                Some(tab) => {
+                    let core = tab.core.lock();
+                    crate::links::logical_line_text(&core, row)
+                }
+                None => return,
+            };
+            let cached = self.hover.last_line_text.as_deref().unwrap_or("");
+            if current_text == cached {
+                // Hovered line text is unchanged; existing hover state
+                // (underline + link) is still valid.
+                return;
+            }
+            // Line changed: drop the cached cell so refresh re-detects.
+            self.hover.cell = None;
+            self.refresh_link_hover(app);
+        } else {
+            // No previously-hovered cell: let refresh_link_hover resolve
+            // whether the pointer is now over a detectable cell.
+            self.hover.cell = None;
+            self.refresh_link_hover(app);
+        }
+    }
+
+    /// Set the pointer icon by precedence: an active CSD resize zone wins,
+    /// then a hand cursor when Ctrl is held over a detected link, else the
+    /// default arrow. Skips the `set_cursor` IPC when the icon is
+    /// unchanged. The hand is gated on Ctrl to match the WebView build,
+    /// where Ctrl/Meta arms the click-to-open.
+    fn update_link_cursor(&mut self) {
+        let icon = if self.current_resize_dir.is_some() {
+            self.current_cursor // leave resize-hint icon untouched
+        } else if self.current_mods.ctrl && self.hover.link.is_some() {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        };
+        if icon != self.current_cursor {
+            self.current_cursor = icon;
+            self.window.set_cursor(icon);
+        }
+    }
+
+    /// Drop any cached link-hover state and clear a hand cursor. Called
+    /// when the grid content shifts under the pointer (scroll) or the
+    /// pointer leaves the window, so a stale underline / cursor doesn't
+    /// survive. Requests a redraw when an underline was showing.
+    fn invalidate_link_hover(&mut self) {
+        self.hover.cell = None;
+        self.hover.link = None;
+        self.hover.last_line_text = None;
+        let had = !self.hover.link_cells.is_empty();
+        self.hover.link_cells.clear();
+        if had {
+            self.window().request_redraw();
+        }
+        self.update_link_cursor();
+    }
+
+    /// Open the link under the pointer (URL via the OS opener, file path
+    /// via the configured editor). Returns `true` when a link was found
+    /// at the click cell (so the caller skips starting a selection),
+    /// regardless of whether the spawn ultimately succeeded — a blocked
+    /// scheme or missing file is still "the user clicked a link".
+    ///
+    /// Always re-runs detection against the live grid at click time so
+    /// the result reflects the current terminal content regardless of
+    /// hover-cache staleness (terminal output, tab switches, alt-screen
+    /// transitions, or settings changes since the last pointer-move can
+    /// all mutate the visible content under a stationary pointer).
+    fn try_open_link_at_pointer(&mut self, app: &App) -> bool {
+        let detect_urls = app.settings.url_detection;
+        let detect_paths = app.settings.file_path_detection;
+        if !detect_urls && !detect_paths {
+            return false;
+        }
+        // Guard against alt-screen: mirrors the same condition applied in
+        // `refresh_link_hover` so hover and click use identical detection rules.
+        if app.alt_screen {
+            return false;
+        }
+        let click_cell = self.pixel_to_grid_cell(self.cursor_pos, app);
+        let Some((row, col)) = click_cell else {
+            return false;
+        };
+
+        // Always re-detect from the live grid; clicks are infrequent so
+        // the regex cost is negligible, and this prevents acting on a
+        // stale DetectedLink from the hover cache.
+        let link = if let Some(tab) = app.active_tab() {
+            let core = tab.core.lock();
+            crate::links::find_link_at(&core, row, col, detect_urls, detect_paths)
+        } else {
+            None
+        };
+
+        let Some(link) = link else {
+            return false;
+        };
+
+        match link.kind {
+            crate::links::LinkKind::Url(url) => {
+                if crate::links::is_safe_uri(&url) {
+                    open_url(&url);
+                } else {
+                    log::warn!("native-poc: refusing to open unsafe URI scheme: {url}");
+                }
+            }
+            crate::links::LinkKind::FilePath { path, line, col } => {
+                self.open_file_in_editor(app, &path, line, col);
+            }
+        }
+        true
+    }
+
+    /// Resolve `file_path` against the active tab's OSC 7 CWD, verify the
+    /// file exists, then spawn `settings.editor_command` with `{file}` /
+    /// `{line}` / `{col}` expanded. Mirrors `openFileInEditor` in the
+    /// WebView build's `link.ts`: existence is checked only at click time
+    /// (not on hover), a relative path with no CWD passes through as-is
+    /// (SPEC FR6), and a blank editor command / absent file is a logged
+    /// no-op.
+    fn open_file_in_editor(&self, app: &App, file_path: &str, line: u32, col: u32) {
+        let editor = app.settings.editor_command.trim();
+        if editor.is_empty() {
+            log::warn!("native-poc: editor_command is blank; not opening {file_path}");
+            return;
+        }
+        let cwd = app.active_tab().and_then(|t| t.cb_state.lock().cwd.clone());
+        // SPEC FR6: with no CWD a relative path passes through as-is; the
+        // is_file() check below then decides whether anything opens.
+        let resolved = crate::links::resolve_path(file_path, cwd.as_deref());
+        if !std::path::Path::new(&resolved).is_file() {
+            log::warn!("native-poc: file not found, not opening: {resolved}");
+            app.notify("ファイルが見つかりません", &resolved);
+            return;
+        }
+        // Canonicalize to an absolute path so a leading-dash path (e.g.
+        // `-S/tmp/x.vim:1`) cannot be passed as an option to the editor.
+        let canonical = match std::fs::canonicalize(&resolved) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("native-poc: canonicalize failed for {resolved}: {e}");
+                app.notify("ファイルが見つかりません", &resolved);
+                return;
+            }
+        };
+        let canonical_str = canonical.to_string_lossy();
+        let Some((program, args)) = crate::links::build_editor_command(
+            &app.settings.editor_command,
+            &canonical_str,
+            line,
+            col,
+        ) else {
+            log::warn!("native-poc: editor_command produced no program; not opening");
+            return;
+        };
+        match std::process::Command::new(&program)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                log::info!("native-poc: opened {canonical_str} in editor ({program})");
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(e) => {
+                log::warn!("native-poc: failed to spawn editor {program}: {e}");
+                app.notify("エディタの起動に失敗しました", &e.to_string());
+            }
+        }
     }
 
     /// Reconfigure the wgpu surface for the current window size.
@@ -890,6 +1220,10 @@ impl WindowHost {
             let _ = app.apply_tab_event(evt);
             // Tab roster changed; force a full redraw next frame.
             app.mark_full_redraw();
+            // Active tab changed: grid content under the pointer is now
+            // different. Drop the cached hover so the stale underline /
+            // hand cursor from the previous tab doesn't bleed through.
+            self.invalidate_link_hover();
         }
         // Scrollbar thumb moved: jump the viewport. `scroll_set_offset`
         // marks the frame dirty itself, so the new position paints on
@@ -897,6 +1231,8 @@ impl WindowHost {
         // produced this interaction).
         if let Some(offset) = frame_events.scroll_to {
             app.scroll_set_offset(offset);
+            // Viewport shifted under the pointer; cached hover is stale.
+            self.invalidate_link_hover();
         }
         let paint_jobs = self
             .egui_ctx
@@ -963,6 +1299,16 @@ impl WindowHost {
         // mutable borrow doesn't conflict with `&self` on the metrics
         // call inside the branch (both go through `cell_metrics_px`).
         let (_, _, origin_x_px, origin_y_px) = self.cell_metrics_px(app);
+        // Borrow the hovered-link cell spans before the `grid_pass`
+        // mutable borrow so `collect_cell_inputs` can underline them
+        // without re-borrowing `self`. Using a slice reference avoids
+        // a per-frame heap allocation while `self.hover.link_cells` and
+        // `self.grid_pass` are disjoint fields.
+        let hover_link_cells: Option<&[(u16, u16, u16)]> = if self.hover.link_cells.is_empty() {
+            None
+        } else {
+            Some(&self.hover.link_cells)
+        };
         let prepared_grid = if let Some(pass) = self.grid_pass.as_mut() {
             // Theme is seeded from settings (font_size_pt + cursor
             // style) and then overlaid with the active tab's OSC
@@ -1009,6 +1355,7 @@ impl WindowHost {
                     app.selection.as_ref(),
                     width_mode,
                     block_cursor_cell,
+                    hover_link_cells,
                 );
                 // IME preedit overlay (Phase 4-G): paint composition
                 // glyphs inline at the anchor so the user can see what
@@ -1229,6 +1576,47 @@ fn winit_to_egui_button(b: MouseButton) -> Option<egui::PointerButton> {
         MouseButton::Right => Some(egui::PointerButton::Secondary),
         MouseButton::Middle => Some(egui::PointerButton::Middle),
         _ => None,
+    }
+}
+
+/// Hand a (safe-scheme-checked) URL to the OS opener. Linux uses
+/// `xdg-open`; Windows uses ShellExecuteW via the `opener` crate. A
+/// spawn failure is logged at `warn` and otherwise ignored — the
+/// WebView build similarly swallows opener errors. The caller is
+/// responsible for the `is_safe_uri` gate.
+fn open_url(url: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        match std::process::Command::new("xdg-open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                log::info!("native-poc: opened URL via xdg-open: {url}");
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(e) => log::warn!("native-poc: xdg-open failed for {url}: {e}"),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // ShellExecuteW receives the URL as a bare parameter — unlike
+        // `cmd /c start`, no cmd.exe parsing happens, so cmd
+        // metacharacters (`&`, `|`, `^`) in a PTY-supplied URL cannot
+        // inject commands.
+        match opener::open(url) {
+            Ok(()) => log::info!("native-poc: opened URL via ShellExecuteW: {url}"),
+            Err(e) => log::warn!("native-poc: ShellExecuteW failed for {url}: {e}"),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        log::warn!("native-poc: no URL opener on this platform for {url}");
     }
 }
 
@@ -1633,6 +2021,10 @@ impl ApplicationHandler for PocApp {
                     shift: s.contains(ModifiersState::SHIFT),
                     alt: s.contains(ModifiersState::ALT),
                 };
+                // Pressing / releasing Ctrl toggles the hand cursor over a
+                // hovered link without any pointer motion. The cell hasn't
+                // moved, so detection is reused — only the icon updates.
+                host.update_link_cursor();
             }
             // Phase 4-G-3: winit surfaces composition events via
             // `WindowEvent::Ime { Enabled, Preedit, Commit, Disabled }`.
@@ -1655,6 +2047,14 @@ impl ApplicationHandler for PocApp {
                 self.app.notify_ime_focus(focused);
                 if !focused {
                     self.app.on_ime_focus_lost();
+                    // ModifiersChanged is not guaranteed to fire while
+                    // the window is unfocused, so a Ctrl held across an
+                    // Alt+Tab would stay latched and arm the link hand
+                    // cursor / Ctrl+click-open on return. Drop all
+                    // modifiers on focus loss; the next real
+                    // ModifiersChanged re-seeds them.
+                    host.current_mods = Modifiers::default();
+                    host.update_link_cursor();
                 } else {
                     // Drop the user back into the cursor's "on" half-
                     // cycle on focus regain so the filled block appears
@@ -1762,6 +2162,11 @@ impl ApplicationHandler for PocApp {
                             other => {
                                 let _ = self.app.apply_action(other);
                                 self.app.mark_full_redraw();
+                                // Tab-switch actions (NextTab/PrevTab/JumpTab/
+                                // NewTab/CloseTab) change the active grid; drop
+                                // the hover so the stale underline / hand cursor
+                                // from the old tab doesn't bleed into the new one.
+                                host.invalidate_link_hover();
                             }
                         }
                     } else {
@@ -1804,6 +2209,10 @@ impl ApplicationHandler for PocApp {
                 let _ = self.app.dispatch_key_event_via_ime(&raw_key);
             }
             WindowEvent::CursorLeft { .. } => {
+                // Mark the pointer as outside the window so PTY-output
+                // re-detection in `about_to_wait` is suppressed — there
+                // is nothing to underline when no pointer is inside.
+                host.pointer_in_window = false;
                 // Reset the resize hint when the pointer leaves the
                 // window so the cached direction doesn't outlive its
                 // hit zone — without this, re-entering the interior
@@ -1816,8 +2225,12 @@ impl ApplicationHandler for PocApp {
                     host.current_cursor = CursorIcon::Default;
                     host.window.set_cursor(CursorIcon::Default);
                 }
+                // Drop any link-hover underline + hand cursor when the
+                // pointer leaves the window.
+                host.invalidate_link_hover();
             }
             WindowEvent::CursorMoved { position, .. } => {
+                host.pointer_in_window = true;
                 host.cursor_pos = position;
                 // Forward to egui so the tab bar / status bar widgets
                 // observe hover + drag motion.
@@ -1835,6 +2248,10 @@ impl ApplicationHandler for PocApp {
                 // mid-drag would be jarring.
                 if !host.dragging {
                     host.update_resize_hint(logical.x, logical.y);
+                    // Link hover: skipped while selection-dragging so a
+                    // drag through a link doesn't flip to a hand cursor /
+                    // underline mid-selection.
+                    host.refresh_link_hover(&self.app);
                 }
                 host.window().request_redraw();
                 if host.dragging {
@@ -1907,6 +2324,15 @@ impl ApplicationHandler for PocApp {
 
                 match (button, state) {
                     (MouseButton::Left, ElementState::Pressed) => {
+                        // Ctrl+click opens a hovered URL / file path and
+                        // skips starting a selection. Reuses the cached
+                        // hover detection for the cell under the pointer
+                        // (refreshed on the CursorMoved that brought us
+                        // here), re-detecting only if the cached cell no
+                        // longer matches the click cell.
+                        if host.current_mods.ctrl && host.try_open_link_at_pointer(&self.app) {
+                            return;
+                        }
                         let (row, col) = host.pixel_to_cell(host.cursor_pos, &self.app);
                         let cls = host.click_tracker.classify(Instant::now(), row, col);
                         if cls.mode == SelectionMode::Character {
@@ -1982,9 +2408,14 @@ impl ApplicationHandler for PocApp {
                 let step = self.app.settings.scroll_speed.max(1);
                 if lines > 0.0 {
                     self.app.scroll_up_by(step);
+                    // Scrollback content shifts under the pointer, so the
+                    // cached hover no longer maps to the same text. Drop
+                    // it; the next CursorMoved re-detects.
+                    host.invalidate_link_hover();
                     host.window().request_redraw();
                 } else if lines < 0.0 {
                     self.app.scroll_down_by(step);
+                    host.invalidate_link_hover();
                     host.window().request_redraw();
                 }
             }
@@ -2015,6 +2446,16 @@ impl ApplicationHandler for PocApp {
         // Visual-bell flash decays over 150 ms; like blink, nothing
         // else would schedule the intermediate frames, so poll it here.
         let bell_due = self.app.needs_bell_repaint();
+        // PTY content may have changed under a stationary pointer. Only
+        // re-run detection when the pointer is inside the window and no
+        // selection drag is in progress — PTY output during a drag must
+        // not flip the cursor to a hand or underline a link mid-selection.
+        // The staleness comparison + cache invalidation lives in
+        // `refresh_link_hover_on_pty_change` so the `HoverState` fields
+        // are never poked from the event loop body.
+        if pty_changed && host.pointer_in_window && !host.dragging {
+            host.refresh_link_hover_on_pty_change(&self.app);
+        }
         if ime_changed || pty_changed || blink_due || bell_due {
             host.window().request_redraw();
         }
@@ -2199,19 +2640,24 @@ fn handle_special_chord(
             WinitKey::Named(NamedKey::PageUp) => {
                 let rows = app.cell_size.rows.max(1) as u32;
                 app.scroll_up_by(rows);
+                // Viewport shifted under the pointer; cached hover is stale.
+                host.invalidate_link_hover();
                 return true;
             }
             WinitKey::Named(NamedKey::PageDown) => {
                 let rows = app.cell_size.rows.max(1) as u32;
                 app.scroll_down_by(rows);
+                host.invalidate_link_hover();
                 return true;
             }
             WinitKey::Named(NamedKey::Home) => {
                 app.scroll_to_top();
+                host.invalidate_link_hover();
                 return true;
             }
             WinitKey::Named(NamedKey::End) => {
                 app.scroll_to_live();
+                host.invalidate_link_hover();
                 return true;
             }
             _ => {}

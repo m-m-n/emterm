@@ -304,6 +304,7 @@ pub fn collect_cell_inputs(
     selection: Option<&Selection>,
     width_mode: AmbiguousWidthMode,
     block_cursor_cell: Option<(u16, u16)>,
+    hovered_link: Option<&[(u16, u16, u16)]>,
 ) -> Vec<CellInput> {
     let cols = core.cols();
     let rows = core.rows();
@@ -314,6 +315,13 @@ pub fn collect_cell_inputs(
         let mut col = 0u16;
         while col < cols {
             let mut style = resolve_cell_style(core, theme, col, row, selection);
+            // Hover underline: a cell inside the hovered link's physical
+            // span gets `underline = true` regardless of its SGR state.
+            // Matches the WebView build's hover-only underline (no Ctrl
+            // required to underline; Ctrl only opens the link).
+            if cell_in_hovered_link(hovered_link, row, col) {
+                style.underline = true;
+            }
             if block_cursor_cell == Some((col, row)) {
                 std::mem::swap(&mut style.fg, &mut style.bg);
             }
@@ -339,6 +347,18 @@ pub fn collect_cell_inputs(
         }
     }
     out
+}
+
+/// Whether physical cell `(row, col)` falls inside any span of the
+/// hovered link. Each span is `(row, col_start, col_end)` with
+/// `col_start <= col < col_end`.
+fn cell_in_hovered_link(hovered_link: Option<&[(u16, u16, u16)]>, row: u16, col: u16) -> bool {
+    match hovered_link {
+        Some(spans) => spans
+            .iter()
+            .any(|&(r, cs, ce)| r == row && col >= cs && col < ce),
+        None => false,
+    }
 }
 
 /// Overlay an in-progress IME preedit composition onto an existing
@@ -857,7 +877,8 @@ mod tests {
         let mut core = TerminalCore::new(5, 2, 100);
         core.process_pty_data(b"ABCDE");
         let theme = Theme::default();
-        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None);
+        let inputs =
+            collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None, None);
         // 5 cols × 2 rows = 10 cell entries.
         assert_eq!(inputs.len(), 10);
         // Row 0 should carry the literal glyphs in column order.
@@ -879,7 +900,8 @@ mod tests {
         let mut core = TerminalCore::new(4, 1, 100);
         core.process_pty_data("あA".as_bytes());
         let theme = Theme::default();
-        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None);
+        let inputs =
+            collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None, None);
         assert_eq!(inputs[0].glyph, "あ");
         assert_eq!(inputs[0].width_cells, 2);
         // Column 2 holds the 'A'; column 1 was skipped (trailing half of あ).
@@ -896,7 +918,8 @@ mod tests {
         // SGR 4 = underline; SGR 9 = strikethrough.
         core.process_pty_data(b"\x1b[4mU\x1b[0m\x1b[9mS\x1b[0mN");
         let theme = Theme::default();
-        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None);
+        let inputs =
+            collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None, None);
         let u = inputs.iter().find(|c| c.glyph == "U").expect("U present");
         let s = inputs.iter().find(|c| c.glyph == "S").expect("S present");
         let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
@@ -917,7 +940,8 @@ mod tests {
         // SGR 41 = red background.
         core.process_pty_data(b"\x1b[41mR\x1b[0mN");
         let theme = Theme::default();
-        let inputs = collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None);
+        let inputs =
+            collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None, None);
         let r = inputs.iter().find(|c| c.glyph == "R").expect("R present");
         let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
         assert!(r.draw_background);

@@ -13,6 +13,7 @@ use std::time::Instant;
 use parking_lot::Mutex;
 use term_core::terminal_core::TerminalCore;
 
+use crate::callbacks::{NotificationSink, NotifyRustSink};
 use crate::ime::backend::{ImeBackend, ImeEvent, KeyDispatchResult, RawKeyEvent, PUMP_BUDGET};
 use crate::ime::null::NullBackend;
 use crate::render::font::cache::GlyphCache;
@@ -212,6 +213,16 @@ pub struct App {
     /// observes `dirty_rows_this_frame() == 0` on an idle shell and
     /// returns early, freezing the clock display.
     previous_status_bar_view_model: Option<crate::status_bar::StatusBarViewModel>,
+    /// Desktop-notification surface shared with every tab's
+    /// `NativeCallbacks` (OSC 9 notifications) and used directly by
+    /// link handling (`WindowHost::open_file_in_editor`) to surface
+    /// file-not-found / editor-launch failures to the user. Constructed
+    /// once in [`App::with_settings`] as the production [`NotifyRustSink`]
+    /// and cloned into each tab so a single sink instance is shared.
+    ///
+    /// アプリケーションドメイン外からの直接アクセスは禁止。通知送信は
+    /// [`App::notify`] を経由すること。
+    pub(crate) notification_sink: Arc<dyn NotificationSink>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +335,11 @@ impl App {
         let runtime_font_size_pt = settings.font_size;
         let show_tab_bar = settings.show_tab_bar;
 
+        // Single production notification sink, shared with every tab's
+        // callbacks (OSC 9) and used directly by link handling for
+        // file-not-found / editor-launch failures.
+        let notification_sink: Arc<dyn NotificationSink> = Arc::new(NotifyRustSink);
+
         Self {
             tabs: Vec::new(),
             active: 0,
@@ -358,6 +374,7 @@ impl App {
             status_bar_runtime,
             active_cwd,
             previous_status_bar_view_model: None,
+            notification_sink,
         }
     }
 
@@ -768,6 +785,7 @@ impl App {
             self.settings.clone(),
             Some(self.status_bar_runtime.dispatcher()),
             Some(self.status_bar_runtime.cwd_provider()),
+            self.notification_sink.clone(),
         );
         self.tabs.push(tab);
         self.active = 0;
@@ -787,6 +805,7 @@ impl App {
             self.settings.clone(),
             Some(self.status_bar_runtime.dispatcher()),
             Some(self.status_bar_runtime.cwd_provider()),
+            self.notification_sink.clone(),
         );
         // A fresh tab seeds its theme from `settings.font_size`; carry
         // the live zoom level over so a tab opened after the user zoomed
@@ -1489,6 +1508,15 @@ impl App {
             return false;
         };
         tab.apply_mux_message(msg)
+    }
+
+    /// ユーザーにデスクトップ通知を送る。
+    ///
+    /// `notification_sink` フィールドの直接アクセスを避け、通知送信を
+    /// アプリケーションドメインにカプセル化するためのメソッド。
+    /// ウィンドウ層など外部からの通知送信はこのメソッドを経由すること。
+    pub fn notify(&self, title: &str, body: &str) {
+        self.notification_sink.send(title, body);
     }
 }
 
