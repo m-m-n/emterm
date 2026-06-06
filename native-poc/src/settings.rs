@@ -498,19 +498,19 @@ pub struct Settings {
     /// `TerminalCore::set_cursor_blink` at tab spawn time; DECTCEM /
     /// app-driven mode changes may still override at runtime.
     pub cursor_blink: bool,
-    /// UI brightness mode. `Light`/`Dark`/`System`. The MD3 palette in
-    /// `ui::md3` is currently dark-only; `Light`/`System` are captured
-    /// for forward compatibility but log a warn-once when first seen.
+    /// UI brightness mode. `Light`/`Dark`/`System`. Picks the light or
+    /// dark variant of the `ui::md3` preset palette at startup. `System`
+    /// resolves to dark (no desktop-portal brightness lookup yet).
     pub ui_theme: UiTheme,
     /// MD3 accent color preset for the UI chrome. Swaps `md3::PRIMARY`
     /// at runtime so tab indicator / focused borders pick up the user's
     /// hue choice.
     pub ui_theme_preset: UiThemePreset,
-    /// UI font family override for the egui-rendered chrome (title bar /
-    /// tab bar / status bar). Empty string keeps egui's bundled default.
-    /// Currently captured only — wiring into `FontDefinitions` is a
-    /// follow-up.
-    #[allow(dead_code)]
+    /// UI font family override for the egui-rendered chrome. Prepended
+    /// to the `Proportional` chain (tab bar / title bar) by
+    /// `window_host::configure_egui_fonts`; the status bar mirrors the
+    /// WebView's terminal-font styling and stays on `Monospace`. Empty
+    /// string keeps egui's bundled default.
     pub ui_font_family: String,
     /// Terminal color-scheme preset name. When non-empty and matched
     /// either by [`COLOR_SCHEME_PRESETS`] or by [`Settings::custom_color_schemes`],
@@ -520,11 +520,9 @@ pub struct Settings {
     /// `terminal_color_scheme`. User schemes override preset names of
     /// the same value.
     pub custom_color_schemes: Vec<UserColorScheme>,
-    /// Scrollbar visibility policy. The native-poc terminal viewport does
-    /// not yet expose a scrollbar widget — captured here so a future
-    /// scrollbar implementation can read the user's choice without a
-    /// schema migration.
-    #[allow(dead_code)]
+    /// Scrollbar visibility policy for the terminal viewport
+    /// (`ui::scrollbar`). `Auto` shows the bar only when scrollback
+    /// content exists, mirroring the WebView's `overflow-y: auto`.
     pub show_scrollbar: ScrollbarMode,
     /// Whether the tab bar is drawn. `false` hides it entirely; the
     /// central terminal panel takes the freed vertical space.
@@ -665,7 +663,6 @@ pub enum ScrollbarMode {
 }
 
 impl ScrollbarMode {
-    #[allow(dead_code)]
     pub fn parse_or_warn(spec: &str) -> Self {
         match spec.trim().to_ascii_lowercase().as_str() {
             "auto" | "" => Self::Auto,
@@ -692,12 +689,11 @@ fn warn_unknown_scrollbar_mode_once(seen: &str) {
     });
 }
 
-/// Bell action mirrored from the legacy WebView settings. native-poc
-/// does not yet ring a sound or flash a visual cue; the value is stored
-/// so a future implementation can read it without a settings-schema
-/// migration.
+/// Bell action mirrored from the legacy WebView settings. Dispatched
+/// by `App::pump_all` when a tab drains a BEL: `Visual` flashes the
+/// terminal area for 150 ms, `Sound` plays the 800 Hz beep via
+/// `crate::bell`, `None` ignores the ring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)]
 pub enum BellAction {
     Sound,
     #[default]
@@ -706,7 +702,6 @@ pub enum BellAction {
 }
 
 impl BellAction {
-    #[allow(dead_code)]
     pub fn parse_or_warn(spec: &str) -> Self {
         match spec.trim().to_ascii_lowercase().as_str() {
             "sound" => Self::Sound,

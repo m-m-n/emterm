@@ -210,7 +210,7 @@ impl WindowHost {
     /// `image_quota_bytes` is the per-process cap on inline-image GPU
     /// memory (sourced from `Settings::image_memory_quota_mb`); when the
     /// cap is hit, the LRU-front image is evicted before any new upload.
-    pub fn new(event_loop: &ActiveEventLoop, image_quota_bytes: u64) -> Self {
+    pub fn new(event_loop: &ActiveEventLoop, image_quota_bytes: u64, ui_font_family: &str) -> Self {
         let attrs = WindowAttributes::default()
             .with_title("eMterm PoC")
             .with_decorations(false)
@@ -320,7 +320,7 @@ impl WindowHost {
         // used for in-flight surface loss, which is already covered.
 
         let egui_ctx = egui::Context::default();
-        configure_egui_emoji_fallback(&egui_ctx);
+        configure_egui_fonts(&egui_ctx, ui_font_family);
         let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
 
         let pixels_per_point = window.scale_factor() as f32;
@@ -866,6 +866,7 @@ impl WindowHost {
         let mut frame_events = crate::render::FrameEvents {
             title: None,
             tab: None,
+            scroll_to: None,
         };
         // Snapshot the current maximized state so the title bar can
         // swap its middle glyph between Maximize and Restore. Reading
@@ -889,6 +890,13 @@ impl WindowHost {
             let _ = app.apply_tab_event(evt);
             // Tab roster changed; force a full redraw next frame.
             app.mark_full_redraw();
+        }
+        // Scrollbar thumb moved: jump the viewport. `scroll_set_offset`
+        // marks the frame dirty itself, so the new position paints on
+        // the next redraw (already requested by the pointer event that
+        // produced this interaction).
+        if let Some(offset) = frame_events.scroll_to {
+            app.scroll_set_offset(offset);
         }
         let paint_jobs = self
             .egui_ctx
@@ -1338,12 +1346,11 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
     }
 }
 
-/// Extend egui's default font families with the bundled CJK and
-/// outline-emoji fonts so the status bar (drawn with
-/// `FontFamily::Monospace`) can render Japanese and pictographs
-/// instead of tofu.
+/// Configure egui's font stack for the chrome (tab bar / title bar /
+/// status bar): the user's `ui_font_family` plus bundled CJK and
+/// outline-emoji fallbacks.
 ///
-/// Two problems are addressed:
+/// Three problems are addressed:
 ///
 /// 1. egui's `FontDefinitions::default()` ships only `Hack` on the
 ///    `Monospace` family, which covers ASCII + Latin extensions but
@@ -1352,6 +1359,12 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
 /// 2. The same default registers BW emoji fonts on `Proportional`
 ///    only; pictographs (✅ 🟢 ☂ etc.) fall off the end of the
 ///    Monospace chain.
+/// 3. `settings.ui_font_family` mirrors the WebView build's
+///    `--ui-font-family` CSS variable, which skins the chrome's
+///    proportional text (tab bar, title bar). It is prepended to
+///    `Proportional` only — the status bar follows
+///    `--terminal-font-family` in the WebView build and so stays on
+///    the `Monospace` chain here.
 ///
 /// We register the bundled `NotoSansCJK-JP` and `NotoColorEmoji.ttf`
 /// (already linked in via [`crate::render::font::resolver`] for the
@@ -1364,11 +1377,18 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
 /// outline* layer is reachable. Full color-emoji parity with the
 /// WebView build requires switching the status-bar text path to a
 /// swash-based custom painter, which is out of scope here.
-fn configure_egui_emoji_fallback(ctx: &egui::Context) {
+fn configure_egui_fonts(ctx: &egui::Context, ui_font_family: &str) {
+    ctx.set_fonts(build_egui_fonts(ui_font_family));
+}
+
+/// Build the `FontDefinitions` for [`configure_egui_fonts`]. Split out
+/// so tests can inspect the resulting chains without an egui `Context`.
+fn build_egui_fonts(ui_font_family: &str) -> egui::FontDefinitions {
     use crate::render::font::resolver::{BUNDLED_CJK_FONT, BUNDLED_EMOJI_FONT};
 
     const CJK_KEY: &str = "EmtermBundledCJK";
     const EMOJI_KEY: &str = "EmtermBundledEmoji";
+    const UI_FONT_KEY: &str = "EmtermUiFont";
 
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -1388,7 +1408,37 @@ fn configure_egui_emoji_fallback(ctx: &egui::Context) {
             }
         }
     }
-    ctx.set_fonts(fonts);
+
+    // User-configured UI font: resolve the family through the same
+    // fontdb lookup the terminal grid uses, then make it the first
+    // Proportional candidate. Unknown families warn and keep egui's
+    // default — matching the WebView CSS fallback (`var(--ui-font-family,
+    // sans-serif)`).
+    let family = ui_font_family.trim();
+    if !family.is_empty() {
+        match crate::render::font::resolver::load_system_family_bytes(family, 400, None) {
+            Some((bytes, index)) => {
+                let mut data = egui::FontData::from_owned(bytes.to_vec());
+                // `.ttc` collection member — egui can address faces by
+                // index directly (unlike the swash ingest path).
+                data.index = index;
+                fonts.font_data.insert(UI_FONT_KEY.to_string(), data);
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .insert(0, UI_FONT_KEY.to_string());
+                log::info!("settings: ui_font_family={family:?} applied to UI chrome");
+            }
+            None => {
+                log::warn!(
+                    "settings.ui_font_family={family:?}: family not found on this host; using egui default"
+                );
+            }
+        }
+    }
+
+    fonts
 }
 
 /// Extract the OS-level physical key / scan code from a winit `KeyEvent`.
@@ -1498,7 +1548,11 @@ impl ApplicationHandler for PocApp {
             return;
         }
         let image_quota_bytes = (self.app.settings.image_memory_quota_mb as u64) * 1024 * 1024;
-        let mut host = WindowHost::new(event_loop, image_quota_bytes);
+        let mut host = WindowHost::new(
+            event_loop,
+            image_quota_bytes,
+            &self.app.settings.ui_font_family,
+        );
 
         // Phase 4-H: construct the TerminalGridPass against the wgpu
         // device now that the surface exists. The App owns the font
@@ -1958,7 +2012,10 @@ impl ApplicationHandler for PocApp {
         // ourselves and request a redraw — otherwise the cursor freezes
         // at whatever phase the last paint landed on.
         let blink_due = self.app.needs_blink_repaint();
-        if ime_changed || pty_changed || blink_due {
+        // Visual-bell flash decays over 150 ms; like blink, nothing
+        // else would schedule the intermediate frames, so poll it here.
+        let bell_due = self.app.needs_bell_repaint();
+        if ime_changed || pty_changed || blink_due || bell_due {
             host.window().request_redraw();
         }
         // Cursor cell may have moved as a side effect of pumps; notify
@@ -2167,6 +2224,59 @@ fn handle_special_chord(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn egui_fonts_empty_ui_font_keeps_default_proportional_head() {
+        let fonts = build_egui_fonts("");
+        assert!(!fonts.font_data.contains_key("EmtermUiFont"));
+        // Bundled CJK / emoji fallbacks are appended to both chains.
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let chain = &fonts.families[&family];
+            assert!(chain.iter().any(|n| n == "EmtermBundledCJK"));
+            assert!(chain.iter().any(|n| n == "EmtermBundledEmoji"));
+            // …but never as the primary face.
+            assert_ne!(chain[0], "EmtermBundledCJK");
+        }
+    }
+
+    #[test]
+    fn egui_fonts_unknown_ui_font_falls_back_to_default() {
+        let fonts = build_egui_fonts("Emterm No Such Font Family 9000");
+        assert!(!fonts.font_data.contains_key("EmtermUiFont"));
+        let prop = &fonts.families[&egui::FontFamily::Proportional];
+        assert_ne!(prop[0], "EmtermUiFont");
+    }
+
+    #[test]
+    fn egui_fonts_known_ui_font_prepends_to_proportional_only() {
+        // Resolve a family that actually exists on this host via the
+        // same fontdb scan the production path uses; skip silently on
+        // fontless CI hosts.
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        let Some(family) = db
+            .faces()
+            .flat_map(|f| f.families.first())
+            .map(|(name, _)| name.clone())
+            .next()
+        else {
+            return;
+        };
+        let fonts = build_egui_fonts(&family);
+        assert!(
+            fonts.font_data.contains_key("EmtermUiFont"),
+            "host family {family:?} should load"
+        );
+        assert_eq!(
+            fonts.families[&egui::FontFamily::Proportional][0],
+            "EmtermUiFont"
+        );
+        // Monospace mirrors --terminal-font-family in the WebView build
+        // and must not pick up the UI font.
+        assert!(fonts.families[&egui::FontFamily::Monospace]
+            .iter()
+            .all(|n| n != "EmtermUiFont"));
+    }
 
     #[test]
     fn click_classifier_single_click_is_character() {

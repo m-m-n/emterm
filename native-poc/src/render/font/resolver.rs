@@ -64,6 +64,116 @@ fn face_match_penalty(
     stretch_penalty + style_penalty + weight_dist
 }
 
+/// Process-wide host font database, loaded once on first use.
+///
+/// `load_system_fonts()` enumerates every installed font file (tens to
+/// hundreds of ms on font-heavy hosts); startup used to repeat that
+/// scan for every family lookup (terminal base / bold / CJK / emoji,
+/// plus the egui chrome's `ui_font_family`). Sharing one instance
+/// bounds the cost to a single scan. fontdb holds only face metadata —
+/// font bytes still load on demand — so keeping it for the process
+/// lifetime is cheap.
+static FONT_DB: std::sync::OnceLock<fontdb::Database> = std::sync::OnceLock::new();
+
+/// Resolve the shared host font database (first call performs the
+/// scan; later calls are free). Panics propagate to the caller —
+/// `Resolver::scan_system_fonts` wraps its call in `catch_unwind` to
+/// preserve its bundled-fonts-only fallback.
+pub(crate) fn shared_font_db() -> &'static fontdb::Database {
+    FONT_DB.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        db
+    })
+}
+
+/// Locate the best-matching face for `family` in the host font database
+/// and eagerly read its bytes. Returns `(bytes, face_index)`; the index
+/// is non-zero for `.ttc` / `.otc` collection members. Shared between
+/// the terminal-grid resolver (swash ingest) and the egui chrome font
+/// path (`settings.ui_font_family` → `FontDefinitions`).
+pub(crate) fn load_system_family_bytes(
+    family: &str,
+    target_weight: u16,
+    min_weight: Option<u16>,
+) -> Option<(Arc<[u8]>, u32)> {
+    let db = shared_font_db();
+    // A family can ship many faces (Google's Inconsolata installs
+    // Thin..Black all under the family name "Inconsolata"); picking
+    // the first enumerated face made the base font an arbitrary
+    // weight — often Bold, rendering every cell as if SGR bold were
+    // set. Select the best face instead: normal stretch/style first,
+    // then the weight closest to `target_weight`.
+    let face = db
+        .faces()
+        .filter(|f| {
+            f.families
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(family))
+        })
+        .min_by_key(|f| {
+            face_match_penalty(
+                f.weight.0,
+                target_weight,
+                f.style == fontdb::Style::Normal,
+                f.stretch == fontdb::Stretch::Normal,
+            )
+        })?;
+    // Bold lookups require a genuinely heavy face: a family that only
+    // ships Regular would otherwise "win" the weight-700 query with
+    // its 400 face and the renderer would re-register the regular
+    // bytes as a phantom bold.
+    if let Some(min) = min_weight {
+        if face.weight.0 < min {
+            return None;
+        }
+    }
+    let source = face.source.clone();
+    let index = face.index;
+    let bytes: Arc<[u8]> = match source {
+        fontdb::Source::Binary(b) => {
+            let raw: &[u8] = b.as_ref().as_ref();
+            Arc::<[u8]>::from(raw)
+        }
+        fontdb::Source::File(path) => match std::fs::read(&path) {
+            Ok(buf) => Arc::<[u8]>::from(buf.as_slice()),
+            Err(e) => {
+                log::warn!(
+                    "font.system_family.read_failed: family={} path={} err={}",
+                    family,
+                    path.display(),
+                    e
+                );
+                return None;
+            }
+        },
+        fontdb::Source::SharedFile(path, shared) => {
+            let raw: &[u8] = shared.as_ref().as_ref();
+            if raw.is_empty() {
+                match std::fs::read(&path) {
+                    Ok(buf) => Arc::<[u8]>::from(buf.as_slice()),
+                    Err(e) => {
+                        log::warn!(
+                            "font.system_family.read_failed: family={} path={} err={}",
+                            family,
+                            path.display(),
+                            e
+                        );
+                        return None;
+                    }
+                }
+            } else {
+                Arc::<[u8]>::from(raw)
+            }
+        }
+    };
+    if bytes.is_empty() {
+        log::warn!("font.system_family.empty_bytes: family={}", family);
+        return None;
+    }
+    Some((bytes, index))
+}
+
 /// Font resolver / registry.
 ///
 /// All registration happens at startup. Lookups are read-only afterwards.
@@ -176,81 +286,7 @@ impl Resolver {
                 }
             }
         }
-        let mut db = fontdb::Database::new();
-        db.load_system_fonts();
-        // A family can ship many faces (Google's Inconsolata installs
-        // Thin..Black all under the family name "Inconsolata"); picking
-        // the first enumerated face made the base font an arbitrary
-        // weight — often Bold, rendering every cell as if SGR bold were
-        // set. Select the best face instead: normal stretch/style first,
-        // then the weight closest to `target_weight`.
-        let face = db
-            .faces()
-            .filter(|f| {
-                f.families
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(family))
-            })
-            .min_by_key(|f| {
-                face_match_penalty(
-                    f.weight.0,
-                    target_weight,
-                    f.style == fontdb::Style::Normal,
-                    f.stretch == fontdb::Stretch::Normal,
-                )
-            })?;
-        // Bold lookups require a genuinely heavy face: a family that only
-        // ships Regular would otherwise "win" the weight-700 query with
-        // its 400 face and the renderer would re-register the regular
-        // bytes as a phantom bold.
-        if let Some(min) = min_weight {
-            if face.weight.0 < min {
-                return None;
-            }
-        }
-        let source = face.source.clone();
-        let index = face.index;
-        let bytes: Arc<[u8]> = match source {
-            fontdb::Source::Binary(b) => {
-                let raw: &[u8] = b.as_ref().as_ref();
-                Arc::<[u8]>::from(raw)
-            }
-            fontdb::Source::File(path) => match std::fs::read(&path) {
-                Ok(buf) => Arc::<[u8]>::from(buf.as_slice()),
-                Err(e) => {
-                    log::warn!(
-                        "font.system_family.read_failed: family={} path={} err={}",
-                        family,
-                        path.display(),
-                        e
-                    );
-                    return None;
-                }
-            },
-            fontdb::Source::SharedFile(path, shared) => {
-                let raw: &[u8] = shared.as_ref().as_ref();
-                if raw.is_empty() {
-                    match std::fs::read(&path) {
-                        Ok(buf) => Arc::<[u8]>::from(buf.as_slice()),
-                        Err(e) => {
-                            log::warn!(
-                                "font.system_family.read_failed: family={} path={} err={}",
-                                family,
-                                path.display(),
-                                e
-                            );
-                            return None;
-                        }
-                    }
-                } else {
-                    Arc::<[u8]>::from(raw)
-                }
-            }
-        };
-        if bytes.is_empty() {
-            log::warn!("font.system_family.empty_bytes: family={}", family);
-            return None;
-        }
+        let (bytes, index) = load_system_family_bytes(family, target_weight, min_weight)?;
         // .ttc / .otc collections expose multiple faces in a single file;
         // we currently only ingest face 0 in the swash path. Warn (but
         // still register) so we can revisit if multi-face collections
@@ -276,11 +312,10 @@ impl Resolver {
             .map(|v| v != "0")
             .unwrap_or(false);
         let t0 = Instant::now();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut db = fontdb::Database::new();
-            db.load_system_fonts();
-            db
-        }));
+        // The shared DB loads on first use; when an earlier family
+        // lookup already triggered the scan this is a cache hit and the
+        // perf log reports ~0 ms.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(shared_font_db));
         let elapsed = t0.elapsed();
         if perf_log {
             log::warn!(

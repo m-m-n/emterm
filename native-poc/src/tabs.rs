@@ -76,6 +76,12 @@ pub struct Tab {
     /// through `App` and rendered as an underline overlay by
     /// `render::cursor::draw_cursor_with_preedit`.
     pub preedit_state: crate::ime::preedit::State,
+    /// Latched when `pump()` drained one or more BEL (0x07) bytes from
+    /// the callback state. `App::pump_all` consumes it via
+    /// [`Tab::take_bell`] and dispatches `settings.bell_action`. A BEL
+    /// burst within one pump collapses into a single latch — one flash
+    /// / beep per frame matches the WebView build's perceived behavior.
+    bell_pending: bool,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -155,7 +161,14 @@ impl Tab {
             mux_session_name: None,
             mux_status_state: None,
             preedit_state: crate::ime::preedit::State::default(),
+            bell_pending: false,
         }
+    }
+
+    /// Consume the BEL latch set by the last `pump()`. Returns true at
+    /// most once per ring — `App::pump_all` polls this every frame.
+    pub fn take_bell(&mut self) -> bool {
+        std::mem::take(&mut self.bell_pending)
     }
 
     /// Pause the native PTY reader. Subsequent PTY output goes into the
@@ -364,6 +377,12 @@ impl Tab {
                     self.title = t;
                     changed = true;
                 }
+            }
+
+            // Latch BEL rings for `App::pump_all` to dispatch per
+            // `settings.bell_action` (visual flash / beep / none).
+            if std::mem::take(&mut s.bell_count) > 0 {
+                self.bell_pending = true;
             }
 
             // Send any device responses (e.g., DA1) back to the shell.

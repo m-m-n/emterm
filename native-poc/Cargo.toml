@@ -99,6 +99,7 @@ image = { version = "0.25", default-features = false }
 # false drops the text/font and raster-image features — eMterm.svg is pure
 # vector (paths, rects, gradients), so only the core renderer is needed.
 resvg = { version = "0.44", default-features = false }
+rodio = { version = "0.22.2", default-features = false, features = ["playback"] }
 
 [dev-dependencies]
 # PNG encoder used by examples/swash_emoji.rs (PoC PNG dump, FR1).

@@ -16,6 +16,7 @@
 pub mod emoji_cache;
 pub mod keybinds;
 pub mod md3;
+pub mod scrollbar;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod title_bar;

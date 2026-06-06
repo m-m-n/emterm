@@ -1,24 +1,25 @@
-//! Material Design 3 (dark) design tokens for the native UI.
+//! Material Design 3 design tokens for the native UI.
 //!
 //! Values mirror the WebView build's `src/styles.css` `--md-sys-color-*`
 //! variables. Keeping the palette in one place means widgets can refer
 //! to semantic roles (`surface_container`, `primary`, …) instead of
 //! hex literals scattered across `ui/`.
 //!
-//! Currently dark-theme only. A future light-theme switch would add a
-//! parallel module (`md3_light`) and pick one at runtime via the same
-//! constant names.
-//!
 //! ## Preset palettes
 //!
 //! Each MD3 accent preset (`UiThemePreset::{Purple, Blue, Green,
 //! Orange, Pink}`) ships its own surface / outline tints in the WebView
-//! build (`src/settings/ui-theme-presets.ts`). [`set_preset`] copies
-//! the matching `Palette` into a process-wide slot at app startup so
-//! every accessor (`primary()`, `surface_container()`, …) returns the
-//! user-configured hue. Until startup runs, accessors return the
-//! purple defaults so unit tests that bypass `App::new` still see a
-//! sensible palette.
+//! build (`src/settings/ui-theme-presets.ts`), in both dark and light
+//! variants. [`set_preset`] copies the `Palette` matching the user's
+//! preset × `ui_theme` brightness into a process-wide slot at app
+//! startup so every accessor (`primary()`, `surface_container()`, …)
+//! returns the user-configured hue. Until startup runs, accessors
+//! return the purple-dark defaults so unit tests that bypass
+//! `App::new` still see a sensible palette.
+//!
+//! `ui_theme=System` resolves to dark: the WebView build reads
+//! `prefers-color-scheme`, but the native build has no desktop-portal
+//! lookup wired in yet.
 
 use egui::Color32;
 
@@ -31,8 +32,8 @@ const fn hex(rrggbb: u32) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// Per-preset dark-variant token bundle. Field names mirror MD3
-/// `--md-sys-color-*` variables one-to-one.
+/// Per-preset token bundle (one per preset × brightness). Field names
+/// mirror MD3 `--md-sys-color-*` variables one-to-one.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub primary: Color32,
@@ -120,15 +121,95 @@ const PALETTE_PINK: Palette = Palette {
     outline_variant: hex(0x514349),
 };
 
-/// Resolve the dark-variant palette for `preset`.
-fn palette_for(preset: crate::settings::UiThemePreset) -> Palette {
+/// Purple light palette. Mirrors `UI_THEME_PRESETS.purple.light` in
+/// the WebView build.
+const PALETTE_PURPLE_LIGHT: Palette = Palette {
+    primary: hex(0x6750A4),
+    on_primary: hex(0xFFFFFF),
+    primary_container: hex(0xEADDFF),
+    on_primary_container: hex(0x21005D),
+    surface_container: hex(0xF3EDF7),
+    surface_container_low: hex(0xF7F2FA),
+    surface_container_high: hex(0xECE6F0),
+    surface_container_highest: hex(0xE6E0E9),
+    on_surface: hex(0x1D1B20),
+    on_surface_variant: hex(0x49454F),
+    outline_variant: hex(0xCAC4D0),
+};
+
+const PALETTE_BLUE_LIGHT: Palette = Palette {
+    primary: hex(0x0B57D0),
+    on_primary: hex(0xFFFFFF),
+    primary_container: hex(0xD3E3FD),
+    on_primary_container: hex(0x041E49),
+    surface_container: hex(0xEFF0F6),
+    surface_container_low: hex(0xF3F3FA),
+    surface_container_high: hex(0xE8E9EF),
+    surface_container_highest: hex(0xE2E2E9),
+    on_surface: hex(0x1A1C20),
+    on_surface_variant: hex(0x44464F),
+    outline_variant: hex(0xC4C6D0),
+};
+
+const PALETTE_GREEN_LIGHT: Palette = Palette {
+    primary: hex(0x006D3E),
+    on_primary: hex(0xFFFFFF),
+    primary_container: hex(0x98F0C3),
+    on_primary_container: hex(0x002110),
+    surface_container: hex(0xEBF1EB),
+    surface_container_low: hex(0xEFF5EF),
+    surface_container_high: hex(0xE5EBE5),
+    surface_container_highest: hex(0xDEE4DF),
+    on_surface: hex(0x181C1A),
+    on_surface_variant: hex(0x404943),
+    outline_variant: hex(0xBFC9C1),
+};
+
+const PALETTE_ORANGE_LIGHT: Palette = Palette {
+    primary: hex(0x8B5000),
+    on_primary: hex(0xFFFFFF),
+    primary_container: hex(0xFFDCBE),
+    on_primary_container: hex(0x2D1600),
+    surface_container: hex(0xF5EDEA),
+    surface_container_low: hex(0xFAF2EE),
+    surface_container_high: hex(0xEEE6E3),
+    surface_container_highest: hex(0xE9E1DD),
+    on_surface: hex(0x211A13),
+    on_surface_variant: hex(0x524436),
+    outline_variant: hex(0xD4C4B1),
+};
+
+const PALETTE_PINK_LIGHT: Palette = Palette {
+    primary: hex(0x984061),
+    on_primary: hex(0xFFFFFF),
+    primary_container: hex(0xFFD9E3),
+    on_primary_container: hex(0x3E001D),
+    surface_container: hex(0xFAECEF),
+    surface_container_low: hex(0xFDF0F2),
+    surface_container_high: hex(0xF2E4E8),
+    surface_container_highest: hex(0xEBDEE2),
+    on_surface: hex(0x22191C),
+    on_surface_variant: hex(0x514349),
+    outline_variant: hex(0xD4BFC5),
+};
+
+/// Resolve the palette for `preset` under `theme`. `System` resolves
+/// to dark (no desktop-portal brightness lookup in the native build
+/// yet — the WebView build reads `prefers-color-scheme` instead).
+fn palette_for(preset: crate::settings::UiThemePreset, theme: crate::settings::UiTheme) -> Palette {
     use crate::settings::UiThemePreset::*;
-    match preset {
-        Purple => PALETTE_PURPLE,
-        Blue => PALETTE_BLUE,
-        Green => PALETTE_GREEN,
-        Orange => PALETTE_ORANGE,
-        Pink => PALETTE_PINK,
+    let light = theme == crate::settings::UiTheme::Light;
+    match (preset, light) {
+        (Purple, false) => PALETTE_PURPLE,
+        (Blue, false) => PALETTE_BLUE,
+        (Green, false) => PALETTE_GREEN,
+        (Orange, false) => PALETTE_ORANGE,
+        (Pink, false) => PALETTE_PINK,
+        (Purple, true) => PALETTE_PURPLE_LIGHT,
+        (Blue, true) => PALETTE_BLUE_LIGHT,
+        (Green, true) => PALETTE_GREEN_LIGHT,
+        (Orange, true) => PALETTE_ORANGE_LIGHT,
+        (Pink, true) => PALETTE_PINK_LIGHT,
     }
 }
 
@@ -137,22 +218,17 @@ fn palette_for(preset: crate::settings::UiThemePreset) -> Palette {
 /// single `OnceLock` write is sufficient.
 static PALETTE_SLOT: std::sync::OnceLock<Palette> = std::sync::OnceLock::new();
 
-/// Install the user's MD3 preset. Idempotent (`OnceLock` semantics) —
-/// only the first call takes effect so a stray reload cannot drift the
-/// chrome mid-session. Call once during app startup, before any widget
-/// reads palette accessors.
-pub fn set_preset(preset: crate::settings::UiThemePreset) {
-    let _ = PALETTE_SLOT.set(palette_for(preset));
+/// Install the user's MD3 preset × brightness. Idempotent (`OnceLock`
+/// semantics) — only the first call takes effect so a stray reload
+/// cannot drift the chrome mid-session. Call once during app startup,
+/// before any widget reads palette accessors.
+pub fn set_preset(preset: crate::settings::UiThemePreset, theme: crate::settings::UiTheme) {
+    let _ = PALETTE_SLOT.set(palette_for(preset, theme));
 }
 
-/// Backwards-compatible alias kept so other call sites that only care
-/// about the accent migration keep working.
-pub fn set_primary_preset(preset: crate::settings::UiThemePreset) {
-    set_preset(preset);
-}
-
-/// Active palette resolved from `settings.ui_theme_preset`. Falls back
-/// to [`PALETTE_PURPLE`] when [`set_preset`] has not run yet.
+/// Active palette resolved from `settings.ui_theme_preset` ×
+/// `settings.ui_theme`. Falls back to [`PALETTE_PURPLE`] when
+/// [`set_preset`] has not run yet.
 fn current() -> &'static Palette {
     PALETTE_SLOT.get().unwrap_or(&PALETTE_PURPLE)
 }
@@ -259,43 +335,88 @@ mod tests {
 
     #[test]
     fn preset_primary_table_matches_webview() {
+        use crate::settings::UiTheme::Dark;
         use crate::settings::UiThemePreset::*;
         assert_eq!(
-            palette_for(Purple).primary,
+            palette_for(Purple, Dark).primary,
             Color32::from_rgb(0xD0, 0xBC, 0xFF)
         );
         assert_eq!(
-            palette_for(Blue).primary,
+            palette_for(Blue, Dark).primary,
             Color32::from_rgb(0xA8, 0xC7, 0xFA)
         );
         assert_eq!(
-            palette_for(Green).primary,
+            palette_for(Green, Dark).primary,
             Color32::from_rgb(0x7D, 0xD3, 0xA8)
         );
         assert_eq!(
-            palette_for(Orange).primary,
+            palette_for(Orange, Dark).primary,
             Color32::from_rgb(0xFF, 0xB8, 0x77)
         );
         assert_eq!(
-            palette_for(Pink).primary,
+            palette_for(Pink, Dark).primary,
             Color32::from_rgb(0xFF, 0xB1, 0xC8)
         );
     }
 
     #[test]
     fn preset_surface_container_matches_webview() {
+        use crate::settings::UiTheme::Dark;
         use crate::settings::UiThemePreset::*;
         // Pink preset's surface_container differs from purple — this is
         // exactly the discrepancy the user noticed when running with
         // `ui_theme_preset: "pink"`: tab bar background still rendered as
         // purple's #211F26 instead of pink's #271D21.
         assert_eq!(
-            palette_for(Pink).surface_container,
+            palette_for(Pink, Dark).surface_container,
             Color32::from_rgb(0x27, 0x1D, 0x21)
         );
         assert_eq!(
-            palette_for(Green).surface_container,
+            palette_for(Green, Dark).surface_container,
             Color32::from_rgb(0x1C, 0x20, 0x1E)
+        );
+    }
+
+    #[test]
+    fn light_palette_matches_webview() {
+        use crate::settings::UiTheme::Light;
+        use crate::settings::UiThemePreset::*;
+        // Spot-check `UI_THEME_PRESETS.*.light` in
+        // `src/settings/ui-theme-presets.ts`.
+        let purple = palette_for(Purple, Light);
+        assert_eq!(purple.primary, Color32::from_rgb(0x67, 0x50, 0xA4));
+        assert_eq!(
+            purple.surface_container,
+            Color32::from_rgb(0xF3, 0xED, 0xF7)
+        );
+        assert_eq!(purple.on_surface, Color32::from_rgb(0x1D, 0x1B, 0x20));
+        assert_eq!(
+            palette_for(Blue, Light).primary,
+            Color32::from_rgb(0x0B, 0x57, 0xD0)
+        );
+        assert_eq!(
+            palette_for(Green, Light).primary,
+            Color32::from_rgb(0x00, 0x6D, 0x3E)
+        );
+        assert_eq!(
+            palette_for(Orange, Light).primary,
+            Color32::from_rgb(0x8B, 0x50, 0x00)
+        );
+        assert_eq!(
+            palette_for(Pink, Light).primary,
+            Color32::from_rgb(0x98, 0x40, 0x61)
+        );
+    }
+
+    #[test]
+    fn system_theme_resolves_to_dark() {
+        use crate::settings::UiTheme::{Dark, System};
+        use crate::settings::UiThemePreset::Purple;
+        // No desktop-portal brightness lookup yet — System must keep
+        // matching the dark palette so existing setups don't shift.
+        assert_eq!(
+            palette_for(Purple, System).surface_container,
+            palette_for(Purple, Dark).surface_container
         );
     }
 

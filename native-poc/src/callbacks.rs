@@ -226,7 +226,8 @@ pub struct NativeCallbackState {
     pub cwd: Option<String>,
     /// Pending emterm-extension viewer requests.
     pub osc_queue: Vec<EmtermOscRequest>,
-    /// BEL counter (used for visual-bell or audible-bell hooks in later phases).
+    /// BEL counter. `Tab::pump` drains this into its per-frame bell
+    /// latch; `App::pump_all` then dispatches `settings.bell_action`.
     pub bell_count: u32,
     /// Pending OSC 9 notifications, drained by `Tab::pump` and dispatched
     /// to the `NotificationSink`. Buffering here keeps the callback fast

@@ -62,6 +62,12 @@ pub const FALLBACK_CELL_W: f32 = 8.5;
 /// the base font.
 pub const FALLBACK_CELL_H: f32 = 17.0;
 
+/// Peak overlay opacity of the visual-bell flash. The WebView build
+/// brightens the whole container via `filter: brightness(2)`; a 25 %
+/// white wash over the cell grid reads as the same "blink" without a
+/// post-processing pass.
+const BELL_FLASH_MAX_ALPHA: f32 = 0.25;
+
 /// Compute the per-cell width and height (logical pixels) for a given
 /// font + size, mirroring the legacy WebView build's
 /// `ctx.measureText("M").width` / `ceil(ascent + descent)` path. The
@@ -130,6 +136,11 @@ struct CellStyle {
 pub struct FrameEvents {
     pub title: Option<crate::ui::TitleBarEvent>,
     pub tab: Option<crate::ui::TabEvent>,
+    /// Scrollbar thumb interaction: jump the active tab's viewport to
+    /// this absolute scrollback offset (rows back from live). Applied
+    /// by `window_host` after the egui pass via `App::scroll_set_offset`
+    /// — the renderer only holds `&App`.
+    pub scroll_to: Option<u32>,
 }
 
 /// Phase-1 placeholder kept for compatibility; routes to the real renderer
@@ -196,6 +207,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
     };
     crate::ui::status_bar::draw(ctx, &status_vm, Some(&emoji_resources));
 
+    let mut scroll_to = None;
     egui::CentralPanel::default()
         // Phase 4-H (FR12): the central panel no longer paints the cell
         // background — `TerminalGridPass` clears the swapchain to the
@@ -213,8 +225,32 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
                 // legacy egui underline overlay was removed so it
                 // doesn't stack on top of the inline reverse-video
                 // composition cells.
+                let scrollbar_view = crate::ui::scrollbar::ScrollbarView {
+                    mode: app.settings.show_scrollbar,
+                    scrollback_len: core.get_scrollback_length(),
+                    viewport_rows: core.rows() as u32,
+                    scroll_offset: app.scroll_offset(),
+                    alt_screen: app.alt_screen,
+                };
+                drop(core);
+                scroll_to = crate::ui::scrollbar::draw(ui, &scrollbar_view);
             } else {
                 ui.colored_label(Color32::LIGHT_GRAY, "no tab — shell may have exited");
+            }
+            // Visual bell: approximate the WebView's 150 ms
+            // `brightness(2) → 1` ease-out (`.terminal-bell-flash`,
+            // src/styles.css) with a white overlay whose alpha decays
+            // quadratically over the terminal area. `about_to_wait`
+            // polls `App::needs_bell_repaint` to keep frames coming
+            // while the flash is live.
+            if let Some(t) = app.visual_bell_progress() {
+                let fade = (1.0 - t) * (1.0 - t); // ease-out decay
+                let alpha = (BELL_FLASH_MAX_ALPHA * fade * 255.0) as u8;
+                ui.painter().rect_filled(
+                    ui.max_rect(),
+                    0.0,
+                    Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
+                );
             }
         });
 
@@ -243,6 +279,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
     FrameEvents {
         title: title_event,
         tab: tab_event,
+        scroll_to,
     }
 }
 
