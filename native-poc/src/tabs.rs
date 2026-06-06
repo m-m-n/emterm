@@ -6,6 +6,7 @@
 //! `get_cursor_*` accessors. OSC titles and emterm-extension dispatches
 //! are delivered through the shared `NativeCallbackState`.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Receiver;
@@ -24,7 +25,17 @@ use mux_ipc::protocol::{MessageType, MuxMessage, StatusUpdateMsg, WelcomeMsg};
 // in `crate::settings`); the caller passes the desired value into
 // `Tab::spawn_shell`.
 
+/// Monotonic counter backing [`Tab::stable_id`]. Process-lifetime unique;
+/// `Relaxed` suffices because the id only needs uniqueness, not ordering
+/// with other memory operations.
+static NEXT_TAB_STABLE_ID: AtomicU64 = AtomicU64::new(0);
+
 pub struct Tab {
+    /// Creation-ordered stable identity. Unlike the positional index in
+    /// `App::tabs`, this survives tab close / drag-reorder, so per-tab
+    /// UI state keyed on it (the activity-dot animation in
+    /// `ui::tab_bar`) never bleeds between tabs when indices shift.
+    pub stable_id: u64,
     pub title: String,
     pub core: Arc<Mutex<TerminalCore>>,
     pub cb_state: Arc<Mutex<NativeCallbackState>>,
@@ -82,6 +93,16 @@ pub struct Tab {
     /// burst within one pump collapses into a single latch — one flash
     /// / beep per frame matches the WebView build's perceived behavior.
     bell_pending: bool,
+    /// Latched when `pump()` fed new PTY bytes into the core.
+    /// `App::pump_all` consumes it via [`Tab::take_output`] to drive the
+    /// inactive-tab activity dot / `notify_on_output` notification —
+    /// the native analogue of the WebView `onOutputActivity` callback.
+    output_pending: bool,
+    /// Unread-activity dot + notification throttle state. Marked by
+    /// `App::pump_all` for inactive tabs; the tab bar renders the dot
+    /// from `activity.has_activity` (gated by
+    /// `settings.tab_activity_indicator`).
+    pub activity: crate::notifications::TabActivityState,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -156,6 +177,7 @@ impl Tab {
         core.callbacks = Some(Box::new(callbacks));
 
         Self {
+            stable_id: NEXT_TAB_STABLE_ID.fetch_add(1, Ordering::Relaxed),
             title: title.into(),
             core: Arc::new(Mutex::new(core)),
             cb_state,
@@ -170,6 +192,8 @@ impl Tab {
             mux_status_state: None,
             preedit_state: crate::ime::preedit::State::default(),
             bell_pending: false,
+            output_pending: false,
+            activity: crate::notifications::TabActivityState::default(),
         }
     }
 
@@ -177,6 +201,13 @@ impl Tab {
     /// most once per ring — `App::pump_all` polls this every frame.
     pub fn take_bell(&mut self) -> bool {
         std::mem::take(&mut self.bell_pending)
+    }
+
+    /// Consume the new-output latch set by the last `pump()`. Returns
+    /// true at most once per burst — `App::pump_all` polls this every
+    /// frame to mark inactive-tab activity.
+    pub fn take_output(&mut self) -> bool {
+        std::mem::take(&mut self.output_pending)
     }
 
     /// Pause the native PTY reader. Subsequent PTY output goes into the
@@ -362,6 +393,9 @@ impl Tab {
                 self.alt_screen = new_alt;
             }
             changed = true;
+            // New PTY bytes reached the core — latch for the
+            // inactive-tab activity path (WebView `onOutputActivity`).
+            self.output_pending = true;
         }
         if let Some(reason) = saw_exit {
             match reason {

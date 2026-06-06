@@ -182,10 +182,16 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         .tabs
         .iter()
         .map(|t| {
-            let mut item = crate::ui::tab_bar::TabBarItem::new(t.display_title());
+            let mut item =
+                crate::ui::tab_bar::TabBarItem::new(t.display_title()).with_stable_id(t.stable_id);
             if let Some(name) = &t.mux_session_name {
                 item = item.with_mux_session(name.clone());
             }
+            // `tab_activity_indicator` gates the dot's rendering only;
+            // the underlying activity state (and notifications) is
+            // tracked regardless — WebView `main.ts` parity.
+            item =
+                item.with_activity(app.settings.tab_activity_indicator && t.activity.has_activity);
             item
         })
         .collect();
