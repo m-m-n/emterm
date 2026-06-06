@@ -575,6 +575,19 @@ pub struct Settings {
     /// Consumed by the Ctrl+click file-path open path in `window_host`
     /// via `crate::links::build_editor_command`.
     pub editor_command: String,
+    /// Master switch for desktop notifications. When `false`, no OS
+    /// notification is dispatched for any activity type (the tab
+    /// activity dot is governed separately by `tab_activity_indicator`).
+    pub notification_enabled: bool,
+    /// Whether inactive tabs show a dot indicator when they accumulate
+    /// unread activity (output / bell / process exit).
+    pub tab_activity_indicator: bool,
+    /// Notify when the shell process in an inactive tab exits.
+    pub notify_on_process_exit: bool,
+    /// Notify when an inactive tab produces new output.
+    pub notify_on_output: bool,
+    /// Notify when an inactive tab receives BEL (`0x07`).
+    pub notify_on_bell: bool,
 }
 
 /// UI brightness mode mirrored from the legacy WebView settings.
@@ -779,6 +792,11 @@ impl Default for Settings {
             file_path_detection: true,
             fold_enabled: true,
             editor_command: "code --goto {file}:{line}:{col}".to_string(),
+            notification_enabled: true,
+            tab_activity_indicator: true,
+            notify_on_process_exit: true,
+            notify_on_output: false,
+            notify_on_bell: true,
         }
     }
 }
@@ -951,6 +969,13 @@ struct RawSettings {
     /// `Narrow`. `native_poc.ambiguous_width_mode` (string form) wins
     /// over this when both are present.
     ambiguous_width: Option<bool>,
+
+    // ── Notifications ──
+    notification_enabled: Option<bool>,
+    tab_activity_indicator: Option<bool>,
+    notify_on_process_exit: Option<bool>,
+    notify_on_output: Option<bool>,
+    notify_on_bell: Option<bool>,
 
     // ── native-poc-specific (nested) ──
     native_poc: Option<RawNativePoc>,
@@ -1268,6 +1293,21 @@ impl RawSettings {
         }
         if let Some(v) = self.editor_command.filter(|s| !s.trim().is_empty()) {
             dst.editor_command = v;
+        }
+        if let Some(v) = self.notification_enabled {
+            dst.notification_enabled = v;
+        }
+        if let Some(v) = self.tab_activity_indicator {
+            dst.tab_activity_indicator = v;
+        }
+        if let Some(v) = self.notify_on_process_exit {
+            dst.notify_on_process_exit = v;
+        }
+        if let Some(v) = self.notify_on_output {
+            dst.notify_on_output = v;
+        }
+        if let Some(v) = self.notify_on_bell {
+            dst.notify_on_bell = v;
         }
         // Flat-key bridge: only seed the native-poc enum when the user
         // hasn't already set the more explicit `native_poc.ambiguous_width_mode`
@@ -1627,6 +1667,57 @@ mod tests {
     fn loader_mux_prefix_overrides_default() {
         let s = load_json(r#"{"mux": {"prefix": "Ctrl+A"}}"#);
         assert_eq!(s.mux_prefix_key, "Ctrl+A");
+    }
+
+    // ── Notification settings ───────────────────────────────────────────
+
+    #[test]
+    fn default_notification_settings_match_webview_build() {
+        // Mirrors src-tauri's AppSettings defaults: everything on except
+        // notify_on_output (opt-in, mirrors the WebView build).
+        let s = Settings::new();
+        assert!(s.notification_enabled);
+        assert!(s.tab_activity_indicator);
+        assert!(s.notify_on_process_exit);
+        assert!(!s.notify_on_output);
+        assert!(s.notify_on_bell);
+    }
+
+    #[test]
+    fn loader_notification_flat_keys_are_applied() {
+        let s = load_json(
+            r#"{
+                "notification_enabled": false,
+                "tab_activity_indicator": false,
+                "notify_on_process_exit": false,
+                "notify_on_output": true,
+                "notify_on_bell": false
+            }"#,
+        );
+        assert!(!s.notification_enabled);
+        assert!(!s.tab_activity_indicator);
+        assert!(!s.notify_on_process_exit);
+        assert!(s.notify_on_output);
+        assert!(!s.notify_on_bell);
+    }
+
+    #[test]
+    fn loader_notification_null_keys_keep_defaults() {
+        let s = load_json(
+            r#"{
+                "notification_enabled": null,
+                "tab_activity_indicator": null,
+                "notify_on_process_exit": null,
+                "notify_on_output": null,
+                "notify_on_bell": null
+            }"#,
+        );
+        let d = Settings::default();
+        assert_eq!(s.notification_enabled, d.notification_enabled);
+        assert_eq!(s.tab_activity_indicator, d.tab_activity_indicator);
+        assert_eq!(s.notify_on_process_exit, d.notify_on_process_exit);
+        assert_eq!(s.notify_on_output, d.notify_on_output);
+        assert_eq!(s.notify_on_bell, d.notify_on_bell);
     }
 
     #[test]

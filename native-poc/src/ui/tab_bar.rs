@@ -75,6 +75,15 @@ const ACTIVE_INDICATOR_HEIGHT: f32 = 3.0;
 const ACTIVE_INDICATOR_SIDE_MARGIN: f32 = 16.0;
 /// Corner radius of the active indicator, mirroring `border-radius: 3px 3px 0 0`.
 const ACTIVE_INDICATOR_RADIUS: f32 = 3.0;
+/// Diameter of the unread-activity dot. Matches `.tab-activity-dot { width/height: 8px }`.
+const ACTIVITY_DOT_DIAMETER: f32 = 8.0;
+/// Gap between the activity dot and the title. Matches
+/// `.tab-activity-dot { margin-right: 6px }`.
+const ACTIVITY_DOT_MARGIN: f32 = 6.0;
+/// Activity-dot show/hide animation duration in seconds. Matches the
+/// WebView's `--md-motion-duration-short4` (250 ms) opacity/scale
+/// transition.
+const ACTIVITY_DOT_ANIM_SECS: f32 = 0.25;
 /// Icon-button (state-layer) corner radius — MD3 uses a full pill so the
 /// 8 % overlay forms a circle inside the 40 px square.
 const ICON_BUTTON_RADIUS: f32 = NEW_TAB_BUTTON_SIZE / 2.0;
@@ -91,6 +100,17 @@ pub struct TabBarItem {
     /// with `[mux:<session>]` before rendering. Populated by Phase 4-C
     /// once the mux client is wired; Phase 4-B leaves this `None`.
     pub mux_session_name: Option<String>,
+    /// When `true`, an unread-activity dot renders left of the title
+    /// (mirrors `.tab-activity-dot.visible`). The view-model builder
+    /// applies the `settings.tab_activity_indicator` gate, so the
+    /// widget just draws what it is told.
+    pub has_activity: bool,
+    /// Stable per-tab identity (`crate::tabs::Tab::stable_id`) keying
+    /// egui animation state. Positional indices shift on tab close /
+    /// drag-reorder, which would bleed in-flight dot animations between
+    /// tabs; titles are not unique (every fresh tab is "shell"). The
+    /// view-model builder MUST set this via `with_stable_id`.
+    pub stable_id: u64,
 }
 
 impl TabBarItem {
@@ -98,11 +118,23 @@ impl TabBarItem {
         Self {
             title: title.into(),
             mux_session_name: None,
+            has_activity: false,
+            stable_id: 0,
         }
     }
 
     pub fn with_mux_session(mut self, name: impl Into<String>) -> Self {
         self.mux_session_name = Some(name.into());
+        self
+    }
+
+    pub fn with_activity(mut self, has_activity: bool) -> Self {
+        self.has_activity = has_activity;
+        self
+    }
+
+    pub fn with_stable_id(mut self, id: u64) -> Self {
+        self.stable_id = id;
         self
     }
 }
@@ -298,10 +330,15 @@ fn layout_tab_strip(
             md3::on_surface_variant()
         };
         let font_id = FontId::proportional(TAB_FONT_SIZE);
+        // Activity-dot slot. Like the WebView flexbox (`.tab-activity-dot`
+        // hides via opacity/scale, not display:none), the 8 px dot +
+        // 6 px gap always occupy layout space so the title does not
+        // shift when the dot appears.
+        let dot_space = ACTIVITY_DOT_DIAMETER + ACTIVITY_DOT_MARGIN;
         // egui has no native truncation helper for direct painter text,
         // so we measure with `Fonts::layout_no_wrap` and ellipsize when
         // the result overflows the label rect.
-        let max_w = label_rect.width().max(0.0);
+        let max_w = (label_rect.width() - dot_space).max(0.0);
         let galley = ui.fonts(|fonts| {
             let mut text = label_text.clone();
             let mut galley = fonts.layout_no_wrap(text.clone(), font_id.clone(), text_color);
@@ -319,7 +356,35 @@ fn layout_tab_strip(
             }
             galley
         });
-        let text_x = label_rect.center().x - galley.size().x / 2.0;
+        // Centre the [dot][gap][title] group as one unit, mirroring the
+        // WebView's `justify-content: center` flex row.
+        let group_w = dot_space + galley.size().x;
+        let group_left = label_rect.center().x - group_w / 2.0;
+
+        // Dot show/hide animates scale + opacity over 250 ms — the
+        // `.tab-activity-dot` transition. `animate_bool_with_time`
+        // requests repaints while in flight, so the fade plays out
+        // without an explicit redraw hook. Keyed on the tab's stable
+        // identity (NOT the positional index, which shifts on tab
+        // close / reorder and would bleed animation state across tabs).
+        let dot_t = ui.ctx().animate_bool_with_time(
+            egui::Id::new(("native-poc-tab-activity-dot", item.stable_id)),
+            item.has_activity,
+            ACTIVITY_DOT_ANIM_SECS,
+        );
+        if dot_t > 0.0 {
+            let dot_center = egui::pos2(
+                group_left + ACTIVITY_DOT_DIAMETER / 2.0,
+                label_rect.center().y,
+            );
+            ui.painter().circle_filled(
+                dot_center,
+                (ACTIVITY_DOT_DIAMETER / 2.0) * dot_t,
+                md3::primary().gamma_multiply(dot_t),
+            );
+        }
+
+        let text_x = group_left + dot_space;
         let text_y = label_rect.center().y - galley.size().y / 2.0;
         ui.painter()
             .galley(egui::pos2(text_x, text_y), galley, text_color);

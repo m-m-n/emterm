@@ -1143,21 +1143,75 @@ impl App {
     pub fn pump_all(&mut self) -> bool {
         let mut changed = false;
         let mut bell_rang = false;
-        for tab in &mut self.tabs {
+        let now = Instant::now();
+        let active = self.active;
+        // Desktop notifications collected during the tab loop and
+        // dispatched after it — `tab` holds `&mut self.tabs`, so
+        // `self.notify()` (a `&self` call) can't run inside the loop.
+        let mut pending_notifications: Vec<(String, crate::notifications::ActivityKind)> =
+            Vec::new();
+        for (idx, tab) in self.tabs.iter_mut().enumerate() {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
             // `apply_mux_message` (see `crate::mux::apc`). There is no
             // separate `pump_mux` pass — the bridge CLI runs inside the
             // same PTY, so a single drain is sufficient.
+            let was_exited = tab.exited;
             if tab.pump() {
                 changed = true;
             }
             // Any tab's BEL triggers the bell action — same as the
             // WebView build, where a background tab's BEL still flashes
             // the shared terminal container / beeps.
-            if tab.take_bell() {
+            let bell = tab.take_bell();
+            if bell {
                 bell_rang = true;
             }
+            let output = tab.take_output();
+            let exited_now = !was_exited && tab.exited;
+
+            // ── Inactive-tab activity (dot + desktop notification) ──
+            // WebView parity: `TabActivityTracker.markActivity` ignores
+            // the active tab entirely; clearing the active tab's dot
+            // every frame covers all switch paths (click, keybind,
+            // reorder, exited-tab reap) without per-path hooks.
+            if idx == active {
+                if tab.activity.has_activity {
+                    tab.activity.clear();
+                    changed = true;
+                }
+                continue;
+            }
+            for (fired, kind) in [
+                (exited_now, crate::notifications::ActivityKind::ProcessExit),
+                (output, crate::notifications::ActivityKind::Output),
+                (bell, crate::notifications::ActivityKind::Bell),
+            ] {
+                if !fired || !crate::notifications::kind_enabled(&self.settings, kind) {
+                    continue;
+                }
+                // `mark` owns the 1 s output throttle; a swallowed mark
+                // produces neither a dot nor a notification.
+                if !tab.activity.mark(kind, now) {
+                    continue;
+                }
+                // Desktop notification gates, in WebView order:
+                // master switch → window focus → per-tab 5 s throttle
+                // (ProcessExit bypasses the check but re-arms it).
+                if self.settings.notification_enabled
+                    && !self.window_focused
+                    && tab.activity.should_notify(kind, now)
+                {
+                    // Sanitize at capture time: carries ≤ 100 chars
+                    // instead of cloning a potentially huge OSC title.
+                    pending_notifications
+                        .push((crate::notifications::sanitize_title(&tab.title), kind));
+                }
+            }
+        }
+        for (sanitized_title, kind) in pending_notifications {
+            let body = crate::notifications::notification_body(&sanitized_title, kind);
+            self.notify(crate::notifications::NOTIFICATION_TITLE, &body);
         }
         if bell_rang {
             match self.settings.bell_action {
