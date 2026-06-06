@@ -29,6 +29,10 @@ use crate::ui::emoji_cache::EmojiTextureCache;
 /// `cursorBlinkXOR` interval; one full on/off cycle is `2 * BLINK_HALF_MS`.
 pub const BLINK_HALF_MS: u128 = 530;
 
+/// Visual-bell flash duration. Mirrors the WebView build's
+/// `.terminal-bell-flash` animation (150 ms ease-out, `src/styles.css`).
+pub const BELL_FLASH_MS: u64 = 150;
+
 /// Per-step change applied by the `ZoomIn` / `ZoomOut` keybinds, in
 /// logical points.
 pub const FONT_SIZE_PT_STEP: f32 = 1.0;
@@ -98,6 +102,12 @@ pub struct App {
     /// When the phase flips, the cursor row joins the dirty union so the
     /// renderer can paint/erase the cursor overlay.
     previous_blink_visible: bool,
+    /// Start of the in-flight visual-bell flash (`bell_action =
+    /// "visual"`). Set by `pump_all` when a tab drained a BEL, cleared
+    /// by [`App::needs_bell_repaint`] once [`BELL_FLASH_MS`] elapsed.
+    /// `render::draw_terminal` reads the decay via
+    /// [`App::visual_bell_progress`].
+    visual_bell_started: Option<Instant>,
     /// Cursor row/col from the previous rendered frame. The renderer dirties
     /// this row so a moved cursor doesn't ghost the old position.
     previous_cursor: Option<(u16, u16)>,
@@ -254,20 +264,13 @@ impl App {
             settings.show_tab_bar,
             settings.terminal_color_scheme
         );
-        // Seed the MD3 accent slot before any widget runs. `OnceLock`
-        // means subsequent calls (e.g. a reload path) are no-ops, which
-        // matches the WebView build's startup-only behavior for the UI
-        // theme preset.
-        crate::ui::md3::set_primary_preset(settings.ui_theme_preset);
-        // `ui::md3` is dark-only today; surface a one-line note when the
-        // user explicitly asked for `light` so the discrepancy is visible
-        // instead of being silently ignored. A future `md3_light` module
-        // will pick up the same setting.
-        if settings.ui_theme == crate::settings::UiTheme::Light {
-            log::warn!(
-                "settings.ui_theme=Light: native-poc UI palette is dark-only; rendering chrome in dark anyway"
-            );
-        }
+        // Seed the MD3 palette slot (accent preset × brightness) before
+        // any widget runs. `OnceLock` means subsequent calls (e.g. a
+        // reload path) are no-ops, which matches the WebView build's
+        // startup-only behavior for the UI theme preset. `System`
+        // resolves to dark inside `set_preset` — no desktop-portal
+        // brightness lookup in the native build yet.
+        crate::ui::md3::set_preset(settings.ui_theme_preset, settings.ui_theme);
         let settings = Arc::new(settings);
         // Resolve the user-configured chord table once. Unparseable
         // specs fall back to their built-in defaults with a warn log
@@ -333,6 +336,7 @@ impl App {
             window_focused: true,
             blink_started: Instant::now(),
             previous_blink_visible: true,
+            visual_bell_started: None,
             previous_cursor: None,
             previous_selection: None,
             needs_full_redraw: true,
@@ -695,6 +699,32 @@ impl App {
     pub fn reset_blink_phase(&mut self) {
         self.blink_started = Instant::now();
         self.previous_blink_visible = true;
+    }
+
+    /// Progress (0.0–1.0) of the in-flight visual-bell flash, `None`
+    /// when idle. `render::draw_terminal` maps this to the overlay's
+    /// decaying alpha.
+    pub fn visual_bell_progress(&self) -> Option<f32> {
+        let started = self.visual_bell_started?;
+        let t = started.elapsed().as_secs_f32() / (BELL_FLASH_MS as f32 / 1000.0);
+        (t < 1.0).then_some(t)
+    }
+
+    /// True while a visual-bell flash needs frames. Polled in
+    /// `about_to_wait` alongside [`App::needs_blink_repaint`] so the
+    /// 150 ms decay animates even when no PTY / input event would
+    /// otherwise request a redraw. Clears the latch once the flash
+    /// expired — returning true one last time so the final frame erases
+    /// the overlay.
+    pub fn needs_bell_repaint(&mut self) -> bool {
+        match self.visual_bell_started {
+            None => false,
+            Some(started) if started.elapsed().as_millis() as u64 >= BELL_FLASH_MS => {
+                self.visual_bell_started = None;
+                true
+            }
+            Some(_) => true,
+        }
     }
 
     /// True when the cursor's blink half-cycle has crossed a boundary
@@ -1093,6 +1123,7 @@ impl App {
     /// new bytes (caller schedules a redraw).
     pub fn pump_all(&mut self) -> bool {
         let mut changed = false;
+        let mut bell_rang = false;
         for tab in &mut self.tabs {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
@@ -1101,6 +1132,22 @@ impl App {
             // same PTY, so a single drain is sufficient.
             if tab.pump() {
                 changed = true;
+            }
+            // Any tab's BEL triggers the bell action — same as the
+            // WebView build, where a background tab's BEL still flashes
+            // the shared terminal container / beeps.
+            if tab.take_bell() {
+                bell_rang = true;
+            }
+        }
+        if bell_rang {
+            match self.settings.bell_action {
+                crate::settings::BellAction::Visual => {
+                    self.visual_bell_started = Some(Instant::now());
+                    changed = true;
+                }
+                crate::settings::BellAction::Sound => crate::bell::play_beep(),
+                crate::settings::BellAction::None => {}
             }
         }
         // Mirror the active tab's alt-screen flag onto the App so the
@@ -1188,6 +1235,23 @@ impl App {
             ScrollPosition::Live
         } else {
             ScrollPosition::OffsetFromLive(new)
+        };
+        self.needs_full_redraw = true;
+    }
+
+    /// Jump to an absolute scrollback offset in rows back from live
+    /// (`0` snaps to `Live`). Used by the scrollbar thumb, which
+    /// computes its target against the *actual* scrollback length;
+    /// the `scrollback_lines` clamp here is a safety net only. No-op
+    /// when alt-screen is active.
+    pub fn scroll_set_offset(&mut self, offset: u32) {
+        if self.alt_screen {
+            return;
+        }
+        self.scroll_position = if offset == 0 {
+            ScrollPosition::Live
+        } else {
+            ScrollPosition::OffsetFromLive(offset.min(self.settings.scrollback_lines))
         };
         self.needs_full_redraw = true;
     }
@@ -1459,6 +1523,7 @@ fn ime_perf_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::selection::{Pos, SelectionMode};
+    use std::time::Duration;
     use term_core::terminal_core::TerminalCore;
 
     fn fresh_core(cols: u16, rows: u16) -> TerminalCore {
@@ -1471,6 +1536,44 @@ mod tests {
         // exercise the union logic rather than the bypass.
         app.record_render_state(core);
         app
+    }
+
+    #[test]
+    fn visual_bell_idle_by_default() {
+        let mut app = App::new();
+        assert_eq!(app.visual_bell_progress(), None);
+        assert!(!app.needs_bell_repaint());
+    }
+
+    #[test]
+    fn visual_bell_reports_progress_while_live() {
+        let mut app = App::new();
+        app.visual_bell_started = Some(Instant::now());
+        let t = app
+            .visual_bell_progress()
+            .expect("flash just started — progress must be live");
+        assert!((0.0..1.0).contains(&t), "progress {t} out of range");
+        assert!(app.needs_bell_repaint(), "live flash must request frames");
+        // The latch survives polls while the flash is still in-flight.
+        assert!(app.visual_bell_started.is_some());
+    }
+
+    #[test]
+    fn visual_bell_clears_after_flash_duration() {
+        let mut app = App::new();
+        // Back-date the flash past its 150 ms lifetime.
+        app.visual_bell_started =
+            Instant::now().checked_sub(Duration::from_millis(BELL_FLASH_MS + 50));
+        assert!(
+            app.visual_bell_started.is_some(),
+            "test clock too close to process start to back-date"
+        );
+        assert_eq!(app.visual_bell_progress(), None);
+        // One final repaint to erase the overlay…
+        assert!(app.needs_bell_repaint());
+        // …then the latch is gone.
+        assert!(!app.needs_bell_repaint());
+        assert!(app.visual_bell_started.is_none());
     }
 
     #[test]
