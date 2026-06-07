@@ -564,9 +564,10 @@ pub struct Settings {
     /// Whether to auto-detect file paths in the terminal grid and
     /// underline them on hover. Consumed alongside `url_detection`.
     pub file_path_detection: bool,
-    /// Whether the prompt-folding affordance is enabled. native-poc
-    /// does not implement folding yet.
-    #[allow(dead_code)]
+    /// Whether the prompt-folding affordance is enabled. Seeds each tab's
+    /// `FoldManager` at construction (see `Tab::spawn_shell`); when `false`,
+    /// fold clicks are no-ops and no region is collapsed, but C→D / custom
+    /// region registration still runs.
     pub fold_enabled: bool,
     /// Editor command template (e.g. `code --goto {file}:{line}:{col}`).
     /// Consumed by the Ctrl+click file-path open path in `window_host`

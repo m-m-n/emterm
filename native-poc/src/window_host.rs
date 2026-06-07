@@ -1192,6 +1192,14 @@ impl WindowHost {
             }
         }
 
+        // Build this frame's fold layout for the active tab before any paint
+        // pass. `collect_cell_inputs` (cell rows), `draw_fold_summaries`
+        // (summary overlays), and `draw_search_highlights` (fold-aware match
+        // mapping) all read `App::fold_layout()`, which needs `&mut self`
+        // here once so those passes can borrow `&App` for the rest of the
+        // frame. No-op (clears to `None`) when no region is collapsed.
+        app.refresh_fold_layout();
+
         let raw_input = self.build_raw_input();
         let mut frame_events = crate::render::FrameEvents {
             title: None,
@@ -1383,6 +1391,11 @@ impl WindowHost {
                     block_cursor_cell,
                     hover_link_cells,
                     scroll_offset,
+                    // Fold layout (built once at the top of `render` via
+                    // `App::refresh_fold_layout`). `Some` only when the active
+                    // tab has a collapsed region; selects the fold-aware row
+                    // mapping + summary-row cell skip.
+                    app.fold_layout(),
                 );
                 // IME preedit overlay (Phase 4-G): paint composition
                 // glyphs inline at the anchor so the user can see what
@@ -2428,8 +2441,35 @@ impl ApplicationHandler for PocApp {
                         host.dragging = false;
                         // A press with no motion in Character mode left
                         // selection == None (see the Pressed branch);
-                        // there is nothing to copy in that case.
-                        host.pending_press_cell = None;
+                        // there is nothing to copy in that case. `pending`
+                        // is `Some` exactly for that case: a single (not
+                        // word/line) press whose motion never upgraded it to
+                        // a drag-select. Capture it before the reset so the
+                        // fold-click path below can detect a plain click.
+                        let pending = host.pending_press_cell.take();
+                        // Plain left-click (no Ctrl; meta does not exist on
+                        // Linux/Windows), no active selection, no drag: this
+                        // is a candidate for a fold toggle. Mirrors the
+                        // WebView `input-wiring.ts` routing (Ctrl/Meta →
+                        // URL, else → handleFoldClick) plus
+                        // `handleFoldClick`'s own "no text selection" guard.
+                        // `handle_fold_click` is a no-op (returns false)
+                        // when the click is not over a foldable region, so
+                        // ordinary clicks-to-deselect fall through unchanged.
+                        if pending.is_some()
+                            && self.app.selection.is_none()
+                            && !host.current_mods.ctrl
+                        {
+                            if let Some((row, _col)) =
+                                host.pixel_to_grid_cell(host.cursor_pos, &self.app)
+                            {
+                                if self.app.handle_fold_click(row) {
+                                    host.invalidate_link_hover();
+                                    host.window().request_redraw();
+                                    return;
+                                }
+                            }
+                        }
                         if let Some(sel) = self.app.selection {
                             if let Some(tab) = self.app.tabs.get(self.app.active) {
                                 let core = tab.core.lock();

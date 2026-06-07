@@ -3,6 +3,7 @@ use winit::event_loop::EventLoop;
 mod app;
 mod bell;
 mod callbacks;
+mod fold;
 mod html;
 mod image;
 mod links;
