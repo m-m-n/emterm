@@ -101,6 +101,13 @@ pub struct App {
     /// Active mouse selection on the active tab, if any. Phase 4 owns this;
     /// later phases may move it per-tab when tabs preserve selection.
     pub selection: Option<Selection>,
+    /// Absolute-row anchor of a single-click press that has not yet been
+    /// upgraded to a drag-selection. Lives here (not in `WindowHost`) so the
+    /// `pump_all` eviction shift treats it as absolute-row state alongside
+    /// `selection` — otherwise a scrollback eviction between the press and
+    /// the first drag motion would leave the anchor pointing at a stale
+    /// buffer row. `None` when no press is pending.
+    pub pending_selection_anchor: Option<crate::selection::Pos>,
     /// In-terminal text-search state (query, options, matches, current
     /// match cursor). App-global like [`Self::selection`]: one search
     /// overlay shared by the window. Matches are resolved against the
@@ -162,6 +169,12 @@ pub struct App {
     /// Selection from the previous rendered frame. Vacated selection rows
     /// must be repainted to clear highlight.
     previous_selection: Option<Selection>,
+    /// `visible_start` (`scrollback_len - scroll_offset`, saturating) from
+    /// the previous rendered frame. Used to translate the absolute-row
+    /// [`Self::previous_selection`] back into screen rows when computing the
+    /// dirty set, so the highlight cleared on the rows it occupied *last*
+    /// frame even after the viewport scrolled.
+    previous_visible_start: u32,
     /// Set on construction, resize, and surface recovery. Forces the next
     /// frame to repaint every row regardless of `term_core` dirty bits.
     needs_full_redraw: bool,
@@ -404,6 +417,7 @@ impl App {
             active: 0,
             cell_size: GridDims::default(),
             selection: None,
+            pending_selection_anchor: None,
             search: crate::search::SearchState::default(),
             search_focus_request: false,
             last_auto_research: None,
@@ -417,6 +431,7 @@ impl App {
             visual_bell_started: None,
             previous_cursor: None,
             previous_selection: None,
+            previous_visible_start: 0,
             needs_full_redraw: true,
             force_full_redraw,
             ime_backend: Box::new(NullBackend::new()),
@@ -930,6 +945,14 @@ impl App {
         if self.search.visible {
             self.search.close();
         }
+        // The selection holds absolute-row buffer coordinates of the
+        // *previous* tab, which are meaningless against the new tab's
+        // buffer (same rationale as closing the search overlay above), so
+        // drop it on every active-tab change.
+        self.selection = None;
+        // The pending press anchor is likewise scoped to the previous tab's
+        // buffer, so drop it as well.
+        self.pending_selection_anchor = None;
         self.needs_full_redraw = true;
     }
 
@@ -1067,34 +1090,63 @@ impl App {
         }
     }
 
-    /// Select the entire visible viewport of the active tab. The
-    /// selection spans `(0, 0)` to `(rows - 1, cols - 1)` in the active
-    /// tab's `TerminalCore` cell coordinates. No-op when there is no
-    /// active tab or the grid is empty.
+    /// Select the entire visible viewport of the active tab. No-op when
+    /// there is no active tab or the grid is empty.
     ///
     /// Coordinate-system note: [`crate::selection::Pos`] addresses
-    /// **viewport** cells (the same space the mouse-selection path in
-    /// `window_host` produces via `pixel_to_cell`), not absolute
-    /// scrollback rows. "Select all" therefore covers the on-screen
-    /// rows only; scrollback above the viewport is not included. A
-    /// scrollback-aware select-all would need `Pos` to carry an
-    /// absolute row, which the PoC selection model does not yet
-    /// express.
+    /// **absolute** buffer rows (the same frame `fold` / `prompts` /
+    /// `search` use). "Select all" covers the on-screen rows, expressed in
+    /// absolute coordinates: the top visible row is
+    /// `visible_start = scrollback_len - scroll_offset` (saturating), and
+    /// the selection spans `(visible_start, 0)` to
+    /// `(visible_start + rows - 1, cols - 1)`. Because the endpoints are
+    /// absolute, the highlight stays anchored to the same buffer lines if
+    /// the viewport scrolls afterward (and a later scrollback-aware
+    /// "select all including history" only needs a wider row range).
+    ///
+    /// When a fold layout is active the screen rows are non-contiguous in
+    /// absolute space (collapsed bodies are hidden), so the top/bottom
+    /// endpoints are read from the layout's first/last visible rows rather
+    /// than the linear `visible_start + (rows - 1)` model — mirroring the
+    /// mouse path's `screen_row_to_abs` mapping.
     pub fn select_all(&mut self) {
         let Some(tab) = self.tabs.get(self.active) else {
             return;
         };
-        let (cols, rows) = {
+        let (cols, rows, scrollback_len) = {
             let core = tab.core.lock();
-            (core.cols(), core.rows())
+            (core.cols(), core.rows(), core.get_scrollback_length())
         };
         if cols == 0 || rows == 0 {
             return;
         }
+        // Derive the visible row span from the fold layout when one is active
+        // (collapsed bodies make the screen rows non-contiguous in absolute
+        // space), mirroring the mouse path's screen_row_to_abs mapping. Falls
+        // back to the linear scrollback model when no layout is active.
+        let row_to_abs = |kind: &crate::fold::FoldRowKind| -> u32 {
+            match kind {
+                crate::fold::FoldRowKind::Cells { actual_line } => *actual_line,
+                crate::fold::FoldRowKind::Summary { region } => region.start_line,
+            }
+        };
+        let (anchor_row, extent_row) = match self.fold_layout() {
+            Some(layout) if !layout.rows.is_empty() => (
+                row_to_abs(layout.rows.first().unwrap()),
+                row_to_abs(layout.rows.last().unwrap()),
+            ),
+            _ => {
+                let visible_start = scrollback_len.saturating_sub(self.scroll_offset());
+                (visible_start, visible_start + (rows - 1) as u32)
+            }
+        };
         self.selection = Some(Selection {
-            anchor: crate::selection::Pos { row: 0, col: 0 },
+            anchor: crate::selection::Pos {
+                row: anchor_row,
+                col: 0,
+            },
             extent: crate::selection::Pos {
-                row: rows - 1,
+                row: extent_row,
                 col: cols - 1,
             },
             mode: crate::selection::SelectionMode::Character,
@@ -1242,6 +1294,11 @@ impl App {
         // `self.notify()` (a `&self` call) can't run inside the loop.
         let mut pending_notifications: Vec<(String, crate::notifications::ActivityKind)> =
             Vec::new();
+        // Absolute-row selection bookkeeping, captured from the active tab in
+        // the loop and applied after it (the loop holds `&mut self.tabs`, so
+        // mutating `self.selection` must wait until the borrow ends).
+        let mut active_eviction_delta: u32 = 0;
+        let mut active_frame_reset = false;
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
@@ -1263,6 +1320,17 @@ impl App {
                 bell_rang = true;
             }
             let output = tab.take_output();
+            // Drain the eviction bookkeeping for every tab so stale deltas do
+            // not accumulate on a background tab and then mis-shift the
+            // selection the moment it becomes active. Only the active tab's
+            // values feed the selection (it owns the buffer the selection
+            // addresses).
+            let eviction_delta = tab.take_eviction_delta();
+            let frame_reset = tab.take_frame_reset();
+            if idx == active {
+                active_eviction_delta = eviction_delta;
+                active_frame_reset = frame_reset;
+            }
             let exited_now = !was_exited && tab.exited;
 
             // ── Inactive-tab activity (dot + desktop notification) ──
@@ -1301,6 +1369,35 @@ impl App {
                     // instead of cloning a potentially huge OSC title.
                     pending_notifications
                         .push((crate::notifications::sanitize_title(&tab.title), kind));
+                }
+            }
+        }
+        // Apply the active tab's absolute-row selection bookkeeping now that
+        // the `&mut self.tabs` borrow has ended. A frame reset drops the
+        // selection outright (its rows belong to the discarded frame); an
+        // eviction shifts it down by the number of evicted rows and drops it
+        // when the whole range scrolled off the top. The `previous_selection`
+        // is intentionally *not* shifted — it is interpreted against the
+        // matching `previous_visible_start` captured in the same prior frame.
+        if active_frame_reset {
+            self.selection = None;
+            self.pending_selection_anchor = None;
+        } else if active_eviction_delta > 0 {
+            if let Some(sel) = self.selection.as_mut() {
+                if !sel.shift_rows_down(active_eviction_delta) {
+                    self.selection = None;
+                }
+            }
+            // Shift the pending press anchor in lockstep with the selection.
+            // An anchor whose row scrolled off the top is dropped, since the
+            // first drag motion would otherwise anchor against a stale row.
+            if let Some(anchor) = self.pending_selection_anchor {
+                match anchor.row.checked_sub(active_eviction_delta) {
+                    Some(r) => {
+                        self.pending_selection_anchor =
+                            Some(crate::selection::Pos { row: r, ..anchor })
+                    }
+                    None => self.pending_selection_anchor = None,
                 }
             }
         }
@@ -1828,6 +1925,13 @@ impl App {
         if active {
             self.scroll_position = ScrollPosition::Live;
         }
+        // The selection holds absolute-row coordinates of the screen it was
+        // made on; toggling between the main and alt screen changes the
+        // buffer the selection addresses, so drop it (and any pending press
+        // anchor) — matches current eMterm behavior and the SPEC's
+        // "alt-screen toggle during selection → selection cleared".
+        self.selection = None;
+        self.pending_selection_anchor = None;
         self.needs_full_redraw = true;
     }
 
@@ -1870,22 +1974,49 @@ impl App {
             push_unique(&mut set, cursor_row);
         }
 
-        // Selection history: union of previous + current.
-        let selection_range = |sel: &Selection| -> (u16, u16) {
+        // Selection history: union of previous + current. The selection now
+        // holds *absolute* buffer rows, so each range must be translated back
+        // into the screen rows it occupies before being added to the dirty
+        // set.
+        //
+        // With a fold layout the absolute → screen mapping is non-linear
+        // (collapsed bodies are hidden, summary rows draw no cells), so a
+        // simple `abs - visible_start` does not hold. Rather than reproduce
+        // the fold walk here just for the dirty set, repaint every row when a
+        // selection is (or was) present and a fold layout is active — folds
+        // are rare and the selection touches at most the viewport, so the
+        // cost is bounded.
+        if self.fold_layout.is_some()
+            && (self.selection.is_some() || self.previous_selection.is_some())
+        {
+            return (0..rows).collect();
+        }
+
+        // Linear case: map the absolute selection range onto screen rows by
+        // intersecting it with the visible window `[visible_start,
+        // visible_start + rows)` and offsetting by `visible_start`.
+        let push_abs_range = |set: &mut Vec<u16>, visible_start: u32, sel: &Selection| {
             let (start, end) = sel.ordered();
-            (start.row, end.row)
-        };
-        if let Some(sel) = &self.selection {
-            let (s, e) = selection_range(sel);
-            for r in s..=e.min(rows - 1) {
-                push_unique(&mut set, r);
+            let win_end = visible_start + rows as u32; // exclusive
+            let lo = start.row.max(visible_start);
+            let hi = (end.row + 1).min(win_end); // exclusive
+            if lo >= hi {
+                return;
             }
+            for abs in lo..hi {
+                push_unique(set, (abs - visible_start) as u16);
+            }
+        };
+        let visible_start_now = core
+            .get_scrollback_length()
+            .saturating_sub(self.scroll_offset());
+        if let Some(sel) = &self.selection {
+            push_abs_range(&mut set, visible_start_now, sel);
         }
         if let Some(sel) = &self.previous_selection {
-            let (s, e) = selection_range(sel);
-            for r in s..=e.min(rows - 1) {
-                push_unique(&mut set, r);
-            }
+            // The previous selection's rows are interpreted against the
+            // visible-start captured when that frame rendered.
+            push_abs_range(&mut set, self.previous_visible_start, sel);
         }
 
         set.sort_unstable();
@@ -1899,6 +2030,12 @@ impl App {
     pub fn record_render_state(&mut self, core: &mut TerminalCore) {
         self.previous_cursor = Some((core.get_cursor_row(), core.get_cursor_col()));
         self.previous_selection = self.selection;
+        // Snapshot the visible-start used this frame so next frame's dirty
+        // computation can translate `previous_selection`'s absolute rows back
+        // into the screen rows it actually occupied.
+        self.previous_visible_start = core
+            .get_scrollback_length()
+            .saturating_sub(self.scroll_offset());
         self.previous_blink_visible = self.blink_visible_now(core.get_cursor_blink());
         self.previous_status_bar_view_model = Some(self.status_bar_view_model());
         self.needs_full_redraw = false;
@@ -1912,6 +2049,7 @@ impl App {
     pub fn record_render_state_no_tab(&mut self) {
         self.previous_cursor = None;
         self.previous_selection = None;
+        self.previous_visible_start = 0;
         self.previous_blink_visible = true;
         self.previous_status_bar_view_model = Some(self.status_bar_view_model());
         self.needs_full_redraw = false;
@@ -3723,5 +3861,311 @@ mod tests {
         // report `false` (no exit request).
         let exit = app.apply_action(crate::ui::AppAction::SelectAll);
         assert!(!exit);
+    }
+
+    #[test]
+    fn select_all_spans_visible_viewport_at_live() {
+        // At live (offset 0) with some scrollback, select_all anchors at the
+        // viewport top (= scrollback_len) and spans the on-screen rows.
+        let mut app = app_with_prompts(50, &[]);
+        let (cols, rows, scrollback_len) = {
+            let core = app.tabs[0].core.lock();
+            (core.cols(), core.rows(), core.get_scrollback_length())
+        };
+        app.select_all();
+        let sel = app.selection.expect("select_all set a selection");
+        assert_eq!(
+            sel.anchor,
+            Pos {
+                row: scrollback_len,
+                col: 0
+            }
+        );
+        assert_eq!(
+            sel.extent,
+            Pos {
+                row: scrollback_len + (rows - 1) as u32,
+                col: cols - 1
+            }
+        );
+    }
+
+    #[test]
+    fn select_all_uses_visible_start_when_scrolled() {
+        // Scrolled back, select_all starts at the scrolled visible_start, not
+        // at the live tail.
+        let mut app = app_with_prompts(50, &[]);
+        let (rows, scrollback_len) = {
+            let core = app.tabs[0].core.lock();
+            (core.rows(), core.get_scrollback_length())
+        };
+        app.scroll_set_offset(10);
+        let visible_start = scrollback_len - 10;
+        app.select_all();
+        let sel = app.selection.expect("select_all set a selection");
+        assert_eq!(sel.anchor.row, visible_start);
+        assert_eq!(sel.extent.row, visible_start + (rows - 1) as u32);
+    }
+
+    #[test]
+    fn pump_all_shifts_selection_by_eviction_delta() {
+        // A selection in absolute rows is shifted down by the active tab's
+        // accumulated eviction delta when `pump_all` runs.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.selection = Some(Selection {
+            anchor: Pos { row: 20, col: 0 },
+            extent: Pos { row: 24, col: 3 },
+            mode: SelectionMode::Character,
+        });
+        // Drive an eviction of 5 rows through the prompt-mark backfill, which
+        // is what `pump` calls in production. This populates the tab's
+        // `pending_eviction_delta`.
+        app.tabs[0].test_backfill_eviction(5);
+        app.pump_all();
+        let sel = app.selection.expect("selection survives the shift");
+        assert_eq!(sel.anchor, Pos { row: 15, col: 0 });
+        assert_eq!(sel.extent, Pos { row: 19, col: 3 });
+    }
+
+    #[test]
+    fn pump_all_drops_selection_when_fully_evicted() {
+        // When the eviction delta exceeds both endpoints, the selection is
+        // dropped entirely.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.selection = Some(Selection {
+            anchor: Pos { row: 2, col: 0 },
+            extent: Pos { row: 6, col: 3 },
+            mode: SelectionMode::Character,
+        });
+        app.tabs[0].test_backfill_eviction(10);
+        app.pump_all();
+        assert!(
+            app.selection.is_none(),
+            "fully-evicted selection must be dropped"
+        );
+    }
+
+    #[test]
+    fn pump_all_clears_selection_on_frame_reset() {
+        // A core reset (RIS) makes the eviction counter go backwards, latching
+        // a frame reset that drops the absolute-row selection.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        // Establish a non-zero eviction baseline first.
+        app.tabs[0].test_backfill_eviction(8);
+        // Drain the resulting delta so it does not also shift the selection.
+        let _ = app.tabs[0].take_eviction_delta();
+        app.selection = Some(Selection {
+            anchor: Pos { row: 4, col: 0 },
+            extent: Pos { row: 9, col: 3 },
+            mode: SelectionMode::Character,
+        });
+        // Counter goes backwards → frame reset latch.
+        app.tabs[0].test_backfill_eviction(0);
+        app.pump_all();
+        assert!(
+            app.selection.is_none(),
+            "frame reset must clear the selection"
+        );
+    }
+
+    #[test]
+    fn switch_to_tab_clears_selection() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab(); // now 2 tabs, active = 1
+        app.selection = Some(Selection {
+            anchor: Pos { row: 0, col: 0 },
+            extent: Pos { row: 2, col: 3 },
+            mode: SelectionMode::Character,
+        });
+        app.switch_to_tab(0);
+        assert!(
+            app.selection.is_none(),
+            "switching tabs clears the active-tab-scoped selection"
+        );
+    }
+
+    #[test]
+    fn switch_to_tab_clears_pending_selection_anchor() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab(); // now 2 tabs, active = 1
+        app.pending_selection_anchor = Some(Pos { row: 3, col: 2 });
+        app.switch_to_tab(0);
+        assert!(
+            app.pending_selection_anchor.is_none(),
+            "switching tabs clears the pending press anchor"
+        );
+    }
+
+    #[test]
+    fn set_alt_screen_true_clears_selection_and_anchor() {
+        // Toggling onto the alt screen changes the buffer the absolute-row
+        // selection addresses, so both the selection and a pending press
+        // anchor must be dropped.
+        let mut app = App::new();
+        app.selection = Some(Selection {
+            anchor: Pos { row: 1, col: 0 },
+            extent: Pos { row: 2, col: 3 },
+            mode: SelectionMode::Character,
+        });
+        app.pending_selection_anchor = Some(Pos { row: 1, col: 1 });
+        app.set_alt_screen(true);
+        assert!(
+            app.selection.is_none(),
+            "alt-screen toggle clears selection"
+        );
+        assert!(
+            app.pending_selection_anchor.is_none(),
+            "alt-screen toggle clears the pending press anchor"
+        );
+    }
+
+    #[test]
+    fn pump_all_shifts_pending_anchor_by_eviction_delta() {
+        // A pending press anchor in absolute rows is shifted down by the
+        // active tab's accumulated eviction delta, exactly like `selection`.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.pending_selection_anchor = Some(Pos { row: 20, col: 4 });
+        app.tabs[0].test_backfill_eviction(5);
+        app.pump_all();
+        assert_eq!(
+            app.pending_selection_anchor,
+            Some(Pos { row: 15, col: 4 }),
+            "pending anchor shifts with the eviction delta"
+        );
+    }
+
+    #[test]
+    fn pump_all_drops_pending_anchor_when_scrolled_off_top() {
+        // When the eviction delta exceeds the anchor's row, the anchor scrolled
+        // off the top of scrollback and is dropped.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.pending_selection_anchor = Some(Pos { row: 3, col: 0 });
+        app.tabs[0].test_backfill_eviction(10);
+        app.pump_all();
+        assert!(
+            app.pending_selection_anchor.is_none(),
+            "a fully-evicted pending anchor is dropped"
+        );
+    }
+
+    #[test]
+    fn pump_all_clears_pending_anchor_on_frame_reset() {
+        // A frame reset (RIS) drops the absolute-row pending anchor alongside
+        // the selection.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.tabs[0].test_backfill_eviction(8);
+        let _ = app.tabs[0].take_eviction_delta();
+        app.pending_selection_anchor = Some(Pos { row: 4, col: 0 });
+        // Counter goes backwards → frame reset latch.
+        app.tabs[0].test_backfill_eviction(0);
+        app.pump_all();
+        assert!(
+            app.pending_selection_anchor.is_none(),
+            "frame reset must clear the pending press anchor"
+        );
+    }
+
+    #[test]
+    fn select_all_uses_fold_layout_visible_span_when_collapsed() {
+        // With a collapsed fold region in view, the screen rows are
+        // non-contiguous in absolute space. select_all must take its
+        // anchor/extent from the layout's first/last visible rows rather than
+        // the linear `visible_start + (rows - 1)` model.
+        let mut app = app_with_prompts(100, &[]);
+        let (cols, scrollback_len) = {
+            let core = app.tabs[0].core.lock();
+            (core.cols(), core.get_scrollback_length())
+        };
+        // Collapse a region near the live tail so its summary survives in the
+        // visible window.
+        let region_start = scrollback_len + 1;
+        let region_end = region_start + 5;
+        app.tabs[0].folds.register_osc133_region(
+            region_start,
+            region_end,
+            "cmd".to_string(),
+            Some(0),
+        );
+        app.tabs[0].folds.toggle_fold(region_start);
+        // Build the per-frame layout the renderer / select_all consult.
+        app.refresh_fold_layout();
+        let layout = app
+            .fold_layout()
+            .expect("collapsed region produces a layout")
+            .clone();
+        let expected_first = match layout.rows.first().unwrap() {
+            crate::fold::FoldRowKind::Cells { actual_line } => *actual_line,
+            crate::fold::FoldRowKind::Summary { region } => region.start_line,
+        };
+        let expected_last = match layout.rows.last().unwrap() {
+            crate::fold::FoldRowKind::Cells { actual_line } => *actual_line,
+            crate::fold::FoldRowKind::Summary { region } => region.start_line,
+        };
+
+        app.select_all();
+        let sel = app.selection.expect("select_all set a selection");
+        assert_eq!(
+            sel.anchor,
+            Pos {
+                row: expected_first,
+                col: 0
+            }
+        );
+        assert_eq!(
+            sel.extent,
+            Pos {
+                row: expected_last,
+                col: cols - 1
+            }
+        );
+    }
+
+    #[test]
+    fn dirty_set_maps_scrolled_selection_to_screen_rows() {
+        // A selection in absolute rows is dirtied at the screen rows it
+        // currently occupies, honoring scroll_offset.
+        let mut app = app_with_prompts(50, &[]);
+        // Clone the core Arc so the lock guard doesn't borrow `app` while we
+        // need `&mut app` for record_render_state.
+        let core_arc = app.tabs[0].core.clone();
+        let scrollback_len = core_arc.lock().get_scrollback_length();
+        // Scroll back by 10 → visible_start = scrollback_len - 10. Clear the
+        // full-redraw latch so the union path runs.
+        app.scroll_set_offset(10);
+        {
+            let mut core = core_arc.lock();
+            app.record_render_state(&mut core);
+        }
+        let visible_start = scrollback_len - 10;
+        // Select two absolute rows that fall on screen rows 3 and 4.
+        app.selection = Some(Selection {
+            anchor: Pos {
+                row: visible_start + 3,
+                col: 0,
+            },
+            extent: Pos {
+                row: visible_start + 4,
+                col: 5,
+            },
+            mode: SelectionMode::Character,
+        });
+        let set = {
+            let core = core_arc.lock();
+            app.dirty_rows_this_frame(&core)
+        };
+        assert!(set.contains(&3), "abs row visible_start+3 → screen row 3");
+        assert!(set.contains(&4), "abs row visible_start+4 → screen row 4");
+        // Screen row 0 holds neither a selected row nor the cursor (which sits
+        // at the viewport bottom after the newline fill), and the core was
+        // cleared of dirty bits by record_render_state, so it is absent.
+        assert!(!set.contains(&0), "unselected screen row 0 stays clean");
     }
 }
