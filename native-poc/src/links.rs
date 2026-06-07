@@ -16,6 +16,8 @@
 
 use term_core::terminal_core::TerminalCore;
 
+use crate::logical_line::LogicalLine;
+
 /// URL pattern matching common protocols. Mirrors `URL_REGEX` in
 /// `url-detector.ts` (line 109).
 const URL_PATTERN: &str = r#"(?:https?|ftp|file)://[^\s<>"'`)\]},;]+"#;
@@ -51,27 +53,6 @@ pub struct DetectedLink {
     pub cells: Vec<(u16, u16, u16)>,
 }
 
-/// One character of the logical line text, paired with the physical cell
-/// it came from. Built cell-by-cell so a regex match's char range can be
-/// translated back into physical `(row, col)` spans even across wide
-/// glyphs and soft wraps.
-struct CharCell {
-    row: u16,
-    col: u16,
-    /// Physical width in cells (1 for normal, 2 for wide glyphs). Used so
-    /// a matched span's `col_end` covers the glyph's full footprint.
-    width: u16,
-}
-
-/// A logical line: the soft-wrap-joined text plus the per-char physical
-/// mapping. `cells[i]` describes the physical origin of the `i`-th *char*
-/// in `text` (in `char` units, matching how the JS regex indexes into the
-/// concatenated string).
-struct LogicalLine {
-    text: String,
-    cells: Vec<CharCell>,
-}
-
 /// Build a logical line by joining soft-wrapped physical lines that
 /// contain `row`. Mirrors `getLogicalLine` in `url-detector.ts`:
 /// `get_line_wrapped(r) == true` means "row `r` is a continuation of the
@@ -82,15 +63,21 @@ struct LogicalLine {
 /// occupy two physical columns; the continuation cell (`width == 0`) is
 /// skipped so it does not inject a phantom char into `text`. Empty cells
 /// contribute a single space, matching the WebView's `getCell(c).char ||
-/// " "`.
-fn build_logical_line(core: &TerminalCore, row: u16) -> LogicalLine {
+/// " "`. The empty-cell → space substitution and per-`char` physical
+/// mapping are owned by the shared [`LogicalLine`] model
+/// ([`crate::logical_line`]).
+///
+/// The JS side indexes the regex match in UTF-16 code units, but since both
+/// URL and path matches are ASCII the per-`char` (Rust `char`) granularity
+/// is equivalent for our spans. A multi-codepoint grapheme (emoji ZWJ) can
+/// never be part of a URL/path match, so collapsing it to one logical
+/// `char`-per-cell is safe and keeps the mapping aligned with the physical
+/// cell.
+fn build_logical_line(core: &TerminalCore, row: u16) -> LogicalLine<u16> {
     let rows = core.rows();
     let cols = core.cols();
     if rows == 0 || cols == 0 || row >= rows {
-        return LogicalLine {
-            text: String::new(),
-            cells: Vec::new(),
-        };
+        return LogicalLine::new();
     }
 
     // Walk backward to the start of the logical line.
@@ -99,39 +86,22 @@ fn build_logical_line(core: &TerminalCore, row: u16) -> LogicalLine {
         start_row -= 1;
     }
 
-    let mut text = String::new();
-    let mut cells: Vec<CharCell> = Vec::new();
+    let mut line: LogicalLine<u16> = LogicalLine::new();
     let mut r = start_row;
     loop {
+        // Collect this physical row's `(grapheme, width)` cells, dropping
+        // the width-0 continuation halves so the char→cell map stays
+        // aligned, then hand them to the shared `push_row` builder.
+        let mut cells: Vec<(String, u16)> = Vec::with_capacity(cols as usize);
         for c in 0..cols {
-            // Skip the trailing half of a wide glyph: it carries no char
-            // of its own (width 0) and printing a space for it would
-            // misalign the char→cell mapping.
             if core.get_cell_width(c, r) == 0 {
                 continue;
             }
             let ch = core.get_cell_char(c, r);
-            let ch = if ch.is_empty() { " ".to_string() } else { ch };
             let width = core.get_cell_width(c, r).max(1) as u16;
-            // The JS side indexes the regex match in UTF-16 code units,
-            // but since both URL and path matches are ASCII the per-char
-            // (Rust `char`) granularity is equivalent for our spans. A
-            // multi-codepoint grapheme (emoji ZWJ) can never be part of a
-            // URL/path match, so collapsing it to one logical char is
-            // safe and keeps the mapping aligned with the physical cell.
-            //
-            // One CharCell per `char` of `ch` keeps `cells[i]` aligned
-            // with the i-th char of `text` (multi-char graphemes share a
-            // physical cell). ASCII matches make this 1:1 in practice.
-            for _ in ch.chars() {
-                cells.push(CharCell {
-                    row: r,
-                    col: c,
-                    width,
-                });
-            }
-            text.push_str(&ch);
+            cells.push((ch, width));
         }
+        line.push_row(r, cells.iter().map(|(c, w)| (c.as_str(), *w)));
         // Advance only while the *next* row is a continuation.
         if r + 1 < rows && core.get_line_wrapped(r + 1) {
             r += 1;
@@ -140,7 +110,7 @@ fn build_logical_line(core: &TerminalCore, row: u16) -> LogicalLine {
         }
     }
 
-    LogicalLine { text, cells }
+    line
 }
 
 /// Return the soft-wrap-joined text of the logical line that contains
@@ -219,37 +189,19 @@ fn char_len(s: &str) -> usize {
 
 /// Collapse a char range `[start_char, end_char)` of a logical line into
 /// physical cell spans: one `(row, col_start, col_end)` per physical row
-/// the range touches. Adjacent same-row cells are merged into a single
-/// span; wide glyphs extend `col_end` by their full width.
+/// the range touches. Thin wrapper over the shared
+/// [`LogicalLine::char_range_to_segments`] that flattens each `Segment`
+/// into the `(row, col_start, col_end)` tuple the [`DetectedLink`] cell
+/// list uses.
 fn char_range_to_cells(
-    line: &LogicalLine,
+    line: &LogicalLine<u16>,
     start_char: usize,
     end_char: usize,
 ) -> Vec<(u16, u16, u16)> {
-    let mut spans: Vec<(u16, u16, u16)> = Vec::new();
-    for cc in line
-        .cells
-        .iter()
-        .skip(start_char)
-        .take(end_char.saturating_sub(start_char))
-    {
-        let col_start = cc.col;
-        // Extend by the glyph's physical width so a wide glyph covers both
-        // of its cells. URL/path matches are ASCII (width 1) in practice;
-        // this keeps the span correct regardless.
-        let col_end = cc.col.saturating_add(cc.width.max(1));
-        match spans.last_mut() {
-            // Merge contiguous cells, and also coalesce duplicate /
-            // already-covered cells (a multi-char grapheme emits several
-            // CharCells sharing one physical column) so the span stays a
-            // single contiguous run per row.
-            Some((row, _cs, ce)) if *row == cc.row && col_start <= *ce => {
-                *ce = (*ce).max(col_end);
-            }
-            _ => spans.push((cc.row, col_start, col_end)),
-        }
-    }
-    spans
+    line.char_range_to_segments(start_char, end_char)
+        .into_iter()
+        .map(|seg| (seg.row, seg.col_start, seg.col_end))
+        .collect()
 }
 
 /// Find the URL or file path covering the physical cell `(row, col)` in
@@ -273,7 +225,7 @@ pub fn find_link_at(
         return None;
     }
     // Logical char index of the hovered cell.
-    let hover_char = logical_char_index(&line, row, col)?;
+    let hover_char = line.char_index_at(row, col)?;
 
     if detect_urls {
         if let Some(link) = find_url_covering(&line, hover_char) {
@@ -288,19 +240,10 @@ pub fn find_link_at(
     None
 }
 
-/// Map a physical `(row, col)` to its logical char index within `line`,
-/// or `None` if the cell is not part of this logical line (e.g. a
-/// width-0 continuation cell that was skipped during build).
-fn logical_char_index(line: &LogicalLine, row: u16, col: u16) -> Option<usize> {
-    line.cells
-        .iter()
-        .position(|cc| cc.row == row && cc.col == col)
-}
-
 /// Scan URL matches and return the one covering `hover_char` (in char
 /// units), trimmed and cell-mapped. Mirrors `detectUrls` +
 /// `findUrlAtPosition`.
-fn find_url_covering(line: &LogicalLine, hover_char: usize) -> Option<DetectedLink> {
+fn find_url_covering(line: &LogicalLine<u16>, hover_char: usize) -> Option<DetectedLink> {
     URL_RE.with(|re| {
         // Incremental byte→char cursor: find_iter yields matches in ascending
         // byte order, so we can walk forward from the previous match position
@@ -346,7 +289,7 @@ fn find_url_covering(line: &LogicalLine, hover_char: usize) -> Option<DetectedLi
 /// Scan file-path matches and return the one covering `hover_char`,
 /// excluding matches that are actually the tail of a URL. Mirrors
 /// `detectFilePaths` + `findFilePathAtPosition`.
-fn find_file_path_covering(line: &LogicalLine, hover_char: usize) -> Option<DetectedLink> {
+fn find_file_path_covering(line: &LogicalLine<u16>, hover_char: usize) -> Option<DetectedLink> {
     let text = &line.text;
 
     // Collect all URL byte ranges in one pass so that the per-file-path-match

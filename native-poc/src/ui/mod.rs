@@ -17,6 +17,7 @@ pub mod emoji_cache;
 pub mod keybinds;
 pub mod md3;
 pub mod scrollbar;
+pub mod search_bar;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod title_bar;
@@ -54,6 +55,10 @@ pub enum AppAction {
     /// Ctrl+Shift+A — select the entire visible viewport of the active
     /// tab. Handled in `App::apply_action`.
     SelectAll,
+    /// Ctrl+Shift+F — open (or re-focus) the in-terminal search overlay.
+    /// Handled at the `window_host` layer because the overlay drives the
+    /// per-frame key-forwarding state and the highlight render path.
+    OpenSearch,
     /// Ctrl+Plus — increase the terminal font size by one point
     /// (clamped). Handled at the `window_host` layer because the cell
     /// metrics + PTY grid must be reshaped after the change.

@@ -1197,6 +1197,7 @@ impl WindowHost {
             title: None,
             tab: None,
             scroll_to: None,
+            search: None,
         };
         // Snapshot the current maximized state so the title bar can
         // swap its middle glyph between Maximize and Restore. Reading
@@ -1205,6 +1206,11 @@ impl WindowHost {
         let window_maximized = self.window.is_maximized();
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
             frame_events = crate::render::draw_placeholder(ctx, app, window_maximized);
+            // Search overlay is drawn after the chrome so it floats above
+            // the tab bar / status bar; it needs `&mut App` for its
+            // TextEdit, so it runs as a separate call from `draw_terminal`
+            // (which holds `&App`).
+            frame_events.search = crate::render::draw_search_overlay(ctx, app);
         });
         // CSD title-bar actions hit `winit::Window` directly except
         // for Close, which defers to `about_to_wait` via
@@ -1233,6 +1239,21 @@ impl WindowHost {
             app.scroll_set_offset(offset);
             // Viewport shifted under the pointer; cached hover is stale.
             self.invalidate_link_hover();
+        }
+        // Search-bar interaction: re-run the search on query / option
+        // changes (incremental), navigate on the prev / next buttons, or
+        // close the overlay. `App` owns the search state + the scroll-to-
+        // match side effect.
+        if let Some(evt) = frame_events.search {
+            use crate::ui::search_bar::SearchBarEvent;
+            match evt {
+                SearchBarEvent::QueryChanged(_) | SearchBarEvent::OptionsChanged => {
+                    app.run_search();
+                }
+                SearchBarEvent::Next => app.search_next(),
+                SearchBarEvent::Prev => app.search_prev(),
+                SearchBarEvent::Close => app.close_search(),
+            }
         }
         let paint_jobs = self
             .egui_ctx
@@ -1556,7 +1577,10 @@ impl WindowHost {
             )),
             time: None,
             predicted_dt: 1.0 / 60.0,
-            modifiers: Default::default(),
+            // Forward the live modifier state so egui's TextEdit (search
+            // bar) interprets editing chords like Ctrl+A / Ctrl+C / Ctrl+V
+            // correctly. Harmless for the chrome widgets, which ignore it.
+            modifiers: input_mods_to_egui(self.current_mods),
             events: std::mem::take(&mut self.pending_egui_events),
             hovered_files: Vec::new(),
             dropped_files: Vec::new(),
@@ -2034,6 +2058,21 @@ impl ApplicationHandler for PocApp {
             // overrides the trait default with a no-op, so this is
             // safe to call unconditionally.
             WindowEvent::Ime(ime) => {
+                // While the search bar owns the keyboard, route IME commits
+                // into egui's TextEdit instead of the terminal IME backend
+                // so Japanese / CJK input lands in the search field. Only
+                // `Commit` carries text we forward; preedit display in the
+                // field is omitted (best-effort CJK support per spec).
+                if self.app.search_visible() {
+                    if let winit::event::Ime::Commit(text) = &ime {
+                        if !text.is_empty() {
+                            host.pending_egui_events
+                                .push(egui::Event::Text(text.clone()));
+                        }
+                    }
+                    host.window().request_redraw();
+                    return;
+                }
                 self.app.pass_winit_ime(&ime);
                 host.window().request_redraw();
             }
@@ -2068,6 +2107,19 @@ impl ApplicationHandler for PocApp {
                 host.window().request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // Search overlay capture: while the search bar is visible
+                // it owns the keyboard. Navigation / close chords are
+                // handled here directly; copy / paste are translated to
+                // egui clipboard events; everything else is forwarded to
+                // egui's TextEdit (bypassing the terminal IME dispatch and
+                // the PTY encoder entirely). Returns early so the normal
+                // Phase 4 key path below never runs while searching.
+                if self.app.search_visible() {
+                    handle_search_key(&event, host.current_mods, host, &mut self.app);
+                    host.window().request_redraw();
+                    return;
+                }
+
                 // Phase 4-G: offer the raw key event to the IME backend
                 // first. `Consumed` means the IM server swallowed the
                 // key (composition open, candidate chosen) and we must
@@ -2149,6 +2201,13 @@ impl ApplicationHandler for PocApp {
                                     host.request_resize();
                                     self.app.mark_full_redraw();
                                 }
+                            }
+                            crate::ui::AppAction::OpenSearch => {
+                                // Open (or re-focus) the search overlay. The
+                                // overlay then captures keystrokes via the
+                                // `search_visible()` branch at the top of the
+                                // KeyboardInput handler on subsequent presses.
+                                self.app.open_search();
                             }
                             crate::ui::AppAction::ToggleTabBar => {
                                 self.app.show_tab_bar = !self.app.show_tab_bar;
@@ -2437,6 +2496,12 @@ impl ApplicationHandler for PocApp {
         // this is a cheap no-op when disabled.
         let ime_changed = self.app.pump_ime();
         let pty_changed = self.app.pump_all();
+        // If the search overlay is open with live results, the pumps (PTY
+        // output / resize) may have shifted matched text into scrollback,
+        // staling the cached document and the matches' absolute rows. Re-run
+        // the search once here so highlights track the text without yanking
+        // the viewport. Per-frame cadence throttles bursts of PTY chunks.
+        let search_changed = self.app.auto_research_if_dirty();
         // Cursor blink advances on a 530 ms half-cycle (BLINK_HALF_MS).
         // egui's request_repaint_after is silent (no callback bridges
         // it back to winit), so we have to detect the phase flip
@@ -2456,7 +2521,7 @@ impl ApplicationHandler for PocApp {
         if pty_changed && host.pointer_in_window && !host.dragging {
             host.refresh_link_hover_on_pty_change(&self.app);
         }
-        if ime_changed || pty_changed || blink_due || bell_due {
+        if ime_changed || pty_changed || search_changed || blink_due || bell_due {
             host.window().request_redraw();
         }
         // Cursor cell may have moved as a side effect of pumps; notify
@@ -2664,6 +2729,110 @@ fn handle_special_chord(
         }
     }
     false
+}
+
+/// Convert the PTY-side [`Modifiers`] (`input::Modifiers`) into the
+/// `egui::Modifiers` shape egui events / `RawInput` expect. `command` /
+/// `mac_cmd` are always false — native-poc targets Linux + Windows only.
+fn input_mods_to_egui(mods: Modifiers) -> egui::Modifiers {
+    egui::Modifiers {
+        ctrl: mods.ctrl,
+        shift: mods.shift,
+        alt: mods.alt,
+        command: false,
+        mac_cmd: false,
+    }
+}
+
+/// Route a key press into the search overlay while it owns the keyboard.
+///
+/// Precedence (mirrors `SearchBar.keydown` + the WebView nav bindings):
+///   1. `Esc` → close the overlay + clear state.
+///   2. `Enter` / `Shift+Enter` → next / previous match.
+///   3. `keybinds.copy` / `keybinds.paste` chords → inject an
+///      `egui::Event::Copy` / `egui::Event::Paste(text)` so the field's
+///      own clipboard handling fires (copy of the field selection, paste
+///      of the OS clipboard into the field).
+///   4. Everything else → forward to egui as an `Event::Key` plus, when
+///      the key produced committed text and no Ctrl/Alt is held, an
+///      `Event::Text` so the TextEdit inserts the character.
+///
+/// The terminal IME dispatch + PTY encoder are intentionally bypassed:
+/// while searching, keystrokes belong to the search field, not the shell.
+fn handle_search_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost, app: &mut App) {
+    use winit::keyboard::NamedKey;
+
+    // 1. Esc closes the overlay.
+    if matches!(event.logical_key, WinitKey::Named(NamedKey::Escape)) {
+        app.close_search();
+        return;
+    }
+
+    // 2. Enter / Shift+Enter navigate. Handled before egui so the field's
+    //    default Enter (which does nothing useful for a single-line edit)
+    //    never swallows them.
+    if matches!(event.logical_key, WinitKey::Named(NamedKey::Enter)) {
+        if mods.shift {
+            app.search_prev();
+        } else {
+            app.search_next();
+        }
+        return;
+    }
+
+    let egui_key = winit_key_to_egui(&event.logical_key);
+
+    // 3. Copy / paste chords → egui clipboard events targeting the field.
+    if let Some(key) = egui_key {
+        let chord = Chord {
+            ctrl: mods.ctrl,
+            shift: mods.shift,
+            alt: mods.alt,
+            key,
+        };
+        // Re-pressing the search chord while the overlay is open re-focuses
+        // the field + reselects the query (rather than inserting an 'f').
+        if chord == app.keybinds.search {
+            app.open_search();
+            return;
+        }
+        if chord == app.keybinds.copy {
+            host.pending_egui_events.push(egui::Event::Copy);
+            return;
+        }
+        if chord == app.keybinds.paste {
+            if let Some(text) = host.get_clipboard() {
+                host.pending_egui_events.push(egui::Event::Paste(text));
+            }
+            return;
+        }
+    }
+
+    // 4. Forward as an egui key event so the TextEdit can act on editing
+    //    keys (Backspace / Delete / arrows / Home / End / Ctrl+A …).
+    if let Some(key) = egui_key {
+        host.pending_egui_events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: event.repeat,
+            modifiers: input_mods_to_egui(mods),
+        });
+    }
+
+    // …and forward the committed text for character insertion. Suppressed
+    // when Ctrl/Alt is held so control chords (e.g. Ctrl+A select-all) do
+    // not also insert a literal character into the field.
+    if !mods.ctrl && !mods.alt {
+        if let Some(text) = &event.text {
+            // Drop control characters (e.g. the Enter/Tab text payloads
+            // winit attaches) — printable text only reaches the field.
+            let printable: String = text.chars().filter(|c| !c.is_control()).collect();
+            if !printable.is_empty() {
+                host.pending_egui_events.push(egui::Event::Text(printable));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

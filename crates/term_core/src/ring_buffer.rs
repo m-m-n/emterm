@@ -21,7 +21,7 @@
 /// - ring_head ∈ [0, rows)
 /// - scrollback_slim.len() == scrollback_wrapped.len() ≤ scrollback_capacity
 use crate::cell::*;
-use crate::slim_cell::{SlimCell, cell_to_slim, slim_overflow_str, slim_to_cell};
+use crate::slim_cell::{cell_to_slim, slim_overflow_str, slim_to_cell, SlimCell};
 use crate::terminal_core::TerminalCore;
 
 // ── Scroll Event ─────────────────────────────────────────
@@ -377,6 +377,30 @@ impl TerminalCore {
         text
     }
 
+    /// Decode a scrollback row into `(grapheme, physical_width)` cells.
+    /// Width-0 cells (the trailing half of a wide glyph) are dropped so the
+    /// result aligns with the per-cell `get_cell_char` / `get_cell_width`
+    /// viewport accessors. Empty cells yield an empty string; the width is
+    /// always `>= 1` for the kept cells. This is the decode sibling of
+    /// [`Self::pack_slim_row`] — kept in this file so the encode/decode of
+    /// the same slim representation stay together.
+    pub(crate) fn slim_row_cells(&self, slim_row: &[SlimCell]) -> Vec<(String, u16)> {
+        let mut cells: Vec<(String, u16)> = Vec::with_capacity(slim_row.len());
+        for slim in slim_row {
+            if slim.width == 0 {
+                continue;
+            }
+            let ch = if slim.is_char_table() {
+                slim_overflow_str(slim, &self.chars).to_string()
+            } else {
+                let cell = slim_to_cell(slim, &self.styles, &self.chars);
+                cell.get_char_inline().unwrap_or("").to_string()
+            };
+            cells.push((ch, slim.width as u16));
+        }
+        cells
+    }
+
     // ── Scrollback access APIs (internal) ──────────────────
 
     /// Get scrollback line in packed binary format (same as get_row_packed).
@@ -396,6 +420,16 @@ impl TerminalCore {
         match self.scrollback_slim.get(index) {
             Some(row) => self.slim_row_text(row).trim_end().to_string(),
             None => String::new(),
+        }
+    }
+
+    /// Get scrollback line decoded into `(grapheme, physical_width)` cells.
+    /// index: 0 = oldest scrollback line.
+    /// Returns an empty vec if index >= scrollback_count.
+    pub(crate) fn scrollback_row_cells(&self, index: usize) -> Vec<(String, u16)> {
+        match self.scrollback_slim.get(index) {
+            Some(row) => self.slim_row_cells(row),
+            None => Vec::new(),
         }
     }
 }
@@ -418,6 +452,20 @@ impl TerminalCore {
     /// index: 0 = oldest line.
     pub fn get_scrollback_text(&self, index: u32) -> String {
         self.scrollback_text(index as usize)
+    }
+
+    /// Get a scrollback line decoded into `(grapheme, physical_width)`
+    /// cells. index: 0 = oldest line. Width-0 continuation halves of wide
+    /// glyphs are dropped so the result aligns with the per-cell
+    /// `get_cell_char` / `get_cell_width` viewport accessors; empty cells
+    /// yield an empty grapheme string. Returns an empty vec when
+    /// index >= scrollback length. High-level replacement for callers that
+    /// would otherwise re-implement the [`get_scrollback_row_packed`]
+    /// binary layout to read cell text + width.
+    ///
+    /// [`get_scrollback_row_packed`]: Self::get_scrollback_row_packed
+    pub fn get_scrollback_row_cells(&self, index: u32) -> Vec<(String, u16)> {
+        self.scrollback_row_cells(index as usize)
     }
 
     /// Get the wrapped flag for a scrollback line.
@@ -791,6 +839,57 @@ mod tests {
         let core = TerminalCore::new(10, 3, 5);
         assert!(core.get_scrollback_row_packed(0).is_empty());
         assert!(core.get_scrollback_row_packed(999).is_empty());
+    }
+
+    #[test]
+    fn test_get_scrollback_row_cells_basic() {
+        let mut core = TerminalCore::new(5, 3, 5);
+        core.set_cell(0, 0, "H", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.set_cell(1, 0, "i", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.scroll_up_internal(1);
+        let cells = core.get_scrollback_row_cells(0);
+        // 5 cols: "H", "i", then 3 blank cells. Blank cells decode to a
+        // single space (matching the viewport `get_cell_char`, which
+        // returns " " for an empty cell), each width 1.
+        assert_eq!(cells.len(), 5);
+        assert_eq!(cells[0], ("H".to_string(), 1));
+        assert_eq!(cells[1], ("i".to_string(), 1));
+        assert_eq!(cells[2], (" ".to_string(), 1));
+    }
+
+    #[test]
+    fn test_get_scrollback_row_cells_wide_char() {
+        let mut core = TerminalCore::new(5, 3, 5);
+        // A double-width CJK glyph occupies col 0 (width 2); col 1 is its
+        // width-0 continuation half and must be dropped from the result.
+        core.set_cell(0, 0, "あ", 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.set_cell(1, 0, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.scroll_up_internal(1);
+        let cells = core.get_scrollback_row_cells(0);
+        assert_eq!(cells[0], ("あ".to_string(), 2));
+        // The continuation half is dropped, so the next kept cell is the
+        // blank at col 2 (a space, width 1), not the width-0 cell at col 1.
+        assert_eq!(cells[1], (" ".to_string(), 1));
+    }
+
+    #[test]
+    fn test_get_scrollback_row_cells_overflow_grapheme() {
+        let mut core = TerminalCore::new(3, 3, 5);
+        // A multi-codepoint grapheme (emoji ZWJ family) routes through the
+        // CharTable / overflow path rather than the inline ascii path.
+        let family = "👨‍👩‍👧";
+        core.set_cell(0, 0, family, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.set_cell(1, 0, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.scroll_up_internal(1);
+        let cells = core.get_scrollback_row_cells(0);
+        assert_eq!(cells[0], (family.to_string(), 2));
+    }
+
+    #[test]
+    fn test_get_scrollback_row_cells_oob_returns_empty() {
+        let core = TerminalCore::new(10, 3, 5);
+        assert!(core.get_scrollback_row_cells(0).is_empty());
+        assert!(core.get_scrollback_row_cells(999).is_empty());
     }
 
     #[test]
@@ -1195,7 +1294,7 @@ mod tests {
     #[test]
     fn test_eviction_releases_refcounts() {
         let mut core = TerminalCore::new(10, 3, 2); // capacity 2 scrollback rows
-        // Push 5 distinct rows; only the last 2 should remain.
+                                                    // Push 5 distinct rows; only the last 2 should remain.
         for i in 0..5u32 {
             // Use a unique style per row by varying RGB.
             core.set_cell(0, 0, "A", 1, 2, i as u8, 0, 0, 0, 0, 0, 0, 0);

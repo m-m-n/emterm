@@ -34,6 +34,25 @@ pub const BLINK_HALF_MS: u128 = 530;
 /// `.terminal-bell-flash` animation (150 ms ease-out, `src/styles.css`).
 pub const BELL_FLASH_MS: u64 = 150;
 
+/// Minimum wall-clock gap between two automatic (per-frame) search
+/// re-resolves. A burst of PTY output flags the search document dirty on
+/// every chunk; without this throttle [`App::auto_research_if_dirty`] would
+/// rebuild the logical-line document and re-run the match on every painted
+/// frame. The dirty flag is *preserved* when a re-search is skipped here, so
+/// the pending change is reflected on the next frame past the gap.
+pub const AUTO_RESEARCH_THROTTLE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Whether an automatic re-search may run now, given the instant of the
+/// previous one. `None` (no prior auto re-search) always allows. Split out
+/// as a pure function so the throttle policy is unit-testable without an
+/// `App` or real wall-clock sleeps.
+pub fn auto_research_allowed(last: Option<Instant>, now: Instant) -> bool {
+    match last {
+        None => true,
+        Some(prev) => now.duration_since(prev) >= AUTO_RESEARCH_THROTTLE,
+    }
+}
+
 /// Per-step change applied by the `ZoomIn` / `ZoomOut` keybinds, in
 /// logical points.
 pub const FONT_SIZE_PT_STEP: f32 = 1.0;
@@ -74,6 +93,26 @@ pub struct App {
     /// Active mouse selection on the active tab, if any. Phase 4 owns this;
     /// later phases may move it per-tab when tabs preserve selection.
     pub selection: Option<Selection>,
+    /// In-terminal text-search state (query, options, matches, current
+    /// match cursor). App-global like [`Self::selection`]: one search
+    /// overlay shared by the window. Matches are resolved against the
+    /// active tab's scrollback + viewport; switching tabs closes the
+    /// overlay and clears the state (see `window_host` tab-switch path)
+    /// because match rows are indexed into the previous tab's buffer.
+    pub search: crate::search::SearchState,
+    /// Set on the frame the search overlay is (re)opened so the UI layer
+    /// grabs keyboard focus + selects the existing query once, mirroring
+    /// the WebView `SearchBar.show()` `focus()` + `select()`. Cleared by
+    /// the renderer after it consumes the request.
+    pub search_focus_request: bool,
+    /// Timestamp of the last *automatic* re-search (the per-frame
+    /// [`Self::auto_research_if_dirty`] path). The auto re-search is
+    /// time-throttled to at most one run per [`AUTO_RESEARCH_THROTTLE`] so a
+    /// burst of PTY output does not rebuild the logical-line document and
+    /// recompile the match on every frame. `None` until the first auto
+    /// re-search runs. User-driven [`Self::run_search`] / navigation bypass
+    /// this gate entirely.
+    last_auto_research: Option<Instant>,
     /// Runtime settings (ambiguous-width policy, OSC 52 policy, and
     /// future fields). Loaded from `settings.json` in Phase 7; today
     /// initialized to default. Wrapped in `Arc` so the per-tab
@@ -345,6 +384,9 @@ impl App {
             active: 0,
             cell_size: GridDims::default(),
             selection: None,
+            search: crate::search::SearchState::default(),
+            search_focus_request: false,
+            last_auto_research: None,
             settings,
             keybinds,
             scroll_position: ScrollPosition::Live,
@@ -831,6 +873,12 @@ impl App {
         // Drop the tab — its `PtySession::Drop` impl kills the child
         // and joins reader/writer threads.
         self.tabs.remove(idx);
+        // Closing a tab shifts the active buffer; any open search overlay
+        // is now indexed into a buffer that may no longer be active, so
+        // clear it (mirrors the switch_to_tab rationale).
+        if self.search.visible {
+            self.search.close();
+        }
         if self.tabs.is_empty() {
             self.active = 0;
             self.needs_full_redraw = true;
@@ -852,6 +900,15 @@ impl App {
             return;
         }
         self.active = idx;
+        // The search overlay's matches are indexed into the previous
+        // tab's scrollback + viewport, so they are meaningless against
+        // the new tab. Close the overlay + clear state on every active-
+        // tab change (the WebView keeps a single SearchHandler with no
+        // per-tab restore hook in the basic build, so closing is the
+        // faithful, non-stale behavior).
+        if self.search.visible {
+            self.search.close();
+        }
         self.needs_full_redraw = true;
     }
 
@@ -976,7 +1033,8 @@ impl App {
             | crate::ui::AppAction::ZoomOut
             | crate::ui::AppAction::ZoomReset
             | crate::ui::AppAction::ToggleFullscreen
-            | crate::ui::AppAction::ToggleTabBar => false,
+            | crate::ui::AppAction::ToggleTabBar
+            | crate::ui::AppAction::OpenSearch => false,
         }
     }
 
@@ -1142,6 +1200,11 @@ impl App {
     /// new bytes (caller schedules a redraw).
     pub fn pump_all(&mut self) -> bool {
         let mut changed = false;
+        // Whether the *active* tab specifically produced new bytes this
+        // pump. Only the active tab's output mutates the buffer the search
+        // overlay is resolved against, so background-tab output must not
+        // invalidate the active tab's cached logical-line document (H3).
+        let mut active_changed = false;
         let mut bell_rang = false;
         let now = Instant::now();
         let active = self.active;
@@ -1159,6 +1222,9 @@ impl App {
             let was_exited = tab.exited;
             if tab.pump() {
                 changed = true;
+                if idx == active {
+                    active_changed = true;
+                }
             }
             // Any tab's BEL triggers the bell action — same as the
             // WebView build, where a background tab's BEL still flashes
@@ -1231,9 +1297,11 @@ impl App {
             self.set_alt_screen(active_alt);
         }
         // Notify scroll-position state machine that new bytes arrived so
-        // the auto-follow rule can preserve the off-tail offset.
+        // the auto-follow rule can preserve the off-tail offset. Pass
+        // whether the *active* tab changed so only its output invalidates
+        // the search overlay's cached document (H3).
         if changed {
-            self.on_pty_output();
+            self.on_pty_output(active_changed);
         }
         // Reap exited tabs (Phase 5 will refine the policy).
         let before = self.tabs.len();
@@ -1241,6 +1309,13 @@ impl App {
         if self.tabs.len() != before {
             if self.active >= self.tabs.len() && !self.tabs.is_empty() {
                 self.active = self.tabs.len() - 1;
+            }
+            // The reap shifted `self.active` onto a different tab's buffer,
+            // so an open search overlay is now indexed into a buffer that is
+            // no longer active. Close it to match the `close_tab` /
+            // `switch_to_tab` behavior (H4).
+            if self.search.visible {
+                self.search.close();
             }
             changed = true;
             // Tab roster changed; redraw everything to repaint the title bar
@@ -1255,6 +1330,12 @@ impl App {
         self.cell_size = GridDims { cols, rows };
         for tab in &self.tabs {
             tab.resize(cols, rows);
+        }
+        // A reshape rewraps scrollback / viewport, so an open search
+        // overlay's cached logical-line document no longer matches the
+        // buffer; flag it for rebuild on the next `execute`.
+        if self.search.visible {
+            self.search.mark_buffer_dirty();
         }
         // Resize invalidates the previously rendered framebuffer; the
         // simplest correct response is a full redraw.
@@ -1349,12 +1430,153 @@ impl App {
         self.needs_full_redraw = true;
     }
 
+    // ── In-terminal search ───────────────────────────────────
+
+    /// Open the search overlay (or re-focus it if already open). Sets the
+    /// one-shot `search_focus_request` so the renderer grabs keyboard
+    /// focus + selects the existing query on the next frame, mirroring
+    /// `SearchHandler.toggleSearch` → `SearchBar.show()`.
+    pub fn open_search(&mut self) {
+        self.search.open();
+        self.search_focus_request = true;
+        self.needs_full_redraw = true;
+    }
+
+    /// Close the search overlay and clear its state + highlights.
+    pub fn close_search(&mut self) {
+        self.search.close();
+        self.search_focus_request = false;
+        self.needs_full_redraw = true;
+    }
+
+    /// Whether the search overlay is currently visible. Used by the key
+    /// router in `window_host` to decide between the search-input path
+    /// and the normal PTY/keybind path.
+    pub fn search_visible(&self) -> bool {
+        self.search.visible
+    }
+
+    /// Re-run the search against the active tab and update highlights.
+    /// Called after the query / options change (incremental search). The
+    /// current match is scrolled into view via [`Self::scroll_to_current_match`].
+    pub fn run_search(&mut self) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            let core = tab.core.lock();
+            self.search.execute(&core);
+        }
+        self.scroll_to_current_match();
+        self.needs_full_redraw = true;
+    }
+
+    /// Re-resolve the matches against the active tab's *current* buffer
+    /// without scrolling. Called once per frame (after the pumps in the
+    /// event loop) when [`SearchState::needs_research`] is set, so an open
+    /// overlay's highlights keep tracking their text as new PTY output (or a
+    /// resize) shifts rows into scrollback and changes their absolute row
+    /// numbers.
+    ///
+    /// Time-throttled to one re-resolve per [`AUTO_RESEARCH_THROTTLE`]: a
+    /// burst of PTY output flags the document dirty every frame, but
+    /// rebuilding the logical-line document + recompiling the match that
+    /// often is wasteful. When the gate blocks a run, the dirty flag is
+    /// **kept** (we do not call `execute`), so the pending change is picked
+    /// up on the next frame past the gap. User-driven [`Self::run_search`]
+    /// bypasses the gate.
+    ///
+    /// Unlike [`Self::run_search`], this deliberately does **not** call
+    /// [`Self::scroll_to_current_match`]: an automatic re-resolve must not
+    /// yank the viewport, and it preserves the navigation cursor (clamped to
+    /// the new match count) rather than snapping back to the first hit, so
+    /// the N/M indicator does not jitter as the buffer scrolls (H5). Returns
+    /// `true` when a re-search ran so the caller can request a repaint.
+    pub fn auto_research_if_dirty(&mut self) -> bool {
+        if !self.search.needs_research() {
+            return false;
+        }
+        let now = Instant::now();
+        if !auto_research_allowed(self.last_auto_research, now) {
+            // Throttled: leave the dirty flag set so the next frame past the
+            // gap re-resolves. No `execute`, no repaint request.
+            return false;
+        }
+        self.last_auto_research = Some(now);
+        if let Some(tab) = self.tabs.get(self.active) {
+            let core = tab.core.lock();
+            self.search.execute_preserving_current(&core);
+        }
+        self.needs_full_redraw = true;
+        true
+    }
+
+    /// Advance to the next match (wrap-around) and scroll it into view.
+    pub fn search_next(&mut self) {
+        self.search.next_match();
+        self.scroll_to_current_match();
+        self.needs_full_redraw = true;
+    }
+
+    /// Step to the previous match (wrap-around) and scroll it into view.
+    pub fn search_prev(&mut self) {
+        self.search.prev_match();
+        self.scroll_to_current_match();
+        self.needs_full_redraw = true;
+    }
+
+    /// Scroll the viewport so the current match is roughly centered, if it
+    /// is not already visible. No-op on the alt screen (no scrollback) or
+    /// when there is no current match.
+    fn scroll_to_current_match(&mut self) {
+        if self.alt_screen {
+            return;
+        }
+        let Some(m) = self.search.current_match() else {
+            return;
+        };
+        // The match's first segment's absolute row anchors the scroll.
+        let Some(seg) = m.segments.first() else {
+            return;
+        };
+        let abs_row = seg.abs_row;
+        let (scrollback_len, rows) = match self.tabs.get(self.active) {
+            Some(tab) => {
+                let core = tab.core.lock();
+                (core.get_scrollback_length(), core.rows())
+            }
+            None => return,
+        };
+        if let Some(offset) = crate::search::scroll_offset_for_match(
+            abs_row,
+            scrollback_len,
+            rows,
+            self.scroll_offset(),
+        ) {
+            self.scroll_set_offset(offset);
+        }
+    }
+
     /// React to new PTY output. When already at the live tail, no-op (the
     /// renderer will pick up the new rows automatically). When sitting at an
     /// offset, preserve the offset so the user is not yanked to the bottom.
     /// Visually, the offset stays anchored because `term_core`'s ring buffer
     /// shifts the old content into scrollback under us.
-    pub fn on_pty_output(&mut self) {
+    ///
+    /// `active_changed` is `true` only when the **active** tab produced the
+    /// new bytes. The search overlay is resolved against the active tab's
+    /// buffer, so background-tab output must not invalidate its cached
+    /// logical-line document (H3) — a switch to that tab closes the overlay
+    /// anyway, so a background change never needs to be reflected.
+    pub fn on_pty_output(&mut self, active_changed: bool) {
+        // New PTY output on the active tab mutates its scrollback / viewport,
+        // so an open search overlay's cached logical-line document is stale,
+        // and the matches' absolute rows shift as rows spill into scrollback.
+        // Flag it dirty here; the frame loop calls `auto_research_if_dirty`
+        // once per frame to rebuild and re-resolve (the per-frame cadence
+        // throttles bursts of PTY chunks — we do not re-search per chunk).
+        // Only meaningful while the overlay is visible; harmless otherwise
+        // since `clear`/`close` resets the flag anyway.
+        if active_changed && self.search.visible {
+            self.search.mark_buffer_dirty();
+        }
         // No-op for `Live`; explicit branch documents intent.
         if matches!(self.scroll_position, ScrollPosition::OffsetFromLive(_)) {
             // The offset is preserved; nothing to mutate, but we mark the
@@ -1628,6 +1850,263 @@ mod tests {
     }
 
     #[test]
+    fn open_search_sets_visible_and_focus_request() {
+        let mut app = App::new();
+        assert!(!app.search_visible());
+        app.open_search();
+        assert!(app.search_visible());
+        assert!(app.search_focus_request);
+    }
+
+    #[test]
+    fn close_search_clears_state() {
+        let mut app = App::new();
+        app.open_search();
+        app.search.query = "x".to_string();
+        app.close_search();
+        assert!(!app.search_visible());
+        assert!(app.search.query.is_empty());
+        assert!(!app.search_focus_request);
+    }
+
+    #[test]
+    fn auto_research_reresolves_matches_without_scrolling() {
+        // Spawn a tab so there is an active core to search against.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let mut core = app.tabs[0].core.lock();
+            core.process_pty_data(b"needle\r\n");
+        }
+        app.open_search();
+        app.search.query = "needle".to_string();
+        app.run_search();
+        assert_eq!(app.search.matches.len(), 1);
+
+        // User scrolls back; the auto re-search must preserve this offset.
+        app.scroll_set_offset(5);
+        assert_eq!(app.scroll_offset(), 5);
+
+        // New PTY output brings a second "needle"; on_pty_output flags the
+        // cache dirty (mirrors the pump_all path).
+        {
+            let mut core = app.tabs[0].core.lock();
+            core.process_pty_data(b"another needle line\r\n");
+        }
+        app.on_pty_output(true);
+        assert!(app.search.needs_research());
+
+        // The frame-loop hook re-resolves against the current buffer without
+        // scrolling.
+        let researched = app.auto_research_if_dirty();
+        assert!(
+            researched,
+            "dirty + visible + non-empty query → re-search ran"
+        );
+        assert_eq!(
+            app.search.matches.len(),
+            2,
+            "re-search reflects the new occurrence in the current buffer"
+        );
+        assert_eq!(
+            app.scroll_offset(),
+            5,
+            "auto re-search must NOT move the viewport"
+        );
+    }
+
+    #[test]
+    fn auto_research_noop_when_overlay_hidden_or_query_empty() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let mut core = app.tabs[0].core.lock();
+            core.process_pty_data(b"needle");
+        }
+        // Hidden overlay: even after a buffer change, no re-search.
+        app.search.query = "needle".to_string();
+        app.on_pty_output(true);
+        assert!(
+            !app.auto_research_if_dirty(),
+            "hidden overlay does not research"
+        );
+
+        // Visible but empty query: nothing to re-resolve.
+        app.open_search();
+        app.search.query.clear();
+        app.on_pty_output(true);
+        assert!(
+            !app.auto_research_if_dirty(),
+            "empty query does not research"
+        );
+    }
+
+    #[test]
+    fn switch_to_tab_closes_open_search() {
+        // Two synthetic tabs so `switch_to_tab` actually changes `active`.
+        // We avoid spawning PTYs by leaving the search overlay open and
+        // asserting it closes on the active-tab change path. Construct a
+        // bare app and drive `switch_to_tab` against an out-of-range and
+        // an in-range index to confirm only a real switch closes search.
+        let mut app = App::new();
+        app.open_search();
+        // No tabs → out-of-range switch is a no-op; search stays open.
+        app.switch_to_tab(1);
+        assert!(app.search_visible(), "no-op switch must not close search");
+    }
+
+    #[test]
+    fn auto_research_throttle_allows_then_blocks_then_allows() {
+        // Pure-function policy: no prior run always allows; within the
+        // window blocks; past the window allows again.
+        let t0 = Instant::now();
+        assert!(
+            auto_research_allowed(None, t0),
+            "first auto re-search always runs"
+        );
+        let just_under = t0 + (AUTO_RESEARCH_THROTTLE - std::time::Duration::from_millis(1));
+        assert!(
+            !auto_research_allowed(Some(t0), just_under),
+            "a run inside the throttle window is blocked"
+        );
+        let just_over = t0 + AUTO_RESEARCH_THROTTLE;
+        assert!(
+            auto_research_allowed(Some(t0), just_over),
+            "a run at/after the window elapses is allowed"
+        );
+    }
+
+    #[test]
+    fn auto_research_throttled_keeps_dirty_and_does_not_run() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let mut core = app.tabs[0].core.lock();
+            core.process_pty_data(b"needle\r\n");
+        }
+        app.open_search();
+        app.search.query = "needle".to_string();
+        app.run_search();
+        assert_eq!(app.search.matches.len(), 1);
+
+        // A fresh buffer change arrives and is flagged dirty.
+        {
+            let mut core = app.tabs[0].core.lock();
+            core.process_pty_data(b"second needle\r\n");
+        }
+        app.on_pty_output(true);
+        assert!(app.search.needs_research());
+
+        // Pretend an auto re-search just ran, so the gate is closed.
+        app.last_auto_research = Some(Instant::now());
+        let ran = app.auto_research_if_dirty();
+        assert!(
+            !ran,
+            "throttled: auto re-search must not run within the window"
+        );
+        assert!(
+            app.search.needs_research(),
+            "dirty flag is preserved so the next frame past the gap re-resolves"
+        );
+        assert_eq!(
+            app.search.matches.len(),
+            1,
+            "matches unchanged while throttled (no execute)"
+        );
+
+        // Past the throttle window the same pending dirty re-resolves.
+        app.last_auto_research =
+            Some(Instant::now() - AUTO_RESEARCH_THROTTLE - std::time::Duration::from_millis(1));
+        let ran = app.auto_research_if_dirty();
+        assert!(ran, "past the window the pending change re-resolves");
+        assert_eq!(app.search.matches.len(), 2);
+    }
+
+    #[test]
+    fn auto_research_preserves_current_index() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let mut core = app.tabs[0].core.lock();
+            core.process_pty_data(b"hit\r\nhit\r\nhit\r\n");
+        }
+        app.open_search();
+        app.search.query = "hit".to_string();
+        app.run_search();
+        assert_eq!(app.search.matches.len(), 3);
+        // Navigate to the second hit; the auto re-search must keep it.
+        app.search_next();
+        assert_eq!(app.search.current_index, 1);
+
+        {
+            let mut core = app.tabs[0].core.lock();
+            core.process_pty_data(b"hit\r\n");
+        }
+        app.on_pty_output(true);
+        // No prior auto re-search → throttle allows immediately.
+        let ran = app.auto_research_if_dirty();
+        assert!(ran);
+        assert_eq!(app.search.matches.len(), 4, "new occurrence picked up");
+        assert_eq!(
+            app.search.current_index, 1,
+            "auto re-search preserved the navigation cursor"
+        );
+    }
+
+    #[test]
+    fn background_tab_output_does_not_dirty_active_search() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab(); // active is now tab 1
+        {
+            let mut core = app.tabs[1].core.lock();
+            core.process_pty_data(b"needle\r\n");
+        }
+        app.open_search();
+        app.search.query = "needle".to_string();
+        app.run_search();
+        assert!(
+            !app.search.needs_research(),
+            "clean immediately after search"
+        );
+
+        // A *background* tab (tab 0) produced output. Per H3 this must NOT
+        // invalidate the active tab's cached search document.
+        app.on_pty_output(false);
+        assert!(
+            !app.search.needs_research(),
+            "background-tab output leaves the active search clean"
+        );
+
+        // Active-tab output does invalidate it.
+        app.on_pty_output(true);
+        assert!(
+            app.search.needs_research(),
+            "active-tab output marks the search document dirty"
+        );
+    }
+
+    #[test]
+    fn reap_exited_tab_closes_open_search() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab(); // two tabs; active is tab 1
+        app.open_search();
+        app.search.query = "x".to_string();
+        assert!(app.search_visible());
+
+        // Mark a tab exited so the reap path in `pump_all` removes it,
+        // shifting the active buffer. The open overlay must close (H4).
+        app.tabs[1].exited = true;
+        app.pump_all();
+        assert_eq!(app.tabs.len(), 1, "exited tab was reaped");
+        assert!(
+            !app.search_visible(),
+            "reap shifted the active buffer → search closed"
+        );
+    }
+
+    #[test]
     fn visual_bell_reports_progress_while_live() {
         let mut app = App::new();
         app.visual_bell_started = Some(Instant::now());
@@ -1861,7 +2340,7 @@ mod tests {
     fn on_pty_output_in_live_is_noop() {
         let mut app = App::new();
         app.needs_full_redraw = false;
-        app.on_pty_output();
+        app.on_pty_output(true);
         // No offset change.
         assert_eq!(app.scroll_position, ScrollPosition::Live);
         // No redraw forced (already at live, nothing visual shifted).
@@ -1873,7 +2352,7 @@ mod tests {
         let mut app = App::new();
         app.scroll_up_by(4);
         app.needs_full_redraw = false;
-        app.on_pty_output();
+        app.on_pty_output(true);
         // Offset preserved: user is not pulled to the bottom.
         assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(4));
         // Viewport content shifted underneath us, so a repaint is needed.
