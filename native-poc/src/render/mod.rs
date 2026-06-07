@@ -308,8 +308,8 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
 /// Phase 4-H (FR12): the cell loop that used to call `painter.text()` /
 /// `painter.line_segment()` / `painter.rect_filled()` now emits per-cell
 /// inputs consumed by the custom wgpu pass. Selection is encoded via the
-/// existing fg/bg swap in [`resolve_cell_style`] (no separate selection
-/// quad).
+/// existing fg/bg swap in [`resolve_cell_style_from_packed`] (no separate
+/// selection quad).
 ///
 /// `block_cursor_cell` is `Some((col, row))` when a block-shaped cursor
 /// is currently visible (blink-on, style=block, terminal-visible). The
@@ -317,6 +317,15 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
 /// with the glyph in inverted color — matching the WebView build's
 /// rendering. Underline / bar cursor shapes stay on the egui overlay
 /// side and pass `None` here.
+///
+/// `scroll_offset` is the active tab's scrollback offset in rows (`0` =
+/// live tail). When non-zero the renderer reads scrollback rows for the
+/// portion of the viewport that has scrolled below the live region. The
+/// absolute-row model matches [`crate::app`] and `draw_search_highlights`:
+/// absolute rows `0..scrollback_len` are scrollback (oldest first) and
+/// `scrollback_len..` are the live viewport. The top visible absolute row
+/// is `scrollback_len - scroll_offset`. `scroll_offset == 0` reproduces the
+/// original live-only output exactly.
 pub fn collect_cell_inputs(
     core: &TerminalCore,
     theme: &Theme,
@@ -324,16 +333,80 @@ pub fn collect_cell_inputs(
     width_mode: AmbiguousWidthMode,
     block_cursor_cell: Option<(u16, u16)>,
     hovered_link: Option<&[(u16, u16, u16)]>,
+    scroll_offset: u32,
 ) -> Vec<CellInput> {
     let cols = core.cols();
     let rows = core.rows();
     let bg_default = rgb_to_egui(theme.bg);
     let mut out: Vec<CellInput> = Vec::with_capacity((cols as usize) * (rows as usize));
 
+    let scrollback_len = core.get_scrollback_length();
+    // Top visible absolute row (saturating: the offset can momentarily
+    // exceed the live length while content scrolls under a pinned viewport).
+    let visible_start = scrollback_len.saturating_sub(scroll_offset);
+
     for row in 0..rows {
+        let abs_row = visible_start + row as u32;
+        if abs_row < scrollback_len {
+            // Scrollback row: decode the styled cells once and emit one
+            // `CellInput` per kept (width > 0) cell. `term_core` already
+            // drops the width-0 trailing halves of wide glyphs, so the
+            // resulting column sequence matches the viewport iterator's
+            // "advance past wide cells" behavior (see
+            // `search::build_logical_lines`).
+            let cells = core.get_scrollback_row_cells_styled(abs_row);
+            let mut col = 0u16;
+            for cell in cells {
+                if col >= cols {
+                    break;
+                }
+                // Selection is viewport-coordinate-based; pass the screen
+                // row so a selection made on-screen stays pinned there as
+                // content scrolls under it (matches the PoC's viewport-only
+                // selection model).
+                let selected = selection.map(|s| s.contains(row, col)).unwrap_or(false);
+                let mut style =
+                    resolve_cell_style_from_packed(theme, cell.fg, cell.bg, cell.flags, selected);
+                if cell_in_hovered_link(hovered_link, row, col) {
+                    style.underline = true;
+                }
+                if block_cursor_cell == Some((col, row)) {
+                    std::mem::swap(&mut style.fg, &mut style.bg);
+                }
+                let cell_width_cells = visible_width(&cell.glyph, width_mode);
+                out.push(CellInput {
+                    col,
+                    row,
+                    width_cells: cell_width_cells.max(1),
+                    glyph: cell.glyph,
+                    fg_rgba: color32_to_rgba(style.fg),
+                    bg_rgba: color32_to_rgba(style.bg),
+                    underline: style.underline,
+                    strikethrough: style.strikethrough,
+                    draw_background: style.bg != bg_default,
+                    bg_extend_below: 0.0,
+                    fit_glyph_to_cell: false,
+                    bold: style.bold,
+                });
+                col = col.saturating_add(cell_width_cells.max(1) as u16);
+            }
+            continue;
+        }
+
+        // Live viewport row: `abs_row - scrollback_len` is the live-ring row
+        // whose content we read. The cell still *appears* at the on-screen
+        // `row`, so hover / cursor / selection are addressed by `row` (their
+        // viewport-coordinate space). When `scroll_offset == 0` these
+        // coincide, reproducing the original live-only output exactly.
+        let content_row = (abs_row - scrollback_len) as u16;
         let mut col = 0u16;
         while col < cols {
-            let mut style = resolve_cell_style(core, theme, col, row, selection);
+            let flags = core.get_cell_flags(col, content_row);
+            let packed_fg = core.get_cell_fg(col, content_row);
+            let packed_bg = core.get_cell_bg(col, content_row);
+            let selected = selection.map(|s| s.contains(row, col)).unwrap_or(false);
+            let mut style =
+                resolve_cell_style_from_packed(theme, packed_fg, packed_bg, flags, selected);
             // Hover underline: a cell inside the hovered link's physical
             // span gets `underline = true` regardless of its SGR state.
             // Matches the WebView build's hover-only underline (no Ctrl
@@ -344,7 +417,7 @@ pub fn collect_cell_inputs(
             if block_cursor_cell == Some((col, row)) {
                 std::mem::swap(&mut style.fg, &mut style.bg);
             }
-            let ch = core.get_cell_char(col, row);
+            let ch = core.get_cell_char(col, content_row);
             let cell_width_cells = visible_width(&ch, width_mode);
 
             out.push(CellInput {
@@ -500,6 +573,15 @@ fn color32_to_rgba(c: Color32) -> [u8; 4] {
 /// the theme foreground when the field is at default).
 fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App) {
     if !core.get_cursor_visible() {
+        return;
+    }
+    // Hide the cursor while scrolled back into history — the live cursor
+    // position has no meaning over scrollback content. Matches the WebView
+    // build, which skips cursor rendering when `scrollOffset !== 0`
+    // (canvas-renderer.ts). The wgpu-side block cursor is suppressed at the
+    // call site (`window_host::render`); this guards the egui overlay path
+    // (underline / bar / hollow block).
+    if app.scroll_offset() != 0 {
         return;
     }
     // Blink only when focused. An unfocused window holds the cursor at
@@ -663,17 +745,23 @@ pub fn draw_search_overlay(
     crate::ui::search_bar::draw(ctx, &mut app.search, top_inset, focus)
 }
 
-fn resolve_cell_style(
-    core: &TerminalCore,
+/// Resolve a cell's paint style from its packed `(fg, bg, flags)` triple and a
+/// pre-computed selection flag. Shared by [`collect_cell_inputs`]'s live
+/// viewport path (reading `get_cell_fg/bg/flags`) and its scrollback path
+/// (reading the same packed representation from `term_core::ScrollbackCell`),
+/// so both routes apply identical reverse / bold-brighten / selection / dim /
+/// hidden handling.
+///
+/// `selected` is computed by the caller against the cell's on-screen viewport
+/// row (the PoC selection model is viewport-coordinate-based and has no
+/// absolute-row notion; see the selection coordinate-system note in `app.rs`).
+fn resolve_cell_style_from_packed(
     theme: &Theme,
-    col: u16,
-    row: u16,
-    selection: Option<&Selection>,
+    packed_fg: u32,
+    packed_bg: u32,
+    flags: u16,
+    selected: bool,
 ) -> CellStyle {
-    let flags = core.get_cell_flags(col, row);
-    let packed_fg = core.get_cell_fg(col, row);
-    let packed_bg = core.get_cell_bg(col, row);
-
     let bold = (flags & STYLE_BOLD) != 0;
     let dim = (flags & STYLE_DIM) != 0;
     let italic = (flags & STYLE_ITALIC) != 0;
@@ -713,7 +801,6 @@ fn resolve_cell_style(
         .unwrap_or_else(|| rgb_to_egui(theme.bg));
 
     // Selection: invert again on top of any reverse already in effect.
-    let selected = selection.map(|s| s.contains(row, col)).unwrap_or(false);
     if selected {
         std::mem::swap(&mut fg, &mut bg);
     }
@@ -984,8 +1071,15 @@ mod tests {
         let mut core = TerminalCore::new(5, 2, 100);
         core.process_pty_data(b"ABCDE");
         let theme = Theme::default();
-        let inputs =
-            collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None, None);
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            0,
+        );
         // 5 cols × 2 rows = 10 cell entries.
         assert_eq!(inputs.len(), 10);
         // Row 0 should carry the literal glyphs in column order.
@@ -1007,8 +1101,15 @@ mod tests {
         let mut core = TerminalCore::new(4, 1, 100);
         core.process_pty_data("あA".as_bytes());
         let theme = Theme::default();
-        let inputs =
-            collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None, None);
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            0,
+        );
         assert_eq!(inputs[0].glyph, "あ");
         assert_eq!(inputs[0].width_cells, 2);
         // Column 2 holds the 'A'; column 1 was skipped (trailing half of あ).
@@ -1025,8 +1126,15 @@ mod tests {
         // SGR 4 = underline; SGR 9 = strikethrough.
         core.process_pty_data(b"\x1b[4mU\x1b[0m\x1b[9mS\x1b[0mN");
         let theme = Theme::default();
-        let inputs =
-            collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None, None);
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            0,
+        );
         let u = inputs.iter().find(|c| c.glyph == "U").expect("U present");
         let s = inputs.iter().find(|c| c.glyph == "S").expect("S present");
         let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
@@ -1047,11 +1155,165 @@ mod tests {
         // SGR 41 = red background.
         core.process_pty_data(b"\x1b[41mR\x1b[0mN");
         let theme = Theme::default();
-        let inputs =
-            collect_cell_inputs(&core, &theme, None, AmbiguousWidthMode::Narrow, None, None);
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            0,
+        );
         let r = inputs.iter().find(|c| c.glyph == "R").expect("R present");
         let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
         assert!(r.draw_background);
         assert!(!n.draw_background);
+    }
+
+    // ── Scrollback rendering (scroll_offset) ──────────────────────────
+
+    /// Helper: collect the on-screen glyph for a given row in reading order,
+    /// trimming trailing blanks so the assertions read cleanly.
+    fn row_text(inputs: &[CellInput], row: u16) -> String {
+        let mut cells: Vec<&CellInput> = inputs.iter().filter(|c| c.row == row).collect();
+        cells.sort_by_key(|c| c.col);
+        cells
+            .iter()
+            .map(|c| c.glyph.as_str())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// `scroll_offset == 0` produces output identical to the pre-scrollback
+    /// path: the live viewport is read row-for-row regardless of how much
+    /// scrollback exists behind it.
+    #[test]
+    fn collect_cell_inputs_offset_zero_matches_live() {
+        let mut core = TerminalCore::new(5, 2, 100);
+        // Push "L0".."L3" so L0/L1 land in scrollback and L2/L3 are live.
+        core.process_pty_data(b"L0\r\nL1\r\nL2\r\nL3");
+        assert!(core.get_scrollback_length() >= 2);
+        let theme = Theme::default();
+        let live = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            0,
+        );
+        // Live viewport shows the last two logical lines.
+        assert_eq!(row_text(&live, 0), "L2");
+        assert_eq!(row_text(&live, 1), "L3");
+    }
+
+    /// A non-zero offset surfaces scrollback rows: scrolling back by the full
+    /// viewport height shows the oldest two rows that had scrolled off.
+    #[test]
+    fn collect_cell_inputs_offset_shows_scrollback() {
+        let mut core = TerminalCore::new(5, 2, 100);
+        core.process_pty_data(b"L0\r\nL1\r\nL2\r\nL3");
+        let scrollback_len = core.get_scrollback_length();
+        assert_eq!(scrollback_len, 2, "L0 and L1 evicted into scrollback");
+        let theme = Theme::default();
+        // Offset = 2 (one full viewport back) → top of view is absolute row
+        // `scrollback_len - 2 = 0`, so rows 0/1 show the scrollback L0/L1.
+        let scrolled = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            2,
+        );
+        assert_eq!(row_text(&scrolled, 0), "L0");
+        assert_eq!(row_text(&scrolled, 1), "L1");
+    }
+
+    /// An offset that straddles the scrollback↔viewport seam shows a
+    /// scrollback row on top and a live viewport row below it.
+    #[test]
+    fn collect_cell_inputs_offset_spans_boundary() {
+        let mut core = TerminalCore::new(5, 2, 100);
+        core.process_pty_data(b"L0\r\nL1\r\nL2\r\nL3");
+        assert_eq!(core.get_scrollback_length(), 2);
+        let theme = Theme::default();
+        // Offset = 1: top visible absolute row = scrollback_len - 1 = 1
+        // (scrollback L1), bottom = absolute row 2 (live L2).
+        let scrolled = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            1,
+        );
+        assert_eq!(row_text(&scrolled, 0), "L1");
+        assert_eq!(row_text(&scrolled, 1), "L2");
+    }
+
+    /// A wide CJK glyph in a scrollback row reports `width_cells = 2` and the
+    /// following cell starts at `col + 2` (the width-0 continuation half is
+    /// dropped by the term_core accessor), matching the live-viewport path.
+    #[test]
+    fn collect_cell_inputs_scrollback_handles_wide_cells() {
+        let mut core = TerminalCore::new(4, 1, 100);
+        // Row 0 carries "あA"; printing a second line scrolls it off into
+        // scrollback (1-row viewport).
+        core.process_pty_data("あA\r\nX".as_bytes());
+        assert_eq!(core.get_scrollback_length(), 1);
+        let theme = Theme::default();
+        let scrolled = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            1,
+        );
+        let wide = scrolled
+            .iter()
+            .find(|c| c.glyph == "あ")
+            .expect("あ present in scrollback row");
+        assert_eq!(wide.col, 0);
+        assert_eq!(wide.width_cells, 2);
+        let a = scrolled
+            .iter()
+            .find(|c| c.glyph == "A")
+            .expect("A present in scrollback row");
+        // Column 2 holds the 'A'; column 1 (trailing half of あ) was skipped.
+        assert_eq!(a.col, 2);
+        assert_eq!(a.width_cells, 1);
+    }
+
+    /// Scrollback cells carry their SGR style: a bold-underlined cell that
+    /// scrolled off keeps `bold` / `underline` set on its `CellInput`.
+    #[test]
+    fn collect_cell_inputs_scrollback_preserves_style() {
+        let mut core = TerminalCore::new(5, 1, 100);
+        // SGR 1 = bold, 4 = underline; then scroll the styled row off.
+        core.process_pty_data(b"\x1b[1;4mB\x1b[0m\r\nX");
+        assert_eq!(core.get_scrollback_length(), 1);
+        let theme = Theme::default();
+        let scrolled = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            1,
+        );
+        let b = scrolled
+            .iter()
+            .find(|c| c.glyph == "B")
+            .expect("B present in scrollback row");
+        assert!(b.bold);
+        assert!(b.underline);
     }
 }

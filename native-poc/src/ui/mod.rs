@@ -59,6 +59,13 @@ pub enum AppAction {
     /// Handled at the `window_host` layer because the overlay drives the
     /// per-frame key-forwarding state and the highlight render path.
     OpenSearch,
+    /// Ctrl+Shift+ArrowUp — scroll to the nearest OSC 133 prompt mark
+    /// above the current view top. Handled in `App::apply_action` via
+    /// `App::jump_to_prompt`. Port of the WebView `handlePromptJump`.
+    JumpToPrevPrompt,
+    /// Ctrl+Shift+ArrowDown — scroll to the nearest OSC 133 prompt mark
+    /// below the current view top. See [`AppAction::JumpToPrevPrompt`].
+    JumpToNextPrompt,
     /// Ctrl+Plus — increase the terminal font size by one point
     /// (clamped). Handled at the `window_host` layer because the cell
     /// metrics + PTY grid must be reshaped after the change.

@@ -297,13 +297,11 @@ pub struct KeybindSettings {
     /// Toggle the tab bar visibility. Dispatched to
     /// `AppAction::ToggleTabBar`.
     pub toggle_tab_bar: String,
-    /// Jump to the previous shell prompt. Captured for forward
-    /// compatibility; native-poc has no prompt detection yet.
-    #[allow(dead_code)]
+    /// Jump to the previous shell prompt (OSC 133). Dispatched to
+    /// `AppAction::JumpToPrevPrompt`.
     pub jump_to_prev_prompt: String,
-    /// Jump to the next shell prompt. Captured for forward
-    /// compatibility; native-poc has no prompt detection yet.
-    #[allow(dead_code)]
+    /// Jump to the next shell prompt (OSC 133). Dispatched to
+    /// `AppAction::JumpToNextPrompt`.
     pub jump_to_next_prompt: String,
     /// Open the profile selector. Captured for forward compatibility;
     /// native-poc has no profile selector yet.

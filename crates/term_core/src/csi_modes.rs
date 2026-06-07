@@ -49,6 +49,10 @@ impl TerminalCore {
             // Also reset synchronized output to prevent orphaned suppression
             47 | 1047 => {
                 self.set_mode(MODE_SYNCHRONIZED_OUTPUT, false);
+                // Track the alt-screen state core-side so parse-time
+                // consumers (OSC 133 prompt-mark capture) see the switch
+                // at the exact byte it happens, not a chunk later.
+                self.set_mode(MODE_ALT_SCREEN, enable);
                 if enable {
                     MODE_ACTION_SWITCH_TO_ALT
                 } else {
@@ -71,6 +75,7 @@ impl TerminalCore {
             }
             1049 => {
                 self.set_mode(MODE_SYNCHRONIZED_OUTPUT, false);
+                self.set_mode(MODE_ALT_SCREEN, enable);
                 if enable {
                     MODE_ACTION_SAVE_AND_SWITCH_TO_ALT
                 } else {

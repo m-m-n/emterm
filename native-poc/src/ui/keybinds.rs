@@ -4,7 +4,8 @@
 //! egui::Key)` to [`AppAction`] with a hard-coded chord table. This
 //! module now drives the tab-roster + view chords from `settings.json`'s
 //! `keybinds.*` block via a [`KeybindTable`]: `new_tab`, `close_tab`,
-//! `next_tab`, `prev_tab`, `select_all`, `search`, the zoom trio,
+//! `next_tab`, `prev_tab`, `select_all`, `search`,
+//! `jump_to_prev_prompt`, `jump_to_next_prompt`, the zoom trio,
 //! `toggle_fullscreen`, and `toggle_tab_bar` are resolved from
 //! user-configured chord specs at startup. (`copy` / `paste` live one
 //! layer up in `window_host::handle_special_chord`.)
@@ -29,6 +30,8 @@
 //! | `prev_tab`          | `Ctrl+PageUp`   | `PrevTab`          |
 //! | `select_all`        | `Ctrl+Shift+A`  | `SelectAll`        |
 //! | `search`            | `Ctrl+Shift+F`  | `OpenSearch`       |
+//! | `jump_to_prev_prompt` | `Ctrl+Shift+ArrowUp`   | `JumpToPrevPrompt` |
+//! | `jump_to_next_prompt` | `Ctrl+Shift+ArrowDown` | `JumpToNextPrompt` |
 //! | `zoom_in`           | `Ctrl+Plus`     | `ZoomIn`           |
 //! | `zoom_out`          | `Ctrl+Minus`    | `ZoomOut`          |
 //! | `zoom_reset`        | `Ctrl+0`        | `ZoomReset`        |
@@ -232,6 +235,8 @@ pub struct KeybindTable {
     pub prev_tab: Chord,
     pub select_all: Chord,
     pub search: Chord,
+    pub jump_to_prev_prompt: Chord,
+    pub jump_to_next_prompt: Chord,
     pub zoom_in: Chord,
     pub zoom_out: Chord,
     pub zoom_reset: Chord,
@@ -255,6 +260,8 @@ impl KeybindTable {
             prev_tab: resolve("prev_tab", &kb.prev_tab),
             select_all: resolve("select_all", &kb.select_all),
             search: resolve("search", &kb.search),
+            jump_to_prev_prompt: resolve("jump_to_prev_prompt", &kb.jump_to_prev_prompt),
+            jump_to_next_prompt: resolve("jump_to_next_prompt", &kb.jump_to_next_prompt),
             zoom_in: resolve("zoom_in", &kb.zoom_in),
             zoom_out: resolve("zoom_out", &kb.zoom_out),
             zoom_reset: resolve("zoom_reset", &kb.zoom_reset),
@@ -294,6 +301,8 @@ impl KeybindTable {
             ("prev_tab", self.prev_tab),
             ("select_all", self.select_all),
             ("search", self.search),
+            ("jump_to_prev_prompt", self.jump_to_prev_prompt),
+            ("jump_to_next_prompt", self.jump_to_next_prompt),
             ("zoom_in", self.zoom_in),
             ("zoom_out", self.zoom_out),
             ("zoom_reset", self.zoom_reset),
@@ -354,6 +363,8 @@ fn default_spec_for(action: &str) -> &'static str {
         "prev_tab" => "Ctrl+PageUp",
         "select_all" => "Ctrl+Shift+A",
         "search" => "Ctrl+Shift+F",
+        "jump_to_prev_prompt" => "Ctrl+Shift+ArrowUp",
+        "jump_to_next_prompt" => "Ctrl+Shift+ArrowDown",
         "zoom_in" => "Ctrl+Plus",
         "zoom_out" => "Ctrl+Minus",
         "zoom_reset" => "Ctrl+0",
@@ -410,6 +421,12 @@ pub fn dispatch(table: &KeybindTable, mods: Modifiers, key: Key) -> Option<AppAc
     }
     if chord == table.search {
         return Some(AppAction::OpenSearch);
+    }
+    if chord == table.jump_to_prev_prompt {
+        return Some(AppAction::JumpToPrevPrompt);
+    }
+    if chord == table.jump_to_next_prompt {
+        return Some(AppAction::JumpToNextPrompt);
     }
     if chord == table.zoom_in {
         return Some(AppAction::ZoomIn);
@@ -819,6 +836,55 @@ mod tests {
         );
         // The old default no longer opens search.
         assert_eq!(dispatch(&table, mods(true, true, false), Key::F), None);
+    }
+
+    #[test]
+    fn default_ctrl_shift_up_is_jump_to_prev_prompt() {
+        assert_eq!(
+            dispatch(
+                &KeybindTable::default(),
+                mods(true, true, false),
+                Key::ArrowUp
+            ),
+            Some(AppAction::JumpToPrevPrompt)
+        );
+    }
+
+    #[test]
+    fn default_ctrl_shift_down_is_jump_to_next_prompt() {
+        assert_eq!(
+            dispatch(
+                &KeybindTable::default(),
+                mods(true, true, false),
+                Key::ArrowDown
+            ),
+            Some(AppAction::JumpToNextPrompt)
+        );
+    }
+
+    #[test]
+    fn from_settings_custom_prompt_jump_chords() {
+        let mut kb = KeybindSettings::default();
+        kb.jump_to_prev_prompt = "Ctrl+Shift+J".to_string();
+        kb.jump_to_next_prompt = "Ctrl+Shift+L".to_string();
+        let table = KeybindTable::from_settings(&kb);
+        assert_eq!(
+            dispatch(&table, mods(true, true, false), Key::J),
+            Some(AppAction::JumpToPrevPrompt)
+        );
+        assert_eq!(
+            dispatch(&table, mods(true, true, false), Key::L),
+            Some(AppAction::JumpToNextPrompt)
+        );
+        // The old defaults no longer fire.
+        assert_eq!(
+            dispatch(&table, mods(true, true, false), Key::ArrowUp),
+            None
+        );
+        assert_eq!(
+            dispatch(&table, mods(true, true, false), Key::ArrowDown),
+            None
+        );
     }
 
     #[test]

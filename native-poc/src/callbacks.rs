@@ -95,36 +95,6 @@ pub struct EmtermOscRequest {
     pub payload: String,
 }
 
-/// OSC 133 semantic-prompt sub-type.
-///
-/// See <https://gitlab.freedesktop.org/Per_Bothner/specifications/-/blob/master/proposals/semantic-prompts.md>.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptMarkKind {
-    /// `A` — prompt start.
-    PromptStart,
-    /// `B` — command start (user input begins).
-    CommandStart,
-    /// `C` — command exec (user input ends, command runs).
-    CommandExec,
-    /// `D` — command end (exit-code-bearing).
-    CommandEnd,
-}
-
-/// A persisted OSC 133 mark. `row` is the absolute scrollback-aware row at
-/// the moment the mark was received; consumers (future search/jump UI)
-/// use this to step between prompts.
-#[derive(Debug, Clone)]
-pub struct PromptMark {
-    pub kind: PromptMarkKind,
-    /// Best-effort row index — currently `0` because `NativeCallbacks` has
-    /// no read access to `TerminalCore` (callbacks are `&self`); the
-    /// renderer (which *does* have the core) can backfill this when it
-    /// drains marks.
-    pub row: u32,
-    /// Optional exit code attached to a `CommandEnd` mark.
-    pub exit_code: Option<i32>,
-}
-
 /// Trait abstracting the OS-notification surface. `NotifyRustSink` is the
 /// production impl; `TestSink` captures `send` calls in unit tests so we
 /// can verify rate-limit behavior without depending on a real D-Bus
@@ -246,9 +216,6 @@ pub struct NativeCallbackState {
     /// Pending DCS (SIXEL) payloads, same buffering rationale as
     /// `pending_apc`.
     pub pending_dcs: Vec<Vec<u8>>,
-    /// OSC 133 prompt marks accumulated in arrival order. Future search /
-    /// jump UI reads this; Phase 6 only persists.
-    pub prompt_marks: Vec<PromptMark>,
     /// Pending OSC 52 *write* payloads — `(target, decoded_text)`. The UI
     /// thread drains these into `arboard`, because arboard's
     /// `Clipboard::new()` cannot be safely shared across threads.
@@ -448,21 +415,6 @@ impl NativeCallbacks {
             }
         }
     }
-
-    fn handle_semantic_prompt(&self, data: &str) {
-        // term_core does not yet hand us the row, so we record marks in
-        // arrival order. Future renderer integration can correlate the
-        // mark with the cursor row by reading the core under the same
-        // lock that drains `prompt_marks`.
-        let (kind, exit_code) = parse_osc133(data);
-        if let Some(kind) = kind {
-            self.state.lock().prompt_marks.push(PromptMark {
-                kind,
-                row: 0,
-                exit_code,
-            });
-        }
-    }
 }
 
 impl TerminalCallbacks for NativeCallbacks {
@@ -488,7 +440,16 @@ impl TerminalCallbacks for NativeCallbacks {
             }
             OSC_NOTIFICATION => self.handle_notify(data),
             OSC_CLIPBOARD => self.handle_clipboard(data),
-            OSC_SEMANTIC_PROMPT => self.handle_semantic_prompt(data),
+            OSC_SEMANTIC_PROMPT => {
+                // OSC 133 marks are captured inside `term_core` (see
+                // `TerminalCore::push_pending_prompt_mark`), which records
+                // each mark with the absolute row it was emitted on. The
+                // native consumer drains them via `take_prompt_marks` under
+                // the core lock, so there is nothing to do here — this
+                // callback fires only to keep the wasm/WebView path's
+                // `on_osc(133, …)` contract intact.
+                log::debug!("OSC 133 mark seen: {data}");
+            }
             OSC_EMTERM_EXTENSION => {
                 // Phase 4-C (APC redesign): mux no longer rides on OSC 777.
                 // Control messages now flow via APC `emterm-mux;<base64>` in
@@ -602,33 +563,6 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(s.as_bytes())
         .ok()
-}
-
-// ── OSC 133 parsing ─────────────────────────────────────────────────────
-
-/// Parse OSC 133 payload into `(kind, exit_code)`.
-///
-/// Forms (subset of the FinalTerm/iTerm2 spec):
-/// - `A` → `PromptStart`
-/// - `B` → `CommandStart`
-/// - `C` → `CommandExec`
-/// - `D` or `D;<n>` → `CommandEnd` (optional exit code)
-fn parse_osc133(data: &str) -> (Option<PromptMarkKind>, Option<i32>) {
-    let mut it = data.split(';');
-    let head = it.next().unwrap_or("");
-    let kind = match head {
-        "A" => Some(PromptMarkKind::PromptStart),
-        "B" => Some(PromptMarkKind::CommandStart),
-        "C" => Some(PromptMarkKind::CommandExec),
-        "D" => Some(PromptMarkKind::CommandEnd),
-        _ => None,
-    };
-    let exit_code = if kind == Some(PromptMarkKind::CommandEnd) {
-        it.next().and_then(|s| s.parse::<i32>().ok())
-    } else {
-        None
-    };
-    (kind, exit_code)
 }
 
 #[cfg(test)]
@@ -898,34 +832,19 @@ mod tests {
     }
 
     #[test]
-    fn osc_133_a_records_prompt_start() {
+    fn osc_133_callback_is_a_noop_for_native_state() {
+        // OSC 133 marks are now captured in `term_core`
+        // (`push_pending_prompt_mark`) and drained by the tab via
+        // `take_prompt_marks`. The callback retains its dispatch arm only to
+        // keep the wasm/WebView `on_osc(133, …)` contract; it must not mutate
+        // any `NativeCallbackState`.
         let h = default_harness();
         h.cb.on_osc(OSC_SEMANTIC_PROMPT, "A");
-        let s = h.state.lock();
-        assert_eq!(s.prompt_marks.len(), 1);
-        assert_eq!(s.prompt_marks[0].kind, PromptMarkKind::PromptStart);
-        assert!(s.prompt_marks[0].exit_code.is_none());
-    }
-
-    #[test]
-    fn osc_133_b_c_d_records_each() {
-        let h = default_harness();
-        h.cb.on_osc(OSC_SEMANTIC_PROMPT, "B");
-        h.cb.on_osc(OSC_SEMANTIC_PROMPT, "C");
-        h.cb.on_osc(OSC_SEMANTIC_PROMPT, "D;0");
-        let s = h.state.lock();
-        assert_eq!(s.prompt_marks.len(), 3);
-        assert_eq!(s.prompt_marks[0].kind, PromptMarkKind::CommandStart);
-        assert_eq!(s.prompt_marks[1].kind, PromptMarkKind::CommandExec);
-        assert_eq!(s.prompt_marks[2].kind, PromptMarkKind::CommandEnd);
-        assert_eq!(s.prompt_marks[2].exit_code, Some(0));
-    }
-
-    #[test]
-    fn osc_133_d_with_nonzero_exit_code() {
-        let h = default_harness();
         h.cb.on_osc(OSC_SEMANTIC_PROMPT, "D;42");
-        assert_eq!(h.state.lock().prompt_marks[0].exit_code, Some(42));
+        let s = h.state.lock();
+        assert!(s.title.is_none());
+        assert!(s.osc_queue.is_empty());
+        assert!(s.pending_notifications.is_empty());
     }
 
     #[test]
@@ -1111,10 +1030,5 @@ mod tests {
         let (t, b) = parse_osc9(";body", Some("fb"));
         assert_eq!(t, "fb");
         assert_eq!(b, ";body");
-    }
-
-    #[test]
-    fn parse_osc133_unknown_returns_none() {
-        assert_eq!(parse_osc133("Z").0, None);
     }
 }
