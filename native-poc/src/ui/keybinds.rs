@@ -4,7 +4,7 @@
 //! egui::Key)` to [`AppAction`] with a hard-coded chord table. This
 //! module now drives the tab-roster + view chords from `settings.json`'s
 //! `keybinds.*` block via a [`KeybindTable`]: `new_tab`, `close_tab`,
-//! `next_tab`, `prev_tab`, `select_all`, the zoom trio,
+//! `next_tab`, `prev_tab`, `select_all`, `search`, the zoom trio,
 //! `toggle_fullscreen`, and `toggle_tab_bar` are resolved from
 //! user-configured chord specs at startup. (`copy` / `paste` live one
 //! layer up in `window_host::handle_special_chord`.)
@@ -28,6 +28,7 @@
 //! | `next_tab`          | `Ctrl+PageDown` | `NextTab`          |
 //! | `prev_tab`          | `Ctrl+PageUp`   | `PrevTab`          |
 //! | `select_all`        | `Ctrl+Shift+A`  | `SelectAll`        |
+//! | `search`            | `Ctrl+Shift+F`  | `OpenSearch`       |
 //! | `zoom_in`           | `Ctrl+Plus`     | `ZoomIn`           |
 //! | `zoom_out`          | `Ctrl+Minus`    | `ZoomOut`          |
 //! | `zoom_reset`        | `Ctrl+0`        | `ZoomReset`        |
@@ -230,6 +231,7 @@ pub struct KeybindTable {
     pub next_tab: Chord,
     pub prev_tab: Chord,
     pub select_all: Chord,
+    pub search: Chord,
     pub zoom_in: Chord,
     pub zoom_out: Chord,
     pub zoom_reset: Chord,
@@ -252,6 +254,7 @@ impl KeybindTable {
             next_tab: resolve("next_tab", &kb.next_tab),
             prev_tab: resolve("prev_tab", &kb.prev_tab),
             select_all: resolve("select_all", &kb.select_all),
+            search: resolve("search", &kb.search),
             zoom_in: resolve("zoom_in", &kb.zoom_in),
             zoom_out: resolve("zoom_out", &kb.zoom_out),
             zoom_reset: resolve("zoom_reset", &kb.zoom_reset),
@@ -290,6 +293,7 @@ impl KeybindTable {
             ("next_tab", self.next_tab),
             ("prev_tab", self.prev_tab),
             ("select_all", self.select_all),
+            ("search", self.search),
             ("zoom_in", self.zoom_in),
             ("zoom_out", self.zoom_out),
             ("zoom_reset", self.zoom_reset),
@@ -349,6 +353,7 @@ fn default_spec_for(action: &str) -> &'static str {
         "next_tab" => "Ctrl+PageDown",
         "prev_tab" => "Ctrl+PageUp",
         "select_all" => "Ctrl+Shift+A",
+        "search" => "Ctrl+Shift+F",
         "zoom_in" => "Ctrl+Plus",
         "zoom_out" => "Ctrl+Minus",
         "zoom_reset" => "Ctrl+0",
@@ -402,6 +407,9 @@ pub fn dispatch(table: &KeybindTable, mods: Modifiers, key: Key) -> Option<AppAc
     }
     if chord == table.select_all {
         return Some(AppAction::SelectAll);
+    }
+    if chord == table.search {
+        return Some(AppAction::OpenSearch);
     }
     if chord == table.zoom_in {
         return Some(AppAction::ZoomIn);
@@ -790,6 +798,27 @@ mod tests {
             dispatch(&KeybindTable::default(), mods(true, true, false), Key::A),
             Some(AppAction::SelectAll)
         );
+    }
+
+    #[test]
+    fn default_ctrl_shift_f_is_open_search() {
+        assert_eq!(
+            dispatch(&KeybindTable::default(), mods(true, true, false), Key::F),
+            Some(AppAction::OpenSearch)
+        );
+    }
+
+    #[test]
+    fn from_settings_custom_search_chord() {
+        let mut kb = KeybindSettings::default();
+        kb.search = "Ctrl+Shift+K".to_string();
+        let table = KeybindTable::from_settings(&kb);
+        assert_eq!(
+            dispatch(&table, mods(true, true, false), Key::K),
+            Some(AppAction::OpenSearch)
+        );
+        // The old default no longer opens search.
+        assert_eq!(dispatch(&table, mods(true, true, false), Key::F), None);
     }
 
     #[test]

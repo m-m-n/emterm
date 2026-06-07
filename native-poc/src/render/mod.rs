@@ -141,6 +141,11 @@ pub struct FrameEvents {
     /// by `window_host` after the egui pass via `App::scroll_set_offset`
     /// — the renderer only holds `&App`.
     pub scroll_to: Option<u32>,
+    /// Search-bar interaction emitted this frame (query change, toggle,
+    /// next / prev, close). Applied post-frame by `window_host` against
+    /// `App` (re-run search / navigate / close). `None` when the overlay
+    /// is hidden or nothing was interacted with.
+    pub search: Option<crate::ui::search_bar::SearchBarEvent>,
 }
 
 /// Phase-1 placeholder kept for compatibility; routes to the real renderer
@@ -226,6 +231,11 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
                 draw_cursor(ui, &core, &theme, app);
+                // Search match highlights: translucent rects over the
+                // matched cells (current match amber, others yellow),
+                // painted on the same egui overlay layer as the cursor +
+                // bell flash. Read-only over `app.search`.
+                draw_search_highlights(ui, &core, app);
                 // Preedit rendering is owned by the wgpu cell pass via
                 // `apply_preedit_overlay` (reverse-video cells). The
                 // legacy egui underline overlay was removed so it
@@ -286,6 +296,9 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         title: title_event,
         tab: tab_event,
         scroll_to,
+        // The search overlay is drawn separately by `draw_search_overlay`
+        // (it needs `&mut App`); `draw_terminal` never populates this.
+        search: None,
     }
 }
 
@@ -560,6 +573,94 @@ fn draw_cursor(ui: &mut egui::Ui, core: &TerminalCore, theme: &Theme, app: &App)
             }
         }
     }
+}
+
+/// Current-match highlight fill, the const (premultiplied) form of the
+/// WebView's straight-alpha `rgba(230, 150, 30, 0.45)`:
+/// `(230·0.45, 150·0.45, 30·0.45, 0.45·255) ≈ (104, 68, 14, 115)`.
+const SEARCH_CURRENT_FILL: Color32 = Color32::from_rgba_premultiplied(104, 68, 14, 115);
+/// Other-match highlight fill, the const form of `rgba(230, 230, 50, 0.3)`:
+/// `(230·0.3, 230·0.3, 50·0.3, 0.3·255) ≈ (69, 69, 15, 77)`.
+const SEARCH_OTHER_FILL: Color32 = Color32::from_rgba_premultiplied(69, 69, 15, 77);
+
+/// Paint translucent rectangles over the cells of every search match
+/// currently visible in the viewport. The current match uses the amber
+/// fill; the rest use the yellow fill — matching the WebView's
+/// `renderSearchHighlights` colors.
+///
+/// Absolute-row → screen-row conversion uses the same scroll model as
+/// [`crate::app`]: the top visible absolute row is
+/// `scrollback_len - scroll_offset`, so `screen_row = abs_row -
+/// (scrollback_len - scroll_offset)`. Segments outside `0..rows` are
+/// skipped. Cell rects use the same origin / metrics as [`draw_cursor`]
+/// so the highlight lines up with the wgpu-rendered glyphs.
+fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
+    if !app.search.visible || app.search.matches.is_empty() {
+        return;
+    }
+    let rows = core.rows();
+    if rows == 0 {
+        return;
+    }
+    let scrollback_len = core.get_scrollback_length();
+    // Top visible absolute row (saturating: offset can momentarily exceed
+    // the live length while content scrolls under a pinned viewport).
+    let visible_start = scrollback_len.saturating_sub(app.scroll_offset());
+
+    // Same origin anchor as draw_cursor (status-bar top inset is handled
+    // by the central panel's min_rect, so it is omitted here on purpose).
+    let pad = app.settings.padding as f32;
+    let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
+    let origin = Pos2::new(pad, crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad);
+    let cell_w = app.cell_w_logical;
+    let cell_h = app.cell_h_logical;
+    let painter = ui.painter();
+
+    let current = app.search.current_index;
+    for (i, m) in app.search.matches.iter().enumerate() {
+        let fill = if i as i32 == current {
+            SEARCH_CURRENT_FILL
+        } else {
+            SEARCH_OTHER_FILL
+        };
+        for seg in &m.segments {
+            // Off-screen above / below the viewport.
+            if seg.abs_row < visible_start {
+                continue;
+            }
+            let screen_row = seg.abs_row - visible_start;
+            if screen_row >= rows as u32 {
+                continue;
+            }
+            let x = origin.x + seg.col_start as f32 * cell_w;
+            let y = origin.y + screen_row as f32 * cell_h;
+            let w = (seg.col_end.saturating_sub(seg.col_start)) as f32 * cell_w;
+            let rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, cell_h));
+            painter.rect_filled(rect, 0.0, fill);
+        }
+    }
+}
+
+/// Draw the floating search bar overlay (when visible) and return the
+/// interaction it emitted this frame. Mutates `app.search` (query +
+/// toggles) and consumes the one-shot `app.search_focus_request`.
+///
+/// Kept separate from [`draw_terminal`] (which holds `&App`) because the
+/// bar's TextEdit needs `&mut` access to the live query buffer.
+pub fn draw_search_overlay(
+    ctx: &egui::Context,
+    app: &mut App,
+) -> Option<crate::ui::search_bar::SearchBarEvent> {
+    if !app.search.visible {
+        return None;
+    }
+    // Top inset = chrome stacked above the terminal area (CSD title bar +
+    // tab strip). The bar floats `TOP_OFFSET` below it (see search_bar).
+    let top_inset = crate::ui::title_bar::TITLE_BAR_HEIGHT
+        + crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
+    let focus = app.search_focus_request;
+    app.search_focus_request = false;
+    crate::ui::search_bar::draw(ctx, &mut app.search, top_inset, focus)
 }
 
 fn resolve_cell_style(

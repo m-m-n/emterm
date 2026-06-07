@@ -7,8 +7,10 @@ mod html;
 mod image;
 mod links;
 mod logging;
+mod logical_line;
 mod notifications;
 mod render;
+mod search;
 mod tabs;
 mod window_host;
 

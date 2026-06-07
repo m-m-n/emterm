@@ -263,9 +263,8 @@ pub struct KeybindSettings {
     /// Select the entire visible viewport of the active tab. Dispatched
     /// to `AppAction::SelectAll`.
     pub select_all: String,
-    /// Open the in-terminal search overlay. Captured for forward
-    /// compatibility; native-poc has no search overlay yet.
-    #[allow(dead_code)]
+    /// Open the in-terminal search overlay. Dispatched to
+    /// `AppAction::OpenSearch`.
     pub search: String,
     /// Open a new tab in the focused window.
     pub new_tab: String,
