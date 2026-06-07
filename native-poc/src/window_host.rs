@@ -1361,7 +1361,12 @@ impl WindowHost {
                 // through the egui overlay and pass `None`.
                 let cursor_style = core.get_cursor_style();
                 let is_block_style = cursor_style != 1 && cursor_style != 2;
-                let block_cursor_cell = if app.window_focused
+                // Suppress the cursor entirely while scrolled back into
+                // history (matches the WebView build, which skips cursor
+                // rendering when `scrollOffset !== 0` — canvas-renderer.ts).
+                let scroll_offset = app.scroll_offset();
+                let block_cursor_cell = if scroll_offset == 0
+                    && app.window_focused
                     && core.get_cursor_visible()
                     && is_block_style
                     && app.blink_visible_now(core.get_cursor_blink())
@@ -1377,6 +1382,7 @@ impl WindowHost {
                     width_mode,
                     block_cursor_cell,
                     hover_link_cells,
+                    scroll_offset,
                 );
                 // IME preedit overlay (Phase 4-G): paint composition
                 // glyphs inline at the anchor so the user can see what

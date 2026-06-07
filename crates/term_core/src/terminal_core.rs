@@ -25,6 +25,45 @@ pub const MODE_SYNCHRONIZED_OUTPUT: u8 = 8;
 // Bits 9-10: cursor keys (2 bits)
 // Bits 11-12: mouse tracking (2 bits)
 // Bits 13-14: mouse encoding (2 bits)
+/// Alternate-screen flag, set/cleared by the buffer-switch modes
+/// (CSI ?47 / ?1047 / ?1049 h/l). Internal bookkeeping so parse-time
+/// consumers (OSC 133 prompt-mark capture) can suppress work while a
+/// full-screen app owns the display — the WebView build tracks the same
+/// state JS-side (`isAlternateBuffer`) and is unaffected by this bit.
+pub const MODE_ALT_SCREEN: u8 = 15;
+
+// ── Pending OSC 133 prompt marks ─────────────────────────
+
+/// Upper bound on `TerminalCore::pending_prompt_marks`. A producer that
+/// emits OSC 133 without ever advancing the cursor (no newline) could
+/// otherwise grow this buffer without bound — the PTY is a trust
+/// boundary. When the cap is hit we drop the oldest pending mark so the
+/// buffer stays bounded; the consumer (`take_prompt_marks`) normally
+/// drains it every pump, so the cap is only reached under abuse.
+pub const MAX_PENDING_PROMPT_MARKS: usize = 4096;
+
+/// An OSC 133 semantic-prompt mark captured at the moment the handler ran,
+/// before the consumer (native-poc) has a chance to read the core. The
+/// absolute row and the eviction counter are snapshotted here because the
+/// frame can shift (scrollback eviction) between the handler firing and
+/// the consumer draining; the consumer normalizes `abs_row` against the
+/// current eviction total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingPromptMark {
+    /// OSC 133 sub-type as a raw byte: `b'A'`/`b'B'`/`b'C'`/`b'D'`. Only
+    /// these four are ever pushed (the handler filters unknown kinds).
+    pub kind: u8,
+    /// Absolute scrollback-frame row at the moment the mark was received:
+    /// `scrollback_len + cursor.row`. May need normalization by the
+    /// consumer if scrollback evicted rows after this snapshot.
+    pub abs_row: u32,
+    /// Optional exit code attached to a `D` (CommandEnd) mark.
+    pub exit_code: Option<i32>,
+    /// `scrollback_evicted_total` at the moment the mark was received.
+    /// The consumer uses `current_evicted_total - this` to shift `abs_row`
+    /// into the consumer's current frame before storing it.
+    pub evicted_total: u64,
+}
 
 // ── SlimStats (FR11 debug export) ────────────────────────
 
@@ -91,6 +130,14 @@ pub struct TerminalCore {
     pub(crate) scrollback_slim: VecDeque<Vec<SlimCell>>,
     pub(crate) scrollback_wrapped: VecDeque<bool>,
     pub(crate) scrollback_capacity: usize, // Maximum number of scrollback rows.
+    /// Monotonic count of scrollback rows ever evicted from the *front*
+    /// (oldest end) of `scrollback_slim`, across both the automatic
+    /// at-capacity eviction in `ring_push_blank` and the explicit
+    /// `evict_oldest_scrollback` API. Consumers that track absolute line
+    /// coordinates (e.g. native-poc's prompt-mark tracker) read the delta
+    /// since their last observation to shift their stored line indices
+    /// down. Reset to 0 by `reset()` — see that method for the rationale.
+    pub(crate) scrollback_evicted_total: u64,
     // Intern tables backing scrollback SlimCells.
     pub(crate) styles: StyleTable,
     pub(crate) chars: CharTable,
@@ -137,6 +184,15 @@ pub struct TerminalCore {
     /// When true, cursor hidden→visible transitions interrupt parsing.
     /// Disable if it causes flicker in applications that frequently toggle cursor.
     pub(crate) cursor_show_interrupt: bool,
+    /// OSC 133 semantic-prompt marks accumulated *during* parsing, each
+    /// stamped with the absolute row (`scrollback_len + cursor.row`) and the
+    /// eviction counter at the moment the OSC handler ran. Native consumers
+    /// (native-poc) drain this via `take_prompt_marks` after the pump so
+    /// each mark keeps the row it was actually emitted on, instead of all
+    /// marks in one chunk collapsing onto the final cursor row. The wasm /
+    /// WebView path ignores this and keeps using the `on_osc(133, …)`
+    /// callback, which still fires. Capped at `MAX_PENDING_PROMPT_MARKS`.
+    pub(crate) pending_prompt_marks: Vec<PendingPromptMark>,
 }
 
 impl TerminalCore {
@@ -169,6 +225,7 @@ impl TerminalCore {
             scrollback_slim: VecDeque::with_capacity(scrollback_capacity.min(64)),
             scrollback_wrapped: VecDeque::with_capacity(scrollback_capacity.min(64)),
             scrollback_capacity,
+            scrollback_evicted_total: 0,
             styles: StyleTable::new(),
             chars: CharTable::new(),
             dirty: vec![u64::MAX; dirty_words], // all dirty initially
@@ -205,6 +262,7 @@ impl TerminalCore {
             active_hyperlink_id: 0,
             cursor_just_shown: false,
             cursor_show_interrupt: false,
+            pending_prompt_marks: Vec::new(),
         };
         core.mark_all_dirty();
         core
@@ -271,16 +329,52 @@ impl TerminalCore {
 
     // ── Reset ────────────────────────────────────────────
 
-    /// Reset the grid + parser to the post-construction state, then feed
-    /// `bytes` through `process_pty_data` so the resulting state reflects a
-    /// fresh replay of that byte stream.
+    /// Feed `bytes` until every byte is consumed, resuming across the
+    /// parser's deliberate interrupts, and return the accumulated mode
+    /// actions.
+    ///
+    /// `process_pty_data` returns early (with the consumed byte count) on a
+    /// pending buffer switch (CSI ?47/?1047/?1049) or a hidden→visible
+    /// cursor transition so the embedder can react mid-stream — the WebView
+    /// build pauses to let JS swap buffers before re-invoking. An embedder
+    /// with no mid-stream reaction (native-poc) that calls
+    /// `process_pty_data` once and ignores the return value silently DROPS
+    /// the remainder of the chunk (e.g. everything after `?1049l` in the
+    /// same PTY read as a vim exit). This resume loop drains
+    /// `take_mode_actions` between rounds (a pending buffer switch would
+    /// otherwise re-interrupt the very next call) and hands the drained
+    /// actions back for the caller's alt-screen tracking.
+    pub fn process_pty_data_fully(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let mut actions: Vec<u8> = Vec::new();
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let consumed = self.process_pty_data(&bytes[offset..]);
+            offset += consumed;
+            actions.extend(self.take_mode_actions());
+            if consumed == 0 {
+                // Defensive: the parser should always make progress, but
+                // never spin if it reports zero consumption.
+                break;
+            }
+        }
+        actions
+    }
+
+    /// Reset the grid + parser to the post-construction state, then replay
+    /// `bytes` so the resulting state reflects a fresh replay of that byte
+    /// stream. Returns the mode actions accumulated during the replay (a
+    /// snapshot captured while a full-screen app was running carries its
+    /// buffer-switch sequences).
     ///
     /// Introduced for native-poc's mux-mode attach: after the daemon sends
     /// a `Snapshot`, the client wants to discard whatever the native PTY
-    /// painted previously and paint the snapshot bytes from scratch.
-    pub fn reset_and_replay(&mut self, bytes: &[u8]) {
+    /// painted previously and paint the snapshot bytes from scratch. Uses
+    /// the resume loop (`process_pty_data_fully`) — a single
+    /// `process_pty_data` call would drop everything after the first
+    /// buffer-switch sequence inside the snapshot.
+    pub fn reset_and_replay(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.reset();
-        self.process_pty_data(bytes);
+        self.process_pty_data_fully(bytes)
     }
 
     pub fn reset(&mut self) {
@@ -291,6 +385,12 @@ impl TerminalCore {
         self.ring_size = self.rows as usize;
         self.scrollback_slim.clear();
         self.scrollback_wrapped.clear();
+        // Full RIS-style reset clears all scrollback, so the absolute-line
+        // baseline is meaningless afterwards. Resetting the counter keeps it
+        // anchored to the (now empty) scrollback; consumers re-baseline off
+        // the same reset notification and never see a spurious eviction
+        // delta. See `scrollback_evicted_total` field docs.
+        self.scrollback_evicted_total = 0;
         self.styles = StyleTable::new();
         self.chars = CharTable::new();
         self.cursor = CursorState::new();
@@ -319,6 +419,10 @@ impl TerminalCore {
         self.parser.reset();
         self.mode_actions.clear();
         self.cursor_just_shown = false;
+        // The line frame restarts, so any prompt marks captured before the
+        // reset are meaningless. Drop them so a post-reset `take_prompt_marks`
+        // returns only marks from the new stream.
+        self.pending_prompt_marks.clear();
         // Note: callbacks are NOT cleared on reset (terminal reset != dispose)
         self.mark_all_dirty();
     }
@@ -326,6 +430,34 @@ impl TerminalCore {
     /// Take and clear the mode action queue.
     pub fn take_mode_actions(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.mode_actions)
+    }
+
+    /// Record an OSC 133 prompt mark at the current absolute row. Called from
+    /// the OSC handler while parsing, so each mark in a single chunk lands on
+    /// the row the cursor was on *when that mark was emitted* — not the final
+    /// cursor row. `kind` is the raw sub-type byte (`b'A'`..=`b'D'`); only
+    /// those four reach here. Drops the oldest mark when the buffer is at
+    /// `MAX_PENDING_PROMPT_MARKS` so a newline-free OSC 133 flood cannot grow
+    /// it without bound (the PTY is a trust boundary).
+    pub(crate) fn push_pending_prompt_mark(&mut self, kind: u8, exit_code: Option<i32>) {
+        let abs_row = self.get_scrollback_length() + self.cursor.row as u32;
+        let mark = PendingPromptMark {
+            kind,
+            abs_row,
+            exit_code,
+            evicted_total: self.scrollback_evicted_total,
+        };
+        if self.pending_prompt_marks.len() >= MAX_PENDING_PROMPT_MARKS {
+            self.pending_prompt_marks.remove(0);
+        }
+        self.pending_prompt_marks.push(mark);
+    }
+
+    /// Drain the OSC 133 prompt marks captured during parsing. Native
+    /// consumers call this once per pump under the same lock used to read the
+    /// frame so the eviction snapshot stays consistent. Cleared by `reset()`.
+    pub fn take_prompt_marks(&mut self) -> Vec<PendingPromptMark> {
+        std::mem::take(&mut self.pending_prompt_marks)
     }
 
     /// Total number of SlimCells currently held in scrollback.
@@ -1196,7 +1328,7 @@ mod tests {
             core.set_cell(0, r, "X", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
         core.scroll_up_internal(2); // 2 rows go to scrollback
-        // Each scrollback row has 10 SlimCells.
+                                    // Each scrollback row has 10 SlimCells.
         assert_eq!(core.slim_cell_total(), 20);
     }
 

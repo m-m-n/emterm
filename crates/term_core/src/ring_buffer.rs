@@ -24,6 +24,32 @@ use crate::cell::*;
 use crate::slim_cell::{cell_to_slim, slim_overflow_str, slim_to_cell, SlimCell};
 use crate::terminal_core::TerminalCore;
 
+// ── Scrollback styled cell ───────────────────────────────
+
+/// A single decoded scrollback cell carrying its grapheme, display width,
+/// and style in the same packed representation the viewport accessors use.
+///
+/// `fg` / `bg` are `PackedColor::to_u32()` values (matching `get_cell_fg` /
+/// `get_cell_bg`); `flags` is the raw `STYLE_*` bitset (matching
+/// `get_cell_flags`). Lets a renderer paint scrollback rows through the same
+/// style-resolution path it already uses for the live viewport without
+/// re-decoding the [`get_scrollback_row_packed`] binary layout.
+///
+/// [`get_scrollback_row_packed`]: TerminalCore::get_scrollback_row_packed
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollbackCell {
+    /// The cell's grapheme. Empty cells yield an empty string.
+    pub glyph: String,
+    /// Display width in cells (`>= 1` for kept cells).
+    pub width: u16,
+    /// Foreground color packed as `PackedColor::to_u32()`.
+    pub fg: u32,
+    /// Background color packed as `PackedColor::to_u32()`.
+    pub bg: u32,
+    /// `STYLE_*` flag bitset.
+    pub flags: u16,
+}
+
 // ── Scroll Event ─────────────────────────────────────────
 
 /// Direction of a scroll event for differential rendering.
@@ -137,6 +163,7 @@ impl TerminalCore {
             if self.scrollback_slim.len() >= self.scrollback_capacity {
                 if let Some(old) = self.scrollback_slim.pop_front() {
                     self.release_slim_row(&old);
+                    self.scrollback_evicted_total += 1;
                 }
                 self.scrollback_wrapped.pop_front();
             }
@@ -401,6 +428,36 @@ impl TerminalCore {
         cells
     }
 
+    /// Decode a scrollback row into styled cells. Like [`Self::slim_row_cells`]
+    /// but additionally resolves each cell's interned style into the same
+    /// packed representation the viewport `get_cell_fg` / `get_cell_bg` /
+    /// `get_cell_flags` accessors return (`PackedColor::to_u32()` + the raw
+    /// `u16` flag bitset). Width-0 continuation halves of wide glyphs are
+    /// dropped so the result aligns with those viewport accessors.
+    pub(crate) fn slim_row_cells_styled(&self, slim_row: &[SlimCell]) -> Vec<ScrollbackCell> {
+        let mut cells: Vec<ScrollbackCell> = Vec::with_capacity(slim_row.len());
+        for slim in slim_row {
+            if slim.width == 0 {
+                continue;
+            }
+            let ch = if slim.is_char_table() {
+                slim_overflow_str(slim, &self.chars).to_string()
+            } else {
+                let cell = slim_to_cell(slim, &self.styles, &self.chars);
+                cell.get_char_inline().unwrap_or("").to_string()
+            };
+            let style = self.styles.get_or_default(slim.style_id);
+            cells.push(ScrollbackCell {
+                glyph: ch,
+                width: slim.width as u16,
+                fg: style.fg.to_u32(),
+                bg: style.bg.to_u32(),
+                flags: style.flags,
+            });
+        }
+        cells
+    }
+
     // ── Scrollback access APIs (internal) ──────────────────
 
     /// Get scrollback line in packed binary format (same as get_row_packed).
@@ -432,6 +489,16 @@ impl TerminalCore {
             None => Vec::new(),
         }
     }
+
+    /// Get scrollback line decoded into styled cells (char + width + packed
+    /// fg/bg + flags). index: 0 = oldest scrollback line.
+    /// Returns an empty vec if index >= scrollback_count.
+    pub(crate) fn scrollback_row_cells_styled(&self, index: usize) -> Vec<ScrollbackCell> {
+        match self.scrollback_slim.get(index) {
+            Some(row) => self.slim_row_cells_styled(row),
+            None => Vec::new(),
+        }
+    }
 }
 
 // ── scrollback API (was wasm_bindgen) ────────────────────
@@ -440,6 +507,15 @@ impl TerminalCore {
     /// Get the number of scrollback lines.
     pub fn get_scrollback_length(&self) -> u32 {
         self.scrollback_count() as u32
+    }
+
+    /// Monotonic count of scrollback rows evicted from the oldest (front)
+    /// end since construction, across both the automatic at-capacity path
+    /// (`ring_push_blank`) and the explicit `evict_oldest_scrollback` API.
+    /// `reset()` zeroes it. Consumers that hold absolute line indices read
+    /// the delta versus their last observation to shift those indices down.
+    pub fn get_scrollback_evicted_total(&self) -> u64 {
+        self.scrollback_evicted_total
     }
 
     /// Get a scrollback line in packed binary format.
@@ -466,6 +542,18 @@ impl TerminalCore {
     /// [`get_scrollback_row_packed`]: Self::get_scrollback_row_packed
     pub fn get_scrollback_row_cells(&self, index: u32) -> Vec<(String, u16)> {
         self.scrollback_row_cells(index as usize)
+    }
+
+    /// Get a scrollback line decoded into styled [`ScrollbackCell`]s.
+    /// index: 0 = oldest line. Each cell carries its grapheme, display width,
+    /// and style packed identically to the viewport `get_cell_fg` /
+    /// `get_cell_bg` (`PackedColor::to_u32()`) / `get_cell_flags` (`u16`
+    /// bitset) accessors, so a renderer can resolve scrollback cells through
+    /// the same style path it uses for the live viewport. Width-0
+    /// continuation halves of wide glyphs are dropped to align with those
+    /// accessors. Returns an empty vec when index >= scrollback length.
+    pub fn get_scrollback_row_cells_styled(&self, index: u32) -> Vec<ScrollbackCell> {
+        self.scrollback_row_cells_styled(index as usize)
     }
 
     /// Get the wrapped flag for a scrollback line.
@@ -518,6 +606,7 @@ impl TerminalCore {
             }
         }
         if evicted > 0 {
+            self.scrollback_evicted_total += evicted as u64;
             self.mark_all_dirty();
         }
         evicted
@@ -593,7 +682,7 @@ impl TerminalCore {
 
 #[cfg(test)]
 mod tests {
-    use crate::cell::PackedColor;
+    use crate::cell::{PackedColor, STYLE_BOLD, STYLE_UNDERLINE};
     use crate::ring_buffer::ScrollDirection;
     use crate::terminal_core::TerminalCore;
 
@@ -890,6 +979,75 @@ mod tests {
         let core = TerminalCore::new(10, 3, 5);
         assert!(core.get_scrollback_row_cells(0).is_empty());
         assert!(core.get_scrollback_row_cells(999).is_empty());
+    }
+
+    #[test]
+    fn test_get_scrollback_row_cells_styled_basic() {
+        let mut core = TerminalCore::new(5, 3, 5);
+        // "H" with RGB fg (200,100,50) + bold; "i" with default style.
+        // set_cell args: col, row, char, width, fg_tag, fg_r, fg_g, fg_b,
+        //                bg_tag, bg_r, bg_g, bg_b, flags
+        core.set_cell(0, 0, "H", 1, 2, 200, 100, 50, 0, 0, 0, 0, STYLE_BOLD);
+        core.set_cell(1, 0, "i", 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.scroll_up_internal(1);
+        let cells = core.get_scrollback_row_cells_styled(0);
+        // 5 cols: "H", "i", then 3 blank cells.
+        assert_eq!(cells.len(), 5);
+        assert_eq!(cells[0].glyph, "H");
+        assert_eq!(cells[0].width, 1);
+        // tag=2 (RGB) packed: tag<<24 | r<<16 | g<<8 | b.
+        assert_eq!(cells[0].fg, (2u32 << 24) | (200 << 16) | (100 << 8) | 50);
+        assert_eq!(cells[0].flags & STYLE_BOLD, STYLE_BOLD);
+        // "i" carries the default style.
+        assert_eq!(cells[1].glyph, "i");
+        assert_eq!(cells[1].fg, 0);
+        assert_eq!(cells[1].bg, 0);
+        assert_eq!(cells[1].flags, 0);
+        // Blank cell decodes to a space with default style.
+        assert_eq!(cells[2].glyph, " ");
+        assert_eq!(cells[2].width, 1);
+    }
+
+    #[test]
+    fn test_get_scrollback_row_cells_styled_packed_matches_viewport() {
+        let mut core = TerminalCore::new(5, 3, 5);
+        // Indexed fg (idx 3) + indexed bg (idx 5) + underline.
+        core.set_cell(0, 0, "X", 1, 1, 3, 0, 0, 1, 5, 0, 0, STYLE_UNDERLINE);
+        // Read the viewport-packed style before scrolling.
+        let vp_fg = core.get_cell_fg(0, 0);
+        let vp_bg = core.get_cell_bg(0, 0);
+        let vp_flags = core.get_cell_flags(0, 0);
+        core.scroll_up_internal(1);
+        let cells = core.get_scrollback_row_cells_styled(0);
+        // The styled scrollback cell must pack identically to the viewport
+        // accessors so a renderer can reuse the same style resolution.
+        assert_eq!(cells[0].fg, vp_fg);
+        assert_eq!(cells[0].bg, vp_bg);
+        assert_eq!(cells[0].flags, vp_flags);
+    }
+
+    #[test]
+    fn test_get_scrollback_row_cells_styled_wide_char() {
+        let mut core = TerminalCore::new(5, 3, 5);
+        // Double-width glyph at col 0; col 1 is its width-0 continuation and
+        // must be dropped from the styled result.
+        core.set_cell(0, 0, "あ", 2, 2, 10, 20, 30, 0, 0, 0, 0, 0);
+        core.set_cell(1, 0, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        core.scroll_up_internal(1);
+        let cells = core.get_scrollback_row_cells_styled(0);
+        assert_eq!(cells[0].glyph, "あ");
+        assert_eq!(cells[0].width, 2);
+        assert_eq!(cells[0].fg, (2u32 << 24) | (10 << 16) | (20 << 8) | 30);
+        // Next kept cell is the blank at col 2, not the dropped width-0 half.
+        assert_eq!(cells[1].glyph, " ");
+        assert_eq!(cells[1].width, 1);
+    }
+
+    #[test]
+    fn test_get_scrollback_row_cells_styled_oob_returns_empty() {
+        let core = TerminalCore::new(10, 3, 5);
+        assert!(core.get_scrollback_row_cells_styled(0).is_empty());
+        assert!(core.get_scrollback_row_cells_styled(999).is_empty());
     }
 
     #[test]
@@ -1289,6 +1447,48 @@ mod tests {
         let evicted = core.evict_oldest_scrollback(0);
         assert_eq!(evicted, 4);
         assert_eq!(core.get_scrollback_length(), 0);
+    }
+
+    #[test]
+    fn test_evicted_total_counts_api_eviction() {
+        let mut core = TerminalCore::new(10, 3, 100);
+        for i in 0..5u32 {
+            core.set_cell(0, 0, &i.to_string(), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            core.scroll_up_internal(1);
+        }
+        assert_eq!(core.get_scrollback_evicted_total(), 0);
+        // Evict 3 of the 5 rows via the explicit API.
+        core.evict_oldest_scrollback(2);
+        assert_eq!(core.get_scrollback_evicted_total(), 3);
+        // A no-op eviction must not advance the counter.
+        core.evict_oldest_scrollback(2);
+        assert_eq!(core.get_scrollback_evicted_total(), 3);
+    }
+
+    #[test]
+    fn test_evicted_total_counts_automatic_eviction() {
+        // capacity 2 scrollback rows → rows beyond 2 evict automatically.
+        let mut core = TerminalCore::new(10, 3, 2);
+        // Push 5 rows; the first 3 spill out of the 2-row scrollback.
+        for i in 0..5u32 {
+            core.set_cell(0, 0, &i.to_string(), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            core.scroll_up_internal(1);
+        }
+        assert_eq!(core.get_scrollback_length(), 2);
+        assert_eq!(core.get_scrollback_evicted_total(), 3);
+    }
+
+    #[test]
+    fn test_evicted_total_reset_zeroes_counter() {
+        let mut core = TerminalCore::new(10, 3, 100);
+        for i in 0..5u32 {
+            core.set_cell(0, 0, &i.to_string(), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            core.scroll_up_internal(1);
+        }
+        core.evict_oldest_scrollback(2);
+        assert_eq!(core.get_scrollback_evicted_total(), 3);
+        core.reset();
+        assert_eq!(core.get_scrollback_evicted_total(), 0);
     }
 
     #[test]

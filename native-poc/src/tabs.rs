@@ -103,6 +103,16 @@ pub struct Tab {
     /// from `activity.has_activity` (gated by
     /// `settings.tab_activity_indicator`).
     pub activity: crate::notifications::TabActivityState,
+    /// Resolved OSC 133 prompt marks for prompt-to-prompt navigation
+    /// (`App::jump_to_prompt`). `pump` drains the callback-side
+    /// `prompt_marks`, backfills each mark's absolute row, and pushes it
+    /// here. Port of the WebView `SemanticZoneTracker`.
+    pub prompts: crate::prompts::PromptTracker,
+    /// Last observed `TerminalCore::get_scrollback_evicted_total`. `pump`
+    /// reads the live counter, and when it advanced past this baseline it
+    /// calls `prompts.prune_before_line(delta)` (shifting stored rows down
+    /// by the number of newly-evicted scrollback lines) and updates this.
+    evicted_baseline: u64,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -194,6 +204,8 @@ impl Tab {
             bell_pending: false,
             output_pending: false,
             activity: crate::notifications::TabActivityState::default(),
+            prompts: crate::prompts::PromptTracker::default(),
+            evicted_baseline: 0,
         }
     }
 
@@ -232,7 +244,10 @@ impl Tab {
         if let Some(p) = &self.pty {
             let drained = p.drain_ring();
             if !drained.is_empty() {
-                self.core.lock().process_pty_data(&drained);
+                // Resume-loop helper: a bare `process_pty_data` call would
+                // drop everything after a buffer-switch interrupt.
+                let mut c = self.core.lock();
+                c.process_pty_data_fully(&drained);
             }
             if p.ring_overflowed() {
                 log::warn!(
@@ -259,7 +274,31 @@ impl Tab {
     pub fn apply_mux_message(&mut self, msg: MuxMessage) -> bool {
         match msg.msg_type {
             MessageType::Snapshot | MessageType::SnapshotRestore => {
-                self.core.lock().reset_and_replay(&msg.payload);
+                // `reset_and_replay` discards all scrollback and zeroes the
+                // eviction counter, so the absolute line frame is rebuilt
+                // from scratch. Drop the resolved tracker, take a fresh
+                // eviction baseline, then backfill the replayed bytes' marks
+                // — each captured by `term_core` during the replay with its
+                // own emit-time row, so the whole snapshot's history no
+                // longer collapses onto one line.
+                self.prompts.clear();
+                let (actions, evicted_total, pending_marks) = {
+                    let mut c = self.core.lock();
+                    let actions = c.reset_and_replay(&msg.payload);
+                    (
+                        actions,
+                        c.get_scrollback_evicted_total(),
+                        c.take_prompt_marks(),
+                    )
+                };
+                self.evicted_baseline = evicted_total;
+                self.backfill_prompt_marks(evicted_total, pending_marks);
+                // A snapshot captured while a full-screen app was running
+                // carries its buffer-switch sequences; mirror the replayed
+                // end state onto the tab flag.
+                if let Some(new_alt) = parse_alt_screen_action(&actions) {
+                    self.alt_screen = new_alt;
+                }
                 log::debug!(
                     "mux apc: applied {:?} ({} bytes) for tab {:?}",
                     msg.msg_type,
@@ -272,7 +311,21 @@ impl Tab {
                 // The daemon's continuous PTY stream: feed it into term_core
                 // as a normal byte stream (NOT a reset). Without this the
                 // mux session looks frozen after the initial Snapshot.
-                self.core.lock().process_pty_data(&msg.payload);
+                let (actions, evicted_total, pending_marks) = {
+                    let mut c = self.core.lock();
+                    let actions = c.process_pty_data_fully(&msg.payload);
+                    (
+                        actions,
+                        c.get_scrollback_evicted_total(),
+                        c.take_prompt_marks(),
+                    )
+                };
+                // Same drain/backfill as the native `pump` path so prompt
+                // marks arriving over the mux stream are navigable too.
+                self.backfill_prompt_marks(evicted_total, pending_marks);
+                if let Some(new_alt) = parse_alt_screen_action(&actions) {
+                    self.alt_screen = new_alt;
+                }
                 true
             }
             MessageType::StatusUpdate => match msg.decode_payload::<StatusUpdateMsg>() {
@@ -377,7 +430,7 @@ impl Tab {
         }
         if !combined.is_empty() {
             let mut c = self.core.lock();
-            c.process_pty_data(&combined);
+            let actions = c.process_pty_data_fully(&combined);
             // Force-flush any grapheme cluster left buffered by the
             // parser (e.g. a lone emoji codepoint at the tail of an
             // IME-commit echo). Without this the cluster sits in
@@ -387,8 +440,16 @@ impl Tab {
             // (typical symptom: SKK `/smile` → 😄 only appears after
             // pressing space).
             c.flush_grapheme_buffer();
-            let actions = c.take_mode_actions();
+            // Drain the OSC 133 marks `term_core` captured during this pump
+            // (each already stamped with its emit-time row + eviction count)
+            // and read the current eviction total — both under the core lock
+            // so they are consistent with the bytes just processed. The
+            // actual backfill runs after `drop(c)` because it needs
+            // `&mut self`.
+            let pending_marks = c.take_prompt_marks();
+            let evicted_total = c.get_scrollback_evicted_total();
             drop(c);
+            self.backfill_prompt_marks(evicted_total, pending_marks);
             if let Some(new_alt) = parse_alt_screen_action(&actions) {
                 self.alt_screen = new_alt;
             }
@@ -467,6 +528,82 @@ impl Tab {
         }
 
         changed
+    }
+
+    /// Absorb any scrollback eviction that shifted the line frame, then push
+    /// the OSC 133 marks `term_core` captured during the just-completed
+    /// `process_pty_data` into the resolved tracker.
+    ///
+    /// `term_core` (`TerminalCore::push_pending_prompt_mark`) stamps every
+    /// mark, *as it parses*, with the absolute row it was emitted on
+    /// (`scrollback_len + cursor.row`) and the eviction counter at that
+    /// instant. This fixes the old collapse where several marks in one chunk
+    /// all landed on the final cursor row. The caller drains those marks via
+    /// `take_prompt_marks` under the core lock and passes them here.
+    ///
+    /// Eviction normalization: a mark's `abs_row` is in the frame that
+    /// existed *when the mark fired*. If scrollback evicted rows after that
+    /// (but still inside the same pump), the consumer's current frame sits
+    /// lower. We shift each new mark down by
+    /// `current_evicted_total - mark.evicted_total` so it lands in the
+    /// current frame. Previously-stored marks are pruned by the *total*
+    /// delta since the last observation (`prune_before_line`) before the new
+    /// marks are pushed, so both populations end up in one consistent frame.
+    ///
+    /// A counter that moved *backwards* means the core was reset (RIS zeroes
+    /// it) and the whole frame restarted — stale marks are meaningless then,
+    /// so drop them.
+    ///
+    /// Takes the scalar frame + the drained marks (rather than the locked
+    /// `TerminalCore`) so the caller can read them off its own `MutexGuard`
+    /// and drop the core borrow before calling — `backfill` needs
+    /// `&mut self`, which would otherwise conflict with the guard's borrow of
+    /// `self.core`.
+    fn backfill_prompt_marks(
+        &mut self,
+        evicted_total: u64,
+        marks: Vec<term_core::terminal_core::PendingPromptMark>,
+    ) {
+        if evicted_total < self.evicted_baseline {
+            // Core reset (RIS / clear-scrollback) re-zeroed the counter and
+            // rebuilt the line frame from scratch.
+            self.prompts.clear();
+            self.evicted_baseline = evicted_total;
+        } else {
+            // Shift previously-stored rows down by however many oldest
+            // scrollback rows were dropped since the last observation.
+            let delta = evicted_total - self.evicted_baseline;
+            if delta > 0 {
+                self.prompts
+                    .prune_before_line(u32::try_from(delta).unwrap_or(u32::MAX));
+                self.evicted_baseline = evicted_total;
+            }
+        }
+        for m in marks {
+            let Some(kind) = crate::prompts::PromptMarkKind::from_byte(m.kind) else {
+                continue;
+            };
+            // Normalize the mark's capture-time row into the current frame:
+            // any eviction that happened *after* this mark fired shifts the
+            // frame down by that many rows. `evicted_total >= m.evicted_total`
+            // always holds (the counter is monotonic and we already handled
+            // the reset/backwards case above), so the subtraction is safe.
+            let shift = evicted_total.saturating_sub(m.evicted_total);
+            let shift = u32::try_from(shift).unwrap_or(u32::MAX);
+            let Some(row) = m.abs_row.checked_sub(shift) else {
+                // The mark's row was evicted out of the frame within this
+                // same pump; it no longer addresses any retained line. Drop
+                // it, matching prune_before_line's retain(row >= count) for
+                // previously-stored marks — clamping to 0 instead would
+                // plant a phantom prompt at the top of scrollback.
+                continue;
+            };
+            self.prompts.push(crate::prompts::ResolvedPromptMark {
+                kind,
+                row,
+                exit_code: m.exit_code,
+            });
+        }
     }
 
     /// Decode buffered APC / DCS payloads via `term_images::ImageProcessor`,
@@ -605,6 +742,7 @@ fn parse_alt_screen_action(actions: &[u8]) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use term_core::terminal_core::PendingPromptMark;
 
     #[test]
     fn parse_alt_screen_switch_to_alt() {
@@ -635,5 +773,129 @@ mod tests {
         assert_eq!(parse_alt_screen_action(&[2, 3]), Some(false));
         // Enter alt twice → last is `true`.
         assert_eq!(parse_alt_screen_action(&[3, 2]), Some(true));
+    }
+
+    // ── backfill_prompt_marks ─────────────────────────────────
+
+    struct NoopSink;
+    impl crate::callbacks::NotificationSink for NoopSink {
+        fn send(&self, _title: &str, _body: &str) {}
+    }
+
+    fn test_tab() -> Tab {
+        Tab::spawn_shell(
+            "test",
+            80,
+            24,
+            100,
+            Arc::new(Settings::default()),
+            None,
+            None,
+            Arc::new(NoopSink),
+        )
+    }
+
+    /// Build a prompt-start `PendingPromptMark` as `term_core` would emit
+    /// it: `abs_row` is the emit-time absolute row, `evicted_total` the
+    /// eviction counter at emit time.
+    fn pending_mark(abs_row: u32, evicted_total: u64) -> PendingPromptMark {
+        PendingPromptMark {
+            kind: b'A',
+            abs_row,
+            exit_code: None,
+            evicted_total,
+        }
+    }
+
+    #[test]
+    fn backfill_stamps_drained_marks_with_emit_row() {
+        let mut tab = test_tab();
+        // A single mark captured at absolute row 105, no eviction.
+        tab.backfill_prompt_marks(0, vec![pending_mark(105, 0)]);
+        assert_eq!(tab.prompts.find_prev_prompt(u32::MAX), Some(105));
+    }
+
+    #[test]
+    fn backfill_separates_multiple_marks_by_emit_row() {
+        // The core regression this fix targets: several marks in one drain
+        // must keep the distinct rows they were emitted on, not collapse.
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(
+            0,
+            vec![
+                pending_mark(10, 0),
+                pending_mark(20, 0),
+                pending_mark(30, 0),
+            ],
+        );
+        assert_eq!(tab.prompts.find_prev_prompt(25), Some(20));
+        assert_eq!(tab.prompts.find_next_prompt(15), Some(20));
+        assert_eq!(tab.prompts.find_prev_prompt(u32::MAX), Some(30));
+    }
+
+    #[test]
+    fn backfill_prunes_stored_marks_before_pushing_new_ones() {
+        // Marks stored in an earlier call are pruned by the eviction delta,
+        // while a new mark captured in the *same* later frame (no eviction
+        // after its own emit) lands at its emit-time row unchanged.
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(0, vec![pending_mark(105, 0)]); // stored at 105
+                                                                  // 50 rows evicted since baseline; the new mark fired *after* those
+                                                                  // evictions, so its own evicted_total is already 50 → no extra shift.
+        tab.backfill_prompt_marks(50, vec![pending_mark(110, 50)]);
+        // Old mark shifted 105 → 55; new mark stays at 110.
+        assert_eq!(tab.prompts.find_prev_prompt(60), Some(55));
+        assert_eq!(tab.prompts.find_next_prompt(60), Some(110));
+    }
+
+    #[test]
+    fn backfill_normalizes_mark_evicted_after_its_emit() {
+        // A mark fired early in a pump (evicted_total = 0, abs_row = 90),
+        // then more output in the SAME pump evicted 30 rows, so the frame
+        // observed at drain time is evicted_total = 30. The mark must shift
+        // down by (30 - 0) = 30 → row 60, matching the post-pump frame.
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(30, vec![pending_mark(90, 0)]);
+        assert_eq!(tab.prompts.find_prev_prompt(u32::MAX), Some(60));
+    }
+
+    #[test]
+    fn backfill_mixed_evicted_totals_in_one_drain() {
+        // Two marks from one pump: the first fired before any eviction, the
+        // second after 20 rows were evicted. At drain the frame is at 20.
+        // First: abs_row 50, evicted 0  → shift 20 → row 30.
+        // Second: abs_row 45, evicted 20 → shift 0  → row 45.
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(20, vec![pending_mark(50, 0), pending_mark(45, 20)]);
+        assert_eq!(tab.prompts.find_prev_prompt(40), Some(30));
+        assert_eq!(tab.prompts.find_prev_prompt(u32::MAX), Some(45));
+    }
+
+    #[test]
+    fn backfill_clears_marks_when_counter_goes_backwards() {
+        // A reset (RIS) zeroes the core's eviction counter; stale marks
+        // belong to the discarded line frame and must be dropped.
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(70, vec![pending_mark(105, 70)]);
+        assert_eq!(tab.prompts.find_prev_prompt(u32::MAX), Some(105));
+        tab.backfill_prompt_marks(0, vec![]);
+        assert_eq!(tab.prompts.find_prev_prompt(u32::MAX), None);
+    }
+
+    #[test]
+    fn backfill_drops_mark_evicted_out_of_frame_in_same_pump() {
+        // A mark fired at abs_row 10 (evicted_total 0), then the SAME pump
+        // evicted 25 rows — more than the mark's depth. The mark's line no
+        // longer exists in the frame, so it must be DROPPED, not clamped to
+        // row 0 (which would plant a phantom prompt at the top of
+        // scrollback that jump_to_prompt would navigate to).
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(25, vec![pending_mark(10, 0)]);
+        assert_eq!(tab.prompts.find_prev_prompt(u32::MAX), None);
+        // Boundary: shift exactly equals abs_row → row 0 is still a real,
+        // retained line (the new frame's first row), so it is kept.
+        let mut tab = test_tab();
+        tab.backfill_prompt_marks(10, vec![pending_mark(10, 0)]);
+        assert_eq!(tab.prompts.find_prev_prompt(u32::MAX), Some(0));
     }
 }

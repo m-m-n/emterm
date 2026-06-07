@@ -84,6 +84,14 @@ pub enum ScrollPosition {
     OffsetFromLive(u32),
 }
 
+/// Direction for [`App::jump_to_prompt`]: `Prev` scrolls toward older
+/// prompts (up), `Next` toward newer prompts (down).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JumpDirection {
+    Prev,
+    Next,
+}
+
 pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
@@ -1022,6 +1030,14 @@ impl App {
                 self.select_all();
                 false
             }
+            crate::ui::AppAction::JumpToPrevPrompt => {
+                self.jump_to_prompt(JumpDirection::Prev);
+                false
+            }
+            crate::ui::AppAction::JumpToNextPrompt => {
+                self.jump_to_prompt(JumpDirection::Next);
+                false
+            }
             // The remaining view-level actions need the host's
             // `winit::window::Window` handle and/or the deferred-resize
             // machinery, so the keyboard handler in `window_host`
@@ -1428,6 +1444,58 @@ impl App {
     pub fn scroll_to_live(&mut self) {
         self.scroll_position = ScrollPosition::Live;
         self.needs_full_redraw = true;
+    }
+
+    // ── Prompt-to-prompt navigation (OSC 133) ────────────────
+
+    /// Scroll to the nearest OSC 133 prompt mark in `direction` relative to
+    /// the current view top. Port of the WebView
+    /// `KeyboardHandler.handlePromptJump` (`handlers/keyboard.ts`).
+    ///
+    /// Coordinate model: marks carry an absolute scrollback-frame row
+    /// (`0..scrollback_len` is scrollback, `scrollback_len..+rows` is the
+    /// viewport). The current view top is `scrollback_len - scroll_offset`
+    /// (offset is rows back from live). Scrolling to a mark sets the offset
+    /// to `scrollback_len - mark_row`, putting the mark line at the top of
+    /// the view — a viewport-row mark therefore resolves to a `Live`
+    /// (`offset == 0`) position. When no mark exists in `direction`, fall
+    /// to the top (`Prev`) or the live tail (`Next`), matching WebView.
+    ///
+    /// No-op on the alternate screen (same guard as the `scroll_*` family;
+    /// alt-screen apps own the whole viewport and have no scrollback).
+    ///
+    /// Note: the WebView build also auto-expands a collapsed fold region
+    /// containing the target. native-poc has no fold support yet, so that
+    /// step is omitted (Phase 2 fold work will add it).
+    pub fn jump_to_prompt(&mut self, direction: JumpDirection) {
+        if self.alt_screen {
+            return;
+        }
+        let scrollback_len = match self.tabs.get(self.active) {
+            Some(tab) => tab.core.lock().get_scrollback_length(),
+            None => return,
+        };
+        let current_top_line = scrollback_len.saturating_sub(self.scroll_offset());
+        let target = match self.tabs.get(self.active) {
+            Some(tab) => match direction {
+                JumpDirection::Prev => tab.prompts.find_prev_prompt(current_top_line),
+                JumpDirection::Next => tab.prompts.find_next_prompt(current_top_line),
+            },
+            None => return,
+        };
+        match target {
+            Some(row) => {
+                let offset = scrollback_len.saturating_sub(row);
+                self.scroll_set_offset(offset);
+            }
+            None => match direction {
+                // No previous prompt: jump to the top of scrollback
+                // (`scroll_set_offset` clamps to the configured ceiling).
+                JumpDirection::Prev => self.scroll_set_offset(scrollback_len),
+                // No next prompt: snap back to the live tail.
+                JumpDirection::Next => self.scroll_set_offset(0),
+            },
+        }
     }
 
     // ── In-terminal search ───────────────────────────────────
@@ -2345,6 +2413,125 @@ mod tests {
         assert_eq!(app.scroll_position, ScrollPosition::Live);
         // No redraw forced (already at live, nothing visual shifted).
         assert!(!app.needs_full_redraw);
+    }
+
+    // ── Prompt-to-prompt navigation (OSC 133) ────────────────
+
+    use crate::prompts::PromptMarkKind;
+    use crate::prompts::ResolvedPromptMark;
+
+    /// Build an `App` with one initial tab whose core has `scrollback`
+    /// rows pushed into scrollback (so absolute rows 0..scrollback are
+    /// scrollback and scrollback.. is viewport), and the given prompt-start
+    /// marks installed. The grid is tiny (4 rows) so a handful of `\r\n`
+    /// lines spill into scrollback quickly.
+    fn app_with_prompts(scrollback: u32, prompt_rows: &[u32]) -> App {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let tab = &mut app.tabs[0];
+            // Push `scrollback + rows` newlines so `scrollback` rows land in
+            // scrollback. Tab core is 80x24-ish by default; feeding plenty
+            // of newlines guarantees the requested scrollback depth.
+            let mut bytes = Vec::new();
+            let total = scrollback + 64; // overshoot to fill the viewport too
+            for _ in 0..total {
+                bytes.extend_from_slice(b"\r\n");
+            }
+            tab.core.lock().process_pty_data(&bytes);
+            for &row in prompt_rows {
+                tab.prompts.push(ResolvedPromptMark {
+                    kind: PromptMarkKind::PromptStart,
+                    row,
+                    exit_code: None,
+                });
+            }
+        }
+        app
+    }
+
+    #[test]
+    fn jump_prev_scrolls_to_mark_above_view_top() {
+        // 100 scrollback rows; a prompt at absolute row 40.
+        let mut app = app_with_prompts(100, &[40]);
+        let scrollback_len = app.tabs[0].core.lock().get_scrollback_length();
+        assert!(scrollback_len >= 100, "expected ≥100 scrollback rows");
+        // Start at live (view top = scrollback_len). Prev finds row 40.
+        app.jump_to_prompt(JumpDirection::Prev);
+        assert_eq!(
+            app.scroll_offset(),
+            scrollback_len - 40,
+            "mark row 40 should sit at the view top"
+        );
+    }
+
+    #[test]
+    fn jump_next_scrolls_to_mark_below_view_top() {
+        let mut app = app_with_prompts(100, &[40, 70]);
+        let scrollback_len = app.tabs[0].core.lock().get_scrollback_length();
+        // Scroll so the view top is at row 50 (between the two marks).
+        app.scroll_set_offset(scrollback_len - 50);
+        // Next from top=50 finds row 70.
+        app.jump_to_prompt(JumpDirection::Next);
+        assert_eq!(app.scroll_offset(), scrollback_len - 70);
+    }
+
+    #[test]
+    fn jump_prev_with_no_mark_above_goes_to_top() {
+        // Mark is below the current view top, so Prev finds nothing.
+        let mut app = app_with_prompts(100, &[80]);
+        let scrollback_len = app.tabs[0].core.lock().get_scrollback_length();
+        // View top at row 10 (offset = scrollback_len - 10). No mark < 10.
+        app.scroll_set_offset(scrollback_len - 10);
+        app.jump_to_prompt(JumpDirection::Prev);
+        // Falls to the top — clamped to the scrollback_lines ceiling, which
+        // is well above scrollback_len here, so the offset equals
+        // scrollback_len (the actual top).
+        assert_eq!(app.scroll_offset(), scrollback_len);
+    }
+
+    #[test]
+    fn jump_next_with_no_mark_below_goes_to_live() {
+        let mut app = app_with_prompts(100, &[20]);
+        let scrollback_len = app.tabs[0].core.lock().get_scrollback_length();
+        // View top at row 50; the only mark (20) is above, so Next finds none.
+        app.scroll_set_offset(scrollback_len - 50);
+        app.jump_to_prompt(JumpDirection::Next);
+        // Falls to the live tail.
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn jump_to_viewport_mark_resolves_to_live() {
+        // A mark inside the viewport (row >= scrollback_len) → offset 0.
+        let mut app = app_with_prompts(100, &[]);
+        let scrollback_len = app.tabs[0].core.lock().get_scrollback_length();
+        app.tabs[0].prompts.push(ResolvedPromptMark {
+            kind: PromptMarkKind::PromptStart,
+            row: scrollback_len + 2, // inside the live viewport
+            exit_code: None,
+        });
+        // Scroll up first so we are not already at live.
+        app.scroll_set_offset(scrollback_len - 30);
+        app.jump_to_prompt(JumpDirection::Next);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn jump_is_noop_on_alt_screen() {
+        let mut app = app_with_prompts(100, &[40]);
+        app.alt_screen = true;
+        let before = app.scroll_position;
+        app.jump_to_prompt(JumpDirection::Prev);
+        assert_eq!(app.scroll_position, before);
+    }
+
+    #[test]
+    fn jump_with_no_tabs_is_noop() {
+        let mut app = App::new();
+        // No tabs at all.
+        app.jump_to_prompt(JumpDirection::Prev);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
     }
 
     #[test]

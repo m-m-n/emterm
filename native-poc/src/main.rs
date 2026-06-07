@@ -9,6 +9,7 @@ mod links;
 mod logging;
 mod logical_line;
 mod notifications;
+mod prompts;
 mod render;
 mod search;
 mod tabs;

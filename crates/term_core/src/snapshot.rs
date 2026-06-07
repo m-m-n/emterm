@@ -266,6 +266,10 @@ impl TerminalCore {
             scrollback_slim: VecDeque::from(snapshot.scrollback_slim),
             scrollback_wrapped: VecDeque::from(snapshot.scrollback_wrapped),
             scrollback_capacity: snapshot.scrollback_capacity,
+            // Snapshot restore rebuilds scrollback from scratch, so the
+            // eviction counter starts at a fresh baseline. Consumers
+            // re-baseline off the same restore event.
+            scrollback_evicted_total: 0,
             styles,
             chars,
             dirty,
@@ -296,6 +300,8 @@ impl TerminalCore {
             active_hyperlink_id: snapshot.active_hyperlink_id,
             cursor_just_shown: false,
             cursor_show_interrupt: snapshot.cursor_show_interrupt,
+            // Snapshot restore starts a fresh parse frame; no in-flight marks.
+            pending_prompt_marks: Vec::new(),
         })
     }
 
@@ -375,6 +381,8 @@ impl TerminalCore {
             scrollback_slim: VecDeque::new(),
             scrollback_wrapped: VecDeque::new(),
             scrollback_capacity,
+            // Restored viewport has no scrollback yet → fresh baseline.
+            scrollback_evicted_total: 0,
             styles: StyleTable::new(),
             chars: CharTable::new(),
             dirty,
@@ -405,6 +413,8 @@ impl TerminalCore {
             active_hyperlink_id: snapshot.active_hyperlink_id,
             cursor_just_shown: false,
             cursor_show_interrupt: snapshot.cursor_show_interrupt,
+            // Snapshot restore starts a fresh parse frame; no in-flight marks.
+            pending_prompt_marks: Vec::new(),
         })
     }
 
