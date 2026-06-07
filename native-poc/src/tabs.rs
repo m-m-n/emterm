@@ -142,6 +142,14 @@ pub struct Tab {
     /// calls `prompts.prune_before_line(delta)` (shifting stored rows down
     /// by the number of newly-evicted scrollback lines) and updates this.
     evicted_baseline: u64,
+    /// Rows evicted from scrollback since the last `take_eviction_delta`,
+    /// accumulated by `backfill_prompt_marks`'s prune step. `App::pump_all`
+    /// drains this to shift the absolute-row selection into the new frame.
+    pending_eviction_delta: u32,
+    /// Latched when the eviction counter moved backwards (core reset /
+    /// RIS) — the whole line frame restarted, so absolute-row consumers
+    /// (the selection) must drop their state.
+    pending_frame_reset: bool,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -243,6 +251,8 @@ impl Tab {
             fold_enabled,
             pending_fold_begin: None,
             evicted_baseline: 0,
+            pending_eviction_delta: 0,
+            pending_frame_reset: false,
         }
     }
 
@@ -269,6 +279,20 @@ impl Tab {
     /// frame to mark inactive-tab activity.
     pub fn take_output(&mut self) -> bool {
         std::mem::take(&mut self.output_pending)
+    }
+
+    /// Consume the accumulated scrollback-eviction delta (rows evicted
+    /// since the last call). `App::pump_all` drains this for the active
+    /// tab to shift the absolute-row selection into the new frame.
+    pub fn take_eviction_delta(&mut self) -> u32 {
+        std::mem::take(&mut self.pending_eviction_delta)
+    }
+
+    /// Consume the frame-reset latch (set when the eviction counter moved
+    /// backwards — a core reset / RIS). `App::pump_all` drains this for the
+    /// active tab to drop the now-meaningless absolute-row selection.
+    pub fn take_frame_reset(&mut self) -> bool {
+        std::mem::take(&mut self.pending_frame_reset)
     }
 
     /// Pause the native PTY reader. Subsequent PTY output goes into the
@@ -634,6 +658,9 @@ impl Tab {
         if evicted_total < self.evicted_baseline {
             // Core reset (RIS / clear-scrollback) re-zeroed the counter and
             // rebuilt the line frame from scratch.
+            // Latch the frame reset so `App::pump_all` drops the absolute-row
+            // selection (its coordinates belong to the discarded frame).
+            self.pending_frame_reset = true;
             self.prompts.clear();
             // Fold regions share the prompt-mark frame, so the same reset
             // invalidates them. Rebuild a fresh manager (preserving nothing)
@@ -651,6 +678,10 @@ impl Tab {
             let delta = evicted_total - self.evicted_baseline;
             if delta > 0 {
                 let delta_u32 = u32::try_from(delta).unwrap_or(u32::MAX);
+                // Accumulate the eviction so `App::pump_all` can shift the
+                // absolute-row selection down by the same number of rows that
+                // prune the prompt / fold frames.
+                self.pending_eviction_delta = self.pending_eviction_delta.saturating_add(delta_u32);
                 self.prompts.prune_before_line(delta_u32);
                 // Keep fold regions in lock-step with the prompt frame: the
                 // same eviction shifts their absolute rows down (and drops
@@ -954,6 +985,15 @@ impl Tab {
         if let Some(p) = &self.pty {
             p.write(bytes);
         }
+    }
+
+    /// Test-only helper that runs the prompt-mark backfill (the production
+    /// `pump` step that records the scrollback-eviction delta / frame-reset
+    /// latch). Lets cross-module tests in `app` drive the eviction
+    /// bookkeeping without exposing the otherwise-private backfill method.
+    #[cfg(test)]
+    pub(crate) fn test_backfill_eviction(&mut self, evicted_total: u64) {
+        self.backfill_prompt_marks(evicted_total, Vec::new());
     }
 
     pub fn resize(&self, cols: u16, rows: u16) {

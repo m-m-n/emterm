@@ -65,7 +65,11 @@ const RESIZE_EDGE_PX: f32 = 8.0;
 #[derive(Debug, Clone, Copy, Default)]
 struct ClickTracker {
     last_press_at: Option<Instant>,
-    last_press_pos: Option<(u16, u16)>,
+    /// Last press cell as `(abs_row, col)`. Using the absolute row keeps a
+    /// double / triple click from spuriously matching when the viewport
+    /// scrolled a different buffer line under the same screen cell between
+    /// clicks.
+    last_press_pos: Option<(u32, u16)>,
     /// Click counter: 1 → Character, 2 → Word, 3 → Line. After 3, the next
     /// press resets to 1.
     count: u32,
@@ -80,9 +84,9 @@ struct ClickClassification {
 }
 
 impl ClickTracker {
-    /// Classify a new press at `(row, col)` happening at `now`. The internal
-    /// state is updated for the next call.
-    fn classify(&mut self, now: Instant, row: u16, col: u16) -> ClickClassification {
+    /// Classify a new press at absolute `(row, col)` happening at `now`. The
+    /// internal state is updated for the next call.
+    fn classify(&mut self, now: Instant, row: u32, col: u16) -> ClickClassification {
         let mut count = 1u32;
         if let (Some(prev_at), Some(prev_pos)) = (self.last_press_at, self.last_press_pos) {
             let elapsed_ms = now.duration_since(prev_at).as_millis();
@@ -167,13 +171,6 @@ pub struct WindowHost {
     /// Whether the left button is currently held — used as the gate for
     /// turning subsequent `CursorMoved` events into selection extends.
     dragging: bool,
-    /// Cell position at which the left button went down, kept until
-    /// either the pointer moves (the press is upgraded to a drag and a
-    /// Character-mode `Selection` is created) or the button is released
-    /// (treated as a click — no selection is materialized). Word and
-    /// line selections from double / triple click bypass this and
-    /// commit immediately, just like before.
-    pending_press_cell: Option<Pos>,
     /// Click tracker for double / triple click detection.
     click_tracker: ClickTracker,
     /// Lazily-initialized arboard clipboard. We only fail-loud once if the
@@ -389,7 +386,6 @@ impl WindowHost {
             current_mods: Modifiers::NONE,
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             dragging: false,
-            pending_press_cell: None,
             click_tracker: ClickTracker::default(),
             clipboard,
             image_layer,
@@ -989,6 +985,27 @@ impl WindowHost {
         let col = (x as u32).min((cols - 1) as u32) as u16;
         let row = (y as u32).min((rows - 1) as u32) as u16;
         (row, col)
+    }
+
+    /// Resolve the absolute buffer row shown at `screen_row`, honoring the
+    /// current fold layout (collapsed bodies skew the linear mapping; a
+    /// summary row maps to its region's start line).
+    fn screen_row_to_abs(&self, screen_row: u16, app: &App) -> u32 {
+        if let Some(layout) = app.fold_layout() {
+            match layout.rows.get(screen_row as usize) {
+                Some(crate::fold::FoldRowKind::Cells { actual_line }) => return *actual_line,
+                Some(crate::fold::FoldRowKind::Summary { region }) => return region.start_line,
+                None => {} // past the layout → fall through to the linear map
+            }
+        }
+        // No fold layout (or screen_row past it): the linear scrollback
+        // model. `visible_start = scrollback_len - scroll_offset` (saturating)
+        // is the absolute row at the top of the viewport.
+        let scrollback_len = app
+            .active_tab()
+            .map(|t| t.core.lock().get_scrollback_length())
+            .unwrap_or(0);
+        scrollback_len.saturating_sub(app.scroll_offset()) + screen_row as u32
     }
 
     /// Write `text` to the X11 PRIMARY selection (auto-copy on mouse-up).
@@ -2333,14 +2350,18 @@ impl ApplicationHandler for PocApp {
                 }
                 host.window().request_redraw();
                 if host.dragging {
-                    let (row, col) = host.pixel_to_cell(position, &self.app);
+                    let (screen_row, col) = host.pixel_to_cell(position, &self.app);
+                    // Convert the screen row to its absolute buffer row so the
+                    // extended endpoint stays pinned to the content as the
+                    // viewport scrolls.
+                    let abs_row = host.screen_row_to_abs(screen_row, &self.app);
                     // First motion since the press in Character mode
                     // upgrades the pending click into a real Selection.
                     // Word / line selections (double / triple click)
                     // were already committed at press time and the
-                    // pending_press_cell was cleared there.
+                    // pending anchor was cleared there.
                     if self.app.selection.is_none() {
-                        if let Some(anchor) = host.pending_press_cell.take() {
+                        if let Some(anchor) = self.app.pending_selection_anchor.take() {
                             self.app.selection =
                                 Some(Selection::new_with_mode(anchor, SelectionMode::Character));
                         }
@@ -2348,7 +2369,7 @@ impl ApplicationHandler for PocApp {
                     if let Some(sel) = self.app.selection.as_mut() {
                         if let Some(tab) = self.app.tabs.get(self.app.active) {
                             let core = tab.core.lock();
-                            sel.extend(Pos { row, col }, &core);
+                            sel.extend(Pos { row: abs_row, col }, &core);
                         }
                     }
                 }
@@ -2411,8 +2432,12 @@ impl ApplicationHandler for PocApp {
                         if host.current_mods.ctrl && host.try_open_link_at_pointer(&self.app) {
                             return;
                         }
-                        let (row, col) = host.pixel_to_cell(host.cursor_pos, &self.app);
-                        let cls = host.click_tracker.classify(Instant::now(), row, col);
+                        let (screen_row, col) = host.pixel_to_cell(host.cursor_pos, &self.app);
+                        // Anchor the press at its absolute buffer row so the
+                        // selection (and double / triple-click classification)
+                        // tracks the content across scrolls.
+                        let abs_row = host.screen_row_to_abs(screen_row, &self.app);
+                        let cls = host.click_tracker.classify(Instant::now(), abs_row, col);
                         if cls.mode == SelectionMode::Character {
                             // Single click in character mode: do not
                             // materialize a one-cell selection yet — the
@@ -2421,19 +2446,20 @@ impl ApplicationHandler for PocApp {
                             // press cell so the first motion (if any)
                             // can upgrade this into a real drag-select.
                             self.app.selection = None;
-                            host.pending_press_cell = Some(Pos { row, col });
+                            self.app.pending_selection_anchor = Some(Pos { row: abs_row, col });
                             host.window().request_redraw();
                         } else {
                             // Word (double click) / line (triple click)
                             // commit immediately so a static click still
                             // selects the targeted word or line.
-                            let mut sel = Selection::new_with_mode(Pos { row, col }, cls.mode);
+                            let mut sel =
+                                Selection::new_with_mode(Pos { row: abs_row, col }, cls.mode);
                             if let Some(tab) = self.app.tabs.get(self.app.active) {
                                 let core = tab.core.lock();
-                                sel.extend(Pos { row, col }, &core);
+                                sel.extend(Pos { row: abs_row, col }, &core);
                             }
                             self.app.selection = Some(sel);
-                            host.pending_press_cell = None;
+                            self.app.pending_selection_anchor = None;
                         }
                         host.dragging = true;
                     }
@@ -2446,7 +2472,7 @@ impl ApplicationHandler for PocApp {
                         // word/line) press whose motion never upgraded it to
                         // a drag-select. Capture it before the reset so the
                         // fold-click path below can detect a plain click.
-                        let pending = host.pending_press_cell.take();
+                        let pending = self.app.pending_selection_anchor.take();
                         // Plain left-click (no Ctrl; meta does not exist on
                         // Linux/Windows), no active selection, no drag: this
                         // is a candidate for a fold toggle. Mirrors the
@@ -2473,7 +2499,7 @@ impl ApplicationHandler for PocApp {
                         if let Some(sel) = self.app.selection {
                             if let Some(tab) = self.app.tabs.get(self.app.active) {
                                 let core = tab.core.lock();
-                                let text = sel.resolve(&core);
+                                let text = sel.resolve(&core, self.app.fold_layout());
                                 drop(core);
                                 host.set_primary(&text);
                                 // `copy_on_select` opts into mirroring the
@@ -2730,7 +2756,7 @@ fn handle_special_chord(
             if let Some(sel) = app.selection {
                 if let Some(tab) = app.tabs.get(app.active) {
                     let core = tab.core.lock();
-                    let text = sel.resolve(&core);
+                    let text = sel.resolve(&core, app.fold_layout());
                     drop(core);
                     host.set_clipboard(&text);
                 }

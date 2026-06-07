@@ -396,11 +396,11 @@ pub fn collect_cell_inputs(
                 if col >= cols {
                     break;
                 }
-                // Selection is viewport-coordinate-based; pass the screen
-                // row so a selection made on-screen stays pinned there as
-                // content scrolls under it (matches the PoC's viewport-only
-                // selection model).
-                let selected = selection.map(|s| s.contains(row, col)).unwrap_or(false);
+                // Selection is absolute-row-based: this scrollback cell is
+                // tested against its own absolute row (`abs_row`), so the
+                // highlight tracks the buffer content as the viewport
+                // scrolls rather than staying pinned to a screen row.
+                let selected = selection.map(|s| s.contains(abs_row, col)).unwrap_or(false);
                 let mut style =
                     resolve_cell_style_from_packed(theme, cell.fg, cell.bg, cell.flags, selected);
                 if cell_in_hovered_link(hovered_link, row, col) {
@@ -431,16 +431,18 @@ pub fn collect_cell_inputs(
 
         // Live viewport row: `abs_row - scrollback_len` is the live-ring row
         // whose content we read. The cell still *appears* at the on-screen
-        // `row`, so hover / cursor / selection are addressed by `row` (their
-        // viewport-coordinate space). When `scroll_offset == 0` these
-        // coincide, reproducing the original live-only output exactly.
+        // `row`, so hover / cursor are addressed by `row` (their
+        // viewport-coordinate space), but the selection is keyed off the
+        // cell's absolute row (`abs_row`) so it tracks the buffer content as
+        // the viewport scrolls. When `scroll_offset == 0` these coincide,
+        // reproducing the original live-only output exactly.
         let content_row = (abs_row - scrollback_len) as u16;
         let mut col = 0u16;
         while col < cols {
             let flags = core.get_cell_flags(col, content_row);
             let packed_fg = core.get_cell_fg(col, content_row);
             let packed_bg = core.get_cell_bg(col, content_row);
-            let selected = selection.map(|s| s.contains(row, col)).unwrap_or(false);
+            let selected = selection.map(|s| s.contains(abs_row, col)).unwrap_or(false);
             let mut style =
                 resolve_cell_style_from_packed(theme, packed_fg, packed_bg, flags, selected);
             // Hover underline: a cell inside the hovered link's physical
