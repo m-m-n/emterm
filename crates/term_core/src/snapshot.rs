@@ -301,7 +301,8 @@ impl TerminalCore {
             cursor_just_shown: false,
             cursor_show_interrupt: snapshot.cursor_show_interrupt,
             // Snapshot restore starts a fresh parse frame; no in-flight marks.
-            pending_prompt_marks: Vec::new(),
+            pending_prompt_marks: VecDeque::new(),
+            pending_fold_marks: VecDeque::new(),
         })
     }
 
@@ -414,7 +415,8 @@ impl TerminalCore {
             cursor_just_shown: false,
             cursor_show_interrupt: snapshot.cursor_show_interrupt,
             // Snapshot restore starts a fresh parse frame; no in-flight marks.
-            pending_prompt_marks: Vec::new(),
+            pending_prompt_marks: VecDeque::new(),
+            pending_fold_marks: VecDeque::new(),
         })
     }
 

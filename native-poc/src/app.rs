@@ -270,6 +270,18 @@ pub struct App {
     /// アプリケーションドメイン外からの直接アクセスは禁止。通知送信は
     /// [`App::notify`] を経由すること。
     pub(crate) notification_sink: Arc<dyn NotificationSink>,
+    /// Per-frame fold layout for the active tab, recomputed at the top of
+    /// each `WindowHost::render` via [`App::refresh_fold_layout`]. `Some`
+    /// only when the active tab has at least one *collapsed* region
+    /// (mirroring the WebView's `getCollapsedRegions().length > 0` gate);
+    /// `None` otherwise so the renderer takes the unchanged linear path.
+    /// Read by `collect_cell_inputs` (cell row selection),
+    /// `draw_fold_summaries` (summary overlays), and
+    /// `draw_search_highlights` (fold-aware match → screen-row mapping).
+    /// Building it once with `&mut self` lets the renderer query it
+    /// immutably for the rest of the frame (the fold line-mapping otherwise
+    /// needs `&mut FoldManager` for its collapsed cache).
+    fold_layout: Option<crate::fold::FoldLayout>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,6 +437,7 @@ impl App {
             active_cwd,
             previous_status_bar_view_model: None,
             notification_sink,
+            fold_layout: None,
         }
     }
 
@@ -1376,6 +1389,128 @@ impl App {
         }
     }
 
+    /// Recompute the per-frame [`crate::fold::FoldLayout`] for the active
+    /// tab. Called once at the top of `WindowHost::render` (before the
+    /// immutable-borrow paint passes). Stores `Some(layout)` only when the
+    /// active tab has at least one collapsed region — the renderer's
+    /// fold-aware paths gate on `fold_layout().is_some()`, mirroring the
+    /// WebView's `getCollapsedRegions().length > 0`. Otherwise stores `None`
+    /// so the linear (non-folded) draw path runs unchanged.
+    ///
+    /// The viewport row count + scrollback length are read from the active
+    /// tab's `TerminalCore`; the offset from [`Self::scroll_offset`].
+    pub fn refresh_fold_layout(&mut self) {
+        let scroll_offset = self.scroll_offset();
+        // Snapshot the dimensions under the core lock, then build the layout
+        // off the tab's `FoldManager` (which needs `&mut` for its collapsed
+        // cache) without holding the core lock across the build.
+        let dims = self.active_tab().map(|tab| {
+            let core = tab.core.lock();
+            (core.get_scrollback_length(), core.rows())
+        });
+        self.fold_layout = match (dims, self.active_tab_mut()) {
+            (Some((scrollback_len, rows)), Some(tab)) => {
+                if tab.folds.has_collapsed_regions() {
+                    Some(tab.folds.build_layout(scrollback_len, rows, scroll_offset))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+    }
+
+    /// The fold layout built for the current frame, if the active tab has
+    /// collapsed regions. `None` selects the linear (non-folded) render
+    /// path. See [`Self::refresh_fold_layout`].
+    pub fn fold_layout(&self) -> Option<&crate::fold::FoldLayout> {
+        self.fold_layout.as_ref()
+    }
+
+    /// Toggle (or expand) the fold region under a plain left-click at screen
+    /// row `display_row` (0-based, counted from the top grid row). Port of
+    /// the WebView `FoldHandler.handleFoldClick` (`handlers/fold.ts`); the
+    /// caller (`window_host`) is responsible for the WebView's
+    /// outer guards that have no equivalent in pure `App` state: a plain
+    /// left-click (no Ctrl/Alt/Meta), with no active text selection, that
+    /// did not become a drag-select.
+    ///
+    /// Behavior, mirroring the WebView:
+    /// - Clicking a collapsed region's **summary row** expands that region.
+    /// - Clicking inside an **expanded** foldable region collapses it. When
+    ///   the region's summary sits *above* the current view top
+    ///   (`regionDisplayLine < display_start`) the scroll offset is reduced
+    ///   by `line_count - 1` (the rows the collapse hides) so the content
+    ///   under the pointer stays visually anchored.
+    /// - Clicking outside any region (or in scrollback below a region) is a
+    ///   no-op.
+    ///
+    /// Returns `true` when fold state changed (the caller should request a
+    /// redraw). `display_row >= rows` (a click below the grid) is rejected,
+    /// matching the WebView's `displayRow < 0 || >= rows` guard.
+    pub fn handle_fold_click(&mut self, display_row: u16) -> bool {
+        // Snapshot the geometry under the core lock, then operate on the
+        // fold manager (which needs `&mut` for its collapsed cache) without
+        // holding the lock across the mutation — same pattern as
+        // `refresh_fold_layout`.
+        let scroll_offset = self.scroll_offset();
+        let Some((scrollback_len, rows)) = self.active_tab().map(|tab| {
+            let core = tab.core.lock();
+            (core.get_scrollback_length(), core.rows())
+        }) else {
+            return false;
+        };
+        if display_row >= rows {
+            return false;
+        }
+        let Some(tab) = self.active_tab_mut() else {
+            return false;
+        };
+        if !tab.folds.is_enabled() {
+            return false;
+        }
+
+        let total_actual = scrollback_len + rows as u32;
+        let total_display = tab.folds.get_total_display_lines(total_actual);
+        // display_start = max(0, total_display - rows - scroll_offset),
+        // saturating to stay in u32 (matches `build_layout`).
+        let display_start = total_display
+            .saturating_sub(rows as u32)
+            .saturating_sub(scroll_offset);
+        let display_line = display_start + display_row as u32;
+
+        // A click on a collapsed region's summary row expands it.
+        if let Some(region) = tab.folds.get_summary_region(display_line) {
+            tab.folds.expand_region_containing(region.start_line);
+            self.needs_full_redraw = true;
+            return true;
+        }
+
+        // Otherwise: a click inside an expanded foldable region collapses it.
+        let actual_line = tab.folds.display_line_to_actual(display_line);
+        let region = match tab.folds.get_region_at_line(actual_line) {
+            Some(r) if !r.collapsed => (r.start_line, r.line_count),
+            _ => return false,
+        };
+        let (region_start, line_count) = region;
+        // Capture the region's display row BEFORE collapsing (matches the
+        // WebView's `regionDisplayLine` computed before `toggleFold`).
+        let region_display_line = tab.folds.actual_line_to_display(region_start);
+        tab.folds.toggle_fold(actual_line);
+        // Collapsing a region whose summary is above the view top hides
+        // `line_count - 1` rows from the scrollback above us; pull the
+        // offset down by the same amount so the click target stays put.
+        if region_display_line < display_start {
+            let delta = line_count - 1;
+            let new_offset = scroll_offset.saturating_sub(delta);
+            // Re-borrow `self` (the `tab` borrow ends here): `scroll_set_offset`
+            // takes `&mut self` and clamps / snaps to Live at 0.
+            self.scroll_set_offset(new_offset);
+        }
+        self.needs_full_redraw = true;
+        true
+    }
+
     /// Scroll back by `delta` rows (clamps to `scrollback_lines`). No-op
     /// when alt-screen is active.
     pub fn scroll_up_by(&mut self, delta: u32) {
@@ -1464,9 +1599,14 @@ impl App {
     /// No-op on the alternate screen (same guard as the `scroll_*` family;
     /// alt-screen apps own the whole viewport and have no scrollback).
     ///
-    /// Note: the WebView build also auto-expands a collapsed fold region
-    /// containing the target. native-poc has no fold support yet, so that
-    /// step is omitted (Phase 2 fold work will add it).
+    /// Note: when the target prompt mark sits inside a *collapsed* fold
+    /// region the region is auto-expanded first (mirroring the WebView
+    /// `handlePromptJump`'s `foldManager.expandRegionContaining(marker.lineIndex)`),
+    /// so the prompt is visible after the jump. The scroll offset is still
+    /// computed against the mark's absolute row — expansion only changes the
+    /// display↔actual mapping, not the buffer row the mark lives on, so the
+    /// `scrollback_len - row` offset places the prompt at the view top either
+    /// way.
     pub fn jump_to_prompt(&mut self, direction: JumpDirection) {
         if self.alt_screen {
             return;
@@ -1485,6 +1625,12 @@ impl App {
         };
         match target {
             Some(row) => {
+                // Auto-expand a collapsed fold region containing the mark so
+                // jumping into folded output reveals the prompt. No-op when
+                // the mark is in no region (or an already-expanded one).
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.folds.expand_region_containing(row);
+                }
                 let offset = scrollback_len.saturating_sub(row);
                 self.scroll_set_offset(offset);
             }
@@ -1593,18 +1739,35 @@ impl App {
     /// Scroll the viewport so the current match is roughly centered, if it
     /// is not already visible. No-op on the alt screen (no scrollback) or
     /// when there is no current match.
+    ///
+    /// Also auto-expands any collapsed fold region that contains the match,
+    /// mirroring the WebView's `search.ts:154`
+    /// `foldManager.expandRegionContaining(match.lineIndex)`. The expand
+    /// happens before the scroll calculation so the geometry is already
+    /// updated when the offset is computed.
     fn scroll_to_current_match(&mut self) {
         if self.alt_screen {
             return;
         }
-        let Some(m) = self.search.current_match() else {
-            return;
+        // Collect the match row first, then drop the borrow on `self.search`
+        // so `self.tabs` can be mutably borrowed for the fold expand below.
+        let abs_row = {
+            let Some(m) = self.search.current_match() else {
+                return;
+            };
+            // The match's first segment's absolute row anchors the scroll.
+            let Some(seg) = m.segments.first() else {
+                return;
+            };
+            seg.abs_row
         };
-        // The match's first segment's absolute row anchors the scroll.
-        let Some(seg) = m.segments.first() else {
-            return;
-        };
-        let abs_row = seg.abs_row;
+        // Auto-expand a collapsed fold region containing the match so the
+        // hit is visible — mirroring the WebView's search.ts:154 call to
+        // `foldManager.expandRegionContaining(match.lineIndex)`.
+        // No-op when the match is in no region or an already-expanded one.
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.folds.expand_region_containing(abs_row);
+        }
         let (scrollback_len, rows) = match self.tabs.get(self.active) {
             Some(tab) => {
                 let core = tab.core.lock();
@@ -2174,6 +2337,145 @@ mod tests {
         );
     }
 
+    // ── Search fold auto-expand (SPEC: Search Integration) ──────────────
+
+    /// Build a tab with one occurrence of "needle" in scrollback and return
+    /// the absolute row the match lands on. The core is small (80×4) so a
+    /// handful of `\r\n` lines push the needle into scrollback quickly.
+    fn app_with_needle_in_scrollback() -> (App, u32) {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        {
+            let mut core = app.tabs[0].core.lock();
+            // Write the needle line then overflow the 4-row viewport so it
+            // spills into scrollback.
+            core.process_pty_data(b"needle\r\n");
+            for _ in 0..8 {
+                core.process_pty_data(b"\r\n");
+            }
+        }
+        // Run a search to discover the actual abs_row of the match.
+        app.open_search();
+        app.search.query = "needle".to_string();
+        if let Some(tab) = app.tabs.get(app.active) {
+            let core = tab.core.lock();
+            app.search.execute(&core);
+        }
+        let abs_row = app.search.matches[0].segments[0].abs_row;
+        // Reset navigation cursor; tests call run_search / search_next themselves.
+        app.search.current_index = -1;
+        (app, abs_row)
+    }
+
+    #[test]
+    fn search_next_auto_expands_collapsed_region_containing_match() {
+        // A collapsed fold region wrapping the needle's absolute row must be
+        // expanded when `search_next` navigates to that match — mirroring the
+        // WebView's `foldManager.expandRegionContaining(match.lineIndex)`
+        // call in search.ts:154.
+        let (mut app, abs_row) = app_with_needle_in_scrollback();
+        // Wrap the needle in a collapsed fold region.
+        let region_start = abs_row;
+        let region_end = abs_row + 5;
+        app.tabs[0].folds.register_osc133_region(
+            region_start,
+            region_end,
+            "cmd".to_string(),
+            Some(0),
+        );
+        app.tabs[0].folds.toggle_fold(region_start);
+        assert!(
+            app.tabs[0]
+                .folds
+                .get_region_at_line(abs_row)
+                .unwrap()
+                .collapsed,
+            "region must be collapsed before navigation"
+        );
+
+        // Navigate to the first match. `search_next` wraps from -1 to 0.
+        app.search_next();
+
+        assert!(
+            !app.tabs[0]
+                .folds
+                .get_region_at_line(abs_row)
+                .unwrap()
+                .collapsed,
+            "search_next must expand the collapsed region containing the match"
+        );
+    }
+
+    #[test]
+    fn run_search_auto_expands_collapsed_region_on_initial_confirm() {
+        // On the initial search confirm (`run_search`) the current match (first
+        // hit) is also scrolled into view, so the same auto-expand must fire.
+        let (mut app, abs_row) = app_with_needle_in_scrollback();
+        let region_start = abs_row;
+        let region_end = abs_row + 5;
+        app.tabs[0].folds.register_osc133_region(
+            region_start,
+            region_end,
+            "cmd".to_string(),
+            Some(0),
+        );
+        app.tabs[0].folds.toggle_fold(region_start);
+
+        app.run_search();
+
+        assert!(
+            !app.tabs[0]
+                .folds
+                .get_region_at_line(abs_row)
+                .unwrap()
+                .collapsed,
+            "run_search must expand the collapsed region containing the first match"
+        );
+    }
+
+    #[test]
+    fn search_does_not_expand_unrelated_collapsed_regions() {
+        // A collapsed region that does NOT contain the current match must stay
+        // collapsed — expand_region_containing is scoped to the match row.
+        let (mut app, abs_row) = app_with_needle_in_scrollback();
+        // Place the fold region well away from the needle.
+        let unrelated_start = abs_row.saturating_sub(1).max(1) - 1; // one before
+                                                                    // Guard: skip when there's no room for a region before abs_row.
+        if unrelated_start == 0 {
+            return;
+        }
+        let unrelated_end = unrelated_start + 1;
+        if unrelated_end > abs_row {
+            // No room — skip rather than overlap.
+            return;
+        }
+        app.tabs[0].folds.register_osc133_region(
+            unrelated_start,
+            unrelated_end,
+            "other".to_string(),
+            Some(0),
+        );
+        app.tabs[0].folds.toggle_fold(unrelated_start);
+        assert!(
+            app.tabs[0]
+                .folds
+                .get_region_at_line(unrelated_start)
+                .unwrap()
+                .collapsed
+        );
+
+        app.search_next();
+
+        assert!(
+            app.tabs[0]
+                .folds
+                .get_region_at_line(unrelated_start)
+                .unwrap()
+                .collapsed,
+            "unrelated collapsed region must stay collapsed"
+        );
+    }
+
     #[test]
     fn visual_bell_reports_progress_while_live() {
         let mut app = App::new();
@@ -2532,6 +2834,210 @@ mod tests {
         // No tabs at all.
         app.jump_to_prompt(JumpDirection::Prev);
         assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    // ── Prompt-jump fold auto-expand (Phase 2 fold step 5) ───
+
+    #[test]
+    fn jump_prev_auto_expands_collapsed_region_containing_mark() {
+        // A prompt mark at absolute row 40 lives inside a collapsed fold
+        // region [35, 50). Jumping back to it must expand that region so
+        // the prompt is visible (mirroring the WebView
+        // `expandRegionContaining(marker.lineIndex)`).
+        let mut app = app_with_prompts(100, &[40]);
+        let scrollback_len = app.tabs[0].core.lock().get_scrollback_length();
+        app.tabs[0]
+            .folds
+            .register_osc133_region(35, 50, "cmd".to_string(), Some(0));
+        app.tabs[0].folds.toggle_fold(40);
+        assert!(app.tabs[0].folds.get_region_at_line(40).unwrap().collapsed);
+
+        app.jump_to_prompt(JumpDirection::Prev);
+
+        // Region expanded …
+        assert!(!app.tabs[0].folds.get_region_at_line(40).unwrap().collapsed);
+        // … and the scroll offset still places the mark row at the view top.
+        assert_eq!(app.scroll_offset(), scrollback_len - 40);
+    }
+
+    #[test]
+    fn jump_next_auto_expands_collapsed_region_containing_mark() {
+        let mut app = app_with_prompts(100, &[40, 70]);
+        let scrollback_len = app.tabs[0].core.lock().get_scrollback_length();
+        app.tabs[0]
+            .folds
+            .register_osc133_region(65, 80, "cmd".to_string(), Some(0));
+        app.tabs[0].folds.toggle_fold(70);
+        // View top at row 50 so Next finds the mark at row 70.
+        app.scroll_set_offset(scrollback_len - 50);
+
+        app.jump_to_prompt(JumpDirection::Next);
+
+        assert!(!app.tabs[0].folds.get_region_at_line(70).unwrap().collapsed);
+        assert_eq!(app.scroll_offset(), scrollback_len - 70);
+    }
+
+    #[test]
+    fn jump_does_not_touch_unrelated_collapsed_regions() {
+        // A collapsed region that does NOT contain the jump target stays
+        // collapsed (expand_region_containing only acts on the mark's region).
+        let mut app = app_with_prompts(100, &[40]);
+        app.tabs[0]
+            .folds
+            .register_osc133_region(60, 70, "other".to_string(), Some(0));
+        app.tabs[0].folds.toggle_fold(60);
+
+        app.jump_to_prompt(JumpDirection::Prev);
+
+        assert!(app.tabs[0].folds.get_region_at_line(60).unwrap().collapsed);
+    }
+
+    #[test]
+    fn jump_with_no_fold_region_at_mark_is_fine() {
+        // No fold regions at all: jump behaves exactly as before.
+        let mut app = app_with_prompts(100, &[40]);
+        let scrollback_len = app.tabs[0].core.lock().get_scrollback_length();
+        app.jump_to_prompt(JumpDirection::Prev);
+        assert_eq!(app.scroll_offset(), scrollback_len - 40);
+    }
+
+    // ── Fold click toggle (Phase 2 fold step 5) ──────────────
+
+    /// Build an `App` with one tab carrying `scrollback` scrollback rows and
+    /// a single OSC 133 fold region `[start, end)`. The region is collapsed
+    /// when `collapsed` is set. Returns the app plus the live `rows` /
+    /// `scrollback_len` so tests can compute display geometry exactly.
+    fn app_with_fold(scrollback: u32, region: (u32, u32), collapsed: bool) -> (App, u16, u32) {
+        let mut app = app_with_prompts(scrollback, &[]);
+        let (start, end) = region;
+        app.tabs[0]
+            .folds
+            .register_osc133_region(start, end, "cmd".to_string(), Some(0));
+        if collapsed {
+            app.tabs[0].folds.toggle_fold(start);
+        }
+        let (rows, scrollback_len) = {
+            let core = app.tabs[0].core.lock();
+            (core.rows(), core.get_scrollback_length())
+        };
+        (app, rows, scrollback_len)
+    }
+
+    #[test]
+    fn fold_click_on_summary_row_expands_region() {
+        // Collapsed region [5, 15) (9 rows hidden). Summary sits at display
+        // line 5; scroll so display_start = 5 → the summary is at the top
+        // screen row (display_row 0).
+        let (mut app, rows, scrollback_len) = app_with_fold(100, (5, 15), true);
+        let total_display = scrollback_len + rows as u32 - 9; // hides 9 rows
+        let display_start = 5u32;
+        let offset = total_display - rows as u32 - display_start;
+        app.scroll_set_offset(offset);
+
+        let acted = app.handle_fold_click(0);
+
+        assert!(acted, "clicking the summary row should act");
+        assert!(
+            !app.tabs[0].folds.get_region_at_line(5).unwrap().collapsed,
+            "summary click must expand the region"
+        );
+    }
+
+    #[test]
+    fn fold_click_inside_expanded_region_collapses_with_scroll_adjust() {
+        // Expanded region [5, 35) (30 rows). Scroll so display_start = 10:
+        // the region start (display line 5) is above the view top, but the
+        // click row 0 (display line 10) lands inside the still-visible body.
+        // Collapsing it must pull the offset down by line_count - 1 = 29 to
+        // keep the click visually anchored.
+        let (mut app, rows, scrollback_len) = app_with_fold(100, (5, 35), false);
+        // No region collapsed yet → total_display == total_actual.
+        let total_display = scrollback_len + rows as u32;
+        let display_start = 10u32;
+        let offset = total_display - rows as u32 - display_start; // == scrollback_len - 10
+        app.scroll_set_offset(offset);
+        let before_offset = app.scroll_offset();
+
+        let acted = app.handle_fold_click(0);
+
+        assert!(
+            acted,
+            "clicking inside an expanded region should collapse it"
+        );
+        assert!(
+            app.tabs[0].folds.get_region_at_line(5).unwrap().collapsed,
+            "interior click must collapse the region"
+        );
+        // Summary (display line 5) was above the view top (display_start 10)
+        // → offset shifts down by line_count - 1 = 29.
+        assert_eq!(app.scroll_offset(), before_offset - 29);
+    }
+
+    #[test]
+    fn fold_click_inside_region_in_viewport_does_not_adjust_scroll() {
+        // Expanded region [5, 15). With display_start = 0 the region start
+        // (display line 5) is at/below the view top, so collapsing it must
+        // NOT shift the scroll offset (mirrors the WebView's
+        // `regionDisplayLine < displayStart` guard being false).
+        let (mut app, rows, scrollback_len) = app_with_fold(100, (5, 15), false);
+        let total_display = scrollback_len + rows as u32; // nothing collapsed yet
+        let offset = total_display - rows as u32; // display_start = 0
+        app.scroll_set_offset(offset);
+        let before_offset = app.scroll_offset();
+
+        // display_start = 0, so display_row 5 = display line 5 = region start.
+        let acted = app.handle_fold_click(5);
+
+        assert!(acted);
+        assert!(app.tabs[0].folds.get_region_at_line(5).unwrap().collapsed);
+        assert_eq!(
+            app.scroll_offset(),
+            before_offset,
+            "region start at/below view top must not shift the offset"
+        );
+    }
+
+    #[test]
+    fn fold_click_outside_any_region_is_noop() {
+        // Click a screen row that maps to a buffer line outside the region.
+        let (mut app, rows, scrollback_len) = app_with_fold(100, (5, 15), false);
+        let total_display = scrollback_len + rows as u32;
+        let offset = total_display - rows as u32; // display_start = 0
+        app.scroll_set_offset(offset);
+
+        // display_row 20 = display line 20 = actual 20, outside [5, 15).
+        let acted = app.handle_fold_click(20);
+
+        assert!(!acted, "a click outside any region must be a no-op");
+        assert!(!app.tabs[0].folds.get_region_at_line(5).unwrap().collapsed);
+    }
+
+    #[test]
+    fn fold_click_below_grid_is_rejected() {
+        // A display_row >= rows (a click below the last grid row) is rejected,
+        // matching the WebView `displayRow >= rows` guard.
+        let (mut app, rows, _sb) = app_with_fold(100, (5, 15), true);
+        assert!(!app.handle_fold_click(rows));
+        assert!(!app.handle_fold_click(rows + 5));
+        // Region unchanged (still collapsed).
+        assert!(app.tabs[0].folds.get_region_at_line(5).unwrap().collapsed);
+    }
+
+    #[test]
+    fn fold_click_with_no_active_tab_is_noop() {
+        let mut app = App::new();
+        assert!(app.tabs.is_empty());
+        assert!(!app.handle_fold_click(0));
+    }
+
+    #[test]
+    fn fold_click_when_folding_disabled_is_noop() {
+        let (mut app, _rows, _sb) = app_with_fold(100, (5, 15), false);
+        app.tabs[0].folds.set_enabled(false);
+        // display_start 0 so display_row 5 would otherwise hit the region.
+        let acted = app.handle_fold_click(5);
+        assert!(!acted, "disabled folding must reject the click");
+        assert!(!app.tabs[0].folds.get_region_at_line(5).unwrap().collapsed);
     }
 
     #[test]

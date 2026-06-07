@@ -65,6 +65,51 @@ pub struct PendingPromptMark {
     pub evicted_total: u64,
 }
 
+// ── Pending custom fold marks (OSC 777;emterm;fold) ──────
+
+/// Upper bound on `TerminalCore::pending_fold_marks`. A producer that
+/// floods `OSC 777;emterm;fold;begin` without advancing the cursor could
+/// otherwise grow this buffer without bound — the PTY is a trust
+/// boundary. When the cap is hit the oldest pending mark is dropped.
+/// Mirrors [`MAX_PENDING_PROMPT_MARKS`].
+pub const MAX_PENDING_FOLD_MARKS: usize = 4096;
+
+/// Whether a captured custom-fold mark is a `begin` or an `end`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoldMarkKind {
+    /// `OSC 777;emterm;fold;begin;<label>` — opens a region.
+    Begin,
+    /// `OSC 777;emterm;fold;end` — closes the most recent open region.
+    End,
+}
+
+/// A custom-fold mark (`OSC 777;emterm;fold;begin|end`) captured at the
+/// moment the handler ran, mirroring [`PendingPromptMark`] but for the
+/// fold pipeline. The absolute row and eviction counter are snapshotted
+/// here because the frame can shift (scrollback eviction) between the
+/// handler firing and the consumer draining; the native consumer
+/// normalizes `abs_row` against the current eviction total. `begin/end`
+/// pairing is left entirely to the consumer (native-poc) so `term_core`
+/// stays a thin accumulator. Carries an owned `label` (only meaningful
+/// for `Begin`), so unlike `PendingPromptMark` it is not `Copy`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingFoldMark {
+    /// Whether this mark opened (`begin`) or closed (`end`) a region.
+    pub kind: FoldMarkKind,
+    /// Absolute scrollback-frame row at the moment the mark was received:
+    /// `scrollback_len + cursor.row`. Mirrors the WebView `lineIndex`
+    /// (`scrollbackLength + cursor.row`) captured at OSC-receipt time.
+    pub abs_row: u32,
+    /// `scrollback_evicted_total` at the moment the mark was received.
+    /// The consumer uses `current_evicted_total - this` to shift `abs_row`
+    /// into its current frame before pairing begin↔end.
+    pub evicted_total: u64,
+    /// Fold label, carried only on `Begin` marks (empty otherwise). The
+    /// `begin` payload is `OSC 777;emterm;fold;begin;<label>`; the consumer
+    /// substitutes a `"..."` fallback for an empty label at registration.
+    pub label: String,
+}
+
 // ── SlimStats (FR11 debug export) ────────────────────────
 
 /// Compact statistics about the SlimCell scrollback storage.
@@ -192,7 +237,19 @@ pub struct TerminalCore {
     /// marks in one chunk collapsing onto the final cursor row. The wasm /
     /// WebView path ignores this and keeps using the `on_osc(133, …)`
     /// callback, which still fires. Capped at `MAX_PENDING_PROMPT_MARKS`.
-    pub(crate) pending_prompt_marks: Vec<PendingPromptMark>,
+    pub(crate) pending_prompt_marks: VecDeque<PendingPromptMark>,
+    /// Custom-fold marks (`OSC 777;emterm;fold;begin|end`) accumulated
+    /// *during* parsing, each stamped with the absolute row it was emitted
+    /// on (`scrollback_len + cursor.row`) and the eviction counter at that
+    /// instant. Native consumers (native-poc) drain this via
+    /// `take_fold_marks` after the pump and do the begin↔end pairing
+    /// themselves. The wasm / WebView path ignores this entirely and keeps
+    /// using the `on_osc(777, …)` callback, which still fires (so the
+    /// status-bar dispatcher / legacy viewer queue are unaffected).
+    /// Suppressed on the alternate screen, matching the OSC 133 capture and
+    /// the WebView `isAlternateBuffer` guard. Capped at
+    /// `MAX_PENDING_FOLD_MARKS`.
+    pub(crate) pending_fold_marks: VecDeque<PendingFoldMark>,
 }
 
 impl TerminalCore {
@@ -262,7 +319,8 @@ impl TerminalCore {
             active_hyperlink_id: 0,
             cursor_just_shown: false,
             cursor_show_interrupt: false,
-            pending_prompt_marks: Vec::new(),
+            pending_prompt_marks: VecDeque::new(),
+            pending_fold_marks: VecDeque::new(),
         };
         core.mark_all_dirty();
         core
@@ -423,6 +481,10 @@ impl TerminalCore {
         // reset are meaningless. Drop them so a post-reset `take_prompt_marks`
         // returns only marks from the new stream.
         self.pending_prompt_marks.clear();
+        // Same for in-flight custom-fold marks: a reset rebuilds the line
+        // frame from scratch, so a `begin` captured before it would pair with
+        // an `end` in an unrelated frame. Drop them.
+        self.pending_fold_marks.clear();
         // Note: callbacks are NOT cleared on reset (terminal reset != dispose)
         self.mark_all_dirty();
     }
@@ -448,9 +510,9 @@ impl TerminalCore {
             evicted_total: self.scrollback_evicted_total,
         };
         if self.pending_prompt_marks.len() >= MAX_PENDING_PROMPT_MARKS {
-            self.pending_prompt_marks.remove(0);
+            self.pending_prompt_marks.pop_front();
         }
-        self.pending_prompt_marks.push(mark);
+        self.pending_prompt_marks.push_back(mark);
     }
 
     /// Drain the OSC 133 prompt marks captured during parsing. Native
@@ -458,6 +520,40 @@ impl TerminalCore {
     /// frame so the eviction snapshot stays consistent. Cleared by `reset()`.
     pub fn take_prompt_marks(&mut self) -> Vec<PendingPromptMark> {
         std::mem::take(&mut self.pending_prompt_marks)
+            .into_iter()
+            .collect()
+    }
+
+    /// Record a custom-fold mark (`OSC 777;emterm;fold;begin|end`) at the
+    /// current absolute row. Called from the OSC handler while parsing, so
+    /// each mark in a single chunk lands on the row the cursor was on *when
+    /// that mark was emitted* — not the final cursor row, mirroring the
+    /// OSC 133 prompt-mark capture. `label` is only meaningful for a `Begin`
+    /// mark (the consumer applies the `"..."` fallback). Drops the oldest
+    /// mark when the buffer is at `MAX_PENDING_FOLD_MARKS` so a `begin` flood
+    /// cannot grow it without bound (the PTY is a trust boundary).
+    pub(crate) fn push_pending_fold_mark(&mut self, kind: FoldMarkKind, label: String) {
+        let abs_row = self.get_scrollback_length() + self.cursor.row as u32;
+        let mark = PendingFoldMark {
+            kind,
+            abs_row,
+            evicted_total: self.scrollback_evicted_total,
+            label,
+        };
+        if self.pending_fold_marks.len() >= MAX_PENDING_FOLD_MARKS {
+            self.pending_fold_marks.pop_front();
+        }
+        self.pending_fold_marks.push_back(mark);
+    }
+
+    /// Drain the custom-fold marks captured during parsing. Native consumers
+    /// call this once per pump under the same lock used to read the frame so
+    /// the eviction snapshot stays consistent. The consumer pairs `begin`
+    /// with `end` itself. Cleared by `reset()`.
+    pub fn take_fold_marks(&mut self) -> Vec<PendingFoldMark> {
+        std::mem::take(&mut self.pending_fold_marks)
+            .into_iter()
+            .collect()
     }
 
     /// Total number of SlimCells currently held in scrollback.

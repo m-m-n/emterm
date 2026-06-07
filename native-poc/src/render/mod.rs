@@ -38,7 +38,7 @@ pub mod theme;
 
 use std::time::Duration;
 
-use egui::{Color32, Pos2, Rect, Stroke, Vec2};
+use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 use term_core::cell::{
     STYLE_BLINK, STYLE_BOLD, STYLE_DIM, STYLE_HIDDEN, STYLE_ITALIC, STYLE_REVERSE,
     STYLE_STRIKETHROUGH, STYLE_UNDERLINE,
@@ -231,6 +231,11 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
                 draw_cursor(ui, &core, &theme, app);
+                // Fold summary overlays: full-width tinted bars with the
+                // `▶ command  — N lines` text over each summary row whose
+                // cells `collect_cell_inputs` left blank. No-op when no
+                // region is collapsed (`app.fold_layout()` is `None`).
+                draw_fold_summaries(ui, app);
                 // Search match highlights: translucent rects over the
                 // matched cells (current match amber, others yellow),
                 // painted on the same egui overlay layer as the cursor +
@@ -326,6 +331,23 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
 /// `scrollback_len..` are the live viewport. The top visible absolute row
 /// is `scrollback_len - scroll_offset`. `scroll_offset == 0` reproduces the
 /// original live-only output exactly.
+///
+/// `fold_layout` is `Some` only when the active tab has at least one
+/// collapsed fold region (the caller gates on
+/// [`crate::fold::FoldManager::has_collapsed_regions`], mirroring the
+/// WebView's `getCollapsedRegions().length > 0`). When present, each screen
+/// row's *actual* buffer row comes from the layout
+/// ([`crate::fold::FoldLayout::rows`]) instead of the linear
+/// `visible_start + row`, and summary rows emit no cells (the summary text is
+/// drawn as an egui overlay by [`draw_fold_summaries`]). When `None` the
+/// linear scrollback path above is used unchanged, so the non-folded /
+/// existing behavior is bit-for-bit identical.
+// The renderer hot path resolves a cell from its core + theme + selection +
+// width policy + cursor + hover + scroll + fold layout; these are distinct
+// per-frame inputs read at the single `window_host::render` call site, so a
+// flat signature is kept rather than introducing a params struct for one
+// caller (mirroring `Tab::spawn_shell`).
+#[allow(clippy::too_many_arguments)]
 pub fn collect_cell_inputs(
     core: &TerminalCore,
     theme: &Theme,
@@ -334,6 +356,7 @@ pub fn collect_cell_inputs(
     block_cursor_cell: Option<(u16, u16)>,
     hovered_link: Option<&[(u16, u16, u16)]>,
     scroll_offset: u32,
+    fold_layout: Option<&crate::fold::FoldLayout>,
 ) -> Vec<CellInput> {
     let cols = core.cols();
     let rows = core.rows();
@@ -346,7 +369,20 @@ pub fn collect_cell_inputs(
     let visible_start = scrollback_len.saturating_sub(scroll_offset);
 
     for row in 0..rows {
-        let abs_row = visible_start + row as u32;
+        // Resolve the absolute buffer row this screen row shows. With a
+        // fold layout the mapping is non-linear (collapsed bodies are
+        // hidden, summary rows draw no cells); without one it is the linear
+        // scrollback model. `continue` on a summary row leaves the cell
+        // grid empty there so `draw_fold_summaries` can paint the overlay.
+        let abs_row = match fold_layout {
+            Some(layout) => match layout.rows.get(row as usize) {
+                Some(crate::fold::FoldRowKind::Cells { actual_line }) => *actual_line,
+                // Summary rows (and rows past the layout, which cannot occur
+                // since `rows == viewport_rows`) emit no cells.
+                _ => continue,
+            },
+            None => visible_start + row as u32,
+        };
         if abs_row < scrollback_len {
             // Scrollback row: decode the styled cells once and emit one
             // `CellInput` per kept (width > 0) cell. `term_core` already
@@ -676,6 +712,14 @@ const SEARCH_OTHER_FILL: Color32 = Color32::from_rgba_premultiplied(69, 69, 15, 
 /// (scrollback_len - scroll_offset)`. Segments outside `0..rows` are
 /// skipped. Cell rects use the same origin / metrics as [`draw_cursor`]
 /// so the highlight lines up with the wgpu-rendered glyphs.
+///
+/// Fold-aware (`app.fold_layout()` is `Some`): a segment whose absolute row
+/// lands inside a *collapsed* region is hidden (skipped), and the screen row
+/// is derived through the fold mapping —
+/// `screen_row = actual_line_to_display(abs_row) - display_start` — instead
+/// of the linear `abs_row - visible_start`. This mirrors the WebView's
+/// `renderSearchHighlights` fold branch (`getRegionAtLine` collapsed-skip +
+/// `actualLineToDisplay`). Without a layout the linear path runs unchanged.
 fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
     if !app.search.visible || app.search.matches.is_empty() {
         return;
@@ -688,6 +732,7 @@ fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
     // Top visible absolute row (saturating: offset can momentarily exceed
     // the live length while content scrolls under a pinned viewport).
     let visible_start = scrollback_len.saturating_sub(app.scroll_offset());
+    let fold_layout = app.fold_layout();
 
     // Same origin anchor as draw_cursor (status-bar top inset is handled
     // by the central panel's min_rect, so it is omitted here on purpose).
@@ -706,11 +751,27 @@ fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
             SEARCH_OTHER_FILL
         };
         for seg in &m.segments {
-            // Off-screen above / below the viewport.
-            if seg.abs_row < visible_start {
-                continue;
-            }
-            let screen_row = seg.abs_row - visible_start;
+            let screen_row = match fold_layout {
+                Some(layout) => {
+                    // Hidden inside a collapsed region → no highlight.
+                    if layout.region_at_line(seg.abs_row).is_some() {
+                        continue;
+                    }
+                    let display_line = layout.actual_line_to_display(seg.abs_row);
+                    // Off-screen above the visible window.
+                    if display_line < layout.display_start {
+                        continue;
+                    }
+                    display_line - layout.display_start
+                }
+                None => {
+                    // Off-screen above / below the viewport.
+                    if seg.abs_row < visible_start {
+                        continue;
+                    }
+                    seg.abs_row - visible_start
+                }
+            };
             if screen_row >= rows as u32 {
                 continue;
             }
@@ -720,6 +781,114 @@ fn draw_search_highlights(ui: &mut egui::Ui, core: &TerminalCore, app: &App) {
             let rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, cell_h));
             painter.rect_filled(rect, 0.0, fill);
         }
+    }
+}
+
+/// Translucent fill behind a fold summary row, the const form of the
+/// WebView's `rgba(60, 60, 80, 0.3)`:
+/// `(60·0.3, 60·0.3, 80·0.3, 0.3·255) ≈ (18, 18, 24, 77)`.
+const FOLD_SUMMARY_BG: Color32 = Color32::from_rgba_premultiplied(18, 18, 24, 77);
+/// Summary text color for a non-error region, the const (premultiplied)
+/// form of WebView `rgba(200, 200, 210, 0.7)`:
+/// `(200·0.7, 200·0.7, 210·0.7, 0.7·255) ≈ (140, 140, 147, 178)`.
+const FOLD_SUMMARY_FG: Color32 = Color32::from_rgba_premultiplied(140, 140, 147, 178);
+/// Summary text color for a failed OSC 133 command (exit != 0): WebView `#ff6b6b`.
+const FOLD_SUMMARY_ERR_FG: Color32 = Color32::from_rgb(0xff, 0x6b, 0x6b);
+/// Max characters of the command/label shown before truncating with "…"
+/// (matches the WebView's `length > 80 ? substring(0, 77) + "..."`).
+const FOLD_SUMMARY_MAX_NAME: usize = 80;
+
+/// Resolve the summary-line text for a region: the truncated command/label
+/// (left), the "— N lines" tail with an optional "(exit N)" suffix (right),
+/// and whether the region is an error (exit != 0). Split out from
+/// [`draw_fold_summaries`] so the logic is unit-testable without an egui
+/// context. Mirrors `renderSummaryLine` (renderer-fold.ts).
+fn fold_summary_texts(region: &crate::fold::FoldRegion) -> (String, String, bool) {
+    use crate::fold::FoldSource;
+    let name = match region.source {
+        FoldSource::Custom => region.label.as_deref().unwrap_or("..."),
+        FoldSource::Osc133 => region.command_text.as_deref().unwrap_or("..."),
+    };
+    // Truncate by Unicode scalar count (matches the WebView's UTF-16-ish
+    // `String.length` closely enough for ASCII commands; multi-byte names
+    // truncate on a char boundary so the slice never panics).
+    let truncated: String = if name.chars().count() > FOLD_SUMMARY_MAX_NAME {
+        let head: String = name.chars().take(FOLD_SUMMARY_MAX_NAME - 3).collect();
+        format!("{head}...")
+    } else {
+        name.to_string()
+    };
+    let left = format!("\u{25B6} {truncated}"); // ▶
+
+    let mut right = format!("\u{2014} {} lines", region.line_count); // —
+    if region.source == FoldSource::Osc133 {
+        if let Some(code) = region.exit_code {
+            right.push_str(&format!(" (exit {code})"));
+        }
+    }
+    let is_error =
+        region.source == FoldSource::Osc133 && matches!(region.exit_code, Some(c) if c != 0);
+    (left, right, is_error)
+}
+
+/// Paint the fold summary overlays for every summary row in this frame's
+/// [`crate::fold::FoldLayout`]. No-op when the active tab has no collapsed
+/// regions (`app.fold_layout()` is `None`).
+///
+/// Each summary row gets a full-width translucent background plus left
+/// (`▶ command`) and right (`— N lines [(exit N)]`) text, drawn on the same
+/// egui overlay layer (and with the same origin / cell metrics) as the
+/// cursor + search highlights so it lands exactly over the row whose cells
+/// `collect_cell_inputs` left blank. Mirrors `renderSummaryLine`
+/// (renderer-fold.ts): bg, ▶ icon, truncated name on the left, "— N lines"
+/// (+ "(exit N)" for OSC 133) right-aligned, error rows in `#ff6b6b`.
+fn draw_fold_summaries(ui: &mut egui::Ui, app: &App) {
+    let Some(layout) = app.fold_layout() else {
+        return;
+    };
+    let cols = app.cell_size.cols;
+    let cell_w = app.cell_w_logical;
+    let cell_h = app.cell_h_logical;
+    let pad = app.settings.padding as f32;
+    let tab_h = crate::ui::tab_bar::effective_tab_bar_height(app.show_tab_bar);
+    let origin = Pos2::new(pad, crate::ui::title_bar::TITLE_BAR_HEIGHT + tab_h + pad);
+    // Summary text uses the terminal font size (logical px == egui points).
+    let font_px = app.runtime_font_size_pt * crate::settings::PT_TO_PX;
+    let font = FontId::monospace(font_px);
+    let row_width = cols as f32 * cell_w;
+
+    for (row, kind) in layout.rows.iter().enumerate() {
+        let crate::fold::FoldRowKind::Summary { region } = kind else {
+            continue;
+        };
+        let y = origin.y + row as f32 * cell_h;
+        let bg_rect = Rect::from_min_size(Pos2::new(origin.x, y), Vec2::new(row_width, cell_h));
+        ui.painter().rect_filled(bg_rect, 0.0, FOLD_SUMMARY_BG);
+
+        let (left, right, is_error) = fold_summary_texts(region);
+        let fg = if is_error {
+            FOLD_SUMMARY_ERR_FG
+        } else {
+            FOLD_SUMMARY_FG
+        };
+        // Vertically center text in the cell row.
+        let text_cy = y + cell_h * 0.5;
+        // Left text: `char_width * 0.5` indent (WebView).
+        ui.painter().text(
+            Pos2::new(origin.x + cell_w * 0.5, text_cy),
+            Align2::LEFT_CENTER,
+            &left,
+            font.clone(),
+            fg,
+        );
+        // Right text: right-aligned with a `char_width * 0.5` right margin.
+        ui.painter().text(
+            Pos2::new(origin.x + row_width - cell_w * 0.5, text_cy),
+            Align2::RIGHT_CENTER,
+            &right,
+            font.clone(),
+            fg,
+        );
     }
 }
 
@@ -1079,6 +1248,7 @@ mod tests {
             None,
             None,
             0,
+            None,
         );
         // 5 cols × 2 rows = 10 cell entries.
         assert_eq!(inputs.len(), 10);
@@ -1109,6 +1279,7 @@ mod tests {
             None,
             None,
             0,
+            None,
         );
         assert_eq!(inputs[0].glyph, "あ");
         assert_eq!(inputs[0].width_cells, 2);
@@ -1134,6 +1305,7 @@ mod tests {
             None,
             None,
             0,
+            None,
         );
         let u = inputs.iter().find(|c| c.glyph == "U").expect("U present");
         let s = inputs.iter().find(|c| c.glyph == "S").expect("S present");
@@ -1163,6 +1335,7 @@ mod tests {
             None,
             None,
             0,
+            None,
         );
         let r = inputs.iter().find(|c| c.glyph == "R").expect("R present");
         let n = inputs.iter().find(|c| c.glyph == "N").expect("N present");
@@ -1203,6 +1376,7 @@ mod tests {
             None,
             None,
             0,
+            None,
         );
         // Live viewport shows the last two logical lines.
         assert_eq!(row_text(&live, 0), "L2");
@@ -1228,6 +1402,7 @@ mod tests {
             None,
             None,
             2,
+            None,
         );
         assert_eq!(row_text(&scrolled, 0), "L0");
         assert_eq!(row_text(&scrolled, 1), "L1");
@@ -1251,6 +1426,7 @@ mod tests {
             None,
             None,
             1,
+            None,
         );
         assert_eq!(row_text(&scrolled, 0), "L1");
         assert_eq!(row_text(&scrolled, 1), "L2");
@@ -1275,6 +1451,7 @@ mod tests {
             None,
             None,
             1,
+            None,
         );
         let wide = scrolled
             .iter()
@@ -1308,6 +1485,7 @@ mod tests {
             None,
             None,
             1,
+            None,
         );
         let b = scrolled
             .iter()
@@ -1315,5 +1493,160 @@ mod tests {
             .expect("B present in scrollback row");
         assert!(b.bold);
         assert!(b.underline);
+    }
+
+    // ── Fold-aware rendering ──────────────────────────────────────────
+
+    /// With a fold layout, `collect_cell_inputs` reads each screen row's
+    /// *actual* buffer row from the layout (not the linear scrollback
+    /// model), and emits no cells for a summary row.
+    #[test]
+    fn collect_cell_inputs_fold_layout_maps_rows_and_skips_summary() {
+        // 5 logical lines L0..L4; 5-row viewport so nothing evicts (all
+        // live). Collapse a region over actual rows 1..3 (L1, L2).
+        let mut core = TerminalCore::new(5, 5, 100);
+        core.process_pty_data(b"L0\r\nL1\r\nL2\r\nL3\r\nL4");
+        assert_eq!(core.get_scrollback_length(), 0);
+
+        let mut fm = crate::fold::FoldManager::new();
+        // Region 1..3 (rows L1,L2) collapsed → summary at display line 1,
+        // hides 1 body row (line_count 2 - 1).
+        fm.register_osc133_region(1, 3, "cmd".to_string(), Some(0));
+        fm.toggle_fold(1);
+        // total_actual = 5, hidden = 1, total_display = 4.
+        // viewport = 5, offset 0 → display_start = max(0, 4-5-0) = 0.
+        let layout = fm.build_layout(0, 5, 0);
+
+        let theme = Theme::default();
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            0,
+            Some(&layout),
+        );
+
+        // Screen row 0 = actual L0.
+        assert_eq!(row_text(&inputs, 0), "L0");
+        // Screen row 1 = summary → no cells emitted by collect_cell_inputs.
+        assert_eq!(row_text(&inputs, 1), "");
+        assert!(
+            !inputs.iter().any(|c| c.row == 1),
+            "summary row must emit no CellInput (overlay draws it)"
+        );
+        // Screen row 2 = actual L3 (the body L1/L2 collapsed onto the
+        // summary, so the next visible buffer row is L3).
+        assert_eq!(row_text(&inputs, 2), "L3");
+        // Screen row 3 = actual L4.
+        assert_eq!(row_text(&inputs, 3), "L4");
+    }
+
+    /// Without a fold layout (`None`), the row mapping is the unchanged
+    /// linear path even when collapsed regions exist in the manager — the
+    /// caller gates passing `Some` on `has_collapsed_regions`, so `None`
+    /// must reproduce the pre-fold behavior exactly.
+    #[test]
+    fn collect_cell_inputs_none_layout_is_linear() {
+        let mut core = TerminalCore::new(5, 3, 100);
+        core.process_pty_data(b"L0\r\nL1\r\nL2");
+        let theme = Theme::default();
+        let inputs = collect_cell_inputs(
+            &core,
+            &theme,
+            None,
+            AmbiguousWidthMode::Narrow,
+            None,
+            None,
+            0,
+            None,
+        );
+        assert_eq!(row_text(&inputs, 0), "L0");
+        assert_eq!(row_text(&inputs, 1), "L1");
+        assert_eq!(row_text(&inputs, 2), "L2");
+    }
+
+    // ── fold_summary_texts ────────────────────────────────────────────
+
+    fn osc133_region(cmd: &str, exit: Option<i32>, lines: u32) -> crate::fold::FoldRegion {
+        crate::fold::FoldRegion {
+            id: format!("osc133:{lines}"),
+            start_line: 0,
+            end_line: lines,
+            collapsed: true,
+            source: crate::fold::FoldSource::Osc133,
+            command_text: Some(cmd.to_string()),
+            label: None,
+            exit_code: exit,
+            line_count: lines,
+        }
+    }
+
+    #[test]
+    fn fold_summary_texts_osc133_with_exit_zero() {
+        let r = osc133_region("ls -la", Some(0), 12);
+        let (left, right, err) = fold_summary_texts(&r);
+        assert_eq!(left, "\u{25B6} ls -la");
+        assert_eq!(right, "\u{2014} 12 lines (exit 0)");
+        assert!(!err);
+    }
+
+    #[test]
+    fn fold_summary_texts_osc133_nonzero_exit_is_error() {
+        let r = osc133_region("make", Some(2), 40);
+        let (_, right, err) = fold_summary_texts(&r);
+        assert_eq!(right, "\u{2014} 40 lines (exit 2)");
+        assert!(err);
+    }
+
+    #[test]
+    fn fold_summary_texts_osc133_no_exit_omits_suffix() {
+        let r = osc133_region("running", None, 5);
+        let (_, right, err) = fold_summary_texts(&r);
+        assert_eq!(right, "\u{2014} 5 lines");
+        assert!(!err);
+    }
+
+    #[test]
+    fn fold_summary_texts_custom_uses_label() {
+        let r = crate::fold::FoldRegion {
+            id: "custom:0".to_string(),
+            start_line: 0,
+            end_line: 3,
+            collapsed: true,
+            source: crate::fold::FoldSource::Custom,
+            command_text: None,
+            label: Some("Build Output".to_string()),
+            exit_code: None,
+            line_count: 3,
+        };
+        let (left, right, err) = fold_summary_texts(&r);
+        assert_eq!(left, "\u{25B6} Build Output");
+        assert_eq!(right, "\u{2014} 3 lines");
+        assert!(!err);
+    }
+
+    #[test]
+    fn fold_summary_texts_truncates_long_name() {
+        // 100-char command → "▶ " + 77 chars + "...".
+        let cmd = "a".repeat(100);
+        let r = osc133_region(&cmd, Some(0), 1);
+        let (left, _, _) = fold_summary_texts(&r);
+        let expected_name = format!("{}...", "a".repeat(77));
+        assert_eq!(left, format!("\u{25B6} {expected_name}"));
+        // The displayed name is exactly 80 chars (77 + "...").
+        let name = left.strip_prefix("\u{25B6} ").unwrap();
+        assert_eq!(name.chars().count(), 80);
+    }
+
+    #[test]
+    fn fold_summary_texts_short_name_not_truncated() {
+        let cmd = "a".repeat(80);
+        let r = osc133_region(&cmd, Some(0), 1);
+        let (left, _, _) = fold_summary_texts(&r);
+        // Exactly 80 chars is the boundary: not truncated.
+        assert_eq!(left, format!("\u{25B6} {cmd}"));
     }
 }

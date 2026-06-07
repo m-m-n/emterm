@@ -127,6 +127,16 @@ impl PromptTracker {
             .map(|m| m.row)
     }
 
+    /// All resolved marks in arrival order. Mirrors the WebView
+    /// `SemanticZoneTracker.getMarkers()`. The OSC 133 fold-region builder
+    /// (`Tab::backfill_prompt_marks`) scans this in reverse to pair a `D`
+    /// mark with its preceding `C` (and the `B` before that), exactly as the
+    /// WebView `registerOsc133FoldRegion` walks `getMarkers()`. Rows are in
+    /// the same post-prune absolute frame the search/fold code expects.
+    pub fn marks(&self) -> &VecDeque<ResolvedPromptMark> {
+        &self.marks
+    }
+
     /// Drop marks whose row is below `count` and re-base the survivors by
     /// subtracting `count`. Called when `count` oldest scrollback rows were
     /// evicted, shifting the whole frame down (WebView `pruneBeforeLine`).
