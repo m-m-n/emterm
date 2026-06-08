@@ -369,16 +369,11 @@ impl Tab {
                 let (actions, evicted_total, pending_marks, pending_fold_marks) = {
                     let mut c = self.core.lock();
                     let actions = c.reset_and_replay(&msg.payload);
-                    (
-                        actions,
-                        c.get_scrollback_evicted_total(),
-                        c.take_prompt_marks(),
-                        c.take_fold_marks(),
-                    )
+                    let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
+                    (actions, evicted_total, pending_marks, pending_fold_marks)
                 };
                 self.evicted_baseline = evicted_total;
-                self.backfill_prompt_marks(evicted_total, pending_marks);
-                self.backfill_fold_marks(evicted_total, pending_fold_marks);
+                self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
                 // A snapshot captured while a full-screen app was running
                 // carries its buffer-switch sequences; mirror the replayed
                 // end state onto the tab flag.
@@ -400,18 +395,13 @@ impl Tab {
                 let (actions, evicted_total, pending_marks, pending_fold_marks) = {
                     let mut c = self.core.lock();
                     let actions = c.process_pty_data_fully(&msg.payload);
-                    (
-                        actions,
-                        c.get_scrollback_evicted_total(),
-                        c.take_prompt_marks(),
-                        c.take_fold_marks(),
-                    )
+                    let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
+                    (actions, evicted_total, pending_marks, pending_fold_marks)
                 };
                 // Same drain/backfill as the native `pump` path so prompt
                 // marks and custom-fold begin/end pairs arriving over the mux
                 // stream are navigable / foldable too.
-                self.backfill_prompt_marks(evicted_total, pending_marks);
-                self.backfill_fold_marks(evicted_total, pending_fold_marks);
+                self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
                 if let Some(new_alt) = parse_alt_screen_action(&actions) {
                     self.alt_screen = new_alt;
                 }
@@ -531,16 +521,13 @@ impl Tab {
             c.flush_grapheme_buffer();
             // Drain the OSC 133 marks `term_core` captured during this pump
             // (each already stamped with its emit-time row + eviction count)
-            // and read the current eviction total — both under the core lock
+            // and read the current eviction total — all under the core lock
             // so they are consistent with the bytes just processed. The
             // actual backfill runs after `drop(c)` because it needs
             // `&mut self`.
-            let pending_marks = c.take_prompt_marks();
-            let pending_fold_marks = c.take_fold_marks();
-            let evicted_total = c.get_scrollback_evicted_total();
+            let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
             drop(c);
-            self.backfill_prompt_marks(evicted_total, pending_marks);
-            self.backfill_fold_marks(evicted_total, pending_fold_marks);
+            self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
             if let Some(new_alt) = parse_alt_screen_action(&actions) {
                 self.alt_screen = new_alt;
             }
@@ -834,6 +821,26 @@ impl Tab {
         }
     }
 
+    /// Push the prompt + fold marks captured for the just-processed chunk
+    /// into the resolved trackers, in the one order that is correct.
+    ///
+    /// `backfill_prompt_marks` runs the eviction normalization + fold-region
+    /// prune that `backfill_fold_marks` then relies on (see the latter's doc
+    /// comment), so prompt marks MUST be backfilled first. Centralizing the
+    /// pair here keeps that ordering invariant in a single place instead of
+    /// leaving every drain site (`pump`, `Snapshot`, `PtyOutput`) to repeat —
+    /// and risk reordering — the two calls. Drain the inputs with
+    /// [`drain_marks`] under the core guard, drop the guard, then call this.
+    fn backfill_marks(
+        &mut self,
+        evicted_total: u64,
+        prompt_marks: Vec<term_core::terminal_core::PendingPromptMark>,
+        fold_marks: Vec<term_core::terminal_core::PendingFoldMark>,
+    ) {
+        self.backfill_prompt_marks(evicted_total, prompt_marks);
+        self.backfill_fold_marks(evicted_total, fold_marks);
+    }
+
     /// Register an OSC 133 C→D fold region for the `D` mark at deque index
     /// `d_idx` with absolute row `d_row` carrying `exit_code`. Port of
     /// `registerOsc133FoldRegion` in `handlers/osc_handlers.ts`: scan the
@@ -1049,6 +1056,27 @@ fn partition_apc_for_mux(apc: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, Vec<MuxMessage>) {
         }
     }
     (images, mux)
+}
+
+/// Drain the prompt + fold marks `term_core` captured during a just-completed
+/// process / replay, together with the current scrollback-eviction total, in
+/// one place. All three are read under the caller's existing core guard so
+/// they stay consistent with the bytes just processed; the caller then drops
+/// the guard before handing the values to [`Tab::backfill_marks`] (which needs
+/// `&mut self` and would otherwise conflict with the guard's borrow of
+/// `self.core`). The three reads are independent, so their order is immaterial.
+fn drain_marks(
+    c: &mut TerminalCore,
+) -> (
+    u64,
+    Vec<term_core::terminal_core::PendingPromptMark>,
+    Vec<term_core::terminal_core::PendingFoldMark>,
+) {
+    (
+        c.get_scrollback_evicted_total(),
+        c.take_prompt_marks(),
+        c.take_fold_marks(),
+    )
 }
 
 /// Scan a `take_mode_actions()` payload for buffer-switch markers and
