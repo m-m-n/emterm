@@ -1003,6 +1003,23 @@ impl Tab {
         self.core.lock().resize(cols, rows);
     }
 
+    /// Drop absolute-row tracker state invalidated by a column-width reflow
+    /// (N3). A reflow rewrites the logical↔physical line mapping when the
+    /// width changes, but leaves the scrollback eviction counter untouched —
+    /// so `pump_all`'s eviction-delta correction (`prune_before_line` /
+    /// `shift_rows_down`) cannot re-base the stored absolute rows. Clearing
+    /// is the safe response: a retained prompt/fold mark would point at the
+    /// wrong buffer line after the rewrap. The OSC 133 prompt/fold marks
+    /// re-accumulate from subsequent output; the per-tab fold-enable
+    /// preference is preserved across the rebuild. The eviction baseline is
+    /// intentionally NOT reset — the eviction counter did not move, so it
+    /// stays valid for the next real eviction.
+    pub fn clear_reflow_invalidated_state(&mut self) {
+        self.prompts.clear();
+        self.folds = Self::new_fold_manager(self.fold_enabled);
+        self.pending_fold_begin = None;
+    }
+
     /// Drain queued emterm OSC viewer-spawn requests. Phase 5+ feeds these
     /// into the Wry viewer spawner.
     pub fn drain_osc(&self) -> Vec<EmtermOscRequest> {
