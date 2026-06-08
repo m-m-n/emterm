@@ -1454,8 +1454,32 @@ impl App {
     /// Propagate a new grid size to all PTYs.
     pub fn set_grid_size(&mut self, cols: u16, rows: u16) {
         self.cell_size = GridDims { cols, rows };
+        // A column-width change triggers a `term_core` reflow that rewrites
+        // the logical↔physical line mapping (a height-only change does not —
+        // `resize_same_width` keeps the wrap boundaries). Detect it before
+        // the resize so the now-stale absolute-row trackers can be dropped
+        // afterward (N3). All tabs share `cell_size`, so any one differing is
+        // enough; checking all is harmless.
+        let mut width_changed = false;
         for tab in &self.tabs {
+            let old_cols = tab.core.lock().cols();
+            if old_cols != cols {
+                width_changed = true;
+            }
             tab.resize(cols, rows);
+        }
+        if width_changed {
+            // The reflow re-wrapped scrollback/viewport without moving the
+            // eviction counter, so `pump_all`'s eviction-delta correction
+            // cannot re-base the stored absolute rows. Drop every
+            // absolute-row tracker: the App-global selection / pending anchor
+            // here, and each tab's prompt / fold marks (which re-accumulate
+            // from subsequent OSC 133 output).
+            self.selection = None;
+            self.pending_selection_anchor = None;
+            for tab in &mut self.tabs {
+                tab.clear_reflow_invalidated_state();
+            }
         }
         // A reshape rewraps scrollback / viewport, so an open search
         // overlay's cached logical-line document no longer matches the
@@ -3985,6 +4009,81 @@ mod tests {
         assert!(
             app.selection.is_none(),
             "switching tabs clears the active-tab-scoped selection"
+        );
+    }
+
+    /// Seed one tab with a selection, a pending anchor, an OSC 133 prompt
+    /// mark, and a fold region, after normalizing the grid to a known width.
+    fn app_with_seeded_trackers() -> App {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        // Normalize to a known width first; the very first set_grid_size may
+        // itself be a width change from the default, which would clear the
+        // (still empty) trackers — harmless, but we seed afterward.
+        app.set_grid_size(80, 24);
+        app.selection = Some(Selection {
+            anchor: Pos { row: 1, col: 0 },
+            extent: Pos { row: 3, col: 4 },
+            mode: SelectionMode::Character,
+        });
+        app.pending_selection_anchor = Some(Pos { row: 2, col: 1 });
+        app.tabs[0]
+            .prompts
+            .push(crate::prompts::ResolvedPromptMark {
+                kind: crate::prompts::PromptMarkKind::PromptStart,
+                row: 5,
+                exit_code: None,
+            });
+        app.tabs[0]
+            .folds
+            .register_osc133_region(5, 8, "cmd".to_string(), None);
+        app
+    }
+
+    #[test]
+    fn width_change_clears_absolute_row_trackers() {
+        // A column-width change reflows the buffer (rewriting the line
+        // mapping without moving the eviction counter), so every absolute-row
+        // tracker must be dropped (N3).
+        let mut app = app_with_seeded_trackers();
+        app.set_grid_size(40, 24); // width 80 -> 40
+        assert!(app.selection.is_none(), "selection dropped on reflow");
+        assert!(
+            app.pending_selection_anchor.is_none(),
+            "pending anchor dropped on reflow"
+        );
+        assert!(
+            app.tabs[0].prompts.find_prev_prompt(u32::MAX).is_none(),
+            "prompt marks cleared on reflow"
+        );
+        assert!(
+            app.tabs[0].folds.get_region_at_line(5).is_none(),
+            "fold regions cleared on reflow"
+        );
+    }
+
+    #[test]
+    fn height_only_change_keeps_absolute_row_trackers() {
+        // A height-only resize does not reflow (resize_same_width keeps the
+        // wrap boundaries), so the absolute-row trackers stay valid.
+        let mut app = app_with_seeded_trackers();
+        app.set_grid_size(80, 30); // same width 80, taller
+        assert!(
+            app.selection.is_some(),
+            "selection kept on height-only resize"
+        );
+        assert!(
+            app.pending_selection_anchor.is_some(),
+            "pending anchor kept on height-only resize"
+        );
+        assert_eq!(
+            app.tabs[0].prompts.find_prev_prompt(u32::MAX),
+            Some(5),
+            "prompt marks kept on height-only resize"
+        );
+        assert!(
+            app.tabs[0].folds.get_region_at_line(5).is_some(),
+            "fold regions kept on height-only resize"
         );
     }
 
