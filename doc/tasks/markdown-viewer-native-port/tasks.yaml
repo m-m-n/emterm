@@ -1,0 +1,213 @@
+schema_version: 1
+feature: markdown-viewer-native-port
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-settings-loader
+    name: Markdown Settings Loader
+    goal: Load all 7 markdown_* settings with defaults and resolve effective appearance honoring follow_ui.
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: [phase-5-links-images-settings]
+    files_create: []
+    files_modify:
+      - native-poc/src/settings.rs
+    tasks:
+      - id: settings-resolved-fields
+        title: Add 7 markdown_* fields to resolved Settings (reuse UiTheme/UiThemePreset)
+        covers_fr: [FR6]
+      - id: settings-raw-merge-defaults
+        title: Raw flat-key fields, null-safe defaults, merge into resolved
+        covers_fr: [FR6, NFR3]
+      - id: settings-appearance-resolver
+        title: Appearance resolver selecting theme/preset source per follow_ui
+        covers_fr: [FR6]
+      - id: settings-unit-tests
+        title: Unit tests for defaults, overrides, follow_ui source selection
+        covers_fr: [FR6]
+    tests:
+      - TS-9
+      - TS-10
+
+  - id: phase-2-osc-session
+    name: OSC Viewer Dispatch + Markdown Session Accumulation
+    goal: Drain OSC queue, parse/route payloads, reassemble Markdown sessions, emit RenderRequest to a sink (window-free, unit-testable).
+    effort: medium
+    status: completed
+    notes: >
+      queue-read-side is satisfied by the pre-existing Tab::drain_osc()
+      (tabs.rs:1032), which the ViewerSpawner consumes; no new callbacks API
+      was needed. 22 unit/integration tests pass; full native-poc suite (1024)
+      green, no regression.
+    depends_on: []
+    blocks: [phase-4-viewer-process]
+    files_create:
+      - native-poc/src/viewer/mod.rs
+      - native-poc/src/viewer/markdown.rs
+    files_modify:
+      - native-poc/src/callbacks.rs
+      - native-poc/src/main.rs
+    tasks:
+      - id: queue-read-side
+        title: Expose OSC queue drain/read side from callbacks state
+        covers_fr: [FR1]
+      - id: payload-parser
+        title: Tokenize <viewer>;<verb>;<k=v> into structured command
+        covers_fr: [FR1]
+      - id: viewer-routing
+        title: Route markdown vs reserved image/json/yaml kinds
+        covers_fr: [FR1]
+      - id: markdown-session-lifecycle
+        title: begin/chunk/end with max-sessions, size cap, timeout, ordered base64 join
+        covers_fr: [FR2]
+      - id: render-request-sink
+        title: ViewerSink trait + RenderRequest; capturing sink for tests
+        covers_fr: [FR1, FR2]
+      - id: osc-session-tests
+        title: Unit/integration tests (lifecycle, ordering, limits, malformed, dispatch)
+        covers_fr: [FR1, FR2]
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-11
+
+  - id: phase-3-viewer-bundle
+    name: Standalone Viewer Bundle
+    goal: Dedicated viewer web entry reusing src/markdown, built by a new Bun target and embedded into the binary.
+    effort: medium
+    status: completed
+    notes: >
+      build:viewer bundles native-poc/viewer/web/index.html (reuses
+      src/markdown + src/settings, 2331 modules) to native-poc/viewer/dist.
+      Embedding uses a new build.rs that walks viewer/dist and emits a
+      VIEWER_ASSETS manifest (content-hashed filenames, so include_dir/
+      rust-embed crates were avoided). assets.rs serves path->bytes+content
+      type. 4 TS entry tests + 3 Rust assets tests pass; src/markdown 208
+      tests green; project tsc clean; git diff --stat src/ empty (NFR3).
+    depends_on: []
+    blocks: [phase-4-viewer-process]
+    files_create:
+      - native-poc/viewer/web/index.html
+      - native-poc/viewer/web/entry.ts
+      - native-poc/src/viewer/assets.rs
+    files_modify:
+      - package.json
+      - native-poc/Cargo.toml
+    tasks:
+      - id: viewer-web-entry
+        title: HTML+TS entry reusing src/markdown renderer; apply appearance + basedir
+        covers_fr: [FR4, FR5]
+      - id: build-viewer-target
+        title: build:viewer Bun script producing a fixed-output bundle (src/ unchanged)
+        covers_fr: [FR4, NFR3]
+      - id: embed-bundle-accessor
+        title: Embed bundle dir; path→bytes accessor with content types
+        covers_fr: [FR4]
+      - id: viewer-bundle-tests
+        title: Render injected sample test + src/markdown no-regression
+        covers_fr: [FR5]
+    tests:
+      - TS-17
+
+  - id: phase-4-viewer-process
+    name: Viewer Process Launch + Child Viewer Window
+    goal: Render requests spawn a separate `--viewer` child process owning a GTK/Wry window serving the bundle+payload; terminal winit loop untouched; clean close.
+    effort: large
+    status: completed
+    notes: >
+      wry version aligned to workspace 0.53 (the SPEC-noted 0.45 risk: a stale
+      native-poc/Cargo.lock showed 0.45, but the workspace shares root
+      Cargo.lock with tauri 2.10 → wry 0.53.5 / webkit2gtk 2.0.1). Added
+      Linux-gated gtk=0.18 dep. main.rs dispatches --viewer; window.rs builds
+      a GTK Toplevel + wry WebView (custom emterm-viewer:// scheme), injects
+      the payload via init script, runs a GTK loop, exits on close/Esc/q.
+      ProcessViewerSink spawns one child per RenderRequest + non-blocking reap;
+      wired into App::pump_all (drains every tab's OSC). Release binary builds
+      (target-host, 2m19s). MANUAL BRING-UP VERIFIED: a real payload launched a
+      live WebKitGTK window on this Wayland host (Gdk-CRITICAL warnings are
+      cosmetic GTK3/Wayland D-Bus noise, non-fatal). 21 Phase-4 unit tests
+      (launch round-trip, sink spawn-intent, image resolver, nav) pass.
+    depends_on: [phase-2-osc-session, phase-3-viewer-bundle]
+    blocks: [phase-5-links-images-settings]
+    files_create:
+      - native-poc/src/viewer/launch.rs
+      - native-poc/src/viewer/window.rs
+    files_modify:
+      - native-poc/src/main.rs
+      - native-poc/src/viewer/mod.rs
+    tasks:
+      - id: viewer-subcommand-entry
+        title: main.rs `--viewer <path>` dispatch to child viewer entry
+        covers_fr: [FR3]
+      - id: child-gtk-wry-window
+        title: Child GTK init + Wry WebView window + child event loop
+        covers_fr: [FR3]
+      - id: custom-scheme-serve
+        title: Custom URI scheme (child) serving embedded bundle
+        covers_fr: [FR3, FR4]
+      - id: payload-transport
+        title: Parent serializes payload to temp file; child reads it
+        covers_fr: [FR3]
+      - id: real-viewer-sink
+        title: Real sink + launcher spawns one child per RenderRequest; non-blocking reap
+        covers_fr: [FR3]
+      - id: window-lifecycle
+        title: Multiple concurrent child viewers; close exits child; never reuse
+        covers_fr: [FR3, FR9]
+      - id: wry-bringup-manual
+        title: Manual bring-up on Linux/WebKitGTK
+        covers_fr: [FR3, NFR1, NFR4]
+    tests:
+      - TS-12
+      - TS-13
+
+  - id: phase-5-links-images-settings
+    name: Links, Images, Settings Injection, Window Controls
+    goal: Links open via OS, images resolve (data URI in-page; basedir via native), settings injected, Esc/q/close work.
+    effort: medium
+    status: completed
+    notes: >
+      Implemented alongside Phase 4 (window.rs is shared). FR7: navigation_allowed
+      denies in-window nav and routes safe external URIs via new
+      links::open_safe_uri (is_safe_uri gate reused). FR8: image_resolver.rs is a
+      cross-platform, fully-tested basedir-confined resolver (MIME allowlist,
+      SVG excluded, traversal+absolute rejected) wired into the custom-scheme
+      /__img/ route; data URIs handled in-page by the reused DOMPurify renderer.
+      FR6 injection: payload carries the Phase-1 resolved appearance, applied by
+      entry.ts::applyAppearance. FR9: Esc/q/close-button exit the child. Tests:
+      12 image_resolver + 3 window(nav/percent-decode) + open_safe_uri gate +
+      entry applyAppearance. All green.
+    depends_on: [phase-4-viewer-process, phase-1-settings-loader]
+    blocks: []
+    files_create: []
+    files_modify:
+      - native-poc/src/viewer/window.rs
+      - native-poc/src/viewer/mod.rs
+      - native-poc/src/links.rs
+    tasks:
+      - id: navigation-interceptor
+        title: Intercept navigation; is_safe_uri → OS open; suppress in-window nav
+        covers_fr: [FR7, NFR2]
+      - id: image-resolver
+        title: basedir-confined image resolution; MIME allowlist; traversal guard; SVG excluded
+        covers_fr: [FR8, NFR2]
+      - id: settings-injection
+        title: Apply payload appearance (theme/preset/fonts/size) to the child page
+        covers_fr: [FR6]
+      - id: window-controls
+        title: Close on Esc/q/close button
+        covers_fr: [FR9]
+      - id: links-images-tests
+        title: Unit tests (is_safe_uri gating, traversal rejection, MIME/SVG exclusion)
+        covers_fr: [FR7, FR8, NFR2]
+    tests:
+      - TS-14
+      - TS-15
+      - TS-16

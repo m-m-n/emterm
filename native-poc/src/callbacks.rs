@@ -90,8 +90,8 @@ pub const LOG_NOTIFY_RATE_LIMIT: &str = "LOG_NOTIFY_RATE_LIMIT";
 /// records them so we can verify the dispatch path end-to-end.
 #[derive(Debug, Clone)]
 pub struct EmtermOscRequest {
-    /// Raw payload — read by the (Phase 5+) Wry viewer spawner.
-    #[allow(dead_code)]
+    /// Raw payload — drained by [`crate::viewer::ViewerSpawner`] and routed
+    /// by viewer kind.
     pub payload: String,
 }
 
@@ -459,13 +459,23 @@ impl TerminalCallbacks for NativeCallbacks {
                 // Phase D (status-bar native port): payloads starting with
                 // `statusbar;` are routed to the dispatcher first; only
                 // unconsumed payloads fall through to the legacy queue.
+                //
+                // `term_core` delivers the OSC 777 payload with the leading
+                // `emterm;` namespace token still attached (the real wire
+                // form is `OSC 777;emterm;<kind>;…`, e.g.
+                // `emterm;markdown;begin;…`). Strip it once here so both the
+                // statusbar dispatcher and the viewer queue see the
+                // post-namespace payload (`<kind>;<verb>;…`), matching the
+                // WebView `src/markdown/session.ts` contract. `strip_prefix`
+                // is a no-op for payloads that were already pre-stripped.
+                let payload = data.strip_prefix("emterm;").unwrap_or(data);
                 if let Some(dispatcher) = self.statusbar_dispatcher.as_ref() {
-                    if try_dispatch_statusbar(dispatcher, data) {
+                    if try_dispatch_statusbar(dispatcher, payload) {
                         return;
                     }
                 }
                 self.state.lock().osc_queue.push(EmtermOscRequest {
-                    payload: data.to_string(),
+                    payload: payload.to_string(),
                 });
             }
             OSC_ITERM2 => {
@@ -854,6 +864,21 @@ mod tests {
         let s = h.state.lock();
         assert_eq!(s.osc_queue.len(), 1);
         assert_eq!(s.osc_queue[0].payload, "markdown;hello");
+    }
+
+    #[test]
+    fn osc_100_strips_emterm_namespace_token_from_real_wire_form() {
+        // The real CLI wire form is `OSC 777;emterm;<kind>;…` and term_core
+        // delivers the `emterm;` prefix intact. The extension arm must strip
+        // it once so the viewer sees the post-namespace `<kind>;<verb>;…`.
+        let h = default_harness();
+        h.cb.on_osc(
+            OSC_EMTERM_EXTENSION,
+            "emterm;markdown;begin;id=x;format=gfm",
+        );
+        let s = h.state.lock();
+        assert_eq!(s.osc_queue.len(), 1);
+        assert_eq!(s.osc_queue[0].payload, "markdown;begin;id=x;format=gfm");
     }
 
     // ── Phase D: OSC 777 statusbar routing ────────────────────────────

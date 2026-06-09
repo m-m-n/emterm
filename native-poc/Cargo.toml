@@ -23,7 +23,10 @@ wgpu = "22"
 egui = "0.29"
 egui-wgpu = "0.29"
 
-# WebView for Markdown viewer (Phase 6) — matches workspace tauri 2.9.5 transitive
+# WebView for Markdown viewer (Phase 4) — used by the child `--viewer`
+# process to render Markdown in a Wry/WebKitGTK window. Version follows the
+# workspace resolution (0.53.x, shared with tauri 2.10 in src-tauri) so a
+# single webkit2gtk-sys is linked across the workspace.
 wry = "0.53"
 
 # term_core (Phase 6: replaces native-poc's stand-in parser/grid)
@@ -112,6 +115,14 @@ png = "0.17"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# GTK 3 — the child `--viewer` window host on Linux. wry 0.45 renders via
+# WebKitGTK and requires a `gtk::Container` plus a GTK main loop, which the
+# terminal's winit loop cannot drive; the viewer therefore runs in a
+# separate child process that owns this GTK window and loop. Version 0.18
+# matches wry 0.45's transitive `gtk` so a single gtk-sys is linked.
+gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 # URL opener for Ctrl+click links (window_host::open_url). Uses

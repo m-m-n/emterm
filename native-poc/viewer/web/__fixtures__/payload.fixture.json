@@ -1,0 +1,13 @@
+{
+  "markdown": "# Hi\n\n本文 🎉",
+  "format": "gfm",
+  "basedir": "/home/me/docs",
+  "appearance": {
+    "theme": "dark",
+    "preset": "purple",
+    "bodyFontFamily": "Noto Sans",
+    "codeFontFamily": "Fira Code",
+    "emojiFontFamily": "Noto Color Emoji",
+    "fontSize": 14
+  }
+}

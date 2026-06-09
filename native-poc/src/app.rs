@@ -133,6 +133,14 @@ pub struct App {
     /// initialized to default. Wrapped in `Arc` so the per-tab
     /// `NativeCallbacks` can share an immutable view without copying.
     pub settings: Arc<Settings>,
+    /// Markdown viewer subsystem: drains each tab's emterm OSC queue,
+    /// reassembles `markdown` sessions, and spawns child viewer processes
+    /// on completion. Lives on `App` so session state survives across
+    /// `pump_all` passes.
+    viewer_spawner: crate::viewer::ViewerSpawner,
+    /// Sink the spawner emits completed render requests to — spawns a
+    /// `--viewer` child process per request and reaps closed children.
+    viewer_sink: crate::viewer::ProcessViewerSink,
     /// Resolved keyboard-chord table, parsed once from
     /// `settings.keybinds` at construction. The keyboard handler in
     /// `window_host` matches incoming events against this for tab-roster
@@ -421,6 +429,8 @@ impl App {
             search: crate::search::SearchState::default(),
             search_focus_request: false,
             last_auto_research: None,
+            viewer_spawner: crate::viewer::ViewerSpawner::new(),
+            viewer_sink: crate::viewer::ProcessViewerSink::new(settings.clone()),
             settings,
             keybinds,
             scroll_position: ScrollPosition::Live,
@@ -1299,6 +1309,9 @@ impl App {
         // mutating `self.selection` must wait until the borrow ends).
         let mut active_eviction_delta: u32 = 0;
         let mut active_frame_reset = false;
+        // emterm viewer OSC payloads collected across all tabs this pass,
+        // routed to the spawner after the `&mut self.tabs` borrow ends.
+        let mut viewer_osc: Vec<crate::callbacks::EmtermOscRequest> = Vec::new();
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
@@ -1311,6 +1324,16 @@ impl App {
                 if idx == active {
                     active_changed = true;
                 }
+            }
+            // Markdown viewer (FR1/FR2/FR3): collect this tab's emterm OSC
+            // queue for the spawner. We cannot touch `self.viewer_spawner`
+            // here because the loop holds `&mut self.tabs`, so the drained
+            // payloads are buffered and routed after the loop. Draining
+            // every tab (not just the active one) matches the WebView
+            // build, where any tab's `emterm markdown` opens a viewer.
+            let mut osc = tab.drain_osc();
+            if !osc.is_empty() {
+                viewer_osc.append(&mut osc);
             }
             // Any tab's BEL triggers the bell action — same as the
             // WebView build, where a background tab's BEL still flashes
@@ -1372,6 +1395,14 @@ impl App {
                 }
             }
         }
+        // Route this pass' collected emterm viewer OSC payloads now that the
+        // `&mut self.tabs` borrow has ended. The spawner reassembles
+        // markdown sessions and emits completed documents to `viewer_sink`,
+        // which spawns a separate `--viewer` child process per document.
+        // Always call so the spawner's idle-session timeout sweep runs even
+        // on empty passes; cheap when there is nothing queued.
+        self.viewer_spawner
+            .drain(viewer_osc, now, &mut self.viewer_sink);
         // Apply the active tab's absolute-row selection bookkeeping now that
         // the `&mut self.tabs` borrow has ended. A frame reset drops the
         // selection outright (its rows belong to the discarded frame); an

@@ -1,3 +1,450 @@
-//! ViewerSpawner — drains the OSC queue and creates Wry windows. Phase 6.
+//! Viewer subsystem — drains the emterm OSC queue, parses the
+//! `<viewer>;<verb>;<k=v>…` payloads, routes them by viewer kind, and
+//! reassembles Markdown sessions into complete documents.
+//!
+//! Phase 2 is window-free and fully unit-testable: completed documents
+//! are emitted as [`RenderRequest`]s to an abstract [`ViewerSink`]. Phase
+//! 4 provides the real sink that spawns child viewer processes; tests use
+//! [`CapturingSink`].
 
+pub mod assets;
+pub mod image_resolver;
+pub mod launch;
 pub mod markdown;
+#[cfg(target_os = "linux")]
+pub mod window;
+
+use std::time::Instant;
+
+use crate::callbacks::EmtermOscRequest;
+use crate::settings::Settings;
+use launch::ViewerPayload;
+use markdown::MarkdownViewerSessions;
+
+/// Markdown source dialect carried from `begin;format=…` through to the
+/// rendered window. Mirrors the WebView build's `MarkdownFormat`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarkdownFormat {
+    /// CommonMark (the default when `format` is absent or unrecognized).
+    #[default]
+    CommonMark,
+    /// GitHub Flavored Markdown.
+    Gfm,
+}
+
+impl MarkdownFormat {
+    /// Parse a `format=` value, defaulting to [`MarkdownFormat::CommonMark`]
+    /// for the empty string or any unrecognized token (matches the
+    /// WebView build's permissive default).
+    pub fn parse(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "gfm" => Self::Gfm,
+            _ => Self::CommonMark,
+        }
+    }
+
+    /// Wire token used when serializing the payload for the child viewer.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CommonMark => "commonmark",
+            Self::Gfm => "gfm",
+        }
+    }
+}
+
+/// A structured emterm viewer command parsed from one OSC payload.
+///
+/// `<kind>;<verb>;<key>=<value>;…` — e.g. `markdown;begin;id=…;format=gfm`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedCommand {
+    /// Viewer kind (first token), e.g. `markdown`, `image`, `json`, `yaml`.
+    pub kind: String,
+    /// Verb (second token), e.g. `begin`, `chunk`, `end`.
+    pub verb: String,
+    /// Remaining `key=value` parameters. Later duplicates win.
+    pub params: std::collections::HashMap<String, String>,
+}
+
+/// Tokenize a raw OSC payload (`callbacks.rs` already stripped the
+/// `777;` prefix) into a [`ParsedCommand`]. Returns `None` (with a warn)
+/// when the payload lacks the required `<kind>;<verb>` prefix.
+pub fn parse_payload(payload: &str) -> Option<ParsedCommand> {
+    let mut tokens = payload.split(';');
+    let kind = tokens.next().unwrap_or("").trim();
+    let verb = match tokens.next() {
+        Some(v) => v.trim(),
+        None => {
+            log::warn!("viewer payload missing verb: {payload:?}");
+            return None;
+        }
+    };
+    if kind.is_empty() || verb.is_empty() {
+        log::warn!("viewer payload missing kind/verb: {payload:?}");
+        return None;
+    }
+
+    let mut params = std::collections::HashMap::new();
+    for tok in tokens {
+        // Split on the first '=' only; values may themselves contain '='
+        // (e.g. base64 padding). Tokens without '=' are ignored.
+        if let Some(eq) = tok.find('=') {
+            let key = tok[..eq].to_string();
+            let value = tok[eq + 1..].to_string();
+            if !key.is_empty() {
+                params.insert(key, value);
+            }
+        }
+    }
+
+    Some(ParsedCommand {
+        kind: kind.to_string(),
+        verb: verb.to_string(),
+        params,
+    })
+}
+
+/// A completed Markdown document ready to be displayed. Phase 4 serializes
+/// this (plus the resolved appearance) into the child viewer payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderRequest {
+    /// Fully reassembled, base64-decoded UTF-8 Markdown source.
+    pub markdown: String,
+    /// Source dialect.
+    pub format: MarkdownFormat,
+    /// Optional base directory for resolving relative image references.
+    pub basedir: Option<String>,
+}
+
+/// Abstract destination for completed [`RenderRequest`]s. The real Phase 4
+/// implementation spawns a child viewer process; tests capture instead.
+pub trait ViewerSink {
+    /// Consume one completed render request.
+    fn emit(&mut self, request: RenderRequest);
+
+    /// Periodic maintenance hook, called once per drain pass (M1). Default
+    /// is a no-op; [`ProcessViewerSink`] overrides it to reap exited child
+    /// viewers so a closed window does not linger as a zombie until the
+    /// next document renders.
+    fn maintain(&mut self) {}
+}
+
+/// Test/inspection sink that records every emitted [`RenderRequest`].
+/// Only compiled under `cfg(test)` — production uses [`ProcessViewerSink`].
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub struct CapturingSink {
+    /// Requests in emission order.
+    pub requests: Vec<RenderRequest>,
+}
+
+#[cfg(test)]
+impl ViewerSink for CapturingSink {
+    fn emit(&mut self, request: RenderRequest) {
+        self.requests.push(request);
+    }
+}
+
+/// Production sink: serializes each [`RenderRequest`] (plus the resolved
+/// appearance) to a temp file and spawns a child `self --viewer <path>`
+/// process. Tracks spawned children loosely for non-blocking reaping so
+/// closed viewers don't linger as zombies. The terminal loop is never
+/// blocked — a spawn failure is logged (ERR_SPAWN) and dropped.
+pub struct ProcessViewerSink {
+    settings: std::sync::Arc<Settings>,
+    children: Vec<std::process::Child>,
+}
+
+impl std::fmt::Debug for ProcessViewerSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProcessViewerSink")
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
+impl ProcessViewerSink {
+    /// Construct a sink that renders with the given resolved `settings`.
+    pub fn new(settings: std::sync::Arc<Settings>) -> Self {
+        Self {
+            settings,
+            children: Vec::new(),
+        }
+    }
+
+    /// Non-blocking reap of exited child viewers. Called opportunistically
+    /// so closed windows don't accumulate as zombies. Never blocks on a
+    /// still-running child.
+    pub fn reap(&mut self) {
+        self.children.retain_mut(|child| {
+            match child.try_wait() {
+                Ok(Some(_status)) => false, // exited → drop
+                Ok(None) => true,           // still running → keep
+                Err(e) => {
+                    log::warn!("viewer: try_wait failed for child: {e}");
+                    false
+                }
+            }
+        });
+    }
+
+    /// Number of tracked (not-yet-reaped) child viewers. Reserved for the
+    /// planned viewer status surface; no caller yet (hence `dead_code`).
+    #[allow(dead_code)]
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+}
+
+impl ViewerSink for ProcessViewerSink {
+    /// Reap exited child viewers every drain pass so closed windows don't
+    /// linger as zombies (M1).
+    fn maintain(&mut self) {
+        self.reap();
+    }
+
+    fn emit(&mut self, request: RenderRequest) {
+        self.reap();
+        // Move the (potentially large) document into the payload instead of
+        // cloning it (H4).
+        let payload = ViewerPayload::from_request(request, &self.settings);
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("viewer: current_exe() failed ({e}); cannot spawn viewer");
+                return;
+            }
+        };
+        // Serialize the payload to a temp file (`launch::write_payload`),
+        // then spawn `self --viewer <path>`. The temp file is left for the
+        // child to read (and reboot GC), per the project temp-file
+        // convention. A spawn failure is logged (ERR_SPAWN) and dropped —
+        // the terminal is never blocked.
+        let path = match launch::write_payload(&payload) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("viewer: failed to write payload temp file ({e}); skipping viewer");
+                return;
+            }
+        };
+        match std::process::Command::new(&exe)
+            .arg("--viewer")
+            .arg(&path)
+            .spawn()
+        {
+            Ok(child) => {
+                log::warn!(
+                    "viewer: spawned child pid={} payload={}",
+                    child.id(),
+                    path.display()
+                );
+                self.children.push(child);
+            }
+            Err(e) => {
+                log::warn!("viewer: failed to spawn child ({e}); terminal unaffected");
+            }
+        }
+    }
+}
+
+/// Drains the OSC queue, routes payloads by viewer kind, and accumulates
+/// Markdown sessions. Holds no window state — purely a coordinator.
+#[derive(Debug, Default)]
+pub struct ViewerSpawner {
+    markdown: MarkdownViewerSessions,
+}
+
+impl ViewerSpawner {
+    /// Construct a spawner with empty session state.
+    pub fn new() -> Self {
+        Self {
+            markdown: MarkdownViewerSessions::new(),
+        }
+    }
+
+    /// Number of in-flight Markdown sessions. Reserved observability helper
+    /// for the planned viewer status surface; no caller yet (hence `dead_code`).
+    #[allow(dead_code)]
+    pub fn markdown_session_count(&self) -> usize {
+        self.markdown.session_count()
+    }
+
+    /// Process a batch of drained OSC requests in arrival order, emitting
+    /// completed documents to `sink`. Uses `now` for timeout bookkeeping.
+    ///
+    /// `Tab::drain_osc()` produces the `requests`; this keeps the spawner
+    /// independent of callback locking and trivially unit-testable.
+    pub fn drain(
+        &mut self,
+        requests: Vec<EmtermOscRequest>,
+        now: Instant,
+        sink: &mut dyn ViewerSink,
+    ) {
+        // Opportunistic timeout sweep on each pass (ERR_TIMEOUT).
+        self.markdown.evict_expired(now);
+        // Reap exited child viewers each pass (M1). Default no-op for
+        // capturing/test sinks; ProcessViewerSink reaps zombies here.
+        sink.maintain();
+
+        for req in requests {
+            let Some(cmd) = parse_payload(&req.payload) else {
+                continue;
+            };
+            self.route(&cmd, now, sink);
+        }
+    }
+
+    fn route(&mut self, cmd: &ParsedCommand, now: Instant, sink: &mut dyn ViewerSink) {
+        match cmd.kind.as_str() {
+            "markdown" => self.markdown.handle(cmd, now, sink),
+            // Reserved for future features — no-op + debug log (FR1).
+            "image" | "json" | "yaml" => {
+                log::debug!(
+                    "viewer: reserved kind {:?} ignored (verb={})",
+                    cmd.kind,
+                    cmd.verb
+                );
+            }
+            other => {
+                log::warn!("viewer: unknown kind {other:?} ignored");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(payload: &str) -> EmtermOscRequest {
+        EmtermOscRequest {
+            payload: payload.to_string(),
+        }
+    }
+
+    fn b64(s: &str) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(s.as_bytes())
+    }
+
+    // ── parse_payload ───────────────────────────────────────────────────
+
+    #[test]
+    fn parse_payload_splits_kind_verb_and_params() {
+        let cmd = parse_payload("markdown;begin;id=abc;format=gfm;version=1").unwrap();
+        assert_eq!(cmd.kind, "markdown");
+        assert_eq!(cmd.verb, "begin");
+        assert_eq!(cmd.params.get("id").map(String::as_str), Some("abc"));
+        assert_eq!(cmd.params.get("format").map(String::as_str), Some("gfm"));
+        assert_eq!(cmd.params.get("version").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn parse_payload_keeps_equals_in_value() {
+        // base64 values can contain '=' padding; only the first '=' splits.
+        let cmd = parse_payload("markdown;chunk;id=a;seq=0;data=YQ==").unwrap();
+        assert_eq!(cmd.params.get("data").map(String::as_str), Some("YQ=="));
+    }
+
+    #[test]
+    fn parse_payload_missing_verb_returns_none() {
+        assert!(parse_payload("markdown").is_none());
+    }
+
+    #[test]
+    fn parse_payload_empty_kind_returns_none() {
+        assert!(parse_payload(";begin;id=a").is_none());
+    }
+
+    // ── routing ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn markdown_payloads_round_trip_to_one_request() {
+        let mut spawner = ViewerSpawner::new();
+        let mut sink = CapturingSink::default();
+        let now = Instant::now();
+        spawner.drain(
+            vec![
+                req("markdown;begin;id=x;format=gfm"),
+                req(&format!(
+                    "markdown;chunk;id=x;seq=0;data={}",
+                    b64("# Title")
+                )),
+                req("markdown;end;id=x"),
+            ],
+            now,
+            &mut sink,
+        );
+        assert_eq!(sink.requests.len(), 1);
+        assert_eq!(sink.requests[0].markdown, "# Title");
+        assert_eq!(sink.requests[0].format, MarkdownFormat::Gfm);
+    }
+
+    #[test]
+    fn reserved_kinds_are_ignored_without_request() {
+        let mut spawner = ViewerSpawner::new();
+        let mut sink = CapturingSink::default();
+        let now = Instant::now();
+        spawner.drain(
+            vec![
+                req("image;show;path=/tmp/a.png"),
+                req("json;render;data=e30="),
+                req("yaml;render;data=e30="),
+            ],
+            now,
+            &mut sink,
+        );
+        assert!(sink.requests.is_empty());
+    }
+
+    #[test]
+    fn unknown_kind_is_ignored_without_request() {
+        let mut spawner = ViewerSpawner::new();
+        let mut sink = CapturingSink::default();
+        let now = Instant::now();
+        spawner.drain(vec![req("widget;do;x=1")], now, &mut sink);
+        assert!(sink.requests.is_empty());
+    }
+
+    #[test]
+    fn malformed_payload_is_skipped_no_panic() {
+        let mut spawner = ViewerSpawner::new();
+        let mut sink = CapturingSink::default();
+        let now = Instant::now();
+        spawner.drain(vec![req("garbage")], now, &mut sink);
+        assert!(sink.requests.is_empty());
+    }
+
+    #[test]
+    fn each_completed_session_yields_exactly_one_request() {
+        let mut spawner = ViewerSpawner::new();
+        let mut sink = CapturingSink::default();
+        let now = Instant::now();
+        spawner.drain(
+            vec![
+                req("markdown;begin;id=a"),
+                req(&format!("markdown;chunk;id=a;seq=0;data={}", b64("A"))),
+                req("markdown;end;id=a"),
+                req("markdown;begin;id=b"),
+                req(&format!("markdown;chunk;id=b;seq=0;data={}", b64("B"))),
+                req("markdown;end;id=b"),
+            ],
+            now,
+            &mut sink,
+        );
+        assert_eq!(sink.requests.len(), 2);
+        assert_eq!(sink.requests[0].markdown, "A");
+        assert_eq!(sink.requests[1].markdown, "B");
+    }
+
+    #[test]
+    fn markdown_format_parse_defaults_to_commonmark() {
+        assert_eq!(MarkdownFormat::parse("gfm"), MarkdownFormat::Gfm);
+        assert_eq!(MarkdownFormat::parse("GFM"), MarkdownFormat::Gfm);
+        assert_eq!(
+            MarkdownFormat::parse("commonmark"),
+            MarkdownFormat::CommonMark
+        );
+        assert_eq!(MarkdownFormat::parse("weird"), MarkdownFormat::CommonMark);
+        assert_eq!(MarkdownFormat::parse(""), MarkdownFormat::CommonMark);
+    }
+}
