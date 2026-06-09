@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>eMterm Markdown Viewer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--markdown-bg, #1e1e1e);
+      }
+      /* The viewer root mirrors the WebView fullscreen overlay container so
+         the reused fullscreen.css markdown styling applies unchanged. */
+      #viewer-root {
+        position: absolute;
+        inset: 0;
+        display: flex;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- entry.ts builds the markdown-fullscreen-overlay structure inside. -->
+    <div id="viewer-root"></div>
+    <script type="module" src="./entry.ts"></script>
+  </body>
+</html>

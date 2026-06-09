@@ -42,6 +42,10 @@ pub const DEFAULT_IMAGE_MEMORY_QUOTA_MB: u32 = 320;
 /// hard-coded `Theme::default().font_size_pt`.
 pub const DEFAULT_FONT_SIZE_PT: f32 = 13.0;
 
+/// Default Markdown viewer base font size in logical points. Mirrors the
+/// WebView build's `markdown_font_size` default (SPEC §Settings).
+pub const DEFAULT_MARKDOWN_FONT_SIZE: u32 = 14;
+
 /// CSS-compatible points-to-pixels conversion factor (1pt = 4/3 px at
 /// the 96-dpi reference resolution that browsers and the legacy
 /// WebView build assume). Used to translate `settings.font_size`
@@ -586,6 +590,44 @@ pub struct Settings {
     pub notify_on_output: bool,
     /// Notify when an inactive tab receives BEL (`0x07`).
     pub notify_on_bell: bool,
+
+    // ── Markdown viewer (Phase 1) ──
+    /// When `true`, the Markdown viewer follows the UI chrome theme
+    /// (`ui_theme` / `ui_theme_preset`). When `false`, it uses the
+    /// dedicated `markdown_theme` / `markdown_theme_preset`. Mirrors the
+    /// WebView build's `markdown_theme_follow_ui`.
+    pub markdown_theme_follow_ui: bool,
+    /// Brightness mode for the Markdown viewer when `follow_ui = false`.
+    pub markdown_theme: UiTheme,
+    /// Accent preset for the Markdown viewer when `follow_ui = false`.
+    pub markdown_theme_preset: UiThemePreset,
+    /// Body font family for the Markdown viewer. Empty → CSS fallback chain.
+    pub markdown_body_font_family: String,
+    /// Code font family for the Markdown viewer. Empty → CSS fallback chain.
+    pub markdown_code_font_family: String,
+    /// Emoji font family for the Markdown viewer. Empty → CSS fallback chain.
+    pub markdown_emoji_font_family: String,
+    /// Base font size (pt) for the Markdown viewer.
+    pub markdown_font_size: u32,
+}
+
+/// Effective Markdown viewer appearance, resolved from the `markdown_*`
+/// settings honoring `markdown_theme_follow_ui`. Phase 4 serializes this
+/// into the child viewer payload; Phase 5 applies it to the page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownAppearance {
+    /// Effective brightness mode (UI source when `follow_ui`, else markdown).
+    pub theme: UiTheme,
+    /// Effective accent preset (UI source when `follow_ui`, else markdown).
+    pub preset: UiThemePreset,
+    /// Body font family (always the markdown_* value).
+    pub body_font_family: String,
+    /// Code font family (always the markdown_* value).
+    pub code_font_family: String,
+    /// Emoji font family (always the markdown_* value).
+    pub emoji_font_family: String,
+    /// Base font size in pt (always the markdown_* value).
+    pub font_size: u32,
 }
 
 /// UI brightness mode mirrored from the legacy WebView settings.
@@ -795,6 +837,13 @@ impl Default for Settings {
             notify_on_process_exit: true,
             notify_on_output: false,
             notify_on_bell: true,
+            markdown_theme_follow_ui: true,
+            markdown_theme: UiTheme::default(),
+            markdown_theme_preset: UiThemePreset::default(),
+            markdown_body_font_family: String::new(),
+            markdown_code_font_family: String::new(),
+            markdown_emoji_font_family: String::new(),
+            markdown_font_size: DEFAULT_MARKDOWN_FONT_SIZE,
         }
     }
 }
@@ -810,6 +859,29 @@ impl Settings {
     /// conversion rationale.
     pub fn font_size_px(&self) -> f32 {
         self.font_size * PT_TO_PX
+    }
+
+    /// Resolve the effective Markdown viewer appearance.
+    ///
+    /// When `markdown_theme_follow_ui` is `true`, the theme/preset come
+    /// from the UI chrome (`ui_theme` / `ui_theme_preset`); otherwise from
+    /// the dedicated `markdown_theme` / `markdown_theme_preset`. Fonts and
+    /// size always come from the `markdown_*` keys (the WebView build has
+    /// no UI-chrome equivalents to inherit).
+    pub fn markdown_appearance(&self) -> MarkdownAppearance {
+        let (theme, preset) = if self.markdown_theme_follow_ui {
+            (self.ui_theme, self.ui_theme_preset)
+        } else {
+            (self.markdown_theme, self.markdown_theme_preset)
+        };
+        MarkdownAppearance {
+            theme,
+            preset,
+            body_font_family: self.markdown_body_font_family.clone(),
+            code_font_family: self.markdown_code_font_family.clone(),
+            emoji_font_family: self.markdown_emoji_font_family.clone(),
+            font_size: self.markdown_font_size,
+        }
     }
 
     /// Load `settings.json` from the platform config dir; fall back to
@@ -974,6 +1046,15 @@ struct RawSettings {
     notify_on_process_exit: Option<bool>,
     notify_on_output: Option<bool>,
     notify_on_bell: Option<bool>,
+
+    // ── Markdown viewer (flat keys, src-tauri compatible) ──
+    markdown_theme_follow_ui: Option<bool>,
+    markdown_theme: Option<String>,
+    markdown_theme_preset: Option<String>,
+    markdown_body_font_family: Option<String>,
+    markdown_code_font_family: Option<String>,
+    markdown_emoji_font_family: Option<String>,
+    markdown_font_size: Option<u32>,
 
     // ── native-poc-specific (nested) ──
     native_poc: Option<RawNativePoc>,
@@ -1307,6 +1388,32 @@ impl RawSettings {
         if let Some(v) = self.notify_on_bell {
             dst.notify_on_bell = v;
         }
+
+        // ── Markdown viewer ──
+        if let Some(v) = self.markdown_theme_follow_ui {
+            dst.markdown_theme_follow_ui = v;
+        }
+        if let Some(v) = self.markdown_theme {
+            dst.markdown_theme = UiTheme::parse_or_warn(&v);
+        }
+        if let Some(v) = self.markdown_theme_preset {
+            dst.markdown_theme_preset = UiThemePreset::parse_or_warn(&v);
+        }
+        // Fonts: empty string is a valid value (→ CSS fallback chain), so
+        // unlike `ui_font_family` we do not drop blanks here.
+        if let Some(v) = self.markdown_body_font_family {
+            dst.markdown_body_font_family = v;
+        }
+        if let Some(v) = self.markdown_code_font_family {
+            dst.markdown_code_font_family = v;
+        }
+        if let Some(v) = self.markdown_emoji_font_family {
+            dst.markdown_emoji_font_family = v;
+        }
+        if let Some(v) = self.markdown_font_size {
+            dst.markdown_font_size = v;
+        }
+
         // Flat-key bridge: only seed the native-poc enum when the user
         // hasn't already set the more explicit `native_poc.ambiguous_width_mode`
         // string. The native_poc block runs *after* this, so if both are
@@ -2063,5 +2170,117 @@ mod tests {
         // Unknown keys are ignored; known keys still apply.
         assert_eq!(s.keybinds.copy, "Ctrl+Insert");
         assert_eq!(s.keybinds.paste, KeybindSettings::default().paste);
+    }
+
+    // ── Markdown viewer settings (Phase 1 / TS-9, TS-10) ────────────────
+
+    #[test]
+    fn markdown_settings_defaults_match_spec() {
+        // SPEC §Settings: follow_ui=true, theme=System, preset=Purple,
+        // fonts empty, size 14.
+        let s = Settings::new();
+        assert!(s.markdown_theme_follow_ui);
+        assert_eq!(s.markdown_theme, UiTheme::System);
+        assert_eq!(s.markdown_theme_preset, UiThemePreset::Purple);
+        assert_eq!(s.markdown_body_font_family, "");
+        assert_eq!(s.markdown_code_font_family, "");
+        assert_eq!(s.markdown_emoji_font_family, "");
+        assert_eq!(s.markdown_font_size, 14);
+    }
+
+    #[test]
+    fn loader_markdown_flat_keys_are_applied() {
+        let s = load_json(
+            r#"{
+                "markdown_theme_follow_ui": false,
+                "markdown_theme": "light",
+                "markdown_theme_preset": "green",
+                "markdown_body_font_family": "Noto Sans",
+                "markdown_code_font_family": "Fira Code",
+                "markdown_emoji_font_family": "Noto Color Emoji",
+                "markdown_font_size": 16
+            }"#,
+        );
+        assert!(!s.markdown_theme_follow_ui);
+        assert_eq!(s.markdown_theme, UiTheme::Light);
+        assert_eq!(s.markdown_theme_preset, UiThemePreset::Green);
+        assert_eq!(s.markdown_body_font_family, "Noto Sans");
+        assert_eq!(s.markdown_code_font_family, "Fira Code");
+        assert_eq!(s.markdown_emoji_font_family, "Noto Color Emoji");
+        assert_eq!(s.markdown_font_size, 16);
+    }
+
+    #[test]
+    fn loader_markdown_null_keys_keep_defaults() {
+        let s = load_json(
+            r#"{
+                "markdown_theme_follow_ui": null,
+                "markdown_theme": null,
+                "markdown_theme_preset": null,
+                "markdown_body_font_family": null,
+                "markdown_code_font_family": null,
+                "markdown_emoji_font_family": null,
+                "markdown_font_size": null
+            }"#,
+        );
+        let d = Settings::default();
+        assert_eq!(s.markdown_theme_follow_ui, d.markdown_theme_follow_ui);
+        assert_eq!(s.markdown_theme, d.markdown_theme);
+        assert_eq!(s.markdown_theme_preset, d.markdown_theme_preset);
+        assert_eq!(s.markdown_body_font_family, d.markdown_body_font_family);
+        assert_eq!(s.markdown_code_font_family, d.markdown_code_font_family);
+        assert_eq!(s.markdown_emoji_font_family, d.markdown_emoji_font_family);
+        assert_eq!(s.markdown_font_size, d.markdown_font_size);
+    }
+
+    #[test]
+    fn loader_markdown_unknown_theme_falls_back() {
+        let s = load_json(r#"{"markdown_theme": "chartreuse", "markdown_theme_preset": "cyan"}"#);
+        // Unknown enum values coerce to documented defaults.
+        assert_eq!(s.markdown_theme, UiTheme::System);
+        assert_eq!(s.markdown_theme_preset, UiThemePreset::Purple);
+    }
+
+    #[test]
+    fn appearance_follow_ui_true_uses_ui_theme_source() {
+        let s = load_json(
+            r#"{
+                "ui_theme": "dark",
+                "ui_theme_preset": "blue",
+                "markdown_theme_follow_ui": true,
+                "markdown_theme": "light",
+                "markdown_theme_preset": "green",
+                "markdown_body_font_family": "Body",
+                "markdown_code_font_family": "Code",
+                "markdown_emoji_font_family": "Emoji",
+                "markdown_font_size": 20
+            }"#,
+        );
+        let a = s.markdown_appearance();
+        // follow_ui = true -> theme/preset come from the UI chrome source.
+        assert_eq!(a.theme, UiTheme::Dark);
+        assert_eq!(a.preset, UiThemePreset::Blue);
+        // Fonts and size always come from the markdown_* keys.
+        assert_eq!(a.body_font_family, "Body");
+        assert_eq!(a.code_font_family, "Code");
+        assert_eq!(a.emoji_font_family, "Emoji");
+        assert_eq!(a.font_size, 20);
+    }
+
+    #[test]
+    fn appearance_follow_ui_false_uses_markdown_theme_source() {
+        let s = load_json(
+            r#"{
+                "ui_theme": "dark",
+                "ui_theme_preset": "blue",
+                "markdown_theme_follow_ui": false,
+                "markdown_theme": "light",
+                "markdown_theme_preset": "green"
+            }"#,
+        );
+        let a = s.markdown_appearance();
+        // follow_ui = false -> theme/preset come from the markdown_* source.
+        assert_eq!(a.theme, UiTheme::Light);
+        assert_eq!(a.preset, UiThemePreset::Green);
     }
 }

@@ -1,0 +1,183 @@
+schema_version: 1
+feature: markdown-viewer-native-port
+created: 2026-06-08
+
+project:
+  components:
+    native-poc:
+      language: rust
+      # native-poc has its own target dirs per `.claude/rules/native-poc-build-location.md`.
+      # Run cargo from the project root with --manifest-path (do NOT `cd native-poc`).
+      build_command: "CARGO_TARGET_DIR=native-poc/target cargo check --manifest-path native-poc/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=native-poc/target cargo test --manifest-path native-poc/Cargo.toml --bin emterm-native-poc"
+      format_command: "cargo fmt --manifest-path native-poc/Cargo.toml"
+      e2e_test_command: ""
+    viewer-bundle:
+      language: typescript
+      # Dedicated standalone viewer bundle reusing src/markdown (import only; src/ unchanged).
+      # Exact script name finalized in sdd.2; placeholder below.
+      build_command: "bun run build:viewer"
+      test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"bun test src/markdown && bun run typecheck\""
+      format_command: "bun run format"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts:
+      - SPEC.md
+      - 要件定義書.md
+    status: completed
+    completed_at_commit: 04de0aad3d78bbbad217c6dcfb4863161d27468d
+  - id: create-plan
+    artifacts:
+      - IMPLEMENTATION.md
+      - VERIFICATION.md
+    status: completed
+    completed_at_commit: 04de0aad3d78bbbad217c6dcfb4863161d27468d
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 04de0aad3d78bbbad217c6dcfb4863161d27468d
+  - id: implement
+    status: completed
+    completed_at_commit: 04de0aad3d78bbbad217c6dcfb4863161d27468d
+  - id: check
+    status: completed
+    completed_at_commit: 04de0aad3d78bbbad217c6dcfb4863161d27468d
+  - id: verify
+    artifacts:
+      - VERIFICATION_RESULT.md
+    status: completed
+    completed_at_commit: 04de0aad3d78bbbad217c6dcfb4863161d27468d
+
+requirements:
+  FR1:
+    title: ViewerSpawner foundation (drain osc_queue, parse, route by viewer type)
+    status: ok
+    tasks:
+      - queue-read-side
+      - payload-parser
+      - viewer-routing
+      - render-request-sink
+      - osc-session-tests
+    tests:
+      - TS-1
+      - TS-8
+      - TS-11
+  FR2:
+    title: Markdown OSC session accumulation (begin/chunk/end, limits, timeout, base64 join)
+    status: ok
+    tasks:
+      - markdown-session-lifecycle
+      - render-request-sink
+      - osc-session-tests
+    tests:
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-7
+  FR3:
+    title: Viewer process spawn per completed session (separate `--viewer` child, concurrent, close=exit)
+    status: ok
+    tasks:
+      - viewer-subcommand-entry
+      - child-gtk-wry-window
+      - custom-scheme-serve
+      - payload-transport
+      - real-viewer-sink
+      - window-lifecycle
+      - wry-bringup-manual
+    tests:
+      - TS-12
+      - TS-13
+  FR4:
+    title: Embedded standalone viewer bundle reusing src/markdown (src/ unchanged)
+    status: ok
+    tasks:
+      - viewer-web-entry
+      - build-viewer-target
+      - embed-bundle-accessor
+      - custom-scheme-serve
+    tests:
+      - TS-17
+  FR5:
+    title: Rendering parity (base syntax + tables + highlight + mermaid + images + outline)
+    status: ok
+    tasks:
+      - viewer-web-entry
+      - viewer-bundle-tests
+    tests:
+      - TS-17
+  FR6:
+    title: Seven markdown_* settings captured and injected into the viewer window
+    status: ok
+    tasks:
+      - settings-resolved-fields
+      - settings-raw-merge-defaults
+      - settings-appearance-resolver
+      - settings-unit-tests
+      - settings-injection
+    tests:
+      - TS-9
+      - TS-10
+  FR7:
+    title: Link handling (is_safe_uri then OS open; suppress in-window navigation)
+    status: ok
+    tasks:
+      - navigation-interceptor
+      - links-images-tests
+    tests:
+      - TS-14
+  FR8:
+    title: Inline image resolution (data URI direct + basedir-relative via native)
+    status: ok
+    tasks:
+      - image-resolver
+      - links-images-tests
+    tests:
+      - TS-15
+      - TS-16
+  FR9:
+    title: Window controls (close via button/Esc/q; in-page scroll)
+    status: ok
+    tasks:
+      - window-lifecycle
+      - window-controls
+    tests: []  # manual-only (no automated GUI E2E for native-poc)
+  NFR1:
+    title: Performance — window spawn does not block terminal render/PTY path
+    status: ok
+    tasks:
+      - wry-bringup-manual
+    tests: []  # manual performance check
+  NFR2:
+    title: Security — DOMPurify, SVG exclusion, MIME allowlist, is_safe_uri, basedir restriction, nav isolation
+    status: ok
+    tasks:
+      - navigation-interceptor
+      - image-resolver
+      - links-images-tests
+    tests:
+      - TS-14
+      - TS-15
+      - TS-16
+  NFR3:
+    title: Branch policy — no src/ modification (import-only reuse)
+    status: ok
+    tasks:
+      - settings-raw-merge-defaults
+      - build-viewer-target
+    tests: []  # verified via `git diff --stat src/` being empty (SC-7)
+  NFR4:
+    title: Platform — Linux primary (Wry/WebKitGTK), Windows secondary, gated OS open paths
+    status: ok
+    tasks:
+      - wry-bringup-manual
+    tests: []  # manual on Linux/WebKitGTK
+  NFR5:
+    title: Maintainability — reuse src/markdown to minimize divergence; warn/error logging
+    status: ok
+    tasks:
+      - viewer-web-entry
+    tests: []  # qualitative (code review)

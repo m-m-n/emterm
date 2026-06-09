@@ -30,6 +30,17 @@ mod wakeup;
 
 fn main() {
     logging::init();
+
+    // `--viewer <payload-path>` dispatches to the separate child viewer
+    // entry (Linux GTK/Wry window) before any terminal startup. The normal
+    // terminal path is taken when the flag is absent.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--viewer") {
+        let payload_path = args.get(pos + 1).cloned();
+        run_viewer(payload_path);
+        return;
+    }
+
     log::info!("native-poc starting (winit 0.30 backend)");
 
     let event_loop = EventLoop::new().expect("native-poc: failed to create winit event loop");
@@ -44,4 +55,32 @@ fn main() {
     let settings = settings::Settings::load_or_default();
     let app = app::App::with_settings(settings);
     window_host::run(event_loop, app);
+}
+
+/// Entry for the child `--viewer <payload-path>` process. On Linux this
+/// runs the GTK/Wry Markdown viewer window and blocks until it closes; on
+/// other platforms the viewer window is not yet implemented, so we log and
+/// exit non-zero. A missing payload path is a usage error.
+fn run_viewer(payload_path: Option<String>) {
+    let Some(path) = payload_path else {
+        log::error!("--viewer requires a payload file path");
+        std::process::exit(2);
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        match viewer::window::run(&path) {
+            Ok(()) => log::info!("viewer: window closed"),
+            Err(e) => {
+                log::error!("{e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        log::error!("viewer: --viewer window is only implemented on Linux");
+        std::process::exit(1);
+    }
 }

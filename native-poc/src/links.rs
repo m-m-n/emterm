@@ -510,6 +510,49 @@ pub fn is_safe_uri(uri: &str) -> bool {
     }
 }
 
+/// Open `uri` with the OS handler **only if** [`is_safe_uri`] allows it
+/// (http/https/mailto/ssh). Disallowed URIs are refused with a `warn` and
+/// `false` is returned (FR7 / NFR2). Linux uses `xdg-open`; Windows uses
+/// `ShellExecuteW` via the `opener` crate (no `cmd /c start`, so PTY-
+/// supplied metacharacters cannot inject commands).
+///
+/// Returns `true` when the open was attempted (the URI passed the gate),
+/// `false` when refused. A spawn failure after a passed gate still returns
+/// `true` (the decision to open was made) but is logged.
+pub fn open_safe_uri(uri: &str) -> bool {
+    if !is_safe_uri(uri) {
+        log::warn!("viewer: refusing to open disallowed URI: {uri:?}");
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Stdio;
+        match std::process::Command::new("xdg-open")
+            .arg(uri)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                log::info!("viewer: opened URI via xdg-open: {uri}");
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(e) => log::warn!("viewer: xdg-open failed for {uri}: {e}"),
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        match opener::open(uri) {
+            Ok(()) => log::info!("viewer: opened URI via ShellExecuteW: {uri}"),
+            Err(e) => log::warn!("viewer: ShellExecuteW failed for {uri}: {e}"),
+        }
+    }
+    true
+}
+
 /// Expand one whitespace-delimited token from an editor-command template by
 /// substituting `{file}`, `{line}`, and `{col}` in a single left-to-right
 /// pass. The input text is never re-scanned after a substitution, so values
@@ -893,6 +936,20 @@ mod tests {
         assert!(!is_safe_uri("ftp://h/f"));
         assert!(!is_safe_uri("relative/path"));
         assert!(!is_safe_uri(""));
+    }
+
+    #[test]
+    fn open_safe_uri_refuses_disallowed_schemes() {
+        // The viewer navigation handler relies on this gate (FR7/NFR2):
+        // a disallowed scheme must be refused (returns false) without ever
+        // reaching the OS opener. We only assert the gate decision here —
+        // the actual xdg-open spawn for allowed URIs is an OS side effect
+        // not exercised in unit tests.
+        assert!(!open_safe_uri("file:///etc/passwd"));
+        assert!(!open_safe_uri("javascript:alert(1)"));
+        assert!(!open_safe_uri("data:text/html,x"));
+        assert!(!open_safe_uri("relative/path"));
+        assert!(!open_safe_uri(""));
     }
 
     // ── Editor-command templating ────────────────────────────
