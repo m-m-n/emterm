@@ -18,14 +18,20 @@ pub const IMAGE_RESPONSE_CHUNK_SIZE: usize = 128 * 1024;
 /// ```text
 /// ESC ] 777 ; emterm ; markdown ; begin ; id={uuid} ; format=gfm ; render=fullscreen ; version=1.0 [; basedir={path}] ESC \
 /// ESC ] 777 ; emterm ; markdown ; chunk ; id={uuid} ; seq=N ; data={base64} ESC \
-/// ESC ] 777 ; emterm ; markdown ; end ; id={uuid} ESC \
+/// ESC ] 777 ; emterm ; markdown ; end ; id={uuid} [; interactive=1] ESC \
 /// ```
 ///
 /// When `basedir` is provided, it is appended to the begin sequence as `basedir={sanitized_path}`.
+///
+/// When `interactive` is true, `;interactive=1` is appended to the END
+/// sequence only. The CLI sets this exclusively when its stdin is a TTY
+/// (i.e. it will park in the interactive loop waiting to be released), so
+/// the terminal can safely inject the release input on that marker.
 pub fn generate_markdown_osc(
     session_id: &Uuid,
     chunks: Vec<String>,
     basedir: Option<&str>,
+    interactive: bool,
 ) -> String {
     let total_data: usize = chunks.iter().map(|c| c.len()).sum();
     let header_overhead = 100;
@@ -52,7 +58,11 @@ pub fn generate_markdown_osc(
     }
 
     // End sequence
-    output.push_str(&format!("\x1b]777;emterm;markdown;end;id={}\x1b\\", id));
+    let interactive_param = if interactive { ";interactive=1" } else { "" };
+    output.push_str(&format!(
+        "\x1b]777;emterm;markdown;end;id={}{}\x1b\\",
+        id, interactive_param
+    ));
 
     output
 }
@@ -244,7 +254,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec!["SGVsbG8=".to_string()];
 
-        let result = generate_markdown_osc(&session_id, chunks, None);
+        let result = generate_markdown_osc(&session_id, chunks, None, false);
 
         // Verify structure
         assert!(result.contains("\x1b]777;emterm;markdown;begin"));
@@ -267,7 +277,7 @@ mod tests {
             "chunk2".to_string(),
         ];
 
-        let result = generate_markdown_osc(&session_id, chunks, None);
+        let result = generate_markdown_osc(&session_id, chunks, None, false);
 
         // Verify sequential chunk numbers
         assert!(result.contains("seq=0"));
@@ -283,7 +293,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec!["data".to_string()];
 
-        let result = generate_markdown_osc(&session_id, chunks, None);
+        let result = generate_markdown_osc(&session_id, chunks, None, false);
 
         // UUID should appear in begin, chunk, and end sequences
         let uuid_str = session_id.to_string();
@@ -512,13 +522,48 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec![];
 
-        let result = generate_markdown_osc(&session_id, chunks, None);
+        let result = generate_markdown_osc(&session_id, chunks, None, false);
 
         // Should still have begin and end sequences
         assert!(result.contains("\x1b]777;emterm;markdown;begin"));
         assert!(result.contains("\x1b]777;emterm;markdown;end"));
         // Should not have any chunk sequences
         assert!(!result.contains("\x1b]777;emterm;markdown;chunk"));
+    }
+
+    // --- interactive flag tests ---
+
+    #[test]
+    fn test_generate_markdown_osc_interactive_flag_on_end_only() {
+        let session_id = Uuid::new_v4();
+        let id = session_id.to_string();
+        let chunks = vec!["SGVsbG8=".to_string()];
+
+        let interactive = generate_markdown_osc(&session_id, chunks.clone(), None, true);
+        // interactive=1 must be present, and on the END sequence only.
+        assert!(interactive.contains(&format!(
+            "\x1b]777;emterm;markdown;end;id={};interactive=1\x1b\\",
+            id
+        )));
+        // The flag appears exactly once, and only on the end sequence.
+        assert_eq!(interactive.matches("interactive=1").count(), 1);
+        // Begin and chunk sequences must NOT carry the flag. Check each
+        // OSC sequence (split on the ST terminator) individually.
+        for seq in interactive.split("\x1b\\") {
+            if seq.contains("markdown;begin") || seq.contains("markdown;chunk") {
+                assert!(
+                    !seq.contains("interactive=1"),
+                    "begin/chunk sequence carried interactive flag: {seq:?}"
+                );
+            }
+        }
+        assert!(interactive.contains("\x1b]777;emterm;markdown;begin"));
+        assert!(interactive.contains("\x1b]777;emterm;markdown;chunk"));
+
+        let non_interactive = generate_markdown_osc(&session_id, chunks, None, false);
+        // No interactive flag anywhere when false.
+        assert!(!non_interactive.contains("interactive=1"));
+        assert!(non_interactive.contains(&format!("\x1b]777;emterm;markdown;end;id={}\x1b\\", id)));
     }
 
     // --- basedir parameter tests ---
@@ -528,7 +573,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec!["SGVsbG8=".to_string()];
 
-        let result = generate_markdown_osc(&session_id, chunks, Some("/home/user/docs"));
+        let result = generate_markdown_osc(&session_id, chunks, Some("/home/user/docs"), false);
 
         // basedir should appear in the begin sequence
         assert!(result.contains("basedir=/home/user/docs"));
@@ -543,7 +588,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec!["SGVsbG8=".to_string()];
 
-        let result = generate_markdown_osc(&session_id, chunks, None);
+        let result = generate_markdown_osc(&session_id, chunks, None, false);
 
         // basedir should NOT appear
         assert!(!result.contains("basedir="));
@@ -557,7 +602,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec!["data".to_string()];
 
-        let result = generate_markdown_osc(&session_id, chunks, Some("/path;evil/dir"));
+        let result = generate_markdown_osc(&session_id, chunks, Some("/path;evil/dir"), false);
 
         // Semicolons should be stripped from basedir value
         assert!(result.contains("basedir=/pathevil/dir"));
@@ -569,7 +614,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         let chunks = vec!["data".to_string()];
 
-        let result = generate_markdown_osc(&session_id, chunks, Some("/path/\x1b[0m/dir"));
+        let result = generate_markdown_osc(&session_id, chunks, Some("/path/\x1b[0m/dir"), false);
 
         // Control characters should be stripped
         assert!(result.contains("basedir=/path/[0m/dir"));

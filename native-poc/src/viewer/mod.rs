@@ -103,6 +103,31 @@ pub fn parse_payload(payload: &str) -> Option<ParsedCommand> {
     })
 }
 
+/// Bytes written to a tab's PTY to release a parked interactive
+/// `emterm markdown` CLI from its stdin loop.
+pub const MARKDOWN_RELEASE_INPUT: &[u8] = b"quit\n";
+
+/// True iff `payload` is a markdown session `end` marker that carries
+/// `interactive=1`. The `emterm markdown` CLI sets this flag ONLY when its
+/// stdin is a TTY (so a genuine interactive CLI is parked waiting to be
+/// released); a non-interactive (piped/redirected) invocation omits it, so
+/// the common *accidental* release — injecting `quit` after a non-TTY CLI
+/// has already returned the prompt — never fires.
+///
+/// SECURITY (accepted residual): the flag is plaintext carried in the
+/// terminal output stream, which is attacker-controllable. Untrusted output
+/// (a `cat`'d file, an SSH peer, a log line) CAN forge
+/// `markdown;end;…;interactive=1` and make the caller write
+/// [`MARKDOWN_RELEASE_INPUT`] into the emitting tab's PTY — the `id` is not
+/// correlated against a live session, so forging needs no secret. The impact
+/// is bounded to a single `quit\n` line into that tab's foreground program
+/// (not arbitrary input); this is an accepted residual documented in SPEC.md
+/// ("Interactive CLI release"). Closing it would require terminal-owned state
+/// (e.g. a foreground-process check or a begin-correlated session id).
+pub fn markdown_end_wants_release(payload: &str) -> bool {
+    payload.starts_with("markdown;end;") && payload.split(';').any(|tok| tok == "interactive=1")
+}
+
 /// A completed Markdown document ready to be displayed. Phase 4 serializes
 /// this (plus the resolved appearance) into the child viewer payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,6 +373,25 @@ mod tests {
     #[test]
     fn parse_payload_missing_verb_returns_none() {
         assert!(parse_payload("markdown").is_none());
+    }
+
+    #[test]
+    fn markdown_end_wants_release_gates_on_interactive_flag() {
+        assert!(markdown_end_wants_release(
+            "markdown;end;id=abc;interactive=1"
+        ));
+        assert!(!markdown_end_wants_release("markdown;end;id=abc"));
+        assert!(!markdown_end_wants_release("markdown;end"));
+        // Must be an `end` marker, not begin.
+        assert!(!markdown_end_wants_release(
+            "markdown;begin;id=abc;interactive=1"
+        ));
+        assert!(!markdown_end_wants_release(
+            "markdown;chunk;id=abc;seq=0;data="
+        ));
+        // Wrong kind even with the flag.
+        assert!(!markdown_end_wants_release("image;end;interactive=1"));
+        assert!(!markdown_end_wants_release(""));
     }
 
     #[test]

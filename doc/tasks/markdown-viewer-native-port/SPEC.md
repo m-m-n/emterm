@@ -126,12 +126,19 @@ Wire form (already decoded by `callbacks.rs`; payload is the part after `777;`):
 ```
 markdown;begin;id=<uuid>;format=<commonmark|gfm>;version=<n>;basedir=<dir>
 markdown;chunk;id=<uuid>;seq=<n>;data=<base64>
-markdown;end;id=<uuid>
+markdown;end;id=<uuid>[;interactive=1]
 ```
 
 - Tokens are `;`-separated; the first two are `<viewer>` and `<verb>`; the rest are `key=value`.
 - `data` is base64-encoded Markdown text (chunked to keep individual OSC sequences small).
+- `interactive=1` is present on the `end` marker only when the CLI's stdin is a TTY (see "Interactive CLI release"). Absent otherwise.
 - tmux DCS passthrough is handled by the CLI emitter; native-poc receives normal OSC.
+
+### Interactive CLI release
+
+`emterm markdown` parks in an interactive stdin loop (navigate/image/quit) when its stdin is a TTY, waiting for a `quit` line before returning the shell prompt. The native viewer is a separate child process that resolves images and links itself, so nothing drives that loop. To return the prompt immediately, the terminal writes `quit\n` to the emitting tab's PTY when it observes a `markdown;end` marker carrying `interactive=1` (the CLI sets that flag only when its stdin is a TTY, so a non-interactive piped/redirected invocation — which has already returned — is not released).
+
+**Accepted residual risk:** `interactive=1` is plaintext in the terminal output stream, which is attacker-controllable. Untrusted output (a `cat`'d file, an SSH peer, a log line) can forge `markdown;end;…;interactive=1` and cause the terminal to write `quit\n` into the emitting tab's foreground program; the `id` is not correlated against a live session. The blast radius is bounded to a single `quit\n` line (not arbitrary input), so this is accepted rather than gated. A stronger gate (terminal-owned foreground-process check via `process_group_leader`, or a begin-correlated session id) is a future option if the residual becomes unacceptable.
 
 ### Parent → Child Data Passing
 
