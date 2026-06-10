@@ -147,6 +147,10 @@ pub struct App {
     /// actions (`new_tab` / `close_tab` / `next_tab` / `prev_tab`) and
     /// clipboard chords (`copy` / `paste`).
     pub keybinds: crate::ui::keybinds::KeybindTable,
+    /// Display locale resolved once from `settings.language` at
+    /// construction (`Auto` consults the OS locale). Consumed by the
+    /// desktop-notification body formatting in `pump_all`.
+    pub locale: crate::i18n::Locale,
     /// Scrollback position. `Live` = auto-follow; `OffsetFromLive(n)` = the
     /// viewport is pinned `n` rows above the live tail.
     pub scroll_position: ScrollPosition,
@@ -367,6 +371,14 @@ impl App {
         // specs fall back to their built-in defaults with a warn log
         // (see `KeybindTable::from_settings`).
         let keybinds = crate::ui::keybinds::KeybindTable::from_settings(&settings.keybinds);
+        // Resolve `language` to a concrete locale once; `Auto` consults
+        // the OS locale (sys-locale), unsupported tags fall back to En.
+        let locale = crate::i18n::resolve(settings.language);
+        log::info!(
+            "settings: language={:?} -> locale={:?}",
+            settings.language,
+            locale
+        );
         let (font_resolver, font_fallback, font_cache, font_rasterizer, font_base_id) =
             Self::build_font_stack(&settings);
 
@@ -433,6 +445,7 @@ impl App {
             viewer_sink: crate::viewer::ProcessViewerSink::new(settings.clone()),
             settings,
             keybinds,
+            locale,
             scroll_position: ScrollPosition::Live,
             alt_screen: false,
             window_focused: true,
@@ -1475,7 +1488,7 @@ impl App {
             }
         }
         for (sanitized_title, kind) in pending_notifications {
-            let body = crate::notifications::notification_body(&sanitized_title, kind);
+            let body = crate::notifications::notification_body(&sanitized_title, kind, self.locale);
             self.notify(crate::notifications::NOTIFICATION_TITLE, &body);
         }
         if bell_rang {
