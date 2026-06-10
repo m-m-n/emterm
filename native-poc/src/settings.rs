@@ -440,10 +440,10 @@ pub struct Settings {
     /// secondary fallback).
     #[allow(dead_code)] // Phase 7: settings.json loader will populate this.
     pub emoji_font: Option<String>,
-    /// Variable-font axis settings (e.g. `("wght", 700.0)`). Currently
-    /// captured for forward compatibility; swash adapter wiring lands
-    /// later.
-    #[allow(dead_code)] // Phase 7+: variable font axis support.
+    /// Variable-font axis settings (e.g. `("wght", 700.0)`). Applied by
+    /// the swash adapter to shaping, rasterization, and metrics of every
+    /// registered font; ignored (with a WARN) under `font_engine =
+    /// ab_glyph`.
     pub variable_font_axes: std::collections::HashMap<String, f32>,
     /// Maximum number of rows preserved above the viewport before old lines
     /// are dropped. Plumbed to `TerminalCore::new` at tab spawn time.

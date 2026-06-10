@@ -562,7 +562,11 @@ impl App {
 
         let rasterizer: Arc<dyn GlyphRasterizer> = match settings.font_engine {
             FontEngine::Swash => {
-                let swash = Arc::new(crate::render::font::swash_adapter::SwashRasterizer::new());
+                let swash = Arc::new(
+                    crate::render::font::swash_adapter::SwashRasterizer::with_axes(
+                        &settings.variable_font_axes,
+                    ),
+                );
                 swash.ingest_resolver(&resolver);
                 log::info!(
                     "font.antialias = {}",
@@ -580,6 +584,11 @@ impl App {
                 // renders. CJK / emoji return None and the fallback
                 // chain stops — that is the documented degradation
                 // path (FR5).
+                if !settings.variable_font_axes.is_empty() {
+                    log::warn!(
+                        "font.variable_axes: ignored under font_engine = ab_glyph (swash only)"
+                    );
+                }
                 match crate::render::font::ab_glyph_adapter::AbGlyphRasterizer::from_static_bytes(
                     crate::render::font::resolver::BUNDLED_CJK_FONT,
                     bundled_cjk_id,
@@ -589,8 +598,14 @@ impl App {
                         Arc::new(r)
                     }
                     None => {
+                        // Honor the "axes ignored under ab_glyph" contract
+                        // even on this fallback: the user explicitly chose
+                        // the no-variable-font escape hatch, so a parse
+                        // failure that lands us back on swash must not
+                        // silently re-enable the axes we just warned were
+                        // off (`new()`, not `with_axes`).
                         log::warn!(
-                            "font.unknown_engine: ab_glyph failed to parse bundled CJK; falling back to swash"
+                            "font.unknown_engine: ab_glyph failed to parse bundled CJK; falling back to swash (variable_font_axes stay ignored)"
                         );
                         let swash =
                             Arc::new(crate::render::font::swash_adapter::SwashRasterizer::new());
