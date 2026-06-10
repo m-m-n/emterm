@@ -86,7 +86,7 @@ pub fn run(payload_path: &str) -> Result<(), String> {
             handle_request(&request, basedir.as_deref())
         })
         // FR7: deny in-window navigation; route safe external URIs to the OS.
-        .with_navigation_handler(|uri| navigation_allowed(&uri));
+        .with_navigation_handler(|uri| handle_navigation(&uri));
 
     let _webview = builder
         .build_gtk(&window)
@@ -175,13 +175,25 @@ fn serve_image(rel: &str, basedir: Option<&str>) -> Response<Cow<'static, [u8]>>
 /// Decide whether the WebView may navigate to `uri` in-window.
 ///
 /// In-bundle (`emterm-viewer://`) navigation is allowed so the page can
-/// load its own assets. Any other URI is *denied* in-window; if it is a
-/// safe external scheme it is opened via the OS handler instead (FR7).
+/// load its own assets. Any other URI is denied in-window. This is a
+/// **pure predicate** with no side effects — opening safe external URIs
+/// in the OS is the caller's job ([`handle_navigation`]), so unit tests
+/// can assert the decision without spawning a browser.
 pub fn navigation_allowed(uri: &str) -> bool {
-    if uri.starts_with(&format!("{SCHEME}://")) {
+    uri.starts_with(&format!("{SCHEME}://"))
+}
+
+/// Navigation handler for the WebView: allow in-window navigation only
+/// for in-bundle URIs; for any other URI, deny in-window navigation and
+/// hand a safe external scheme to the OS handler (FR7).
+///
+/// Returns whether the WebView may proceed in-window. The OS-open is a
+/// side effect, deliberately kept out of [`navigation_allowed`] so the
+/// predicate stays test-safe.
+pub fn handle_navigation(uri: &str) -> bool {
+    if navigation_allowed(uri) {
         return true;
     }
-    // External link: hand to the OS if safe, never navigate the window.
     crate::links::open_safe_uri(uri);
     false
 }
@@ -228,6 +240,10 @@ mod tests {
     #[test]
     fn external_navigation_is_denied_in_window() {
         // Safe or not, the window itself must never navigate externally.
+        // `navigation_allowed` is a PURE predicate — calling it here must
+        // NOT spawn an OS browser (the side effect lives in
+        // `handle_navigation`, exercised only at runtime). Using a safe
+        // https URL here previously launched xdg-open on every test run.
         assert!(!navigation_allowed("https://example.com"));
         assert!(!navigation_allowed("file:///etc/passwd"));
         assert!(!navigation_allowed("javascript:alert(1)"));
