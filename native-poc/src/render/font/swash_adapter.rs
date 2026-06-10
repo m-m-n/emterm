@@ -19,7 +19,7 @@ use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::shape::ShapeContext;
 use swash::zeno::{Format, Vector};
-use swash::FontRef;
+use swash::{FontRef, NormalizedCoord, Setting};
 
 use super::resolver::{RegisteredFont, Resolver};
 use super::traits::{AtlasFormat, FontId, FontMetrics, GlyphBitmap, GlyphRasterizer, ShapedGlyph};
@@ -55,11 +55,52 @@ fn subpixel_enabled_from_env() -> bool {
         .unwrap_or(true)
 }
 
+/// Parse `settings.variable_font_axes` entries into swash `Setting`s.
+/// Axis tags must be exactly 4 printable-ASCII characters (OpenType tag
+/// grammar, e.g. `wght` / `wdth` / `slnt`); anything else is warned and
+/// skipped. The result is sorted by tag so downstream behavior does not
+/// depend on `HashMap` iteration order.
+fn parse_axes(map: &HashMap<String, f32>) -> Vec<Setting<f32>> {
+    let mut out: Vec<Setting<f32>> = Vec::new();
+    for (tag, &value) in map {
+        if tag.len() == 4 && tag.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+            out.push(Setting::from((tag.as_str(), value)));
+        } else {
+            log::warn!(
+                "font.variable_axes: invalid axis tag {tag:?} (must be 4 ASCII chars); ignored"
+            );
+        }
+    }
+    out.sort_by_key(|s| s.tag);
+    out
+}
+
+/// Compute the full normalized-coordinate array for `face` under `axes`.
+/// Returns an empty vec when the font is not variable or none of its
+/// axes appear in `axes` — empty coords are the documented "default
+/// instance" for swash's metrics APIs, so non-variable fonts stay on
+/// the exact code path they used before axis support landed.
+fn normalized_coords(face: &FontRef, axes: &[Setting<f32>]) -> Vec<NormalizedCoord> {
+    if axes.is_empty() {
+        return Vec::new();
+    }
+    let vars = face.variations();
+    if axes.iter().all(|s| vars.find_by_tag(s.tag).is_none()) {
+        return Vec::new();
+    }
+    vars.normalized_coords(axes.iter().copied()).collect()
+}
+
 /// A registered font's byte storage + cached offset/key needed by swash.
 #[derive(Clone)]
 struct SwashFont {
     bytes: Arc<[u8]>,
     offset: u32,
+    /// Normalized variation coordinates for the adapter's configured
+    /// axes, cached at ingest. Empty for non-variable fonts (and when no
+    /// configured axis exists in the font), which selects the default
+    /// instance in `FontRef::metrics` / `glyph_metrics`.
+    coords: Vec<NormalizedCoord>,
     /// True when the font has at least one color-table (CBDT, CBLC, COLR,
     /// or SVG). Used to pick the rasterize source list.
     has_color: bool,
@@ -98,6 +139,11 @@ pub struct SwashRasterizer {
     /// offset, tripling the effective horizontal resolution. Disabled
     /// (grayscale) with `EMTERM_SUBPIXEL=0`.
     subpixel: bool,
+    /// Variable-font axis settings (`native_poc.variable_font_axes`,
+    /// e.g. `wght: 450`). Applied uniformly to shaping, rasterization,
+    /// and metrics of every registered font; fonts that lack a given
+    /// axis ignore it (swash clamps / no-ops per the fvar table).
+    axes: Vec<Setting<f32>>,
 }
 
 impl SwashRasterizer {
@@ -107,9 +153,26 @@ impl SwashRasterizer {
 
     /// Explicit subpixel toggle (test helper + future settings hook).
     pub fn with_subpixel(subpixel: bool) -> Self {
+        Self::with_subpixel_and_axes(subpixel, &HashMap::new())
+    }
+
+    /// Settings-driven constructor: subpixel from env, variable-font
+    /// axes from `Settings::variable_font_axes`.
+    pub fn with_axes(axes: &HashMap<String, f32>) -> Self {
+        Self::with_subpixel_and_axes(subpixel_enabled_from_env(), axes)
+    }
+
+    /// Fully explicit constructor (test helper).
+    pub fn with_subpixel_and_axes(subpixel: bool, axes: &HashMap<String, f32>) -> Self {
+        let axes = parse_axes(axes);
+        if !axes.is_empty() {
+            let listed: Vec<String> = axes.iter().map(|s| s.to_string()).collect();
+            log::info!("font.variable_axes = {}", listed.join(", "));
+        }
         Self {
             inner: Mutex::new(Inner::default()),
             subpixel,
+            axes,
         }
     }
 
@@ -132,12 +195,12 @@ impl SwashRasterizer {
             .map(|f| f.id)
         {
             if let Some(font) = resolver.font(id) {
-                Self::ingest_font(&mut inner, font);
+                Self::ingest_font(&mut inner, font, &self.axes);
             }
         }
     }
 
-    fn ingest_font(inner: &mut Inner, font: &RegisteredFont) {
+    fn ingest_font(inner: &mut Inner, font: &RegisteredFont, axes: &[Setting<f32>]) {
         if font.bytes.is_empty() {
             return;
         }
@@ -155,12 +218,19 @@ impl SwashRasterizer {
         // Emoji has color; Noto Sans CJK JP does not). The probe is
         // narrow enough that it does not slow startup measurably.
         let has_color = probe_color_support(&bytes);
-        let is_bold = FontRef::from_index(&bytes, 0)
+        let parsed = FontRef::from_index(&bytes, 0);
+        let is_bold = parsed
+            .as_ref()
             .map(|f| f.attributes().weight().0 >= 600)
             .unwrap_or(false);
+        let coords = parsed
+            .as_ref()
+            .map(|f| normalized_coords(f, axes))
+            .unwrap_or_default();
         let entry = SwashFont {
             bytes,
             offset: 0,
+            coords,
             has_color,
             is_bold,
         };
@@ -178,6 +248,7 @@ impl SwashRasterizer {
                 family: String::new(),
                 bytes,
             },
+            &self.axes,
         );
     }
 
@@ -202,6 +273,7 @@ impl GlyphRasterizer for SwashRasterizer {
             .shape_ctx
             .builder(swash_font.font_ref())
             .size(size_px)
+            .variations(self.axes.iter().copied())
             .build();
         shaper.add_str(cluster);
         let mut out = Vec::new();
@@ -233,6 +305,7 @@ impl GlyphRasterizer for SwashRasterizer {
             // (~17 px) unhinted outlines smear across pixel boundaries
             // and read as thin / washed-out.
             .hint(true)
+            .variations(self.axes.iter().copied())
             .build();
         // Source order: when the font has color tables, try the color
         // sources first; otherwise go straight to the alpha outline. This
@@ -288,8 +361,9 @@ impl GlyphRasterizer for SwashRasterizer {
         // Compute horizontal advance via the shaper-free path: swash's
         // `font_ref` exposes glyph metrics directly.
         let advance = {
-            let scale = size_px / face.metrics(&[]).units_per_em as f32;
-            let raw = face.glyph_metrics(&[]).advance_width(glyph_id as u16);
+            let coords = swash_font.coords.as_slice();
+            let scale = size_px / face.metrics(coords).units_per_em as f32;
+            let raw = face.glyph_metrics(coords).advance_width(glyph_id as u16);
             raw * scale
         };
         Some(GlyphBitmap {
@@ -319,7 +393,7 @@ impl GlyphRasterizer for SwashRasterizer {
         let inner = self.inner.lock();
         let swash_font = inner.fonts.get(&font)?;
         let face = swash_font.font_ref();
-        let m = face.metrics(&[]);
+        let m = face.metrics(&swash_font.coords);
         let upem = m.units_per_em as f32;
         if upem <= 0.0 || size_px <= 0.0 {
             return None;
@@ -375,6 +449,7 @@ fn probe_color_support(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swash::Tag;
 
     fn rasterizer_with_emoji() -> SwashRasterizer {
         // Explicit grayscale so the assertions stay deterministic
@@ -480,5 +555,130 @@ mod tests {
         let r = rasterizer_with_emoji();
         assert!(r.has_codepoint(FontId(1), 0x1F600));
         assert!(!r.has_codepoint(FontId(1), 0xE000_0001));
+    }
+
+    // ── variable_font_axes ────────────────────────────────────────────
+
+    /// Valid 4-char ASCII tags parse; anything else is skipped. The
+    /// result is sorted by tag regardless of HashMap iteration order.
+    #[test]
+    fn parse_axes_filters_invalid_tags() {
+        let mut map = HashMap::new();
+        map.insert("wght".to_string(), 700.0);
+        map.insert("wdth".to_string(), 90.0);
+        map.insert("weight".to_string(), 1.0); // too long
+        map.insert("wt".to_string(), 1.0); // too short
+        map.insert("wgh\u{3042}".to_string(), 1.0); // non-ASCII (5 bytes anyway)
+        let axes = parse_axes(&map);
+        assert_eq!(axes.len(), 2);
+        let tags: Vec<Tag> = axes.iter().map(|s| s.tag).collect();
+        let mut expected = vec![
+            Setting::from(("wght", 0.0)).tag,
+            Setting::from(("wdth", 0.0)).tag,
+        ];
+        expected.sort();
+        assert_eq!(tags, expected);
+        assert!(axes.windows(2).all(|w| w[0].tag <= w[1].tag));
+    }
+
+    /// Locate any installed variable font via fontconfig and return its
+    /// bytes. Portable across dev machines (no hardcoded per-user path);
+    /// returns `None` in environments without fontconfig or without any
+    /// variable font (e.g. Docker CI), so the caller skips cleanly. Only
+    /// fonts the adapter actually treats as variable (non-empty
+    /// normalized coords for a `wght` probe) and single-face files (the
+    /// adapter parses index 0 only) are accepted.
+    fn find_variable_font_via_fontconfig() -> Option<Arc<[u8]>> {
+        let mut probe_map = HashMap::new();
+        probe_map.insert("wght".to_string(), 900.0);
+        let probe = parse_axes(&probe_map);
+        let out = std::process::Command::new("fc-list")
+            .args([":variable", "file"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let path = line.split(':').next().unwrap_or("").trim();
+            if path.is_empty() || path.ends_with(".ttc") || path.ends_with(".TTC") {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let is_variable = FontRef::from_index(&bytes, 0)
+                .map(|f| !normalized_coords(&f, &probe).is_empty())
+                .unwrap_or(false);
+            if is_variable {
+                return Some(Arc::from(bytes));
+            }
+        }
+        None
+    }
+
+    /// On a real variable font, a `wght` setting must change both the
+    /// cached coords and the rasterized ink. Host-dependent: silently
+    /// skips when no variable font is installed (e.g. Docker CI),
+    /// so the deterministic suite is unaffected.
+    #[test]
+    fn axes_affect_variable_font_when_available() {
+        let Some(bytes) = find_variable_font_via_fontconfig() else {
+            eprintln!("skip: no variable font on this host");
+            return;
+        };
+        let mut heavy_map = HashMap::new();
+        heavy_map.insert("wght".to_string(), 900.0);
+        let heavy = SwashRasterizer::with_subpixel_and_axes(false, &heavy_map);
+        heavy.register_bytes(FontId(1), bytes.clone());
+        assert!(
+            !heavy.inner.lock().fonts[&FontId(1)].coords.is_empty(),
+            "variable font must cache non-empty coords"
+        );
+        let plain = SwashRasterizer::with_subpixel(false);
+        plain.register_bytes(FontId(1), bytes);
+        let g = heavy.shape("A", FontId(1), 24.0)[0];
+        let ink = |bm: &GlyphBitmap| bm.pixels.iter().map(|&p| p as u64).sum::<u64>();
+        let bm_heavy = heavy.raster(g.font, g.glyph_id, 24.0).unwrap();
+        let bm_plain = plain.raster(g.font, g.glyph_id, 24.0).unwrap();
+        assert!(
+            ink(&bm_heavy) > ink(&bm_plain),
+            "wght 900 must put more ink on the page than the default instance ({} vs {})",
+            ink(&bm_heavy),
+            ink(&bm_plain)
+        );
+    }
+
+    /// Non-variable fonts must stay on the default-instance path: cached
+    /// coords are empty and rasterization output is byte-identical to an
+    /// adapter without any axis settings (bundled CJK is a static OTF).
+    #[test]
+    fn axes_are_noop_on_non_variable_font() {
+        let mut map = HashMap::new();
+        map.insert("wght".to_string(), 700.0);
+        let with_axes = SwashRasterizer::with_subpixel_and_axes(false, &map);
+        with_axes.register_bytes(
+            FontId(1),
+            Arc::<[u8]>::from(super::super::resolver::BUNDLED_CJK_FONT),
+        );
+        assert!(
+            with_axes.inner.lock().fonts[&FontId(1)].coords.is_empty(),
+            "static font must cache empty (default-instance) coords"
+        );
+        let plain = rasterizer_with_cjk();
+        let g_a = with_axes.shape("A", FontId(1), 17.0)[0];
+        let g_b = plain.shape("A", FontId(1), 17.0)[0];
+        assert_eq!(g_a.glyph_id, g_b.glyph_id);
+        let bm_a = with_axes.raster(g_a.font, g_a.glyph_id, 17.0).unwrap();
+        let bm_b = plain.raster(g_b.font, g_b.glyph_id, 17.0).unwrap();
+        assert_eq!(
+            bm_a.pixels, bm_b.pixels,
+            "axes must not alter static-font rasters"
+        );
+        assert_eq!(bm_a.advance, bm_b.advance);
+        let m_a = with_axes.font_metrics(FontId(1), 17.0).unwrap();
+        let m_b = plain.font_metrics(FontId(1), 17.0).unwrap();
+        assert_eq!(m_a.ascent, m_b.ascent);
+        assert_eq!(m_a.descent, m_b.descent);
     }
 }
