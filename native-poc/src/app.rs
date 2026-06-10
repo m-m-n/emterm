@@ -1333,6 +1333,33 @@ impl App {
             // build, where any tab's `emterm markdown` opens a viewer.
             let mut osc = tab.drain_osc();
             if !osc.is_empty() {
+                // Release the parked `emterm markdown` CLI as soon as its
+                // session end marker passes by. The release is gated on the
+                // CLI's `interactive=1` flag (set only when its stdin was a
+                // TTY, i.e. it is actually parked in the navigate/image/quit
+                // stdin loop), which suppresses the common *accidental* case:
+                // a non-interactive (piped/redirected) `emterm markdown`
+                // omits the flag, so we don't inject `quit` after it has
+                // already returned the prompt. The native viewer child
+                // resolves images and links itself, so releasing here returns
+                // the shell prompt immediately instead of holding it until the
+                // viewer window closes. `.any()` caps this at one quit per tab
+                // per drain — only one interactive markdown CLI can be parked
+                // per PTY.
+                //
+                // SECURITY (accepted residual): the flag is plaintext in the
+                // terminal output stream, which is attacker-controllable, so
+                // untrusted output (a `cat`'d file, an SSH peer, a log line)
+                // CAN forge `markdown;end;…;interactive=1` and make us write
+                // `quit\n` into this tab's foreground program. The blast
+                // radius is bounded to that single line (not arbitrary input);
+                // accepted as documented in SPEC.md ("Interactive CLI release").
+                if osc
+                    .iter()
+                    .any(|r| crate::viewer::markdown_end_wants_release(&r.payload))
+                {
+                    tab.write(crate::viewer::MARKDOWN_RELEASE_INPUT.to_vec());
+                }
                 viewer_osc.append(&mut osc);
             }
             // Any tab's BEL triggers the bell action — same as the

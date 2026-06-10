@@ -94,7 +94,12 @@ fn compute_basedir(file_path: &Path) -> Option<String> {
 }
 
 /// Read a file and generate markdown OSC sequences with basedir.
-fn generate_markdown_output(file_path: &Path) -> Result<String, CommandError> {
+///
+/// `interactive` tags the end sequence with `interactive=1` so the
+/// terminal releases the parked CLI; the caller passes the result of a
+/// single `stdin().is_terminal()` check (true only when the CLI will
+/// actually park in [`run_interactive_loop`]).
+fn generate_markdown_output(file_path: &Path, interactive: bool) -> Result<String, CommandError> {
     let canonical = std::fs::canonicalize(file_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             CommandError::FileNotFound(file_path.to_owned())
@@ -133,7 +138,7 @@ fn generate_markdown_output(file_path: &Path) -> Result<String, CommandError> {
     drop(encoded);
 
     let basedir = compute_basedir(&canonical);
-    let sequence = osc::generate_markdown_osc(&session_id, chunks, basedir.as_deref());
+    let sequence = osc::generate_markdown_osc(&session_id, chunks, basedir.as_deref(), interactive);
 
     Ok(sequence)
 }
@@ -192,13 +197,18 @@ fn generate_image_response(request_id: &str, file_path: &Path) -> String {
 /// Executes the markdown command: reads file, encodes to base64, generates OSC sequences.
 /// When stdin is a TTY, enters an interactive loop for navigate/image/quit commands.
 pub fn execute_markdown_command(file_path: &Path) -> Result<(), CommandError> {
-    let sequence = generate_markdown_output(file_path)?;
+    // Compute the TTY check once: it both tags the end sequence
+    // (`interactive=1`) and decides whether we park in the interactive
+    // loop. Driving both from the same value guarantees the flag is set
+    // exactly when the CLI is actually waiting to be released.
+    let interactive = io::stdin().is_terminal();
+    let sequence = generate_markdown_output(file_path, interactive)?;
 
     // Output to stdout (wrap in DCS passthrough when inside tmux)
     output_to_stdout(&super::tmux::passthrough_if_needed(&sequence))?;
 
     // If stdin is a TTY, enter interactive mode
-    if io::stdin().is_terminal() {
+    if interactive {
         run_interactive_loop();
     }
 
@@ -239,7 +249,10 @@ fn run_interactive_loop() {
                     continue;
                 }
 
-                match generate_markdown_output(&path) {
+                // We are inside the interactive loop, so the navigated
+                // document's end sequence must carry the interactive flag
+                // too (the CLI stays parked after navigation).
+                match generate_markdown_output(&path, true) {
                     Ok(sequence) => {
                         if let Err(e) =
                             output_to_stdout(&super::tmux::passthrough_if_needed(&sequence))
@@ -255,8 +268,12 @@ fn run_interactive_loop() {
                         let encoded = base64::encode_base64(error_content.as_bytes());
                         let chunks = base64::chunk_data(&encoded, MARKDOWN_CHUNK_SIZE);
                         let basedir = compute_basedir(&path);
-                        let sequence =
-                            osc::generate_markdown_osc(&session_id, chunks, basedir.as_deref());
+                        let sequence = osc::generate_markdown_osc(
+                            &session_id,
+                            chunks,
+                            basedir.as_deref(),
+                            true,
+                        );
                         if let Err(e) =
                             output_to_stdout(&super::tmux::passthrough_if_needed(&sequence))
                         {
@@ -324,7 +341,7 @@ mod tests {
         write!(temp_file, "{}", large_content).unwrap();
         temp_file.flush().unwrap();
 
-        let result = generate_markdown_output(temp_file.path());
+        let result = generate_markdown_output(temp_file.path(), false);
         assert!(matches!(result, Err(CommandError::FileTooLarge { .. })));
     }
 
@@ -546,7 +563,7 @@ mod tests {
         let mut temp_file = NamedTempFile::new().unwrap();
         writeln!(temp_file, "# Test").unwrap();
 
-        let result = generate_markdown_output(temp_file.path()).unwrap();
+        let result = generate_markdown_output(temp_file.path(), false).unwrap();
 
         // The output should contain basedir with the temp file's parent directory
         assert!(result.contains("basedir="));
@@ -554,8 +571,20 @@ mod tests {
 
     #[test]
     fn test_generate_markdown_output_not_found() {
-        let result = generate_markdown_output(Path::new("/nonexistent/file.md"));
+        let result = generate_markdown_output(Path::new("/nonexistent/file.md"), false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_generate_markdown_output_interactive_flag() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "# Test").unwrap();
+
+        let interactive = generate_markdown_output(temp_file.path(), true).unwrap();
+        assert!(interactive.contains("interactive=1"));
+
+        let non_interactive = generate_markdown_output(temp_file.path(), false).unwrap();
+        assert!(!non_interactive.contains("interactive=1"));
     }
 
     // --- generate_image_response tests ---
