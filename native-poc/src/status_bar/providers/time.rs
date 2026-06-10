@@ -183,7 +183,7 @@ impl VariableProvider for TimeProvider {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let fmt = self.format.lock().unwrap().clone();
-        let (y, mo, d, h, mi, s) = local_components(secs as i64);
+        let (y, mo, d, h, mi, s) = crate::localtime::local_components(secs as i64);
         format_with(&fmt, y, mo, d, h, mi, s)
     }
 
@@ -198,59 +198,6 @@ impl VariableProvider for TimeProvider {
         // they want without producing any side effect.
         self.version.load(Ordering::Relaxed)
     }
-}
-
-#[cfg(unix)]
-fn local_components(secs: i64) -> (u32, u32, u32, u32, u32, u32) {
-    use std::mem::MaybeUninit;
-    let t: libc::time_t = secs as libc::time_t;
-    let mut tm_buf: MaybeUninit<libc::tm> = MaybeUninit::uninit();
-    let res = unsafe { libc::localtime_r(&t, tm_buf.as_mut_ptr()) };
-    if res.is_null() {
-        return utc_components(secs);
-    }
-    let tm = unsafe { tm_buf.assume_init() };
-    (
-        (tm.tm_year + 1900) as u32,
-        (tm.tm_mon + 1) as u32,
-        tm.tm_mday as u32,
-        tm.tm_hour as u32,
-        tm.tm_min as u32,
-        tm.tm_sec as u32,
-    )
-}
-
-#[cfg(not(unix))]
-fn local_components(secs: i64) -> (u32, u32, u32, u32, u32, u32) {
-    utc_components(secs)
-}
-
-/// UTC date+time decomposition by integer arithmetic. Used as the
-/// non-unix path and the fallback when `localtime_r` fails.
-fn utc_components(secs: i64) -> (u32, u32, u32, u32, u32, u32) {
-    let day = secs.div_euclid(86_400);
-    let day_secs = secs.rem_euclid(86_400) as u32;
-    let h = day_secs / 3600;
-    let mi = (day_secs % 3600) / 60;
-    let s = day_secs % 60;
-    let (y, mo, d) = days_to_ymd(day);
-    (y, mo, d, h, mi, s)
-}
-
-/// Convert days-since-1970-01-01 to (year, month, day) using the
-/// Howard Hinnant civil-from-days algorithm (public domain).
-fn days_to_ymd(z: i64) -> (u32, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as u32, m as u32, d as u32)
 }
 
 /// Apply a token-based format to the supplied components.
@@ -399,22 +346,8 @@ mod tests {
         assert!(p.version(None) > v1);
     }
 
-    #[test]
-    fn days_to_ymd_known_dates() {
-        // 1970-01-01 → day 0
-        assert_eq!(days_to_ymd(0), (1970, 1, 1));
-        // 2000-01-01 → day 10957
-        assert_eq!(days_to_ymd(10_957), (2000, 1, 1));
-        // 2024-02-29 (leap day) → day 19782
-        assert_eq!(days_to_ymd(19_782), (2024, 2, 29));
-    }
-
-    #[test]
-    fn utc_components_for_known_epoch() {
-        // 2026-01-01T00:00:00Z = 1767225600
-        let (y, mo, d, h, mi, s) = utc_components(1_767_225_600);
-        assert_eq!((y, mo, d, h, mi, s), (2026, 1, 1, 0, 0, 0));
-    }
+    // Date/time decomposition tests moved with the functions to
+    // `crate::localtime` (see native-poc/src/localtime.rs).
 
     // ── TS-29 + TS-perf-3: timer thread + Drop join ─────────────
 

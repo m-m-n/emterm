@@ -5,8 +5,10 @@ mod bell;
 mod callbacks;
 mod fold;
 mod html;
+mod i18n;
 mod image;
 mod links;
+mod localtime;
 mod logging;
 mod logical_line;
 mod notifications;
@@ -53,6 +55,12 @@ fn main() {
         let _ = proxy.send_event(());
     }));
     let settings = settings::Settings::load_or_default();
+    // Mirror src-tauri's setup: the `emterm.log` file handle only exists
+    // in release builds; `log_recording_enabled` gates the writes.
+    if !cfg!(debug_assertions) {
+        logging::init_log_file();
+    }
+    logging::set_recording_enabled(settings.log_recording_enabled);
     let app = app::App::with_settings(settings);
     window_host::run(event_loop, app);
 }

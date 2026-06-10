@@ -1917,6 +1917,19 @@ fn winit_physical_key_code(event: &KeyEvent) -> u32 {
 /// glyphs, dead-key composition results, and shifted symbols all reach
 /// the PTY. For chords (Ctrl+C, Alt+b) we go through the `encode`
 /// path with the named-key dispatch table.
+/// `skk_mode`: whether this press is the bare `Ctrl+J` chord that must be
+/// withheld from the PTY. Emacs-style IMEs (SKK) bind `Ctrl+J` for mode
+/// switching; without the skip the chord encodes to LF (`0x0A`) and inserts
+/// unwanted newlines. Mirrors the WebView build's keyboard-handler skip
+/// (`src/terminal-app/handlers/keyboard.ts`): Ctrl held, no Alt/Shift, key
+/// `j` (case-insensitive).
+fn is_skk_swallowed_chord(logical_key: &WinitKey, mods: Modifiers) -> bool {
+    mods.ctrl
+        && !mods.alt
+        && !mods.shift
+        && matches!(logical_key, WinitKey::Character(s) if s.eq_ignore_ascii_case("j"))
+}
+
 fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
     // Fast path for plain printable text — winit already accounts for the
     // current keyboard layout (X11 / Wayland / Win32). When IME is
@@ -2264,6 +2277,12 @@ impl ApplicationHandler for PocApp {
                                 host.invalidate_link_hover();
                             }
                         }
+                    } else if self.app.settings.skk_mode
+                        && is_skk_swallowed_chord(&event.logical_key, host.current_mods)
+                    {
+                        // `skk_mode` (default on): swallow bare Ctrl+J so
+                        // SKK-style IMEs keep their mode-switch chord (see
+                        // `is_skk_swallowed_chord`).
                     } else {
                         // `shift_enter_as_alt_enter`: when the user has
                         // opted in, present `Shift+Enter` to the shell
@@ -2911,6 +2930,60 @@ fn handle_search_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost, a
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    // ── skk_mode: bare Ctrl+J swallow ────────────────────────────────
+
+    #[test]
+    fn skk_chord_matches_bare_ctrl_j_case_insensitive() {
+        let ctrl = Modifiers {
+            ctrl: true,
+            shift: false,
+            alt: false,
+        };
+        assert!(is_skk_swallowed_chord(
+            &WinitKey::Character("j".into()),
+            ctrl
+        ));
+        assert!(is_skk_swallowed_chord(
+            &WinitKey::Character("J".into()),
+            ctrl
+        ));
+    }
+
+    #[test]
+    fn skk_chord_rejects_extra_mods_and_other_keys() {
+        let ctrl = Modifiers {
+            ctrl: true,
+            shift: false,
+            alt: false,
+        };
+        // Extra modifiers — the WebView skip requires Ctrl alone.
+        assert!(!is_skk_swallowed_chord(
+            &WinitKey::Character("j".into()),
+            Modifiers {
+                shift: true,
+                ..ctrl
+            }
+        ));
+        assert!(!is_skk_swallowed_chord(
+            &WinitKey::Character("j".into()),
+            Modifiers { alt: true, ..ctrl }
+        ));
+        // No Ctrl at all.
+        assert!(!is_skk_swallowed_chord(
+            &WinitKey::Character("j".into()),
+            Modifiers::NONE
+        ));
+        // Other keys keep flowing to the PTY encoder.
+        assert!(!is_skk_swallowed_chord(
+            &WinitKey::Character("k".into()),
+            ctrl
+        ));
+        assert!(!is_skk_swallowed_chord(
+            &WinitKey::Named(NamedKey::Enter),
+            ctrl
+        ));
+    }
 
     #[test]
     fn egui_fonts_empty_ui_font_keeps_default_proportional_head() {

@@ -555,6 +555,12 @@ pub struct Settings {
     /// integrate with editors / shells that bind a multi-line
     /// continuation on `M-RET`.
     pub shift_enter_as_alt_enter: bool,
+    /// When `true` (default), a bare `Ctrl+J` press is withheld from
+    /// the PTY. Emacs-style IMEs (SKK) use `Ctrl+J` for mode switching;
+    /// without the skip the chord encodes to LF (`0x0A`) and inserts
+    /// unwanted newlines. Mirrors the WebView build's keyboard-handler
+    /// skip (`src/terminal-app/handlers/keyboard.ts`).
+    pub skk_mode: bool,
     /// Bell action when the terminal receives `BEL` (`0x07`). One of
     /// `Sound`, `Visual`, `None`. The native-poc renderer does not yet
     /// implement either side, so this field is captured for forward
@@ -590,6 +596,16 @@ pub struct Settings {
     pub notify_on_output: bool,
     /// Notify when an inactive tab receives BEL (`0x07`).
     pub notify_on_bell: bool,
+    /// UI language: `Auto` (OS locale), `En`, or `Ja`. Resolved to a
+    /// concrete [`crate::i18n::Locale`] once at startup
+    /// (`App::with_settings`); `Auto` consults the system locale and
+    /// falls back to English for unsupported languages.
+    pub language: Language,
+    /// Whether WARN/ERROR log lines are appended to `emterm.log`
+    /// (release builds only). The file path matches the legacy Tauri
+    /// build's `app_log_dir()` so both binaries share a single log
+    /// file during the native-poc transition.
+    pub log_recording_enabled: bool,
 
     // ── Markdown viewer (Phase 1) ──
     /// When `true`, the Markdown viewer follows the UI chrome theme
@@ -660,6 +676,43 @@ fn warn_unknown_ui_theme_once(seen: &str) {
     ONCE.call_once(move || {
         log::warn!(
             "settings.ui_theme: unknown value {:?}, falling back to \"system\"",
+            owned
+        );
+    });
+}
+
+/// UI language mirrored from the legacy WebView settings
+/// (`"auto" | "en" | "ja"`). `Auto` resolves against the OS locale at
+/// startup (see [`crate::i18n::resolve`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Language {
+    #[default]
+    Auto,
+    En,
+    Ja,
+}
+
+impl Language {
+    pub fn parse_or_warn(spec: &str) -> Self {
+        match spec.trim().to_ascii_lowercase().as_str() {
+            "auto" | "" => Self::Auto,
+            "en" => Self::En,
+            "ja" => Self::Ja,
+            other => {
+                warn_unknown_language_once(other);
+                Self::Auto
+            }
+        }
+    }
+}
+
+fn warn_unknown_language_once(seen: &str) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    let owned = seen.to_string();
+    ONCE.call_once(move || {
+        log::warn!(
+            "settings.language: unknown value {:?}, falling back to \"auto\"",
             owned
         );
     });
@@ -827,6 +880,7 @@ impl Default for Settings {
             copy_on_select: false,
             middle_click_paste: true,
             shift_enter_as_alt_enter: true,
+            skk_mode: true,
             bell_action: BellAction::default(),
             url_detection: true,
             file_path_detection: true,
@@ -837,6 +891,8 @@ impl Default for Settings {
             notify_on_process_exit: true,
             notify_on_output: false,
             notify_on_bell: true,
+            language: Language::default(),
+            log_recording_enabled: false,
             markdown_theme_follow_ui: true,
             markdown_theme: UiTheme::default(),
             markdown_theme_preset: UiThemePreset::default(),
@@ -1030,6 +1086,7 @@ struct RawSettings {
     copy_on_select: Option<bool>,
     middle_click_paste: Option<bool>,
     shift_enter_as_alt_enter: Option<bool>,
+    skk_mode: Option<bool>,
     bell_action: Option<String>,
     url_detection: Option<bool>,
     file_path_detection: Option<bool>,
@@ -1046,6 +1103,10 @@ struct RawSettings {
     notify_on_process_exit: Option<bool>,
     notify_on_output: Option<bool>,
     notify_on_bell: Option<bool>,
+
+    // ── Language / logging ──
+    language: Option<String>,
+    log_recording_enabled: Option<bool>,
 
     // ── Markdown viewer (flat keys, src-tauri compatible) ──
     markdown_theme_follow_ui: Option<bool>,
@@ -1358,6 +1419,9 @@ impl RawSettings {
         if let Some(v) = self.shift_enter_as_alt_enter {
             dst.shift_enter_as_alt_enter = v;
         }
+        if let Some(v) = self.skk_mode {
+            dst.skk_mode = v;
+        }
         if let Some(v) = self.bell_action {
             dst.bell_action = BellAction::parse_or_warn(&v);
         }
@@ -1387,6 +1451,14 @@ impl RawSettings {
         }
         if let Some(v) = self.notify_on_bell {
             dst.notify_on_bell = v;
+        }
+
+        // ── Language / logging ──
+        if let Some(v) = self.language {
+            dst.language = Language::parse_or_warn(&v);
+        }
+        if let Some(v) = self.log_recording_enabled {
+            dst.log_recording_enabled = v;
         }
 
         // ── Markdown viewer ──
@@ -1823,6 +1895,64 @@ mod tests {
         assert_eq!(s.notify_on_process_exit, d.notify_on_process_exit);
         assert_eq!(s.notify_on_output, d.notify_on_output);
         assert_eq!(s.notify_on_bell, d.notify_on_bell);
+    }
+
+    // ── language / log recording / skk_mode ─────────────────────────
+
+    #[test]
+    fn default_language_is_auto() {
+        assert_eq!(Settings::new().language, Language::Auto);
+    }
+
+    #[test]
+    fn default_log_recording_is_disabled() {
+        assert!(!Settings::new().log_recording_enabled);
+    }
+
+    #[test]
+    fn default_skk_mode_is_enabled() {
+        assert!(Settings::new().skk_mode);
+    }
+
+    #[test]
+    fn loader_language_log_recording_skk_mode_flat_keys_are_applied() {
+        let s = load_json(
+            r#"{
+                "language": "ja",
+                "log_recording_enabled": true,
+                "skk_mode": false
+            }"#,
+        );
+        assert_eq!(s.language, Language::Ja);
+        assert!(s.log_recording_enabled);
+        assert!(!s.skk_mode);
+    }
+
+    #[test]
+    fn loader_language_parses_all_supported_values() {
+        assert_eq!(
+            load_json(r#"{"language": "auto"}"#).language,
+            Language::Auto
+        );
+        assert_eq!(load_json(r#"{"language": "en"}"#).language, Language::En);
+        assert_eq!(load_json(r#"{"language": "ja"}"#).language, Language::Ja);
+        // Unknown values warn and fall back to auto.
+        assert_eq!(load_json(r#"{"language": "fr"}"#).language, Language::Auto);
+    }
+
+    #[test]
+    fn loader_language_log_recording_skk_mode_null_keys_keep_defaults() {
+        let s = load_json(
+            r#"{
+                "language": null,
+                "log_recording_enabled": null,
+                "skk_mode": null
+            }"#,
+        );
+        let d = Settings::default();
+        assert_eq!(s.language, d.language);
+        assert_eq!(s.log_recording_enabled, d.log_recording_enabled);
+        assert_eq!(s.skk_mode, d.skk_mode);
     }
 
     #[test]

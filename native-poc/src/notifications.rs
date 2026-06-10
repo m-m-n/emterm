@@ -17,11 +17,13 @@
 //!   `settings.notification_enabled` holds, dispatches one desktop
 //!   notification through the shared
 //!   [`crate::callbacks::NotificationSink`].
-//! - Notification bodies are fixed English strings; native-poc has no
-//!   i18n layer (the `language` setting is not consumed yet).
+//! - Notification bodies are localized per the resolved
+//!   [`crate::i18n::Locale`] (the `language` setting); the strings
+//!   match the WebView locales' `settings.notification.body.*`.
 
 use std::time::{Duration, Instant};
 
+use crate::i18n::Locale;
 use crate::settings::Settings;
 
 /// Activity types, mirroring the WebView `ActivityType` union
@@ -149,13 +151,16 @@ pub fn sanitize_title(title: &str) -> String {
 }
 
 /// Notification body — WebView `formatNotificationBody`. The per-kind
-/// suffix is fixed English (`settings.notification.body.*` in the
-/// WebView locales); native-poc has no i18n layer.
-pub fn notification_body(sanitized_title: &str, kind: ActivityKind) -> String {
-    let msg = match kind {
-        ActivityKind::ProcessExit => "Process exited",
-        ActivityKind::Output => "New output",
-        ActivityKind::Bell => "Bell",
+/// suffix comes from the resolved locale; the strings are the WebView
+/// locales' `settings.notification.body.*` values verbatim.
+pub fn notification_body(sanitized_title: &str, kind: ActivityKind, locale: Locale) -> String {
+    let msg = match (locale, kind) {
+        (Locale::En, ActivityKind::ProcessExit) => "Process exited",
+        (Locale::En, ActivityKind::Output) => "New output",
+        (Locale::En, ActivityKind::Bell) => "Bell",
+        (Locale::Ja, ActivityKind::ProcessExit) => "プロセスが終了しました",
+        (Locale::Ja, ActivityKind::Output) => "新しい出力",
+        (Locale::Ja, ActivityKind::Bell) => "ベル",
     };
     format!("{sanitized_title}: {msg}")
 }
@@ -296,13 +301,33 @@ mod tests {
     #[test]
     fn body_formats_match_webview_strings() {
         assert_eq!(
-            notification_body("tab", ActivityKind::ProcessExit),
+            notification_body("tab", ActivityKind::ProcessExit, Locale::En),
             "tab: Process exited"
         );
         assert_eq!(
-            notification_body("tab", ActivityKind::Output),
+            notification_body("tab", ActivityKind::Output, Locale::En),
             "tab: New output"
         );
-        assert_eq!(notification_body("tab", ActivityKind::Bell), "tab: Bell");
+        assert_eq!(
+            notification_body("tab", ActivityKind::Bell, Locale::En),
+            "tab: Bell"
+        );
+    }
+
+    #[test]
+    fn body_formats_match_webview_ja_strings() {
+        // Values from src/i18n/locales/ja.json `settings.notification.body.*`.
+        assert_eq!(
+            notification_body("tab", ActivityKind::ProcessExit, Locale::Ja),
+            "tab: プロセスが終了しました"
+        );
+        assert_eq!(
+            notification_body("tab", ActivityKind::Output, Locale::Ja),
+            "tab: 新しい出力"
+        );
+        assert_eq!(
+            notification_body("tab", ActivityKind::Bell, Locale::Ja),
+            "tab: ベル"
+        );
     }
 }
