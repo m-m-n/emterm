@@ -8,15 +8,21 @@
 //! [`CapturingSink`].
 
 pub mod assets;
+pub mod data;
+pub mod data_model;
+pub mod data_payload;
+pub mod data_window;
 pub mod image;
 pub mod image_payload;
 pub mod image_resolver;
 pub mod image_window;
 pub mod launch;
 pub mod markdown;
+pub mod shell;
 #[cfg(target_os = "linux")]
 pub mod window;
 
+use std::path::Path;
 use std::time::Instant;
 
 use crate::callbacks::EmtermOscRequest;
@@ -146,8 +152,11 @@ pub struct RenderRequest {
 /// Abstract destination for completed [`RenderRequest`]s. The real Phase 4
 /// implementation spawns a child viewer process; tests capture instead.
 pub trait ViewerSink {
-    /// Consume one completed render request.
+    /// Consume one completed Markdown render request.
     fn emit(&mut self, request: RenderRequest);
+
+    /// Consume one completed JSON/YAML data-viewer request.
+    fn emit_data(&mut self, request: data::DataRenderRequest);
 
     /// Periodic maintenance hook, called once per drain pass (M1). Default
     /// is a no-op; [`ProcessViewerSink`] overrides it to reap exited child
@@ -156,19 +165,25 @@ pub trait ViewerSink {
     fn maintain(&mut self) {}
 }
 
-/// Test/inspection sink that records every emitted [`RenderRequest`].
+/// Test/inspection sink that records every emitted request.
 /// Only compiled under `cfg(test)` — production uses [`ProcessViewerSink`].
 #[cfg(test)]
 #[derive(Debug, Default)]
 pub struct CapturingSink {
-    /// Requests in emission order.
+    /// Markdown requests in emission order.
     pub requests: Vec<RenderRequest>,
+    /// JSON/YAML requests in emission order.
+    pub data_requests: Vec<data::DataRenderRequest>,
 }
 
 #[cfg(test)]
 impl ViewerSink for CapturingSink {
     fn emit(&mut self, request: RenderRequest) {
         self.requests.push(request);
+    }
+
+    fn emit_data(&mut self, request: data::DataRenderRequest) {
+        self.data_requests.push(request);
     }
 }
 
@@ -221,6 +236,35 @@ impl ProcessViewerSink {
     pub fn child_count(&self) -> usize {
         self.children.len()
     }
+
+    /// Spawn `self <flag> <payload-path>` and track the child for
+    /// reaping. A spawn failure is logged (ERR_SPAWN) and dropped — the
+    /// terminal is never blocked; the orphaned payload file is removed
+    /// since nothing will ever read it.
+    fn spawn_child(&mut self, flag: &str, path: &Path) {
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("viewer: current_exe() failed ({e}); cannot spawn viewer");
+                let _ = std::fs::remove_file(path);
+                return;
+            }
+        };
+        match std::process::Command::new(&exe).arg(flag).arg(path).spawn() {
+            Ok(child) => {
+                log::warn!(
+                    "viewer: spawned child pid={} {flag} payload={}",
+                    child.id(),
+                    path.display()
+                );
+                self.children.push(child);
+            }
+            Err(e) => {
+                log::warn!("viewer: failed to spawn child ({e}); terminal unaffected");
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 }
 
 impl ViewerSink for ProcessViewerSink {
@@ -235,13 +279,6 @@ impl ViewerSink for ProcessViewerSink {
         // Move the (potentially large) document into the payload instead of
         // cloning it (H4).
         let payload = ViewerPayload::from_request(request, &self.settings);
-        let exe = match std::env::current_exe() {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("viewer: current_exe() failed ({e}); cannot spawn viewer");
-                return;
-            }
-        };
         // Serialize the payload to a temp file (`launch::write_payload`),
         // then spawn `self --viewer <path>`. The temp file is left for the
         // child to read (and reboot GC), per the project temp-file
@@ -254,31 +291,36 @@ impl ViewerSink for ProcessViewerSink {
                 return;
             }
         };
-        match std::process::Command::new(&exe)
-            .arg("--viewer")
-            .arg(&path)
-            .spawn()
-        {
-            Ok(child) => {
-                log::warn!(
-                    "viewer: spawned child pid={} payload={}",
-                    child.id(),
-                    path.display()
-                );
-                self.children.push(child);
-            }
+        self.spawn_child("--viewer", &path);
+    }
+
+    fn emit_data(&mut self, request: data::DataRenderRequest) {
+        self.reap();
+        // Chrome appearance travels in the payload header so the child
+        // never re-reads settings.json (same design as the image viewer).
+        let chrome = image_payload::ViewerChrome {
+            theme: launch::theme_token(self.settings.ui_theme).to_string(),
+            preset: launch::preset_token(self.settings.ui_theme_preset).to_string(),
+            ui_font_family: self.settings.ui_font_family.clone(),
+        };
+        let path = match data_payload::write_data_payload(request.format, &request.text, &chrome) {
+            Ok(p) => p,
             Err(e) => {
-                log::warn!("viewer: failed to spawn child ({e}); terminal unaffected");
+                log::warn!("viewer: failed to write data payload ({e}); skipping viewer");
+                return;
             }
-        }
+        };
+        self.spawn_child("--data-viewer", &path);
     }
 }
 
 /// Drains the OSC queue, routes payloads by viewer kind, and accumulates
-/// Markdown sessions. Holds no window state — purely a coordinator.
+/// Markdown and JSON/YAML sessions. Holds no window state — purely a
+/// coordinator.
 #[derive(Debug, Default)]
 pub struct ViewerSpawner {
     markdown: MarkdownViewerSessions,
+    data: data::DataViewerSessions,
 }
 
 impl ViewerSpawner {
@@ -286,6 +328,7 @@ impl ViewerSpawner {
     pub fn new() -> Self {
         Self {
             markdown: MarkdownViewerSessions::new(),
+            data: data::DataViewerSessions::new(),
         }
     }
 
@@ -309,6 +352,7 @@ impl ViewerSpawner {
     ) {
         // Opportunistic timeout sweep on each pass (ERR_TIMEOUT).
         self.markdown.evict_expired(now);
+        self.data.evict_expired(now);
         // Reap exited child viewers each pass (M1). Default no-op for
         // capturing/test sinks; ProcessViewerSink reaps zombies here.
         sink.maintain();
@@ -324,8 +368,14 @@ impl ViewerSpawner {
     fn route(&mut self, cmd: &ParsedCommand, now: Instant, sink: &mut dyn ViewerSink) {
         match cmd.kind.as_str() {
             "markdown" => self.markdown.handle(cmd, now, sink),
+            "json" | "yaml" => {
+                // DataFormat::parse never fails for these two tokens.
+                if let Some(format) = data::DataFormat::parse(&cmd.kind) {
+                    self.data.handle(format, cmd, now, sink);
+                }
+            }
             // Reserved for future features — no-op + debug log (FR1).
-            "image" | "json" | "yaml" => {
+            "image" => {
                 log::debug!(
                     "viewer: reserved kind {:?} ignored (verb={})",
                     cmd.kind,
@@ -434,6 +484,8 @@ mod tests {
         spawner.drain(
             vec![
                 req("image;show;path=/tmp/a.png"),
+                // json/yaml route to the data sessions now, but an unknown
+                // verb still emits nothing.
                 req("json;render;data=e30="),
                 req("yaml;render;data=e30="),
             ],
@@ -441,6 +493,45 @@ mod tests {
             &mut sink,
         );
         assert!(sink.requests.is_empty());
+        assert!(sink.data_requests.is_empty());
+    }
+
+    #[test]
+    fn json_payloads_round_trip_to_one_data_request() {
+        let mut spawner = ViewerSpawner::new();
+        let mut sink = CapturingSink::default();
+        let now = Instant::now();
+        spawner.drain(
+            vec![
+                req("json;begin;id=d;version=1.0"),
+                req(&format!("json;chunk;id=d;seq=0;data={}", b64("{\"a\":1}"))),
+                req("json;end;id=d"),
+            ],
+            now,
+            &mut sink,
+        );
+        assert!(sink.requests.is_empty());
+        assert_eq!(sink.data_requests.len(), 1);
+        assert_eq!(sink.data_requests[0].text, "{\"a\":1}");
+        assert_eq!(sink.data_requests[0].format, data::DataFormat::Json);
+    }
+
+    #[test]
+    fn yaml_payloads_round_trip_to_one_data_request() {
+        let mut spawner = ViewerSpawner::new();
+        let mut sink = CapturingSink::default();
+        let now = Instant::now();
+        spawner.drain(
+            vec![
+                req("yaml;begin;id=y;version=1.0"),
+                req(&format!("yaml;chunk;id=y;seq=0;data={}", b64("a: 1\n"))),
+                req("yaml;end;id=y"),
+            ],
+            now,
+            &mut sink,
+        );
+        assert_eq!(sink.data_requests.len(), 1);
+        assert_eq!(sink.data_requests[0].format, data::DataFormat::Yaml);
     }
 
     #[test]

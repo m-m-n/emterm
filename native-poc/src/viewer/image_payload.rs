@@ -212,7 +212,8 @@ fn rgba_byte_count(width: u32, height: u32) -> Option<usize> {
 
 /// `create_new` + 0o600 on Unix (other local users must not read the
 /// image), plain `create_new` elsewhere. Mirrors `launch::write_payload`.
-fn open_create_new(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+/// Shared with the data-viewer payload (`viewer::data_payload`).
+pub(crate) fn open_create_new(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]

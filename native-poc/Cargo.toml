@@ -72,7 +72,15 @@ sys-locale = "0.3"
 
 # Serialization (Phase 7)
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order: the JSON/YAML data viewer's outline must show object
+# keys in DOCUMENT order (matching the WebView's JSON.parse), not
+# BTreeMap-sorted order.
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# YAML parse/serialize for the JSON/YAML data viewer. Version matches the
+# workspace's existing transitive `serde_yml` (0.0.11, already in
+# Cargo.lock) so no new crate enters the build graph.
+serde_yml = "0.0.11"
 
 # Utilities
 parking_lot = "0.12"
