@@ -17,8 +17,10 @@ pub mod chrome;
 pub mod emoji_cache;
 pub mod keybinds;
 pub mod md3;
+pub mod md3_widgets;
 pub mod scrollbar;
 pub mod search_bar;
+pub mod settings_panel;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod title_bar;
@@ -84,6 +86,11 @@ pub enum AppAction {
     /// `window_host` layer so the grid can be reshaped for the
     /// reclaimed / surrendered row.
     ToggleTabBar,
+    /// Ctrl+, — open (or switch to) the in-app settings tab. Handled in
+    /// `App::apply_action` via [`crate::app::App::activate_settings_tab`].
+    /// Port of the WebView `open_settings` keybind, which opens a
+    /// dedicated settings tab in the tab strip.
+    OpenSettings,
 }
 
 /// User intents originating from the custom (client-side) title bar.
@@ -121,6 +128,9 @@ pub enum TitleBarEvent {
 pub enum TabEvent {
     /// "+" button on the tab strip.
     New,
+    /// Gear button on the tab strip's fixed area — open (or focus) the
+    /// Settings tab. Mirrors the WebView `.tab-button-settings`.
+    OpenSettings,
     /// Close ("×") button on the tab at `index` (0-based).
     Close(usize),
     /// Switch to the tab at `index` (0-based) via mouse click.

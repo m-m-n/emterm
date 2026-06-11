@@ -25,6 +25,7 @@ mod mux;
 mod pty;
 mod selection;
 mod settings;
+mod settings_store;
 mod status_bar;
 mod ui;
 mod viewer;

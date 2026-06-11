@@ -165,9 +165,9 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
             ui.spacing_mut().item_spacing = Vec2::ZERO;
 
             // Total room for the scrollable tab strip (everything minus the
-            // fixed "+" area on the right).
+            // fixed "+" / gear area on the right).
             let panel_w = ui.available_width();
-            let fixed_w = NEW_TAB_BUTTON_SIZE + FIXED_AREA_PAD * 2.0;
+            let fixed_w = NEW_TAB_BUTTON_SIZE * 2.0 + FIXED_AREA_PAD * 2.0;
             let scroll_w = (panel_w - fixed_w).max(0.0);
 
             // Hairline at the very bottom — drawn last so it stays on top
@@ -184,6 +184,10 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
                 // count) exceeds the available strip width. Keeping the
                 // common path scroll-free preserves a predictable cell
                 // origin for the click-to-tab tests below.
+                // The strip always occupies the full scroll_w span (even
+                // when the tabs need less) so the fixed "+" / gear area
+                // that follows stays pinned to the panel's right edge,
+                // mirroring the WebView's `.tab-fixed-area`.
                 if needed_w > scroll_w {
                     ui.allocate_ui_with_layout(
                         Vec2::new(scroll_w, TAB_BAR_HEIGHT),
@@ -202,7 +206,20 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
                         },
                     );
                 } else {
-                    event = layout_tab_strip(ui, items, active_idx, ideal_w);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(scroll_w, TAB_BAR_HEIGHT),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            // `allocate_ui_with_layout` only advances the
+                            // parent cursor by what the child actually
+                            // used; pin the child's min width so the
+                            // fixed-button area lands at the right edge
+                            // even when the tabs need less room.
+                            ui.set_min_width(scroll_w);
+                            ui.spacing_mut().item_spacing = Vec2::ZERO;
+                            event = layout_tab_strip(ui, items, active_idx, ideal_w);
+                        },
+                    );
                 }
 
                 // ── Fixed-button area ("+") ─────────────────────────
@@ -223,6 +240,12 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
                 }
                 if plus_resp.clicked() && event.is_none() {
                     event = Some(TabEvent::New);
+                }
+                // Gear button — open (or focus) the Settings tab.
+                // Mirrors the WebView `.tab-button-settings` next to "+".
+                let gear_resp = draw_gear_button(ui, NEW_TAB_BUTTON_SIZE);
+                if gear_resp.clicked() && event.is_none() {
+                    event = Some(TabEvent::OpenSettings);
                 }
                 ui.add_space(FIXED_AREA_PAD);
             });
@@ -534,6 +557,41 @@ fn draw_icon_button(ui: &mut Ui, size: f32) -> egui::Response {
         [egui::pos2(cx, bbox.top()), egui::pos2(cx, bbox.bottom())],
         stroke,
     );
+
+    resp
+}
+
+/// Circular hover-highlight button with a line-drawn gear glyph.
+/// Painter-rendered (like the "+" button) so it follows the md3 tokens
+/// without shipping an icon font.
+fn draw_gear_button(ui: &mut Ui, size: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let painter = ui.painter();
+
+    if resp.hovered() {
+        painter.rect_filled(
+            rect,
+            Rounding::same(ICON_BUTTON_RADIUS),
+            md3::state_layer(md3::on_surface_variant(), md3::STATE_LAYER_HOVER),
+        );
+    }
+
+    let center = rect.center();
+    let color = md3::on_surface_variant();
+    // Gear glyph: hub ring + outer ring + 8 radial teeth.
+    let hub_r = 2.5;
+    let ring_r = 5.0;
+    let tooth_r = 7.5;
+    painter.circle_stroke(center, hub_r, Stroke::new(1.2, color));
+    painter.circle_stroke(center, ring_r, Stroke::new(1.6, color));
+    for i in 0..8 {
+        let angle = (i as f32) * std::f32::consts::FRAC_PI_4;
+        let dir = Vec2::new(angle.cos(), angle.sin());
+        painter.line_segment(
+            [center + dir * ring_r, center + dir * tooth_r],
+            Stroke::new(2.0, color),
+        );
+    }
 
     resp
 }

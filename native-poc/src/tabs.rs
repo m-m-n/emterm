@@ -268,6 +268,16 @@ impl Tab {
         fm
     }
 
+    /// Update the tab's fold-enable preference at runtime (settings
+    /// panel apply path). Pushes the new state into the live
+    /// `FoldManager` (disabling also unfolds everything, mirroring the
+    /// WebView's `setEnabled(false)`) and records it so the
+    /// reset/replay rebuild sites keep honoring it.
+    pub fn set_fold_enabled(&mut self, enabled: bool) {
+        self.fold_enabled = enabled;
+        self.folds.set_enabled(enabled);
+    }
+
     /// Consume the BEL latch set by the last `pump()`. Returns true at
     /// most once per ring — `App::pump_all` polls this every frame.
     pub fn take_bell(&mut self) -> bool {

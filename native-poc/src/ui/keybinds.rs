@@ -242,6 +242,7 @@ pub struct KeybindTable {
     pub zoom_reset: Chord,
     pub toggle_fullscreen: Chord,
     pub toggle_tab_bar: Chord,
+    pub open_settings: Chord,
 }
 
 impl KeybindTable {
@@ -267,6 +268,7 @@ impl KeybindTable {
             zoom_reset: resolve("zoom_reset", &kb.zoom_reset),
             toggle_fullscreen: resolve("toggle_fullscreen", &kb.toggle_fullscreen),
             toggle_tab_bar: resolve("toggle_tab_bar", &kb.toggle_tab_bar),
+            open_settings: resolve("open_settings", &kb.open_settings),
         };
         // Matching is first-wins (`handle_special_chord` checks copy /
         // paste before `dispatch` walks the tab actions), so two actions
@@ -308,6 +310,7 @@ impl KeybindTable {
             ("zoom_reset", self.zoom_reset),
             ("toggle_fullscreen", self.toggle_fullscreen),
             ("toggle_tab_bar", self.toggle_tab_bar),
+            ("open_settings", self.open_settings),
         ];
         let mut out = Vec::new();
         for i in 0..entries.len() {
@@ -370,6 +373,7 @@ fn default_spec_for(action: &str) -> &'static str {
         "zoom_reset" => "Ctrl+0",
         "toggle_fullscreen" => "F11",
         "toggle_tab_bar" => "Ctrl+Shift+B",
+        "open_settings" => "Ctrl+,",
         // Unreachable: `resolve` is only called with the names above.
         _ => "Ctrl+Shift+T",
     }
@@ -442,6 +446,9 @@ pub fn dispatch(table: &KeybindTable, mods: Modifiers, key: Key) -> Option<AppAc
     }
     if chord == table.toggle_tab_bar {
         return Some(AppAction::ToggleTabBar);
+    }
+    if chord == table.open_settings {
+        return Some(AppAction::OpenSettings);
     }
 
     // 2. Built-in native-poc conventions (never alt). These are not
