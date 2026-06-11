@@ -82,12 +82,13 @@ pub fn write_image_payload(
     rgba: &[u8],
     chrome: &ViewerChrome,
 ) -> std::io::Result<PathBuf> {
-    let expected = (width as usize) * (height as usize) * 4;
-    if rgba.len() != expected || width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
+    let expected = rgba_byte_count(width, height);
+    let size_ok = matches!(expected, Some(e) if rgba.len() == e);
+    if !size_ok || width == 0 || height == 0 || width > MAX_DIM || height > MAX_DIM {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "image payload size mismatch: {}x{} expects {} bytes, got {}",
+                "image payload size mismatch: {}x{} expects {:?} bytes, got {}",
                 width,
                 height,
                 expected,
@@ -149,7 +150,8 @@ pub fn read_image_payload(path: &std::path::Path) -> std::io::Result<ImagePayloa
             header.width, header.height
         )));
     }
-    let expected = (header.width as usize) * (header.height as usize) * 4;
+    let expected = rgba_byte_count(header.width, header.height)
+        .ok_or_else(|| invalid("image payload dimensions overflow"))?;
 
     // Exact-size check against file metadata BEFORE allocating the RGBA
     // buffer, so a wrong-sized file never costs the full allocation.
@@ -194,6 +196,18 @@ pub fn read_image_payload(path: &std::path::Path) -> std::io::Result<ImagePayloa
 
 fn invalid(msg: &str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, msg)
+}
+
+/// `width * height * 4` with overflow checking. `MAX_DIM` keeps the
+/// product inside `usize` on every supported target today; the checked
+/// arithmetic is defense-in-depth so a future `MAX_DIM` bump cannot
+/// silently wrap on a 32-bit target (wrapping would accept a short
+/// buffer as a "full" image).
+fn rgba_byte_count(width: u32, height: u32) -> Option<usize> {
+    (width as u64)
+        .checked_mul(height as u64)
+        .and_then(|n| n.checked_mul(4))
+        .and_then(|n| usize::try_from(n).ok())
 }
 
 /// `create_new` + 0o600 on Unix (other local users must not read the
@@ -359,6 +373,16 @@ mod tests {
         let err = read_image_payload(&path).unwrap_err();
         cleanup(&path);
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn rgba_byte_count_checks_overflow() {
+        assert_eq!(rgba_byte_count(3, 2), Some(24));
+        // MAX_DIM² × 4 = exactly 1 GiB — the largest accepted product.
+        assert_eq!(rgba_byte_count(MAX_DIM, MAX_DIM), Some(1024 * 1024 * 1024));
+        // u32::MAX² × 4 overflows u64 → must be None, never a wrapped
+        // small value.
+        assert_eq!(rgba_byte_count(u32::MAX, u32::MAX), None);
     }
 
     #[test]
