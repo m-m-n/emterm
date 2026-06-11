@@ -59,7 +59,16 @@ enum DisplayMode {
 
 /// Run the viewer window event loop until the user closes it.
 pub fn run(payload_path: &str) -> Result<(), String> {
-    let payload = read_image_payload(std::path::Path::new(payload_path))
+    // The parent always writes payloads into the OS temp dir; reject
+    // anything else so directly invoking `--image-viewer` cannot be used
+    // to read (and unlink) an arbitrary local file.
+    let path = std::path::Path::new(payload_path);
+    if !payload_path_is_in_temp_dir(path) {
+        return Err(format!(
+            "image viewer: payload path is not inside the OS temp dir: {payload_path}"
+        ));
+    }
+    let payload = read_image_payload(path)
         .map_err(|e| format!("image viewer: failed to read payload {payload_path}: {e}"))?;
     log::info!(
         "image viewer: showing {}x{} image",
@@ -760,6 +769,20 @@ impl ApplicationHandler for ViewerApp {
     }
 }
 
+/// True iff `path` resolves (symlinks included) to a file inside the OS
+/// temp dir. Containment is checked AFTER `canonicalize`, so a symlink
+/// planted inside the temp dir cannot point the viewer at an outside
+/// file. A non-existent path is rejected (canonicalize fails).
+fn payload_path_is_in_temp_dir(path: &std::path::Path) -> bool {
+    let Ok(real) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let Ok(tmp) = std::fs::canonicalize(std::env::temp_dir()) else {
+        return false;
+    };
+    real.starts_with(&tmp)
+}
+
 /// Map the few egui cursor icons the viewer uses onto winit cursors.
 fn egui_to_winit_cursor(icon: egui::CursorIcon) -> CursorIcon {
     match icon {
@@ -870,6 +893,50 @@ mod tests {
         let mut s = ViewerState::new(50, 50);
         s.space_scroll(800.0, 600.0, false);
         assert_eq!(s.pan_y, 0.0);
+    }
+
+    // ── payload-path containment ─────────────────────────────────────────
+
+    #[test]
+    fn payload_path_inside_temp_dir_is_accepted() {
+        let path = std::env::temp_dir().join(format!(
+            "emterm-image-viewer-containment-test-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"x").unwrap();
+        assert!(payload_path_is_in_temp_dir(&path));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn payload_path_outside_temp_dir_is_rejected() {
+        // An existing, readable file that is definitely not under the OS
+        // temp dir.
+        assert!(!payload_path_is_in_temp_dir(std::path::Path::new(
+            "/etc/hostname"
+        )));
+    }
+
+    #[test]
+    fn payload_path_nonexistent_is_rejected() {
+        let path = std::env::temp_dir().join("emterm-image-viewer-no-such-file.bin");
+        assert!(!payload_path_is_in_temp_dir(&path));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn payload_path_symlink_escaping_temp_dir_is_rejected() {
+        // A symlink INSIDE the temp dir pointing OUTSIDE must be rejected
+        // (containment is checked post-canonicalize).
+        let link = std::env::temp_dir().join(format!(
+            "emterm-image-viewer-escape-link-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink("/etc/hostname", &link).unwrap();
+        assert!(!payload_path_is_in_temp_dir(&link));
+        let _ = std::fs::remove_file(&link);
     }
 
     // ── title-bar event latching ─────────────────────────────────────────
