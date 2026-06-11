@@ -95,6 +95,17 @@ pub enum JumpDirection {
 pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
+    /// In-app settings panel state. `Some` while the Settings tab is
+    /// open (it occupies the last slot of the tab strip); `None` once
+    /// closed. Port of the WebView's `createTab({ type: "settings" })`
+    /// tab, except the native strip pins it to the end.
+    pub settings_panel: Option<crate::ui::settings_panel::PanelState>,
+    /// Whether the Settings tab is the active pane. While `true`,
+    /// [`App::active_tab`] reports no active terminal tab (key input,
+    /// selection, scroll, IME, and the grid renderer all observe a
+    /// tabless state) and the settings panel owns the central area.
+    /// `self.active` keeps pointing at the terminal tab to return to.
+    pub settings_active: bool,
     /// Last known grid size in cells. Updated by `window_host` whenever the
     /// window resizes; PTYs are resized to match.
     pub cell_size: GridDims,
@@ -439,6 +450,8 @@ impl App {
         Self {
             tabs: Vec::new(),
             active: 0,
+            settings_panel: None,
+            settings_active: false,
             cell_size: GridDims::default(),
             selection: None,
             pending_selection_anchor: None,
@@ -917,6 +930,12 @@ impl App {
     /// Spawn an additional shell tab, switch to it, and request a
     /// repaint. Used by `AppAction::NewTab` and `TabEvent::New`.
     pub fn spawn_new_tab(&mut self) {
+        // A new tab always becomes the active pane; leave the Settings
+        // tab open in the strip but drop its focus.
+        if self.settings_active {
+            self.settings_active = false;
+            self.needs_full_redraw = true;
+        }
         let dims = self.cell_size;
         let tab = Tab::spawn_shell(
             "shell",
@@ -1043,22 +1062,133 @@ impl App {
         self.needs_full_redraw = true;
     }
 
+    // ── Settings tab (strip-index model) ─────────────────────────
+    //
+    // The tab strip shows the terminal tabs (indices `0..tabs.len()`)
+    // plus, when open, the Settings tab pinned at index `tabs.len()`.
+    // Tab-bar events arrive in strip indices and are translated here.
+
+    /// `true` while the Settings tab is the active pane.
+    pub fn settings_panel_active(&self) -> bool {
+        self.settings_active
+    }
+
+    /// Strip index of the Settings tab when it is open.
+    fn settings_strip_index(&self) -> Option<usize> {
+        self.settings_panel.is_some().then_some(self.tabs.len())
+    }
+
+    /// Number of entries in the tab strip (terminal tabs + Settings).
+    pub fn tab_strip_len(&self) -> usize {
+        self.tabs.len() + usize::from(self.settings_panel.is_some())
+    }
+
+    /// Strip index of the active pane.
+    pub fn active_strip_index(&self) -> usize {
+        if self.settings_active {
+            self.tabs.len()
+        } else {
+            self.active
+        }
+    }
+
+    /// Open the Settings tab (creating its state on first use) and make
+    /// it the active pane. Mirrors the WebView `open_settings` handler:
+    /// re-invoking switches to the existing tab instead of duplicating.
+    pub fn activate_settings_tab(&mut self) {
+        if self.settings_panel.is_none() {
+            self.settings_panel = Some(crate::ui::settings_panel::PanelState::new(
+                &self.settings,
+                self.locale,
+            ));
+        }
+        if !self.settings_active {
+            self.settings_active = true;
+            // Same invalidation set as a terminal tab switch: the search
+            // overlay / selection address the outgoing tab's buffer.
+            if self.search.visible {
+                self.search.close();
+            }
+            self.selection = None;
+            self.pending_selection_anchor = None;
+            self.needs_full_redraw = true;
+        }
+    }
+
+    /// Switch the active pane to the terminal tab at `idx`, leaving the
+    /// Settings tab (if any) open in the strip.
+    pub fn activate_terminal_tab(&mut self, idx: usize) {
+        if idx >= self.tabs.len() {
+            return;
+        }
+        if self.settings_active {
+            self.settings_active = false;
+            self.needs_full_redraw = true;
+            // `switch_to_tab` early-returns on idx == active; the flag
+            // flip above already restored the terminal view for that case.
+            if idx != self.active {
+                self.switch_to_tab(idx);
+            }
+        } else {
+            self.switch_to_tab(idx);
+        }
+    }
+
+    /// Close the Settings tab. When it was the active pane, focus
+    /// returns to the terminal tab `self.active` kept pointing at.
+    pub fn close_settings_tab(&mut self) {
+        self.settings_panel = None;
+        if self.settings_active {
+            self.settings_active = false;
+            self.needs_full_redraw = true;
+        }
+    }
+
+    /// Activate the strip entry at `idx` (terminal tab or Settings).
+    fn activate_strip(&mut self, idx: usize) {
+        if Some(idx) == self.settings_strip_index() {
+            self.activate_settings_tab();
+        } else {
+            self.activate_terminal_tab(idx);
+        }
+    }
+
     /// Apply a [`crate::ui::TabEvent`] emitted by the tab bar widget.
     /// Returns `true` when the resulting state should exit the window
     /// (i.e. the last tab was closed).
+    ///
+    /// Event indices are **strip** indices: the Settings tab (when
+    /// open) occupies the last slot after the terminal tabs.
     pub fn apply_tab_event(&mut self, evt: crate::ui::TabEvent) -> bool {
         match evt {
             crate::ui::TabEvent::New => {
                 self.spawn_new_tab();
                 false
             }
-            crate::ui::TabEvent::Close(idx) => self.close_tab(idx),
+            crate::ui::TabEvent::OpenSettings => {
+                self.activate_settings_tab();
+                false
+            }
+            crate::ui::TabEvent::Close(idx) => {
+                if Some(idx) == self.settings_strip_index() {
+                    self.close_settings_tab();
+                    false
+                } else {
+                    self.close_tab(idx)
+                }
+            }
             crate::ui::TabEvent::Switch(idx) => {
-                self.switch_to_tab(idx);
+                self.activate_strip(idx);
                 false
             }
             crate::ui::TabEvent::Reorder { from, to } => {
-                self.reorder_tab(from, to);
+                // The Settings tab is pinned to the strip's end: a drag
+                // that starts on it is ignored, and a drop past the last
+                // terminal slot clamps to the terminal range.
+                if from >= self.tabs.len() {
+                    return false;
+                }
+                self.reorder_tab(from, to.min(self.tabs.len()));
                 false
             }
         }
@@ -1073,36 +1203,40 @@ impl App {
                 false
             }
             crate::ui::AppAction::CloseTab => {
+                if self.settings_active {
+                    self.close_settings_tab();
+                    return false;
+                }
                 let idx = self.active;
                 self.close_tab(idx)
             }
             crate::ui::AppAction::NextTab => {
-                if self.tabs.is_empty() {
+                let total = self.tab_strip_len();
+                if total == 0 {
                     return false;
                 }
-                let next = (self.active + 1) % self.tabs.len();
-                self.switch_to_tab(next);
+                let next = (self.active_strip_index() + 1) % total;
+                self.activate_strip(next);
                 false
             }
             crate::ui::AppAction::PrevTab => {
-                if self.tabs.is_empty() {
+                let total = self.tab_strip_len();
+                if total == 0 {
                     return false;
                 }
-                let prev = if self.active == 0 {
-                    self.tabs.len() - 1
-                } else {
-                    self.active - 1
-                };
-                self.switch_to_tab(prev);
+                let cur = self.active_strip_index();
+                let prev = if cur == 0 { total - 1 } else { cur - 1 };
+                self.activate_strip(prev);
                 false
             }
             crate::ui::AppAction::JumpTab(n) => {
-                if self.tabs.is_empty() {
+                let total = self.tab_strip_len();
+                if total == 0 {
                     return false;
                 }
-                // n is 1-based and clamped to the existing range.
-                let idx = (n.saturating_sub(1) as usize).min(self.tabs.len() - 1);
-                self.switch_to_tab(idx);
+                // n is 1-based and clamped to the existing strip range.
+                let idx = (n.saturating_sub(1) as usize).min(total - 1);
+                self.activate_strip(idx);
                 false
             }
             crate::ui::AppAction::SelectAll => {
@@ -1115,6 +1249,10 @@ impl App {
             }
             crate::ui::AppAction::JumpToNextPrompt => {
                 self.jump_to_prompt(JumpDirection::Next);
+                false
+            }
+            crate::ui::AppAction::OpenSettings => {
+                self.activate_settings_tab();
                 false
             }
             // The remaining view-level actions need the host's
@@ -1153,7 +1291,7 @@ impl App {
     /// than the linear `visible_start + (rows - 1)` model — mirroring the
     /// mouse path's `screen_row_to_abs` mapping.
     pub fn select_all(&mut self) {
-        let Some(tab) = self.tabs.get(self.active) else {
+        let Some(tab) = self.active_tab() else {
             return;
         };
         let (cols, rows, scrollback_len) = {
@@ -1256,6 +1394,82 @@ impl App {
         true
     }
 
+    /// Apply a settings draft committed by the in-app settings panel to
+    /// the running app. Re-derives every startup-resolved state that
+    /// the panel's categories can affect; settings that only bind at
+    /// tab spawn time (`shell_path` / `shell_args` /
+    /// `scrollback_lines`) intentionally reach new tabs only, matching
+    /// the WebView build.
+    ///
+    /// Returns `true` when the caller (`window_host`) must reshape the
+    /// window grid (cell metrics or padding changed).
+    pub fn apply_settings(&mut self, mut new: Settings) -> bool {
+        crate::settings_store::clamp_for_save(&mut new);
+        let old = Arc::clone(&self.settings);
+
+        // UI chrome palette: preset × brightness swaps live (the md3
+        // slot is process-wide, so the next frame re-skins every
+        // widget).
+        crate::ui::md3::set_preset(new.ui_theme_preset, new.ui_theme);
+        // Keybinds / locale resolve the same way as startup.
+        self.keybinds = crate::ui::keybinds::KeybindTable::from_settings(&new.keybinds);
+        self.locale = crate::i18n::resolve(new.language);
+
+        let font_families_changed = new.font_family_fallback != old.font_family_fallback
+            || new.emoji_font != old.emoji_font;
+        let font_size_changed = (new.font_size - old.font_size).abs() >= f32::EPSILON;
+        let padding_changed = new.padding != old.padding;
+
+        self.settings = Arc::new(new);
+
+        if font_families_changed {
+            let (resolver, fallback, cache, rasterizer, base_id) =
+                Self::build_font_stack(&self.settings);
+            self.font_resolver = resolver;
+            self.font_fallback = fallback;
+            self.font_cache = cache;
+            self.font_rasterizer = rasterizer;
+            self.font_base_id = base_id;
+        }
+
+        // Re-derive cell metrics. A font_size change routes through
+        // `set_font_size_pt` (which also pushes the size into every tab
+        // theme); a pure family swap keeps the size but the new chain's
+        // advance may differ, so recompute the dims in place.
+        if font_size_changed {
+            self.set_font_size_pt(self.settings.font_size);
+        } else if font_families_changed {
+            let px = self.runtime_font_size_pt * crate::settings::PT_TO_PX;
+            let (w, h) = crate::render::compute_cell_dims(
+                self.font_rasterizer.as_ref(),
+                self.font_fallback.as_ref(),
+                px,
+            );
+            self.cell_w_logical = w;
+            self.cell_h_logical = h;
+        }
+
+        // Rebuild every tab's theme from the new settings (color scheme
+        // / cursor style / bold-brighten), preserving the live zoom
+        // level. OSC-driven palette mutations a tab accumulated are
+        // reset — same outcome as the WebView's
+        // `applyTerminalColorScheme` full remap.
+        for tab in &mut self.tabs {
+            let mut theme = crate::render::theme::Theme::from_settings(self.settings.as_ref());
+            theme.font_size_pt = self.runtime_font_size_pt;
+            *tab.theme.lock() = theme;
+            {
+                let mut core = tab.core.lock();
+                core.set_cursor_blink(self.settings.cursor_blink);
+                core.mark_all_dirty();
+            }
+            tab.set_fold_enabled(self.settings.fold_enabled);
+        }
+
+        self.needs_full_redraw = true;
+        font_size_changed || font_families_changed || padding_changed
+    }
+
     #[allow(dead_code)] // retained for window_host / tests
     pub fn has_tabs(&self) -> bool {
         !self.tabs.is_empty()
@@ -1312,11 +1526,21 @@ impl App {
         }
     }
     pub fn active_tab(&self) -> Option<&Tab> {
+        // While the Settings tab is the active pane there is no active
+        // *terminal* tab: key input, selection, scroll, IME, and the
+        // grid renderer all see a tabless state, which is exactly the
+        // set of no-ops the settings view needs.
+        if self.settings_active {
+            return None;
+        }
         self.tabs.get(self.active)
     }
 
     #[allow(dead_code)] // retained for future mutation paths / tests
     pub fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        if self.settings_active {
+            return None;
+        }
         self.tabs.get_mut(self.active)
     }
 
@@ -1331,7 +1555,15 @@ impl App {
         let mut active_changed = false;
         let mut bell_rang = false;
         let now = Instant::now();
-        let active = self.active;
+        // While the Settings tab is the active pane every terminal tab
+        // counts as inactive (matching the WebView, where the settings
+        // tab being active makes all terminal tabs background tabs for
+        // the activity tracker). `usize::MAX` never matches an index.
+        let active = if self.settings_active {
+            usize::MAX
+        } else {
+            self.active
+        };
         // Desktop notifications collected during the tab loop and
         // dispatched after it — `tab` holds `&mut self.tabs`, so
         // `self.notify()` (a `&self` call) can't run inside the loop.
@@ -4371,5 +4603,222 @@ mod tests {
         // at the viewport bottom after the newline fill), and the core was
         // cleared of dirty bits by record_render_state, so it is absent.
         assert!(!set.contains(&0), "unselected screen row 0 stays clean");
+    }
+
+    // ── Settings tab (strip model) ─────────────────────────────
+
+    #[test]
+    fn activate_settings_tab_creates_panel_and_hides_active_tab() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        assert!(app.active_tab().is_some());
+
+        app.activate_settings_tab();
+        assert!(app.settings_panel.is_some());
+        assert!(app.settings_panel_active());
+        // The settings pane reports a tabless state to every consumer.
+        assert!(app.active_tab().is_none());
+        // The strip shows tabs + the pinned settings slot, which is active.
+        assert_eq!(app.tab_strip_len(), 2);
+        assert_eq!(app.active_strip_index(), 1);
+    }
+
+    #[test]
+    fn activate_settings_tab_twice_keeps_existing_panel() {
+        let mut app = App::new();
+        app.activate_settings_tab();
+        app.settings_panel.as_mut().unwrap().draft.font_size = 20.0;
+        // Re-invoking (the WebView "switch to existing tab" path) must
+        // not recreate the panel state.
+        app.activate_settings_tab();
+        assert_eq!(app.settings_panel.as_ref().unwrap().draft.font_size, 20.0);
+    }
+
+    #[test]
+    fn activate_terminal_tab_returns_focus_without_closing_panel() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.activate_settings_tab();
+
+        app.activate_terminal_tab(0);
+        assert!(!app.settings_panel_active());
+        assert!(app.settings_panel.is_some(), "panel stays open in strip");
+        assert!(app.active_tab().is_some());
+        assert_eq!(app.active_strip_index(), 0);
+    }
+
+    #[test]
+    fn close_settings_tab_restores_terminal_focus() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.activate_settings_tab();
+
+        app.close_settings_tab();
+        assert!(app.settings_panel.is_none());
+        assert!(!app.settings_panel_active());
+        assert!(app.active_tab().is_some());
+        assert_eq!(app.tab_strip_len(), 1);
+    }
+
+    #[test]
+    fn tab_event_switch_and_close_map_settings_strip_index() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.activate_settings_tab();
+        app.activate_terminal_tab(0);
+
+        // Strip index 1 (= tabs.len()) is the settings slot.
+        assert!(!app.apply_tab_event(crate::ui::TabEvent::Switch(1)));
+        assert!(app.settings_panel_active());
+
+        // Closing the settings slot never exits the window.
+        assert!(!app.apply_tab_event(crate::ui::TabEvent::Close(1)));
+        assert!(app.settings_panel.is_none());
+        assert!(!app.settings_panel_active());
+    }
+
+    #[test]
+    fn next_prev_tab_cycle_includes_settings_slot() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.activate_settings_tab();
+        app.activate_terminal_tab(0);
+
+        assert!(!app.apply_action(crate::ui::AppAction::NextTab));
+        assert!(
+            app.settings_panel_active(),
+            "next from last tab wraps to settings"
+        );
+        assert!(!app.apply_action(crate::ui::AppAction::NextTab));
+        assert!(
+            !app.settings_panel_active(),
+            "next from settings wraps to tab 0"
+        );
+        assert!(!app.apply_action(crate::ui::AppAction::PrevTab));
+        assert!(
+            app.settings_panel_active(),
+            "prev from tab 0 wraps to settings"
+        );
+    }
+
+    #[test]
+    fn close_tab_action_closes_settings_when_focused() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.activate_settings_tab();
+
+        // CloseTab on the focused settings tab closes the panel, not a
+        // terminal tab, and never signals window exit.
+        assert!(!app.apply_action(crate::ui::AppAction::CloseTab));
+        assert!(app.settings_panel.is_none());
+        assert_eq!(app.tabs.len(), 1);
+    }
+
+    #[test]
+    fn reorder_from_settings_slot_is_ignored() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        app.activate_settings_tab();
+        let first_id = app.tabs[0].stable_id;
+
+        // `from` = strip index of the settings tab (tabs.len() == 2).
+        assert!(!app.apply_tab_event(crate::ui::TabEvent::Reorder { from: 2, to: 0 }));
+        assert_eq!(app.tabs[0].stable_id, first_id, "terminal order unchanged");
+        assert!(app.settings_panel.is_some());
+    }
+
+    #[test]
+    fn spawn_new_tab_drops_settings_focus() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.activate_settings_tab();
+
+        app.spawn_new_tab();
+        assert!(!app.settings_panel_active());
+        assert!(app.settings_panel.is_some(), "panel stays open in strip");
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn open_settings_action_activates_panel() {
+        let mut app = App::new();
+        assert!(!app.apply_action(crate::ui::AppAction::OpenSettings));
+        assert!(app.settings_panel_active());
+    }
+
+    // ── apply_settings ─────────────────────────────────────────
+
+    #[test]
+    fn apply_settings_rebuilds_keybinds_and_locale() {
+        let mut app = App::new();
+        let mut new = Settings::default();
+        new.keybinds.new_tab = "Ctrl+Shift+N".to_string();
+        new.language = crate::settings::Language::Ja;
+
+        app.apply_settings(new);
+        let expected = crate::ui::keybinds::parse_chord("Ctrl+Shift+N").unwrap();
+        assert_eq!(app.keybinds.new_tab, expected);
+        assert_eq!(app.locale, crate::i18n::Locale::Ja);
+    }
+
+    #[test]
+    fn apply_settings_font_size_change_requests_resize_and_tracks_runtime() {
+        let mut app = App::new();
+        let mut new = Settings::default();
+        new.font_size = 18.0;
+
+        assert!(
+            app.apply_settings(new),
+            "font size change needs a grid reshape"
+        );
+        assert_eq!(app.runtime_font_size_pt, 18.0);
+        assert_eq!(app.settings.font_size, 18.0);
+    }
+
+    #[test]
+    fn apply_settings_behavior_only_change_needs_no_resize() {
+        let mut app = App::new();
+        let mut new = Settings::default();
+        new.scroll_speed = 9;
+        new.copy_on_select = true;
+
+        assert!(!app.apply_settings(new));
+        assert_eq!(app.settings.scroll_speed, 9);
+        assert!(app.settings.copy_on_select);
+    }
+
+    #[test]
+    fn apply_settings_clamps_to_save_ranges() {
+        let mut app = App::new();
+        let mut new = Settings::default();
+        new.font_size = 500.0;
+        new.scroll_speed = 99;
+
+        app.apply_settings(new);
+        assert_eq!(app.settings.font_size, 32.0);
+        assert_eq!(app.settings.scroll_speed, 10);
+    }
+
+    #[test]
+    fn apply_settings_updates_tab_theme_and_fold_gate() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let mut new = Settings::default();
+        new.terminal_color_scheme = "dracula".to_string();
+        new.fold_enabled = false;
+        new.cursor_blink = false;
+
+        app.apply_settings(new);
+        let theme = app.tabs[0].theme.lock().clone();
+        let expected = crate::render::theme::Theme::from_settings(app.settings.as_ref());
+        assert_eq!(
+            theme.bg, expected.bg,
+            "dracula background applied to live tab"
+        );
+        assert!(
+            !app.tabs[0].folds.is_enabled(),
+            "fold gate pushed into live manager"
+        );
     }
 }

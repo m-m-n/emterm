@@ -1178,6 +1178,7 @@ impl WindowHost {
         // the window here (instead of inside `draw_placeholder`)
         // keeps the render module free of winit dependencies.
         let window_maximized = self.window.is_maximized();
+        let mut settings_event: Option<crate::ui::settings_panel::PanelEvent> = None;
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
             frame_events = crate::render::draw_placeholder(ctx, app, window_maximized);
             // Search overlay is drawn after the chrome so it floats above
@@ -1185,6 +1186,9 @@ impl WindowHost {
             // TextEdit, so it runs as a separate call from `draw_terminal`
             // (which holds `&App`).
             frame_events.search = crate::render::draw_search_overlay(ctx, app);
+            // Settings panel central area (only while the Settings tab is
+            // the active pane). Same `&mut App` split as the search bar.
+            settings_event = crate::render::draw_settings_overlay(ctx, app);
         });
         // CSD title-bar actions hit `winit::Window` directly except
         // for Close, which defers to `about_to_wait` via
@@ -1204,6 +1208,15 @@ impl WindowHost {
             // different. Drop the cached hover so the stale underline /
             // hand cursor from the previous tab doesn't bleed through.
             self.invalidate_link_hover();
+            // The event was applied *after* this frame's egui pass, so the
+            // chrome just painted reflects the pre-event state. Schedule a
+            // follow-up frame immediately — without this the new state
+            // (e.g. the settings tab opening) only appears on the next OS
+            // input event. The wake covers Wayland, where a redraw
+            // requested from inside RedrawRequested can be folded into
+            // the in-flight frame (see the repaint_delay comment below).
+            self.window.request_redraw();
+            crate::wakeup::wake();
         }
         // Scrollbar thumb moved: jump the viewport. `scroll_set_offset`
         // marks the frame dirty itself, so the new position paints on
@@ -1228,6 +1241,35 @@ impl WindowHost {
                 SearchBarEvent::Prev => app.search_prev(),
                 SearchBarEvent::Close => app.close_search(),
             }
+        }
+        // Settings-panel commit: the draft settled into a new state.
+        // Persist it to settings.json (non-managed keys survive — see
+        // `settings_store`) and apply it to the running app.
+        if settings_event == Some(crate::ui::settings_panel::PanelEvent::Changed) {
+            self.apply_settings_change(app);
+        }
+        // egui requested an immediate repaint (a popup opening, a widget
+        // state transition, a one-frame animation step). Without honoring
+        // this the next frame only renders on the next OS input event, so
+        // e.g. a ComboBox click appears to need a second click before its
+        // popup shows, and a tab-event state change (settings tab opening)
+        // presents a half-applied frame. Mirrors `viewer::shell`'s
+        // repaint_delay handling.
+        //
+        // `wakeup::wake()` in addition to `request_redraw()`: we are
+        // *inside* the RedrawRequested handler here, and winit's Wayland
+        // backend can fold a redraw requested mid-redraw into the frame
+        // currently being presented (X11 reliably schedules a fresh one).
+        // The proxy-driven wake lands as a `user_event` on the next loop
+        // cycle whose own `request_redraw()` is unambiguously "new" —
+        // the same bridge the status-bar clock relies on.
+        if full_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .is_some_and(|v| v.repaint_delay.is_zero())
+        {
+            self.window.request_redraw();
+            crate::wakeup::wake();
         }
         let paint_jobs = self
             .egui_ctx
@@ -1506,6 +1548,48 @@ impl WindowHost {
             }
             None => app.record_render_state_no_tab(),
         }
+    }
+
+    /// Persist + apply a settings-panel commit. The panel's draft is
+    /// applied to the running app first (which clamps it to the save
+    /// ranges), then the clamped result is written to `settings.json`
+    /// and synced back into the panel so its widgets reflect any
+    /// clamping. A save failure is surfaced in the panel's nav column
+    /// instead of aborting the in-memory apply — the WebView build
+    /// behaves the same way (apply first, log on save error).
+    fn apply_settings_change(&mut self, app: &mut App) {
+        let Some(panel) = app.settings_panel.as_ref() else {
+            return;
+        };
+        let draft = panel.draft.clone();
+        let old_ui_font = app.settings.ui_font_family.clone();
+        let needs_resize = app.apply_settings(draft);
+        let save_result = crate::settings_store::save(app.settings.as_ref());
+        if let Err(e) = &save_result {
+            log::warn!("settings: save failed: {e}");
+        }
+        let applied = app.settings.clone();
+        let locale = app.locale;
+        if let Some(panel) = app.settings_panel.as_mut() {
+            panel.sync_from(applied.as_ref(), locale);
+            panel.save_error = save_result.err();
+        }
+        // The egui chrome font chain is owned by the host context, not
+        // the App; rebuild it when the UI font family changed.
+        if app.settings.ui_font_family != old_ui_font {
+            configure_egui_fonts(&self.egui_ctx, &app.settings.ui_font_family);
+        }
+        if needs_resize {
+            // Cell metrics / padding changed: reshape the PTY grid for
+            // the unchanged window pixel size on the next frame.
+            self.request_resize();
+        }
+        app.mark_full_redraw();
+        // Called from inside RedrawRequested (the egui pass emitted the
+        // commit event); the wake guarantees the follow-up frame on
+        // Wayland (see the repaint_delay comment in `render`).
+        self.window.request_redraw();
+        crate::wakeup::wake();
     }
 
     /// Translate winit state into a minimal `egui::RawInput`. Phase 1 only
@@ -1923,12 +2007,13 @@ impl ApplicationHandler for PocApp {
             // overrides the trait default with a no-op, so this is
             // safe to call unconditionally.
             WindowEvent::Ime(ime) => {
-                // While the search bar owns the keyboard, route IME commits
-                // into egui's TextEdit instead of the terminal IME backend
-                // so Japanese / CJK input lands in the search field. Only
-                // `Commit` carries text we forward; preedit display in the
-                // field is omitted (best-effort CJK support per spec).
-                if self.app.search_visible() {
+                // While the search bar or the settings panel owns the
+                // keyboard, route IME commits into egui's TextEdit
+                // instead of the terminal IME backend so Japanese / CJK
+                // input lands in the focused field. Only `Commit`
+                // carries text we forward; preedit display in the field
+                // is omitted (best-effort CJK support per spec).
+                if self.app.search_visible() || self.app.settings_panel_active() {
                     if let winit::event::Ime::Commit(text) = &ime {
                         if !text.is_empty() {
                             host.pending_egui_events
@@ -1972,6 +2057,18 @@ impl ApplicationHandler for PocApp {
                 host.window().request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // Settings-tab capture: while the Settings tab is the
+                // active pane the keyboard belongs to its panel. Global
+                // tab-roster chords still dispatch; everything else is
+                // forwarded to egui so the panel's text fields work.
+                // Runs before the search branch (opening the settings
+                // tab closes the search overlay, so they never overlap).
+                if self.app.settings_panel_active() {
+                    handle_settings_key(&event, host.current_mods, host, &mut self.app);
+                    host.window().request_redraw();
+                    return;
+                }
+
                 // Search overlay capture: while the search bar is visible
                 // it owns the keyboard. Navigation / close chords are
                 // handled here directly; copy / paste are translated to
@@ -2242,6 +2339,15 @@ impl ApplicationHandler for PocApp {
                 }
                 host.window().request_redraw();
 
+                // Settings tab: the click belongs entirely to the egui
+                // panel (already forwarded above). Skip the terminal
+                // selection / link / paste handling — without this a
+                // click on a panel control would also arm a selection
+                // anchor against the hidden terminal grid.
+                if self.app.settings_panel_active() {
+                    return;
+                }
+
                 // Clicks that land on the egui-owned strip (CSD title
                 // bar + tab bar at the top, status bar at the bottom
                 // when enabled) must not also kick off a terminal
@@ -2360,6 +2466,23 @@ impl ApplicationHandler for PocApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                // Settings tab: the wheel scrolls the panel's egui
+                // ScrollArea, not the (hidden) terminal viewport.
+                if self.app.settings_panel_active() {
+                    let d = match delta {
+                        // egui points per wheel line — matches egui-winit's
+                        // own LineDelta translation factor.
+                        MouseScrollDelta::LineDelta(x, y) => egui::vec2(x * 50.0, y * 50.0),
+                        MouseScrollDelta::PixelDelta(p) => egui::vec2(p.x as f32, p.y as f32),
+                    };
+                    host.pending_egui_events.push(egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: d,
+                        modifiers: input_mods_to_egui(host.current_mods),
+                    });
+                    host.window().request_redraw();
+                    return;
+                }
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => {
@@ -2608,6 +2731,102 @@ fn input_mods_to_egui(mods: Modifiers) -> egui::Modifiers {
         alt: mods.alt,
         command: false,
         mac_cmd: false,
+    }
+}
+
+/// Route a key press into the settings panel while the Settings tab is
+/// the active pane.
+///
+/// Precedence:
+///   1. `keybinds.copy` / `keybinds.paste` chords → egui clipboard
+///      events targeting the focused text field.
+///   2. Global tab-roster / window chords (`new_tab`, `close_tab`,
+///      `next_tab`, `prev_tab`, `Ctrl+1..9`, `toggle_fullscreen`,
+///      `toggle_tab_bar`) keep working so the user can leave the panel
+///      the same way they entered it. Terminal-pane actions (zoom,
+///      search, select-all, prompt jumps) are ignored — there is no
+///      terminal pane to act on.
+///   3. Everything else → forward to egui (`Event::Key` + committed
+///      text) so the panel's TextEdits / sliders receive it.
+///
+/// The PTY encoder is bypassed entirely: no keystroke reaches the
+/// shell while the settings tab is focused.
+fn handle_settings_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost, app: &mut App) {
+    let egui_key = winit_key_to_egui(&event.logical_key);
+
+    if let Some(key) = egui_key {
+        let chord = Chord {
+            ctrl: mods.ctrl,
+            shift: mods.shift,
+            alt: mods.alt,
+            key,
+        };
+        // 1. Clipboard chords → egui clipboard events for the field.
+        if chord == app.keybinds.copy {
+            host.pending_egui_events.push(egui::Event::Copy);
+            return;
+        }
+        if chord == app.keybinds.paste {
+            if let Some(text) = host.get_clipboard() {
+                host.pending_egui_events.push(egui::Event::Paste(text));
+            }
+            return;
+        }
+
+        // 2. Global chords that remain meaningful with the panel open.
+        let egui_mods = input_mods_to_egui(mods);
+        if let Some(act) = crate::ui::keybinds::dispatch(&app.keybinds, egui_mods, key) {
+            match act {
+                crate::ui::AppAction::ToggleFullscreen => {
+                    host.toggle_fullscreen();
+                    app.mark_full_redraw();
+                }
+                crate::ui::AppAction::ToggleTabBar => {
+                    app.show_tab_bar = !app.show_tab_bar;
+                    host.request_resize();
+                    app.mark_full_redraw();
+                }
+                crate::ui::AppAction::NewTab
+                | crate::ui::AppAction::CloseTab
+                | crate::ui::AppAction::NextTab
+                | crate::ui::AppAction::PrevTab
+                | crate::ui::AppAction::JumpTab(_)
+                | crate::ui::AppAction::OpenSettings => {
+                    let _ = app.apply_action(act);
+                    app.mark_full_redraw();
+                    host.invalidate_link_hover();
+                }
+                // Terminal-pane actions are no-ops while settings is
+                // focused (no terminal pane to zoom / search / select).
+                crate::ui::AppAction::SelectAll
+                | crate::ui::AppAction::OpenSearch
+                | crate::ui::AppAction::JumpToPrevPrompt
+                | crate::ui::AppAction::JumpToNextPrompt
+                | crate::ui::AppAction::ZoomIn
+                | crate::ui::AppAction::ZoomOut
+                | crate::ui::AppAction::ZoomReset => {}
+            }
+            return;
+        }
+    }
+
+    // 3. Forward to egui for the panel widgets (editing keys + text).
+    if let Some(key) = egui_key {
+        host.pending_egui_events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: event.repeat,
+            modifiers: input_mods_to_egui(mods),
+        });
+    }
+    if !mods.ctrl && !mods.alt {
+        if let Some(text) = &event.text {
+            let printable: String = text.chars().filter(|c| !c.is_control()).collect();
+            if !printable.is_empty() {
+                host.pending_egui_events.push(egui::Event::Text(printable));
+            }
+        }
     }
 }
 

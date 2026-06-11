@@ -517,6 +517,13 @@ const COLOR_SCHEME_PRESETS: &[ColorSchemePreset] = &[
     },
 ];
 
+/// Names of the built-in terminal color-scheme presets, in definition
+/// order. The settings panel's scheme selector lists these ahead of the
+/// user-defined `custom_color_schemes`.
+pub fn color_scheme_preset_names() -> impl Iterator<Item = &'static str> {
+    COLOR_SCHEME_PRESETS.iter().map(|p| p.name)
+}
+
 /// Apply `settings.terminal_color_scheme` to `theme`. User-defined
 /// schemes in `settings.custom_color_schemes` win over built-in presets
 /// of the same name, matching the WebView build (`initial-settings.ts`).

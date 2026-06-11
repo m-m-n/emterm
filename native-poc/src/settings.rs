@@ -94,6 +94,17 @@ impl CursorStyle {
             }
         }
     }
+
+    /// Canonical `settings.json` spelling (the WebView build's select
+    /// values). Inverse of [`CursorStyle::parse_or_warn`] for the
+    /// settings-panel save path.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Underline => "underline",
+            Self::Bar => "bar",
+        }
+    }
 }
 
 fn warn_unknown_cursor_style_once(seen: &str) {
@@ -294,9 +305,8 @@ pub struct KeybindSettings {
     /// Toggle borderless full-screen mode. Dispatched to
     /// `AppAction::ToggleFullscreen`.
     pub toggle_fullscreen: String,
-    /// Open the settings panel. Captured for forward compatibility;
-    /// native-poc has no settings panel yet.
-    #[allow(dead_code)]
+    /// Open (or switch to) the in-app settings tab. Dispatched to
+    /// `AppAction::OpenSettings`.
     pub open_settings: String,
     /// Toggle the tab bar visibility. Dispatched to
     /// `AppAction::ToggleTabBar`.
@@ -667,6 +677,16 @@ impl UiTheme {
             }
         }
     }
+
+    /// Canonical `settings.json` spelling. Inverse of
+    /// [`UiTheme::parse_or_warn`] for the settings-panel save path.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+            Self::System => "system",
+        }
+    }
 }
 
 fn warn_unknown_ui_theme_once(seen: &str) {
@@ -702,6 +722,16 @@ impl Language {
                 warn_unknown_language_once(other);
                 Self::Auto
             }
+        }
+    }
+
+    /// Canonical `settings.json` spelling. Inverse of
+    /// [`Language::parse_or_warn`] for the settings-panel save path.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::En => "en",
+            Self::Ja => "ja",
         }
     }
 }
@@ -743,6 +773,18 @@ impl UiThemePreset {
             }
         }
     }
+
+    /// Canonical `settings.json` spelling. Inverse of
+    /// [`UiThemePreset::parse_or_warn`] for the settings-panel save path.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Purple => "purple",
+            Self::Blue => "blue",
+            Self::Green => "green",
+            Self::Orange => "orange",
+            Self::Pink => "pink",
+        }
+    }
 }
 
 fn warn_unknown_ui_theme_preset_once(seen: &str) {
@@ -776,6 +818,16 @@ impl ScrollbarMode {
                 warn_unknown_scrollbar_mode_once(other);
                 Self::Auto
             }
+        }
+    }
+
+    /// Canonical `settings.json` spelling. Inverse of
+    /// [`ScrollbarMode::parse_or_warn`] for the settings-panel save path.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Never => "never",
         }
     }
 }
@@ -815,6 +867,16 @@ impl BellAction {
                 warn_unknown_bell_action_once(other);
                 Self::Visual
             }
+        }
+    }
+
+    /// Canonical `settings.json` spelling. Inverse of
+    /// [`BellAction::parse_or_warn`] for the settings-panel save path.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Sound => "sound",
+            Self::Visual => "visual",
+            Self::None => "none",
         }
     }
 }
@@ -999,8 +1061,9 @@ impl Settings {
 
 /// Resolve the `settings.json` path on the current platform. Returns
 /// `None` only on unsupported targets (macOS / others); callers fall
-/// back to [`Settings::default`].
-fn settings_path() -> Option<std::path::PathBuf> {
+/// back to [`Settings::default`]. Shared with the settings-panel save
+/// path (`crate::settings_store`).
+pub(crate) fn settings_path() -> Option<std::path::PathBuf> {
     const APP_ID: &str = "net.laser5.app.emterm";
 
     #[cfg(target_os = "linux")]

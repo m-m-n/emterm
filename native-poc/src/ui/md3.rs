@@ -40,12 +40,16 @@ pub struct Palette {
     pub on_primary: Color32,
     pub primary_container: Color32,
     pub on_primary_container: Color32,
+    pub secondary_container: Color32,
+    pub on_secondary_container: Color32,
+    pub surface: Color32,
     pub surface_container: Color32,
     pub surface_container_low: Color32,
     pub surface_container_high: Color32,
     pub surface_container_highest: Color32,
     pub on_surface: Color32,
     pub on_surface_variant: Color32,
+    pub outline: Color32,
     pub outline_variant: Color32,
 }
 
@@ -56,12 +60,16 @@ const PALETTE_PURPLE: Palette = Palette {
     on_primary: hex(0x381E72),
     primary_container: hex(0x4F378B),
     on_primary_container: hex(0xEADDFF),
+    secondary_container: hex(0x4A4458),
+    on_secondary_container: hex(0xE8DEF8),
+    surface: hex(0x141218),
     surface_container: hex(0x211F26),
     surface_container_low: hex(0x1D1B20),
     surface_container_high: hex(0x2B2930),
     surface_container_highest: hex(0x36343B),
     on_surface: hex(0xE6E0E9),
     on_surface_variant: hex(0xCAC4D0),
+    outline: hex(0x938F99),
     outline_variant: hex(0x49454F),
 };
 
@@ -70,12 +78,16 @@ const PALETTE_BLUE: Palette = Palette {
     on_primary: hex(0x062E6F),
     primary_container: hex(0x0842A0),
     on_primary_container: hex(0xD3E3FD),
+    secondary_container: hex(0x434659),
+    on_secondary_container: hex(0xDEE2F9),
+    surface: hex(0x111318),
     surface_container: hex(0x1F2126),
     surface_container_low: hex(0x1A1C20),
     surface_container_high: hex(0x292B30),
     surface_container_highest: hex(0x34363B),
     on_surface: hex(0xE2E2E9),
     on_surface_variant: hex(0xC4C6D0),
+    outline: hex(0x8E909A),
     outline_variant: hex(0x44464F),
 };
 
@@ -84,12 +96,16 @@ const PALETTE_GREEN: Palette = Palette {
     on_primary: hex(0x003823),
     primary_container: hex(0x005234),
     on_primary_container: hex(0x98F0C2),
+    secondary_container: hex(0x374B3E),
+    on_secondary_container: hex(0xD0E8D4),
+    surface: hex(0x101412),
     surface_container: hex(0x1C201E),
     surface_container_low: hex(0x181C1A),
     surface_container_high: hex(0x262B28),
     surface_container_highest: hex(0x313633),
     on_surface: hex(0xDFE4DF),
     on_surface_variant: hex(0xBFC9C1),
+    outline: hex(0x8A938C),
     outline_variant: hex(0x404943),
 };
 
@@ -98,12 +114,16 @@ const PALETTE_ORANGE: Palette = Palette {
     on_primary: hex(0x4C2700),
     primary_container: hex(0x6C3A00),
     on_primary_container: hex(0xFFDCBE),
+    secondary_container: hex(0x56432B),
+    on_secondary_container: hex(0xFADEBB),
+    surface: hex(0x18120B),
     surface_container: hex(0x261F18),
     surface_container_low: hex(0x211A13),
     surface_container_high: hex(0x302922),
     surface_container_highest: hex(0x3B342D),
     on_surface: hex(0xEDE0D4),
     on_surface_variant: hex(0xD4C4B1),
+    outline: hex(0x9D8E7D),
     outline_variant: hex(0x524436),
 };
 
@@ -112,12 +132,16 @@ const PALETTE_PINK: Palette = Palette {
     on_primary: hex(0x5E1133),
     primary_container: hex(0x7B2949),
     on_primary_container: hex(0xFFD9E2),
+    secondary_container: hex(0x5B3F47),
+    on_secondary_container: hex(0xFFD9E2),
+    surface: hex(0x1A1114),
     surface_container: hex(0x271D21),
     surface_container_low: hex(0x221820),
     surface_container_high: hex(0x322830),
     surface_container_highest: hex(0x3D333A),
     on_surface: hex(0xEEDFE3),
     on_surface_variant: hex(0xD4BFC5),
+    outline: hex(0x9D8A90),
     outline_variant: hex(0x514349),
 };
 
@@ -128,12 +152,16 @@ const PALETTE_PURPLE_LIGHT: Palette = Palette {
     on_primary: hex(0xFFFFFF),
     primary_container: hex(0xEADDFF),
     on_primary_container: hex(0x21005D),
+    secondary_container: hex(0xE8DEF8),
+    on_secondary_container: hex(0x1D192B),
+    surface: hex(0xFEF7FF),
     surface_container: hex(0xF3EDF7),
     surface_container_low: hex(0xF7F2FA),
     surface_container_high: hex(0xECE6F0),
     surface_container_highest: hex(0xE6E0E9),
     on_surface: hex(0x1D1B20),
     on_surface_variant: hex(0x49454F),
+    outline: hex(0x79747E),
     outline_variant: hex(0xCAC4D0),
 };
 
@@ -142,12 +170,16 @@ const PALETTE_BLUE_LIGHT: Palette = Palette {
     on_primary: hex(0xFFFFFF),
     primary_container: hex(0xD3E3FD),
     on_primary_container: hex(0x041E49),
+    secondary_container: hex(0xDEE2F9),
+    on_secondary_container: hex(0x171B2C),
+    surface: hex(0xF9F9FF),
     surface_container: hex(0xEFF0F6),
     surface_container_low: hex(0xF3F3FA),
     surface_container_high: hex(0xE8E9EF),
     surface_container_highest: hex(0xE2E2E9),
     on_surface: hex(0x1A1C20),
     on_surface_variant: hex(0x44464F),
+    outline: hex(0x75767F),
     outline_variant: hex(0xC4C6D0),
 };
 
@@ -156,12 +188,16 @@ const PALETTE_GREEN_LIGHT: Palette = Palette {
     on_primary: hex(0xFFFFFF),
     primary_container: hex(0x98F0C3),
     on_primary_container: hex(0x002110),
+    secondary_container: hex(0xD0E8D4),
+    on_secondary_container: hex(0x0B1F13),
+    surface: hex(0xF5FBF5),
     surface_container: hex(0xEBF1EB),
     surface_container_low: hex(0xEFF5EF),
     surface_container_high: hex(0xE5EBE5),
     surface_container_highest: hex(0xDEE4DF),
     on_surface: hex(0x181C1A),
     on_surface_variant: hex(0x404943),
+    outline: hex(0x717972),
     outline_variant: hex(0xBFC9C1),
 };
 
@@ -170,12 +206,16 @@ const PALETTE_ORANGE_LIGHT: Palette = Palette {
     on_primary: hex(0xFFFFFF),
     primary_container: hex(0xFFDCBE),
     on_primary_container: hex(0x2D1600),
+    secondary_container: hex(0xFADEBB),
+    on_secondary_container: hex(0x271904),
+    surface: hex(0xFFF8F4),
     surface_container: hex(0xF5EDEA),
     surface_container_low: hex(0xFAF2EE),
     surface_container_high: hex(0xEEE6E3),
     surface_container_highest: hex(0xE9E1DD),
     on_surface: hex(0x211A13),
     on_surface_variant: hex(0x524436),
+    outline: hex(0x847465),
     outline_variant: hex(0xD4C4B1),
 };
 
@@ -184,12 +224,16 @@ const PALETTE_PINK_LIGHT: Palette = Palette {
     on_primary: hex(0xFFFFFF),
     primary_container: hex(0xFFD9E3),
     on_primary_container: hex(0x3E001D),
+    secondary_container: hex(0xFFD9E2),
+    on_secondary_container: hex(0x2B151C),
+    surface: hex(0xFFF8F8),
     surface_container: hex(0xFAECEF),
     surface_container_low: hex(0xFDF0F2),
     surface_container_high: hex(0xF2E4E8),
     surface_container_highest: hex(0xEBDEE2),
     on_surface: hex(0x22191C),
     on_surface_variant: hex(0x514349),
+    outline: hex(0x837379),
     outline_variant: hex(0xD4BFC5),
 };
 
@@ -213,24 +257,32 @@ fn palette_for(preset: crate::settings::UiThemePreset, theme: crate::settings::U
     }
 }
 
-/// Process-wide palette slot seeded at startup by [`set_preset`].
-/// Widgets read individual tokens through the accessors below so a
-/// single `OnceLock` write is sufficient.
-static PALETTE_SLOT: std::sync::OnceLock<Palette> = std::sync::OnceLock::new();
+/// Process-wide palette slot seeded at startup by [`set_preset`] and
+/// re-written when the in-app settings panel changes the UI theme /
+/// preset. Widgets read individual tokens through the accessors below.
+/// `RwLock` (not `OnceLock`) so `App::apply_settings` can swap the
+/// palette live; `Palette` is `Copy`, so readers take a snapshot and
+/// never hold the lock across a frame.
+static PALETTE_SLOT: std::sync::RwLock<Option<Palette>> = std::sync::RwLock::new(None);
 
-/// Install the user's MD3 preset × brightness. Idempotent (`OnceLock`
-/// semantics) — only the first call takes effect so a stray reload
-/// cannot drift the chrome mid-session. Call once during app startup,
-/// before any widget reads palette accessors.
+/// Install the user's MD3 preset × brightness. Call during app startup
+/// before any widget reads palette accessors; the settings panel calls
+/// it again (via `App::apply_settings`) so a theme change re-skins the
+/// chrome on the next frame.
 pub fn set_preset(preset: crate::settings::UiThemePreset, theme: crate::settings::UiTheme) {
-    let _ = PALETTE_SLOT.set(palette_for(preset, theme));
+    *PALETTE_SLOT
+        .write()
+        .expect("md3 palette lock poisoned (writer panicked)") = Some(palette_for(preset, theme));
 }
 
 /// Active palette resolved from `settings.ui_theme_preset` ×
 /// `settings.ui_theme`. Falls back to [`PALETTE_PURPLE`] when
 /// [`set_preset`] has not run yet.
-fn current() -> &'static Palette {
-    PALETTE_SLOT.get().unwrap_or(&PALETTE_PURPLE)
+fn current() -> Palette {
+    PALETTE_SLOT
+        .read()
+        .expect("md3 palette lock poisoned (writer panicked)")
+        .unwrap_or(PALETTE_PURPLE)
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -255,6 +307,21 @@ pub fn primary_container() -> Color32 {
 #[allow(dead_code)]
 pub fn on_primary_container() -> Color32 {
     current().on_primary_container
+}
+
+/// Selected nav item background (settings category nav).
+pub fn secondary_container() -> Color32 {
+    current().secondary_container
+}
+
+/// Text/icon color over [`secondary_container`].
+pub fn on_secondary_container() -> Color32 {
+    current().on_secondary_container
+}
+
+/// Base surface (settings content area background).
+pub fn surface() -> Color32 {
+    current().surface
 }
 
 /// Tab bar, list item cards, color palette editor.
@@ -285,6 +352,11 @@ pub fn on_surface() -> Color32 {
 /// Secondary text, inactive icons.
 pub fn on_surface_variant() -> Color32 {
     current().on_surface_variant
+}
+
+/// Form-control borders (MD3 outlined text fields / selects).
+pub fn outline() -> Color32 {
+    current().outline
 }
 
 /// Subtle borders (tab bar bottom hairline, list separators).
