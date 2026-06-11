@@ -115,6 +115,16 @@ struct WindowUi {
     scroll_selection_into_view: bool,
     /// RAW line cache keyed by the pretty flag.
     raw_lines: Option<(bool, Vec<String>)>,
+    /// Highlighted detail galley, cached per `(selected, pixels_per_point
+    /// bits)` so the tokenizer + text layout run only when the selection
+    /// (or DPI) changes — never per frame.
+    detail_galley: Option<(usize, u32, std::sync::Arc<egui::Galley>)>,
+    /// Tree scroll offset from the previous frame (virtualized rows need
+    /// manual scroll-into-view math; `scroll_to_me` can't reach rows that
+    /// were never rendered).
+    tree_scroll_offset: f32,
+    /// Tree viewport height from the previous frame.
+    tree_viewport_h: f32,
     /// Last central-content height in points (keyboard page scrolls).
     content_height: f32,
     /// `Some(t)` while the Copy button shows "Copied!" (2 s).
@@ -130,10 +140,29 @@ impl WindowUi {
             raw_scroll: 0.0,
             scroll_selection_into_view: false,
             raw_lines: None,
+            detail_galley: None,
+            tree_scroll_offset: 0.0,
+            tree_viewport_h: 0.0,
             content_height: 400.0,
             copied_at: None,
             copy_requested: false,
         }
+    }
+}
+
+/// Minimal scroll adjustment that brings row `selected` (of `stride`
+/// height) into a viewport of `viewport_h` currently scrolled to
+/// `current`: scroll up to the row's top when it is above, down to its
+/// bottom when below, otherwise keep the offset.
+fn scroll_offset_for_row(selected: usize, stride: f32, viewport_h: f32, current: f32) -> f32 {
+    let top = selected as f32 * stride;
+    let bottom = top + stride;
+    if top < current {
+        top
+    } else if bottom > current + viewport_h && viewport_h > 0.0 {
+        bottom - viewport_h
+    } else {
+        current
     }
 }
 
@@ -522,56 +551,82 @@ fn outline_ui(ctx: &egui::Context, state: &mut DataViewerState, win: &mut Window
         .default_width(280.0)
         .width_range(200.0..=600.0)
         .show(ctx, |ui| {
-            egui::ScrollArea::both()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    tree_rows(ui, state, win);
-                });
+            tree_rows(ui, state, win);
         });
 
     egui::CentralPanel::default()
         .frame(egui::Frame::none().fill(BG))
         .show(ctx, |ui| {
             win.content_height = ui.available_height();
-            let format = state.format;
-            let detail = state.detail().to_string();
+            // Highlighted detail galley, cached per (selection, DPI):
+            // the tokenizer + text layout run only when those change.
+            // Painting a cached `Arc<Galley>` per frame is O(visible),
+            // not O(document).
+            let sel = state.selected;
+            let ppp_bits = ctx.pixels_per_point().to_bits();
+            let cached =
+                matches!(&win.detail_galley, Some((s, p, _)) if *s == sel && *p == ppp_bits);
+            if !cached {
+                let job = highlight_job(state.format, state.detail());
+                let galley = ctx.fonts(|f| f.layout_job(job));
+                win.detail_galley = Some((sel, ppp_bits, galley));
+            }
+            let galley = win.detail_galley.as_ref().expect("filled above").2.clone();
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.add_space(16.0);
-                        ui.add(
-                            egui::Label::new(highlight_job(format, &detail))
-                                .wrap_mode(egui::TextWrapMode::Extend),
-                        );
+                        let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+                        ui.painter().galley(rect.min, galley.clone(), FG);
                     });
                     ui.add_space(8.0);
                 });
         });
 }
 
-/// One row per tree node, WebView `.tree-item` visuals.
+/// Virtualized tree rows (WebView `.tree-item` visuals): only the rows in
+/// the visible range are laid out and painted, like the RAW view's
+/// `show_rows`. Keyboard navigation adjusts the scroll offset directly —
+/// `scroll_to_me` cannot reach rows that were never rendered.
 fn tree_rows(ui: &mut egui::Ui, state: &mut DataViewerState, win: &mut WindowUi) {
     let row_h = ui.fonts(|f| f.row_height(&egui::FontId::monospace(CONTENT_FONT))) * 1.6;
+    // `show_rows` strides by row_h + item_spacing.y; zero the spacing so
+    // the offset arithmetic below stays exact.
+    ui.spacing_mut().item_spacing.y = 0.0;
     let scroll_into_view = std::mem::take(&mut win.scroll_selection_into_view);
     let mut clicked: Option<usize> = None;
 
-    for (i, node) in state.nodes.iter().enumerate() {
-        let selected = i == state.selected;
-        let indent = (node.depth as f32 + 1.0) * 16.0 + 8.0;
-        let marker = if node.has_children { "▸ " } else { "" };
-        let text = format!("{marker}{}", node.label);
-        let galley = ui.fonts(|f| {
-            f.layout_no_wrap(
-                text,
-                egui::FontId::monospace(CONTENT_FONT),
-                egui::Color32::WHITE, // recolored below
-            )
-        });
-        let row_w = (indent + galley.size().x + 16.0).max(ui.available_width());
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(row_w, row_h), egui::Sense::click());
-        if ui.is_rect_visible(rect) || (selected && scroll_into_view) {
+    let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+    if scroll_into_view {
+        let target = scroll_offset_for_row(
+            state.selected,
+            row_h,
+            win.tree_viewport_h,
+            win.tree_scroll_offset,
+        );
+        area = area.vertical_scroll_offset(target);
+    }
+    let out = area.show_rows(ui, row_h, state.nodes.len(), |ui, range| {
+        for i in range {
+            let Some(node) = state.nodes.get(i) else {
+                continue;
+            };
+            let selected = i == state.selected;
+            let indent = (node.depth as f32 + 1.0) * 16.0 + 8.0;
+            let marker = if node.has_children { "▸ " } else { "" };
+            let text = format!("{marker}{}", node.label);
+            let galley = ui.fonts(|f| {
+                f.layout_no_wrap(
+                    text,
+                    egui::FontId::monospace(CONTENT_FONT),
+                    egui::Color32::WHITE, // recolored below
+                )
+            });
+            let row_w = (indent + galley.size().x + 16.0).max(ui.available_width());
+            let (rect, resp) =
+                ui.allocate_exact_size(egui::vec2(row_w, row_h), egui::Sense::click());
             if selected {
                 ui.painter().rect_filled(rect, 0.0, SELECT_BG);
             } else if resp.hovered() {
@@ -621,14 +676,14 @@ fn tree_rows(ui: &mut egui::Ui, state: &mut DataViewerState, win: &mut WindowUi)
                     color,
                 );
             }
+            if resp.clicked() {
+                clicked = Some(i);
+            }
         }
-        if selected && scroll_into_view {
-            resp.scroll_to_me(None);
-        }
-        if resp.clicked() {
-            clicked = Some(i);
-        }
-    }
+    });
+    win.tree_scroll_offset = out.state.offset.y;
+    win.tree_viewport_h = out.inner_rect.height();
+
     if let Some(i) = clicked {
         state.select(i);
     }
@@ -771,4 +826,38 @@ fn plain_job(line: &str) -> egui::text::LayoutJob {
         tok_format(TokKind::Plain),
     );
     job
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── virtualized tree scroll-into-view math ───────────────────────────
+
+    #[test]
+    fn scroll_offset_keeps_visible_row_in_place() {
+        // Row 10 of 20pt rows in a 200pt viewport scrolled to 100pt:
+        // rows 5..15 are visible → no adjustment.
+        assert_eq!(scroll_offset_for_row(10, 20.0, 200.0, 100.0), 100.0);
+    }
+
+    #[test]
+    fn scroll_offset_scrolls_up_to_row_above_viewport() {
+        // Row 2 (top = 40) above the 100pt offset → snap to its top.
+        assert_eq!(scroll_offset_for_row(2, 20.0, 200.0, 100.0), 40.0);
+    }
+
+    #[test]
+    fn scroll_offset_scrolls_down_to_row_below_viewport() {
+        // Row 20 (bottom = 420) below 100+200 → align bottom to viewport.
+        assert_eq!(scroll_offset_for_row(20, 20.0, 200.0, 100.0), 220.0);
+    }
+
+    #[test]
+    fn scroll_offset_handles_unknown_viewport() {
+        // First frame: viewport height not yet measured (0) → only the
+        // scroll-up branch may fire; never a negative/odd offset.
+        assert_eq!(scroll_offset_for_row(0, 20.0, 0.0, 100.0), 0.0);
+        assert_eq!(scroll_offset_for_row(10, 20.0, 0.0, 100.0), 100.0);
+    }
 }
