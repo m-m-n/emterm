@@ -8,13 +8,13 @@
 //! and color glyphs (Noto Color Emoji CBDT / COLR v1) are sampled as-is.
 //!
 //! The frame draw order managed by `window_host::render` is
-//! `clear -> TerminalGridPass -> egui (LoadOp::Load) -> ImageOverlayPass`.
+//! `clear -> TerminalGridPass -> egui (LoadOp::Load)`.
 //! egui therefore retains the UI overlay only (tab bar / status bar /
 //! IME preedit / settings panel); it no longer draws cell glyphs.
 //!
-//! Implementation strategy mirrors `image::overlay::OverlayPipeline`:
-//! pipeline + bind group layout + per-frame instance buffer + a tiny
-//! local `bytemuck`-style cast helper so we do not add a new dependency.
+//! Implementation strategy: pipeline + bind group layout + per-frame
+//! instance buffer + a tiny local `bytemuck`-style cast helper so we do
+//! not add a new dependency.
 
 use std::sync::Arc;
 

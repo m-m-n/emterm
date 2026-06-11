@@ -981,9 +981,9 @@ impl Tab {
     }
 
     /// Drain the queue of image-state events accumulated by `pump`.
-    /// `WindowHost` calls this once per frame and forwards the events to
-    /// `ImageLayer::ingest`, which handles GPU texture upload + LRU
-    /// eviction.
+    /// `App::pump_all` calls this once per pass and forwards the events
+    /// to `crate::viewer::image::ImageViewerRouter`, which stores decoded
+    /// images (LRU) and opens a native viewer child window per `Place`.
     pub fn drain_image_events(&mut self) -> Vec<ImageEvent> {
         std::mem::take(&mut self.pending_image_events)
     }

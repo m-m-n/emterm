@@ -13,6 +13,7 @@
 //! affordances; later phases (4-C prefix latch, 4-D status bar) extend
 //! them rather than redefining them.
 
+pub mod chrome;
 pub mod emoji_cache;
 pub mod keybinds;
 pub mod md3;

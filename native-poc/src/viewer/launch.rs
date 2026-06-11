@@ -52,7 +52,8 @@ pub struct PayloadAppearance {
 }
 
 /// Lowercase wire token for a [`UiTheme`] (matches the TS `UiTheme`).
-fn theme_token(t: UiTheme) -> &'static str {
+/// Shared with the image-viewer payload (`viewer::image`).
+pub(crate) fn theme_token(t: UiTheme) -> &'static str {
     match t {
         UiTheme::Light => "light",
         UiTheme::Dark => "dark",
@@ -61,7 +62,8 @@ fn theme_token(t: UiTheme) -> &'static str {
 }
 
 /// Lowercase wire token for a [`UiThemePreset`] (matches TS `UiThemePreset`).
-fn preset_token(p: UiThemePreset) -> &'static str {
+/// Shared with the image-viewer payload (`viewer::image`).
+pub(crate) fn preset_token(p: UiThemePreset) -> &'static str {
     match p {
         UiThemePreset::Purple => "purple",
         UiThemePreset::Blue => "blue",

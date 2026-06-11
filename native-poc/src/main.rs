@@ -42,6 +42,14 @@ fn main() {
         run_viewer(payload_path);
         return;
     }
+    // `--image-viewer <payload-path>` runs the native (winit + wgpu + egui)
+    // image viewer child window. Cross-platform, unlike the Wry Markdown
+    // viewer above.
+    if let Some(pos) = args.iter().position(|a| a == "--image-viewer") {
+        let payload_path = args.get(pos + 1).cloned();
+        run_image_viewer(payload_path);
+        return;
+    }
 
     log::info!("native-poc starting (winit 0.30 backend)");
 
@@ -90,5 +98,22 @@ fn run_viewer(payload_path: Option<String>) {
         let _ = path;
         log::error!("viewer: --viewer window is only implemented on Linux");
         std::process::exit(1);
+    }
+}
+
+/// Entry for the child `--image-viewer <payload-path>` process: a native
+/// (winit + wgpu + egui) window showing one decoded image. Blocks until
+/// the window closes. A missing payload path is a usage error.
+fn run_image_viewer(payload_path: Option<String>) {
+    let Some(path) = payload_path else {
+        log::error!("--image-viewer requires a payload file path");
+        std::process::exit(2);
+    };
+    match viewer::image_window::run(&path) {
+        Ok(()) => log::info!("image viewer: window closed"),
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(1);
+        }
     }
 }

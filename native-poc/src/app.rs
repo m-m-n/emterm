@@ -141,6 +141,10 @@ pub struct App {
     /// Sink the spawner emits completed render requests to — spawns a
     /// `--viewer` child process per request and reaps closed children.
     viewer_sink: crate::viewer::ProcessViewerSink,
+    /// Image-viewer router: stores decoded Kitty/SIXEL images (LRU,
+    /// `image_memory_quota_mb` cap) and spawns a native `--image-viewer`
+    /// child window per `Place` event.
+    image_viewer: crate::viewer::image::ImageViewerRouter,
     /// Resolved keyboard-chord table, parsed once from
     /// `settings.keybinds` at construction. The keyboard handler in
     /// `window_host` matches incoming events against this for tab-roster
@@ -443,6 +447,7 @@ impl App {
             last_auto_research: None,
             viewer_spawner: crate::viewer::ViewerSpawner::new(),
             viewer_sink: crate::viewer::ProcessViewerSink::new(settings.clone()),
+            image_viewer: crate::viewer::image::ImageViewerRouter::new(&settings),
             settings,
             keybinds,
             locale,
@@ -1340,6 +1345,11 @@ impl App {
         // emterm viewer OSC payloads collected across all tabs this pass,
         // routed to the spawner after the `&mut self.tabs` borrow ends.
         let mut viewer_osc: Vec<crate::callbacks::EmtermOscRequest> = Vec::new();
+        // Decoded Kitty/SIXEL image events (ImageReady / Place / Delete),
+        // likewise buffered during the loop and routed to the image-viewer
+        // router after it. Every tab is drained — like the WebView build,
+        // any tab's `emterm image` opens a viewer window.
+        let mut image_events: Vec<term_images::image_proc::ImageEvent> = Vec::new();
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             // Phase 4-C (APC redesign): `Tab::pump` already routes
             // APC-encoded mux messages into the tab's own state via
@@ -1390,6 +1400,10 @@ impl App {
                 }
                 viewer_osc.append(&mut osc);
             }
+            // Image viewer: collect this tab's decoded image events. Must
+            // run before the `idx == active` early-continue below so the
+            // active tab's images open a viewer too.
+            image_events.extend(tab.drain_image_events());
             // Any tab's BEL triggers the bell action — same as the
             // WebView build, where a background tab's BEL still flashes
             // the shared terminal container / beeps.
@@ -1458,6 +1472,11 @@ impl App {
         // on empty passes; cheap when there is nothing queued.
         self.viewer_spawner
             .drain(viewer_osc, now, &mut self.viewer_sink);
+        // Route decoded image events: ImageReady fills the LRU store,
+        // each Place spawns a native `--image-viewer` child window.
+        if !image_events.is_empty() {
+            self.image_viewer.handle_events(image_events);
+        }
         // Apply the active tab's absolute-row selection bookkeeping now that
         // the `&mut self.tabs` borrow has ended. A frame reset drops the
         // selection outright (its rows belong to the discarded frame); an
