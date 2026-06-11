@@ -448,9 +448,9 @@ pub struct Settings {
     /// Maximum number of rows preserved above the viewport before old lines
     /// are dropped. Plumbed to `TerminalCore::new` at tab spawn time.
     pub scrollback_lines: u32,
-    /// Per-tab cap on image-overlay GPU memory in megabytes. Plumbed to
-    /// `ImageLayer::new(quota_bytes)` at tab spawn time. Eviction is
-    /// least-recently-used (see `crate::image::ImageLayerState`).
+    /// Cap on decoded-image memory in megabytes, held by the image-viewer
+    /// router while a `Place` is awaited. Eviction is least-recently-used
+    /// (see `crate::viewer::image::ImageViewerRouter`).
     pub image_memory_quota_mb: u32,
     /// Whether OSC 52 *read* (clipboard query `? ` form) is permitted.
     /// Writes are always allowed if size ≤ `clipboard_max_size_osc52`.

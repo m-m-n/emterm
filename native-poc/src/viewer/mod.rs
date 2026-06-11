@@ -8,7 +8,10 @@
 //! [`CapturingSink`].
 
 pub mod assets;
+pub mod image;
+pub mod image_payload;
 pub mod image_resolver;
+pub mod image_window;
 pub mod launch;
 pub mod markdown;
 #[cfg(target_os = "linux")]

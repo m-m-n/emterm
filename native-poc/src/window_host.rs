@@ -39,8 +39,6 @@ use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes, WindowId};
 
 use crate::app::App;
-use crate::image::overlay::OverlayPipeline;
-use crate::image::ImageLayer;
 use crate::ime::backend::{build_backend_with_window, KeyDispatchResult, ProcessEnv, RawKeyEvent};
 use crate::pty::input::{encode, Key, Modifiers};
 use crate::render::terminal_grid_pass::TerminalGridPass;
@@ -52,13 +50,7 @@ use crate::ui::keybinds::Chord;
 /// resets to 1. 500 ms matches xterm's `multiClickTime` default.
 const MULTI_CLICK_WINDOW_MS: u128 = 500;
 
-/// Hit-zone width for CSD edge / corner resize, expressed in egui logical
-/// points. 8 pt is the smallest band that's reliably grabbable with a
-/// mouse — the user's hand can overshoot the edge band before the
-/// cursor icon flips, so anything narrower than this manifested as
-/// "上下リサイズが効かない" because the pointer ended up in the
-/// title-bar / status-bar interior before reaching the resize zone.
-const RESIZE_EDGE_PX: f32 = 8.0;
+use crate::ui::chrome::{classify_resize_edge, configure_egui_fonts, RESIZE_EDGE_PX};
 
 /// Tracks last-click metadata so a double / triple click can be detected by
 /// comparing time + position against the next press.
@@ -125,17 +117,8 @@ pub struct WindowHost {
     /// draws terminal cells (foreground glyph + background fill +
     /// underline / strikethrough). Constructed lazily once the App is
     /// available so the font stack can be taken from `App::font_*`.
-    /// Frame draw order is `clear → TerminalGridPass → egui (LoadOp::Load)
-    /// → ImageOverlayPass (LoadOp::Load)`.
+    /// Frame draw order is `clear → TerminalGridPass → egui (LoadOp::Load)`.
     grid_pass: Option<TerminalGridPass>,
-    /// Reusable wgpu pipeline that draws every visible placement after
-    /// the egui pass on the same swapchain texture (`LoadOp::Load`).
-    overlay_pipeline: OverlayPipeline,
-    /// Phase 5: inline-image overlay (Kitty Graphics + SIXEL). Single
-    /// instance shared by all tabs — the per-tab `ImageProcessor` lives in
-    /// `Tab::image_proc` and produces `ImageEvent`s which are forwarded
-    /// here once per frame via `Tab::drain_image_events`.
-    image_layer: ImageLayer,
     egui_renderer: egui_wgpu::Renderer,
     egui_ctx: egui::Context,
     surface_config: wgpu::SurfaceConfiguration,
@@ -239,11 +222,7 @@ struct HoverState {
 
 impl WindowHost {
     /// Build the window + GPU resources.
-    ///
-    /// `image_quota_bytes` is the per-process cap on inline-image GPU
-    /// memory (sourced from `Settings::image_memory_quota_mb`); when the
-    /// cap is hit, the LRU-front image is evicted before any new upload.
-    pub fn new(event_loop: &ActiveEventLoop, image_quota_bytes: u64, ui_font_family: &str) -> Self {
+    pub fn new(event_loop: &ActiveEventLoop, ui_font_family: &str) -> Self {
         let attrs = WindowAttributes::default()
             .with_title("eMterm PoC")
             .with_decorations(false)
@@ -366,9 +345,6 @@ impl WindowHost {
             }
         };
 
-        let image_layer = ImageLayer::new(image_quota_bytes);
-        let overlay_pipeline = OverlayPipeline::new(&device, format);
-
         Self {
             window,
             instance,
@@ -388,8 +364,6 @@ impl WindowHost {
             dragging: false,
             click_tracker: ClickTracker::default(),
             clipboard,
-            image_layer,
-            overlay_pipeline,
             grid_pass: None,
             pending_egui_events: Vec::new(),
             pending_close: false,
@@ -1146,33 +1120,11 @@ impl WindowHost {
             app.mark_full_redraw();
         }
 
-        // Phase 5: drain image events from every tab into the shared
-        // GPU `ImageLayer`. The drain must happen *before* the skip-frame
-        // check below because a new image arriving alone (no row dirty)
-        // still requires a frame to paint the overlay quad.
-        let mut have_pending_images = false;
-        for tab in app.tabs.iter_mut() {
-            let events = tab.drain_image_events();
-            if !events.is_empty() {
-                have_pending_images = true;
-                self.image_layer.ingest(events, &self.device, &self.queue);
-            }
-        }
-        // Keep image placements anchored to the current cell metrics —
-        // must match what the grid pass actually draws, otherwise image
-        // overlays drift relative to text on HiDPI.
-        let (cell_w_px, cell_h_px, _, _) = self.cell_metrics_px(app);
-        self.image_layer.recompute_pixel_dims(
-            cell_w_px.round().max(1.0) as u32,
-            cell_h_px.round().max(1.0) as u32,
-        );
-
         // Sub-phase 2 dirty-row diff: skip the entire egui+wgpu cycle when
         // nothing in the active tab needs to repaint. The first frame
         // (or any frame that follows a surface reconfigure) bypasses this
         // skip because `App::mark_full_redraw()` forces the dirty set to
-        // the full row range. Phase 5: also bypass when there are pending
-        // image events to draw or any placements (re-paint over text).
+        // the full row range.
         //
         // The status-bar carve-out: provider-owned wake chains
         // (`TimeProvider` timer thread, `GitBranchProvider` worker,
@@ -1184,7 +1136,7 @@ impl WindowHost {
         // against the previous frame's view model so the skip path
         // only triggers when neither the terminal nor the status bar
         // moved.
-        if !was_surface_dirty && !have_pending_images {
+        if !was_surface_dirty {
             let dirty_count = if let Some(tab) = app.active_tab() {
                 let core = tab.core.lock();
                 let dirty = app.dirty_rows_this_frame(&core);
@@ -1201,10 +1153,7 @@ impl WindowHost {
                 None
             };
             let status_bar_changed = app.status_bar_view_model_changed();
-            if matches!(dirty_count, Some(0))
-                && self.image_layer.state.placement_count() == 0
-                && !status_bar_changed
-            {
+            if matches!(dirty_count, Some(0)) && !status_bar_changed {
                 return;
             }
         }
@@ -1536,39 +1485,6 @@ impl WindowHost {
                 .render(&mut pass, &paint_jobs, &screen_descriptor);
         }
 
-        // Phase 5: image-overlay pass. Runs *after* egui with
-        // `LoadOp::Load` so the terminal cells egui just drew underneath
-        // are preserved, and the placement quads composit over them
-        // using premultiplied alpha-blend (configured on the pipeline).
-        if self.image_layer.state.placement_count() > 0 {
-            let commands = self.overlay_pipeline.build_frame(
-                &self.device,
-                &self.queue,
-                &self.image_layer,
-                self.surface_config.width,
-                self.surface_config.height,
-            );
-            if !commands.is_empty() {
-                let mut pass = encoder
-                    .begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("native-poc-image-overlay-pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        occlusion_query_set: None,
-                        timestamp_writes: None,
-                    })
-                    .forget_lifetime();
-                self.overlay_pipeline.draw(&mut pass, &commands);
-            }
-        }
-
         self.queue.submit(std::iter::once(encoder.finish()));
         surface_texture.present();
 
@@ -1794,101 +1710,6 @@ fn winit_key_to_egui(logical: &WinitKey) -> Option<egui::Key> {
     }
 }
 
-/// Configure egui's font stack for the chrome (tab bar / title bar /
-/// status bar): the user's `ui_font_family` plus bundled CJK and
-/// outline-emoji fallbacks.
-///
-/// Three problems are addressed:
-///
-/// 1. egui's `FontDefinitions::default()` ships only `Hack` on the
-///    `Monospace` family, which covers ASCII + Latin extensions but
-///    no CJK. Any 日本語 in a `{cmd:…}` script's output would
-///    therefore render as tofu.
-/// 2. The same default registers BW emoji fonts on `Proportional`
-///    only; pictographs (✅ 🟢 ☂ etc.) fall off the end of the
-///    Monospace chain.
-/// 3. `settings.ui_font_family` mirrors the WebView build's
-///    `--ui-font-family` CSS variable, which skins the chrome's
-///    proportional text (tab bar, title bar). It is prepended to
-///    `Proportional` only — the status bar follows
-///    `--terminal-font-family` in the WebView build and so stays on
-///    the `Monospace` chain here.
-///
-/// We register the bundled `NotoSansCJK-JP` and `NotoColorEmoji.ttf`
-/// (already linked in via [`crate::render::font::resolver`] for the
-/// terminal grid) and append them to both `Monospace` and
-/// `Proportional` so other egui surfaces (tab bar, title bar)
-/// inherit the same coverage.
-///
-/// Caveat: egui 0.29 / ab_glyph cannot raster color emoji
-/// (CBDT / COLR v1) — for the emoji font only the *monochrome
-/// outline* layer is reachable. Full color-emoji parity with the
-/// WebView build requires switching the status-bar text path to a
-/// swash-based custom painter, which is out of scope here.
-fn configure_egui_fonts(ctx: &egui::Context, ui_font_family: &str) {
-    ctx.set_fonts(build_egui_fonts(ui_font_family));
-}
-
-/// Build the `FontDefinitions` for [`configure_egui_fonts`]. Split out
-/// so tests can inspect the resulting chains without an egui `Context`.
-fn build_egui_fonts(ui_font_family: &str) -> egui::FontDefinitions {
-    use crate::render::font::resolver::{BUNDLED_CJK_FONT, BUNDLED_EMOJI_FONT};
-
-    const CJK_KEY: &str = "EmtermBundledCJK";
-    const EMOJI_KEY: &str = "EmtermBundledEmoji";
-    const UI_FONT_KEY: &str = "EmtermUiFont";
-
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        CJK_KEY.to_string(),
-        egui::FontData::from_static(BUNDLED_CJK_FONT),
-    );
-    fonts.font_data.insert(
-        EMOJI_KEY.to_string(),
-        egui::FontData::from_static(BUNDLED_EMOJI_FONT),
-    );
-
-    for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
-        let chain = fonts.families.entry(family).or_default();
-        for name in [CJK_KEY, EMOJI_KEY] {
-            if !chain.iter().any(|n| n == name) {
-                chain.push(name.to_string());
-            }
-        }
-    }
-
-    // User-configured UI font: resolve the family through the same
-    // fontdb lookup the terminal grid uses, then make it the first
-    // Proportional candidate. Unknown families warn and keep egui's
-    // default — matching the WebView CSS fallback (`var(--ui-font-family,
-    // sans-serif)`).
-    let family = ui_font_family.trim();
-    if !family.is_empty() {
-        match crate::render::font::resolver::load_system_family_bytes(family, 400, None) {
-            Some((bytes, index)) => {
-                let mut data = egui::FontData::from_owned(bytes.to_vec());
-                // `.ttc` collection member — egui can address faces by
-                // index directly (unlike the swash ingest path).
-                data.index = index;
-                fonts.font_data.insert(UI_FONT_KEY.to_string(), data);
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Proportional)
-                    .or_default()
-                    .insert(0, UI_FONT_KEY.to_string());
-                log::info!("settings: ui_font_family={family:?} applied to UI chrome");
-            }
-            None => {
-                log::warn!(
-                    "settings.ui_font_family={family:?}: family not found on this host; using egui default"
-                );
-            }
-        }
-    }
-
-    fonts
-}
-
 /// Extract the OS-level physical key / scan code from a winit `KeyEvent`.
 /// Phase 4-G-A captures it into [`RawKeyEvent`] so any future IME backend
 /// can stash the original scan code without re-querying winit internals.
@@ -2008,12 +1829,7 @@ impl ApplicationHandler for PocApp {
             // surface (the PoC has no Android target).
             return;
         }
-        let image_quota_bytes = (self.app.settings.image_memory_quota_mb as u64) * 1024 * 1024;
-        let mut host = WindowHost::new(
-            event_loop,
-            image_quota_bytes,
-            &self.app.settings.ui_font_family,
-        );
+        let mut host = WindowHost::new(event_loop, &self.app.settings.ui_font_family);
 
         // Phase 4-H: construct the TerminalGridPass against the wgpu
         // device now that the surface exists. The App owns the font
@@ -2060,7 +1876,7 @@ impl ApplicationHandler for PocApp {
                 // owns; if we let WindowHost outlive the EventLoop, the
                 // surface destructor calls into a freed display and
                 // segfaults. Same reason applies to the egui-wgpu
-                // Renderer, ImageLayer textures, and the Window arc.
+                // Renderer and the Window arc.
                 self.host = None;
                 event_loop.exit();
             }
@@ -2675,46 +2491,6 @@ impl ApplicationHandler for PocApp {
     }
 }
 
-/// Classify a pointer position against a window of the given logical
-/// size as one of the eight CSD resize directions, or `None` when the
-/// pointer is inside the interior (away from every edge by at least
-/// `edge_px`) or outside the window entirely.
-///
-/// Pure over the inputs so the resize hot-zone math can be unit-tested
-/// without instantiating a real `winit::Window`. The caller layers the
-/// "maximized → never resize" rule on top — that condition is not
-/// expressible in terms of the geometry alone.
-fn classify_resize_edge(
-    width: f32,
-    height: f32,
-    x: f32,
-    y: f32,
-    edge_px: f32,
-) -> Option<ResizeDirection> {
-    // Reject negative coords (Wayland delivers them briefly on pointer
-    // leave) and positions past the far edge so we never latch a
-    // phantom direction with the pointer outside the window.
-    if x < 0.0 || y < 0.0 || x > width || y > height {
-        return None;
-    }
-    let near_left = x < edge_px;
-    let near_right = x > width - edge_px;
-    let near_top = y < edge_px;
-    let near_bottom = y > height - edge_px;
-    use ResizeDirection::*;
-    match (near_top, near_bottom, near_left, near_right) {
-        (true, _, true, _) => Some(NorthWest),
-        (true, _, _, true) => Some(NorthEast),
-        (_, true, true, _) => Some(SouthWest),
-        (_, true, _, true) => Some(SouthEast),
-        (true, _, _, _) => Some(North),
-        (_, true, _, _) => Some(South),
-        (_, _, true, _) => Some(West),
-        (_, _, _, true) => Some(East),
-        _ => None,
-    }
-}
-
 /// Pure-logic decision for `PocApp::user_event` (TS-32).
 ///
 /// Extracted as a free function so unit tests can exercise the
@@ -2929,6 +2705,7 @@ fn handle_search_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost, a
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::chrome::build_egui_fonts;
     use std::time::Duration;
 
     // ── skk_mode: bare Ctrl+J swallow ────────────────────────────────
