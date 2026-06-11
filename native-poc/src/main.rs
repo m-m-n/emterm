@@ -50,6 +50,13 @@ fn main() {
         run_image_viewer(payload_path);
         return;
     }
+    // `--data-viewer <payload-path>` runs the native JSON/YAML data viewer
+    // child window (same native stack as the image viewer).
+    if let Some(pos) = args.iter().position(|a| a == "--data-viewer") {
+        let payload_path = args.get(pos + 1).cloned();
+        run_data_viewer(payload_path);
+        return;
+    }
 
     log::info!("native-poc starting (winit 0.30 backend)");
 
@@ -111,6 +118,22 @@ fn run_image_viewer(payload_path: Option<String>) {
     };
     match viewer::image_window::run(&path) {
         Ok(()) => log::info!("image viewer: window closed"),
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Entry for the child `--data-viewer <payload-path>` process: a native
+/// JSON/YAML viewer window. Blocks until the window closes.
+fn run_data_viewer(payload_path: Option<String>) {
+    let Some(path) = payload_path else {
+        log::error!("--data-viewer requires a payload file path");
+        std::process::exit(2);
+    };
+    match viewer::data_window::run(&path) {
+        Ok(()) => log::info!("data viewer: window closed"),
         Err(e) => {
             log::error!("{e}");
             std::process::exit(1);

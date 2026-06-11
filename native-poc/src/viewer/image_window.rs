@@ -26,19 +26,15 @@
 //! mapping replaces them), and animation playback is not implemented
 //! (the parent only forwards static images; see `viewer/image.rs`).
 
-use std::sync::Arc;
-
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{CursorIcon, ResizeDirection, Window};
-
-use egui_wgpu::ScreenDescriptor;
+use winit::window::{ResizeDirection, Window};
 
 use super::image_payload::{read_image_payload, ImagePayload};
-use crate::ui::chrome::{classify_resize_edge, configure_egui_fonts, RESIZE_EDGE_PX};
+use super::shell::{payload_path_is_in_temp_dir, GpuShell};
 use crate::ui::title_bar::{self, TITLE_BAR_HEIGHT};
 use crate::ui::TitleBarEvent;
 
@@ -294,26 +290,13 @@ impl ViewerState {
     }
 }
 
-/// Window + GPU resources, created on `resumed`.
-struct Gpu {
-    window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    surface_config: wgpu::SurfaceConfiguration,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    egui_ctx: egui::Context,
-    egui_renderer: egui_wgpu::Renderer,
-    pixels_per_point: f32,
-    /// Keeps the uploaded image alive in egui's texture manager.
-    texture: egui::TextureHandle,
-    surface_dirty: bool,
-}
-
 struct ViewerApp {
     payload: ImagePayload,
     ui_font_family: String,
     state: ViewerState,
-    gpu: Option<Gpu>,
+    shell: Option<GpuShell>,
+    /// Keeps the uploaded image alive in egui's texture manager.
+    texture: Option<egui::TextureHandle>,
     pending_egui_events: Vec<egui::Event>,
     modifiers: winit::event::Modifiers,
     /// Last cursor position in egui points.
@@ -331,7 +314,8 @@ impl ViewerApp {
             payload,
             ui_font_family,
             state,
-            gpu: None,
+            shell: None,
+            texture: None,
             pending_egui_events: Vec::new(),
             modifiers: winit::event::Modifiers::default(),
             cursor_pos: egui::Pos2::ZERO,
@@ -353,202 +337,61 @@ impl ViewerApp {
     /// Image-area viewport in physical pixels (the window minus the
     /// title bar). 0×0 before `resumed`.
     fn image_viewport(&self) -> (f32, f32) {
-        match &self.gpu {
-            Some(g) => (
-                g.surface_config.width as f32,
-                (g.surface_config.height as f32 - TITLE_BAR_HEIGHT * g.pixels_per_point).max(0.0),
+        match &self.shell {
+            Some(s) => (
+                s.surface_config.width as f32,
+                (s.surface_config.height as f32 - TITLE_BAR_HEIGHT * s.pixels_per_point).max(0.0),
             ),
             None => (0.0, 0.0),
         }
     }
 
     fn request_redraw(&self) {
-        if let Some(g) = &self.gpu {
-            g.window.request_redraw();
+        if let Some(s) = &self.shell {
+            s.window.request_redraw();
         }
-    }
-
-    /// Classify the pointer position (egui points) against the CSD edge
-    /// zones, with the terminal's title-bar carve-out: inside the bar
-    /// (below the outermost strip) the move / button semantics win over
-    /// the North resize.
-    fn resize_direction_at(&self, logical_x: f32, logical_y: f32) -> Option<ResizeDirection> {
-        let gpu = self.gpu.as_ref()?;
-        if gpu.window.is_maximized() {
-            return None;
-        }
-        let size = gpu
-            .window
-            .inner_size()
-            .to_logical::<f32>(gpu.pixels_per_point as f64);
-        let dir = classify_resize_edge(
-            size.width,
-            size.height,
-            logical_x,
-            logical_y,
-            RESIZE_EDGE_PX,
-        )?;
-        if logical_y >= RESIZE_EDGE_PX && logical_y < TITLE_BAR_HEIGHT {
-            use ResizeDirection::*;
-            if matches!(dir, North | NorthEast | NorthWest) {
-                return None;
-            }
-        }
-        Some(dir)
     }
 
     fn render(&mut self) {
         let modifiers = self.egui_modifiers();
         let events = std::mem::take(&mut self.pending_egui_events);
         let resize_hover = self.current_resize_dir;
-        let Some(gpu) = self.gpu.as_mut() else {
+        let (Some(shell), Some(texture)) = (self.shell.as_mut(), self.texture.as_ref()) else {
             return;
         };
-        if gpu.surface_dirty {
-            let size = gpu.window.inner_size();
-            gpu.surface_config.width = size.width.max(1);
-            gpu.surface_config.height = size.height.max(1);
-            gpu.surface.configure(&gpu.device, &gpu.surface_config);
-            gpu.surface_dirty = false;
-        }
-
-        let size = gpu.window.inner_size();
-        let logical = size.to_logical::<f32>(gpu.pixels_per_point as f64);
-        let raw_input = egui::RawInput {
-            viewport_id: egui::ViewportId::ROOT,
-            viewports: std::iter::once((
-                egui::ViewportId::ROOT,
-                egui::ViewportInfo {
-                    native_pixels_per_point: Some(gpu.pixels_per_point),
-                    ..Default::default()
-                },
-            ))
-            .collect(),
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(logical.width, logical.height),
-            )),
-            modifiers,
-            events,
-            focused: true,
-            max_texture_side: Some(8192),
-            ..Default::default()
-        };
-
-        let ctx = gpu.egui_ctx.clone();
-        let tex_id = gpu.texture.id();
-        let ppp = gpu.pixels_per_point;
-        let is_maximized = gpu.window.is_maximized();
+        let raw_input = shell.build_raw_input(modifiers, events);
+        let tex_id = texture.id();
+        let ppp = shell.pixels_per_point;
+        let is_maximized = shell.window.is_maximized();
         let state = &mut self.state;
-        let full_output = ctx.run(raw_input, |ctx| {
+        let repaint_now = shell.render_frame(raw_input, &mut |ctx| {
             state.build_ui(ctx, tex_id, ppp, is_maximized)
         });
+        // The CSD edge hint owns the cursor while the pointer is in a
+        // resize zone; otherwise egui's per-frame output applies.
+        shell.apply_cursor(resize_hover);
 
-        // Title-bar intents latched during the frame. Drag / resize hand
-        // off to the WM, so the pointer cursor stays whatever the WM set.
+        // Title-bar intents latched during the frame.
         if std::mem::take(&mut state.minimize_requested) {
-            gpu.window.set_minimized(true);
+            shell.window.set_minimized(true);
         }
         if std::mem::take(&mut state.maximize_toggle_requested) {
-            gpu.window.set_maximized(!is_maximized);
+            shell.window.set_maximized(!is_maximized);
         }
         if std::mem::take(&mut state.drag_window_requested) {
-            if let Err(e) = gpu.window.drag_window() {
+            if let Err(e) = shell.window.drag_window() {
                 log::warn!("image viewer: drag_window failed: {e}");
             }
         }
-
-        // The CSD edge hint owns the cursor while the pointer is in a
-        // resize zone; otherwise egui's per-frame output applies.
-        let cursor = match resize_hover {
-            Some(dir) => CursorIcon::from(dir),
-            None => egui_to_winit_cursor(ctx.output(|o| o.cursor_icon)),
-        };
-        gpu.window.set_cursor(cursor);
-
-        let paint_jobs = ctx.tessellate(full_output.shapes, ppp);
-        let textures_delta = full_output.textures_delta;
-
-        let surface_texture = match gpu.surface.get_current_texture() {
-            Ok(tex) => tex,
-            Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
-                gpu.surface_dirty = true;
-                gpu.window.request_redraw();
-                return;
-            }
-            Err(e) => {
-                log::warn!("image viewer: surface error {e:?}; skipping frame");
-                gpu.surface_dirty = true;
-                gpu.window.request_redraw();
-                return;
-            }
-        };
-        let view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("image-viewer-encoder"),
-            });
-        let screen_descriptor = ScreenDescriptor {
-            size_in_pixels: [gpu.surface_config.width, gpu.surface_config.height],
-            pixels_per_point: ppp,
-        };
-        for (id, image_delta) in &textures_delta.set {
-            gpu.egui_renderer
-                .update_texture(&gpu.device, &gpu.queue, *id, image_delta);
-        }
-        gpu.egui_renderer.update_buffers(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &paint_jobs,
-            &screen_descriptor,
-        );
-        {
-            let mut pass = encoder
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("image-viewer-egui-pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    occlusion_query_set: None,
-                    timestamp_writes: None,
-                })
-                .forget_lifetime();
-            gpu.egui_renderer
-                .render(&mut pass, &paint_jobs, &screen_descriptor);
-        }
-        gpu.queue.submit(std::iter::once(encoder.finish()));
-        gpu.window.pre_present_notify();
-        surface_texture.present();
-        for id in &textures_delta.free {
-            gpu.egui_renderer.free_texture(id);
-        }
-
-        // egui-driven animations (e.g. button hover) ask for an immediate
-        // repaint via the viewport output.
-        let repaint_now = full_output
-            .viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .is_some_and(|v| v.repaint_delay.is_zero());
         if repaint_now {
-            gpu.window.request_redraw();
+            shell.window.request_redraw();
         }
     }
 }
 
 impl ApplicationHandler for ViewerApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.gpu.is_some() {
+        if self.shell.is_some() {
             return;
         }
 
@@ -577,71 +420,7 @@ impl ApplicationHandler for ViewerApp {
             .with_decorations(false)
             .with_inner_size(PhysicalSize::new(win_w, win_h))
             .with_min_inner_size(LogicalSize::new(320.0, 240.0));
-        let window = Arc::new(
-            event_loop
-                .create_window(attrs)
-                .expect("image viewer: failed to create window"),
-        );
-
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
-            ..Default::default()
-        });
-        // SAFETY: `window` is kept alive in `Arc<Window>` next to the
-        // surface for the whole `Gpu` lifetime (same pattern as
-        // `WindowHost::new`).
-        let surface: wgpu::Surface<'static> = unsafe {
-            instance
-                .create_surface_unsafe(
-                    wgpu::SurfaceTargetUnsafe::from_window(&*window)
-                        .expect("image viewer: surface target"),
-                )
-                .expect("image viewer: create surface")
-        };
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            force_fallback_adapter: false,
-            compatible_surface: Some(&surface),
-        }))
-        .expect("image viewer: no compatible wgpu adapter found");
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("image-viewer-device"),
-                required_features: wgpu::Features::empty(),
-                required_limits:
-                    wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
-                memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        ))
-        .expect("image viewer: failed to request wgpu device");
-
-        let size = window.inner_size();
-        let surface_caps = surface.get_capabilities(&adapter);
-        // Non-sRGB surface for the same verbatim-bytes reason as the
-        // terminal window (see `WindowHost::new`).
-        let format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| !f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-
-        let egui_ctx = egui::Context::default();
-        // Same UI font as the terminal chrome (title text).
-        configure_egui_fonts(&egui_ctx, &self.ui_font_family);
-        let egui_renderer = egui_wgpu::Renderer::new(&device, format, None, 1, false);
-        let pixels_per_point = window.scale_factor() as f32;
+        let shell = GpuShell::new(event_loop, attrs, &self.ui_font_family);
 
         // Nearest magnification keeps pixel mode (100%) exact; linear
         // minification keeps fit mode (<100%) smooth.
@@ -649,7 +428,7 @@ impl ApplicationHandler for ViewerApp {
             [self.payload.width as usize, self.payload.height as usize],
             &self.payload.rgba,
         );
-        let texture = egui_ctx.load_texture(
+        self.texture = Some(shell.egui_ctx.load_texture(
             "viewer-image",
             color,
             egui::TextureOptions {
@@ -657,21 +436,8 @@ impl ApplicationHandler for ViewerApp {
                 minification: egui::TextureFilter::Linear,
                 ..Default::default()
             },
-        );
-
-        window.request_redraw();
-        self.gpu = Some(Gpu {
-            window,
-            surface,
-            surface_config,
-            device,
-            queue,
-            egui_ctx,
-            egui_renderer,
-            pixels_per_point,
-            texture,
-            surface_dirty: true,
-        });
+        ));
+        self.shell = Some(shell);
     }
 
     fn window_event(
@@ -683,15 +449,15 @@ impl ApplicationHandler for ViewerApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(_) => {
-                if let Some(g) = self.gpu.as_mut() {
-                    g.surface_dirty = true;
+                if let Some(s) = self.shell.as_mut() {
+                    s.surface_dirty = true;
                 }
                 self.request_redraw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if let Some(g) = self.gpu.as_mut() {
-                    g.pixels_per_point = scale_factor as f32;
-                    g.surface_dirty = true;
+                if let Some(s) = self.shell.as_mut() {
+                    s.pixels_per_point = scale_factor as f32;
+                    s.surface_dirty = true;
                 }
                 self.request_redraw();
             }
@@ -718,10 +484,17 @@ impl ApplicationHandler for ViewerApp {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let ppp = self.gpu.as_ref().map(|g| g.pixels_per_point).unwrap_or(1.0);
+                let ppp = self
+                    .shell
+                    .as_ref()
+                    .map(|s| s.pixels_per_point)
+                    .unwrap_or(1.0);
                 let logical = position.to_logical::<f32>(ppp as f64);
                 self.cursor_pos = egui::pos2(logical.x, logical.y);
-                self.current_resize_dir = self.resize_direction_at(logical.x, logical.y);
+                self.current_resize_dir = self
+                    .shell
+                    .as_ref()
+                    .and_then(|s| s.resize_direction_at(logical.x, logical.y));
                 self.pending_egui_events
                     .push(egui::Event::PointerMoved(self.cursor_pos));
                 self.request_redraw();
@@ -736,8 +509,8 @@ impl ApplicationHandler for ViewerApp {
                 // loop instead of reaching egui.
                 if button == MouseButton::Left && state == ElementState::Pressed {
                     if let Some(dir) = self.current_resize_dir {
-                        if let Some(g) = &self.gpu {
-                            if let Err(e) = g.window.drag_resize_window(dir) {
+                        if let Some(s) = &self.shell {
+                            if let Err(e) = s.window.drag_resize_window(dir) {
                                 log::warn!("image viewer: drag_resize_window failed: {e}");
                             }
                         }
@@ -766,30 +539,6 @@ impl ApplicationHandler for ViewerApp {
             }
             _ => {}
         }
-    }
-}
-
-/// True iff `path` resolves (symlinks included) to a file inside the OS
-/// temp dir. Containment is checked AFTER `canonicalize`, so a symlink
-/// planted inside the temp dir cannot point the viewer at an outside
-/// file. A non-existent path is rejected (canonicalize fails).
-fn payload_path_is_in_temp_dir(path: &std::path::Path) -> bool {
-    let Ok(real) = std::fs::canonicalize(path) else {
-        return false;
-    };
-    let Ok(tmp) = std::fs::canonicalize(std::env::temp_dir()) else {
-        return false;
-    };
-    real.starts_with(&tmp)
-}
-
-/// Map the few egui cursor icons the viewer uses onto winit cursors.
-fn egui_to_winit_cursor(icon: egui::CursorIcon) -> CursorIcon {
-    match icon {
-        egui::CursorIcon::Grab => CursorIcon::Grab,
-        egui::CursorIcon::Grabbing => CursorIcon::Grabbing,
-        egui::CursorIcon::PointingHand => CursorIcon::Pointer,
-        _ => CursorIcon::Default,
     }
 }
 
