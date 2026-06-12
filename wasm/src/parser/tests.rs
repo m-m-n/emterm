@@ -1025,3 +1025,69 @@ fn test_interruptible_remaining_parseable() {
     assert_eq!(actions2.len(), 5);
     assert_eq!(actions2[0], ParsedAction::Print('H'));
 }
+
+// =========================================================================
+// Colon Sub-Parameter Tests (ISO 8613-6, e.g. avt dump / kitty SGR)
+// =========================================================================
+
+#[test]
+fn test_parse_csi_sgr_colon_indexed_color() {
+    use crate::parser_params::SUB_PARAM_FLAG;
+    let actions = parse_all(b"\x1b[38:5:196m");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(
+        actions[0],
+        csi(
+            &[38, 5 | SUB_PARAM_FLAG, 196 | SUB_PARAM_FLAG],
+            &[],
+            b'm'
+        )
+    );
+}
+
+#[test]
+fn test_parse_csi_sgr_colon_rgb_color() {
+    use crate::parser_params::SUB_PARAM_FLAG;
+    let actions = parse_all(b"\x1b[48:2:10:20:30m");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(
+        actions[0],
+        csi(
+            &[
+                48,
+                2 | SUB_PARAM_FLAG,
+                10 | SUB_PARAM_FLAG,
+                20 | SUB_PARAM_FLAG,
+                30 | SUB_PARAM_FLAG
+            ],
+            &[],
+            b'm'
+        )
+    );
+}
+
+#[test]
+fn test_parse_csi_colon_does_not_leak_text() {
+    // Regression: the parser used to cancel CSI at ':' and print the
+    // remainder ("5:196m") as literal text, garbling the screen on every
+    // avt-generated resume snapshot.
+    let actions = parse_all(b"\x1b[38:5:196mX");
+    assert_eq!(actions.len(), 2);
+    assert!(matches!(actions[0], ParsedAction::CsiDispatch { .. }));
+    assert_eq!(actions[1], ParsedAction::Print('X'));
+}
+
+#[test]
+fn test_parse_csi_mixed_semicolon_and_colon() {
+    use crate::parser_params::SUB_PARAM_FLAG;
+    let actions = parse_all(b"\x1b[1;38:5:9;4m");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(
+        actions[0],
+        csi(
+            &[1, 38, 5 | SUB_PARAM_FLAG, 9 | SUB_PARAM_FLAG, 4],
+            &[],
+            b'm'
+        )
+    );
+}
