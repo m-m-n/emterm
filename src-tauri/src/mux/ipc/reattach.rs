@@ -13,7 +13,8 @@ use super::codec::MuxCodec;
 use super::protocol::*;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
+    lock_shadow_parser, DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser,
+    TitleChangeSender,
 };
 
 /// Build a self-contained ANSI byte sequence that reproduces the current
@@ -28,7 +29,7 @@ use crate::mux::session::pane::{
 /// on-demand `RequestPaneSnapshot` path (shadow parser output only).
 pub(super) fn build_shadow_parser_snapshot(shadow_parser: &SharedShadowParser) -> Vec<u8> {
     let screen_data = {
-        let parser = shadow_parser.lock().unwrap();
+        let parser = lock_shadow_parser(shadow_parser);
         parser.screen().contents_formatted()
     };
     let mut combined = Vec::with_capacity(screen_data.len() + 10);
@@ -131,7 +132,7 @@ pub(super) async fn collect_reattach_data(
                     // state. Scrollback is read WITHOUT clearing (FR6: the
                     // buffer lives for the lifetime of the pane).
                     let (screen_data, is_alternate_screen) = {
-                        let parser = pane.shadow_parser.lock().unwrap();
+                        let parser = lock_shadow_parser(&pane.shadow_parser);
                         let screen = parser.screen();
                         (screen.contents_formatted(), screen.alternate_screen())
                     };

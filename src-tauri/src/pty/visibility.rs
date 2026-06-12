@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 #[cfg(feature = "gui")]
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 #[cfg(feature = "gui")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "gui")]
@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::ipc::{Channel, InvokeResponseBody};
 
 #[cfg(feature = "gui")]
-use super::SessionId;
-#[cfg(feature = "gui")]
 use super::passthrough_scanner::PassthroughScanner;
+#[cfg(feature = "gui")]
+use super::SessionId;
 
 /// Default raw passthrough capacity for non-mux sessions (4 MiB).
 pub const HIDDEN_PASSTHROUGH_CAPACITY_NONMUX: usize = 4 * 1024 * 1024;
@@ -167,7 +167,7 @@ impl SessionVisibilityState {
     /// Resize the shadow parser to match a frontend resize.
     pub fn resize(&self, cols: u16, rows: u16) {
         let mut inner = self.inner.lock().expect("visibility state poisoned");
-        inner.shadow.set_size(rows, cols);
+        inner.shadow.screen_mut().set_size(rows, cols);
         inner.shadow_cols = cols;
         inner.shadow_rows = rows;
     }

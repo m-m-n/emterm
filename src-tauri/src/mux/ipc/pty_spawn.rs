@@ -9,9 +9,9 @@ use tokio::sync::mpsc;
 
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget, PtyOutputChunk,
-    SharedNotificationSender, SharedOutputTarget, SharedScrollback, SharedShadowParser,
-    SharedTitleSender, TitleChangeSender,
+    lock_shadow_parser, DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget,
+    PtyOutputChunk, SharedNotificationSender, SharedOutputTarget, SharedScrollback,
+    SharedShadowParser, SharedTitleSender, TitleChangeSender,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -230,20 +230,37 @@ fn pty_reader_loop(
 
                 // Feed shadow parser and detect OSC title in a single lock scope
                 let title_changed = {
-                    let mut parser = shadow_parser.lock().unwrap();
-                    parser.process(data);
-                    let new_title = parser.screen().title();
-                    if new_title.is_empty() {
-                        None
-                    } else {
-                        let mut current = last_title.lock().unwrap();
-                        if Some(new_title) != current.as_deref() {
-                            let owned = new_title.to_string();
-                            *current = Some(owned.clone());
-                            Some(owned)
-                        } else {
-                            None
+                    let mut parser = lock_shadow_parser(&shadow_parser);
+                    // vt100 has internal panics (wide-character bookkeeping
+                    // can `unwrap` a `None`). Catch the unwind here so the
+                    // panic neither kills the reader thread nor poisons the
+                    // mutex; rebuild the parser so subsequent output
+                    // re-populates the shadow screen.
+                    let (rows, cols) = parser.screen().size();
+                    let processed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        parser.process(data);
+                    }));
+                    if processed.is_err() {
+                        *parser = crate::mux::session::pane::new_shadow_parser(rows, cols);
+                        log::error!(
+                            "pane {}: shadow parser panicked while processing {} bytes; parser reset",
+                            pane_id,
+                            data.len()
+                        );
+                    }
+                    // vt100 0.16 reports OSC 0/2 titles via the Callbacks
+                    // API; the TitleSink records the latest one per chunk.
+                    match parser.callbacks_mut().take_title() {
+                        Some(new_title) if !new_title.is_empty() => {
+                            let mut current = last_title.lock().unwrap();
+                            if Some(new_title.as_str()) != current.as_deref() {
+                                *current = Some(new_title.clone());
+                                Some(new_title)
+                            } else {
+                                None
+                            }
                         }
+                        _ => None,
                     }
                 };
                 if let Some(new_title) = title_changed {
