@@ -11,6 +11,7 @@
 		"prebuild": "bash scripts/generate-icons.sh",
 		"build": "bun run build:wasm && bun build src/index.html --outdir dist --minify && cp wasm/pkg/emterm_wasm_bg.wasm dist/",
 		"build:viewer": "bun build native-poc/viewer/web/index.html --outdir native-poc/viewer/dist --minify --entry-naming '[dir]/[name].[ext]' --asset-naming '[name].[ext]'",
+		"build:settings": "bun build native-poc/settings/web/index.html --outdir native-poc/settings/dist --minify --entry-naming '[dir]/[name].[ext]' --asset-naming '[name].[ext]'",
 		"tauri": "tauri",
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build",

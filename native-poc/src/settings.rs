@@ -1061,7 +1061,7 @@ impl Settings {
 
 /// Resolve the `settings.json` path on the current platform. Returns
 /// `None` only on unsupported targets (macOS / others); callers fall
-/// back to [`Settings::default`]. Shared with the settings-panel save
+/// back to [`Settings::default`]. Shared with the settings-window save
 /// path (`crate::settings_store`).
 pub(crate) fn settings_path() -> Option<std::path::PathBuf> {
     const APP_ID: &str = "net.laser5.app.emterm";

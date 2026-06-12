@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "src-tauri",
     "wasm",
+    "crates/app_settings",
     "crates/term_core",
     "crates/term_images",
     "crates/mux_ipc",

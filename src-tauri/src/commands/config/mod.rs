@@ -1,7 +1,9 @@
 #[cfg(feature = "gui")]
 pub mod io;
-pub mod settings;
-pub mod types;
+// The settings schema lives in the shared `app_settings` crate (also used
+// by native-poc's child settings window); re-export the modules here so
+// `crate::commands::config::settings::…` / `…::types::…` paths keep working.
+pub use app_settings::{settings, types};
 #[cfg(any(feature = "gui", test))]
 mod validation;
 

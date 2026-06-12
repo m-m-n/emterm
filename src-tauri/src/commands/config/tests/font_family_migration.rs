@@ -7,12 +7,7 @@ use super::*;
 fn test_migrate_legacy_font_family_to_primary() {
     let json = r#"{"font_family": "Fira Code"}"#;
     let mut settings: AppSettings = serde_json::from_str(json).unwrap();
-    // Simulate migration (load_settings does this)
-    if !settings.font_family.is_empty() && settings.font_family_primary.is_empty() {
-        settings.font_family_primary = std::mem::take(&mut settings.font_family);
-    } else {
-        settings.font_family.clear();
-    }
+    settings.apply_migrations();
     assert_eq!(settings.font_family_primary, "Fira Code");
     assert_eq!(settings.font_family_secondary, "");
     assert_eq!(settings.font_family_emoji, "");
@@ -22,11 +17,7 @@ fn test_migrate_legacy_font_family_to_primary() {
 fn test_migrate_font_family_primary_takes_precedence() {
     let json = r#"{"font_family": "Old Font", "font_family_primary": "New Font"}"#;
     let mut settings: AppSettings = serde_json::from_str(json).unwrap();
-    if !settings.font_family.is_empty() && settings.font_family_primary.is_empty() {
-        settings.font_family_primary = std::mem::take(&mut settings.font_family);
-    } else {
-        settings.font_family.clear();
-    }
+    settings.apply_migrations();
     assert_eq!(settings.font_family_primary, "New Font");
 }
 

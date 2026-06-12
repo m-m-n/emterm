@@ -29,6 +29,11 @@ egui-wgpu = "0.29"
 # single webkit2gtk-sys is linked across the workspace.
 wry = "0.53"
 
+# app_settings: the shared settings.json schema (extracted from src-tauri).
+# The child settings window loads/saves the full AppSettings with the same
+# serde defaults as the Tauri build.
+app_settings = { path = "../crates/app_settings" }
+
 # term_core (Phase 6: replaces native-poc's stand-in parser/grid)
 term_core = { path = "../crates/term_core" }
 

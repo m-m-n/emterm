@@ -70,6 +70,7 @@ term_images = { path = "../crates/term_images" }
 # pulling in tauri. Server framing (codec/connection) intentionally stays in
 # src-tauri.
 mux_ipc = { path = "../crates/mux_ipc" }
+app_settings = { path = "../crates/app_settings" }
 clap = { version = "4.5.54", features = ["derive"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 rust-i18n = "3"

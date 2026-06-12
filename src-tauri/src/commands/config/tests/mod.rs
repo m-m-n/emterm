@@ -20,7 +20,6 @@ mod language;
 mod markdown;
 mod notification;
 mod profile;
-mod round_trip;
 mod serialization;
 mod show_tab_bar;
 mod ssh;

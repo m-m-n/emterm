@@ -50,13 +50,7 @@ pub fn load_settings(app: AppHandle) -> Result<AppSettings, String> {
     // deserialize_null_default handles null values
     match serde_json::from_str::<AppSettings>(&contents) {
         Ok(mut settings) => {
-            // Migration: move legacy font_family to font_family_primary if needed
-            if !settings.font_family.is_empty() && settings.font_family_primary.is_empty() {
-                settings.font_family_primary = std::mem::take(&mut settings.font_family);
-            } else {
-                settings.font_family.clear();
-            }
-
+            settings.apply_migrations();
             Ok(settings)
         }
         Err(e) => {
