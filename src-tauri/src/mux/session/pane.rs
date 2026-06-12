@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
+use crate::mux::scrollback_buffer::{ScrollbackRingBuffer, DEFAULT_SCROLLBACK_CAPACITY};
 use crate::pty::passthrough_scanner::PassthroughScanner;
-use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
+use crate::pty::visibility::{RawPassthroughBuffer, HIDDEN_PASSTHROUGH_CAPACITY_MUX};
 
 /// Pane identifier.
 pub type PaneId = u32;
@@ -30,8 +30,55 @@ pub type NotificationSender = mpsc::Sender<(PaneId, String)>;
 /// notification even when no GUI client is currently attached.
 pub type SharedNotificationSender = Arc<StdMutex<Option<NotificationSender>>>;
 
+/// Callback sink recording the most recent OSC 0/2 window title.
+///
+/// vt100 0.16 removed `Screen::title()` in favor of the callback API;
+/// the reader loop drains this sink via `take_title()` after each
+/// `process()` call.
+#[derive(Default)]
+pub struct TitleSink {
+    title: Option<String>,
+}
+
+impl TitleSink {
+    /// Take the title set since the last call, if any.
+    pub fn take_title(&mut self) -> Option<String> {
+        self.title.take()
+    }
+}
+
+impl vt100::Callbacks for TitleSink {
+    fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
+        self.title = Some(String::from_utf8_lossy(title).into_owned());
+    }
+}
+
+/// Shadow VT100 parser with title-change reporting.
+pub type ShadowParser = vt100::Parser<TitleSink>;
+
 /// Thread-safe shared reference to a shadow VT100 parser.
-pub type SharedShadowParser = Arc<StdMutex<vt100::Parser>>;
+pub type SharedShadowParser = Arc<StdMutex<ShadowParser>>;
+
+/// Construct a shadow parser at the given size (scrollback 0).
+pub fn new_shadow_parser(rows: u16, cols: u16) -> ShadowParser {
+    vt100::Parser::new_with_callbacks(rows, cols, 0, TitleSink::default())
+}
+
+/// Lock the shadow parser, recovering from a poisoned mutex.
+///
+/// vt100 has internal panics (wide-character bookkeeping can `unwrap` a
+/// `None` mid-`process`). If the reader thread panics while holding this
+/// lock, the mutex stays poisoned for the lifetime of the daemon and every
+/// later `lock().unwrap()` on the attach/resize path panics too, making the
+/// session permanently unattachable. Recovering the guard trades a possibly
+/// stale snapshot for a daemon that keeps serving attaches.
+pub fn lock_shadow_parser(
+    parser: &StdMutex<ShadowParser>,
+) -> std::sync::MutexGuard<'_, ShadowParser> {
+    parser
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// PTY output chunk sent from the reader thread to the mux writer.
 pub struct PtyOutputChunk {
@@ -223,10 +270,7 @@ pub fn evaluate_output_target(
                     // Phase C FR5 order: clear → scrollback → shadow →
                     // passthrough. Scrollback is read WITHOUT clearing (FR6:
                     // the buffer lives for the lifetime of the pane).
-                    let screen = pane
-                        .shadow_parser
-                        .lock()
-                        .unwrap()
+                    let screen = lock_shadow_parser(&pane.shadow_parser)
                         .screen()
                         .contents_formatted();
                     let buffered = pane.scrollback.lock().unwrap().read_all();
@@ -294,10 +338,7 @@ pub fn resume_pane_with_permit(
             }
             // Phase C FR5 order: clear → scrollback → shadow → passthrough.
             // Scrollback is read WITHOUT clearing (FR6).
-            let screen = pane
-                .shadow_parser
-                .lock()
-                .unwrap()
+            let screen = lock_shadow_parser(&pane.shadow_parser)
                 .screen()
                 .contents_formatted();
             let buffered = pane.scrollback.lock().unwrap().read_all();
@@ -381,7 +422,7 @@ impl MuxPane {
             writer: Some(Arc::new(StdMutex::new(writer))),
             master: Some(master),
             exited: false,
-            shadow_parser: Arc::new(StdMutex::new(vt100::Parser::new(rows, cols, 0))),
+            shadow_parser: Arc::new(StdMutex::new(new_shadow_parser(rows, cols))),
             cwd: Arc::new(StdMutex::new(None)),
             title: Arc::new(StdMutex::new(None)),
             title_sender: Arc::new(StdMutex::new(None)),
@@ -425,7 +466,19 @@ impl MuxPane {
             .map_err(|e| format!("PTY resize failed: {}", e))?;
         self.cols = cols;
         self.rows = rows;
-        self.shadow_parser.lock().unwrap().set_size(rows, cols);
+        let mut parser = lock_shadow_parser(&self.shadow_parser);
+        let resized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            parser.screen_mut().set_size(rows, cols);
+        }));
+        if resized.is_err() {
+            // vt100 panicked mid-resize; its internal state may be torn.
+            // Rebuild so subsequent output re-populates the shadow screen.
+            *parser = new_shadow_parser(rows, cols);
+            log::error!(
+                "pane {}: shadow parser panicked during resize; parser reset",
+                self.id
+            );
+        }
         Ok(())
     }
 
@@ -448,7 +501,7 @@ impl MuxPane {
             writer: Some(Arc::new(StdMutex::new(writer))),
             master: None,
             exited: false,
-            shadow_parser: Arc::new(StdMutex::new(vt100::Parser::new(rows, cols, 0))),
+            shadow_parser: Arc::new(StdMutex::new(new_shadow_parser(rows, cols))),
             cwd: Arc::new(StdMutex::new(None)),
             title: Arc::new(StdMutex::new(None)),
             title_sender: Arc::new(StdMutex::new(None)),
@@ -512,13 +565,12 @@ mod tests {
         // Channel capacity 1: second send should fail with Full
         let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
         // First send succeeds
-        assert!(
-            tx.try_send(PtyOutputChunk {
+        assert!(tx
+            .try_send(PtyOutputChunk {
                 pane_id: 1,
                 data: vec![1]
             })
-            .is_ok()
-        );
+            .is_ok());
         // Second send hits backpressure (channel full)
         let result = tx.try_send(PtyOutputChunk {
             pane_id: 1,
@@ -935,5 +987,98 @@ mod tests {
             DetachReason::Both.clear_hidden(),
             Some(DetachReason::NetworkDetach)
         );
+    }
+
+    /// Regression for the vt100 0.15 panic that poisoned the shadow parser:
+    /// a saved cursor (DECSC) outside the grid after a shrink resize was
+    /// restored (DECRC) unclamped, and the next wide-character write hit an
+    /// out-of-bounds `drawing_cell(pos).unwrap()`. vt100 0.16 clamps
+    /// `saved_pos` in `set_size`, so this sequence must not panic.
+    #[test]
+    fn test_shadow_parser_survives_decrc_after_shrink_resize() {
+        let mut parser = new_shadow_parser(24, 80);
+        // Park the cursor near the bottom-right corner and save it (DECSC),
+        // with wide characters at the edge.
+        parser.process("\x1b[24;75Hあああ\x1b7".as_bytes());
+        // Shrink the grid, restore the saved cursor (DECRC), then write
+        // wide characters again.
+        parser.screen_mut().set_size(10, 20);
+        parser.process("\x1b8ああああああ".as_bytes());
+        let (rows, cols) = parser.screen().size();
+        assert_eq!((rows, cols), (10, 20));
+    }
+
+    /// OSC 0 / OSC 2 titles must surface through the TitleSink callback
+    /// (vt100 0.16 removed `Screen::title()`).
+    #[test]
+    fn test_title_sink_reports_osc_titles() {
+        let mut parser = new_shadow_parser(24, 80);
+        assert_eq!(parser.callbacks_mut().take_title(), None);
+        parser.process(b"\x1b]0;from-osc-0\x07");
+        assert_eq!(
+            parser.callbacks_mut().take_title().as_deref(),
+            Some("from-osc-0")
+        );
+        // Drained after take.
+        assert_eq!(parser.callbacks_mut().take_title(), None);
+        parser.process(b"\x1b]2;from-osc-2\x07");
+        assert_eq!(
+            parser.callbacks_mut().take_title().as_deref(),
+            Some("from-osc-2")
+        );
+    }
+
+    /// Poison the shadow parser mutex by panicking while holding the lock.
+    fn poison_shadow_parser(pane: &MuxPane) {
+        let parser = pane.shadow_parser.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = parser.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+        assert!(pane.shadow_parser.lock().is_err(), "mutex must be poisoned");
+    }
+
+    /// A poisoned shadow parser mutex must not panic the caller; the guard
+    /// is recovered and the parser stays usable.
+    #[test]
+    fn test_lock_shadow_parser_recovers_from_poison() {
+        let (owned_tx, _rx) = mpsc::channel(16);
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx)));
+        let pane = MuxPane::new_test(1, 80, 24, target);
+        pane.shadow_parser.lock().unwrap().process(b"before-poison");
+        poison_shadow_parser(&pane);
+
+        let parser = lock_shadow_parser(&pane.shadow_parser);
+        let contents = parser.screen().contents();
+        assert!(contents.contains("before-poison"));
+    }
+
+    /// Reattach (Detached -> Connected) must still produce a snapshot after
+    /// the shadow parser mutex was poisoned by a reader-thread panic.
+    #[test]
+    fn test_evaluate_output_target_survives_poisoned_shadow_parser() {
+        let (owned_tx, _rx) = mpsc::channel(16);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        pane.shadow_parser.lock().unwrap().process(b"shadow-data");
+        poison_shadow_parser(&pane);
+
+        let result = evaluate_output_target(&pane, false, true, &owned_tx);
+        match result {
+            EvalResult::ResumeWithSnapshot { snapshot } => {
+                let s = String::from_utf8_lossy(&snapshot);
+                assert!(s.contains("shadow-data"), "snapshot must include shadow");
+            }
+            _ => panic!("expected ResumeWithSnapshot"),
+        }
+        assert!(matches!(
+            *target.lock().unwrap(),
+            PaneOutputTarget::Connected(_)
+        ));
     }
 }
