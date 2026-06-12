@@ -95,17 +95,11 @@ pub enum JumpDirection {
 pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
-    /// In-app settings panel state. `Some` while the Settings tab is
-    /// open (it occupies the last slot of the tab strip); `None` once
-    /// closed. Port of the WebView's `createTab({ type: "settings" })`
-    /// tab, except the native strip pins it to the end.
-    pub settings_panel: Option<crate::ui::settings_panel::PanelState>,
-    /// Whether the Settings tab is the active pane. While `true`,
-    /// [`App::active_tab`] reports no active terminal tab (key input,
-    /// selection, scroll, IME, and the grid renderer all observe a
-    /// tabless state) and the settings panel owns the central area.
-    /// `self.active` keeps pointing at the terminal tab to return to.
-    pub settings_active: bool,
+    /// Settings-window launcher: the settings UI runs in a child
+    /// `--settings` process (Wry WebView), spawned on the settings icon /
+    /// `Ctrl+,`. Boxed so tests can swap in a counting double instead of
+    /// spawning real processes.
+    pub settings_launcher: Box<dyn crate::settings_launcher::SettingsWindowLauncher>,
     /// Last known grid size in cells. Updated by `window_host` whenever the
     /// window resizes; PTYs are resized to match.
     pub cell_size: GridDims,
@@ -450,8 +444,7 @@ impl App {
         Self {
             tabs: Vec::new(),
             active: 0,
-            settings_panel: None,
-            settings_active: false,
+            settings_launcher: Box::new(crate::settings_launcher::ProcessSettingsLauncher::new()),
             cell_size: GridDims::default(),
             selection: None,
             pending_selection_anchor: None,
@@ -930,12 +923,6 @@ impl App {
     /// Spawn an additional shell tab, switch to it, and request a
     /// repaint. Used by `AppAction::NewTab` and `TabEvent::New`.
     pub fn spawn_new_tab(&mut self) {
-        // A new tab always becomes the active pane; leave the Settings
-        // tab open in the strip but drop its focus.
-        if self.settings_active {
-            self.settings_active = false;
-            self.needs_full_redraw = true;
-        }
         let dims = self.cell_size;
         let tab = Tab::spawn_shell(
             "shell",
@@ -1062,103 +1049,17 @@ impl App {
         self.needs_full_redraw = true;
     }
 
-    // ── Settings tab (strip-index model) ─────────────────────────
-    //
-    // The tab strip shows the terminal tabs (indices `0..tabs.len()`)
-    // plus, when open, the Settings tab pinned at index `tabs.len()`.
-    // Tab-bar events arrive in strip indices and are translated here.
-
-    /// `true` while the Settings tab is the active pane.
-    pub fn settings_panel_active(&self) -> bool {
-        self.settings_active
-    }
-
-    /// Strip index of the Settings tab when it is open.
-    fn settings_strip_index(&self) -> Option<usize> {
-        self.settings_panel.is_some().then_some(self.tabs.len())
-    }
-
-    /// Number of entries in the tab strip (terminal tabs + Settings).
-    pub fn tab_strip_len(&self) -> usize {
-        self.tabs.len() + usize::from(self.settings_panel.is_some())
-    }
-
-    /// Strip index of the active pane.
-    pub fn active_strip_index(&self) -> usize {
-        if self.settings_active {
-            self.tabs.len()
-        } else {
-            self.active
-        }
-    }
-
-    /// Open the Settings tab (creating its state on first use) and make
-    /// it the active pane. Mirrors the WebView `open_settings` handler:
-    /// re-invoking switches to the existing tab instead of duplicating.
-    pub fn activate_settings_tab(&mut self) {
-        if self.settings_panel.is_none() {
-            self.settings_panel = Some(crate::ui::settings_panel::PanelState::new(
-                &self.settings,
-                self.locale,
-            ));
-        }
-        if !self.settings_active {
-            self.settings_active = true;
-            // Same invalidation set as a terminal tab switch: the search
-            // overlay / selection address the outgoing tab's buffer.
-            if self.search.visible {
-                self.search.close();
-            }
-            self.selection = None;
-            self.pending_selection_anchor = None;
-            self.needs_full_redraw = true;
-        }
-    }
-
-    /// Switch the active pane to the terminal tab at `idx`, leaving the
-    /// Settings tab (if any) open in the strip.
-    pub fn activate_terminal_tab(&mut self, idx: usize) {
-        if idx >= self.tabs.len() {
-            return;
-        }
-        if self.settings_active {
-            self.settings_active = false;
-            self.needs_full_redraw = true;
-            // `switch_to_tab` early-returns on idx == active; the flag
-            // flip above already restored the terminal view for that case.
-            if idx != self.active {
-                self.switch_to_tab(idx);
-            }
-        } else {
-            self.switch_to_tab(idx);
-        }
-    }
-
-    /// Close the Settings tab. When it was the active pane, focus
-    /// returns to the terminal tab `self.active` kept pointing at.
-    pub fn close_settings_tab(&mut self) {
-        self.settings_panel = None;
-        if self.settings_active {
-            self.settings_active = false;
-            self.needs_full_redraw = true;
-        }
-    }
-
-    /// Activate the strip entry at `idx` (terminal tab or Settings).
-    fn activate_strip(&mut self, idx: usize) {
-        if Some(idx) == self.settings_strip_index() {
-            self.activate_settings_tab();
-        } else {
-            self.activate_terminal_tab(idx);
-        }
+    /// Open the settings window (child `--settings` process). Replaces
+    /// the former in-app egui settings tab: the WebView settings panel
+    /// runs in its own window, and saves are applied live through the
+    /// launcher's save-event watcher.
+    pub fn open_settings_window(&mut self) {
+        self.settings_launcher.open();
     }
 
     /// Apply a [`crate::ui::TabEvent`] emitted by the tab bar widget.
     /// Returns `true` when the resulting state should exit the window
     /// (i.e. the last tab was closed).
-    ///
-    /// Event indices are **strip** indices: the Settings tab (when
-    /// open) occupies the last slot after the terminal tabs.
     pub fn apply_tab_event(&mut self, evt: crate::ui::TabEvent) -> bool {
         match evt {
             crate::ui::TabEvent::New => {
@@ -1166,25 +1067,17 @@ impl App {
                 false
             }
             crate::ui::TabEvent::OpenSettings => {
-                self.activate_settings_tab();
+                self.open_settings_window();
                 false
             }
-            crate::ui::TabEvent::Close(idx) => {
-                if Some(idx) == self.settings_strip_index() {
-                    self.close_settings_tab();
-                    false
-                } else {
-                    self.close_tab(idx)
-                }
-            }
+            crate::ui::TabEvent::Close(idx) => self.close_tab(idx),
             crate::ui::TabEvent::Switch(idx) => {
-                self.activate_strip(idx);
+                if idx < self.tabs.len() {
+                    self.switch_to_tab(idx);
+                }
                 false
             }
             crate::ui::TabEvent::Reorder { from, to } => {
-                // The Settings tab is pinned to the strip's end: a drag
-                // that starts on it is ignored, and a drop past the last
-                // terminal slot clamps to the terminal range.
                 if from >= self.tabs.len() {
                     return false;
                 }
@@ -1203,40 +1096,39 @@ impl App {
                 false
             }
             crate::ui::AppAction::CloseTab => {
-                if self.settings_active {
-                    self.close_settings_tab();
-                    return false;
-                }
                 let idx = self.active;
                 self.close_tab(idx)
             }
             crate::ui::AppAction::NextTab => {
-                let total = self.tab_strip_len();
+                let total = self.tabs.len();
                 if total == 0 {
                     return false;
                 }
-                let next = (self.active_strip_index() + 1) % total;
-                self.activate_strip(next);
+                let next = (self.active + 1) % total;
+                self.switch_to_tab(next);
                 false
             }
             crate::ui::AppAction::PrevTab => {
-                let total = self.tab_strip_len();
+                let total = self.tabs.len();
                 if total == 0 {
                     return false;
                 }
-                let cur = self.active_strip_index();
-                let prev = if cur == 0 { total - 1 } else { cur - 1 };
-                self.activate_strip(prev);
+                let prev = if self.active == 0 {
+                    total - 1
+                } else {
+                    self.active - 1
+                };
+                self.switch_to_tab(prev);
                 false
             }
             crate::ui::AppAction::JumpTab(n) => {
-                let total = self.tab_strip_len();
+                let total = self.tabs.len();
                 if total == 0 {
                     return false;
                 }
-                // n is 1-based and clamped to the existing strip range.
+                // n is 1-based and clamped to the existing tab range.
                 let idx = (n.saturating_sub(1) as usize).min(total - 1);
-                self.activate_strip(idx);
+                self.switch_to_tab(idx);
                 false
             }
             crate::ui::AppAction::SelectAll => {
@@ -1252,7 +1144,7 @@ impl App {
                 false
             }
             crate::ui::AppAction::OpenSettings => {
-                self.activate_settings_tab();
+                self.open_settings_window();
                 false
             }
             // The remaining view-level actions need the host's
@@ -1526,21 +1418,11 @@ impl App {
         }
     }
     pub fn active_tab(&self) -> Option<&Tab> {
-        // While the Settings tab is the active pane there is no active
-        // *terminal* tab: key input, selection, scroll, IME, and the
-        // grid renderer all see a tabless state, which is exactly the
-        // set of no-ops the settings view needs.
-        if self.settings_active {
-            return None;
-        }
         self.tabs.get(self.active)
     }
 
     #[allow(dead_code)] // retained for future mutation paths / tests
     pub fn active_tab_mut(&mut self) -> Option<&mut Tab> {
-        if self.settings_active {
-            return None;
-        }
         self.tabs.get_mut(self.active)
     }
 
@@ -1555,15 +1437,7 @@ impl App {
         let mut active_changed = false;
         let mut bell_rang = false;
         let now = Instant::now();
-        // While the Settings tab is the active pane every terminal tab
-        // counts as inactive (matching the WebView, where the settings
-        // tab being active makes all terminal tabs background tabs for
-        // the activity tracker). `usize::MAX` never matches an index.
-        let active = if self.settings_active {
-            usize::MAX
-        } else {
-            self.active
-        };
+        let active = self.active;
         // Desktop notifications collected during the tab loop and
         // dispatched after it — `tab` holds `&mut self.tabs`, so
         // `self.notify()` (a `&self` call) can't run inside the loop.
@@ -4605,146 +4479,41 @@ mod tests {
         assert!(!set.contains(&0), "unselected screen row 0 stays clean");
     }
 
-    // ── Settings tab (strip model) ─────────────────────────────
+    // ── Settings window (child-process launcher) ───────────────
 
-    #[test]
-    fn activate_settings_tab_creates_panel_and_hides_active_tab() {
-        let mut app = App::new();
-        app.spawn_initial_tab();
-        assert!(app.active_tab().is_some());
+    /// Counting launcher double: records `open()` calls instead of
+    /// spawning a real `--settings` child.
+    struct CountingLauncher(std::rc::Rc<std::cell::Cell<usize>>);
+    impl crate::settings_launcher::SettingsWindowLauncher for CountingLauncher {
+        fn open(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
 
-        app.activate_settings_tab();
-        assert!(app.settings_panel.is_some());
-        assert!(app.settings_panel_active());
-        // The settings pane reports a tabless state to every consumer.
-        assert!(app.active_tab().is_none());
-        // The strip shows tabs + the pinned settings slot, which is active.
-        assert_eq!(app.tab_strip_len(), 2);
-        assert_eq!(app.active_strip_index(), 1);
+    fn install_counting_launcher(app: &mut App) -> std::rc::Rc<std::cell::Cell<usize>> {
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        app.settings_launcher = Box::new(CountingLauncher(count.clone()));
+        count
     }
 
     #[test]
-    fn activate_settings_tab_twice_keeps_existing_panel() {
+    fn open_settings_action_spawns_the_settings_window() {
         let mut app = App::new();
-        app.activate_settings_tab();
-        app.settings_panel.as_mut().unwrap().draft.font_size = 20.0;
-        // Re-invoking (the WebView "switch to existing tab" path) must
-        // not recreate the panel state.
-        app.activate_settings_tab();
-        assert_eq!(app.settings_panel.as_ref().unwrap().draft.font_size, 20.0);
-    }
-
-    #[test]
-    fn activate_terminal_tab_returns_focus_without_closing_panel() {
-        let mut app = App::new();
-        app.spawn_initial_tab();
-        app.activate_settings_tab();
-
-        app.activate_terminal_tab(0);
-        assert!(!app.settings_panel_active());
-        assert!(app.settings_panel.is_some(), "panel stays open in strip");
-        assert!(app.active_tab().is_some());
-        assert_eq!(app.active_strip_index(), 0);
-    }
-
-    #[test]
-    fn close_settings_tab_restores_terminal_focus() {
-        let mut app = App::new();
-        app.spawn_initial_tab();
-        app.activate_settings_tab();
-
-        app.close_settings_tab();
-        assert!(app.settings_panel.is_none());
-        assert!(!app.settings_panel_active());
-        assert!(app.active_tab().is_some());
-        assert_eq!(app.tab_strip_len(), 1);
-    }
-
-    #[test]
-    fn tab_event_switch_and_close_map_settings_strip_index() {
-        let mut app = App::new();
-        app.spawn_initial_tab();
-        app.activate_settings_tab();
-        app.activate_terminal_tab(0);
-
-        // Strip index 1 (= tabs.len()) is the settings slot.
-        assert!(!app.apply_tab_event(crate::ui::TabEvent::Switch(1)));
-        assert!(app.settings_panel_active());
-
-        // Closing the settings slot never exits the window.
-        assert!(!app.apply_tab_event(crate::ui::TabEvent::Close(1)));
-        assert!(app.settings_panel.is_none());
-        assert!(!app.settings_panel_active());
-    }
-
-    #[test]
-    fn next_prev_tab_cycle_includes_settings_slot() {
-        let mut app = App::new();
-        app.spawn_initial_tab();
-        app.activate_settings_tab();
-        app.activate_terminal_tab(0);
-
-        assert!(!app.apply_action(crate::ui::AppAction::NextTab));
-        assert!(
-            app.settings_panel_active(),
-            "next from last tab wraps to settings"
-        );
-        assert!(!app.apply_action(crate::ui::AppAction::NextTab));
-        assert!(
-            !app.settings_panel_active(),
-            "next from settings wraps to tab 0"
-        );
-        assert!(!app.apply_action(crate::ui::AppAction::PrevTab));
-        assert!(
-            app.settings_panel_active(),
-            "prev from tab 0 wraps to settings"
-        );
-    }
-
-    #[test]
-    fn close_tab_action_closes_settings_when_focused() {
-        let mut app = App::new();
-        app.spawn_initial_tab();
-        app.activate_settings_tab();
-
-        // CloseTab on the focused settings tab closes the panel, not a
-        // terminal tab, and never signals window exit.
-        assert!(!app.apply_action(crate::ui::AppAction::CloseTab));
-        assert!(app.settings_panel.is_none());
-        assert_eq!(app.tabs.len(), 1);
-    }
-
-    #[test]
-    fn reorder_from_settings_slot_is_ignored() {
-        let mut app = App::new();
-        app.spawn_initial_tab();
-        app.spawn_new_tab();
-        app.activate_settings_tab();
-        let first_id = app.tabs[0].stable_id;
-
-        // `from` = strip index of the settings tab (tabs.len() == 2).
-        assert!(!app.apply_tab_event(crate::ui::TabEvent::Reorder { from: 2, to: 0 }));
-        assert_eq!(app.tabs[0].stable_id, first_id, "terminal order unchanged");
-        assert!(app.settings_panel.is_some());
-    }
-
-    #[test]
-    fn spawn_new_tab_drops_settings_focus() {
-        let mut app = App::new();
-        app.spawn_initial_tab();
-        app.activate_settings_tab();
-
-        app.spawn_new_tab();
-        assert!(!app.settings_panel_active());
-        assert!(app.settings_panel.is_some(), "panel stays open in strip");
-        assert_eq!(app.active, 1);
-    }
-
-    #[test]
-    fn open_settings_action_activates_panel() {
-        let mut app = App::new();
+        let opened = install_counting_launcher(&mut app);
         assert!(!app.apply_action(crate::ui::AppAction::OpenSettings));
-        assert!(app.settings_panel_active());
+        assert_eq!(opened.get(), 1);
+    }
+
+    #[test]
+    fn open_settings_tab_event_spawns_the_settings_window() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let opened = install_counting_launcher(&mut app);
+        assert!(!app.apply_tab_event(crate::ui::TabEvent::OpenSettings));
+        assert_eq!(opened.get(), 1);
+        // The terminal pane keeps focus; no in-app tab is created.
+        assert!(app.active_tab().is_some());
+        assert_eq!(app.tabs.len(), 1);
     }
 
     // ── apply_settings ─────────────────────────────────────────

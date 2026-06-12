@@ -1,0 +1,12 @@
+[package]
+name = "app_settings"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Shared eMterm settings schema (AppSettings) used by the Tauri build and native-poc"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

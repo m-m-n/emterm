@@ -1,93 +1,21 @@
-//! Settings persistence for the in-app settings panel.
+//! Atomic patch-based persistence for `settings.json`.
 //!
-//! The WebView build's `save_settings` Tauri command serializes its
-//! complete `AppSettings` struct, which carries every key (profiles,
-//! SSH connections, mux sub-keys, …). native-poc's [`crate::settings::
-//! Settings`] only models a subset of those keys, so a whole-struct
-//! rewrite would silently delete everything it does not know about.
+//! The on-disk JSON is parsed as a raw `serde_json` object, the patch's
+//! top-level keys are overwritten, and the result is written back
+//! atomically (temp file + rename). Keys absent from the patch
+//! round-trip untouched, so writers that model only a subset of the
+//! schema can never delete what they do not know about.
 //!
-//! Instead, saves go through a **read-modify-write patch**: the on-disk
-//! JSON is parsed as a raw `serde_json` object, only the keys the
-//! settings panel actually manages are overwritten, and the result is
-//! written back atomically (temp file + rename). Keys the native build
-//! has never heard of round-trip untouched.
+//! Used by the child settings window's `save_settings` command
+//! ([`crate::settings_window::commands`]); [`clamp_for_save`] is shared
+//! with the live-apply path so a programmatic caller can not push a
+//! value outside what the WebView build accepts.
 
 use std::path::Path;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use crate::settings::Settings;
-
-/// Build the flat-key patch for every setting the native settings panel
-/// manages today (UI appearance + terminal appearance + terminal
-/// behavior categories). Keys/values use the WebView build's
-/// `AppSettings` spelling so the same `settings.json` keeps working for
-/// both binaries.
-pub fn panel_patch(s: &Settings) -> Map<String, Value> {
-    let mut m = Map::new();
-
-    // ── UI appearance ──
-    m.insert("language".into(), json!(s.language.as_str()));
-    m.insert("ui_theme".into(), json!(s.ui_theme.as_str()));
-    m.insert("ui_theme_preset".into(), json!(s.ui_theme_preset.as_str()));
-    m.insert("ui_font_family".into(), json!(s.ui_font_family));
-
-    // ── Terminal appearance ──
-    m.insert("font_size".into(), json!(s.font_size));
-    // The native model folds the flat primary/secondary keys into
-    // `font_family_fallback` at load time; project them back out the
-    // same way. An empty slot is written as "" which the loaders on
-    // both sides treat as "keep the built-in default".
-    m.insert(
-        "font_family_primary".into(),
-        json!(s.font_family_fallback.first().cloned().unwrap_or_default()),
-    );
-    m.insert(
-        "font_family_secondary".into(),
-        json!(s.font_family_fallback.get(1).cloned().unwrap_or_default()),
-    );
-    m.insert(
-        "font_family_emoji".into(),
-        json!(s.emoji_font.clone().unwrap_or_default()),
-    );
-    m.insert(
-        "terminal_color_scheme".into(),
-        json!(s.terminal_color_scheme),
-    );
-    m.insert(
-        "bold_brightens_ansi_colors".into(),
-        json!(s.bold_brightens_ansi_colors),
-    );
-    m.insert("padding".into(), json!(s.padding));
-    m.insert("scrollback_lines".into(), json!(s.scrollback_lines));
-    m.insert("show_scrollbar".into(), json!(s.show_scrollbar.as_str()));
-
-    // ── Terminal behavior ──
-    m.insert("cursor_style".into(), json!(s.cursor_style.as_str()));
-    m.insert("cursor_blink".into(), json!(s.cursor_blink));
-    m.insert("shell_path".into(), json!(s.shell_path));
-    m.insert("shell_args".into(), json!(s.shell_args));
-    m.insert("scroll_speed".into(), json!(s.scroll_speed));
-    m.insert("bell_action".into(), json!(s.bell_action.as_str()));
-    m.insert("url_detection".into(), json!(s.url_detection));
-    m.insert("file_path_detection".into(), json!(s.file_path_detection));
-    m.insert("editor_command".into(), json!(s.editor_command));
-    m.insert("copy_on_select".into(), json!(s.copy_on_select));
-    m.insert("middle_click_paste".into(), json!(s.middle_click_paste));
-    m.insert(
-        "shift_enter_as_alt_enter".into(),
-        json!(s.shift_enter_as_alt_enter),
-    );
-    m.insert("skk_mode".into(), json!(s.skk_mode));
-    m.insert("fold_enabled".into(), json!(s.fold_enabled));
-    m.insert("clipboard_read_osc52".into(), json!(s.clipboard_read_osc52));
-    m.insert(
-        "clipboard_max_size_osc52".into(),
-        json!(s.clipboard_max_size_osc52),
-    );
-
-    m
-}
 
 /// Clamp the numeric panel-managed fields to the WebView build's
 /// `validate_settings` ranges so a value that egui's widgets failed to
@@ -101,15 +29,6 @@ pub fn clamp_for_save(s: &mut Settings) {
     s.clipboard_max_size_osc52 = s
         .clipboard_max_size_osc52
         .clamp(1024 * 1024, 50 * 1024 * 1024);
-}
-
-/// Save `settings` to the platform `settings.json` (the same path
-/// [`crate::settings::Settings::load_or_default`] reads). Only the
-/// panel-managed keys are touched; everything else on disk survives.
-pub fn save(settings: &Settings) -> Result<(), String> {
-    let path = crate::settings::settings_path()
-        .ok_or_else(|| "settings: unable to resolve config dir".to_string())?;
-    save_patch_to(&path, panel_patch(settings))
 }
 
 /// Read-modify-write `path` with `patch` applied over the existing
@@ -177,6 +96,7 @@ pub fn save_patch_to(path: &Path, patch: Map<String, Value>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn tmp_path(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -235,28 +155,31 @@ mod tests {
     }
 
     #[test]
-    fn panel_patch_round_trips_through_loader() {
-        // A Settings mutated by the panel, projected to flat keys, must
-        // load back to the same values through the normal loader.
-        let mut s = Settings::default();
-        s.language = crate::settings::Language::Ja;
-        s.ui_theme = crate::settings::UiTheme::Light;
-        s.ui_theme_preset = crate::settings::UiThemePreset::Green;
+    fn app_settings_save_round_trips_through_native_loader() {
+        // The child settings window saves the FULL shared schema
+        // (`app_settings::AppSettings`) as a patch; the parent reloads
+        // through the native loader. Every native-modeled key must
+        // round-trip across the two schemas.
+        let mut s = app_settings::AppSettings::default();
+        s.language = "ja".into();
+        s.ui_theme = app_settings::UiTheme::Light;
+        s.ui_theme_preset = app_settings::UiThemePreset::Green;
         s.ui_font_family = "Noto Sans JP".into();
-        s.font_size = 15.5;
-        s.font_family_fallback = vec!["JetBrains Mono".into(), "Noto Sans JP".into()];
-        s.emoji_font = Some("Twemoji".into());
+        s.font_size = 15;
+        s.font_family_primary = "JetBrains Mono".into();
+        s.font_family_secondary = "Noto Sans JP".into();
+        s.font_family_emoji = "Twemoji".into();
         s.terminal_color_scheme = "dracula".into();
         s.bold_brightens_ansi_colors = false;
         s.padding = 12;
         s.scrollback_lines = 50_000;
-        s.show_scrollbar = crate::settings::ScrollbarMode::Always;
-        s.cursor_style = crate::settings::CursorStyle::Bar;
+        s.show_scrollbar = app_settings::ScrollbarMode::Always;
+        s.cursor_style = app_settings::CursorStyle::Bar;
         s.cursor_blink = false;
         s.shell_path = "/bin/zsh".into();
         s.shell_args = vec!["-l".into()];
         s.scroll_speed = 7;
-        s.bell_action = crate::settings::BellAction::Sound;
+        s.bell_action = app_settings::BellAction::Sound;
         s.url_detection = false;
         s.file_path_detection = false;
         s.editor_command = "vim {file}".into();
@@ -270,40 +193,49 @@ mod tests {
 
         let path = tmp_path("roundtrip");
         let _ = std::fs::remove_file(&path);
-        save_patch_to(&path, panel_patch(&s)).unwrap();
+        let Value::Object(patch) = serde_json::to_value(&s).unwrap() else {
+            panic!("AppSettings must serialize to an object");
+        };
+        save_patch_to(&path, patch).unwrap();
 
         let loaded = Settings::load_from(&path);
-        assert_eq!(loaded.language, s.language);
-        assert_eq!(loaded.ui_theme, s.ui_theme);
-        assert_eq!(loaded.ui_theme_preset, s.ui_theme_preset);
-        assert_eq!(loaded.ui_font_family, s.ui_font_family);
-        assert_eq!(loaded.font_size, s.font_size);
-        assert_eq!(loaded.font_family_fallback, s.font_family_fallback);
-        assert_eq!(loaded.emoji_font, s.emoji_font);
-        assert_eq!(loaded.terminal_color_scheme, s.terminal_color_scheme);
+        assert_eq!(loaded.language, crate::settings::Language::Ja);
+        assert_eq!(loaded.ui_theme, crate::settings::UiTheme::Light);
         assert_eq!(
-            loaded.bold_brightens_ansi_colors,
-            s.bold_brightens_ansi_colors
+            loaded.ui_theme_preset,
+            crate::settings::UiThemePreset::Green
         );
-        assert_eq!(loaded.padding, s.padding);
-        assert_eq!(loaded.scrollback_lines, s.scrollback_lines);
-        assert_eq!(loaded.show_scrollbar, s.show_scrollbar);
-        assert_eq!(loaded.cursor_style, s.cursor_style);
-        assert_eq!(loaded.cursor_blink, s.cursor_blink);
-        assert_eq!(loaded.shell_path, s.shell_path);
-        assert_eq!(loaded.shell_args, s.shell_args);
-        assert_eq!(loaded.scroll_speed, s.scroll_speed);
-        assert_eq!(loaded.bell_action, s.bell_action);
-        assert_eq!(loaded.url_detection, s.url_detection);
-        assert_eq!(loaded.file_path_detection, s.file_path_detection);
-        assert_eq!(loaded.editor_command, s.editor_command);
-        assert_eq!(loaded.copy_on_select, s.copy_on_select);
-        assert_eq!(loaded.middle_click_paste, s.middle_click_paste);
-        assert_eq!(loaded.shift_enter_as_alt_enter, s.shift_enter_as_alt_enter);
-        assert_eq!(loaded.skk_mode, s.skk_mode);
-        assert_eq!(loaded.fold_enabled, s.fold_enabled);
-        assert_eq!(loaded.clipboard_read_osc52, s.clipboard_read_osc52);
-        assert_eq!(loaded.clipboard_max_size_osc52, s.clipboard_max_size_osc52);
+        assert_eq!(loaded.ui_font_family, "Noto Sans JP");
+        assert_eq!(loaded.font_size, 15.0);
+        assert_eq!(
+            loaded.font_family_fallback,
+            vec!["JetBrains Mono".to_string(), "Noto Sans JP".to_string()]
+        );
+        assert_eq!(loaded.emoji_font.as_deref(), Some("Twemoji"));
+        assert_eq!(loaded.terminal_color_scheme, "dracula");
+        assert!(!loaded.bold_brightens_ansi_colors);
+        assert_eq!(loaded.padding, 12);
+        assert_eq!(loaded.scrollback_lines, 50_000);
+        assert_eq!(
+            loaded.show_scrollbar,
+            crate::settings::ScrollbarMode::Always
+        );
+        assert_eq!(loaded.cursor_style, crate::settings::CursorStyle::Bar);
+        assert!(!loaded.cursor_blink);
+        assert_eq!(loaded.shell_path, "/bin/zsh");
+        assert_eq!(loaded.shell_args, vec!["-l".to_string()]);
+        assert_eq!(loaded.scroll_speed, 7);
+        assert_eq!(loaded.bell_action, crate::settings::BellAction::Sound);
+        assert!(!loaded.url_detection);
+        assert!(!loaded.file_path_detection);
+        assert_eq!(loaded.editor_command, "vim {file}");
+        assert!(loaded.copy_on_select);
+        assert!(!loaded.middle_click_paste);
+        assert!(!loaded.shift_enter_as_alt_enter);
+        assert!(!loaded.skk_mode);
+        assert!(!loaded.fold_enabled);
+        assert!(!loaded.clipboard_read_osc52);
+        assert_eq!(loaded.clipboard_max_size_osc52, 5 * 1024 * 1024);
     }
 
     #[test]

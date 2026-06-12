@@ -183,7 +183,7 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
 
     // Phase 4-B: real tab bar widget. We build a lightweight view-
     // model from the live tabs vector once per frame.
-    let mut items: Vec<crate::ui::tab_bar::TabBarItem> = app
+    let items: Vec<crate::ui::tab_bar::TabBarItem> = app
         .tabs
         .iter()
         .map(|t| {
@@ -200,20 +200,10 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             item
         })
         .collect();
-    // The Settings tab (when open) is pinned to the strip's last slot.
-    // `u64::MAX` is reserved as its stable id — `Tab::stable_id` is a
-    // monotonic counter from 0, so it can never collide.
-    if app.settings_panel.is_some() {
-        let title = match app.locale {
-            crate::i18n::Locale::Ja => "設定",
-            crate::i18n::Locale::En => "Settings",
-        };
-        items.push(crate::ui::tab_bar::TabBarItem::new(title).with_stable_id(u64::MAX));
-    }
     let tab_event = if items.is_empty() || !app.show_tab_bar {
         None
     } else {
-        crate::ui::tab_bar::draw(ctx, &items, app.active_strip_index())
+        crate::ui::tab_bar::draw(ctx, &items, app.active)
     };
 
     // Phase 4-D: status-bar panel. Inserted before the central panel
@@ -229,67 +219,61 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
     crate::ui::status_bar::draw(ctx, &status_vm, Some(&emoji_resources));
 
     let mut scroll_to = None;
-    // While the Settings tab is active the central area belongs to the
-    // settings panel (drawn afterwards by `draw_settings_overlay`, which
-    // needs `&mut App`); showing this CentralPanel too would double up
-    // the panel id and paint the no-tab hint under the settings UI.
-    if !app.settings_panel_active() {
-        egui::CentralPanel::default()
-            // Phase 4-H (FR12): the central panel no longer paints the cell
-            // background — `TerminalGridPass` clears the swapchain to the
-            // theme background and emits per-cell solid quads where the SGR
-            // bg differs. Using `Color32::TRANSPARENT` keeps egui's overlay
-            // (cursor + IME preedit underline) on top of the wgpu-rendered
-            // cells without painting an opaque rect that would hide them.
-            .frame(egui::Frame::none().fill(Color32::TRANSPARENT))
-            .show(ctx, |ui| {
-                if let Some(tab) = app.active_tab() {
-                    let core = tab.core.lock();
-                    draw_cursor(ui, &core, &theme, app);
-                    // Fold summary overlays: full-width tinted bars with the
-                    // `▶ command  — N lines` text over each summary row whose
-                    // cells `collect_cell_inputs` left blank. No-op when no
-                    // region is collapsed (`app.fold_layout()` is `None`).
-                    draw_fold_summaries(ui, app);
-                    // Search match highlights: translucent rects over the
-                    // matched cells (current match amber, others yellow),
-                    // painted on the same egui overlay layer as the cursor +
-                    // bell flash. Read-only over `app.search`.
-                    draw_search_highlights(ui, &core, app);
-                    // Preedit rendering is owned by the wgpu cell pass via
-                    // `apply_preedit_overlay` (reverse-video cells). The
-                    // legacy egui underline overlay was removed so it
-                    // doesn't stack on top of the inline reverse-video
-                    // composition cells.
-                    let scrollbar_view = crate::ui::scrollbar::ScrollbarView {
-                        mode: app.settings.show_scrollbar,
-                        scrollback_len: core.get_scrollback_length(),
-                        viewport_rows: core.rows() as u32,
-                        scroll_offset: app.scroll_offset(),
-                        alt_screen: app.alt_screen,
-                    };
-                    drop(core);
-                    scroll_to = crate::ui::scrollbar::draw(ui, &scrollbar_view);
-                } else {
-                    ui.colored_label(Color32::LIGHT_GRAY, "no tab — shell may have exited");
-                }
-                // Visual bell: approximate the WebView's 150 ms
-                // `brightness(2) → 1` ease-out (`.terminal-bell-flash`,
-                // src/styles.css) with a white overlay whose alpha decays
-                // quadratically over the terminal area. `about_to_wait`
-                // polls `App::needs_bell_repaint` to keep frames coming
-                // while the flash is live.
-                if let Some(t) = app.visual_bell_progress() {
-                    let fade = (1.0 - t) * (1.0 - t); // ease-out decay
-                    let alpha = (BELL_FLASH_MAX_ALPHA * fade * 255.0) as u8;
-                    ui.painter().rect_filled(
-                        ui.max_rect(),
-                        0.0,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
-                    );
-                }
-            });
-    }
+    egui::CentralPanel::default()
+        // Phase 4-H (FR12): the central panel no longer paints the cell
+        // background — `TerminalGridPass` clears the swapchain to the
+        // theme background and emits per-cell solid quads where the SGR
+        // bg differs. Using `Color32::TRANSPARENT` keeps egui's overlay
+        // (cursor + IME preedit underline) on top of the wgpu-rendered
+        // cells without painting an opaque rect that would hide them.
+        .frame(egui::Frame::none().fill(Color32::TRANSPARENT))
+        .show(ctx, |ui| {
+            if let Some(tab) = app.active_tab() {
+                let core = tab.core.lock();
+                draw_cursor(ui, &core, &theme, app);
+                // Fold summary overlays: full-width tinted bars with the
+                // `▶ command  — N lines` text over each summary row whose
+                // cells `collect_cell_inputs` left blank. No-op when no
+                // region is collapsed (`app.fold_layout()` is `None`).
+                draw_fold_summaries(ui, app);
+                // Search match highlights: translucent rects over the
+                // matched cells (current match amber, others yellow),
+                // painted on the same egui overlay layer as the cursor +
+                // bell flash. Read-only over `app.search`.
+                draw_search_highlights(ui, &core, app);
+                // Preedit rendering is owned by the wgpu cell pass via
+                // `apply_preedit_overlay` (reverse-video cells). The
+                // legacy egui underline overlay was removed so it
+                // doesn't stack on top of the inline reverse-video
+                // composition cells.
+                let scrollbar_view = crate::ui::scrollbar::ScrollbarView {
+                    mode: app.settings.show_scrollbar,
+                    scrollback_len: core.get_scrollback_length(),
+                    viewport_rows: core.rows() as u32,
+                    scroll_offset: app.scroll_offset(),
+                    alt_screen: app.alt_screen,
+                };
+                drop(core);
+                scroll_to = crate::ui::scrollbar::draw(ui, &scrollbar_view);
+            } else {
+                ui.colored_label(Color32::LIGHT_GRAY, "no tab — shell may have exited");
+            }
+            // Visual bell: approximate the WebView's 150 ms
+            // `brightness(2) → 1` ease-out (`.terminal-bell-flash`,
+            // src/styles.css) with a white overlay whose alpha decays
+            // quadratically over the terminal area. `about_to_wait`
+            // polls `App::needs_bell_repaint` to keep frames coming
+            // while the flash is live.
+            if let Some(t) = app.visual_bell_progress() {
+                let fade = (1.0 - t) * (1.0 - t); // ease-out decay
+                let alpha = (BELL_FLASH_MAX_ALPHA * fade * 255.0) as u8;
+                ui.painter().rect_filled(
+                    ui.max_rect(),
+                    0.0,
+                    Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
+                );
+            }
+        });
 
     // Keep blinking cursors animating. egui only repaints on demand, so we
     // schedule a wake-up at the half-period. Frame-level skip in
@@ -930,24 +914,6 @@ pub fn draw_search_overlay(
     let focus = app.search_focus_request;
     app.search_focus_request = false;
     crate::ui::search_bar::draw(ctx, &mut app.search, top_inset, focus)
-}
-
-/// Draw the settings panel into the central area while the Settings
-/// tab is the active pane. Returns the panel's commit event (the draft
-/// settled into a new state) for `window_host` to persist + apply.
-///
-/// Kept separate from [`draw_terminal`] (which holds `&App`) because
-/// the panel's widgets need `&mut` access to the draft settings —
-/// the same split as [`draw_search_overlay`].
-pub fn draw_settings_overlay(
-    ctx: &egui::Context,
-    app: &mut App,
-) -> Option<crate::ui::settings_panel::PanelEvent> {
-    if !app.settings_panel_active() {
-        return None;
-    }
-    let state = app.settings_panel.as_mut()?;
-    crate::ui::settings_panel::draw(ctx, state)
 }
 
 /// Resolve a cell's paint style from its packed `(fg, bg, flags)` triple and a

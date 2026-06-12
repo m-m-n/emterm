@@ -69,7 +69,7 @@ pub fn init_log_file() {
 
 /// Resolve the platform log directory (see [`init_log_file`]). Returns
 /// `None` on unsupported targets.
-fn log_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn log_dir() -> Option<std::path::PathBuf> {
     const APP_ID: &str = "net.laser5.app.emterm";
 
     #[cfg(target_os = "linux")]

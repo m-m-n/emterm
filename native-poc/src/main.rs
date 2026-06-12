@@ -26,6 +26,8 @@ mod pty;
 mod selection;
 mod settings;
 mod settings_store;
+mod settings_launcher;
+mod settings_window;
 mod status_bar;
 mod ui;
 mod viewer;
@@ -56,6 +58,12 @@ fn main() {
     if let Some(pos) = args.iter().position(|a| a == "--data-viewer") {
         let payload_path = args.get(pos + 1).cloned();
         run_data_viewer(payload_path);
+        return;
+    }
+    // `--settings` runs the child settings window (GTK/Wry, reused WebView
+    // settings panel). No payload: the child reads settings.json itself.
+    if args.iter().any(|a| a == "--settings") {
+        run_settings_window();
         return;
     }
 
@@ -105,6 +113,27 @@ fn run_viewer(payload_path: Option<String>) {
     {
         let _ = path;
         log::error!("viewer: --viewer window is only implemented on Linux");
+        std::process::exit(1);
+    }
+}
+
+/// Entry for the child `--settings` process. On Linux this runs the
+/// GTK/Wry settings window and blocks until it closes; on other platforms
+/// it is not yet implemented, so we log and exit non-zero.
+fn run_settings_window() {
+    #[cfg(target_os = "linux")]
+    {
+        match settings_window::run() {
+            Ok(()) => log::info!("settings window: closed"),
+            Err(e) => {
+                log::error!("{e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        log::error!("settings window: --settings is only implemented on Linux");
         std::process::exit(1);
     }
 }
