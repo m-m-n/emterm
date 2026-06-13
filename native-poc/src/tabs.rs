@@ -181,6 +181,7 @@ impl Tab {
         >,
         cwd_provider: Option<Arc<crate::status_bar::providers::CwdProvider>>,
         notification_sink: Arc<dyn crate::callbacks::NotificationSink>,
+        spawn_overrides: Option<crate::profiles::SpawnOverrides>,
     ) -> Self {
         // bounded(4096): allows up to ~64MB of in-flight PTY chunks
         // (4096 × 16KB reader buffer) before the reader thread blocks
@@ -191,14 +192,26 @@ impl Tab {
         // worth (12 ms budget) at a time. The trade-off is up to 64MB
         // of resident memory per tab during a sustained burst.
         let (tx, rx) = crossbeam_channel::bounded::<PtyEvent>(4096);
-        let pty =
-            match PtySession::spawn(cols, rows, tx, &settings.shell_path, &settings.shell_args) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    log::error!("failed to spawn shell PTY: {e}");
-                    None
-                }
-            };
+        // Profile overrides (shell / argv / env / cwd) win over the global
+        // settings; `None` fields fall through to `settings.*`.
+        let ov = spawn_overrides.unwrap_or_default();
+        let shell_path = ov.shell_path.as_deref().unwrap_or(&settings.shell_path);
+        let shell_args = ov.shell_args.as_deref().unwrap_or(&settings.shell_args);
+        let pty = match PtySession::spawn(
+            cols,
+            rows,
+            tx,
+            shell_path,
+            shell_args,
+            &ov.env_vars,
+            ov.working_directory.as_deref(),
+        ) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                log::error!("failed to spawn shell PTY: {e}");
+                None
+            }
+        };
 
         // Capture the fold-enable preference before `settings` is moved into
         // the callbacks below; it seeds the per-tab `FoldManager` and is
@@ -1172,6 +1185,7 @@ mod tests {
             None,
             None,
             Arc::new(NoopSink),
+            None,
         )
     }
 
@@ -1191,6 +1205,7 @@ mod tests {
             None,
             None,
             Arc::new(NoopSink),
+            None,
         )
     }
 
@@ -1460,6 +1475,7 @@ mod tests {
             None,
             None,
             Arc::new(NoopSink),
+            None,
         );
         // "make build" on the first line, then push it into scrollback with
         // two more lines (2-row viewport → row 0 evicts to scrollback idx 0).

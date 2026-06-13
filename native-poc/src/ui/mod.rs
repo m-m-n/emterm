@@ -18,6 +18,7 @@ pub mod emoji_cache;
 pub mod keybinds;
 pub mod md3;
 pub mod md3_widgets;
+pub mod profile_selector;
 pub mod scrollbar;
 pub mod search_bar;
 pub mod status_bar;
@@ -89,6 +90,16 @@ pub enum AppAction {
     /// Handled in `App::apply_action` via `App::open_settings_window`.
     /// Port of the WebView `open_settings` keybind.
     OpenSettings,
+    /// Ctrl+Shift+G — spawn a new tab with the **global** settings,
+    /// ignoring any default profile. Port of the WebView
+    /// `new_tab_global` keybind. Checked before `NewTab` in the
+    /// dispatcher so this chord wins when both keybinds resolve to the
+    /// same combination (WebView parity).
+    NewTabGlobal,
+    /// Ctrl+Shift+P — open the modal profile selector. No-op when no
+    /// profiles are configured. Port of the WebView `profile_selector`
+    /// keybind.
+    OpenProfileSelector,
 }
 
 /// User intents originating from the custom (client-side) title bar.

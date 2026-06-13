@@ -46,6 +46,10 @@ pub const DEFAULT_FONT_SIZE_PT: f32 = 13.0;
 /// WebView build's `markdown_font_size` default (SPEC §Settings).
 pub const DEFAULT_MARKDOWN_FONT_SIZE: u32 = 14;
 
+/// Default maximum concurrent SFTP uploads. Mirrors the `src-tauri`
+/// build's `sftp_max_concurrent_uploads` default.
+pub const DEFAULT_SFTP_MAX_CONCURRENT_UPLOADS: u16 = 4;
+
 /// CSS-compatible points-to-pixels conversion factor (1pt = 4/3 px at
 /// the 96-dpi reference resolution that browsers and the legacy
 /// WebView build assume). Used to translate `settings.font_size`
@@ -635,6 +639,23 @@ pub struct Settings {
     pub markdown_emoji_font_family: String,
     /// Base font size (pt) for the Markdown viewer.
     pub markdown_font_size: u32,
+
+    // ── Profiles / SSH / SFTP ──
+    /// Terminal profiles (per-tab shell / SSH / WSL spawn presets).
+    /// Resolved into spawn overrides by [`crate::profiles::resolve_spawn`];
+    /// the `is_default` profile is applied by the `new_tab` keybind
+    /// (`new_tab_global` always uses the global settings).
+    pub profiles: Vec<app_settings::Profile>,
+    /// Path to the ssh(1) binary used to launch SSH profiles. Empty means
+    /// "not configured" — SSH profiles fail with a logged error, matching
+    /// the WebView's alert.
+    pub ssh_command_path: String,
+    /// Saved SSH connections, referenced by `Profile::ssh_connection_name`.
+    pub ssh_connections: Vec<app_settings::SshConnection>,
+    /// Maximum concurrent SFTP uploads. Captured for parity; the SFTP
+    /// upload pipeline itself is not yet ported to native-poc.
+    #[allow(dead_code)]
+    pub sftp_max_concurrent_uploads: u16,
 }
 
 /// Effective Markdown viewer appearance, resolved from the `markdown_*`
@@ -962,6 +983,10 @@ impl Default for Settings {
             markdown_code_font_family: String::new(),
             markdown_emoji_font_family: String::new(),
             markdown_font_size: DEFAULT_MARKDOWN_FONT_SIZE,
+            profiles: Vec::new(),
+            ssh_command_path: String::new(),
+            ssh_connections: Vec::new(),
+            sftp_max_concurrent_uploads: DEFAULT_SFTP_MAX_CONCURRENT_UPLOADS,
         }
     }
 }
@@ -1179,6 +1204,14 @@ struct RawSettings {
     markdown_code_font_family: Option<String>,
     markdown_emoji_font_family: Option<String>,
     markdown_font_size: Option<u32>,
+
+    // ── Profiles / SSH / SFTP (src-tauri compatible). The entry types
+    // come from the shared `app_settings` crate so per-field defaults
+    // and null-handling match the legacy build exactly. ──
+    profiles: Option<Vec<app_settings::Profile>>,
+    ssh_command_path: Option<String>,
+    ssh_connections: Option<Vec<app_settings::SshConnection>>,
+    sftp_max_concurrent_uploads: Option<u16>,
 
     // ── native-poc-specific (nested) ──
     native_poc: Option<RawNativePoc>,
@@ -1547,6 +1580,20 @@ impl RawSettings {
         }
         if let Some(v) = self.markdown_font_size {
             dst.markdown_font_size = v;
+        }
+
+        // ── Profiles / SSH / SFTP ──
+        if let Some(v) = self.profiles {
+            dst.profiles = v;
+        }
+        if let Some(v) = self.ssh_command_path.filter(|s| !s.trim().is_empty()) {
+            dst.ssh_command_path = v;
+        }
+        if let Some(v) = self.ssh_connections {
+            dst.ssh_connections = v;
+        }
+        if let Some(v) = self.sftp_max_concurrent_uploads {
+            dst.sftp_max_concurrent_uploads = v;
         }
 
         // Flat-key bridge: only seed the native-poc enum when the user
@@ -2432,6 +2479,70 @@ mod tests {
         // Unknown enum values coerce to documented defaults.
         assert_eq!(s.markdown_theme, UiTheme::System);
         assert_eq!(s.markdown_theme_preset, UiThemePreset::Purple);
+    }
+
+    // ── Profiles / SSH / SFTP ────────────────────────────────────────
+
+    #[test]
+    fn loader_profiles_and_ssh_defaults() {
+        let s = load_json("{}");
+        assert!(s.profiles.is_empty());
+        assert!(s.ssh_connections.is_empty());
+        assert_eq!(s.ssh_command_path, "");
+        assert_eq!(
+            s.sftp_max_concurrent_uploads,
+            DEFAULT_SFTP_MAX_CONCURRENT_UPLOADS
+        );
+    }
+
+    #[test]
+    fn loader_profiles_and_ssh_parse_src_tauri_shape() {
+        let s = load_json(
+            r#"{
+                "profiles": [
+                    {
+                        "name": "dev",
+                        "shell_path": "/bin/zsh",
+                        "shell_args": ["-l"],
+                        "env_vars": "FOO=bar",
+                        "working_directory": "/tmp",
+                        "is_default": true,
+                        "ssh_connection_name": "",
+                        "wsl_distro_name": ""
+                    },
+                    { "name": "minimal" }
+                ],
+                "ssh_command_path": "/usr/bin/ssh",
+                "ssh_connections": [
+                    {
+                        "name": "work",
+                        "hostname": "example.com",
+                        "port": 2222,
+                        "username": "user",
+                        "identity_file": "~/.ssh/id_rsa",
+                        "ssh_options": [
+                            { "key": "ServerAliveInterval", "value": "60" }
+                        ]
+                    },
+                    { "name": "bare", "hostname": "h", "port": null }
+                ],
+                "sftp_max_concurrent_uploads": 8
+            }"#,
+        );
+        assert_eq!(s.profiles.len(), 2);
+        assert_eq!(s.profiles[0].name, "dev");
+        assert!(s.profiles[0].is_default);
+        assert_eq!(s.profiles[0].shell_args, vec!["-l".to_string()]);
+        // Partial entries fill the app_settings per-field defaults.
+        assert_eq!(s.profiles[1].name, "minimal");
+        assert!(!s.profiles[1].is_default);
+        assert_eq!(s.ssh_command_path, "/usr/bin/ssh");
+        assert_eq!(s.ssh_connections.len(), 2);
+        assert_eq!(s.ssh_connections[0].port, 2222);
+        assert_eq!(s.ssh_connections[0].ssh_options.len(), 1);
+        // `null` port falls back to 22 (src-tauri deserializer parity).
+        assert_eq!(s.ssh_connections[1].port, 22);
+        assert_eq!(s.sftp_max_concurrent_uploads, 8);
     }
 
     #[test]
