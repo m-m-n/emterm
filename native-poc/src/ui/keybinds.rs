@@ -229,6 +229,8 @@ fn fn_key(n: u8) -> Option<Key> {
 pub struct KeybindTable {
     pub copy: Chord,
     pub paste: Chord,
+    pub profile_selector: Chord,
+    pub new_tab_global: Chord,
     pub new_tab: Chord,
     pub close_tab: Chord,
     pub next_tab: Chord,
@@ -255,6 +257,8 @@ impl KeybindTable {
         let table = Self {
             copy: resolve("copy", &kb.copy),
             paste: resolve("paste", &kb.paste),
+            profile_selector: resolve("profile_selector", &kb.profile_selector),
+            new_tab_global: resolve("new_tab_global", &kb.new_tab_global),
             new_tab: resolve("new_tab", &kb.new_tab),
             close_tab: resolve("close_tab", &kb.close_tab),
             next_tab: resolve("next_tab", &kb.next_tab),
@@ -297,6 +301,8 @@ impl KeybindTable {
         let entries = [
             ("copy", self.copy),
             ("paste", self.paste),
+            ("profile_selector", self.profile_selector),
+            ("new_tab_global", self.new_tab_global),
             ("new_tab", self.new_tab),
             ("close_tab", self.close_tab),
             ("next_tab", self.next_tab),
@@ -374,6 +380,8 @@ fn default_spec_for(action: &str) -> &'static str {
         "toggle_fullscreen" => "F11",
         "toggle_tab_bar" => "Ctrl+Shift+B",
         "open_settings" => "Ctrl+,",
+        "profile_selector" => "Ctrl+Shift+P",
+        "new_tab_global" => "Ctrl+Shift+G",
         // Unreachable: `resolve` is only called with the names above.
         _ => "Ctrl+Shift+T",
     }
@@ -408,6 +416,16 @@ pub fn dispatch(table: &KeybindTable, mods: Modifiers, key: Key) -> Option<AppAc
 
     // 1. Settings-driven chords take priority. Configured specs may
     //    include `alt`, so this check runs before the `!alt` built-ins.
+    //    `profile_selector` and `new_tab_global` are checked before
+    //    `new_tab` so they win when the user maps several actions to the
+    //    same combination (WebView parity: `keyboard-handler.ts` matches
+    //    in this order).
+    if chord == table.profile_selector {
+        return Some(AppAction::OpenProfileSelector);
+    }
+    if chord == table.new_tab_global {
+        return Some(AppAction::NewTabGlobal);
+    }
     if chord == table.new_tab {
         return Some(AppAction::NewTab);
     }

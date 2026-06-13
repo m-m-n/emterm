@@ -1172,6 +1172,7 @@ impl WindowHost {
             tab: None,
             scroll_to: None,
             search: None,
+            profile: None,
         };
         // Snapshot the current maximized state so the title bar can
         // swap its middle glyph between Maximize and Restore. Reading
@@ -1185,6 +1186,9 @@ impl WindowHost {
             // TextEdit, so it runs as a separate call from `draw_terminal`
             // (which holds `&App`).
             frame_events.search = crate::render::draw_search_overlay(ctx, app);
+            // Profile selector modal floats above everything (scrim +
+            // dialog); same `&mut App` split as the search overlay.
+            frame_events.profile = crate::render::draw_profile_selector_overlay(ctx, app);
         });
         // CSD title-bar actions hit `winit::Window` directly except
         // for Close, which defers to `about_to_wait` via
@@ -1237,6 +1241,21 @@ impl WindowHost {
                 SearchBarEvent::Prev => app.search_prev(),
                 SearchBarEvent::Close => app.close_search(),
             }
+        }
+        // Profile-selector pointer interaction: a row click spawns the
+        // tab (modal closes inside `confirm_profile_selection`); a scrim
+        // click dismisses. Applied post-pass like the tab events, with
+        // the same immediate-repaint kick so the new state paints without
+        // waiting for the next OS input event.
+        if let Some(evt) = frame_events.profile {
+            use crate::ui::profile_selector::ProfileSelectorEvent;
+            match evt {
+                ProfileSelectorEvent::Confirm(idx) => app.confirm_profile_selection(idx),
+                ProfileSelectorEvent::Cancel => app.profile_selector.close(),
+            }
+            app.mark_full_redraw();
+            self.window.request_redraw();
+            crate::wakeup::wake();
         }
         // egui requested an immediate repaint (a popup opening, a widget
         // state transition, a one-frame animation step). Without honoring
@@ -1981,6 +2000,13 @@ impl ApplicationHandler for PocApp {
             // overrides the trait default with a no-op, so this is
             // safe to call unconditionally.
             WindowEvent::Ime(ime) => {
+                // While the profile-selector modal owns the keyboard,
+                // swallow IME events entirely — the modal has no text
+                // field, and a commit must not leak into the PTY.
+                if self.app.profile_selector.visible {
+                    host.window().request_redraw();
+                    return;
+                }
                 // While the search bar owns the keyboard, route IME
                 // commits into egui's TextEdit instead of the terminal
                 // IME backend so Japanese / CJK input lands in the
@@ -2038,6 +2064,15 @@ impl ApplicationHandler for PocApp {
                 // egui's TextEdit (bypassing the terminal IME dispatch and
                 // the PTY encoder entirely). Returns early so the normal
                 // Phase 4 key path below never runs while searching.
+                // Profile-selector capture: the modal owns the keyboard
+                // entirely (navigation / confirm / cancel); nothing
+                // reaches the search overlay, the IME, or the PTY.
+                if self.app.profile_selector.visible {
+                    handle_profile_selector_key(&event, &mut self.app);
+                    host.window().request_redraw();
+                    return;
+                }
+
                 if self.app.search_visible() {
                     handle_search_key(&event, host.current_mods, host, &mut self.app);
                     host.window().request_redraw();
@@ -2315,6 +2350,13 @@ impl ApplicationHandler for PocApp {
                     return;
                 }
 
+                // While the profile-selector modal is up, every click
+                // belongs to egui (a row, or the scrim which dismisses);
+                // never start a terminal selection underneath it.
+                if self.app.profile_selector.visible {
+                    return;
+                }
+
                 match (button, state) {
                     (MouseButton::Left, ElementState::Pressed) => {
                         // Ctrl+click opens a hovered URL / file path and
@@ -2419,6 +2461,29 @@ impl ApplicationHandler for PocApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                // While the profile-selector modal is up, the wheel
+                // scrolls the modal's list: translate to an egui
+                // MouseWheel event (the raw-input builder does not
+                // forward wheel deltas on the terminal path) and skip
+                // the terminal viewport scroll.
+                if self.app.profile_selector.visible {
+                    let (unit, delta) = match delta {
+                        MouseScrollDelta::LineDelta(x, y) => {
+                            (egui::MouseWheelUnit::Line, egui::vec2(x, y))
+                        }
+                        MouseScrollDelta::PixelDelta(p) => (
+                            egui::MouseWheelUnit::Point,
+                            egui::vec2(p.x as f32, p.y as f32),
+                        ),
+                    };
+                    host.pending_egui_events.push(egui::Event::MouseWheel {
+                        unit,
+                        delta,
+                        modifiers: egui::Modifiers::default(),
+                    });
+                    host.window().request_redraw();
+                    return;
+                }
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => {
@@ -2691,6 +2756,35 @@ fn input_mods_to_egui(mods: Modifiers) -> egui::Modifiers {
 ///
 /// The terminal IME dispatch + PTY encoder are intentionally bypassed:
 /// while searching, keystrokes belong to the search field, not the shell.
+/// Keyboard handling while the profile-selector modal is visible. The
+/// modal owns the keyboard completely: navigation / confirm / cancel act
+/// on the selector state, every other key is swallowed (never encoded to
+/// the PTY). Port of `profile-selector.ts::handleKeydown` (ArrowUp /
+/// ArrowDown wrap, Home / End, Enter / Space confirm, Escape cancel).
+fn handle_profile_selector_key(event: &KeyEvent, app: &mut App) {
+    use winit::keyboard::NamedKey;
+
+    // Row count includes the synthetic "Global Settings" row in new-tab
+    // chooser mode.
+    let len = app.profile_selector_row_count();
+    match &event.logical_key {
+        WinitKey::Named(NamedKey::Escape) => app.profile_selector.close(),
+        WinitKey::Named(NamedKey::ArrowDown) => app.profile_selector.move_selection(1, len),
+        WinitKey::Named(NamedKey::ArrowUp) => app.profile_selector.move_selection(-1, len),
+        WinitKey::Named(NamedKey::Home) => app.profile_selector.select_edge(false, len),
+        WinitKey::Named(NamedKey::End) => app.profile_selector.select_edge(true, len),
+        WinitKey::Named(NamedKey::Enter) | WinitKey::Named(NamedKey::Space) => {
+            let idx = app.profile_selector.selected;
+            app.confirm_profile_selection(idx);
+        }
+        WinitKey::Character(c) if c == " " => {
+            let idx = app.profile_selector.selected;
+            app.confirm_profile_selection(idx);
+        }
+        _ => {}
+    }
+}
+
 fn handle_search_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost, app: &mut App) {
     use winit::keyboard::NamedKey;
 

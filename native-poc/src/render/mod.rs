@@ -146,6 +146,11 @@ pub struct FrameEvents {
     /// `App` (re-run search / navigate / close). `None` when the overlay
     /// is hidden or nothing was interacted with.
     pub search: Option<crate::ui::search_bar::SearchBarEvent>,
+    /// Profile-selector pointer interaction emitted this frame (row
+    /// click confirm / scrim click cancel). Applied post-frame by
+    /// `window_host` against `App`. `None` when the modal is hidden or
+    /// nothing was clicked.
+    pub profile: Option<crate::ui::profile_selector::ProfileSelectorEvent>,
 }
 
 /// Phase-1 placeholder kept for compatibility; routes to the real renderer
@@ -304,7 +309,50 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         // The search overlay is drawn separately by `draw_search_overlay`
         // (it needs `&mut App`); `draw_terminal` never populates this.
         search: None,
+        // Likewise drawn separately by `draw_profile_selector_overlay`.
+        profile: None,
     }
+}
+
+/// Draw the modal profile selector when it is open. Runs as a separate
+/// pass after `draw_terminal` (same `&mut App` split as
+/// [`draw_search_overlay`]) so the modal floats above the chrome.
+pub fn draw_profile_selector_overlay(
+    ctx: &egui::Context,
+    app: &mut App,
+) -> Option<crate::ui::profile_selector::ProfileSelectorEvent> {
+    if !app.profile_selector.visible {
+        return None;
+    }
+    let (selector_title, new_tab_title, global_label, badge) = match app.locale {
+        crate::i18n::Locale::Ja => ("プロファイル", "新しいタブ", "グローバル設定", "デフォルト"),
+        crate::i18n::Locale::En => ("Profiles", "New Tab", "Global Settings", "Default"),
+    };
+    let mut rows: Vec<crate::ui::profile_selector::ProfileRow<'_>> = Vec::new();
+    // New-tab chooser mode (`+` button): a synthetic "Global Settings"
+    // row leads the list and the dialog is titled "New Tab" (WebView
+    // `handleNewTabClick` parity).
+    let title = if app.profile_selector.include_global {
+        rows.push(crate::ui::profile_selector::ProfileRow {
+            name: global_label,
+            shell_path: "",
+            is_default: false,
+        });
+        new_tab_title
+    } else {
+        selector_title
+    };
+    rows.extend(
+        app.settings
+            .profiles
+            .iter()
+            .map(|p| crate::ui::profile_selector::ProfileRow {
+                name: &p.name,
+                shell_path: &p.shell_path,
+                is_default: p.is_default,
+            }),
+    );
+    crate::ui::profile_selector::draw(ctx, &mut app.profile_selector, &rows, title, badge)
 }
 
 /// Walk the terminal grid and build a `Vec<CellInput>` suitable for

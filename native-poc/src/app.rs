@@ -125,6 +125,11 @@ pub struct App {
     /// the WebView `SearchBar.show()` `focus()` + `select()`. Cleared by
     /// the renderer after it consumes the request.
     pub search_focus_request: bool,
+    /// Modal profile-selector state (visibility + highlighted row).
+    /// Opened by the `profile_selector` keybind; while visible the
+    /// keyboard is captured in `window_host` (navigation / confirm /
+    /// cancel) and never reaches the PTY.
+    pub profile_selector: crate::ui::profile_selector::ProfileSelectorState,
     /// Timestamp of the last *automatic* re-search (the per-frame
     /// [`Self::auto_research_if_dirty`] path). The auto re-search is
     /// time-throttled to at most one run per [`AUTO_RESEARCH_THROTTLE`] so a
@@ -450,6 +455,7 @@ impl App {
             pending_selection_anchor: None,
             search: crate::search::SearchState::default(),
             search_focus_request: false,
+            profile_selector: crate::ui::profile_selector::ProfileSelectorState::default(),
             last_auto_research: None,
             viewer_spawner: crate::viewer::ViewerSpawner::new(),
             viewer_sink: crate::viewer::ProcessViewerSink::new(settings.clone()),
@@ -913,6 +919,7 @@ impl App {
             Some(self.status_bar_runtime.dispatcher()),
             Some(self.status_bar_runtime.cwd_provider()),
             self.notification_sink.clone(),
+            None,
         );
         self.tabs.push(tab);
         self.active = 0;
@@ -920,9 +927,19 @@ impl App {
         self.needs_full_redraw = true;
     }
 
-    /// Spawn an additional shell tab, switch to it, and request a
-    /// repaint. Used by `AppAction::NewTab` and `TabEvent::New`.
+    /// Spawn an additional shell tab using the global settings, switch to
+    /// it, and request a repaint. Used by `AppAction::NewTabGlobal` and as
+    /// the no-default-profile fallback of [`App::spawn_new_tab_profile_aware`].
     pub fn spawn_new_tab(&mut self) {
+        self.spawn_new_tab_with_overrides(None);
+    }
+
+    /// Spawn an additional shell tab with optional profile spawn
+    /// overrides, switch to it, and request a repaint.
+    pub fn spawn_new_tab_with_overrides(
+        &mut self,
+        overrides: Option<crate::profiles::SpawnOverrides>,
+    ) {
         let dims = self.cell_size;
         let tab = Tab::spawn_shell(
             "shell",
@@ -933,6 +950,7 @@ impl App {
             Some(self.status_bar_runtime.dispatcher()),
             Some(self.status_bar_runtime.cwd_provider()),
             self.notification_sink.clone(),
+            overrides,
         );
         // A fresh tab seeds its theme from `settings.font_size`; carry
         // the live zoom level over so a tab opened after the user zoomed
@@ -944,6 +962,86 @@ impl App {
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         self.needs_full_redraw = true;
+    }
+
+    /// `new_tab` keybind: apply the `is_default` profile when one exists,
+    /// otherwise spawn with the global settings. Port of the WebView's
+    /// `keyboard-handler.ts::handleNewTab`. A profile that fails to
+    /// resolve (unknown SSH connection / unconfigured ssh path) logs an
+    /// error and spawns nothing, matching the WebView's alert-and-abort.
+    pub fn spawn_new_tab_profile_aware(&mut self) {
+        let Some(profile) = crate::profiles::default_profile(&self.settings.profiles) else {
+            self.spawn_new_tab();
+            return;
+        };
+        match crate::profiles::resolve_spawn(profile, &self.settings) {
+            Ok(overrides) => self.spawn_new_tab_with_overrides(Some(overrides)),
+            Err(e) => log::error!("profile {:?}: {e}", profile.name),
+        }
+    }
+
+    /// `profile_selector` keybind: open the modal selector. No-op when no
+    /// profiles are configured (WebView parity:
+    /// `keyboard-handler.ts::handleProfileSelector`).
+    pub fn open_profile_selector(&mut self) {
+        if self.settings.profiles.is_empty() {
+            return;
+        }
+        self.profile_selector.open();
+        self.needs_full_redraw = true;
+    }
+
+    /// Tab-bar `+` button (`TabEvent::New`): spawn directly with the
+    /// global settings when no profiles exist, otherwise open the
+    /// new-tab chooser (a "Global Settings" row + each profile, with the
+    /// default profile preselected). Port of the WebView's
+    /// `tab-bar-ui.ts::handleNewTabClick` dialog.
+    pub fn open_new_tab_chooser(&mut self) {
+        if self.settings.profiles.is_empty() {
+            self.spawn_new_tab();
+            return;
+        }
+        // Preselect the default profile's row (chooser mode prepends a
+        // "Global Settings" row, so the row<->profile offset lives in
+        // `ProfileSelectorState::profile_row`). No default → row 0
+        // (Global Settings).
+        self.profile_selector.open_with_global(0);
+        if let Some(i) = self.settings.profiles.iter().position(|p| p.is_default) {
+            self.profile_selector.selected = self.profile_selector.profile_row(i);
+        }
+        self.needs_full_redraw = true;
+    }
+
+    /// Number of rows the open selector shows (profiles, plus the
+    /// leading "Global Settings" row in new-tab chooser mode). Drives
+    /// the keyboard wrap-around in `window_host`.
+    pub fn profile_selector_row_count(&self) -> usize {
+        self.settings.profiles.len() + usize::from(self.profile_selector.include_global)
+    }
+
+    /// Selector confirmed: resolve the chosen row and spawn a tab. The
+    /// row→choice decode (including the chooser-mode "Global Settings"
+    /// offset) lives in `ProfileSelectorState::row_to_choice`, the single
+    /// authority shared with the renderer. Resolution failures log an
+    /// error and spawn nothing (WebView parity with `launchSshProfile`'s
+    /// alert path).
+    pub fn confirm_profile_selection(&mut self, index: usize) {
+        let choice = self.profile_selector.row_to_choice(index);
+        self.profile_selector.close();
+        let profile_index = match choice {
+            crate::ui::profile_selector::Choice::Global => {
+                self.spawn_new_tab();
+                return;
+            }
+            crate::ui::profile_selector::Choice::Profile(i) => i,
+        };
+        let Some(profile) = self.settings.profiles.get(profile_index) else {
+            return;
+        };
+        match crate::profiles::resolve_spawn(profile, &self.settings) {
+            Ok(overrides) => self.spawn_new_tab_with_overrides(Some(overrides)),
+            Err(e) => log::error!("profile {:?}: {e}", profile.name),
+        }
     }
 
     /// Close the tab at `idx`. Returns `true` when the close emptied
@@ -1063,7 +1161,9 @@ impl App {
     pub fn apply_tab_event(&mut self, evt: crate::ui::TabEvent) -> bool {
         match evt {
             crate::ui::TabEvent::New => {
-                self.spawn_new_tab();
+                // `+` button: plain spawn without profiles, otherwise the
+                // new-tab chooser modal (WebView `handleNewTabClick`).
+                self.open_new_tab_chooser();
                 false
             }
             crate::ui::TabEvent::OpenSettings => {
@@ -1092,7 +1192,17 @@ impl App {
     pub fn apply_action(&mut self, action: crate::ui::AppAction) -> bool {
         match action {
             crate::ui::AppAction::NewTab => {
+                // Profile-aware: applies the `is_default` profile when one
+                // exists (WebView `handleNewTab` parity).
+                self.spawn_new_tab_profile_aware();
+                false
+            }
+            crate::ui::AppAction::NewTabGlobal => {
                 self.spawn_new_tab();
+                false
+            }
+            crate::ui::AppAction::OpenProfileSelector => {
+                self.open_profile_selector();
                 false
             }
             crate::ui::AppAction::CloseTab => {
@@ -1298,6 +1408,19 @@ impl App {
     pub fn apply_settings(&mut self, mut new: Settings) -> bool {
         crate::settings_store::clamp_for_save(&mut new);
         let old = Arc::clone(&self.settings);
+
+        // The profile selector / new-tab chooser renders its rows live
+        // from `self.settings.profiles` and its highlight index is bound
+        // to that list. A settings save (from the external WebView
+        // settings window) can add / remove / reorder profiles while the
+        // modal is open, leaving `selected` pointing past the new list or
+        // at a different profile than the highlighted row. Close it so the
+        // user never confirms against a stale list (the WebView rebuilt
+        // the list on every open; closing is the equivalent invariant).
+        if self.profile_selector.visible {
+            self.profile_selector.close();
+            self.needs_full_redraw = true;
+        }
 
         // UI chrome palette: preset × brightness swaps live (the md3
         // slot is process-wide, so the next frame re-skins every
@@ -2471,6 +2594,91 @@ mod tests {
         assert!(!app.search_visible());
         assert!(app.search.query.is_empty());
         assert!(!app.search_focus_request);
+    }
+
+    // ── profile selector / new-tab chooser ───────────────────────────
+
+    fn profile(name: &str, is_default: bool) -> app_settings::Profile {
+        app_settings::Profile {
+            name: name.to_string(),
+            shell_path: String::new(),
+            shell_args: Vec::new(),
+            env_vars: String::new(),
+            working_directory: String::new(),
+            is_default,
+            ssh_connection_name: String::new(),
+            wsl_distro_name: String::new(),
+        }
+    }
+
+    fn app_with_profiles(profiles: Vec<app_settings::Profile>) -> App {
+        let settings = crate::settings::Settings {
+            profiles,
+            ..Default::default()
+        };
+        App::with_settings(settings)
+    }
+
+    #[test]
+    fn open_profile_selector_noop_without_profiles() {
+        let mut app = App::new();
+        app.open_profile_selector();
+        assert!(!app.profile_selector.visible);
+    }
+
+    #[test]
+    fn open_profile_selector_lists_profiles_only() {
+        let mut app = app_with_profiles(vec![profile("a", false), profile("b", true)]);
+        app.open_profile_selector();
+        assert!(app.profile_selector.visible);
+        assert!(!app.profile_selector.include_global);
+        assert_eq!(app.profile_selector_row_count(), 2);
+        assert_eq!(app.profile_selector.selected, 0);
+    }
+
+    #[test]
+    fn new_tab_chooser_prepends_global_and_preselects_default() {
+        let mut app = app_with_profiles(vec![profile("a", false), profile("b", true)]);
+        app.open_new_tab_chooser();
+        assert!(app.profile_selector.visible);
+        assert!(app.profile_selector.include_global);
+        // Global row + 2 profiles.
+        assert_eq!(app.profile_selector_row_count(), 3);
+        // Default profile "b" (profiles[1]) → row 2.
+        assert_eq!(app.profile_selector.selected, 2);
+    }
+
+    #[test]
+    fn new_tab_chooser_without_default_preselects_global() {
+        let mut app = app_with_profiles(vec![profile("a", false)]);
+        app.open_new_tab_chooser();
+        assert!(app.profile_selector.include_global);
+        assert_eq!(app.profile_selector.selected, 0);
+    }
+
+    #[test]
+    fn confirm_out_of_range_closes_without_spawn() {
+        let mut app = app_with_profiles(vec![profile("a", false)]);
+        app.open_profile_selector();
+        app.confirm_profile_selection(5);
+        assert!(!app.profile_selector.visible);
+        assert!(app.tabs.is_empty());
+    }
+
+    #[test]
+    fn apply_settings_closes_open_profile_selector() {
+        let mut app = app_with_profiles(vec![profile("a", false), profile("b", false)]);
+        app.open_new_tab_chooser();
+        assert!(app.profile_selector.visible);
+        // A settings save reloads profiles (here: a shorter list) while
+        // the modal is open. The selector must close rather than confirm
+        // against the stale list.
+        let reloaded = crate::settings::Settings {
+            profiles: vec![profile("a", false)],
+            ..Default::default()
+        };
+        app.apply_settings(reloaded);
+        assert!(!app.profile_selector.visible);
     }
 
     #[test]

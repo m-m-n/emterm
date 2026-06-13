@@ -63,17 +63,23 @@ pub struct PtySession {
 
 impl PtySession {
     /// Spawn a shell. Selection order:
-    ///   1. `shell_path` argument when non-empty (from `settings.shell_path`),
+    ///   1. `shell_path` argument when non-empty (from `settings.shell_path`
+    ///      or a profile override),
     ///   2. `$SHELL` environment variable,
     ///   3. `/bin/sh` fallback.
-    /// `shell_args` is appended verbatim to the resulting argv. `event_tx`
-    /// receives `PtyEvent` items.
+    /// `shell_args` is appended verbatim to the resulting argv. `env_vars`
+    /// entries (profile overrides) are applied in order; `cwd` sets the
+    /// child's working directory when it exists (a missing directory logs
+    /// a warning and is skipped, mirroring `src-tauri/src/pty/session.rs`).
+    /// `event_tx` receives `PtyEvent` items.
     pub fn spawn(
         cols: u16,
         rows: u16,
         event_tx: Sender<PtyEvent>,
         shell_path: &str,
         shell_args: &[String],
+        env_vars: &[(String, String)],
+        cwd: Option<&str>,
     ) -> std::io::Result<Self> {
         let shell = if !shell_path.trim().is_empty() {
             shell_path.to_string()
@@ -98,16 +104,32 @@ impl PtySession {
         for arg in shell_args {
             cmd.arg(arg);
         }
+        // Profile-provided environment variables, in declaration order.
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
         // Strip multiplexer-injected env vars: the shell we spawn here is a
         // fresh child of native-poc, not of any outer mux/tmux session. Leaving
         // these set would (a) make `emterm mux` refuse to start with
         // "Cannot nest mux sessions (EMTERM_MUX is set)", and (b) make tmux-
         // aware CLI commands wrap responses in DCS passthrough when they
-        // shouldn't.
+        // shouldn't. Applied after the profile env so a profile cannot
+        // re-inject them.
         cmd.env_remove("EMTERM_MUX");
         cmd.env_remove("EMTERM_MUX_SOCKET");
         cmd.env_remove("TMUX");
         cmd.env_remove("TMUX_PANE");
+        // Profile-provided working directory. Validated here (not at
+        // resolve time) so the check runs against the directory state at
+        // spawn, same as the legacy build.
+        if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
+            let path = std::path::Path::new(dir);
+            if path.is_dir() {
+                cmd.cwd(path);
+            } else {
+                log::warn!("profile working directory does not exist, ignoring: {dir:?}");
+            }
+        }
         let child = pair
             .slave
             .spawn_command(cmd)
