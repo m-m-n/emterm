@@ -16,6 +16,7 @@ mod profiles;
 mod prompts;
 mod render;
 mod search;
+mod sftp;
 mod tabs;
 mod window_host;
 
@@ -33,6 +34,53 @@ mod status_bar;
 mod ui;
 mod viewer;
 mod wakeup;
+
+/// Build the winit event loop, preferring the X11 backend on Linux when a
+/// Wayland session also exposes X11 (XWayland).
+///
+/// winit 0.30's Wayland backend does not emit `WindowEvent::DroppedFile` /
+/// `HoveredFile` (only X11 / Windows / macOS do), so file drag-and-drop — the
+/// SFTP upload entry point — is dead under native Wayland. When both
+/// `WAYLAND_DISPLAY` and `DISPLAY` are set we force the X11 backend so drops
+/// work via XWayland. Remove this once winit lands Wayland DnD
+/// (rust-windowing/winit#1881 / PR #2429).
+///
+/// Override with `EMTERM_BACKEND=wayland` (keep native Wayland, no file drop)
+/// or `EMTERM_BACKEND=x11` (force X11 whenever `DISPLAY` is set).
+#[cfg(target_os = "linux")]
+fn build_event_loop() -> EventLoop<()> {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+
+    let non_empty = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    let backend = std::env::var("EMTERM_BACKEND").unwrap_or_default();
+    let has_wayland = non_empty("WAYLAND_DISPLAY") || non_empty("WAYLAND_SOCKET");
+    let has_x11 = non_empty("DISPLAY");
+
+    let force_x11 = match backend.as_str() {
+        "wayland" => false,
+        "x11" => has_x11,
+        // auto: prefer X11 only when a Wayland session would otherwise be
+        // selected (winit picks Wayland first) AND XWayland is available.
+        _ => has_wayland && has_x11,
+    };
+
+    let mut builder = EventLoop::builder();
+    if force_x11 {
+        builder.with_x11();
+        log::info!(
+            "native-poc: forcing X11 backend (XWayland) so file drag-and-drop works \
+             — winit Wayland DnD is unimplemented; set EMTERM_BACKEND=wayland to opt out"
+        );
+    }
+    builder
+        .build()
+        .expect("native-poc: failed to create winit event loop")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn build_event_loop() -> EventLoop<()> {
+    EventLoop::new().expect("native-poc: failed to create winit event loop")
+}
 
 fn main() {
     logging::init();
@@ -70,7 +118,7 @@ fn main() {
 
     log::info!("native-poc starting (winit 0.30 backend)");
 
-    let event_loop = EventLoop::new().expect("native-poc: failed to create winit event loop");
+    let event_loop = build_event_loop();
     // Install a cross-thread wakeup so PTY readers can pull the main
     // event loop out of `WaitUntil` the instant new bytes arrive,
     // instead of waiting on the 16 ms idle deadline that Wayland often

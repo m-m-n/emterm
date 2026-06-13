@@ -150,6 +150,11 @@ pub struct Tab {
     /// RIS) — the whole line frame restarted, so absolute-row consumers
     /// (the selection) must drop their state.
     pending_frame_reset: bool,
+    /// The SSH connection name this tab was spawned with, when it is an SSH
+    /// tab (`SpawnOverrides::ssh_connection_name`). `None` for plain / WSL
+    /// tabs. SFTP upload reads this to rebuild the connection inputs for a
+    /// file drop on this tab.
+    pub ssh_connection_name: Option<String>,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -195,6 +200,7 @@ impl Tab {
         // Profile overrides (shell / argv / env / cwd) win over the global
         // settings; `None` fields fall through to `settings.*`.
         let ov = spawn_overrides.unwrap_or_default();
+        let ssh_connection_name = ov.ssh_connection_name.clone();
         let shell_path = ov.shell_path.as_deref().unwrap_or(&settings.shell_path);
         let shell_args = ov.shell_args.as_deref().unwrap_or(&settings.shell_args);
         let pty = match PtySession::spawn(
@@ -266,6 +272,7 @@ impl Tab {
             evicted_baseline: 0,
             pending_eviction_delta: 0,
             pending_frame_reset: false,
+            ssh_connection_name,
         }
     }
 
@@ -279,6 +286,22 @@ impl Tab {
         let mut fm = crate::fold::FoldManager::new();
         fm.set_enabled(enabled);
         fm
+    }
+
+    /// Whether this tab was spawned through an SSH profile (and therefore can
+    /// drive an SFTP upload for a file drop).
+    pub fn is_ssh_tab(&self) -> bool {
+        self.ssh_connection_name.is_some()
+    }
+
+    /// Resolve this tab's SSH connection name to the matching settings record,
+    /// or `None` when the tab is not an SSH tab or the connection was removed.
+    pub fn ssh_connection<'a>(
+        &self,
+        settings: &'a Settings,
+    ) -> Option<&'a app_settings::SshConnection> {
+        let name = self.ssh_connection_name.as_deref()?;
+        settings.ssh_connections.iter().find(|c| c.name == name)
     }
 
     /// Update the tab's fold-enable preference at runtime (settings

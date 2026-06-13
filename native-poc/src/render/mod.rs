@@ -151,6 +151,29 @@ pub struct FrameEvents {
     /// `window_host` against `App`. `None` when the modal is hidden or
     /// nothing was clicked.
     pub profile: Option<crate::ui::profile_selector::ProfileSelectorEvent>,
+    /// SFTP overlay/dialog/toast interaction emitted this frame. Applied
+    /// post-frame by `window_host` against `App` (confirm upload / overwrite,
+    /// cancel a session). `None` when nothing was interacted with.
+    pub sftp: Option<SftpFrameEvent>,
+}
+
+/// A post-frame action requested by the SFTP overlay layer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SftpFrameEvent {
+    /// The upload dialog was confirmed (run the duplicate check).
+    ConfirmUpload,
+    /// The upload dialog was cancelled.
+    CancelUpload,
+    /// The overwrite dialog was confirmed (upload despite duplicates).
+    ConfirmOverwrite,
+    /// The overwrite dialog was cancelled.
+    CancelOverwrite,
+    /// A running upload's toast cancel control was clicked.
+    CancelSession(String),
+    /// The tab-close guard was confirmed (cancel the tab's uploads, close it).
+    ConfirmClose,
+    /// The tab-close guard was dismissed (keep the tab open).
+    CancelClose,
 }
 
 /// Phase-1 placeholder kept for compatibility; routes to the real renderer
@@ -311,6 +334,8 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
         search: None,
         // Likewise drawn separately by `draw_profile_selector_overlay`.
         profile: None,
+        // Likewise drawn separately by `draw_sftp_overlay`.
+        sftp: None,
     }
 }
 
@@ -353,6 +378,169 @@ pub fn draw_profile_selector_overlay(
             }),
     );
     crate::ui::profile_selector::draw(ctx, &mut app.profile_selector, &rows, title, badge)
+}
+
+/// Draw the SFTP drop overlay, upload/overwrite dialogs, and progress toasts,
+/// returning any post-frame action. The `now` frame time drives the toast
+/// auto-dismiss (monotonic, wall-clock-free).
+pub fn draw_sftp_overlay(ctx: &egui::Context, app: &mut App) -> Option<SftpFrameEvent> {
+    use crate::sftp::ui::HoverOverlay;
+
+    let loc = app.locale;
+    let t = |ja: &'static str, en: &'static str| match loc {
+        crate::i18n::Locale::Ja => ja,
+        crate::i18n::Locale::En => en,
+    };
+
+    let mut event: Option<SftpFrameEvent> = None;
+
+    // ── Drop hover overlay ───────────────────────────────────────
+    if let Some(hover) = &app.sftp_ui.hover {
+        let msg = match hover {
+            HoverOverlay::SshUpload => t("ドロップしてアップロード", "Drop to upload"),
+            HoverOverlay::Paste => t("ドロップしてパスを貼り付け", "Drop to paste paths"),
+        };
+        egui::Area::new(egui::Id::new("sftp_drop_overlay"))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(msg);
+                });
+            });
+    }
+
+    // ── Upload confirmation dialog ───────────────────────────────
+    if let Some(dialog) = app.sftp_ui.upload_dialog.clone() {
+        egui::Window::new(t("アップロードの確認", "Confirm upload"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(t("アップロードするファイル:", "Files to upload:"));
+                for p in &dialog.paths {
+                    ui.label(p.to_string_lossy());
+                }
+                ui.separator();
+                ui.label(format!(
+                    "{} {}",
+                    t("送信先:", "Destination:"),
+                    dialog.remote_dir
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button(t("アップロード", "Upload")).clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    {
+                        event = Some(SftpFrameEvent::ConfirmUpload);
+                    }
+                    if ui.button(t("キャンセル", "Cancel")).clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                    {
+                        event = Some(SftpFrameEvent::CancelUpload);
+                    }
+                });
+            });
+    }
+
+    // ── Overwrite confirmation dialog ────────────────────────────
+    if let Some(dialog) = app.sftp_ui.overwrite_dialog.clone() {
+        egui::Window::new(t("上書きの確認", "Confirm overwrite"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(t(
+                    "次のファイルは既に存在します:",
+                    "These files already exist:",
+                ));
+                for name in &dialog.duplicates {
+                    ui.label(name);
+                }
+                ui.horizontal(|ui| {
+                    // SPEC US3/FR6: Cancel is the default focus for the
+                    // destructive overwrite dialog. Bare Enter must NOT confirm
+                    // the overwrite — both Enter and Escape map to Cancel, and
+                    // Overwrite requires an explicit button click.
+                    if ui.button(t("上書き", "Overwrite")).clicked() {
+                        event = Some(SftpFrameEvent::ConfirmOverwrite);
+                    }
+                    if ui.button(t("キャンセル", "Cancel")).clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                    {
+                        event = Some(SftpFrameEvent::CancelOverwrite);
+                    }
+                });
+            });
+    }
+
+    // ── Tab-close guard dialog ───────────────────────────────────
+    if app.sftp_ui.close_guard.is_some() {
+        egui::Window::new(t("タブを閉じますか?", "Close this tab?"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(t(
+                    "このタブにはアップロード中のファイルがあります。閉じると中止されます。",
+                    "This tab has uploads in progress. Closing will cancel them.",
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button(t("閉じる", "Close")).clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    {
+                        event = Some(SftpFrameEvent::ConfirmClose);
+                    }
+                    if ui.button(t("キャンセル", "Cancel")).clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                    {
+                        event = Some(SftpFrameEvent::CancelClose);
+                    }
+                });
+            });
+    }
+
+    // ── Progress toasts (top-right stack) ────────────────────────
+    if !app.sftp_ui.toasts.toasts.is_empty() {
+        egui::Area::new(egui::Id::new("sftp_toasts"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
+            .show(ctx, |ui| {
+                for toast in &app.sftp_ui.toasts.toasts {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let status = sftp_status_label(&toast.status, t);
+                            ui.label(format!("{} — {}", toast.file_name, status));
+                            // Only running uploads can be cancelled.
+                            if matches!(
+                                toast.status,
+                                crate::sftp::SftpUploadStatus::Preparing
+                                    | crate::sftp::SftpUploadStatus::Uploading
+                            ) && ui.button(t("中止", "Cancel")).clicked()
+                            {
+                                event =
+                                    Some(SftpFrameEvent::CancelSession(toast.session_id.clone()));
+                            }
+                        });
+                    });
+                }
+            });
+    }
+
+    event
+}
+
+fn sftp_status_label(
+    status: &crate::sftp::SftpUploadStatus,
+    t: impl Fn(&'static str, &'static str) -> &'static str,
+) -> &'static str {
+    use crate::sftp::SftpUploadStatus as S;
+    match status {
+        S::Preparing => t("準備中", "Preparing"),
+        S::Uploading => t("アップロード中", "Uploading"),
+        S::Completed => t("完了", "Completed"),
+        S::Failed => t("失敗", "Failed"),
+        S::Cancelled => t("中止", "Cancelled"),
+    }
 }
 
 /// Walk the terminal grid and build a `Vec<CellInput>` suitable for

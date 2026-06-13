@@ -321,6 +321,17 @@ pub struct App {
     /// immutably for the rest of the frame (the fold line-mapping otherwise
     /// needs `&mut FoldManager` for its collapsed cache).
     fold_layout: Option<crate::fold::FoldLayout>,
+    /// In-process SFTP upload service (process manager + concurrency pool +
+    /// progress/result senders). Constructed from
+    /// `settings.sftp_max_concurrent_uploads`. Shared via `Arc` so worker
+    /// threads spawned by `start_upload` outlive a single `pump`.
+    pub sftp_service: Arc<crate::sftp::service::SftpService>,
+    /// SFTP UI state (drop aggregation + overlay + dialogs + toasts).
+    pub sftp_ui: crate::sftp::ui::SftpUiState,
+    /// Progress receiver drained each frame by [`App::pump_sftp`].
+    sftp_progress_rx: crate::sftp::service::ProgressReceiver,
+    /// Duplicate-check result receiver drained each frame by [`App::pump_sftp`].
+    sftp_result_rx: crate::sftp::service::ResultReceiver,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -381,6 +392,12 @@ impl App {
         // brightness lookup in the native build yet.
         crate::ui::md3::set_preset(settings.ui_theme_preset, settings.ui_theme);
         let settings = Arc::new(settings);
+        // Construct the in-process SFTP service from the configured
+        // concurrency cap; the receivers are drained each frame by
+        // `App::pump_sftp`.
+        let (sftp_service, sftp_progress_rx, sftp_result_rx) =
+            crate::sftp::service::SftpService::new(settings.sftp_max_concurrent_uploads);
+        let sftp_service = Arc::new(sftp_service);
         // Resolve the user-configured chord table once. Unparseable
         // specs fall back to their built-in defaults with a warn log
         // (see `KeybindTable::from_settings`).
@@ -493,6 +510,10 @@ impl App {
             previous_status_bar_view_model: None,
             notification_sink,
             fold_layout: None,
+            sftp_service,
+            sftp_ui: crate::sftp::ui::SftpUiState::default(),
+            sftp_progress_rx,
+            sftp_result_rx,
         }
     }
 
@@ -1049,6 +1070,45 @@ impl App {
     /// exit. `tabs.is_empty()` is the same signal; this is a
     /// convenience for code that needs to branch immediately after
     /// the close.
+    /// Request closing the tab at `idx`. When that tab has active SFTP
+    /// uploads, the close is deferred behind a confirmation dialog (the
+    /// `close_guard` is armed and the tab stays open) and `false` is returned.
+    /// Otherwise it closes immediately via [`Self::close_tab`].
+    pub fn request_close_tab(&mut self, idx: usize) -> bool {
+        if let Some(tab) = self.tabs.get(idx) {
+            if self.sftp_service.has_active_for_tab(tab.stable_id) {
+                // Store the tab's stable_id, not its index: the roster can
+                // change (tabs added/removed/reordered) while the guard dialog
+                // is open, which would invalidate a stored index (#7).
+                self.sftp_ui.close_guard = Some(tab.stable_id);
+                return false;
+            }
+        }
+        self.close_tab(idx)
+    }
+
+    /// Confirm a guarded tab close: cancel the guarded tab's active uploads,
+    /// then close it. The guard holds a stable_id, resolved to a current index
+    /// here; if the tab is already gone the guard is cleared cleanly.
+    /// Returns true when the close emptied the tabs vector.
+    pub fn confirm_close_guard(&mut self) -> bool {
+        let Some(id) = self.sftp_ui.close_guard.take() else {
+            return false;
+        };
+        let Some(idx) = self.tabs.iter().position(|t| t.stable_id == id) else {
+            // The guarded tab no longer exists; nothing to close.
+            return self.tabs.is_empty();
+        };
+        // Cancel only the guarded tab's sessions.
+        self.sftp_service.cancel_for_tab(id);
+        self.close_tab(idx)
+    }
+
+    /// Dismiss the close-guard dialog without closing the tab.
+    pub fn cancel_close_guard(&mut self) {
+        self.sftp_ui.close_guard = None;
+    }
+
     pub fn close_tab(&mut self, idx: usize) -> bool {
         if idx >= self.tabs.len() {
             return self.tabs.is_empty();
@@ -1170,7 +1230,7 @@ impl App {
                 self.open_settings_window();
                 false
             }
-            crate::ui::TabEvent::Close(idx) => self.close_tab(idx),
+            crate::ui::TabEvent::Close(idx) => self.request_close_tab(idx),
             crate::ui::TabEvent::Switch(idx) => {
                 if idx < self.tabs.len() {
                     self.switch_to_tab(idx);
@@ -1437,6 +1497,11 @@ impl App {
 
         self.settings = Arc::new(new);
 
+        // Reflect the (possibly changed) SFTP concurrency cap onto the live
+        // pool so reload takes effect without restarting in-flight uploads.
+        self.sftp_service
+            .set_max_concurrent(self.settings.sftp_max_concurrent_uploads);
+
         if font_families_changed {
             let (resolver, fallback, cache, rasterizer, base_id) =
                 Self::build_font_stack(&self.settings);
@@ -1542,6 +1607,234 @@ impl App {
     }
     pub fn active_tab(&self) -> Option<&Tab> {
         self.tabs.get(self.active)
+    }
+
+    // ── SFTP upload (drag & drop) ────────────────────────────────
+
+    /// Drain the SFTP progress + duplicate-check channels and update the UI.
+    /// `now` is the current egui frame time (monotonic, wall-clock-free).
+    /// Returns true when any toast/dialog state changed (so the caller can
+    /// request a redraw).
+    pub fn pump_sftp(&mut self, now: f64) -> bool {
+        let mut changed = false;
+
+        // Progress events → toasts.
+        while let Ok(progress) = self.sftp_progress_rx.try_recv() {
+            self.sftp_ui.toasts.apply(progress, now);
+            changed = true;
+        }
+        // Auto-dismiss elapsed terminal toasts.
+        let before = self.sftp_ui.toasts.toasts.len();
+        self.sftp_ui.toasts.prune_expired(now);
+        if self.sftp_ui.toasts.toasts.len() != before {
+            changed = true;
+        }
+
+        // Duplicate-check results → overwrite dialog or direct upload.
+        // pending_check is a map keyed by request_id so concurrent checks are
+        // not clobbered (#13); a result with no matching entry (already
+        // superseded/consumed) is simply ignored.
+        while let Ok(result) = self.sftp_result_rx.try_recv() {
+            changed = true;
+            let Some(dialog) = self.sftp_ui.pending_check.remove(&result.request_id) else {
+                continue;
+            };
+            match result.outcome {
+                Ok(duplicates) => match crate::sftp::ui::confirm_branch(duplicates) {
+                    crate::sftp::ui::ConfirmOutcome::StartUploads => {
+                        self.start_uploads_with(
+                            now,
+                            dialog.tab_id,
+                            dialog.connection,
+                            dialog.paths,
+                            dialog.remote_dir,
+                        );
+                    }
+                    crate::sftp::ui::ConfirmOutcome::OpenOverwrite(dups) => {
+                        self.sftp_ui.overwrite_dialog = Some(crate::sftp::ui::OverwriteDialog {
+                            paths: dialog.paths,
+                            remote_dir: dialog.remote_dir,
+                            duplicates: dups,
+                            tab_id: dialog.tab_id,
+                            connection: dialog.connection,
+                        });
+                    }
+                },
+                Err(_e) => {
+                    // The remote listing failed. Do NOT silently fall through to
+                    // an upload (#12): surface the failure as a toast and abort,
+                    // so an unverified destination never receives an implicit
+                    // overwrite.
+                    self.push_sftp_error_toast(
+                        now,
+                        "重複チェックに失敗したためアップロードを中止しました",
+                        "Upload aborted: duplicate check failed",
+                    );
+                }
+            }
+        }
+
+        changed
+    }
+
+    /// Route an aggregated drop batch by the active tab kind. Returns the
+    /// drop target chosen (so the caller / tests can assert the branch).
+    pub fn dispatch_drop(&mut self, paths: Vec<std::path::PathBuf>) -> crate::sftp::ui::DropTarget {
+        // Capture the originating tab's identity (stable_id + resolved
+        // connection) at drop time so the later confirm/overwrite paths do not
+        // re-read the active tab, which may have changed.
+        let identity = self.active_tab().filter(|t| t.is_ssh_tab()).and_then(|t| {
+            let id = t.stable_id;
+            t.ssh_connection(&self.settings)
+                .map(crate::sftp::service::SftpConnection::from_ssh_connection)
+                .map(|conn| (id, conn))
+        });
+        if let Some((tab_id, connection)) = identity {
+            let remote_dir = self.active_tab_remote_dir();
+            self.sftp_ui.upload_dialog = Some(crate::sftp::ui::UploadDialog {
+                paths,
+                remote_dir: remote_dir.clone(),
+                tab_id,
+                connection,
+            });
+            crate::sftp::ui::DropTarget::SshUpload { remote_dir }
+        } else {
+            let strs: Vec<String> = paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            let line = crate::sftp::remote_path::format_paths_for_paste(&strs);
+            if let Some(tab) = self.active_tab() {
+                tab.write(line.into_bytes());
+            }
+            crate::sftp::ui::DropTarget::Paste
+        }
+    }
+
+    /// The remote upload directory derived from the active tab's OSC 7 CWD.
+    fn active_tab_remote_dir(&self) -> String {
+        let cwd = self
+            .active_tab()
+            .and_then(|tab| tab.cb_state.lock().cwd.clone())
+            .unwrap_or_default();
+        crate::sftp::remote_path::extract_remote_path(&cwd)
+    }
+
+    /// Confirm the upload dialog: request an off-thread duplicate check for the
+    /// pending paths. The result channel pump branches to overwrite or upload.
+    ///
+    /// Uses the connection/tab identity captured in the dialog at drop time —
+    /// it never re-reads the active tab — so switching tabs between drop and
+    /// confirm cannot redirect the upload (#4).
+    pub fn confirm_upload_dialog(&mut self, now: f64) {
+        let Some(dialog) = self.sftp_ui.upload_dialog.take() else {
+            return;
+        };
+        // Guard: the originating tab must still exist and still be an SSH tab.
+        if !self.tab_is_still_ssh(dialog.tab_id) {
+            self.push_sftp_error_toast(
+                now,
+                "アップロード対象のタブが見つかりません",
+                "Upload target tab is no longer available",
+            );
+            return;
+        }
+        let file_names: Vec<String> = dialog
+            .paths
+            .iter()
+            .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .collect();
+        let req_id = self.sftp_ui.next_request_id();
+        let connection = dialog.connection.clone();
+        let remote_dir = dialog.remote_dir.clone();
+        self.sftp_ui.pending_check.insert(req_id, dialog);
+        self.sftp_service
+            .check_duplicates(req_id, connection, remote_dir, file_names);
+    }
+
+    /// Confirm the overwrite dialog: start the uploads despite the duplicates,
+    /// using the dialog's captured identity (not the active tab).
+    pub fn confirm_overwrite_dialog(&mut self, now: f64) {
+        let Some(dialog) = self.sftp_ui.overwrite_dialog.take() else {
+            return;
+        };
+        self.start_uploads_with(
+            now,
+            dialog.tab_id,
+            dialog.connection,
+            dialog.paths,
+            dialog.remote_dir,
+        );
+    }
+
+    /// Cancel a running upload (toast cancel control).
+    pub fn cancel_sftp_upload(&mut self, session_id: &str) {
+        self.sftp_service.cancel(session_id);
+        self.sftp_ui.toasts.remove(session_id);
+    }
+
+    /// Whether the tab with `tab_id` still exists and is still an SSH tab.
+    fn tab_is_still_ssh(&self, tab_id: u64) -> bool {
+        self.tabs
+            .iter()
+            .find(|t| t.stable_id == tab_id)
+            .map(|t| t.is_ssh_tab())
+            .unwrap_or(false)
+    }
+
+    /// Surface an SFTP error to the user as a transient failure toast. Uses a
+    /// synthetic session id so it slots into the same toast stack and
+    /// auto-dismisses like a real terminal-state toast.
+    fn push_sftp_error_toast(&mut self, now: f64, ja: &'static str, en: &'static str) {
+        let msg = match self.locale {
+            crate::i18n::Locale::Ja => ja,
+            crate::i18n::Locale::En => en,
+        };
+        let session_id = format!("sftp-error-{}", self.sftp_ui.next_request_id());
+        self.sftp_ui.toasts.apply(
+            crate::sftp::SftpUploadProgress {
+                session_id,
+                file_name: msg.to_string(),
+                bytes_transferred: 0,
+                total_bytes: 0,
+                status: crate::sftp::SftpUploadStatus::Failed,
+                error_message: Some(msg.to_string()),
+            },
+            now,
+        );
+    }
+
+    /// Start one upload per path in the batch against the captured identity.
+    /// The originating tab is re-validated (existence + still SSH); if it is
+    /// gone the batch is dropped with an error toast instead of being
+    /// redirected to whatever tab happens to be active.
+    fn start_uploads_with(
+        &mut self,
+        now: f64,
+        tab_id: u64,
+        connection: crate::sftp::service::SftpConnection,
+        paths: Vec<std::path::PathBuf>,
+        remote_dir: String,
+    ) {
+        if !self.tab_is_still_ssh(tab_id) {
+            self.push_sftp_error_toast(
+                now,
+                "アップロード対象のタブが見つかりません",
+                "Upload target tab is no longer available",
+            );
+            return;
+        }
+        for path in paths {
+            let is_directory = crate::sftp::remote_path::is_directory(&path);
+            let local_path = path.to_string_lossy().to_string();
+            let _ = self.sftp_service.start_upload(
+                tab_id,
+                connection.clone(),
+                local_path,
+                remote_dir.clone(),
+                is_directory,
+            );
+        }
     }
 
     #[allow(dead_code)] // retained for future mutation paths / tests
@@ -4796,6 +5089,97 @@ mod tests {
         assert!(
             !app.tabs[0].folds.is_enabled(),
             "fold gate pushed into live manager"
+        );
+    }
+
+    // ── SFTP close-guard / identity-capture regression tests ──────
+
+    #[test]
+    fn close_guard_resolves_by_stable_id_after_reorder() {
+        // #7: the guard holds a stable_id, so a roster change between arming
+        // and confirming must not close the wrong (or a missing) tab.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_initial_tab();
+        app.spawn_initial_tab();
+        assert_eq!(app.tabs.len(), 3);
+
+        // Arm the guard on the *middle* tab's stable_id.
+        let target_id = app.tabs[1].stable_id;
+        app.sftp_ui.close_guard = Some(target_id);
+
+        // Reorder so the target is no longer at index 1.
+        app.reorder_tab(1, 3); // middle tab moves to the end
+        let new_idx = app
+            .tabs
+            .iter()
+            .position(|t| t.stable_id == target_id)
+            .expect("target still present");
+        assert_eq!(new_idx, 2, "target moved to the end");
+
+        // Confirming resolves by id and closes exactly the target tab.
+        app.confirm_close_guard();
+        assert_eq!(app.tabs.len(), 2);
+        assert!(
+            app.tabs.iter().all(|t| t.stable_id != target_id),
+            "the guarded tab (by id) was the one closed"
+        );
+        assert!(app.sftp_ui.close_guard.is_none(), "guard cleared");
+    }
+
+    #[test]
+    fn close_guard_missing_tab_aborts_cleanly() {
+        // If the guarded tab vanished, confirm must not panic or close an
+        // unrelated tab.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let only_id = app.tabs[0].stable_id;
+        // Arm the guard on a stable_id that does not exist.
+        app.sftp_ui.close_guard = Some(only_id.wrapping_add(9999));
+
+        app.confirm_close_guard();
+
+        // The unrelated tab is untouched; guard is cleared.
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].stable_id, only_id);
+        assert!(app.sftp_ui.close_guard.is_none());
+    }
+
+    #[test]
+    fn confirm_overwrite_uses_captured_tab_not_active() {
+        // #4: confirm_overwrite_dialog must drive uploads against the dialog's
+        // captured tab_id, and abort (no panic, error toast) when that tab is
+        // gone instead of redirecting to the active tab.
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let live_id = app.tabs[0].stable_id;
+
+        // Overwrite dialog captured for a now-missing tab.
+        app.sftp_ui.overwrite_dialog = Some(crate::sftp::ui::OverwriteDialog {
+            paths: vec![std::path::PathBuf::from("/a/f.txt")],
+            remote_dir: "/remote".to_string(),
+            duplicates: vec!["f.txt".to_string()],
+            tab_id: live_id.wrapping_add(7777),
+            connection: crate::sftp::service::SftpConnection {
+                hostname: "h".to_string(),
+                port: 22,
+                username: String::new(),
+                identity_file: String::new(),
+                ssh_options: Vec::new(),
+            },
+        });
+
+        // Should abort with an error toast (the live non-SSH tab is not a
+        // valid redirect target).
+        app.confirm_overwrite_dialog(0.0);
+        assert!(app.sftp_ui.overwrite_dialog.is_none(), "dialog consumed");
+        assert!(
+            app.sftp_ui
+                .toasts
+                .toasts
+                .iter()
+                .any(|t| t.status == crate::sftp::SftpUploadStatus::Failed),
+            "an error toast was surfaced instead of redirecting the upload"
         );
     }
 }

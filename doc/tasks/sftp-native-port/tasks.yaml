@@ -1,0 +1,194 @@
+schema_version: 1
+feature: sftp-native-port
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-a-core
+    name: Core logic port
+    goal: Port args/check/pool/progress/process + types into native-poc/src/sftp as Tauri-free modules with their unit tests passing.
+    effort: medium
+    status: completed
+    depends_on: []
+    blocks: [phase-b-service]
+    files_create:
+      - native-poc/src/sftp/mod.rs
+      - native-poc/src/sftp/args.rs
+      - native-poc/src/sftp/check.rs
+      - native-poc/src/sftp/pool.rs
+      - native-poc/src/sftp/progress.rs
+      - native-poc/src/sftp/process.rs
+    files_modify:
+      - native-poc/src/main.rs
+    tasks:
+      - id: port-types
+        title: Port upload status enum + progress payload into mod.rs
+        covers_fr: [FR1]
+      - id: port-args
+        title: Port build_sftp_args, redirecting tilde expansion to crate::profiles
+        covers_fr: [FR1, NFR5]
+      - id: port-check-progress
+        title: Port parse/duplicate + progress/error parsing with source tests
+        covers_fr: [FR1]
+      - id: port-pool
+        title: Port ConcurrentUploadPool with source tests
+        covers_fr: [FR1, FR7]
+      - id: port-process
+        title: Port SftpProcessManager (spawn/ls/cancel/drop) with source tests
+        covers_fr: [FR1]
+      - id: register-module
+        title: Register mod sftp; resolve warnings; confirm Tauri-free
+        covers_fr: [FR1, NFR2]
+    tests: [TS-1, TS-2, TS-3, TS-4]
+
+  - id: phase-b-service
+    name: Orchestration service
+    goal: SftpService owns manager+pool, validates inputs, generates wall-clock-free session ids, runs uploads on worker threads, and reports progress over an in-process channel.
+    effort: medium
+    status: completed
+    depends_on: [phase-a-core]
+    blocks: [phase-e-ui]
+    files_create:
+      - native-poc/src/sftp/service.rs
+    files_modify: []
+    tasks:
+      - id: binary-detection
+        title: Port platform sftp-binary detection (Unix/Windows)
+        covers_fr: [NFR5]
+      - id: validation
+        title: Port connection/remote/local validation helpers
+        covers_fr: [NFR1]
+      - id: connection-adapter
+        title: Map settings SshConnection to argv inputs
+        covers_fr: [FR2]
+      - id: service-struct
+        title: Own manager/pool/sender; monotonic session-id counter
+        covers_fr: [FR2, FR4, FR7, NFR4]
+      - id: start-cancel
+        title: Worker-thread orchestration (preparing/uploading/terminal); cancel
+        covers_fr: [FR2, NFR3]
+      - id: session-tab-map
+        title: Record session→tab; active_for_tab query + cancel-for-tab
+        covers_fr: [FR10]
+      - id: result-channel
+        title: Off-thread duplicate check delivering its outcome over a result channel
+        covers_fr: [FR6, NFR3]
+      - id: service-tests
+        title: Unit tests for validation rejection + session-id monotonicity + active_for_tab
+        covers_fr: [FR2, NFR1, NFR4, FR10]
+    tests: [TS-6, TS-10, TS-14]
+
+  - id: phase-c-tab-ssh
+    name: Per-tab SSH connection
+    goal: A tab knows its SSH connection (resolve_spawn carries the name, Tab stores it, a helper resolves it to a connection record).
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: [phase-d-drop, phase-e-ui]
+    files_create: []
+    files_modify:
+      - native-poc/src/profiles.rs
+      - native-poc/src/tabs.rs
+    tasks:
+      - id: spawn-overrides-conn-name
+        title: Spawn-overrides carry the resolved SSH connection name (SSH branch sets it)
+        covers_fr: [FR3]
+      - id: tab-conn-field
+        title: Tab stores connection name; thread through spawn + 3 constructions
+        covers_fr: [FR3]
+      - id: tab-conn-lookup
+        title: Lookup helper (tab+settings → connection) and is-SSH predicate
+        covers_fr: [FR3]
+      - id: resolve-spawn-tests
+        title: Unit tests for SSH-branch name vs WSL-branch none
+        covers_fr: [FR3]
+    tests: [TS-13]
+
+  - id: phase-d-drop
+    name: File drop, aggregation, remote path
+    goal: Aggregate per-file winit drops into one batch and dispatch (upload on SSH tabs, paste on non-SSH); derive the remote destination from OSC 7 CWD.
+    effort: medium
+    status: completed
+    depends_on: [phase-c-tab-ssh]
+    blocks: [phase-e-ui]
+    files_create:
+      - native-poc/src/sftp/remote_path.rs
+    files_modify:
+      - native-poc/src/window_host.rs
+    tasks:
+      - id: window-drop-events
+        title: Handle winit hovered/dropped/hover-cancelled events
+        covers_fr: [FR4]
+      - id: drop-aggregation
+        title: Accumulate per-file drops into a batch finalized next loop turn
+        covers_fr: [FR4]
+      - id: remote-path-helpers
+        title: extract_remote_path (URI decode) + format_paths_for_paste with tests
+        covers_fr: [FR5]
+      - id: drop-dispatch
+        title: Branch by tab kind; per-path directory flag; non-SSH paste via PTY write
+        covers_fr: [FR4, FR5]
+    tests: [TS-7, TS-8, TS-9]
+
+  - id: phase-e-ui
+    name: egui UI (overlay, dialogs, toasts)
+    goal: Render the drop overlay, upload dialog, overwrite dialog, and progress toasts driven by the progress channel.
+    effort: large
+    status: completed
+    depends_on: [phase-b-service, phase-d-drop]
+    blocks: [phase-f-settings-guard]
+    files_create:
+      - native-poc/src/sftp/ui.rs
+    files_modify:
+      - native-poc/src/app.rs
+      - native-poc/src/render/mod.rs
+      - native-poc/src/i18n.rs
+    tasks:
+      - id: ui-state
+        title: Overlay/dialog/toast state container and transitions
+        covers_fr: [FR6, FR8]
+      - id: app-wiring
+        title: Hold UI state + progress receiver; drain each frame
+        covers_fr: [FR8, NFR4]
+      - id: overlay-dialogs-render
+        title: Draw overlay + upload/overwrite dialogs (Esc/Enter, initial focus)
+        covers_fr: [FR6]
+      - id: toast-render
+        title: Top-right toast stack with status + cancel control
+        covers_fr: [FR8, FR9]
+      - id: confirm-logic
+        title: Dialog confirm → off-thread duplicate check → overwrite or upload
+        covers_fr: [FR6, NFR3]
+      - id: i18n-strings
+        title: Register en/ja keys for SFTP UI text
+        covers_fr: [FR12]
+      - id: ui-tests
+        title: Unit tests for toast state machine + dialog-confirm branch
+        covers_fr: [FR6, FR8]
+    tests: [TS-11, TS-12]
+
+  - id: phase-f-settings-guard
+    name: Settings, tab-close guard, polish
+    goal: Concurrency reflects settings at startup and reload; closing a tab with active uploads is guarded; cleanup + clippy.
+    effort: medium
+    status: completed
+    depends_on: [phase-b-service, phase-e-ui]
+    blocks: []
+    files_create: []
+    files_modify:
+      - native-poc/src/app.rs
+      - native-poc/src/window_host.rs
+      - native-poc/src/i18n.rs
+    tasks:
+      - id: settings-init
+        title: Construct the service from the settings concurrency value
+        covers_fr: [FR7, FR11]
+      - id: reload-reflection
+        title: Update the pool cap on settings reload
+        covers_fr: [FR11]
+      - id: close-guard
+        title: Confirm on tab close with the tab's active uploads (via session→tab); cancel-then-close
+        covers_fr: [FR10]
+      - id: i18n-cleanup
+        title: Close-guard strings; remove dead-code allowances; clippy pass
+        covers_fr: [FR12]
+    tests: [TS-5, TS-14]

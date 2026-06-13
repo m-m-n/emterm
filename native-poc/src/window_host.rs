@@ -1173,6 +1173,7 @@ impl WindowHost {
             scroll_to: None,
             search: None,
             profile: None,
+            sftp: None,
         };
         // Snapshot the current maximized state so the title bar can
         // swap its middle glyph between Maximize and Restore. Reading
@@ -1189,6 +1190,14 @@ impl WindowHost {
             // Profile selector modal floats above everything (scrim +
             // dialog); same `&mut App` split as the search overlay.
             frame_events.profile = crate::render::draw_profile_selector_overlay(ctx, app);
+            // SFTP: drain progress + duplicate-check channels using the egui
+            // frame time (monotonic, wall-clock-free) so terminal toasts can
+            // schedule their auto-dismiss, then draw the overlay/dialogs/toasts.
+            let now = ctx.input(|i| i.time);
+            if app.pump_sftp(now) {
+                ctx.request_repaint();
+            }
+            frame_events.sftp = crate::render::draw_sftp_overlay(ctx, app);
         });
         // CSD title-bar actions hit `winit::Window` directly except
         // for Close, which defers to `about_to_wait` via
@@ -1254,6 +1263,37 @@ impl WindowHost {
                 ProfileSelectorEvent::Cancel => app.profile_selector.close(),
             }
             app.mark_full_redraw();
+            self.window.request_redraw();
+            crate::wakeup::wake();
+        }
+        // SFTP overlay interaction: confirm/cancel the upload or overwrite
+        // dialog, or cancel a running upload. Applied post-frame like the
+        // other overlays, with the same immediate-repaint kick.
+        if let Some(evt) = frame_events.sftp {
+            use crate::render::SftpFrameEvent;
+            // Frame time for any error toast surfaced by the confirm paths
+            // (monotonic, wall-clock-free; same source as `pump_sftp`).
+            let now = self.egui_ctx.input(|i| i.time);
+            match evt {
+                SftpFrameEvent::ConfirmUpload => app.confirm_upload_dialog(now),
+                SftpFrameEvent::CancelUpload => {
+                    app.sftp_ui.upload_dialog = None;
+                }
+                SftpFrameEvent::ConfirmOverwrite => app.confirm_overwrite_dialog(now),
+                SftpFrameEvent::CancelOverwrite => {
+                    app.sftp_ui.overwrite_dialog = None;
+                }
+                SftpFrameEvent::CancelSession(id) => app.cancel_sftp_upload(&id),
+                SftpFrameEvent::ConfirmClose => {
+                    // Cancel the guarded tab's uploads and close it. Emptying
+                    // the roster is handled by `about_to_wait`'s
+                    // `tabs.is_empty()` teardown check on the next turn.
+                    let _ = app.confirm_close_guard();
+                    app.mark_full_redraw();
+                    self.invalidate_link_hover();
+                }
+                SftpFrameEvent::CancelClose => app.cancel_close_guard(),
+            }
             self.window.request_redraw();
             crate::wakeup::wake();
         }
@@ -2509,6 +2549,34 @@ impl ApplicationHandler for PocApp {
                     host.window().request_redraw();
                 }
             }
+            WindowEvent::HoveredFile(_path) => {
+                // A drag entered the window: show the drop overlay. The
+                // message depends on whether the active tab is an SSH tab
+                // (upload) or not (paste).
+                let overlay = if self
+                    .app
+                    .active_tab()
+                    .map(|t| t.is_ssh_tab())
+                    .unwrap_or(false)
+                {
+                    crate::sftp::ui::HoverOverlay::SshUpload
+                } else {
+                    crate::sftp::ui::HoverOverlay::Paste
+                };
+                self.app.sftp_ui.hover = Some(overlay);
+                host.window().request_redraw();
+            }
+            WindowEvent::HoveredFileCancelled => {
+                self.app.sftp_ui.hover = None;
+                host.window().request_redraw();
+            }
+            WindowEvent::DroppedFile(path) => {
+                // Accumulate one path; `about_to_wait` finalizes the batch on
+                // the next loop turn (winit gives no drop-complete signal).
+                self.app.sftp_ui.hover = None;
+                self.app.sftp_ui.aggregator.push(path);
+                host.window().request_redraw();
+            }
             WindowEvent::RedrawRequested => {
                 host.render(&mut self.app);
             }
@@ -2532,6 +2600,17 @@ impl ApplicationHandler for PocApp {
         // reload settings.json and apply it live.
         if crate::settings_launcher::take_saved() {
             host.reload_settings_from_disk(&mut self.app);
+        }
+        // Finalize a drag-drop gesture once per loop turn: winit delivers each
+        // dropped file as a separate `DroppedFile` event with no completion
+        // signal, so the per-file paths accumulated since the last turn are
+        // dispatched here as a single batch (upload on SSH tabs, paste on
+        // non-SSH tabs).
+        if self.app.sftp_ui.aggregator.is_armed() {
+            if let Some(batch) = self.app.sftp_ui.aggregator.take_batch() {
+                self.app.dispatch_drop(batch);
+                host.window().request_redraw();
+            }
         }
         // If the search overlay is open with live results, the pumps (PTY
         // output / resize) may have shifted matched text into scrollback,
