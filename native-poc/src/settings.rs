@@ -652,9 +652,9 @@ pub struct Settings {
     pub ssh_command_path: String,
     /// Saved SSH connections, referenced by `Profile::ssh_connection_name`.
     pub ssh_connections: Vec<app_settings::SshConnection>,
-    /// Maximum concurrent SFTP uploads. Captured for parity; the SFTP
-    /// upload pipeline itself is not yet ported to native-poc.
-    #[allow(dead_code)]
+    /// Maximum concurrent SFTP uploads. Applied to the in-process upload
+    /// pool by `App::with_settings` at startup and `App::apply_settings` on
+    /// reload (see `crate::sftp::service::SftpService`).
     pub sftp_max_concurrent_uploads: u16,
 }
 

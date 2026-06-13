@@ -1,0 +1,122 @@
+schema_version: 1
+feature: sftp-native-port
+created: 2026-06-13
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=native-poc/target cargo check --manifest-path native-poc/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=native-poc/target cargo test --manifest-path native-poc/Cargo.toml --bin emterm-native-poc"
+      format_command: "cargo fmt --manifest-path native-poc/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: c7a3403c139bc334eff8b57948098d2292aee2a4
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
+    status: completed
+    completed_at_commit: c7a3403c139bc334eff8b57948098d2292aee2a4
+  - id: verify-plan
+    status: completed
+    completed_at_commit: c7a3403c139bc334eff8b57948098d2292aee2a4
+  - id: implement
+    status: completed
+    completed_at_commit: c7a3403c139bc334eff8b57948098d2292aee2a4
+  - id: check
+    status: completed
+    completed_at_commit: c7a3403c139bc334eff8b57948098d2292aee2a4
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: c7a3403c139bc334eff8b57948098d2292aee2a4
+
+requirements:
+  FR1:
+    title: コアロジック移植 (args/check/pool/progress/process + 型)
+    status: ok
+    tasks: [port-types, port-args, port-check-progress, port-pool, port-process, register-module]
+    tests: [TS-1, TS-2, TS-3, TS-4]
+  FR2:
+    title: SftpService オーケストレーション (検証/採番/channel 進捗)
+    status: ok
+    tasks: [connection-adapter, service-struct, start-cancel, service-tests]
+    tests: [TS-6, TS-10]
+  FR3:
+    title: タブの SSH 接続情報保持 (resolve_spawn 拡張 + Tab フィールド + lookup)
+    status: ok
+    tasks: [spawn-overrides-conn-name, tab-conn-field, tab-conn-lookup, resolve-spawn-tests]
+    tests: [TS-13]
+  FR4:
+    title: winit ファイルドロップ集約と SSH/非SSH 振り分け
+    status: ok
+    tasks: [window-drop-events, drop-aggregation, drop-dispatch, service-struct]
+    tests: [TS-9]
+  FR5:
+    title: OSC 7 CWD からのリモートパス解決
+    status: ok
+    tasks: [remote-path-helpers, drop-dispatch]
+    tests: [TS-7, TS-8]
+  FR6:
+    title: 重複検出と上書き確認ダイアログ
+    status: ok
+    tasks: [result-channel, ui-state, overlay-dialogs-render, confirm-logic, ui-tests]
+    tests: [TS-2, TS-12]
+  FR7:
+    title: 並行アップロード制限 (sftp_max_concurrent_uploads)
+    status: ok
+    tasks: [port-pool, service-struct, settings-init]
+    tests: [TS-4, TS-5]
+  FR8:
+    title: 進捗トースト (状態表示 + 自動消去)
+    status: ok
+    tasks: [ui-state, app-wiring, toast-render, ui-tests]
+    tests: [TS-11]
+  FR9:
+    title: アップロードのキャンセル
+    status: ok
+    tasks: [toast-render, start-cancel]
+    tests: []
+  FR10:
+    title: タブクローズガード (確認ダイアログ / session→タブ紐付け)
+    status: ok
+    tasks: [session-tab-map, close-guard]
+    tests: [TS-14]
+  FR11:
+    title: settings 反映 (起動時/リロード時の max-concurrent)
+    status: ok
+    tasks: [settings-init, reload-reflection]
+    tests: [TS-5]
+  FR12:
+    title: UI 文言の i18n (en/ja キー)
+    status: ok
+    tasks: [i18n-strings, i18n-cleanup]
+    tests: []
+  NFR1:
+    title: セキュリティ (入力検証 / argv 配列渡し / argv フラグ密輸防止 / ペーストインジェクション防止 / 鍵認証のみ)
+    status: ok
+    tasks: [validation, remote-path-helpers, service-tests]
+    tests: [TS-6, TS-15, TS-16]
+  NFR2:
+    title: アーキテクチャ (移植元 Tauri 非依存維持 / crossbeam channel)
+    status: ok
+    tasks: [register-module]
+    tests: []
+  NFR3:
+    title: 応答性 (バックグラウンドスレッド / UI 非ブロック)
+    status: ok
+    tasks: [start-cancel, confirm-logic]
+    tests: []
+  NFR4:
+    title: wall-clock 不使用 (AtomicU64 採番 / egui フレーム時刻)
+    status: ok
+    tasks: [service-struct, app-wiring]
+    tests: [TS-10]
+  NFR5:
+    title: クロスプラットフォーム (sftp バイナリ検出 Unix/Windows)
+    status: ok
+    tasks: [binary-detection, port-args]
+    tests: []

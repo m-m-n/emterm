@@ -32,6 +32,10 @@ pub struct SpawnOverrides {
     /// site; a missing directory logs a warning and is skipped, mirroring
     /// `src-tauri/src/pty/session.rs`.
     pub working_directory: Option<String>,
+    /// The resolved SSH connection name for SSH-profile tabs. `Some` only on
+    /// the SSH branch; `None` for plain/WSL tabs. Threaded onto the `Tab` so
+    /// SFTP upload can rebuild the connection inputs for a drop on that tab.
+    pub ssh_connection_name: Option<String>,
 }
 
 /// Parse a multi-line `KEY=VALUE` string into ordered pairs.
@@ -160,6 +164,7 @@ pub fn resolve_spawn(profile: &Profile, settings: &Settings) -> Result<SpawnOver
             ]),
             env_vars: Vec::new(),
             working_directory: None,
+            ssh_connection_name: None,
         });
     }
 
@@ -194,6 +199,7 @@ pub fn resolve_spawn(profile: &Profile, settings: &Settings) -> Result<SpawnOver
             shell_args: Some(args),
             env_vars,
             working_directory: non_empty(&profile.working_directory),
+            ssh_connection_name: Some(profile.ssh_connection_name.clone()),
         });
     }
 
@@ -206,6 +212,7 @@ pub fn resolve_spawn(profile: &Profile, settings: &Settings) -> Result<SpawnOver
         },
         env_vars,
         working_directory: non_empty(&profile.working_directory),
+        ssh_connection_name: None,
     })
 }
 
@@ -417,6 +424,8 @@ mod tests {
             o.shell_args.as_deref().unwrap(),
             &["-d", "Ubuntu-24.04", "--cd", "~"]
         );
+        // WSL tabs carry no SSH connection name.
+        assert_eq!(o.ssh_connection_name, None);
     }
 
     #[test]
@@ -447,6 +456,17 @@ mod tests {
             ]
         );
         assert_eq!(o.env_vars, vec![("FOO".to_string(), "bar".to_string())]);
+        // SSH tabs carry the resolved connection name for SFTP upload.
+        assert_eq!(o.ssh_connection_name.as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn resolve_plain_profile_has_no_connection_name() {
+        let mut p = profile("dev");
+        p.shell_path = "/bin/zsh".to_string();
+        let s = Settings::default();
+        let o = resolve_spawn(&p, &s).unwrap();
+        assert_eq!(o.ssh_connection_name, None);
     }
 
     #[test]
