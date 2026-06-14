@@ -1,0 +1,147 @@
+schema_version: 1
+feature: mux-window-tabs-native-port
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-state-settings
+    name: Window state model + settings loader
+    goal: A mux-attached tab holds an ordered window list (id/name), active index, pane ids, and an expansion flag; the native loader reads mux.tab_always_expand / status_position / keybinds / statusbar.*.
+    effort: medium
+    status: completed
+    depends_on: []
+    blocks: [phase-2-apc, phase-3-prefix, phase-4-dialogs, phase-5-ui]
+    files_create:
+      - native-poc/src/mux/window_group.rs
+    files_modify:
+      - native-poc/src/tabs.rs
+      - native-poc/src/settings.rs
+    tasks:
+      - id: window-state-model
+        title: Define window list / active index / pane ids state with query/mutate contracts
+        covers_fr: [FR2]
+      - id: expansion-controller
+        title: compact/expanded toggle + getCompactLabel + active accessors, seeded by tab_always_expand
+        covers_fr: [FR2, FR1]
+      - id: tab-integration
+        title: Attach mux window state to the tab; lifecycle on attach/detach
+        covers_fr: [FR2]
+      - id: mux-settings-loader
+        title: Load mux.tab_always_expand / status_position / keybinds / statusbar.* with validation + defaults
+        covers_fr: [FR11]
+    tests: [TS-1, TS-2, TS-3, TS-4]
+
+  - id: phase-2-apc
+    name: Bidirectional APC (outbound encode + inbound reconcile)
+    goal: native sends structured mux control via APC-encoded MuxMessage to the PTY and reconciles window state from Welcome / PaneCreated / PtyExited / RenameWindow / SwitchWindow.
+    effort: large
+    status: completed
+    depends_on: [phase-1-state-settings]
+    blocks: [phase-3-prefix, phase-4-dialogs, phase-5-ui]
+    files_modify:
+      - native-poc/src/mux/apc.rs
+      - native-poc/src/tabs.rs
+      - native-poc/src/app.rs
+    tasks:
+      - id: apc-encoder
+        title: Outbound APC encoder; round-trip with existing decoder
+        covers_fr: [FR3]
+      - id: send-control-path
+        title: send_control encodes + writes to active PTY (fire-and-forget, no socket)
+        covers_fr: [FR3, NFR2]
+      - id: welcome-ingest
+        title: Seed window list + active index from SessionInfo.windows
+        covers_fr: [FR4]
+      - id: inbound-window-handlers
+        title: PaneCreated / PtyExited / RenameWindow / SwitchWindow reconcile against the model
+        covers_fr: [FR4, FR9]
+      - id: app-routing
+        title: Route inbound effects to tab-bar re-render; expose send_control to actions
+        covers_fr: [FR4]
+    tests: [TS-5, TS-6, TS-7, TS-8, TS-9, TS-10, TS-16]
+
+  - id: phase-3-prefix
+    name: Prefix latch wiring + switch / create actions
+    goal: prefix chords drive mux actions; window switch (n/p/digit) and new-window (c) work end to end with mux.keybinds-driven bindings.
+    effort: medium
+    status: completed
+    depends_on: [phase-2-apc]
+    blocks: [phase-4-dialogs, phase-5-ui]
+    files_modify:
+      - native-poc/src/mux/prefix.rs
+      - native-poc/src/app.rs
+      - native-poc/src/window_host.rs
+    tasks:
+      - id: extend-action-enum
+        title: Add NewWindow / RenameWindow / MoveWindow to PrefixAction
+        covers_fr: [FR10]
+      - id: bindings-from-settings
+        title: Build action table from mux.keybinds (warn + default on invalid)
+        covers_fr: [FR10]
+      - id: latch-wiring
+        title: Intercept keys for active mux tabs ahead of PTY passthrough
+        covers_fr: [FR10]
+      - id: switch-dispatch
+        title: next/prev wrap + digit clamp + SwitchWindow send + snapshot swap
+        covers_fr: [FR5]
+      - id: new-window-dispatch
+        title: pending-create accounting + CreateWindow send
+        covers_fr: [FR6]
+    tests: [TS-11, TS-12]
+
+  - id: phase-4-dialogs
+    name: Rename / move dialogs
+    goal: prefix , and m open egui dialogs that rename / reorder windows with optimistic local updates and move rollback on send failure.
+    effort: medium
+    status: completed
+    depends_on: [phase-3-prefix]
+    blocks: [phase-5-ui]
+    files_create:
+      - native-poc/src/ui/rename_window_dialog.rs
+      - native-poc/src/ui/move_window_dialog.rs
+    files_modify:
+      - native-poc/src/app.rs
+      - native-poc/src/render/mod.rs
+      - native-poc/src/window_host.rs
+    tasks:
+      - id: rename-dialog-ui
+        title: egui rename dialog (seeded name, confirm/cancel)
+        covers_fr: [FR7]
+      - id: move-dialog-ui
+        title: egui move dialog (target position, range validation)
+        covers_fr: [FR8]
+      - id: rename-handler
+        title: Stable-id re-resolve + optimistic relabel + RenameWindow send
+        covers_fr: [FR7]
+      - id: move-handler
+        title: Optimistic reorder + MoveWindow send + rollback on failure
+        covers_fr: [FR8]
+      - id: dialog-input-routing
+        title: Draw overlay + capture keys while a dialog is open
+        covers_fr: [FR7, FR8]
+    tests: [TS-13, TS-14]
+
+  - id: phase-5-ui
+    name: Tab group rendering + dynamic settings apply
+    goal: the mux tab group renders (compact mux(N) / expanded sub-tabs, active highlight, click toggle/switch) and mux UI settings apply on save.
+    effort: medium
+    status: completed
+    depends_on: [phase-4-dialogs]
+    blocks: []
+    files_modify:
+      - native-poc/src/ui/tab_bar.rs
+      - native-poc/src/app.rs
+      - native-poc/src/ui/status_bar.rs
+    tasks:
+      - id: compact-rendering
+        title: Group cell mux(N) + toggle hit area
+        covers_fr: [FR1]
+      - id: expanded-rendering
+        title: Sub-tab row with active highlight
+        covers_fr: [FR1]
+      - id: click-routing
+        title: Group cell toggle vs sub-tab switch hit-test
+        covers_fr: [FR1, FR5]
+      - id: dynamic-apply
+        title: apply_settings rebuilds mux keybinds + expand + statusbar/position
+        covers_fr: [FR11]
+    tests: [TS-15]

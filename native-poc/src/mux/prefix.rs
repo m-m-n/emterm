@@ -17,11 +17,104 @@
 //! [`Latch::observe`]; the latch never queries the wall clock on its own so
 //! tests can drive it with a synthetic clock.
 //!
-//! The module is intentionally pure — no I/O, no `egui::Context`, no logger.
+//! The module is intentionally pure — no I/O, no `egui::Context`, no logger,
+//! no egui types. Input is fed in through the framework-agnostic
+//! [`KeyInput`] / [`KeySym`] types defined below; the UI layer
+//! (`window_host`) converts its native event source (egui, in this build)
+//! into them before calling [`Latch::observe`] / [`crate::app::App::observe_mux_key`].
 
 use std::time::{Duration, Instant};
 
-use egui::{Key, Modifiers};
+/// Framework-agnostic key identity recognized by the mux prefix layer.
+/// Carries only the discriminants the latch actually needs to match — the
+/// letters, digits, and punctuation keys reachable by the tmux defaults
+/// and the configurable `mux.keybinds`. Everything else (function keys,
+/// arrows, navigation) becomes [`KeySym::Other`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySym {
+    /// An ASCII letter, normalized to lower case.
+    Letter(char),
+    /// A decimal digit `0..=9` (for `prefix N` window jumps).
+    Digit(u8),
+    Comma,
+    Period,
+    Semicolon,
+    Slash,
+    Backslash,
+    Minus,
+    /// Any key the latch does not recognize as a mux follow-up.
+    Other,
+}
+
+impl KeySym {
+    /// Match against the resolved follow-up character a `mux.keybinds`
+    /// entry would use; returns the same lower-case `char` as the
+    /// `default_mux_action_key` / `parse_mux_action_key` pipeline.
+    fn as_char(self) -> Option<char> {
+        match self {
+            KeySym::Letter(c) => Some(c),
+            KeySym::Comma => Some(','),
+            KeySym::Period => Some('.'),
+            KeySym::Semicolon => Some(';'),
+            KeySym::Slash => Some('/'),
+            KeySym::Backslash => Some('\\'),
+            KeySym::Minus => Some('-'),
+            _ => None,
+        }
+    }
+
+    fn as_digit(self) -> Option<u8> {
+        match self {
+            KeySym::Digit(d) => Some(d),
+            _ => None,
+        }
+    }
+}
+
+/// Modifier + key bundle the latch consumes. Plain data with no UI-toolkit
+/// dependency: the window host converts its native event before calling
+/// [`Latch::observe`]. `ctrl` MUST be set when either the actual Control
+/// modifier OR egui's `command` (mac-Cmd / Windows-Ctrl alias) is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyInput {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub key: KeySym,
+}
+
+impl KeyInput {
+    /// Convenience for tests: build a plain `ctrl+letter` chord.
+    #[cfg(test)]
+    pub fn ctrl_letter(letter: char) -> Self {
+        Self {
+            ctrl: true,
+            shift: false,
+            alt: false,
+            key: KeySym::Letter(letter.to_ascii_lowercase()),
+        }
+    }
+    /// Convenience for tests: a plain letter with no modifiers.
+    #[cfg(test)]
+    pub fn letter(letter: char) -> Self {
+        Self {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            key: KeySym::Letter(letter.to_ascii_lowercase()),
+        }
+    }
+    /// Convenience for tests: a plain digit with no modifiers.
+    #[cfg(test)]
+    pub fn digit(d: u8) -> Self {
+        Self {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            key: KeySym::Digit(d),
+        }
+    }
+}
 
 /// Default time the latch stays armed waiting for a follow-up key. Mirrors
 /// the common tmux default (`set -g escape-time 500`, latch timeout 3 s).
@@ -54,6 +147,115 @@ pub enum PrefixAction {
     /// the digit verbatim; the caller is responsible for mapping it to the
     /// daemon's `ControlMsg::SelectWindow(Index(d))` representation.
     SelectWindow(u8),
+    /// Create a new mux window (tmux `prefix c`). The caller sends
+    /// `CreateWindow` and increments the pending-create count.
+    NewWindow,
+    /// Open the rename-window dialog (tmux `prefix ,`).
+    RenameWindow,
+    /// Open the move-window dialog (tmux `prefix m`).
+    MoveWindow,
+}
+
+/// Effective follow-up key bindings for the mux actions, resolved from
+/// `settings.mux.keybinds` (with tmux-compatible defaults). The latch maps
+/// an armed follow-up character to the bound action; digits `0..=9` are
+/// always `SelectWindow` and are not configurable (matching the WebView,
+/// where digit jumps are built in rather than part of `keybinds`).
+#[derive(Debug, Clone)]
+pub struct ActionBindings {
+    /// detach
+    pub detach: char,
+    /// new-window
+    pub new_window: char,
+    /// next-window
+    pub next_window: char,
+    /// prev-window
+    pub prev_window: char,
+    /// rename-window
+    pub rename_window: char,
+    /// move-window
+    pub move_window: char,
+}
+
+/// Single-source-of-truth table of the tmux-compatible default follow-up
+/// keys per mux action. `ActionBindings::default()` and
+/// [`crate::settings::default_mux_action_key`] both read from here so the two
+/// can never drift; mirror of the WebView `DEFAULT_ACTION_BINDINGS` in
+/// `prefix-key.ts`.
+pub const DEFAULT_ACTION_BINDINGS: &[(&str, char)] = &[
+    ("detach", 'd'),
+    ("new-window", 'c'),
+    ("next-window", 'n'),
+    ("prev-window", 'p'),
+    ("rename-window", ','),
+    ("move-window", 'm'),
+];
+
+/// Default follow-up key for a mux action, or `None` if the action name is
+/// unknown. Lookup against [`DEFAULT_ACTION_BINDINGS`].
+pub fn default_action_char(action: &str) -> Option<char> {
+    DEFAULT_ACTION_BINDINGS
+        .iter()
+        .find_map(|(k, c)| (*k == action).then_some(*c))
+}
+
+impl Default for ActionBindings {
+    fn default() -> Self {
+        // Pull every field from the SSOT table — any drift surfaces at
+        // construction time (the `expect` fires) instead of silently divergent
+        // defaults.
+        let get = |a| {
+            default_action_char(a).unwrap_or_else(|| panic!("DEFAULT_ACTION_BINDINGS missing {a}"))
+        };
+        Self {
+            detach: get("detach"),
+            new_window: get("new-window"),
+            next_window: get("next-window"),
+            prev_window: get("prev-window"),
+            rename_window: get("rename-window"),
+            move_window: get("move-window"),
+        }
+    }
+}
+
+impl ActionBindings {
+    /// Build the table from a resolved `settings.mux.keybinds` map, falling
+    /// back to the tmux default for any action the map omits. Invalid /
+    /// unknown entries were already dropped (warn) by the settings loader,
+    /// so this only reads the validated single-char values.
+    pub fn from_settings_map(map: &std::collections::HashMap<String, char>) -> Self {
+        let d = Self::default();
+        Self {
+            detach: map.get("detach").copied().unwrap_or(d.detach),
+            new_window: map.get("new-window").copied().unwrap_or(d.new_window),
+            next_window: map.get("next-window").copied().unwrap_or(d.next_window),
+            prev_window: map.get("prev-window").copied().unwrap_or(d.prev_window),
+            rename_window: map.get("rename-window").copied().unwrap_or(d.rename_window),
+            move_window: map.get("move-window").copied().unwrap_or(d.move_window),
+        }
+    }
+
+    /// Resolve an armed follow-up character to its action. Digits are mapped
+    /// to `SelectWindow` before this is consulted; returns `None` for any
+    /// character not bound to an action (the caller then consumes the latch
+    /// without emitting — unknown-after-prefix is ignored, FR2).
+    pub fn action_for_char(&self, c: char) -> Option<PrefixAction> {
+        if c == self.detach {
+            Some(PrefixAction::Detach)
+        } else if c == self.new_window {
+            Some(PrefixAction::NewWindow)
+        } else if c == self.next_window {
+            Some(PrefixAction::NextWindow)
+        } else if c == self.prev_window {
+            Some(PrefixAction::PrevWindow)
+        } else if c == self.rename_window {
+            Some(PrefixAction::RenameWindow)
+        } else if c == self.move_window {
+            Some(PrefixAction::MoveWindow)
+        } else {
+            None
+        }
+    }
 }
 
 /// Configurable prefix chord. Constructed by parsing `settings.mux.prefix_key`
@@ -64,7 +266,7 @@ pub struct PrefixChord {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
-    pub key: Key,
+    pub key: KeySym,
 }
 
 impl Default for PrefixChord {
@@ -73,18 +275,51 @@ impl Default for PrefixChord {
             ctrl: true,
             shift: false,
             alt: false,
-            key: Key::B,
+            key: KeySym::Letter('b'),
         }
     }
 }
 
 impl PrefixChord {
-    /// Match the chord against an egui `(Modifiers, Key)` pair.
-    fn matches(&self, mods: &Modifiers, key: Key) -> bool {
-        // `mods.command` aliases to ctrl on non-mac (and is what tao reports
-        // on Windows for the literal Ctrl key); treat it as canonical.
-        let ctrl = mods.ctrl || mods.command;
-        ctrl == self.ctrl && mods.shift == self.shift && mods.alt == self.alt && key == self.key
+    /// Match the chord against a framework-agnostic [`KeyInput`].
+    fn matches(&self, input: &KeyInput) -> bool {
+        input.ctrl == self.ctrl
+            && input.shift == self.shift
+            && input.alt == self.alt
+            && input.key == self.key
+    }
+}
+
+/// Derive the byte to send on a double-prefix `Literal` from the active
+/// `PrefixChord`. Used by `Latch::literal_byte` and tested independently;
+/// see the doc on `Latch::literal_byte` for the resolution rules.
+fn chord_literal_byte(chord: &PrefixChord) -> u8 {
+    let ch = match chord.key {
+        KeySym::Letter(c) => c,
+        KeySym::Digit(d) => (b'0' + d) as char,
+        KeySym::Comma => ',',
+        KeySym::Period => '.',
+        KeySym::Semicolon => ';',
+        KeySym::Slash => '/',
+        KeySym::Backslash => '\\',
+        KeySym::Minus => '-',
+        KeySym::Other => return DEFAULT_LITERAL_BYTE,
+    };
+    if chord.ctrl {
+        // C0 control codes for `Ctrl+A` ... `Ctrl+Z` are 0x01..=0x1A; for
+        // non-letter chord keys with Ctrl, fall back to the default literal
+        // byte (the platform-level mapping of, say, "Ctrl+," varies).
+        let upper = ch.to_ascii_uppercase();
+        if upper.is_ascii_alphabetic() {
+            return (upper as u8) - b'A' + 1;
+        }
+        DEFAULT_LITERAL_BYTE
+    } else {
+        // Bare printable chord (e.g. user set the prefix to a plain `,`): send
+        // the printable byte directly. Non-ASCII chord keys never reach the
+        // printable-byte path because they only arise via the keybinds parser,
+        // which restricts to ASCII letters / digits / a few punctuation marks.
+        ch as u32 as u8
     }
 }
 
@@ -104,6 +339,7 @@ pub struct Latch {
     chord: PrefixChord,
     timeout: Duration,
     state: State,
+    bindings: ActionBindings,
 }
 
 impl Default for Latch {
@@ -118,13 +354,54 @@ impl Latch {
             chord,
             timeout,
             state: State::Idle,
+            bindings: ActionBindings::default(),
         }
+    }
+
+    /// Construct a latch with explicit action bindings (from
+    /// `settings.mux.keybinds`).
+    pub fn with_bindings(chord: PrefixChord, timeout: Duration, bindings: ActionBindings) -> Self {
+        Self {
+            chord,
+            timeout,
+            state: State::Idle,
+            bindings,
+        }
+    }
+
+    /// Replace the action bindings at runtime (settings apply). Does not
+    /// disturb the arm state.
+    pub fn set_bindings(&mut self, bindings: ActionBindings) {
+        self.bindings = bindings;
+    }
+
+    /// Replace the prefix chord at runtime (settings apply). Cancels any
+    /// in-flight arm so a stale chord can't fire under the new binding.
+    pub fn set_chord(&mut self, chord: PrefixChord) {
+        self.chord = chord;
+        self.state = State::Idle;
     }
 
     /// Returns true when the latch is currently waiting for a follow-up key
     /// (used by the UI to draw a transient "prefix armed" indicator).
     pub fn is_armed(&self) -> bool {
         matches!(self.state, State::Armed { .. })
+    }
+
+    /// The byte to passthrough on a double-prefix ([`PrefixAction::Literal`]).
+    /// Derived from the configured chord so a non-default prefix
+    /// (e.g. `Ctrl+A`) sends its own C0 byte (`0x01`) instead of the
+    /// hardcoded `Ctrl+B` byte (`0x02`). The classic case: a tmux nested
+    /// inside the mux session expects to receive its own configured prefix
+    /// when the user double-taps it.
+    ///
+    /// Resolution rules:
+    /// - `ctrl + letter` → C0 control byte (`A`→0x01 … `Z`→0x1A).
+    /// - non-ctrl printable chord → the printable byte itself.
+    /// - anything else (Other / no representable byte) → fall back to
+    ///   [`DEFAULT_LITERAL_BYTE`].
+    pub fn literal_byte(&self) -> u8 {
+        chord_literal_byte(&self.chord)
     }
 
     /// Forcibly cancel the latch. Called when focus is lost or the tab
@@ -142,7 +419,7 @@ impl Latch {
     /// Returns the [`PrefixAction`] derived from the event. The latch
     /// transitions atomically inside this call; the caller does not need
     /// to do any bookkeeping.
-    pub fn observe(&mut self, mods: Modifiers, key: Key, now: Instant) -> PrefixAction {
+    pub fn observe(&mut self, input: &KeyInput, now: Instant) -> PrefixAction {
         // Auto-cancel if the previous arm has expired. Do this before
         // matching so a stale arm cannot accidentally trigger.
         if let State::Armed { since } = self.state {
@@ -153,7 +430,7 @@ impl Latch {
 
         match self.state {
             State::Idle => {
-                if self.chord.matches(&mods, key) {
+                if self.chord.matches(input) {
                     self.state = State::Armed { since: now };
                 }
                 PrefixAction::None
@@ -161,25 +438,11 @@ impl Latch {
             State::Armed { .. } => {
                 // Double-press: the same chord while armed is a literal
                 // passthrough request.
-                if self.chord.matches(&mods, key) {
+                if self.chord.matches(input) {
                     self.state = State::Idle;
                     return PrefixAction::Literal;
                 }
-
-                // Modifier-only chords (Ctrl, Shift, Alt alone) keep the
-                // latch armed so the user can hold Ctrl while typing the
-                // follow-up letter. egui surfaces these via the `Key` enum
-                // — anything that is not a "real" letter / digit / etc.
-                // we treat as a no-op for the latch state machine.
-                //
-                // egui::Key has no specific "modifier-only" variant; in
-                // practice tao surfaces modifier presses as
-                // `Modifiers` updates rather than `Key` events, so this
-                // branch is dead in production. We still keep an explicit
-                // bail-out for any future event source that does emit
-                // standalone modifier keys.
-
-                let action = decode_follow_up(key);
+                let action = decode_follow_up(input.key, &self.bindings);
                 self.state = State::Idle;
                 action
             }
@@ -187,25 +450,20 @@ impl Latch {
     }
 }
 
-/// Decode the follow-up key into an action. Anything not in the table
-/// returns `PrefixAction::None` and the caller still consumes the latch
-/// (the prefix chord is "used up" once armed).
-fn decode_follow_up(key: Key) -> PrefixAction {
-    match key {
-        Key::N => PrefixAction::NextWindow,
-        Key::P => PrefixAction::PrevWindow,
-        Key::D => PrefixAction::Detach,
-        Key::Num0 => PrefixAction::SelectWindow(0),
-        Key::Num1 => PrefixAction::SelectWindow(1),
-        Key::Num2 => PrefixAction::SelectWindow(2),
-        Key::Num3 => PrefixAction::SelectWindow(3),
-        Key::Num4 => PrefixAction::SelectWindow(4),
-        Key::Num5 => PrefixAction::SelectWindow(5),
-        Key::Num6 => PrefixAction::SelectWindow(6),
-        Key::Num7 => PrefixAction::SelectWindow(7),
-        Key::Num8 => PrefixAction::SelectWindow(8),
-        Key::Num9 => PrefixAction::SelectWindow(9),
-        _ => PrefixAction::None,
+/// Decode the follow-up key into an action using the configured
+/// [`ActionBindings`]. Digits `0..=9` always map to `SelectWindow` (built
+/// in, not configurable, matching the WebView). Any other key is resolved
+/// to a `char` and looked up in the bindings; an unbound key returns
+/// `PrefixAction::None` and the caller still consumes the latch (the prefix
+/// chord is "used up" once armed — unknown-after-prefix is ignored, FR2).
+fn decode_follow_up(key: KeySym, bindings: &ActionBindings) -> PrefixAction {
+    // Digit jumps first (built-in, override any char binding collision).
+    if let Some(d) = key.as_digit() {
+        return PrefixAction::SelectWindow(d);
+    }
+    match key.as_char() {
+        Some(c) => bindings.action_for_char(c).unwrap_or(PrefixAction::None),
+        None => PrefixAction::None,
     }
 }
 
@@ -215,8 +473,8 @@ fn decode_follow_up(key: Key) -> PrefixAction {
 /// single-letter keys):
 ///
 /// - `Ctrl+B`, `Ctrl+Shift+B`, `Alt+X`, …
-/// - Single-letter keys map to `Key::A`..`Key::Z`.
-/// - Digits `0..9` map to `Key::Num0`..`Key::Num9`.
+/// - Single-letter keys map to `KeySym::Letter('a'..='z')`.
+/// - Digits `0..9` map to `KeySym::Digit(0..=9)`.
 ///
 /// Returns `None` on an unparseable spec; the caller falls back to
 /// [`PrefixChord::default`] and logs a `warn`.
@@ -224,7 +482,7 @@ pub fn parse_prefix_key(spec: &str) -> Option<PrefixChord> {
     let mut ctrl = false;
     let mut shift = false;
     let mut alt = false;
-    let mut key: Option<Key> = None;
+    let mut key: Option<KeySym> = None;
     for tok_raw in spec.split('+') {
         let tok = tok_raw.trim();
         if tok.is_empty() {
@@ -240,7 +498,7 @@ pub fn parse_prefix_key(spec: &str) -> Option<PrefixChord> {
                     return None;
                 }
                 key = parse_key_token(tok);
-                key?; // bail if the token didn't map to any Key
+                key?; // bail if the token didn't map to any KeySym
             }
         }
     }
@@ -252,81 +510,26 @@ pub fn parse_prefix_key(spec: &str) -> Option<PrefixChord> {
     })
 }
 
-fn parse_key_token(tok: &str) -> Option<Key> {
+fn parse_key_token(tok: &str) -> Option<KeySym> {
     if tok.len() == 1 {
         let c = tok.chars().next().unwrap();
         if c.is_ascii_alphabetic() {
-            return Some(letter_to_key(c.to_ascii_uppercase()));
+            return Some(KeySym::Letter(c.to_ascii_lowercase()));
         }
         if let Some(digit) = c.to_digit(10) {
-            return digit_to_key(digit as u8);
+            return Some(KeySym::Digit(digit as u8));
         }
     }
     None
-}
-
-fn letter_to_key(c: char) -> Key {
-    match c {
-        'A' => Key::A,
-        'B' => Key::B,
-        'C' => Key::C,
-        'D' => Key::D,
-        'E' => Key::E,
-        'F' => Key::F,
-        'G' => Key::G,
-        'H' => Key::H,
-        'I' => Key::I,
-        'J' => Key::J,
-        'K' => Key::K,
-        'L' => Key::L,
-        'M' => Key::M,
-        'N' => Key::N,
-        'O' => Key::O,
-        'P' => Key::P,
-        'Q' => Key::Q,
-        'R' => Key::R,
-        'S' => Key::S,
-        'T' => Key::T,
-        'U' => Key::U,
-        'V' => Key::V,
-        'W' => Key::W,
-        'X' => Key::X,
-        'Y' => Key::Y,
-        'Z' => Key::Z,
-        // Unreachable because the caller filters on `is_ascii_alphabetic`,
-        // but be conservative.
-        _ => Key::B,
-    }
-}
-
-fn digit_to_key(d: u8) -> Option<Key> {
-    match d {
-        0 => Some(Key::Num0),
-        1 => Some(Key::Num1),
-        2 => Some(Key::Num2),
-        3 => Some(Key::Num3),
-        4 => Some(Key::Num4),
-        5 => Some(Key::Num5),
-        6 => Some(Key::Num6),
-        7 => Some(Key::Num7),
-        8 => Some(Key::Num8),
-        9 => Some(Key::Num9),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn mods(ctrl: bool, shift: bool, alt: bool) -> Modifiers {
-        Modifiers {
-            ctrl,
-            shift,
-            alt,
-            command: false,
-            mac_cmd: false,
-        }
+    /// Helper: the default Ctrl+B prefix as a `KeyInput`.
+    fn prefix() -> KeyInput {
+        KeyInput::ctrl_letter('b')
     }
 
     // ── TS-prefix-1: arming + follow-up actions ─────────────────────────
@@ -335,10 +538,7 @@ mod tests {
     fn ctrl_b_arms_the_latch_without_emitting_action() {
         let mut l = Latch::default();
         let now = Instant::now();
-        assert_eq!(
-            l.observe(mods(true, false, false), Key::B, now),
-            PrefixAction::None
-        );
+        assert_eq!(l.observe(&prefix(), now), PrefixAction::None);
         assert!(l.is_armed());
     }
 
@@ -346,10 +546,10 @@ mod tests {
     fn ctrl_b_then_n_emits_next_window() {
         let mut l = Latch::default();
         let t0 = Instant::now();
-        let _ = l.observe(mods(true, false, false), Key::B, t0);
+        let _ = l.observe(&prefix(), t0);
         let t1 = t0 + Duration::from_millis(50);
         assert_eq!(
-            l.observe(mods(false, false, false), Key::N, t1),
+            l.observe(&KeyInput::letter('n'), t1),
             PrefixAction::NextWindow
         );
         assert!(!l.is_armed());
@@ -359,13 +559,9 @@ mod tests {
     fn ctrl_b_then_p_emits_prev_window() {
         let mut l = Latch::default();
         let t0 = Instant::now();
-        let _ = l.observe(mods(true, false, false), Key::B, t0);
+        let _ = l.observe(&prefix(), t0);
         assert_eq!(
-            l.observe(
-                mods(false, false, false),
-                Key::P,
-                t0 + Duration::from_millis(50)
-            ),
+            l.observe(&KeyInput::letter('p'), t0 + Duration::from_millis(50)),
             PrefixAction::PrevWindow
         );
     }
@@ -374,34 +570,21 @@ mod tests {
     fn ctrl_b_then_d_emits_detach() {
         let mut l = Latch::default();
         let t0 = Instant::now();
-        let _ = l.observe(mods(true, false, false), Key::B, t0);
+        let _ = l.observe(&prefix(), t0);
         assert_eq!(
-            l.observe(
-                mods(false, false, false),
-                Key::D,
-                t0 + Duration::from_millis(50)
-            ),
+            l.observe(&KeyInput::letter('d'), t0 + Duration::from_millis(50)),
             PrefixAction::Detach
         );
     }
 
     #[test]
     fn ctrl_b_then_digit_emits_select_window() {
-        for (key, want) in [
-            (Key::Num0, 0u8),
-            (Key::Num1, 1),
-            (Key::Num5, 5),
-            (Key::Num9, 9),
-        ] {
+        for want in [0u8, 1, 5, 9] {
             let mut l = Latch::default();
             let t0 = Instant::now();
-            let _ = l.observe(mods(true, false, false), Key::B, t0);
+            let _ = l.observe(&prefix(), t0);
             assert_eq!(
-                l.observe(
-                    mods(false, false, false),
-                    key,
-                    t0 + Duration::from_millis(50)
-                ),
+                l.observe(&KeyInput::digit(want), t0 + Duration::from_millis(50)),
                 PrefixAction::SelectWindow(want),
                 "digit {want}"
             );
@@ -414,13 +597,9 @@ mod tests {
     fn double_prefix_emits_literal() {
         let mut l = Latch::default();
         let t0 = Instant::now();
-        let _ = l.observe(mods(true, false, false), Key::B, t0);
+        let _ = l.observe(&prefix(), t0);
         assert_eq!(
-            l.observe(
-                mods(true, false, false),
-                Key::B,
-                t0 + Duration::from_millis(20)
-            ),
+            l.observe(&prefix(), t0 + Duration::from_millis(20)),
             PrefixAction::Literal
         );
         assert!(!l.is_armed());
@@ -430,16 +609,10 @@ mod tests {
     fn armed_latch_auto_cancels_after_3s() {
         let mut l = Latch::default();
         let t0 = Instant::now();
-        let _ = l.observe(mods(true, false, false), Key::B, t0);
+        let _ = l.observe(&prefix(), t0);
         assert!(l.is_armed());
-        // Exactly at the timeout boundary the latch is treated as expired.
         let later = t0 + DEFAULT_ARMED_TIMEOUT;
-        // Any follow-up after the timeout is a no-op (latch is idle); if
-        // the follow-up is the prefix itself it re-arms instead.
-        assert_eq!(
-            l.observe(mods(false, false, false), Key::N, later),
-            PrefixAction::None
-        );
+        assert_eq!(l.observe(&KeyInput::letter('n'), later), PrefixAction::None);
         assert!(!l.is_armed());
     }
 
@@ -447,14 +620,9 @@ mod tests {
     fn armed_latch_consumes_on_unknown_follow_up() {
         let mut l = Latch::default();
         let t0 = Instant::now();
-        let _ = l.observe(mods(true, false, false), Key::B, t0);
-        // Hitting an unmapped key (`Q`) cancels the arm without emitting.
+        let _ = l.observe(&prefix(), t0);
         assert_eq!(
-            l.observe(
-                mods(false, false, false),
-                Key::Q,
-                t0 + Duration::from_millis(20)
-            ),
+            l.observe(&KeyInput::letter('q'), t0 + Duration::from_millis(20)),
             PrefixAction::None
         );
         assert!(!l.is_armed());
@@ -463,7 +631,7 @@ mod tests {
     #[test]
     fn cancel_clears_arm() {
         let mut l = Latch::default();
-        let _ = l.observe(mods(true, false, false), Key::B, Instant::now());
+        let _ = l.observe(&prefix(), Instant::now());
         assert!(l.is_armed());
         l.cancel();
         assert!(!l.is_armed());
@@ -487,14 +655,14 @@ mod tests {
         assert!(chord.ctrl);
         assert!(chord.shift);
         assert!(!chord.alt);
-        assert_eq!(chord.key, Key::X);
+        assert_eq!(chord.key, KeySym::Letter('x'));
     }
 
     #[test]
     fn parses_alt_digit() {
         let chord = parse_prefix_key("Alt+5").unwrap();
         assert!(chord.alt);
-        assert_eq!(chord.key, Key::Num5);
+        assert_eq!(chord.key, KeySym::Digit(5));
     }
 
     #[test]
@@ -513,39 +681,162 @@ mod tests {
         let t0 = Instant::now();
         // Ctrl+B should not arm a Ctrl+A latch.
         assert_eq!(
-            l.observe(mods(true, false, false), Key::B, t0),
+            l.observe(&KeyInput::ctrl_letter('b'), t0),
             PrefixAction::None
         );
         assert!(!l.is_armed());
         // Ctrl+A arms it.
         assert_eq!(
-            l.observe(mods(true, false, false), Key::A, t0),
+            l.observe(&KeyInput::ctrl_letter('a'), t0),
             PrefixAction::None
         );
         assert!(l.is_armed());
         // Ctrl+A again = literal.
         assert_eq!(
-            l.observe(
-                mods(true, false, false),
-                Key::A,
-                t0 + Duration::from_millis(20)
-            ),
+            l.observe(&KeyInput::ctrl_letter('a'), t0 + Duration::from_millis(20)),
+            PrefixAction::Literal
+        );
+    }
+
+    // ── TS-11: extended actions + custom bindings ─────────────────────────
+
+    fn arm_then(l: &mut Latch, follow: KeyInput) -> PrefixAction {
+        let t0 = Instant::now();
+        let _ = l.observe(&prefix(), t0);
+        l.observe(&follow, t0 + Duration::from_millis(20))
+    }
+
+    #[test]
+    fn default_bindings_map_c_comma_m() {
+        let mut l = Latch::default();
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('c')),
+            PrefixAction::NewWindow
+        );
+        let mut l = Latch::default();
+        let comma = KeyInput {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            key: KeySym::Comma,
+        };
+        assert_eq!(arm_then(&mut l, comma), PrefixAction::RenameWindow);
+        let mut l = Latch::default();
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('m')),
+            PrefixAction::MoveWindow
+        );
+    }
+
+    #[test]
+    fn default_bindings_still_map_d_n_p_and_digits() {
+        let mut l = Latch::default();
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('d')),
+            PrefixAction::Detach
+        );
+        let mut l = Latch::default();
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('n')),
+            PrefixAction::NextWindow
+        );
+        let mut l = Latch::default();
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('p')),
+            PrefixAction::PrevWindow
+        );
+        let mut l = Latch::default();
+        assert_eq!(
+            arm_then(&mut l, KeyInput::digit(3)),
+            PrefixAction::SelectWindow(3)
+        );
+    }
+
+    #[test]
+    fn unknown_follow_up_consumes_without_action() {
+        let mut l = Latch::default();
+        assert_eq!(arm_then(&mut l, KeyInput::letter('q')), PrefixAction::None);
+        assert!(!l.is_armed());
+    }
+
+    #[test]
+    fn custom_bindings_override_defaults() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("next-window".to_string(), 'j');
+        map.insert("prev-window".to_string(), 'k');
+        let bindings = ActionBindings::from_settings_map(&map);
+        let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('j')),
+            PrefixAction::NextWindow
+        );
+        let mut l2 = {
+            let mut map = std::collections::HashMap::new();
+            map.insert("next-window".to_string(), 'j');
+            map.insert("prev-window".to_string(), 'k');
+            Latch::with_bindings(
+                PrefixChord::default(),
+                DEFAULT_ARMED_TIMEOUT,
+                ActionBindings::from_settings_map(&map),
+            )
+        };
+        assert_eq!(
+            arm_then(&mut l2, KeyInput::letter('k')),
+            PrefixAction::PrevWindow
+        );
+        let mut l3 = Latch::with_bindings(
+            PrefixChord::default(),
+            DEFAULT_ARMED_TIMEOUT,
+            ActionBindings::from_settings_map(&{
+                let mut m = std::collections::HashMap::new();
+                m.insert("next-window".to_string(), 'j');
+                m
+            }),
+        );
+        assert_eq!(arm_then(&mut l3, KeyInput::letter('n')), PrefixAction::None);
+    }
+
+    #[test]
+    fn set_bindings_applies_at_runtime() {
+        let mut l = Latch::default();
+        let mut map = std::collections::HashMap::new();
+        map.insert("new-window".to_string(), 'x');
+        l.set_bindings(ActionBindings::from_settings_map(&map));
+        assert_eq!(
+            arm_then(&mut l, KeyInput::letter('x')),
+            PrefixAction::NewWindow
+        );
+        let mut l2 = l;
+        assert_eq!(arm_then(&mut l2, KeyInput::letter('c')), PrefixAction::None);
+    }
+
+    #[test]
+    fn double_prefix_still_literal_with_custom_bindings() {
+        let bindings = ActionBindings::from_settings_map(&std::collections::HashMap::new());
+        let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
+        let t0 = Instant::now();
+        let _ = l.observe(&prefix(), t0);
+        assert_eq!(
+            l.observe(&prefix(), t0 + Duration::from_millis(20)),
             PrefixAction::Literal
         );
     }
 
     #[test]
-    fn command_flag_aliases_to_ctrl() {
-        let chord = PrefixChord::default();
-        let m = Modifiers {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            command: true,
-            mac_cmd: false,
-        };
-        // Even though `ctrl=false`, `command=true` should match a Ctrl+B
-        // chord on non-mac platforms.
-        assert!(chord.matches(&m, Key::B));
+    fn timeout_still_cancels_with_extended_actions() {
+        let mut l = Latch::default();
+        let t0 = Instant::now();
+        let _ = l.observe(&prefix(), t0);
+        let later = t0 + DEFAULT_ARMED_TIMEOUT;
+        assert_eq!(l.observe(&KeyInput::letter('c'), later), PrefixAction::None);
+        assert!(!l.is_armed());
+    }
+
+    #[test]
+    fn action_bindings_from_settings_map_uses_defaults_for_missing() {
+        let b = ActionBindings::from_settings_map(&std::collections::HashMap::new());
+        assert_eq!(b.detach, 'd');
+        assert_eq!(b.new_window, 'c');
+        assert_eq!(b.move_window, 'm');
     }
 }

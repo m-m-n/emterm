@@ -18,6 +18,7 @@ pub mod emoji_cache;
 pub mod keybinds;
 pub mod md3;
 pub mod md3_widgets;
+pub mod mux_dialogs;
 pub mod profile_selector;
 pub mod scrollbar;
 pub mod search_bar;
@@ -149,4 +150,8 @@ pub enum TabEvent {
     /// `to == from` and `to == from + 1` are no-ops (the tab would land
     /// in the same slot).
     Reorder { from: usize, to: usize },
+    /// Click on a mux sub-tab: switch the group at tab `tab` (0-based) to
+    /// the window at `window` (0-based index within the group). Mirrors a
+    /// `prefix 0..9` jump driven from the tab bar.
+    MuxSwitch { tab: usize, window: usize },
 }

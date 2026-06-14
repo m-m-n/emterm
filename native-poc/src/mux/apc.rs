@@ -55,10 +55,106 @@ pub fn try_decode_emterm_mux(data: &[u8]) -> Option<MuxMessage> {
     }
 }
 
+/// Encode a `MuxMessage` into an outbound `emterm-mux` APC byte sequence
+/// (`ESC _ emterm-mux;<base64(frame_body)> ESC \`), the counterpart to
+/// [`try_decode_emterm_mux`].
+///
+/// native-poc writes the result straight to the active tab's PTY
+/// (fire-and-forget); the `emterm mux` bridge reads it off the PTY and
+/// relays the frame to the daemon over its Unix socket. native never opens
+/// the socket itself (NFR2 — SSH transparency). Responses arrive back as
+/// inbound APC through the existing `on_apc` route.
+///
+/// Mirrors the WebView `MuxClient.sendControl` → `encodeApc` path. The wire
+/// shape is identical to `MuxMessage::to_apc`, so the result round-trips
+/// with the decoder above.
+pub fn encode_emterm_mux(msg: &MuxMessage) -> Vec<u8> {
+    msg.to_apc().into_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mux_ipc::protocol::{MessageType, MuxMessage, StatusUpdateMsg};
+    use mux_ipc::protocol::{
+        CreateWindowPayload, MessageType, MoveWindowMsg, MuxMessage, RenameWindowMsg,
+        StatusUpdateMsg,
+    };
+
+    /// Strip the `ESC _` / `ESC \` framing the way `term_core`'s `on_apc`
+    /// hands the slice to [`try_decode_emterm_mux`].
+    fn strip_apc(apc: &[u8]) -> Vec<u8> {
+        let s = std::str::from_utf8(apc).unwrap();
+        let inner = s
+            .strip_prefix("\x1b_")
+            .and_then(|s| s.strip_suffix("\x1b\\"))
+            .expect("apc framing");
+        inner.as_bytes().to_vec()
+    }
+
+    // ── TS-5: outbound encode round-trips with the decoder ────────────────
+
+    #[test]
+    fn encode_create_window_round_trips() {
+        let payload = CreateWindowPayload::default();
+        let msg = MuxMessage::control(MessageType::CreateWindow, 0, &payload);
+        let apc = encode_emterm_mux(&msg);
+        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).expect("decoded");
+        assert_eq!(decoded.msg_type, MessageType::CreateWindow);
+        assert_eq!(decoded.pane_id, 0);
+    }
+
+    #[test]
+    fn encode_switch_window_round_trips() {
+        let msg = MuxMessage {
+            msg_type: MessageType::SwitchWindow,
+            pane_id: 42,
+            payload: Vec::new(),
+        };
+        let apc = encode_emterm_mux(&msg);
+        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::SwitchWindow);
+        assert_eq!(decoded.pane_id, 42);
+    }
+
+    #[test]
+    fn encode_rename_window_round_trips() {
+        let rename = RenameWindowMsg {
+            name: "editor 🎉".to_string(),
+        };
+        let msg = MuxMessage::control(MessageType::RenameWindow, 7, &rename);
+        let apc = encode_emterm_mux(&msg);
+        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::RenameWindow);
+        assert_eq!(decoded.pane_id, 7);
+        let back: RenameWindowMsg = decoded.decode_payload().unwrap();
+        assert_eq!(back.name, "editor 🎉");
+    }
+
+    #[test]
+    fn encode_move_window_round_trips() {
+        let mv = MoveWindowMsg { target_index: 3 };
+        let msg = MuxMessage::control(MessageType::MoveWindow, 9, &mv);
+        let apc = encode_emterm_mux(&msg);
+        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::MoveWindow);
+        assert_eq!(decoded.pane_id, 9);
+        let back: MoveWindowMsg = decoded.decode_payload().unwrap();
+        assert_eq!(back.target_index, 3);
+    }
+
+    #[test]
+    fn encode_request_pane_snapshot_round_trips() {
+        // Screen-restore request: control frame carrying just the pane id.
+        let msg = MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: 5,
+            payload: Vec::new(),
+        };
+        let apc = encode_emterm_mux(&msg);
+        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).unwrap();
+        assert_eq!(decoded.msg_type, MessageType::RequestPaneSnapshot);
+        assert_eq!(decoded.pane_id, 5);
+    }
 
     // ── TS-apc-1: happy path round-trip ──────────────────────────────────
 
