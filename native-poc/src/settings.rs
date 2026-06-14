@@ -134,6 +134,88 @@ pub const DEFAULT_CLIPBOARD_MAX_SIZE_OSC52: u32 = 10 * 1024 * 1024;
 /// cannot lock the user out of mux mode.
 pub const DEFAULT_MUX_PREFIX_KEY: &str = "Ctrl+B";
 
+/// Action keys recognized in `mux.keybinds`. Each maps a mux action name to
+/// a single follow-up key after the prefix (tmux-compatible defaults
+/// `d`/`c`/`n`/`p`/`,`/`m`). Mirrors `DEFAULT_ACTION_BINDINGS` in
+/// `src/terminal/mux/prefix-key.ts`.
+pub const MUX_ACTION_NAMES: [&str; 6] = [
+    "detach",
+    "new-window",
+    "next-window",
+    "prev-window",
+    "rename-window",
+    "move-window",
+];
+
+/// Default follow-up key for a mux action, or `None` if the action name is
+/// unknown. Thin wrapper over the SSOT
+/// [`crate::mux::prefix::DEFAULT_ACTION_BINDINGS`]; both the settings loader
+/// and `ActionBindings::default()` consult the same table so the two cannot
+/// drift.
+pub fn default_mux_action_key(action: &str) -> Option<char> {
+    crate::mux::prefix::default_action_char(action)
+}
+
+/// Resolved mux UI settings (`mux.*`). Port of the WebView `MuxSettings` /
+/// `crates/app_settings::MuxSettings` subset the native build consumes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MuxSettings {
+    /// Initial expansion state of the tab group (`mux.tab_always_expand`).
+    pub tab_always_expand: bool,
+    /// Position of the mux status row (`mux.status_position`).
+    pub status_position: StatusBarPosition,
+    /// Effective per-action follow-up keys (`mux.keybinds`), starting from
+    /// the tmux defaults and overlaid with valid user entries. Invalid or
+    /// unknown entries are dropped (warn) and the default is kept.
+    pub keybinds: std::collections::HashMap<String, char>,
+    /// Mux status-bar content (`mux.statusbar.*`).
+    pub statusbar: MuxStatusbarSettings,
+}
+
+impl Default for MuxSettings {
+    fn default() -> Self {
+        let mut keybinds = std::collections::HashMap::new();
+        for action in MUX_ACTION_NAMES {
+            if let Some(c) = default_mux_action_key(action) {
+                keybinds.insert(action.to_string(), c);
+            }
+        }
+        Self {
+            tab_always_expand: false,
+            status_position: StatusBarPosition::default(),
+            keybinds,
+            statusbar: MuxStatusbarSettings::default(),
+        }
+    }
+}
+
+/// Mux status-bar content (`mux.statusbar.*`). Port of
+/// `crates/app_settings::MuxStatusbarSettings` (the subset rendered natively).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MuxStatusbarSettings {
+    pub enabled: bool,
+    pub left: String,
+    pub right: String,
+}
+
+/// Parse a single `mux.keybinds` follow-up chord into one character. Valid
+/// entries are a single printable char (`"c"`, `","`) — matching the
+/// WebView single-char action bindings. Returns `None` for anything else
+/// (empty, multi-char, modifier combo); the caller warns and keeps the
+/// default for that action.
+pub fn parse_mux_action_key(spec: &str) -> Option<char> {
+    let mut chars = spec.chars();
+    let first = chars.next()?;
+    if chars.next().is_some() {
+        // More than one character (e.g. "Ctrl+N") — not a single-char chord.
+        return None;
+    }
+    if first.is_control() || first == ' ' {
+        return None;
+    }
+    Some(first)
+}
+
 /// Position of the egui status-bar widget relative to the terminal grid.
 /// `Top` inserts an [`egui::TopBottomPanel::top`]; `Bottom` inserts an
 /// [`egui::TopBottomPanel::bottom`]. Phase 4-D introduces this; later
@@ -481,6 +563,10 @@ pub struct Settings {
     /// [`DEFAULT_MUX_PREFIX_KEY`] and never mutated.
     #[allow(dead_code)] // Phase 4-D status bar / settings UI will consume this.
     pub mux_prefix_key: String,
+    /// Resolved mux UI settings (`mux.tab_always_expand` / `status_position`
+    /// / `keybinds` / `statusbar.*`). Consumed by the mux tab group, the
+    /// prefix latch, and the mux status row.
+    pub mux: MuxSettings,
     /// Status-bar widget configuration. See [`StatusBarSettings`]. Phase
     /// 4-D introduces this; today the value is always the default until
     /// Phase 7 wires `settings.json` loading.
@@ -942,6 +1028,7 @@ impl Default for Settings {
             clipboard_read_osc52: true,
             clipboard_max_size_osc52: DEFAULT_CLIPBOARD_MAX_SIZE_OSC52,
             mux_prefix_key: DEFAULT_MUX_PREFIX_KEY.to_string(),
+            mux: MuxSettings::default(),
             statusbar: StatusBarSettings::default(),
             keybinds: KeybindSettings::default(),
             ime: ImeSettings::default(),
@@ -1236,6 +1323,20 @@ struct RawUserColorScheme {
 #[serde(default)]
 struct RawMux {
     prefix: Option<String>,
+    tab_always_expand: Option<bool>,
+    status_position: Option<String>,
+    keybinds: Option<std::collections::HashMap<String, String>>,
+    statusbar: Option<RawMuxStatusbar>,
+}
+
+/// Deserialize side of `mux.statusbar.*`. Mirrors the subset of
+/// `crates/app_settings::MuxStatusbarSettings` the native build renders.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+struct RawMuxStatusbar {
+    enabled: Option<bool>,
+    left: Option<String>,
+    right: Option<String>,
 }
 
 /// Deserialize side of the nested `"keybinds"` block. Mirrors
@@ -1354,6 +1455,51 @@ impl RawSettings {
         if let Some(mux) = self.mux {
             if let Some(v) = mux.prefix.filter(|s| !s.trim().is_empty()) {
                 dst.mux_prefix_key = v;
+            }
+            if let Some(v) = mux.tab_always_expand {
+                dst.mux.tab_always_expand = v;
+            }
+            if let Some(v) = mux.status_position.filter(|s| !s.trim().is_empty()) {
+                dst.mux.status_position = StatusBarPosition::parse_or_warn(&v);
+            }
+            if let Some(kb) = mux.keybinds {
+                for (action, spec) in kb {
+                    // Unknown action names are ignored (forward compat).
+                    if default_mux_action_key(&action).is_none() {
+                        log::warn!(
+                            "settings.mux.keybinds: unknown action {:?}, ignored",
+                            action
+                        );
+                        continue;
+                    }
+                    // Blank entries keep the default (matching mux.prefix).
+                    if spec.trim().is_empty() {
+                        continue;
+                    }
+                    match parse_mux_action_key(&spec) {
+                        Some(c) => {
+                            dst.mux.keybinds.insert(action, c);
+                        }
+                        None => {
+                            log::warn!(
+                                "settings.mux.keybinds.{}: invalid chord {:?}, keeping default",
+                                action,
+                                spec
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(sb) = mux.statusbar {
+                if let Some(v) = sb.enabled {
+                    dst.mux.statusbar.enabled = v;
+                }
+                if let Some(v) = sb.left {
+                    dst.mux.statusbar.left = v;
+                }
+                if let Some(v) = sb.right {
+                    dst.mux.statusbar.right = v;
+                }
             }
         }
 
@@ -1954,6 +2100,79 @@ mod tests {
     fn loader_mux_prefix_overrides_default() {
         let s = load_json(r#"{"mux": {"prefix": "Ctrl+A"}}"#);
         assert_eq!(s.mux_prefix_key, "Ctrl+A");
+    }
+
+    // ── TS-4: mux settings loader (tab_always_expand / status_position /
+    //          keybinds / statusbar.*) ──────────────────────────────────────
+
+    #[test]
+    fn default_mux_settings_match_webview() {
+        let s = Settings::new();
+        assert!(!s.mux.tab_always_expand);
+        assert_eq!(s.mux.status_position, StatusBarPosition::Bottom);
+        // tmux-compatible default action keys.
+        assert_eq!(s.mux.keybinds.get("detach"), Some(&'d'));
+        assert_eq!(s.mux.keybinds.get("new-window"), Some(&'c'));
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&'n'));
+        assert_eq!(s.mux.keybinds.get("prev-window"), Some(&'p'));
+        assert_eq!(s.mux.keybinds.get("rename-window"), Some(&','));
+        assert_eq!(s.mux.keybinds.get("move-window"), Some(&'m'));
+        assert!(!s.mux.statusbar.enabled);
+    }
+
+    #[test]
+    fn loader_mux_tab_always_expand() {
+        let s = load_json(r#"{"mux": {"tab_always_expand": true}}"#);
+        assert!(s.mux.tab_always_expand);
+    }
+
+    #[test]
+    fn loader_mux_status_position_top() {
+        let s = load_json(r#"{"mux": {"status_position": "top"}}"#);
+        assert_eq!(s.mux.status_position, StatusBarPosition::Top);
+    }
+
+    #[test]
+    fn loader_mux_status_position_invalid_falls_back_to_bottom() {
+        let s = load_json(r#"{"mux": {"status_position": "sideways"}}"#);
+        assert_eq!(s.mux.status_position, StatusBarPosition::Bottom);
+    }
+
+    #[test]
+    fn loader_mux_keybinds_override_valid() {
+        let s = load_json(r#"{"mux": {"keybinds": {"next-window": "j", "prev-window": "k"}}}"#);
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&'j'));
+        assert_eq!(s.mux.keybinds.get("prev-window"), Some(&'k'));
+        // Untouched actions keep their defaults.
+        assert_eq!(s.mux.keybinds.get("new-window"), Some(&'c'));
+    }
+
+    #[test]
+    fn loader_mux_keybinds_invalid_keeps_default() {
+        // Multi-char chord is not a single-char follow-up → keep default.
+        let s = load_json(r#"{"mux": {"keybinds": {"next-window": "Ctrl+N"}}}"#);
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&'n'));
+    }
+
+    #[test]
+    fn loader_mux_keybinds_empty_keeps_default() {
+        let s = load_json(r#"{"mux": {"keybinds": {"next-window": ""}}}"#);
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&'n'));
+    }
+
+    #[test]
+    fn loader_mux_keybinds_unknown_action_ignored() {
+        let s = load_json(r#"{"mux": {"keybinds": {"frobnicate": "z"}}}"#);
+        assert!(!s.mux.keybinds.contains_key("frobnicate"));
+    }
+
+    #[test]
+    fn loader_mux_statusbar_fields() {
+        let s =
+            load_json(r#"{"mux": {"statusbar": {"enabled": true, "left": "L", "right": "R"}}}"#);
+        assert!(s.mux.statusbar.enabled);
+        assert_eq!(s.mux.statusbar.left, "L");
+        assert_eq!(s.mux.statusbar.right, "R");
     }
 
     // ── Notification settings ───────────────────────────────────────────

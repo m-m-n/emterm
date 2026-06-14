@@ -179,6 +179,23 @@ impl StatusBarRuntime {
         mux_session_name: Option<&str>,
         mux_status: Option<&mux_ipc::protocol::StatusUpdateMsg>,
     ) -> StatusBarViewModel {
+        self.build_view_model_with_mux(settings, mux_session_name, mux_status, None)
+    }
+
+    /// SPEC US4 / FR11: same as [`Self::build_view_model`] but with the
+    /// `mux.statusbar.*` settings layered on top when the active tab is
+    /// mux-attached. The mux templates override the app's `line1_left` /
+    /// `line1_right` while attached (resolved through the same engine);
+    /// when `mux_statusbar.enabled` is false, both app rows are cleared so
+    /// only the daemon-pushed OSC row remains. With `mux_session_name`
+    /// None, the call collapses to the plain app statusbar.
+    pub fn build_view_model_with_mux(
+        &self,
+        settings: &StatusBarSettings,
+        mux_session_name: Option<&str>,
+        mux_status: Option<&mux_ipc::protocol::StatusUpdateMsg>,
+        mux_statusbar: Option<&crate::settings::MuxStatusbarSettings>,
+    ) -> StatusBarViewModel {
         if !settings.enabled {
             return StatusBarViewModel::default();
         }
@@ -211,14 +228,32 @@ impl StatusBarRuntime {
         // App rows: resolve each side through the engine + html
         // pipeline, with the (template, version-tuple) cache in
         // front to short-circuit identical frames (NFR1).
+        //
+        // When the active tab is mux-attached AND `mux.statusbar.enabled`,
+        // the mux templates override `line1`'s left/right (SPEC US4 / FR11);
+        // when the mux statusbar is disabled while attached, both app rows
+        // are zeroed so only the daemon-pushed OSC row remains visible.
         let mut cache = self.run_cache.lock();
-        let app_line1 = AppRow {
-            left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_left),
-            right: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_right),
-        };
-        let app_line2 = AppRow {
-            left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line2_left),
-            right: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line2_right),
+        let (app_line1, app_line2) = match (mux_session_name, mux_statusbar) {
+            (Some(_), Some(mux_sb)) if mux_sb.enabled => {
+                let line1 = AppRow {
+                    left: resolve_runs_cached(&self.engine, &mut cache, &mux_sb.left),
+                    right: resolve_runs_cached(&self.engine, &mut cache, &mux_sb.right),
+                };
+                (line1, AppRow::default())
+            }
+            (Some(_), Some(mux_sb)) if !mux_sb.enabled => (AppRow::default(), AppRow::default()),
+            _ => {
+                let line1 = AppRow {
+                    left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_left),
+                    right: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_right),
+                };
+                let line2 = AppRow {
+                    left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line2_left),
+                    right: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line2_right),
+                };
+                (line1, line2)
+            }
         };
         drop(cache);
 

@@ -1,0 +1,123 @@
+schema_version: 1
+feature: mux-window-tabs-native-port
+created: 2026-06-14
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=native-poc/target cargo check --manifest-path native-poc/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=native-poc/target cargo test --manifest-path native-poc/Cargo.toml --bin emterm-native-poc"
+      format_command: "cargo fmt --manifest-path native-poc/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: fec8d8da53e0f271f6e98fe2d8c9231c26ff6fe9
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: fec8d8da53e0f271f6e98fe2d8c9231c26ff6fe9
+  - id: verify-plan
+    status: completed
+    completed_at_commit: fec8d8da53e0f271f6e98fe2d8c9231c26ff6fe9
+  - id: implement
+    status: completed
+    completed_at_commit: fec8d8da53e0f271f6e98fe2d8c9231c26ff6fe9
+  - id: check
+    status: completed
+    completed_at_commit: fec8d8da53e0f271f6e98fe2d8c9231c26ff6fe9
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: fec8d8da53e0f271f6e98fe2d8c9231c26ff6fe9
+
+requirements:
+  FR1:
+    title: タブグループ UI（WebView 準拠・常にサブタブ）
+    status: ok
+    note: "WebView 準拠に修正: compact/expanded トグルを廃止。mux アタッチ中は常に各ウィンドウを [N] 名前 のサブタブで描画（windowCount>=1）、クリックで TabEvent::MuxSwitch→switch_to。0 ウィンドウでグループ解除。render/mod.rs→mux_group_render_model→TabBarItem.mux_cells、layout_tab_strip で実描画"
+    tasks: [subtab-rendering, click-routing]
+    tests: [TS-15]
+  FR2:
+    title: ウィンドウ状態モデル（windows / active_window_index / pane_ids / expanded）
+    status: ok
+    tasks: [window-state-model, expansion-controller, tab-integration]
+    tests: [TS-1, TS-2, TS-3]
+  FR3:
+    title: APC 制御送信経路（MuxMessage を APC エンコードして PTY write）
+    status: ok
+    tasks: [apc-encoder, send-control-path]
+    tests: [TS-5]
+  FR4:
+    title: 受信メッセージ拡張（PaneCreated / SwitchWindow / RenameWindow / PtyExited / Welcome windows）
+    status: ok
+    tasks: [welcome-ingest, inbound-window-handlers, app-routing]
+    tests: [TS-6, TS-7, TS-8, TS-9, TS-10, TS-16]
+  FR5:
+    title: ウィンドウ切替（サブタブクリック / prefix n,p,0..9）
+    status: ok
+    tasks: [switch-dispatch, click-routing]
+    tests: [TS-12]
+  FR6:
+    title: 新規ウィンドウ（prefix c → CreateWindow → PaneCreated）
+    status: ok
+    tasks: [new-window-dispatch]
+    tests: [TS-7, TS-11]
+  FR7:
+    title: ウィンドウリネーム（prefix , + ダイアログ + RenameWindow）
+    status: ok
+    tasks: [rename-dialog-ui, rename-handler, dialog-input-routing]
+    tests: [TS-9, TS-14]
+  FR8:
+    title: ウィンドウ移動（prefix m + ダイアログ + 楽観 reorder + MoveWindow、失敗時ロールバック）
+    status: ok
+    tasks: [move-dialog-ui, move-handler]
+    tests: [TS-13]
+  FR9:
+    title: ウィンドウ削除反映（PtyExited でサブタブ除去・1ウィンドウでグループ解除）
+    status: ok
+    tasks: [inbound-window-handlers]
+    tests: [TS-8]
+  FR10:
+    title: prefix Latch の dispatch 配線と拡張（NewWindow/Rename/Move、mux.keybinds 反映）
+    status: ok
+    tasks: [extend-action-enum, bindings-from-settings, latch-wiring]
+    tests: [TS-11]
+  FR11:
+    title: mux 設定の取得・動的反映（tab_always_expand / status_position / keybinds / statusbar）
+    status: ok
+    tasks: [mux-settings-loader, dynamic-apply]
+    tests: [TS-4]
+  NFR1:
+    title: パフォーマンス（PTY ホットパス非影響、on_apc 経路再利用）
+    status: ok
+    tasks: [send-control-path]
+    tests: []
+  NFR2:
+    title: SSH 透過（socket を開かず APC inband 維持）
+    status: ok
+    tasks: [send-control-path]
+    tests: []
+  NFR3:
+    title: 互換性（src-tauri ビルド/テスト非影響、mux_ipc 共有不変）
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: ユーザビリティ（WebView mux タブグループとの挙動等価）
+    status: ok
+    tasks: [compact-rendering, expanded-rendering]
+    tests: []
+
+open_questions:
+  - id: OQ1
+    ref: FR6
+    question: "PaneCreated にウィンドウ名が無い場合の初期名規則"
+    resolution: "解決済み: 新規作成時の初期名は \"Terminal\"（WebView handleMuxPaneCreated 準拠、OSC タイトルで後更新）"
+  - id: OQ2
+    ref: FR9
+    question: "明示的な kill-window 操作の有無"
+    resolution: "解決済み: WebView に明示的 kill-window は無い。削除はシェル終了（PtyExited → handleMuxPaneExited）経由のみ"

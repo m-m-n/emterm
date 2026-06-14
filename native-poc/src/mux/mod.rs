@@ -23,4 +23,6 @@
 #![allow(dead_code)]
 
 pub mod apc;
+pub mod dialog;
 pub mod prefix;
+pub mod window_group;

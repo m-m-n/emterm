@@ -220,6 +220,16 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
             if let Some(name) = &t.mux_session_name {
                 item = item.with_mux_session(name.clone());
             }
+            // FR1 (WebView parity): a mux-attached tab renders one sub-tab per
+            // window (`[N] name`) instead of the plain title, whenever the
+            // group holds at least one window. The group is dissolved only at
+            // zero windows (`is_group()` false → the `Option` is cleared on the
+            // last `PtyExited`), falling back to the plain title.
+            if let Some(group) = &t.mux_group {
+                if group.is_group() {
+                    item = item.with_mux_cells(crate::ui::tab_bar::mux_group_render_model(group));
+                }
+            }
             // `tab_activity_indicator` gates the dot's rendering only;
             // the underlying activity state (and notifications) is
             // tracked regardless — WebView `main.ts` parity.

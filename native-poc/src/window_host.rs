@@ -40,7 +40,104 @@ use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes, Windo
 
 use crate::app::App;
 use crate::ime::backend::{build_backend_with_window, KeyDispatchResult, ProcessEnv, RawKeyEvent};
+use crate::mux::dialog::{MuxDialogOutcome, MuxDialogState};
+use crate::mux::prefix::{KeyInput as MuxKeyInput, KeySym};
 use crate::pty::input::{encode, Key, Modifiers};
+
+/// Drive one frame of the open mux dialog: render via the UI layer
+/// (`ui::mux_dialogs::draw`) and dispatch the resulting outcome into the
+/// domain layer (`App::confirm_mux_*`). This is the orchestration glue
+/// that previously lived in `ui::mux_dialogs::drive`; moved here so the UI
+/// module no longer has to `use crate::app::App` (otherwise the UI layer
+/// imports App, and App imports UI types like `TabEvent` — a cycle).
+/// `window_host` already owns `App`, so dispatch lives at this boundary.
+fn drive_mux_dialogs(app: &mut App, ctx: &egui::Context) -> bool {
+    if !app.mux_dialog.is_open() {
+        return false;
+    }
+    // Reconcile against any daemon-driven changes that arrived since the
+    // dialog opened (PaneCreated / PtyExited / SwitchWindow). If the
+    // captured window vanished, refresh_mux_dialog flips the state to
+    // Closed; we then early-return without drawing.
+    app.refresh_mux_dialog();
+    if !app.mux_dialog.is_open() {
+        return false;
+    }
+    let outcome = crate::ui::mux_dialogs::draw(&mut app.mux_dialog, ctx);
+    match outcome {
+        MuxDialogOutcome::Pending => {}
+        MuxDialogOutcome::ConfirmRename { window_id, name } => {
+            app.mux_dialog = MuxDialogState::Closed;
+            app.confirm_mux_rename(window_id, name);
+        }
+        MuxDialogOutcome::ConfirmMove { window_id, target } => {
+            app.mux_dialog = MuxDialogState::Closed;
+            app.confirm_mux_move(window_id, target);
+        }
+        MuxDialogOutcome::Cancelled => {
+            app.mux_dialog = MuxDialogState::Closed;
+        }
+    }
+    true
+}
+
+/// Convert an (egui::Key, current modifiers) pair from the winit event
+/// pipeline into the framework-agnostic [`MuxKeyInput`] the mux prefix
+/// latch consumes. Keeps the egui→domain translation pinned to this
+/// single boundary site (gpt-architecture #4).
+fn egui_to_mux_input(mods: Modifiers, key: egui::Key) -> MuxKeyInput {
+    let sym = match key {
+        egui::Key::A => KeySym::Letter('a'),
+        egui::Key::B => KeySym::Letter('b'),
+        egui::Key::C => KeySym::Letter('c'),
+        egui::Key::D => KeySym::Letter('d'),
+        egui::Key::E => KeySym::Letter('e'),
+        egui::Key::F => KeySym::Letter('f'),
+        egui::Key::G => KeySym::Letter('g'),
+        egui::Key::H => KeySym::Letter('h'),
+        egui::Key::I => KeySym::Letter('i'),
+        egui::Key::J => KeySym::Letter('j'),
+        egui::Key::K => KeySym::Letter('k'),
+        egui::Key::L => KeySym::Letter('l'),
+        egui::Key::M => KeySym::Letter('m'),
+        egui::Key::N => KeySym::Letter('n'),
+        egui::Key::O => KeySym::Letter('o'),
+        egui::Key::P => KeySym::Letter('p'),
+        egui::Key::Q => KeySym::Letter('q'),
+        egui::Key::R => KeySym::Letter('r'),
+        egui::Key::S => KeySym::Letter('s'),
+        egui::Key::T => KeySym::Letter('t'),
+        egui::Key::U => KeySym::Letter('u'),
+        egui::Key::V => KeySym::Letter('v'),
+        egui::Key::W => KeySym::Letter('w'),
+        egui::Key::X => KeySym::Letter('x'),
+        egui::Key::Y => KeySym::Letter('y'),
+        egui::Key::Z => KeySym::Letter('z'),
+        egui::Key::Num0 => KeySym::Digit(0),
+        egui::Key::Num1 => KeySym::Digit(1),
+        egui::Key::Num2 => KeySym::Digit(2),
+        egui::Key::Num3 => KeySym::Digit(3),
+        egui::Key::Num4 => KeySym::Digit(4),
+        egui::Key::Num5 => KeySym::Digit(5),
+        egui::Key::Num6 => KeySym::Digit(6),
+        egui::Key::Num7 => KeySym::Digit(7),
+        egui::Key::Num8 => KeySym::Digit(8),
+        egui::Key::Num9 => KeySym::Digit(9),
+        egui::Key::Comma => KeySym::Comma,
+        egui::Key::Period => KeySym::Period,
+        egui::Key::Semicolon => KeySym::Semicolon,
+        egui::Key::Slash => KeySym::Slash,
+        egui::Key::Backslash => KeySym::Backslash,
+        egui::Key::Minus => KeySym::Minus,
+        _ => KeySym::Other,
+    };
+    MuxKeyInput {
+        ctrl: mods.ctrl,
+        shift: mods.shift,
+        alt: mods.alt,
+        key: sym,
+    }
+}
 use crate::render::terminal_grid_pass::TerminalGridPass;
 use crate::selection::{Pos, Selection, SelectionMode};
 use crate::ui::keybinds::Chord;
@@ -1075,9 +1172,10 @@ impl WindowHost {
             .core
             .lock()
             .get_mode(term_core::terminal_core::MODE_BRACKETED_PASTE);
-        if let Some(pty) = &tab.pty {
-            pty.write_paste(text, bracketed);
-        }
+        // mux-aware: in mux mode the paste is wrapped as a PtyInput frame
+        // (the bridge drops raw stdin); otherwise it is a plain bracketed
+        // PTY write.
+        tab.write_paste_input(text, bracketed);
     }
 
     /// Run a single egui frame and present.
@@ -1198,6 +1296,11 @@ impl WindowHost {
                 ctx.request_repaint();
             }
             frame_events.sftp = crate::render::draw_sftp_overlay(ctx, app);
+            // mux rename / move modals (same `&mut App` split). Drawn last so
+            // they float above the other chrome.
+            if drive_mux_dialogs(app, ctx) {
+                ctx.request_repaint();
+            }
         });
         // CSD title-bar actions hit `winit::Window` directly except
         // for Close, which defers to `about_to_wait` via
@@ -2063,6 +2166,18 @@ impl ApplicationHandler for PocApp {
                     host.window().request_redraw();
                     return;
                 }
+                // Same capture for an open mux dialog: route CJK commits into
+                // the dialog's TextEdit, never the terminal IME backend.
+                if self.app.mux_dialog_open() {
+                    if let winit::event::Ime::Commit(text) = &ime {
+                        if !text.is_empty() {
+                            host.pending_egui_events
+                                .push(egui::Event::Text(text.clone()));
+                        }
+                    }
+                    host.window().request_redraw();
+                    return;
+                }
                 self.app.pass_winit_ime(&ime);
                 host.window().request_redraw();
             }
@@ -2119,6 +2234,16 @@ impl ApplicationHandler for PocApp {
                     return;
                 }
 
+                // While a mux rename / move dialog owns the keyboard, forward
+                // keys into egui (its TextEdit / DragValue / Enter / Escape)
+                // and return early so the chord never reaches the terminal
+                // IME, the keybind dispatcher, or the PTY encoder.
+                if self.app.mux_dialog_open() {
+                    handle_mux_dialog_key(&event, host.current_mods, host);
+                    host.window().request_redraw();
+                    return;
+                }
+
                 // Phase 4-G: offer the raw key event to the IME backend
                 // first. `Consumed` means the IM server swallowed the
                 // key (composition open, candidate chosen) and we must
@@ -2158,7 +2283,28 @@ impl ApplicationHandler for PocApp {
                 let egui_key = winit_key_to_egui(&event.logical_key);
                 let handled =
                     handle_special_chord(&event, host.current_mods, egui_key, host, &mut self.app);
+                // mux prefix latch: intercept keys for the active mux tab
+                // ahead of the keybind dispatch / PTY passthrough. Only fires
+                // when the active tab is mux-attached.
+                let mut mux_consumed = false;
                 if !handled {
+                    if let Some(k) = egui_key {
+                        // Convert the framework-native (egui::Modifiers, egui::Key)
+                        // into the framework-agnostic mux::prefix::KeyInput right
+                        // here at the UI boundary so the domain layer never sees
+                        // egui types (gpt-architecture #4). `command` is folded
+                        // into `ctrl` because egui aliases Cmd to Ctrl on non-mac.
+                        let input = egui_to_mux_input(host.current_mods, k);
+                        let (consumed, outcome) =
+                            self.app.observe_mux_key(&input, std::time::Instant::now());
+                        mux_consumed = consumed;
+                        self.app.handle_mux_outcome(outcome);
+                        if consumed {
+                            self.app.mark_full_redraw();
+                        }
+                    }
+                }
+                if !handled && !mux_consumed {
                     // Settings-driven global keybinds (tab roster) take
                     // priority over the generic PTY encoder. The chord
                     // table comes from `settings.keybinds` (resolved into
@@ -2252,7 +2398,9 @@ impl ApplicationHandler for PocApp {
                         }
                         if let Some(bytes) = winit_key_to_bytes(&event, mods) {
                             if let Some(tab) = self.app.active_tab() {
-                                tab.write(bytes);
+                                // mux-aware: wraps as PtyInput in mux mode so the
+                                // bridge forwards it (raw stdin is dropped there).
+                                tab.write_input(bytes);
                             }
                         }
                     }
@@ -2861,6 +3009,35 @@ fn handle_profile_selector_key(event: &KeyEvent, app: &mut App) {
             app.confirm_profile_selection(idx);
         }
         _ => {}
+    }
+}
+
+/// Forward a key press into egui while a mux rename / move dialog is open.
+/// Mirrors the search-bar capture: editing keys (Backspace / arrows /
+/// Enter / Escape …) go through as egui `Key` events and printable text as
+/// `Text` events, so the dialog's `TextEdit` / `DragValue` and its
+/// Enter-confirm / Escape-cancel handling work. The terminal IME backend,
+/// the keybind dispatcher, and the PTY encoder never see the key — without
+/// this gate, typing in the dialog would leak into the running shell.
+fn handle_mux_dialog_key(event: &KeyEvent, mods: Modifiers, host: &mut WindowHost) {
+    if let Some(key) = winit_key_to_egui(&event.logical_key) {
+        host.pending_egui_events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: event.repeat,
+            modifiers: input_mods_to_egui(mods),
+        });
+    }
+    // Printable characters insert into the focused field. Suppressed while
+    // Ctrl/Alt is held so control chords do not also emit a literal glyph.
+    if !mods.ctrl && !mods.alt {
+        if let Some(text) = &event.text {
+            let printable: String = text.chars().filter(|c| !c.is_control()).collect();
+            if !printable.is_empty() {
+                host.pending_egui_events.push(egui::Event::Text(printable));
+            }
+        }
     }
 }
 

@@ -19,7 +19,9 @@ use crate::image::{parse as image_parse, split_image_events};
 use crate::pty::{ExitReason, PtyEvent, PtySession};
 use crate::render::theme::Theme;
 use crate::settings::Settings;
-use mux_ipc::protocol::{MessageType, MuxMessage, StatusUpdateMsg, WelcomeMsg};
+use mux_ipc::protocol::{MessageType, MuxMessage, RenameWindowMsg, StatusUpdateMsg, WelcomeMsg};
+
+use crate::mux::window_group::{MuxWindow, MuxWindowGroup};
 
 // Default scrollback capacity now lives on `Settings` (`DEFAULT_SCROLLBACK_LINES`
 // in `crate::settings`); the caller passes the desired value into
@@ -82,6 +84,13 @@ pub struct Tab {
     /// daemon. Phase 4-D's status-bar widget (`ui::status_bar`) reads
     /// this through `App::status_bar_state()`.
     pub mux_status_state: Option<StatusUpdateMsg>,
+    /// mux window-tab group state for a mux-attached tab. Holds the ordered
+    /// window list (parallel `windows` / `pane_ids`), active index, and
+    /// compact/expanded flag. `None` until the tab attaches to a mux session
+    /// (seeded by `Welcome`); cleared on detach. The tab bar reads this to
+    /// render the group; prefix/dialog actions mutate it. Port of the WebView
+    /// `muxWindows` / `muxPaneIds` + `MuxTabGroup`.
+    pub mux_group: Option<crate::mux::window_group::MuxWindowGroup>,
     /// Phase 4-E: per-tab IME preedit composition state. Driven by
     /// `egui::Event::Ime(ImeEvent::Preedit/Commit)` events routed
     /// through `App` and rendered as an underline overlay by
@@ -261,6 +270,7 @@ impl Tab {
             pending_image_events: Vec::new(),
             mux_session_name: None,
             mux_status_state: None,
+            mux_group: None,
             preedit_state: crate::ime::preedit::State::default(),
             bell_pending: false,
             output_pending: false,
@@ -435,6 +445,27 @@ impl Tab {
                 true
             }
             MessageType::PtyOutput => {
+                // Route by pane. Once attached (see the Welcome handler), the
+                // daemon streams live output for *every* pane in the session to
+                // this owning connection — but native renders one core per tab,
+                // showing only the active window. Feeding another window's bytes
+                // into this core interleaves unrelated screens (the "other
+                // tabs' data mixing in" symptom). The WebView keeps a separate
+                // core per pane; native instead drops non-active panes here and
+                // reconciles each window's screen from the daemon's
+                // authoritative state via `request_pane_snapshot` on switch.
+                // When the tab has no window group (older daemon / single
+                // pane), `active_pane_id()` is None and all output is accepted.
+                if let Some(active) = self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
+                    if msg.pane_id != active {
+                        log::debug!(
+                            "mux apc: dropping PtyOutput for inactive pane {} (active {})",
+                            msg.pane_id,
+                            active
+                        );
+                        return false;
+                    }
+                }
                 // The daemon's continuous PTY stream: feed it into term_core
                 // as a normal byte stream (NOT a reset). Without this the
                 // mux session looks frozen after the initial Snapshot.
@@ -465,13 +496,94 @@ impl Tab {
             },
             MessageType::Welcome => match msg.decode_payload::<WelcomeMsg>() {
                 Some(WelcomeMsg::Accepted { sessions, .. }) => {
-                    let active = sessions.first().map(|s| s.name.clone());
-                    if let Some(name) = active {
-                        log::info!("mux apc: tab {:?} attached to session {name}", self.title);
-                        self.mux_session_name = Some(name);
-                        true
-                    } else {
-                        false
+                    match sessions.first() {
+                        Some(session) => {
+                            log::info!(
+                                "mux apc: tab {:?} attached to session {}",
+                                self.title,
+                                session.name
+                            );
+                            // Detect the first Welcome of this attach *before*
+                            // recording the session name. The bridge/daemon can
+                            // deliver Welcome twice (a known duplication); a
+                            // second Attach would make the daemon replay its
+                            // buffered output a second time, interleaving two
+                            // large base64 APC frames into a stream that no
+                            // longer decodes ("invalid base64 encoding").
+                            // `mux_session_name` is None before the first
+                            // Welcome and cleared again on Detach, so it doubles
+                            // as the per-attach guard without a new field.
+                            let first_welcome = self.mux_session_name.is_none();
+                            // Keep the existing session-name extraction intact
+                            // (F3): the status bar badge reads it.
+                            self.mux_session_name = Some(session.name.clone());
+                            // Become the live-output owner so continuous PTY
+                            // output (e.g. `top`) streams to native instead of
+                            // only on-demand snapshots. The daemon delivers its
+                            // live stream to a pane's single owning connection;
+                            // native must Attach to take ownership, exactly as
+                            // the WebView reattach path does (`mux-session.ts`).
+                            // Gate on the *targeted* session's pane_count so
+                            // when (in a future multi-session daemon)
+                            // `sessions[0].pane_count == 0` and a later session
+                            // has panes, we don't send an Attach to the empty
+                            // session — the WebView `existingPanes > 0` check
+                            // applies to the session being attached, not the
+                            // sum across every session.
+                            if first_welcome && session.pane_count > 0 {
+                                self.send_attach(session.id);
+                            }
+                            // Seed the window group from the session's window
+                            // list (additive). `windows` carries the daemon
+                            // window id / name / active pane id; the pane ids
+                            // are the per-window active panes, parallel to the
+                            // window list (F1). When the daemon omits the
+                            // window list (older daemon), leave the group
+                            // unseeded — it stays a plain tab.
+                            //
+                            // Gate the entire seed + snapshot block behind
+                            // `first_welcome` for the same reason as the Attach
+                            // guard above. On the (known) duplicate Welcome
+                            // delivery, replaying `group.seed(...)` would wipe
+                            // out anything accumulated between the two Welcomes
+                            // — a window appended from `PaneCreated`, an
+                            // optimistic `confirm_mux_rename`/`confirm_mux_move`
+                            // edit, an inbound `SwitchWindow` that moved
+                            // `active` — and a second `request_pane_snapshot`
+                            // would race the user's just-applied local change.
+                            if first_welcome && !session.windows.is_empty() {
+                                let active_pane_id = {
+                                    let group =
+                                        self.mux_group.get_or_insert_with(MuxWindowGroup::new);
+                                    let windows: Vec<MuxWindow> = session
+                                        .windows
+                                        .iter()
+                                        .map(|w| MuxWindow {
+                                            id: w.id,
+                                            name: w.name.clone(),
+                                        })
+                                        .collect();
+                                    let pane_ids: Vec<u32> =
+                                        session.windows.iter().map(|w| w.active_pane_id).collect();
+                                    group.seed(
+                                        windows,
+                                        pane_ids,
+                                        session.active_window_index as usize,
+                                    );
+                                    group.active_pane_id()
+                                };
+                                // Pull the active window's screen on attach — the
+                                // daemon does not push it unprompted, so without
+                                // this the freshly attached tab stays blank
+                                // (parity with the WebView reattach path's
+                                // `requestPaneSnapshot`).
+                                if let Some(pane_id) = active_pane_id {
+                                    self.request_pane_snapshot(pane_id);
+                                }
+                            }
+                            true
+                        }
+                        None => false,
                     }
                 }
                 Some(WelcomeMsg::Rejected { reason }) => {
@@ -483,9 +595,161 @@ impl Tab {
                     false
                 }
             },
+            MessageType::PaneCreated => {
+                // SPEC FR4 / Message Mapping: the daemon's PaneCreated is the
+                // authoritative "append window" signal — it fires for every
+                // pane the daemon creates, whether this client requested the
+                // create or another client did. Treat it as such:
+                //
+                // - Require an existing group: a PaneCreated arriving before
+                //   Welcome installs nothing (no `get_or_insert_with`, so the
+                //   empty-group leakage that made other handlers spuriously
+                //   think this tab was mux-attached is gone — M4).
+                // - Idempotent: if the pane id is already in our group (resend
+                //   / replay), don't double-append.
+                // - Daemon-authoritative: append even when no pending-create
+                //   credit exists. `pending_create` is now purely an
+                //   optimistic-UX counter — consume it when present so a
+                //   subsequent CreateWindow request still gets its own credit,
+                //   but never gate the append on it (the spec finding #5).
+                let Some(group) = self.mux_group.as_mut() else {
+                    log::debug!(
+                        "mux apc: PaneCreated pane={} before attach (no group), ignored",
+                        msg.pane_id
+                    );
+                    return false;
+                };
+                if group.index_of_pane_id(msg.pane_id).is_some() {
+                    log::debug!(
+                        "mux apc: PaneCreated pane={} already in group, ignored (idempotency)",
+                        msg.pane_id
+                    );
+                    return false;
+                }
+                let pending = group.take_pending_create();
+                // Locally-unique window id (one past the current max) so the
+                // synthetic id never collides with a daemon-seeded one. Initial
+                // name "Terminal" (OQ1 resolved); daemon-pushed RenameWindow
+                // later overwrites it.
+                let new_id = group.fresh_window_id();
+                group.push(
+                    MuxWindow {
+                        id: new_id,
+                        name: "Terminal".to_string(),
+                    },
+                    msg.pane_id,
+                );
+                log::info!(
+                    "mux apc: pane {} created (window {}, pending_consumed={}) for tab {:?}",
+                    msg.pane_id,
+                    new_id,
+                    pending,
+                    self.title
+                );
+                true
+            }
+            MessageType::SwitchWindow => {
+                // Daemon-initiated switch (e.g. CLI `switch-window`): sync the
+                // active index to the window owning this pane. Port of
+                // `handleRemoteSwitchWindow`'s index resolution.
+                let synced = self
+                    .mux_group
+                    .as_mut()
+                    .map(|g| g.set_active_by_pane(msg.pane_id))
+                    .unwrap_or(false);
+                if synced {
+                    log::info!(
+                        "mux apc: remote switch to pane {} for tab {:?}",
+                        msg.pane_id,
+                        self.title
+                    );
+                    // Reconcile the screen with the now-active window (parity
+                    // with the WebView remote-switch path's `requestPaneSnapshot`).
+                    self.request_pane_snapshot(msg.pane_id);
+                }
+                synced
+            }
+            MessageType::RenameWindow => {
+                // Daemon-broadcast rename. The wire field is the *pane id* —
+                // `confirm_mux_rename` sends `pane_ids()[idx]`, and the daemon
+                // re-broadcasts the frame with the same field unchanged. The
+                // earlier code interpreted `msg.pane_id` directly as a window
+                // id (commented "WebView `const windowId = paneId`"), which
+                // only worked when window ids and pane ids happened to
+                // coincide; for windows where they differ (locally-created
+                // windows get a synthetic window id from `fresh_window_id`
+                // while the daemon assigns its own pane id), the daemon's
+                // broadcast targeted the wrong window or no window at all.
+                // Resolve by pane id so producer and consumer agree on the
+                // contract (gpt-architecture + gpt-spec cross-model finding).
+                match msg.decode_payload::<RenameWindowMsg>() {
+                    Some(rename) => {
+                        let renamed = self
+                            .mux_group
+                            .as_mut()
+                            .and_then(|g| {
+                                let idx = g.index_of_pane_id(msg.pane_id)?;
+                                let window_id = g.windows().get(idx)?.id;
+                                Some(g.rename_window_id(window_id, rename.name.clone()))
+                            })
+                            .unwrap_or(false);
+                        if renamed {
+                            log::info!(
+                                "mux apc: pane {} renamed to {:?} for tab {:?}",
+                                msg.pane_id,
+                                rename.name,
+                                self.title
+                            );
+                        }
+                        renamed
+                    }
+                    None => {
+                        log::warn!("mux apc: malformed RenameWindow payload");
+                        false
+                    }
+                }
+            }
             MessageType::PtyExited => {
-                log::info!("mux apc: remote pane exited for tab {:?}", self.title);
-                false
+                // A window's shell exited: remove its window/pane. The group
+                // keeps rendering sub-tabs down to a single window (WebView
+                // parity); only dropping to zero clears the group entirely so
+                // the tab reverts to a plain tab. Port of `handleMuxPaneExited`.
+                match self.mux_group.as_mut() {
+                    Some(group) => match group.remove_pane(msg.pane_id) {
+                        Some(idx) => {
+                            log::info!(
+                                "mux apc: pane {} exited (window {}) for tab {:?}",
+                                msg.pane_id,
+                                idx,
+                                self.title
+                            );
+                            if group.is_empty() {
+                                self.mux_group = None;
+                            }
+                            true
+                        }
+                        None => false,
+                    },
+                    None => {
+                        log::info!(
+                            "mux apc: remote pane {} exited for tab {:?}",
+                            msg.pane_id,
+                            self.title
+                        );
+                        false
+                    }
+                }
+            }
+            MessageType::Detached => {
+                // The daemon confirmed our `Detach`: exit mux mode. Clear the
+                // window group (the tab reverts to a plain tab), the session
+                // name (status-bar mux badge clears), and the cached status
+                // state. Port of the WebView `onDetached → exitMuxMode`.
+                log::info!("mux apc: detached from session for tab {:?}", self.title);
+                self.mux_group = None;
+                self.mux_session_name = None;
+                self.mux_status_state = None;
+                true
             }
             other => {
                 log::debug!("mux apc: unhandled message type {other:?}");
@@ -1038,6 +1302,119 @@ impl Tab {
         if let Some(p) = &self.pty {
             p.write(bytes);
         }
+    }
+
+    /// Send user input (keystrokes / paste / IME commits) to the active pane.
+    ///
+    /// In mux mode the `emterm mux` bridge **drops raw stdin bytes** (only
+    /// APC-framed mux messages are relayed to the daemon — see
+    /// `src-tauri/src/mux/bridge.rs`), so input must be wrapped as a
+    /// `PtyInput` frame carrying the active pane id (parity with the WebView
+    /// `MuxClient.sendInput`). Outside mux mode this is a plain raw PTY write.
+    pub fn write_input(&self, bytes: Vec<u8>) {
+        // Two-step gate so a *half-attached* state (mux session present but the
+        // window group is None / unseeded, or seeded but with no active pane)
+        // does not silently fall back to raw PTY write — which the bridge
+        // would then drop, leaving the user staring at a mux-badged tab that
+        // ignores keystrokes / IME commits / paste. When attached we always
+        // take the PtyInput path; if no active pane id is yet available we log
+        // and drop so the failure mode is visible during development instead
+        // of silently swallowed.
+        if self.mux_session_name.is_some() {
+            match self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
+                Some(pane_id) => {
+                    self.send_control(&MuxMessage {
+                        msg_type: MessageType::PtyInput,
+                        pane_id,
+                        payload: bytes,
+                    });
+                }
+                None => {
+                    log::warn!(
+                        "mux: write_input dropped {} bytes — tab {:?} attached \
+                         but no active pane id (group not yet seeded)",
+                        bytes.len(),
+                        self.title
+                    );
+                }
+            }
+        } else {
+            self.write(bytes);
+        }
+    }
+
+    /// Paste-aware input: bracketed-paste-wrap (DECSET 2004) then route via
+    /// [`Self::write_input`] so the paste reaches the active mux pane too.
+    pub fn write_paste_input(&self, text: &str, bracketed: bool) {
+        let wrapped = crate::selection::bracketed_paste(text, bracketed);
+        self.write_input(wrapped.into_bytes());
+    }
+
+    /// Send a structured mux control message to the daemon by APC-encoding it
+    /// and writing the bytes to this tab's PTY (fire-and-forget). The
+    /// `emterm mux` bridge running in the PTY relays the frame to the daemon
+    /// over its Unix socket; native-poc never opens that socket (NFR2).
+    /// Responses arrive as inbound APC through the existing decode route.
+    ///
+    /// Port of the WebView `MuxClient.sendControl` (`writeDirect`). Returns
+    /// `false` when the tab has no live PTY (the message is dropped).
+    pub fn send_control(&self, msg: &MuxMessage) -> bool {
+        let bytes = crate::mux::apc::encode_emterm_mux(msg);
+        match &self.pty {
+            Some(p) => {
+                p.write(bytes);
+                true
+            }
+            None => {
+                log::warn!(
+                    "mux: send_control({:?}) dropped — tab {:?} has no PTY",
+                    msg.msg_type,
+                    self.title
+                );
+                false
+            }
+        }
+    }
+
+    /// Request an on-demand screen snapshot for `pane_id`. The daemon replies
+    /// with a `PtyOutput` frame (a screen reset + shadow-parser replay) that
+    /// `apply_mux_message` feeds into `term_core`, so the displayed grid is
+    /// reconciled with the daemon's authoritative state. Without this, an
+    /// attach / window switch leaves the target pane's screen blank or stale —
+    /// the daemon does not push the active screen unprompted.
+    ///
+    /// Port of `requestPaneSnapshot` (`MuxClient.sendRequestPaneSnapshot`).
+    /// Fire-and-forget; returns `false` when the tab has no live PTY.
+    pub fn request_pane_snapshot(&self, pane_id: u32) -> bool {
+        use mux_ipc::protocol::{MessageType, MuxMessage};
+        self.send_control(&MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id,
+            payload: Vec::new(),
+        })
+    }
+
+    /// Register this connection as the live-output *owner* of `session_id` by
+    /// sending an `Attach` control frame, mirroring the WebView reattach path
+    /// (`enterMuxMode` in `src/terminal-app/mux/mux-session.ts`).
+    ///
+    /// The daemon streams continuous PTY output only to a pane's single owning
+    /// connection. Without an Attach, native receives on-demand snapshots
+    /// (`request_pane_snapshot`) but no live updates, so programs like `top`
+    /// look frozen. Sending Attach installs this connection's output channel as
+    /// the pane owner — evicting any prior client (e.g. an attached WebView) —
+    /// and replays the daemon's buffered output for the session's panes.
+    ///
+    /// The `AttachMsg` payload is bincode-serialized (`session_id` as a 4-byte
+    /// LE u32), matching the WebView wire shape. Fire-and-forget; returns
+    /// `false` when the tab has no live PTY.
+    pub fn send_attach(&self, session_id: u32) -> bool {
+        use mux_ipc::protocol::{AttachMsg, MessageType, MuxMessage};
+        self.send_control(&MuxMessage::control(
+            MessageType::Attach,
+            0,
+            &AttachMsg { session_id },
+        ))
     }
 
     /// Test-only helper that runs the prompt-mark backfill (the production
@@ -2045,5 +2422,276 @@ mod tests {
             !tab.folds.is_enabled(),
             "disabled state survives the snapshot rebuild"
         );
+    }
+
+    // ── Phase 2: inbound window reconcile (TS-6..TS-10, TS-16) ────────────
+
+    use mux_ipc::protocol::{SessionInfo, WindowInfo};
+
+    fn welcome_msg(windows: &[(u32, &str, u32)], active: u32) -> MuxMessage {
+        let windows: Vec<WindowInfo> = windows
+            .iter()
+            .map(|(id, name, pane)| WindowInfo {
+                id: *id,
+                name: name.to_string(),
+                active_pane_id: *pane,
+            })
+            .collect();
+        let session = SessionInfo {
+            id: 1,
+            name: "main".to_string(),
+            window_count: windows.len() as u32,
+            pane_count: windows.len() as u32,
+            active_window_index: active,
+            windows,
+        };
+        MuxMessage::control(
+            MessageType::Welcome,
+            0,
+            &WelcomeMsg::Accepted {
+                server_version: 1,
+                sessions: vec![session],
+            },
+        )
+    }
+
+    fn pane_created(pane_id: u32) -> MuxMessage {
+        MuxMessage {
+            msg_type: MessageType::PaneCreated,
+            pane_id,
+            payload: Vec::new(),
+        }
+    }
+
+    fn switch_window(pane_id: u32) -> MuxMessage {
+        MuxMessage {
+            msg_type: MessageType::SwitchWindow,
+            pane_id,
+            payload: Vec::new(),
+        }
+    }
+
+    fn rename_window(pane_id: u32, name: &str) -> MuxMessage {
+        // The RenameWindow frame addresses the window by *pane id* (the
+        // outbound side at `confirm_mux_rename` sends `pane_ids()[idx]`, and
+        // the daemon re-broadcasts the same field). The inbound handler
+        // resolves the window from this pane id via `index_of_pane_id`.
+        MuxMessage::control(
+            MessageType::RenameWindow,
+            pane_id,
+            &RenameWindowMsg {
+                name: name.to_string(),
+            },
+        )
+    }
+
+    fn pty_exited(pane_id: u32) -> MuxMessage {
+        MuxMessage {
+            msg_type: MessageType::PtyExited,
+            pane_id,
+            payload: Vec::new(),
+        }
+    }
+
+    // ── TS-6: Welcome ingest ──────────────────────────────────────────────
+
+    #[test]
+    fn welcome_seeds_window_list_and_active_index() {
+        let mut tab = test_tab();
+        let changed = tab.apply_mux_message(welcome_msg(&[(1, "shell", 10), (2, "editor", 20)], 1));
+        assert!(changed);
+        let g = tab.mux_group.as_ref().expect("group seeded");
+        assert_eq!(g.len(), 2);
+        assert_eq!(g.windows()[0].name, "shell");
+        assert_eq!(g.windows()[1].name, "editor");
+        assert_eq!(g.pane_ids(), &[10, 20]);
+        assert_eq!(g.active_index(), 1);
+        // F3: session name still set.
+        assert_eq!(tab.mux_session_name.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn welcome_without_windows_leaves_group_none() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        assert!(tab.mux_group.is_none());
+        assert_eq!(tab.mux_session_name.as_deref(), Some("main"));
+    }
+
+    // ── TS-7: PaneCreated append ──────────────────────────────────────────
+
+    #[test]
+    fn pane_created_appends_window_named_terminal_and_activates() {
+        let mut tab = test_tab();
+        // Seed two windows, then request + confirm a create.
+        tab.apply_mux_message(welcome_msg(&[(1, "shell", 10), (2, "editor", 20)], 0));
+        tab.mux_group.as_mut().unwrap().inc_pending_create();
+        let changed = tab.apply_mux_message(pane_created(30));
+        assert!(changed);
+        let g = tab.mux_group.as_ref().unwrap();
+        assert_eq!(g.len(), 3);
+        assert_eq!(g.windows()[2].name, "Terminal");
+        assert_eq!(g.active_index(), 2);
+        assert_eq!(g.active_pane_id(), Some(30));
+    }
+
+    #[test]
+    fn pane_created_without_pending_is_appended_as_daemon_authoritative() {
+        // SPEC FR4 / Message Mapping: daemon-pushed PaneCreated is the
+        // append-window signal regardless of whether *this* client requested
+        // the create. Earlier behavior dropped such frames as "phantom" —
+        // that silently lost panes other clients (or daemon-side actions)
+        // spawned. Now the daemon is the authority; pending_create is only
+        // an optimistic-UX counter for the originating client.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "shell", 10), (2, "editor", 20)], 0));
+        let changed = tab.apply_mux_message(pane_created(30));
+        assert!(changed);
+        assert_eq!(tab.mux_group.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn pane_created_is_idempotent_on_resend() {
+        // A duplicate PaneCreated for an already-known pane (bridge replay)
+        // must not double-append, otherwise the same pane would surface twice
+        // in the sub-tab strip.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "shell", 10), (2, "editor", 20)], 0));
+        let first = tab.apply_mux_message(pane_created(30));
+        let second = tab.apply_mux_message(pane_created(30));
+        assert!(first);
+        assert!(!second);
+        assert_eq!(tab.mux_group.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn pane_created_before_attach_does_not_install_empty_group() {
+        // PaneCreated arriving before Welcome must not allocate an empty
+        // MuxWindowGroup on the tab. Otherwise every is_some() check
+        // downstream (PtyOutput pane filter, write_input mux branch,
+        // mux_session_name badge) would treat the tab as mux-attached even
+        // though it isn't.
+        let mut tab = test_tab();
+        assert!(tab.mux_group.is_none());
+        let changed = tab.apply_mux_message(pane_created(30));
+        assert!(!changed);
+        assert!(tab.mux_group.is_none());
+    }
+
+    // ── TS-8: PtyExited removal + group dissolve ──────────────────────────
+
+    #[test]
+    fn pty_exited_removes_window() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20), (3, "c", 30)], 2));
+        let changed = tab.apply_mux_message(pty_exited(30));
+        assert!(changed);
+        let g = tab.mux_group.as_ref().unwrap();
+        assert_eq!(g.len(), 2);
+        assert_eq!(g.active_index(), 1); // re-clamped
+    }
+
+    #[test]
+    fn pty_exited_dissolves_group_at_zero() {
+        let mut tab = test_tab();
+        // One-window group (seeded directly).
+        tab.apply_mux_message(welcome_msg(&[(1, "only", 10)], 0));
+        tab.apply_mux_message(pty_exited(10));
+        assert!(tab.mux_group.is_none());
+    }
+
+    // ── Detached: exit mux mode (group + session name cleared) ────────────
+
+    #[test]
+    fn detached_clears_group_and_session_name() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "shell", 10), (2, "editor", 20)], 0));
+        assert!(tab.mux_group.is_some());
+        assert_eq!(tab.mux_session_name.as_deref(), Some("main"));
+
+        let changed = tab.apply_mux_message(MuxMessage {
+            msg_type: MessageType::Detached,
+            pane_id: 0,
+            payload: Vec::new(),
+        });
+        assert!(changed);
+        // The tab reverts to a plain tab: no group, no mux session badge.
+        assert!(tab.mux_group.is_none());
+        assert!(tab.mux_session_name.is_none());
+    }
+
+    // ── TS-9: RenameWindow inbound ────────────────────────────────────────
+
+    #[test]
+    fn rename_window_updates_label_by_pane_id() {
+        // Inbound RenameWindow addresses the window by its active pane id —
+        // window_id 2 has active_pane_id 20 per the welcome below, so the
+        // rename frame's pane_id is 20 (matching the wire shape the daemon
+        // re-broadcasts after our outbound `confirm_mux_rename` send).
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "shell", 10), (2, "editor", 20)], 0));
+        let changed = tab.apply_mux_message(rename_window(20, "vim"));
+        assert!(changed);
+        assert_eq!(tab.mux_group.as_ref().unwrap().windows()[1].name, "vim");
+    }
+
+    #[test]
+    fn rename_window_unknown_pane_id_is_noop() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "shell", 10)], 0));
+        // pane_id 999 isn't in the group → no rename.
+        let changed = tab.apply_mux_message(rename_window(999, "vim"));
+        assert!(!changed);
+    }
+
+    // ── TS-10: SwitchWindow inbound ───────────────────────────────────────
+
+    #[test]
+    fn switch_window_syncs_active_index_by_pane() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let changed = tab.apply_mux_message(switch_window(20));
+        assert!(changed);
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_index(), 1);
+    }
+
+    #[test]
+    fn switch_window_unknown_pane_is_noop() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10)], 0));
+        let changed = tab.apply_mux_message(switch_window(999));
+        assert!(!changed);
+    }
+
+    // ── TS-16: scripted inbound sequence ──────────────────────────────────
+
+    #[test]
+    fn inbound_sequence_attach_create_switch_rename_exit() {
+        let mut tab = test_tab();
+        // attach: one window (id 1, pane 10).
+        tab.apply_mux_message(welcome_msg(&[(1, "shell", 10)], 0));
+        // create: request then confirm → fresh window (id 2, pane 50).
+        tab.mux_group.as_mut().unwrap().inc_pending_create();
+        tab.apply_mux_message(pane_created(50));
+        let _created_id = {
+            let g = tab.mux_group.as_ref().unwrap();
+            assert_eq!(g.len(), 2);
+            assert_eq!(g.active_index(), 1); // new window active
+            g.windows()[1].id
+        };
+        // switch back to the first pane.
+        tab.apply_mux_message(switch_window(10));
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_index(), 0);
+        // rename the freshly created window: addressed by its *pane id* (50)
+        // on the wire, matching the inbound contract.
+        tab.apply_mux_message(rename_window(50, "build"));
+        assert_eq!(tab.mux_group.as_ref().unwrap().windows()[1].name, "build");
+        // exit the created pane → drop back to one window. WebView parity:
+        // the group still renders (one numbered sub-tab); it only dissolves
+        // when the last window exits (the `Option` is cleared at zero).
+        tab.apply_mux_message(pty_exited(50));
+        let g = tab.mux_group.as_ref().unwrap();
+        assert_eq!(g.len(), 1);
+        assert!(g.is_group());
     }
 }

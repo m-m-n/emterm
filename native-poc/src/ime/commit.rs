@@ -46,6 +46,14 @@ pub fn write_commit<W: PtyWriter + ?Sized>(pty_writer: &W, text: &str) -> io::Re
     pty_writer.write_bytes(cleaned.into_bytes())
 }
 
+/// Sanitized commit bytes for the mux input path: the same cleaning
+/// `write_commit` applies, returned as bytes so the caller can route them
+/// through `Tab::write_input` (which wraps them as a `PtyInput` frame in mux
+/// mode). Returns an empty vec when nothing survives sanitization.
+pub fn commit_bytes(text: &str) -> Vec<u8> {
+    sanitize(text).into_bytes()
+}
+
 #[cfg(test)]
 /// Test-only re-export of the sanitize helper so `preedit::tests` can
 /// pin the contract that both directions share the same sanitizer

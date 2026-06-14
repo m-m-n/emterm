@@ -111,6 +111,13 @@ pub struct TabBarItem {
     /// tabs; titles are not unique (every fresh tab is "shell"). The
     /// view-model builder MUST set this via `with_stable_id`.
     pub stable_id: u64,
+    /// When `Some`, this tab is a mux tab group and renders one sub-tab per
+    /// window (`[N] name`) instead of the plain title cell. Built by
+    /// [`mux_group_render_model`] from the tab's
+    /// [`crate::mux::window_group::MuxWindowGroup`] whenever the group holds
+    /// at least one window (FR1, WebView parity). `None` leaves the plain-tab
+    /// path untouched.
+    pub mux_cells: Option<Vec<MuxSubTabCell>>,
 }
 
 impl TabBarItem {
@@ -120,6 +127,7 @@ impl TabBarItem {
             mux_session_name: None,
             has_activity: false,
             stable_id: 0,
+            mux_cells: None,
         }
     }
 
@@ -135,6 +143,13 @@ impl TabBarItem {
 
     pub fn with_stable_id(mut self, id: u64) -> Self {
         self.stable_id = id;
+        self
+    }
+
+    /// Mark this tab as a mux tab group rendered from `cells`. An empty
+    /// vec is treated as "not a group" (the plain title renders).
+    pub fn with_mux_cells(mut self, cells: Vec<MuxSubTabCell>) -> Self {
+        self.mux_cells = if cells.is_empty() { None } else { Some(cells) };
         self
     }
 }
@@ -176,7 +191,10 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
 
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 // ── Tab strip ───────────────────────────────────────
-                let n = items.len().max(1) as f32;
+                // A mux tab group expands into multiple visual cells
+                // (compact → 1, expanded → header + one per window), so the
+                // width math counts cells, not roster entries.
+                let n = visual_cell_count(items).max(1) as f32;
                 let ideal_w = (scroll_w / n).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH);
                 let needed_w = MIN_TAB_WIDTH * n;
 
@@ -273,6 +291,133 @@ fn drag_state_id() -> egui::Id {
     egui::Id::new(DRAG_FROM_KEY)
 }
 
+/// One drawable cell in the strip: either a plain roster tab or a single
+/// cell of a mux tab group belonging to a roster tab.
+enum Visual {
+    /// Plain roster tab at index `item`.
+    Tab { item: usize },
+    /// Mux group cell at position `cell` within `items[tab].mux_cells`.
+    Mux { tab: usize, cell: usize },
+}
+
+/// Count the visual cells the strip renders: a plain tab is one cell; a
+/// mux group expands to its cell count (compact → 1, expanded → header +
+/// one per window). Used so the equal-width layout math accounts for the
+/// expansion. With no mux groups this equals `items.len()`.
+fn visual_cell_count(items: &[TabBarItem]) -> usize {
+    items
+        .iter()
+        .map(|it| match &it.mux_cells {
+            Some(cells) if !cells.is_empty() => cells.len(),
+            _ => 1,
+        })
+        .sum()
+}
+
+/// Flatten the roster into the ordered visual cells the strip draws.
+fn build_visuals(items: &[TabBarItem]) -> Vec<Visual> {
+    let mut visuals = Vec::with_capacity(visual_cell_count(items));
+    for (i, item) in items.iter().enumerate() {
+        match &item.mux_cells {
+            Some(cells) if !cells.is_empty() => {
+                for c in 0..cells.len() {
+                    visuals.push(Visual::Mux { tab: i, cell: c });
+                }
+            }
+            _ => visuals.push(Visual::Tab { item: i }),
+        }
+    }
+    visuals
+}
+
+/// Draw the active-tab / active-sub-tab indicator: a 3 px primary bar at
+/// the bottom, side-margined to match the WebView `width: calc(100% - 32px)`.
+fn paint_active_indicator(ui: &Ui, rect: Rect) {
+    let bar = Rect::from_min_max(
+        egui::pos2(
+            rect.left() + ACTIVE_INDICATOR_SIDE_MARGIN,
+            rect.bottom() - ACTIVE_INDICATOR_HEIGHT - HAIRLINE_HEIGHT,
+        ),
+        egui::pos2(
+            rect.right() - ACTIVE_INDICATOR_SIDE_MARGIN,
+            rect.bottom() - HAIRLINE_HEIGHT,
+        ),
+    );
+    ui.painter().rect_filled(
+        bar,
+        Rounding {
+            nw: ACTIVE_INDICATOR_RADIUS,
+            ne: ACTIVE_INDICATOR_RADIUS,
+            sw: 0.0,
+            se: 0.0,
+        },
+        md3::primary(),
+    );
+}
+
+/// Lay out `text` in `font_id` / `color`, ellipsizing with `…` when it
+/// overflows `max_w`. Uses a binary search over char boundaries (O(log N)
+/// layouts, one allocation for the winning candidate) instead of the
+/// naive char-pop loop (O(N²) plus N `format!` allocations per frame). The
+/// tab strip calls this on every cell every frame, so the cost matters
+/// when window names are long.
+fn layout_ellipsized(
+    fonts: &egui::text::Fonts,
+    text: &str,
+    font_id: &FontId,
+    color: egui::Color32,
+    max_w: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let full = fonts.layout_no_wrap(text.to_string(), font_id.clone(), color);
+    if full.size().x <= max_w || text.is_empty() {
+        return full;
+    }
+    let ell = "…";
+    let char_offsets: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut lo = 0usize;
+    let mut hi = char_offsets.len().saturating_sub(2);
+    let mut best: Option<std::sync::Arc<egui::Galley>> = None;
+    while lo <= hi {
+        let mid = lo + (hi - lo) / 2;
+        let candidate = &text[..char_offsets[mid]];
+        let g = fonts.layout_no_wrap(format!("{candidate}{ell}"), font_id.clone(), color);
+        if g.size().x <= max_w {
+            best = Some(g);
+            lo = mid + 1;
+        } else {
+            if mid == 0 {
+                break;
+            }
+            hi = mid - 1;
+        }
+    }
+    best.unwrap_or(full)
+}
+
+/// Paint a single-line label centred in `rect`, ellipsizing when it
+/// overflows the horizontal padding box. Used for mux group cells (which
+/// carry no activity dot, unlike the plain-tab path).
+fn paint_centered_label(ui: &Ui, rect: Rect, text: &str, color: egui::Color32) {
+    let font_id = FontId::proportional(TAB_FONT_SIZE);
+    let label_left = rect.left() + TAB_HORIZONTAL_PAD;
+    let label_right = rect.right() - TAB_HORIZONTAL_PAD;
+    let label_rect = Rect::from_min_max(
+        egui::pos2(label_left, rect.top()),
+        egui::pos2(label_right.max(label_left), rect.bottom()),
+    );
+    let max_w = label_rect.width().max(0.0);
+    let galley = ui.fonts(|fonts| layout_ellipsized(fonts, text, &font_id, color, max_w));
+    let pos = egui::pos2(
+        label_rect.center().x - galley.size().x / 2.0,
+        label_rect.center().y - galley.size().y / 2.0,
+    );
+    ui.painter().galley(pos, galley, color);
+}
+
 /// Inner layout: lay out one tab cell per item. Returns at most one
 /// [`TabEvent`] this frame.
 fn layout_tab_strip(
@@ -285,19 +430,74 @@ fn layout_tab_strip(
     let drag_id = drag_state_id();
     let mut drag_from: Option<usize> = ui.ctx().memory(|m| m.data.get_temp(drag_id));
 
-    // Capture cell rects locally so the post-loop drop-target math does
-    // not depend on the test-only thread_local hooks.
+    let visuals = build_visuals(items);
+    // Drag-reorder applies to plain-tab cells only — mux sub-tab cells (a
+    // group's expanded `[N] name` cells) carry `Sense::click()` not
+    // `click_and_drag()`, so the cell-level drag is naturally restricted
+    // there. The post-loop drop math works over `cell_rects` (plain tabs
+    // only) and uses `cell_rosters[cell_idx]` to map the drop-target cell
+    // index back to a roster insertion point. With this mapping, plain-tab
+    // reorder stays live even when one tab is expanded as a mux group
+    // (pre-fix the whole drag path was disabled globally when any tab was
+    // mux-attached — coarse coupling between unrelated features).
     let mut cell_rects: Vec<Rect> = Vec::with_capacity(items.len());
+    let mut cell_rosters: Vec<usize> = Vec::with_capacity(items.len());
 
     #[cfg(test)]
     tests::LAST_TAB_CELLS.with(|c| c.borrow_mut().clear());
+    #[cfg(test)]
+    tests::LAST_MUX_CELLS.with(|c| c.borrow_mut().clear());
 
-    for (i, item) in items.iter().enumerate() {
+    for visual in &visuals {
+        let i = match *visual {
+            Visual::Tab { item } => item,
+            Visual::Mux { tab, cell } => {
+                // ── mux window sub-tab (`[N] name`) ─────────────────
+                let mux_cell = &items[tab].mux_cells.as_ref().expect("mux group cells")[cell];
+                let cell_size = Vec2::new(tab_width, TAB_BAR_HEIGHT);
+                let (rect, cell_resp) = ui.allocate_exact_size(cell_size, Sense::click());
+
+                #[cfg(test)]
+                tests::LAST_MUX_CELLS.with(|c| c.borrow_mut().push(rect));
+
+                let is_active_cell = mux_cell.active;
+                let color = if is_active_cell {
+                    md3::primary()
+                } else {
+                    md3::on_surface_variant()
+                };
+
+                if cell_resp.hovered() {
+                    ui.painter().rect_filled(
+                        rect,
+                        Rounding::ZERO,
+                        md3::state_layer(color, md3::STATE_LAYER_HOVER),
+                    );
+                }
+                paint_centered_label(ui, rect, &mux_sub_tab_label(mux_cell), color);
+                if is_active_cell {
+                    paint_active_indicator(ui, rect);
+                }
+
+                // Click switches to this window (WebView parity: sub-tab
+                // click → switch; there is no compact/expand toggle).
+                if cell_resp.clicked() && event.is_none() {
+                    event = Some(TabEvent::MuxSwitch {
+                        tab,
+                        window: mux_cell.index,
+                    });
+                }
+                continue;
+            }
+        };
+
+        let item = &items[i];
         let is_active = i == active_idx;
         let cell_size = Vec2::new(tab_width, TAB_BAR_HEIGHT);
         let (rect, cell_resp) = ui.allocate_exact_size(cell_size, Sense::click_and_drag());
 
         cell_rects.push(rect);
+        cell_rosters.push(i);
         #[cfg(test)]
         tests::LAST_TAB_CELLS.with(|c| c.borrow_mut().push(rect));
 
@@ -306,8 +506,7 @@ fn layout_tab_strip(
         // simple click does not enter drag mode.
         if drag_from.is_none() && cell_resp.drag_started_by(egui::PointerButton::Primary) {
             drag_from = Some(i);
-            ui.ctx()
-                .memory_mut(|m| m.data.insert_temp(drag_id, i as usize));
+            ui.ctx().memory_mut(|m| m.data.insert_temp(drag_id, i));
         }
 
         // Background — the strip itself inherits `surface-container` from
@@ -362,23 +561,8 @@ fn layout_tab_strip(
         // so we measure with `Fonts::layout_no_wrap` and ellipsize when
         // the result overflows the label rect.
         let max_w = (label_rect.width() - dot_space).max(0.0);
-        let galley = ui.fonts(|fonts| {
-            let mut text = label_text.clone();
-            let mut galley = fonts.layout_no_wrap(text.clone(), font_id.clone(), text_color);
-            if galley.size().x > max_w && !text.is_empty() {
-                let ell = "…";
-                while text.chars().count() > 1 {
-                    text.pop();
-                    let candidate = format!("{text}{ell}");
-                    let g = fonts.layout_no_wrap(candidate, font_id.clone(), text_color);
-                    if g.size().x <= max_w {
-                        galley = g;
-                        break;
-                    }
-                }
-            }
-            galley
-        });
+        let galley =
+            ui.fonts(|fonts| layout_ellipsized(fonts, &label_text, &font_id, text_color, max_w));
         // Centre the [dot][gap][title] group as one unit, mirroring the
         // WebView's `justify-content: center` flex row.
         let group_w = dot_space + galley.size().x;
@@ -425,41 +609,29 @@ fn layout_tab_strip(
         // Active-tab indicator: 3 px bar at the bottom, side-margined to
         // match `width: calc(100% - 32px)`.
         if is_active {
-            let painter = ui.painter();
-            let bar = Rect::from_min_max(
-                egui::pos2(
-                    rect.left() + ACTIVE_INDICATOR_SIDE_MARGIN,
-                    rect.bottom() - ACTIVE_INDICATOR_HEIGHT - HAIRLINE_HEIGHT,
-                ),
-                egui::pos2(
-                    rect.right() - ACTIVE_INDICATOR_SIDE_MARGIN,
-                    rect.bottom() - HAIRLINE_HEIGHT,
-                ),
-            );
-            painter.rect_filled(
-                bar,
-                Rounding {
-                    nw: ACTIVE_INDICATOR_RADIUS,
-                    ne: ACTIVE_INDICATOR_RADIUS,
-                    sw: 0.0,
-                    se: 0.0,
-                },
-                md3::primary(),
-            );
+            paint_active_indicator(ui, rect);
         }
     }
 
     // Post-loop: handle drag-in-progress (indicator) and drop (event).
-    if let Some(from) = drag_from {
+    // `cell_rects` holds only plain-tab cells; we use `cell_rosters` to map
+    // a drop-target cell index back to a roster insertion point so a mux
+    // group expanding in the middle of the strip doesn't break drag math.
+    if cell_rects.is_empty() {
+        // Strip is all mux cells (no plain tabs); clean up any latched drag.
+        if drag_from.is_some() && ui.input(|i| i.pointer.any_released()) {
+            ui.ctx().memory_mut(|m| m.data.remove::<usize>(drag_id));
+        }
+    } else if let Some(from) = drag_from {
         // `latest_pos` survives across release frames, unlike
         // `interact_pos` which returns `None` once the pointer leaves
         // the interaction state (e.g. on the release frame itself).
         let pointer_pos = ui.input(|i| i.pointer.latest_pos());
-        let target = pointer_pos.map(|p| drop_target_index(&cell_rects, p.x));
+        let target_cell = pointer_pos.map(|p| drop_target_index(&cell_rects, p.x));
 
         // Draw a vertical primary-coloured indicator at the drop slot.
-        if let Some(target) = target {
-            if let Some(indicator_x) = drop_indicator_x(&cell_rects, target) {
+        if let Some(target_cell) = target_cell {
+            if let Some(indicator_x) = drop_indicator_x(&cell_rects, target_cell) {
                 let y0 = cell_rects[0].top();
                 let y1 = cell_rects[0].bottom() - HAIRLINE_HEIGHT;
                 ui.painter()
@@ -468,14 +640,21 @@ fn layout_tab_strip(
         }
 
         // Release ends the drag. `drag_started_by` already guards the
-        // click-vs-drag threshold (egui's default 4 px), so by the
-        // time `drag_from` is set we know this was an actual drag.
-        // No separate threshold check is needed here, and one would be
-        // hostile to implement: `press_origin()` returns `None` on the
-        // release frame because the button is no longer held.
+        // click-vs-drag threshold (egui's default 4 px), so by the time
+        // `drag_from` is set we know this was an actual drag.
         let released = ui.input(|i| i.pointer.any_released());
         if released {
-            if let Some(to) = target {
+            if let Some(target_cell) = target_cell {
+                // Map the cell-space drop target back to a roster insertion
+                // point: a drop before `cell_rects[c]` inserts before the
+                // roster index `cell_rosters[c]`; a drop at `cell_rects.len()`
+                // (past the rightmost plain-tab cell) inserts at the end of
+                // the roster (past any trailing mux group too).
+                let to = if target_cell < cell_rosters.len() {
+                    cell_rosters[target_cell]
+                } else {
+                    items.len()
+                };
                 if to != from && to != from + 1 {
                     event = Some(TabEvent::Reorder { from, to });
                 }
@@ -596,6 +775,50 @@ fn draw_gear_button(ui: &mut Ui, size: f32) -> egui::Response {
     resp
 }
 
+// ── mux tab group render-model ───────────────────────────────────────────
+
+/// One window sub-tab in a mux tab group, in left-to-right order. The widget
+/// draws each cell labelled `[N] name` and a click switches to that window.
+/// The model is built from the tab's
+/// [`crate::mux::window_group::MuxWindowGroup`] by [`mux_group_render_model`].
+///
+/// WebView parity: an attached mux tab always renders one sub-tab per window
+/// (no compact `mux (N)` cell, no expand/collapse toggle).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MuxSubTabCell {
+    /// Window position (0-based) within the group; the click target.
+    pub index: usize,
+    /// Window display name.
+    pub name: String,
+    /// Whether this is the active window (highlighted).
+    pub active: bool,
+}
+
+/// Render-model for the mux tab group: one [`MuxSubTabCell`] per window, in
+/// order, with the active window marked. Mirrors the WebView
+/// `renderMuxSubTabs` (always one numbered sub-tab per window).
+pub fn mux_group_render_model(
+    group: &crate::mux::window_group::MuxWindowGroup,
+) -> Vec<MuxSubTabCell> {
+    let active = group.active_index();
+    group
+        .windows()
+        .iter()
+        .enumerate()
+        .map(|(i, w)| MuxSubTabCell {
+            index: i,
+            name: w.name.clone(),
+            active: i == active,
+        })
+        .collect()
+}
+
+/// The `[N] name` label shown on a sub-tab (number badge + window name),
+/// mirroring the WebView `mux-window-number` + `tab-title` spans.
+fn mux_sub_tab_label(cell: &MuxSubTabCell) -> String {
+    format!("[{}] {}", cell.index + 1, cell.name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +828,7 @@ mod tests {
     thread_local! {
         pub(super) static LAST_PLUS_RECT: Cell<Option<Rect>> = const { Cell::new(None) };
         pub(super) static LAST_TAB_CELLS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
+        pub(super) static LAST_MUX_CELLS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
     }
 
     fn item(title: &str) -> TabBarItem {
@@ -793,5 +1017,102 @@ mod tests {
             captured = draw(ctx, &items, 0);
         });
         assert_eq!(captured, None);
+    }
+
+    // ── TS-15: mux tab-group render model (always sub-tabs) ───────────────
+
+    use crate::mux::window_group::{MuxWindow, MuxWindowGroup};
+
+    fn group_with(n: usize, active: usize) -> MuxWindowGroup {
+        let mut g = MuxWindowGroup::new();
+        let windows: Vec<MuxWindow> = (0..n)
+            .map(|i| MuxWindow {
+                id: i as u32,
+                name: format!("w{i}"),
+            })
+            .collect();
+        let panes: Vec<u32> = (0..n).map(|i| 100 + i as u32).collect();
+        g.seed(windows, panes, active);
+        g
+    }
+
+    #[test]
+    fn render_model_is_one_subtab_per_window_with_active_marker() {
+        let cells = mux_group_render_model(&group_with(3, 1));
+        assert_eq!(cells.len(), 3);
+        let actives: Vec<bool> = cells.iter().map(|c| c.active).collect();
+        assert_eq!(actives, vec![false, true, false]);
+        // Index + name carried through for the click target / label.
+        assert_eq!(cells[0].index, 0);
+        assert_eq!(cells[2].name, "w2");
+    }
+
+    #[test]
+    fn render_model_single_window_still_renders_one_subtab() {
+        // WebView parity: a single mux window still renders as a sub-tab.
+        let cells = mux_group_render_model(&group_with(1, 0));
+        assert_eq!(cells.len(), 1);
+        assert!(cells[0].active);
+    }
+
+    #[test]
+    fn sub_tab_label_is_numbered() {
+        let cells = mux_group_render_model(&group_with(2, 0));
+        assert_eq!(mux_sub_tab_label(&cells[0]), "[1] w0");
+        assert_eq!(mux_sub_tab_label(&cells[1]), "[2] w1");
+    }
+
+    // ── FR1: mux group is rendered by `draw` and clicks route correctly ───
+
+    /// A tab whose roster entry carries mux cells (built from a group).
+    fn mux_item(group: &MuxWindowGroup) -> TabBarItem {
+        TabBarItem::new("ignored").with_mux_cells(mux_group_render_model(group))
+    }
+
+    /// Lay out one frame and return the captured mux cell rects in order.
+    fn mux_cell_rects(items: &[TabBarItem]) -> Vec<Rect> {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(screen_rect());
+        let _ = ctx.run(input, |ctx| {
+            let _ = draw(ctx, items, 0);
+        });
+        LAST_MUX_CELLS.with(|c| c.borrow().clone())
+    }
+
+    #[test]
+    fn draw_renders_one_cell_per_window() {
+        // 3-window group → 3 sub-tab cells (no compact/header cell).
+        let items = vec![mux_item(&group_with(3, 0))];
+        let rects = mux_cell_rects(&items);
+        assert_eq!(rects.len(), 3);
+    }
+
+    #[test]
+    fn clicking_subtab_emits_mux_switch_to_that_window() {
+        // Cells: [sub0, sub1, sub2]; clicking sub2 → switch window 2.
+        let items = vec![mux_item(&group_with(3, 0))];
+        let sub2 = mux_cell_rects(&items)[2].center();
+        let ev = run_with_click(&items, 0, sub2);
+        assert_eq!(ev, Some(TabEvent::MuxSwitch { tab: 0, window: 2 }));
+    }
+
+    #[test]
+    fn clicking_first_subtab_switches_to_window_zero() {
+        let items = vec![mux_item(&group_with(3, 1))];
+        let sub0 = mux_cell_rects(&items)[0].center();
+        let ev = run_with_click(&items, 0, sub0);
+        assert_eq!(ev, Some(TabEvent::MuxSwitch { tab: 0, window: 0 }));
+    }
+
+    #[test]
+    fn mux_group_cell_count_drives_strip_width_math() {
+        // A 3-window group counts as 3 visual cells, not 1 roster entry, so
+        // the equal-width layout reserves room for every sub-tab.
+        let items = vec![mux_item(&group_with(3, 0))];
+        assert_eq!(visual_cell_count(&items), 3);
+        // Plain tabs still count one-each (Phase 4-B path unchanged).
+        let plain = vec![item("a"), item("b")];
+        assert_eq!(visual_cell_count(&plain), 2);
     }
 }

@@ -92,6 +92,51 @@ pub enum JumpDirection {
     Next,
 }
 
+/// Result of dispatching a mux prefix action ([`App::dispatch_mux_action`]).
+/// The caller (the key path in `window_host`) reacts to it: redraw on
+/// `Changed`, open the corresponding egui dialog on `OpenRename` /
+/// `OpenMove`, tear down the group on `Detach`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MuxActionOutcome {
+    /// The action did not apply (no mux tab, single-window switch, unknown
+    /// follow-up, …). Caller does nothing.
+    None,
+    /// Local mux state changed and a control message was sent; redraw.
+    Changed,
+    /// A `Detach` was sent; the daemon's `Detached` reply dissolves the
+    /// group through the inbound path.
+    Detach,
+    /// Open the rename dialog for the window with this stable id, seeded with
+    /// `current_name`. Confirmed via [`App::confirm_mux_rename`].
+    OpenRename {
+        window_id: u32,
+        current_name: String,
+    },
+    /// Open the move dialog for the window with this stable id. Confirmed via
+    /// [`App::confirm_mux_move`].
+    OpenMove {
+        window_id: u32,
+        current_position: usize,
+        window_count: usize,
+    },
+}
+
+/// Build the mux prefix latch from settings: the prefix chord
+/// (`mux_prefix_key`, falling back to `Ctrl+B` on a parse error) and the
+/// action bindings (`mux.keybinds`).
+fn build_mux_latch(settings: &Settings) -> crate::mux::prefix::Latch {
+    use crate::mux::prefix::{parse_prefix_key, ActionBindings, Latch, PrefixChord};
+    let chord = parse_prefix_key(&settings.mux_prefix_key).unwrap_or_else(|| {
+        log::warn!(
+            "settings.mux.prefix: invalid chord {:?}, falling back to Ctrl+B",
+            settings.mux_prefix_key
+        );
+        PrefixChord::default()
+    });
+    let bindings = ActionBindings::from_settings_map(&settings.mux.keybinds);
+    Latch::with_bindings(chord, crate::mux::prefix::DEFAULT_ARMED_TIMEOUT, bindings)
+}
+
 pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
@@ -161,6 +206,18 @@ pub struct App {
     /// actions (`new_tab` / `close_tab` / `next_tab` / `prev_tab`) and
     /// clipboard chords (`copy` / `paste`).
     pub keybinds: crate::ui::keybinds::KeybindTable,
+    /// mux prefix-key latch. Armed on the prefix chord; the follow-up key is
+    /// mapped to a [`crate::mux::prefix::PrefixAction`] via the configured
+    /// `mux.keybinds`. Only consulted for the active tab when it is
+    /// mux-attached (has a `mux_group`). Rebuilt on `apply_settings`.
+    pub mux_latch: crate::mux::prefix::Latch,
+    /// Currently-open mux rename / move dialog (if any). Plain-data state
+    /// so the domain layer stays free of egui widget types (the rendering
+    /// for these dialogs lives in `ui::mux_dialogs`, the only place that
+    /// imports `egui::Context` for them). Single field replaces the two
+    /// `Option<Widget>` fields; reentry is guarded by the
+    /// `MuxDialogState::Closed` variant.
+    pub mux_dialog: crate::mux::dialog::MuxDialogState,
     /// Display locale resolved once from `settings.language` at
     /// construction (`Auto` consults the OS locale). Consumed by the
     /// desktop-notification body formatting in `pump_all`.
@@ -402,6 +459,7 @@ impl App {
         // specs fall back to their built-in defaults with a warn log
         // (see `KeybindTable::from_settings`).
         let keybinds = crate::ui::keybinds::KeybindTable::from_settings(&settings.keybinds);
+        let mux_latch = build_mux_latch(&settings);
         // Resolve `language` to a concrete locale once; `Auto` consults
         // the OS locale (sys-locale), unsupported tags fall back to En.
         let locale = crate::i18n::resolve(settings.language);
@@ -466,6 +524,8 @@ impl App {
         Self {
             tabs: Vec::new(),
             active: 0,
+            mux_latch,
+            mux_dialog: crate::mux::dialog::MuxDialogState::Closed,
             settings_launcher: Box::new(crate::settings_launcher::ProcessSettingsLauncher::new()),
             cell_size: GridDims::default(),
             selection: None,
@@ -1219,6 +1279,17 @@ impl App {
     /// Returns `true` when the resulting state should exit the window
     /// (i.e. the last tab was closed).
     pub fn apply_tab_event(&mut self, evt: crate::ui::TabEvent) -> bool {
+        // Mux rename / move dialogs commit against `self.tabs.get_mut(self.active)`
+        // (they only carry a `window_id`, not an owning-tab anchor). Any tab
+        // event that mutates `self.tabs` / `self.active` (creation, close,
+        // reorder, switch, mux-switch — and any future variant we add) makes
+        // the captured anchor stale or out-of-range, so the conservative
+        // choice is to drop *every* tab event while a dialog is open. Fail
+        // closed: a new `TabEvent` variant added later defaults to "blocked
+        // while dialog open", not "silently leaks past the guard".
+        if self.mux_dialog_open() {
+            return false;
+        }
         match evt {
             crate::ui::TabEvent::New => {
                 // `+` button: plain spawn without profiles, otherwise the
@@ -1242,6 +1313,20 @@ impl App {
                     return false;
                 }
                 self.reorder_tab(from, to.min(self.tabs.len()));
+                false
+            }
+            crate::ui::TabEvent::MuxSwitch { tab, window } => {
+                // Sub-tab click: focus the tab if needed, then switch the
+                // mux window (local active index + `SwitchWindow`), mirroring
+                // the keyboard `prefix 0..9` path (FR5).
+                if tab < self.tabs.len() {
+                    if self.active != tab {
+                        self.switch_to_tab(tab);
+                    }
+                    if let Some(t) = self.tabs.get_mut(self.active) {
+                        let _ = Self::switch_to(t, Some(window));
+                    }
+                }
                 false
             }
         }
@@ -1490,6 +1575,12 @@ impl App {
         self.keybinds = crate::ui::keybinds::KeybindTable::from_settings(&new.keybinds);
         self.locale = crate::i18n::resolve(new.language);
 
+        // mux: rebuild the prefix latch (chord + action bindings) from the
+        // new settings (FR11 dynamic apply). The tab group always renders its
+        // windows as sub-tabs (WebView parity), so there is no expand
+        // preference to push onto tabs.
+        self.mux_latch = build_mux_latch(&new);
+
         let font_families_changed = new.font_family_fallback != old.font_family_fallback
             || new.emoji_font != old.emoji_font;
         let font_size_changed = (new.font_size - old.font_size).abs() >= f32::EPSILON;
@@ -1576,11 +1667,25 @@ impl App {
             None => (None, None),
         };
 
-        self.status_bar_runtime.build_view_model(
+        // SPEC US4 / FR11: hand the mux statusbar settings to the runtime
+        // when the active tab is mux-attached so `mux.statusbar.enabled /
+        // left / right` actually drive the rendered row (pre-fix these were
+        // parsed into `Settings::mux.statusbar` but never read, the
+        // gpt-spec finding).
+        let mux_statusbar = mux_session_name.map(|_| &self.settings.mux.statusbar);
+        let mut vm = self.status_bar_runtime.build_view_model_with_mux(
             &self.settings.statusbar,
             mux_session_name,
             mux_status,
-        )
+            mux_statusbar,
+        );
+        // When the active tab is mux-attached, the mux status row honors
+        // `mux.status_position` (FR11) — it may differ from the app status
+        // bar's own position.
+        if mux_session_name.is_some() {
+            vm.position = self.settings.mux.status_position;
+        }
+        vm
     }
 
     /// Build the current status-bar view model and compare it against
@@ -1840,6 +1945,407 @@ impl App {
     #[allow(dead_code)] // retained for future mutation paths / tests
     pub fn active_tab_mut(&mut self) -> Option<&mut Tab> {
         self.tabs.get_mut(self.active)
+    }
+
+    /// Dispatch a mux prefix action against the active tab. Switch / new /
+    /// detach are handled here; rename / move open dialogs (Phase 4) and are
+    /// surfaced via [`MuxActionOutcome`] for the caller to drive. Returns the
+    /// outcome so the caller (window_host) can react (open a dialog, redraw).
+    ///
+    /// Port of `handleMuxAction` in `mux-action-handler.ts`, fused with the
+    /// `switchMuxWindow` index math (the native build sends `SwitchWindow`
+    /// and lets the daemon snapshot swap the screen, so there is no local
+    /// grid save/restore here).
+    pub fn dispatch_mux_action(
+        &mut self,
+        action: crate::mux::prefix::PrefixAction,
+    ) -> MuxActionOutcome {
+        use crate::mux::prefix::PrefixAction;
+        use mux_ipc::protocol::{CreateWindowPayload, MessageType, MuxMessage};
+
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return MuxActionOutcome::None;
+        };
+        if tab.mux_group.is_none() {
+            return MuxActionOutcome::None;
+        }
+
+        match action {
+            PrefixAction::None | PrefixAction::Literal => MuxActionOutcome::None,
+            PrefixAction::Detach => {
+                tab.send_control(&MuxMessage {
+                    msg_type: MessageType::Detach,
+                    pane_id: 0,
+                    payload: Vec::new(),
+                });
+                MuxActionOutcome::Detach
+            }
+            PrefixAction::NewWindow => {
+                tab.mux_group.as_mut().unwrap().inc_pending_create();
+                let sent = tab.send_control(&MuxMessage::control(
+                    MessageType::CreateWindow,
+                    0,
+                    &CreateWindowPayload::default(),
+                ));
+                if !sent {
+                    // No PTY — undo the optimistic pending credit so a later
+                    // stray PaneCreated cannot append a phantom window.
+                    tab.mux_group.as_mut().unwrap().take_pending_create();
+                    return MuxActionOutcome::None;
+                }
+                MuxActionOutcome::Changed
+            }
+            PrefixAction::NextWindow => {
+                let target = tab.mux_group.as_ref().unwrap().next_index();
+                Self::switch_to(tab, target)
+            }
+            PrefixAction::PrevWindow => {
+                let target = tab.mux_group.as_ref().unwrap().prev_index();
+                Self::switch_to(tab, target)
+            }
+            PrefixAction::SelectWindow(d) => {
+                let target = tab.mux_group.as_ref().unwrap().digit_index(d);
+                Self::switch_to(tab, target)
+            }
+            PrefixAction::RenameWindow => {
+                // Re-resolved by the dialog handler; surface the active
+                // window's stable id so the dialog can re-find it on confirm.
+                match tab.mux_group.as_ref().unwrap().active_window() {
+                    Some(w) => MuxActionOutcome::OpenRename {
+                        window_id: w.id,
+                        current_name: w.name.clone(),
+                    },
+                    None => MuxActionOutcome::None,
+                }
+            }
+            PrefixAction::MoveWindow => {
+                let group = tab.mux_group.as_ref().unwrap();
+                if group.len() <= 1 {
+                    return MuxActionOutcome::None;
+                }
+                match group.active_window() {
+                    Some(w) => MuxActionOutcome::OpenMove {
+                        window_id: w.id,
+                        current_position: group.active_index() + 1,
+                        window_count: group.len(),
+                    },
+                    None => MuxActionOutcome::None,
+                }
+            }
+        }
+    }
+
+    /// React to a [`MuxActionOutcome`] from [`Self::observe_mux_key`]. Switch
+    /// / new / detach already applied their effects in `dispatch_mux_action`;
+    /// here we open the rename / move dialogs (Phase 4). `None` / `Changed` /
+    /// `Detach` need no further action at this layer.
+    pub fn handle_mux_outcome(&mut self, outcome: MuxActionOutcome) {
+        match outcome {
+            MuxActionOutcome::None | MuxActionOutcome::Changed | MuxActionOutcome::Detach => {}
+            MuxActionOutcome::OpenRename {
+                window_id,
+                current_name,
+            } => {
+                self.open_mux_rename_dialog(window_id, current_name);
+            }
+            MuxActionOutcome::OpenMove {
+                window_id,
+                current_position,
+                window_count,
+            } => {
+                self.open_mux_move_dialog(window_id, current_position, window_count);
+            }
+        }
+    }
+
+    /// Open the rename dialog for `window_id`, seeded with `current_name`.
+    /// Reentry guard: a no-op if a rename dialog is already open (port of
+    /// `renameDialogOpen`).
+    pub fn open_mux_rename_dialog(&mut self, window_id: u32, current_name: String) {
+        if self.mux_dialog.is_open() {
+            return;
+        }
+        self.mux_dialog = crate::mux::dialog::MuxDialogState::Rename {
+            window_id,
+            name: current_name,
+            focused_once: false,
+        };
+    }
+
+    /// Open the move dialog for `window_id`. Reentry guard via the
+    /// `MuxDialogState::Closed` discriminant (port of `moveDialogOpen`).
+    pub fn open_mux_move_dialog(
+        &mut self,
+        window_id: u32,
+        current_position: usize,
+        window_count: usize,
+    ) {
+        if self.mux_dialog.is_open() {
+            return;
+        }
+        self.mux_dialog = crate::mux::dialog::MuxDialogState::Move {
+            window_id,
+            current_position,
+            window_count,
+            target: current_position,
+        };
+    }
+
+    /// Whether a mux rename / move dialog is currently open (the caller
+    /// routes input to the dialog and swallows the PTY while it is).
+    pub fn mux_dialog_open(&self) -> bool {
+        self.mux_dialog.is_open()
+    }
+
+    /// Reconcile the open mux dialog against the active tab's current window
+    /// group. Called by the render pipeline (`window_host::drive_mux_dialogs`)
+    /// every frame before draw so a daemon-driven change that arrived while
+    /// the dialog was open (a `PaneCreated` widened the window list, a
+    /// `PtyExited` removed the captured window, a `SwitchWindow` shifted the
+    /// current position) is reflected — instead of the dialog still showing
+    /// a stale `current_position` / `window_count` captured at open time, or
+    /// the user confirming a target the group can no longer accept.
+    ///
+    /// Outcomes:
+    /// - The captured `window_id` no longer exists in the group → close the
+    ///   dialog (`Closed`); the user's pending edit is silently discarded
+    ///   since the target window is gone (parity with WebView, which closes
+    ///   the dialog on a server-broadcast detach of the targeted window).
+    /// - For the move dialog: refresh `current_position` to the captured
+    ///   window's new 1-based index and `window_count` to `group.len()`, and
+    ///   clamp `target` into the new `1..=window_count` range so an
+    ///   in-flight edit can never confirm a value the group cannot accept.
+    /// - For the rename dialog: nothing to refresh (the only display field is
+    ///   the user-edited buffer).
+    pub fn refresh_mux_dialog(&mut self) {
+        use crate::mux::dialog::MuxDialogState;
+        if matches!(self.mux_dialog, MuxDialogState::Closed) {
+            return;
+        }
+        let Some(tab) = self.tabs.get(self.active) else {
+            self.mux_dialog = MuxDialogState::Closed;
+            return;
+        };
+        let Some(group) = tab.mux_group.as_ref() else {
+            self.mux_dialog = MuxDialogState::Closed;
+            return;
+        };
+        let captured_id = match &self.mux_dialog {
+            MuxDialogState::Closed => return,
+            MuxDialogState::Rename { window_id, .. } | MuxDialogState::Move { window_id, .. } => {
+                *window_id
+            }
+        };
+        let Some(idx) = group.index_of_window_id(captured_id) else {
+            self.mux_dialog = MuxDialogState::Closed;
+            return;
+        };
+        if let MuxDialogState::Move {
+            current_position,
+            window_count,
+            target,
+            ..
+        } = &mut self.mux_dialog
+        {
+            let new_count = group.len();
+            let new_current = idx + 1;
+            *current_position = new_current;
+            *window_count = new_count;
+            *target = (*target).clamp(1, new_count.max(1));
+        }
+    }
+
+    /// Feed one key event into the mux prefix latch and act on the result.
+    /// Only intercepts when the active tab is mux-attached (has a
+    /// `mux_group`); otherwise returns `(false, None)` so the caller falls
+    /// through to the normal keybind / PTY path.
+    ///
+    /// Returns `(consumed, outcome)`:
+    /// - `consumed = true` means the key was absorbed by the mux layer and
+    ///   must NOT reach the keybind dispatch or PTY passthrough (covers
+    ///   arming, the action follow-up, the double-prefix literal, and the
+    ///   unknown-after-prefix ignore — FR2).
+    /// - `outcome` is the action result (for the caller to open a dialog /
+    ///   redraw); `None` when nothing actionable happened.
+    ///
+    /// `now` is the wall-clock instant (production passes `Instant::now()`;
+    /// tests pass a synthetic clock). Port of `PrefixKeyHandler.handleKeyEvent`
+    /// fused with `handleMuxAction` dispatch.
+    pub fn observe_mux_key(
+        &mut self,
+        input: &crate::mux::prefix::KeyInput,
+        now: Instant,
+    ) -> (bool, MuxActionOutcome) {
+        use crate::mux::prefix::PrefixAction;
+        // Only a mux-attached active tab gets the prefix intercept.
+        let is_mux = self
+            .tabs
+            .get(self.active)
+            .map(|t| t.mux_group.is_some())
+            .unwrap_or(false);
+        if !is_mux {
+            return (false, MuxActionOutcome::None);
+        }
+        let was_armed = self.mux_latch.is_armed();
+        let action = self.mux_latch.observe(input, now);
+        match action {
+            PrefixAction::None => {
+                // Two cases: (1) this key just armed the latch → consume it;
+                // (2) it was an unknown follow-up after the prefix → consume
+                // it (unknown-after-prefix is ignored, FR2). Otherwise the
+                // key is unrelated and must fall through.
+                if self.mux_latch.is_armed() || was_armed {
+                    (true, MuxActionOutcome::None)
+                } else {
+                    (false, MuxActionOutcome::None)
+                }
+            }
+            PrefixAction::Literal => {
+                // Double-prefix: send the *configured* prefix's literal byte to
+                // the active pane so programs that themselves use the chord
+                // still receive it. Pre-fix this was hardcoded to
+                // `DEFAULT_LITERAL_BYTE` (0x02 = Ctrl+B), so a user with
+                // `Ctrl+A` set would double-tap Ctrl+A and the pane would see
+                // Ctrl+B instead — silently breaking a nested tmux. Derive the
+                // byte from the live chord via `Latch::literal_byte`.
+                let byte = self.mux_latch.literal_byte();
+                if let Some(tab) = self.tabs.get(self.active) {
+                    tab.write_input(vec![byte]);
+                }
+                (true, MuxActionOutcome::None)
+            }
+            other => {
+                let outcome = self.dispatch_mux_action(other);
+                (true, outcome)
+            }
+        }
+    }
+
+    /// Apply a local switch to `target` (if any) and notify the daemon. The
+    /// daemon-pushed snapshot swaps the on-screen content; here we only move
+    /// the active index and send `SwitchWindow` with the new pane id. A
+    /// `None` target (single window / out-of-range digit) is a no-op.
+    ///
+    /// Send-first / commit-after: when the PTY write fails (no PTY, broken
+    /// pipe) the local active index is left untouched, mirroring the
+    /// `NewWindow` rollback path. Pre-fix this committed the local switch
+    /// unconditionally, leaving the UI and the pane-filter (`PtyOutput`
+    /// drops bytes for non-active panes) pointing at a window the daemon
+    /// never moved off of.
+    fn switch_to(tab: &mut Tab, target: Option<usize>) -> MuxActionOutcome {
+        use mux_ipc::protocol::{MessageType, MuxMessage};
+        let Some(idx) = target else {
+            return MuxActionOutcome::None;
+        };
+        // Peek the target pane via shared borrow so a failed send does not
+        // leave `group.active` already mutated.
+        let pane_id = {
+            let Some(group) = tab.mux_group.as_ref() else {
+                return MuxActionOutcome::None;
+            };
+            let panes = group.pane_ids();
+            if panes.is_empty() {
+                return MuxActionOutcome::None;
+            }
+            let clamped = idx.min(panes.len() - 1);
+            panes[clamped]
+        };
+        let sent = tab.send_control(&MuxMessage {
+            msg_type: MessageType::SwitchWindow,
+            pane_id,
+            payload: Vec::new(),
+        });
+        if !sent {
+            return MuxActionOutcome::None;
+        }
+        // Daemon accepted; now commit local state and pull the new window's
+        // screen on demand (the daemon does not push the active grid
+        // unprompted — parity with `switchMuxWindow`'s `requestPaneSnapshot`).
+        if let Some(group) = tab.mux_group.as_mut() {
+            group.set_active_clamped(idx);
+        }
+        tab.request_pane_snapshot(pane_id);
+        MuxActionOutcome::Changed
+    }
+
+    /// Confirm an optimistic rename: relabel the window with `window_id` (if
+    /// it still exists) and notify the daemon with the active pane id. An
+    /// empty name is a no-op (matching the WebView). Returns true when a
+    /// rename was applied.
+    pub fn confirm_mux_rename(&mut self, window_id: u32, name: String) -> bool {
+        use mux_ipc::protocol::{MessageType, MuxMessage, RenameWindowMsg};
+        // Trim then reject empty. The originating dialog already returns
+        // `trimmed.to_string()`, but this is a `pub` entry point — a future
+        // caller (CLI rebind, test, remote-confirm) could pass `"   "` and
+        // the literal-empty guard alone would let a whitespace-only name
+        // reach the daemon and the local `MuxWindow.name`. Make the contract
+        // explicit.
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return false;
+        }
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return false;
+        };
+        let Some(group) = tab.mux_group.as_mut() else {
+            return false;
+        };
+        let Some(idx) = group.index_of_window_id(window_id) else {
+            return false; // window closed during the dialog
+        };
+        let pane_id = group.pane_ids()[idx];
+        group.rename_window_id(window_id, name.clone());
+        tab.send_control(&MuxMessage::control(
+            MessageType::RenameWindow,
+            pane_id,
+            &RenameWindowMsg { name },
+        ));
+        true
+    }
+
+    /// Confirm an optimistic move: reorder the window with stable `window_id`
+    /// to 1-based `target_position`, notify the daemon, and roll back the
+    /// reorder if the send fails (the daemon does not broadcast order, so
+    /// local state is authoritative). Returns true when a move was applied
+    /// and survived (no rollback). Port of the `move-window` handler.
+    pub fn confirm_mux_move(&mut self, window_id: u32, target_position: usize) -> bool {
+        use mux_ipc::protocol::{MessageType, MoveWindowMsg, MuxMessage};
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return false;
+        };
+        let Some(group) = tab.mux_group.as_mut() else {
+            return false;
+        };
+        let Some(from) = group.index_of_window_id(window_id) else {
+            return false; // window closed during the dialog
+        };
+        let count = group.len();
+        if target_position < 1 || target_position > count {
+            return false; // out of range
+        }
+        let to = target_position - 1;
+        if to == from {
+            return false; // same position — no-op
+        }
+        let pane_id = group.pane_ids()[from];
+        // Optimistic reorder so the UI updates immediately.
+        group.reorder(from, to);
+        let sent = tab.send_control(&MuxMessage::control(
+            MessageType::MoveWindow,
+            pane_id,
+            &MoveWindowMsg {
+                target_index: to as u32,
+            },
+        ));
+        if !sent {
+            // Roll back: re-insert from `to` back to `from`.
+            if let Some(g) = tab.mux_group.as_mut() {
+                g.reorder(to, from);
+            }
+            log::warn!("mux: MoveWindow send failed, reverted optimistic reorder");
+            return false;
+        }
+        true
     }
 
     /// Drain PTY events on every tab. Returns true if any tab produced
@@ -2765,7 +3271,19 @@ impl App {
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
-        if let Some(pty) = tab.pty.as_ref() {
+        // mux mode: route the commit as a PtyInput frame (the bridge drops raw
+        // stdin). Otherwise write directly to the PTY.
+        if tab
+            .mux_group
+            .as_ref()
+            .and_then(|g| g.active_pane_id())
+            .is_some()
+        {
+            let bytes = crate::ime::commit::commit_bytes(text);
+            if !bytes.is_empty() {
+                tab.write_input(bytes);
+            }
+        } else if let Some(pty) = tab.pty.as_ref() {
             if let Err(e) = crate::ime::commit::write_commit(pty, text) {
                 log::warn!("ime commit write failed: {e}");
             }
@@ -4290,6 +4808,352 @@ mod tests {
             payload: b"hello".to_vec(),
         };
         assert!(!app.on_mux_message(0, msg));
+    }
+
+    // ── Phase 3/4: mux action dispatch (TS-12, TS-13, TS-14) ──────────
+
+    use crate::mux::prefix::PrefixAction;
+    use mux_ipc::protocol::{MessageType, MuxMessage, SessionInfo, WelcomeMsg, WindowInfo};
+
+    /// An app with one tab seeded with `n` mux windows (panes 100+i, ids
+    /// 0..n, active 0) via a real Welcome message.
+    fn app_with_mux_windows(n: usize) -> App {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let windows: Vec<WindowInfo> = (0..n)
+            .map(|i| WindowInfo {
+                id: i as u32,
+                name: format!("w{i}"),
+                active_pane_id: 100 + i as u32,
+            })
+            .collect();
+        let welcome = MuxMessage::control(
+            MessageType::Welcome,
+            0,
+            &WelcomeMsg::Accepted {
+                server_version: 1,
+                sessions: vec![SessionInfo {
+                    id: 1,
+                    name: "main".to_string(),
+                    window_count: n as u32,
+                    pane_count: n as u32,
+                    active_window_index: 0,
+                    windows,
+                }],
+            },
+        );
+        app.on_mux_message(0, welcome);
+        app
+    }
+
+    fn active_idx(app: &App) -> usize {
+        app.active_tab()
+            .unwrap()
+            .mux_group
+            .as_ref()
+            .unwrap()
+            .active_index()
+    }
+
+    #[test]
+    fn dispatch_next_prev_wrap() {
+        let mut app = app_with_mux_windows(3);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextWindow),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(active_idx(&app), 1);
+        app.dispatch_mux_action(PrefixAction::NextWindow);
+        app.dispatch_mux_action(PrefixAction::NextWindow);
+        assert_eq!(active_idx(&app), 0); // wrapped
+        app.dispatch_mux_action(PrefixAction::PrevWindow);
+        assert_eq!(active_idx(&app), 2); // wrapped backwards
+    }
+
+    #[test]
+    fn dispatch_digit_clamps_and_noops_past_range() {
+        let mut app = app_with_mux_windows(3);
+        app.dispatch_mux_action(PrefixAction::SelectWindow(2));
+        assert_eq!(active_idx(&app), 2);
+        // digit 5 is past range → no-op, stays on 2.
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::SelectWindow(5)),
+            MuxActionOutcome::None
+        );
+        assert_eq!(active_idx(&app), 2);
+    }
+
+    #[test]
+    fn dispatch_single_window_switch_is_noop() {
+        let mut app = app_with_mux_windows(1);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextWindow),
+            MuxActionOutcome::None
+        );
+        assert_eq!(active_idx(&app), 0);
+    }
+
+    #[test]
+    fn dispatch_new_window_increments_pending() {
+        let mut app = app_with_mux_windows(2);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NewWindow),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(
+            app.active_tab()
+                .unwrap()
+                .mux_group
+                .as_ref()
+                .unwrap()
+                .pending_create(),
+            1
+        );
+    }
+
+    #[test]
+    fn dispatch_detach_emits_detach_outcome() {
+        let mut app = app_with_mux_windows(2);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::Detach),
+            MuxActionOutcome::Detach
+        );
+    }
+
+    #[test]
+    fn dispatch_rename_opens_dialog_with_stable_id() {
+        let mut app = app_with_mux_windows(2);
+        app.dispatch_mux_action(PrefixAction::NextWindow); // active idx 1, id 1
+        match app.dispatch_mux_action(PrefixAction::RenameWindow) {
+            MuxActionOutcome::OpenRename {
+                window_id,
+                current_name,
+            } => {
+                assert_eq!(window_id, 1);
+                assert_eq!(current_name, "w1");
+            }
+            other => panic!("expected OpenRename, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_move_requires_two_windows() {
+        let mut app = app_with_mux_windows(1);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::MoveWindow),
+            MuxActionOutcome::None
+        );
+        let mut app = app_with_mux_windows(2);
+        match app.dispatch_mux_action(PrefixAction::MoveWindow) {
+            MuxActionOutcome::OpenMove {
+                window_id,
+                current_position,
+                window_count,
+            } => {
+                assert_eq!(window_id, 0);
+                assert_eq!(current_position, 1);
+                assert_eq!(window_count, 2);
+            }
+            other => panic!("expected OpenMove, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_without_mux_group_is_noop() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextWindow),
+            MuxActionOutcome::None
+        );
+    }
+
+    // ── FR1: tab-bar mux sub-tab click routing (MuxSwitch) ────────────────
+
+    #[test]
+    fn apply_tab_event_mux_switch_moves_active_window() {
+        let mut app = app_with_mux_windows(3);
+        assert_eq!(active_idx(&app), 0);
+        let exit = app.apply_tab_event(crate::ui::TabEvent::MuxSwitch { tab: 0, window: 2 });
+        assert!(!exit);
+        assert_eq!(active_idx(&app), 2);
+    }
+
+    #[test]
+    fn apply_tab_event_mux_switch_on_missing_tab_is_noop() {
+        let mut app = app_with_mux_windows(2);
+        // Out-of-range tab index must not panic and must leave state intact.
+        assert!(!app.apply_tab_event(crate::ui::TabEvent::MuxSwitch { tab: 9, window: 1 }));
+        assert_eq!(active_idx(&app), 0);
+    }
+
+    // ── TS-14: rename confirm re-resolves by stable id ────────────────
+
+    #[test]
+    fn confirm_rename_relabels_by_stable_id() {
+        let mut app = app_with_mux_windows(3);
+        assert!(app.confirm_mux_rename(2, "editor".to_string()));
+        let g = app.active_tab().unwrap().mux_group.as_ref().unwrap();
+        assert_eq!(g.windows()[2].name, "editor");
+    }
+
+    #[test]
+    fn confirm_rename_empty_name_is_noop() {
+        let mut app = app_with_mux_windows(2);
+        assert!(!app.confirm_mux_rename(0, String::new()));
+    }
+
+    #[test]
+    fn confirm_rename_closed_window_aborts() {
+        let mut app = app_with_mux_windows(2);
+        // window id 999 never existed → abort.
+        assert!(!app.confirm_mux_rename(999, "x".to_string()));
+    }
+
+    // ── TS-13: move validation + optimistic reorder ───────────────────
+
+    #[test]
+    fn confirm_move_reorders_optimistically() {
+        let mut app = app_with_mux_windows(3); // ids 0,1,2 panes 100,101,102
+                                               // move window id 0 to position 3 → order 1,2,0
+        assert!(app.confirm_mux_move(0, 3));
+        let g = app.active_tab().unwrap().mux_group.as_ref().unwrap();
+        assert_eq!(
+            g.windows().iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![1, 2, 0]
+        );
+    }
+
+    #[test]
+    fn confirm_move_out_of_range_is_noop() {
+        let mut app = app_with_mux_windows(3);
+        assert!(!app.confirm_mux_move(0, 0)); // below range
+        assert!(!app.confirm_mux_move(0, 4)); // above range
+    }
+
+    #[test]
+    fn confirm_move_same_position_is_noop() {
+        let mut app = app_with_mux_windows(3); // active id 0 at position 1
+        assert!(!app.confirm_mux_move(0, 1));
+    }
+
+    #[test]
+    fn confirm_move_closed_window_aborts() {
+        let mut app = app_with_mux_windows(3);
+        assert!(!app.confirm_mux_move(999, 2));
+    }
+
+    #[test]
+    fn confirm_move_rolls_back_on_send_failure() {
+        let mut app = app_with_mux_windows(3); // ids 0,1,2
+                                               // Drop the PTY so send_control fails.
+        app.active_tab_mut().unwrap().pty = None;
+        let before: Vec<u32> = app
+            .active_tab()
+            .unwrap()
+            .mux_group
+            .as_ref()
+            .unwrap()
+            .windows()
+            .iter()
+            .map(|w| w.id)
+            .collect();
+        // Attempt move id 0 → position 3; send fails → reverted.
+        assert!(!app.confirm_mux_move(0, 3));
+        let after: Vec<u32> = app
+            .active_tab()
+            .unwrap()
+            .mux_group
+            .as_ref()
+            .unwrap()
+            .windows()
+            .iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(before, after, "order reverted after send failure");
+    }
+
+    // ── observe_mux_key latch wiring + dialog reentry ─────────────────
+
+    #[test]
+    fn observe_mux_key_ignores_non_mux_tab() {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        let t0 = Instant::now();
+        let (consumed, _) = app.observe_mux_key(&crate::mux::prefix::KeyInput::letter('b'), t0);
+        assert!(!consumed, "non-mux tab falls through");
+    }
+
+    #[test]
+    fn observe_mux_key_arms_then_dispatches() {
+        let mut app = app_with_mux_windows(3);
+        let t0 = Instant::now();
+        let (consumed, out) =
+            app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('b'), t0);
+        assert!(consumed);
+        assert_eq!(out, MuxActionOutcome::None);
+        let (consumed, out) = app.observe_mux_key(&crate::mux::prefix::KeyInput::letter('n'), t0);
+        assert!(consumed);
+        assert_eq!(out, MuxActionOutcome::Changed);
+        assert_eq!(active_idx(&app), 1);
+    }
+
+    #[test]
+    fn observe_mux_key_unknown_followup_consumed() {
+        let mut app = app_with_mux_windows(2);
+        let t0 = Instant::now();
+        app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('b'), t0);
+        let (consumed, out) = app.observe_mux_key(&crate::mux::prefix::KeyInput::letter('q'), t0);
+        assert!(consumed);
+        assert_eq!(out, MuxActionOutcome::None);
+    }
+
+    #[test]
+    fn observe_mux_key_rename_opens_dialog() {
+        let mut app = app_with_mux_windows(2);
+        let t0 = Instant::now();
+        app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('b'), t0);
+        let comma = crate::mux::prefix::KeyInput {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            key: crate::mux::prefix::KeySym::Comma,
+        };
+        let (consumed, out) = app.observe_mux_key(&comma, t0);
+        assert!(consumed);
+        assert!(matches!(out, MuxActionOutcome::OpenRename { .. }));
+        app.handle_mux_outcome(out);
+        assert!(matches!(
+            app.mux_dialog,
+            crate::mux::dialog::MuxDialogState::Rename { .. }
+        ));
+    }
+
+    #[test]
+    fn rename_dialog_reentry_guard() {
+        let mut app = app_with_mux_windows(2);
+        app.open_mux_rename_dialog(0, "a".to_string());
+        // Second open with a different id must not replace the first.
+        app.open_mux_rename_dialog(1, "b".to_string());
+        match &app.mux_dialog {
+            crate::mux::dialog::MuxDialogState::Rename { window_id, .. } => {
+                assert_eq!(*window_id, 0);
+            }
+            other => panic!("expected Rename dialog, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn move_dialog_reentry_guard() {
+        let mut app = app_with_mux_windows(2);
+        app.open_mux_move_dialog(0, 1, 2);
+        app.open_mux_move_dialog(1, 2, 2);
+        match &app.mux_dialog {
+            crate::mux::dialog::MuxDialogState::Move { window_id, .. } => {
+                assert_eq!(*window_id, 0);
+            }
+            other => panic!("expected Move dialog, got {other:?}"),
+        }
     }
 
     // ── Phase 4-G-A: ImeBackend wiring on App ────────────────────────
