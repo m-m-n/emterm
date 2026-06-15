@@ -157,43 +157,68 @@ pub enum PrefixAction {
 }
 
 /// Effective follow-up key bindings for the mux actions, resolved from
-/// `settings.mux.keybinds` (with tmux-compatible defaults). The latch maps
-/// an armed follow-up character to the bound action; digits `0..=9` are
-/// always `SelectWindow` and are not configurable (matching the WebView,
-/// where digit jumps are built in rather than part of `keybinds`).
+/// `settings.mux.keybinds` (with tmux-compatible defaults). The latch
+/// matches an armed follow-up [`KeyInput`] against each chord; digits
+/// `0..=9` are always `SelectWindow` and are not configurable (matching
+/// the WebView, where digit jumps are built in rather than part of
+/// `keybinds`).
+///
+/// The chord representation lets a user bind, e.g., `detach = Ctrl+D`
+/// instead of the bare `d` follow-up — matching the WebView's
+/// `matchActionBinding` (which accepts both single-char and modifier
+/// chords). Stored as [`PrefixChord`] so a single chord type covers both
+/// the prefix and the action follow-ups.
 #[derive(Debug, Clone)]
 pub struct ActionBindings {
     /// detach
-    pub detach: char,
+    pub detach: PrefixChord,
     /// new-window
-    pub new_window: char,
+    pub new_window: PrefixChord,
     /// next-window
-    pub next_window: char,
+    pub next_window: PrefixChord,
     /// prev-window
-    pub prev_window: char,
+    pub prev_window: PrefixChord,
     /// rename-window
-    pub rename_window: char,
+    pub rename_window: PrefixChord,
     /// move-window
-    pub move_window: char,
+    pub move_window: PrefixChord,
+}
+
+const fn bare_letter(c: char) -> PrefixChord {
+    PrefixChord {
+        ctrl: false,
+        shift: false,
+        alt: false,
+        key: KeySym::Letter(c),
+    }
+}
+
+const fn bare_comma() -> PrefixChord {
+    PrefixChord {
+        ctrl: false,
+        shift: false,
+        alt: false,
+        key: KeySym::Comma,
+    }
 }
 
 /// Single-source-of-truth table of the tmux-compatible default follow-up
-/// keys per mux action. `ActionBindings::default()` and
-/// [`crate::settings::default_mux_action_key`] both read from here so the two
-/// can never drift; mirror of the WebView `DEFAULT_ACTION_BINDINGS` in
-/// `prefix-key.ts`.
-pub const DEFAULT_ACTION_BINDINGS: &[(&str, char)] = &[
-    ("detach", 'd'),
-    ("new-window", 'c'),
-    ("next-window", 'n'),
-    ("prev-window", 'p'),
-    ("rename-window", ','),
-    ("move-window", 'm'),
+/// chords per mux action. `ActionBindings::default()` and
+/// [`crate::settings::default_mux_action_chord`] both read from here so
+/// the two can never drift; mirror of the WebView `DEFAULT_ACTION_BINDINGS`
+/// in `prefix-key.ts`.
+pub const DEFAULT_ACTION_BINDINGS: &[(&str, PrefixChord)] = &[
+    ("detach", bare_letter('d')),
+    ("new-window", bare_letter('c')),
+    ("next-window", bare_letter('n')),
+    ("prev-window", bare_letter('p')),
+    ("rename-window", bare_comma()),
+    ("move-window", bare_letter('m')),
 ];
 
-/// Default follow-up key for a mux action, or `None` if the action name is
-/// unknown. Lookup against [`DEFAULT_ACTION_BINDINGS`].
-pub fn default_action_char(action: &str) -> Option<char> {
+/// Default follow-up chord for a mux action, or `None` if the action
+/// name is unknown. Lookup against [`DEFAULT_ACTION_BINDINGS`].
+pub fn default_action_chord(action: &str) -> Option<PrefixChord> {
     DEFAULT_ACTION_BINDINGS
         .iter()
         .find_map(|(k, c)| (*k == action).then_some(*c))
@@ -202,10 +227,10 @@ pub fn default_action_char(action: &str) -> Option<char> {
 impl Default for ActionBindings {
     fn default() -> Self {
         // Pull every field from the SSOT table — any drift surfaces at
-        // construction time (the `expect` fires) instead of silently divergent
+        // construction time (the panic fires) instead of silently divergent
         // defaults.
         let get = |a| {
-            default_action_char(a).unwrap_or_else(|| panic!("DEFAULT_ACTION_BINDINGS missing {a}"))
+            default_action_chord(a).unwrap_or_else(|| panic!("DEFAULT_ACTION_BINDINGS missing {a}"))
         };
         Self {
             detach: get("detach"),
@@ -222,8 +247,8 @@ impl ActionBindings {
     /// Build the table from a resolved `settings.mux.keybinds` map, falling
     /// back to the tmux default for any action the map omits. Invalid /
     /// unknown entries were already dropped (warn) by the settings loader,
-    /// so this only reads the validated single-char values.
-    pub fn from_settings_map(map: &std::collections::HashMap<String, char>) -> Self {
+    /// so this only reads validated chords.
+    pub fn from_settings_map(map: &std::collections::HashMap<String, PrefixChord>) -> Self {
         let d = Self::default();
         Self {
             detach: map.get("detach").copied().unwrap_or(d.detach),
@@ -235,22 +260,23 @@ impl ActionBindings {
         }
     }
 
-    /// Resolve an armed follow-up character to its action. Digits are mapped
-    /// to `SelectWindow` before this is consulted; returns `None` for any
-    /// character not bound to an action (the caller then consumes the latch
-    /// without emitting — unknown-after-prefix is ignored, FR2).
-    pub fn action_for_char(&self, c: char) -> Option<PrefixAction> {
-        if c == self.detach {
+    /// Resolve an armed follow-up [`KeyInput`] to its action. Digits are
+    /// mapped to `SelectWindow` before this is consulted; returns `None`
+    /// for any input that does not match a bound chord (the caller then
+    /// consumes the latch without emitting — unknown-after-prefix is
+    /// ignored, FR2).
+    pub fn action_for_input(&self, input: &KeyInput) -> Option<PrefixAction> {
+        if self.detach.matches_as_follow_up(input) {
             Some(PrefixAction::Detach)
-        } else if c == self.new_window {
+        } else if self.new_window.matches_as_follow_up(input) {
             Some(PrefixAction::NewWindow)
-        } else if c == self.next_window {
+        } else if self.next_window.matches_as_follow_up(input) {
             Some(PrefixAction::NextWindow)
-        } else if c == self.prev_window {
+        } else if self.prev_window.matches_as_follow_up(input) {
             Some(PrefixAction::PrevWindow)
-        } else if c == self.rename_window {
+        } else if self.rename_window.matches_as_follow_up(input) {
             Some(PrefixAction::RenameWindow)
-        } else if c == self.move_window {
+        } else if self.move_window.matches_as_follow_up(input) {
             Some(PrefixAction::MoveWindow)
         } else {
             None
@@ -281,12 +307,40 @@ impl Default for PrefixChord {
 }
 
 impl PrefixChord {
-    /// Match the chord against a framework-agnostic [`KeyInput`].
+    /// Match the chord against a framework-agnostic [`KeyInput`] with
+    /// exact modifier comparison. Used for the prefix chord itself
+    /// (where the user expects, e.g., `Ctrl+B` to require the Control
+    /// modifier).
     fn matches(&self, input: &KeyInput) -> bool {
         input.ctrl == self.ctrl
             && input.shift == self.shift
             && input.alt == self.alt
             && input.key == self.key
+    }
+
+    /// `true` when this chord carries no modifier (a bare single-key
+    /// follow-up like `d` / `c` / `,`).
+    fn is_bare(&self) -> bool {
+        !self.ctrl && !self.shift && !self.alt
+    }
+
+    /// Match the chord as an **action follow-up**. Mirrors the WebView's
+    /// `matchActionBinding` (`src/terminal/mux/prefix-key.ts`): a bare
+    /// single-key binding (no modifiers) ignores the input's modifiers
+    /// and matches the key alone, while a modifier-bearing binding
+    /// requires exact modifier+key match. Without this, a user holding
+    /// the prefix's Control modifier while typing the follow-up
+    /// (`prefix → Ctrl+d`) would silently fail to dispatch `Detach`
+    /// under the default `detach = "d"` binding even though the WebView
+    /// fires it. Keeping `matches` for the prefix itself and
+    /// `matches_as_follow_up` for action bindings preserves the strict
+    /// semantics where they belong.
+    fn matches_as_follow_up(&self, input: &KeyInput) -> bool {
+        if self.is_bare() {
+            input.key == self.key
+        } else {
+            self.matches(input)
+        }
     }
 }
 
@@ -442,7 +496,7 @@ impl Latch {
                     self.state = State::Idle;
                     return PrefixAction::Literal;
                 }
-                let action = decode_follow_up(input.key, &self.bindings);
+                let action = decode_follow_up(input, &self.bindings);
                 self.state = State::Idle;
                 action
             }
@@ -450,21 +504,28 @@ impl Latch {
     }
 }
 
-/// Decode the follow-up key into an action using the configured
+/// Decode the follow-up [`KeyInput`] into an action using the configured
 /// [`ActionBindings`]. Digits `0..=9` always map to `SelectWindow` (built
-/// in, not configurable, matching the WebView). Any other key is resolved
-/// to a `char` and looked up in the bindings; an unbound key returns
-/// `PrefixAction::None` and the caller still consumes the latch (the prefix
-/// chord is "used up" once armed — unknown-after-prefix is ignored, FR2).
-fn decode_follow_up(key: KeySym, bindings: &ActionBindings) -> PrefixAction {
-    // Digit jumps first (built-in, override any char binding collision).
-    if let Some(d) = key.as_digit() {
-        return PrefixAction::SelectWindow(d);
+/// in, not configurable, matching the WebView). Any other input is
+/// matched against each bound chord (modifiers included); an unbound
+/// input returns `PrefixAction::None` and the caller still consumes the
+/// latch (the prefix chord is "used up" once armed — unknown-after-prefix
+/// is ignored, FR2).
+///
+/// Digit recognition is restricted to bare digits (no modifiers) so a
+/// modifier-bearing chord like `Ctrl+1` could be bound to a real action
+/// without colliding with the built-in `SelectWindow(1)` jump. tmux
+/// itself accepts only the bare digits for window selection, so this is
+/// the natural match.
+fn decode_follow_up(input: &KeyInput, bindings: &ActionBindings) -> PrefixAction {
+    if !input.ctrl && !input.shift && !input.alt {
+        if let Some(d) = input.key.as_digit() {
+            return PrefixAction::SelectWindow(d);
+        }
     }
-    match key.as_char() {
-        Some(c) => bindings.action_for_char(c).unwrap_or(PrefixAction::None),
-        None => PrefixAction::None,
-    }
+    bindings
+        .action_for_input(input)
+        .unwrap_or(PrefixAction::None)
 }
 
 /// Parse a textual prefix-key spec like `"Ctrl+B"` into a [`PrefixChord`].
@@ -519,8 +580,38 @@ fn parse_key_token(tok: &str) -> Option<KeySym> {
         if let Some(digit) = c.to_digit(10) {
             return Some(KeySym::Digit(digit as u8));
         }
+        // Single-character punctuation reachable from a `mux.keybinds`
+        // chord spec. The set matches `KeySym::as_char` so a round-trip
+        // ("," → KeySym::Comma → back to ",") is byte-identical.
+        return match c {
+            ',' => Some(KeySym::Comma),
+            '.' => Some(KeySym::Period),
+            ';' => Some(KeySym::Semicolon),
+            '/' => Some(KeySym::Slash),
+            '\\' => Some(KeySym::Backslash),
+            '-' => Some(KeySym::Minus),
+            _ => None,
+        };
     }
-    None
+    // Name-form token aliases — the WebView settings UI
+    // (`src/settings/sections/mux-section.ts:256-262`) captures `,` as
+    // the literal `,` *unless* the user presses something the UI rewrites
+    // to a name, and `src/keybind/matcher.ts`'s `KEY_MAP` recognises
+    // additional name forms (`Comma`, `Period`, `Slash`, …) that the
+    // matcher accepts. We accept the subset that the existing `KeySym`
+    // variants can already represent; name forms requiring new KeySym
+    // variants (`Space`, `Plus`, `Enter`, named navigation keys) are
+    // intentionally left for a follow-up KeySym extension (the user
+    // explicitly deferred the broader rewrite).
+    match tok.to_ascii_lowercase().as_str() {
+        "comma" => Some(KeySym::Comma),
+        "period" => Some(KeySym::Period),
+        "semicolon" => Some(KeySym::Semicolon),
+        "slash" => Some(KeySym::Slash),
+        "backslash" => Some(KeySym::Backslash),
+        "minus" => Some(KeySym::Minus),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -762,8 +853,8 @@ mod tests {
     #[test]
     fn custom_bindings_override_defaults() {
         let mut map = std::collections::HashMap::new();
-        map.insert("next-window".to_string(), 'j');
-        map.insert("prev-window".to_string(), 'k');
+        map.insert("next-window".to_string(), bare_letter('j'));
+        map.insert("prev-window".to_string(), bare_letter('k'));
         let bindings = ActionBindings::from_settings_map(&map);
         let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
         assert_eq!(
@@ -772,8 +863,8 @@ mod tests {
         );
         let mut l2 = {
             let mut map = std::collections::HashMap::new();
-            map.insert("next-window".to_string(), 'j');
-            map.insert("prev-window".to_string(), 'k');
+            map.insert("next-window".to_string(), bare_letter('j'));
+            map.insert("prev-window".to_string(), bare_letter('k'));
             Latch::with_bindings(
                 PrefixChord::default(),
                 DEFAULT_ARMED_TIMEOUT,
@@ -789,7 +880,7 @@ mod tests {
             DEFAULT_ARMED_TIMEOUT,
             ActionBindings::from_settings_map(&{
                 let mut m = std::collections::HashMap::new();
-                m.insert("next-window".to_string(), 'j');
+                m.insert("next-window".to_string(), bare_letter('j'));
                 m
             }),
         );
@@ -800,7 +891,7 @@ mod tests {
     fn set_bindings_applies_at_runtime() {
         let mut l = Latch::default();
         let mut map = std::collections::HashMap::new();
-        map.insert("new-window".to_string(), 'x');
+        map.insert("new-window".to_string(), bare_letter('x'));
         l.set_bindings(ActionBindings::from_settings_map(&map));
         assert_eq!(
             arm_then(&mut l, KeyInput::letter('x')),
@@ -835,8 +926,156 @@ mod tests {
     #[test]
     fn action_bindings_from_settings_map_uses_defaults_for_missing() {
         let b = ActionBindings::from_settings_map(&std::collections::HashMap::new());
-        assert_eq!(b.detach, 'd');
-        assert_eq!(b.new_window, 'c');
-        assert_eq!(b.move_window, 'm');
+        assert_eq!(b.detach, bare_letter('d'));
+        assert_eq!(b.new_window, bare_letter('c'));
+        assert_eq!(b.move_window, bare_letter('m'));
+    }
+
+    /// Regression: a chord follow-up like `Ctrl+D` (the bind that
+    /// triggered the multi-review session) must fire its action under
+    /// the new chord-aware dispatcher. tmux ships `bind C-d detach-client`
+    /// in many user configs, which `tmux_conf::converter` writes back as
+    /// `settings.mux.keybinds.detach = "Ctrl+D"`.
+    #[test]
+    fn ctrl_letter_chord_follow_up_fires_action() {
+        // Build the chord through the public spec parser to mirror the
+        // settings loader's exact code path.
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "detach".to_string(),
+            crate::settings::parse_mux_action_chord("Ctrl+D").unwrap(),
+        );
+        let bindings = ActionBindings::from_settings_map(&map);
+        let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
+        // `Ctrl+D` after the prefix must fire `Detach`.
+        assert_eq!(
+            arm_then(&mut l, KeyInput::ctrl_letter('d')),
+            PrefixAction::Detach
+        );
+        // Bare `d` no longer fires (the binding was rewritten).
+        let mut l2 = Latch::with_bindings(
+            PrefixChord::default(),
+            DEFAULT_ARMED_TIMEOUT,
+            ActionBindings::from_settings_map(&{
+                let mut m = std::collections::HashMap::new();
+                m.insert(
+                    "detach".to_string(),
+                    crate::settings::parse_mux_action_chord("Ctrl+D").unwrap(),
+                );
+                m
+            }),
+        );
+        assert_eq!(arm_then(&mut l2, KeyInput::letter('d')), PrefixAction::None);
+    }
+
+    /// A bare digit must still trigger `SelectWindow`, but a modifier
+    /// chord on a digit (`Ctrl+1`) must NOT — it falls through to the
+    /// action bindings so a user could in principle bind it.
+    #[test]
+    fn modifier_digit_chord_does_not_trigger_select_window() {
+        let mut l = Latch::default();
+        // Bare 1 → SelectWindow(1).
+        assert_eq!(
+            arm_then(&mut l, KeyInput::digit(1)),
+            PrefixAction::SelectWindow(1)
+        );
+        // Ctrl+1 → falls through to bindings (no default binding) → None.
+        let mut l2 = Latch::default();
+        assert_eq!(
+            arm_then(
+                &mut l2,
+                KeyInput {
+                    ctrl: true,
+                    shift: false,
+                    alt: false,
+                    key: KeySym::Digit(1),
+                }
+            ),
+            PrefixAction::None
+        );
+    }
+
+    /// SPEC regression — mirrors WebView's `matchActionBinding` which
+    /// matches a bare single-key binding (`detach = "d"`) against the
+    /// input's KEY only, ignoring modifiers. Without this rule a user
+    /// holding the prefix's Control modifier while typing the follow-up
+    /// (`Ctrl+Z` prefix → still-holding-Ctrl `d`) would silently fail to
+    /// detach under the default binding, even though the WebView fires
+    /// it.
+    #[test]
+    fn bare_binding_ignores_modifiers_like_webview() {
+        let mut l = Latch::default();
+        // `Ctrl+d` after the prefix fires `Detach` because `detach = "d"`
+        // is a bare binding (no modifiers in the binding spec).
+        assert_eq!(
+            arm_then(&mut l, KeyInput::ctrl_letter('d')),
+            PrefixAction::Detach
+        );
+        // Same for `Shift+d`.
+        let mut l2 = Latch::default();
+        assert_eq!(
+            arm_then(
+                &mut l2,
+                KeyInput {
+                    ctrl: false,
+                    shift: true,
+                    alt: false,
+                    key: KeySym::Letter('d'),
+                }
+            ),
+            PrefixAction::Detach
+        );
+        // And the plain bare `d` still fires.
+        let mut l3 = Latch::default();
+        assert_eq!(
+            arm_then(&mut l3, KeyInput::letter('d')),
+            PrefixAction::Detach
+        );
+    }
+
+    /// Modifier-bearing bindings (`detach = "Ctrl+D"`) keep strict
+    /// modifier matching — bare `d` no longer fires under that binding.
+    #[test]
+    fn modifier_binding_keeps_strict_match() {
+        let mut map = std::collections::HashMap::new();
+        map.insert(
+            "detach".to_string(),
+            crate::settings::parse_mux_action_chord("Ctrl+D").unwrap(),
+        );
+        let bindings = ActionBindings::from_settings_map(&map);
+        let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
+        // Bare `d` must NOT fire under a `Ctrl+D`-only binding.
+        assert_eq!(arm_then(&mut l, KeyInput::letter('d')), PrefixAction::None);
+    }
+
+    /// SPEC regression — WebView settings UI captures keys with
+    /// name-form aliases (`Comma`, `Period`, `Slash`, …). The native
+    /// loader's chord-spec parser must accept those so a UI-saved
+    /// `mux.keybinds.rename-window = "Ctrl+Comma"` is honoured instead
+    /// of silently falling back to the default. Only the subset
+    /// representable by the existing `KeySym` variants is covered here;
+    /// `Space` / `Plus` / `Enter` etc. are intentionally deferred.
+    #[test]
+    fn name_form_punctuation_aliases_parse() {
+        // Single-token name forms (no modifiers).
+        let comma = crate::settings::parse_mux_action_chord("Comma").unwrap();
+        let period = crate::settings::parse_mux_action_chord("Period").unwrap();
+        let slash = crate::settings::parse_mux_action_chord("Slash").unwrap();
+        let backslash = crate::settings::parse_mux_action_chord("Backslash").unwrap();
+        let minus = crate::settings::parse_mux_action_chord("Minus").unwrap();
+        let semicolon = crate::settings::parse_mux_action_chord("Semicolon").unwrap();
+        assert_eq!(comma.key, KeySym::Comma);
+        assert_eq!(period.key, KeySym::Period);
+        assert_eq!(slash.key, KeySym::Slash);
+        assert_eq!(backslash.key, KeySym::Backslash);
+        assert_eq!(minus.key, KeySym::Minus);
+        assert_eq!(semicolon.key, KeySym::Semicolon);
+        // Case-insensitive.
+        let lc = crate::settings::parse_mux_action_chord("comma").unwrap();
+        assert_eq!(lc.key, KeySym::Comma);
+        // Modifier + name form (matches the WebView UI's `Ctrl+Comma` save shape).
+        let ctrl_comma = crate::settings::parse_mux_action_chord("Ctrl+Comma").unwrap();
+        assert!(ctrl_comma.ctrl);
+        assert_eq!(ctrl_comma.key, KeySym::Comma);
     }
 }

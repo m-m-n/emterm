@@ -147,13 +147,13 @@ pub const MUX_ACTION_NAMES: [&str; 6] = [
     "move-window",
 ];
 
-/// Default follow-up key for a mux action, or `None` if the action name is
-/// unknown. Thin wrapper over the SSOT
-/// [`crate::mux::prefix::DEFAULT_ACTION_BINDINGS`]; both the settings loader
-/// and `ActionBindings::default()` consult the same table so the two cannot
-/// drift.
-pub fn default_mux_action_key(action: &str) -> Option<char> {
-    crate::mux::prefix::default_action_char(action)
+/// Default follow-up chord for a mux action, or `None` if the action
+/// name is unknown. Thin wrapper over the SSOT
+/// [`crate::mux::prefix::DEFAULT_ACTION_BINDINGS`]; both the settings
+/// loader and `ActionBindings::default()` consult the same table so the
+/// two cannot drift.
+pub fn default_mux_action_chord(action: &str) -> Option<crate::mux::prefix::PrefixChord> {
+    crate::mux::prefix::default_action_chord(action)
 }
 
 /// Resolved mux UI settings (`mux.*`). Port of the WebView `MuxSettings` /
@@ -164,10 +164,14 @@ pub struct MuxSettings {
     pub tab_always_expand: bool,
     /// Position of the mux status row (`mux.status_position`).
     pub status_position: StatusBarPosition,
-    /// Effective per-action follow-up keys (`mux.keybinds`), starting from
-    /// the tmux defaults and overlaid with valid user entries. Invalid or
-    /// unknown entries are dropped (warn) and the default is kept.
-    pub keybinds: std::collections::HashMap<String, char>,
+    /// Effective per-action follow-up chords (`mux.keybinds`), starting
+    /// from the tmux defaults and overlaid with valid user entries.
+    /// Invalid or unknown entries are dropped (warn) and the default is
+    /// kept. Each value is a [`crate::mux::prefix::PrefixChord`] so that
+    /// both bare single-char follow-ups (`"d"`) and modifier-bearing
+    /// chords (`"Ctrl+D"`) are first-class — matching the WebView's
+    /// `matchActionBinding`.
+    pub keybinds: std::collections::HashMap<String, crate::mux::prefix::PrefixChord>,
     /// Mux status-bar content (`mux.statusbar.*`).
     pub statusbar: MuxStatusbarSettings,
 }
@@ -176,7 +180,7 @@ impl Default for MuxSettings {
     fn default() -> Self {
         let mut keybinds = std::collections::HashMap::new();
         for action in MUX_ACTION_NAMES {
-            if let Some(c) = default_mux_action_key(action) {
+            if let Some(c) = default_mux_action_chord(action) {
                 keybinds.insert(action.to_string(), c);
             }
         }
@@ -211,22 +215,24 @@ pub struct MuxStatusbarSettings {
     pub commands: std::collections::HashMap<String, CustomCommand>,
 }
 
-/// Parse a single `mux.keybinds` follow-up chord into one character. Valid
-/// entries are a single printable char (`"c"`, `","`) — matching the
-/// WebView single-char action bindings. Returns `None` for anything else
-/// (empty, multi-char, modifier combo); the caller warns and keeps the
-/// default for that action.
-pub fn parse_mux_action_key(spec: &str) -> Option<char> {
-    let mut chars = spec.chars();
-    let first = chars.next()?;
-    if chars.next().is_some() {
-        // More than one character (e.g. "Ctrl+N") — not a single-char chord.
+/// Parse a `mux.keybinds` follow-up spec into a [`PrefixChord`]. Accepts
+/// both single printable chars (`"c"`, `","`) and modifier chords
+/// (`"Ctrl+D"`, `"Alt+M"`) — matching the WebView's `matchActionBinding`
+/// which routes either via `parseKeybind`. Returns `None` for anything
+/// the chord parser cannot recognize; the caller warns and keeps the
+/// tmux default for that action.
+///
+/// [`PrefixChord`]: crate::mux::prefix::PrefixChord
+pub fn parse_mux_action_chord(spec: &str) -> Option<crate::mux::prefix::PrefixChord> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
         return None;
     }
-    if first.is_control() || first == ' ' {
-        return None;
-    }
-    Some(first)
+    // Defer to the shared `parse_prefix_key` parser so prefix and action
+    // follow-ups share one chord-spec grammar. Single printable chars
+    // (no `+`) go through the same path: `parse_prefix_key("d")` →
+    // `PrefixChord { ctrl: false, ..., key: KeySym::Letter('d') }`.
+    crate::mux::prefix::parse_prefix_key(trimmed)
 }
 
 /// Position of the egui status-bar widget relative to the terminal grid.
@@ -1479,7 +1485,7 @@ impl RawSettings {
             if let Some(kb) = mux.keybinds {
                 for (action, spec) in kb {
                     // Unknown action names are ignored (forward compat).
-                    if default_mux_action_key(&action).is_none() {
+                    if default_mux_action_chord(&action).is_none() {
                         log::warn!(
                             "settings.mux.keybinds: unknown action {:?}, ignored",
                             action
@@ -1490,7 +1496,7 @@ impl RawSettings {
                     if spec.trim().is_empty() {
                         continue;
                     }
-                    match parse_mux_action_key(&spec) {
+                    match parse_mux_action_chord(&spec) {
                         Some(c) => {
                             dst.mux.keybinds.insert(action, c);
                         }
@@ -2146,13 +2152,14 @@ mod tests {
         let s = Settings::new();
         assert!(!s.mux.tab_always_expand);
         assert_eq!(s.mux.status_position, StatusBarPosition::Bottom);
-        // tmux-compatible default action keys.
-        assert_eq!(s.mux.keybinds.get("detach"), Some(&'d'));
-        assert_eq!(s.mux.keybinds.get("new-window"), Some(&'c'));
-        assert_eq!(s.mux.keybinds.get("next-window"), Some(&'n'));
-        assert_eq!(s.mux.keybinds.get("prev-window"), Some(&'p'));
-        assert_eq!(s.mux.keybinds.get("rename-window"), Some(&','));
-        assert_eq!(s.mux.keybinds.get("move-window"), Some(&'m'));
+        // tmux-compatible default action chords (bare single chars).
+        let bare = |spec: &str| parse_mux_action_chord(spec).unwrap();
+        assert_eq!(s.mux.keybinds.get("detach"), Some(&bare("d")));
+        assert_eq!(s.mux.keybinds.get("new-window"), Some(&bare("c")));
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&bare("n")));
+        assert_eq!(s.mux.keybinds.get("prev-window"), Some(&bare("p")));
+        assert_eq!(s.mux.keybinds.get("rename-window"), Some(&bare(",")));
+        assert_eq!(s.mux.keybinds.get("move-window"), Some(&bare("m")));
         assert!(!s.mux.statusbar.enabled);
     }
 
@@ -2177,23 +2184,39 @@ mod tests {
     #[test]
     fn loader_mux_keybinds_override_valid() {
         let s = load_json(r#"{"mux": {"keybinds": {"next-window": "j", "prev-window": "k"}}}"#);
-        assert_eq!(s.mux.keybinds.get("next-window"), Some(&'j'));
-        assert_eq!(s.mux.keybinds.get("prev-window"), Some(&'k'));
+        let chord = |spec: &str| parse_mux_action_chord(spec).unwrap();
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&chord("j")));
+        assert_eq!(s.mux.keybinds.get("prev-window"), Some(&chord("k")));
         // Untouched actions keep their defaults.
-        assert_eq!(s.mux.keybinds.get("new-window"), Some(&'c'));
+        assert_eq!(s.mux.keybinds.get("new-window"), Some(&chord("c")));
     }
 
     #[test]
-    fn loader_mux_keybinds_invalid_keeps_default() {
-        // Multi-char chord is not a single-char follow-up → keep default.
-        let s = load_json(r#"{"mux": {"keybinds": {"next-window": "Ctrl+N"}}}"#);
-        assert_eq!(s.mux.keybinds.get("next-window"), Some(&'n'));
+    fn loader_mux_keybinds_modifier_chord_accepted() {
+        // Regression: modifier-bearing chords (`Ctrl+D`, `Alt+M`, …) are now
+        // first-class follow-ups, matching the WebView's
+        // `matchActionBinding`. tmux.conf import writes these back when the
+        // user binds, e.g., `bind C-d detach-client`.
+        let s = load_json(r#"{"mux": {"keybinds": {"detach": "Ctrl+D", "next-window": "Alt+N"}}}"#);
+        let ctrl_d = parse_mux_action_chord("Ctrl+D").unwrap();
+        let alt_n = parse_mux_action_chord("Alt+N").unwrap();
+        assert_eq!(s.mux.keybinds.get("detach"), Some(&ctrl_d));
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&alt_n));
+    }
+
+    #[test]
+    fn loader_mux_keybinds_unparseable_keeps_default() {
+        // Garbage spec is still rejected and keeps the default chord.
+        let s = load_json(r#"{"mux": {"keybinds": {"next-window": "+++"}}}"#);
+        let bare_n = parse_mux_action_chord("n").unwrap();
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&bare_n));
     }
 
     #[test]
     fn loader_mux_keybinds_empty_keeps_default() {
         let s = load_json(r#"{"mux": {"keybinds": {"next-window": ""}}}"#);
-        assert_eq!(s.mux.keybinds.get("next-window"), Some(&'n'));
+        let bare_n = parse_mux_action_chord("n").unwrap();
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&bare_n));
     }
 
     #[test]
