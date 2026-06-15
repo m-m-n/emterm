@@ -503,8 +503,40 @@ impl App {
             Arc::new(move || cwd_for_source.lock().clone());
         // Hand the providers a clone of the global `wake` so each
         // owns its own refresh-redraw seam (SPEC.md Notes section).
+        //
+        // `mux.statusbar.commands` registers `{cmd:<name>}` consumers
+        // for the mux templates. The WebView build runs those in the
+        // mux daemon; native-poc is in-process and shares the same
+        // CommandProvider with `statusbar.custom_commands`, so we merge
+        // the mux entries here before spinning up workers. On a name
+        // collision the app side wins (the mux entry is dropped with a
+        // warn-log) so a `settings.json` typo can never silently
+        // replace an app-defined command.
+        //
+        // SPEC mux-statusbar §FR1: "When `enabled` is `false`, daemon
+        // skips all command execution, timer setup, and StatusUpdate
+        // sending." We honour the same contract here by gating the merge
+        // on `mux.statusbar.enabled` — when disabled, mux-only commands
+        // never enter the shared CommandProvider, so a user keeping the
+        // default `enabled=false` while pre-staging entries for a future
+        // toggle does not see them silently start running via the app
+        // statusbar's `{cmd:<name>}` templates.
+        let mut runtime_statusbar = settings.statusbar.clone();
+        if settings.mux.statusbar.enabled {
+            for (name, cmd) in &settings.mux.statusbar.commands {
+                if runtime_statusbar.custom_commands.contains_key(name) {
+                    log::warn!(
+                        "settings.mux.statusbar.commands.{name}: name collides with statusbar.custom_commands; mux entry dropped"
+                    );
+                    continue;
+                }
+                runtime_statusbar
+                    .custom_commands
+                    .insert(name.clone(), cmd.clone());
+            }
+        }
         let status_bar_runtime = StatusBarRuntime::new(
-            &settings.statusbar,
+            &runtime_statusbar,
             cwd_source,
             crate::wakeup::shared_wake_fn(),
         );

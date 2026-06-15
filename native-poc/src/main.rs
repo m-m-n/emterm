@@ -127,6 +127,11 @@ fn main() {
     wakeup::install(Box::new(move || {
         let _ = proxy.send_event(());
     }));
+    // One-shot tmux.conf auto-import. Runs before the settings loader
+    // reads the file so an imported `mux.prefix` / `mux.keybinds` etc.
+    // are visible on this very launch. The function is idempotent
+    // (latched on `mux.tmux_conf_imported`).
+    mux::tmux_import::import_tmux_conf_if_needed();
     let settings = settings::Settings::load_or_default();
     // Mirror src-tauri's setup: the `emterm.log` file handle only exists
     // in release builds; `log_recording_enabled` gates the writes.
