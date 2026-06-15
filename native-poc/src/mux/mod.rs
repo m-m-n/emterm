@@ -25,4 +25,6 @@
 pub mod apc;
 pub mod dialog;
 pub mod prefix;
+pub mod tmux_conf;
+pub mod tmux_import;
 pub mod window_group;

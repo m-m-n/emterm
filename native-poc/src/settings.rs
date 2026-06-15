@@ -191,11 +191,24 @@ impl Default for MuxSettings {
 
 /// Mux status-bar content (`mux.statusbar.*`). Port of
 /// `crates/app_settings::MuxStatusbarSettings` (the subset rendered natively).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// `commands` registers `{cmd:<name>}` template variables consumable
+/// from `mux.statusbar.left` / `right`. In the WebView build these run
+/// in the mux daemon; native-poc is in-process and shares the app-level
+/// [`CommandProvider`], so [`App::with_settings`] merges them into
+/// [`StatusBarSettings::custom_commands`] before the runtime starts.
+/// On a name collision the app side wins and the mux entry is dropped
+/// with a warn-log.
+///
+/// [`App::with_settings`]: crate::app::App::with_settings
+/// [`CommandProvider`]: crate::status_bar::providers::CommandProvider
+/// [`StatusBarSettings::custom_commands`]: crate::settings::StatusBarSettings::custom_commands
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct MuxStatusbarSettings {
     pub enabled: bool,
     pub left: String,
     pub right: String,
+    pub commands: std::collections::HashMap<String, CustomCommand>,
 }
 
 /// Parse a single `mux.keybinds` follow-up chord into one character. Valid
@@ -1337,6 +1350,7 @@ struct RawMuxStatusbar {
     enabled: Option<bool>,
     left: Option<String>,
     right: Option<String>,
+    commands: Option<std::collections::HashMap<String, RawCustomCommand>>,
 }
 
 /// Deserialize side of the nested `"keybinds"` block. Mirrors
@@ -1499,6 +1513,28 @@ impl RawSettings {
                 }
                 if let Some(v) = sb.right {
                     dst.mux.statusbar.right = v;
+                }
+                if let Some(v) = sb.commands {
+                    dst.mux.statusbar.commands = v
+                        .into_iter()
+                        .map(|(k, c)| {
+                            (
+                                k,
+                                CustomCommand {
+                                    executable: c.executable,
+                                    // SPEC mux-statusbar §FR1: `interval_ms`
+                                    // default is 5000 ms (different from the
+                                    // app-side `statusbar_custom_commands`
+                                    // default of 1000 ms). §FR3's "clamp to
+                                    // ≥ 1000 ms" is enforced downstream by
+                                    // `CommandProvider::MIN_INTERVAL`, which
+                                    // both the app and mux command pools
+                                    // share, so no extra clamp here.
+                                    interval_ms: c.interval_ms.unwrap_or(5000),
+                                },
+                            )
+                        })
+                        .collect();
                 }
             }
         }
@@ -2173,6 +2209,50 @@ mod tests {
         assert!(s.mux.statusbar.enabled);
         assert_eq!(s.mux.statusbar.left, "L");
         assert_eq!(s.mux.statusbar.right, "R");
+    }
+
+    #[test]
+    fn loader_mux_statusbar_commands_explicit_interval_kept() {
+        let s = load_json(
+            r#"{
+                "mux": {
+                    "statusbar": {
+                        "commands": {
+                            "branch": {"executable": "/usr/bin/git-branch", "interval_ms": 7500}
+                        }
+                    }
+                }
+            }"#,
+        );
+        let cmd = s.mux.statusbar.commands.get("branch").unwrap();
+        assert_eq!(cmd.executable, "/usr/bin/git-branch");
+        assert_eq!(cmd.interval_ms, 7500);
+    }
+
+    #[test]
+    fn loader_mux_statusbar_commands_default_interval_when_omitted() {
+        // SPEC mux-statusbar §FR1: mux statusbar commands default to
+        // 5000 ms (separate from `statusbar_custom_commands` which
+        // defaults to 1000 ms).
+        let s = load_json(
+            r#"{
+                "mux": {
+                    "statusbar": {
+                        "commands": {
+                            "branch": {"executable": "/usr/bin/git-branch"}
+                        }
+                    }
+                }
+            }"#,
+        );
+        let cmd = s.mux.statusbar.commands.get("branch").unwrap();
+        assert_eq!(cmd.interval_ms, 5000);
+    }
+
+    #[test]
+    fn default_mux_statusbar_commands_is_empty() {
+        let s = Settings::new();
+        assert!(s.mux.statusbar.commands.is_empty());
     }
 
     // ── Notification settings ───────────────────────────────────────────
