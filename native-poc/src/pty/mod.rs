@@ -45,8 +45,11 @@ pub struct PtySession {
     /// Outbound queue consumed by the writer thread.
     input_tx: Sender<Vec<u8>>,
     /// Resize handle for the PTY master. Wrapped so the App can call
-    /// `resize` without owning the session mutably.
-    master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+    /// `resize` without owning the session mutably. `Option` so `Drop`
+    /// can `take()` it and run `ClosePseudoConsole` BEFORE joining the
+    /// reader thread on Windows — otherwise the X-button close path
+    /// freezes (see `impl Drop`). Always `Some` outside `Drop`.
+    master: Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>,
     /// Child process handle for SIGHUP on teardown.
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     reader_join: Option<JoinHandle<()>>,
@@ -208,7 +211,7 @@ impl PtySession {
 
         Ok(Self {
             input_tx,
-            master: Arc::new(Mutex::new(master)),
+            master: Some(Arc::new(Mutex::new(master))),
             child: Arc::new(Mutex::new(child)),
             reader_join: Some(reader_join),
             writer_join: Some(writer_join),
@@ -256,7 +259,10 @@ impl PtySession {
 
     /// Update the PTY size. Called on window resize.
     pub fn resize(&self, cols: u16, rows: u16) {
-        let master = self.master.lock();
+        let Some(master) = self.master.as_ref() else {
+            return;
+        };
+        let master = master.lock();
         if let Err(e) = master.resize(PtySize {
             rows,
             cols,
@@ -291,9 +297,27 @@ impl Drop for PtySession {
         let old_tx = std::mem::replace(&mut self.input_tx, dummy_tx);
         drop(old_tx);
 
-        // 3. Join threads. Order matters: reader is unblocked by step 1
-        //    (kernel-side EOF on master read); writer is unblocked by step 2
-        //    (channel disconnect).
+        // 3. Drop the master PTY handle. On Windows this runs
+        //    `ClosePseudoConsole` which tells conhost to close its end of the
+        //    output pipe — that EOF is what unblocks the reader thread's
+        //    `ReadFile`. Without this the X-button close path freezes:
+        //    `TerminateProcess` alone does not release conhost's end of the
+        //    pipe, so the reader sits in a blocking read and `reader_join`
+        //    below never returns. On Linux this is harmless: the reader holds
+        //    its own duped fd from `try_clone_reader`, so closing the master
+        //    side does not affect the reader's read, and the kernel-side EOF
+        //    that `child.kill()` already produced is what drives the reader
+        //    to exit.
+        //
+        //    `master` is `Option` exactly so we can move it out here.
+        //    `take()` decrements the `Arc` to its last owner and drops the
+        //    `MasterPty`, invoking the platform-specific cleanup.
+        drop(self.master.take());
+
+        // 4. Join threads. Order matters: reader is unblocked by step 1
+        //    (kernel-side EOF on master read; Linux) or step 3
+        //    (`ClosePseudoConsole` → conhost closes its pipe end; Windows);
+        //    writer is unblocked by step 2 (channel disconnect).
         if let Some(h) = self.reader_join.take() {
             let _ = h.join();
         }
