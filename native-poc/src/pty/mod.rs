@@ -61,12 +61,51 @@ pub struct PtySession {
     ring: Arc<Mutex<RingBuffer>>,
 }
 
+/// Resolve the Windows PowerShell path from the `SystemRoot` environment
+/// variable. Returns an absolute path under `%SystemRoot%\System32\...`
+/// when `SystemRoot` is set and non-empty. Returns `Err` when `SystemRoot`
+/// is unset or empty so the caller does not silently fall back to a
+/// PATH-searched executable.
+#[cfg(target_os = "windows")]
+fn windows_default_shell_path() -> std::io::Result<String> {
+    match std::env::var("SystemRoot") {
+        Ok(root) if !root.is_empty() => {
+            let mut path = std::path::PathBuf::from(root);
+            path.push("System32");
+            path.push("WindowsPowerShell");
+            path.push("v1.0");
+            path.push("powershell.exe");
+            Ok(path.to_string_lossy().into_owned())
+        }
+        _ => Err(std::io::Error::other(
+            "SystemRoot is unset; cannot resolve default PowerShell path",
+        )),
+    }
+}
+
+/// Platform-default shell when neither `shell_path` nor `$SHELL` is set.
+/// Linux returns `/bin/sh`. Windows resolves an absolute path to
+/// `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`.
+/// Returns `Err` on Windows when `SystemRoot` is unset/empty so the caller
+/// does not silently fall back to a PATH-searched executable.
+fn default_shell() -> std::io::Result<String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_default_shell_path()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok("/bin/sh".to_string())
+    }
+}
+
 impl PtySession {
     /// Spawn a shell. Selection order:
     ///   1. `shell_path` argument when non-empty (from `settings.shell_path`
     ///      or a profile override),
     ///   2. `$SHELL` environment variable,
-    ///   3. `/bin/sh` fallback.
+    ///   3. platform default ([`default_shell`]): `/bin/sh` on Linux,
+    ///      `powershell.exe` on Windows.
     /// `shell_args` is appended verbatim to the resulting argv. `env_vars`
     /// entries (profile overrides) are applied in order; `cwd` sets the
     /// child's working directory when it exists (a missing directory logs
@@ -83,11 +122,10 @@ impl PtySession {
     ) -> std::io::Result<Self> {
         let shell = if !shell_path.trim().is_empty() {
             shell_path.to_string()
+        } else if let Ok(s) = std::env::var("SHELL") {
+            s
         } else {
-            std::env::var("SHELL").unwrap_or_else(|_| {
-                // Phase 6 NFR: Linux-only PoC, but keep the fallback explicit.
-                "/bin/sh".to_string()
-            })
+            default_shell()?
         };
 
         let pty_system = native_pty_system();
