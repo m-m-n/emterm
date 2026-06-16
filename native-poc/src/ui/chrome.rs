@@ -108,11 +108,45 @@ pub(crate) fn build_egui_fonts(ui_font_family: &str) -> egui::FontDefinitions {
         egui::FontData::from_static(BUNDLED_EMOJI_FONT),
     );
 
+    // Symbol fallback families: cover prompt arrows / math symbols /
+    // geometric shapes / braille dots that the CJK + emoji fonts miss
+    // (e.g. `✻` U+273B and `⠋` U+2807 used in Claude Code's OSC title
+    // spinner, `❯` U+276F shown by starship prompts). Mirrors the
+    // terminal-grid `FontRole::Secondary` registration in `app.rs` so
+    // chrome surfaces (tab bar, title bar, status bar) inherit the same
+    // glyph coverage as the grid — otherwise the tab bar tofus on
+    // characters the grid renders fine.
+    let mut symbol_keys: Vec<String> = Vec::new();
+    for (idx, family) in [
+        "Noto Sans Symbols2",
+        "Symbola",
+        "DejaVu Sans Mono",
+        "DejaVu Sans",
+    ]
+    .iter()
+    .enumerate()
+    {
+        if let Some((bytes, index)) =
+            crate::render::font::resolver::load_system_family_bytes(family, 400, None)
+        {
+            let key = format!("EmtermSymbol{idx}");
+            let mut data = egui::FontData::from_owned(bytes.to_vec());
+            data.index = index;
+            fonts.font_data.insert(key.clone(), data);
+            symbol_keys.push(key);
+        }
+    }
+
     for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
         let chain = fonts.families.entry(family).or_default();
         for name in [CJK_KEY, EMOJI_KEY] {
             if !chain.iter().any(|n| n == name) {
                 chain.push(name.to_string());
+            }
+        }
+        for key in &symbol_keys {
+            if !chain.iter().any(|n| n == key) {
+                chain.push(key.clone());
             }
         }
     }
