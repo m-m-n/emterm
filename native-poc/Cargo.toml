@@ -133,6 +133,13 @@ png = "0.17"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Windows: libc::localtime_s + libc::tm for chrono-free local-time
+# decomposition (see `crate::localtime`). Without this, the non-unix
+# fallback returns UTC, so the status bar `time` provider shows UTC and
+# `emterm.log` lines carry `+00:00` regardless of the user's wall clock.
+[target.'cfg(windows)'.dependencies.libc]
+version = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # GTK 3 — the child `--viewer` window host on Linux. wry 0.45 renders via
 # WebKitGTK and requires a `gtk::Container` plus a GTK main loop, which the

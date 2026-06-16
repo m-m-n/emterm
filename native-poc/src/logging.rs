@@ -122,10 +122,11 @@ fn write_to_log_file(level: log::Level, message: &std::fmt::Arguments<'_>) {
 /// `YYYY-MM-DD HH:MM:SS.mmm ±HH:MM` — src-tauri's chrono-built shape
 /// plus an explicit UTC offset, rendered from the crate's chrono-free
 /// local-time decomposition (`crate::localtime`). The offset makes
-/// each line self-describing: on the non-unix fallback the components
-/// are UTC and the suffix reads `+00:00`, so native-poc lines can
-/// never be mistaken for (or silently disagree with) the legacy
-/// build's local-time lines in the shared file.
+/// each line self-describing: when no platform local-time API is
+/// available the components fall back to UTC and the suffix reads
+/// `+00:00`, so native-poc lines can never be mistaken for (or
+/// silently disagree with) the legacy build's local-time lines in the
+/// shared file.
 fn timestamp() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
