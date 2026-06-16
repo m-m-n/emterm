@@ -13,6 +13,7 @@ src-tauri/target/
 wasm/pkg/
 wasm/target/
 native-poc/target/
+native-poc/target-win/
 src-tauri/icons/*
 !src-tauri/icons/.gitkeep
 

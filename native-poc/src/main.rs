@@ -1,3 +1,9 @@
+// Suppress the console window on Windows for release builds. Without this
+// attribute the binary links against the console subsystem, so launching it
+// spawns a console window (Windows Terminal when set as the default) alongside
+// the app window. Debug builds keep the console so log output stays visible.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use winit::event_loop::EventLoop;
 
 mod app;
