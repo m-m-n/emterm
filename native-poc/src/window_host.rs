@@ -324,7 +324,8 @@ impl WindowHost {
             .with_title("eMterm PoC")
             .with_decorations(false)
             .with_inner_size(LogicalSize::new(960.0, 600.0))
-            .with_min_inner_size(LogicalSize::new(320.0, 200.0));
+            .with_min_inner_size(LogicalSize::new(320.0, 200.0))
+            .with_maximized(true);
         let window = event_loop
             .create_window(attrs)
             .expect("native-poc: failed to create winit window");
