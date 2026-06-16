@@ -697,6 +697,26 @@ impl App {
         #[cfg(test)]
         let host_emoji_id: Option<FontId> = None;
 
+        // Symbol fallback families: cover prompt arrows / math symbols
+        // / geometric shapes the base monospace + CJK + emoji fonts
+        // miss (e.g. `❯` U+276F shown by starship, ✱ U+2731, ▰ U+25B0
+        // bars used by some TUIs). On Linux `fc-match :charset=276f`
+        // typically resolves to `Noto Sans Symbols2`; on systems
+        // without it `DejaVu Sans` catches a wide BMP range. Registered
+        // as `Secondary` so they sit at the chain tail and only get
+        // consulted when every earlier role misses. Each call is
+        // silent on absence — missing families just leave the slot
+        // unfilled.
+        #[cfg(not(test))]
+        for family in [
+            "Noto Sans Symbols2",
+            "Symbola",
+            "DejaVu Sans Mono",
+            "DejaVu Sans",
+        ] {
+            let _ = resolver.register_system_family(family, FontRole::Secondary);
+        }
+
         // Best-effort wider system scan (logged at WARN on failure;
         // family-name only, byte loading is deferred). Tests skip the
         // scan to keep cargo test deterministic.
@@ -771,6 +791,20 @@ impl App {
             // Keep the bundled CJK font as a last-resort CJK fallback
             // (covers KR / TC / SC / extended CJK that NSJP omits).
             extras.push(bundled_cjk_id);
+        }
+        // Symbol fallback families registered above as
+        // FontRole::Secondary (`Noto Sans Symbols2`, `Symbola`, etc.)
+        // occupy the `font_family_fallback...` slot in SPEC FR8's
+        // `[base, font_family_fallback..., emoji_font]` chain order.
+        // They cover codepoints the base + CJK fonts miss (e.g.
+        // `❯` U+276F shown by starship) and are consulted before
+        // the emoji fallback so monochrome prompt symbols are
+        // preferred over color emoji presentation when both have
+        // coverage.
+        #[cfg(not(test))]
+        for f in resolver.by_role(FontRole::Secondary) {
+            extras.push(f.id);
+            log::info!("font.symbol = {} (id={:?})", f.family, f.id);
         }
         // Host-installed emoji font (if any) takes precedence over the
         // bundled one — both go in the chain so a codepoint absent
