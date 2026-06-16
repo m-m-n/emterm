@@ -98,10 +98,17 @@ pub fn is_box_drawing(cp: u32) -> bool {
 /// pixel.
 pub fn rects_for(cp: u32, cell_w: f32, cell_h: f32) -> Option<Vec<(f32, f32, f32, f32)>> {
     let def = lookup(cp)?;
-    // Stroke thickness: at least 1px so the line is visible even at small
-    // cell sizes. Light = ~7% of cell height, heavy = ~14%, clamped so
-    // glyphs at typical 13pt / cell_h≈17 give 1px / 2px.
-    let light_px = (cell_h * 0.08).round().max(1.0);
+    // Stroke thickness: keep the line a hairline regardless of HiDPI
+    // scale / font size. `cell_h` here is in physical pixels (logical
+    // cell height × pixels_per_point), so dividing by ~18 (the physical
+    // cell_h of 13pt Inconsolata at scale=1.0) maps cleanly to:
+    //   cell_h≈17 (13pt, scale=1.0) → 1px
+    //   cell_h≈34 (13pt, scale=2.0) → 2px
+    //   cell_h≈51 (13pt, scale=3.0) → 3px
+    // Earlier `cell_h * 0.08` rounded up to 2-3px on HiDPI / large
+    // fonts, which read as a thick line rather than the crisp hairline
+    // Alacritty / WezTerm draw at the same scale.
+    let light_px = (cell_h / 18.0).round().max(1.0);
     let heavy_px = (light_px * 2.0).max(2.0);
     let weight = |w: u8| -> f32 {
         match w {
@@ -201,5 +208,41 @@ mod tests {
         let light_t = light[0].3;
         let heavy_t = heavy[0].3;
         assert!(heavy_t > light_t);
+    }
+
+    #[test]
+    fn light_stroke_is_1px_at_default_cell() {
+        // 13pt Inconsolata at scale=1.0 lands around cell_h≈17. The
+        // light stroke must stay a 1px hairline so adjacent box-frame
+        // lines don't read as bold rules.
+        let rects = rects_for(0x2500, 9.0, 17.0).unwrap();
+        assert!(
+            (rects[0].3 - 1.0).abs() < 0.01,
+            "light stroke should be 1px at cell_h=17"
+        );
+    }
+
+    #[test]
+    fn light_stroke_stays_thin_at_larger_font() {
+        // 16pt at scale=1.0 pushes cell_h up to ~21. Before the
+        // fix this rounded to a 2px line; the corrected formula keeps
+        // it a 1px hairline so visual weight matches a 13pt frame.
+        let rects = rects_for(0x2500, 11.0, 21.0).unwrap();
+        assert!(
+            (rects[0].3 - 1.0).abs() < 0.01,
+            "light stroke should still be 1px at cell_h=21"
+        );
+    }
+
+    #[test]
+    fn light_stroke_scales_at_hidpi() {
+        // scale=2.0 HiDPI (cell_h≈34): light should become 2 physical
+        // px so the line stays 1 logical px (matches Alacritty / WezTerm
+        // procedural-glyph behaviour on HiDPI compositors).
+        let rects = rects_for(0x2500, 18.0, 34.0).unwrap();
+        assert!(
+            (rects[0].3 - 2.0).abs() < 0.01,
+            "light stroke should be 2px at cell_h=34"
+        );
     }
 }
