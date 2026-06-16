@@ -1,0 +1,190 @@
+schema_version: 1
+feature: cli-subcommand-native-port
+created: 2026-06-16
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=native-poc/target-host cargo build --release --manifest-path native-poc/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=native-poc/target cargo test --manifest-path native-poc/Cargo.toml"
+      format_command: "cargo fmt --manifest-path native-poc/Cargo.toml"
+      e2e_test_command: "./scripts/run-e2e-docker.sh test"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+  - id: implement
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+  - id: check
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+
+requirements:
+  FR1:
+    title: markdown subcommand
+    status: ok
+    tasks:
+      - phase-2-text-subcommands
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+  FR2:
+    title: json subcommand
+    status: ok
+    tasks:
+      - phase-2-text-subcommands
+    tests:
+      - TS-7
+      - TS-9
+  FR3:
+    title: yaml subcommand
+    status: ok
+    tasks:
+      - phase-2-text-subcommands
+    tests:
+      - TS-8
+      - TS-9
+  FR4:
+    title: image subcommand (Kitty + SIXEL)
+    status: ok
+    tasks:
+      - phase-3-image-subcommand
+    tests:
+      - TS-10
+      - TS-11
+      - TS-12
+      - TS-13
+      - TS-14
+      - TS-15
+      - TS-16
+  FR5:
+    title: cli module dispatcher (clap)
+    status: ok
+    tasks:
+      - phase-1-foundation
+      - phase-2-text-subcommands
+      - phase-3-image-subcommand
+    tests:
+      - TS-12
+      - TS-25
+  FR6:
+    title: main.rs integration (CLI dispatch arm)
+    status: ok
+    tasks:
+      - phase-4-integration
+    tests:
+      - TS-26
+      - TS-27
+  FR7:
+    title: tmux DCS passthrough port
+    status: ok
+    tasks:
+      - phase-1-foundation
+    tests:
+      - TS-17
+      - TS-18
+      - TS-22
+  FR8:
+    title: Localized error messages (no rust-i18n)
+    status: ok
+    tasks:
+      - phase-1-foundation
+    tests:
+      - TS-19
+      - TS-20
+      - TS-21
+  FR9:
+    title: session_id via uuid v4
+    status: ok
+    tasks:
+      - phase-1-foundation
+      - phase-2-text-subcommands
+      - phase-3-image-subcommand
+    tests:
+      - TS-1
+      - TS-7
+      - TS-8
+      - TS-10
+      - TS-11
+  FR10:
+    title: Unit test parity with src-tauri
+    status: ok
+    tasks:
+      - phase-2-text-subcommands
+      - phase-3-image-subcommand
+    tests:
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-9
+      - TS-12
+      - TS-13
+      - TS-14
+      - TS-15
+      - TS-22
+      - TS-23
+      - TS-24
+      - TS-25
+  NFR1:
+    title: Performance targets (markdown 200ms / image 500ms)
+    status: ok
+    tasks:
+      - phase-4-integration
+    tests: []
+  NFR2:
+    title: Security guards (TOCTOU, size limits, decompression bomb)
+    status: ok
+    tasks:
+      - phase-1-foundation
+      - phase-3-image-subcommand
+    tests:
+      - TS-3
+      - TS-4
+      - TS-13
+      - TS-14
+      - TS-15
+  NFR3:
+    title: Dependency minimalism (clap + uuid + tempfile-dev only)
+    status: ok
+    tasks:
+      - phase-1-foundation
+    tests:
+      - TS-21
+  NFR4:
+    title: Cross-platform (Linux + Windows, Unix-only code cfg-gated)
+    status: ok
+    tasks:
+      - phase-3-image-subcommand
+      - phase-4-integration
+    tests:
+      - TS-16
+  NFR5:
+    title: Branch policy (no changes outside native-poc/)
+    status: ok
+    tasks:
+      - phase-1-foundation
+      - phase-2-text-subcommands
+      - phase-3-image-subcommand
+      - phase-4-integration
+    tests: []

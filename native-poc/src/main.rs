@@ -6,41 +6,13 @@
 
 use winit::event_loop::EventLoop;
 
-mod app;
-mod bell;
-mod callbacks;
-mod fold;
-mod html;
-mod i18n;
-mod image;
-mod links;
-mod localtime;
-mod logging;
-mod logical_line;
-mod notifications;
-mod profiles;
-mod prompts;
-mod render;
-mod search;
-mod sftp;
-mod tabs;
-mod window_host;
-
-// Phase 2+ modules — declared but empty for now so the tree compiles when
-// later phases land. (Each file is a stub describing its responsibility.)
-mod ime;
-mod mux;
-mod pty;
-mod selection;
-mod settings;
-mod settings_launcher;
-mod settings_store;
-mod settings_window;
-mod status_bar;
-mod ui;
-mod viewer;
-mod wakeup;
-mod webview_host;
+// All modules live in the library target (`src/lib.rs`); the binary is a
+// thin entry point that wires the event loop and dispatches to the
+// library's subsystems. See `native-poc/Cargo.toml` for the `[lib]`
+// target definition and `src/lib.rs` for the module roster.
+use emterm_native_poc::{
+    app, logging, mux, settings, settings_window, viewer, wakeup, window_host,
+};
 
 /// Build the winit event loop, preferring the X11 backend on Linux when a
 /// Wayland session also exposes X11 (XWayland).
@@ -92,10 +64,21 @@ fn build_event_loop() -> EventLoop<()> {
 fn main() {
     logging::init();
 
+    let args: Vec<String> = std::env::args().collect();
+
+    // CLI subcommand dispatch (markdown / json / yaml / image). Bare-word
+    // subcommands are recognized first; `--`-prefixed child-process flags
+    // (handled below) retain their existing hand-rolled path.
+    if let Some(sub) = args.get(1).map(|s| s.as_str()) {
+        if matches!(sub, "markdown" | "json" | "yaml" | "image") {
+            let code = emterm_native_poc::cli::run(&args[1..]);
+            std::process::exit(code);
+        }
+    }
+
     // `--viewer <payload-path>` dispatches to the separate child viewer
     // entry (Linux GTK/Wry window) before any terminal startup. The normal
     // terminal path is taken when the flag is absent.
-    let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--viewer") {
         let payload_path = args.get(pos + 1).cloned();
         run_viewer(payload_path);

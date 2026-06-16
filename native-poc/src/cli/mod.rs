@@ -1,0 +1,240 @@
+//! CLI subcommand dispatcher.
+//!
+//! Entry point: [`run`] takes the post-binary-name slice of argv (so
+//! `args[0]` is the subcommand) and returns an exit code suitable for
+//! `std::process::exit`. Subcommands are bare words (`markdown`, `json`,
+//! `yaml`, `image`); the dispatch arm in `main.rs` only delegates here
+//! when one of these matches, so `--`-prefixed child-process flags
+//! retain their existing hand-rolled path.
+
+pub mod encoding;
+pub mod error;
+pub mod image;
+pub mod json;
+pub mod markdown;
+pub mod messages;
+pub mod protocols;
+pub mod tmux;
+pub mod validation;
+pub mod yaml;
+
+use crate::i18n::Locale;
+use std::sync::Mutex;
+
+/// Cached active locale for one CLI invocation.
+///
+/// Stored in a `Mutex<Option<Locale>>` (not `OnceLock`) so test code can
+/// swap the value between cases via [`set_active_locale_for_test`].
+static ACTIVE_LOCALE: Mutex<Option<Locale>> = Mutex::new(None);
+
+/// Resolve the active [`Locale`] once per process and cache the result.
+///
+/// On first call this reads only the `language` field from
+/// `settings.json` (bypassing the full [`crate::settings::Settings`]
+/// loader, which pulls in heavy modules unnecessary for CLI dispatch)
+/// and resolves it through [`crate::i18n::resolve`]. Subsequent calls
+/// return the cached value.
+pub fn active_locale() -> Locale {
+    let mut guard = ACTIVE_LOCALE.lock().expect("active_locale mutex poisoned");
+    if let Some(loc) = *guard {
+        return loc;
+    }
+    let language = load_language_only();
+    let loc = crate::i18n::resolve(language);
+    *guard = Some(loc);
+    loc
+}
+
+/// Read only the `language` field from settings.json, without invoking
+/// the full settings loader. Returns [`crate::settings::Language::Auto`]
+/// when the file is absent, unreadable, or has no `language` field.
+fn load_language_only() -> crate::settings::Language {
+    let Some(path) = crate::settings::settings_path() else {
+        return crate::settings::Language::Auto;
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return crate::settings::Language::Auto;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return crate::settings::Language::Auto;
+    };
+    let Some(s) = value.get("language").and_then(|v| v.as_str()) else {
+        return crate::settings::Language::Auto;
+    };
+    crate::settings::Language::parse_or_warn(s)
+}
+
+/// Test-only setter for the cached active locale.
+#[cfg(test)]
+pub fn set_active_locale_for_test(loc: Locale) {
+    let mut guard = ACTIVE_LOCALE.lock().expect("active_locale mutex poisoned");
+    *guard = Some(loc);
+}
+
+/// CLI dispatch entry point.
+///
+/// `args[0]` is expected to be the subcommand name (one of `markdown`,
+/// `json`, `yaml`, `image`). The remaining positional argument is the
+/// file path; `image` additionally accepts `--protocol kitty|sixel`.
+///
+/// Returns 0 on success, or the error's `exit_code()` on failure.
+pub fn run(args: &[String]) -> i32 {
+    // Build a synthetic argv with a program name prefix so clap's
+    // bin/about strings work as expected. We use a derive-based clap
+    // app for ergonomic parsing.
+    let mut argv: Vec<String> = Vec::with_capacity(args.len() + 1);
+    argv.push("emterm-native-poc".to_string());
+    argv.extend_from_slice(args);
+
+    let loc = active_locale();
+    let cli = match build_command(loc).try_get_matches_from(argv) {
+        Ok(m) => m,
+        Err(e) => {
+            // clap prints its own help / version / error text.
+            let _ = e.print();
+            return if e.use_stderr() { 2 } else { 0 };
+        }
+    };
+
+    let result = match cli.subcommand() {
+        Some(("markdown", sub)) => {
+            let file: &std::path::PathBuf = sub.get_one("file").expect("required by clap");
+            markdown::execute_markdown_command(file)
+        }
+        Some(("json", sub)) => {
+            let file: &std::path::PathBuf = sub.get_one("file").expect("required by clap");
+            json::execute_json_command(file)
+        }
+        Some(("yaml", sub)) => {
+            let file: &std::path::PathBuf = sub.get_one("file").expect("required by clap");
+            yaml::execute_yaml_command(file)
+        }
+        Some(("image", sub)) => {
+            let file: &std::path::PathBuf = sub.get_one("file").expect("required by clap");
+            let protocol: &String = sub
+                .get_one("protocol")
+                .expect("clap default ensures presence");
+            match image::ImageProtocol::parse(protocol) {
+                Ok(proto) => image::execute_image_command(file, proto),
+                Err(e) => Err(e),
+            }
+        }
+        _ => {
+            // Should be unreachable: clap requires a subcommand. Treat
+            // as a usage error.
+            eprintln!("emterm-native-poc: missing subcommand");
+            return 2;
+        }
+    };
+
+    match result {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("Error: {}", err);
+            err.exit_code()
+        }
+    }
+}
+
+/// Construct the clap command tree with locale-aware help text.
+fn build_command(loc: Locale) -> clap::Command {
+    use clap::{Arg, Command};
+
+    Command::new("emterm-native-poc")
+        .about(messages::cli_about(loc))
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .subcommand(
+            Command::new("markdown")
+                .about(messages::cli_markdown_about(loc))
+                .arg(
+                    Arg::new("file")
+                        .help(messages::cli_markdown_file(loc))
+                        .required(true)
+                        .value_parser(clap::value_parser!(std::path::PathBuf)),
+                ),
+        )
+        .subcommand(
+            Command::new("json")
+                .about(messages::cli_json_about(loc))
+                .arg(
+                    Arg::new("file")
+                        .help(messages::cli_json_file(loc))
+                        .required(true)
+                        .value_parser(clap::value_parser!(std::path::PathBuf)),
+                ),
+        )
+        .subcommand(
+            Command::new("yaml")
+                .about(messages::cli_yaml_about(loc))
+                .arg(
+                    Arg::new("file")
+                        .help(messages::cli_yaml_file(loc))
+                        .required(true)
+                        .value_parser(clap::value_parser!(std::path::PathBuf)),
+                ),
+        )
+        .subcommand(
+            Command::new("image")
+                .about(messages::cli_image_about(loc))
+                .arg(
+                    Arg::new("file")
+                        .help(messages::cli_image_file(loc))
+                        .required(true)
+                        .value_parser(clap::value_parser!(std::path::PathBuf)),
+                )
+                .arg(
+                    Arg::new("protocol")
+                        .long("protocol")
+                        .help(messages::cli_image_protocol(loc))
+                        .default_value("kitty")
+                        .value_parser(clap::builder::NonEmptyStringValueParser::new()),
+                ),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_command_accepts_markdown_subcommand() {
+        let m = build_command(Locale::En)
+            .try_get_matches_from(["emterm-native-poc", "markdown", "foo.md"])
+            .expect("parse should succeed");
+        assert_eq!(m.subcommand_name(), Some("markdown"));
+    }
+
+    #[test]
+    fn build_command_accepts_image_with_protocol() {
+        let m = build_command(Locale::En)
+            .try_get_matches_from([
+                "emterm-native-poc",
+                "image",
+                "foo.png",
+                "--protocol",
+                "sixel",
+            ])
+            .expect("parse should succeed");
+        let sub = m.subcommand_matches("image").unwrap();
+        let protocol: &String = sub.get_one("protocol").unwrap();
+        assert_eq!(protocol, "sixel");
+    }
+
+    #[test]
+    fn build_command_defaults_image_protocol_to_kitty() {
+        let m = build_command(Locale::En)
+            .try_get_matches_from(["emterm-native-poc", "image", "foo.png"])
+            .expect("parse should succeed");
+        let sub = m.subcommand_matches("image").unwrap();
+        let protocol: &String = sub.get_one("protocol").unwrap();
+        assert_eq!(protocol, "kitty");
+    }
+
+    #[test]
+    fn build_command_rejects_unknown_subcommand() {
+        let result =
+            build_command(Locale::En).try_get_matches_from(["emterm-native-poc", "explode", "foo"]);
+        assert!(result.is_err());
+    }
+}

@@ -1,0 +1,102 @@
+schema_version: 1
+feature: cli-subcommand-native-port
+
+phases:
+  - id: phase-1-foundation
+    title: CLI foundation (deps + shared modules)
+    summary: >
+      Add clap/uuid/tempfile dependencies; port encoding, error, tmux,
+      validation/file, locale helper, and the cli::run dispatcher skeleton.
+    files_to_create:
+      - native-poc/src/cli/mod.rs
+      - native-poc/src/cli/messages.rs
+      - native-poc/src/cli/error.rs
+      - native-poc/src/cli/tmux.rs
+      - native-poc/src/cli/encoding/mod.rs
+      - native-poc/src/cli/encoding/base64.rs
+      - native-poc/src/cli/encoding/osc.rs
+      - native-poc/src/cli/validation/mod.rs
+      - native-poc/src/cli/validation/file.rs
+    files_to_modify:
+      - native-poc/Cargo.toml
+    depends_on: []
+    blocks:
+      - phase-2-text-subcommands
+      - phase-3-image-subcommand
+      - phase-4-integration
+    estimated_effort: medium
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+
+  - id: phase-2-text-subcommands
+    title: Text subcommands (markdown / json / yaml)
+    summary: >
+      Port markdown (without interactive loop), json, and yaml handlers
+      and wire them into the cli dispatcher. Port their unit tests.
+    files_to_create:
+      - native-poc/src/cli/markdown.rs
+      - native-poc/src/cli/json.rs
+      - native-poc/src/cli/yaml.rs
+    files_to_modify:
+      - native-poc/src/cli/mod.rs
+      - native-poc/src/cli/encoding/osc.rs
+    depends_on:
+      - phase-1-foundation
+    blocks:
+      - phase-4-integration
+    estimated_effort: medium
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+
+  - id: phase-3-image-subcommand
+    title: Image subcommand (Kitty + SIXEL)
+    summary: >
+      Port validation/image, protocols/kitty, protocols/sixel, and the
+      cli::image orchestrator (including Unix-gated stdin drain). Wire
+      --protocol argument. Port image unit tests.
+    files_to_create:
+      - native-poc/src/cli/validation/image.rs
+      - native-poc/src/cli/protocols/mod.rs
+      - native-poc/src/cli/protocols/kitty.rs
+      - native-poc/src/cli/protocols/sixel.rs
+      - native-poc/src/cli/image.rs
+    files_to_modify:
+      - native-poc/src/cli/mod.rs
+    depends_on:
+      - phase-1-foundation
+    blocks:
+      - phase-4-integration
+    estimated_effort: medium
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+
+  - id: phase-4-integration
+    title: main.rs integration + integration tests
+    summary: >
+      Add CLI dispatch arm to main.rs (before --viewer-family branches),
+      expose cli::run for in-process integration tests, write
+      tests/cli_subcommands.rs and fixtures, build the release binary.
+    files_to_create:
+      - native-poc/src/lib.rs
+      - native-poc/tests/cli_subcommands.rs
+      - native-poc/tests/fixtures/markdown/sample.md
+      - native-poc/tests/fixtures/data/sample.json
+      - native-poc/tests/fixtures/data/sample.yaml
+    files_to_modify:
+      - native-poc/Cargo.toml
+      - native-poc/src/main.rs
+    depends_on:
+      - phase-1-foundation
+      - phase-2-text-subcommands
+      - phase-3-image-subcommand
+    blocks: []
+    estimated_effort: small
+    status: completed
+    completed_at_commit: 8bbec2f1b4c86ed1b5d2e1d335a39d6a3390a876
+    notes: >
+      The static images/sample.png fixture from the original plan is
+      replaced by an in-test tempfile-generated PNG, because (a) we
+      cannot easily produce a deterministic binary fixture from the
+      shell, and (b) the integration tests already use the same image
+      crate as the unit tests, so the tempfile approach gives identical
+      coverage without a committed binary asset.
