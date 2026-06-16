@@ -19,7 +19,6 @@ pub mod image_window;
 pub mod launch;
 pub mod markdown;
 pub mod shell;
-#[cfg(target_os = "linux")]
 pub mod window;
 
 use std::path::Path;

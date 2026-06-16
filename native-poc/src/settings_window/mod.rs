@@ -1,9 +1,10 @@
-//! Child `--settings` window (Linux GTK / WebKitGTK via wry).
+//! Child `--settings` window.
 //!
-//! Runs the reused WebView settings panel in a separate child process,
-//! following the Markdown viewer's architecture (`viewer::window`): the
-//! terminal's winit loop cannot drive WebKitGTK, so the child owns its own
-//! GTK window and main loop, and closing it never touches the terminal.
+//! Runs the reused WebView settings panel in a separate child process via
+//! the shared [`crate::webview_host`] runtime: GTK + WebKitGTK on Linux,
+//! winit + WebView2 on Windows. The terminal's winit loop cannot drive
+//! WebKitGTK, so the child owns its own window (and on Linux its own GTK
+//! main loop); closing it never touches the terminal.
 //!
 //! Unlike the read-only viewers there is a bidirectional bridge: the
 //! panel's Tauri `invoke()` calls arrive through wry's IPC channel as
@@ -21,10 +22,8 @@ pub mod commands;
 pub const SAVED_EVENT_LINE: &str = "EMTERM_SETTINGS_SAVED";
 
 /// Custom URI scheme the child serves its bundle from.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 const SCHEME: &str = "emterm-settings";
 /// Host used for in-bundle asset requests.
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 const HOST: &str = "localhost";
 
 /// One parsed invoke message from the panel (`{id, cmd, args}`).
@@ -72,83 +71,47 @@ pub fn reply_script(id: u64, result: &Result<serde_json::Value, String>) -> Stri
 }
 
 /// Run the child settings window. Blocks until the window closes.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn run() -> Result<(), String> {
     use std::io::Write as _;
 
-    use gtk::prelude::*;
-    use gtk::{Window, WindowType};
-    use wry::http::Request;
-    use wry::{WebViewBuilder, WebViewBuilderExtUnix};
+    use crate::webview_host::{IpcConfig, WebViewHost};
 
     if !assets::is_embedded() {
         return Err("settings window: bundle not embedded (run `bun run build:settings`)".into());
     }
 
-    gtk::init().map_err(|e| format!("settings window: gtk init failed: {e}"))?;
-
-    let window = Window::new(WindowType::Toplevel);
-    window.set_title(&window_title());
-    window.set_default_size(1080, 760);
-
-    // invoke() calls land here (any wry worker thread) and are drained on
-    // the GTK main loop below, where the WebView handle lives.
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-
-    let builder = WebViewBuilder::new()
-        .with_url(format!("{SCHEME}://{HOST}/{}", assets::INDEX_PATH))
-        .with_custom_protocol(SCHEME.to_string(), move |_id, request| {
-            handle_request(&request)
-        })
-        .with_ipc_handler(move |request: Request<String>| {
-            let _ = tx.send(request.body().clone());
-        })
-        // Deny in-window navigation away from the bundle; route safe
-        // external URIs to the OS (same gate as the Markdown viewer).
-        .with_navigation_handler(|uri| handle_navigation(&uri));
-
-    let webview = builder
-        .build_gtk(&window)
-        .map_err(|e| format!("settings window: webview build failed: {e}"))?;
-
-    let running = std::rc::Rc::new(std::cell::Cell::new(true));
-    {
-        let running = running.clone();
-        window.connect_delete_event(move |_, _| {
-            running.set(false);
-            gtk::glib::Propagation::Proceed
-        });
-    }
-    // No Esc/q shortcuts here (unlike the read-only viewers): the panel is
-    // full of text inputs and its own Esc-closing dialogs.
-
-    window.show_all();
-
-    // Child-owned GTK main loop; after each iteration drain the pending
-    // invoke calls and reply on the main thread.
-    while running.get() {
-        gtk::main_iteration_do(true);
-        while let Ok(body) = rx.try_recv() {
-            let Some(msg) = parse_invoke(&body) else {
-                continue;
-            };
-            let outcome = commands::handle(&msg.cmd, &msg.args);
-            if let Err(e) = &outcome.result {
-                log::warn!("settings window: {} failed: {e}", msg.cmd);
-            }
-            let script = reply_script(msg.id, &outcome.result);
-            if let Err(e) = webview.evaluate_script(&script) {
-                log::warn!("settings window: reply eval failed: {e}");
-            }
-            if outcome.saved {
-                // Line-oriented save signal for the parent's pipe reader.
-                let mut out = std::io::stdout().lock();
-                let _ = writeln!(out, "{SAVED_EVENT_LINE}");
-                let _ = out.flush();
-            }
-        }
-    }
-    Ok(())
+    let host = WebViewHost {
+        scheme: SCHEME.to_string(),
+        host: HOST.to_string(),
+        title: window_title(),
+        initial_size: (1080.0, 760.0),
+        initial_url_path: assets::INDEX_PATH.to_string(),
+        init_script: None,
+        request_handler: Box::new(|request| handle_request(request)),
+        navigation_handler: Box::new(|uri| handle_navigation(uri)),
+        ipc: Some(IpcConfig {
+            on_invoke: Box::new(|body| {
+                let msg = parse_invoke(&body)?;
+                let outcome = commands::handle(&msg.cmd, &msg.args);
+                if let Err(e) = &outcome.result {
+                    log::warn!("settings window: {} failed: {e}", msg.cmd);
+                }
+                let script = reply_script(msg.id, &outcome.result);
+                if outcome.saved {
+                    // Line-oriented save signal for the parent's pipe reader.
+                    let mut out = std::io::stdout().lock();
+                    let _ = writeln!(out, "{SAVED_EVENT_LINE}");
+                    let _ = out.flush();
+                }
+                Some(script)
+            }),
+        }),
+        // The panel is full of text inputs and its own Esc-closing
+        // dialogs, so Esc/Q must not exit the window.
+        close_on_esc_q: false,
+    };
+    host.run()
 }
 
 /// Window title, localized from the persisted language (the child has no
@@ -212,131 +175,6 @@ fn handle_navigation(uri: &str) -> bool {
     }
     crate::links::open_safe_uri(uri);
     false
-}
-
-/// Run the child settings window on Windows (wry + WebView2 hosted in a
-/// winit window). The Linux path owns its own GTK main loop because
-/// WebKitGTK requires it; on Windows wry's WebView2 backend is driven by
-/// the standard Win32 message pump that winit already runs, so the
-/// implementation is a single `EventLoop::run_app` over a user-event
-/// stream carrying IPC bodies from wry's worker thread back to the main
-/// thread.
-#[cfg(target_os = "windows")]
-pub fn run() -> Result<(), String> {
-    use std::cell::RefCell;
-    use std::io::Write as _;
-    use std::rc::Rc;
-
-    use winit::application::ApplicationHandler;
-    use winit::event::WindowEvent;
-    use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
-    use winit::window::{Window, WindowAttributes, WindowId};
-    use wry::http::Request;
-    use wry::WebViewBuilder;
-
-    if !assets::is_embedded() {
-        return Err("settings window: bundle not embedded (run `bun run build:settings`)".into());
-    }
-
-    let event_loop = EventLoop::<String>::with_user_event()
-        .build()
-        .map_err(|e| format!("settings window: event loop build failed: {e}"))?;
-    let proxy: EventLoopProxy<String> = event_loop.create_proxy();
-
-    struct SettingsApp {
-        proxy: EventLoopProxy<String>,
-        window: Option<Rc<Window>>,
-        webview: Option<wry::WebView>,
-        build_error: Rc<RefCell<Option<String>>>,
-    }
-
-    impl ApplicationHandler<String> for SettingsApp {
-        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-            if self.window.is_some() {
-                return;
-            }
-            let attrs = WindowAttributes::default()
-                .with_title(window_title())
-                .with_inner_size(winit::dpi::LogicalSize::new(1080.0, 760.0));
-            let window = match event_loop.create_window(attrs) {
-                Ok(w) => Rc::new(w),
-                Err(e) => {
-                    *self.build_error.borrow_mut() =
-                        Some(format!("settings window: create_window failed: {e}"));
-                    event_loop.exit();
-                    return;
-                }
-            };
-            let ipc_proxy = self.proxy.clone();
-            let builder = WebViewBuilder::new()
-                .with_url(format!("{SCHEME}://{HOST}/{}", assets::INDEX_PATH))
-                .with_custom_protocol(SCHEME.to_string(), move |_id, request| {
-                    handle_request(&request)
-                })
-                .with_ipc_handler(move |request: Request<String>| {
-                    let _ = ipc_proxy.send_event(request.body().clone());
-                })
-                .with_navigation_handler(|uri| handle_navigation(&uri));
-            let webview = match builder.build(window.as_ref()) {
-                Ok(w) => w,
-                Err(e) => {
-                    *self.build_error.borrow_mut() =
-                        Some(format!("settings window: webview build failed: {e}"));
-                    event_loop.exit();
-                    return;
-                }
-            };
-            self.window = Some(window);
-            self.webview = Some(webview);
-        }
-
-        fn window_event(
-            &mut self,
-            event_loop: &ActiveEventLoop,
-            _id: WindowId,
-            event: WindowEvent,
-        ) {
-            if matches!(event, WindowEvent::CloseRequested) {
-                event_loop.exit();
-            }
-        }
-
-        fn user_event(&mut self, _event_loop: &ActiveEventLoop, body: String) {
-            let Some(msg) = parse_invoke(&body) else {
-                return;
-            };
-            let outcome = commands::handle(&msg.cmd, &msg.args);
-            if let Err(e) = &outcome.result {
-                log::warn!("settings window: {} failed: {e}", msg.cmd);
-            }
-            let script = reply_script(msg.id, &outcome.result);
-            if let Some(webview) = self.webview.as_ref() {
-                if let Err(e) = webview.evaluate_script(&script) {
-                    log::warn!("settings window: reply eval failed: {e}");
-                }
-            }
-            if outcome.saved {
-                let mut out = std::io::stdout().lock();
-                let _ = writeln!(out, "{SAVED_EVENT_LINE}");
-                let _ = out.flush();
-            }
-        }
-    }
-
-    let build_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let mut app = SettingsApp {
-        proxy,
-        window: None,
-        webview: None,
-        build_error: build_error.clone(),
-    };
-    event_loop
-        .run_app(&mut app)
-        .map_err(|e| format!("settings window: event loop returned error: {e}"))?;
-    if let Some(err) = build_error.borrow().clone() {
-        return Err(err);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
