@@ -397,6 +397,40 @@ mod tests {
         assert_eq!(chain.resolve(&raster, 0x3042), Some(FontId(2)));
     }
 
+    /// Regression: when a pictographic codepoint (e.g. `❯` U+276F shown
+    /// by starship) is NOT covered by the emoji font, the chain walk
+    /// must consult the `FontRole::Secondary` slot and resolve to a
+    /// symbol font in it. `app.rs` slots `Noto Sans Symbols2` etc.
+    /// here per SPEC FR8's `font_family_fallback...` position, and a
+    /// regression in `resolve` that stops walking after the emoji
+    /// short-circuit (or that reorders the chain so Secondary lands
+    /// after emoji again) would silently drop `❯` and friends back
+    /// to a tofu glyph.
+    #[test]
+    fn resolve_pictographic_falls_to_secondary_when_emoji_misses() {
+        // Chain shape mirrors the production build:
+        //   FontId(1) = base (Inconsolata-equivalent, ASCII only)
+        //   FontId(2) = secondary (Symbols2-equivalent, covers U+276F)
+        //   FontId(3) = emoji (Noto Color Emoji-equivalent, covers
+        //               U+1F600 but NOT U+276F — current real-world
+        //               coverage of the bundled emoji font).
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x41)); // base: 'A'
+        covers.insert((FontId(2), 0x276F)); // secondary: ❯
+        covers.insert((FontId(3), 0x1F600)); // emoji: 😀
+        let raster = TableRasterizer { covers };
+        // U+276F is inside `is_pictographic`'s 0x2600..=0x27BF range,
+        // so `resolve` checks the emoji font FIRST. The emoji font
+        // misses, the chain walks on, and Secondary catches it.
+        assert_eq!(chain.resolve(&raster, 0x276F), Some(FontId(2)));
+        // U+1F600 stays on the emoji font (sanity check the
+        // short-circuit still wins when the emoji font covers a
+        // pictographic codepoint).
+        assert_eq!(chain.resolve(&raster, 0x1F600), Some(FontId(3)));
+    }
+
     /// Pin the boundary values of [`is_pictographic`] so a future tweak
     /// that accidentally widens the range (and re-introduces the
     /// "ASCII gets emoji glyph" regression) trips the test.
