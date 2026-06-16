@@ -157,11 +157,7 @@ impl GpuShell {
         run_ui: &mut dyn FnMut(&egui::Context),
     ) -> bool {
         if self.surface_dirty {
-            let size = self.window.inner_size();
-            self.surface_config.width = size.width.max(1);
-            self.surface_config.height = size.height.max(1);
-            self.surface.configure(&self.device, &self.surface_config);
-            self.surface_dirty = false;
+            self.reconfigure_surface();
         }
 
         let ctx = self.egui_ctx.clone();
@@ -171,19 +167,9 @@ impl GpuShell {
         let paint_jobs = ctx.tessellate(full_output.shapes, ppp);
         let textures_delta = full_output.textures_delta;
 
-        let surface_texture = match self.surface.get_current_texture() {
-            Ok(tex) => tex,
-            Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
-                self.surface_dirty = true;
-                self.window.request_redraw();
-                return false;
-            }
-            Err(e) => {
-                log::warn!("viewer shell: surface error {e:?}; skipping frame");
-                self.surface_dirty = true;
-                self.window.request_redraw();
-                return false;
-            }
+        let surface_texture = match self.acquire_surface_texture() {
+            Some(tex) => tex,
+            None => return false,
         };
         let view = surface_texture
             .texture
@@ -240,6 +226,49 @@ impl GpuShell {
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .is_some_and(|v| v.repaint_delay.is_zero())
+    }
+
+    /// Reconfigure the wgpu surface for the current window size.
+    fn reconfigure_surface(&mut self) {
+        let size = self.window.inner_size();
+        self.surface_config.width = size.width.max(1);
+        self.surface_config.height = size.height.max(1);
+        self.surface.configure(&self.device, &self.surface_config);
+        self.surface_dirty = false;
+    }
+
+    /// Acquire the next swapchain texture, transparently recovering from
+    /// `suboptimal` results by reconfiguring once and re-acquiring before
+    /// returning. Mirrors [`crate::window_host::WindowHost::acquire_surface_texture`]
+    /// so the viewer windows don't spam `wgpu_hal`'s "Suboptimal present
+    /// of frame N" warn on every frame whose swapchain happens to be
+    /// suboptimal (typically after a resize the surface hasn't observed
+    /// yet).
+    fn acquire_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
+        let mut tries: u8 = 0;
+        loop {
+            match self.surface.get_current_texture() {
+                Ok(tex) if tex.suboptimal && tries == 0 => {
+                    drop(tex);
+                    log::debug!("viewer shell: surface suboptimal; reconfiguring before retry");
+                    self.reconfigure_surface();
+                    tries += 1;
+                    continue;
+                }
+                Ok(tex) => return Some(tex),
+                Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
+                    self.surface_dirty = true;
+                    self.window.request_redraw();
+                    return None;
+                }
+                Err(e) => {
+                    log::warn!("viewer shell: surface error {e:?}; skipping frame");
+                    self.surface_dirty = true;
+                    self.window.request_redraw();
+                    return None;
+                }
+            }
+        }
     }
 
     /// Apply the egui-reported cursor unless the caller's CSD resize hint

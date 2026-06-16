@@ -156,6 +156,25 @@ pub fn default_mux_action_chord(action: &str) -> Option<crate::mux::prefix::Pref
     crate::mux::prefix::default_action_chord(action)
 }
 
+/// Mux action names that the WebView build (and older native imports)
+/// still write into `settings.json` even though SPEC mux-feature-cleanup
+/// removed them from [`MUX_ACTION_NAMES`]. The loader drops these
+/// without emitting a warn so a normal launch isn't spammed once per
+/// legacy entry — the entries are dead either way.
+fn is_legacy_mux_action(action: &str) -> bool {
+    matches!(
+        action,
+        "split-vertical"
+            | "split-horizontal"
+            | "next-pane"
+            | "prev-pane"
+            | "close-pane"
+            | "zoom-toggle"
+            | "copy-mode"
+            | "paste"
+    )
+}
+
 /// Resolved mux UI settings (`mux.*`). Port of the WebView `MuxSettings` /
 /// `crates/app_settings::MuxSettings` subset the native build consumes.
 #[derive(Debug, Clone, PartialEq)]
@@ -1486,10 +1505,24 @@ impl RawSettings {
                 for (action, spec) in kb {
                     // Unknown action names are ignored (forward compat).
                     if default_mux_action_chord(&action).is_none() {
-                        log::warn!(
-                            "settings.mux.keybinds: unknown action {:?}, ignored",
-                            action
-                        );
+                        // Pre-SPEC-mux-feature-cleanup actions can still
+                        // be present in `settings.json` files written by
+                        // the WebView build (or older native builds).
+                        // They are dead bindings the WebView frontend
+                        // ignores; silently drop them here so a normal
+                        // launch doesn't repeat the same warn for every
+                        // legacy entry.
+                        if is_legacy_mux_action(&action) {
+                            log::debug!(
+                                "settings.mux.keybinds: legacy action {:?}, dropped",
+                                action
+                            );
+                        } else {
+                            log::warn!(
+                                "settings.mux.keybinds: unknown action {:?}, ignored",
+                                action
+                            );
+                        }
                         continue;
                     }
                     // Blank entries keep the default (matching mux.prefix).
@@ -2223,6 +2256,28 @@ mod tests {
     fn loader_mux_keybinds_unknown_action_ignored() {
         let s = load_json(r#"{"mux": {"keybinds": {"frobnicate": "z"}}}"#);
         assert!(!s.mux.keybinds.contains_key("frobnicate"));
+    }
+
+    #[test]
+    fn loader_mux_keybinds_legacy_actions_dropped_silently() {
+        // Pre-cleanup `mux.keybinds` entries that the WebView build still
+        // emits must be dropped (no map entry) without a `warn!` storm.
+        // We can't easily assert "no warn fired" from here, but the
+        // dropped-from-the-map invariant is the user-observable half.
+        let s = load_json(
+            r#"{
+                "mux": {
+                    "keybinds": {
+                        "next-pane": "o",
+                        "copy-mode": "Ctrl+[",
+                        "paste": "Ctrl+]"
+                    }
+                }
+            }"#,
+        );
+        assert!(!s.mux.keybinds.contains_key("next-pane"));
+        assert!(!s.mux.keybinds.contains_key("copy-mode"));
+        assert!(!s.mux.keybinds.contains_key("paste"));
     }
 
     #[test]
