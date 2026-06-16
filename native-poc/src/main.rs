@@ -172,10 +172,10 @@ fn run_viewer(payload_path: Option<String>) {
 }
 
 /// Entry for the child `--settings` process. On Linux this runs the
-/// GTK/Wry settings window and blocks until it closes; on other platforms
-/// it is not yet implemented, so we log and exit non-zero.
+/// GTK/Wry settings window; on Windows it runs the winit + wry/WebView2
+/// equivalent. Other platforms have no implementation and exit non-zero.
 fn run_settings_window() {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         match settings_window::run() {
             Ok(()) => log::info!("settings window: closed"),
@@ -185,9 +185,9 @@ fn run_settings_window() {
             }
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
-        log::error!("settings window: --settings is only implemented on Linux");
+        log::error!("settings window: --settings is not implemented on this platform");
         std::process::exit(1);
     }
 }

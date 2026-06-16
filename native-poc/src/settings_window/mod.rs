@@ -21,10 +21,10 @@ pub mod commands;
 pub const SAVED_EVENT_LINE: &str = "EMTERM_SETTINGS_SAVED";
 
 /// Custom URI scheme the child serves its bundle from.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const SCHEME: &str = "emterm-settings";
 /// Host used for in-bundle asset requests.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 const HOST: &str = "localhost";
 
 /// One parsed invoke message from the panel (`{id, cmd, args}`).
@@ -153,7 +153,7 @@ pub fn run() -> Result<(), String> {
 
 /// Window title, localized from the persisted language (the child has no
 /// other locale source before the bundle boots).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn window_title() -> String {
     let settings = crate::settings::Settings::load_or_default();
     match crate::i18n::resolve(settings.language) {
@@ -163,7 +163,7 @@ fn window_title() -> String {
 }
 
 /// Custom-scheme request router: serves in-bundle assets only.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn handle_request(
     request: &wry::http::Request<Vec<u8>>,
 ) -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
@@ -182,7 +182,7 @@ fn handle_request(
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn not_found() -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
     wry::http::Response::builder()
         .status(404)
@@ -191,19 +191,152 @@ fn not_found() -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
 }
 
 /// In-window navigation is allowed only inside the bundle origin.
+///
+/// WebView2 on Windows cannot register non-standard URI schemes, so wry
+/// rewrites `emterm-settings://localhost/...` to
+/// `http://emterm-settings.localhost/...` before navigating (see wry
+/// `apply_uri_work_around`). The rewritten form arrives at this gate, so
+/// we accept it alongside the original scheme.
 pub fn navigation_allowed(uri: &str) -> bool {
     uri.starts_with("emterm-settings://")
+        || uri.starts_with("http://emterm-settings.localhost/")
+        || uri.starts_with("https://emterm-settings.localhost/")
 }
 
 /// Navigation handler: in-bundle proceeds; anything else is denied
 /// in-window and safe external schemes open in the OS browser.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn handle_navigation(uri: &str) -> bool {
     if navigation_allowed(uri) {
         return true;
     }
     crate::links::open_safe_uri(uri);
     false
+}
+
+/// Run the child settings window on Windows (wry + WebView2 hosted in a
+/// winit window). The Linux path owns its own GTK main loop because
+/// WebKitGTK requires it; on Windows wry's WebView2 backend is driven by
+/// the standard Win32 message pump that winit already runs, so the
+/// implementation is a single `EventLoop::run_app` over a user-event
+/// stream carrying IPC bodies from wry's worker thread back to the main
+/// thread.
+#[cfg(target_os = "windows")]
+pub fn run() -> Result<(), String> {
+    use std::cell::RefCell;
+    use std::io::Write as _;
+    use std::rc::Rc;
+
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+    use winit::window::{Window, WindowAttributes, WindowId};
+    use wry::http::Request;
+    use wry::WebViewBuilder;
+
+    if !assets::is_embedded() {
+        return Err("settings window: bundle not embedded (run `bun run build:settings`)".into());
+    }
+
+    let event_loop = EventLoop::<String>::with_user_event()
+        .build()
+        .map_err(|e| format!("settings window: event loop build failed: {e}"))?;
+    let proxy: EventLoopProxy<String> = event_loop.create_proxy();
+
+    struct SettingsApp {
+        proxy: EventLoopProxy<String>,
+        window: Option<Rc<Window>>,
+        webview: Option<wry::WebView>,
+        build_error: Rc<RefCell<Option<String>>>,
+    }
+
+    impl ApplicationHandler<String> for SettingsApp {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            if self.window.is_some() {
+                return;
+            }
+            let attrs = WindowAttributes::default()
+                .with_title(window_title())
+                .with_inner_size(winit::dpi::LogicalSize::new(1080.0, 760.0));
+            let window = match event_loop.create_window(attrs) {
+                Ok(w) => Rc::new(w),
+                Err(e) => {
+                    *self.build_error.borrow_mut() =
+                        Some(format!("settings window: create_window failed: {e}"));
+                    event_loop.exit();
+                    return;
+                }
+            };
+            let ipc_proxy = self.proxy.clone();
+            let builder = WebViewBuilder::new()
+                .with_url(format!("{SCHEME}://{HOST}/{}", assets::INDEX_PATH))
+                .with_custom_protocol(SCHEME.to_string(), move |_id, request| {
+                    handle_request(&request)
+                })
+                .with_ipc_handler(move |request: Request<String>| {
+                    let _ = ipc_proxy.send_event(request.body().clone());
+                })
+                .with_navigation_handler(|uri| handle_navigation(&uri));
+            let webview = match builder.build(window.as_ref()) {
+                Ok(w) => w,
+                Err(e) => {
+                    *self.build_error.borrow_mut() =
+                        Some(format!("settings window: webview build failed: {e}"));
+                    event_loop.exit();
+                    return;
+                }
+            };
+            self.window = Some(window);
+            self.webview = Some(webview);
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            _id: WindowId,
+            event: WindowEvent,
+        ) {
+            if matches!(event, WindowEvent::CloseRequested) {
+                event_loop.exit();
+            }
+        }
+
+        fn user_event(&mut self, _event_loop: &ActiveEventLoop, body: String) {
+            let Some(msg) = parse_invoke(&body) else {
+                return;
+            };
+            let outcome = commands::handle(&msg.cmd, &msg.args);
+            if let Err(e) = &outcome.result {
+                log::warn!("settings window: {} failed: {e}", msg.cmd);
+            }
+            let script = reply_script(msg.id, &outcome.result);
+            if let Some(webview) = self.webview.as_ref() {
+                if let Err(e) = webview.evaluate_script(&script) {
+                    log::warn!("settings window: reply eval failed: {e}");
+                }
+            }
+            if outcome.saved {
+                let mut out = std::io::stdout().lock();
+                let _ = writeln!(out, "{SAVED_EVENT_LINE}");
+                let _ = out.flush();
+            }
+        }
+    }
+
+    let build_error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let mut app = SettingsApp {
+        proxy,
+        window: None,
+        webview: None,
+        build_error: build_error.clone(),
+    };
+    event_loop
+        .run_app(&mut app)
+        .map_err(|e| format!("settings window: event loop returned error: {e}"))?;
+    if let Some(err) = build_error.borrow().clone() {
+        return Err(err);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -261,5 +394,24 @@ mod tests {
         assert!(!navigation_allowed("https://example.com"));
         assert!(!navigation_allowed("file:///etc/passwd"));
         assert!(!navigation_allowed("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn navigation_gate_accepts_webview2_workaround_form() {
+        // WebView2 rewrites `emterm-settings://localhost/...` to
+        // `http(s)://emterm-settings.localhost/...`; the rewritten form
+        // must still count as in-bundle so wry's NavigationStarting
+        // callback proceeds instead of being routed to the OS browser.
+        assert!(navigation_allowed(
+            "http://emterm-settings.localhost/index.html"
+        ));
+        assert!(navigation_allowed(
+            "https://emterm-settings.localhost/assets/app.js"
+        ));
+        // Look-alike origins must still be rejected.
+        assert!(!navigation_allowed(
+            "http://emterm-settings.localhost.evil.com/"
+        ));
+        assert!(!navigation_allowed("http://emterm-settings/index.html"));
     }
 }
