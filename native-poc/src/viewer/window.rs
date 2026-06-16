@@ -1,11 +1,9 @@
-//! Child `--viewer` window (Linux GTK / WebKitGTK via wry).
+//! Child `--viewer` window.
 //!
-//! This module owns the *separate viewer process* on Linux: it initializes
-//! GTK, builds a `gtk::Window`, mounts a wry `WebView` that serves the
-//! embedded Markdown viewer bundle through a custom URI scheme, injects the
-//! render payload, and drives its own GTK main loop. The terminal process'
-//! winit loop and `WindowHost` are untouched — closing this window exits
-//! only the child (FR3 / FR9).
+//! Runs the Markdown viewer in a separate child process via the shared
+//! [`crate::webview_host`] runtime: GTK + WebKitGTK on Linux, winit +
+//! WebView2 on Windows. The terminal's winit loop and `WindowHost` are
+//! untouched — closing this window exits only the child (FR3 / FR9).
 //!
 //! Phase 5 responsibilities also live here: navigation interception
 //! (FR7), the basedir-confined custom-scheme image resolver (FR8), and
@@ -13,20 +11,15 @@
 //! logic (link gate, image confinement) lives in `crate::links` and
 //! `crate::viewer::image_resolver` so it is unit-tested without a window.
 
-#![cfg(target_os = "linux")]
-
 use std::borrow::Cow;
 
-use gtk::prelude::*;
-use gtk::{Window, WindowType};
 use wry::http::{Request, Response};
-use wry::{WebViewBuilder, WebViewBuilderExtUnix};
 
 use super::assets;
 use super::image_resolver;
 use super::launch::ViewerPayload;
 
-/// Custom URI scheme the child serves its own content from. WebKitGTK
+/// Custom URI scheme the child serves its own content from. WebView
 /// origins look like `emterm-viewer://<host>/<path>`.
 const SCHEME: &str = "emterm-viewer";
 /// Host used for in-bundle asset requests (`emterm-viewer://localhost/…`).
@@ -38,6 +31,8 @@ const IMAGE_PREFIX: &str = "/__img/";
 /// window closes, then returns. Any setup failure logs at `warn`/`error`
 /// (ERR_SPAWN side) and returns an error so the child can exit non-zero.
 pub fn run(payload_path: &str) -> Result<(), String> {
+    use crate::webview_host::WebViewHost;
+
     let raw = std::fs::read_to_string(payload_path)
         .map_err(|e| format!("viewer: cannot read payload {payload_path}: {e}"))?;
     let payload =
@@ -51,12 +46,6 @@ pub fn run(payload_path: &str) -> Result<(), String> {
     if !assets::is_embedded() {
         return Err("viewer: bundle not embedded (run `bun run build:viewer`)".to_string());
     }
-
-    gtk::init().map_err(|e| format!("viewer: gtk init failed: {e}"))?;
-
-    let window = Window::new(WindowType::Toplevel);
-    window.set_title("eMterm Markdown Viewer");
-    window.set_default_size(960, 720);
 
     // The injected payload global + a tiny ready-signal, evaluated before
     // the bundle entry runs. The bundle reads `window.__EMTERM_VIEWER_PAYLOAD__`.
@@ -79,50 +68,20 @@ pub fn run(payload_path: &str) -> Result<(), String> {
     // basedir captured by the custom-scheme image resolver.
     let basedir = payload.basedir.clone();
 
-    let builder = WebViewBuilder::new()
-        .with_url(format!("{SCHEME}://{HOST}/{}", assets::INDEX_PATH))
-        .with_initialization_script(&init_script)
-        .with_custom_protocol(SCHEME.to_string(), move |_id, request| {
-            handle_request(&request, basedir.as_deref())
-        })
-        // FR7: deny in-window navigation; route safe external URIs to the OS.
-        .with_navigation_handler(|uri| handle_navigation(&uri));
-
-    let _webview = builder
-        .build_gtk(&window)
-        .map_err(|e| format!("viewer: webview build failed: {e}"))?;
-
-    // FR9: window close button exits the child loop.
-    let running = std::rc::Rc::new(std::cell::Cell::new(true));
-    {
-        let running = running.clone();
-        window.connect_delete_event(move |_, _| {
-            running.set(false);
-            gtk::glib::Propagation::Proceed
-        });
-    }
-    // FR9: Esc / q exit the child.
-    {
-        let running = running.clone();
-        window.connect_key_press_event(move |_, ev| {
-            let key = ev.keyval();
-            if key == gtk::gdk::keys::constants::Escape
-                || key == gtk::gdk::keys::constants::q
-                || key == gtk::gdk::keys::constants::Q
-            {
-                running.set(false);
-            }
-            gtk::glib::Propagation::Proceed
-        });
-    }
-
-    window.show_all();
-
-    // Child-owned GTK main loop (the terminal's winit loop is separate).
-    while running.get() {
-        gtk::main_iteration_do(true);
-    }
-    Ok(())
+    let host = WebViewHost {
+        scheme: SCHEME.to_string(),
+        host: HOST.to_string(),
+        title: "eMterm Markdown Viewer".to_string(),
+        initial_size: (960.0, 720.0),
+        initial_url_path: assets::INDEX_PATH.to_string(),
+        init_script: Some(init_script),
+        request_handler: Box::new(move |request| handle_request(request, basedir.as_deref())),
+        navigation_handler: Box::new(|uri| handle_navigation(uri)),
+        ipc: None,
+        // FR9: Esc / q exit the read-only viewer.
+        close_on_esc_q: true,
+    };
+    host.run()
 }
 
 /// Custom-scheme request router: serves in-bundle assets and, under
@@ -175,12 +134,18 @@ fn serve_image(rel: &str, basedir: Option<&str>) -> Response<Cow<'static, [u8]>>
 /// Decide whether the WebView may navigate to `uri` in-window.
 ///
 /// In-bundle (`emterm-viewer://`) navigation is allowed so the page can
-/// load its own assets. Any other URI is denied in-window. This is a
-/// **pure predicate** with no side effects — opening safe external URIs
-/// in the OS is the caller's job ([`handle_navigation`]), so unit tests
-/// can assert the decision without spawning a browser.
+/// load its own assets. WebView2 on Windows cannot register non-standard
+/// URI schemes, so wry rewrites `emterm-viewer://localhost/...` to
+/// `http(s)://emterm-viewer.localhost/...`; the rewritten form is also
+/// accepted (same workaround as the settings window). Any other URI is
+/// denied in-window. This is a **pure predicate** with no side effects —
+/// opening safe external URIs in the OS is the caller's job
+/// ([`handle_navigation`]), so unit tests can assert the decision without
+/// spawning a browser.
 pub fn navigation_allowed(uri: &str) -> bool {
-    uri.starts_with(&format!("{SCHEME}://"))
+    uri.starts_with("emterm-viewer://")
+        || uri.starts_with("http://emterm-viewer.localhost/")
+        || uri.starts_with("https://emterm-viewer.localhost/")
 }
 
 /// Navigation handler for the WebView: allow in-window navigation only
@@ -247,6 +212,25 @@ mod tests {
         assert!(!navigation_allowed("https://example.com"));
         assert!(!navigation_allowed("file:///etc/passwd"));
         assert!(!navigation_allowed("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn navigation_gate_accepts_webview2_workaround_form() {
+        // WebView2 rewrites `emterm-viewer://localhost/...` to
+        // `http(s)://emterm-viewer.localhost/...`; the rewritten form
+        // must still count as in-bundle so wry's NavigationStarting
+        // callback proceeds instead of being routed to the OS browser.
+        assert!(navigation_allowed(
+            "http://emterm-viewer.localhost/index.html"
+        ));
+        assert!(navigation_allowed(
+            "https://emterm-viewer.localhost/assets/app.js"
+        ));
+        // Look-alike origins must still be rejected.
+        assert!(!navigation_allowed(
+            "http://emterm-viewer.localhost.evil.com/"
+        ));
+        assert!(!navigation_allowed("http://emterm-viewer/index.html"));
     }
 
     #[test]

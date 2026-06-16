@@ -40,6 +40,7 @@ mod status_bar;
 mod ui;
 mod viewer;
 mod wakeup;
+mod webview_host;
 
 /// Build the winit event loop, preferring the X11 backend on Linux when a
 /// Wayland session also exposes X11 (XWayland).
@@ -149,31 +150,21 @@ fn main() {
     window_host::run(event_loop, app);
 }
 
-/// Entry for the child `--viewer <payload-path>` process. On Linux this
-/// runs the GTK/Wry Markdown viewer window and blocks until it closes; on
-/// other platforms the viewer window is not yet implemented, so we log and
-/// exit non-zero. A missing payload path is a usage error.
+/// Entry for the child `--viewer <payload-path>` process. Runs the Wry
+/// Markdown viewer window (GTK/WebKitGTK on Linux, WebView2 on Windows)
+/// and blocks until it closes. A missing payload path is a usage error.
 fn run_viewer(payload_path: Option<String>) {
     let Some(path) = payload_path else {
         log::error!("--viewer requires a payload file path");
         std::process::exit(2);
     };
 
-    #[cfg(target_os = "linux")]
-    {
-        match viewer::window::run(&path) {
-            Ok(()) => log::info!("viewer: window closed"),
-            Err(e) => {
-                log::error!("{e}");
-                std::process::exit(1);
-            }
+    match viewer::window::run(&path) {
+        Ok(()) => log::info!("viewer: window closed"),
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(1);
         }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = path;
-        log::error!("viewer: --viewer window is only implemented on Linux");
-        std::process::exit(1);
     }
 }
 
