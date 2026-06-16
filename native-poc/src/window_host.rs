@@ -912,6 +912,56 @@ impl WindowHost {
         self.surface_dirty = false;
     }
 
+    /// Acquire the next swapchain texture, transparently recovering from
+    /// `suboptimal` results by reconfiguring once and re-acquiring before
+    /// returning. Without this, every frame whose swapchain is suboptimal
+    /// would trigger a `wgpu_hal` "Suboptimal present of frame N" warn at
+    /// `present()` — the swapchain stays in that state until a resize
+    /// event happens to land, so the warn loops on every frame in between.
+    ///
+    /// Returns `None` when the texture is unrecoverable for this frame
+    /// (`Lost` / `Outdated` / `OutOfMemory` / `Timeout`); the caller must
+    /// return without rendering — `surface_dirty` is already flagged so
+    /// the next frame reconfigures.
+    fn acquire_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
+        let mut tries: u8 = 0;
+        loop {
+            match self.surface.get_current_texture() {
+                Ok(tex) if tex.suboptimal && tries == 0 => {
+                    // Drop the suboptimal texture and reconfigure to the
+                    // current physical size. Cap at one retry so a
+                    // compositor that keeps reporting suboptimal cannot
+                    // spin us in a tight acquire loop.
+                    drop(tex);
+                    log::debug!("wgpu surface suboptimal; reconfiguring before retry");
+                    self.reconfigure_surface();
+                    tries += 1;
+                    continue;
+                }
+                Ok(tex) => return Some(tex),
+                Err(SurfaceError::Lost) | Err(SurfaceError::Outdated) => {
+                    // Mark dirty so the next frame reconfigures before
+                    // acquire, and request a redraw so the event loop
+                    // schedules one.
+                    log::warn!("wgpu surface Lost/Outdated; will reconfigure next frame");
+                    self.surface_dirty = true;
+                    self.window.request_redraw();
+                    return None;
+                }
+                Err(SurfaceError::OutOfMemory) => {
+                    log::error!("wgpu surface out of memory; will recreate next frame");
+                    self.surface_dirty = true;
+                    self.window.request_redraw();
+                    return None;
+                }
+                Err(SurfaceError::Timeout) => {
+                    log::warn!("wgpu surface timeout; skipping frame");
+                    return None;
+                }
+            }
+        }
+    }
+
     /// Fully recreate the surface from the underlying instance. Reserved
     /// for severe failure modes (e.g. `OutOfMemory`) where simply
     /// reconfiguring the current handle is insufficient. The Lost/Outdated
@@ -1428,26 +1478,9 @@ impl WindowHost {
             .tessellate(full_output.shapes, self.pixels_per_point);
         let textures_delta = full_output.textures_delta;
 
-        let surface_texture = match self.surface.get_current_texture() {
-            Ok(tex) => tex,
-            Err(SurfaceError::Lost) | Err(SurfaceError::Outdated) => {
-                // Mark dirty so the next frame reconfigures before acquire,
-                // and request a redraw so the event loop schedules one.
-                log::warn!("wgpu surface Lost/Outdated; will reconfigure next frame");
-                self.surface_dirty = true;
-                self.window.request_redraw();
-                return;
-            }
-            Err(SurfaceError::OutOfMemory) => {
-                log::error!("wgpu surface out of memory; will recreate next frame");
-                self.surface_dirty = true;
-                self.window.request_redraw();
-                return;
-            }
-            Err(SurfaceError::Timeout) => {
-                log::warn!("wgpu surface timeout; skipping frame");
-                return;
-            }
+        let surface_texture = match self.acquire_surface_texture() {
+            Some(tex) => tex,
+            None => return,
         };
         let view = surface_texture
             .texture
@@ -1680,6 +1713,10 @@ impl WindowHost {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
+        // winit's Wayland backend asks us to call `pre_present_notify`
+        // immediately before `present()` so the compositor can pace the
+        // next frame; on X11/Windows it is a cheap no-op.
+        self.window.pre_present_notify();
         surface_texture.present();
 
         for id in &textures_delta.free {
