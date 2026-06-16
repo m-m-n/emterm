@@ -796,11 +796,20 @@ impl App {
         // FontRole::Secondary (`Noto Sans Symbols2`, `Symbola`, etc.)
         // occupy the `font_family_fallback...` slot in SPEC FR8's
         // `[base, font_family_fallback..., emoji_font]` chain order.
-        // They cover codepoints the base + CJK fonts miss (e.g.
-        // `❯` U+276F shown by starship) and are consulted before
-        // the emoji fallback so monochrome prompt symbols are
-        // preferred over color emoji presentation when both have
-        // coverage.
+        // They cover codepoints the base + CJK fonts miss — most
+        // visibly `❯` U+276F shown by starship.
+        //
+        // Note: for codepoints in `is_pictographic`'s range
+        // (0x2600..=0x27BF + emoji blocks), `FallbackChain::resolve`
+        // checks `self.emoji` FIRST regardless of chain order, so
+        // Secondary only catches a pictographic codepoint when the
+        // emoji font does NOT cover it. Today Noto Color Emoji omits
+        // dingbat ornaments like U+276F / U+2731, so the Secondary
+        // chain catches them as intended. If a future emoji font
+        // gains dingbat coverage, the `resolve_pictographic_falls_to_
+        // secondary_when_emoji_misses` regression test in
+        // `render/font/fallback.rs` pins the "miss → Secondary"
+        // contract so the regression surfaces immediately.
         #[cfg(not(test))]
         for f in resolver.by_role(FontRole::Secondary) {
             extras.push(f.id);
