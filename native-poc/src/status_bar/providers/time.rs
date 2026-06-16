@@ -4,9 +4,10 @@
 //! (e.g. `HH:mm:ss`). The format string lives on
 //! `Settings::statusbar.time_format` and is supplied at construction.
 //!
-//! Unix uses `libc::localtime_r` so the result respects `TZ`. On
-//! Windows we fall back to UTC arithmetic for now; a follow-up can
-//! introduce `GetLocalTime` if test machines surface drift.
+//! Unix uses `libc::localtime_r` so the result respects `TZ`; Windows
+//! uses `libc::localtime_s` so the result respects the system zone
+//! (registered via the Control Panel / Time & Language settings).
+//! Both paths live in [`crate::localtime`].
 //!
 //! ## Self-owned timer thread
 //!
