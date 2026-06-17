@@ -22,8 +22,12 @@ pub struct StatusBarViewModel {
     /// keeps the widget's default.
     pub font_size: Option<f32>,
     /// Mux session badge (`[mux:<name>]`) prepended to the OSC row's
-    /// left side at draw time when non-empty. The runtime sets this
-    /// from `Tab::mux_session_name`.
+    /// left side at draw time **only when this name is non-empty AND
+    /// `osc.left` is non-empty**. An empty `osc.left` (the daemon's
+    /// `mux.statusbar.left` resolved to nothing) suppresses the badge
+    /// entirely — the left section stays blank rather than painting a
+    /// lonely `[mux:<name>]`. The runtime sets this from
+    /// `Tab::mux_session_name`.
     pub mux_session_name: Option<String>,
     pub osc: OscRow,
     pub app_line1: AppRow,
@@ -44,14 +48,23 @@ pub struct OscRow {
 impl OscRow {
     /// `true` when the row should appear given the auto-hide rule
     /// (FR12).
-    pub fn should_render(&self, has_mux_session: bool) -> bool {
+    ///
+    /// Mux attachment alone does NOT render the row. The daemon
+    /// signals "I'm pushing OSC content" by setting
+    /// `forced_visible = Some(true)` (in `runtime::build_osc_row` when
+    /// a `StatusUpdateMsg` arrives); until then both sides are empty
+    /// and the row stays hidden — empty content (the daemon explicitly
+    /// pushed `left = ""` / `right = ""`) and absent content (no
+    /// `StatusUpdateMsg` yet) are distinguished by `forced_visible`,
+    /// not by `has_mux_session`.
+    pub fn should_render(&self) -> bool {
         if self.forced_visible == Some(false) {
             return false;
         }
         if self.forced_visible == Some(true) {
             return true;
         }
-        !self.left.is_empty() || !self.right.is_empty() || has_mux_session
+        !self.left.is_empty() || !self.right.is_empty()
     }
 }
 
@@ -82,7 +95,7 @@ mod tests {
     #[test]
     fn osc_row_auto_hides_when_empty_and_not_forced() {
         let row = OscRow::default();
-        assert!(!row.should_render(false));
+        assert!(!row.should_render());
     }
 
     #[test]
@@ -91,13 +104,18 @@ mod tests {
             left: "hi".to_string(),
             ..Default::default()
         };
-        assert!(row.should_render(false));
+        assert!(row.should_render());
     }
 
+    /// Mux attachment alone must NOT render the row — distinguishes
+    /// "daemon explicitly pushed empty content" (forced_visible Some(true))
+    /// from "no StatusUpdateMsg received yet" (both sides empty,
+    /// forced_visible None). Without this rule a freshly-attached tab
+    /// shows an empty OSC band before the daemon's first push.
     #[test]
-    fn osc_row_renders_when_mux_session_present_even_if_empty() {
+    fn osc_row_hides_when_only_mux_attached_with_no_content() {
         let row = OscRow::default();
-        assert!(row.should_render(true));
+        assert!(!row.should_render());
     }
 
     #[test]
@@ -107,7 +125,7 @@ mod tests {
             forced_visible: Some(false),
             ..Default::default()
         };
-        assert!(!row.should_render(false));
+        assert!(!row.should_render());
     }
 
     #[test]
@@ -116,7 +134,7 @@ mod tests {
             forced_visible: Some(true),
             ..Default::default()
         };
-        assert!(row.should_render(false));
+        assert!(row.should_render());
     }
 
     #[test]

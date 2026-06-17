@@ -173,28 +173,15 @@ impl StatusBarRuntime {
     /// - `mux_status`: `Some(StatusUpdateMsg)` when the daemon has
     ///   pushed status state for the active tab — wins over the OSC
     ///   `777;statusbar` layer
+    ///
+    /// SPEC US5: App Line 1/2 render the app's client-side templates
+    /// concurrently with the mux-daemon-supplied OSC row. The mux
+    /// session does NOT override or clear App Line 1/2.
     pub fn build_view_model(
         &self,
         settings: &StatusBarSettings,
         mux_session_name: Option<&str>,
         mux_status: Option<&mux_ipc::protocol::StatusUpdateMsg>,
-    ) -> StatusBarViewModel {
-        self.build_view_model_with_mux(settings, mux_session_name, mux_status, None)
-    }
-
-    /// SPEC US4 / FR11: same as [`Self::build_view_model`] but with the
-    /// `mux.statusbar.*` settings layered on top when the active tab is
-    /// mux-attached. The mux templates override the app's `line1_left` /
-    /// `line1_right` while attached (resolved through the same engine);
-    /// when `mux_statusbar.enabled` is false, both app rows are cleared so
-    /// only the daemon-pushed OSC row remains. With `mux_session_name`
-    /// None, the call collapses to the plain app statusbar.
-    pub fn build_view_model_with_mux(
-        &self,
-        settings: &StatusBarSettings,
-        mux_session_name: Option<&str>,
-        mux_status: Option<&mux_ipc::protocol::StatusUpdateMsg>,
-        mux_statusbar: Option<&crate::settings::MuxStatusbarSettings>,
     ) -> StatusBarViewModel {
         if !settings.enabled {
             return StatusBarViewModel::default();
@@ -227,33 +214,17 @@ impl StatusBarRuntime {
 
         // App rows: resolve each side through the engine + html
         // pipeline, with the (template, version-tuple) cache in
-        // front to short-circuit identical frames (NFR1).
-        //
-        // When the active tab is mux-attached AND `mux.statusbar.enabled`,
-        // the mux templates override `line1`'s left/right (SPEC US4 / FR11);
-        // when the mux statusbar is disabled while attached, both app rows
-        // are zeroed so only the daemon-pushed OSC row remains visible.
+        // front to short-circuit identical frames (NFR1). Mux
+        // attachment does NOT alter these — SPEC US5 requires the
+        // local templates to keep rendering alongside the OSC row.
         let mut cache = self.run_cache.lock();
-        let (app_line1, app_line2) = match (mux_session_name, mux_statusbar) {
-            (Some(_), Some(mux_sb)) if mux_sb.enabled => {
-                let line1 = AppRow {
-                    left: resolve_runs_cached(&self.engine, &mut cache, &mux_sb.left),
-                    right: resolve_runs_cached(&self.engine, &mut cache, &mux_sb.right),
-                };
-                (line1, AppRow::default())
-            }
-            (Some(_), Some(mux_sb)) if !mux_sb.enabled => (AppRow::default(), AppRow::default()),
-            _ => {
-                let line1 = AppRow {
-                    left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_left),
-                    right: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_right),
-                };
-                let line2 = AppRow {
-                    left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line2_left),
-                    right: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line2_right),
-                };
-                (line1, line2)
-            }
+        let app_line1 = AppRow {
+            left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_left),
+            right: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line1_right),
+        };
+        let app_line2 = AppRow {
+            left: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line2_left),
+            right: resolve_runs_cached(&self.engine, &mut cache, &settings.app_line2_right),
         };
         drop(cache);
 
@@ -584,6 +555,39 @@ mod tests {
         let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
         let vm = rt.build_view_model(&s, None, None);
         assert!(!vm.app_line2.has_content());
+    }
+
+    /// SPEC US5 regression: when the active tab is mux-attached, App Line
+    /// 1/2 MUST keep rendering the app's own templates. A prior implementation
+    /// short-circuited both rows on mux attach (clearing them entirely or
+    /// overwriting line 1 with `mux.statusbar.left/right`), which silently
+    /// broke the local app status-bar the moment the user attached to a mux
+    /// session.
+    #[test]
+    fn mux_attach_does_not_clear_app_rows() {
+        let mut s = settings_with("{time}", "");
+        s.app_line2_left = "app2".to_string();
+        let rt = StatusBarRuntime::new(&s, Arc::new(|| None), noop_wake());
+        let status = StatusUpdateMsg {
+            left: "mux-left".to_string(),
+            right: "mux-right".to_string(),
+        };
+        let vm = rt.build_view_model(&s, Some("main"), Some(&status));
+
+        // App Line 1 left ({time}) resolves to a non-empty run.
+        assert!(
+            !vm.app_line1.left.is_empty(),
+            "App Line 1 left must keep resolving its template while mux-attached"
+        );
+        assert_eq!(vm.app_line1.left[0].text.len(), 8); // HH:mm:ss
+                                                        // App Line 2 left (literal "app2") survives.
+        assert!(
+            vm.app_line2.has_content(),
+            "App Line 2 must keep its app-side template while mux-attached"
+        );
+        // And the mux daemon's row content lands on the OSC row, not App.
+        assert_eq!(vm.osc.left, "mux-left");
+        assert_eq!(vm.osc.right, "mux-right");
     }
 
     // ── Phase F: run-list LRU cache ────────────────────────────
