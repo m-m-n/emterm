@@ -822,7 +822,22 @@ impl App {
             extras.push(id);
         }
         extras.push(emoji_id);
-        let preferred_emoji_id = host_emoji_id.unwrap_or(emoji_id);
+        // Pick the preferred color-emoji source. Host wins only when
+        // the rasterizer reports it actually carries color glyphs it
+        // can paint — Windows' system "Noto Color Emoji" ships as
+        // COLRv1 + SVG (no CBDT strikes), and swash advertises the
+        // run as `Content::Color` but rasterizes nothing. Without
+        // this guard the chain marker would point at an empty face
+        // and every 🟢 / 😀 cluster would render as blank. Falling
+        // back to the bundled CBDT/CBLC font keeps color emoji
+        // visible on hosts whose system emoji font swash cannot
+        // raster. The unusable host font stays in the chain so a
+        // codepoint the bundled font misses still has a last-resort
+        // monochrome fallback before tofu.
+        let preferred_emoji_id = match host_emoji_id {
+            Some(host) if rasterizer.has_color(host) => host,
+            _ => emoji_id,
+        };
         #[cfg(not(test))]
         if let Some(id) = inconsolata_id {
             log::info!("font.base = {} (id={:?})", base_family, id);
@@ -842,7 +857,14 @@ impl App {
             );
         }
         match (host_emoji_id, settings.emoji_font.as_deref()) {
-            (Some(id), Some(family)) => log::info!("font.emoji = {} (id={:?})", family, id),
+            (Some(id), Some(family)) if preferred_emoji_id == id => {
+                log::info!("font.emoji = {} (id={:?})", family, id)
+            }
+            (Some(id), Some(family)) => log::warn!(
+                "font.emoji = bundled Noto Color Emoji (requested {:?} id={:?} has no rasterizable color glyphs)",
+                family,
+                id,
+            ),
             (None, Some(family)) => log::warn!(
                 "font.emoji = bundled Noto Color Emoji (requested {:?} not found on host)",
                 family
@@ -872,6 +894,91 @@ impl App {
             // bold ids are compile-time `None`.
             let _ = (base_bold_id, cjk_bold_id);
         }
+
+        // Font smoke diagnostic — release/non-test only. Forces the
+        // result into `emterm.log` even when the host has not enabled
+        // `log_recording_enabled`, so a Windows user can hand us the
+        // log file without editing settings.json first. Runs once at
+        // startup so the cost is bounded.
+        #[cfg(not(test))]
+        {
+            let probe_cp: u32 = 0x1F600; // 😀
+            let covers = rasterizer.has_codepoint(preferred_emoji_id, probe_cp);
+            let summary_chain: Vec<String> = chain
+                .chain()
+                .iter()
+                .map(|id| {
+                    resolver
+                        .font(*id)
+                        .map(|f| format!("{:?}={}", id, f.family))
+                        .unwrap_or_else(|| format!("{:?}=?", id))
+                })
+                .collect();
+            crate::logging::force_log_line(
+                log::Level::Warn,
+                &format!(
+                    "font.diag.chain = [{}] base={:?} emoji={:?} covers_U+1F600={}",
+                    summary_chain.join(", "),
+                    base_id,
+                    preferred_emoji_id,
+                    covers,
+                ),
+            );
+            log::warn!(
+                "font.diag.chain = [{}] base={:?} emoji={:?} covers_U+1F600={}",
+                summary_chain.join(", "),
+                base_id,
+                preferred_emoji_id,
+                covers,
+            );
+            // Shape + raster smoke test for U+1F600 at a representative
+            // terminal cell pixel size. Empty shape / None raster is the
+            // first visible symptom on Windows; the log line tells us
+            // which stage broke (charmap miss vs raster failure vs
+            // bitmap-strike unavailable).
+            let shaped = rasterizer.shape("\u{1F600}", preferred_emoji_id, 17.0);
+            let first = shaped.into_iter().next();
+            match first {
+                None => {
+                    let msg = format!(
+                        "font.diag.smoke: shape returned no glyphs for U+1F600 (font={:?})",
+                        preferred_emoji_id,
+                    );
+                    crate::logging::force_log_line(log::Level::Warn, &msg);
+                    log::warn!("{}", msg);
+                }
+                Some(g) => match rasterizer.raster(g.font, g.glyph_id, g.size_px) {
+                    None => {
+                        let msg = format!(
+                            "font.diag.smoke: raster returned None glyph_id={} size_px={} font={:?}",
+                            g.glyph_id, g.size_px, g.font,
+                        );
+                        crate::logging::force_log_line(log::Level::Warn, &msg);
+                        log::warn!("{}", msg);
+                    }
+                    Some(b) => {
+                        let nonzero = match b.format {
+                            crate::render::font::traits::AtlasFormat::Rgba => {
+                                b.pixels.chunks_exact(4).filter(|px| px[3] != 0).count()
+                            }
+                            _ => b.pixels.iter().filter(|&&v| v != 0).count(),
+                        };
+                        let msg = format!(
+                            "font.diag.smoke: raster ok format={:?} w={} h={} advance={:.1} bytes={} nonzero={}",
+                            b.format,
+                            b.width,
+                            b.height,
+                            b.advance,
+                            b.pixels.len(),
+                            nonzero,
+                        );
+                        crate::logging::force_log_line(log::Level::Warn, &msg);
+                        log::warn!("{}", msg);
+                    }
+                },
+            }
+        }
+
         (
             Arc::new(resolver),
             Arc::new(chain),

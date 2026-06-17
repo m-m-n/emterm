@@ -31,6 +31,27 @@ pub fn set_recording_enabled(enabled: bool) {
     RECORDING_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+/// Append a one-off diagnostic line to `emterm.log` when recording is
+/// enabled. Intended for startup probes (e.g. font/raster smoke checks)
+/// that should not go through the standard `log::warn!` macro to avoid
+/// duplication with the normal log path. No-op when recording is
+/// disabled, the file was never opened (debug builds), or on open
+/// failure.
+pub fn force_log_line(level: log::Level, message: &str) {
+    if !RECORDING_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(mut guard) = LOG_FILE.lock() else {
+        return;
+    };
+    let Some(file) = guard.as_mut() else {
+        return;
+    };
+    let line = format!("{} [{}][NATIVE-POC] {}\n", timestamp(), level, message);
+    let _ = file.write_all(line.as_bytes());
+    let _ = file.flush();
+}
+
 /// Open `emterm.log` in append mode. The directory mirrors the legacy
 /// Tauri build's `app_log_dir()`:
 /// - Linux:   `$XDG_DATA_HOME/net.laser5.app.emterm/logs`

@@ -66,6 +66,14 @@ impl Modifiers {
 pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
     use Key::*;
 
+    // Windows Backspace bypasses the xterm Alt-ESC prefix: the Win32
+    // Input Mode sequence carries modifiers inline, and prepending the
+    // ESC byte would corrupt the CSI.
+    #[cfg(windows)]
+    if matches!(key, Backspace) {
+        return encode_backspace_win32(mods);
+    }
+
     // ESC prefix for Alt-modified keys (xterm convention).
     let mut out: Vec<u8> = Vec::new();
     if mods.alt {
@@ -86,6 +94,10 @@ pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
         }
         Enter => out.push(b'\r'),
         Tab => out.push(b'\t'),
+        // Linux/macOS: 0x7f (DEL) matches xterm convention (terminfo
+        // kbs=^?), required by canonical-mode line editors (sudo prompt,
+        // ssh password, stty default erase character).
+        // Windows is handled by encode_backspace_win32 early-return above.
         Backspace => out.push(0x7f),
         Escape => out.push(0x1b),
         Up => out.extend_from_slice(b"\x1b[A"),
@@ -115,6 +127,40 @@ pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
         },
     }
     out
+}
+
+/// Encode Backspace for ConPTY in `PSEUDOCONSOLE_WIN32_INPUT_MODE`.
+///
+/// portable-pty 0.8 opens every Windows PTY with that flag (see
+/// `portable-pty-0.8.1/src/win/psuedocon.rs`), so ConPTY interprets
+/// incoming bytes as Win32 Input Mode VT key sequences rather than
+/// plain control characters. A raw `0x08` on this channel is decoded
+/// as `Ctrl+Backspace` and triggers PSReadLine / cmd's word-delete
+/// (`ssh-keygen[BS]` → `ssh-`). The full key-event sequence below
+/// keeps Backspace as a one-character delete and pipes modifier state
+/// through as proper INPUT_RECORD bits.
+///
+/// Sequence: `ESC [ Vk;Sc;Uc;Kd;Cs;Rc _`
+///   Vk=8 (VK_BACK), Sc=14 (0x0E scan code), Uc=8, Kd=1/0 (down/up),
+///   Cs=ControlKeyState bitmask, Rc=1 (repeat count).
+///
+/// Reference: Microsoft Terminal spec #4999 (Improved keyboard handling
+/// in conpty).
+#[cfg(windows)]
+fn encode_backspace_win32(mods: Modifiers) -> Vec<u8> {
+    // Bias toward the left-side modifier codes to match what an English
+    // PC keyboard's leftmost Shift/Ctrl/Alt physically reports.
+    let mut cs: u32 = 0;
+    if mods.shift {
+        cs |= 0x10; // SHIFT_PRESSED
+    }
+    if mods.ctrl {
+        cs |= 0x08; // LEFT_CTRL_PRESSED
+    }
+    if mods.alt {
+        cs |= 0x02; // LEFT_ALT_PRESSED
+    }
+    format!("\x1b[8;14;8;1;{cs};1_\x1b[8;14;8;0;{cs};1_").into_bytes()
 }
 
 /// Map a printable character to its Ctrl-modified byte (0x00..0x1f).
@@ -164,8 +210,39 @@ mod tests {
     fn enter_tab_backspace_escape() {
         assert_eq!(encode(Key::Enter, Modifiers::NONE), b"\r");
         assert_eq!(encode(Key::Tab, Modifiers::NONE), b"\t");
+        #[cfg(not(windows))]
         assert_eq!(encode(Key::Backspace, Modifiers::NONE), b"\x7f");
         assert_eq!(encode(Key::Escape, Modifiers::NONE), b"\x1b");
+    }
+
+    /// Windows Backspace must emit a Win32 Input Mode key event pair
+    /// (keyDown + keyUp) instead of a bare 0x08; ConPTY in
+    /// `PSEUDOCONSOLE_WIN32_INPUT_MODE` reinterprets the bare byte as
+    /// `Ctrl+Backspace`, which triggers PSReadLine / cmd word-delete.
+    #[cfg(windows)]
+    #[test]
+    fn backspace_emits_win32_input_mode_pair() {
+        assert_eq!(
+            encode(Key::Backspace, Modifiers::NONE),
+            b"\x1b[8;14;8;1;0;1_\x1b[8;14;8;0;0;1_"
+        );
+    }
+
+    /// Modifiers must thread through the Win32 Input Mode `Cs` field so
+    /// chords like `Shift+Backspace` reach PSReadLine intact.
+    #[cfg(windows)]
+    #[test]
+    fn backspace_win32_includes_modifier_bits() {
+        let bytes = encode(
+            Key::Backspace,
+            Modifiers {
+                ctrl: true,
+                shift: false,
+                alt: false,
+            },
+        );
+        // Left Ctrl pressed = 0x08
+        assert_eq!(bytes, b"\x1b[8;14;8;1;8;1_\x1b[8;14;8;0;8;1_");
     }
 
     #[test]

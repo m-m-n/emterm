@@ -405,6 +405,15 @@ impl GlyphRasterizer for SwashRasterizer {
             line_gap: m.leading * scale,
         })
     }
+
+    fn has_color(&self, font: FontId) -> bool {
+        self.inner
+            .lock()
+            .fonts
+            .get(&font)
+            .map(|f| f.has_color)
+            .unwrap_or(false)
+    }
 }
 
 // Silence: `offset` is kept for forward-compatibility with .ttc face
@@ -414,12 +423,24 @@ fn _offset_compat(f: &SwashFont) -> u32 {
     f.offset
 }
 
-/// Probe whether a font supplies color glyphs.
+/// Probe whether a font supplies color glyphs **that swash can actually
+/// rasterize**.
 ///
-/// We try a single render on a known emoji codepoint (U+1F600). If the
-/// font's charmap covers it and swash returns `Content::Color`, the font
-/// is color-capable; otherwise it is monochrome. For fonts that lack the
-/// probe codepoint we fall back to "no color".
+/// We try a single render on a known emoji codepoint (U+1F600). The
+/// font is color-capable only when swash returns `Content::Color`
+/// **and** the resulting placement has non-zero pixels. The placement
+/// check matters for fonts shipped on Windows as the system "Noto
+/// Color Emoji" (COLRv1 + SVG, e.g. the 24 MB build): swash advertises
+/// the run as `Content::Color` but rasterizes nothing — selecting that
+/// font as the preferred emoji source would silently drop every color
+/// emoji. By treating "color-tagged but empty raster" as monochrome,
+/// the chain builder falls back to the bundled CBDT/CBLC font which
+/// swash does raster correctly.
+///
+/// Source list intentionally excludes `Outline`: an outline-only emoji
+/// font (none exist in practice, but probe should not vouch for one)
+/// would otherwise be reported as color when only the monochrome
+/// fallback succeeded.
 fn probe_color_support(bytes: &[u8]) -> bool {
     let face = match FontRef::from_index(bytes, 0) {
         Some(f) => f,
@@ -434,7 +455,6 @@ fn probe_color_support(bytes: &[u8]) -> bool {
     let img = match Render::new(&[
         Source::ColorBitmap(StrikeWith::BestFit),
         Source::ColorOutline(0),
-        Source::Outline,
     ])
     .format(Format::Alpha)
     .offset(Vector::ZERO)
@@ -443,7 +463,7 @@ fn probe_color_support(bytes: &[u8]) -> bool {
         Some(img) => img,
         None => return false,
     };
-    matches!(img.content, Content::Color)
+    matches!(img.content, Content::Color) && img.placement.width > 0 && img.placement.height > 0
 }
 
 #[cfg(test)]
@@ -555,6 +575,31 @@ mod tests {
         let r = rasterizer_with_emoji();
         assert!(r.has_codepoint(FontId(1), 0x1F600));
         assert!(!r.has_codepoint(FontId(1), 0xE000_0001));
+    }
+
+    /// Bundled CBDT emoji font ingests with `has_color = true`. The
+    /// chain builder leans on this answer to decide whether a host
+    /// emoji font (e.g. Windows' COLRv1 build) should preempt bundled.
+    #[test]
+    fn has_color_true_for_bundled_emoji() {
+        let r = rasterizer_with_emoji();
+        assert!(r.has_color(FontId(1)));
+    }
+
+    /// CJK font has no color tables — `has_color` must be `false` so
+    /// the chain never picks it as a color-emoji source.
+    #[test]
+    fn has_color_false_for_cjk_font() {
+        let r = rasterizer_with_cjk();
+        assert!(!r.has_color(FontId(1)));
+    }
+
+    /// Unknown font id returns `false` rather than panicking — chain
+    /// builders may probe ids before all faces finish ingesting.
+    #[test]
+    fn has_color_false_for_unknown_font() {
+        let r = SwashRasterizer::with_subpixel(false);
+        assert!(!r.has_color(FontId(99)));
     }
 
     // ── variable_font_axes ────────────────────────────────────────────

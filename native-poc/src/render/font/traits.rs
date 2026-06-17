@@ -155,6 +155,17 @@ pub trait GlyphRasterizer: Send + Sync {
             line_gap: 0.0,
         })
     }
+
+    /// Whether `font` carries a color table this engine can actually
+    /// rasterize. Used by the chain builder to decide whether a
+    /// host-installed emoji font (e.g. system Noto Color Emoji on
+    /// Windows that ships as COLRv1 + SVG) should preempt the bundled
+    /// CBDT/CBLC fallback. The default returns `false`: engines that
+    /// cannot raster color glyphs are honest about it so the caller
+    /// keeps walking toward an engine that can.
+    fn has_color(&self, _font: FontId) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

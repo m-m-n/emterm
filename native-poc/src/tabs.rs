@@ -469,12 +469,26 @@ impl Tab {
                 // The daemon's continuous PTY stream: feed it into term_core
                 // as a normal byte stream (NOT a reset). Without this the
                 // mux session looks frozen after the initial Snapshot.
-                let (actions, evicted_total, pending_marks, pending_fold_marks) = {
+                let (actions, evicted_total, pending_marks, pending_fold_marks, device_response) = {
                     let mut c = self.core.lock();
                     let actions = c.process_pty_data_fully(&msg.payload);
+                    let device_response = c.take_response();
                     let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
-                    (actions, evicted_total, pending_marks, pending_fold_marks)
+                    (
+                        actions,
+                        evicted_total,
+                        pending_marks,
+                        pending_fold_marks,
+                        device_response,
+                    )
                 };
+                // Mirror the native pump path: route any device-status reply
+                // (e.g. CPR synthesized for a PSReadLine `\x1b[6n` query)
+                // back to the originating remote pane via PtyInput framing so
+                // PSReadLine cursor tracking stays accurate over a mux session.
+                if !device_response.is_empty() {
+                    self.write_device_response(device_response);
+                }
                 // Same drain/backfill as the native `pump` path so prompt
                 // marks and custom-fold begin/end pairs arriving over the mux
                 // stream are navigable / foldable too.
@@ -829,6 +843,13 @@ impl Tab {
             // (typical symptom: SKK `/smile` → 😄 only appears after
             // pressing space).
             c.flush_grapheme_buffer();
+            // Pick up any device-status / DA / XTWINOPS reply term_core
+            // synthesized while processing this chunk. PowerShell +
+            // PSReadLine issue `\x1b[6n` cursor-position queries during
+            // every line redraw; without writing the reply back into the
+            // PTY, PSReadLine recomputes the redraw against a stale
+            // cursor and a single Backspace erases multiple cells.
+            let device_response = c.take_response();
             // Drain the OSC 133 marks `term_core` captured during this pump
             // (each already stamped with its emit-time row + eviction count)
             // and read the current eviction total — all under the core lock
@@ -837,6 +858,9 @@ impl Tab {
             // `&mut self`.
             let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
             drop(c);
+            if !device_response.is_empty() {
+                self.write_device_response(device_response);
+            }
             self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
             if let Some(new_alt) = parse_alt_screen_action(&actions) {
                 self.alt_screen = new_alt;
@@ -1332,6 +1356,42 @@ impl Tab {
                 None => {
                     log::warn!(
                         "mux: write_input dropped {} bytes — tab {:?} attached \
+                         but no active pane id (group not yet seeded)",
+                        bytes.len(),
+                        self.title
+                    );
+                }
+            }
+        } else {
+            self.write(bytes);
+        }
+    }
+
+    /// Route a terminal-generated device response (DSR/DA/XTWINOPS reply from
+    /// `term_core`) back to the active pane, mirroring `write_input`'s routing
+    /// decision.
+    ///
+    /// In mux mode the `emterm mux` bridge **drops raw stdin bytes**, so the
+    /// response must be wrapped as a `PtyInput` frame — identical to how user
+    /// keystrokes are routed. Outside mux mode a plain raw PTY write is used.
+    ///
+    /// The two-step gate from `write_input` is replicated here: when attached
+    /// but no active pane id is yet available the bytes are dropped with a
+    /// warning (observable failure mode) rather than falling back to a raw
+    /// write that the bridge would silently discard anyway.
+    fn write_device_response(&self, bytes: Vec<u8>) {
+        if self.mux_session_name.is_some() {
+            match self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
+                Some(pane_id) => {
+                    self.send_control(&MuxMessage {
+                        msg_type: MessageType::PtyInput,
+                        pane_id,
+                        payload: bytes,
+                    });
+                }
+                None => {
+                    log::warn!(
+                        "mux: write_device_response dropped {} bytes — tab {:?} attached \
                          but no active pane id (group not yet seeded)",
                         bytes.len(),
                         self.title

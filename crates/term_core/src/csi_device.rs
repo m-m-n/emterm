@@ -45,6 +45,27 @@ impl TerminalCore {
     pub fn get_response_bytes(&self) -> Vec<u8> {
         self.response_buffer[..self.response_len as usize].to_vec()
     }
+
+    /// Take the pending device response and clear the buffer.
+    ///
+    /// The native-poc embedder calls this after every `process_pty_data_fully`
+    /// to forward DSR / DA / XTWINOPS replies back into the PTY's input side.
+    /// Without it PSReadLine (PowerShell, Windows) issues `\x1b[6n` cursor-
+    /// position queries during line redraws, never receives an answer, and
+    /// recomputes the redraw against a stale cursor — manifesting as
+    /// backspace erasing far more characters than the one the user pressed.
+    /// The WebView build keeps reading via `get_response_bytes` so this is an
+    /// additive API.
+    pub fn take_response(&mut self) -> Vec<u8> {
+        let len = self.response_len as usize;
+        if len == 0 {
+            return Vec::new();
+        }
+        let out = self.response_buffer[..len].to_vec();
+        self.response_buffer[..len].fill(0);
+        self.response_len = 0;
+        out
+    }
 }
 
 impl TerminalCore {
