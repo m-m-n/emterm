@@ -391,13 +391,19 @@ mod tests {
         // env mutation (matches the existing `expand_home` test).
         let prev_path = std::env::var("PATH").unwrap_or_default();
         let new_path = format!("{}:{}", dir.display(), prev_path);
-        std::env::set_var("PATH", &new_path);
+        // SAFETY: tests in this crate run single-threaded for env mutation
+        // (see `expand_home`).
+        unsafe {
+            std::env::set_var("PATH", &new_path);
+        }
 
         super::tick(&cwd_source, &cache, &version, &wake);
 
         // Restore PATH before any assertion so a failure leaves the
         // process env clean for siblings.
-        std::env::set_var("PATH", &prev_path);
+        unsafe {
+            std::env::set_var("PATH", &prev_path);
+        }
 
         // Inspect the counter: one `rev-parse` + one `status`. The
         // double-spawn bug used to produce TWO `status` entries.

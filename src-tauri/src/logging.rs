@@ -185,14 +185,16 @@ pub fn init() {
         // opt back into the verbose stream with e.g.
         // `RUST_LOG=wgpu_core=info`.
         if std::env::var_os("RUST_LOG").is_none() {
-            // 2024-edition note: when this crate eventually moves to
-            // edition 2024 `set_var` becomes `unsafe`. Until then the
-            // call is safe under the single-threaded-startup invariant
-            // above.
-            std::env::set_var(
-                "RUST_LOG",
-                "info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,naga=warn",
-            );
+            // SAFETY: `init()` is gated by `INIT.call_once`, so this runs
+            // exactly once from the main thread before any background
+            // thread spawns. Editing the process env table is sound under
+            // that invariant.
+            unsafe {
+                std::env::set_var(
+                    "RUST_LOG",
+                    "info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,naga=warn",
+                );
+            }
         }
         let mut builder =
             env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));

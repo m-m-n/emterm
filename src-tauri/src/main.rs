@@ -63,19 +63,43 @@ fn build_event_loop() -> EventLoop<()> {
 }
 
 fn main() {
-    logging::init();
-
     let args: Vec<String> = std::env::args().collect();
 
-    // CLI subcommand dispatch (markdown / json / yaml / image). Bare-word
-    // subcommands are recognized first so the CLI-only build can dispatch
-    // them without touching any GUI subsystem.
+    // CLI subcommand dispatch (markdown / json / yaml / image / mux).
+    // Bare-word subcommands are recognized BEFORE `logging::init()` because
+    // each subcommand owns its own logger (mux bridge / daemon write to
+    // dedicated log files via `env_logger::Builder::init`, which panics if
+    // a global logger was already installed). Subcommands that need a
+    // logger install one themselves; the rest run unlogged.
     if let Some(sub) = args.get(1).map(|s| s.as_str()) {
         if matches!(sub, "markdown" | "json" | "yaml" | "image") {
             let code = emterm::cli::run(&args[1..]);
             std::process::exit(code);
         }
+        // `emterm mux …` — terminal multiplexer CLI bridge / daemon entry.
+        // The mux subsystem is gated behind the GUI feature today (the
+        // daemon spawns child PTYs and ships with the same binary the user
+        // launches as the terminal). CLI-only builds error out cleanly.
+        if sub == "mux" {
+            #[cfg(feature = "gui")]
+            {
+                let code = emterm::mux::cli::run(&args[2..]);
+                std::process::exit(code);
+            }
+            #[cfg(not(feature = "gui"))]
+            {
+                eprintln!(
+                    "emterm: `mux` is not available in this CLI-only build.\n\
+                     Install the GUI build (`emterm`) to use `emterm mux`."
+                );
+                std::process::exit(2);
+            }
+        }
     }
+
+    // No subcommand matched — proceed to the GUI / image-viewer / settings
+    // path. The GUI owns the global logger.
+    logging::init();
 
     #[cfg(feature = "gui")]
     {

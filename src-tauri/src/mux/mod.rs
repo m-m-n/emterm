@@ -23,8 +23,15 @@
 #![allow(dead_code)]
 
 pub mod apc;
+pub mod bridge;
+pub mod cli;
+pub mod daemon;
 pub mod dialog;
+pub mod ipc;
 pub mod prefix;
+pub mod scrollback_buffer;
+pub mod session;
+pub mod snapshot;
 pub mod tmux_conf;
 pub mod tmux_import;
 pub mod window_group;

@@ -494,7 +494,11 @@ mod tests {
         // Unconditionally remove just in case a previous test in this
         // process set it (each test owns its key naming so the global
         // env stays untouched).
-        std::env::remove_var(key);
+        // SAFETY: The chosen key is dedicated to this test and is never
+        // read by other threads; the global env is left untouched.
+        unsafe {
+            std::env::remove_var(key);
+        }
         assert!(env.get(key).is_none());
     }
 }

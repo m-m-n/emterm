@@ -7,7 +7,9 @@
 //! retargeting the `on_bytes` callback at the parser entry point.
 
 pub mod input;
+pub mod passthrough_scanner;
 pub mod ring;
+pub mod visibility;
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
