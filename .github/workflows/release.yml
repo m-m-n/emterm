@@ -31,23 +31,27 @@ jobs:
 
       - name: Get version from tag
         id: get-version
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          GITHUB_REF_VAR: ${{ github.ref }}
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          if [ -n "$INPUT_TAG" ]; then
+            echo "version=$INPUT_TAG" >> "$GITHUB_OUTPUT"
           else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "version=${GITHUB_REF_VAR#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Extract tag message
         id: tag-message
+        env:
+          TAG_NAME: ${{ steps.get-version.outputs.version }}
         run: |
-          TAG_NAME="${{ steps.get-version.outputs.version }}"
           TAG_MESSAGE=$(git tag -l --format='%(contents)' "$TAG_NAME")
           {
             echo 'message<<EOF'
             echo "$TAG_MESSAGE"
             echo 'EOF'
-          } >> $GITHUB_OUTPUT
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         id: create-release
@@ -97,9 +101,10 @@ jobs:
 
       - name: Set version from tag
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
         run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          VERSION="${VERSION#v}"
+          VERSION="${RELEASE_VERSION#v}"
           echo "Setting version to $VERSION"
           sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
@@ -113,10 +118,12 @@ jobs:
       - name: Upload GUI deb to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release upload "${{ needs.create-release.outputs.version }}" \
+          gh release upload "$RELEASE_VERSION" \
             build/emterm_*.deb \
-            --repo "${{ github.repository }}"
+            --repo "$REPO"
 
   build-cli:
     needs: create-release
@@ -137,9 +144,10 @@ jobs:
 
       - name: Set version from tag
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
         run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          VERSION="${VERSION#v}"
+          VERSION="${RELEASE_VERSION#v}"
           sed -i -E "s/^version = \"[^\"]+\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
 
       - name: Build CLI deb package
@@ -148,10 +156,12 @@ jobs:
       - name: Upload CLI deb to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release upload "${{ needs.create-release.outputs.version }}" \
+          gh release upload "$RELEASE_VERSION" \
             build/emterm-cli_*.deb \
-            --repo "${{ github.repository }}"
+            --repo "$REPO"
 
   build-windows:
     needs: create-release
@@ -177,9 +187,10 @@ jobs:
 
       - name: Set version from tag
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
         run: |
-          VERSION="${{ needs.create-release.outputs.version }}"
-          VERSION="${VERSION#v}"
+          VERSION="${RELEASE_VERSION#v}"
           echo "Setting version to $VERSION"
           sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
@@ -205,10 +216,12 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release upload "${{ needs.create-release.outputs.version }}" \
+          gh release upload "$RELEASE_VERSION" \
             "src-tauri/target-win/x86_64-pc-windows-msvc/release/emterm.exe" \
-            --repo "${{ github.repository }}"
+            --repo "$REPO"
 
   publish-release:
     needs: [create-release, build-linux, build-cli, build-windows]
@@ -217,7 +230,9 @@ jobs:
       - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         run: |
-          gh api repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }} \
+          gh api "repos/${REPO}/releases/${RELEASE_ID}" \
             --method PATCH \
             -f draft=false
