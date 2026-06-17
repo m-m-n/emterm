@@ -2010,6 +2010,47 @@ fn is_skk_swallowed_chord(logical_key: &WinitKey, mods: Modifiers) -> bool {
 }
 
 fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
+    // Named keys take precedence over the printable fast path. winit on
+    // Windows fills `event.text` for Backspace with `"\x7f"` (DEL); if we
+    // routed that through the fast path the PTY would receive DEL, which
+    // ConPTY converts to a `Backspace + Ctrl` INPUT_RECORD that PSReadLine
+    // binds to BackwardKillWord — `ssh[BS]` then wipes the whole token.
+    // Resolving named keys first sends 0x08 (BS, Ctrl+H) instead, which
+    // ConPTY passes through as a plain Backspace.
+    let named_key: Option<Key> = match &event.logical_key {
+        WinitKey::Named(NamedKey::Enter) => Some(Key::Enter),
+        WinitKey::Named(NamedKey::Tab) => Some(Key::Tab),
+        WinitKey::Named(NamedKey::Backspace) => Some(Key::Backspace),
+        WinitKey::Named(NamedKey::Escape) => Some(Key::Escape),
+        WinitKey::Named(NamedKey::ArrowUp) => Some(Key::Up),
+        WinitKey::Named(NamedKey::ArrowDown) => Some(Key::Down),
+        WinitKey::Named(NamedKey::ArrowLeft) => Some(Key::Left),
+        WinitKey::Named(NamedKey::ArrowRight) => Some(Key::Right),
+        WinitKey::Named(NamedKey::Home) => Some(Key::Home),
+        WinitKey::Named(NamedKey::End) => Some(Key::End),
+        WinitKey::Named(NamedKey::PageUp) => Some(Key::PageUp),
+        WinitKey::Named(NamedKey::PageDown) => Some(Key::PageDown),
+        WinitKey::Named(NamedKey::Delete) => Some(Key::Delete),
+        WinitKey::Named(NamedKey::Insert) => Some(Key::Insert),
+        WinitKey::Named(NamedKey::F1) => Some(Key::F(1)),
+        WinitKey::Named(NamedKey::F2) => Some(Key::F(2)),
+        WinitKey::Named(NamedKey::F3) => Some(Key::F(3)),
+        WinitKey::Named(NamedKey::F4) => Some(Key::F(4)),
+        WinitKey::Named(NamedKey::F5) => Some(Key::F(5)),
+        WinitKey::Named(NamedKey::F6) => Some(Key::F(6)),
+        WinitKey::Named(NamedKey::F7) => Some(Key::F(7)),
+        WinitKey::Named(NamedKey::F8) => Some(Key::F(8)),
+        WinitKey::Named(NamedKey::F9) => Some(Key::F(9)),
+        WinitKey::Named(NamedKey::F10) => Some(Key::F(10)),
+        WinitKey::Named(NamedKey::F11) => Some(Key::F(11)),
+        WinitKey::Named(NamedKey::F12) => Some(Key::F(12)),
+        _ => None,
+    };
+    if let Some(key) = named_key {
+        let bytes = encode(key, mods);
+        return if bytes.is_empty() { None } else { Some(bytes) };
+    }
+
     // Fast path for plain printable text — winit already accounts for the
     // current keyboard layout (X11 / Wayland / Win32). When IME is
     // composing, winit suppresses `text` and routes the result via
@@ -2028,33 +2069,7 @@ fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
             let c = chars.next()?;
             Key::Char(c)
         }
-        WinitKey::Named(NamedKey::Enter) => Key::Enter,
-        WinitKey::Named(NamedKey::Tab) => Key::Tab,
-        WinitKey::Named(NamedKey::Backspace) => Key::Backspace,
-        WinitKey::Named(NamedKey::Escape) => Key::Escape,
         WinitKey::Named(NamedKey::Space) => Key::Char(' '),
-        WinitKey::Named(NamedKey::ArrowUp) => Key::Up,
-        WinitKey::Named(NamedKey::ArrowDown) => Key::Down,
-        WinitKey::Named(NamedKey::ArrowLeft) => Key::Left,
-        WinitKey::Named(NamedKey::ArrowRight) => Key::Right,
-        WinitKey::Named(NamedKey::Home) => Key::Home,
-        WinitKey::Named(NamedKey::End) => Key::End,
-        WinitKey::Named(NamedKey::PageUp) => Key::PageUp,
-        WinitKey::Named(NamedKey::PageDown) => Key::PageDown,
-        WinitKey::Named(NamedKey::Delete) => Key::Delete,
-        WinitKey::Named(NamedKey::Insert) => Key::Insert,
-        WinitKey::Named(NamedKey::F1) => Key::F(1),
-        WinitKey::Named(NamedKey::F2) => Key::F(2),
-        WinitKey::Named(NamedKey::F3) => Key::F(3),
-        WinitKey::Named(NamedKey::F4) => Key::F(4),
-        WinitKey::Named(NamedKey::F5) => Key::F(5),
-        WinitKey::Named(NamedKey::F6) => Key::F(6),
-        WinitKey::Named(NamedKey::F7) => Key::F(7),
-        WinitKey::Named(NamedKey::F8) => Key::F(8),
-        WinitKey::Named(NamedKey::F9) => Key::F(9),
-        WinitKey::Named(NamedKey::F10) => Key::F(10),
-        WinitKey::Named(NamedKey::F11) => Key::F(11),
-        WinitKey::Named(NamedKey::F12) => Key::F(12),
         _ => return None,
     };
     let bytes = encode(key, mods);
