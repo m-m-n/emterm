@@ -60,7 +60,7 @@ As a user, I want mux UI settings to take effect on save so that I don't restart
 - **FR3 — APC control send path**: a `send_control(msg_type, pane_id, payload)` that APC-encodes a `mux_ipc::protocol::MuxMessage` and writes it to the active PTY (`writeDirect` equivalent). Fire-and-forget; responses arrive as inbound APC. native never opens the daemon socket.
 - **FR4 — Inbound message handling**: extend `Tab::apply_mux_message` to handle `PaneCreated`, `SwitchWindow`, `RenameWindow`, `PtyExited` (per-pane removal), and to ingest `SessionInfo.windows` / `active_window_index` from `Welcome`.
 - **FR5 — Window switch**: sub-tab click and `PrefixAction::{NextWindow, PrevWindow, SelectWindow}` update the local active index, send `SwitchWindow`, and apply the daemon snapshot.
-- **FR6 — New window**: `prefix c` (`PrefixAction::NewWindow`) sends `CreateWindow`; `PaneCreated` appends the window to the list.
+- **FR6 — New window**: `prefix c` (`PrefixAction::NewWindow`) sends `CreateWindow`; `PaneCreated` appends the window to the list. When the appended window becomes the active sub-tab (per `MuxWindowGroup::push`), the active terminal core is also reset (`reset_and_replay(b"")` via the shared `reset_frame_for_replay` helper) so the new tab opens on a clean screen and any pre-existing absolute-row selection / press anchor is dropped via `pending_frame_reset`.
 - **FR7 — Rename window**: `prefix ,` opens an egui rename dialog; on confirm, optimistic local label update + send `RenameWindow { name }` with the active pane id. Inbound `RenameWindow` from the daemon also updates the label.
 - **FR8 — Move window**: `prefix m` opens an egui move dialog; on confirm, optimistic local reorder + send `MoveWindow { target_index }`. The daemon does NOT broadcast the new order, so local state is authoritative; roll back on send failure.
 - **FR9 — Window close**: inbound `PtyExited` removes the matching window/pane; collapsing to one window dissolves the group.
@@ -99,6 +99,7 @@ prefix c ─▶ PrefixAction::NewWindow ─▶ send_control(CreateWindow) ─▶
                                                                                    │
 PaneCreated APC ◀──────────────────────────────────────────────────────────────────┘
    └─▶ Tab::apply_mux_message ─▶ windows.push / pane_ids.push ─▶ tab bar re-render
+                              └─▶ reset_frame_for_replay(b"") ─▶ screen clear + pending_frame_reset latch
 
 sub-tab click / prefix n ─▶ active_window_index = i ─▶ send_control(SwitchWindow, pane_ids[i])
    └─▶ daemon Snapshot APC ─▶ reset_and_replay ─▶ screen swap
@@ -109,7 +110,7 @@ sub-tab click / prefix n ─▶ active_window_index = i ─▶ send_control(Swit
 | Action | Outbound MuxMessage | Inbound effect |
 |--------|---------------------|----------------|
 | attach | (existing) | `Welcome.SessionInfo{ windows, active_window_index }` → seed window list |
-| new window | `CreateWindow` | `PaneCreated{ pane_id }` → append window |
+| new window | `CreateWindow` | `PaneCreated{ pane_id }` → append window + reset active core (via `reset_frame_for_replay`) |
 | switch | `SwitchWindow` (pane_id) | `Snapshot` → screen swap; `SwitchWindow` (remote) → sync active index |
 | rename | `RenameWindow{ name }` (active pane) | `RenameWindow{ name }` → update label |
 | move | `MoveWindow{ target_index }` | none (daemon does not broadcast); local optimistic |
@@ -153,7 +154,7 @@ native-poc/src/
 ## Test Scenarios
 
 ### Unit Tests
-- [ ] `apply_mux_message` PaneCreated appends a window + pane id.
+- [ ] `apply_mux_message` PaneCreated appends a window + pane id, resets the active terminal core (via `reset_frame_for_replay(b"")`), and latches `pending_frame_reset` so any pre-existing selection is dropped.
 - [ ] `apply_mux_message` PtyExited removes the matching window; one-window collapse dissolves the group.
 - [ ] `apply_mux_message` RenameWindow updates the label by window id.
 - [ ] Welcome ingests `SessionInfo.windows` + `active_window_index`.

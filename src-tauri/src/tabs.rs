@@ -391,6 +391,59 @@ impl Tab {
         }
     }
 
+    /// Rebuild the absolute-row frame from a replay payload.
+    ///
+    /// Shared by every code path that swaps in a fresh `term_core` frame:
+    /// `Snapshot` / `SnapshotRestore` replay the daemon-captured bytes, and
+    /// `PaneCreated` calls with an empty payload to reset the tab when a new
+    /// mux window becomes active. Centralising the recipe keeps the
+    /// callers in lockstep — adding a future field (e.g. another
+    /// frame-keyed cache) only needs to land here, not at every site.
+    ///
+    /// Recipe:
+    /// - clear prompts (they referenced the discarded frame's rows)
+    /// - rebuild the fold manager with the current fold-enable preference
+    /// - drop any in-flight custom-fold `begin` (belonged to the discarded frame)
+    /// - lock the core, `reset_and_replay`, drain marks
+    /// - update `evicted_baseline` and call `backfill_marks` so
+    ///   `backfill_prompt_marks` latches `pending_frame_reset` (App::pump_all
+    ///   reads that latch to drop the now-stale absolute-row selection /
+    ///   press anchor — without this, a selection from the previous frame
+    ///   addresses rows that no longer mean the same thing)
+    /// - reseed `alt_screen` to false (term_core::reset returns to the
+    ///   primary buffer) and let any buffer-switch action in the replay
+    ///   override
+    ///
+    /// Returns the mode actions accumulated during the replay so a caller
+    /// (e.g. Snapshot's debug log) can use them.
+    fn reset_frame_for_replay(&mut self, payload: &[u8]) -> Vec<u8> {
+        self.prompts.clear();
+        self.folds = Self::new_fold_manager(self.fold_enabled);
+        self.pending_fold_begin = None;
+        let (actions, evicted_total, pending_marks, pending_fold_marks) = {
+            let mut c = self.core.lock();
+            let actions = c.reset_and_replay(payload);
+            let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
+            (actions, evicted_total, pending_marks, pending_fold_marks)
+        };
+        // Unconditionally latch the frame-reset flag here, before assigning
+        // evicted_baseline.  backfill_prompt_marks's in-band detector
+        // (`evicted_total < self.evicted_baseline`) cannot fire at this point
+        // because `evicted_total` was just computed from a freshly-reset core
+        // whose own eviction counter is 0, so both sides of the comparison
+        // would be equal — the condition would never be true.  The helper's
+        // contract is "the previous frame was discarded", so the latch is
+        // unconditional regardless of eviction counts.
+        self.pending_frame_reset = true;
+        self.evicted_baseline = evicted_total;
+        self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
+        self.alt_screen = false;
+        if let Some(new_alt) = parse_alt_screen_action(&actions) {
+            self.alt_screen = new_alt;
+        }
+        actions
+    }
+
     /// Route one decoded mux message into this tab. Called by `App::pump_all`
     /// after the APC decoder ([`crate::mux::apc::try_decode_emterm_mux`])
     /// produced a typed `MuxMessage`. Returns true when the visible state
@@ -405,39 +458,12 @@ impl Tab {
     pub fn apply_mux_message(&mut self, msg: MuxMessage) -> bool {
         match msg.msg_type {
             MessageType::Snapshot | MessageType::SnapshotRestore => {
-                // `reset_and_replay` discards all scrollback and zeroes the
-                // eviction counter, so the absolute line frame is rebuilt
-                // from scratch. Drop the resolved tracker, take a fresh
-                // eviction baseline, then backfill the replayed bytes' marks
-                // — each captured by `term_core` during the replay with its
-                // own emit-time row, so the whole snapshot's history no
-                // longer collapses onto one line.
-                self.prompts.clear();
-                // Fold regions key off the same absolute frame as the prompt
-                // marks, so a snapshot replay (which rebuilds that frame from
-                // scratch) must discard them too — `backfill_prompt_marks`
-                // re-registers any C→D pairs the replay carries, and
-                // `backfill_fold_marks` re-registers any begin→end pairs.
-                // Rebuild with the tab's fold-enable preference so a disabled
-                // tab does not silently re-enable folding after a replay.
-                self.folds = Self::new_fold_manager(self.fold_enabled);
-                // Any in-flight custom-fold `begin` belonged to the old frame;
-                // the replay rebuilds the frame from scratch, so drop it.
-                self.pending_fold_begin = None;
-                let (actions, evicted_total, pending_marks, pending_fold_marks) = {
-                    let mut c = self.core.lock();
-                    let actions = c.reset_and_replay(&msg.payload);
-                    let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
-                    (actions, evicted_total, pending_marks, pending_fold_marks)
-                };
-                self.evicted_baseline = evicted_total;
-                self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
-                // A snapshot captured while a full-screen app was running
-                // carries its buffer-switch sequences; mirror the replayed
-                // end state onto the tab flag.
-                if let Some(new_alt) = parse_alt_screen_action(&actions) {
-                    self.alt_screen = new_alt;
-                }
+                // Replay the daemon-captured bytes onto a fresh frame.
+                // `reset_frame_for_replay` owns the recipe (prompt clear,
+                // fold rebuild, drain + backfill marks so
+                // `pending_frame_reset` latches, alt_screen reseed) so the
+                // PaneCreated path stays in lockstep.
+                let _actions = self.reset_frame_for_replay(&msg.payload);
                 log::debug!(
                     "mux apc: applied {:?} ({} bytes) for tab {:?}",
                     msg.msg_type,
@@ -681,6 +707,17 @@ impl Tab {
                     pending,
                     self.title
                 );
+                // The newly created window becomes the active sub-tab (see
+                // `MuxWindowGroup::push`). Without a core reset here, the
+                // previous active window's grid + scrollback stay painted
+                // until the new shell's first byte arrives — and even after
+                // it does, the old content lingers in scrollback. The
+                // shared `reset_frame_for_replay` recipe drops prompts /
+                // folds, runs `reset_and_replay(b"")`, and routes through
+                // `backfill_marks` so `pending_frame_reset` latches and
+                // any active selection / press anchor on this tab is
+                // dropped by `App::pump_all`.
+                let _ = self.reset_frame_for_replay(b"");
                 // The daemon spawns every new PTY at a hardcoded 80x24
                 // (`handle_create_window`); without this, the pane stays at
                 // 80 columns even though the GUI grid is wider, so output
