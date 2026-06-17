@@ -54,7 +54,8 @@ else
 fi
 PACKAGE_NAME="${DEB_PACKAGE}_${VERSION}_${DEB_ARCH}"
 BUILD_DIR="build/dpkg/${PACKAGE_NAME}"
-BINARY_PATH="src-tauri/target/release/${PROJECT_NAME}"
+CARGO_TARGET_HOST="src-tauri/target-host"
+BINARY_PATH="${CARGO_TARGET_HOST}/release/${PROJECT_NAME}"
 
 echo ""
 echo -e "${BLUE}═══════════════════════════════════════${NC}"
@@ -96,14 +97,28 @@ fi
 # Build the binary
 if [ -n "$CLI_ONLY" ]; then
     echo "Building CLI-only binary..."
-    if ! cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features; then
+    if ! CARGO_TARGET_DIR="${CARGO_TARGET_HOST}" cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features; then
         echo -e "${RED}Failed to build CLI-only binary${NC}"
         exit 1
     fi
 else
-    echo "Building Tauri application..."
-    if ! bun tauri build --no-bundle; then
-        echo -e "${RED}Failed to build Tauri application${NC}"
+    echo "Building web bundles (viewer + settings)..."
+    if ! bun run build:viewer; then
+        echo -e "${RED}Failed to build Markdown viewer bundle${NC}"
+        exit 1
+    fi
+    if ! bun run build:settings; then
+        echo -e "${RED}Failed to build settings window bundle${NC}"
+        exit 1
+    fi
+    echo "Generating app icons..."
+    if ! bash scripts/generate-icons.sh; then
+        echo -e "${RED}Failed to generate app icons${NC}"
+        exit 1
+    fi
+    echo "Building emterm (GUI) binary..."
+    if ! CARGO_TARGET_DIR="${CARGO_TARGET_HOST}" cargo build --manifest-path src-tauri/Cargo.toml --release; then
+        echo -e "${RED}Failed to build emterm binary${NC}"
         exit 1
     fi
 fi
@@ -158,7 +173,7 @@ if [ -z "$CLI_ONLY" ]; then
     cat > "${BUILD_DIR}/usr/share/applications/${PROJECT_NAME}.desktop" << EOF
 [Desktop Entry]
 Name=eMterm
-Comment=Cross-platform terminal emulator with rich rendering capabilities
+Comment=Native terminal emulator with rich rendering capabilities
 Exec=${PROJECT_NAME}
 Icon=${PROJECT_NAME}
 Terminal=false
@@ -199,12 +214,14 @@ Architecture: ${DEB_ARCH}
 Maintainer: m-m-n <51132276+m-m-n@users.noreply.github.com>
 Depends: libc6
 Description: CLI tools for eMterm terminal emulator
- Command-line tools for displaying images and Markdown in
- compatible terminal emulators.
+ Command-line tools for displaying images, Markdown, and structured
+ data in compatible terminal emulators.
  .
  Commands:
   - emterm image: Display images via Kitty/SIXEL protocol
   - emterm markdown: Display Markdown via OSC extension
+  - emterm json: Display JSON via OSC extension
+  - emterm yaml: Display YAML via OSC extension
 EOF
 else
     cat > "${BUILD_DIR}/DEBIAN/control" << 'EOF'
@@ -215,16 +232,17 @@ Priority: optional
 Architecture: ${DEB_ARCH}
 Maintainer: m-m-n <51132276+m-m-n@users.noreply.github.com>
 Depends: libc6, libwebkit2gtk-4.1-0, libgtk-3-0, libglib2.0-0
-Description: Cross-platform terminal emulator with rich rendering
- A modern terminal emulator built with Tauri, featuring rich rendering
- capabilities including inline images and Markdown display.
+Description: Native terminal emulator with rich rendering capabilities
+ A modern terminal emulator with a native wgpu+swash render pipeline,
+ inline image protocols (Kitty / SIXEL), and child WebView windows for
+ Markdown / JSON / YAML viewing and the settings panel.
  .
  Features:
   - Full ANSI control sequence support
   - Kitty Graphics Protocol / SIXEL for inline images
-  - Custom OSC extension for Markdown rendering
-  - WebView-based rich content display
+  - Custom OSC extension for Markdown / JSON / YAML rendering
   - Low-latency typing performance
+  - tmux-style multiplexing (windows / tabs / panes)
 EOF
 fi
 

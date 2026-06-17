@@ -7,33 +7,52 @@ ifeq ($(findstring .,$(VERSION)),)
   VERSION := 0.0.0-$(VERSION)
 endif
 
-.PHONY: dev build win-build dpkg install clean help setup
+CARGO_TARGET_HOST := src-tauri/target-host
+CARGO_TARGET_WIN  := src-tauri/target-win
+MANIFEST := --manifest-path src-tauri/Cargo.toml
+
+.PHONY: help setup viewer settings web dev build cli-build win-build dpkg cli-dpkg install clean
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-setup: ## Install required tools and dependencies
-	rustup target add wasm32-unknown-unknown
-	cargo install wasm-pack
+setup: ## Install required toolchains and bun deps
+	rustup target add x86_64-pc-windows-msvc
+	cargo install cargo-xwin
 	bun install
 
-dev: ## Run in development mode
-	bun tauri dev
+viewer: ## Build the Markdown viewer web bundle (src-tauri/viewer/dist)
+	bun run build:viewer
 
-build: ## Build release (deb/rpm/nsis) with git version
+settings: ## Build the settings window web bundle (src-tauri/settings/dist)
+	bun run build:settings
+
+web: viewer settings ## Build both web bundles
+
+dev: web ## Run eMterm (debug build, default GUI feature)
+	CARGO_TARGET_DIR=src-tauri/target cargo run $(MANIFEST)
+
+build: web ## Release build (GUI, Linux host)
 	@echo "Building version: $(VERSION)"
-	bun tauri build --config '{"version":"$(VERSION)"}'
+	CARGO_TARGET_DIR=$(CARGO_TARGET_HOST) cargo build --release $(MANIFEST)
 
-win-build: ## Build Windows release (cross-compile with cargo-xwin)
+cli-build: ## Release build (CLI only, --no-default-features)
+	CARGO_TARGET_DIR=$(CARGO_TARGET_HOST) cargo build --release --no-default-features $(MANIFEST)
+
+win-build: web ## Windows cross-build via cargo-xwin (emterm.exe)
 	@echo "Building version: $(VERSION) for Windows"
-	bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --config '{"version":"$(VERSION)"}'
+	CARGO_TARGET_DIR=$(CARGO_TARGET_WIN) cargo xwin build --release --target x86_64-pc-windows-msvc $(MANIFEST)
 
-dpkg: setup ## Build custom dpkg package
+dpkg: setup web ## Build the GUI deb package (build/emterm_<ver>_<arch>.deb)
 	bash scripts/build-dpkg.sh
 
-install: build ## Build and install deb package
-	sudo dpkg -i src-tauri/target/release/bundle/deb/emterm_$(VERSION)_*.deb
+cli-dpkg: ## Build the CLI-only deb package (build/emterm-cli_<ver>_<arch>.deb)
+	EMTERM_CLI_ONLY=1 bash scripts/build-dpkg.sh
 
-clean: ## Clean build artifacts
-	bun run clean
-	cargo clean --manifest-path src-tauri/Cargo.toml
+install: build dpkg ## Build and install the GUI deb locally
+	sudo dpkg -i build/emterm_$(VERSION)_*.deb
+
+clean: ## Clean all build artifacts
+	rm -rf build
+	rm -rf src-tauri/viewer/dist src-tauri/settings/dist
+	cargo clean $(MANIFEST)

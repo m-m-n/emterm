@@ -8,14 +8,13 @@ node_modules/
 dist/
 build/
 target/
-target-host/
 src-tauri/target/
-wasm/pkg/
-wasm/target/
-native-poc/target/
-native-poc/target-win/
+src-tauri/target-host/
+src-tauri/target-win/
 src-tauri/icons/*
 !src-tauri/icons/.gitkeep
+src-tauri/viewer/dist/
+src-tauri/settings/dist/
 
 # Temporary files
 /tmp
@@ -30,9 +29,6 @@ Thumbs.db
 
 # Bun
 bun.lock
-
-# E2E test screenshots (binary files)
-e2e-tests/screenshots/
 
 # Claude Code local settings
 .claude/settings.local.json

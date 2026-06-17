@@ -1,23 +1,26 @@
-//! Line-oriented tmux.conf parser.
+//! Line-oriented `tmux.conf` parser.
 //!
-//! Parses tmux configuration directives on a best-effort basis.
-//! Supports: set, bind-key, unbind-key.
-//! Ignores: if-shell, run-shell, format strings, hooks, plugins.
+//! Ported from `src-tauri/src/mux/tmux_conf/parser.rs` to support
+//! native-poc's one-shot tmux.conf import (`mux::tmux_import`). Parses
+//! tmux configuration directives on a best-effort basis. Supports:
+//! `set`, `bind-key`, `unbind-key`. Ignores `if-shell`, `run-shell`,
+//! format strings, hooks, and plugins.
 
-/// A parsed tmux.conf directive.
+/// A parsed `tmux.conf` directive.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TmuxDirective {
-    /// `set -g option value` or `set-option -g option value`
+    /// `set -g option value` or `set-option -g option value`.
     SetGlobal { option: String, value: String },
-    /// `bind-key key command [args...]` or `bind key command [args...]`
+    /// `bind-key key command [args...]` or `bind key command [args...]`.
     BindKey { key: String, command: String },
-    /// `unbind-key key` or `unbind key`
+    /// `unbind-key key` or `unbind key`.
     UnbindKey { key: String },
-    /// Directive that we recognize but don't support.
+    /// Directive recognised but not supported by the importer.
     Unsupported { line: String, reason: String },
 }
 
-/// Parse a tmux.conf file contents into directives.
+/// Parse a `tmux.conf` file's contents into directives. Empty / comment
+/// lines are dropped silently.
 pub fn parse_tmux_conf(contents: &str) -> Vec<TmuxDirective> {
     contents
         .lines()
@@ -26,12 +29,10 @@ pub fn parse_tmux_conf(contents: &str) -> Vec<TmuxDirective> {
 }
 
 fn parse_line(line: &str) -> Option<TmuxDirective> {
-    // Skip empty lines and comments
     if line.is_empty() || line.starts_with('#') {
         return None;
     }
 
-    // Tokenize (simple space-split, handling quotes minimally)
     let tokens = tokenize(line);
     if tokens.is_empty() {
         return None;
@@ -62,16 +63,12 @@ fn parse_line(line: &str) -> Option<TmuxDirective> {
 }
 
 fn parse_set(tokens: &[String]) -> Option<TmuxDirective> {
-    // set [-g] option value
     let mut i = 1;
-    let mut is_global = false;
-
     while i < tokens.len() {
         if tokens[i] == "-g" || tokens[i] == "-ga" {
-            is_global = true;
             i += 1;
         } else if tokens[i].starts_with('-') {
-            i += 1; // skip other flags
+            i += 1;
         } else {
             break;
         }
@@ -83,17 +80,10 @@ fn parse_set(tokens: &[String]) -> Option<TmuxDirective> {
 
     let option = tokens[i].clone();
     let value = tokens[i + 1..].join(" ");
-
-    if is_global {
-        Some(TmuxDirective::SetGlobal { option, value })
-    } else {
-        // Non-global set — still parse it
-        Some(TmuxDirective::SetGlobal { option, value })
-    }
+    Some(TmuxDirective::SetGlobal { option, value })
 }
 
 fn parse_bind(tokens: &[String]) -> Option<TmuxDirective> {
-    // bind [-n] key command [args...]
     let mut i = 1;
     while i < tokens.len() && tokens[i].starts_with('-') {
         i += 1;
@@ -123,7 +113,9 @@ fn parse_unbind(tokens: &[String]) -> Option<TmuxDirective> {
     })
 }
 
-/// Simple tokenizer: splits on whitespace, handles single/double quotes.
+/// Splits on whitespace, respecting single / double quotes. A `;` at the
+/// top level terminates the line so trailing chained commands are
+/// ignored (matching the WebView importer's behaviour).
 fn tokenize(line: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
@@ -144,7 +136,6 @@ fn tokenize(line: &str) -> Vec<String> {
                 }
             }
             ';' if !in_single && !in_double => {
-                // Command separator — stop parsing this line
                 if !current.is_empty() {
                     tokens.push(std::mem::take(&mut current));
                 }
@@ -164,13 +155,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_empty_and_comments() {
+    fn parse_empty_and_comments() {
         assert!(parse_tmux_conf("").is_empty());
         assert!(parse_tmux_conf("# comment\n  \n").is_empty());
     }
 
     #[test]
-    fn test_parse_set_global() {
+    fn parse_set_global() {
         let directives = parse_tmux_conf("set -g prefix C-a");
         assert_eq!(directives.len(), 1);
         match &directives[0] {
@@ -178,12 +169,12 @@ mod tests {
                 assert_eq!(option, "prefix");
                 assert_eq!(value, "C-a");
             }
-            _ => panic!("Expected SetGlobal"),
+            _ => panic!("expected SetGlobal"),
         }
     }
 
     #[test]
-    fn test_parse_set_option_global() {
+    fn parse_set_option_global() {
         let directives = parse_tmux_conf("set-option -g mouse on");
         assert_eq!(directives.len(), 1);
         match &directives[0] {
@@ -191,12 +182,12 @@ mod tests {
                 assert_eq!(option, "mouse");
                 assert_eq!(value, "on");
             }
-            _ => panic!("Expected SetGlobal"),
+            _ => panic!("expected SetGlobal"),
         }
     }
 
     #[test]
-    fn test_parse_bind_key() {
+    fn parse_bind_key() {
         let directives = parse_tmux_conf("bind-key r source-file ~/.tmux.conf");
         assert_eq!(directives.len(), 1);
         match &directives[0] {
@@ -204,47 +195,43 @@ mod tests {
                 assert_eq!(key, "r");
                 assert_eq!(command, "source-file ~/.tmux.conf");
             }
-            _ => panic!("Expected BindKey"),
+            _ => panic!("expected BindKey"),
         }
     }
 
     #[test]
-    fn test_parse_unbind() {
+    fn parse_unbind() {
         let directives = parse_tmux_conf("unbind C-b");
         assert_eq!(directives.len(), 1);
         match &directives[0] {
             TmuxDirective::UnbindKey { key } => assert_eq!(key, "C-b"),
-            _ => panic!("Expected UnbindKey"),
+            _ => panic!("expected UnbindKey"),
         }
     }
 
     #[test]
-    fn test_parse_if_shell_unsupported() {
+    fn parse_if_shell_unsupported() {
         let directives =
             parse_tmux_conf("if-shell 'test -f ~/.local.conf' 'source-file ~/.local.conf'");
         assert_eq!(directives.len(), 1);
         match &directives[0] {
-            TmuxDirective::Unsupported { reason, .. } => {
-                assert!(reason.contains("if-shell"));
-            }
-            _ => panic!("Expected Unsupported"),
+            TmuxDirective::Unsupported { reason, .. } => assert!(reason.contains("if-shell")),
+            _ => panic!("expected Unsupported"),
         }
     }
 
     #[test]
-    fn test_parse_run_shell_unsupported() {
+    fn parse_run_shell_unsupported() {
         let directives = parse_tmux_conf("run-shell 'echo hello'");
         assert_eq!(directives.len(), 1);
         match &directives[0] {
-            TmuxDirective::Unsupported { reason, .. } => {
-                assert!(reason.contains("run-shell"));
-            }
-            _ => panic!("Expected Unsupported"),
+            TmuxDirective::Unsupported { reason, .. } => assert!(reason.contains("run-shell")),
+            _ => panic!("expected Unsupported"),
         }
     }
 
     #[test]
-    fn test_parse_multiple_directives() {
+    fn parse_multiple_directives() {
         let conf = "
 set -g prefix C-a
 set -g mouse on
@@ -252,18 +239,17 @@ bind-key % split-window -h
 # comment
 unbind C-b
 ";
-        let directives = parse_tmux_conf(conf);
-        assert_eq!(directives.len(), 4);
+        assert_eq!(parse_tmux_conf(conf).len(), 4);
     }
 
     #[test]
-    fn test_tokenize_with_quotes() {
+    fn tokenize_with_quotes() {
         let tokens = tokenize("set -g status-left '[#S] '");
         assert_eq!(tokens, vec!["set", "-g", "status-left", "[#S] "]);
     }
 
     #[test]
-    fn test_tokenize_semicolon_separator() {
+    fn tokenize_semicolon_separator() {
         let tokens = tokenize("bind r source-file ~/.tmux.conf; display-message 'Reloaded'");
         assert_eq!(tokens, vec!["bind", "r", "source-file", "~/.tmux.conf"]);
     }

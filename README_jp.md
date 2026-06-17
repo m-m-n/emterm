@@ -1,16 +1,16 @@
 # eMterm
 
-Tauriで構築されたLinux/Windows向けターミナルエミュレータ。インライン画像やMarkdown表示などのリッチな描画機能を備えています。
+Linux/Windows向けのネイティブターミナルエミュレータ。ターミナル本体は winit + wgpu + swash でネイティブ描画し、Markdown / JSON / YAML / 画像ビューア・設定パネルは wry（WebKitGTK / WebView2）の子ウィンドウで表示します。
 
 ## 機能
 
 - **コアターミナル**
   - ANSI/VT100/VT220/xterm 制御シーケンス完全対応
   - 独立したPTYセッションを持つマルチタブターミナル
-  - WASMベースのターミナルコアによる高性能グリッドレンダリング
+  - `term_core` Rustクレートによるパーサ・グリッド・Unicode 幅
   - リサイズ時の全バッファリフローに対応したリングバッファ（UnifiedBuffer）
   - SlimCellスクロールバック圧縮: StyleTable/CharTable重複排除によるセルあたり76%のメモリ削減（34B→8B）
-  - ダーティ行追跡付きCanvas 2Dレンダラー
+  - winit イベントループ駆動の wgpu レンダーパイプライン（ダーティ行追跡付き）
   - BCE（背景色消去）対応
 
 - **リッチコンテンツ表示**
@@ -94,56 +94,57 @@ Tauriで構築されたLinux/Windows向けターミナルエミュレータ。�
 ## 必要条件
 
 - [Rust](https://rustup.rs/) 1.85以上
-- [Bun](https://bun.sh/) 1.0以上
-- Tauriのシステム依存関係（[Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/)を参照）
+- [Bun](https://bun.sh/) 1.0以上（子WebView用 TypeScript バンドルのビルドに使用）
 
 ### Linux (Ubuntu/Debian)
 
 ```bash
 sudo apt update
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libglib2.0-dev \
+                 libasound2-dev librsvg2-dev librsvg2-bin build-essential dpkg
 ```
+
+子WebView（Markdownビューア・設定パネル・データビューア）が wry 経由で `libwebkit2gtk-4.1-dev` / `libgtk-3-dev` を必要とします。`libasound2-dev` はベル音用、`librsvg2-bin` の `rsvg-convert` はアイコン生成に使用します。
 
 ### Windows
 
-[Microsoft Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)と[WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)をインストールしてください。
+[Microsoft Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) をインストールしてください。WebView2 ランタイムは Windows 10/11 標準で組み込まれており別途インストール不要です。
 
 ## インストール
 
 ```bash
 # リポジトリをクローン
-git clone https://github.com/yourusername/emterm.git
+git clone https://github.com/m-m-n/emterm.git
 cd emterm
 
-# 依存関係をインストール
+# JS 依存と Rust ツールチェイン（クロスビルド用）をインストール
 bun install
+make setup   # rustup target add x86_64-pc-windows-msvc + cargo install cargo-xwin
 ```
 
 ## 開発
 
 ```bash
-# 開発サーバーとTauriアプリを起動
-bun run tauri:dev
+make dev   # bun run build:viewer + build:settings → cargo run
 ```
 
 ## ビルド
 
 ```bash
-# プロダクションビルド（Linux: deb/rpm, Windows: nsis）
-make build
+make build   # Linux GUI リリース（src-tauri/target-host/release/emterm）
+make dpkg    # build/emterm_<ver>_<arch>.deb（GUI、libwebkit2gtk-4.1-0 に依存）
 ```
-
-ビルドされたアプリケーションは `src-tauri/target/release/bundle/` に出力されます。
 
 ### CLI単体ビルド
 
-GUIアプリケーションなしで、CLIコマンド（`emterm markdown`、`emterm image`）のみをビルドします：
+GUI 不要の軽量バイナリです。SSH 越しに `emterm markdown` / `emterm image` / `emterm json` / `emterm yaml` を実行すると、ローカル側 eMterm が制御シーケンスを受け取ってリッチ表示します。
 
 ```bash
-cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features
+make cli-build   # cargo build --release --no-default-features
+make cli-dpkg    # build/emterm-cli_<ver>_<arch>.deb（libc6 にのみ依存）
 ```
 
-`gui` featureフラグがデフォルトで有効になっています。`--no-default-features` を指定するとGUI依存（Tauri、WebViewなど）を除外し、軽量なCLIバイナリを生成します。
+`gui` feature フラグがデフォルトで有効です。`--no-default-features` を指定すると winit / wgpu / wry / swash などのGUI依存をすべて除外し、CLI サブコマンドのみのバイナリを生成します。
 
 ### Windowsクロスコンパイル（Linuxから）
 
@@ -153,7 +154,7 @@ cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features
 make win-build
 ```
 
-内部で `bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc` を実行します。
+`cargo xwin build --release --target x86_64-pc-windows-msvc` を実行し、`src-tauri/target-win/x86_64-pc-windows-msvc/release/emterm.exe` を生成します。wry 0.53 が WebView2 ローダーを exe に埋め込み、WebView2 ランタイム本体は Windows 10/11 の Edge ランタイムが提供するため、配布に追加 DLL は不要です。
 
 **前提条件:**
 
@@ -162,12 +163,11 @@ make win-build
 cargo install cargo-xwin
 
 # システム依存パッケージのインストール (Ubuntu/Debian)
-sudo apt install clang lld llvm nsis librsvg2-bin
+sudo apt install clang lld llvm librsvg2-bin
 ```
 
 - `clang`, `lld` — C/C++クロスコンパイラおよびリンカー（`clang-cl`, `lld-link`）
 - `llvm` — リソースコンパイラ（`llvm-rc`）
-- `nsis` — NSISインストーラ生成（`makensis`）
 - `librsvg2-bin` — SVGからPNGへのアイコン変換（`rsvg-convert`）
 
 ## CLIコマンド
@@ -311,28 +311,46 @@ eMtermがサポートするOSC（Operating System Command）シーケンス一�
 
 ```
 emterm/
-├── src/                    # フロントエンド (TypeScript)
-│   ├── index.html
-│   ├── main.ts
-│   └── styles.css
-├── src-tauri/              # バックエンド (Rust)
-│   ├── src/
-│   │   ├── main.rs
-│   │   └── lib.rs
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── serve.ts                # 開発サーバー
-├── package.json
-└── tsconfig.json
+├── src-tauri/                  # emterm Rust クレート
+│   ├── src/                    # Rust ソース
+│   │   ├── main.rs             # entry: CLI / --viewer / --settings / terminal
+│   │   ├── lib.rs              # モジュール宣言（GUI は #[cfg(feature = "gui")]）
+│   │   ├── cli/                # markdown / json / yaml / image サブコマンド
+│   │   ├── settings_core.rs    # CLI 共有（Language enum + settings_path）
+│   │   ├── settings.rs         # GUI 設定ランタイム
+│   │   └── ...                 # render/, ui/, tabs/, mux/, viewer/, window_host.rs ...
+│   ├── viewer/web/             # Markdown / image / data ビューア TS エントリ
+│   ├── settings/web/           # 設定パネル TS エントリ
+│   ├── web-shared/             # 子WebView 間で共有する TS モジュール
+│   ├── assets/fonts/           # 同梱 Noto フォント
+│   ├── build.rs                # gui 有効時に viewer/dist + settings/dist を埋め込み
+│   ├── Cargo.toml              # features: default=["gui"]、--no-default-features = CLI のみ
+│   └── tests/                  # cli_subcommands.rs（統合テスト）
+├── crates/
+│   ├── app_settings/           # settings.json スキーマ（serde）
+│   ├── term_core/              # ANSI パーサ + グリッド + Unicode 幅
+│   ├── term_images/            # Kitty / SIXEL デコーダ
+│   └── mux_ipc/                # mux プロトコル型定義
+├── scripts/
+│   ├── build-dpkg.sh           # deb パッケージャ（GUI / EMTERM_CLI_ONLY=1）
+│   ├── generate-icons.sh       # SVG → PNG アイコン生成
+│   └── measure-hidden-rss.sh   # RSS サンプラ
+├── package.json                # bun: build:viewer / build:settings / test / typecheck
+└── Makefile                    # make dev / build / cli-build / win-build / dpkg / cli-dpkg
 ```
 
 ## スクリプト
 
 | コマンド | 説明 |
 |---------|------|
-| `bun run dev` | フロントエンド開発サーバーを起動 |
-| `bun run tauri:dev` | Tauriアプリを開発モードで起動 |
-| `bun run tauri:build` | プロダクションビルド |
-| `bun run typecheck` | TypeScript型チェック |
-| `bun test` | テスト実行 |
+| `bun run build:viewer` | Markdown ビューアをバンドル（`src-tauri/viewer/dist`） |
+| `bun run build:settings` | 設定パネルをバンドル（`src-tauri/settings/dist`） |
+| `bun run typecheck` | TypeScript 型チェック |
+| `bun test` | TypeScript テスト |
+| `make dev` | eMterm を起動（debug, GUI） |
+| `make build` | リリースビルド（GUI） |
+| `make cli-build` | リリースビルド（CLI のみ） |
+| `make win-build` | cargo-xwin で Windows クロスビルド |
+| `make dpkg` | GUI deb を生成 |
+| `make cli-dpkg` | CLI deb を生成 |
 

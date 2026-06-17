@@ -3,7 +3,7 @@
 //! Builds the argument list for spawning an `sftp` subprocess.
 //! Note: sftp uses `-P` (uppercase) for port, unlike ssh which uses `-p`.
 
-use crate::ssh::detect::expand_tilde;
+use crate::profiles::expand_tilde;
 
 /// Build sftp command arguments from SSH connection settings.
 ///
@@ -46,6 +46,13 @@ pub fn build_sftp_args(
         hostname.to_string()
     };
 
+    // End-of-options marker: defense in depth against argv flag smuggling. Even
+    // if a `[user@]host` value were to begin with `-` (validation in
+    // `service::validate_connection` rejects this up front), the literal `--`
+    // forces sftp to treat the following element as the positional destination
+    // rather than an option (e.g. a smuggled `-oProxyCommand=...`).
+    args.push("--".to_string());
+
     if !username.is_empty() {
         args.push(format!("{}@{}", username, host));
     } else {
@@ -62,7 +69,7 @@ mod tests {
     #[test]
     fn test_build_sftp_args_minimal() {
         let args = build_sftp_args("example.com", 22, "", "", &[]);
-        assert_eq!(args, vec!["-b", "-", "example.com"]);
+        assert_eq!(args, vec!["-b", "-", "--", "example.com"]);
     }
 
     #[test]
@@ -119,7 +126,8 @@ mod tests {
         assert_eq!(args[5], "StrictHostKeyChecking=no");
         assert_eq!(args[6], "-b");
         assert_eq!(args[7], "-");
-        assert_eq!(args[8], "user@example.com");
+        assert_eq!(args[8], "--");
+        assert_eq!(args[9], "user@example.com");
     }
 
     #[test]
@@ -158,5 +166,15 @@ mod tests {
     fn test_build_sftp_args_ipv4_not_bracketed() {
         let args = build_sftp_args("192.168.1.1", 22, "", "", &[]);
         assert!(args.contains(&"192.168.1.1".to_string()));
+    }
+
+    #[test]
+    fn test_build_sftp_args_end_of_options_marker_precedes_host() {
+        // `--` must immediately precede the positional destination so a host
+        // that starts with `-` cannot be parsed as an option (argv smuggling).
+        let args = build_sftp_args("example.com", 22, "user", "", &[]);
+        let dash_dash = args.iter().position(|a| a == "--").unwrap();
+        assert_eq!(args[dash_dash + 1], "user@example.com");
+        assert_eq!(dash_dash, args.len() - 2);
     }
 }
