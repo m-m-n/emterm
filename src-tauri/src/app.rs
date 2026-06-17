@@ -2766,6 +2766,9 @@ impl App {
 
     /// Propagate a new grid size to all PTYs.
     pub fn set_grid_size(&mut self, cols: u16, rows: u16) {
+        if self.cell_size.cols == cols && self.cell_size.rows == rows {
+            return;
+        }
         self.cell_size = GridDims { cols, rows };
         // A column-width change triggers a `term_core` reflow that rewrites
         // the logical↔physical line mapping (a height-only change does not —

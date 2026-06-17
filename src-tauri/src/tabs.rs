@@ -19,7 +19,9 @@ use crate::image::{parse as image_parse, split_image_events};
 use crate::pty::{ExitReason, PtyEvent, PtySession};
 use crate::render::theme::Theme;
 use crate::settings::Settings;
-use mux_ipc::protocol::{MessageType, MuxMessage, RenameWindowMsg, StatusUpdateMsg, WelcomeMsg};
+use mux_ipc::protocol::{
+    MessageType, MuxMessage, RenameWindowMsg, ResizeMsg, StatusUpdateMsg, WelcomeMsg,
+};
 
 use crate::mux::window_group::{MuxWindow, MuxWindowGroup};
 
@@ -566,7 +568,7 @@ impl Tab {
                             // `active` — and a second `request_pane_snapshot`
                             // would race the user's just-applied local change.
                             if first_welcome && !session.windows.is_empty() {
-                                let active_pane_id = {
+                                let (active_pane_id, seeded_pane_ids) = {
                                     let group =
                                         self.mux_group.get_or_insert_with(MuxWindowGroup::new);
                                     let windows: Vec<MuxWindow> = session
@@ -584,8 +586,27 @@ impl Tab {
                                         pane_ids,
                                         session.active_window_index as usize,
                                     );
-                                    group.active_pane_id()
+                                    (group.active_pane_id(), group.pane_ids().to_vec())
                                 };
+                                // Tell the daemon every seeded pane's PTY size
+                                // up front, so a freshly attached client picks
+                                // up the GUI's current grid dimensions instead
+                                // of inheriting whatever the previous owner
+                                // (or the daemon's 80x24 default) left behind.
+                                // Without this the daemon-side wrap column
+                                // stays mismatched until the user happens to
+                                // resize the window.
+                                let (cols, rows) = {
+                                    let core = self.core.lock();
+                                    (core.cols(), core.rows())
+                                };
+                                for pane_id in &seeded_pane_ids {
+                                    self.send_control(&MuxMessage::control(
+                                        MessageType::Resize,
+                                        *pane_id,
+                                        &ResizeMsg { cols, rows },
+                                    ));
+                                }
                                 // Pull the active window's screen on attach — the
                                 // daemon does not push it unprompted, so without
                                 // this the freshly attached tab stays blank
@@ -660,6 +681,20 @@ impl Tab {
                     pending,
                     self.title
                 );
+                // The daemon spawns every new PTY at a hardcoded 80x24
+                // (`handle_create_window`); without this, the pane stays at
+                // 80 columns even though the GUI grid is wider, so output
+                // wraps early. Push the current grid dimensions immediately
+                // after the append so the daemon-side PTY catches up.
+                let (cols, rows) = {
+                    let core = self.core.lock();
+                    (core.cols(), core.rows())
+                };
+                self.send_control(&MuxMessage::control(
+                    MessageType::Resize,
+                    msg.pane_id,
+                    &ResizeMsg { cols, rows },
+                ));
                 true
             }
             MessageType::SwitchWindow => {
@@ -1491,6 +1526,23 @@ impl Tab {
             p.resize(cols, rows);
         }
         self.core.lock().resize(cols, rows);
+
+        // In mux mode the local PTY is the bridge's stdin pipe, so the
+        // resize above only stretches the bridge-facing FD — the daemon's
+        // per-pane PTYs stay at whatever size they were last told. Push a
+        // Resize control frame for every pane in the group so each
+        // daemon-side PTY matches the new grid.
+        if self.mux_session_name.is_some() {
+            if let Some(group) = self.mux_group.as_ref() {
+                for &pane_id in group.pane_ids() {
+                    self.send_control(&MuxMessage::control(
+                        MessageType::Resize,
+                        pane_id,
+                        &ResizeMsg { cols, rows },
+                    ));
+                }
+            }
+        }
     }
 
     /// Drop absolute-row tracker state invalidated by a column-width reflow
