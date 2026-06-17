@@ -69,7 +69,6 @@ impl CellInstance {
 }
 
 unsafe impl bytemuck_compat::Pod for CellInstance {}
-unsafe impl bytemuck_compat::Zeroable for CellInstance {}
 
 /// Global uniform: swapchain viewport in pixels + atlas page sizes (used to
 /// turn the integer atlas region into normalized UV coordinates inside the
@@ -84,15 +83,11 @@ struct FrameUniform {
 }
 
 unsafe impl bytemuck_compat::Pod for FrameUniform {}
-unsafe impl bytemuck_compat::Zeroable for FrameUniform {}
 
 mod bytemuck_compat {
     /// # Safety
     /// Implementors guarantee a defined `#[repr(C)]` byte representation.
     pub unsafe trait Pod: Copy + 'static {}
-    /// # Safety
-    /// Implementors guarantee an all-zero bit pattern is a valid value.
-    pub unsafe trait Zeroable: Sized {}
 
     pub fn cast_slice<T: Pod>(slice: &[T]) -> &[u8] {
         let len_bytes = std::mem::size_of_val(slice);

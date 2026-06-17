@@ -457,10 +457,10 @@ fn build_logical_lines(core: &TerminalCore) -> Vec<LogicalLine<u32>> {
     // given absolute row, joining onto the previous logical line when
     // `wrapped` (and a predecessor exists — `wrapped` on the very first row
     // has nothing to attach to, so it starts a fresh line).
-    let mut push_phys = |lines: &mut Vec<LogicalLine<u32>>,
-                         abs_row: u32,
-                         cells: &[(String, u16)],
-                         wrapped: bool| {
+    let push_phys = |lines: &mut Vec<LogicalLine<u32>>,
+                     abs_row: u32,
+                     cells: &[(String, u16)],
+                     wrapped: bool| {
         let continues = wrapped && !lines.is_empty();
         if !continues {
             lines.push(LogicalLine::new());
