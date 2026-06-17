@@ -147,6 +147,21 @@ impl PtySession {
         for arg in shell_args {
             cmd.arg(arg);
         }
+        // Advertise this terminal's capabilities to the child shell.
+        // portable-pty does not set `TERM` itself, so without this the
+        // shell inherits whatever the OUTER terminal that launched
+        // emterm had (e.g. `xterm-kitty`, `wezterm`). Readline / line
+        // editors then read that foreign terminfo and emit cursor /
+        // erase sequences keyed to the wrong terminal, which manifests
+        // as backspace not visually erasing characters even though the
+        // shell's buffer is correct. The mux daemon spawn applies the
+        // same baseline (`mux/ipc/pty_spawn.rs`); keep them in sync.
+        // Set BEFORE the profile env loop so a profile can still
+        // override `TERM` (e.g. for SSH targets that need a specific
+        // value).
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM_PROGRAM", "emterm");
         // Profile-provided environment variables, in declaration order.
         for (key, value) in env_vars {
             cmd.env(key, value);
