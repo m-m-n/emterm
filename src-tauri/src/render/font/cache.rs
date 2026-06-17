@@ -1,4 +1,4 @@
-//! Glyph cache: (FontId, GlyphId, size bucket, subpixel bucket) → AtlasRegion.
+//! Glyph cache: (FontId, GlyphId, size bucket, subpixel bucket) → CachedGlyph.
 //!
 //! Phase 2 of font-swash-migration. The cache memoizes rasterizer output
 //! and the resulting atlas region so per-frame draws never re-rasterize
@@ -14,6 +14,28 @@ use std::time::Instant;
 
 use super::atlas::{Atlas, AtlasRegion};
 use super::traits::{FontId, GlyphRasterizer};
+
+/// A glyph as seen by the renderer: the atlas tile that holds the bitmap
+/// plus the font's design `advance` width (in pixels).
+///
+/// `AtlasRegion` carries only texture-coordinate / placement geometry
+/// (`x` / `y` / `w` / `h` / `bearing_*`). Layout-level metrics like the
+/// horizontal advance live here, alongside the region, so the atlas
+/// stays a pure texture descriptor and callers receive both pieces of
+/// data from a single cache lookup. The render pass keys shrink-to-fit
+/// (ambiguous-width-rendering SPEC FR2) off `advance` so a CJK Dingbat
+/// fallback's wide advance shrinks correctly while Latin AA overhang
+/// stays at its natural bitmap width.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CachedGlyph {
+    pub region: AtlasRegion,
+    /// Horizontal advance in pixels, from the font's design metrics
+    /// (copied from `GlyphBitmap::advance`). `0.0` means the rasterizer
+    /// did not report an advance (e.g. combining marks, sentinel
+    /// zero-size bitmaps) — `glyph_instance` treats that as "do not
+    /// shrink".
+    pub advance: f32,
+}
 
 /// Cache key: identifies a unique glyph rasterization request.
 ///
@@ -42,10 +64,16 @@ impl GlyphKey {
 
 /// Sentinel marker for "rasterizer returned `None`": the cache stores this
 /// so subsequent identical lookups skip the (failed) rasterize call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Empty` carries the design `advance` alongside the implicit zero-size
+/// region so a cache hit returns the same `CachedGlyph` shape as the
+/// miss path — without this, the first lookup would see the rasterizer-
+/// reported advance and every subsequent hit would see `0.0`, which the
+/// previous `Slot::Empty` variant accidentally did.
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Slot {
-    Empty,             // valid zero-size rasterize result (whitespace)
-    Some(AtlasRegion), // rasterizer succeeded, region uploaded
+    Empty(f32),        // valid zero-size rasterize result (whitespace), carrying advance
+    Some(CachedGlyph), // rasterizer succeeded, region uploaded
     Missing,           // rasterizer returned None — cluster must fall through chain
 }
 
@@ -108,23 +136,26 @@ impl GlyphCache {
         &mut self,
         rasterizer: &dyn GlyphRasterizer,
         key: GlyphKey,
-    ) -> Option<AtlasRegion> {
+    ) -> Option<CachedGlyph> {
         if let Some(slot) = self.slots.get(&key).copied() {
             return match slot {
-                Slot::Some(r) => {
+                Slot::Some(g) => {
                     self.stats.hits += 1;
-                    Some(r)
+                    Some(g)
                 }
-                Slot::Empty => {
+                Slot::Empty(advance) => {
                     self.stats.hits += 1;
-                    Some(AtlasRegion {
-                        format: super::traits::AtlasFormat::Alpha,
-                        x: 0,
-                        y: 0,
-                        width: 0,
-                        height: 0,
-                        bearing_left: 0,
-                        bearing_top: 0,
+                    Some(CachedGlyph {
+                        region: AtlasRegion {
+                            format: super::traits::AtlasFormat::Alpha,
+                            x: 0,
+                            y: 0,
+                            width: 0,
+                            height: 0,
+                            bearing_left: 0,
+                            bearing_top: 0,
+                        },
+                        advance,
                     })
                 }
                 Slot::Missing => {
@@ -156,23 +187,30 @@ impl GlyphCache {
                 None
             }
             Some(bitmap) if bitmap.is_empty() => {
-                self.slots.insert(key, Slot::Empty);
+                self.slots.insert(key, Slot::Empty(bitmap.advance));
                 self.stats.misses += 1;
-                Some(AtlasRegion {
-                    format: bitmap.format,
-                    x: 0,
-                    y: 0,
-                    width: 0,
-                    height: 0,
-                    bearing_left: 0,
-                    bearing_top: 0,
+                Some(CachedGlyph {
+                    region: AtlasRegion {
+                        format: bitmap.format,
+                        x: 0,
+                        y: 0,
+                        width: 0,
+                        height: 0,
+                        bearing_left: 0,
+                        bearing_top: 0,
+                    },
+                    advance: bitmap.advance,
                 })
             }
             Some(bitmap) => {
                 let region = self.atlas.upload(&bitmap);
-                self.slots.insert(key, Slot::Some(region));
+                let glyph = CachedGlyph {
+                    region,
+                    advance: bitmap.advance,
+                };
+                self.slots.insert(key, Slot::Some(glyph));
                 self.stats.misses += 1;
-                Some(region)
+                Some(glyph)
             }
         }
     }
@@ -274,8 +312,8 @@ mod tests {
             ret: Some(alpha_bitmap(0, 0)),
         };
         let key = GlyphKey::new(FontId(1), 32, 13.0, 0.0);
-        let region = cache.get_or_rasterize(&r, key).unwrap();
-        assert!(region.is_empty());
+        let cached = cache.get_or_rasterize(&r, key).unwrap();
+        assert!(cached.region.is_empty());
         // Second call hits the Empty sentinel without re-rastering.
         let _ = cache.get_or_rasterize(&r, key).unwrap();
         assert_eq!(r.calls.load(Ordering::SeqCst), 1);

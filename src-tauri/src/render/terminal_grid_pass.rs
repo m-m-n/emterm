@@ -101,6 +101,52 @@ mod bytemuck_compat {
     }
 }
 
+/// Shrink-to-fit policy for a cell's glyph quad.
+///
+/// Ordinary cells use [`GlyphFit::HorizontalOnly`] to fix the
+/// ambiguous-width-rendering SPEC's FR2 — a Dingbat / Symbol glyph
+/// rendered from a CJK fallback whose design advance is ~1.5 em is
+/// shrunk horizontally so its bitmap stops bleeding into the next
+/// cell, while a Latin monospace glyph (advance == cell_w) sees
+/// `sx = 1.0` and isn't crushed by its natural AA overhang. IME
+/// preedit overlay uses [`GlyphFit::Both`] so CJK descenders past
+/// `cell_h` are additionally clamped inside the reverse-video bg.
+/// [`GlyphFit::None`] preserves natural metrics in both axes.
+///
+/// Replacing the prior `fit_glyph_to_cell` + `fit_glyph_vertical`
+/// boolean pair: the four-combination matrix included one dead state
+/// (`(false, true)` — vertical fit without horizontal) that no
+/// caller wants but a typo could produce. The enum makes the three
+/// meaningful states exhaustive and the dead one unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlyphFit {
+    /// Render the glyph at its natural metrics. Used by ordinary
+    /// cells under the previous renderer (pre-FR2 port) and by tests
+    /// that don't exercise the fit path.
+    None,
+    /// Shrink horizontally so the glyph advance fits the cell
+    /// footprint; leave the vertical axis at natural metrics so
+    /// descenders / ascenders aren't visibly crushed.
+    HorizontalOnly,
+    /// Shrink both axes so the entire bitmap quad fits the cell rect.
+    /// Used by the IME preedit overlay so reverse-video bg contains
+    /// the full glyph including CJK descenders.
+    Both,
+}
+
+impl GlyphFit {
+    /// True when horizontal shrink-to-fit applies. Both `HorizontalOnly`
+    /// and `Both` opt in; `None` does not.
+    pub fn horizontal(self) -> bool {
+        matches!(self, GlyphFit::HorizontalOnly | GlyphFit::Both)
+    }
+    /// True only for `Both`. `HorizontalOnly` does NOT touch the
+    /// vertical axis.
+    pub fn vertical(self) -> bool {
+        matches!(self, GlyphFit::Both)
+    }
+}
+
 /// Per-cell input to [`TerminalGridPass::prepare`].
 ///
 /// `glyph` is the grapheme cluster string. Empty / single-space clusters
@@ -123,12 +169,14 @@ pub struct CellInput {
     /// covers CJK glyph descenders that naturally rasterize past
     /// `cell_h`. `0.0` for ordinary cells.
     pub bg_extend_below: f32,
-    /// Clamp the glyph quad's width / height to the cell rect when
-    /// `true`. Used by the IME preedit overlay so ambiguous-width
-    /// glyphs (e.g. ▽ U+25BD) whose natural bitmap exceeds 1 cell are
-    /// scaled down to fit. `false` for ordinary cells (preserves
-    /// natural glyph metrics for accurate text rendering).
-    pub fit_glyph_to_cell: bool,
+    /// Shrink policy for the glyph quad when its natural bitmap
+    /// exceeds the cell footprint. See [`GlyphFit`] for the variant
+    /// semantics. Replaces the prior pair of `(fit_glyph_to_cell,
+    /// fit_glyph_vertical)` bools — the four-combination matrix
+    /// included one dead state (`vertical only`), and the enum makes
+    /// the three meaningful modes match-exhaustive at the consumer
+    /// site.
+    pub fit: GlyphFit,
     /// SGR bold: render the glyph with the resolved font's bold face
     /// when one is registered on the fallback chain (see
     /// `FallbackChain::bold_variant`). Fonts without a bold variant
@@ -559,7 +607,9 @@ impl TerminalGridPass {
             return None;
         }
         let key = GlyphKey::new(font_id, g.glyph_id, size_px, 0.0);
-        let region = cache.get_or_rasterize(&*self.rasterizer, key)?;
+        let cached = cache.get_or_rasterize(&*self.rasterizer, key)?;
+        let region = cached.region;
+        let advance = cached.advance;
         if region.is_empty() {
             return None;
         }
@@ -585,25 +635,61 @@ impl TerminalGridPass {
         let baseline = y + v_pad + base_ascent;
         let mut glyph_x = x + region.bearing_left as f32;
         let mut glyph_y = baseline - region.bearing_top as f32;
-        // IME preedit overlay (`fit_glyph_to_cell = true`): force the
-        // glyph quad to sit entirely within the cell rect. Required so
-        // (a) ambiguous-width shapes (▽ U+25BD) whose bitmap is wider
-        // than the 1-cell footprint don't bleed sideways, and (b) CJK
-        // glyphs whose descenders rasterize past `cell_h` are scaled
-        // back inside the reverse-video bg instead of leaking onto the
-        // next row's dark default background.
-        if cell.fit_glyph_to_cell && glyph_w > 0.0 && glyph_h > 0.0 {
-            // First: horizontal scale so the bitmap fits the cell width.
-            let sx = (w / glyph_w).min(1.0);
-            // Second: vertical scale so the bitmap fits the cell height
-            // *measured against where the glyph currently lands*. We
-            // include the offset above the cell top (baseline placement
-            // can leave the bitmap top above `y`) and below the cell
-            // bottom (descender past `y + h`).
-            let top_overflow = (y - glyph_y).max(0.0);
-            let bottom_overflow = ((glyph_y + glyph_h) - (y + h)).max(0.0);
-            let sy = if top_overflow + bottom_overflow > 0.0 {
-                (h / (glyph_h + top_overflow + bottom_overflow)).min(1.0)
+        // Shrink the glyph quad according to `cell.fit`. See [`GlyphFit`]
+        // for the variant semantics. Branch is fully predictable per
+        // call site (`HorizontalOnly` for ordinary cells, `Both` for
+        // IME preedit), so the per-cell cost is one match + one branch
+        // + the divide; ASCII collapses to `sx = 1.0` because
+        // `advance == cell_w` for monospace.
+        if cell.fit.horizontal() && glyph_w > 0.0 && glyph_h > 0.0 {
+            // Horizontal scale. The reference width depends on the
+            // fit mode:
+            //
+            //   GlyphFit::HorizontalOnly — ordinary cells. Use the
+            //   font's DESIGN advance so a hinted Latin monospace
+            //   glyph (Inconsolata 'm' / 'w' at 13 pt) with bitmap
+            //   11 px and advance 9 px sees `sx = 9/9 = 1.0` (no
+            //   shrink — the 2 px AA overhang is fed to the
+            //   subpixel-clip path further down). A CJK Dingbat
+            //   fallback with `advance ≈ 1.5 × cell_w` sees `sx
+            //   ≈ 0.67` and the entire bitmap (including its AA
+            //   skirt) is scaled down to fit the cell footprint.
+            //
+            //   GlyphFit::Both — IME preedit overlay. The reverse-
+            //   video bg must visibly enclose the WHOLE bitmap,
+            //   AA overhang included, so the reference width is
+            //   the bitmap pixel width (`glyph_w`). Without this,
+            //   a preedit U+25BD ▽ whose bitmap exceeds the cell
+            //   would have its right edge bleed past the highlight
+            //   bg even though `advance == cell_w` — the regression
+            //   the original `fit_glyph_to_cell` path was added to
+            //   prevent.
+            //
+            // `advance.is_finite() && > 0.0` guards against the rare
+            // case where the rasterizer reports a malformed advance
+            // (e.g. `units_per_em == 0` → Inf) — falling back to
+            // `glyph_w` keeps the math sound under such inputs.
+            let h_reference = match cell.fit {
+                GlyphFit::Both => glyph_w,
+                _ if advance.is_finite() && advance > 0.0 => advance,
+                _ => glyph_w,
+            };
+            let sx = (w / h_reference).min(1.0);
+            // Vertical scale so the bitmap fits the cell height
+            // *measured against where the glyph currently lands*.
+            // Only kicks in when `cell.fit == GlyphFit::Both` (IME
+            // preedit). Ordinary cells (`HorizontalOnly`) keep
+            // vertical at 1.0 so a 1-2 px CJK descender doesn't
+            // trigger a uniform 5-10% shrink that crushes the whole
+            // glyph just to contain the descender.
+            let sy = if cell.fit.vertical() {
+                let top_overflow = (y - glyph_y).max(0.0);
+                let bottom_overflow = ((glyph_y + glyph_h) - (y + h)).max(0.0);
+                if top_overflow + bottom_overflow > 0.0 {
+                    (h / (glyph_h + top_overflow + bottom_overflow)).min(1.0)
+                } else {
+                    1.0
+                }
             } else {
                 1.0
             };
@@ -1060,7 +1146,8 @@ mod tests {
                     if let Some(g) = shaped.first() {
                         if g.glyph_id != 0 {
                             let key = GlyphKey::new(font_id, g.glyph_id, metrics.font_size_px, 0.0);
-                            if let Some(region) = cache_lock.get_or_rasterize(rasterizer, key) {
+                            if let Some(cached) = cache_lock.get_or_rasterize(rasterizer, key) {
+                                let region = cached.region;
                                 if !region.is_empty() {
                                     let page = match region.format {
                                         AtlasFormat::Alpha => PAGE_ALPHA,
@@ -1130,7 +1217,7 @@ mod tests {
             strikethrough: false,
             draw_background: false,
             bg_extend_below: 0.0,
-            fit_glyph_to_cell: false,
+            fit: GlyphFit::None,
             bold: false,
         }
     }
@@ -1204,7 +1291,7 @@ mod tests {
                 strikethrough: false,
                 draw_background: false,
                 bg_extend_below: 0.0,
-                fit_glyph_to_cell: false,
+                fit: GlyphFit::None,
                 bold: false,
             },
         ];
@@ -1335,7 +1422,7 @@ mod tests {
             strikethrough: false,
             draw_background: false,
             bg_extend_below: 0.0,
-            fit_glyph_to_cell: false,
+            fit: GlyphFit::None,
             bold: false,
         }];
         let raster_ref: &dyn GlyphRasterizer = &*swash;
