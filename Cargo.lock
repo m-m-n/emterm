@@ -1209,6 +1209,7 @@ dependencies = [
  "uuid",
  "vt100",
  "wgpu",
+ "windows-sys 0.59.0",
  "winit",
  "wry",
  "zeno",
