@@ -243,7 +243,9 @@ mod tests {
     #[test]
     fn expand_home_with_tilde_prefix_resolves() {
         // SAFETY: tests run single-threaded by default for env mutation.
-        std::env::set_var("HOME", "/home/test");
+        unsafe {
+            std::env::set_var("HOME", "/home/test");
+        }
         let out = expand_home("~/projects");
         // Unix path separator.
         if cfg!(unix) {

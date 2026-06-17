@@ -289,7 +289,7 @@ impl SftpService {
         let sessions: Vec<String> = {
             let map = self.session_tab.lock().unwrap();
             map.iter()
-                .filter(|(_, &t)| t == tab_id)
+                .filter(|&(_, &t)| t == tab_id)
                 .map(|(s, _)| s.clone())
                 .collect()
         };

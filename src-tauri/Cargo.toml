@@ -1,7 +1,7 @@
 [package]
 name = "emterm"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 description = "Native terminal emulator with rich rendering capabilities (Linux + Windows)"
 
@@ -46,6 +46,15 @@ gui = [
     "dep:regex",
     "dep:unicode-width",
     "dep:unicode-segmentation",
+    # mux daemon / bridge / CLI: tokio + tokio-util + futures + chrono + anyhow
+    # + hostname + vt100 (shadow parser for hidden-pane state).
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:futures",
+    "dep:chrono",
+    "dep:anyhow",
+    "dep:hostname",
+    "dep:vt100",
     # target-specific GUI deps; Cargo gracefully skips these on
     # non-matching targets even when `gui` is enabled.
     "dep:gtk",
@@ -153,12 +162,29 @@ ab_glyph = { version = "0.2", optional = true }
 resvg = { version = "0.44", default-features = false, optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
 
+# === mux daemon / bridge / CLI dependencies (gated behind `gui`) ===
+# The `emterm mux ...` CLI dispatch (daemon + bridge + session manager) ships
+# only with the GUI build today. CLI-only builds still respond to mux
+# subcommands but error out cleanly.
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net", "io-util", "io-std", "signal", "process"], optional = true }
+tokio-util = { version = "0.7", features = ["codec"], optional = true }
+futures = { version = "0.3", optional = true }
+chrono = { version = "0.4", optional = true }
+anyhow = { version = "1", optional = true }
+hostname = { version = "0.4", optional = true }
+vt100 = { version = "0.16", optional = true }
+
 [dev-dependencies]
 # PNG encoder used by examples/swash_emoji.rs (PoC PNG dump, FR1).
 png = "0.17"
 
 # Temporary files for ported CLI subcommand unit tests.
 tempfile = "3"
+
+# Scoped env-var manipulation for mux daemon/bridge tests (HOME / XDG /
+# EMTERM_MUX overrides without leaking into sibling tests). The crate
+# is published as `temp-env` but exposes itself as `temp_env`.
+temp_env = { package = "temp-env", version = "0.3" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
