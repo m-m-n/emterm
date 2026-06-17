@@ -1849,17 +1849,15 @@ impl App {
             None => (None, None),
         };
 
-        // SPEC US4 / FR11: hand the mux statusbar settings to the runtime
-        // when the active tab is mux-attached so `mux.statusbar.enabled /
-        // left / right` actually drive the rendered row (pre-fix these were
-        // parsed into `Settings::mux.statusbar` but never read, the
-        // gpt-spec finding).
-        let mux_statusbar = mux_session_name.map(|_| &self.settings.mux.statusbar);
-        let mut vm = self.status_bar_runtime.build_view_model_with_mux(
+        // SPEC US5: App Line 1/2 keep rendering the app's own templates
+        // while the mux daemon's StatusUpdate populates the OSC row.
+        // `mux.statusbar.*` is consumed by the daemon (and the GUI's
+        // `CommandProvider` merge at startup); the runtime does not need
+        // it on the per-frame path.
+        let mut vm = self.status_bar_runtime.build_view_model(
             &self.settings.statusbar,
             mux_session_name,
             mux_status,
-            mux_statusbar,
         );
         // When the active tab is mux-attached, the mux status row honors
         // `mux.status_position` (FR11) — it may differ from the app status
