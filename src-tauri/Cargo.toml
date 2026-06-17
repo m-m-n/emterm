@@ -1,131 +1,210 @@
 [package]
 name = "emterm"
-version = "0.0.0"
-description = "A terminal emulator for Linux and Windows with rich rendering capabilities"
-authors = ["m-m-n"]
-license = "MIT"
-repository = ""
-edition = "2024"
-rust-version = "1.85"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native terminal emulator with rich rendering capabilities (Linux + Windows)"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "emterm"
+path = "src/main.rs"
+
+# Library facade so integration tests can call `cli::run` in-process.
+# The binary above still owns the full module tree; the library only
+# re-exposes the subset required by `cli` (see `src/lib.rs`).
+[lib]
+name = "emterm"
+path = "src/lib.rs"
 
 [features]
 default = ["gui"]
+# `gui` enables the windowed terminal (winit + wgpu + egui + wry child
+# WebViews). Disabling it (`--no-default-features`) yields a CLI-only
+# build whose binary handles only the `markdown` / `json` / `yaml` /
+# `image` subcommands. The CLI-only build is what `EMTERM_CLI_ONLY=1
+# bash scripts/build-dpkg.sh` packages as `emterm-cli`.
 gui = [
-    "tauri",
-    "tauri-plugin-clipboard-manager",
-    "tauri-plugin-dialog",
-    "tauri-plugin-notification",
-    "tauri-plugin-shell",
-    "font-kit",
-    "tauri-build",
-    "raw-window-handle",
-    "windows",
+    "dep:winit",
+    "dep:wgpu",
+    "dep:egui",
+    "dep:egui-wgpu",
+    "dep:wry",
+    "dep:swash",
+    "dep:zeno",
+    "dep:fontdb",
+    "dep:ab_glyph",
+    "dep:resvg",
+    "dep:rodio",
+    "dep:arboard",
+    "dep:notify-rust",
+    "dep:raw-window-handle",
+    "dep:pollster",
+    "dep:portable-pty",
+    "dep:term_core",
+    "dep:term_images",
+    "dep:mux_ipc",
+    "dep:regex",
+    "dep:unicode-width",
+    "dep:unicode-segmentation",
+    # target-specific GUI deps; Cargo gracefully skips these on
+    # non-matching targets even when `gui` is enabled.
+    "dep:gtk",
+    "dep:opener",
 ]
 
-[lib]
-name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-
-[build-dependencies]
-tauri-build = { version = "2.5.3", features = [], optional = true }
-
 [dependencies]
-serde_json = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-log = { version = "0.4", features = ["std"] }
-env_logger = "0.11"
-chrono = "0.4"
-tauri = { version = "2.9.5", features = [], optional = true }
-tauri-plugin-clipboard-manager = { version = "2", optional = true }
-tauri-plugin-notification = { version = "2", optional = true }
-tauri-plugin-shell = { version = "2", optional = true }
-tauri-plugin-dialog = { version = "2", optional = true }
+# === CLI-shared dependencies (always built) ===
 
-# PTY dependencies
-portable-pty = "0.8"
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net", "io-util", "io-std", "signal", "process"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-bytes = "1"
-uuid = { version = "1", features = ["v4"] }
-thiserror = "2"
-futures = "0.3"
-anyhow = "1"
-hostname = "0.4"
-bincode = "1.3"
-vt100 = "0.16"
-
-# Image processing dependencies
-png = "0.17"
-gif = "0.13"
-base64 = "0.22"
-flate2 = "1"
-# Phase 3 (native-terminal-features): Kitty/SIXEL decoders + APC/DCS parsers
-# extracted into a workspace crate so native-poc can consume them without
-# pulling in tauri.
-term_images = { path = "../crates/term_images" }
-# Phase 4-A (mux-tabs-windows-ime): protocol-only types extracted into a
-# workspace crate so native-poc can speak the same mux wire format without
-# pulling in tauri. Server framing (codec/connection) intentionally stays in
-# src-tauri.
-mux_ipc = { path = "../crates/mux_ipc" }
+# app_settings: the shared settings.json schema. Used by both the GUI
+# settings loader and `cli::active_locale` (the latter reads just the
+# `language` field via `crate::settings::settings_path`).
 app_settings = { path = "../crates/app_settings" }
-clap = { version = "4.5.54", features = ["derive"] }
-image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-rust-i18n = "3"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# OS locale detection for `language = "auto"` (i18n.rs).
 sys-locale = "0.3"
-font-kit = { version = "0.14", optional = true }
+
+# Serialization. `serde_json` preserve_order keeps document order for
+# the JSON/YAML data viewer outline (matches the WebView's JSON.parse).
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yml = "0.0.11"
+
+# Utilities used by both GUI and CLI paths.
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+bytes = "1"
+base64 = "0.22"
+once_cell = "1"
+
+# CLI subcommand support (markdown / json / yaml / image).
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+
+# Image codecs. Required by `cli::image` (decoding user-provided files)
+# and `cli::protocols::kitty` (PNG encoding for the APC payload).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+# === GUI-only dependencies (optional, enabled by the `gui` feature) ===
+
+# Window + event loop. Phase 4-G-2 redesign (2026-05-14) replaced
+# tao 0.34 with winit 0.30.9. tao did not expose XKB keycodes, breaking
+# self-built XIM; winit provides native IME via WindowEvent::Ime on
+# X11 / Wayland / Windows. default-features=false drops Android/iOS;
+# we keep rwh_06 (raw-window-handle 0.6) for wgpu surface integration
+# and x11 + wayland for Linux platform support.
+winit = { version = "0.30.9", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"], optional = true }
+
+# GPU surface + egui rendering
+wgpu = { version = "22", optional = true }
+egui = { version = "0.29", optional = true }
+egui-wgpu = { version = "0.29", optional = true }
+
+# WebView for the child Markdown / settings / data viewer windows.
+wry = { version = "0.53", optional = true }
+
+# term_core (Phase 6: replaces native-poc's stand-in parser/grid)
+term_core = { path = "../crates/term_core", optional = true }
+
+# term_images (Phase 5: inline Kitty / SIXEL image decoders + APC/DCS parsers)
+term_images = { path = "../crates/term_images", optional = true }
+
+# mux_ipc (Phase 4-A): shared protocol types. Consumed only by the
+# GUI-side `mux` module — APC payloads embedded in the PTY stream are
+# decoded via `MuxMessage::from_apc` and applied to the active tab.
+mux_ipc = { path = "../crates/mux_ipc", optional = true }
+
+# PTY (Phase 2)
+portable-pty = { version = "0.8", optional = true }
+
+# Clipboard (Phase 4)
+arboard = { version = "3", optional = true }
+
+# OS notifications (Phase 6) — OSC 9. Linux uses D-Bus
+# org.freedesktop.Notifications.
+notify-rust = { version = "4", optional = true }
+
+# Unicode (Phase 3) — used by GUI render and term_core consumers.
+unicode-width = { version = "0.2", optional = true }
+unicode-segmentation = { version = "1.12", optional = true }
+
+# URL / file-path link detection (links.rs).
+regex = { version = "1", optional = true }
+
+# Utilities used only by the GUI event loop and renderer.
+pollster = { version = "0.4", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
+# Font rasterizer stack (Phase 4-H / font-swash-migration).
+# swash is pinned at = 0.1.x per NFR3 (single-maintainer churn guard);
+# zeno is its companion vector → bitmap rasterizer; fontdb enumerates the
+# host font database and registers our bundled fonts as primary fallbacks.
+swash = { version = "=0.1.18", optional = true }
+zeno = { version = "0.2", optional = true }
+fontdb = { version = "0.21", optional = true }
+
+# ab_glyph is the legacy fallback rasterizer (FR5 escape hatch).
+ab_glyph = { version = "0.2", optional = true }
+
+# SVG rasterizer for the window-chrome app icon (render::app_icon).
+resvg = { version = "0.44", default-features = false, optional = true }
+rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
+
+[dev-dependencies]
+# PNG encoder used by examples/swash_emoji.rs (PoC PNG dump, FR1).
+png = "0.17"
+
+# Temporary files for ported CLI subcommand unit tests.
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# X11/Wayland PRIMARY selection support (select-to-copy, middle-click-paste).
-# Linux-only so Windows binaries do not pull it in.
+# Windows: libc::localtime_s + libc::tm for chrono-free local-time
+# decomposition (see `crate::localtime`). Without this, the non-unix
+# fallback returns UTC, so the status bar `time` provider shows UTC and
+# `emterm.log` lines carry `+00:00` regardless of the user's wall clock.
+[target.'cfg(windows)'.dependencies.libc]
+version = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
-arboard = { version = "3", features = ["wayland-data-control"] }
+# GTK 3 — the child `--viewer` window host on Linux. Optional because the
+# CLI-only build never spawns a viewer process and therefore does not need
+# GTK/WebKitGTK at link time (CLI deb depends on libc6 only). Enabled by
+# the `gui` feature in the workspace [features] section above.
+gtk = { version = "0.18", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-raw-window-handle = { version = "0.6", optional = true }
+# URL opener for Ctrl+click links (window_host::open_url). Uses
+# ShellExecuteW, which takes the URL as a parameter and never routes it
+# through cmd.exe parsing — `cmd /c start <url>` would let cmd
+# metacharacters (`&`, `|`, `^`) in a PTY-supplied URL inject commands.
+opener = { version = "0.7", optional = true }
 
-[target.'cfg(windows)'.dependencies.windows]
-version = "0.62"
-features = [
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_System_LibraryLoader",
-]
-optional = true
+# Phase 4-G-1 redesign (2026-05-14): removed x11-dl / wayland-client /
+# wayland-protocols / windows. The self-built XIM / zwp_text_input_v3 /
+# IMM32 clients did not work in practice because tao 0.34 does not
+# expose XKB keycodes; Phase 4-G-3 routes IME through winit instead.
 
-[target.'cfg(windows)'.dependencies.windows-sys]
-version = "0.59"
-features = [
-    "Win32_Foundation",
-    "Win32_System_Console",
-]
+# NOTE: dev/release profiles are managed at the workspace root Cargo.toml
+# (see top-level Cargo.toml). Per-package profile sections produce
+# warnings and are ignored by Cargo when a workspace root profile exists.
 
-[dev-dependencies]
-tempfile = "3.24.0"
-assert_cmd = "2"
-predicates = "3"
-criterion = "0.5"
-temp-env = "0.3"
+[[example]]
+name = "swash_emoji"
+required-features = ["gui"]
 
-[[test]]
-name = "download_tests"
-path = "tests/integration/download_tests.rs"
+[[example]]
+name = "bold_raster_probe"
+required-features = ["gui"]
 
-[[test]]
-name = "markdown_tests"
-path = "tests/integration/markdown_tests.rs"
+[[example]]
+name = "font_select_probe"
+required-features = ["gui"]
 
-[[test]]
-name = "image_tests"
-path = "tests/integration/image_tests.rs"
-
-[[test]]
-name = "sixel_tests"
-path = "tests/integration/sixel_tests.rs"
-
-[[bench]]
-name = "command_benchmarks"
-harness = false
+[[example]]
+name = "m_placement_probe"
+required-features = ["gui"]

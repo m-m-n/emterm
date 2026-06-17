@@ -1,16 +1,16 @@
 # eMterm
 
-A terminal emulator for Linux and Windows, built with Tauri, featuring rich rendering capabilities including inline images and Markdown display.
+A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for the terminal window and wry (WebKitGTK / WebView2) for child windows that render Markdown, JSON, YAML, images, and the settings panel.
 
 ## Features
 
 - **Core Terminal**
   - Full ANSI/VT100/VT220/xterm control sequence support
   - Multi-tab terminal with independent PTY sessions
-  - WASM-based terminal core for high-performance grid rendering
+  - `term_core` Rust crate for the parser, grid, and Unicode width
   - Unified ring buffer with full-buffer reflow on resize
   - SlimCell scrollback compression: 76% per-cell memory reduction (34B → 8B) via StyleTable/CharTable deduplication
-  - Canvas 2D renderer with dirty-row tracking
+  - wgpu render pipeline with dirty-row tracking and a winit event loop
   - Background Color Erase (BCE) support
 
 - **Rich Content Display**
@@ -49,8 +49,8 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
   - Custom commands: user-defined executables with configurable refresh intervals
 
 - **Input and IME**
-  - High-throughput key input (event-based binary IPC, zero JSON serialization)
-  - Full IME support: EditContext API (Chromium) and hidden textarea fallback (WebKit)
+  - High-throughput key input (direct winit `WindowEvent::KeyboardInput`, no JSON serialization)
+  - Native IME via winit `WindowEvent::Ime` (X11 / Wayland / Windows)
   - IME position auto-adjustment for TUI applications (cursor-hidden mode positions IME at bottom-left)
   - Capture-phase clipboard shortcuts (Ctrl+Shift+C/V) compatible with IME
   - Middle-click paste (configurable on Windows; fixed native behavior on Linux)
@@ -100,58 +100,57 @@ A terminal emulator for Linux and Windows, built with Tauri, featuring rich rend
 ## Requirements
 
 - [Rust](https://rustup.rs/) 1.85+
-- [Bun](https://bun.sh/) 1.0+
-- System dependencies for Tauri (see [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/))
+- [Bun](https://bun.sh/) 1.0+ (builds the child WebView TypeScript bundles)
 
 ### Linux (Ubuntu/Debian)
 
 ```bash
 sudo apt update
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libglib2.0-dev \
+                 libasound2-dev librsvg2-dev librsvg2-bin build-essential dpkg
 ```
+
+`libwebkit2gtk-4.1-dev` / `libgtk-3-dev` are required by the child WebView windows (Markdown viewer, settings panel, data viewer) via wry. `libasound2-dev` is needed for the bell sound. `librsvg2-bin` provides `rsvg-convert` for icon generation.
 
 ### Windows
 
-Install [Microsoft Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+Install [Microsoft Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/). Windows 10/11 already ships with the WebView2 runtime that the child WebView windows use.
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/emterm.git
+git clone https://github.com/m-m-n/emterm.git
 cd emterm
 
-# Install dependencies
+# Install JS deps + Rust toolchains for cross-build
 bun install
+make setup   # rustup target add x86_64-pc-windows-msvc + cargo install cargo-xwin
 ```
 
 ## Development
 
 ```bash
-# Start the development server and Tauri app
-bun run tauri:dev
+make dev   # bun run build:viewer + build:settings, then cargo run
 ```
 
 ## Build
 
 ```bash
-# Build for production (Linux: deb/rpm, Windows: nsis)
-make build
+make build   # Linux GUI release (src-tauri/target-host/release/emterm)
+make dpkg    # build/emterm_<ver>_<arch>.deb (GUI, depends on libwebkit2gtk-4.1-0)
 ```
-
-The built application will be in `src-tauri/target/release/bundle/`.
 
 ### CLI-Only Build
 
-The CLI-only build is useful for installing on remote servers. For example, running `emterm markdown` or `emterm image` over SSH outputs control sequences that the eMterm client renders as rich content — no GUI dependencies needed on the server side.
-
-Build only the CLI commands (`emterm markdown`, `emterm image`) without the GUI application:
+The CLI-only build is useful for installing on remote servers. Running `emterm markdown` / `emterm image` / `emterm json` / `emterm yaml` over SSH outputs control sequences that the local eMterm client renders as rich content — no GUI dependencies needed on the server side.
 
 ```bash
-cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features
+make cli-build   # cargo build --release --no-default-features
+make cli-dpkg    # build/emterm-cli_<ver>_<arch>.deb (depends only on libc6)
 ```
 
-The `gui` feature flag is enabled by default. Using `--no-default-features` excludes all GUI dependencies (Tauri, WebView, etc.) and produces a lightweight CLI binary. A pre-built `emterm-cli` deb package is also available in [Releases](https://github.com/m-m-n/emterm/releases).
+The `gui` feature flag is enabled by default. With `--no-default-features` the binary drops winit / wgpu / wry / swash / etc. and ships only the CLI subcommands. A pre-built `emterm-cli` deb package is also available in [Releases](https://github.com/m-m-n/emterm/releases).
 
 ### Windows Cross-Compilation (from Linux)
 
@@ -161,7 +160,7 @@ Cross-compile for Windows using [cargo-xwin](https://github.com/rust-cross/cargo
 make win-build
 ```
 
-This runs `bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc`.
+This runs `cargo xwin build --release --target x86_64-pc-windows-msvc` and produces `src-tauri/target-win/x86_64-pc-windows-msvc/release/emterm.exe`. The exe is fully self-contained — no extra DLL is required because wry 0.53 embeds the WebView2 loader and the Windows 10/11 Edge runtime provides WebView2 itself.
 
 **Prerequisites:**
 
@@ -170,12 +169,11 @@ This runs `bun tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc`.
 cargo install cargo-xwin
 
 # Install system dependencies (Ubuntu/Debian)
-sudo apt install clang lld llvm nsis librsvg2-bin
+sudo apt install clang lld llvm librsvg2-bin
 ```
 
 - `clang`, `lld` — C/C++ cross-compiler and linker (`clang-cl`, `lld-link`)
 - `llvm` — Resource compiler (`llvm-rc`)
-- `nsis` — NSIS installer generator (`makensis`)
 - `librsvg2-bin` — SVG to PNG icon conversion (`rsvg-convert`)
 
 ## CLI Commands
@@ -370,31 +368,46 @@ echo -ne "\e]777;emterm;markdown;end;id=$ID\e\\"
 
 ```
 emterm/
-├── src/                    # Frontend (TypeScript)
-│   ├── terminal/           # Terminal emulator core
-│   ├── markdown/           # Markdown rendering module
-│   ├── index.html
-│   ├── main.ts
-│   └── styles.css
-├── src-tauri/              # Backend (Rust)
-│   ├── src/
-│   │   ├── main.rs
-│   │   └── lib.rs
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── serve.ts                # Development server
-├── package.json
-└── tsconfig.json
+├── src-tauri/                  # The emterm Rust crate
+│   ├── src/                    # Rust source (main.rs + GUI/CLI modules)
+│   │   ├── main.rs             # entry: cli subcmd, --viewer, --settings, terminal
+│   │   ├── lib.rs              # module roster; GUI modules behind #[cfg(feature = "gui")]
+│   │   ├── cli/                # markdown / json / yaml / image subcommands
+│   │   ├── settings_core.rs    # CLI-shared (Language enum + settings_path)
+│   │   ├── settings.rs         # GUI-only settings runtime
+│   │   └── ...                 # render/, ui/, tabs/, mux/, viewer/, window_host.rs ...
+│   ├── viewer/web/             # Markdown / image / data viewer TS entry
+│   ├── settings/web/           # Settings panel TS entry
+│   ├── web-shared/             # TS shared between viewer & settings entries
+│   ├── assets/fonts/           # Bundled Noto fonts
+│   ├── build.rs                # Embeds viewer/dist + settings/dist when gui is on
+│   ├── Cargo.toml              # features: default=["gui"]; --no-default-features = CLI only
+│   └── tests/                  # cli_subcommands.rs (integration tests)
+├── crates/
+│   ├── app_settings/           # settings.json schema (serde)
+│   ├── term_core/              # ANSI parser + grid + Unicode width
+│   ├── term_images/            # Kitty / SIXEL decoders
+│   └── mux_ipc/                # mux protocol types
+├── scripts/
+│   ├── build-dpkg.sh           # deb packager (GUI or EMTERM_CLI_ONLY=1)
+│   ├── generate-icons.sh       # SVG → PNG icons
+│   └── measure-hidden-rss.sh   # RSS sampler
+├── package.json                # bun: build:viewer / build:settings / test / typecheck
+└── Makefile                    # make dev / build / cli-build / win-build / dpkg / cli-dpkg
 ```
 
 ## Scripts
 
 | Command | Description |
 |---------|-------------|
-| `bun run dev` | Start frontend development server |
-| `bun run tauri:dev` | Start Tauri app in development mode |
-| `bun run tauri:build` | Build for production |
-| `bun run icons` | Generate Tauri icon assets |
+| `bun run build:viewer` | Bundle the Markdown viewer (`src-tauri/viewer/dist`) |
+| `bun run build:settings` | Bundle the settings panel (`src-tauri/settings/dist`) |
 | `bun run typecheck` | Run TypeScript type checking |
-| `bun test` | Run tests |
+| `bun test` | Run TypeScript tests |
+| `make dev` | Run eMterm (debug, GUI) |
+| `make build` | Release build (GUI) |
+| `make cli-build` | Release build (CLI only) |
+| `make win-build` | Windows cross-build via cargo-xwin |
+| `make dpkg` | Build GUI deb |
+| `make cli-dpkg` | Build CLI deb |
 

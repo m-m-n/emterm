@@ -1,336 +1,229 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+// Suppress the console window on Windows for release GUI builds. Without
+// this attribute the binary links against the console subsystem, so
+// launching it spawns a console window alongside the app window. Debug
+// builds — and the CLI-only build (`--no-default-features`) — keep the
+// console so log output stays visible.
 #![cfg_attr(
     all(not(debug_assertions), feature = "gui"),
     windows_subsystem = "windows"
 )]
 
-rust_i18n::i18n!("locales", fallback = "en");
+use emterm::logging;
 
-use clap::{Arg, Command};
-use rust_i18n::t;
-use std::path::PathBuf;
+#[cfg(feature = "gui")]
+use emterm::{app, mux, settings, settings_window, viewer, wakeup, window_host};
+#[cfg(feature = "gui")]
+use winit::event_loop::EventLoop;
 
-const SUPPORTED_LOCALES: &[&str] = &["en", "ja"];
-
-/// Resolves the system locale to a supported language code.
+/// Build the winit event loop, preferring the X11 backend on Linux when a
+/// Wayland session also exposes X11 (XWayland).
 ///
-/// Uses `sys_locale::get_locale()` for OS detection, then splits by
-/// multiple separators (`-`, `_`, `.`) to handle formats like
-/// `ja_JP`, `ja_JP.UTF-8`, `ja-JP`.
-/// Falls back to "en" for unsupported locales.
-fn resolve_system_locale() -> String {
-    let locale = sys_locale::get_locale().unwrap_or_else(|| "en".to_string());
-    let base = locale.split(&['-', '_', '.'][..]).next().unwrap_or("en");
-    if SUPPORTED_LOCALES.contains(&base) {
-        base.to_string()
-    } else {
-        "en".to_string()
+/// winit 0.30's Wayland backend does not emit `WindowEvent::DroppedFile` /
+/// `HoveredFile` (only X11 / Windows / macOS do), so file drag-and-drop — the
+/// SFTP upload entry point — is dead under native Wayland. When both
+/// `WAYLAND_DISPLAY` and `DISPLAY` are set we force the X11 backend so drops
+/// work via XWayland. Remove this once winit lands Wayland DnD
+/// (rust-windowing/winit#1881 / PR #2429).
+///
+/// Override with `EMTERM_BACKEND=wayland` (keep native Wayland, no file drop)
+/// or `EMTERM_BACKEND=x11` (force X11 whenever `DISPLAY` is set).
+#[cfg(all(feature = "gui", target_os = "linux"))]
+fn build_event_loop() -> EventLoop<()> {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+
+    let non_empty = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    let backend = std::env::var("EMTERM_BACKEND").unwrap_or_default();
+    let has_wayland = non_empty("WAYLAND_DISPLAY") || non_empty("WAYLAND_SOCKET");
+    let has_x11 = non_empty("DISPLAY");
+
+    let force_x11 = match backend.as_str() {
+        "wayland" => false,
+        "x11" => has_x11,
+        // auto: prefer X11 only when a Wayland session would otherwise be
+        // selected (winit picks Wayland first) AND XWayland is available.
+        _ => has_wayland && has_x11,
+    };
+
+    let mut builder = EventLoop::builder();
+    if force_x11 {
+        builder.with_x11();
+        log::info!(
+            "emterm: forcing X11 backend (XWayland) so file drag-and-drop works \
+             — winit Wayland DnD is unimplemented; set EMTERM_BACKEND=wayland to opt out"
+        );
     }
+    builder
+        .build()
+        .expect("emterm: failed to create winit event loop")
 }
 
-/// Builds the CLI command using the clap builder API with localized strings.
-fn build_cli() -> Command {
-    Command::new("emterm")
-        .about(t!("cli.about").to_string())
-        .version(env!("APP_VERSION"))
-        .subcommand(
-            Command::new("markdown")
-                .about(t!("cli.markdownAbout").to_string())
-                .arg(
-                    Arg::new("file")
-                        .help(t!("cli.markdownFile").to_string())
-                        .value_name("FILE")
-                        .required(true),
-                ),
-        )
-        .subcommand(
-            Command::new("image")
-                .about(t!("cli.imageAbout").to_string())
-                .arg(
-                    Arg::new("file")
-                        .help(t!("cli.imageFile").to_string())
-                        .value_name("FILE")
-                        .required(true),
-                )
-                .arg(
-                    Arg::new("protocol")
-                        .long("protocol")
-                        .help(t!("cli.imageProtocol").to_string())
-                        .default_value("kitty"),
-                ),
-        )
-        .subcommand(
-            Command::new("json")
-                .about(t!("cli.jsonAbout").to_string())
-                .arg(
-                    Arg::new("file")
-                        .help(t!("cli.jsonFile").to_string())
-                        .value_name("FILE")
-                        .required(true),
-                ),
-        )
-        .subcommand(
-            Command::new("yaml")
-                .about(t!("cli.yamlAbout").to_string())
-                .arg(
-                    Arg::new("file")
-                        .help(t!("cli.yamlFile").to_string())
-                        .value_name("FILE")
-                        .required(true),
-                ),
-        )
-        .subcommand(
-            Command::new("mux")
-                .about("Terminal multiplexer")
-                .arg(
-                    Arg::new("daemon")
-                        .long("daemon")
-                        .help("Run as daemon process (internal)")
-                        .action(clap::ArgAction::SetTrue),
-                )
-                .subcommand(Command::new("ls").about("List sessions"))
-                .subcommand(
-                    Command::new("kill")
-                        .about("Kill a session")
-                        .arg(Arg::new("session").help("Session name or ID")),
-                )
-                .subcommand(
-                    Command::new("attach")
-                        .about("Attach to a session")
-                        .arg(Arg::new("session").help("Session name or ID")),
-                )
-                .subcommand(
-                    Command::new("new")
-                        .about("Create a new session")
-                        .arg(Arg::new("name").help("Session name")),
-                )
-                .subcommand(
-                    Command::new("new-window")
-                        .about("Create a new window in the active session")
-                        .arg(
-                            Arg::new("name")
-                                .short('n')
-                                .long("name")
-                                .help("Window name (displayed in tab bar)")
-                                .value_name("NAME"),
-                        )
-                        .arg(
-                            Arg::new("command")
-                                .short('c')
-                                .long("command")
-                                .help("Initial command to run")
-                                .value_name("COMMAND"),
-                        ),
-                )
-                .subcommand(
-                    Command::new("script")
-                        .about("Start daemon without attaching (for scripted initialization)"),
-                )
-                .subcommand(
-                    Command::new("switch-window")
-                        .about("Switch active window")
-                        .arg(
-                            Arg::new("index")
-                                .help("Window index (0-based)")
-                                .value_parser(clap::value_parser!(u32))
-                                .required(true),
-                        ),
-                )
-                .subcommand(
-                    Command::new("send-keys")
-                        .about("Send stdin data as key input to a pane")
-                        .arg(
-                            Arg::new("target")
-                                .short('t')
-                                .long("target")
-                                .help("Target window index (0-based, default: active window)")
-                                .value_name("INDEX")
-                                .value_parser(clap::value_parser!(u32)),
-                        ),
-                )
-                .subcommand(
-                    Command::new("clear-logs")
-                        .about("Truncate mux log files (daemon, bridge, client)"),
-                ),
-        )
-        .subcommand(
-            Command::new("download")
-                .about(t!("cli.downloadAbout").to_string())
-                .arg(
-                    Arg::new("file")
-                        .help(t!("cli.downloadFile").to_string())
-                        .value_name("FILE"),
-                )
-                .arg(
-                    Arg::new("name")
-                        .long("name")
-                        .help(t!("cli.downloadName").to_string())
-                        .value_name("NAME"),
-                ),
-        )
+#[cfg(all(feature = "gui", not(target_os = "linux")))]
+fn build_event_loop() -> EventLoop<()> {
+    EventLoop::new().expect("emterm: failed to create winit event loop")
 }
 
 fn main() {
-    // Resolve system locale and set backend locale before argument parsing
-    let locale = resolve_system_locale();
-    rust_i18n::set_locale(&locale);
+    logging::init();
 
-    let matches = build_cli().get_matches();
+    let args: Vec<String> = std::env::args().collect();
 
-    match matches.subcommand() {
-        Some(("markdown", sub_matches)) => {
-            let file = PathBuf::from(sub_matches.get_one::<String>("file").unwrap());
-            if let Err(err) = app_lib::commands::markdown::execute_markdown_command(&file) {
-                eprintln!("Error: {}", err);
-                std::process::exit(err.exit_code());
+    // CLI subcommand dispatch (markdown / json / yaml / image). Bare-word
+    // subcommands are recognized first so the CLI-only build can dispatch
+    // them without touching any GUI subsystem.
+    if let Some(sub) = args.get(1).map(|s| s.as_str()) {
+        if matches!(sub, "markdown" | "json" | "yaml" | "image") {
+            let code = emterm::cli::run(&args[1..]);
+            std::process::exit(code);
+        }
+    }
+
+    #[cfg(feature = "gui")]
+    {
+        run_gui(args);
+    }
+
+    #[cfg(not(feature = "gui"))]
+    {
+        eprintln!(
+            "emterm: this build provides only CLI subcommands.\n\
+             Usage: emterm <markdown|json|yaml|image> <file> [options]\n\
+             Run `emterm <subcommand> --help` for details."
+        );
+        std::process::exit(2);
+    }
+}
+
+#[cfg(feature = "gui")]
+fn run_gui(args: Vec<String>) {
+    // `--viewer <payload-path>` dispatches to the separate child viewer
+    // entry (Linux GTK/Wry window) before any terminal startup. The normal
+    // terminal path is taken when the flag is absent.
+    if let Some(pos) = args.iter().position(|a| a == "--viewer") {
+        let payload_path = args.get(pos + 1).cloned();
+        run_viewer(payload_path);
+        return;
+    }
+    // `--image-viewer <payload-path>` runs the native (winit + wgpu + egui)
+    // image viewer child window. Cross-platform, unlike the Wry Markdown
+    // viewer above.
+    if let Some(pos) = args.iter().position(|a| a == "--image-viewer") {
+        let payload_path = args.get(pos + 1).cloned();
+        run_image_viewer(payload_path);
+        return;
+    }
+    // `--data-viewer <payload-path>` runs the native JSON/YAML data viewer
+    // child window (same native stack as the image viewer).
+    if let Some(pos) = args.iter().position(|a| a == "--data-viewer") {
+        let payload_path = args.get(pos + 1).cloned();
+        run_data_viewer(payload_path);
+        return;
+    }
+    // `--settings` runs the child settings window (GTK/Wry, reused WebView
+    // settings panel). No payload: the child reads settings.json itself.
+    if args.iter().any(|a| a == "--settings") {
+        run_settings_window();
+        return;
+    }
+
+    log::info!("emterm starting (winit 0.30 backend)");
+
+    let event_loop = build_event_loop();
+    // Install a cross-thread wakeup so PTY readers can pull the main
+    // event loop out of `WaitUntil` the instant new bytes arrive,
+    // instead of waiting on the 16 ms idle deadline that Wayland often
+    // misses when the surface has nothing else to draw.
+    let proxy = event_loop.create_proxy();
+    wakeup::install(Box::new(move || {
+        let _ = proxy.send_event(());
+    }));
+    // One-shot tmux.conf auto-import. Runs before the settings loader
+    // reads the file so an imported `mux.prefix` / `mux.keybinds` etc.
+    // are visible on this very launch. The function is idempotent
+    // (latched on `mux.tmux_conf_imported`).
+    mux::tmux_import::import_tmux_conf_if_needed();
+    let settings = settings::Settings::load_or_default();
+    // Mirror src-tauri's setup: the `emterm.log` file handle only exists
+    // in release builds; `log_recording_enabled` gates the writes.
+    if !cfg!(debug_assertions) {
+        logging::init_log_file();
+    }
+    logging::set_recording_enabled(settings.log_recording_enabled);
+    let app = app::App::with_settings(settings);
+    window_host::run(event_loop, app);
+}
+
+/// Entry for the child `--viewer <payload-path>` process. Runs the Wry
+/// Markdown viewer window (GTK/WebKitGTK on Linux, WebView2 on Windows)
+/// and blocks until it closes. A missing payload path is a usage error.
+#[cfg(feature = "gui")]
+fn run_viewer(payload_path: Option<String>) {
+    let Some(path) = payload_path else {
+        log::error!("--viewer requires a payload file path");
+        std::process::exit(2);
+    };
+
+    match viewer::window::run(&path) {
+        Ok(()) => log::info!("viewer: window closed"),
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Entry for the child `--settings` process. On Linux this runs the
+/// GTK/Wry settings window; on Windows it runs the winit + wry/WebView2
+/// equivalent. Other platforms have no implementation and exit non-zero.
+#[cfg(feature = "gui")]
+fn run_settings_window() {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        match settings_window::run() {
+            Ok(()) => log::info!("settings window: closed"),
+            Err(e) => {
+                log::error!("{e}");
+                std::process::exit(1);
             }
         }
-        Some(("json", sub_matches)) => {
-            let file = PathBuf::from(sub_matches.get_one::<String>("file").unwrap());
-            if let Err(err) = app_lib::commands::json::execute_json_command(&file) {
-                eprintln!("Error: {}", err);
-                std::process::exit(err.exit_code());
-            }
-        }
-        Some(("yaml", sub_matches)) => {
-            let file = PathBuf::from(sub_matches.get_one::<String>("file").unwrap());
-            if let Err(err) = app_lib::commands::yaml::execute_yaml_command(&file) {
-                eprintln!("Error: {}", err);
-                std::process::exit(err.exit_code());
-            }
-        }
-        Some(("image", sub_matches)) => {
-            let file = PathBuf::from(sub_matches.get_one::<String>("file").unwrap());
-            let protocol = sub_matches
-                .get_one::<String>("protocol")
-                .map(|s| s.as_str())
-                .unwrap_or("kitty");
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        log::error!("settings window: --settings is not implemented on this platform");
+        std::process::exit(1);
+    }
+}
 
-            let proto = match app_lib::commands::image::ImageProtocol::parse(protocol) {
-                Ok(p) => p,
-                Err(err) => {
-                    eprintln!("Error: {}", err);
-                    std::process::exit(err.exit_code());
-                }
-            };
-
-            if let Err(err) = app_lib::commands::image::execute_image_command(&file, proto) {
-                eprintln!("Error: {}", err);
-                std::process::exit(err.exit_code());
-            }
+/// Entry for the child `--image-viewer <payload-path>` process: a native
+/// (winit + wgpu + egui) window showing one decoded image. Blocks until
+/// the window closes. A missing payload path is a usage error.
+#[cfg(feature = "gui")]
+fn run_image_viewer(payload_path: Option<String>) {
+    let Some(path) = payload_path else {
+        log::error!("--image-viewer requires a payload file path");
+        std::process::exit(2);
+    };
+    match viewer::image_window::run(&path) {
+        Ok(()) => log::info!("image viewer: window closed"),
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(1);
         }
-        Some(("mux", sub_matches)) => {
-            if sub_matches.get_flag("daemon") {
-                if let Err(e) = app_lib::mux::cli::execute_daemon() {
-                    eprintln!("Daemon error: {}", e);
-                    std::process::exit(1);
-                }
-            } else {
-                match sub_matches.subcommand() {
-                    Some(("ls", _)) => {
-                        if let Err(e) = app_lib::mux::cli::execute_ls() {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    Some(("kill", sub)) => {
-                        let session = sub.get_one::<String>("session").map(|s| s.as_str());
-                        if let Err(e) = app_lib::mux::cli::execute_kill(session) {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    Some(("attach", sub)) => {
-                        let session = sub.get_one::<String>("session").map(|s| s.as_str());
-                        if let Err(e) = app_lib::mux::cli::execute_attach(session) {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    Some(("new-window", sub)) => {
-                        let name = sub.get_one::<String>("name").map(|s| s.as_str());
-                        let command = sub.get_one::<String>("command").map(|s| s.as_str());
-                        if let Err(e) = app_lib::mux::cli::execute_new_window(name, command) {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    Some(("script", _)) => {
-                        if let Err(e) = app_lib::mux::cli::execute_script() {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    Some(("switch-window", sub)) => {
-                        let target = *sub.get_one::<u32>("index").unwrap();
-                        if let Err(e) = app_lib::mux::cli::execute_switch_window(target) {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    Some(("send-keys", sub)) => {
-                        let target = sub.get_one::<u32>("target").copied();
-                        if let Err(e) = app_lib::mux::cli::execute_send_keys(target) {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    Some(("clear-logs", _)) => {
-                        if let Err(e) = app_lib::mux::cli::execute_clear_logs() {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    _ => {
-                        // Default: start new session
-                        if let Err(e) = app_lib::mux::cli::execute_mux() {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                }
-            }
-        }
-        Some(("download", sub_matches)) => {
-            use std::io::IsTerminal;
+    }
+}
 
-            let file = sub_matches.get_one::<String>("file");
-            let name = sub_matches.get_one::<String>("name");
-
-            let result = if let Some(file_path) = file {
-                app_lib::commands::download::execute_download_command(&PathBuf::from(file_path))
-            } else {
-                // stdin mode: --name is required, and stdin must not be a TTY
-                match name {
-                    Some(n) => {
-                        if std::io::stdin().is_terminal() {
-                            eprintln!("Error: stdin is a TTY. Provide a file path or pipe data.");
-                            std::process::exit(1);
-                        }
-                        app_lib::commands::download::execute_download_from_stdin(n)
-                    }
-                    None => Err(app_lib::error::CommandError::NameRequired),
-                }
-            };
-
-            if let Err(err) = result {
-                eprintln!("Error: {}", err);
-                std::process::exit(err.exit_code());
-            }
-        }
-        _ => {
-            // No subcommand provided
-            #[cfg(feature = "gui")]
-            {
-                #[cfg(not(test))]
-                app_lib::run();
-            }
-            #[cfg(not(feature = "gui"))]
-            {
-                // CLI-only build: show help when no subcommand provided
-                build_cli().print_help().ok();
-                std::process::exit(0);
-            }
+/// Entry for the child `--data-viewer <payload-path>` process: a native
+/// JSON/YAML viewer window. Blocks until the window closes.
+#[cfg(feature = "gui")]
+fn run_data_viewer(payload_path: Option<String>) {
+    let Some(path) = payload_path else {
+        log::error!("--data-viewer requires a payload file path");
+        std::process::exit(2);
+    };
+    match viewer::data_window::run(&path) {
+        Ok(()) => log::info!("data viewer: window closed"),
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(1);
         }
     }
 }

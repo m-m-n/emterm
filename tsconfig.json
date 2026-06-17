@@ -26,5 +26,17 @@
 		"noUnusedParameters": false,
 		"noPropertyAccessFromIndexSignature": false
 	},
-	"exclude": ["test-setup.ts", "**/*.test.ts", "src-tauri"]
+	"include": [
+		"src-tauri/viewer/web/**/*.ts",
+		"src-tauri/settings/web/**/*.ts"
+	],
+	"exclude": [
+		"**/*.test.ts",
+		"node_modules",
+		"src-tauri/target",
+		"src-tauri/target-host",
+		"src-tauri/target-win",
+		"src-tauri/viewer/dist",
+		"src-tauri/settings/dist"
+	]
 }

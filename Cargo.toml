@@ -2,26 +2,13 @@
 resolver = "2"
 members = [
     "src-tauri",
-    "wasm",
     "crates/app_settings",
     "crates/term_core",
     "crates/term_images",
     "crates/mux_ipc",
-    "native-poc",
 ]
 
-# Workspace-level release profile.
-# wasm crate previously had a size-tuned release profile in wasm/Cargo.toml
-# (opt-level = "z", lto = true, codegen-units = 1, strip = "symbols").
-# After workspace flattening, per-package opt-level / codegen-units / strip
-# can be set at the per-package override below; `lto = true` is set at the
-# workspace level because Cargo does not honour `lto` on per-package
-# overrides. LTO=true also benefits the Tauri release build.
+# Workspace-level release profile. LTO benefits the native terminal
+# release build (smaller binary, slightly better runtime).
 [profile.release]
 lto = true
-
-# Restore wasm size-tuning for the cdylib only.
-[profile.release.package.emterm-wasm]
-opt-level = "z"
-codegen-units = 1
-strip = "symbols"

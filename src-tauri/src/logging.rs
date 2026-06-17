@@ -1,89 +1,44 @@
-//! Custom logging module for eMterm.
+//! `env_logger` initialization with origin tagging.
 //!
-//! Provides unified logging format for both backend (Rust) and frontend (TypeScript).
-//! Backend logs appear as `[LEVEL][BACKEND]` with dimmer colors.
-//! Frontend logs appear as `[LEVEL][FRONTEND]` with brighter colors.
+//! Tagging matches the project convention (`[LEVEL][ORIGIN]`). All native-poc
+//! logs use the `NATIVE-POC` origin; this keeps them distinguishable from the
+//! existing Tauri build logs in mixed sessions.
 //!
-//! In release builds, WARN and ERROR level logs are also written to a log file
-//! (without ANSI colors) for post-mortem analysis.
+//! When `settings.log_recording_enabled` holds (and the build is a release
+//! build), WARN/ERROR lines are additionally appended — plain text, no ANSI
+//! colors — to the same `emterm.log` the legacy Tauri build writes
+//! (`app_log_dir()/emterm.log`), so post-mortem analysis reads one file
+//! regardless of which binary produced the line. Unlike the legacy build's
+//! bare timestamps, native-poc lines carry an explicit `±HH:MM` UTC offset
+//! so their zone is never ambiguous next to lines from the other process.
 
-use log::{Level, Log, Metadata, Record};
 use std::io::Write;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, Once};
 
-/// Whether log recording to file is enabled.
-static LOG_RECORDING_ENABLED: AtomicBool = AtomicBool::new(false);
+static INIT: Once = Once::new();
 
-/// Global log file handle. Set once during app setup in release builds.
+/// Whether WARN/ERROR lines are recorded to `emterm.log`. Seeded from
+/// `settings.log_recording_enabled` after the settings load in `main`.
+static RECORDING_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Append-mode handle to `emterm.log`. Set once by [`init_log_file`]
+/// (release builds); stays `None` in debug builds and on open failure.
 static LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
-/// Path to the log file (set once during init).
-static LOG_FILE_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
-
-/// Set the log recording enabled flag.
-pub fn set_log_recording_enabled(enabled: bool) {
-    LOG_RECORDING_ENABLED.store(enabled, Ordering::Relaxed);
+/// Set the recording flag (from `settings.log_recording_enabled`).
+pub fn set_recording_enabled(enabled: bool) {
+    RECORDING_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-/// Get the current log recording enabled flag.
-pub fn is_log_recording_enabled() -> bool {
-    LOG_RECORDING_ENABLED.load(Ordering::Relaxed)
-}
-
-/// ANSI color codes for backend logging (dimmer/normal colors).
-/// Note: Backend uses Rust's `log` crate levels (Debug, Info, Warn, Error, Trace).
-/// There is no "LOG" level in Rust - frontend's console.log() maps to INFO on backend.
-mod backend_colors {
-    pub const DEBUG: &str = "\x1b[2;90m"; // dim gray
-    pub const INFO: &str = "\x1b[36m"; // cyan
-    pub const WARN: &str = "\x1b[33m"; // yellow
-    pub const ERROR: &str = "\x1b[31m"; // red
-    pub const RESET: &str = "\x1b[0m";
-}
-
-/// ANSI color codes for frontend logging (brighter colors).
-pub mod frontend_colors {
-    pub const DEBUG: &str = "\x1b[90m"; // bright black/gray
-    pub const INFO: &str = "\x1b[96m"; // bright cyan
-    pub const LOG: &str = "\x1b[92m"; // bright green
-    pub const WARN: &str = "\x1b[93m"; // bright yellow
-    pub const ERROR: &str = "\x1b[91m"; // bright red
-    pub const RESET: &str = "\x1b[0m";
-}
-
-/// Initialize the log file for release builds.
-///
-/// Creates the log directory if needed and opens the file in append mode.
-/// The file accumulates until explicitly cleared by the user.
-pub fn init_log_file(log_dir: &std::path::Path) {
-    if let Err(e) = std::fs::create_dir_all(log_dir) {
-        eprintln!("Failed to create log directory: {e}");
-        return;
-    }
-
-    let log_path = log_dir.join("emterm.log");
-
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        Ok(file) => {
-            *LOG_FILE_PATH.lock().unwrap() = Some(log_path);
-            *LOG_FILE.lock().unwrap() = Some(file);
-        }
-        Err(e) => {
-            eprintln!("Failed to open log file: {e}");
-        }
-    }
-}
-
-/// Write a plain-text log entry (no ANSI colors) to the log file.
-///
-/// Does nothing if log recording is disabled.
-pub fn write_to_log_file(level: &str, origin: &str, message: &str) {
-    if !LOG_RECORDING_ENABLED.load(Ordering::Relaxed) {
+/// Append a one-off diagnostic line to `emterm.log` when recording is
+/// enabled. Intended for startup probes (e.g. font/raster smoke checks)
+/// that should not go through the standard `log::warn!` macro to avoid
+/// duplication with the normal log path. No-op when recording is
+/// disabled, the file was never opened (debug builds), or on open
+/// failure.
+pub fn force_log_line(level: log::Level, message: &str) {
+    if !RECORDING_ENABLED.load(Ordering::Relaxed) {
         return;
     }
     let Ok(mut guard) = LOG_FILE.lock() else {
@@ -92,154 +47,167 @@ pub fn write_to_log_file(level: &str, origin: &str, message: &str) {
     let Some(file) = guard.as_mut() else {
         return;
     };
-    let now = chrono::Local::now()
-        .format("%Y-%m-%d %H:%M:%S%.3f")
-        .to_string();
-    let _ = writeln!(file, "{now} [{level}][{origin}] {message}");
+    let line = format!("{} [{}][NATIVE-POC] {}\n", timestamp(), level, message);
+    let _ = file.write_all(line.as_bytes());
     let _ = file.flush();
 }
 
-/// Read the entire log file contents as a string.
-pub fn read_log_file() -> Result<String, String> {
-    let path_guard = LOG_FILE_PATH.lock().map_err(|e| e.to_string())?;
-    let Some(path) = path_guard.as_ref() else {
-        return Ok(String::new());
-    };
-    std::fs::read_to_string(path).map_err(|e| e.to_string())
-}
-
-/// Read the last `max_lines` lines from the log file.
-pub fn read_log_tail(max_lines: usize) -> Result<String, String> {
-    let path_guard = LOG_FILE_PATH.lock().map_err(|e| e.to_string())?;
-    let Some(path) = path_guard.as_ref() else {
-        return Ok(String::new());
-    };
-    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let lines: Vec<&str> = contents.lines().collect();
-    let start = lines.len().saturating_sub(max_lines);
-    Ok(lines[start..].join("\n"))
-}
-
-/// Clear the log file.
-pub fn clear_log_file() -> Result<(), String> {
-    // Truncate by closing and reopening
-    let path_guard = LOG_FILE_PATH.lock().map_err(|e| e.to_string())?;
-    let Some(path) = path_guard.as_ref() else {
-        return Ok(());
-    };
-    let path = path.clone();
-    drop(path_guard);
-
-    let mut file_guard = LOG_FILE.lock().map_err(|e| e.to_string())?;
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&path)
-        .map_err(|e| e.to_string())?;
-    *file_guard = Some(file);
-    Ok(())
-}
-
-/// Get the log file path.
-pub fn get_log_file_path() -> Option<String> {
-    LOG_FILE_PATH
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(|p| p.to_string_lossy().into_owned()))
-}
-
-/// Custom logger for backend Rust code.
+/// Open `emterm.log` in append mode. The directory mirrors the legacy
+/// Tauri build's `app_log_dir()`:
+/// - Linux:   `$XDG_DATA_HOME/net.laser5.app.emterm/logs`
+///            (default: `$HOME/.local/share/...`)
+/// - Windows: `%LOCALAPPDATA%\net.laser5.app.emterm\logs`
 ///
-/// Formats log messages as `[LEVEL][BACKEND] message` with appropriate colors.
-pub struct BackendLogger {
-    level: Level,
-}
-
-impl BackendLogger {
-    /// Creates a new BackendLogger with the specified maximum log level.
-    pub fn new(level: Level) -> Self {
-        Self { level }
-    }
-
-    /// Initializes the global logger with this BackendLogger.
-    ///
-    /// # Panics
-    ///
-    /// Panics if a logger has already been set.
-    pub fn init(level: Level) {
-        let logger = Box::new(Self::new(level));
-        log::set_boxed_logger(logger).expect("Failed to set logger");
-        log::set_max_level(level.to_level_filter());
-    }
-}
-
-impl Log for BackendLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= self.level
-    }
-
-    fn log(&self, record: &Record) {
-        if !self.enabled(record.metadata()) {
-            return;
-        }
-
-        let (color, label) = match record.level() {
-            Level::Error => (backend_colors::ERROR, "ERROR"),
-            Level::Warn => (backend_colors::WARN, "WARN"),
-            Level::Info => (backend_colors::INFO, "INFO"),
-            Level::Debug => (backend_colors::DEBUG, "DEBUG"),
-            Level::Trace => (backend_colors::DEBUG, "TRACE"),
-        };
-
-        let message = format!(
-            "{}[{}][BACKEND]{} {}",
-            color,
-            label,
-            backend_colors::RESET,
-            record.args()
+/// Failures are reported on stderr and leave file recording disabled;
+/// the stderr logger is unaffected either way.
+pub fn init_log_file() {
+    let Some(dir) = log_dir() else {
+        eprintln!("[WARN][NATIVE-POC] log file: unable to resolve log directory");
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!(
+            "[WARN][NATIVE-POC] log file: failed to create {}: {e}",
+            dir.display()
         );
-
-        // ERROR and WARN go to stderr, others to stdout
-        if record.level() <= Level::Warn {
-            eprintln!("{}", message);
-        } else {
-            println!("{}", message);
-        }
-
-        // In release builds, write WARN and ERROR to log file
-        if !cfg!(debug_assertions) && record.level() <= Level::Warn {
-            write_to_log_file(label, "BACKEND", &record.args().to_string());
+        return;
+    }
+    let path = dir.join("emterm.log");
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(file) => *LOG_FILE.lock().unwrap() = Some(file),
+        Err(e) => {
+            eprintln!(
+                "[WARN][NATIVE-POC] log file: failed to open {}: {e}",
+                path.display()
+            );
         }
     }
-
-    fn flush(&self) {}
 }
 
-/// Formats a frontend log message with the appropriate color and label.
-///
-/// Returns the formatted string ready for output.
-pub fn format_frontend_log(level: &str, message: &str) -> String {
-    let (color, label) = match level {
-        "error" => (frontend_colors::ERROR, "ERROR"),
-        "warn" => (frontend_colors::WARN, "WARN"),
-        "info" => (frontend_colors::INFO, "INFO"),
-        "debug" => (frontend_colors::DEBUG, "DEBUG"),
-        _ => (frontend_colors::LOG, "LOG"),
-    };
+/// Resolve the platform log directory (see [`init_log_file`]). Returns
+/// `None` on unsupported targets.
+pub(crate) fn log_dir() -> Option<std::path::PathBuf> {
+    const APP_ID: &str = "net.laser5.app.emterm";
 
-    // In release builds, write WARN and ERROR to log file
-    if !cfg!(debug_assertions) && (level == "error" || level == "warn") {
-        write_to_log_file(label, "FRONTEND", message);
+    #[cfg(target_os = "linux")]
+    {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
+            })?;
+        Some(base.join(APP_ID).join("logs"))
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)?;
+        Some(base.join(APP_ID).join("logs"))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+/// Append one plain-text line to `emterm.log`. No-op while recording is
+/// disabled or the file was never opened (debug builds, open failure).
+///
+/// The whole line is formatted into one `String` and emitted via a
+/// single `write_all` so the append is one `write()` syscall — the
+/// legacy Tauri build appends to the same file from its own process,
+/// and O_APPEND atomicity is only per-syscall, so a multi-write
+/// `writeln!` could interleave mid-line with the other producer.
+fn write_to_log_file(level: log::Level, message: &std::fmt::Arguments<'_>) {
+    if !RECORDING_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(mut guard) = LOG_FILE.lock() else {
+        return;
+    };
+    let Some(file) = guard.as_mut() else {
+        return;
+    };
+    let line = format!("{} [{}][NATIVE-POC] {}\n", timestamp(), level, message);
+    let _ = file.write_all(line.as_bytes());
+    let _ = file.flush();
+}
+
+/// `YYYY-MM-DD HH:MM:SS.mmm ±HH:MM` — src-tauri's chrono-built shape
+/// plus an explicit UTC offset, rendered from the crate's chrono-free
+/// local-time decomposition (`crate::localtime`). The offset makes
+/// each line self-describing: when no platform local-time API is
+/// available the components fall back to UTC and the suffix reads
+/// `+00:00`, so native-poc lines can never be mistaken for (or
+/// silently disagree with) the legacy build's local-time lines in the
+/// shared file.
+fn timestamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let ((y, mo, d, h, mi, s), off) =
+        crate::localtime::local_components_and_offset(now.as_secs() as i64);
     format!(
-        "{}[{}][FRONTEND]{} {}",
-        color,
-        label,
-        frontend_colors::RESET,
-        message
+        "{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.{ms:03} {offset}",
+        ms = now.subsec_millis(),
+        offset = offset_suffix(off)
     )
+}
+
+/// Render a UTC offset in seconds as `±HH:MM` (RFC 3339 style).
+fn offset_suffix(offset_secs: i32) -> String {
+    let sign = if offset_secs < 0 { '-' } else { '+' };
+    let abs = offset_secs.unsigned_abs();
+    format!("{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60)
+}
+
+/// Initialize the global logger. Safe to call multiple times.
+///
+/// Reads `RUST_LOG`. When unset, defaults to `info` for native-poc itself
+/// while clamping noisy framework loggers (`wgpu*`, `naga`) to `warn` so
+/// the per-frame `Device::maintain` info chatter does not flood the
+/// stderr in normal runs. Users can still opt into the verbose stream
+/// via `RUST_LOG=wgpu_core=info` (or similar) when debugging.
+pub fn init() {
+    INIT.call_once(|| {
+        // Set the env-var only if the user hasn't already provided one.
+        // We touch it from a single-threaded startup path (call_once on
+        // the main thread), well before any other component spawns
+        // threads that might also touch the environment. The intent is
+        // "default filter unless the user overrode it"; users can still
+        // opt back into the verbose stream with e.g.
+        // `RUST_LOG=wgpu_core=info`.
+        if std::env::var_os("RUST_LOG").is_none() {
+            // 2024-edition note: when this crate eventually moves to
+            // edition 2024 `set_var` becomes `unsafe`. Until then the
+            // call is safe under the single-threaded-startup invariant
+            // above.
+            std::env::set_var(
+                "RUST_LOG",
+                "info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,naga=warn",
+            );
+        }
+        let mut builder =
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+        builder.format(|buf, record| {
+            // Release builds mirror src-tauri's `BackendLogger::log`: WARN
+            // and ERROR also land in `emterm.log` when recording is on.
+            if !cfg!(debug_assertions) && record.level() <= log::Level::Warn {
+                write_to_log_file(record.level(), record.args());
+            }
+            writeln!(buf, "[{}][NATIVE-POC] {}", record.level(), record.args())
+        });
+        // Best-effort init; if a logger was already installed (unlikely in
+        // this binary) we silently continue.
+        let _ = builder.try_init();
+    });
 }
 
 #[cfg(test)]
@@ -247,35 +215,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format_frontend_log() {
-        let msg = format_frontend_log("debug", "test message");
-        assert!(msg.contains("[DEBUG][FRONTEND]"));
-        assert!(msg.contains("test message"));
-
-        let msg = format_frontend_log("error", "error message");
-        assert!(msg.contains("[ERROR][FRONTEND]"));
-
-        let msg = format_frontend_log("log", "log message");
-        assert!(msg.contains("[LOG][FRONTEND]"));
+    fn offset_suffix_renders_rfc3339_style() {
+        assert_eq!(offset_suffix(9 * 3600), "+09:00");
+        assert_eq!(offset_suffix(0), "+00:00");
+        assert_eq!(offset_suffix(-(3 * 3600 + 30 * 60)), "-03:30");
+        assert_eq!(offset_suffix(5 * 3600 + 45 * 60), "+05:45");
     }
 
     #[test]
-    fn test_backend_logger_enabled() {
-        let logger = BackendLogger::new(Level::Info);
-
-        // Info level logger should enable Error, Warn, Info
-        assert!(logger.enabled(&log::Metadata::builder().level(Level::Error).build()));
-        assert!(logger.enabled(&log::Metadata::builder().level(Level::Warn).build()));
-        assert!(logger.enabled(&log::Metadata::builder().level(Level::Info).build()));
-
-        // But not Debug or Trace
-        assert!(!logger.enabled(&log::Metadata::builder().level(Level::Debug).build()));
-        assert!(!logger.enabled(&log::Metadata::builder().level(Level::Trace).build()));
-    }
-
-    #[test]
-    fn test_get_log_file_path_default_none() {
-        // Without init, path should be None
-        assert!(get_log_file_path().is_none() || get_log_file_path().is_some());
+    fn timestamp_carries_an_explicit_offset() {
+        let ts = timestamp();
+        // `YYYY-MM-DD HH:MM:SS.mmm ±HH:MM` — the suffix is the part that
+        // keeps shared-log lines unambiguous, so pin its shape.
+        let (_, suffix) = ts.split_at(ts.len() - 6);
+        assert!(
+            suffix.starts_with('+') || suffix.starts_with('-'),
+            "timestamp missing offset suffix: {ts}"
+        );
+        assert_eq!(&suffix[3..4], ":");
     }
 }

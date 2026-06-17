@@ -1,13 +1,19 @@
-//! Convert parsed tmux.conf directives to eMterm mux settings.
+//! Convert parsed `tmux.conf` directives to eMterm mux settings.
+//!
+//! Ported from `src-tauri/src/mux/tmux_conf/converter.rs`. The output
+//! is a flat list of `(key, value)` strings the importer
+//! ([`crate::mux::tmux_import`]) applies onto `settings.json` as a JSON
+//! patch. Anything we don't model (`if-shell`, format strings, unknown
+//! bindings) becomes a warning instead.
 
 use super::parser::TmuxDirective;
 
 /// Conversion result: settings to apply + warnings for unsupported items.
 #[derive(Debug, Default)]
 pub struct ConversionResult {
-    /// Settings to apply (key-value pairs for mux section).
+    /// Settings to apply (key-value pairs targeting the `mux` section).
     pub settings: Vec<(String, String)>,
-    /// Warning messages for unsupported/ignored directives.
+    /// Warning messages for unsupported / ignored directives.
     pub warnings: Vec<String>,
 }
 
@@ -24,7 +30,6 @@ pub fn convert_directives(directives: &[TmuxDirective]) -> ConversionResult {
                 convert_bind_key(&mut result, key, command);
             }
             TmuxDirective::UnbindKey { key } => {
-                // Convert key notation but can't determine action without context
                 let converted = convert_key_notation(key);
                 result.warnings.push(format!(
                     "Skipped: unbind {} (unbind not supported, rebind in settings)",
@@ -72,7 +77,6 @@ fn convert_set_option(result: &mut ConversionResult, option: &str, value: &str) 
                 value
             ));
         }
-        // Options with format strings
         "status-left"
         | "status-right"
         | "status-style"
@@ -98,7 +102,8 @@ fn convert_set_option(result: &mut ConversionResult, option: &str, value: &str) 
     }
 }
 
-/// Convert tmux key notation (C-a, M-b) to eMterm notation (ctrl+a, alt+b).
+/// Convert tmux key notation (`C-a`, `M-b`) to eMterm notation
+/// (`Ctrl+A`, `Alt+B`).
 fn convert_key_notation(tmux_key: &str) -> String {
     if let Some(suffix) = tmux_key.strip_prefix("C-") {
         format!("Ctrl+{}", suffix.to_uppercase())
@@ -109,25 +114,22 @@ fn convert_key_notation(tmux_key: &str) -> String {
     }
 }
 
-/// Map tmux command string to eMterm mux action name.
-/// Returns None for unsupported commands.
+/// Map a tmux command string to an eMterm mux action name. Returns
+/// `None` for unsupported commands.
+///
+/// Allowlist source: [`crate::settings::MUX_ACTION_NAMES`] (the actions
+/// `RawSettings::merge_into` will accept under `mux.keybinds.*`). The
+/// `split-vertical` / `split-horizontal` / `next-pane` / `prev-pane` /
+/// `close-pane` / `zoom-toggle` / `copy-mode` / `paste` actions were
+/// removed by SPEC mux-feature-cleanup; terminal-multiplexer §FR10
+/// requires the importer log and skip them instead of writing dead
+/// `keybind.<removed-action>` entries to `settings.json`. WebView-side
+/// converter still emits the legacy names so its frontend can ignore
+/// them; native-poc has no such frontend, so we drop them entirely at
+/// the converter so they never reach the patch.
 fn tmux_command_to_action(command: &str) -> Option<&'static str> {
     let trimmed = command.trim();
-    if trimmed.starts_with("split-window -h") || trimmed.starts_with("split-window -bh") {
-        Some("split-vertical")
-    } else if trimmed.starts_with("split-window") {
-        Some("split-horizontal")
-    } else if trimmed.starts_with("select-pane") {
-        Some("next-pane")
-    } else if trimmed.starts_with("last-pane") {
-        Some("prev-pane")
-    } else if trimmed.starts_with("kill-pane")
-        || (trimmed.starts_with("confirm-before") && trimmed.contains("kill-pane"))
-    {
-        Some("close-pane")
-    } else if trimmed.starts_with("resize-pane -Z") {
-        Some("zoom-toggle")
-    } else if trimmed.starts_with("detach-client") || trimmed == "detach" {
+    if trimmed.starts_with("detach-client") || trimmed == "detach" {
         Some("detach")
     } else if trimmed.starts_with("new-window") {
         Some("new-window")
@@ -139,16 +141,15 @@ fn tmux_command_to_action(command: &str) -> Option<&'static str> {
         || (trimmed.starts_with("command-prompt") && trimmed.contains("rename-window"))
     {
         Some("rename-window")
-    } else if trimmed.starts_with("copy-mode") {
-        Some("copy-mode")
-    } else if trimmed.starts_with("paste-buffer") {
-        Some("paste")
     } else {
+        // Everything else — split-window / select-pane / last-pane /
+        // kill-pane / resize-pane -Z / copy-mode / paste-buffer / unknown —
+        // is unsupported. `convert_bind_key` will emit the existing
+        // "unsupported command" warning so the user sees what was dropped.
         None
     }
 }
 
-/// Convert a bind-key directive to eMterm action → key mapping.
 fn convert_bind_key(result: &mut ConversionResult, key: &str, command: &str) {
     match tmux_command_to_action(command) {
         Some(action) => {
@@ -166,30 +167,14 @@ fn convert_bind_key(result: &mut ConversionResult, key: &str, command: &str) {
     }
 }
 
-/// Auto-import tmux.conf from the user's home directory.
-/// Returns None if the file doesn't exist or HOME is not set.
-/// Returns Some(result) if the file was found and parsed.
-pub fn auto_import_tmux_conf() -> Option<ConversionResult> {
-    let home = std::env::var("HOME").ok()?;
-    let conf_path = std::path::PathBuf::from(home).join(".tmux.conf");
-    if !conf_path.exists() {
-        return None;
-    }
-    let contents = std::fs::read_to_string(&conf_path).ok()?;
-    let directives = super::parser::parse_tmux_conf(&contents);
-    let result = convert_directives(&directives);
-    Some(result)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::parser::parse_tmux_conf;
     use super::*;
 
     #[test]
-    fn test_convert_prefix() {
-        let directives = parse_tmux_conf("set -g prefix C-a");
-        let result = convert_directives(&directives);
+    fn convert_prefix() {
+        let result = convert_directives(&parse_tmux_conf("set -g prefix C-a"));
         assert_eq!(result.settings.len(), 1);
         assert_eq!(
             result.settings[0],
@@ -198,9 +183,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_mouse() {
-        let directives = parse_tmux_conf("set -g mouse on");
-        let result = convert_directives(&directives);
+    fn convert_mouse() {
+        let result = convert_directives(&parse_tmux_conf("set -g mouse on"));
         assert_eq!(
             result.settings[0],
             ("mouse".to_string(), "true".to_string())
@@ -208,9 +192,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_base_index() {
-        let directives = parse_tmux_conf("set -g base-index 1");
-        let result = convert_directives(&directives);
+    fn convert_base_index() {
+        let result = convert_directives(&parse_tmux_conf("set -g base-index 1"));
         assert_eq!(
             result.settings[0],
             ("base_index".to_string(), "1".to_string())
@@ -218,9 +201,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_status_position() {
-        let directives = parse_tmux_conf("set -g status-position top");
-        let result = convert_directives(&directives);
+    fn convert_status_position() {
+        let result = convert_directives(&parse_tmux_conf("set -g status-position top"));
         assert_eq!(
             result.settings[0],
             ("status_position".to_string(), "top".to_string())
@@ -228,9 +210,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_bind_key_known_action() {
-        let directives = parse_tmux_conf("bind c new-window");
-        let result = convert_directives(&directives);
+    fn convert_bind_key_known_action() {
+        let result = convert_directives(&parse_tmux_conf("bind c new-window"));
         assert_eq!(
             result.settings[0],
             ("keybind.new-window".to_string(), "c".to_string())
@@ -238,9 +219,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_bind_key_with_modifier() {
-        let directives = parse_tmux_conf("bind C-n new-window");
-        let result = convert_directives(&directives);
+    fn convert_bind_key_with_modifier() {
+        let result = convert_directives(&parse_tmux_conf("bind C-n new-window"));
         assert_eq!(
             result.settings[0],
             ("keybind.new-window".to_string(), "Ctrl+N".to_string())
@@ -248,53 +228,102 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_bind_key_unknown_command() {
-        let directives = parse_tmux_conf("bind r source-file ~/.tmux.conf");
-        let result = convert_directives(&directives);
+    fn convert_bind_key_unknown_command() {
+        let result = convert_directives(&parse_tmux_conf("bind r source-file ~/.tmux.conf"));
         assert!(result.settings.is_empty());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("unsupported command")));
+    }
+
+    #[test]
+    fn convert_bind_key_split_is_skipped() {
+        // SPEC mux-feature-cleanup removed the `split-vertical` action;
+        // terminal-multiplexer §FR10 mandates "logged and skipped" for
+        // unsupported actions. The converter must NOT write a dead
+        // `keybind.split-vertical` entry to settings.json.
+        let result = convert_directives(&parse_tmux_conf("bind | split-window -h"));
+        assert!(
+            result.settings.is_empty(),
+            "split-window must not produce a removed-action keybind"
+        );
         assert!(
             result
                 .warnings
                 .iter()
-                .any(|w| w.contains("unsupported command"))
+                .any(|w| w.contains("unsupported command")),
+            "split-window must emit an 'unsupported command' warning"
         );
     }
 
     #[test]
-    fn test_convert_bind_key_split() {
-        let directives = parse_tmux_conf("bind | split-window -h");
-        let result = convert_directives(&directives);
-        assert_eq!(
-            result.settings[0],
-            ("keybind.split-vertical".to_string(), "|".to_string())
-        );
+    fn convert_bind_key_copy_mode_is_skipped() {
+        // Sibling regression for `copy-mode`, also removed by SPEC.
+        let result = convert_directives(&parse_tmux_conf("bind [ copy-mode"));
+        assert!(result.settings.is_empty());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("unsupported command")));
     }
 
     #[test]
-    fn test_convert_unbind_key() {
-        let directives = parse_tmux_conf("unbind C-b");
-        let result = convert_directives(&directives);
+    fn convert_bind_key_pane_actions_are_skipped() {
+        // Sibling regression: every removed pane action must produce no
+        // settings and one warning each. Keeps this list in lockstep with
+        // `tmux_command_to_action`'s allowlist.
+        // Note: avoid `;` in the key column — `tokenize()` treats an
+        // unescaped semicolon as a top-level statement separator, which
+        // truncates the line before the command is reached. Real tmux
+        // configs use `bind \;` for the literal-semicolon binding; the
+        // pane-action coverage doesn't need to exercise that escape.
+        for line in [
+            "bind | split-window -h",
+            "bind - split-window",
+            "bind o select-pane -t :.+",
+            "bind L last-pane",
+            "bind x kill-pane",
+            "bind z resize-pane -Z",
+            "bind ] paste-buffer",
+        ] {
+            let result = convert_directives(&parse_tmux_conf(line));
+            assert!(
+                result.settings.is_empty(),
+                "{line}: must not produce settings"
+            );
+            assert!(
+                result
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("unsupported command")),
+                "{line}: must emit unsupported-command warning"
+            );
+        }
+    }
+
+    #[test]
+    fn convert_unbind_key() {
+        let result = convert_directives(&parse_tmux_conf("unbind C-b"));
         assert!(result.settings.is_empty());
         assert!(result.warnings.iter().any(|w| w.contains("unbind")));
     }
 
     #[test]
-    fn test_unsupported_generates_warning() {
-        let directives = parse_tmux_conf("if-shell 'test -f foo' 'source foo'");
-        let result = convert_directives(&directives);
+    fn unsupported_generates_warning() {
+        let result = convert_directives(&parse_tmux_conf("if-shell 'test -f foo' 'source foo'"));
         assert_eq!(result.warnings.len(), 1);
         assert!(result.warnings[0].contains("Skipped"));
     }
 
     #[test]
-    fn test_format_string_warning() {
-        let directives = parse_tmux_conf("set -g status-left '#{session_name}'");
-        let result = convert_directives(&directives);
+    fn format_string_warning() {
+        let result = convert_directives(&parse_tmux_conf("set -g status-left '#{session_name}'"));
         assert!(result.warnings.iter().any(|w| w.contains("format strings")));
     }
 
     #[test]
-    fn test_convert_key_notation() {
+    fn convert_key_notation_cases() {
         assert_eq!(convert_key_notation("C-a"), "Ctrl+A");
         assert_eq!(convert_key_notation("M-b"), "Alt+B");
         assert_eq!(convert_key_notation("F12"), "F12");
@@ -302,9 +331,9 @@ mod tests {
     }
 
     #[test]
-    fn test_full_config_conversion() {
+    fn full_config_conversion() {
         let conf = "
-# My tmux config
+# my tmux config
 set -g prefix C-a
 unbind C-b
 set -g mouse on
@@ -314,55 +343,10 @@ bind r source-file ~/.tmux.conf
 bind c new-window
 if-shell 'test -f ~/.local.conf' 'source ~/.local.conf'
 ";
-        let directives = parse_tmux_conf(conf);
-        let result = convert_directives(&directives);
-
+        let result = convert_directives(&parse_tmux_conf(conf));
         // 5 settings: prefix, mouse, base-index, status-position, keybind.new-window
         assert_eq!(result.settings.len(), 5);
-        // 3 warnings: unbind C-b, bind r (unsupported command), if-shell
+        // 3 warnings: unbind C-b, bind r (unsupported), if-shell
         assert_eq!(result.warnings.len(), 3);
-    }
-
-    #[test]
-    fn test_auto_import_no_home() {
-        temp_env::with_var_unset("HOME", || {
-            assert!(auto_import_tmux_conf().is_none());
-        });
-    }
-
-    #[test]
-    fn test_auto_import_no_file() {
-        temp_env::with_var(
-            "HOME",
-            Some("/tmp/nonexistent_test_dir_auto_import"),
-            || {
-                assert!(auto_import_tmux_conf().is_none());
-            },
-        );
-    }
-
-    #[test]
-    fn test_auto_import_with_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let conf_path = dir.path().join(".tmux.conf");
-        std::fs::write(&conf_path, "set -g prefix C-a\nset -g mouse on\n").unwrap();
-
-        temp_env::with_var("HOME", Some(dir.path().to_str().unwrap()), || {
-            let result = auto_import_tmux_conf();
-            assert!(result.is_some());
-            let result = result.unwrap();
-            assert!(
-                result
-                    .settings
-                    .iter()
-                    .any(|(k, v)| k == "prefix" && v == "Ctrl+A")
-            );
-            assert!(
-                result
-                    .settings
-                    .iter()
-                    .any(|(k, v)| k == "mouse" && v == "true")
-            );
-        });
     }
 }

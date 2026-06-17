@@ -1,32 +1,33 @@
 # CLAUDE.md
 
-eMterm is a terminal emulator for Linux and Windows, built with Tauri, featuring rich rendering capabilities including inline images and Markdown display.
+eMterm is a native terminal emulator for Linux and Windows with a wgpu+swash render pipeline and child WebView windows for rich Markdown / JSON / YAML / image display and the settings panel.
 
 ## What (Technology Stack)
 
-**Primary Technologies:**
-- Rust (Tauri backend) - PTY management, image processing, IPC
-- Rust/WebAssembly (WASM) - ANSI parsing, grid state, Unicode processing
-- Vanilla TypeScript (frontend) - Terminal UI, Canvas rendering, event handling
-- Bun - Package manager and bundler
+**Primary technologies:**
+- Rust — native terminal stack: winit (event loop, IME), wgpu (GPU surface), egui (in-process UI), swash + zeno + fontdb (font rasterization), portable-pty (PTY abstraction)
+- Rust + wry — child WebView windows (Markdown viewer, JSON/YAML data viewer, settings panel). Linux uses GTK + WebKitGTK, Windows uses WebView2 (no extra DLL needed)
+- TypeScript (vanilla, no framework) — the child WebView frontends (`src-tauri/{viewer,settings}/web/`) and the shared web modules they import from (`src-tauri/web-shared/`)
+- Bun — TypeScript bundler / test runner / package manager for the child WebView bundles only. The Rust binary embeds the bundles via `build.rs`
 
-**Project Type:** Desktop application (Tauri)
+**Project type:** Desktop application (native Rust + child WebView windows; not Tauri-bundled)
 
-**Key Features:**
-- Full ANSI control sequence support
+**Key features:**
+- Full ANSI control sequence support (parsed by `crates/term_core`)
 - Kitty Graphics Protocol / SIXEL for inline images
-- Custom OSC extension for Markdown rendering
-- WebView-based rich content display
+- Custom OSC extension for Markdown / JSON / YAML rendering in child WebView windows
+- mux: tmux-style multiplexing (windows / tabs / panes) inside one process
+- Low-latency typing with a wgpu render pipeline driven by the winit event loop
 
 ## Why (Project Purpose)
 
-A modern terminal emulator that combines traditional terminal reliability with rich content rendering. It enables displaying images and formatted Markdown directly in the terminal via control sequences, while maintaining low-latency typing performance.
+A modern terminal emulator that combines traditional terminal reliability with rich content rendering. It displays images and formatted Markdown / JSON / YAML directly in the terminal via control sequences while keeping latency low.
 
-**Design Philosophy:**
-- AI-first: Built for the AI era, prioritizing compatibility with AI coding tools like Claude Code
+**Design philosophy:**
+- AI-first: built for the AI era, prioritizing compatibility with AI coding tools like Claude Code
 - Explicit display commands only (no auto-detection)
 - Stateless CLI design (works over SSH)
-- Robust isolation (XSS protection, resource management)
+- Robust isolation (XSS protection in child WebViews, resource management)
 
 ## How (Development Workflow)
 
@@ -34,177 +35,133 @@ A modern terminal emulator that combines traditional terminal reliability with r
 
 ```bash
 bun install
+make setup   # rustup target add x86_64-pc-windows-msvc + cargo install cargo-xwin
 ```
 
 ### Icon Generation
 
 Requires `rsvg-convert` or `magick` (ImageMagick):
 ```bash
-bun run icons
+bash scripts/generate-icons.sh
 ```
-Generates all platform icons from `assets/eMterm.svg`. Also runs automatically via `postinstall` and `prebuild` hooks.
+Generates `src-tauri/icons/{32x32,128x128,128x128@2x}.png` from `assets/eMterm.svg`. Called automatically by `make dpkg`.
 
 ### Running the Project
 
-**Development:**
+**Development (Linux host, GUI):**
 ```bash
-bun tauri dev
+make dev          # bun run build:viewer + build:settings + cargo run
 ```
 
-**Build:**
+**Release build (Linux, GUI):**
 ```bash
-bun tauri build
+make build        # CARGO_TARGET_DIR=src-tauri/target-host cargo build --release
 ```
+
+**CLI-only build (no winit/wgpu/wry):**
+```bash
+make cli-build    # cargo build --release --no-default-features
+```
+
+**Windows cross-build:**
+```bash
+make win-build    # CARGO_TARGET_DIR=src-tauri/target-win cargo xwin build --release --target x86_64-pc-windows-msvc
+```
+
+**deb packages:**
+```bash
+make dpkg         # build/emterm_<ver>_<arch>.deb (GUI, depends on libwebkit2gtk-4.1-0)
+make cli-dpkg     # build/emterm-cli_<ver>_<arch>.deb (CLI only, depends on libc6)
+```
+
+### Build Layout
+
+The `src-tauri/` crate uses dedicated `CARGO_TARGET_DIR` paths to keep the
+fast debug + test cycle isolated from the release binary the user runs:
+
+| Purpose                      | Target dir                  |
+| ---------------------------- | --------------------------- |
+| Quick check / unit tests     | `src-tauri/target`          |
+| Release binary (Linux host)  | `src-tauri/target-host`     |
+| Windows cross-build          | `src-tauri/target-win`      |
+
+Always pass `--manifest-path src-tauri/Cargo.toml` and `CARGO_TARGET_DIR=<one of the above>` so concurrent sessions agree on where the binary lives. The release binary lives at `src-tauri/target-host/release/emterm` (or `.exe` on Windows).
 
 ### Testing & Verification
 
-**⚠️ Prefer Docker for test execution.** Running tests on the host risks corrupting local config files and caches.
-
-**Docker (recommended):**
+**Rust unit + integration tests** (default features):
 ```bash
-# Rust tests
-docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "cargo test --manifest-path src-tauri/Cargo.toml"
-
-# TypeScript tests
-docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "bun test"
-
-# TypeScript typecheck
-docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c "bun run typecheck"
-
-# E2E tests (full cycle)
-./scripts/run-e2e-docker.sh
-
-# Reset build caches (after Dockerfile.e2e changes or stale state)
-docker compose -f docker-compose.e2e.yml down -v
+CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-**Host execution (only when explicitly permitted by the developer):**
+**CLI-only feature check** (verifies feature gates don't break):
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml
-bun test
-bun run typecheck
+CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
 ```
 
-**E2E verification (Docker + tauri-driver):**
-
-Always use Docker for UI verification during implementation and debugging. Never run GUI tests on the host.
-
+**TypeScript (child WebView bundles):**
 ```bash
-# Build Docker image (first time or after Dockerfile.e2e changes)
-./scripts/run-e2e-docker.sh build
-
-# Run all E2E tests
-./scripts/run-e2e-docker.sh test
-
-# Run a specific spec (primary method during development)
-./scripts/run-e2e-docker.sh test terminal.e2e.js
-
-# Full cycle (build image → run tests)
-./scripts/run-e2e-docker.sh
+bun test            # uses test-setup.ts (happy-dom + i18n init)
+bun run typecheck   # tsc --noEmit, scoped to src-tauri/{viewer,settings}/web
 ```
-
-Architecture: `Xvfb (virtual display)` → `tauri-driver` → `WebKitWebDriver` → `WebdriverIO`. Screenshots are saved to `e2e-tests/screenshots/`.
-
-Notes for writing E2E specs:
-- Place spec files in `e2e-tests/specs/` as `*.e2e.js`
-- Docker config: `e2e-tests/wdio.docker.conf.js`
-- Timeouts are set to 180s for the Docker environment
-- `tauri:options` points to the pre-built debug binary inside the container
 
 ### Project Structure
 
 ```
-src-tauri/         - Rust backend (Tauri core, PTY, image processing)
-src/               - TypeScript frontend (terminal UI, rendering)
-wasm/              - Rust WASM module (ANSI parser, grid, Unicode)
-tmp/               - Temporary files and drafts
+src-tauri/                  - Rust crate (the `emterm` binary)
+  Cargo.toml                - features: default=["gui"]; --no-default-features = CLI only
+  build.rs                  - embeds viewer/dist + settings/dist when gui is on
+  src/                      - Rust source
+    main.rs                 - dispatch: cli subcommand vs --viewer / --image-viewer / --data-viewer / --settings / terminal
+    lib.rs                  - module roster; GUI modules behind #[cfg(feature = "gui")]
+    cli/                    - CLI subcommands (markdown / json / yaml / image)
+    settings_core.rs        - CLI-shared (Language enum, settings_path)
+    settings.rs             - GUI runtime settings (re-exports settings_core::*)
+    {app,callbacks,render,ui,tabs,window_host,...}  - GUI-only modules
+  viewer/web/               - Markdown / image / data viewer TypeScript entry
+  viewer/dist/              - bun bundle output (gitignored)
+  settings/web/             - settings panel TypeScript entry
+  settings/dist/            - bun bundle output (gitignored)
+  web-shared/               - TypeScript shared between viewer & settings web entries
+                              (Markdown renderer, settings panel, i18n, etc.)
+  assets/fonts/             - bundled Noto fonts (CJK, color emoji)
+  icons/                    - PNGs generated by scripts/generate-icons.sh (gitignored)
+  examples/                 - swash / font probes (required-features = ["gui"])
+  tests/                    - integration tests (cli_subcommands.rs)
+crates/
+  app_settings              - settings.json schema (serde shape)
+  term_core                 - ANSI parser + grid + Unicode width
+  term_images               - Kitty / SIXEL decoders + APC/DCS parsers
+  mux_ipc                   - mux protocol types
+scripts/
+  build-dpkg.sh             - deb packager (GUI or EMTERM_CLI_ONLY=1)
+  generate-icons.sh         - SVG → PNG icons via rsvg-convert / magick
+  measure-hidden-rss.sh     - RSS sampling helper
+tmp/                        - temporary files and drafts (gitignored)
 ```
 
-### Architecture & Development Policy
+### Feature Gates
 
-**Backend (Rust / `src-tauri/`)**
+The `gui` feature (default-on) toggles the windowed terminal stack:
 
-The backend handles OS-level operations and resource-intensive processing that requires native performance or system access:
+- **`gui` on** — full binary: winit + wgpu + egui terminal, wry child WebViews, mux/tabs/PTY, term_core/term_images/mux_ipc, font stack (swash/zeno/fontdb), bell/notifications/clipboard/SVG icon
+- **`gui` off** (`--no-default-features`) — CLI only: just the `markdown` / `json` / `yaml` / `image` subcommands dispatched from `cli/`. The CLI deb (`emterm-cli`) ships this build and depends only on libc6
 
-- **PTY management** - Session lifecycle, shell spawning, lock-free writer threads via channels
-- **Image processing** - Kitty/SIXEL decoding, LRU cache (320MB quota), animation frames
-- **IPC bridge** - Tauri commands/events, binary PTY data streaming via Channel
-- **CLI commands** - `emterm markdown`, `emterm image` (stateless, pipeable)
-- **Settings & i18n** - Config persistence, validation with `rust-i18n`
-
-Key conventions:
-- Synchronous Tauri commands for hot paths (e.g., `pty_write`) to avoid async overhead
-- `Arc<RwLock<HashMap>>` for session registries (read-optimized)
-- Atomic operations for race-free session creation/removal
-- `portable-pty` for PTY abstraction (Linux/Windows)
-
-**Frontend (TypeScript + WASM / `src/` + `wasm/`)**
-
-The frontend is split between WASM (performance-critical data processing) and TypeScript (UI, events, coordination).
-
-WASM module (`wasm/src/`) owns:
-- **ANSI/VT100 parser** - Full state machine for escape sequences (CSI, ESC, OSC, APC, DCS)
-- **Terminal grid** - Ring buffer storage, viewport, cursor state, dirty row tracking
-- **Unicode processing** - Codepoint width, emoji detection, grapheme classification
-- **Control sequence handlers** - C0, CSI cursor/screen/edit/scroll/modes, ESC, OSC
-
-TypeScript (`src/`) owns:
-- **Canvas 2D rendering** - Differential drawing based on WASM dirty flags
-- **Event handling** - Keyboard, mouse, IME, resize
-- **UI components** - Tab bar, settings panel, image viewer, markdown renderer, selection
-- **Application orchestration** - TerminalApp, TerminalState, PTY client
-- **WASM integration layer** - `src/terminal/wasm/` (loader, proxies, adapters)
-
-Data flow: `PTY (Rust) → Binary Channel → PtyClient (TS) → process_pty_data (WASM) → callbacks (TS) → Canvas render (TS)`
-
-**WASM Adoption Criteria**
-
-Use WASM when:
-- Processing runs on **every byte of PTY output** (parser, grid updates, Unicode width)
-- The operation is **CPU-bound with tight loops** (escape sequence state machine, cell iteration)
-- **Data stays within WASM** across multiple operations (grid read/write without crossing boundary)
-- The logic is **algorithmically complex** and benefits from Rust's type safety (parser state machine, ring buffer)
-
-Keep in TypeScript when:
-- The code **interacts with DOM/Canvas/Browser APIs** (rendering, clipboard, notifications)
-- The operation is **event-driven and infrequent** (user input, settings, tab management)
-- It requires **Tauri API access** (IPC commands, file dialogs, system tray)
-- The data **crosses the WASM boundary per-call** with no batching benefit (one-shot lookups)
-
-### UI Design Guidelines
-
-UI implementation MUST follow `doc/UI-DESIGN-GUIDELINES.yaml`. This file defines:
-- Design tokens (shape, motion, color-roles, typography, spacing)
-- Component specifications (classes, properties, states, variants)
-- Z-index scale
-- Known issues
-
-When implementing or modifying UI components, always refer to this file for correct token values, component dimensions, and state styles.
-
-When UI design changes are made (new components, modified styles, updated tokens), `doc/UI-DESIGN-GUIDELINES.yaml` MUST be updated to reflect the changes. Run `/gen-design-guidelines` to update.
+When you add a new module that uses GUI-only crates (winit, wgpu, wry, swash, etc.) declare it under `#[cfg(feature = "gui")]` in `src-tauri/src/lib.rs`. CLI-shared code should depend only on the always-built crates (serde / clap / image / app_settings / etc.).
 
 ### Logging
 
-Unified logging format with origin labels (`[LEVEL][ORIGIN]`):
+Logger output format: `[LEVEL] <message>` via `env_logger`. Frontend (child WebView) `console.*` calls are forwarded over the wry IPC channel and merged into the same backend log.
 
-**Frontend (TypeScript)** - brighter colors:
-- `console.debug()` → `[DEBUG][FRONTEND]` (bright gray)
-- `console.log()` → `[LOG][FRONTEND]` (bright green)
-- `console.info()` → `[INFO][FRONTEND]` (bright cyan)
-- `console.warn()` → `[WARN][FRONTEND]` (bright yellow, stderr)
-- `console.error()` → `[ERROR][FRONTEND]` (bright red, stderr)
-
-**Backend (Rust)** - dimmer colors:
-- `log::debug!()` → `[DEBUG][BACKEND]` (dim gray)
-- `log::info!()` → `[INFO][BACKEND]` (cyan)
-- `log::warn!()` → `[WARN][BACKEND]` (yellow, stderr)
-- `log::error!()` → `[ERROR][BACKEND]` (red, stderr)
+Log file (Linux): `~/.local/share/net.laser5.app.emterm/logs/emterm.log`. Release builds persist only `warn` and higher.
 
 ## CLI Commands
 
-The application provides helper CLI commands:
-- `emterm` - Terminal application
-- `emterm markdown` - Output Markdown display sequences to stdout
-- `emterm image` - Output image display sequences to stdout
+The application binary doubles as a CLI helper:
+- `emterm` — launches the terminal (GUI build only)
+- `emterm markdown <file>` — emit Markdown display sequence to stdout
+- `emterm json <file>` — emit JSON display sequence to stdout
+- `emterm yaml <file>` — emit YAML display sequence to stdout
+- `emterm image <file> [--protocol kitty|sixel]` — emit image display sequence to stdout
 
 **tmux support:** Inside tmux, CLI commands automatically wrap sequences in DCS passthrough (`ESC P tmux; ... ESC \`). Requires `set -g allow-passthrough on` in tmux config.

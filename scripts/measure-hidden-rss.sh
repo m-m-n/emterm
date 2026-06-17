@@ -9,7 +9,7 @@
 #   ./scripts/measure-hidden-rss.sh <pid> [interval_seconds]
 #
 # Example:
-#   pid=$(pgrep -f 'src-tauri/target/.*emterm$' | head -1)
+#   pid=$(pgrep -f 'src-tauri/target-host/release/emterm$' | head -1)
 #   ./scripts/measure-hidden-rss.sh "$pid" 60
 #
 # Output:
