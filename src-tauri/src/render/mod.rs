@@ -47,7 +47,7 @@ use term_core::terminal_core::TerminalCore;
 use term_core::{char_width, is_ambiguous_width};
 
 use crate::app::{App, BLINK_HALF_MS};
-use crate::render::terminal_grid_pass::CellInput;
+use crate::render::terminal_grid_pass::{CellInput, GlyphFit};
 use crate::render::theme::{Rgb, Theme};
 use crate::selection::Selection;
 use crate::settings::AmbiguousWidthMode;
@@ -667,7 +667,15 @@ pub fn collect_cell_inputs(
                     strikethrough: style.strikethrough,
                     draw_background: style.bg != bg_default,
                     bg_extend_below: 0.0,
-                    fit_glyph_to_cell: false,
+                    // Horizontal advance-based shrink-to-fit
+                    // (ambiguous-width-rendering SPEC FR2). Glyphs whose
+                    // design advance exceeds their cell footprint are
+                    // scaled down so they fit (e.g. U+273B ✻ rasterized
+                    // from a CJK Gothic fallback at ~1.5 em). Monospace
+                    // ascii has advance == cell_w → sx = 1.0 (no
+                    // shrink), so Latin AA overhang from hinted bitmaps
+                    // keeps its existing subpixel-clip path.
+                    fit: GlyphFit::HorizontalOnly,
                     bold: style.bold,
                 });
                 col = col.saturating_add(cell_width_cells.max(1) as u16);
@@ -715,7 +723,9 @@ pub fn collect_cell_inputs(
                 strikethrough: style.strikethrough,
                 draw_background: style.bg != bg_default,
                 bg_extend_below: 0.0,
-                fit_glyph_to_cell: false,
+                // Advance-based shrink-to-fit (SPEC FR2): see the
+                // matching comment in the scrollback branch above.
+                fit: GlyphFit::HorizontalOnly,
                 bold: style.bold,
             });
 
@@ -813,7 +823,9 @@ pub fn apply_preedit_overlay(
             strikethrough: false,
             draw_background: bg_preedit != bg_default,
             bg_extend_below,
-            fit_glyph_to_cell: true,
+            // IME preedit needs the full both-axis clamp so CJK
+            // descenders past `cell_h` stay inside the highlight bg.
+            fit: GlyphFit::Both,
             bold: false,
         });
         col = col.saturating_add(w);
