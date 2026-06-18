@@ -166,6 +166,25 @@ pub struct Tab {
     /// tabs. SFTP upload reads this to rebuild the connection inputs for a
     /// file drop on this tab.
     pub ssh_connection_name: Option<String>,
+    /// Saved scroll position while this tab is inactive (FR3). `App` keeps
+    /// the *active* tab's live scroll value in `App::scroll_position`; on a
+    /// native tab switch it parks the outgoing tab's value here and reloads
+    /// the incoming tab's. Defaults to `Live` (bottom). For a mux-attached
+    /// tab this holds the active pane's position (per-pane positions live in
+    /// `mux_group.pane_scrolls`); the two are reconciled on pane switch.
+    pub scroll_position: crate::app::ScrollPosition,
+    /// Latched by the inbound (daemon-initiated) `SwitchWindow` reconcile and
+    /// the `PaneCreated` append (FR3 pane wiring): holds the **pane id** of the
+    /// active pane *before* the switch/create moved it. The daemon handler runs
+    /// deep inside `pump`, with no access to `App::scroll_position`, so it
+    /// records the outgoing pane here; `App::pump_all` drains it via
+    /// [`Tab::take_pending_pane_switch`] and performs the App-side per-pane
+    /// scroll save/restore + full-redraw, exactly as the local switch path does
+    /// inline. Stored by pane **id** (not index) so a same-pump `PtyExited`
+    /// that removes a pane — shifting the parallel arrays — cannot make the
+    /// latch park the outgoing scroll into the wrong slot; the consumer
+    /// resolves the id to a current index and skips if the pane is gone.
+    pending_pane_switch_from: Option<u32>,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -285,6 +304,8 @@ impl Tab {
             pending_eviction_delta: 0,
             pending_frame_reset: false,
             ssh_connection_name,
+            scroll_position: crate::app::ScrollPosition::default(),
+            pending_pane_switch_from: None,
         }
     }
 
@@ -351,6 +372,17 @@ impl Tab {
     /// active tab to drop the now-meaningless absolute-row selection.
     pub fn take_frame_reset(&mut self) -> bool {
         std::mem::take(&mut self.pending_frame_reset)
+    }
+
+    /// Consume the inbound-pane-switch latch (FR3 pane wiring). Returns the
+    /// outgoing active pane **id** recorded by a daemon-initiated `SwitchWindow`
+    /// or `PaneCreated` that actually moved the active pane, or `None` when no
+    /// such transition occurred this pump. `App::pump_all` drains this, resolves
+    /// the pane id to its current index (skipping if the pane has since exited),
+    /// parks the outgoing pane's scroll position there, then reloads the new
+    /// active pane's saved position and forces a full redraw (FR2).
+    pub fn take_pending_pane_switch(&mut self) -> Option<u32> {
+        self.pending_pane_switch_from.take()
     }
 
     /// Pause the native PTY reader. Subsequent PTY output goes into the
@@ -693,6 +725,15 @@ impl Tab {
                 // name "Terminal" (OQ1 resolved); daemon-pushed RenameWindow
                 // later overwrites it.
                 let new_id = group.fresh_window_id();
+                // The new window becomes the active sub-tab (see `push`). Treat
+                // that like a pane switch for scroll bookkeeping: latch the
+                // outgoing pane id so `App::pump_all` parks the outgoing pane's
+                // scroll into its slot and reloads the new pane's (default
+                // `Live`) slot — first-latch-only, matching the SwitchWindow
+                // path. `active_pane_id()` is `None` for the tab's first mux
+                // window (empty group before this push), so that case correctly
+                // latches nothing.
+                let from_pane = group.active_pane_id();
                 group.push(
                     MuxWindow {
                         id: new_id,
@@ -700,6 +741,11 @@ impl Tab {
                     },
                     msg.pane_id,
                 );
+                if let Some(from) = from_pane {
+                    if self.pending_pane_switch_from.is_none() {
+                        self.pending_pane_switch_from = Some(from);
+                    }
+                }
                 log::info!(
                     "mux apc: pane {} created (window {}, pending_consumed={}) for tab {:?}",
                     msg.pane_id,
@@ -738,6 +784,13 @@ impl Tab {
                 // Daemon-initiated switch (e.g. CLI `switch-window`): sync the
                 // active index to the window owning this pane. Port of
                 // `handleRemoteSwitchWindow`'s index resolution.
+                //
+                // Capture the outgoing active pane id before the sync so the
+                // App-side per-pane scroll save/restore (FR3) can park the
+                // outgoing pane's position — the daemon handler runs inside
+                // `pump`, with no access to `App::scroll_position`, so it
+                // latches the transition for `App::pump_all` to apply.
+                let from_pane = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
                 let synced = self
                     .mux_group
                     .as_mut()
@@ -749,6 +802,21 @@ impl Tab {
                         msg.pane_id,
                         self.title
                     );
+                    // Latch the outgoing pane id only when the switch actually
+                    // moved the active pane (a no-op switch onto the current
+                    // pane must not park/reload scroll or force a redraw), and
+                    // only for the FIRST move in this pump. Several SwitchWindow
+                    // messages can drain in one `pump` (A→B→C); only A is the
+                    // genuinely-displayed outgoing pane whose live scroll must be
+                    // parked — intermediate panes were never rendered. Keeping
+                    // the first `from` avoids parking the live scroll into a
+                    // wrong (intermediate) slot.
+                    let to_pane = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
+                    if let (Some(from), Some(to)) = (from_pane, to_pane) {
+                        if from != to && self.pending_pane_switch_from.is_none() {
+                            self.pending_pane_switch_from = Some(from);
+                        }
+                    }
                     // Reconcile the screen with the now-active window (parity
                     // with the WebView remote-switch path's `requestPaneSnapshot`).
                     self.request_pane_snapshot(msg.pane_id);
@@ -2818,6 +2886,138 @@ mod tests {
         tab.apply_mux_message(welcome_msg(&[(1, "a", 10)], 0));
         let changed = tab.apply_mux_message(switch_window(999));
         assert!(!changed);
+    }
+
+    // ── FR3 pane wiring: inbound SwitchWindow latches the outgoing index ───
+
+    #[test]
+    fn inbound_switch_latches_outgoing_pane_index() {
+        // A real inbound switch (active index moves 0 → 1) records the
+        // outgoing pane id (10) so `App::pump_all` can park its scroll position.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        assert!(tab.apply_mux_message(switch_window(20)));
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_index(), 1);
+        assert_eq!(
+            tab.take_pending_pane_switch(),
+            Some(10),
+            "the outgoing pane id (10) is latched for the App-side scroll save"
+        );
+        // The latch is one-shot.
+        assert_eq!(tab.take_pending_pane_switch(), None);
+    }
+
+    #[test]
+    fn inbound_switch_to_same_pane_does_not_latch() {
+        // Switching onto the already-active pane must not latch a transition
+        // (no scroll save/restore, no forced redraw).
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        // active is 0 (pane 10); switch to pane 10 again.
+        let changed = tab.apply_mux_message(switch_window(10));
+        assert!(changed, "set_active_by_pane still reports a match");
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_index(), 0);
+        assert_eq!(
+            tab.take_pending_pane_switch(),
+            None,
+            "a no-op switch onto the current pane latches nothing"
+        );
+    }
+
+    #[test]
+    fn inbound_switch_unknown_pane_does_not_latch() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        assert!(!tab.apply_mux_message(switch_window(999)));
+        assert_eq!(tab.take_pending_pane_switch(), None);
+    }
+
+    #[test]
+    fn inbound_multiple_switches_in_one_pump_latch_first_only() {
+        // Several SwitchWindow messages can drain in one `pump` before
+        // `App::pump_all` consumes the latch. A→B→C must keep the FIRST
+        // outgoing pane (A, id 10) — that is the genuinely-displayed pane whose
+        // live scroll must be parked; the intermediate pane (B) was never
+        // rendered. Overwriting with B would corrupt two panes' slots.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20), (3, "c", 30)], 0));
+        assert!(tab.apply_mux_message(switch_window(20))); // 0 → 1, latch pane 10
+        assert!(tab.apply_mux_message(switch_window(30))); // 1 → 2, must NOT overwrite
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_index(), 2);
+        assert_eq!(
+            tab.take_pending_pane_switch(),
+            Some(10),
+            "only the first outgoing pane id of the pump is latched"
+        );
+    }
+
+    #[test]
+    fn pane_created_latches_outgoing_index_for_scroll_save() {
+        // Creating a new window makes it the active sub-tab. That is a third
+        // unit-switch path: latch the outgoing pane id so `App::pump_all` parks
+        // the outgoing pane's scroll and resets the new (empty) pane to Live.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10)], 0));
+        assert!(tab.apply_mux_message(pane_created(20)));
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_index(), 1);
+        assert_eq!(
+            tab.take_pending_pane_switch(),
+            Some(10),
+            "the outgoing pane id (10) is latched on new-window create"
+        );
+    }
+
+    #[test]
+    fn latched_outgoing_pane_survives_same_pump_pane_removal() {
+        // Regression: the latch stores the outgoing pane *id*, not its index,
+        // so a same-pump `PtyExited` that removes a different pane (shifting the
+        // parallel arrays) cannot make the consumer park the outgoing scroll
+        // into the wrong slot. Sequence in one pump: active = pane 20 (index 1);
+        // switch to pane 30 (latch outgoing = pane 20); then pane 10 exits,
+        // shifting pane 20 from index 1 → 0. The latch still resolves to pane
+        // 20's NEW index (0); an index-based latch would have pointed at pane 30.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20), (3, "c", 30)], 1));
+        assert!(tab.apply_mux_message(switch_window(30))); // active 1 → 2, latch pane 20
+        assert!(tab.apply_mux_message(pty_exited(10))); // removes index 0, arrays shift
+        let latched = tab.take_pending_pane_switch();
+        assert_eq!(
+            latched,
+            Some(20),
+            "latch holds the outgoing pane id, not its index"
+        );
+        // The consumer resolves the id to its CURRENT index (pane 20 is now 0).
+        let idx = tab
+            .mux_group
+            .as_ref()
+            .unwrap()
+            .index_of_pane_id(latched.unwrap());
+        assert_eq!(
+            idx,
+            Some(0),
+            "outgoing pane 20 resolved to its post-removal index"
+        );
+    }
+
+    #[test]
+    fn latched_outgoing_pane_skipped_when_it_exits_same_pump() {
+        // When the outgoing pane itself exits in the same pump, its scroll slot
+        // is gone; the consumer's `index_of_pane_id` returns `None` and the
+        // park is skipped (no panic, nothing parked into a stale slot).
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        assert!(tab.apply_mux_message(switch_window(20))); // active 0 → 1, latch pane 10
+        assert!(tab.apply_mux_message(pty_exited(10))); // outgoing pane 10 exits
+        let latched = tab.take_pending_pane_switch();
+        assert_eq!(latched, Some(10));
+        assert_eq!(
+            tab.mux_group
+                .as_ref()
+                .unwrap()
+                .index_of_pane_id(latched.unwrap()),
+            None,
+            "exited outgoing pane resolves to no index → consumer skips the park"
+        );
     }
 
     // ── TS-16: scripted inbound sequence ──────────────────────────────────

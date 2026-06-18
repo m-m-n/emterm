@@ -46,6 +46,8 @@ pub mod prompts;
 #[cfg(feature = "gui")]
 pub mod render;
 #[cfg(feature = "gui")]
+pub mod scroll;
+#[cfg(feature = "gui")]
 pub mod search;
 #[cfg(feature = "gui")]
 pub mod sftp;

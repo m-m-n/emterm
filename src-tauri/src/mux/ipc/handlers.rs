@@ -19,7 +19,7 @@ use super::reattach::{
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     evaluate_output_target, resume_pane_with_permit, NotificationSender, PaneId, PtyOutputChunk,
-    SharedPaneExitSender, SharedShadowParser, TitleChangeSender,
+    SharedPaneExitSender, SharedScrollback, SharedShadowParser, TitleChangeSender,
 };
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
@@ -414,35 +414,66 @@ pub(super) async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<S
 /// (e.g. a reader-side snapshot-request barrier).
 pub(super) async fn handle_request_pane_snapshot(
     msg: &MuxMessage,
+    active_session_id: u32,
     session_manager: &Arc<Mutex<SessionManager>>,
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
 ) -> Result<(), bool> {
     let pane_id = msg.pane_id;
 
-    let shadow_parser: Option<SharedShadowParser> = {
+    // Resolve the shadow parser AND the scrollback buffer together so the
+    // on-demand snapshot mirrors the reattach construction (FR1): the daemon
+    // already holds the pane's scrollback for the pane's lifetime, so the
+    // history-bearing snapshot adds no new daemon state — only bytes the
+    // on-demand reply previously omitted.
+    //
+    // Authorization: the snapshot (screen + scrollback) is served ONLY for
+    // panes that belong to the connection's currently-attached session. A
+    // `pane_id` resolving to a different session is refused so a client cannot
+    // read another session's terminal history by guessing pane ids — the reply
+    // now carries scrollback, which commonly holds secrets / commands / file
+    // contents (this also closes the pre-existing screen-only exposure).
+    let resolved: Option<(SharedShadowParser, SharedScrollback)> = {
         let mgr = session_manager.lock().await;
-        mgr.find_pane(pane_id).and_then(|(sid, wid)| {
-            mgr.get_session(sid)
+        match mgr.find_pane(pane_id) {
+            None => {
+                log::warn!("RequestPaneSnapshot: pane {} not found; ignoring", pane_id);
+                None
+            }
+            Some((sid, _)) if sid != active_session_id => {
+                log::warn!(
+                    "RequestPaneSnapshot: pane {} owned by session {} but requester is attached to {}; refusing",
+                    pane_id, sid, active_session_id
+                );
+                None
+            }
+            Some((sid, wid)) => mgr
+                .get_session(sid)
                 .and_then(|s| s.windows.get(&wid))
                 .and_then(|w| w.panes.get(&pane_id))
-                .map(|p| p.shadow_parser.clone())
-        })
+                .map(|p| (p.shadow_parser.clone(), p.scrollback.clone())),
+        }
     };
 
-    let Some(shadow_parser) = shadow_parser else {
-        log::warn!("RequestPaneSnapshot: pane {} not found; ignoring", pane_id);
+    let Some((shadow_parser, scrollback)) = resolved else {
         return Ok(());
     };
 
-    let snapshot = build_shadow_parser_snapshot(&shadow_parser);
+    // Read the pane's scrollback WITHOUT clearing (the buffer lives for the
+    // lifetime of the pane; an empty buffer yields a valid clear + shadow
+    // snapshot). The client's reset_and_replay rebuilds history from it.
+    let scrollback_data = scrollback.lock().unwrap().read_all();
+    let snapshot = build_shadow_parser_snapshot(&shadow_parser, &scrollback_data);
     // Promoted from debug -> warn so release builds (which drop debug/info)
     // capture the snapshot-reply path during recovery investigations. The
     // call is rare (only on WASM recovery / window-switch reattach), so the
-    // log volume is bounded.
+    // log volume is bounded. The size now includes scrollback (NFR2: the
+    // payload scales like the reattach path), so this line doubles as the
+    // transfer-size diagnostic for the larger payload.
     log::warn!(
-        "RequestPaneSnapshot: pane {} -> {}B",
+        "RequestPaneSnapshot: pane {} -> {}B (scrollback {}B)",
         pane_id,
-        snapshot.len()
+        snapshot.len(),
+        scrollback_data.len()
     );
 
     // Send as a regular PTY output chunk so it interleaves correctly with any
