@@ -1,0 +1,138 @@
+schema_version: 1
+feature: mux-offthread-replay
+created: 2026-06-18
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 26b38e13ff0231041fe6f492a4023113ec8b3003
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 26b38e13ff0231041fe6f492a4023113ec8b3003
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 26b38e13ff0231041fe6f492a4023113ec8b3003
+  - id: implement
+    status: completed
+    completed_at_commit: 26b38e13ff0231041fe6f492a4023113ec8b3003
+  - id: check
+    status: completed
+    completed_at_commit: 26b38e13ff0231041fe6f492a4023113ec8b3003
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 26b38e13ff0231041fe6f492a4023113ec8b3003
+
+requirements:
+  FR1:
+    title: "Off-thread reparse with main-thread swap: payload ≥ threshold is parsed on a one-shot worker (TerminalCore @ current grid, process_pty_data_fully), swapped into tab.core on a later pump_all"
+    status: ok
+    tasks:
+      - build-core-from-snapshot-pure
+      - confirm-terminalcore-send
+      - pending-switch-state
+      - snapshot-dispatch-by-size
+      - poll-worker-and-swap
+    tests:
+      - TS-1
+      - TS-3
+      - TS-4
+  FR2:
+    title: "Pending-switch display: outgoing pane stays shown from switch request until swap (no blank frame)"
+    status: ok
+    tasks:
+      - pending-switch-state
+    tests:
+      - TS-9
+      - TS-11
+  FR3:
+    title: "Live-output ordering: target-pane PtyOutput arriving during pending switch is queued on the main thread and applied in arrival order after the swap"
+    status: ok
+    tasks:
+      - queue-live-output-during-pending
+      - post-swap-reconcile
+      - ordering-supersession-fallback-tests
+    tests:
+      - TS-5
+      - TS-8
+  FR4:
+    title: "Size-threshold fast path: payload < OFFTHREAD_REPLAY_THRESHOLD_BYTES (default 64 KiB ≈ ~7ms) reparses synchronously on the main thread (instant, no gap); only ≥ threshold goes off-thread"
+    status: ok
+    tasks:
+      - offthread-threshold-constant
+      - snapshot-dispatch-by-size
+    tests:
+      - TS-4
+  FR5:
+    title: "Supersession on rapid re-switch (and on grid resize): only the most recent target is applied; superseded intermediate / stale-sized results discarded; live queue follows latest target; intermediate panes never shown"
+    status: ok
+    tasks:
+      - supersession-latest-target
+      - pending-switch-state
+      - ordering-supersession-fallback-tests
+    tests:
+      - TS-6
+      - TS-12
+  FR6:
+    title: "Reconciliation split: byte→core parse on worker; marks/folds/selection/anchor reconcile + per-pane scroll restore on main thread after swap (reproduces reset_frame_for_replay semantics)"
+    status: ok
+    tasks:
+      - build-core-from-snapshot-pure
+      - post-swap-reconcile
+    tests:
+      - TS-1
+      - TS-8
+  FR7:
+    title: "Synchronous fallback on worker failure/panic: that switch reparses synchronously on the main thread (legacy path), preserving correctness"
+    status: ok
+    tasks:
+      - sync-fallback-on-failure
+      - ordering-supersession-fallback-tests
+    tests:
+      - TS-7
+  NFR1:
+    title: "Invariant preservation: mux-scroll-isolation FR2 (no residual rows) / FR3 (per-tab/per-pane scroll restore) and marks/folds/selection consistency maintained; non-mux and single-window mux unaffected"
+    status: ok
+    tasks:
+      - post-swap-reconcile
+      - invariant-regression-test
+    tests:
+      - TS-8
+      - TS-9
+  NFR2:
+    title: "Deterministic, non-flaky testability: worker parse exposed as a pure function (bytes + grid → TerminalCore) and unit-tested without going through pump_all; no new flaky async pump_all tests"
+    status: ok
+    tasks:
+      - build-core-from-snapshot-pure
+      - pure-parse-equivalence-test
+      - ordering-supersession-fallback-tests
+    tests:
+      - TS-1
+      - TS-2
+      - TS-5
+  NFR3:
+    title: "Portability: term_core + src-tauri changes keep Linux/Windows GUI and CLI-only (--no-default-features) builds green; off-thread path is GUI-only"
+    status: ok
+    tasks:
+      - confirm-terminalcore-send
+      - cli-only-check
+    tests:
+      - TS-3
+      - TS-10
+  NFR4:
+    title: "No memory regression: parsed core stays 1 per tab (transient in-flight worker core only); no per-pane resident cores, no LRU cache"
+    status: ok
+    tasks:
+      - pending-switch-state
+    tests: []

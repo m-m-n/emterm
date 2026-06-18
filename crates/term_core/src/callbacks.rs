@@ -17,7 +17,17 @@ use crate::terminal_core::TerminalCore;
 /// All methods take `&self` because `TerminalCore` invokes them while
 /// holding `&self` (no interior mutability required for the wasm wrapper
 /// which simply forwards to `js_sys::Function::callN`).
-pub trait TerminalCallbacks {
+///
+/// `Send` is required so a `TerminalCore` — which stores an
+/// `Option<Box<dyn TerminalCallbacks>>` — is itself `Send` and can be
+/// constructed on a worker thread and moved to the main thread (the
+/// mux off-thread snapshot replay; see
+/// [`TerminalCore::build_from_snapshot`]). The native consumer
+/// (`NativeCallbacks`) is already `Send` (it holds only `Arc`s of
+/// `Send + Sync` types). The off-thread builder itself always leaves
+/// `callbacks` as `None`, so no callback ever actually crosses the
+/// thread boundary — the bound only keeps the *type* movable.
+pub trait TerminalCallbacks: Send {
     /// OSC dispatch: `action_type` is the emterm-internal action id
     /// produced by the OSC handler; `data` is the OSC payload (UTF-8 string).
     fn on_osc(&self, action_type: u8, data: &str);
@@ -81,33 +91,39 @@ impl TerminalCore {
 mod tests {
     use super::TerminalCallbacks;
     use crate::terminal_core::TerminalCore;
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
-    /// Test impl that records every callback invocation.
+    /// Test impl that records every callback invocation. Uses `Mutex`
+    /// (not `RefCell`) so the recorder is `Send + Sync` and an
+    /// `Arc<Recorder>` satisfies the `TerminalCallbacks: Send` bound the
+    /// off-thread snapshot replay relies on.
     #[derive(Default)]
     struct Recorder {
-        osc: RefCell<Vec<(u8, String)>>,
-        apc: RefCell<Vec<Vec<u8>>>,
-        dcs: RefCell<Vec<Vec<u8>>>,
-        bell: RefCell<usize>,
-        device: RefCell<Vec<Vec<u8>>>,
+        osc: Mutex<Vec<(u8, String)>>,
+        apc: Mutex<Vec<Vec<u8>>>,
+        dcs: Mutex<Vec<Vec<u8>>>,
+        bell: Mutex<usize>,
+        device: Mutex<Vec<Vec<u8>>>,
     }
 
     impl TerminalCallbacks for Recorder {
         fn on_osc(&self, action_type: u8, data: &str) {
-            self.osc.borrow_mut().push((action_type, data.to_string()));
+            self.osc
+                .lock()
+                .unwrap()
+                .push((action_type, data.to_string()));
         }
         fn on_apc(&self, data: &[u8]) {
-            self.apc.borrow_mut().push(data.to_vec());
+            self.apc.lock().unwrap().push(data.to_vec());
         }
         fn on_dcs(&self, data: &[u8]) {
-            self.dcs.borrow_mut().push(data.to_vec());
+            self.dcs.lock().unwrap().push(data.to_vec());
         }
         fn on_bell(&self) {
-            *self.bell.borrow_mut() += 1;
+            *self.bell.lock().unwrap() += 1;
         }
         fn on_device_response(&self, data: &[u8]) {
-            self.device.borrow_mut().push(data.to_vec());
+            self.device.lock().unwrap().push(data.to_vec());
         }
     }
 
@@ -150,8 +166,8 @@ mod tests {
     #[test]
     fn test_callbacks_dispatch_through_trait() {
         let mut core = TerminalCore::new(80, 24, 0);
-        let recorder = std::rc::Rc::new(Recorder::default());
-        struct Forward(std::rc::Rc<Recorder>);
+        let recorder = std::sync::Arc::new(Recorder::default());
+        struct Forward(std::sync::Arc<Recorder>);
         impl TerminalCallbacks for Forward {
             fn on_osc(&self, a: u8, d: &str) {
                 self.0.on_osc(a, d)
@@ -172,7 +188,7 @@ mod tests {
         core.callbacks = Some(Box::new(Forward(recorder.clone())));
         core.fire_osc_callback(2, "hello");
         core.fire_bell_callback();
-        assert_eq!(recorder.osc.borrow().len(), 1);
-        assert_eq!(*recorder.bell.borrow(), 1);
+        assert_eq!(recorder.osc.lock().unwrap().len(), 1);
+        assert_eq!(*recorder.bell.lock().unwrap(), 1);
     }
 }

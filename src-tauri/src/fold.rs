@@ -399,6 +399,14 @@ impl FoldManager {
         self.enabled
     }
 
+    /// Test-only: number of registered fold regions. Used by the mux
+    /// off-thread replay parity test to assert the off-thread swap registers
+    /// the same OSC 133 C→D regions as the synchronous path.
+    #[cfg(test)]
+    pub(crate) fn region_count(&self) -> usize {
+        self.regions.len()
+    }
+
     // ── Private helpers ──────────────────────────────────────
 
     /// The region containing `line_index` (`start <= line < end`), if any.
