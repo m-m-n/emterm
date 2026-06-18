@@ -10,7 +10,7 @@ import { DEFAULT_ACTION_BINDINGS } from "../../terminal/mux/prefix-key";
 
 /** i18n key mapping for each mux action. */
 const ACTION_I18N_KEYS: Record<string, string> = {
-  "detach": "settings.mux.keybind.detach",
+  detach: "settings.mux.keybind.detach",
   "new-window": "settings.mux.keybind.newWindow",
   "next-window": "settings.mux.keybind.nextWindow",
   "prev-window": "settings.mux.keybind.prevWindow",
@@ -80,7 +80,10 @@ export function renderMuxSection(
         { value: "bottom", label: "Bottom" },
       ],
       onSave: (v) => {
-        ctx.saveSetting("mux", { ...ctx.currentSettings.mux, status_position: v });
+        ctx.saveSetting("mux", {
+          ...ctx.currentSettings.mux,
+          status_position: v,
+        });
       },
     },
     ctx.addContentListener,
@@ -98,13 +101,7 @@ export function renderMuxSection(
     const currentKey = keybinds[action] ?? DEFAULT_ACTION_BINDINGS[action]!;
     const i18nKey = ACTION_I18N_KEYS[action]!;
 
-    renderMuxKeybindInput(
-      grid,
-      action,
-      t(i18nKey),
-      currentKey,
-      ctx,
-    );
+    renderMuxKeybindInput(grid, action, t(i18nKey), currentKey, ctx);
   }
 }
 
@@ -257,7 +254,8 @@ function renderMuxKeybindInput(
       if (keyName === " ") keyName = "Space";
       else if (keyName === "+") keyName = "Plus";
       else if (keyName === "-") keyName = "Minus";
-      else if (keyName.length === 1 && parts.length > 0) keyName = keyName.toUpperCase();
+      else if (keyName.length === 1 && parts.length > 0)
+        keyName = keyName.toUpperCase();
 
       parts.push(keyName);
       const combo = parts.join("+");
@@ -267,8 +265,14 @@ function renderMuxKeybindInput(
       document.removeEventListener("keydown", keydownHandler, true);
       captured = true;
 
-      const newKeybinds = { ...ctx.currentSettings.mux.keybinds, [action]: combo };
-      ctx.saveSetting("mux", { ...ctx.currentSettings.mux, keybinds: newKeybinds });
+      const newKeybinds = {
+        ...ctx.currentSettings.mux.keybinds,
+        [action]: combo,
+      };
+      ctx.saveSetting("mux", {
+        ...ctx.currentSettings.mux,
+        keybinds: newKeybinds,
+      });
     };
 
     document.addEventListener("keydown", keydownHandler, true);

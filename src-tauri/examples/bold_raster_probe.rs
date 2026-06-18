@@ -11,9 +11,9 @@ fn main() {
     // Duplicates the adapter's swash calls (examples cannot link the
     // binary crate's private modules); keep in sync with
     // src/render/font/swash_adapter.rs `raster`.
+    use swash::FontRef;
     use swash::scale::{Render, ScaleContext, Source, StrikeWith};
     use swash::zeno::{Format, Vector};
-    use swash::FontRef;
 
     let size_px = 17.333f32;
     for (label, path) in [

@@ -1346,13 +1346,7 @@ fn palette_256(idx: u8) -> Rgb {
         let r = i / 36;
         let g = (i % 36) / 6;
         let b = i % 6;
-        let to_byte = |n: u8| -> u8 {
-            if n == 0 {
-                0
-            } else {
-                55 + n * 40
-            }
-        };
+        let to_byte = |n: u8| -> u8 { if n == 0 { 0 } else { 55 + n * 40 } };
         Rgb(to_byte(r), to_byte(g), to_byte(b))
     } else {
         // Grayscale ramp.

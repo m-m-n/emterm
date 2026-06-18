@@ -13,8 +13,8 @@ use super::session::pane::{
     NotificationSender, PaneExitSender, PaneId, SharedPaneExitSender, TitleChangeSender,
 };
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 /// Daemon-level title channel capacity.
 const TITLE_CHANNEL_CAPACITY: usize = 64;

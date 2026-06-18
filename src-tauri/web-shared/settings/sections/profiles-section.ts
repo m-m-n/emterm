@@ -20,7 +20,10 @@ export function renderProfilesSection(
   ctx.addContentListener(addBtn, "click", () => {
     showProfileEditor({
       onSave: (profile: Profile) => {
-        ctx.currentSettings.profiles = [...ctx.currentSettings.profiles, profile];
+        ctx.currentSettings.profiles = [
+          ...ctx.currentSettings.profiles,
+          profile,
+        ];
         ctx.saveSetting("profiles", ctx.currentSettings.profiles);
         ctx.reRender();
       },

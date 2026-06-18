@@ -23,7 +23,12 @@ fn main() {
         let fg = core.get_cell_fg(0, row);
         println!(
             "row={} ch={:?} flags={:#06x} fg={:#010x} (tag={}, idx/r={})",
-            row, ch, flags, fg, (fg >> 24) & 0xff, (fg >> 16) & 0xff
+            row,
+            ch,
+            flags,
+            fg,
+            (fg >> 24) & 0xff,
+            (fg >> 16) & 0xff
         );
     }
 }

@@ -292,7 +292,7 @@ impl GpuShell {
         logical_x: f32,
         logical_y: f32,
     ) -> Option<winit::window::ResizeDirection> {
-        use crate::ui::chrome::{classify_resize_edge, RESIZE_EDGE_PX};
+        use crate::ui::chrome::{RESIZE_EDGE_PX, classify_resize_edge};
         use crate::ui::title_bar::TITLE_BAR_HEIGHT;
         if self.window.is_maximized() {
             return None;

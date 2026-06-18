@@ -24,7 +24,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::html::{parse_css_color, tokenize, CssColor, Token};
+use crate::html::{CssColor, Token, parse_css_color, tokenize};
 
 /// Provider trait. Implementations return cached values; any IO
 /// happens out-of-band on a worker thread.

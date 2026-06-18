@@ -3,15 +3,15 @@
 //! Manages per-client connection state machine:
 //! handshake -> authenticated (GUI streaming or CLI control).
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
@@ -22,7 +22,7 @@ use super::handlers::{
 };
 use super::protocol::*;
 use super::reattach::detach_session_panes;
-use super::statusbar::{execute_command, StatusBarEngine};
+use super::statusbar::{StatusBarEngine, execute_command};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     NotificationSender, PtyOutputChunk, SharedPaneExitSender, TitleChangeSender,

@@ -35,11 +35,7 @@ pub fn asset(path: &str) -> Option<(&'static [u8], &'static str)> {
 fn normalize(path: &str) -> &str {
     let p = path.strip_prefix('/').unwrap_or(path);
     let p = p.strip_prefix("./").unwrap_or(p);
-    if p.is_empty() {
-        INDEX_PATH
-    } else {
-        p
-    }
+    if p.is_empty() { INDEX_PATH } else { p }
 }
 
 #[cfg(test)]

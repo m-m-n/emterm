@@ -12,13 +12,13 @@ pub mod ring;
 pub mod visibility;
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use parking_lot::Mutex;
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use self::ring::RingBuffer;
 
@@ -427,7 +427,7 @@ mod tests {
         // We achieve this by setting argv via CommandBuilder. Since our
         // spawn API does not take a command yet, this test uses portable-pty
         // directly to confirm the reader thread shape works end-to-end.
-        use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
         let pty = native_pty_system()
             .openpty(PtySize {

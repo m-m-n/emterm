@@ -6,8 +6,8 @@
 //! `get_cursor_*` accessors. OSC titles and emterm-extension dispatches
 //! are delivered through the shared `NativeCallbackState`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_channel::Receiver;
 use parking_lot::Mutex;
@@ -1876,8 +1876,8 @@ mod tests {
         // after its own emit) lands at its emit-time row unchanged.
         let mut tab = test_tab();
         tab.backfill_prompt_marks(0, vec![pending_mark(105, 0)]); // stored at 105
-                                                                  // 50 rows evicted since baseline; the new mark fired *after* those
-                                                                  // evictions, so its own evicted_total is already 50 → no extra shift.
+        // 50 rows evicted since baseline; the new mark fired *after* those
+        // evictions, so its own evicted_total is already 50 → no extra shift.
         tab.backfill_prompt_marks(50, vec![pending_mark(110, 50)]);
         // Old mark shifted 105 → 55; new mark stays at 110.
         assert_eq!(tab.prompts.find_prev_prompt(60), Some(55));

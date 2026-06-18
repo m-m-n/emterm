@@ -28,7 +28,7 @@ use term_core::callbacks::TerminalCallbacks;
 
 use crate::render::theme::Theme;
 use crate::settings::Settings;
-use crate::status_bar::osc_dispatcher::{try_dispatch_statusbar, StatusBarOscDispatcher};
+use crate::status_bar::osc_dispatcher::{StatusBarOscDispatcher, try_dispatch_statusbar};
 use crate::status_bar::providers::CwdProvider;
 
 // ── OSC action_type constants (matches term_core::osc_handler) ───────────

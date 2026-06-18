@@ -27,8 +27,8 @@
 
 use egui::{Align, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
 
-use super::md3;
 use super::TabEvent;
+use super::md3;
 
 /// Fixed visual height of the tab strip in egui logical points.
 /// Matches `.tab-bar { height: 48px }` in the WebView build.
@@ -40,11 +40,7 @@ pub const TAB_BAR_HEIGHT: f32 = 48.0;
 /// Returns 0 when the bar is hidden so the terminal grid / cursor
 /// overlay use the freed vertical space.
 pub fn effective_tab_bar_height(show_tab_bar: bool) -> f32 {
-    if show_tab_bar {
-        TAB_BAR_HEIGHT
-    } else {
-        0.0
-    }
+    if show_tab_bar { TAB_BAR_HEIGHT } else { 0.0 }
 }
 /// Minimum width of a single tab before horizontal scroll kicks in.
 /// Matches `.tab { min-width: 120px }`.

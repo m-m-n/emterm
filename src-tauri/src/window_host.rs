@@ -29,8 +29,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::ViewportId;
-use egui_wgpu::wgpu::SurfaceError;
 use egui_wgpu::ScreenDescriptor;
+use egui_wgpu::wgpu::SurfaceError;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
@@ -39,10 +39,10 @@ use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowAttributes, WindowId};
 
 use crate::app::App;
-use crate::ime::backend::{build_backend_with_window, KeyDispatchResult, ProcessEnv, RawKeyEvent};
+use crate::ime::backend::{KeyDispatchResult, ProcessEnv, RawKeyEvent, build_backend_with_window};
 use crate::mux::dialog::{MuxDialogOutcome, MuxDialogState};
 use crate::mux::prefix::{KeyInput as MuxKeyInput, KeySym};
-use crate::pty::input::{encode, Key, Modifiers};
+use crate::pty::input::{Key, Modifiers, encode};
 
 /// Drive one frame of the open mux dialog: render via the UI layer
 /// (`ui::mux_dialogs::draw`) and dispatch the resulting outcome into the
@@ -147,7 +147,7 @@ use crate::ui::keybinds::Chord;
 /// resets to 1. 500 ms matches xterm's `multiClickTime` default.
 const MULTI_CLICK_WINDOW_MS: u128 = 500;
 
-use crate::ui::chrome::{classify_resize_edge, configure_egui_fonts, RESIZE_EDGE_PX};
+use crate::ui::chrome::{RESIZE_EDGE_PX, classify_resize_edge, configure_egui_fonts};
 
 /// Tracks last-click metadata so a double / triple click can be detected by
 /// comparing time + position against the next press.
@@ -2073,11 +2073,7 @@ fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
         _ => return None,
     };
     let bytes = encode(key, mods);
-    if bytes.is_empty() {
-        None
-    } else {
-        Some(bytes)
-    }
+    if bytes.is_empty() { None } else { Some(bytes) }
 }
 
 /// `ApplicationHandler` impl driving the App + WindowHost on winit 0.30.
@@ -3278,9 +3274,11 @@ mod tests {
         );
         // Monospace mirrors --terminal-font-family in the WebView build
         // and must not pick up the UI font.
-        assert!(fonts.families[&egui::FontFamily::Monospace]
-            .iter()
-            .all(|n| n != "EmtermUiFont"));
+        assert!(
+            fonts.families[&egui::FontFamily::Monospace]
+                .iter()
+                .all(|n| n != "EmtermUiFont")
+        );
     }
 
     #[test]

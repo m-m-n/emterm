@@ -31,9 +31,9 @@ use winit::window::{ResizeDirection, Window};
 use super::data::DataFormat;
 use super::data_model::{DataViewerState, TokKind, ViewMode};
 use super::data_payload::read_data_payload;
-use super::shell::{payload_path_is_in_temp_dir, GpuShell};
-use crate::ui::title_bar::{self, TITLE_BAR_HEIGHT};
+use super::shell::{GpuShell, payload_path_is_in_temp_dir};
 use crate::ui::TitleBarEvent;
+use crate::ui::title_bar::{self, TITLE_BAR_HEIGHT};
 
 // WebView `data-viewer.css` palette (dark fixed).
 const BG: egui::Color32 = egui::Color32::from_rgb(0x1e, 0x1e, 0x1e);

@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
-use crate::mux::scrollback_buffer::{ScrollbackRingBuffer, DEFAULT_SCROLLBACK_CAPACITY};
+use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
 use crate::pty::passthrough_scanner::PassthroughScanner;
-use crate::pty::visibility::{RawPassthroughBuffer, HIDDEN_PASSTHROUGH_CAPACITY_MUX};
+use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
 
 /// Pane identifier.
 pub type PaneId = u32;
@@ -582,12 +582,13 @@ mod tests {
         // Channel capacity 1: second send should fail with Full
         let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
         // First send succeeds
-        assert!(tx
-            .try_send(PtyOutputChunk {
+        assert!(
+            tx.try_send(PtyOutputChunk {
                 pane_id: 1,
                 data: vec![1]
             })
-            .is_ok());
+            .is_ok()
+        );
         // Second send hits backpressure (channel full)
         let result = tx.try_send(PtyOutputChunk {
             pane_id: 1,

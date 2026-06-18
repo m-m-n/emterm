@@ -4,10 +4,7 @@ import {
   applyFoldEnabled,
 } from "../settings-applier";
 import type { CursorStyle, BellAction } from "../types";
-import {
-  MIN_SCROLL_SPEED,
-  MAX_SCROLL_SPEED,
-} from "../types";
+import { MIN_SCROLL_SPEED, MAX_SCROLL_SPEED } from "../types";
 import { t } from "../../i18n/index.ts";
 import { isLinux } from "../../platform";
 import {
@@ -265,7 +262,10 @@ export function renderTerminalBehaviorSection(
       label: t("settings.terminal.foldEnabled"),
       value: settings.fold_enabled,
       description: t("settings.terminal.foldEnabledDesc"),
-      onSave: (v) => { applyFoldEnabled(v); ctx.saveSetting("fold_enabled", v); },
+      onSave: (v) => {
+        applyFoldEnabled(v);
+        ctx.saveSetting("fold_enabled", v);
+      },
     },
     ctx.addContentListener,
   );
@@ -299,7 +299,8 @@ export function renderTerminalBehaviorSection(
       hint: t("settings.terminal.clipboardMaxSizeOsc52Hint"),
       description: t("settings.terminal.clipboardMaxSizeOsc52Desc"),
       onInput: () => {},
-      onSave: (v) => ctx.saveSetting("clipboard_max_size_osc52", v * 1024 * 1024),
+      onSave: (v) =>
+        ctx.saveSetting("clipboard_max_size_osc52", v * 1024 * 1024),
     },
     ctx.addContentListener,
   );

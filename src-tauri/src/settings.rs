@@ -4,7 +4,7 @@
 //! so the CLI-only build can read them without compiling the rest of this
 //! module.
 
-pub use crate::settings_core::{settings_path, Language};
+pub use crate::settings_core::{Language, settings_path};
 
 /// Display width policy for East-Asian ambiguous-width characters
 /// (Unicode property `Ambiguous`). xterm's `ambiguousIsNarrow` / `wide`

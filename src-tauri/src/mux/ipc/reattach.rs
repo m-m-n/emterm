@@ -4,17 +4,17 @@ use std::sync::Arc;
 
 use futures::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
 use super::protocol::*;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    lock_shadow_parser, DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser,
-    TitleChangeSender,
+    DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
+    lock_shadow_parser,
 };
 
 /// The clear-and-home prefix every snapshot starts with: `ESC[H ESC[2J`.
@@ -332,7 +332,7 @@ pub(in crate::mux) async fn detach_session_panes(
 mod tests {
     use super::*;
     use crate::mux::session::pane::{
-        new_shadow_parser, MuxPane, PaneOutputTarget, SharedOutputTarget,
+        MuxPane, PaneOutputTarget, SharedOutputTarget, new_shadow_parser,
     };
     use std::sync::Mutex as StdMutex;
 

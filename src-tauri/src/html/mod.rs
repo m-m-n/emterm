@@ -10,8 +10,8 @@ pub mod rich_text;
 pub mod sanitizer;
 pub mod tokenizer;
 
-pub use parser::{parse, CssColor};
-pub use rich_text::{to_rich_text_runs, RichTextRun};
+pub use parser::{CssColor, parse};
+pub use rich_text::{RichTextRun, to_rich_text_runs};
 pub use sanitizer::strip_html_tags;
 
 // Facade re-exports consumed by the status-bar layer (template engine's
@@ -21,6 +21,6 @@ pub use sanitizer::strip_html_tags;
 // reorganize. `#[allow(unused_imports)]` keeps the bin target
 // warning-clean when a given consumer build doesn't touch all of them.
 #[allow(unused_imports)]
-pub use parser::{parse_css_color, Node};
+pub use parser::{Node, parse_css_color};
 #[allow(unused_imports)]
-pub use tokenizer::{tokenize, Token};
+pub use tokenizer::{Token, tokenize};

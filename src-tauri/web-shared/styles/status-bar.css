@@ -12,7 +12,9 @@
   flex-direction: column;
   background: var(--md-sys-color-surface-container);
   color: var(--md-sys-color-on-surface);
-  font-family: var(--terminal-font-family, monospace), 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  font-family:
+    var(--terminal-font-family, monospace), "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   font-size: var(--status-bar-font-size, 11pt);
   line-height: 1.4;
   border-top: 1px solid var(--md-sys-color-outline-variant);
@@ -20,7 +22,8 @@
   user-select: none;
   flex-shrink: 0;
   overflow: hidden;
-  transition: height var(--md-motion-duration-short4, 200ms) var(--md-motion-easing-standard, ease);
+  transition: height var(--md-motion-duration-short4, 200ms)
+    var(--md-motion-easing-standard, ease);
 }
 
 /* Hidden state */

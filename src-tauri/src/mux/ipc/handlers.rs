@@ -1,13 +1,13 @@
 //! Message handlers for mux IPC commands.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::SinkExt;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::sync::Mutex;
 use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
@@ -18,8 +18,8 @@ use super::reattach::{
 };
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    evaluate_output_target, resume_pane_with_permit, NotificationSender, PaneId, PtyOutputChunk,
-    SharedPaneExitSender, SharedScrollback, SharedShadowParser, TitleChangeSender,
+    NotificationSender, PaneId, PtyOutputChunk, SharedPaneExitSender, SharedScrollback,
+    SharedShadowParser, TitleChangeSender, evaluate_output_target, resume_pane_with_permit,
 };
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
@@ -442,7 +442,9 @@ pub(super) async fn handle_request_pane_snapshot(
             Some((sid, _)) if sid != active_session_id => {
                 log::warn!(
                     "RequestPaneSnapshot: pane {} owned by session {} but requester is attached to {}; refusing",
-                    pane_id, sid, active_session_id
+                    pane_id,
+                    sid,
+                    active_session_id
                 );
                 None
             }

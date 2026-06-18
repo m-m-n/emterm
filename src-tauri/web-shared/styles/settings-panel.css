@@ -11,9 +11,12 @@
   min-height: 0;
   background-color: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
-  font-family: var(--ui-font-family, sans-serif), 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  font-family:
+    var(--ui-font-family, sans-serif), "Apple Color Emoji", "Segoe UI Emoji",
+    "Segoe UI Symbol", "Noto Color Emoji";
   font-size: 14px;
-  transition: grid-template-columns var(--md-motion-duration-medium2) var(--md-motion-easing-emphasized);
+  transition: grid-template-columns var(--md-motion-duration-medium2)
+    var(--md-motion-easing-emphasized);
 }
 
 /* Collapsed state: icon-only rail */
@@ -59,7 +62,8 @@
   font-size: 20px;
   cursor: pointer;
   position: relative;
-  transition: color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .settings-nav-collapse-btn::before {
@@ -69,7 +73,8 @@
   border-radius: var(--md-sys-shape-corner-full);
   background-color: currentColor;
   opacity: 0;
-  transition: opacity var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: opacity var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .settings-nav-collapse-btn:hover::before {
@@ -139,7 +144,7 @@
   position: relative;
   transition:
     background-color var(--md-motion-duration-short4)
-      var(--md-motion-easing-standard),
+    var(--md-motion-easing-standard),
     color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
 }
 
@@ -480,9 +485,9 @@
   border: 2px solid var(--md-sys-color-outline);
   transition:
     background-color var(--md-motion-duration-short4)
-      var(--md-motion-easing-standard),
+    var(--md-motion-easing-standard),
     border-color var(--md-motion-duration-short4)
-      var(--md-motion-easing-standard);
+    var(--md-motion-easing-standard);
 }
 
 .settings-toggle-thumb {
@@ -499,7 +504,7 @@
     width var(--md-motion-duration-short4) var(--md-motion-easing-standard),
     height var(--md-motion-duration-short4) var(--md-motion-easing-standard),
     background-color var(--md-motion-duration-short4)
-      var(--md-motion-easing-standard);
+    var(--md-motion-easing-standard);
 }
 
 /* Toggle ON state */
@@ -582,9 +587,9 @@
   cursor: pointer;
   transition:
     background-color var(--md-motion-duration-short4)
-      var(--md-motion-easing-standard),
+    var(--md-motion-easing-standard),
     border-color var(--md-motion-duration-short4)
-      var(--md-motion-easing-standard);
+    var(--md-motion-easing-standard);
 }
 
 .settings-keybind-input:hover {
@@ -721,11 +726,16 @@
   color: var(--md-sys-color-on-surface-variant);
   font-size: 16px;
   cursor: pointer;
-  transition: background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: background-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .settings-font-picker-clear:hover {
-  background-color: color-mix(in srgb, var(--md-sys-color-on-surface-variant) 8%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-surface-variant) 8%,
+    transparent
+  );
 }
 
 .settings-font-picker-clear:focus-visible {
@@ -749,9 +759,9 @@
   cursor: pointer;
   transition:
     background-color var(--md-motion-duration-short4)
-      var(--md-motion-easing-standard),
+    var(--md-motion-easing-standard),
     border-color var(--md-motion-duration-short4)
-      var(--md-motion-easing-standard);
+    var(--md-motion-easing-standard);
 }
 
 .settings-font-picker-button:hover {
@@ -1238,7 +1248,11 @@
 }
 
 .profile-action-btn:hover {
-  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-surface) 8%,
+    transparent
+  );
 }
 
 .profile-action-btn:focus-visible {
@@ -1291,7 +1305,11 @@
   justify-content: space-between;
   padding: 8px 16px;
   border-radius: var(--md-sys-shape-corner-small);
-  background-color: color-mix(in srgb, var(--md-sys-color-surface-variant) 40%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-surface-variant) 40%,
+    transparent
+  );
 }
 
 .ssh-config-item-name {
@@ -1351,7 +1369,11 @@
 }
 
 .ssh-option-remove-btn:hover {
-  background-color: color-mix(in srgb, var(--md-sys-color-error) 20%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-error) 20%,
+    transparent
+  );
 }
 
 .ssh-option-add-btn {
@@ -1510,7 +1532,11 @@
 }
 
 .profile-editor-btn-cancel:hover {
-  background-color: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-primary) 8%,
+    transparent
+  );
 }
 
 .profile-editor-btn-save {
@@ -1545,13 +1571,20 @@
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
-  transition: color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
-              border-color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
-              background-color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition:
+    color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    border-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard),
+    background-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .profile-editor-tab:hover:not(.disabled) {
-  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-surface) 8%,
+    transparent
+  );
   color: var(--md-sys-color-on-surface);
 }
 
@@ -1642,7 +1675,11 @@
 }
 
 .profile-selector-item:hover {
-  background-color: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-surface) 8%,
+    transparent
+  );
 }
 
 .profile-selector-item.active {
@@ -1671,7 +1708,11 @@
 }
 
 .profile-selector-item.active .profile-selector-item-shell {
-  color: color-mix(in srgb, var(--md-sys-color-on-secondary-container) 70%, transparent);
+  color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-secondary-container) 70%,
+    transparent
+  );
 }
 
 .profile-selector-actions {
@@ -1688,7 +1729,11 @@
 .settings-log-path {
   font-size: 12px;
   color: color-mix(in srgb, var(--md-sys-color-on-surface) 65%, transparent);
-  background: color-mix(in srgb, var(--md-sys-color-surface-variant) 50%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--md-sys-color-surface-variant) 50%,
+    transparent
+  );
   padding: 4px 8px;
   border-radius: 4px;
   word-break: break-all;
@@ -1701,9 +1746,14 @@
   font-family: var(--terminal-font-family, monospace);
   font-size: 11px;
   line-height: 1.5;
-  background: color-mix(in srgb, var(--md-sys-color-surface-variant) 40%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--md-sys-color-surface-variant) 40%,
+    transparent
+  );
   color: var(--md-sys-color-on-surface);
-  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
   border-radius: 8px;
   padding: 12px;
   margin: 8px 0;
@@ -1731,7 +1781,11 @@
 }
 
 .settings-btn:hover {
-  background: color-mix(in srgb, var(--md-sys-color-secondary-container) 85%, var(--md-sys-color-on-secondary-container));
+  background: color-mix(
+    in srgb,
+    var(--md-sys-color-secondary-container) 85%,
+    var(--md-sys-color-on-secondary-container)
+  );
 }
 
 .settings-btn-danger {
@@ -1740,7 +1794,11 @@
 }
 
 .settings-btn-danger:hover {
-  background: color-mix(in srgb, var(--md-sys-color-error-container) 85%, var(--md-sys-color-on-error-container));
+  background: color-mix(
+    in srgb,
+    var(--md-sys-color-error-container) 85%,
+    var(--md-sys-color-on-error-container)
+  );
 }
 
 .settings-log-status {

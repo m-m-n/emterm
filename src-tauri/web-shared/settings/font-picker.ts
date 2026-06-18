@@ -41,7 +41,11 @@ export function renderFontPickerInput(
   panel: HTMLElement,
   opts: FontPickerInputOptions,
   addListener: AddListenerFn,
-  onChangeClick: (category: FontCategory, currentValue: string, onSelect: (value: string) => void) => void,
+  onChangeClick: (
+    category: FontCategory,
+    currentValue: string,
+    onSelect: (value: string) => void,
+  ) => void,
 ): void {
   const row = document.createElement("div");
   row.className = "settings-row";
@@ -200,7 +204,10 @@ export async function showFontPicker(
   searchInput.type = "text";
   searchInput.className = "font-picker-search-input";
   searchInput.placeholder = t("settings.appearance.fontPickerSearch");
-  searchInput.setAttribute("aria-label", t("settings.appearance.fontPickerSearch"));
+  searchInput.setAttribute(
+    "aria-label",
+    t("settings.appearance.fontPickerSearch"),
+  );
   searchContainer.appendChild(searchInput);
 
   picker.appendChild(searchContainer);
@@ -342,7 +349,10 @@ export function hideFontPicker(ctx: FontPickerContext): void {
   ctx.renderContent();
 }
 
-export function setNavTabsEnabled(navElement: HTMLElement | null, enabled: boolean): void {
+export function setNavTabsEnabled(
+  navElement: HTMLElement | null,
+  enabled: boolean,
+): void {
   if (!navElement) return;
   const tabs = navElement.querySelectorAll(".settings-nav-item");
   for (const tab of tabs) {

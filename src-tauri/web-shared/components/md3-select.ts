@@ -89,7 +89,10 @@ export function createMd3Select(config: Md3SelectConfig): {
       const item = document.createElement("div");
       item.className = "md3-select-item";
       item.setAttribute("role", "option");
-      item.setAttribute("aria-selected", opt.value === currentValue ? "true" : "false");
+      item.setAttribute(
+        "aria-selected",
+        opt.value === currentValue ? "true" : "false",
+      );
       item.dataset.value = opt.value;
       item.dataset.index = String(i);
       item.textContent = opt.label;
@@ -173,13 +176,17 @@ export function createMd3Select(config: Md3SelectConfig): {
     menu.style.visibility = "";
 
     // Set active to current selection
-    const selectedIndex = currentOptions.findIndex((o) => o.value === currentValue);
+    const selectedIndex = currentOptions.findIndex(
+      (o) => o.value === currentValue,
+    );
     activeIndex = -1;
     if (selectedIndex >= 0) {
       updateActive(selectedIndex);
     }
 
-    document.addEventListener("mousedown", handleOutsideClick, { capture: true });
+    document.addEventListener("mousedown", handleOutsideClick, {
+      capture: true,
+    });
     document.addEventListener("keydown", handleKeydown, { capture: true });
     window.addEventListener("blur", closeMenu);
   };
@@ -192,7 +199,9 @@ export function createMd3Select(config: Md3SelectConfig): {
     trigger.setAttribute("aria-expanded", "false");
     menu.style.display = "";
 
-    document.removeEventListener("mousedown", handleOutsideClick, { capture: true });
+    document.removeEventListener("mousedown", handleOutsideClick, {
+      capture: true,
+    });
     document.removeEventListener("keydown", handleKeydown, { capture: true });
     window.removeEventListener("blur", closeMenu);
 
@@ -211,14 +220,18 @@ export function createMd3Select(config: Md3SelectConfig): {
         e.preventDefault();
         e.stopPropagation();
         if (menuItems.length > 0) {
-          updateActive(activeIndex < menuItems.length - 1 ? activeIndex + 1 : 0);
+          updateActive(
+            activeIndex < menuItems.length - 1 ? activeIndex + 1 : 0,
+          );
         }
         break;
       case "ArrowUp":
         e.preventDefault();
         e.stopPropagation();
         if (menuItems.length > 0) {
-          updateActive(activeIndex > 0 ? activeIndex - 1 : menuItems.length - 1);
+          updateActive(
+            activeIndex > 0 ? activeIndex - 1 : menuItems.length - 1,
+          );
         }
         break;
       case "Home":
@@ -263,7 +276,12 @@ export function createMd3Select(config: Md3SelectConfig): {
   // Trigger keyboard handler (when menu is closed)
   trigger.addEventListener("keydown", (e) => {
     if (isOpen) return; // Handled by document listener
-    if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === " " || e.key === "Enter") {
+    if (
+      e.key === "ArrowDown" ||
+      e.key === "ArrowUp" ||
+      e.key === " " ||
+      e.key === "Enter"
+    ) {
       e.preventDefault();
       openMenu();
     }

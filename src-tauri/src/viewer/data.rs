@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use base64::Engine;
 
-use super::markdown::{MAX_SESSIONS, MAX_SESSION_DATA_SIZE, SESSION_TIMEOUT};
+use super::markdown::{MAX_SESSION_DATA_SIZE, MAX_SESSIONS, SESSION_TIMEOUT};
 use super::{ParsedCommand, ViewerSink};
 
 /// Source format of a data-viewer document. Carried from the OSC `kind`

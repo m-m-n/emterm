@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use term_images::image_proc::{DecodedImage, ImageDelete, ImageEvent};
 
-use super::image_payload::{write_image_payload, ViewerChrome};
+use super::image_payload::{ViewerChrome, write_image_payload};
 use super::launch::{preset_token, theme_token};
 use crate::settings::Settings;
 
