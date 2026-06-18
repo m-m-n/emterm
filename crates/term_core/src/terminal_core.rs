@@ -110,6 +110,47 @@ pub struct PendingFoldMark {
     pub label: String,
 }
 
+// ── Off-thread snapshot replay result ────────────────────
+
+/// Output of [`TerminalCore::build_from_snapshot`]: a freshly built core
+/// plus everything the synchronous `reset_and_replay` + `drain_marks`
+/// site would have produced. Returned by value so the whole bundle can be
+/// moved from a worker thread to the main thread for the swap + reconcile.
+///
+/// `core` is `Send` (it is built with no callbacks installed; see the
+/// `static_assert_terminal_core_is_send` below), so this struct is `Send`
+/// as well.
+pub struct SnapshotReplay {
+    /// The fully replayed core, sized to the requested grid.
+    pub core: TerminalCore,
+    /// Mode actions accumulated during the replay (alt-screen reseed input).
+    pub actions: Vec<u8>,
+    /// `get_scrollback_evicted_total()` immediately after the replay — the
+    /// `evicted_baseline` the caller installs (a fresh core's counter is 0,
+    /// matching the synchronous `reset_frame_for_replay`).
+    pub evicted_total: u64,
+    /// Prompt marks drained from the replayed core (OSC 133), for the
+    /// caller's `backfill_prompt_marks`.
+    pub prompt_marks: Vec<PendingPromptMark>,
+    /// Custom-fold marks drained from the replayed core (OSC 777;…;fold),
+    /// for the caller's `backfill_fold_marks`.
+    pub fold_marks: Vec<PendingFoldMark>,
+}
+
+/// Compile-time guarantee that a built `TerminalCore` can be moved across
+/// threads. `build_from_snapshot` constructs the core on a worker thread
+/// and the result is moved back to the main thread for the swap; if a
+/// future field made the core `!Send`, this assertion fails to compile and
+/// the off-thread design must be revisited before that field lands.
+///
+/// The `callbacks` field (`Option<Box<dyn TerminalCallbacks>>`) is `Send`
+/// because [`crate::callbacks::TerminalCallbacks`] requires `Send`.
+const _: () = {
+    const fn static_assert_send<T: Send>() {}
+    static_assert_send::<TerminalCore>();
+    static_assert_send::<SnapshotReplay>();
+};
+
 // ── SlimStats (FR11 debug export) ────────────────────────
 
 /// Compact statistics about the SlimCell scrollback storage.
@@ -336,6 +377,14 @@ impl TerminalCore {
         self.rows
     }
 
+    /// Maximum number of scrollback lines this core retains (the
+    /// `scrollback_lines` it was constructed with). Used by the mux
+    /// off-thread snapshot replay to size the worker-built core to the same
+    /// scrollback depth as the live core it will replace.
+    pub fn scrollback_capacity(&self) -> u32 {
+        self.scrollback_capacity as u32
+    }
+
     /// Set cell size in pixels (for CSI 14t/16t XTWINOPS responses).
     /// Called from TypeScript after measuring character dimensions.
     pub fn set_cell_size_px(&mut self, width: u16, height: u16) {
@@ -403,9 +452,36 @@ impl TerminalCore {
     /// otherwise re-interrupt the very next call) and hands the drained
     /// actions back for the caller's alt-screen tracking.
     pub fn process_pty_data_fully(&mut self, bytes: &[u8]) -> Vec<u8> {
+        // The non-cancellable entry point (22+ call sites). It delegates to
+        // the cancellable drain with a flag that is never set, so there is a
+        // single resume-loop implementation and the two paths cannot drift.
+        // `NEVER` is never stored to, so the cancellable drain always runs to
+        // completion and returns `Some` — the unwrap cannot fail.
+        static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        self.process_pty_data_fully_cancellable(bytes, &NEVER)
+            .expect("non-cancellable drain always completes")
+    }
+
+    /// Cancellable variant of [`Self::process_pty_data_fully`]. Checks
+    /// `cancel` at each resume-loop boundary and returns `None` if it is set
+    /// mid-drain, so an off-thread snapshot worker whose switch was superseded
+    /// can bail out at the next chunk boundary instead of parsing the whole
+    /// payload (bounding wasted work + concurrent worker lifetime under a
+    /// rapid pane-switch / resize storm). Returns `Some(actions)` on a
+    /// completed drain, identical to the non-cancellable path.
+    pub fn process_pty_data_fully_cancellable(
+        &mut self,
+        bytes: &[u8],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Option<Vec<u8>> {
         let mut actions: Vec<u8> = Vec::new();
         let mut offset = 0usize;
         while offset < bytes.len() {
+            // Cooperative cancellation: a relaxed load per chunk is negligible
+            // on the live-output hot path; a superseded worker stops here.
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return None;
+            }
             let consumed = self.process_pty_data(&bytes[offset..]);
             offset += consumed;
             actions.extend(self.take_mode_actions());
@@ -415,7 +491,7 @@ impl TerminalCore {
                 break;
             }
         }
-        actions
+        Some(actions)
     }
 
     /// Reset the grid + parser to the post-construction state, then replay
@@ -433,6 +509,58 @@ impl TerminalCore {
     pub fn reset_and_replay(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.reset();
         self.process_pty_data_fully(bytes)
+    }
+
+    /// Construct a fresh `TerminalCore` sized to `(cols, rows,
+    /// scrollback_lines)`, full-drain replay `payload` into it, and return
+    /// the built core together with the mode actions and the
+    /// prompt / fold marks (plus the post-replay eviction total) drained
+    /// during the replay.
+    ///
+    /// This is the **pure, off-thread half** of the mux snapshot-replay
+    /// recipe: it owns and returns the core (no `&mut self`), installs no
+    /// callbacks, and touches no GUI / thread-local state, so it can run on
+    /// a worker thread and the result moved to the main thread. The
+    /// returned tuple is observably identical to the in-place
+    /// `reset_and_replay` + `drain` path (`get_scrollback_evicted_total`,
+    /// `take_prompt_marks`, `take_fold_marks`) on a core of the same size
+    /// fed the same `payload` — the off-thread path and the synchronous
+    /// path therefore reconcile from byte/grid-identical inputs.
+    ///
+    /// A fresh `TerminalCore::new` is already in the post-`reset` state, so
+    /// the extra `reset` inside `reset_and_replay` is a no-op here; it is
+    /// kept so the off-thread builder and the synchronous path share the
+    /// exact same replay entry point (`reset_and_replay`) and cannot drift.
+    ///
+    /// The drained marks/total are returned (rather than left on the core)
+    /// because the caller backfills them into its own absolute-row trackers
+    /// after the swap, exactly as the synchronous `drain_marks` site does.
+    /// `cancel` lets a superseded off-thread worker abandon the parse at the
+    /// next chunk boundary; when it is observed set mid-drain this returns
+    /// `None` (the partially-built core is discarded by the caller). A fresh
+    /// `TerminalCore::new` is already in the post-`reset` state, so the
+    /// explicit `reset` matches `reset_and_replay`'s entry point as a no-op
+    /// and keeps the off-thread and synchronous paths byte/grid-identical.
+    pub fn build_from_snapshot(
+        cols: u16,
+        rows: u16,
+        scrollback_lines: u32,
+        payload: &[u8],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Option<SnapshotReplay> {
+        let mut core = TerminalCore::new(cols, rows, scrollback_lines);
+        core.reset();
+        let actions = core.process_pty_data_fully_cancellable(payload, cancel)?;
+        let evicted_total = core.get_scrollback_evicted_total();
+        let prompt_marks = core.take_prompt_marks();
+        let fold_marks = core.take_fold_marks();
+        Some(SnapshotReplay {
+            core,
+            actions,
+            evicted_total,
+            prompt_marks,
+            fold_marks,
+        })
     }
 
     pub fn reset(&mut self) {
@@ -695,6 +823,130 @@ impl TerminalCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Off-thread snapshot replay builder (FR1/FR6/NFR2/NFR3) ──
+
+    /// Collect the observable grid text + cursor + scrollback length into a
+    /// comparable shape so the pure builder and the synchronous path can be
+    /// asserted byte/grid-identical.
+    fn grid_fingerprint(core: &TerminalCore) -> (Vec<String>, u16, u16, u32) {
+        let mut rows = Vec::with_capacity(core.rows() as usize);
+        for r in 0..core.rows() {
+            let mut line = String::new();
+            for c in 0..core.cols() {
+                line.push_str(&core.get_cell_char(c, r));
+            }
+            rows.push(line);
+        }
+        (
+            rows,
+            core.get_cursor_col(),
+            core.get_cursor_row(),
+            core.get_scrollback_length(),
+        )
+    }
+
+    /// TS-1: the pure builder is grid/scrollback/marks-identical to the
+    /// in-place `reset_and_replay` + drain path for a representative payload
+    /// (text, prompt marks, scrollback growth).
+    #[test]
+    fn test_build_from_snapshot_matches_reset_and_replay() {
+        // Many newlines push lines into scrollback; OSC 133 A/B/C/D emit
+        // prompt marks; plain text fills the grid.
+        let mut payload: Vec<u8> = Vec::new();
+        payload.extend_from_slice(b"\x1b]133;A\x07prompt$ \x1b]133;B\x07");
+        payload.extend_from_slice(b"echo hi\x1b]133;C\x07\r\n");
+        for i in 0..40u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        payload.extend_from_slice(b"\x1b]133;D;0\x07tail here");
+
+        // Synchronous path: an already-used core, reset_and_replay'd + drained.
+        let mut sync_core = TerminalCore::new(80, 24, 1000);
+        // Dirty it first so the reset inside reset_and_replay has to clean up.
+        sync_core.process_pty_data_fully(b"garbage that gets reset away\r\n\r\n");
+        let sync_actions = sync_core.reset_and_replay(&payload);
+        let sync_evicted = sync_core.get_scrollback_evicted_total();
+        let sync_prompts = sync_core.take_prompt_marks();
+        let sync_folds = sync_core.take_fold_marks();
+
+        // Off-thread builder path.
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let built = TerminalCore::build_from_snapshot(80, 24, 1000, &payload, &never)
+            .expect("not cancelled");
+
+        assert_eq!(grid_fingerprint(&built.core), grid_fingerprint(&sync_core));
+        assert_eq!(built.actions, sync_actions);
+        assert_eq!(built.evicted_total, sync_evicted);
+        assert_eq!(built.prompt_marks, sync_prompts);
+        assert_eq!(built.fold_marks, sync_folds);
+    }
+
+    /// TS-2: empty payload yields the same (empty, freshly-reset) result via
+    /// both paths.
+    #[test]
+    fn test_build_from_snapshot_empty_payload() {
+        let mut sync_core = TerminalCore::new(80, 24, 100);
+        let sync_actions = sync_core.reset_and_replay(b"");
+        let sync_evicted = sync_core.get_scrollback_evicted_total();
+        let sync_prompts = sync_core.take_prompt_marks();
+        let sync_folds = sync_core.take_fold_marks();
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let built =
+            TerminalCore::build_from_snapshot(80, 24, 100, b"", &never).expect("not cancelled");
+
+        assert_eq!(grid_fingerprint(&built.core), grid_fingerprint(&sync_core));
+        assert_eq!(built.actions, sync_actions);
+        assert_eq!(built.evicted_total, sync_evicted);
+        assert!(built.prompt_marks.is_empty());
+        assert!(built.fold_marks.is_empty());
+        assert_eq!(sync_prompts.len(), built.prompt_marks.len());
+        assert_eq!(sync_folds.len(), built.fold_marks.len());
+    }
+
+    /// TS-3: the built core (and the replay result bundle) is statically
+    /// movable across threads, and actually survives a round trip through a
+    /// spawned worker thread.
+    #[test]
+    fn test_build_from_snapshot_is_send_across_threads() {
+        fn assert_send<T: Send>() {}
+        assert_send::<TerminalCore>();
+        assert_send::<SnapshotReplay>();
+
+        // Runtime proof: build on a worker, move the result back.
+        let payload = b"hello off-thread\r\nsecond line\r\n".to_vec();
+        let handle = std::thread::spawn(move || {
+            static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &NEVER)
+        });
+        let built = handle
+            .join()
+            .expect("worker thread panicked")
+            .expect("not cancelled");
+        assert_eq!(built.core.get_cell_char(0, 0), "h");
+        assert!(built.core.callbacks.is_none());
+    }
+
+    /// A `build_from_snapshot` whose cancel flag is already set bails at the
+    /// first resume-loop boundary and returns `None` (a superseded off-thread
+    /// worker discards its work). A clear flag returns `Some` as usual.
+    #[test]
+    fn test_build_from_snapshot_cancelled_returns_none() {
+        let payload = b"row zero\r\nrow one\r\n".to_vec();
+
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        assert!(
+            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &cancelled).is_none(),
+            "a pre-set cancel flag must abandon the build"
+        );
+
+        let live = std::sync::atomic::AtomicBool::new(false);
+        assert!(
+            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &live).is_some(),
+            "a clear cancel flag must build normally"
+        );
+    }
 
     // ── Grid construction ────────────────────────────────
 

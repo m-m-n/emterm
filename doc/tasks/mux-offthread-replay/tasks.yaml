@@ -1,0 +1,113 @@
+schema_version: 1
+feature: mux-offthread-replay
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-pure-parse
+    name: Off-thread-safe pure parse in term_core (FR1, FR6, NFR2, NFR3)
+    goal: A pure builder constructs a fresh TerminalCore at a given grid size, full-drain replays the snapshot payload, and returns the core plus drained mode-actions and marks, byte/grid-identical to the synchronous reset_and_replay path; TerminalCore is statically confirmed movable across threads.
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: [phase-2-dispatch, phase-3-swap-reconcile]
+    files_create: []
+    files_modify:
+      - crates/term_core/src/terminal_core.rs
+    tasks:
+      - id: build-core-from-snapshot-pure
+        title: Add a pure function that builds a fresh TerminalCore at (cols, rows, scrollback_lines), full-drain replays the payload, and returns (core, mode-actions, drained marks); result identical to in-place reset_and_replay + drain
+        covers_fr: [FR1, FR6, NFR2]
+      - id: confirm-terminalcore-send
+        title: Document and add a compile-time assertion that TerminalCore is movable to another thread (no GUI/thread-local state)
+        covers_fr: [FR1, NFR3]
+      - id: pure-parse-equivalence-test
+        title: Unit test that the pure builder's grid/scrollback/marks equal legacy reset_and_replay for a representative payload and an empty payload
+        covers_fr: [NFR2]
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+
+  - id: phase-2-dispatch
+    name: Pending-switch state, size-threshold dispatch, live-output queue (FR2, FR3, FR4, FR5, NFR4)
+    goal: On a snapshot apply, dispatch the parse off-thread for payloads at/above the threshold without mutating the displayed core; queue target-pane live output during the pending switch; supersede the pending target on a newer switch. Small payloads keep the synchronous path. No per-pane resident cores / no LRU (1 core per tab maintained).
+    effort: medium
+    status: completed
+    depends_on: [phase-1-pure-parse]
+    blocks: [phase-3-swap-reconcile]
+    files_create: []
+    files_modify:
+      - src-tauri/src/tabs.rs
+    tasks:
+      - id: offthread-threshold-constant
+        title: Introduce OFFTHREAD_REPLAY_THRESHOLD_BYTES named constant (default 64 KiB ≈ ~7ms) deciding sync vs off-thread
+        covers_fr: [FR4]
+      - id: pending-switch-state
+        title: Add per-tab pending-switch state (target pane id, non-blocking completion handoff, live-output queue) with explicit enter/clear lifecycle; transient only (no resident per-pane cores)
+        covers_fr: [FR1, FR2, FR5, NFR4]
+      - id: snapshot-dispatch-by-size
+        title: Split the Snapshot/SnapshotRestore arm into sync (< threshold, legacy) and off-thread (>= threshold, copy payload + reset prompts/folds + start worker + enter pending-switch) without resetting the displayed core
+        covers_fr: [FR1, FR4]
+      - id: queue-live-output-during-pending
+        title: During a pending switch, route target-pane PtyOutput into the live-output queue in arrival order instead of the displayed core
+        covers_fr: [FR3]
+      - id: supersession-latest-target
+        title: On a newer switch (or a grid resize), replace the pending target, discard the in-flight result, and re-key the live queue to the latest target; intermediate / stale-sized cores never swap in
+        covers_fr: [FR5]
+    tests:
+      - TS-4
+      - TS-6
+      - TS-12
+
+  - id: phase-3-swap-reconcile
+    name: Worker-completion swap + main-thread reconciliation + fallback (FR1, FR3, FR6, FR7, NFR1)
+    goal: pump_all non-blockingly polls the active tab's pending switch; on completion swaps Tab::core, applies queued live bytes in order, reconciles marks/folds/selection (pending_frame_reset latch, alt-screen reseed), restores per-pane scroll, and full-redraws. Worker failure falls back to synchronous reparse.
+    effort: large
+    status: completed
+    depends_on: [phase-1-pure-parse, phase-2-dispatch]
+    blocks: [phase-4-invariants]
+    files_create: []
+    files_modify:
+      - src-tauri/src/app.rs
+      - src-tauri/src/tabs.rs
+    tasks:
+      - id: poll-worker-and-swap
+        title: In pump_all, non-blockingly poll the active tab's pending-switch handoff; on ready, swap Tab::core to the built core
+        covers_fr: [FR1]
+      - id: post-swap-reconcile
+        title: After swap, apply queued live bytes in arrival order, then reproduce reset_frame_for_replay main-thread effects (marks backfill, pending_frame_reset latch, alt-screen reseed) and drive existing per-pane scroll restore + full redraw
+        covers_fr: [FR3, FR6, NFR1]
+      - id: sync-fallback-on-failure
+        title: On worker failure/panic, synchronously reparse the latest target via the legacy path and clear pending-switch
+        covers_fr: [FR7]
+    tests:
+      - TS-5
+      - TS-7
+      - TS-8
+
+  - id: phase-4-invariants
+    name: Invariant regression + portability hardening (NFR1, NFR2, NFR3)
+    goal: Lock in the mux-scroll-isolation invariants under the off-thread path and keep all build variants green, with worker logic exercised as pure functions (no flaky pump_all async tests).
+    effort: medium
+    status: completed
+    depends_on: [phase-3-swap-reconcile]
+    blocks: []
+    files_create: []
+    files_modify:
+      - crates/term_core/src/terminal_core.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/app.rs
+    tasks:
+      - id: invariant-regression-test
+        title: Integration tests for FR2 (no residual rows after off-thread swap to a shorter pane) and marks/folds/selection + per-pane scroll parity vs the synchronous path
+        covers_fr: [NFR1]
+      - id: ordering-supersession-fallback-tests
+        title: Unit tests for live-queue ordering (vs contiguous parse), supersession (latest-only), and worker-failure fallback, driven directly without pump_all async
+        covers_fr: [FR3, FR5, FR7, NFR2]
+      - id: cli-only-check
+        title: Verify --no-default-features cargo check stays green (off-thread path is GUI-only)
+        covers_fr: [NFR3]
+    tests:
+      - TS-5
+      - TS-9
+      - TS-10

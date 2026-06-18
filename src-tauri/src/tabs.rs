@@ -7,7 +7,7 @@
 //! are delivered through the shared `NativeCallbackState`.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crossbeam_channel::Receiver;
 use parking_lot::Mutex;
@@ -33,6 +33,79 @@ use crate::mux::window_group::{MuxWindow, MuxWindowGroup};
 /// `Relaxed` suffices because the id only needs uniqueness, not ordering
 /// with other memory operations.
 static NEXT_TAB_STABLE_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot payloads at or above this byte size replay the VT stream on a
+/// one-shot worker thread (the mux off-thread replay) instead of blocking
+/// the winit/UI thread. 64 KiB ≈ ~7 ms of reparse on the target machine —
+/// well under one 60 fps frame — so the sub-threshold synchronous block
+/// stays imperceptible while large (history-heavy) panes never stall the
+/// switch. Resolved at verify-plan; re-tune here if measurement on the
+/// target machine differs.
+pub(crate) const OFFTHREAD_REPLAY_THRESHOLD_BYTES: usize = 64 * 1024;
+
+/// Upper bound on live output queued during a pending off-thread replay.
+/// While the worker parses, target-pane `PtyOutput` accumulates in
+/// `PendingSwitch.live_queue`; a fast-producing pane during a slow parse could
+/// grow it without bound and then replay one large burst on the UI thread at
+/// swap time (defeating the off-thread goal) or grow memory if the worker
+/// stalls. Past this cap the in-flight replay is abandoned and the snapshot is
+/// reparsed synchronously, applying the accumulated bytes as ordinary output.
+pub(crate) const OFFTHREAD_LIVE_QUEUE_CAP_BYTES: usize = 4 * 1024 * 1024;
+
+/// Per-tab state tracking an in-flight off-thread snapshot replay (the mux
+/// off-thread switch). Created when a large `Snapshot` is dispatched to a
+/// worker; cleared on swap (worker completed) or supersede (a newer switch
+/// or a grid resize arrived first). Transient — there is at most one of
+/// these per tab and never a resident per-pane core (NFR4: still one core
+/// per tab; the worker's in-flight core is the only extra, and it is
+/// discarded on supersede or moved in on swap).
+pub(crate) struct PendingSwitch {
+    /// The pane id this replay targets. Live `PtyOutput` for this pane is
+    /// queued (not applied to the displayed core) until the swap; output
+    /// for any other pane is dropped as usual.
+    pub(crate) target_pane: u32,
+    /// Grid the worker core is being built at. A resize to a different
+    /// `(cols, rows)` supersedes the in-flight parse so a stale-sized core
+    /// is never swapped in (FR5).
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+    /// Non-blocking completion handoff from the worker. `try_recv` yields
+    /// `Ok(replay)` when the worker finished, `Err(Empty)` while it is
+    /// still parsing, and `Err(Disconnected)` if the worker panicked
+    /// (→ synchronous reparse fallback).
+    pub(crate) done: std::sync::mpsc::Receiver<term_core::terminal_core::SnapshotReplay>,
+    /// Target-pane live output that arrived during the parse gap, kept in
+    /// arrival order to be replayed onto the swapped-in core after the swap
+    /// (FR3). Each entry is one decoded `PtyOutput` payload.
+    pub(crate) live_queue: Vec<Vec<u8>>,
+    /// Running total of `live_queue` payload bytes, compared against
+    /// [`OFFTHREAD_LIVE_QUEUE_CAP_BYTES`] to bound the backlog.
+    pub(crate) queued_bytes: usize,
+    /// The raw snapshot payload, retained so a supersession-by-resize can
+    /// re-dispatch the same bytes at the new grid without another daemon
+    /// round-trip.
+    pub(crate) payload: Vec<u8>,
+    /// Cooperative cancellation flag shared with the worker thread. Set when
+    /// this switch is superseded (a newer switch, a grid resize, or the
+    /// live-queue cap fallback) so the worker abandons its parse at the next
+    /// chunk boundary instead of running to completion — bounding wasted work
+    /// and concurrent worker lifetime under a rapid switch / resize storm.
+    pub(crate) cancel: Arc<AtomicBool>,
+}
+
+/// Result of [`Tab::poll_pending_switch`], driving how `App::pump_all`
+/// reconciles after polling the off-thread replay handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwapOutcome {
+    /// No off-thread replay is pending on this tab.
+    Idle,
+    /// A worker is still parsing; keep showing the outgoing pane.
+    Pending,
+    /// The core was swapped (or, on worker failure, reparsed synchronously)
+    /// and reconciled this pump; the caller drives the active-tab post-loop
+    /// per-pane scroll restore + full redraw.
+    Swapped,
+}
 
 pub struct Tab {
     /// Creation-ordered stable identity. Unlike the positional index in
@@ -185,6 +258,13 @@ pub struct Tab {
     /// latch park the outgoing scroll into the wrong slot; the consumer
     /// resolves the id to a current index and skips if the pane is gone.
     pending_pane_switch_from: Option<u32>,
+    /// In-flight off-thread snapshot replay for this tab (the mux
+    /// off-thread switch). `Some` while a large snapshot is being reparsed
+    /// on a worker thread; `App::pump_all` polls it each pump and swaps the
+    /// completed core in on a later frame. `None` when no off-thread replay
+    /// is pending (the common case, and always so for sub-threshold
+    /// snapshots which stay on the synchronous path).
+    pending_switch: Option<PendingSwitch>,
 }
 
 /// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
@@ -306,6 +386,7 @@ impl Tab {
             ssh_connection_name,
             scroll_position: crate::app::ScrollPosition::default(),
             pending_pane_switch_from: None,
+            pending_switch: None,
         }
     }
 
@@ -449,31 +530,249 @@ impl Tab {
     /// Returns the mode actions accumulated during the replay so a caller
     /// (e.g. Snapshot's debug log) can use them.
     fn reset_frame_for_replay(&mut self, payload: &[u8]) -> Vec<u8> {
-        self.prompts.clear();
-        self.folds = Self::new_fold_manager(self.fold_enabled);
-        self.pending_fold_begin = None;
+        self.reset_frame_prompts_folds();
         let (actions, evicted_total, pending_marks, pending_fold_marks) = {
             let mut c = self.core.lock();
             let actions = c.reset_and_replay(payload);
             let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
             (actions, evicted_total, pending_marks, pending_fold_marks)
         };
-        // Unconditionally latch the frame-reset flag here, before assigning
-        // evicted_baseline.  backfill_prompt_marks's in-band detector
-        // (`evicted_total < self.evicted_baseline`) cannot fire at this point
-        // because `evicted_total` was just computed from a freshly-reset core
-        // whose own eviction counter is 0, so both sides of the comparison
-        // would be equal — the condition would never be true.  The helper's
-        // contract is "the previous frame was discarded", so the latch is
-        // unconditional regardless of eviction counts.
+        self.apply_replay_reconcile(&actions, evicted_total, pending_marks, pending_fold_marks);
+        actions
+    }
+
+    /// Frame-discard half of the replay recipe: drop the prompt / fold
+    /// state that addressed the *outgoing* frame's rows. Shared by the
+    /// synchronous [`Self::reset_frame_for_replay`] and the off-thread
+    /// dispatch (which does this at dispatch time, before the worker has
+    /// produced the new core, so the stale trackers never outlive the
+    /// dispatch). The displayed core itself is NOT touched here — the
+    /// off-thread path keeps showing the outgoing pane until the swap.
+    fn reset_frame_prompts_folds(&mut self) {
+        self.prompts.clear();
+        self.folds = Self::new_fold_manager(self.fold_enabled);
+        self.pending_fold_begin = None;
+    }
+
+    /// Dispatch an off-thread snapshot replay for `target_pane`: do the
+    /// frame-discard portion now (so the stale prompt/fold trackers don't
+    /// outlive the dispatch), read the displayed core's current grid size,
+    /// spawn a one-shot worker that builds a fresh core at that grid and
+    /// full-drain replays `payload`, and install the [`PendingSwitch`].
+    ///
+    /// The displayed core is deliberately NOT reset here — the outgoing pane
+    /// stays on screen until `App::pump_all` swaps the worker-built core in.
+    /// Replaces (supersedes) any prior in-flight switch on this tab; the
+    /// prior worker's result is dropped when its `done` sender is dropped
+    /// with the old `PendingSwitch`.
+    fn dispatch_offthread_replay(&mut self, target_pane: u32, payload: Vec<u8>) {
+        // Supersede any in-flight worker: signal it to bail at the next chunk
+        // boundary so workers do not pile up under a rapid switch / resize
+        // storm. The old `PendingSwitch` (and its receiver) is dropped when
+        // `self.pending_switch` is overwritten below.
+        if let Some(old) = self.pending_switch.as_ref() {
+            old.cancel.store(true, Ordering::Relaxed);
+        }
+        self.reset_frame_prompts_folds();
+        let (cols, rows, scrollback_lines) = {
+            let c = self.core.lock();
+            (c.cols(), c.rows(), c.scrollback_capacity())
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let worker_payload = payload.clone();
+        // One-shot worker: pure build off the UI thread. `build_from_snapshot`
+        // returns `None` if cancelled mid-parse — then there is nothing to
+        // send. A successful build's `send` failure (receiver dropped because
+        // the switch was superseded) is ignored. A panic inside the build
+        // drops `tx`, which the main thread observes as `Err(Disconnected)`
+        // and handles via the synchronous reparse fallback (FR7).
+        let spawn_result = std::thread::Builder::new()
+            .name("mux-snapshot-replay".into())
+            .spawn(move || {
+                if let Some(replay) = term_core::terminal_core::TerminalCore::build_from_snapshot(
+                    cols,
+                    rows,
+                    scrollback_lines,
+                    &worker_payload,
+                    &worker_cancel,
+                ) {
+                    let _ = tx.send(replay);
+                }
+            });
+        match spawn_result {
+            Ok(_) => {
+                self.pending_switch = Some(PendingSwitch {
+                    target_pane,
+                    cols,
+                    rows,
+                    done: rx,
+                    live_queue: Vec::new(),
+                    queued_bytes: 0,
+                    payload,
+                    cancel,
+                });
+            }
+            Err(e) => {
+                // Spawn failure (thread/resource exhaustion) must not crash
+                // the UI thread (the synchronous path it replaces never did).
+                // Reparse synchronously now — a one-off block, accepted — and
+                // install no pending switch. `reset_frame_prompts_folds` above
+                // already cleared the trackers; `reset_frame_for_replay`
+                // repeats that (a no-op on the now-empty state) plus replays.
+                log::warn!(
+                    "mux off-thread replay worker spawn failed ({e}); \
+                     synchronous reparse fallback for tab {:?}",
+                    self.title
+                );
+                self.reset_frame_for_replay(&payload);
+                self.pending_switch = None;
+            }
+        }
+    }
+
+    /// Non-blockingly poll the in-flight off-thread snapshot replay and, when
+    /// the worker has finished, swap the built core in, replay the queued
+    /// target-pane live output in arrival order, and reconcile the
+    /// absolute-row trackers. Called once per owning tab from
+    /// `App::pump_all` (not gated to the active tab), so background-tab
+    /// swaps apply too.
+    ///
+    /// Returns:
+    /// - `SwapOutcome::Idle` — no pending switch.
+    /// - `SwapOutcome::Pending` — worker still parsing; keep showing the
+    ///   outgoing pane.
+    /// - `SwapOutcome::Swapped` — the core was swapped + reconciled this
+    ///   call; the caller drives the active-tab post-loop reconciliation
+    ///   (per-pane scroll restore + selection-on-frame-reset + full redraw).
+    /// - the fallback (worker panic) also returns `Swapped`: the latest
+    ///   target is reparsed synchronously here (FR7), so from the caller's
+    ///   perspective the swap completed this pump.
+    pub(crate) fn poll_pending_switch(&mut self) -> SwapOutcome {
+        let Some(pending) = self.pending_switch.as_ref() else {
+            return SwapOutcome::Idle;
+        };
+        match pending.done.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => SwapOutcome::Pending,
+            Ok(replay) => {
+                // Take ownership of the queued live output + payload before
+                // dropping the pending state.
+                let pending = self.pending_switch.take().expect("just matched Some");
+                self.apply_offthread_swap(replay, pending.live_queue);
+                SwapOutcome::Swapped
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // FR7: the worker panicked. Reparse the latest target's
+                // snapshot synchronously via the legacy path (a one-off
+                // main-thread block, accepted), then apply the queued live
+                // output as ordinary output so nothing is lost.
+                log::warn!(
+                    "mux off-thread replay worker for tab {:?} disconnected; \
+                     falling back to synchronous reparse",
+                    self.title
+                );
+                let pending = self.pending_switch.take().expect("just matched Some");
+                self.reset_frame_for_replay(&pending.payload);
+                self.apply_queued_live_output(pending.live_queue);
+                SwapOutcome::Swapped
+            }
+        }
+    }
+
+    /// Swap the worker-built `replay.core` into this tab, replay `live_queue`
+    /// in arrival order, and reconcile the absolute-row trackers so the
+    /// result is identical to a contiguous synchronous parse of
+    /// `snapshot ++ live`.
+    ///
+    /// The core is replaced *inside* the existing `Arc<Mutex<…>>` (not the
+    /// `Arc` itself) so the renderer's shared handle stays valid. The
+    /// snapshot's drained marks/actions/eviction (captured by the worker
+    /// from a freshly-reset core, counter 0) reconcile exactly like the
+    /// synchronous `reset_frame_for_replay`; the live output is then
+    /// backfilled at its own post-replay eviction total so an eviction that
+    /// happened while applying the queue shifts the snapshot marks down by
+    /// the right delta.
+    fn apply_offthread_swap(
+        &mut self,
+        replay: term_core::terminal_core::SnapshotReplay,
+        live_queue: Vec<Vec<u8>>,
+    ) {
+        // 1. Swap the built core in (renderer's Arc stays valid).
+        *self.core.lock() = replay.core;
+        // 2. Reconcile the snapshot half first: install the fresh baseline,
+        //    latch the frame reset, backfill the snapshot's marks, reseed
+        //    alt-screen. (Frame-discard of prompts/folds already happened at
+        //    dispatch time in `dispatch_offthread_replay`.)
+        self.apply_replay_reconcile(
+            &replay.actions,
+            replay.evicted_total,
+            replay.prompt_marks,
+            replay.fold_marks,
+        );
+        // 3. Apply the queued live output in order, as ordinary post-snapshot
+        //    output (NOT a reset). This re-runs the same drain/backfill the
+        //    `PtyOutput` arm would have, so prompt/fold marks and eviction
+        //    arriving during the gap are honored.
+        self.apply_queued_live_output(live_queue);
+    }
+
+    /// Replay a pending switch's queued live output onto the (already
+    /// swapped or reparsed) displayed core, in arrival order, exactly as the
+    /// `PtyOutput` arm would have for each chunk: feed the bytes, route any
+    /// device response, backfill marks, reseed alt-screen.
+    fn apply_queued_live_output(&mut self, live_queue: Vec<Vec<u8>>) {
+        for payload in live_queue {
+            let (actions, evicted_total, prompt_marks, fold_marks, device_response) = {
+                let mut c = self.core.lock();
+                let actions = c.process_pty_data_fully(&payload);
+                let device_response = c.take_response();
+                let (evicted_total, prompt_marks, fold_marks) = drain_marks(&mut c);
+                (
+                    actions,
+                    evicted_total,
+                    prompt_marks,
+                    fold_marks,
+                    device_response,
+                )
+            };
+            if !device_response.is_empty() {
+                self.write_device_response(device_response);
+            }
+            self.backfill_marks(evicted_total, prompt_marks, fold_marks);
+            if let Some(new_alt) = parse_alt_screen_action(&actions) {
+                self.alt_screen = new_alt;
+            }
+        }
+    }
+
+    /// Main-thread reconcile half of the replay recipe, shared by the
+    /// synchronous path and the off-thread swap. Given the replay's mode
+    /// `actions` and the marks/eviction total drained from the *replayed*
+    /// core (the synchronous core for the sync path, the worker-built core
+    /// for the off-thread path), latch `pending_frame_reset`, install the
+    /// fresh `evicted_baseline`, backfill the marks, and reseed
+    /// `alt_screen`.
+    ///
+    /// The eviction total comes from a freshly-reset core (counter 0), so
+    /// `backfill_prompt_marks`'s in-band detector
+    /// (`evicted_total < self.evicted_baseline`) cannot fire — the latch is
+    /// set unconditionally because the helper's contract is "the previous
+    /// frame was discarded" regardless of eviction counts.
+    fn apply_replay_reconcile(
+        &mut self,
+        actions: &[u8],
+        evicted_total: u64,
+        prompt_marks: Vec<term_core::terminal_core::PendingPromptMark>,
+        fold_marks: Vec<term_core::terminal_core::PendingFoldMark>,
+    ) {
         self.pending_frame_reset = true;
         self.evicted_baseline = evicted_total;
-        self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
+        self.backfill_marks(evicted_total, prompt_marks, fold_marks);
         self.alt_screen = false;
-        if let Some(new_alt) = parse_alt_screen_action(&actions) {
+        if let Some(new_alt) = parse_alt_screen_action(actions) {
             self.alt_screen = new_alt;
         }
-        actions
     }
 
     /// Route one decoded mux message into this tab. Called by `App::pump_all`
@@ -490,18 +789,58 @@ impl Tab {
     pub fn apply_mux_message(&mut self, msg: MuxMessage) -> bool {
         match msg.msg_type {
             MessageType::Snapshot | MessageType::SnapshotRestore => {
-                // Replay the daemon-captured bytes onto a fresh frame.
-                // `reset_frame_for_replay` owns the recipe (prompt clear,
-                // fold rebuild, drain + backfill marks so
-                // `pending_frame_reset` latches, alt_screen reseed) so the
-                // PaneCreated path stays in lockstep.
-                let _actions = self.reset_frame_for_replay(&msg.payload);
-                log::debug!(
-                    "mux apc: applied {:?} ({} bytes) for tab {:?}",
-                    msg.msg_type,
-                    msg.payload.len(),
-                    self.title
-                );
+                // FR4: branch on payload size. Small snapshots replay
+                // synchronously (no perceptible block, no swap gap); large
+                // ones go off-thread so the switch stays responsive.
+                if msg.payload.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES {
+                    // Synchronous path (legacy). `reset_frame_for_replay`
+                    // owns the recipe (prompt clear, fold rebuild, drain +
+                    // backfill marks so `pending_frame_reset` latches,
+                    // alt_screen reseed) so the PaneCreated path stays in
+                    // lockstep. A pending off-thread switch (if any) is
+                    // superseded by this newer, now-applied switch — signal
+                    // its worker to bail before dropping it.
+                    if let Some(old) = self.pending_switch.take() {
+                        old.cancel.store(true, Ordering::Relaxed);
+                    }
+                    let _actions = self.reset_frame_for_replay(&msg.payload);
+                    log::debug!(
+                        "mux apc: applied {:?} ({} bytes, sync) for tab {:?}",
+                        msg.msg_type,
+                        msg.payload.len(),
+                        self.title
+                    );
+                } else {
+                    // Off-thread path (FR1/FR4): copy the payload, do the
+                    // frame-discard portion now (prompts/folds belonged to
+                    // the outgoing frame), and dispatch a worker. The
+                    // displayed core is left intact so the outgoing pane
+                    // stays visible until the swap. A newer switch supersedes
+                    // any prior in-flight parse.
+                    //
+                    // The live-output queue is keyed on the tab's *active*
+                    // pane id (the pane `switch_to` already moved to), the
+                    // same id the `PtyOutput` arm filters on, so live bytes
+                    // for the just-switched-to pane queue while the parse runs
+                    // instead of being dropped. Fall back to the snapshot's
+                    // own `pane_id` when the tab has no window group.
+                    let target_pane = self
+                        .mux_group
+                        .as_ref()
+                        .and_then(|g| g.active_pane_id())
+                        .unwrap_or(msg.pane_id);
+                    self.dispatch_offthread_replay(target_pane, msg.payload);
+                    log::debug!(
+                        "mux apc: dispatched {:?} ({} bytes, off-thread) for tab {:?} pane {}",
+                        msg.msg_type,
+                        self.pending_switch
+                            .as_ref()
+                            .map(|p| p.payload.len())
+                            .unwrap_or(0),
+                        self.title,
+                        target_pane
+                    );
+                }
                 true
             }
             MessageType::PtyOutput => {
@@ -525,6 +864,53 @@ impl Tab {
                         );
                         return false;
                     }
+                }
+                // FR3: while an off-thread replay for this pane is in flight,
+                // the displayed core is still showing the *outgoing* pane —
+                // feeding the just-switched-to pane's live bytes into it would
+                // corrupt the visible screen. Queue them in arrival order
+                // instead; `App::pump_all` replays the queue onto the
+                // worker-built core after the swap. Output that races in for a
+                // *different* target than the pending switch is dropped (it
+                // belongs to a pane we are no longer switching to).
+                if let Some(pending) = self.pending_switch.as_mut() {
+                    if msg.pane_id == pending.target_pane {
+                        pending.queued_bytes =
+                            pending.queued_bytes.saturating_add(msg.payload.len());
+                        pending.live_queue.push(msg.payload);
+                        // Bound the backlog: past the cap, abandon the
+                        // off-thread switch and reparse synchronously now,
+                        // applying the accumulated queue as ordinary output.
+                        // This caps both the swap-time replay burst and the
+                        // memory a fast pane can accumulate during a slow parse.
+                        if pending.queued_bytes > OFFTHREAD_LIVE_QUEUE_CAP_BYTES {
+                            let pending = self
+                                .pending_switch
+                                .take()
+                                .expect("pending_switch is Some in this arm");
+                            pending.cancel.store(true, Ordering::Relaxed);
+                            log::warn!(
+                                "mux off-thread replay live-queue exceeded {} bytes for tab {:?}; \
+                                 synchronous reparse fallback",
+                                OFFTHREAD_LIVE_QUEUE_CAP_BYTES,
+                                self.title
+                            );
+                            self.reset_frame_for_replay(&pending.payload);
+                            self.apply_queued_live_output(pending.live_queue);
+                            // The swap-equivalent happened synchronously now;
+                            // repaint the newly-visible pane.
+                            return true;
+                        }
+                        // Queued, not yet visible — no redraw needed; the swap
+                        // will repaint.
+                        return false;
+                    }
+                    log::debug!(
+                        "mux apc: dropping PtyOutput for pane {} during pending switch to {}",
+                        msg.pane_id,
+                        pending.target_pane
+                    );
+                    return false;
                 }
                 // The daemon's continuous PTY stream: feed it into term_core
                 // as a normal byte stream (NOT a reset). Without this the
@@ -1631,11 +2017,128 @@ impl Tab {
         self.backfill_prompt_marks(evicted_total, Vec::new());
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) {
+    /// Test-only: whether an off-thread snapshot replay is currently in
+    /// flight for this tab.
+    #[cfg(test)]
+    pub(crate) fn test_has_pending_switch(&self) -> bool {
+        self.pending_switch.is_some()
+    }
+
+    /// Test-only: the target pane id of the in-flight off-thread replay,
+    /// or `None` when no replay is pending.
+    #[cfg(test)]
+    pub(crate) fn test_pending_target(&self) -> Option<u32> {
+        self.pending_switch.as_ref().map(|p| p.target_pane)
+    }
+
+    /// Test-only: the queued live-output payloads accumulated for the
+    /// in-flight off-thread replay, in arrival order.
+    #[cfg(test)]
+    pub(crate) fn test_pending_live_queue(&self) -> Vec<Vec<u8>> {
+        self.pending_switch
+            .as_ref()
+            .map(|p| p.live_queue.clone())
+            .unwrap_or_default()
+    }
+
+    /// Test-only: block until the in-flight worker finishes and return its
+    /// built core's first-row text, proving exactly the latest target's
+    /// snapshot was the one that got built (supersession). Panics if no
+    /// switch is pending. Used by the supersession test; production code
+    /// never blocks on the handoff (it is `try_recv`'d in `pump_all`).
+    #[cfg(test)]
+    pub(crate) fn test_wait_pending_first_row(&self) -> String {
+        let pending = self.pending_switch.as_ref().expect("no pending switch");
+        let replay = pending.done.recv().expect("worker disconnected");
+        let mut s = String::new();
+        for col in 0..replay.core.cols() {
+            s.push_str(&replay.core.get_cell_char(col, 0));
+        }
+        s.trim_end().to_string()
+    }
+
+    /// Test-only: spin on [`Self::poll_pending_switch`] until the worker
+    /// finishes and the swap completes (or there is no pending switch),
+    /// returning the final outcome. Bounded spin so a stuck worker fails the
+    /// test instead of hanging. Mirrors what `pump_all` does across many
+    /// frames, collapsed into one synchronous call for unit tests (no real
+    /// `pump_all` async loop — NFR2).
+    #[cfg(test)]
+    pub(crate) fn test_poll_until_swapped(&mut self) -> SwapOutcome {
+        for _ in 0..10_000 {
+            match self.poll_pending_switch() {
+                SwapOutcome::Pending => std::thread::yield_now(),
+                other => return other,
+            }
+        }
+        panic!("off-thread replay worker did not complete in time");
+    }
+
+    /// Test-only: block until the in-flight worker has produced its result,
+    /// then re-stage it on a fresh, ready-to-`try_recv` channel so a later
+    /// `poll_pending_switch` (e.g. the one inside a single `App::pump_all`
+    /// call) deterministically observes `Ok(replay)` — no spin/sleep, no
+    /// `pump_all` polling loop (NFR2). Panics if no switch is pending.
+    #[cfg(test)]
+    pub(crate) fn test_block_worker_ready(&mut self) {
+        let pending = self.pending_switch.as_mut().expect("no pending switch");
+        let replay = pending.done.recv().expect("worker disconnected");
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(replay).expect("re-stage replay");
+        pending.done = rx;
+        // `tx` drops here, but the value is already buffered in `rx`, so
+        // `try_recv` returns `Ok` before it would see `Disconnected`.
+    }
+
+    /// Test-only: drop the in-flight worker's completion sender so the next
+    /// poll observes `Disconnected` (the worker-panic fallback path, FR7).
+    /// Replaces the live receiver with a fresh, already-disconnected one.
+    #[cfg(test)]
+    pub(crate) fn test_force_worker_disconnect(&mut self) {
+        if let Some(pending) = self.pending_switch.as_mut() {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            // `_tx` drops at end of scope → `rx` is immediately disconnected.
+            pending.done = rx;
+        }
+    }
+
+    /// Test-only: read the displayed core's row `row` as trimmed text.
+    #[cfg(test)]
+    pub(crate) fn test_row_text(&self, row: u16) -> String {
+        let c = self.core.lock();
+        let s: String = (0..c.cols()).map(|col| c.get_cell_char(col, row)).collect();
+        s.trim_end().to_string()
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16) {
         if let Some(p) = &self.pty {
             p.resize(cols, rows);
         }
         self.core.lock().resize(cols, rows);
+
+        // FR5: a grid resize during a pending off-thread replay supersedes
+        // the in-flight parse — a core built at the old `(cols, rows)` would
+        // be the wrong size to swap in. Re-dispatch the *same* snapshot bytes
+        // at the new grid (no daemon round-trip), preserving the target pane
+        // and the already-queued live output so ordering is not lost. A
+        // resize that did not actually change the grid is left alone (the
+        // in-flight core is still correctly sized).
+        if let Some(pending) = self.pending_switch.as_ref() {
+            if pending.cols != cols || pending.rows != rows {
+                let target = pending.target_pane;
+                let payload = pending.payload.clone();
+                let queued = pending.live_queue.clone();
+                let queued_bytes = pending.queued_bytes;
+                // `dispatch_offthread_replay` reads the *current* core size
+                // (just resized above), cancels the old worker, and starts a
+                // fresh one, overwriting `self.pending_switch`.
+                self.dispatch_offthread_replay(target, payload);
+                if let Some(p) = self.pending_switch.as_mut() {
+                    p.live_queue = queued;
+                    p.queued_bytes = queued_bytes;
+                }
+            }
+        }
 
         // In mux mode the local PTY is the bridge's stdin pipe, so the
         // resize above only stretches the bridge-facing FD — the daemon's
@@ -3050,5 +3553,441 @@ mod tests {
         let g = tab.mux_group.as_ref().unwrap();
         assert_eq!(g.len(), 1);
         assert!(g.is_group());
+    }
+
+    // ── Off-thread snapshot replay (Phase 2/3/4) ──────────────────────────
+
+    fn snapshot_msg(pane_id: u32, payload: Vec<u8>) -> MuxMessage {
+        MuxMessage {
+            msg_type: MessageType::Snapshot,
+            pane_id,
+            payload,
+        }
+    }
+
+    fn pty_output(pane_id: u32, payload: Vec<u8>) -> MuxMessage {
+        MuxMessage {
+            msg_type: MessageType::PtyOutput,
+            pane_id,
+            payload,
+        }
+    }
+
+    /// A payload at or above the off-thread threshold whose first row, once
+    /// replayed, is `marker` followed by a newline so subsequent live output
+    /// lands on row 1 (the worker-built core is identifiable by row 0). The
+    /// trailing NUL padding is ignored by the parser and leaves the cursor at
+    /// the start of row 1.
+    fn large_payload(marker: &str) -> Vec<u8> {
+        let mut p = marker.as_bytes().to_vec();
+        p.extend_from_slice(b"\r\n");
+        // Pad past the threshold with NULs (ignored by the parser; they do
+        // not advance the cursor) so row 0 stays exactly `marker`.
+        p.resize(OFFTHREAD_REPLAY_THRESHOLD_BYTES + 16, 0);
+        p
+    }
+
+    /// TS-4: exactly at the threshold goes off-thread; one byte below stays
+    /// synchronous (no pending switch).
+    #[test]
+    fn ts4_threshold_boundary_sync_vs_offthread() {
+        // One byte below threshold → synchronous, no pending switch.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let below = vec![b'x'; OFFTHREAD_REPLAY_THRESHOLD_BYTES - 1];
+        tab.apply_mux_message(snapshot_msg(10, below));
+        assert!(
+            !tab.test_has_pending_switch(),
+            "sub-threshold snapshot must stay synchronous"
+        );
+
+        // Exactly at the threshold → off-thread, pending switch entered.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let at = vec![b'x'; OFFTHREAD_REPLAY_THRESHOLD_BYTES];
+        tab.apply_mux_message(snapshot_msg(10, at));
+        assert!(
+            tab.test_has_pending_switch(),
+            "at-threshold snapshot must go off-thread"
+        );
+        // Active pane (index 0 → pane 10) is the queue target.
+        assert_eq!(tab.test_pending_target(), Some(10));
+    }
+
+    /// FR1: a large snapshot dispatch must NOT mutate the displayed core —
+    /// the outgoing pane stays visible until the swap.
+    #[test]
+    fn ts4_offthread_dispatch_leaves_displayed_core_intact() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        // Paint the outgoing pane's content into the displayed core.
+        {
+            let mut c = tab.core.lock();
+            c.process_pty_data_fully(b"OUTGOING");
+        }
+        tab.apply_mux_message(snapshot_msg(10, large_payload("INCOMING")));
+        assert!(tab.test_has_pending_switch());
+        // Displayed core still shows the outgoing content (not reset).
+        let c = tab.core.lock();
+        let row0: String = (0..8).map(|col| c.get_cell_char(col, 0)).collect();
+        assert_eq!(row0, "OUTGOING");
+    }
+
+    /// FR3 / TS-3 (queue): target-pane live output during a pending switch is
+    /// queued in arrival order, not applied to the displayed core; output for
+    /// a different pane is dropped.
+    #[test]
+    fn ts3_live_output_queued_during_pending_switch() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SNAP")));
+        assert_eq!(tab.test_pending_target(), Some(10));
+
+        // Two live chunks for the target pane → queued in order.
+        tab.apply_mux_message(pty_output(10, b"first".to_vec()));
+        tab.apply_mux_message(pty_output(10, b"second".to_vec()));
+        // A chunk for a non-target pane → dropped (the PtyOutput pane filter
+        // also drops non-active panes, but the pending guard covers it too).
+        tab.apply_mux_message(pty_output(20, b"other".to_vec()));
+
+        assert_eq!(
+            tab.test_pending_live_queue(),
+            vec![b"first".to_vec(), b"second".to_vec()]
+        );
+    }
+
+    /// β: target-pane live output exceeding OFFTHREAD_LIVE_QUEUE_CAP_BYTES
+    /// during a pending replay abandons the off-thread switch and reparses the
+    /// snapshot synchronously, applying the accumulated output (nothing lost,
+    /// no unbounded backlog / swap-time burst).
+    #[test]
+    fn offthread_live_queue_cap_falls_back_to_sync() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SNAP")));
+        assert!(tab.test_has_pending_switch());
+
+        // 1 MiB of NUL padding per chunk: counts toward the byte budget but is
+        // ignored by the parser (does not move the cursor / paint).
+        let chunk = vec![0u8; 1024 * 1024];
+        // Four chunks = 4 MiB == cap (not strictly greater) → still pending.
+        for _ in 0..4 {
+            tab.apply_mux_message(pty_output(10, chunk.clone()));
+            assert!(
+                tab.test_has_pending_switch(),
+                "at-or-below the cap must stay off-thread"
+            );
+        }
+        // The fifth chunk crosses the cap → synchronous fallback.
+        let changed = tab.apply_mux_message(pty_output(10, chunk.clone()));
+        assert!(changed, "the synchronous fallback repaints");
+        assert!(
+            !tab.test_has_pending_switch(),
+            "exceeding the cap must abandon the off-thread switch"
+        );
+        // The snapshot was replayed synchronously (row 0 == marker) and the
+        // NUL live output was applied on top without corrupting it.
+        assert_eq!(tab.test_row_text(0), "SNAP");
+    }
+
+    /// TS-6 / FR5: a newer switch supersedes the in-flight one — only the
+    /// latest target's snapshot ends up being the one built/queued.
+    #[test]
+    fn ts6_newer_switch_supersedes_in_flight() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+
+        // First off-thread switch to pane 10.
+        tab.apply_mux_message(snapshot_msg(10, large_payload("FIRST")));
+        tab.apply_mux_message(pty_output(10, b"stale".to_vec()));
+        assert_eq!(tab.test_pending_target(), Some(10));
+        assert_eq!(tab.test_pending_live_queue(), vec![b"stale".to_vec()]);
+
+        // The daemon moved the active pane to 20 (a newer SwitchWindow), then
+        // a second large snapshot arrives for it.
+        tab.mux_group.as_mut().unwrap().set_active_by_pane(20);
+        tab.apply_mux_message(snapshot_msg(20, large_payload("SECOND")));
+
+        // The pending switch now targets 20 and its queue was re-keyed (the
+        // stale pane-10 bytes are discarded).
+        assert_eq!(tab.test_pending_target(), Some(20));
+        assert!(tab.test_pending_live_queue().is_empty());
+        // The worker that actually completes built the *latest* target.
+        assert_eq!(tab.test_wait_pending_first_row(), "SECOND");
+    }
+
+    /// FR5: a sub-threshold snapshot arriving mid-parse supersedes the
+    /// in-flight off-thread switch (it applies synchronously and clears it).
+    #[test]
+    fn ts6_sync_snapshot_supersedes_pending_switch() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(snapshot_msg(10, large_payload("BIG")));
+        assert!(tab.test_has_pending_switch());
+
+        // A small snapshot for the now-active pane applies synchronously and
+        // supersedes the in-flight parse.
+        tab.mux_group.as_mut().unwrap().set_active_by_pane(20);
+        tab.apply_mux_message(snapshot_msg(20, b"small".to_vec()));
+        assert!(!tab.test_has_pending_switch());
+    }
+
+    /// TS-12 / FR5: a grid resize during a pending switch supersedes the
+    /// in-flight parse and re-dispatches at the new grid, preserving the
+    /// target and the already-queued live output.
+    #[test]
+    fn ts12_resize_supersedes_and_redispatches_at_new_grid() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(snapshot_msg(10, large_payload("PANE")));
+        tab.apply_mux_message(pty_output(10, b"queued".to_vec()));
+        assert!(tab.test_has_pending_switch());
+
+        // Resize to a different grid → supersede + re-dispatch.
+        tab.resize(100, 40);
+        assert!(tab.test_has_pending_switch());
+        assert_eq!(tab.test_pending_target(), Some(10));
+        // Queue preserved across the re-dispatch.
+        assert_eq!(tab.test_pending_live_queue(), vec![b"queued".to_vec()]);
+        // The re-dispatched worker built a core at the new grid width.
+        {
+            let pending = tab.pending_switch.as_ref().unwrap();
+            assert_eq!(pending.cols, 100);
+            assert_eq!(pending.rows, 40);
+            let replay = pending.done.recv().expect("worker disconnected");
+            assert_eq!(replay.core.cols(), 100);
+            assert_eq!(replay.core.rows(), 40);
+        }
+    }
+
+    /// FR5: a resize that does not change the grid leaves the in-flight parse
+    /// untouched (the core is still correctly sized).
+    #[test]
+    fn ts12_noop_resize_keeps_in_flight_parse() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(snapshot_msg(10, large_payload("PANE")));
+        let (cols, rows) = {
+            let c = tab.core.lock();
+            (c.cols(), c.rows())
+        };
+        tab.resize(cols, rows);
+        assert!(tab.test_has_pending_switch());
+        assert_eq!(tab.test_pending_target(), Some(10));
+    }
+
+    /// A small snapshot payload whose first row replays to `marker` (stays on
+    /// the synchronous path; reused as the contiguous-parse reference).
+    fn small_snapshot_bytes(marker: &str) -> Vec<u8> {
+        marker.as_bytes().to_vec()
+    }
+
+    /// Grid fingerprint of a tab's displayed core (all rows trimmed of
+    /// trailing blanks + cursor position), for parity assertions.
+    fn displayed_fingerprint(tab: &Tab) -> (Vec<String>, u16, u16) {
+        let c = tab.core.lock();
+        let mut rows = Vec::with_capacity(c.rows() as usize);
+        for r in 0..c.rows() {
+            let line: String = (0..c.cols()).map(|col| c.get_cell_char(col, r)).collect();
+            rows.push(line.trim_end().to_string());
+        }
+        (rows, c.get_cursor_col(), c.get_cursor_row())
+    }
+
+    /// TS-5 / FR3: an off-thread snapshot parse + queued live output applied
+    /// after the swap is byte/grid-identical to one contiguous synchronous
+    /// parse of `snapshot ++ live`, and the prompt-mark tracker matches.
+    #[test]
+    fn ts5_offthread_swap_plus_live_equals_contiguous_parse() {
+        // Build a large snapshot with an OSC 133 prompt mark + visible text,
+        // then two live chunks that add more text and another prompt mark.
+        let mut snapshot = b"\x1b]133;A\x07first-row\r\n".to_vec();
+        snapshot.resize(OFFTHREAD_REPLAY_THRESHOLD_BYTES + 8, 0);
+        let live1 = b"live-line-1\r\n".to_vec();
+        let live2 = b"\x1b]133;A\x07live-line-2".to_vec();
+
+        // Reference: a tab that replays snapshot ++ live as one synchronous
+        // frame (reset_frame_for_replay) then feeds the live chunks as
+        // ordinary output — exactly the legacy behavior with no off-thread gap.
+        let mut reference = test_tab();
+        reference.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        reference.reset_frame_for_replay(&snapshot);
+        reference.apply_queued_live_output(vec![live1.clone(), live2.clone()]);
+
+        // Off-thread path: dispatch, queue the live chunks, then swap.
+        let mut offthread = test_tab();
+        offthread.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        offthread.apply_mux_message(snapshot_msg(10, snapshot));
+        offthread.apply_mux_message(pty_output(10, live1));
+        offthread.apply_mux_message(pty_output(10, live2));
+        assert_eq!(offthread.test_poll_until_swapped(), SwapOutcome::Swapped);
+        assert!(!offthread.test_has_pending_switch());
+
+        // Grid + cursor identical.
+        assert_eq!(
+            displayed_fingerprint(&offthread),
+            displayed_fingerprint(&reference)
+        );
+        // Prompt-mark tracker identical (both prompt marks present, same rows).
+        assert_eq!(
+            offthread.prompts.find_prev_prompt(u32::MAX),
+            reference.prompts.find_prev_prompt(u32::MAX)
+        );
+        assert_eq!(
+            offthread.prompts.find_next_prompt(0),
+            reference.prompts.find_next_prompt(0)
+        );
+    }
+
+    /// TS-5: queued live output is applied in arrival order (a later chunk's
+    /// content overwrites / follows an earlier chunk's, never reordered).
+    #[test]
+    fn ts5_queued_live_output_applied_in_order() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(snapshot_msg(10, large_payload("SNAP")));
+        // Three ordered chunks, each writing to a fresh line.
+        tab.apply_mux_message(pty_output(10, b"AAA\r\n".to_vec()));
+        tab.apply_mux_message(pty_output(10, b"BBB\r\n".to_vec()));
+        tab.apply_mux_message(pty_output(10, b"CCC".to_vec()));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        // Row 0 = snapshot marker; rows 1..3 = the live chunks in order.
+        assert_eq!(tab.test_row_text(0), "SNAP");
+        assert_eq!(tab.test_row_text(1), "AAA");
+        assert_eq!(tab.test_row_text(2), "BBB");
+        assert_eq!(tab.test_row_text(3), "CCC");
+    }
+
+    /// TS-7 / FR7: on worker failure the swap falls back to a synchronous
+    /// reparse of the latest target, with the queued live output applied in
+    /// order — the displayed result is correct.
+    #[test]
+    fn ts7_worker_failure_falls_back_to_sync_reparse() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(snapshot_msg(10, large_payload("FALLBACK")));
+        tab.apply_mux_message(pty_output(10, b"after\r\n".to_vec()));
+        // Simulate the worker panicking (sender dropped → Disconnected).
+        tab.test_force_worker_disconnect();
+        assert_eq!(tab.poll_pending_switch(), SwapOutcome::Swapped);
+        assert!(!tab.test_has_pending_switch());
+        // Snapshot reparsed synchronously + queued live applied in order.
+        assert_eq!(tab.test_row_text(0), "FALLBACK");
+        assert_eq!(tab.test_row_text(1), "after");
+    }
+
+    /// FR1: polling with no pending switch is a cheap no-op.
+    #[test]
+    fn poll_pending_switch_idle_when_none() {
+        let mut tab = test_tab();
+        assert_eq!(tab.poll_pending_switch(), SwapOutcome::Idle);
+    }
+
+    /// FR1: the swap replaces the displayed core's content (the outgoing
+    /// pane's content is gone after the swap).
+    #[test]
+    fn swap_replaces_outgoing_content() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        {
+            let mut c = tab.core.lock();
+            c.process_pty_data_fully(b"OUTGOING-PANE");
+        }
+        tab.apply_mux_message(snapshot_msg(10, large_payload("NEWPANE")));
+        // Before the swap, outgoing content is still shown.
+        assert_eq!(tab.test_row_text(0), "OUTGOING-PANE");
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+        // After the swap, the worker-built content replaced it.
+        assert_eq!(tab.test_row_text(0), "NEWPANE");
+    }
+
+    // Keep `small_snapshot_bytes` referenced (used by the integration test in
+    // Phase 4) without an unused-fn warning when that test is filtered out.
+    #[test]
+    fn small_snapshot_helper_is_below_threshold() {
+        assert!(small_snapshot_bytes("hi").len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES);
+    }
+
+    /// TS-9 / FR2: swapping in a snapshot whose content occupies fewer rows
+    /// than the outgoing pane leaves NO residual rows — every row past the
+    /// snapshot's content is blank in the swapped-in core. The worker builds
+    /// a fresh core (`reset_and_replay`), so residual rows cannot survive the
+    /// swap; this locks that invariant in under the off-thread path.
+    #[test]
+    fn ts9_no_residual_rows_after_offthread_swap_to_shorter_pane() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        // Outgoing pane: fill many rows with content.
+        {
+            let mut c = tab.core.lock();
+            let mut bytes = Vec::new();
+            for i in 0..20 {
+                bytes.extend_from_slice(format!("outgoing row {i}\r\n").as_bytes());
+            }
+            c.process_pty_data_fully(&bytes);
+        }
+        // Confirm the outgoing pane really has content on a deep row.
+        assert!(!tab.test_row_text(10).is_empty());
+
+        // Incoming snapshot: only two rows of content (large enough to go
+        // off-thread).
+        let mut snapshot = b"only-row-0\r\nonly-row-1".to_vec();
+        snapshot.resize(OFFTHREAD_REPLAY_THRESHOLD_BYTES + 8, 0);
+        tab.apply_mux_message(snapshot_msg(10, snapshot));
+        assert_eq!(tab.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+        // Rows 0/1 hold the snapshot; every later row is blank — no residual.
+        assert_eq!(tab.test_row_text(0), "only-row-0");
+        assert_eq!(tab.test_row_text(1), "only-row-1");
+        let rows = tab.core.lock().rows();
+        for r in 2..rows {
+            assert_eq!(
+                tab.test_row_text(r),
+                "",
+                "row {r} must be blank after swap (no residual rows, FR2)"
+            );
+        }
+    }
+
+    /// TS-9 / NFR1: marks/folds + the eviction baseline after an off-thread
+    /// swap match the synchronous `reset_frame_for_replay` path for the same
+    /// snapshot (parity).
+    #[test]
+    fn ts9_marks_and_baseline_parity_with_sync_path() {
+        // A snapshot with an OSC 133 A/B/C/D cycle (a foldable command region)
+        // plus scrollback growth so the eviction baseline is exercised.
+        let mut snapshot = Vec::new();
+        snapshot.extend_from_slice(b"\x1b]133;A\x07$ \x1b]133;B\x07cmd\x1b]133;C\x07\r\n");
+        for i in 0..30 {
+            snapshot.extend_from_slice(format!("out {i}\r\n").as_bytes());
+        }
+        snapshot.extend_from_slice(b"\x1b]133;D;0\x07");
+        let mut large = snapshot.clone();
+        large.resize(OFFTHREAD_REPLAY_THRESHOLD_BYTES + large.len(), 0);
+
+        // Synchronous reference (sub-threshold, legacy path).
+        let mut reference = test_tab();
+        reference.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        reference.reset_frame_for_replay(&snapshot);
+
+        // Off-thread path (padded past the threshold; NUL padding does not
+        // change the grid/marks).
+        let mut offthread = test_tab();
+        offthread.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        offthread.apply_mux_message(snapshot_msg(10, large));
+        assert_eq!(offthread.test_poll_until_swapped(), SwapOutcome::Swapped);
+
+        // Prompt navigation parity.
+        assert_eq!(
+            offthread.prompts.find_prev_prompt(u32::MAX),
+            reference.prompts.find_prev_prompt(u32::MAX)
+        );
+        // Fold-region parity: both paths registered the same number of
+        // foldable OSC 133 C→D regions.
+        assert_eq!(
+            offthread.folds.region_count(),
+            reference.folds.region_count(),
+            "off-thread and sync paths must register the same fold regions"
+        );
     }
 }

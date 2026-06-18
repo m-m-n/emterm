@@ -2601,6 +2601,13 @@ impl App {
         // the active tab this pump (FR3 pane wiring); applied after the
         // `&mut self.tabs` borrow ends.
         let mut active_pane_switch_from: Option<u32> = None;
+        // Whether the *active* tab's off-thread snapshot replay completed and
+        // swapped in this pump. Drives the active-tab post-loop full redraw so
+        // a shorter incoming pane leaves no residual rows (FR2) once the
+        // worker-built core is shown. Selection drop is handled by the
+        // `pending_frame_reset` latch (drained into `active_frame_reset`),
+        // which `apply_offthread_swap` set during the swap.
+        let mut active_offthread_swapped = false;
         // emterm viewer OSC payloads collected across all tabs this pass,
         // routed to the spawner after the `&mut self.tabs` borrow ends.
         let mut viewer_osc: Vec<crate::callbacks::EmtermOscRequest> = Vec::new();
@@ -2621,6 +2628,23 @@ impl App {
                 if idx == active {
                     active_changed = true;
                 }
+            }
+            // Non-blockingly poll this tab's in-flight off-thread snapshot
+            // replay (the mux off-thread switch). Run per owning tab, not just
+            // the active one, so a background tab's swap applies as well (its
+            // selection/scroll are reconciled when it later becomes active,
+            // parity with the existing background-tab bookkeeping). On a swap,
+            // the displayed content changed, so mark `changed`; the active tab
+            // additionally drives the post-loop full redraw + scroll restore.
+            match tab.poll_pending_switch() {
+                crate::tabs::SwapOutcome::Swapped => {
+                    changed = true;
+                    if idx == active {
+                        active_changed = true;
+                        active_offthread_swapped = true;
+                    }
+                }
+                crate::tabs::SwapOutcome::Pending | crate::tabs::SwapOutcome::Idle => {}
             }
             // Markdown viewer (FR1/FR2/FR3): collect this tab's emterm OSC
             // queue for the spawner. We cannot touch `self.viewer_spawner`
@@ -2792,6 +2816,18 @@ impl App {
                 changed = true;
             }
         }
+        // The active tab's off-thread snapshot replay completed and swapped in
+        // this pump: the displayed core changed from the outgoing pane to the
+        // (possibly shorter) target pane, so force a full redraw to clear any
+        // residual rows (FR2). The per-pane scroll position was already
+        // restored at `switch_to` time (the active index moved synchronously
+        // there); the swap only changes the rendered content, so no scroll
+        // reload is needed here. Selection drop is handled by the
+        // `active_frame_reset` latch below.
+        if active_offthread_swapped {
+            self.needs_full_redraw = true;
+            changed = true;
+        }
         if active_frame_reset {
             self.selection = None;
             self.pending_selection_anchor = None;
@@ -2877,7 +2913,7 @@ impl App {
         // afterward (N3). All tabs share `cell_size`, so any one differing is
         // enough; checking all is harmless.
         let mut width_changed = false;
-        for tab in &self.tabs {
+        for tab in &mut self.tabs {
             let old_cols = tab.core.lock().cols();
             if old_cols != cols {
                 width_changed = true;
@@ -6025,6 +6061,76 @@ mod tests {
         assert!(
             app.selection.is_none(),
             "frame reset must clear the selection"
+        );
+    }
+
+    /// TS-8 (integration): an off-thread snapshot swap completing on the
+    /// active tab during a single `pump_all` reconciles like the synchronous
+    /// path — the absolute-row selection is dropped (frame reset) and a full
+    /// redraw is forced (FR2: a shorter incoming pane leaves no residual
+    /// rows). No `pump_all` polling loop: the worker is blocked-ready first,
+    /// then `pump_all` is called exactly once.
+    #[test]
+    fn ts8_offthread_swap_reconciles_active_tab_on_pump() {
+        use mux_ipc::protocol::{MessageType, MuxMessage};
+
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        // Seed a 2-pane mux group, active pane = 10.
+        {
+            let group = app.tabs[0]
+                .mux_group
+                .get_or_insert_with(crate::mux::window_group::MuxWindowGroup::new);
+            group.seed(
+                vec![
+                    crate::mux::window_group::MuxWindow {
+                        id: 1,
+                        name: "a".into(),
+                    },
+                    crate::mux::window_group::MuxWindow {
+                        id: 2,
+                        name: "b".into(),
+                    },
+                ],
+                vec![10, 20],
+                0,
+            );
+        }
+        // A stale absolute-row selection that the frame reset must drop.
+        app.selection = Some(Selection {
+            anchor: Pos { row: 2, col: 0 },
+            extent: Pos { row: 6, col: 3 },
+            mode: SelectionMode::Character,
+        });
+        app.needs_full_redraw = false;
+
+        // Dispatch a large snapshot off-thread for the active pane.
+        let threshold = crate::tabs::OFFTHREAD_REPLAY_THRESHOLD_BYTES;
+        let mut payload = b"SWAPPED-IN\r\n".to_vec();
+        payload.resize(threshold + 16, 0);
+        app.tabs[0].apply_mux_message(MuxMessage {
+            msg_type: MessageType::Snapshot,
+            pane_id: 10,
+            payload,
+        });
+        assert!(app.tabs[0].test_has_pending_switch());
+
+        // Block until the worker is ready (re-staged for try_recv), then pump
+        // exactly once.
+        app.tabs[0].test_block_worker_ready();
+        app.pump_all();
+
+        // Swap completed: no pending switch, content replaced, selection
+        // dropped by the frame reset, full redraw forced.
+        assert!(!app.tabs[0].test_has_pending_switch());
+        assert_eq!(app.tabs[0].test_row_text(0), "SWAPPED-IN");
+        assert!(
+            app.selection.is_none(),
+            "off-thread swap frame reset must drop the stale selection"
+        );
+        assert!(
+            app.needs_full_redraw,
+            "off-thread swap on the active tab must force a full redraw (FR2)"
         );
     }
 
