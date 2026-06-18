@@ -11,7 +11,7 @@ CARGO_TARGET_HOST := src-tauri/target-host
 CARGO_TARGET_WIN  := src-tauri/target-win
 MANIFEST := --manifest-path src-tauri/Cargo.toml
 
-.PHONY: help setup viewer settings web dev build cli-build win-build dpkg cli-dpkg install clean
+.PHONY: help setup viewer settings web dev build cli-build win-build dpkg cli-dpkg install clean fmt fmt-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -28,6 +28,14 @@ settings: ## Build the settings window web bundle (src-tauri/settings/dist)
 	bun run build:settings
 
 web: viewer settings ## Build both web bundles
+
+fmt: ## Format all sources (rustfmt + biome)
+	cargo fmt --all
+	bunx biome format --write .
+
+fmt-check: ## Check formatting without writing (fails if anything is unformatted)
+	cargo fmt --all --check
+	bunx biome check .
 
 dev: web ## Run eMterm (debug build, default GUI feature)
 	CARGO_TARGET_DIR=src-tauri/target cargo run $(MANIFEST)

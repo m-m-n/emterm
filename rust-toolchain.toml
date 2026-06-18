@@ -1,0 +1,10 @@
+# Pin the toolchain so rustfmt's default style does not drift when a newer
+# stable ships (a style change would otherwise re-dirty the whole tree).
+# Bump this channel deliberately, then re-run `make fmt` in a dedicated commit.
+#
+# The Windows cross-build target (x86_64-pc-windows-msvc) is intentionally not
+# listed here so CLI-only contributors are not forced to install it; `make
+# setup` adds it on demand.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]
