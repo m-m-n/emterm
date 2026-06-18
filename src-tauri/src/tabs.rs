@@ -797,9 +797,13 @@ impl Tab {
             }
             MessageType::PtyExited => {
                 // A window's shell exited: remove its window/pane. The group
-                // keeps rendering sub-tabs down to a single window (WebView
-                // parity); only dropping to zero clears the group entirely so
-                // the tab reverts to a plain tab. Port of `handleMuxPaneExited`.
+                // keeps rendering sub-tabs down to a single window; only
+                // dropping to zero ends the mux session for this tab. Unlike an
+                // explicit `Detach` (which reverts to a plain tab), the last
+                // window's shell exiting means there is nothing left to show, so
+                // the tab itself is closed — `exited` makes `App::pump_all` reap
+                // it just like a local shell that ran out (otherwise the empty
+                // mux tab lingers and blocks `mux kill`).
                 match self.mux_group.as_mut() {
                     Some(group) => match group.remove_pane(msg.pane_id) {
                         Some(idx) => {
@@ -811,6 +815,7 @@ impl Tab {
                             );
                             if group.is_empty() {
                                 self.mux_group = None;
+                                self.exited = true;
                             }
                             true
                         }
@@ -2747,6 +2752,9 @@ mod tests {
         tab.apply_mux_message(welcome_msg(&[(1, "only", 10)], 0));
         tab.apply_mux_message(pty_exited(10));
         assert!(tab.mux_group.is_none());
+        // The last window's shell exited: the tab closes (reaped by
+        // `App::pump_all`), unlike an explicit detach which keeps it alive.
+        assert!(tab.exited);
     }
 
     // ── Detached: exit mux mode (group + session name cleared) ────────────
