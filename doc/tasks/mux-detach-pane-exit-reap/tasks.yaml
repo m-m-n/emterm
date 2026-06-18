@@ -1,0 +1,66 @@
+schema_version: 1
+feature: mux-detach-pane-exit-reap
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-reap-authority
+    name: Daemon reap authority
+    goal: A daemon-level task reaps a pane from the session manager on receipt of a pane identifier, independent of attach state, firing the shutdown signal when all sessions become empty. Testable in isolation.
+    effort: medium
+    status: completed
+    depends_on: []
+    blocks: [phase-2-reader-notify-wiring]
+    files_create: []
+    files_modify:
+      - src-tauri/src/mux/session/pane.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/daemon.rs
+    tasks:
+      - id: pane-exit-sender-type
+        title: Shared optional pane-exit sender type alias (mirrors shared-notification-sender shape; distinct from the OSC-notification channel)
+        covers_fr: [FR2, NFR4]
+      - id: expose-destroy-pane
+        title: Widen visibility of the pane-destroy reap function so the daemon module can call it
+        covers_fr: [FR2]
+      - id: daemon-reap-task
+        title: Daemon reap task that reaps each received pane id via the pane-destroy reap function (output-target-independent, idempotent, fires shutdown when all sessions empty)
+        covers_fr: [FR2, FR4, FR5, FR6, NFR1]
+      - id: phase1-tests
+        title: Unit/integration tests for detached last/non-last reap, network-detach race, and idempotent double reap
+        covers_fr: [FR2, FR4, FR5, FR6, NFR1]
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+
+  - id: phase-2-reader-notify-wiring
+    name: Reader EOF notification + run-loop wiring
+    goal: On reader EOF, notify the daemon of the pane exit regardless of attach state while preserving attached client teardown; create the channel, spawn the reap task, and thread the shared sender down the pane-creation path on both daemon run loops.
+    effort: medium
+    status: completed
+    depends_on: [phase-1-reap-authority]
+    blocks: []
+    files_create: []
+    files_modify:
+      - src-tauri/src/mux/ipc/pty_spawn.rs
+      - src-tauri/src/mux/ipc/connection.rs
+      - src-tauri/src/mux/daemon.rs
+    tasks:
+      - id: reader-eof-notify
+        title: Plumb the shared sender into the reader; in the EOF arm keep attached empty-chunk teardown and always enqueue the pane id (ignore send failure); steady-state Ok(n) path untouched
+        covers_fr: [FR1, FR3, NFR3]
+      - id: wire-runloops
+        title: In both run loops (Unix socket, Windows named pipe) create the pane-exit channel, spawn the reap task, and build the shared sender
+        covers_fr: [FR7, FR2, FR5]
+      - id: plumb-sender-chain
+        title: Thread the shared pane-exit sender through the pane-creation call chain to the reader spawn, mirroring the notification sender
+        covers_fr: [FR1, FR7]
+      - id: phase2-verify
+        title: Manual detach->exit verification on both platforms plus regression (full mux suite + CLI-only compile)
+        covers_fr: [FR1, FR3, FR7, NFR2]
+    tests:
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-8

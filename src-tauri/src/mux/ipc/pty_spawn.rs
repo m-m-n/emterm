@@ -10,8 +10,8 @@ use tokio::sync::mpsc;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     lock_shadow_parser, DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget,
-    PtyOutputChunk, SharedNotificationSender, SharedOutputTarget, SharedScrollback,
-    SharedShadowParser, SharedTitleSender, TitleChangeSender,
+    PtyOutputChunk, SharedNotificationSender, SharedOutputTarget, SharedPaneExitSender,
+    SharedScrollback, SharedShadowParser, SharedTitleSender, TitleChangeSender,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;
@@ -110,6 +110,7 @@ pub(super) fn register_pane_and_start_reader(
     pane_output_tx: &mpsc::Sender<PtyOutputChunk>,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
+    pane_exit_sender: &SharedPaneExitSender,
 ) -> Option<PaneId> {
     // Verify session/window exist before allocating pane ID
     {
@@ -146,6 +147,10 @@ pub(super) fn register_pane_and_start_reader(
     *notification_sender.lock().unwrap() = Some(notification_tx.clone());
     window.add_pane(pane);
 
+    // The pane-exit sender is fixed at pane creation and never swapped on
+    // attach/detach (M1): clone the shared Arc straight into the reader thread.
+    let pane_exit_sender = pane_exit_sender.clone();
+
     let reader = spawned.reader;
     std::thread::spawn(move || {
         pty_reader_loop(
@@ -160,6 +165,7 @@ pub(super) fn register_pane_and_start_reader(
             raw_passthrough,
             passthrough_scanner,
             scrollback,
+            pane_exit_sender,
         );
     });
 
@@ -190,6 +196,7 @@ fn pty_reader_loop(
     raw_passthrough: SharedRawPassthrough,
     passthrough_scanner: SharedPassthroughScanner,
     scrollback: SharedScrollback,
+    pane_exit_sender: SharedPaneExitSender,
 ) {
     let mut buf = [0u8; 65536];
     loop {
@@ -207,13 +214,31 @@ fn pty_reader_loop(
                     pane_id,
                     target_state
                 );
-                // Signal exit to connected client if any
-                let target = output_target.lock().unwrap();
-                if let PaneOutputTarget::Connected(ref tx) = *target {
-                    let _ = tx.blocking_send(PtyOutputChunk {
-                        pane_id,
-                        data: Vec::new(),
-                    });
+                // FR3: signal exit to the connected client (if any) so the GUI
+                // tears the pane/tab down. Scope the lock so it is released
+                // before the pane-exit enqueue below.
+                {
+                    let target = output_target.lock().unwrap();
+                    if let PaneOutputTarget::Connected(ref tx) = *target {
+                        let _ = tx.blocking_send(PtyOutputChunk {
+                            pane_id,
+                            data: Vec::new(),
+                        });
+                    }
+                }
+                // FR1: notify the daemon of the pane exit regardless of attach
+                // state so a detached pane is reaped authoritatively (the
+                // Connected empty-chunk path above only reaches an attached
+                // client). The sender is fixed at pane creation and never
+                // swapped (M1), so this works even while detached.
+                //
+                // M2: a non-blocking `try_send` keeps the exiting reader thread
+                // from blocking. A `None` sender (CLI / test path) or a dropped
+                // receiver (daemon already shutting down) is ignored.
+                if let Some(tx) = pane_exit_sender.lock().unwrap().as_ref() {
+                    if let Err(e) = tx.try_send(pane_id) {
+                        log::debug!("pane {} exit notification not delivered: {}", pane_id, e);
+                    }
                 }
                 break;
             }

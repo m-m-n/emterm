@@ -19,7 +19,7 @@ use super::reattach::{
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     evaluate_output_target, resume_pane_with_permit, NotificationSender, PaneId, PtyOutputChunk,
-    SharedShadowParser, TitleChangeSender,
+    SharedPaneExitSender, SharedShadowParser, TitleChangeSender,
 };
 
 /// Spawn a PTY, create a pane, and start a reader thread for output streaming.
@@ -27,6 +27,7 @@ use crate::mux::session::pane::{
 /// Decodes optional `CreateWindowPayload` from the message to set window name
 /// and execute an initial command. Empty or missing payload defaults to
 /// name="Terminal" with no command (backward compatible with GUI).
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_create_window<S>(
     msg: &MuxMessage,
     session_manager: &Arc<Mutex<SessionManager>>,
@@ -35,6 +36,7 @@ pub(super) async fn handle_create_window<S>(
     active_session_id: u32,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
+    pane_exit_sender: &SharedPaneExitSender,
 ) -> Result<(), bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -89,6 +91,7 @@ where
         pane_output_tx,
         title_tx,
         notification_tx,
+        pane_exit_sender,
     ) {
         Some(id) => id,
         None => {
@@ -138,7 +141,14 @@ where
 
 /// Destroy a pane, removing it from its window. Cleans up empty windows and sessions.
 /// Signals daemon shutdown when all sessions become empty.
-pub(super) async fn handle_destroy_pane(
+///
+/// Visibility is `pub(in crate::mux)` (wider than the surrounding `pub(super)`)
+/// so the daemon-level pane-exit reap task in `crate::mux::daemon` can drive
+/// reap directly. Reaping is keyed on `pane_id` and ignores the pane's
+/// `output_target`, so it covers the detached path and the connection-reset
+/// race uniformly. Returns early (warn + no-op) when the pane is already gone,
+/// which makes a double reap (Connected empty-chunk path + daemon task) safe.
+pub(in crate::mux) async fn handle_destroy_pane(
     pane_id: PaneId,
     session_manager: &Arc<Mutex<SessionManager>>,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,

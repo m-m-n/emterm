@@ -6,10 +6,13 @@
 use std::path::PathBuf;
 
 use super::ipc::connection::handle_connection;
+use super::ipc::handlers::handle_destroy_pane;
 use super::ipc::protocol::{MessageType, MuxMessage, NotifyMsg, RenameWindowMsg};
 use super::session::manager::SessionManager;
-use super::session::pane::{NotificationSender, TitleChangeSender};
-use std::sync::Arc;
+use super::session::pane::{
+    NotificationSender, PaneExitSender, PaneId, SharedPaneExitSender, TitleChangeSender,
+};
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
@@ -19,6 +22,11 @@ const TITLE_CHANNEL_CAPACITY: usize = 64;
 /// Daemon-level notification channel capacity (OSC 9 desktop notifications
 /// detected on Detached panes).
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 64;
+
+/// Daemon-level pane-exit channel capacity. Reader threads enqueue a bare
+/// `PaneId` here on PTY EOF; the reap task drains it. EOF is one-shot per
+/// pane so the channel never sustains high throughput.
+const PANE_EXIT_CHANNEL_CAPACITY: usize = 64;
 
 #[cfg(unix)]
 use tokio::net::UnixListener;
@@ -271,6 +279,20 @@ pub async fn run_daemon() -> anyhow::Result<()> {
     // Shutdown signal: sent by handle_destroy_pane/handle_destroy_window when all sessions empty
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Daemon-level pane-exit channel: pane reader threads enqueue their pane_id
+    // here on PTY EOF (regardless of attach state); the reap task reaps each via
+    // handle_destroy_pane, making "PTY death -> reap" the single authority (FR1,
+    // FR2, FR7). The SharedPaneExitSender is fixed at pane creation and never
+    // swapped on detach, so a detached pane can still notify on EOF (M1).
+    let (pane_exit_tx, pane_exit_rx): (PaneExitSender, mpsc::Receiver<PaneId>) =
+        mpsc::channel(PANE_EXIT_CHANNEL_CAPACITY);
+    tokio::spawn(run_pane_exit_task(
+        session_manager.clone(),
+        shutdown_tx.clone(),
+        pane_exit_rx,
+    ));
+    let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(Some(pane_exit_tx)));
+
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     #[cfg(unix)]
@@ -284,7 +306,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
-                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone()));
+                        tokio::spawn(handle_connection(stream, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), pane_exit_sender.clone()));
                     }
                     Err(e) => {
                         log::error!("Accept error: {}", e);
@@ -361,6 +383,19 @@ pub async fn run_daemon() -> anyhow::Result<()> {
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
+    // Daemon-level pane-exit channel (same wiring as the Unix run loop, FR7):
+    // reader threads enqueue their pane_id on PTY EOF; the reap task reaps each
+    // via handle_destroy_pane regardless of attach state (FR1, FR2). The
+    // SharedPaneExitSender is fixed at pane creation and never swapped (M1).
+    let (pane_exit_tx, pane_exit_rx): (PaneExitSender, mpsc::Receiver<PaneId>) =
+        mpsc::channel(PANE_EXIT_CHANNEL_CAPACITY);
+    tokio::spawn(run_pane_exit_task(
+        session_manager.clone(),
+        shutdown_tx.clone(),
+        pane_exit_rx,
+    ));
+    let pane_exit_sender: SharedPaneExitSender = Arc::new(StdMutex::new(Some(pane_exit_tx)));
+
     // First iteration claims exclusive pipe ownership to prevent hijacking
     let mut is_first_instance = true;
     loop {
@@ -374,7 +409,7 @@ pub async fn run_daemon() -> anyhow::Result<()> {
             result = server.connect() => {
                 match result {
                     Ok(()) => {
-                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone()));
+                        tokio::spawn(handle_connection(server, session_manager.clone(), shutdown_tx.clone(), title_tx.clone(), notification_tx.clone(), pane_exit_sender.clone()));
                     }
                     Err(e) => {
                         log::error!("Pipe accept error: {}", e);
@@ -499,6 +534,30 @@ async fn run_notification_task(
         relay_notification(&session_manager, pane_id, message).await;
     }
     log::info!("Notification relay task exiting");
+}
+
+/// Run the daemon-level pane-exit reap task.
+///
+/// Consumes a bare `PaneId` from each per-pane reader thread that observed
+/// PTY EOF (sent regardless of attach state, FR1) and reaps the pane via
+/// `handle_destroy_pane`, making "PTY death -> reap" the single authority
+/// independent of attach state (FR2). Because reap is keyed on `pane_id` and
+/// ignores the pane's `output_target`, this covers the detached path and the
+/// connection-reset race (FR6) uniformly, and is a safe no-op when the pane
+/// was already reaped via the Connected empty-chunk path (FR4). When the
+/// reaped pane is the last one, `handle_destroy_pane` fires
+/// `shutdown_tx.send(true)` (FR5). Exits when all senders are dropped (daemon
+/// shutdown).
+async fn run_pane_exit_task(
+    session_manager: Arc<Mutex<SessionManager>>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
+    mut pane_exit_rx: mpsc::Receiver<PaneId>,
+) {
+    log::info!("Pane-exit reap task started");
+    while let Some(pane_id) = pane_exit_rx.recv().await {
+        handle_destroy_pane(pane_id, &session_manager, &shutdown_tx).await;
+    }
+    log::info!("Pane-exit reap task exiting");
 }
 
 /// Close all PTYs in all sessions for graceful daemon shutdown.
@@ -851,6 +910,228 @@ mod tests {
         let list = m.session_list();
         let window = list[0].windows.iter().find(|w| w.id == wid).unwrap();
         assert_eq!(window.name, "detached-title");
+    }
+
+    /// Build a pane whose `output_target` is `Detached(NetworkDetach)` with a
+    /// system origin (`owner = None`), matching the state a pane is left in by
+    /// `detach_session_panes` during the connection-reset race (FR6).
+    #[cfg(unix)]
+    fn make_detached_test_pane(id: u32) -> crate::mux::session::pane::MuxPane {
+        use crate::mux::session::pane::{
+            DetachReason, MuxPane, PaneOutputTarget, SharedOutputTarget,
+        };
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        let target: SharedOutputTarget = StdArc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::NetworkDetach,
+            owner: None,
+        }));
+        MuxPane::new_test(id, 80, 24, target)
+    }
+
+    /// Build a Connected test pane (the default attached state).
+    #[cfg(unix)]
+    fn make_connected_test_pane(id: u32) -> crate::mux::session::pane::MuxPane {
+        use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+        use std::sync::{Arc as StdArc, Mutex as StdMutex};
+        let (tx, _rx) = mpsc::channel(1);
+        let target: SharedOutputTarget =
+            StdArc::new(StdMutex::new(PaneOutputTarget::Connected(tx)));
+        MuxPane::new_test(id, 80, 24, target)
+    }
+
+    /// TS-1: detached last-pane reap drives shutdown. One session / window /
+    /// pane fed to the reap task; the pane is removed, the session is gone,
+    /// the manager is empty, and the watch channel observes `true`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_pane_exit_task_last_pane_reap_fires_shutdown() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let pane_id = 42u32;
+        let (sid, wid) = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(make_detached_test_pane(pane_id));
+            (sid, wid)
+        };
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        let (exit_tx, exit_rx) = mpsc::channel::<u32>(PANE_EXIT_CHANNEL_CAPACITY);
+        let task = tokio::spawn(run_pane_exit_task(
+            mgr.clone(),
+            shutdown_tx.clone(),
+            exit_rx,
+        ));
+
+        exit_tx.send(pane_id).await.unwrap();
+        // Wait for the reap task to fire the shutdown signal.
+        shutdown_rx.changed().await.unwrap();
+        assert!(*shutdown_rx.borrow(), "shutdown signal must be true");
+
+        let m = mgr.lock().await;
+        assert!(m.is_empty(), "manager must be empty after last pane reaped");
+        assert!(m.get_session(sid).is_none(), "session must be removed");
+        assert!(
+            m.get_session(sid)
+                .and_then(|s| s.windows.get(&wid))
+                .is_none(),
+            "window must be removed"
+        );
+        drop(m);
+
+        drop(exit_tx);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), task).await;
+    }
+
+    /// TS-2: detached non-last pane reap. Two panes in distinct windows; reap
+    /// one and assert only it is removed and the shutdown signal does NOT fire.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_pane_exit_task_non_last_pane_reap_keeps_daemon_alive() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (sid, wid1, wid2) = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid1 = m.create_window(sid, "w1".to_string()).unwrap();
+            let wid2 = m.create_window(sid, "w2".to_string()).unwrap();
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid1)
+                .unwrap()
+                .add_pane(make_detached_test_pane(1));
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid2)
+                .unwrap()
+                .add_pane(make_detached_test_pane(2));
+            (sid, wid1, wid2)
+        };
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        handle_destroy_pane(1, &mgr, &shutdown_tx).await;
+
+        // Pane 1 removed, its (now-empty) window removed; pane 2 / its window
+        // intact; the session survives; shutdown NOT fired.
+        let m = mgr.lock().await;
+        assert!(!m.is_empty(), "session must survive a non-last reap");
+        let session = m.get_session(sid).expect("session must remain");
+        assert!(
+            session.windows.get(&wid1).is_none(),
+            "emptied window must be pruned"
+        );
+        let window2 = session.windows.get(&wid2).expect("window 2 must remain");
+        assert!(window2.panes.contains_key(&2), "pane 2 must remain");
+        drop(m);
+
+        assert!(
+            !*shutdown_rx.borrow(),
+            "shutdown signal must not fire while a pane remains"
+        );
+    }
+
+    /// TS-3: connection-reset race (FR6). A pane switched to
+    /// `Detached(NetworkDetach)` (as `detach_session_panes` does) must still be
+    /// reaped regardless of its `output_target`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_pane_exit_reap_removes_network_detached_pane() {
+        use crate::mux::session::pane::PaneOutputTarget;
+
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let pane_id = 7u32;
+        let sid = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(make_detached_test_pane(pane_id));
+            // Confirm the precondition: the pane is Detached, not Connected.
+            let pane = m
+                .get_session(sid)
+                .unwrap()
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&pane_id)
+                .unwrap();
+            assert!(matches!(
+                *pane.output_target.lock().unwrap(),
+                PaneOutputTarget::Detached { .. }
+            ));
+            sid
+        };
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        handle_destroy_pane(pane_id, &mgr, &shutdown_tx).await;
+
+        let m = mgr.lock().await;
+        assert!(
+            m.get_session(sid).is_none(),
+            "the detached pane's session must be reaped despite Detached target"
+        );
+        assert!(
+            m.is_empty(),
+            "manager must be empty after reaping last pane"
+        );
+        drop(m);
+        // Last pane gone -> shutdown fires.
+        assert!(
+            *shutdown_rx.borrow(),
+            "shutdown must fire on last pane reap"
+        );
+    }
+
+    /// TS-4: idempotent reap (FR4). Reaping the same pane id twice — and also
+    /// a pane that was already torn down via the Connected empty-chunk path —
+    /// is a safe no-op: no panic, and the shutdown signal is not re-fired.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_pane_exit_reap_is_idempotent() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let pane_id = 5u32;
+        {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            m.get_session_mut(sid)
+                .unwrap()
+                .windows
+                .get_mut(&wid)
+                .unwrap()
+                .add_pane(make_connected_test_pane(pane_id));
+        }
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
+        // First reap removes the pane and fires shutdown (last pane).
+        handle_destroy_pane(pane_id, &mgr, &shutdown_tx).await;
+        assert!(shutdown_rx.has_changed().unwrap());
+        let _ = shutdown_rx.changed().await;
+        assert!(*shutdown_rx.borrow());
+
+        // Second reap of the same (already-removed) pane is a safe no-op:
+        // no panic, and the watch channel observes no further change.
+        handle_destroy_pane(pane_id, &mgr, &shutdown_tx).await;
+        assert!(
+            !shutdown_rx.has_changed().unwrap(),
+            "double reap must not re-fire the shutdown signal"
+        );
+
+        let m = mgr.lock().await;
+        assert!(m.is_empty());
     }
 
     /// TS-11: notify_tx subscription taken before Welcome construction must
