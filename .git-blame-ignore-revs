@@ -1,0 +1,9 @@
+# Revisions ignored by `git blame` — formatting-only commits that touch many
+# lines without changing behavior.
+#
+# Enable locally (one-time):
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub honors this file automatically.
+#
+# After the one-time formatting normalization commit, add its full 40-char
+# hash on its own line below.

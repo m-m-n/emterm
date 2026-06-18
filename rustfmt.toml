@@ -1,0 +1,10 @@
+# rustfmt configuration (stable rustfmt, no nightly-only options).
+#
+# style_edition pins the formatting style to the 2024 ruleset. rustfmt's style
+# default is independent of a crate's Cargo `edition` and would otherwise fall
+# back to the 2015 style, so this keeps the whole workspace on the modern
+# ruleset. All crates use edition 2024.
+#
+# Other options stay at rustfmt's stable defaults
+# (max_width = 100, tab_spaces = 4, hard_tabs = false).
+style_edition = "2024"
