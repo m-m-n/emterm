@@ -18,8 +18,14 @@ impl Parser {
                 self.params.add_intermediate(byte);
                 self.state = State::CsiParam;
             }
-            // Semicolon (parameter separator with no preceding digit)
-            b';' => {
+            // Parameter separator with no preceding digit.
+            // `:` (ISO 8613-6 sub-parameter separator) is consumed like `;` so
+            // colon-form SGR (e.g. `38:5:n`, `38:2:r:g:b`) does not cancel the
+            // CSI and leak its tail as literal text. Sub-parameters collapse to
+            // plain parameters (see colon-sub-param tests). Full ISO 8613-6
+            // sub-parameter semantics (distinguishing `:` from `;`, e.g. `4:3`
+            // underline styles) are not yet modeled.
+            b';' | b':' => {
                 self.params.finish_param();
                 self.state = State::CsiParam;
             }
@@ -53,8 +59,10 @@ impl Parser {
             b'0'..=b'9' => {
                 self.params.add_digit(byte);
             }
-            // Parameter separator
-            b';' => {
+            // Parameter separator. `:` (ISO 8613-6 sub-parameter separator) is
+            // consumed like `;` so colon-form SGR does not cancel the CSI and
+            // leak its tail as text; sub-parameters collapse to plain params.
+            b';' | b':' => {
                 self.params.finish_param();
             }
             // Valid intermediate bytes (0x20-0x2F, after params)

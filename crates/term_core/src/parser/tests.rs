@@ -1030,36 +1030,28 @@ fn test_interruptible_remaining_parseable() {
 // Colon Sub-Parameter Tests (ISO 8613-6, e.g. avt dump / kitty SGR)
 // =========================================================================
 
+// The parser consumes `:` (ISO 8613-6 sub-parameter separator) like `;`, so a
+// colon-form SGR does not cancel the CSI and leak its tail as literal text.
+// Sub-parameters collapse to plain parameters, which is correct for the common
+// colon color forms (`38:5:n` indexed, `38:2:r:g:b` truecolor — same parameter
+// sequence as the `;` form). Full ISO 8613-6 sub-parameter semantics (keeping
+// `:` distinct from `;`, e.g. `4:3` underline styles or the `38:2::r:g:b`
+// empty-colorspace form) are NOT yet modeled — see the colon-sub-param
+// follow-up note in tmp/.
 #[test]
 fn test_parse_csi_sgr_colon_indexed_color() {
-    use crate::parser_params::SUB_PARAM_FLAG;
+    // `38:5:196` collapses to the same params as `38;5;196` (fg = 256-color 196).
     let actions = parse_all(b"\x1b[38:5:196m");
     assert_eq!(actions.len(), 1);
-    assert_eq!(
-        actions[0],
-        csi(&[38, 5 | SUB_PARAM_FLAG, 196 | SUB_PARAM_FLAG], &[], b'm')
-    );
+    assert_eq!(actions[0], csi(&[38, 5, 196], &[], b'm'));
 }
 
 #[test]
 fn test_parse_csi_sgr_colon_rgb_color() {
-    use crate::parser_params::SUB_PARAM_FLAG;
+    // `48:2:10:20:30` collapses to the same params as `48;2;10;20;30`.
     let actions = parse_all(b"\x1b[48:2:10:20:30m");
     assert_eq!(actions.len(), 1);
-    assert_eq!(
-        actions[0],
-        csi(
-            &[
-                48,
-                2 | SUB_PARAM_FLAG,
-                10 | SUB_PARAM_FLAG,
-                20 | SUB_PARAM_FLAG,
-                30 | SUB_PARAM_FLAG
-            ],
-            &[],
-            b'm'
-        )
-    );
+    assert_eq!(actions[0], csi(&[48, 2, 10, 20, 30], &[], b'm'));
 }
 
 #[test]
@@ -1075,15 +1067,9 @@ fn test_parse_csi_colon_does_not_leak_text() {
 
 #[test]
 fn test_parse_csi_mixed_semicolon_and_colon() {
-    use crate::parser_params::SUB_PARAM_FLAG;
+    // Mixed `;` and `:` separators both finish a parameter, so
+    // `1;38:5:9;4` collapses to five plain params.
     let actions = parse_all(b"\x1b[1;38:5:9;4m");
     assert_eq!(actions.len(), 1);
-    assert_eq!(
-        actions[0],
-        csi(
-            &[1, 38, 5 | SUB_PARAM_FLAG, 9 | SUB_PARAM_FLAG, 4],
-            &[],
-            b'm'
-        )
-    );
+    assert_eq!(actions[0], csi(&[1, 38, 5, 9, 4], &[], b'm'));
 }
