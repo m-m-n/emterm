@@ -45,7 +45,14 @@ impl TerminalCore {
 
             // Erase operations
             (None, b'J') => {
-                self.handle_erase_in_display(ParamParser::get_first_or_zero(params) as u8);
+                // ED 3 (Erase Scrollback) returns a sentinel from the screen
+                // handler; perform the actual scrollback clear here. Other
+                // modes return 0 (handled in place).
+                if self.handle_erase_in_display(ParamParser::get_first_or_zero(params) as u8)
+                    == crate::csi_screen::SCROLLBACK_SENTINEL
+                {
+                    self.clear_scrollback();
+                }
             }
             (None, b'K') => {
                 self.handle_erase_in_line(ParamParser::get_first_or_zero(params) as u8);

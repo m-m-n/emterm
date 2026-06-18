@@ -136,9 +136,6 @@ pub struct Tab {
     pub events: Receiver<PtyEvent>,
     pub pty: Option<PtySession>,
     pub exited: bool,
-    /// Whether the alternate screen buffer is currently active for this tab.
-    /// Updated by `pump()` after draining `core.take_mode_actions()`.
-    pub alt_screen: bool,
     /// Per-tab Kitty Graphics Protocol + SIXEL processor (CPU side).
     /// `Tab::pump` drains `cb_state.pending_apc` / `pending_dcs` into this
     /// to produce `ImageEvent`s. `Response` events are routed back to the
@@ -267,17 +264,6 @@ pub struct Tab {
     pending_switch: Option<PendingSwitch>,
 }
 
-/// Mode action codes emitted by `TerminalCore` after CSI ?47h / ?47l /
-/// ?1047h / ?1047l / ?1049h / ?1049l. Kept in sync with
-/// `crates/term_core/src/csi_modes.rs`.
-const MODE_ACTION_SWITCH_TO_ALT: u8 = 1;
-const MODE_ACTION_SAVE_AND_SWITCH_TO_ALT: u8 = 2;
-const MODE_ACTION_SWITCH_TO_MAIN: u8 = 3;
-/// TS_FALLBACK escape codes — followed by 2 payload bytes. Skipped when
-/// scanning for buffer-switch markers.
-const MODE_ACTION_TS_FALLBACK_A: u8 = 0xFF;
-const MODE_ACTION_TS_FALLBACK_B: u8 = 0xFE;
-
 impl Tab {
     // Each argument maps to a distinct construction input (grid dims,
     // settings, the two optional status-bar runtime handles, and the
@@ -366,7 +352,6 @@ impl Tab {
             pty,
             events: rx,
             exited: false,
-            alt_screen: false,
             image_proc: ImageProcessor::new(),
             pending_image_events: Vec::new(),
             mux_session_name: None,
@@ -523,9 +508,11 @@ impl Tab {
     ///   reads that latch to drop the now-stale absolute-row selection /
     ///   press anchor — without this, a selection from the previous frame
     ///   addresses rows that no longer mean the same thing)
-    /// - reseed `alt_screen` to false (term_core::reset returns to the
-    ///   primary buffer) and let any buffer-switch action in the replay
-    ///   override
+    ///
+    /// The alt-screen state needs no reseed here: `term_core::reset` returns
+    /// the core to the primary buffer and the replay re-derives the
+    /// authoritative `MODE_ALT_SCREEN` bit, which `App::pump_all` reads
+    /// directly each pump.
     ///
     /// Returns the mode actions accumulated during the replay so a caller
     /// (e.g. Snapshot's debug log) can use them.
@@ -537,7 +524,7 @@ impl Tab {
             let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
             (actions, evicted_total, pending_marks, pending_fold_marks)
         };
-        self.apply_replay_reconcile(&actions, evicted_total, pending_marks, pending_fold_marks);
+        self.apply_replay_reconcile(evicted_total, pending_marks, pending_fold_marks);
         actions
     }
 
@@ -701,15 +688,11 @@ impl Tab {
         // 1. Swap the built core in (renderer's Arc stays valid).
         *self.core.lock() = replay.core;
         // 2. Reconcile the snapshot half first: install the fresh baseline,
-        //    latch the frame reset, backfill the snapshot's marks, reseed
-        //    alt-screen. (Frame-discard of prompts/folds already happened at
-        //    dispatch time in `dispatch_offthread_replay`.)
-        self.apply_replay_reconcile(
-            &replay.actions,
-            replay.evicted_total,
-            replay.prompt_marks,
-            replay.fold_marks,
-        );
+        //    latch the frame reset, backfill the snapshot's marks.
+        //    (Frame-discard of prompts/folds already happened at dispatch
+        //    time in `dispatch_offthread_replay`; the alt-screen state is the
+        //    core's MODE_ALT_SCREEN bit, read directly by App::pump_all.)
+        self.apply_replay_reconcile(replay.evicted_total, replay.prompt_marks, replay.fold_marks);
         // 3. Apply the queued live output in order, as ordinary post-snapshot
         //    output (NOT a reset). This re-runs the same drain/backfill the
         //    `PtyOutput` arm would have, so prompt/fold marks and eviction
@@ -720,39 +703,31 @@ impl Tab {
     /// Replay a pending switch's queued live output onto the (already
     /// swapped or reparsed) displayed core, in arrival order, exactly as the
     /// `PtyOutput` arm would have for each chunk: feed the bytes, route any
-    /// device response, backfill marks, reseed alt-screen.
+    /// device response, backfill marks.
     fn apply_queued_live_output(&mut self, live_queue: Vec<Vec<u8>>) {
         for payload in live_queue {
-            let (actions, evicted_total, prompt_marks, fold_marks, device_response) = {
+            let (evicted_total, prompt_marks, fold_marks, device_response) = {
                 let mut c = self.core.lock();
-                let actions = c.process_pty_data_fully(&payload);
+                c.process_pty_data_fully(&payload);
                 let device_response = c.take_response();
                 let (evicted_total, prompt_marks, fold_marks) = drain_marks(&mut c);
-                (
-                    actions,
-                    evicted_total,
-                    prompt_marks,
-                    fold_marks,
-                    device_response,
-                )
+                (evicted_total, prompt_marks, fold_marks, device_response)
             };
             if !device_response.is_empty() {
                 self.write_device_response(device_response);
             }
             self.backfill_marks(evicted_total, prompt_marks, fold_marks);
-            if let Some(new_alt) = parse_alt_screen_action(&actions) {
-                self.alt_screen = new_alt;
-            }
         }
     }
 
     /// Main-thread reconcile half of the replay recipe, shared by the
-    /// synchronous path and the off-thread swap. Given the replay's mode
-    /// `actions` and the marks/eviction total drained from the *replayed*
-    /// core (the synchronous core for the sync path, the worker-built core
-    /// for the off-thread path), latch `pending_frame_reset`, install the
-    /// fresh `evicted_baseline`, backfill the marks, and reseed
-    /// `alt_screen`.
+    /// synchronous path and the off-thread swap. Given the marks/eviction
+    /// total drained from the *replayed* core (the synchronous core for the
+    /// sync path, the worker-built core for the off-thread path), latch
+    /// `pending_frame_reset`, install the fresh `evicted_baseline`, and
+    /// backfill the marks. The alt-screen state is the core's authoritative
+    /// `MODE_ALT_SCREEN` bit (read by `App::pump_all`), so it needs no reseed
+    /// here.
     ///
     /// The eviction total comes from a freshly-reset core (counter 0), so
     /// `backfill_prompt_marks`'s in-band detector
@@ -761,7 +736,6 @@ impl Tab {
     /// frame was discarded" regardless of eviction counts.
     fn apply_replay_reconcile(
         &mut self,
-        actions: &[u8],
         evicted_total: u64,
         prompt_marks: Vec<term_core::terminal_core::PendingPromptMark>,
         fold_marks: Vec<term_core::terminal_core::PendingFoldMark>,
@@ -769,10 +743,6 @@ impl Tab {
         self.pending_frame_reset = true;
         self.evicted_baseline = evicted_total;
         self.backfill_marks(evicted_total, prompt_marks, fold_marks);
-        self.alt_screen = false;
-        if let Some(new_alt) = parse_alt_screen_action(actions) {
-            self.alt_screen = new_alt;
-        }
     }
 
     /// Route one decoded mux message into this tab. Called by `App::pump_all`
@@ -795,9 +765,9 @@ impl Tab {
                 if msg.payload.len() < OFFTHREAD_REPLAY_THRESHOLD_BYTES {
                     // Synchronous path (legacy). `reset_frame_for_replay`
                     // owns the recipe (prompt clear, fold rebuild, drain +
-                    // backfill marks so `pending_frame_reset` latches,
-                    // alt_screen reseed) so the PaneCreated path stays in
-                    // lockstep. A pending off-thread switch (if any) is
+                    // backfill marks so `pending_frame_reset` latches) so the
+                    // PaneCreated path stays in lockstep. A pending off-thread
+                    // switch (if any) is
                     // superseded by this newer, now-applied switch — signal
                     // its worker to bail before dropping it.
                     if let Some(old) = self.pending_switch.take() {
@@ -915,13 +885,12 @@ impl Tab {
                 // The daemon's continuous PTY stream: feed it into term_core
                 // as a normal byte stream (NOT a reset). Without this the
                 // mux session looks frozen after the initial Snapshot.
-                let (actions, evicted_total, pending_marks, pending_fold_marks, device_response) = {
+                let (evicted_total, pending_marks, pending_fold_marks, device_response) = {
                     let mut c = self.core.lock();
-                    let actions = c.process_pty_data_fully(&msg.payload);
+                    c.process_pty_data_fully(&msg.payload);
                     let device_response = c.take_response();
                     let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
                     (
-                        actions,
                         evicted_total,
                         pending_marks,
                         pending_fold_marks,
@@ -939,9 +908,6 @@ impl Tab {
                 // marks and custom-fold begin/end pairs arriving over the mux
                 // stream are navigable / foldable too.
                 self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
-                if let Some(new_alt) = parse_alt_screen_action(&actions) {
-                    self.alt_screen = new_alt;
-                }
                 true
             }
             MessageType::StatusUpdate => match msg.decode_payload::<StatusUpdateMsg>() {
@@ -1364,7 +1330,7 @@ impl Tab {
         }
         if !combined.is_empty() {
             let mut c = self.core.lock();
-            let actions = c.process_pty_data_fully(&combined);
+            c.process_pty_data_fully(&combined);
             // Force-flush any grapheme cluster left buffered by the
             // parser (e.g. a lone emoji codepoint at the tail of an
             // IME-commit echo). Without this the cluster sits in
@@ -1393,9 +1359,6 @@ impl Tab {
                 self.write_device_response(device_response);
             }
             self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
-            if let Some(new_alt) = parse_alt_screen_action(&actions) {
-                self.alt_screen = new_alt;
-            }
             changed = true;
             // New PTY bytes reached the core — latch for the
             // inactive-tab activity path (WebView `onOutputActivity`).
@@ -2227,71 +2190,10 @@ fn drain_marks(
     )
 }
 
-/// Scan a `take_mode_actions()` payload for buffer-switch markers and
-/// return the resulting alt-screen state, if any. Returns `None` when no
-/// buffer-switch action is present (the caller keeps the previous flag).
-///
-/// The payload is a byte slice of action codes; TS_FALLBACK markers
-/// (`0xFF` / `0xFE`) introduce a 3-byte entry (marker + mode_lo + mode_hi)
-/// and must be skipped.
-fn parse_alt_screen_action(actions: &[u8]) -> Option<bool> {
-    let mut last: Option<bool> = None;
-    let mut i = 0;
-    while i < actions.len() {
-        let code = actions[i];
-        if code == MODE_ACTION_TS_FALLBACK_A || code == MODE_ACTION_TS_FALLBACK_B {
-            i += 3;
-            continue;
-        }
-        match code {
-            MODE_ACTION_SWITCH_TO_ALT | MODE_ACTION_SAVE_AND_SWITCH_TO_ALT => {
-                last = Some(true);
-            }
-            MODE_ACTION_SWITCH_TO_MAIN => {
-                last = Some(false);
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    last
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use term_core::terminal_core::PendingPromptMark;
-
-    #[test]
-    fn parse_alt_screen_switch_to_alt() {
-        assert_eq!(parse_alt_screen_action(&[1]), Some(true));
-        assert_eq!(parse_alt_screen_action(&[2]), Some(true));
-    }
-
-    #[test]
-    fn parse_alt_screen_switch_to_main() {
-        assert_eq!(parse_alt_screen_action(&[3]), Some(false));
-    }
-
-    #[test]
-    fn parse_alt_screen_empty_returns_none() {
-        assert_eq!(parse_alt_screen_action(&[]), None);
-    }
-
-    #[test]
-    fn parse_alt_screen_skips_ts_fallback() {
-        // 0xFF / 0xFE are followed by two mode bytes.
-        assert_eq!(parse_alt_screen_action(&[0xFF, 0x01, 0x00]), None);
-        assert_eq!(parse_alt_screen_action(&[0xFE, 0x07, 0x00, 1]), Some(true));
-    }
-
-    #[test]
-    fn parse_alt_screen_takes_last_seen() {
-        // Within one chunk: enter alt then leave → last is `false`.
-        assert_eq!(parse_alt_screen_action(&[2, 3]), Some(false));
-        // Enter alt twice → last is `true`.
-        assert_eq!(parse_alt_screen_action(&[3, 2]), Some(true));
-    }
 
     // ── backfill_prompt_marks ─────────────────────────────────
 

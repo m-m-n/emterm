@@ -760,9 +760,9 @@ mod tests {
         };
         let assembled = build_shadow_parser_snapshot(&shadow_parser, &scrollback_data);
 
-        // Established layout: ESC[H ESC[2J + scrollback + shadow screen.
+        // Established layout: ESC[3J ESC[H ESC[2J + scrollback + shadow screen.
         assert!(
-            assembled.starts_with(b"\x1b[H\x1b[2J"),
+            assembled.starts_with(b"\x1b[3J\x1b[H\x1b[2J"),
             "snapshot must start with the clear+home prefix"
         );
         let find = |needle: &[u8]| {
@@ -774,7 +774,7 @@ mod tests {
         let sb_at = find(b"HISTORY-LINE-ONE");
         let screen_at = find(b"SCREEN-CONTENT");
         assert!(
-            sb_at >= b"\x1b[H\x1b[2J".len(),
+            sb_at >= b"\x1b[3J\x1b[H\x1b[2J".len(),
             "scrollback after clear prefix"
         );
         assert!(
@@ -796,7 +796,7 @@ mod tests {
         };
         assert!(empty_data.is_empty(), "fresh buffer reads back empty");
         let empty_assembled = build_shadow_parser_snapshot(&shadow_parser, &empty_data);
-        assert!(empty_assembled.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(empty_assembled.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
         assert!(
             empty_assembled
                 .windows(b"SCREEN-CONTENT".len())
