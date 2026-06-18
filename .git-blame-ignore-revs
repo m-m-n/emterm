@@ -7,3 +7,6 @@
 #
 # After the one-time formatting normalization commit, add its full 40-char
 # hash on its own line below.
+
+# style: normalize formatting (rustfmt + biome)
+90eee5a1ea700506e5eac5e90c1a3884a795225e
