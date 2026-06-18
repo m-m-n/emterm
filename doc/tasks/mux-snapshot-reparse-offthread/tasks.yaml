@@ -1,0 +1,68 @@
+schema_version: 1
+feature: mux-snapshot-reparse-offthread
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-measurement-harness
+    name: Reparse-cost measurement harness (FR1, NFR1)
+    goal: A deterministic, on-demand timing harness in term_core feeds a ~2 MiB synthetic scrollback to process_pty_data_fully on a fresh core and reports elapsed ms + MiB/s. It uses fixed (non-RNG, non-clock) input, calls term_core directly (no App::pump_all / PTY), and is excluded from the default cargo test run.
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: [phase-3-measure-and-decide]
+    files_create: []
+    files_modify:
+      - crates/term_core/src/terminal_core.rs
+    tasks:
+      - id: synthetic-scrollback-builder
+        title: Add a deterministic helper that builds an N-byte representative scrollback (printable text, periodic newlines, occasional SGR); no RNG / clock input
+        covers_fr: [FR1, NFR1]
+      - id: add-reparse-measurement-harness
+        title: Add a gated (ignored) timing test that times the full-drain reparse of the synthetic buffer and prints ms + MiB/s; excluded from default cargo test
+        covers_fr: [FR1, NFR1, NFR2]
+      - id: measurement-empty-input-guard
+        title: Assert a 0-byte input reparse neither panics nor misreports (~0 ms)
+        covers_fr: [FR1, NFR1]
+    tests:
+      - TS-1
+      - TS-2
+      - TS-5
+
+  - id: phase-2-lock-scope-guardrail
+    name: Lock-scope guard-rail for the snapshot copy (FR3, NFR2, NFR3)
+    goal: The snapshot handler's already copy-only scrollback lock scope is made explicit (scoped block returning the owned buffer + a comment naming the invariant) so a future refactor cannot hold it across assembly/log/send, with byte-identical snapshot output and the existing session-scope authorization preserved. This locks in the current behavior; it does not shorten the unavoidable O(n) copy under lock.
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: []
+    files_create: []
+    files_modify:
+      - src-tauri/src/mux/ipc/handlers.rs
+    tasks:
+      - id: tighten-snapshot-lock-scope
+        title: Make the scrollback guard's drop point explicit (scoped block returning the owned read_all copy + comment naming the lock-held-only-for-copy invariant); keep authorization, ordering, and output bytes unchanged
+        covers_fr: [FR3, NFR3]
+      - id: snapshot-bytes-unchanged-test
+        title: Add a test asserting the assembled snapshot bytes equal the established layout for a representative screen + scrollback (and for empty scrollback)
+        covers_fr: [FR3, NFR2]
+    tests:
+      - TS-3
+      - TS-4
+      - TS-6
+
+  - id: phase-3-measure-and-decide
+    name: Measure & record go/no-go decision (FR2)
+    goal: Run the Phase 1 harness on the target machine, map the ~2 MiB figure to the §4 threshold bands (<5ms / 5-50ms / 50ms+), and record the decision + rationale in VERIFICATION_RESULT.md; if go, state the 案a follow-up scope (core only, no LRU). Result (sdd.6): release(lto) measurement 2 MiB = 232ms (>50ms) → GO; 案a filed as follow-up.
+    effort: small
+    status: completed
+    depends_on: [phase-1-measurement-harness]
+    blocks: []
+    files_create: []
+    files_modify: []
+    tasks:
+      - id: run-measurement-record-decision
+        title: Run the gated harness, capture figures, apply thresholds, and record the decision + rationale (and follow-up scope if go) at verify time
+        covers_fr: [FR2]
+    tests:
+      - TS-1
+      - TS-7
