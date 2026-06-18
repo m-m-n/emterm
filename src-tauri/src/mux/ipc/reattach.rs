@@ -17,25 +17,59 @@ use crate::mux::session::pane::{
     TitleChangeSender,
 };
 
-/// Build a self-contained ANSI byte sequence that reproduces the current
-/// screen state tracked by the given shadow parser.
+/// The clear-and-home prefix every snapshot starts with: `ESC[H ESC[2J`.
+/// Homes the cursor and clears the screen so the client replays from a known
+/// state before the scrollback / screen bytes arrive.
+const SNAPSHOT_CLEAR_HOME: &[u8] = b"\x1b[H\x1b[2J";
+
+/// Assemble the shared snapshot byte layout used by both the reattach path
+/// and the on-demand `RequestPaneSnapshot` path:
 ///
-/// Output layout: `ESC[H ESC[2J` + `vt100::Screen::contents_formatted()`.
+/// ```text
+/// ESC[H ESC[2J + scrollback + screen
+/// ```
+///
+/// The scrollback bytes replay into the client's grid *before* the screen
+/// snapshot overwrites the visible region with the final state, so the
+/// client's `reset_and_replay` rebuilds the pane's history (FR1). Both paths
+/// route through this one function so the byte ordering stays a single source
+/// of truth. The reattach path appends its per-pane `raw_passthrough` bytes
+/// after the screen on top of this layout.
+pub(super) fn build_snapshot_bytes(scrollback: &[u8], screen: &[u8]) -> Vec<u8> {
+    let mut combined =
+        Vec::with_capacity(SNAPSHOT_CLEAR_HOME.len() + scrollback.len() + screen.len());
+    combined.extend_from_slice(SNAPSHOT_CLEAR_HOME);
+    combined.extend_from_slice(scrollback);
+    combined.extend_from_slice(screen);
+    combined
+}
+
+/// Build a self-contained ANSI byte sequence that reproduces the current
+/// screen state tracked by the given shadow parser, optionally prefixed with
+/// the pane's scrollback so the client can scroll to past output.
+///
+/// Output layout (shared with the reattach path via [`build_snapshot_bytes`]):
+/// `ESC[H ESC[2J` + `scrollback` + `vt100::Screen::contents_formatted()`.
 /// The first fragment clears the screen and homes the cursor so the client
-/// starts from a known state; the second fragment replays the full screen
-/// including alt-screen toggle, SGR attributes, cursor position, and cells.
+/// starts from a known state; the scrollback fragment rebuilds history; the
+/// final fragment replays the full screen including alt-screen toggle, SGR
+/// attributes, cursor position, and cells.
+///
+/// `scrollback` is read by the caller WITHOUT clearing (the buffer lives for
+/// the lifetime of the pane). An empty `scrollback` yields a valid
+/// clear + shadow snapshot (history replays as empty).
 ///
 /// Used by both the reattach path (combined with ring buffer delta) and the
-/// on-demand `RequestPaneSnapshot` path (shadow parser output only).
-pub(super) fn build_shadow_parser_snapshot(shadow_parser: &SharedShadowParser) -> Vec<u8> {
+/// on-demand `RequestPaneSnapshot` path.
+pub(super) fn build_shadow_parser_snapshot(
+    shadow_parser: &SharedShadowParser,
+    scrollback: &[u8],
+) -> Vec<u8> {
     let screen_data = {
         let parser = lock_shadow_parser(shadow_parser);
         parser.screen().contents_formatted()
     };
-    let mut combined = Vec::with_capacity(screen_data.len() + 10);
-    combined.extend_from_slice(b"\x1b[H\x1b[2J");
-    combined.extend_from_slice(&screen_data);
-    combined
+    build_snapshot_bytes(scrollback, &screen_data)
 }
 
 /// Collect reattach data for panes in the given session.
@@ -169,12 +203,10 @@ pub(super) async fn collect_reattach_data(
                         pane.exited
                     );
 
-                    let mut combined = Vec::with_capacity(
-                        8 + scrollback_data.len() + screen_data.len() + passthrough_data.len(),
-                    );
-                    combined.extend_from_slice(b"\x1b[H\x1b[2J");
-                    combined.extend_from_slice(&scrollback_data);
-                    combined.extend_from_slice(&screen_data);
+                    // Shared layout: ESC[H ESC[2J + scrollback + screen.
+                    // The reattach path appends its per-pane raw_passthrough
+                    // after the screen on top of that shared base.
+                    let mut combined = build_snapshot_bytes(&scrollback_data, &screen_data);
                     combined.extend_from_slice(&passthrough_data);
 
                     data.push((pane.id, combined));
@@ -299,11 +331,76 @@ pub(in crate::mux) async fn detach_session_panes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mux::session::pane::{MuxPane, PaneOutputTarget, SharedOutputTarget};
+    use crate::mux::session::pane::{
+        new_shadow_parser, MuxPane, PaneOutputTarget, SharedOutputTarget,
+    };
     use std::sync::Mutex as StdMutex;
 
     fn make_test_pane_with_target(id: u32, output_target: SharedOutputTarget) -> MuxPane {
         MuxPane::new_test(id, 80, 24, output_target)
+    }
+
+    // ── TS-4 / TS-6: on-demand snapshot builder (FR1) ────────────────────
+
+    /// TS-4: the on-demand snapshot builder emits scrollback BEFORE the
+    /// shadow screen, matching the reattach construction (clear + scrollback
+    /// + shadow). Asserted by byte-offset ordering.
+    #[test]
+    fn build_shadow_parser_snapshot_emits_scrollback_before_screen() {
+        let parser: SharedShadowParser = Arc::new(StdMutex::new(new_shadow_parser(24, 80)));
+        parser.lock().unwrap().process(b"SCREEN-CONTENT");
+        let scrollback = b"HISTORY-LINE-ONE";
+
+        let snapshot = build_shadow_parser_snapshot(&parser, scrollback);
+
+        // Leading clear-and-home.
+        assert!(
+            snapshot.starts_with(b"\x1b[H\x1b[2J"),
+            "snapshot must start with ESC[H ESC[2J"
+        );
+        let find = |needle: &[u8]| {
+            snapshot
+                .windows(needle.len())
+                .position(|w| w == needle)
+                .unwrap_or_else(|| panic!("needle {:?} not found in snapshot", needle))
+        };
+        let scrollback_at = find(b"HISTORY-LINE-ONE");
+        let screen_at = find(b"SCREEN-CONTENT");
+        assert!(
+            scrollback_at < screen_at,
+            "scrollback ({scrollback_at}) must precede the shadow screen ({screen_at})"
+        );
+        // And the scrollback must come after the clear prefix.
+        assert!(scrollback_at >= b"\x1b[H\x1b[2J".len());
+    }
+
+    /// TS-6: an empty scrollback yields a valid clear + shadow snapshot
+    /// (no panic, history replays empty).
+    #[test]
+    fn build_shadow_parser_snapshot_empty_scrollback_is_clear_plus_shadow() {
+        let parser: SharedShadowParser = Arc::new(StdMutex::new(new_shadow_parser(24, 80)));
+        parser.lock().unwrap().process(b"ONLY-SCREEN");
+
+        let snapshot = build_shadow_parser_snapshot(&parser, b"");
+
+        assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(
+            snapshot
+                .windows(b"ONLY-SCREEN".len())
+                .any(|w| w == b"ONLY-SCREEN"),
+            "shadow screen must still be present with empty scrollback"
+        );
+    }
+
+    /// The shared layout helper places scrollback between the clear prefix
+    /// and the screen, and an empty screen / empty scrollback both produce a
+    /// well-formed buffer (the on-demand + reattach paths share this base).
+    #[test]
+    fn build_snapshot_bytes_layout_is_clear_scrollback_screen() {
+        let out = build_snapshot_bytes(b"SB", b"SC");
+        assert_eq!(out, b"\x1b[H\x1b[2JSBSC");
+        // Empty inputs: just the clear prefix.
+        assert_eq!(build_snapshot_bytes(b"", b""), b"\x1b[H\x1b[2J");
     }
 
     /// Test: collect_reattach_data returns entries for 2 panes in 2 windows.

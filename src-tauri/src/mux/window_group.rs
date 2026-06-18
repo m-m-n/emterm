@@ -16,6 +16,8 @@
 //!
 //! The module is intentionally pure — no egui, no I/O, no protocol concerns.
 
+use crate::scroll::ScrollPosition;
+
 /// One mux window as tracked by the GUI: a stable daemon window id and the
 /// current display name. Mirrors the WebView `{ id, name }` entries in
 /// `muxWindows`.
@@ -39,6 +41,16 @@ pub struct MuxWindowGroup {
     windows: Vec<MuxWindow>,
     /// Ordered pane ids. Parallel to [`Self::windows`] (invariant F1).
     pane_ids: Vec<u32>,
+    /// Per-pane saved scroll position. Parallel to [`Self::windows`] /
+    /// [`Self::pane_ids`] (invariant F1): index `i` holds the scroll
+    /// position window `i`'s pane was showing when it last became inactive.
+    /// `Live` (the default) restores to the bottom; `OffsetFromLive(n)`
+    /// restores to that offset. Stored as a third parallel array rather than
+    /// a field on [`MuxWindow`] so the window entry's `PartialEq`/`Eq`
+    /// (used by the tab-bar render tests) keeps depending only on identity +
+    /// name, and so the parallel-array invariant is enforced in the same
+    /// mutators that move `windows` / `pane_ids`.
+    pane_scrolls: Vec<ScrollPosition>,
     /// Active window index. Always clamped into `[0, len - 1]` while the
     /// list is non-empty; `0` when empty.
     active: usize,
@@ -83,6 +95,39 @@ impl MuxWindowGroup {
     /// The pane id of the active window, if any.
     pub fn active_pane_id(&self) -> Option<u32> {
         self.pane_ids.get(self.active).copied()
+    }
+
+    /// The saved scroll position of the active pane. Returns `Live` (the
+    /// default) when the group is empty so callers never branch on emptiness.
+    /// Used by the pane-switch save/restore path to reload the incoming
+    /// pane's place after committing the new active index.
+    pub fn active_pane_scroll(&self) -> ScrollPosition {
+        self.pane_scrolls
+            .get(self.active)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Store `scroll` as the active pane's saved scroll position. No-op when
+    /// the group is empty (no active pane to write). Used by the pane-switch
+    /// save path to persist the outgoing pane's place before the active index
+    /// moves. Does not expose the parallel `pane_scrolls` array directly so
+    /// the invariant stays enforced inside this type.
+    pub fn set_active_pane_scroll(&mut self, scroll: ScrollPosition) {
+        if let Some(slot) = self.pane_scrolls.get_mut(self.active) {
+            *slot = scroll;
+        }
+    }
+
+    /// Store `scroll` as the saved scroll position of the pane at `index`.
+    /// No-op when `index` is out of range. Used by the inbound-switch
+    /// reconcile, which moves the active index inside the daemon handler and
+    /// then (from `App::pump_all`) parks the *outgoing* pane's position into
+    /// its now-inactive slot by index.
+    pub fn set_pane_scroll_at(&mut self, index: usize, scroll: ScrollPosition) {
+        if let Some(slot) = self.pane_scrolls.get_mut(index) {
+            *slot = scroll;
+        }
     }
 
     /// The active window, if any.
@@ -149,8 +194,18 @@ impl MuxWindowGroup {
             pane_ids.len(),
             "F1: seed windows/pane_ids length mismatch"
         );
+        // Every seeded pane starts at the live bottom (`Live`); the saved
+        // offset is rebuilt as the user scrolls and switches away (invariant
+        // F1: the scroll array tracks the window count).
+        self.pane_scrolls = vec![ScrollPosition::default(); windows.len()];
         self.windows = windows;
         self.pane_ids = pane_ids;
+        // F1: all three parallel arrays must be the same length after a seed.
+        debug_assert_eq!(
+            self.pane_scrolls.len(),
+            self.windows.len(),
+            "F1: seed pane_scrolls length mismatch"
+        );
         self.set_active_clamped(active);
     }
 
@@ -160,6 +215,8 @@ impl MuxWindowGroup {
     pub fn push(&mut self, window: MuxWindow, pane_id: u32) -> usize {
         self.windows.push(window);
         self.pane_ids.push(pane_id);
+        // New pane starts pinned to the bottom (invariant F1).
+        self.pane_scrolls.push(ScrollPosition::default());
         let idx = self.windows.len() - 1;
         self.active = idx;
         idx
@@ -173,6 +230,8 @@ impl MuxWindowGroup {
         let idx = self.index_of_pane_id(pane_id)?;
         self.windows.remove(idx);
         self.pane_ids.remove(idx);
+        // Keep the scroll array parallel (invariant F1).
+        self.pane_scrolls.remove(idx);
         if self.active >= self.windows.len() {
             self.active = self.windows.len().saturating_sub(1);
         }
@@ -266,6 +325,9 @@ impl MuxWindowGroup {
         self.windows.insert(to, win);
         let pane = self.pane_ids.remove(from);
         self.pane_ids.insert(to, pane);
+        // Move the saved scroll position with its window (invariant F1).
+        let scroll = self.pane_scrolls.remove(from);
+        self.pane_scrolls.insert(to, scroll);
 
         let active = self.active;
         if active == from {
@@ -500,5 +562,65 @@ mod tests {
         let mut g = group_with(3); // panes 100,101,102 ids 0,1,2
         g.remove_pane(101); // close window id 1
         assert_eq!(g.index_of_window_id(1), None);
+    }
+
+    // ── per-pane scroll slot (FR3 pane wiring) ───────────────────────────
+
+    #[test]
+    fn pane_scroll_defaults_to_live() {
+        let g = group_with(3);
+        assert_eq!(g.active_pane_scroll(), ScrollPosition::Live);
+        // Empty group resolves to Live as well (no active pane).
+        assert_eq!(
+            MuxWindowGroup::new().active_pane_scroll(),
+            ScrollPosition::Live
+        );
+    }
+
+    #[test]
+    fn pane_scroll_set_get_round_trip_is_per_pane() {
+        let mut g = group_with(3); // active 0
+        g.set_active_pane_scroll(ScrollPosition::OffsetFromLive(7));
+        assert_eq!(g.active_pane_scroll(), ScrollPosition::OffsetFromLive(7));
+        // A different pane keeps its own (default) value.
+        g.set_active_clamped(1);
+        assert_eq!(g.active_pane_scroll(), ScrollPosition::Live);
+        // Returning to pane 0 restores its saved offset.
+        g.set_active_clamped(0);
+        assert_eq!(g.active_pane_scroll(), ScrollPosition::OffsetFromLive(7));
+    }
+
+    #[test]
+    fn pane_scroll_set_on_empty_group_is_noop() {
+        let mut g = MuxWindowGroup::new();
+        g.set_active_pane_scroll(ScrollPosition::OffsetFromLive(3));
+        assert_eq!(g.active_pane_scroll(), ScrollPosition::Live);
+    }
+
+    #[test]
+    fn pane_scroll_follows_reorder_and_survives_remove() {
+        let mut g = group_with(3); // panes 100,101,102; active 0
+        g.set_active_clamped(1);
+        g.set_active_pane_scroll(ScrollPosition::OffsetFromLive(9)); // pane 101
+                                                                     // Reorder window at 1 to index 0 → pane 101 leads, scroll travels.
+        g.reorder(1, 0);
+        assert_eq!(g.pane_ids()[0], 101);
+        g.set_active_clamped(0);
+        assert_eq!(g.active_pane_scroll(), ScrollPosition::OffsetFromLive(9));
+        // The scroll array stays parallel after a remove.
+        g.remove_pane(100);
+        assert_eq!(g.windows().len(), g.pane_ids().len());
+    }
+
+    #[test]
+    fn push_resets_new_pane_scroll_to_live() {
+        let mut g = group_with(2);
+        g.set_active_clamped(0);
+        g.set_active_pane_scroll(ScrollPosition::OffsetFromLive(4));
+        g.push(win(9, "extra"), 109); // becomes active
+        assert_eq!(g.active_pane_scroll(), ScrollPosition::Live);
+        // The previously-scrolled pane keeps its offset.
+        g.set_active_clamped(0);
+        assert_eq!(g.active_pane_scroll(), ScrollPosition::OffsetFromLive(4));
     }
 }

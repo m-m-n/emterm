@@ -71,18 +71,11 @@ pub fn clamp_font_size_pt(pt: f32) -> f32 {
 
 /// Where the viewport currently sits relative to the live tail.
 ///
-/// `Live` means the user is tracking new output (auto-follow). When PTY
-/// output arrives in this state, the viewport advances with it.
-///
-/// `OffsetFromLive(n)` means the user has scrolled back `n` rows into
-/// scrollback. New PTY output preserves this offset so the user does not
-/// get yanked back to the bottom mid-read.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum ScrollPosition {
-    #[default]
-    Live,
-    OffsetFromLive(u32),
-}
+/// Scrollback position. Defined in [`crate::scroll`] as a layer-free value
+/// type and re-exported here for backward compatibility; `mux::window_group`
+/// imports it from `crate::scroll` so the pure mux model does not depend on
+/// the `app` layer (no `app ↔ mux` cycle).
+pub use crate::scroll::ScrollPosition;
 
 /// Direction for [`App::jump_to_prompt`]: `Prev` scrolls toward older
 /// prompts (up), `Next` toward newer prompts (down).
@@ -1384,7 +1377,20 @@ impl App {
         if idx >= self.tabs.len() || idx == self.active {
             return;
         }
+        // FR3: park the outgoing tab's live scroll position into its own slot,
+        // then commit the new active index, then reload the incoming tab's
+        // saved position into the single active value (`scroll_position`) the
+        // renderer and the scroll mutators read. `Live` restores to the
+        // bottom; `OffsetFromLive(n)` restores to that offset. The scroll-pin
+        // hot path (wheel / PageUp) is untouched — it still reads/writes the
+        // single `scroll_position`; only the switch boundary swaps it.
+        if let Some(outgoing) = self.tabs.get_mut(self.active) {
+            outgoing.scroll_position = self.scroll_position;
+        }
         self.active = idx;
+        if let Some(incoming) = self.tabs.get(self.active) {
+            self.scroll_position = incoming.scroll_position;
+        }
         // The search overlay's matches are indexed into the previous
         // tab's scrollback + viewport, so they are meaningless against
         // the new tab. Close the overlay + clear state on every active-
@@ -1505,8 +1511,17 @@ impl App {
                     if self.active != tab {
                         self.switch_to_tab(tab);
                     }
-                    if let Some(t) = self.tabs.get_mut(self.active) {
-                        let _ = Self::switch_to(t, Some(window));
+                    // Swap the active scroll value through the per-pane slots
+                    // (FR3) and force a full redraw on a committed switch
+                    // (FR2), mirroring the keyboard prefix path.
+                    let mut scroll = self.scroll_position;
+                    let outcome = match self.tabs.get_mut(self.active) {
+                        Some(t) => Self::switch_to(t, Some(window), &mut scroll),
+                        None => MuxActionOutcome::None,
+                    };
+                    if outcome == MuxActionOutcome::Changed {
+                        self.scroll_position = scroll;
+                        self.needs_full_redraw = true;
                     }
                 }
                 false
@@ -2150,7 +2165,13 @@ impl App {
             return MuxActionOutcome::None;
         }
 
-        match action {
+        // FR3: the switch arms swap the App's single active scroll value
+        // through `switch_to`. Copy it into a local so the `tab` borrow above
+        // does not conflict with `&mut self.scroll_position`; write the
+        // (possibly updated) value back after the match and force a full
+        // redraw on a committed switch (FR2) below.
+        let mut scroll = self.scroll_position;
+        let outcome = match action {
             PrefixAction::None | PrefixAction::Literal => MuxActionOutcome::None,
             PrefixAction::Detach => {
                 tab.send_control(&MuxMessage {
@@ -2177,15 +2198,15 @@ impl App {
             }
             PrefixAction::NextWindow => {
                 let target = tab.mux_group.as_ref().unwrap().next_index();
-                Self::switch_to(tab, target)
+                Self::switch_to(tab, target, &mut scroll)
             }
             PrefixAction::PrevWindow => {
                 let target = tab.mux_group.as_ref().unwrap().prev_index();
-                Self::switch_to(tab, target)
+                Self::switch_to(tab, target, &mut scroll)
             }
             PrefixAction::SelectWindow(d) => {
                 let target = tab.mux_group.as_ref().unwrap().digit_index(d);
-                Self::switch_to(tab, target)
+                Self::switch_to(tab, target, &mut scroll)
             }
             PrefixAction::RenameWindow => {
                 // Re-resolved by the dialog handler; surface the active
@@ -2212,7 +2233,15 @@ impl App {
                     None => MuxActionOutcome::None,
                 }
             }
+        };
+        // The `tab` borrow has ended; commit the swapped scroll value and, on
+        // a committed pane switch, force a full redraw so a shorter incoming
+        // pane leaves no residual rows from the longer outgoing one (FR2).
+        if outcome == MuxActionOutcome::Changed {
+            self.scroll_position = scroll;
+            self.needs_full_redraw = true;
         }
+        outcome
     }
 
     /// React to a [`MuxActionOutcome`] from [`Self::observe_mux_key`]. Switch
@@ -2412,7 +2441,17 @@ impl App {
     /// unconditionally, leaving the UI and the pane-filter (`PtyOutput`
     /// drops bytes for non-active panes) pointing at a window the daemon
     /// never moved off of.
-    fn switch_to(tab: &mut Tab, target: Option<usize>) -> MuxActionOutcome {
+    ///
+    /// `scroll` is the App's single active scroll value (`App::scroll_position`).
+    /// On a committed switch this saves the outgoing pane's position into its
+    /// per-pane slot, then reloads the incoming pane's saved position into
+    /// `scroll` after the snapshot request (FR3 pane wiring). A failed send or
+    /// empty group leaves `scroll` untouched.
+    fn switch_to(
+        tab: &mut Tab,
+        target: Option<usize>,
+        scroll: &mut crate::app::ScrollPosition,
+    ) -> MuxActionOutcome {
         use mux_ipc::protocol::{MessageType, MuxMessage};
         let Some(idx) = target else {
             return MuxActionOutcome::None;
@@ -2442,9 +2481,17 @@ impl App {
         // screen on demand (the daemon does not push the active grid
         // unprompted — parity with `switchMuxWindow`'s `requestPaneSnapshot`).
         if let Some(group) = tab.mux_group.as_mut() {
+            // FR3: park the outgoing pane's live scroll position before the
+            // active index moves, then reload the incoming pane's saved
+            // position after committing the switch + requesting its snapshot,
+            // so the restore lands together with the replayed content.
+            group.set_active_pane_scroll(*scroll);
             group.set_active_clamped(idx);
         }
         tab.request_pane_snapshot(pane_id);
+        if let Some(group) = tab.mux_group.as_ref() {
+            *scroll = group.active_pane_scroll();
+        }
         MuxActionOutcome::Changed
     }
 
@@ -2550,6 +2597,10 @@ impl App {
         // mutating `self.selection` must wait until the borrow ends).
         let mut active_eviction_delta: u32 = 0;
         let mut active_frame_reset = false;
+        // Outgoing pane index latched by a daemon-initiated SwitchWindow on
+        // the active tab this pump (FR3 pane wiring); applied after the
+        // `&mut self.tabs` borrow ends.
+        let mut active_pane_switch_from: Option<u32> = None;
         // emterm viewer OSC payloads collected across all tabs this pass,
         // routed to the spawner after the `&mut self.tabs` borrow ends.
         let mut viewer_osc: Vec<crate::callbacks::EmtermOscRequest> = Vec::new();
@@ -2627,9 +2678,36 @@ impl App {
             // addresses).
             let eviction_delta = tab.take_eviction_delta();
             let frame_reset = tab.take_frame_reset();
+            // Drain the inbound-pane-switch latch for every tab so a stale
+            // transition recorded on a background tab cannot mis-apply when it
+            // later becomes active; only the active tab's value is consumed.
+            let pane_switch_from = tab.take_pending_pane_switch();
             if idx == active {
                 active_eviction_delta = eviction_delta;
                 active_frame_reset = frame_reset;
+                active_pane_switch_from = pane_switch_from;
+            } else if let Some(from_pane) = pane_switch_from {
+                // Background tab: a daemon-initiated pane switch (or new-window
+                // create) moved this tab's active pane while it was off screen.
+                // Its live scroll lives in `Tab::scroll_position` (only the
+                // active tab's lives in `App::scroll_position`), so park that
+                // into the outgoing pane's slot and reload the now-active pane's
+                // saved slot. Without this, a later `switch_to_tab` would
+                // restore the OLD pane's scroll against the NEW active pane
+                // (FR3 / NFR3 divergence). No full redraw — the tab is hidden.
+                // The latch holds the outgoing pane *id*; resolve it to a
+                // current index (a same-pump `PtyExited` may have shifted the
+                // arrays) and skip the park if the pane has since exited.
+                let saved = tab.scroll_position;
+                let reloaded = tab.mux_group.as_mut().map(|group| {
+                    if let Some(from_idx) = group.index_of_pane_id(from_pane) {
+                        group.set_pane_scroll_at(from_idx, saved);
+                    }
+                    group.active_pane_scroll()
+                });
+                if let Some(scroll) = reloaded {
+                    tab.scroll_position = scroll;
+                }
             }
             let exited_now = !was_exited && tab.exited;
 
@@ -2692,6 +2770,28 @@ impl App {
         // when the whole range scrolled off the top. The `previous_selection`
         // is intentionally *not* shifted — it is interpreted against the
         // matching `previous_visible_start` captured in the same prior frame.
+        // Inbound (daemon-initiated) pane switch on the active tab: park the
+        // outgoing pane's scroll position, reload the now-active pane's saved
+        // position into the single active value, and force a full redraw so a
+        // shorter incoming pane leaves no residual rows (FR2 + FR3 pane wiring).
+        // Mirrors the local switch path, but the active index has already moved
+        // inside `apply_mux_message`. The latch holds the outgoing pane *id*;
+        // resolve it to a current index (a same-pump `PtyExited` may have
+        // shifted the arrays) and skip the park if the pane has since exited.
+        if let Some(from_pane) = active_pane_switch_from {
+            let restored = self.tabs.get_mut(self.active).and_then(|tab| {
+                let group = tab.mux_group.as_mut()?;
+                if let Some(from_idx) = group.index_of_pane_id(from_pane) {
+                    group.set_pane_scroll_at(from_idx, self.scroll_position);
+                }
+                Some(group.active_pane_scroll())
+            });
+            if let Some(scroll) = restored {
+                self.scroll_position = scroll;
+                self.needs_full_redraw = true;
+                changed = true;
+            }
+        }
         if active_frame_reset {
             self.selection = None;
             self.pending_selection_anchor = None;
@@ -3759,6 +3859,89 @@ mod tests {
         // No tabs → out-of-range switch is a no-op; search stays open.
         app.switch_to_tab(1);
         assert!(app.search_visible(), "no-op switch must not close search");
+    }
+
+    // ── TS-1 / TS-2 / TS-3 / TS-7: per-tab scroll save/restore (FR3) ─────
+
+    /// Two synthetic tabs to exercise the native tab-switch scroll handoff.
+    fn app_with_two_tabs() -> App {
+        let mut app = App::new();
+        app.spawn_initial_tab();
+        app.spawn_new_tab();
+        // `spawn_new_tab` makes the new tab active; reset to tab 0 so the
+        // test starts from a known active index. Use the direct field rather
+        // than `switch_to_tab` so we do not exercise the path under test.
+        app.active = 0;
+        app.scroll_position = ScrollPosition::Live;
+        app
+    }
+
+    #[test]
+    fn switch_to_tab_saves_outgoing_and_restores_incoming_scroll() {
+        // TS-1: switching tabs saves the outgoing tab's scroll position and
+        // restores the incoming tab's.
+        let mut app = app_with_two_tabs();
+        // Scroll up in tab 0, then switch to tab 1 (saved at Live).
+        app.scroll_position = ScrollPosition::OffsetFromLive(12);
+        app.switch_to_tab(1);
+        assert_eq!(
+            app.scroll_offset(),
+            0,
+            "incoming tab 1 was at Live → restores to bottom"
+        );
+        assert_eq!(
+            app.tabs[0].scroll_position,
+            ScrollPosition::OffsetFromLive(12),
+            "outgoing tab 0's offset was parked into its slot"
+        );
+        // Returning to tab 0 restores its parked offset.
+        app.switch_to_tab(0);
+        assert_eq!(
+            app.scroll_offset(),
+            12,
+            "returning to tab 0 restores its saved offset"
+        );
+    }
+
+    #[test]
+    fn switch_to_tab_live_restores_to_bottom() {
+        // TS-2: a unit saved at Live restores at the bottom (offset 0).
+        let mut app = app_with_two_tabs();
+        // Tab 1 stays at Live; tab 0 scrolls up before we leave it.
+        app.scroll_position = ScrollPosition::OffsetFromLive(5);
+        app.switch_to_tab(1);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+        assert_eq!(app.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn switch_to_tab_offset_restores_to_same_offset() {
+        // TS-3: a unit saved at OffsetFromLive(n) restores at offset n.
+        let mut app = app_with_two_tabs();
+        // Pre-seed tab 1 with a saved offset, then switch into it.
+        app.tabs[1].scroll_position = ScrollPosition::OffsetFromLive(8);
+        app.switch_to_tab(1);
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(8));
+        assert_eq!(app.scroll_offset(), 8);
+    }
+
+    #[test]
+    fn switch_to_tab_all_live_introduces_no_scroll() {
+        // TS-7: all tabs at Live → switching introduces no scroll.
+        let mut app = app_with_two_tabs();
+        assert_eq!(app.tabs[0].scroll_position, ScrollPosition::Live);
+        assert_eq!(app.tabs[1].scroll_position, ScrollPosition::Live);
+        app.switch_to_tab(1);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+        app.switch_to_tab(0);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn tab_scroll_position_default_is_live() {
+        let app = app_with_two_tabs();
+        assert_eq!(app.tabs[0].scroll_position, ScrollPosition::Live);
+        assert_eq!(app.tabs[1].scroll_position, ScrollPosition::Live);
     }
 
     #[test]
@@ -5074,6 +5257,97 @@ mod tests {
             MuxActionOutcome::None
         );
         assert_eq!(active_idx(&app), 0);
+    }
+
+    // ── TS-5 / TS-6 / TS-7 (pane): local pane-switch scroll save/restore (FR3) ──
+
+    #[test]
+    fn local_pane_switch_round_trip_restores_scroll_position() {
+        // TS-5 (local switch path): scroll up in pane A, switch to B, return
+        // to A — A's saved offset is restored; B is unaffected (Live).
+        let mut app = app_with_mux_windows(2);
+        assert_eq!(active_idx(&app), 0);
+
+        // Scroll up in pane A (index 0), then switch to pane B (index 1).
+        app.scroll_position = ScrollPosition::OffsetFromLive(15);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::SelectWindow(1)),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(active_idx(&app), 1);
+        assert_eq!(
+            app.scroll_position,
+            ScrollPosition::Live,
+            "incoming pane B restores to its own (Live) position"
+        );
+        assert!(app.needs_full_redraw, "pane switch forces a full redraw");
+
+        // Return to pane A (index 0): its saved offset comes back.
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::SelectWindow(0)),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(active_idx(&app), 0);
+        assert_eq!(
+            app.scroll_position,
+            ScrollPosition::OffsetFromLive(15),
+            "returning to pane A restores A's saved offset"
+        );
+    }
+
+    #[test]
+    fn local_pane_switch_all_live_introduces_no_scroll() {
+        // TS-7 (pane): all panes at Live → switching introduces no scroll.
+        let mut app = app_with_mux_windows(2);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::SelectWindow(1)),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::SelectWindow(0)),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn local_pane_switch_with_empty_scrollback_does_not_crash() {
+        // TS-6 (switch side): switching to a pane whose shared core has no
+        // scrollback succeeds and leaves the active scroll value at the
+        // incoming (Live) pane's saved position with no panic.
+        let mut app = app_with_mux_windows(2);
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::SelectWindow(1)),
+            MuxActionOutcome::Changed
+        );
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+        assert_eq!(app.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn local_pane_switch_forces_full_redraw() {
+        // FR2: a committed pane switch sets the renderer's full-redraw flag so
+        // a shorter incoming pane leaves no residual rows.
+        let mut app = app_with_mux_windows(2);
+        app.needs_full_redraw = false;
+        app.dispatch_mux_action(PrefixAction::SelectWindow(1));
+        assert!(app.needs_full_redraw);
+    }
+
+    #[test]
+    fn local_pane_switch_noop_does_not_touch_scroll_or_redraw() {
+        // NFR1: a no-op switch (single window) leaves scroll + redraw flag
+        // untouched (scroll-pin / single-window mux unaffected).
+        let mut app = app_with_mux_windows(1);
+        app.scroll_position = ScrollPosition::OffsetFromLive(9);
+        app.needs_full_redraw = false;
+        assert_eq!(
+            app.dispatch_mux_action(PrefixAction::NextWindow),
+            MuxActionOutcome::None
+        );
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(9));
+        assert!(!app.needs_full_redraw);
     }
 
     #[test]

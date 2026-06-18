@@ -1,0 +1,103 @@
+schema_version: 1
+feature: mux-scroll-isolation
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-per-unit-scroll-state
+    name: Per-unit scroll position state (FR3)
+    goal: Scroll position is persisted per native tab and per mux pane; native tab switch saves the outgoing tab's position and restores the incoming tab's, with Live restoring to the bottom and OffsetFromLive(n) restoring to offset n. App.scroll_position remains the single active value used by the renderer and mutators.
+    effort: medium
+    status: completed
+    depends_on: []
+    blocks: [phase-3-pane-switch-and-redraw]
+    files_create: []
+    files_modify:
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/mux/window_group.rs
+      - src-tauri/src/app.rs
+    tasks:
+      - id: tab-scroll-slot
+        title: Add a per-tab scroll-position slot on Tab (default Live), initialized at tab construction
+        covers_fr: [FR3]
+      - id: pane-scroll-slot
+        title: Add a per-pane scroll-position slot on the mux window entry (default Live), set on seed/append
+        covers_fr: [FR3]
+      - id: group-scroll-accessors
+        title: Add window-group accessors to read/write the active pane's stored scroll position without exposing the parallel arrays
+        covers_fr: [FR3]
+      - id: wire-tab-switch-save-restore
+        title: In switch_to_tab, save the outgoing tab's scroll position and restore the incoming tab's before the existing reset logic; keep App.scroll_position as the single active value
+        covers_fr: [FR3, NFR1]
+      - id: phase1-tests
+        title: Unit tests for tab save/restore round-trip and Live / OffsetFromLive(n) restore semantics
+        covers_fr: [FR3, NFR1]
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-7
+
+  - id: phase-2-snapshot-scrollback
+    name: Scrollback in the on-demand pane snapshot (FR1)
+    goal: The on-demand RequestPaneSnapshot response includes the target pane's scrollback in reattach ordering (clear + scrollback + shadow), so after a pane switch the client's replayed core holds the pane's history. No client-side change required.
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: [phase-3-pane-switch-and-redraw]
+    files_create: []
+    files_modify:
+      - src-tauri/src/mux/ipc/reattach.rs
+      - src-tauri/src/mux/ipc/handlers.rs
+    tasks:
+      - id: shared-snapshot-layout
+        title: Factor the snapshot byte ordering so on-demand and reattach builders agree on clear + scrollback + shadow
+        covers_fr: [FR1, NFR2]
+      - id: read-pane-scrollback-in-handler
+        title: Read the pane's scrollback bytes in the on-demand handler (no clear) alongside the already-resolved shadow parser
+        covers_fr: [FR1]
+      - id: build-history-bearing-snapshot
+        title: Assemble the on-demand snapshot including scrollback using the shared layout; keep the snapshot-size warn log for release diagnostics
+        covers_fr: [FR1, NFR2]
+      - id: phase2-tests
+        title: Unit tests asserting the on-demand builder emits scrollback before the shadow screen and that empty scrollback yields a valid clear+shadow snapshot
+        covers_fr: [FR1]
+    tests:
+      - TS-4
+      - TS-6
+
+  - id: phase-3-pane-switch-and-redraw
+    name: Pane-switch save/restore + full re-render on switch (FR2, FR3 pane wiring)
+    goal: On a mux pane switch (local prefix and inbound SwitchWindow), the outgoing pane's scroll position is saved and the incoming pane's restored alongside the snapshot replay, and the terminal area is fully re-rendered on tab and pane switch so a shorter incoming unit leaves no residual rows. Single-window mux and non-mux tabs unaffected; scroll-pin preserved.
+    effort: medium
+    status: completed
+    depends_on: [phase-1-per-unit-scroll-state, phase-2-snapshot-scrollback]
+    blocks: []
+    files_create: []
+    files_modify:
+      - src-tauri/src/app.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/window_host.rs
+      - src-tauri/src/render/mod.rs
+    tasks:
+      - id: local-pane-switch-save
+        title: In the local pane-switch path, save the active scroll value into the outgoing pane's slot before committing the new active index
+        covers_fr: [FR3]
+      - id: local-pane-switch-restore
+        title: After the snapshot request, restore the active scroll value from the incoming pane's slot
+        covers_fr: [FR3, NFR3]
+      - id: inbound-switch-parity
+        title: Apply the same save/restore at the inbound SwitchWindow reconcile so remote-initiated switches behave identically
+        covers_fr: [FR3, NFR3]
+      - id: full-redraw-on-switch
+        title: Set the renderer's full-redraw flag on pane-switch paths and verify the renderer clears non-emitted rows so a shorter incoming unit leaves no residual content
+        covers_fr: [FR2, NFR1]
+      - id: phase3-tests
+        title: Integration tests for A->B->A pane round-trip (scroll position + scrollable history), empty-scrollback switch, all-Live switch, and long->short residual-row check
+        covers_fr: [FR2, FR3, NFR1, NFR3]
+    tests:
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-9
+      - TS-10

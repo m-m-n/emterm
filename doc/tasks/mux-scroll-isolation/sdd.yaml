@@ -1,0 +1,105 @@
+schema_version: 1
+feature: mux-scroll-isolation
+created: 2026-06-18
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 684fe107191ae9d9185cc103a8806639185ce4cb
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 684fe107191ae9d9185cc103a8806639185ce4cb
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 684fe107191ae9d9185cc103a8806639185ce4cb
+  - id: implement
+    status: completed
+    completed_at_commit: 684fe107191ae9d9185cc103a8806639185ce4cb
+  - id: check
+    status: completed
+    completed_at_commit: 684fe107191ae9d9185cc103a8806639185ce4cb
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 684fe107191ae9d9185cc103a8806639185ce4cb
+
+requirements:
+  FR1:
+    title: "On-demand pane snapshot includes scrollback (scroll past output after switch, no detach/attach)"
+    status: ok
+    tasks:
+      - shared-snapshot-layout
+      - read-pane-scrollback-in-handler
+      - build-history-bearing-snapshot
+      - phase2-tests
+    tests:
+      - TS-4
+      - TS-5
+      - TS-6
+  FR2:
+    title: "Full re-render on tab/pane switch so a shorter incoming unit shows no residual rows"
+    status: ok
+    tasks:
+      - wire-tab-switch-save-restore
+      - full-redraw-on-switch
+      - phase3-tests
+    tests:
+      - TS-6
+      - TS-8
+  FR3:
+    title: "Scroll position stored per native tab and per mux pane; saved/restored on switch"
+    status: ok
+    tasks:
+      - tab-scroll-slot
+      - pane-scroll-slot
+      - group-scroll-accessors
+      - wire-tab-switch-save-restore
+      - local-pane-switch-save
+      - local-pane-switch-restore
+      - inbound-switch-parity
+      - phase1-tests
+      - phase3-tests
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-5
+      - TS-7
+  NFR1:
+    title: "No regression for non-mux tabs and single-window mux; scroll-pin preserved"
+    status: ok
+    tasks:
+      - wire-tab-switch-save-restore
+      - full-redraw-on-switch
+      - phase1-tests
+      - phase3-tests
+    tests:
+      - TS-7
+      - TS-8
+  NFR2:
+    title: "O(1) scroll save/restore; snapshot scrollback transfer comparable to reattach path"
+    status: ok
+    tasks:
+      - shared-snapshot-layout
+      - build-history-bearing-snapshot
+    tests:
+      - TS-10
+  NFR3:
+    title: "Returned-to pane shows content consistent with its saved scroll position"
+    status: ok
+    tasks:
+      - local-pane-switch-restore
+      - inbound-switch-parity
+    tests:
+      - TS-9
