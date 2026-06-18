@@ -2864,10 +2864,20 @@ impl App {
                 crate::settings::BellAction::None => {}
             }
         }
-        // Mirror the active tab's alt-screen flag onto the App so the
+        // Mirror the active tab's alt-screen state onto the App so the
         // scroll input routes can suppress wheel / Shift+Page during
-        // alt-screen sessions.
-        let active_alt = self.tabs.get(self.active).map(|t| t.alt_screen);
+        // alt-screen sessions. Read the core's authoritative
+        // `MODE_ALT_SCREEN` bit (set at parse time on every 1049/47/1047
+        // toggle) rather than the toggle-tracked `Tab::alt_screen`: a single
+        // buffer-switch action lost across a reattach / off-thread replay /
+        // snapshot gap would otherwise strand `Tab::alt_screen` true and kill
+        // scrolling permanently even after the app returned to the main
+        // buffer. The core's mode bit cannot desync from the displayed buffer.
+        let active_alt = self.tabs.get(self.active).map(|t| {
+            t.core
+                .lock()
+                .get_mode(term_core::terminal_core::MODE_ALT_SCREEN)
+        });
         if let Some(active_alt) = active_alt {
             self.set_alt_screen(active_alt);
         }

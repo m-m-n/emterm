@@ -1,5 +1,6 @@
 //! PTY spawning and reader loop for mux panes.
 
+use std::borrow::Cow;
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -183,6 +184,79 @@ pub(super) fn register_pane_and_start_reader(
 /// (matching the previous per-detach-cycle ring buffer behavior). Phase C
 /// will move the write above the `output_target` match so attach-time bytes
 /// are also retained.
+/// Extract the main-buffer byte spans of a raw PTY chunk for the scrollback
+/// ring, given `alt_at_start` (the shadow parser's alt-screen state *before*
+/// this chunk). The alternate screen has no scrollback, so its output — and
+/// the buffer-switch toggles themselves (`?1049` / `?1047` / `?47` `h`/`l`) —
+/// are dropped; only main-buffer bytes survive. A chunk that crosses a buffer
+/// switch keeps the main-buffer side rather than being discarded wholesale
+/// (which would lose e.g. command output emitted just before a TUI opens in
+/// the same read).
+///
+/// Returns `(bytes, final_alt)`. `final_alt` is the alt state the scan ended
+/// in; the caller cross-checks it against the authoritative post-chunk parser
+/// state to detect a toggle that straddled the read boundary (or an
+/// unrecognized form) and fall back conservatively. `Cow::Borrowed` is
+/// returned for the common no-toggle chunk (whole chunk on main, empty on
+/// alt) so the hot path avoids a copy.
+fn extract_main_buffer_bytes(data: &[u8], alt_at_start: bool) -> (Cow<'_, [u8]>, bool) {
+    // (pattern, is_enter). `h` enters the alternate screen, `l` returns to main.
+    const TOGGLES: [(&[u8], bool); 6] = [
+        (b"\x1b[?1049h", true),
+        (b"\x1b[?1049l", false),
+        (b"\x1b[?1047h", true),
+        (b"\x1b[?1047l", false),
+        (b"\x1b[?47h", true),
+        (b"\x1b[?47l", false),
+    ];
+    let matches_toggle = |d: &[u8]| TOGGLES.iter().find(|(p, _)| d.starts_with(p)).copied();
+
+    // Fast scan for any toggle. Most chunks (plain output, even SGR-colored)
+    // contain none, so we can borrow without building a filtered copy.
+    let mut has_toggle = false;
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == 0x1b && matches_toggle(&data[i..]).is_some() {
+            has_toggle = true;
+            break;
+        }
+        i += 1;
+    }
+    if !has_toggle {
+        return if alt_at_start {
+            (Cow::Borrowed(&[]), true)
+        } else {
+            (Cow::Borrowed(data), false)
+        };
+    }
+
+    // Slow path: split into main-buffer spans, dropping toggles and alt spans.
+    let mut out = Vec::with_capacity(data.len());
+    let mut alt = alt_at_start;
+    let mut span_start: Option<usize> = if alt { None } else { Some(0) };
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] == 0x1b {
+            if let Some((pat, is_enter)) = matches_toggle(&data[i..]) {
+                if let Some(s) = span_start.take() {
+                    out.extend_from_slice(&data[s..i]);
+                }
+                alt = is_enter;
+                i += pat.len();
+                if !alt {
+                    span_start = Some(i);
+                }
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if let Some(s) = span_start {
+        out.extend_from_slice(&data[s..]);
+    }
+    (Cow::Owned(out), alt)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn pty_reader_loop(
     pane_id: u32,
@@ -245,17 +319,14 @@ fn pty_reader_loop(
             Ok(n) => {
                 let data = &buf[..n];
 
-                // Phase C: always-on scrollback write. Capture every PTY
-                // chunk regardless of attach state so a later reattach can
-                // replay pre-detach history. Keep the lock scope to a single
-                // memcpy; the lock is uncontended on the steady-state path
-                // (only `collect_reattach_data` and `evaluate_output_target`
-                // also take it, both rare).
-                scrollback.lock().unwrap().write(data);
-
-                // Feed shadow parser and detect OSC title in a single lock scope
-                let title_changed = {
+                // Feed the shadow parser (OSC title + alt-screen state) FIRST,
+                // in a single lock scope, so the scrollback write below can be
+                // gated on the alt-screen state.
+                let (title_changed, alt_before, alt_after) = {
                     let mut parser = lock_shadow_parser(&shadow_parser);
+                    // alt-screen state BEFORE this chunk; paired with the
+                    // post-process state it identifies pure main-buffer chunks.
+                    let alt_before = parser.screen().alternate_screen();
                     // vt100 has internal panics (wide-character bookkeeping
                     // can `unwrap` a `None`). Catch the unwind here so the
                     // panic neither kills the reader thread nor poisons the
@@ -273,9 +344,10 @@ fn pty_reader_loop(
                             data.len()
                         );
                     }
+                    let alt_after = parser.screen().alternate_screen();
                     // vt100 0.16 reports OSC 0/2 titles via the Callbacks
                     // API; the TitleSink records the latest one per chunk.
-                    match parser.callbacks_mut().take_title() {
+                    let title_changed = match parser.callbacks_mut().take_title() {
                         Some(new_title) if !new_title.is_empty() => {
                             let mut current = last_title.lock().unwrap();
                             if Some(new_title.as_str()) != current.as_deref() {
@@ -286,8 +358,35 @@ fn pty_reader_loop(
                             }
                         }
                         _ => None,
-                    }
+                    };
+                    (title_changed, alt_before, alt_after)
                 };
+
+                // Phase C: scrollback write, restricted to the chunk's
+                // MAIN-buffer byte spans. Like a real terminal the alternate
+                // screen has NO scrollback, so its output and the
+                // buffer-switch toggles themselves are dropped — keeping any
+                // unpaired `?1049h` out of the scrollback so the on-demand
+                // snapshot (which replays scrollback into the client) can't
+                // strand the client in alt-screen. Unlike a whole-chunk gate,
+                // this preserves main-buffer output that shares a read with a
+                // buffer switch (e.g. command output emitted right before a
+                // TUI opens). Capture still happens regardless of attach state
+                // so a later reattach can replay pre-detach history.
+                let (main_bytes, scan_alt) = extract_main_buffer_bytes(data, alt_before);
+                let to_write: &[u8] = if scan_alt == alt_after {
+                    &main_bytes
+                } else {
+                    // The scan ended in a different buffer than the
+                    // authoritative shadow parser: a toggle straddled this
+                    // read boundary or used an unrecognized form. Fall back to
+                    // the conservative whole-chunk gate so we never emit a
+                    // partial toggle sequence into scrollback.
+                    if !alt_before && !alt_after { data } else { &[] }
+                };
+                if !to_write.is_empty() {
+                    scrollback.lock().unwrap().write(to_write);
+                }
                 if let Some(new_title) = title_changed {
                     if let Some(tx) = title_sender.lock().unwrap().as_ref() {
                         let _ = tx.try_send((pane_id, new_title));
@@ -324,8 +423,9 @@ fn pty_reader_loop(
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
                                     // Channel closed — switch to detached.
                                     // Scrollback was already captured above
-                                    // (Phase C always-on write); only the
-                                    // passthrough scan needs to run here.
+                                    // (Phase C, gated on main-buffer state);
+                                    // only the passthrough scan needs to run
+                                    // here.
                                     capture_passthrough(
                                         pane_id,
                                         data,
@@ -448,6 +548,59 @@ fn capture_passthrough(
 mod tests {
     use super::*;
     use crate::pty::visibility::HIDDEN_PASSTHROUGH_CAPACITY_MUX;
+
+    // ── extract_main_buffer_bytes (alt-screen scrollback gating) ──────────
+
+    #[test]
+    fn extract_main_buffer_pure_main_borrows_whole_chunk() {
+        let (bytes, alt) = extract_main_buffer_bytes(b"hello \x1b[31mworld\x1b[0m", false);
+        assert_eq!(&*bytes, b"hello \x1b[31mworld\x1b[0m");
+        assert!(!alt);
+        assert!(
+            matches!(bytes, Cow::Borrowed(_)),
+            "no-toggle main chunk must borrow"
+        );
+    }
+
+    #[test]
+    fn extract_main_buffer_pure_alt_yields_nothing() {
+        let (bytes, alt) = extract_main_buffer_bytes(b"alt frame redraw", true);
+        assert!(bytes.is_empty());
+        assert!(alt);
+    }
+
+    #[test]
+    fn extract_main_buffer_keeps_prefix_before_alt_enter() {
+        // Command output then a TUI opens in the SAME read — the leading
+        // main-buffer output must survive (the regression this guards).
+        let (bytes, alt) = extract_main_buffer_bytes(b"PRE-OUTPUT\x1b[?1049hALTUI", false);
+        assert_eq!(&*bytes, b"PRE-OUTPUT");
+        assert!(alt);
+    }
+
+    #[test]
+    fn extract_main_buffer_keeps_suffix_after_alt_exit() {
+        let (bytes, alt) = extract_main_buffer_bytes(b"ALTUI\x1b[?1049lPOST-PROMPT", true);
+        assert_eq!(&*bytes, b"POST-PROMPT");
+        assert!(!alt);
+    }
+
+    #[test]
+    fn extract_main_buffer_drops_balanced_internal_alt_span() {
+        let (bytes, alt) = extract_main_buffer_bytes(b"A\x1b[?1049hHIDDEN\x1b[?1049lB", false);
+        assert_eq!(&*bytes, b"AB");
+        assert!(!alt);
+    }
+
+    #[test]
+    fn extract_main_buffer_handles_47_and_1047_forms() {
+        let (b1, a1) = extract_main_buffer_bytes(b"X\x1b[?47hY", false);
+        assert_eq!(&*b1, b"X");
+        assert!(a1);
+        let (b2, a2) = extract_main_buffer_bytes(b"X\x1b[?1047lY", true);
+        assert_eq!(&*b2, b"Y");
+        assert!(!a2);
+    }
 
     type TestRig = (
         SharedRawPassthrough,

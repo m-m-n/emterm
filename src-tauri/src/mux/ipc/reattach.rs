@@ -17,30 +17,48 @@ use crate::mux::session::pane::{
     lock_shadow_parser,
 };
 
-/// The clear-and-home prefix every snapshot starts with: `ESC[H ESC[2J`.
-/// Homes the cursor and clears the screen so the client replays from a known
-/// state before the scrollback / screen bytes arrive.
-const SNAPSHOT_CLEAR_HOME: &[u8] = b"\x1b[H\x1b[2J";
+/// The clear-and-home prefix every snapshot starts with:
+/// `ESC[3J ESC[H ESC[2J`. `ESC[3J` (ED 3) clears the client's existing
+/// scrollback so an on-demand snapshot REPLACES the client's history instead
+/// of appending to it — the snapshot is ingested via the append-only
+/// `PtyOutput` path, so without this each window switch would duplicate the
+/// scrollback. `ESC[H ESC[2J` then homes the cursor and clears the screen so
+/// the client replays from a known state before the scrollback / screen bytes
+/// arrive.
+const SNAPSHOT_CLEAR_HOME: &[u8] = b"\x1b[3J\x1b[H\x1b[2J";
 
 /// Assemble the shared snapshot byte layout used by both the reattach path
 /// and the on-demand `RequestPaneSnapshot` path:
 ///
 /// ```text
-/// ESC[H ESC[2J + scrollback + screen
+/// ESC[3J ESC[H ESC[2J + scrollback + screen + ESC[?1049{h,l}
 /// ```
 ///
 /// The scrollback bytes replay into the client's grid *before* the screen
 /// snapshot overwrites the visible region with the final state, so the
-/// client's `reset_and_replay` rebuilds the pane's history (FR1). Both paths
-/// route through this one function so the byte ordering stays a single source
-/// of truth. The reattach path appends its per-pane `raw_passthrough` bytes
-/// after the screen on top of this layout.
-pub(super) fn build_snapshot_bytes(scrollback: &[u8], screen: &[u8]) -> Vec<u8> {
-    let mut combined =
-        Vec::with_capacity(SNAPSHOT_CLEAR_HOME.len() + scrollback.len() + screen.len());
+/// client's `reset_and_replay` rebuilds the pane's history (FR1). The trailing
+/// `ESC[?1049h` / `ESC[?1049l` normalizes the client's alt-screen flag to the
+/// captured pane's actual buffer (`alt_screen`): `contents_formatted()` never
+/// emits the buffer-switch toggle, and the snapshot is applied via the
+/// append path (no core reset), so without this the client's alt-screen flag
+/// would persist from whatever window it last viewed — switching from an
+/// alt-screen app (e.g. glances) to a main-buffer pane would inherit alt=true
+/// and wrongly suppress scrolling. Both paths route through this one function
+/// so the byte ordering stays a single source of truth. The reattach path
+/// appends its per-pane `raw_passthrough` bytes after this layout.
+pub(super) fn build_snapshot_bytes(scrollback: &[u8], screen: &[u8], alt_screen: bool) -> Vec<u8> {
+    let alt_mode: &[u8] = if alt_screen {
+        b"\x1b[?1049h"
+    } else {
+        b"\x1b[?1049l"
+    };
+    let mut combined = Vec::with_capacity(
+        SNAPSHOT_CLEAR_HOME.len() + scrollback.len() + screen.len() + alt_mode.len(),
+    );
     combined.extend_from_slice(SNAPSHOT_CLEAR_HOME);
     combined.extend_from_slice(scrollback);
     combined.extend_from_slice(screen);
+    combined.extend_from_slice(alt_mode);
     combined
 }
 
@@ -49,11 +67,12 @@ pub(super) fn build_snapshot_bytes(scrollback: &[u8], screen: &[u8]) -> Vec<u8> 
 /// the pane's scrollback so the client can scroll to past output.
 ///
 /// Output layout (shared with the reattach path via [`build_snapshot_bytes`]):
-/// `ESC[H ESC[2J` + `scrollback` + `vt100::Screen::contents_formatted()`.
-/// The first fragment clears the screen and homes the cursor so the client
-/// starts from a known state; the scrollback fragment rebuilds history; the
-/// final fragment replays the full screen including alt-screen toggle, SGR
-/// attributes, cursor position, and cells.
+/// `ESC[3J ESC[H ESC[2J` + `scrollback` + `vt100::Screen::contents_formatted()`.
+/// The first fragment clears the client's scrollback + screen and homes the
+/// cursor so the client starts from a known state (and the on-demand path
+/// replaces rather than appends history); the scrollback fragment rebuilds
+/// history; the final fragment replays the full screen including alt-screen
+/// toggle, SGR attributes, cursor position, and cells.
 ///
 /// `scrollback` is read by the caller WITHOUT clearing (the buffer lives for
 /// the lifetime of the pane). An empty `scrollback` yields a valid
@@ -65,11 +84,12 @@ pub(super) fn build_shadow_parser_snapshot(
     shadow_parser: &SharedShadowParser,
     scrollback: &[u8],
 ) -> Vec<u8> {
-    let screen_data = {
+    let (screen_data, alt_screen) = {
         let parser = lock_shadow_parser(shadow_parser);
-        parser.screen().contents_formatted()
+        let screen = parser.screen();
+        (screen.contents_formatted(), screen.alternate_screen())
     };
-    build_snapshot_bytes(scrollback, &screen_data)
+    build_snapshot_bytes(scrollback, &screen_data, alt_screen)
 }
 
 /// Collect reattach data for panes in the given session.
@@ -203,10 +223,11 @@ pub(super) async fn collect_reattach_data(
                         pane.exited
                     );
 
-                    // Shared layout: ESC[H ESC[2J + scrollback + screen.
-                    // The reattach path appends its per-pane raw_passthrough
-                    // after the screen on top of that shared base.
-                    let mut combined = build_snapshot_bytes(&scrollback_data, &screen_data);
+                    // Shared layout: ESC[3J ESC[H ESC[2J + scrollback + screen
+                    // + alt-mode. The reattach path appends its per-pane
+                    // raw_passthrough after that shared base.
+                    let mut combined =
+                        build_snapshot_bytes(&scrollback_data, &screen_data, is_alternate_screen);
                     combined.extend_from_slice(&passthrough_data);
 
                     data.push((pane.id, combined));
@@ -355,8 +376,8 @@ mod tests {
 
         // Leading clear-and-home.
         assert!(
-            snapshot.starts_with(b"\x1b[H\x1b[2J"),
-            "snapshot must start with ESC[H ESC[2J"
+            snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"),
+            "snapshot must start with ESC[3J ESC[H ESC[2J"
         );
         let find = |needle: &[u8]| {
             snapshot
@@ -371,7 +392,7 @@ mod tests {
             "scrollback ({scrollback_at}) must precede the shadow screen ({screen_at})"
         );
         // And the scrollback must come after the clear prefix.
-        assert!(scrollback_at >= b"\x1b[H\x1b[2J".len());
+        assert!(scrollback_at >= b"\x1b[3J\x1b[H\x1b[2J".len());
     }
 
     /// TS-6: an empty scrollback yields a valid clear + shadow snapshot
@@ -383,7 +404,7 @@ mod tests {
 
         let snapshot = build_shadow_parser_snapshot(&parser, b"");
 
-        assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
         assert!(
             snapshot
                 .windows(b"ONLY-SCREEN".len())
@@ -397,10 +418,19 @@ mod tests {
     /// well-formed buffer (the on-demand + reattach paths share this base).
     #[test]
     fn build_snapshot_bytes_layout_is_clear_scrollback_screen() {
-        let out = build_snapshot_bytes(b"SB", b"SC");
-        assert_eq!(out, b"\x1b[H\x1b[2JSBSC");
-        // Empty inputs: just the clear prefix.
-        assert_eq!(build_snapshot_bytes(b"", b""), b"\x1b[H\x1b[2J");
+        // Main-buffer pane (alt_screen = false): trailing ESC[?1049l.
+        let out = build_snapshot_bytes(b"SB", b"SC", false);
+        assert_eq!(out, b"\x1b[3J\x1b[H\x1b[2JSBSC\x1b[?1049l");
+        // Empty inputs: clear prefix + alt-mode normalization.
+        assert_eq!(
+            build_snapshot_bytes(b"", b"", false),
+            b"\x1b[3J\x1b[H\x1b[2J\x1b[?1049l"
+        );
+        // Alt-screen pane (alt_screen = true): trailing ESC[?1049h.
+        assert_eq!(
+            build_snapshot_bytes(b"", b"", true),
+            b"\x1b[3J\x1b[H\x1b[2J\x1b[?1049h"
+        );
     }
 
     /// Test: collect_reattach_data returns entries for 2 panes in 2 windows.
@@ -472,7 +502,7 @@ mod tests {
                 "Reattach data should include screen restoration"
             );
             assert!(
-                buf.starts_with(b"\x1b[H\x1b[2J"),
+                buf.starts_with(b"\x1b[3J\x1b[H\x1b[2J"),
                 "Reattach data should start with reset sequence"
             );
         }
@@ -964,7 +994,7 @@ mod tests {
         assert_eq!(data.len(), 1, "expected 1 entry");
         let (pane_id, snapshot) = &data[0];
         assert_eq!(*pane_id, 1);
-        assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
         let needle = b"\x1b_Gi=42;PNG-bytes\x1b\\";
         assert!(
             snapshot.windows(needle.len()).any(|w| w == needle),
@@ -1179,7 +1209,7 @@ mod tests {
             collect_reattach_data(&mgr, session_id, &new_tx, &title_tx, kick_tx2, true).await;
         assert_eq!(data2.len(), 1);
         let (_pid, snapshot) = &data2[0];
-        assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
         assert!(
             snapshot
                 .windows(b"ring-bytes".len())
