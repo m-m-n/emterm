@@ -1,0 +1,93 @@
+schema_version: 1
+feature: mux-snapshot-reparse-offthread
+created: 2026-06-18
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 18fc3e714ed41d6be5d2373c6b3f73a24c086d36
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 18fc3e714ed41d6be5d2373c6b3f73a24c086d36
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 18fc3e714ed41d6be5d2373c6b3f73a24c086d36
+  - id: implement
+    status: completed
+    completed_at_commit: 0b77717b20b048dfd1d99c635e832808c21c4fb8
+  - id: check
+    status: completed
+    completed_at_commit: 0b77717b20b048dfd1d99c635e832808c21c4fb8
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 0b77717b20b048dfd1d99c635e832808c21c4fb8
+
+requirements:
+  FR1:
+    title: "Deterministic reparse-cost measurement harness for ~2 MiB scrollback (process_pty_data_fully), gated from default tests"
+    status: ok
+    tasks:
+      - synthetic-scrollback-builder
+      - add-reparse-measurement-harness
+      - measurement-empty-input-guard
+    tests:
+      - TS-1
+      - TS-2
+      - TS-5
+  FR2:
+    title: "Go/no-go decision for off-thread replay (案a) recorded against §4 thresholds (<5ms / 5-50ms / 50ms+)"
+    status: ok
+    tasks:
+      - run-measurement-record-decision
+    tests:
+      - TS-1
+      - TS-7
+  FR3:
+    title: "Lock-scope guard-rail: snapshot copy holds scrollback Mutex only for read_all (explicit drop point + comment + regression test); byte-identical output"
+    status: ok
+    tasks:
+      - tighten-snapshot-lock-scope
+      - snapshot-bytes-unchanged-test
+    tests:
+      - TS-3
+      - TS-4
+      - TS-6
+  NFR1:
+    title: "Measurement is deterministic and isolated from the flaky pump_all path (pure term_core call)"
+    status: ok
+    tasks:
+      - synthetic-scrollback-builder
+      - add-reparse-measurement-harness
+      - measurement-empty-input-guard
+    tests:
+      - TS-2
+      - TS-5
+  NFR2:
+    title: "No regression: FR3 byte-identical; FR1 does not slow/destabilize default cargo test; CLI-only check green"
+    status: ok
+    tasks:
+      - add-reparse-measurement-harness
+      - snapshot-bytes-unchanged-test
+    tests:
+      - TS-4
+      - TS-5
+      - TS-6
+  NFR3:
+    title: "Portability: term_core + src-tauri changes keep Linux/Windows and CLI-only builds green"
+    status: ok
+    tasks:
+      - tighten-snapshot-lock-scope
+    tests:
+      - TS-6

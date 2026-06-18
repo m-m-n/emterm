@@ -463,7 +463,18 @@ pub(super) async fn handle_request_pane_snapshot(
     // Read the pane's scrollback WITHOUT clearing (the buffer lives for the
     // lifetime of the pane; an empty buffer yields a valid clear + shadow
     // snapshot). The client's reset_and_replay rebuilds history from it.
-    let scrollback_data = scrollback.lock().unwrap().read_all();
+    //
+    // INVARIANT (FR3 guard-rail): the scrollback lock is held ONLY for the
+    // `read_all` copy. The owned `Vec` is returned out of this scope so the
+    // guard is provably dropped at the closing brace — before snapshot
+    // assembly, logging, and the channel send below. This is a copy-only
+    // critical section: the O(n) copy is unavoidable, but the lock must never
+    // span assembly/log/send. Keep the copy inside this block when refactoring.
+    let scrollback_data: Vec<u8> = {
+        let guard = scrollback.lock().unwrap();
+        guard.read_all()
+        // guard dropped here, at scope end, before any assembly/log/send.
+    };
     let snapshot = build_shadow_parser_snapshot(&shadow_parser, &scrollback_data);
     // Promoted from debug -> warn so release builds (which drop debug/info)
     // capture the snapshot-reply path during recovery investigations. The
@@ -713,6 +724,85 @@ mod tests {
             .get_mut(&window_id)
             .unwrap()
             .add_pane(pane);
+    }
+
+    /// FR3 byte-identity guard-rail: the lock-scope refactor in
+    /// `handle_request_pane_snapshot` (scoped `read_all` block) must NOT change
+    /// the assembled snapshot bytes. This reconstructs the same inputs the
+    /// handler feeds to `build_shadow_parser_snapshot` (an owned `read_all`
+    /// copy + the shadow screen) and asserts the result is byte-for-byte the
+    /// established `ESC[H ESC[2J + scrollback + screen` layout — for both a
+    /// representative screen + scrollback and the empty-scrollback case.
+    #[test]
+    fn snapshot_bytes_unchanged_after_lock_scope_guardrail() {
+        use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+        use crate::mux::session::pane::new_shadow_parser;
+        use std::sync::Mutex as StdMutex;
+
+        // Representative screen + scrollback.
+        let shadow_parser: SharedShadowParser = Arc::new(StdMutex::new(new_shadow_parser(24, 80)));
+        shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"\x1b[31mSCREEN-CONTENT\x1b[0m");
+
+        let scrollback: SharedScrollback =
+            Arc::new(StdMutex::new(ScrollbackRingBuffer::new(64 * 1024)));
+        scrollback
+            .lock()
+            .unwrap()
+            .write(b"HISTORY-LINE-ONE\r\nHISTORY-LINE-TWO\r\n");
+
+        // Mirror the handler's scoped-copy step, then assemble.
+        let scrollback_data: Vec<u8> = {
+            let guard = scrollback.lock().unwrap();
+            guard.read_all()
+        };
+        let assembled = build_shadow_parser_snapshot(&shadow_parser, &scrollback_data);
+
+        // Established layout: ESC[H ESC[2J + scrollback + shadow screen.
+        assert!(
+            assembled.starts_with(b"\x1b[H\x1b[2J"),
+            "snapshot must start with the clear+home prefix"
+        );
+        let find = |needle: &[u8]| {
+            assembled
+                .windows(needle.len())
+                .position(|w| w == needle)
+                .unwrap_or_else(|| panic!("needle {:?} not found", needle))
+        };
+        let sb_at = find(b"HISTORY-LINE-ONE");
+        let screen_at = find(b"SCREEN-CONTENT");
+        assert!(
+            sb_at >= b"\x1b[H\x1b[2J".len(),
+            "scrollback after clear prefix"
+        );
+        assert!(
+            sb_at < screen_at,
+            "scrollback must precede the shadow screen"
+        );
+        // The owned-copy path produces the exact same bytes as feeding the
+        // scrollback slice straight through (no behavioral divergence).
+        let direct =
+            build_shadow_parser_snapshot(&shadow_parser, &scrollback.lock().unwrap().read_all());
+        assert_eq!(assembled, direct, "scoped copy must be byte-identical");
+
+        // Empty-scrollback case: still a valid clear + shadow snapshot.
+        let empty_sb: SharedScrollback =
+            Arc::new(StdMutex::new(ScrollbackRingBuffer::new(64 * 1024)));
+        let empty_data: Vec<u8> = {
+            let guard = empty_sb.lock().unwrap();
+            guard.read_all()
+        };
+        assert!(empty_data.is_empty(), "fresh buffer reads back empty");
+        let empty_assembled = build_shadow_parser_snapshot(&shadow_parser, &empty_data);
+        assert!(empty_assembled.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(
+            empty_assembled
+                .windows(b"SCREEN-CONTENT".len())
+                .any(|w| w == b"SCREEN-CONTENT"),
+            "shadow screen present with empty scrollback"
+        );
     }
 
     /// TS-7: SetVisibility(false) flips identity-owned panes to Detached.

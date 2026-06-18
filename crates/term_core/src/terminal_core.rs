@@ -1448,4 +1448,145 @@ mod tests {
             }
         }
     }
+
+    // ── Reparse-cost measurement harness (FR1) ───────────
+    //
+    // A deterministic, on-demand timing harness that feeds a synthetic
+    // scrollback through `process_pty_data_fully` on a fresh core and reports
+    // the elapsed time + throughput. The synthetic input is fixed (no RNG, no
+    // clock) so re-runs are stable, and the harness calls `term_core` directly
+    // (no `App::pump_all`, no real PTY) so it is isolated from the flaky pump
+    // path. The timing test is `#[ignore]`-gated so the default `cargo test`
+    // run is unaffected; run it with `cargo test -- --ignored --nocapture`.
+
+    /// Build a deterministic, terminal-representative byte buffer of about
+    /// `target_bytes` bytes. The content mixes printable ASCII text, periodic
+    /// newlines (so the parser scrolls and fills scrollback), and an occasional
+    /// SGR colour change — no RNG and no clock input, so the buffer is
+    /// byte-for-byte reproducible across runs and machines.
+    fn build_synthetic_scrollback(target_bytes: usize) -> Vec<u8> {
+        // A short, fixed palette of SGR colour changes cycled deterministically.
+        const SGRS: &[&[u8]] = &[
+            b"\x1b[31m", // red
+            b"\x1b[32m", // green
+            b"\x1b[33m", // yellow
+            b"\x1b[34m", // blue
+            b"\x1b[0m",  // reset
+        ];
+        // Printable glyphs cycled per column (deterministic, ASCII only).
+        const GLYPHS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789 ";
+
+        let mut out: Vec<u8> = Vec::with_capacity(target_bytes + 64);
+        let mut col: usize = 0;
+        let mut line: usize = 0;
+        let mut glyph_i: usize = 0;
+        // Wrap-ish line width so newlines come periodically (~80 cols).
+        const LINE_WIDTH: usize = 78;
+
+        while out.len() < target_bytes {
+            if col == 0 {
+                // Once every 8 lines, emit a deterministic SGR change so the
+                // stream exercises the colour path without dominating it.
+                if line % 8 == 0 {
+                    out.extend_from_slice(SGRS[(line / 8) % SGRS.len()]);
+                }
+            }
+            out.push(GLYPHS[glyph_i % GLYPHS.len()]);
+            glyph_i += 1;
+            col += 1;
+            if col >= LINE_WIDTH {
+                out.push(b'\r');
+                out.push(b'\n');
+                col = 0;
+                line += 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_synthetic_scrollback_is_deterministic() {
+        // Same size in -> byte-identical buffer out (no RNG / clock).
+        let a = build_synthetic_scrollback(64 * 1024);
+        let b = build_synthetic_scrollback(64 * 1024);
+        assert_eq!(a, b, "synthetic scrollback must be reproducible");
+        assert!(
+            a.len() >= 64 * 1024,
+            "buffer should reach the requested size"
+        );
+        // Sanity: it contains newlines and at least one SGR introducer.
+        assert!(a.contains(&b'\n'), "should contain newlines");
+        assert!(
+            a.windows(2).any(|w| w == b"\x1b["),
+            "should contain SGR sequences"
+        );
+    }
+
+    #[test]
+    fn test_reparse_empty_input_no_panic() {
+        // FR1 empty-input guard: feeding 0 bytes through the full-drain reparse
+        // path neither panics nor misreports; elapsed time is ~0 ms.
+        let mut core = TerminalCore::new(80, 24, 10_000);
+        let start = std::time::Instant::now();
+        let actions = core.process_pty_data_fully(b"");
+        let elapsed = start.elapsed();
+        assert!(actions.is_empty(), "empty input yields no mode actions");
+        // ~0 ms: be generous to avoid flakiness on loaded CI, but it must not
+        // wander into the tens of ms a real reparse would take.
+        assert!(
+            elapsed.as_millis() < 50,
+            "empty reparse should be ~0 ms, was {:?}",
+            elapsed
+        );
+    }
+
+    /// Gated measurement harness (FR1 -> FR2). Excluded from the default
+    /// `cargo test` run via `#[ignore]`. Run explicitly with:
+    ///
+    /// ```text
+    /// cargo test -p term_core -- --ignored --nocapture
+    /// ```
+    ///
+    /// Reports the reparse time + throughput for a ~2 MiB synthetic scrollback,
+    /// plus a few smaller sizes to show scaling. The measured ~2 MiB figure is
+    /// the input to the §4 threshold decision recorded at verify time.
+    #[test]
+    #[ignore = "measurement harness; run with --ignored --nocapture"]
+    fn measure_reparse_cost_2mib() {
+        // Sizes: 256 KiB / 1 MiB / 2 MiB so scaling is visible. The 2 MiB run
+        // is the headline figure for the go/no-go decision.
+        const SIZES: &[(usize, &str)] = &[
+            (256 * 1024, "256 KiB"),
+            (1024 * 1024, "1 MiB"),
+            (2 * 1024 * 1024, "2 MiB"),
+        ];
+
+        eprintln!("=== reparse-cost measurement (process_pty_data_fully) ===");
+        for &(size, label) in SIZES {
+            let buf = build_synthetic_scrollback(size);
+            // Fresh core at a representative grid size with a 2 MiB-ish
+            // scrollback capacity so rows actually accumulate.
+            let mut core = TerminalCore::new(80, 24, 50_000);
+
+            let start = std::time::Instant::now();
+            let _ = core.process_pty_data_fully(&buf);
+            let elapsed = start.elapsed();
+
+            let bytes = buf.len() as f64;
+            let secs = elapsed.as_secs_f64();
+            let mib = bytes / (1024.0 * 1024.0);
+            let mibps = if secs > 0.0 {
+                mib / secs
+            } else {
+                f64::INFINITY
+            };
+            eprintln!(
+                "{label:>8}: {bytes:>9.0} bytes  {ms:>8.3} ms  {mibps:>8.1} MiB/s",
+                bytes = bytes,
+                ms = elapsed.as_secs_f64() * 1000.0,
+                mibps = mibps,
+            );
+        }
+        eprintln!("=========================================================");
+    }
 }
