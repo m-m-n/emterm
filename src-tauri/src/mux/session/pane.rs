@@ -30,6 +30,23 @@ pub type NotificationSender = mpsc::Sender<(PaneId, String)>;
 /// notification even when no GUI client is currently attached.
 pub type SharedNotificationSender = Arc<StdMutex<Option<NotificationSender>>>;
 
+/// Channel carrying a pane's `PaneId` from its reader thread to the daemon
+/// reap task when the pane's PTY reaches EOF.
+///
+/// Distinct from `NotificationSender = mpsc::Sender<(PaneId, String)>` (the
+/// OSC-notification relay): this carries only a bare `PaneId` and drives pane
+/// reap, not desktop notifications (NFR4).
+pub type PaneExitSender = mpsc::Sender<PaneId>;
+
+/// Daemon-lifetime pane-exit sender shared with each pane reader thread.
+///
+/// Follows the `SharedNotificationSender` shape exactly: an
+/// `Arc<Mutex<Option<_>>>` so it can be cloned into reader threads and left
+/// `None` in CLI / test paths. Unlike the pane output target, this sender is
+/// fixed at pane creation and is **never** swapped on attach/detach — that is
+/// what lets a detached pane still notify the daemon on EOF (M1).
+pub type SharedPaneExitSender = Arc<StdMutex<Option<PaneExitSender>>>;
+
 /// Callback sink recording the most recent OSC 0/2 window title.
 ///
 /// vt100 0.16 removed `Screen::title()` in favor of the callback API;

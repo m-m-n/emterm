@@ -1,0 +1,96 @@
+schema_version: 1
+feature: mux-detach-pane-exit-reap
+created: 2026-06-18
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      # The crate is edition=2024 but the project's formatter (PostToolUse hook)
+      # is `rustfmt --edition 2021`; crate-wide `cargo fmt` would reformat ~43
+      # unrelated pre-existing files. Format only the changed .rs files with the
+      # project's edition.
+      format_command: "git diff --name-only HEAD -- '*.rs' | xargs -r rustfmt --edition 2021"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 0966e67455e9cd3a4fb7609c6ab12bd45c3387b7
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 0966e67455e9cd3a4fb7609c6ab12bd45c3387b7
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 0966e67455e9cd3a4fb7609c6ab12bd45c3387b7
+  - id: implement
+    status: completed
+    completed_at_commit: 0966e67455e9cd3a4fb7609c6ab12bd45c3387b7
+  - id: check
+    status: completed
+    completed_at_commit: 0966e67455e9cd3a4fb7609c6ab12bd45c3387b7
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 0966e67455e9cd3a4fb7609c6ab12bd45c3387b7
+
+requirements:
+  FR1:
+    title: reader EOF で attach 状態に関係なく pane-exit を daemon へ通知する
+    status: ok
+    tasks: [reader-eof-notify, plumb-sender-chain]
+    tests: [TS-6]
+  FR2:
+    title: daemon 受信タスクが handle_destroy_pane で reap する単一の権威
+    status: ok
+    tasks: [pane-exit-sender-type, expose-destroy-pane, daemon-reap-task, wire-runloops]
+    tests: [TS-1, TS-2]
+  FR3:
+    title: Connected 時は従来どおり空チャンクを client へ送る (UI teardown 保持)
+    status: ok
+    tasks: [reader-eof-notify]
+    tests: [TS-5]
+  FR4:
+    title: reap の冪等性 (除去済み pane への reap は安全な no-op)
+    status: ok
+    tasks: [daemon-reap-task, phase1-tests]
+    tests: [TS-4]
+  FR5:
+    title: 全 session 空で shutdown_tx.send(true) (detach 経路から到達可能に)
+    status: ok
+    tasks: [daemon-reap-task, wire-runloops]
+    tests: [TS-1]
+  FR6:
+    title: 接続断レースで Detached(NetworkDetach) 化された pane も reap する
+    status: ok
+    tasks: [daemon-reap-task]
+    tests: [TS-3]
+  FR7:
+    title: Unix socket / Windows named pipe 両 run ループで配線する
+    status: ok
+    tasks: [wire-runloops, plumb-sender-chain]
+    tests: [TS-6]
+  NFR1:
+    title: 信頼性 — attach/detach で reap 挙動が分岐しない・async Mutex で直列化
+    status: ok
+    tasks: [daemon-reap-task]
+    tests: [TS-1, TS-2, TS-3]
+  NFR2:
+    title: 互換性 — mux-kill-shutdown / close-window-on-shell-exit を壊さない
+    status: ok
+    tasks: [phase2-verify]
+    tests: [TS-7]
+  NFR3:
+    title: パフォーマンス — 定常出力経路 (Ok(n)) に影響を与えない
+    status: ok
+    tasks: [reader-eof-notify]
+    tests: [TS-8]
+  NFR4:
+    title: 保守性 — 既存 (PaneId, String) 通知チャネルとは別の専用チャネルを切る
+    status: ok
+    tasks: [pane-exit-sender-type]
+    tests: [TS-8]

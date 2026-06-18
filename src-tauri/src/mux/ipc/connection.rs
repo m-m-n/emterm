@@ -24,7 +24,9 @@ use super::protocol::*;
 use super::reattach::detach_session_panes;
 use super::statusbar::{execute_command, StatusBarEngine};
 use crate::mux::session::manager::SessionManager;
-use crate::mux::session::pane::{NotificationSender, PtyOutputChunk, TitleChangeSender};
+use crate::mux::session::pane::{
+    NotificationSender, PtyOutputChunk, SharedPaneExitSender, TitleChangeSender,
+};
 
 /// Handshake timeout: client must send Hello within this duration.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -36,12 +38,14 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const DRAIN_BATCH_LIMIT: usize = 64;
 
 /// Handle a new client connection through handshake and message loop.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_connection<S>(
     stream: S,
     session_manager: Arc<Mutex<SessionManager>>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     daemon_title_tx: TitleChangeSender,
     daemon_notification_tx: NotificationSender,
+    daemon_pane_exit_sender: SharedPaneExitSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -121,6 +125,7 @@ pub async fn handle_connection<S>(
             &shutdown_tx,
             &daemon_title_tx,
             &daemon_notification_tx,
+            &daemon_pane_exit_sender,
         )
         .await;
         return;
@@ -147,6 +152,11 @@ pub async fn handle_connection<S>(
     // forward Detached-pane OSC 9 notifications through it; the daemon
     // notification task relays them to the GUI client (FR2).
     let notification_tx = daemon_notification_tx;
+    // Daemon-lifetime pane-exit sender: panes created on this connection emit
+    // their pane_id here on PTY EOF (regardless of attach state) so the daemon
+    // reap task can reap them authoritatively (FR1/FR2). Fixed at pane
+    // creation; never swapped on detach.
+    let pane_exit_sender = daemon_pane_exit_sender;
 
     // NOTE: Reattach data is NOT sent here. The client must send an Attach
     // message after its output stream is ready. This eliminates the timing
@@ -271,6 +281,7 @@ pub async fn handle_connection<S>(
                             &pane_cwd_map,
                             &title_tx,
                             &notification_tx,
+                            &pane_exit_sender,
                             &mut kick_rx,
                             &visible_state,
                         ).await {
@@ -505,12 +516,14 @@ pub async fn handle_connection<S>(
 /// Reads at most one control message (e.g., CreateWindow), processes it,
 /// sends a response, and disconnects. If no message arrives within 5 seconds,
 /// disconnects gracefully (this is the normal `mux ls` path).
+#[allow(clippy::too_many_arguments)]
 async fn handle_cli_client<S>(
     framed: &mut Framed<S, MuxCodec>,
     session_manager: &Arc<Mutex<SessionManager>>,
     shutdown_tx: &tokio::sync::watch::Sender<bool>,
     daemon_title_tx: &TitleChangeSender,
     daemon_notification_tx: &NotificationSender,
+    daemon_pane_exit_sender: &SharedPaneExitSender,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -553,6 +566,7 @@ async fn handle_cli_client<S>(
                 active_session_id,
                 daemon_title_tx,
                 daemon_notification_tx,
+                daemon_pane_exit_sender,
             )
             .await;
 
@@ -660,6 +674,7 @@ async fn route_message<S>(
     pane_cwd_map: &super::statusbar::SharedPaneCwdMap,
     title_tx: &TitleChangeSender,
     notification_tx: &NotificationSender,
+    pane_exit_sender: &SharedPaneExitSender,
     kick_rx: &mut Option<oneshot::Receiver<()>>,
     visible_state: &Arc<AtomicBool>,
 ) -> Result<(), bool>
@@ -676,6 +691,7 @@ where
                 *active_session_id,
                 title_tx,
                 notification_tx,
+                pane_exit_sender,
             )
             .await?;
             // Register pane cwd Arcs for newly created panes
