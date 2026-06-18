@@ -333,9 +333,11 @@ pub async fn handle_connection<S>(
 
                     // Batch send: feed all into buffer, then flush once
                     let mut send_err = false;
+                    let mut exited_panes: Vec<u32> = Vec::new();
                     for chunk in merged {
                         if chunk.data.is_empty() {
                             log::info!("PTY exited for pane {}", chunk.pane_id);
+                            exited_panes.push(chunk.pane_id);
                             let exit_msg = PtyExitedMsg { exit_code: Some(0) };
                             let msg = MuxMessage::control(MessageType::PtyExited, chunk.pane_id, &exit_msg);
                             if framed.feed(msg).await.is_err() {
@@ -352,7 +354,25 @@ pub async fn handle_connection<S>(
                             }
                         }
                     }
-                    if send_err || framed.flush().await.is_err() {
+                    let flush_failed = framed.flush().await.is_err();
+                    // Reap each exited pane from the daemon's own SessionManager
+                    // *regardless* of whether delivery to the client succeeded:
+                    // the PTY genuinely exited, so the empty window / session must
+                    // be removed and the daemon shut down once the last pane is
+                    // gone. Gating this on a successful flush would re-open the
+                    // zombie-pane bug under a client-drop race — the GUI window
+                    // closing at the same moment the last shell exits via Ctrl+D
+                    // both delivers the exit chunk and fails the client write, so
+                    // a success-gated reap would skip cleanup and leave a session
+                    // that never auto-shuts-down / can't be `mux kill`ed. Mirror
+                    // the explicit `DestroyPane` cleanup fully — including dropping
+                    // the pane's cwd entry from the status-bar map so it can't
+                    // resolve a stale cwd for a dead pane.
+                    for pane_id in exited_panes {
+                        pane_cwd_map.lock().unwrap().remove(&pane_id);
+                        handle_destroy_pane(pane_id, &session_manager, &shutdown_tx).await;
+                    }
+                    if send_err || flush_failed {
                         if !send_err {
                             log::warn!("pty-batch flush error: merged_count={}", merged_count);
                         }
