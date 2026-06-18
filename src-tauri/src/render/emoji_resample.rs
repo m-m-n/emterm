@@ -12,7 +12,7 @@
 //! because it is pixel-level image processing, not UI layout. The status
 //! bar's `ui::emoji_cache` is a thin coordinator that calls into here.
 
-use image::{imageops::resize, imageops::FilterType, ImageBuffer, Rgba};
+use image::{ImageBuffer, Rgba, imageops::FilterType, imageops::resize};
 
 /// Resolution swash rasterizes color emoji at before the Lanczos3
 /// downscale. Rasterizing near the strike's native size keeps swash's own

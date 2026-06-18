@@ -5,7 +5,7 @@
 //! - PTY data uses raw bytes payload
 //! - Control messages use bincode-serialized payload
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 
 /// Protocol version for handshake compatibility check.

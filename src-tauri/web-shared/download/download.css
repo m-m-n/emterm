@@ -7,12 +7,12 @@
   min-width: 240px;
   max-width: 360px;
   background: var(--md-sys-color-surface-container-high, #2b2930);
-  color: var(--md-sys-color-on-surface, #E6E1E5);
+  color: var(--md-sys-color-on-surface, #e6e1e5);
   border: 1px solid var(--md-sys-color-outline-variant, #49454f);
   border-radius: var(--md-sys-shape-corner-medium, 12px);
   padding: 12px 16px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+  font-family: var(--ui-font-family, "Roboto", sans-serif);
   font-size: 13px;
   z-index: 500;
   pointer-events: auto;
@@ -39,20 +39,20 @@
 
 .download-toast__progress {
   flex-shrink: 0;
-  color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+  color: var(--md-sys-color-on-surface-variant, #cac4d0);
   font-size: 12px;
 }
 
 .download-toast__bar {
   height: 4px;
-  background: var(--md-sys-color-surface-variant, #49454F);
+  background: var(--md-sys-color-surface-variant, #49454f);
   border-radius: 2px;
   overflow: hidden;
 }
 
 .download-toast__bar-fill {
   height: 100%;
-  background: var(--md-sys-color-primary, #D0BCFF);
+  background: var(--md-sys-color-primary, #d0bcff);
   border-radius: 2px;
   transition: width 0.2s ease;
 }

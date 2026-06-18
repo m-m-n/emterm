@@ -580,7 +580,7 @@ mod tests {
             "App Line 1 left must keep resolving its template while mux-attached"
         );
         assert_eq!(vm.app_line1.left[0].text.len(), 8); // HH:mm:ss
-                                                        // App Line 2 left (literal "app2") survives.
+        // App Line 2 left (literal "app2") survives.
         assert!(
             vm.app_line2.has_content(),
             "App Line 2 must keep its app-side template while mux-attached"

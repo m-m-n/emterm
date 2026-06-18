@@ -352,8 +352,8 @@ mod tests {
 
     // ── TS-29 + TS-perf-3: timer thread + Drop join ─────────────
 
-    use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
 
     fn counter_wake() -> (WakeFn, Arc<AtomicUsize>) {
         let count = Arc::new(AtomicUsize::new(0));

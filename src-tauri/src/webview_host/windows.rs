@@ -16,8 +16,8 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowAttributes, WindowId};
-use wry::http::Request;
 use wry::WebViewBuilder;
+use wry::http::Request;
 
 use super::{IpcHandler, NavigationHandler, RequestHandler, WebViewHost};
 

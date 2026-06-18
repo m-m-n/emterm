@@ -231,10 +231,12 @@ mod tests {
     fn convert_bind_key_unknown_command() {
         let result = convert_directives(&parse_tmux_conf("bind r source-file ~/.tmux.conf"));
         assert!(result.settings.is_empty());
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("unsupported command")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("unsupported command"))
+        );
     }
 
     #[test]
@@ -262,10 +264,12 @@ mod tests {
         // Sibling regression for `copy-mode`, also removed by SPEC.
         let result = convert_directives(&parse_tmux_conf("bind [ copy-mode"));
         assert!(result.settings.is_empty());
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("unsupported command")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("unsupported command"))
+        );
     }
 
     #[test]

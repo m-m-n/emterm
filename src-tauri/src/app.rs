@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use term_core::terminal_core::TerminalCore;
 
 use crate::callbacks::{NotificationSink, NotifyRustSink};
-use crate::ime::backend::{ImeBackend, ImeEvent, KeyDispatchResult, RawKeyEvent, PUMP_BUDGET};
+use crate::ime::backend::{ImeBackend, ImeEvent, KeyDispatchResult, PUMP_BUDGET, RawKeyEvent};
 use crate::ime::null::NullBackend;
 use crate::render::font::cache::GlyphCache;
 use crate::render::font::fallback::FallbackChain;
@@ -118,7 +118,7 @@ pub enum MuxActionOutcome {
 /// (`mux_prefix_key`, falling back to `Ctrl+B` on a parse error) and the
 /// action bindings (`mux.keybinds`).
 fn build_mux_latch(settings: &Settings) -> crate::mux::prefix::Latch {
-    use crate::mux::prefix::{parse_prefix_key, ActionBindings, Latch, PrefixChord};
+    use crate::mux::prefix::{ActionBindings, Latch, PrefixChord, parse_prefix_key};
     let chord = parse_prefix_key(&settings.mux_prefix_key).unwrap_or_else(|| {
         log::warn!(
             "settings.mux.prefix: invalid chord {:?}, falling back to Ctrl+B",
@@ -4198,7 +4198,7 @@ mod tests {
         let (mut app, abs_row) = app_with_needle_in_scrollback();
         // Place the fold region well away from the needle.
         let unrelated_start = abs_row.saturating_sub(1).max(1) - 1; // one before
-                                                                    // Guard: skip when there's no room for a region before abs_row.
+        // Guard: skip when there's no room for a region before abs_row.
         if unrelated_start == 0 {
             return;
         }
@@ -4282,7 +4282,7 @@ mod tests {
         // Move cursor to row 3 via CSI Cursor Position (1-based).
         core.process_pty_data(b"\x1b[4;1H");
         core.clear_dirty(); // simulate that the write itself didn't touch cells
-                            // App still has previous_cursor = (0, 0) from initial record.
+        // App still has previous_cursor = (0, 0) from initial record.
         let set = app.dirty_rows_this_frame(&core);
         assert!(
             set.contains(&0),
@@ -5472,7 +5472,7 @@ mod tests {
     #[test]
     fn confirm_move_reorders_optimistically() {
         let mut app = app_with_mux_windows(3); // ids 0,1,2 panes 100,101,102
-                                               // move window id 0 to position 3 → order 1,2,0
+        // move window id 0 to position 3 → order 1,2,0
         assert!(app.confirm_mux_move(0, 3));
         let g = app.active_tab().unwrap().mux_group.as_ref().unwrap();
         assert_eq!(
@@ -5503,7 +5503,7 @@ mod tests {
     #[test]
     fn confirm_move_rolls_back_on_send_failure() {
         let mut app = app_with_mux_windows(3); // ids 0,1,2
-                                               // Drop the PTY so send_control fails.
+        // Drop the PTY so send_control fails.
         app.active_tab_mut().unwrap().pty = None;
         let before: Vec<u32> = app
             .active_tab()

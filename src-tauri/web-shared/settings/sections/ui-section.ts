@@ -10,10 +10,7 @@ import { renderSubsectionHeader, renderSelect } from "../settings-components";
 import { renderFontPickerInput } from "../font-picker";
 import type { SectionContext } from "./types";
 
-export function renderUiSection(
-  panel: HTMLElement,
-  ctx: SectionContext,
-): void {
+export function renderUiSection(panel: HTMLElement, ctx: SectionContext): void {
   const settings = ctx.currentSettings;
 
   const header = document.createElement("h2");

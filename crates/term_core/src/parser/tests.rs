@@ -1037,11 +1037,7 @@ fn test_parse_csi_sgr_colon_indexed_color() {
     assert_eq!(actions.len(), 1);
     assert_eq!(
         actions[0],
-        csi(
-            &[38, 5 | SUB_PARAM_FLAG, 196 | SUB_PARAM_FLAG],
-            &[],
-            b'm'
-        )
+        csi(&[38, 5 | SUB_PARAM_FLAG, 196 | SUB_PARAM_FLAG], &[], b'm')
     );
 }
 

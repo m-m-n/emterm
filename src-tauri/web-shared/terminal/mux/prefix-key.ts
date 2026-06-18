@@ -23,7 +23,7 @@ export type PrefixKeyState = "idle" | "waiting";
 
 /** Default action bindings (action -> keybind string, tmux-compatible). */
 export const DEFAULT_ACTION_BINDINGS: Record<string, string> = {
-  "detach": "d",
+  detach: "d",
   "new-window": "c",
   "next-window": "n",
   "prev-window": "p",

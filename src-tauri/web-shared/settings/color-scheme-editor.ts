@@ -37,7 +37,11 @@ export interface RenameResult {
 }
 
 /** Color key for special colors */
-export type SpecialColorKey = "foreground" | "background" | "cursor" | "selection";
+export type SpecialColorKey =
+  | "foreground"
+  | "background"
+  | "cursor"
+  | "selection";
 
 /** Color key including ANSI colors */
 export type ColorKey = SpecialColorKey | `ansi_${number}`;
@@ -54,7 +58,10 @@ export type ColorKey = SpecialColorKey | `ansi_${number}`;
  * @param existingNames - List of existing scheme names
  * @returns A unique name in format {baseName}_copy_N
  */
-export function generateCopyName(baseName: string, existingNames: string[]): string {
+export function generateCopyName(
+  baseName: string,
+  existingNames: string[],
+): string {
   let n = 1;
   while (existingNames.includes(`${baseName}_copy_${n}`)) {
     n++;
@@ -73,7 +80,10 @@ export function generateCopyName(baseName: string, existingNames: string[]): str
  * @param userSchemes - Array of user schemes
  * @returns True if the name matches a user scheme
  */
-export function isUserScheme(name: string, userSchemes: UserColorScheme[]): boolean {
+export function isUserScheme(
+  name: string,
+  userSchemes: UserColorScheme[],
+): boolean {
   return userSchemes.some((s) => s.name === name);
 }
 
@@ -95,7 +105,10 @@ export function isPresetName(name: string): boolean {
  * Convert a ColorSchemePreset to UserColorScheme format.
  * Converts Rgb values to hex strings.
  */
-function presetToUserScheme(preset: ColorSchemePreset, name: string): UserColorScheme {
+function presetToUserScheme(
+  preset: ColorSchemePreset,
+  name: string,
+): UserColorScheme {
   return {
     name,
     foreground: rgbToHex(preset.foreground),
@@ -116,7 +129,7 @@ function presetToUserScheme(preset: ColorSchemePreset, name: string): UserColorS
  */
 export function createUserSchemeFromPreset(
   presetName: string,
-  userSchemes: UserColorScheme[]
+  userSchemes: UserColorScheme[],
 ): UserColorScheme | null {
   const preset = getColorSchemePreset(presetName);
   if (!preset) {
@@ -141,7 +154,7 @@ export function createUserSchemeFromPreset(
 export function updateUserSchemeColor(
   scheme: UserColorScheme,
   colorKey: ColorKey,
-  newValue: string
+  newValue: string,
 ): UserColorScheme {
   // Handle ANSI colors
   if (colorKey.startsWith("ansi_")) {
@@ -168,7 +181,7 @@ export function updateUserSchemeColor(
  */
 export function deleteUserScheme(
   schemes: UserColorScheme[],
-  name: string
+  name: string,
 ): UserColorScheme[] {
   return schemes.filter((s) => s.name !== name);
 }
@@ -182,7 +195,7 @@ export function deleteUserScheme(
  */
 export function duplicateScheme(
   sourceName: string,
-  userSchemes: UserColorScheme[]
+  userSchemes: UserColorScheme[],
 ): UserColorScheme | null {
   // Check if it's a user scheme first
   const userScheme = userSchemes.find((s) => s.name === sourceName);
@@ -211,7 +224,7 @@ export function duplicateScheme(
 export function renameUserScheme(
   schemes: UserColorScheme[],
   oldName: string,
-  newName: string
+  newName: string,
 ): RenameResult {
   const trimmedName = newName.trim();
 
@@ -267,7 +280,9 @@ export function renameUserScheme(
  * @param userSchemes - Array of user schemes
  * @returns Array of select options
  */
-export function buildSelectOptions(userSchemes: UserColorScheme[]): ColorSchemeSelectOption[] {
+export function buildSelectOptions(
+  userSchemes: UserColorScheme[],
+): ColorSchemeSelectOption[] {
   const options: ColorSchemeSelectOption[] = [];
 
   // Add presets first (fixed order from COLOR_SCHEME_PRESETS)
@@ -315,7 +330,10 @@ function formatPresetLabel(name: string): string {
 /**
  * Get all colors from a scheme (preset or user) as hex strings.
  */
-export function getSchemeColors(schemeName: string, userSchemes: UserColorScheme[]): UserColorScheme | null {
+export function getSchemeColors(
+  schemeName: string,
+  userSchemes: UserColorScheme[],
+): UserColorScheme | null {
   // Check user schemes first
   const userScheme = userSchemes.find((s) => s.name === schemeName);
   if (userScheme) {
@@ -400,8 +418,12 @@ export function renderColorSchemeEditor(
 
   // Proxy object for compatibility with existing code
   const select = {
-    get value() { return md3Select.getValue(); },
-    set value(v: string) { md3Select.setValue(v); },
+    get value() {
+      return md3Select.getValue();
+    },
+    set value(v: string) {
+      md3Select.setValue(v);
+    },
   };
 
   // Action buttons container
@@ -464,12 +486,7 @@ export function renderColorSchemeEditor(
     paletteDiv.appendChild(standardGrid);
     for (let i = 0; i < 8; i++) {
       const color = schemeColors.ansi_colors[i] || "#000000";
-      renderColorInput(
-        standardGrid,
-        String(i),
-        color,
-        `ansi_${i}` as ColorKey,
-      );
+      renderColorInput(standardGrid, String(i), color, `ansi_${i}` as ColorKey);
     }
 
     const brightLabel = document.createElement("div");
@@ -482,12 +499,7 @@ export function renderColorSchemeEditor(
     paletteDiv.appendChild(brightGrid);
     for (let i = 8; i < 16; i++) {
       const color = schemeColors.ansi_colors[i] || "#000000";
-      renderColorInput(
-        brightGrid,
-        String(i),
-        color,
-        `ansi_${i}` as ColorKey,
-      );
+      renderColorInput(brightGrid, String(i), color, `ansi_${i}` as ColorKey);
     }
   };
 

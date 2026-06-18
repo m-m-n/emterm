@@ -24,7 +24,7 @@ use crate::render::font::fallback::FallbackChain;
 use crate::render::font::traits::GlyphRasterizer;
 use crate::settings::StatusBarPosition;
 use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
-use crate::ui::emoji_cache::{split_segments, EmojiTextureCache, TextSegment};
+use crate::ui::emoji_cache::{EmojiTextureCache, TextSegment, split_segments};
 use crate::ui::md3;
 
 /// External handles the status-bar widget needs to render color

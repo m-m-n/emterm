@@ -146,11 +146,15 @@ export function enterKeybindCapture(
   });
 }
 
-export function exitKeybindCapture(cancelled: boolean, ctx: KeybindEditorContext): void {
+export function exitKeybindCapture(
+  cancelled: boolean,
+  ctx: KeybindEditorContext,
+): void {
   if (!ctx.state.capturingKeybindButton) return;
 
   if (cancelled && ctx.state.capturingOriginalValue !== null) {
-    ctx.state.capturingKeybindButton.textContent = ctx.state.capturingOriginalValue;
+    ctx.state.capturingKeybindButton.textContent =
+      ctx.state.capturingOriginalValue;
   }
 
   ctx.state.capturingKeybindButton.classList.remove("capturing");
@@ -161,7 +165,11 @@ export function exitKeybindCapture(cancelled: boolean, ctx: KeybindEditorContext
   // Remove the capture keydown listener
   const newListeners = ctx.eventListeners.filter((listener) => {
     if (listener.element === document && listener.type === "keydown") {
-      listener.element.removeEventListener(listener.type, listener.handler, true);
+      listener.element.removeEventListener(
+        listener.type,
+        listener.handler,
+        true,
+      );
       return false;
     }
     return true;
@@ -170,7 +178,11 @@ export function exitKeybindCapture(cancelled: boolean, ctx: KeybindEditorContext
   ctx.eventListeners.push(...newListeners);
 }
 
-async function saveKeybind(key: string, value: string, ctx: KeybindEditorContext): Promise<void> {
+async function saveKeybind(
+  key: string,
+  value: string,
+  ctx: KeybindEditorContext,
+): Promise<void> {
   if (!ctx.currentSettings) return;
   (ctx.currentSettings.keybinds as any)[key] = value;
   try {

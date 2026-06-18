@@ -11,7 +11,7 @@
 //! preserved verbatim. The tokenizer's lenient mode treats them as
 //! literal text.
 
-use crate::html::tokenizer::{tokenize, Token};
+use crate::html::tokenizer::{Token, tokenize};
 
 /// Strip all tags from `input`, dropping `<script>` / `<style>`
 /// contents entirely. Returns the concatenated text.

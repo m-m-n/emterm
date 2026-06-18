@@ -1,7 +1,7 @@
 fn main() {
+    use swash::FontRef;
     use swash::scale::{Render, ScaleContext, Source};
     use swash::zeno::{Format, Vector};
-    use swash::FontRef;
 
     let size_px = 17.333f32;
     let bytes =

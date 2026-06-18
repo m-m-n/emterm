@@ -48,9 +48,16 @@ let markdownSystemThemeListener: ((e: MediaQueryListEvent) => void) | null =
  */
 export function applySettings(settings: AppSettings): void {
   applyFontSize(settings.font_size);
-  applyFontFamily(settings.font_family_primary, settings.font_family_emoji, settings.font_family_secondary);
+  applyFontFamily(
+    settings.font_family_primary,
+    settings.font_family_emoji,
+    settings.font_family_secondary,
+  );
   applyUiTheme(settings.ui_theme, settings.ui_theme_preset);
-  applyTerminalColorScheme(settings.terminal_color_scheme, settings.custom_color_schemes);
+  applyTerminalColorScheme(
+    settings.terminal_color_scheme,
+    settings.custom_color_schemes,
+  );
   applyPadding(settings.padding);
   applyScrollbar(settings.show_scrollbar);
   applyCursorStyle(settings.cursor_style);
@@ -79,7 +86,10 @@ export function applySettings(settings: AppSettings): void {
  * Dispatches a custom event that StatusBarUI listens for.
  */
 export function applyStatusBar(settings: AppSettings): void {
-  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.dispatchEvent === "function"
+  ) {
     window.dispatchEvent(
       new CustomEvent("emterm-statusbar-settings", { detail: settings }),
     );
@@ -119,7 +129,11 @@ export function applyFontSize(fontSize: number): void {
  * Order: primary, emoji, secondary. Empty fields are omitted.
  * Returns empty string when no fonts are configured.
  */
-export function buildFontFamilyChain(primary: string, emoji: string, secondary: string): string {
+export function buildFontFamilyChain(
+  primary: string,
+  emoji: string,
+  secondary: string,
+): string {
   const parts: string[] = [];
   if (primary) parts.push(primary);
   if (emoji) parts.push(emoji);
@@ -132,7 +146,11 @@ export function buildFontFamilyChain(primary: string, emoji: string, secondary: 
  * Sets --terminal-font-family CSS variable when fonts are configured.
  * Renderer receives the user chain or "monospace" as default.
  */
-export function applyFontFamily(primary: string, emoji: string, secondary: string): void {
+export function applyFontFamily(
+  primary: string,
+  emoji: string,
+  secondary: string,
+): void {
   const chain = buildFontFamilyChain(primary, emoji, secondary);
   const root = document.documentElement;
   if (chain) {
@@ -149,7 +167,10 @@ export function applyFontFamily(primary: string, emoji: string, secondary: strin
  * "system" respects prefers-color-scheme media query.
  * Preset colors are applied as CSS variables on :root.
  */
-export function applyUiTheme(theme: UiTheme, preset: UiThemePreset = "purple"): void {
+export function applyUiTheme(
+  theme: UiTheme,
+  preset: UiThemePreset = "purple",
+): void {
   const root = document.documentElement;
 
   // Clean up previous system theme listener
@@ -244,7 +265,10 @@ const TERMINAL_COLOR_VARS = [
  * @param scheme - Scheme name to apply
  * @param userSchemes - Optional array of user-defined color schemes
  */
-export function applyTerminalColorScheme(scheme: string, userSchemes?: UserColorScheme[]): void {
+export function applyTerminalColorScheme(
+  scheme: string,
+  userSchemes?: UserColorScheme[],
+): void {
   const root = document.documentElement;
 
   if (!scheme || scheme === "default" || scheme === "emterm") {
@@ -273,7 +297,10 @@ export function applyTerminalColorScheme(scheme: string, userSchemes?: UserColor
   // Fall back to preset lookup
   const preset = getColorSchemePreset(scheme);
   if (preset) {
-    root.style.setProperty("--terminal-background", rgbToCSS(preset.background));
+    root.style.setProperty(
+      "--terminal-background",
+      rgbToCSS(preset.background),
+    );
   }
 
   // Notify renderers with the scheme name
@@ -283,7 +310,10 @@ export function applyTerminalColorScheme(scheme: string, userSchemes?: UserColor
 /**
  * Apply a user-defined color scheme by setting all CSS variables.
  */
-function applyUserColorScheme(root: HTMLElement, scheme: UserColorScheme): void {
+function applyUserColorScheme(
+  root: HTMLElement,
+  scheme: UserColorScheme,
+): void {
   root.style.setProperty("--terminal-foreground", scheme.foreground);
   root.style.setProperty("--terminal-background", scheme.background);
   root.style.setProperty("--terminal-cursor-color", scheme.cursor);
@@ -375,7 +405,9 @@ export interface MarkdownColorThemeOptions {
  * Resolves the effective theme/preset (follow UI or independent) and applies
  * the corresponding palette to --markdown-* CSS color variables.
  */
-export function applyMarkdownColorTheme(options: MarkdownColorThemeOptions): void {
+export function applyMarkdownColorTheme(
+  options: MarkdownColorThemeOptions,
+): void {
   const { followUi, mdTheme, mdPreset, uiTheme, uiPreset } = options;
   const root = document.documentElement;
 
@@ -397,10 +429,7 @@ export function applyMarkdownColorTheme(options: MarkdownColorThemeOptions): voi
   const applyPalette = (mode: "dark" | "light") => {
     const palette = MARKDOWN_THEME_PRESETS[safePreset][mode];
     for (const [key, cssVar] of Object.entries(MARKDOWN_COLOR_TO_CSS_VAR)) {
-      root.style.setProperty(
-        cssVar,
-        palette[key as keyof MarkdownThemeColors],
-      );
+      root.style.setProperty(cssVar, palette[key as keyof MarkdownThemeColors]);
     }
   };
 

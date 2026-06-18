@@ -441,9 +441,9 @@ mod tests {
         assert!(!is_pictographic(0x3042)); // あ
         assert!(!is_pictographic(0x2500)); // box drawing ─
         assert!(!is_pictographic(0x25FF)); // last box drawing
-                                           // Block-drawing must stay text-rendered: the status-bar
-                                           // progress bars are built from these (`░▒▓█`), and a color
-                                           // emoji glyph would wreck the bar. Pin the whole block.
+        // Block-drawing must stay text-rendered: the status-bar
+        // progress bars are built from these (`░▒▓█`), and a color
+        // emoji glyph would wreck the bar. Pin the whole block.
         assert!(!is_pictographic(0x2580)); // ▀ upper half block
         assert!(!is_pictographic(0x2588)); // █ full block
         assert!(!is_pictographic(0x2591)); // ░ light shade (the bar's empty cell)
@@ -454,7 +454,7 @@ mod tests {
         assert!(!is_pictographic(0x23E8)); // just below the clock-control span
         assert!(!is_pictographic(0x23F4)); // ⏴ BW arrow, just above ⏳
         assert!(!is_pictographic(0x1EFFF)); // just below SMP emoji block
-                                            // Inside the range
+        // Inside the range
         assert!(is_pictographic(0x231A)); // ⌚ watch
         assert!(is_pictographic(0x231B)); // ⌛ hourglass
         assert!(is_pictographic(0x23E9)); // ⏩ fast-forward

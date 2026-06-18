@@ -11,9 +11,9 @@
 //! - `file://` URIs (`file:///home/me`, `file://host/home/me`)
 //! - Percent-encoded segments inside `file://` URIs
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::html::CssColor;
 use crate::status_bar::template_engine::VariableProvider;

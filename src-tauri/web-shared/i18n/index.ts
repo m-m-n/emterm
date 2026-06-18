@@ -71,7 +71,10 @@ export function initI18n(locale: string): void {
  * @param params - Optional parameter map for placeholder replacement
  * @returns Translated string, or the key itself if not found
  */
-export function t(key: string, params?: Record<string, string | number>): string {
+export function t(
+  key: string,
+  params?: Record<string, string | number>,
+): string {
   // Try current locale
   let value = resolveKey(translations[currentLocale], key);
 
@@ -151,14 +154,21 @@ export function resolveLocale(locale: string): string {
  * @param key - Dot-separated key (e.g., "settings.appearance.fontSize")
  * @returns The string value, or undefined if not found
  */
-function resolveKey(data: TranslationData | undefined, key: string): string | undefined {
+function resolveKey(
+  data: TranslationData | undefined,
+  key: string,
+): string | undefined {
   if (!data) return undefined;
 
   const parts = key.split(".");
   let current: unknown = data;
 
   for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== "object") {
+    if (
+      current === null ||
+      current === undefined ||
+      typeof current !== "object"
+    ) {
       return undefined;
     }
     current = (current as Record<string, unknown>)[part];

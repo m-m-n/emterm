@@ -16,12 +16,12 @@
 
 use std::path::Path;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::settings::settings_path;
 use crate::settings_store::save_patch_to;
 
-use super::tmux_conf::converter::{convert_directives, ConversionResult};
+use super::tmux_conf::converter::{ConversionResult, convert_directives};
 use super::tmux_conf::parser::parse_tmux_conf;
 
 /// Hard cap on the size of `~/.tmux.conf` accepted by the importer. The

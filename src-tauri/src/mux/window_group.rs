@@ -511,7 +511,7 @@ mod tests {
     fn reorder_shifts_active_when_crossed() {
         let mut g = group_with(4);
         g.set_active_clamped(1); // active window id 1
-                                 // move window id 0 (from 0) to 2 → active id1 shifts down to index 0.
+        // move window id 0 (from 0) to 2 → active id1 shifts down to index 0.
         g.reorder(0, 2);
         assert_eq!(g.active_window().unwrap().id, 1);
         assert_eq!(g.active_index(), 0);
@@ -602,7 +602,7 @@ mod tests {
         let mut g = group_with(3); // panes 100,101,102; active 0
         g.set_active_clamped(1);
         g.set_active_pane_scroll(ScrollPosition::OffsetFromLive(9)); // pane 101
-                                                                     // Reorder window at 1 to index 0 → pane 101 leads, scroll travels.
+        // Reorder window at 1 to index 0 → pane 101 leads, scroll travels.
         g.reorder(1, 0);
         assert_eq!(g.pane_ids()[0], 101);
         g.set_active_clamped(0);

@@ -28,8 +28,8 @@ use egui::{
     Align, Align2, Color32, FontId, Layout, Rect, Rounding, Sense, Stroke, TextureId, Ui, Vec2,
 };
 
-use super::md3;
 use super::TitleBarEvent;
+use super::md3;
 
 /// Title-bar height in egui logical points. 32 pt matches the common
 /// CSD bar height on Linux GTK / Windows 10.

@@ -14,8 +14,10 @@
   user-select: none;
   flex-shrink: 0;
   overflow: hidden;
-  transition: height var(--md-motion-duration-short4) var(--md-motion-easing-standard),
-              border-bottom-width var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition:
+    height var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    border-bottom-width var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 /* Hidden state for tab bar toggle */
@@ -52,23 +54,27 @@
   border-right: none;
   cursor: pointer;
   color: var(--md-sys-color-on-surface-variant);
-  font-family: var(--ui-font-family, sans-serif), 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  font-family:
+    var(--ui-font-family, sans-serif), "Apple Color Emoji", "Segoe UI Emoji",
+    "Segoe UI Symbol", "Noto Color Emoji";
   font-size: 14px;
   font-weight: 500;
   letter-spacing: 0.1px;
   line-height: 20px;
   position: relative;
-  transition: color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 /* State Layer */
 .tab::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   background-color: currentColor;
   opacity: 0;
-  transition: opacity var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: opacity var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .tab:hover::before {
@@ -94,7 +100,7 @@
 }
 
 .tab.active::after {
-  content: '';
+  content: "";
   position: absolute;
   bottom: 0;
   left: 50%;
@@ -123,8 +129,9 @@
   flex-shrink: 0;
   opacity: 0;
   transform: scale(0);
-  transition: opacity var(--md-motion-duration-short4) var(--md-motion-easing-standard),
-              transform var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition:
+    opacity var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    transform var(--md-motion-duration-short4) var(--md-motion-easing-standard);
   position: relative;
   z-index: 1;
 }
@@ -167,18 +174,20 @@
   border-radius: var(--md-sys-shape-corner-full);
   color: var(--md-sys-color-on-surface-variant);
   position: relative;
-  transition: color var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 /* Icon Button State Layer */
 .tab-button::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   border-radius: var(--md-sys-shape-corner-full);
   background-color: currentColor;
   opacity: 0;
-  transition: opacity var(--md-motion-duration-short4) var(--md-motion-easing-standard);
+  transition: opacity var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
 }
 
 .tab-button:hover::before {
@@ -224,7 +233,9 @@
   justify-content: center;
   background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
-  font-family: var(--ui-font-family, sans-serif), 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  font-family:
+    var(--ui-font-family, sans-serif), "Apple Color Emoji", "Segoe UI Emoji",
+    "Segoe UI Symbol", "Noto Color Emoji";
 }
 
 .settings-placeholder {
@@ -254,7 +265,7 @@
 
 /* Active window indicator: 3px primary bar (only when group is active) */
 .mux-tab-group.active .mux-window-active::after {
-  content: '';
+  content: "";
   position: absolute;
   bottom: 0;
   left: 50%;

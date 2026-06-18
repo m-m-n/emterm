@@ -21,17 +21,17 @@ import type { Profile } from "../settings/types";
  * - Empty keys (after trim) are skipped
  */
 export function parseEnvVars(text: string): Record<string, string> {
-	const result: Record<string, string> = {};
-	for (const line of text.split("\n")) {
-		const trimmed = line.trim();
-		if (trimmed === "" || !trimmed.includes("=")) continue;
-		const eqIndex = trimmed.indexOf("=");
-		const key = trimmed.substring(0, eqIndex).trim();
-		const value = trimmed.substring(eqIndex + 1);
-		if (key === "") continue;
-		result[key] = value;
-	}
-	return result;
+  const result: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "" || !trimmed.includes("=")) continue;
+    const eqIndex = trimmed.indexOf("=");
+    const key = trimmed.substring(0, eqIndex).trim();
+    const value = trimmed.substring(eqIndex + 1);
+    if (key === "") continue;
+    result[key] = value;
+  }
+  return result;
 }
 
 /**
@@ -40,13 +40,13 @@ export function parseEnvVars(text: string): Record<string, string> {
  * If `defaultIndex` is -1, clears all defaults.
  */
 export function ensureSingleDefault(
-	profiles: Profile[],
-	defaultIndex: number,
+  profiles: Profile[],
+  defaultIndex: number,
 ): void {
-	for (let i = 0; i < profiles.length; i++) {
-		const p = profiles[i];
-		if (p) p.is_default = i === defaultIndex;
-	}
+  for (let i = 0; i < profiles.length; i++) {
+    const p = profiles[i];
+    if (p) p.is_default = i === defaultIndex;
+  }
 }
 
 /**
@@ -55,30 +55,30 @@ export function ensureSingleDefault(
  * The duplicate is always non-default.
  */
 export function duplicateProfile(profile: Profile): Profile {
-	return {
-		name: `${profile.name} (Copy)`,
-		shell_path: profile.shell_path,
-		shell_args: [...profile.shell_args],
-		env_vars: profile.env_vars,
-		working_directory: profile.working_directory,
-		is_default: false,
-		ssh_connection_name: profile.ssh_connection_name,
-		wsl_distro_name: profile.wsl_distro_name,
-	};
+  return {
+    name: `${profile.name} (Copy)`,
+    shell_path: profile.shell_path,
+    shell_args: [...profile.shell_args],
+    env_vars: profile.env_vars,
+    working_directory: profile.working_directory,
+    is_default: false,
+    ssh_connection_name: profile.ssh_connection_name,
+    wsl_distro_name: profile.wsl_distro_name,
+  };
 }
 
 /**
  * Create a new empty profile with default values.
  */
 export function createEmptyProfile(): Profile {
-	return {
-		name: "",
-		shell_path: "",
-		shell_args: [],
-		env_vars: "",
-		working_directory: "",
-		is_default: false,
-		ssh_connection_name: "",
-		wsl_distro_name: "",
-	};
+  return {
+    name: "",
+    shell_path: "",
+    shell_args: [],
+    env_vars: "",
+    working_directory: "",
+    is_default: false,
+    ssh_connection_name: "",
+    wsl_distro_name: "",
+  };
 }

@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use crate::html::tokenizer::{tokenize, Token};
+use crate::html::tokenizer::{Token, tokenize};
 
 /// Color value as it appears in a CSS color expression. We keep the
 /// parsed form so the egui conversion layer can produce a

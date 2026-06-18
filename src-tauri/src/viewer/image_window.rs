@@ -33,10 +33,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{ResizeDirection, Window};
 
-use super::image_payload::{read_image_payload, ImagePayload};
-use super::shell::{payload_path_is_in_temp_dir, GpuShell};
-use crate::ui::title_bar::{self, TITLE_BAR_HEIGHT};
+use super::image_payload::{ImagePayload, read_image_payload};
+use super::shell::{GpuShell, payload_path_is_in_temp_dir};
 use crate::ui::TitleBarEvent;
+use crate::ui::title_bar::{self, TITLE_BAR_HEIGHT};
 
 /// Fit mode leaves this fraction of the viewport around the image
 /// (WebView `VIEWPORT_PADDING`).

@@ -9,9 +9,9 @@ use tokio::sync::mpsc;
 
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    lock_shadow_parser, DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget,
-    PtyOutputChunk, SharedNotificationSender, SharedOutputTarget, SharedPaneExitSender,
-    SharedScrollback, SharedShadowParser, SharedTitleSender, TitleChangeSender,
+    DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget, PtyOutputChunk,
+    SharedNotificationSender, SharedOutputTarget, SharedPaneExitSender, SharedScrollback,
+    SharedShadowParser, SharedTitleSender, TitleChangeSender, lock_shadow_parser,
 };
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::RawPassthroughBuffer;

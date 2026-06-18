@@ -5,7 +5,7 @@
   position: absolute;
   inset: 0;
   background: rgba(var(--md-sys-color-primary-rgb, 208, 188, 255), 0.15);
-  border: 2px dashed var(--md-sys-color-primary, #D0BCFF);
+  border: 2px dashed var(--md-sys-color-primary, #d0bcff);
   border-radius: 8px;
   display: flex;
   align-items: center;
@@ -17,9 +17,9 @@
 .sftp-drop-overlay-message {
   padding: 16px 32px;
   background: var(--md-sys-color-surface-container-high, #2b2930);
-  color: var(--md-sys-color-on-surface, #E6E1E5);
+  color: var(--md-sys-color-on-surface, #e6e1e5);
   border-radius: 12px;
-  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+  font-family: var(--ui-font-family, "Roboto", sans-serif);
   font-size: 16px;
   font-weight: 500;
 }
@@ -38,7 +38,7 @@
 /* Dialog Container */
 .sftp-dialog {
   background: var(--md-sys-color-surface-container-high, #2b2930);
-  color: var(--md-sys-color-on-surface, #E6E1E5);
+  color: var(--md-sys-color-on-surface, #e6e1e5);
   border: 1px solid var(--md-sys-color-outline-variant, #49454f);
   border-radius: 16px;
   padding: 24px;
@@ -47,7 +47,7 @@
   max-height: 80vh;
   overflow-y: auto;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+  font-family: var(--ui-font-family, "Roboto", sans-serif);
 }
 
 .sftp-dialog-title {
@@ -55,14 +55,14 @@
   font-size: 22px;
   line-height: 28px;
   font-weight: 400;
-  color: var(--md-sys-color-on-surface, #E6E1E5);
+  color: var(--md-sys-color-on-surface, #e6e1e5);
 }
 
 .sftp-dialog-label {
   margin: 0 0 8px 0;
   font-size: 14px;
   line-height: 20px;
-  color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+  color: var(--md-sys-color-on-surface-variant, #cac4d0);
 }
 
 /* File List */
@@ -81,12 +81,12 @@
   padding: 4px 8px;
   font-size: 13px;
   line-height: 20px;
-  color: var(--md-sys-color-on-surface, #E6E1E5);
+  color: var(--md-sys-color-on-surface, #e6e1e5);
   word-break: break-all;
 }
 
 .sftp-dialog-file-conflict {
-  color: var(--md-sys-color-error, #F2B8B5);
+  color: var(--md-sys-color-error, #f2b8b5);
 }
 
 /* Input */
@@ -96,16 +96,16 @@
   margin-bottom: 16px;
   font-size: 14px;
   line-height: 20px;
-  color: var(--md-sys-color-on-surface, #E6E1E5);
+  color: var(--md-sys-color-on-surface, #e6e1e5);
   background: var(--md-sys-color-surface, #1c1b1f);
-  border: 1px solid var(--md-sys-color-outline, #938F99);
+  border: 1px solid var(--md-sys-color-outline, #938f99);
   border-radius: 4px;
   outline: none;
   font-family: monospace;
 }
 
 .sftp-dialog-input:focus {
-  border-color: var(--md-sys-color-primary, #D0BCFF);
+  border-color: var(--md-sys-color-primary, #d0bcff);
 }
 
 /* Buttons */
@@ -123,14 +123,14 @@
   font-weight: 500;
   cursor: pointer;
   border: none;
-  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+  font-family: var(--ui-font-family, "Roboto", sans-serif);
   transition: background-color 200ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 .sftp-dialog-btn-cancel {
   background: transparent;
-  color: var(--md-sys-color-primary, #D0BCFF);
-  border: 1px solid var(--md-sys-color-outline, #938F99);
+  color: var(--md-sys-color-primary, #d0bcff);
+  border: 1px solid var(--md-sys-color-outline, #938f99);
 }
 
 .sftp-dialog-btn-cancel:hover {
@@ -138,8 +138,8 @@
 }
 
 .sftp-dialog-btn-confirm {
-  background: var(--md-sys-color-primary, #D0BCFF);
-  color: var(--md-sys-color-on-primary, #381E72);
+  background: var(--md-sys-color-primary, #d0bcff);
+  color: var(--md-sys-color-on-primary, #381e72);
 }
 
 .sftp-dialog-btn-confirm:hover {
@@ -147,8 +147,8 @@
 }
 
 .sftp-dialog-btn-danger {
-  background: var(--md-sys-color-error-container, #8C1D18);
-  color: var(--md-sys-color-on-error-container, #F9DEDC);
+  background: var(--md-sys-color-error-container, #8c1d18);
+  color: var(--md-sys-color-on-error-container, #f9dedc);
 }
 
 .sftp-dialog-btn-danger:hover {
@@ -174,7 +174,7 @@
   border-radius: 12px;
   padding: 12px 16px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  font-family: var(--ui-font-family, 'Roboto', sans-serif);
+  font-family: var(--ui-font-family, "Roboto", sans-serif);
   animation: sftp-slide-in 200ms cubic-bezier(0.05, 0.7, 0.1, 1);
 }
 
@@ -184,7 +184,7 @@
 
 .sftp-progress-filename {
   font-size: 13px;
-  color: var(--md-sys-color-on-surface, #E6E1E5);
+  color: var(--md-sys-color-on-surface, #e6e1e5);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -202,37 +202,37 @@
   height: 16px;
   border-radius: 50%;
   border: 2px solid var(--md-sys-color-surface-container-highest, #36343b);
-  border-top-color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+  border-top-color: var(--md-sys-color-on-surface-variant, #cac4d0);
   flex-shrink: 0;
 }
 
 .sftp-progress-spinner-preparing {
   animation: sftp-spin 1.2s linear infinite;
-  border-top-color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+  border-top-color: var(--md-sys-color-on-surface-variant, #cac4d0);
 }
 
 .sftp-progress-spinner-uploading {
   animation: sftp-spin 0.8s linear infinite;
-  border-top-color: var(--md-sys-color-primary, #D0BCFF);
+  border-top-color: var(--md-sys-color-primary, #d0bcff);
 }
 
 .sftp-progress-status {
   font-size: 12px;
-  color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+  color: var(--md-sys-color-on-surface-variant, #cac4d0);
 }
 
 .sftp-progress-status-success {
-  color: var(--md-sys-color-primary, #D0BCFF);
+  color: var(--md-sys-color-primary, #d0bcff);
 }
 
 .sftp-progress-status-error {
-  color: var(--md-sys-color-error, #F2B8B5);
+  color: var(--md-sys-color-error, #f2b8b5);
 }
 
 .sftp-progress-cancel-btn {
   background: none;
   border: none;
-  color: var(--md-sys-color-on-surface-variant, #CAC4D0);
+  color: var(--md-sys-color-on-surface-variant, #cac4d0);
   cursor: pointer;
   font-size: 12px;
   padding: 2px 8px;
@@ -241,7 +241,7 @@
 }
 
 .sftp-progress-cancel-btn:hover {
-  color: var(--md-sys-color-error, #F2B8B5);
+  color: var(--md-sys-color-error, #f2b8b5);
   background: var(--md-sys-color-surface-container-highest, #36343b);
 }
 

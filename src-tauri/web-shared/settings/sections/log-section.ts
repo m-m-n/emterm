@@ -16,7 +16,9 @@ export function renderLogSection(
   versionSpan.className = "settings-log-version";
   versionSpan.textContent = "";
   header.appendChild(versionSpan);
-  getVersion().then((v) => { versionSpan.textContent = `  v${v}`; });
+  getVersion().then((v) => {
+    versionSpan.textContent = `  v${v}`;
+  });
   panel.appendChild(header);
 
   // Log Recording toggle
@@ -130,7 +132,9 @@ export function renderLogSection(
     try {
       await navigator.clipboard.writeText(logArea.textContent || "");
       statusSpan.textContent = t("settings.log.copied");
-      setTimeout(() => { statusSpan.textContent = ""; }, 2000);
+      setTimeout(() => {
+        statusSpan.textContent = "";
+      }, 2000);
     } catch (e) {
       statusSpan.textContent = String(e);
     }
@@ -142,7 +146,9 @@ export function renderLogSection(
       await invoke("clear_log");
       logArea.textContent = t("settings.log.empty");
       statusSpan.textContent = t("settings.log.cleared");
-      setTimeout(() => { statusSpan.textContent = ""; }, 2000);
+      setTimeout(() => {
+        statusSpan.textContent = "";
+      }, 2000);
     } catch (e) {
       statusSpan.textContent = String(e);
     }

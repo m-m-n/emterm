@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use app_settings::AppSettings;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// Result of one dispatched command: the JSON reply plus whether the
 /// command persisted `settings.json` (the caller notifies the parent

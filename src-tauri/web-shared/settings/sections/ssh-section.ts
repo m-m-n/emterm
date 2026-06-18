@@ -1,7 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SshConnection, SshConfigHost } from "../types";
 import { t } from "../../i18n/index.ts";
-import { renderSubsectionHeader, renderNumberInput } from "../settings-components";
+import {
+  renderSubsectionHeader,
+  renderNumberInput,
+} from "../settings-components";
 import { showSshEditor } from "../../ssh/ssh-editor";
 import type { SectionContext } from "./types";
 
@@ -117,113 +120,117 @@ export function renderSshSection(
     empty.textContent = t("settings.ssh.noConnections");
     panel.appendChild(empty);
   } else {
+    // Connection list
+    const list = document.createElement("div");
+    list.className = "profile-list";
+    list.setAttribute("role", "list");
 
-  // Connection list
-  const list = document.createElement("div");
-  list.className = "profile-list";
-  list.setAttribute("role", "list");
+    for (let i = 0; i < connections.length; i++) {
+      const conn = connections[i]!;
+      const item = document.createElement("div");
+      item.className = "profile-list-item";
+      item.setAttribute("role", "listitem");
+      item.draggable = true;
+      item.dataset.index = String(i);
 
-  for (let i = 0; i < connections.length; i++) {
-    const conn = connections[i]!;
-    const item = document.createElement("div");
-    item.className = "profile-list-item";
-    item.setAttribute("role", "listitem");
-    item.draggable = true;
-    item.dataset.index = String(i);
+      // Drag handle
+      const dragHandle = document.createElement("span");
+      dragHandle.className = "profile-drag-handle";
+      dragHandle.textContent = "\u283F";
+      dragHandle.title = t("settings.ssh.dragHandle");
+      item.appendChild(dragHandle);
 
-    // Drag handle
-    const dragHandle = document.createElement("span");
-    dragHandle.className = "profile-drag-handle";
-    dragHandle.textContent = "\u283F";
-    dragHandle.title = t("settings.ssh.dragHandle");
-    item.appendChild(dragHandle);
+      // Info area
+      const info = document.createElement("div");
+      info.className = "profile-item-info";
 
-    // Info area
-    const info = document.createElement("div");
-    info.className = "profile-item-info";
+      const nameEl = document.createElement("span");
+      nameEl.className = "profile-item-name";
+      nameEl.textContent = conn.name;
+      info.appendChild(nameEl);
 
-    const nameEl = document.createElement("span");
-    nameEl.className = "profile-item-name";
-    nameEl.textContent = conn.name;
-    info.appendChild(nameEl);
+      const hostEl = document.createElement("span");
+      hostEl.className = "profile-item-shell";
+      const hostText = conn.username
+        ? `${conn.username}@${conn.hostname}`
+        : conn.hostname;
+      hostEl.textContent =
+        conn.port !== 22 ? `${hostText}:${conn.port}` : hostText;
+      info.appendChild(hostEl);
 
-    const hostEl = document.createElement("span");
-    hostEl.className = "profile-item-shell";
-    const hostText = conn.username
-      ? `${conn.username}@${conn.hostname}`
-      : conn.hostname;
-    hostEl.textContent = conn.port !== 22
-      ? `${hostText}:${conn.port}`
-      : hostText;
-    info.appendChild(hostEl);
+      item.appendChild(info);
 
-    item.appendChild(info);
+      // Action buttons
+      const actions = document.createElement("div");
+      actions.className = "profile-item-actions";
 
-    // Action buttons
-    const actions = document.createElement("div");
-    actions.className = "profile-item-actions";
+      // Edit
+      actions.appendChild(
+        createSshActionButton(t("settings.ssh.edit"), () => {
+          showSshEditor({
+            connection: conn,
+            onSave: (updated: SshConnection) => {
+              ctx.currentSettings.ssh_connections[i] = updated;
+              ctx.saveSetting("ssh_connections", [
+                ...ctx.currentSettings.ssh_connections,
+              ]);
+              ctx.reRender();
+            },
+            onCancel: () => {},
+          });
+        }),
+      );
 
-    // Edit
-    actions.appendChild(
-      createSshActionButton(t("settings.ssh.edit"), () => {
-        showSshEditor({
-          connection: conn,
-          onSave: (updated: SshConnection) => {
-            ctx.currentSettings.ssh_connections[i] = updated;
-            ctx.saveSetting("ssh_connections", [...ctx.currentSettings.ssh_connections]);
-            ctx.reRender();
-          },
-          onCancel: () => {},
-        });
-      }),
-    );
+      // Duplicate
+      actions.appendChild(
+        createSshActionButton(t("settings.ssh.duplicate"), () => {
+          const existingNames = new Set(
+            ctx.currentSettings.ssh_connections.map((c) => c.name),
+          );
+          let copyName = `${conn.name} (Copy)`;
+          let counter = 2;
+          while (existingNames.has(copyName)) {
+            copyName = `${conn.name} (Copy ${counter})`;
+            counter++;
+          }
+          const copy: SshConnection = {
+            ...conn,
+            name: copyName,
+          };
+          ctx.currentSettings.ssh_connections = [
+            ...ctx.currentSettings.ssh_connections.slice(0, i + 1),
+            copy,
+            ...ctx.currentSettings.ssh_connections.slice(i + 1),
+          ];
+          ctx.saveSetting(
+            "ssh_connections",
+            ctx.currentSettings.ssh_connections,
+          );
+          ctx.reRender();
+        }),
+      );
 
-    // Duplicate
-    actions.appendChild(
-      createSshActionButton(t("settings.ssh.duplicate"), () => {
-        const existingNames = new Set(
-          ctx.currentSettings.ssh_connections.map((c) => c.name),
-        );
-        let copyName = `${conn.name} (Copy)`;
-        let counter = 2;
-        while (existingNames.has(copyName)) {
-          copyName = `${conn.name} (Copy ${counter})`;
-          counter++;
-        }
-        const copy: SshConnection = {
-          ...conn,
-          name: copyName,
-        };
-        ctx.currentSettings.ssh_connections = [
-          ...ctx.currentSettings.ssh_connections.slice(0, i + 1),
-          copy,
-          ...ctx.currentSettings.ssh_connections.slice(i + 1),
-        ];
-        ctx.saveSetting("ssh_connections", ctx.currentSettings.ssh_connections);
-        ctx.reRender();
-      }),
-    );
+      // Delete
+      actions.appendChild(
+        createSshActionButton(t("settings.ssh.delete"), () => {
+          ctx.currentSettings.ssh_connections =
+            ctx.currentSettings.ssh_connections.filter((_, idx) => idx !== i);
+          ctx.saveSetting(
+            "ssh_connections",
+            ctx.currentSettings.ssh_connections,
+          );
+          ctx.reRender();
+        }),
+      );
 
-    // Delete
-    actions.appendChild(
-      createSshActionButton(t("settings.ssh.delete"), () => {
-        ctx.currentSettings.ssh_connections = ctx.currentSettings.ssh_connections.filter(
-          (_, idx) => idx !== i,
-        );
-        ctx.saveSetting("ssh_connections", ctx.currentSettings.ssh_connections);
-        ctx.reRender();
-      }),
-    );
+      item.appendChild(actions);
+      list.appendChild(item);
+    }
 
-    item.appendChild(actions);
-    list.appendChild(item);
-  }
+    // Drag and drop reorder
+    setupSshDragReorder(list, ctx);
 
-  // Drag and drop reorder
-  setupSshDragReorder(list, ctx);
-
-  panel.appendChild(list);
-
+    panel.appendChild(list);
   } // end of connections.length > 0
 
   // -- .ssh/config Hosts (read-only) --
@@ -241,72 +248,77 @@ export function renderSshSection(
     panel.appendChild(configList);
 
     // Load hosts asynchronously (now returns SshConfigHost[])
-    invoke<SshConfigHost[]>("load_ssh_config_hosts").then((hosts) => {
-      if (hosts.length === 0) {
-        const empty = document.createElement("p");
-        empty.className = "ssh-empty-state";
-        empty.textContent = t("settings.ssh.configHostsEmpty");
-        configList.appendChild(empty);
-        return;
-      }
-
-      for (const host of hosts) {
-        const item = document.createElement("div");
-        item.className = "ssh-config-item";
-        item.setAttribute("role", "listitem");
-
-        const nameEl = document.createElement("span");
-        nameEl.className = "ssh-config-item-name";
-        nameEl.textContent = host.host;
-        item.appendChild(nameEl);
-
-        // Show details if available
-        const detailParts: string[] = [];
-        if (host.hostname) detailParts.push(host.hostname);
-        if (host.user) detailParts.push(host.user + "@");
-        if (host.port !== 22) detailParts.push(":" + host.port);
-        if (detailParts.length > 0) {
-          const detailEl = document.createElement("span");
-          detailEl.className = "ssh-config-item-detail";
-          const userPart = host.user ? `${host.user}@` : "";
-          const hostPart = host.hostname || host.host;
-          const portPart = host.port !== 22 ? `:${host.port}` : "";
-          detailEl.textContent = `${userPart}${hostPart}${portPart}`;
-          item.appendChild(detailEl);
+    invoke<SshConfigHost[]>("load_ssh_config_hosts")
+      .then((hosts) => {
+        if (hosts.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "ssh-empty-state";
+          empty.textContent = t("settings.ssh.configHostsEmpty");
+          configList.appendChild(empty);
+          return;
         }
 
-        // Import button: creates an eMterm SSH connection from this host
-        const importBtn = document.createElement("button");
-        importBtn.type = "button";
-        importBtn.className = "profile-action-btn";
-        importBtn.textContent = t("settings.ssh.import");
-        ctx.addContentListener(importBtn, "click", () => {
-          const newConn: SshConnection = {
-            name: host.host,
-            hostname: host.hostname || host.host,
-            port: host.port,
-            username: host.user,
-            identity_file: host.identity_file,
-            ssh_options: [],
-          };
-          ctx.currentSettings.ssh_connections = [
-            ...ctx.currentSettings.ssh_connections,
-            newConn,
-          ];
-          ctx.saveSetting("ssh_connections", ctx.currentSettings.ssh_connections);
-          ctx.reRender();
-        });
-        item.appendChild(importBtn);
+        for (const host of hosts) {
+          const item = document.createElement("div");
+          item.className = "ssh-config-item";
+          item.setAttribute("role", "listitem");
 
-        configList.appendChild(item);
-      }
-    }).catch((err) => {
-      console.warn("Failed to load SSH config hosts:", err);
-      const errEl = document.createElement("p");
-      errEl.className = "ssh-empty-state";
-      errEl.textContent = t("settings.ssh.configHostsEmpty");
-      configList.appendChild(errEl);
-    });
+          const nameEl = document.createElement("span");
+          nameEl.className = "ssh-config-item-name";
+          nameEl.textContent = host.host;
+          item.appendChild(nameEl);
+
+          // Show details if available
+          const detailParts: string[] = [];
+          if (host.hostname) detailParts.push(host.hostname);
+          if (host.user) detailParts.push(host.user + "@");
+          if (host.port !== 22) detailParts.push(":" + host.port);
+          if (detailParts.length > 0) {
+            const detailEl = document.createElement("span");
+            detailEl.className = "ssh-config-item-detail";
+            const userPart = host.user ? `${host.user}@` : "";
+            const hostPart = host.hostname || host.host;
+            const portPart = host.port !== 22 ? `:${host.port}` : "";
+            detailEl.textContent = `${userPart}${hostPart}${portPart}`;
+            item.appendChild(detailEl);
+          }
+
+          // Import button: creates an eMterm SSH connection from this host
+          const importBtn = document.createElement("button");
+          importBtn.type = "button";
+          importBtn.className = "profile-action-btn";
+          importBtn.textContent = t("settings.ssh.import");
+          ctx.addContentListener(importBtn, "click", () => {
+            const newConn: SshConnection = {
+              name: host.host,
+              hostname: host.hostname || host.host,
+              port: host.port,
+              username: host.user,
+              identity_file: host.identity_file,
+              ssh_options: [],
+            };
+            ctx.currentSettings.ssh_connections = [
+              ...ctx.currentSettings.ssh_connections,
+              newConn,
+            ];
+            ctx.saveSetting(
+              "ssh_connections",
+              ctx.currentSettings.ssh_connections,
+            );
+            ctx.reRender();
+          });
+          item.appendChild(importBtn);
+
+          configList.appendChild(item);
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to load SSH config hosts:", err);
+        const errEl = document.createElement("p");
+        errEl.className = "ssh-empty-state";
+        errEl.textContent = t("settings.ssh.configHostsEmpty");
+        configList.appendChild(errEl);
+      });
   } else {
     const unavailable = document.createElement("p");
     unavailable.className = "ssh-empty-state";

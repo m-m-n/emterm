@@ -1,6 +1,6 @@
 //! Base64 encoding helpers ported from `src-tauri/src/encoding/base64.rs`.
 
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 
 /// Encodes bytes to base64 string using standard encoding
 pub fn encode_base64(data: &[u8]) -> String {

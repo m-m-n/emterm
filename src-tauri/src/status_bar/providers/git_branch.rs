@@ -16,11 +16,11 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::html::CssColor;
-use crate::status_bar::providers::worker::{
-    run_command, run_command_full, spawn, Stop, StopHandle, WorkerOutcome, WorkerOutcomeFull,
-    DEFAULT_TIMEOUT,
-};
 use crate::status_bar::providers::CwdSource;
+use crate::status_bar::providers::worker::{
+    DEFAULT_TIMEOUT, Stop, StopHandle, WorkerOutcome, WorkerOutcomeFull, run_command,
+    run_command_full, spawn,
+};
 use crate::status_bar::template_engine::VariableProvider;
 use crate::wakeup::WakeFn;
 

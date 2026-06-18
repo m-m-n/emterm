@@ -22,7 +22,7 @@ use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
 
 use super::data::DataFormat;
-use super::image_payload::{open_create_new, ViewerChrome};
+use super::image_payload::{ViewerChrome, open_create_new};
 
 /// JSON header line preceding the raw document bytes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

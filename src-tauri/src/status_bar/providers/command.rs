@@ -19,7 +19,7 @@ use std::time::Duration;
 use crate::html::CssColor;
 use crate::settings::CustomCommand;
 use crate::status_bar::providers::worker::{
-    run_command, spawn, Stop, StopHandle, WorkerOutcome, DEFAULT_TIMEOUT,
+    DEFAULT_TIMEOUT, Stop, StopHandle, WorkerOutcome, run_command, spawn,
 };
 use crate::status_bar::template_engine::VariableProvider;
 use crate::wakeup::WakeFn;

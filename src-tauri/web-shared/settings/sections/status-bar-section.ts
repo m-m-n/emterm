@@ -34,7 +34,10 @@ export function renderStatusBarSection(
       label: t("settings.statusBar.enabled"),
       value: settings.statusbar_enabled,
       description: t("settings.statusBar.enabledDesc"),
-      onSave: (v) => { ctx.saveSetting("statusbar_enabled", v); applyStatusBar(ctx.currentSettings); },
+      onSave: (v) => {
+        ctx.saveSetting("statusbar_enabled", v);
+        applyStatusBar(ctx.currentSettings);
+      },
     },
     ctx.addContentListener,
   );
@@ -51,7 +54,10 @@ export function renderStatusBarSection(
       value: settings.statusbar_app_line1_left,
       placeholder: "{time}",
       hint: t("settings.statusBar.templateHint"),
-      onSave: (v) => { ctx.saveSetting("statusbar_app_line1_left", v); applyStatusBar(ctx.currentSettings); },
+      onSave: (v) => {
+        ctx.saveSetting("statusbar_app_line1_left", v);
+        applyStatusBar(ctx.currentSettings);
+      },
     },
     ctx.addContentListener,
   );
@@ -65,7 +71,10 @@ export function renderStatusBarSection(
       value: settings.statusbar_app_line1_right,
       placeholder: "{cwd}",
       hint: "",
-      onSave: (v) => { ctx.saveSetting("statusbar_app_line1_right", v); applyStatusBar(ctx.currentSettings); },
+      onSave: (v) => {
+        ctx.saveSetting("statusbar_app_line1_right", v);
+        applyStatusBar(ctx.currentSettings);
+      },
     },
     ctx.addContentListener,
   );
@@ -79,7 +88,10 @@ export function renderStatusBarSection(
       value: settings.statusbar_app_line2_left,
       placeholder: "",
       hint: t("settings.statusBar.line2Hint"),
-      onSave: (v) => { ctx.saveSetting("statusbar_app_line2_left", v); applyStatusBar(ctx.currentSettings); },
+      onSave: (v) => {
+        ctx.saveSetting("statusbar_app_line2_left", v);
+        applyStatusBar(ctx.currentSettings);
+      },
     },
     ctx.addContentListener,
   );
@@ -93,7 +105,10 @@ export function renderStatusBarSection(
       value: settings.statusbar_app_line2_right,
       placeholder: "",
       hint: "",
-      onSave: (v) => { ctx.saveSetting("statusbar_app_line2_right", v); applyStatusBar(ctx.currentSettings); },
+      onSave: (v) => {
+        ctx.saveSetting("statusbar_app_line2_right", v);
+        applyStatusBar(ctx.currentSettings);
+      },
     },
     ctx.addContentListener,
   );
@@ -107,7 +122,10 @@ export function renderStatusBarSection(
       value: settings.statusbar_time_format,
       placeholder: "HH:mm:ss",
       hint: t("settings.statusBar.timeFormatHint"),
-      onSave: (v) => { ctx.saveSetting("statusbar_time_format", v); applyStatusBar(ctx.currentSettings); },
+      onSave: (v) => {
+        ctx.saveSetting("statusbar_time_format", v);
+        applyStatusBar(ctx.currentSettings);
+      },
     },
     ctx.addContentListener,
   );
@@ -137,10 +155,17 @@ export function renderStatusBarSection(
         const newName = nameInput.value.trim();
         if (!newName || newName === name) return;
         // Rename: remove old key, add new key
-        const { [name]: cmdVal, ...rest } = ctx.currentSettings.statusbar_custom_commands;
+        const { [name]: cmdVal, ...rest } =
+          ctx.currentSettings.statusbar_custom_commands;
         if (!cmdVal) return;
-        ctx.currentSettings.statusbar_custom_commands = { ...rest, [newName]: cmdVal };
-        ctx.saveSetting("statusbar_custom_commands", ctx.currentSettings.statusbar_custom_commands);
+        ctx.currentSettings.statusbar_custom_commands = {
+          ...rest,
+          [newName]: cmdVal,
+        };
+        ctx.saveSetting(
+          "statusbar_custom_commands",
+          ctx.currentSettings.statusbar_custom_commands,
+        );
         applyStatusBar(ctx.currentSettings);
         ctx.reRender();
       });
@@ -153,7 +178,9 @@ export function renderStatusBarSection(
         const val = execInput.value.trim();
         if (!val) return;
         ctx.currentSettings.statusbar_custom_commands[name]!.executable = val;
-        ctx.saveSetting("statusbar_custom_commands", { ...ctx.currentSettings.statusbar_custom_commands });
+        ctx.saveSetting("statusbar_custom_commands", {
+          ...ctx.currentSettings.statusbar_custom_commands,
+        });
         applyStatusBar(ctx.currentSettings);
       });
 
@@ -166,7 +193,9 @@ export function renderStatusBarSection(
       ctx.addContentListener(intervalInput, "change", () => {
         const val = parseInt(intervalInput.value, 10) || 1000;
         ctx.currentSettings.statusbar_custom_commands[name]!.interval_ms = val;
-        ctx.saveSetting("statusbar_custom_commands", { ...ctx.currentSettings.statusbar_custom_commands });
+        ctx.saveSetting("statusbar_custom_commands", {
+          ...ctx.currentSettings.statusbar_custom_commands,
+        });
         applyStatusBar(ctx.currentSettings);
       });
 
@@ -183,7 +212,8 @@ export function renderStatusBarSection(
       deleteBtn.className = "profile-action-btn";
       deleteBtn.textContent = t("settings.statusBar.deleteCommand");
       ctx.addContentListener(deleteBtn, "click", () => {
-        const { [name]: _, ...rest } = ctx.currentSettings.statusbar_custom_commands;
+        const { [name]: _, ...rest } =
+          ctx.currentSettings.statusbar_custom_commands;
         ctx.currentSettings.statusbar_custom_commands = rest;
         ctx.saveSetting("statusbar_custom_commands", rest);
         applyStatusBar(ctx.currentSettings);
@@ -236,7 +266,10 @@ export function renderStatusBarSection(
       ...ctx.currentSettings.statusbar_custom_commands,
       [name]: { executable, interval_ms: interval },
     };
-    ctx.saveSetting("statusbar_custom_commands", ctx.currentSettings.statusbar_custom_commands);
+    ctx.saveSetting(
+      "statusbar_custom_commands",
+      ctx.currentSettings.statusbar_custom_commands,
+    );
     applyStatusBar(ctx.currentSettings);
     ctx.reRender();
   });
@@ -267,7 +300,10 @@ export function renderStatusBarSection(
       unit: "pt",
       hint: t("settings.statusBar.fontSizeHint"),
       onInput: () => {},
-      onSave: (v) => { ctx.saveSetting("statusbar_font_size", v); applyStatusBar(ctx.currentSettings); },
+      onSave: (v) => {
+        ctx.saveSetting("statusbar_font_size", v);
+        applyStatusBar(ctx.currentSettings);
+      },
     },
     ctx.addContentListener,
   );

@@ -29,39 +29,42 @@ import "./settings.css";
 
 /** Apply the window-level appearance driven by the current settings. */
 function applyWindowAppearance(settings: AppSettings): void {
-	applyUiTheme(settings.ui_theme, settings.ui_theme_preset);
+  applyUiTheme(settings.ui_theme, settings.ui_theme_preset);
 }
 
 async function boot(): Promise<void> {
-	const root = document.getElementById("settings-root");
-	if (!root) {
-		console.error("[ERROR][FRONTEND] settings: #settings-root missing");
-		return;
-	}
+  const root = document.getElementById("settings-root");
+  if (!root) {
+    console.error("[ERROR][FRONTEND] settings: #settings-root missing");
+    return;
+  }
 
-	// Platform + locale before the first render so `isLinux()` and `t()`
-	// resolve correctly inside the panel.
-	await initPlatform();
-	const settings = await SettingsService.load();
-	initI18n(resolveLocale(settings.language));
-	applyWindowAppearance(settings);
+  // Platform + locale before the first render so `isLinux()` and `t()`
+  // resolve correctly inside the panel.
+  await initPlatform();
+  const settings = await SettingsService.load();
+  initI18n(resolveLocale(settings.language));
+  applyWindowAppearance(settings);
 
-	const panel = new SettingsPanel({ container: root });
-	await panel.init();
+  const panel = new SettingsPanel({ container: root });
+  await panel.init();
 
-	// The panel dispatches this after every successful save; re-resolve the
-	// window's own theme (the parent terminal applies the rest on its side).
-	window.addEventListener("emterm-settings-changed", () => {
-		SettingsService.load()
-			.then(applyWindowAppearance)
-			.catch((err) => {
-				console.warn("[WARN][FRONTEND] settings: theme refresh failed:", err);
-			});
-	});
+  // The panel dispatches this after every successful save; re-resolve the
+  // window's own theme (the parent terminal applies the rest on its side).
+  window.addEventListener("emterm-settings-changed", () => {
+    SettingsService.load()
+      .then(applyWindowAppearance)
+      .catch((err) => {
+        console.warn("[WARN][FRONTEND] settings: theme refresh failed:", err);
+      });
+  });
 }
 
 // Only auto-boot in a real document (skipped under unit tests that import
 // this module without a DOM).
-if (typeof document !== "undefined" && document.getElementById("settings-root")) {
-	void boot();
+if (
+  typeof document !== "undefined" &&
+  document.getElementById("settings-root")
+) {
+  void boot();
 }

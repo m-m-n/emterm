@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::render::emoji_resample::{lanczos3_downscale_rgba, HQ_SOURCE_PX};
+use crate::render::emoji_resample::{HQ_SOURCE_PX, lanczos3_downscale_rgba};
 use crate::render::font::fallback::FallbackChain;
 use crate::render::font::traits::{AtlasFormat, GlyphRasterizer};
 
