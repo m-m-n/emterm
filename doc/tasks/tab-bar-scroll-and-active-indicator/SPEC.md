@@ -45,13 +45,15 @@ so that the active tab is unambiguous.
 - [ ] The active-indicator bar is shown for exactly one cell across the whole strip.
 - [ ] Re-activating a mux tab restores the bar on its previously active window's sub-tab.
 
-### US4: See a newly created tab
-As a user, I want a newly created tab to be brought into view, so that the tab I just
-opened is visible even when the tabs overflow.
+### US4: See a newly created tab or mux window
+As a user, I want a newly created tab or mux window to be brought into view, so that what
+I just opened is visible even when the strip overflows.
 
 **Acceptance Criteria:**
 - [ ] Creating a tab (via the `+` button or a keybind) makes it active and scrolls it into
       view when it lands off-screen.
+- [ ] Creating a mux window on the active tab makes its new sub-tab active and scrolls it
+      into view when it lands off-screen.
 
 ## Technical Requirements
 
@@ -70,11 +72,13 @@ opened is visible even when the tabs overflow.
 - **FR5 - Unique active indicator:** A mux sub-tab's active-indicator bar is painted only
   when its parent mux tab is the currently active tab. When the parent tab is not active,
   no sub-tab indicator is painted. The mux group's active-window state is not modified.
-- **FR6 - New-tab scroll-into-view:** When a new tab is created it becomes active and is
-  scrolled into view if it lands outside the visible strip. This applies to every new-tab
-  path (the `+` button and keybinds). The FR4 keyboard-only constraint governs switching
-  among existing tabs; creating a new tab is a distinct trigger and is not bound by it — a
-  freshly created tab has not been seen yet, so it surfaces regardless of input method.
+- **FR6 - New tab / mux window scroll-into-view:** When a new tab is created, or a new mux
+  window is appended to the active tab, the newly-active cell is scrolled into view if it
+  lands outside the visible strip. This applies to every creation path (the `+` button,
+  keybinds, and the asynchronous mux `new-window` flow confirmed by the daemon's
+  `PaneCreated`). The FR4 keyboard-only constraint governs switching among existing
+  tabs/windows; creating a new tab or mux window is a distinct trigger and is not bound by
+  it — a freshly created cell has not been seen yet, so it surfaces regardless of input method.
 
 ### Non-Functional Requirements
 
