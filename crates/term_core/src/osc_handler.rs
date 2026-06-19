@@ -50,8 +50,10 @@ impl TerminalCore {
     pub(crate) fn handle_osc_internal(&mut self, param: u16, data: &str) {
         // OSC 9999: emterm mux message — route to APC callback for mux handling.
         // This allows mux to work through Windows ConPTY which strips APC but passes OSC.
-        if param == 9999 {
-            if data.starts_with("emterm-mux;") {
+        // Constants are the term_core-internal SSOT shared with `MuxApcExtractor`
+        // (see `mux_apc_extractor.rs`); both must recognize the same frames.
+        if param == crate::mux_apc_extractor::MUX_OSC_PARAM {
+            if data.starts_with(crate::mux_apc_extractor::MUX_PREFIX) {
                 self.fire_apc_callback(data.as_bytes());
             }
             return;
