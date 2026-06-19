@@ -1226,6 +1226,14 @@ impl App {
         }
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
+        // FR4-adjacent: a freshly created tab lands at the end of the strip,
+        // which is off-screen when the tabs overflow. Raise the same one-shot
+        // scroll-into-view flag the keyboard switch path uses so the new tab
+        // surfaces next frame. Unlike an existing-tab mouse click (already
+        // visible, so it must NOT scroll — see `switch_to_tab`), a tab the user
+        // has not seen yet should always surface, whether opened via the `+`
+        // button or a keybind. All new-tab paths funnel through here.
+        self.scroll_active_tab_into_view = true;
         self.needs_full_redraw = true;
     }
 
@@ -3981,10 +3989,12 @@ mod tests {
         let mut app = App::new();
         app.spawn_initial_tab();
         app.spawn_new_tab();
-        // `spawn_new_tab` makes the new tab active; reset to tab 0 so the
-        // test starts from a known active index. Use the direct field rather
+        // `spawn_new_tab` makes the new tab active AND raises the one-shot
+        // scroll-into-view flag; reset both so the test starts from a known
+        // clean state (active tab 0, flag down). Use the direct field rather
         // than `switch_to_tab` so we do not exercise the path under test.
         app.active = 0;
+        app.scroll_active_tab_into_view = false;
         app.scroll_position = ScrollPosition::Live;
         app
     }
@@ -4125,6 +4135,26 @@ mod tests {
         assert!(
             !app.scroll_active_tab_into_view(),
             "mouse-originated tab switch must NOT set the scroll-into-view flag"
+        );
+    }
+
+    #[test]
+    fn new_tab_sets_scroll_into_view_flag() {
+        // A freshly created tab lands at the end of the strip (off-screen when
+        // tabs overflow), so it raises the one-shot scroll-into-view flag and
+        // surfaces next frame. This holds for every new-tab path (they all
+        // funnel through `spawn_new_tab_with_overrides`), and unlike an
+        // existing-tab mouse switch, it fires even though `+` is a mouse action
+        // — the new tab is one the user has not seen yet.
+        let mut app = app_with_two_tabs();
+        app.clear_scroll_active_tab_into_view();
+        let before = app.tabs.len();
+        app.spawn_new_tab();
+        assert_eq!(app.tabs.len(), before + 1, "spawned a new tab");
+        assert_eq!(app.active, app.tabs.len() - 1, "the new tab is active");
+        assert!(
+            app.scroll_active_tab_into_view(),
+            "a newly created tab must raise the scroll-into-view flag"
         );
     }
 

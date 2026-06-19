@@ -33,7 +33,8 @@ so that the selected tab is never hidden off-screen.
 **Acceptance Criteria:**
 - [ ] Pressing a tab-switch key (Ctrl+PageUp/PageDown, Ctrl+Tab/Ctrl+Shift+Tab, Ctrl+1..9)
       scrolls the newly active cell into view when it is off-screen.
-- [ ] Scroll-into-view fires only as a result of keyboard activation, not on unrelated repaints.
+- [ ] Scroll-into-view fires only as a result of keyboard activation when switching among
+      existing tabs (new-tab creation is a separate trigger, see US4/FR6), not on unrelated repaints.
 
 ### US3: Unique active indicator with mixed tabs
 As a user with mux tabs and plain tabs, I want only one active-indicator bar visible,
@@ -43,6 +44,14 @@ so that the active tab is unambiguous.
 - [ ] Activating a plain tab removes the active-indicator bar from any non-active mux tab's sub-tabs.
 - [ ] The active-indicator bar is shown for exactly one cell across the whole strip.
 - [ ] Re-activating a mux tab restores the bar on its previously active window's sub-tab.
+
+### US4: See a newly created tab
+As a user, I want a newly created tab to be brought into view, so that the tab I just
+opened is visible even when the tabs overflow.
+
+**Acceptance Criteria:**
+- [ ] Creating a tab (via the `+` button or a keybind) makes it active and scrolls it into
+      view when it lands off-screen.
 
 ## Technical Requirements
 
@@ -56,10 +65,16 @@ so that the active tab is unambiguous.
 - **FR3 - Shift+wheel horizontal scroll:** Shift+wheel scrolls the tab strip horizontally.
 - **FR4 - Active tab scroll-into-view:** When the active cell changes via keyboard
   (plain-tab selection or mux window selection), the active visual cell is scrolled into
-  view if it is outside the visible strip. This is triggered only by keyboard activation.
+  view if it is outside the visible strip. This is triggered only by keyboard activation
+  when switching among existing tabs; creating a new tab is a separate trigger (FR6).
 - **FR5 - Unique active indicator:** A mux sub-tab's active-indicator bar is painted only
   when its parent mux tab is the currently active tab. When the parent tab is not active,
   no sub-tab indicator is painted. The mux group's active-window state is not modified.
+- **FR6 - New-tab scroll-into-view:** When a new tab is created it becomes active and is
+  scrolled into view if it lands outside the visible strip. This applies to every new-tab
+  path (the `+` button and keybinds). The FR4 keyboard-only constraint governs switching
+  among existing tabs; creating a new tab is a distinct trigger and is not bound by it — a
+  freshly created tab has not been seen yet, so it surfaces regardless of input method.
 
 ### Non-Functional Requirements
 
@@ -176,7 +191,7 @@ src-tauri/src/
 - [ ] Tabs exactly fit the width (no overflow): no scroll area, no scrollbar, no scroll-into-view side effects.
 - [ ] All cells are mux sub-tabs (no plain tabs): indicator gating and scroll-into-view still behave.
 - [ ] Single tab: no overflow, indicator on the only tab.
-- [ ] Mouse-driven scroll followed by an unrelated repaint: active tab is NOT force-scrolled back into view (flag only set on keyboard activation).
+- [ ] Mouse-driven scroll followed by an unrelated repaint: active tab is NOT force-scrolled back into view (the flag is set only by a keyboard tab-switch or new-tab creation, never by mouse scroll, an existing-tab mouse click, or unrelated repaints).
 
 ### Performance Tests
 - [ ] No additional per-frame allocations introduced in the layout loop for FR4/FR5 gating.
@@ -192,7 +207,7 @@ src-tauri/src/
 
 ## Success Criteria
 
-- [ ] All functional requirements (FR1–FR5) are implemented.
+- [ ] All functional requirements (FR1–FR6) are implemented.
 - [ ] All test scenarios pass.
 - [ ] No regression in click switch, drag-reorder, mux sub-tab click, "+"/gear buttons.
 - [ ] WebView tab bar is unchanged.

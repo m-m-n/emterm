@@ -80,6 +80,12 @@ requirements:
       - TS-2
       - TS-3
       - TS-4
+  FR6:
+    title: 新規タブ作成時に新規タブをアクティブ化し画面外なら画面内へスクロールインする(+ボタン/キーバインド双方。FR4のキーボード制約対象外)
+    status: ok
+    tasks: []
+    tests:
+      - new_tab_sets_scroll_into_view_flag
   NFR1:
     title: 毎フレーム描画のコストを著しく増やさない
     status: ok
