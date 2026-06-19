@@ -1,0 +1,85 @@
+schema_version: 1
+feature: mux-window-close-redraw
+created: 2026-06-19
+
+project:
+  components:
+    main:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --bin emterm"
+      format_command: "CARGO_TARGET_DIR=src-tauri/target cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 8d7e3b1a14085714964f0f2ade9712b96a4accf6
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 8d7e3b1a14085714964f0f2ade9712b96a4accf6
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 8d7e3b1a14085714964f0f2ade9712b96a4accf6
+  - id: implement
+    status: completed
+    completed_at_commit: 8d7e3b1a14085714964f0f2ade9712b96a4accf6
+  - id: check
+    status: completed
+    completed_at_commit: 8d7e3b1a14085714964f0f2ade9712b96a4accf6
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 8d7e3b1a14085714964f0f2ade9712b96a4accf6
+
+requirements:
+  FR1:
+    title: クローズでアクティブ window が変わったら新アクティブ window のスナップショットを要求し再描画する
+    status: ok
+    tasks:
+      - close-reconcile-decision
+      - wire-ptyexited-reconcile
+      - close-reconcile-tests
+    tests:
+      - TS-1
+      - TS-5
+  FR2:
+    title: 非アクティブ window のクローズでは再描画を要求しない
+    status: ok
+    tasks:
+      - close-reconcile-decision
+      - wire-ptyexited-reconcile
+      - close-reconcile-tests
+    tests:
+      - TS-2
+  FR3:
+    title: 最後の window のクローズではタブを閉じ（既存挙動）再描画を要求しない
+    status: ok
+    tasks:
+      - close-reconcile-decision
+      - wire-ptyexited-reconcile
+      - close-reconcile-tests
+    tests:
+      - TS-3
+  NFR1:
+    title: 明示的な window 切り替え・非 mux タブの挙動を変えない
+    status: ok
+    tasks:
+      - wire-ptyexited-reconcile
+      - close-reconcile-tests
+    tests:
+      - TS-6
+  NFR2:
+    title: CLI-only ビルド（--no-default-features）を壊さない
+    status: ok
+    tasks:
+      - cli-only-build-gate
+    tests: []
+  NFR3:
+    title: native（src-tauri/）のみ変更し WebView（src/）は変更しない
+    status: ok
+    tasks:
+      - wire-ptyexited-reconcile
+    tests: []

@@ -1,0 +1,39 @@
+schema_version: 1
+feature: mux-window-close-redraw
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-close-reconcile
+    name: Reconcile the screen on a close-induced active-window change (FR1, FR2, FR3, NFR1, NFR2, NFR3)
+    goal: After PtyExited removes a mux window, if the active window changed to a different still-existing window, request that window's pane snapshot so the existing off-thread replay redraws it; when the active window is unchanged or the group is emptied, request nothing (group-empty keeps the existing exited behavior).
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: []
+    files_create: []
+    files_modify:
+      - src-tauri/src/tabs.rs
+    tasks:
+      - id: close-reconcile-decision
+        title: Factor a testable decision that, given the active pane id before removal and the post-removal group state, returns the now-active pane id to reconcile (or none) — none when active is unchanged or group emptied
+        covers_fr: [FR1, FR2, FR3]
+        status: completed
+      - id: wire-ptyexited-reconcile
+        title: In the PtyExited arm, capture the before-active pane id, remove the window, keep the empty-group -> exited path snapshot-free, and request a pane snapshot when the decision yields a pane id
+        covers_fr: [FR1, FR2, FR3, NFR1, NFR3]
+        status: completed
+      - id: close-reconcile-tests
+        title: Unit tests for active-changed / non-active / last-window / unknown-pane / multi-exit-in-one-pump, plus a SwitchWindow regression assertion
+        covers_fr: [FR1, FR2, FR3, NFR1]
+        status: completed
+      - id: cli-only-build-gate
+        title: Confirm the change stays under feature gui and the --no-default-features build still compiles
+        covers_fr: [NFR2]
+        status: completed
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
