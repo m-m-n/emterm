@@ -50,13 +50,13 @@ frontend が hidden の間、backend と mux daemon が PTY 出力を内部 shad
 | TS-11b | `PassthroughScanner` の partial buffer が `PARTIAL_SEQUENCE_MAX` (16 MiB) を超えると対象 sequence を放棄し warn ログを出す | partial_buffer_len() が 0 にリセット、warn 呼出 1 回 | Unit (Rust) | 1 | FR14 |
 | TS-12 | `evaluate_output_target` が (network_detach=true, visible=true) で Detached を維持する | output_target == Detached | Unit (Rust) | 3 | FR7, FR13 |
 | TS-13 | `evaluate_output_target` が (network_detach=false, visible=false) で identity-scoped に Detached に切り替える (他 connection 所有のペインは触らない) | 自分の owned_tx 一致のみ Detached、他は不変 | Unit (Rust) | 3 | FR7, FR13 |
-| TS-14 | `evaluate_output_target` が (network_detach=false, visible=true) で Connected(owned_tx) に戻し、snapshot bytes (shadow + raw_passthrough) を返す | output_target == Connected, returned snapshot non-empty | Unit (Rust) | 3 | FR7, FR9, FR13 |
+| TS-14 | `evaluate_output_target` が (network_detach=false, visible=true) で Connected(owned_tx) に戻し、shadow snapshot bytes を返す (raw_passthrough は連結しない) | output_target == Connected, returned snapshot non-empty | Unit (Rust) | 3 | FR7, FR9, FR13 |
 | TS-14b | mux visible 復帰時に snapshot 送信 → output_target 切替の順序が保たれる | mock の send 呼出順が snapshot 先、reader chunk が後 | Integration (Rust) | 3 | FR9 |
 | TS-15 | 非 mux: hidden 状態で 10 MiB 分の PTY 出力を `process_hidden` 経由で流しても `pty_get_send_stats.sent_bytes` が増えない (E2E から `__TAURI_INTERNALS__.invoke("pty_get_send_stats", { sessionId })` を直接呼んで観測する。frontend からの定期 invoke は FR15 で撤去済) | 増分 == 0 | Integration (Rust) | 1 | FR2, FR6, FR11 |
 | TS-16 | 非 mux: visible 復帰時に shadow snapshot が 1 メッセージで Channel mock に届く | Channel への send 呼び出し回数 == 1、bytes が snapshot 形式 | Integration (Rust) | 1 | FR6, FR8 |
-| TS-17 | 非 mux: hidden 中に Kitty 画像 sequence を流し込み、復帰時に raw passthrough として届く | snapshot bytes が画像 sequence を含む | Integration (Rust) | 1 | FR8, FR12, FR14 |
+| TS-17 | 非 mux: hidden 中に Kitty 画像 sequence を流し込み、復帰スナップショットに raw passthrough (画像) が連結されない | snapshot bytes が画像 sequence を含まない | Integration (Rust) | 1 | FR8, FR12, FR14 |
 | TS-18 | mux: hidden 中に各ペインの output_target が Detached 相当となり、ring buffer + raw_passthrough に蓄積される | output_target == Detached、ring に bytes、raw_passthrough に画像 bytes | Integration (Rust) | 3 | FR7, FR14 |
-| TS-19 | mux: visible 復帰時に各ペインの `build_shadow_parser_snapshot` + raw passthrough が PtyOutput として送られる | mock socket で PtyOutput を per-pane 受信、payload に snapshot + passthrough | Integration (Rust) | 3 | FR3, FR9, FR12 |
+| TS-19 | mux: visible 復帰時に各ペインの `build_shadow_parser_snapshot` が PtyOutput として送られ、raw passthrough は連結されず drain される | mock socket で PtyOutput を per-pane 受信、payload に snapshot のみ (passthrough は含まれない) | Integration (Rust) | 3 | FR3, FR9, FR12 |
 | TS-20 | mux: detach (network) 中に SetVisibility を受けても output_target は Detached のまま、connection-scope の visible_state だけ更新される | output_target 不変、visible 値が新規 | Integration (Rust) | 3 | FR13 |
 | TS-21 | NFR5 ヘルスチェック: VisibilityController が 10 秒ごとに直近確定状態を再送する | fake timer で 10 秒進めると invoke が 1 回追加 | Unit (TS) | 2 | NFR5 |
 | TS-22 | raw passthrough 容量超過時に古いものから drop され、警告ログが 1 回出力される | drop 後 read_all 長 == 容量、warn 1 回 | Unit (Rust) | 1 | FR14 |
@@ -113,7 +113,7 @@ frontend が hidden の間、backend と mux daemon が PTY 出力を内部 shad
 | `src-tauri/src/mux/ipc/protocol.rs` | SetVisibility = 0x1B、既存 round-trip テスト 2 本のループ範囲拡張と is_none チェック箇所変更 | 3 |
 | `src-tauri/src/mux/ipc/handlers.rs` | handle_set_visibility | 3 |
 | `src-tauri/src/mux/ipc/connection.rs` | `handle_connection` 内 loop ローカルに `Arc<AtomicBool> visible_state` を追加 (新規 ConnectionState struct は導入しない、Decision Log 参照) | 3 |
-| `src-tauri/src/mux/ipc/reattach.rs` | snapshot 連結、visibility 評価 | 3 |
+| `src-tauri/src/mux/ipc/reattach.rs` | snapshot は shadow snapshot のみ (raw passthrough は連結せず drain)、visibility 評価 | 3 |
 | `src-tauri/src/mux/ipc/pty_spawn.rs` | Detached 経路 passthrough 蓄積 | 3 |
 | `src-tauri/src/mux/session/pane.rs` | raw_passthrough (1 MiB / pane)、passthrough_scanner、evaluate_output_target (identity-scoped) | 3 |
 | `e2e-tests/wdio.docker.conf.js` | 必要に応じてタイムアウト調整 | 4 | not modified — defaults sufficient |
@@ -136,7 +136,7 @@ frontend が hidden の間、backend と mux daemon が PTY 出力を内部 shad
 | SC-5 | mux / 非 mux の両方で `pty_get_send_stats.sent_bytes` が hidden 中に増加しない | TS-15 (非 mux), TS-18 + 別途 mux 経路の pty_get_send_stats 確認 |
 | SC-6 | 既存 E2E テストが回帰なく pass する | E2E suite full run (Phase 4) |
 | SC-7 | 既存対症療法 (FR15) が削除され、関連診断ログが消える | TS-23 |
-| SC-8 | CLI 画像 / Markdown 表示が hidden 跨ぎで復帰後に表示される | TS-17 + 手動確認 |
+| SC-8 | CLI 画像 / Markdown 表示は hidden 跨ぎで復帰後に再表示されない (復帰スナップショットに連結されない) | TS-17 + 手動確認 |
 
 ### Functional Requirements Coverage
 
@@ -185,8 +185,8 @@ E2E 自動化が困難な項目を手動確認する。実機 (Linux + Windows) 
   - eMterm から focus を外して別アプリで 10 分以上作業 (デスクトップロックでも可)
   - eMterm に focus を戻したとき、UI 操作 (タブ切替、文字入力) が即座に応答する
   - mux モード (複数ペイン稼働) でも同じ手順で確認
-- [ ] **CLI 画像表示** (`emterm image` 経由) を hidden 中に送信し、復帰時に表示されることを目視
-- [ ] **CLI Markdown 表示** (`emterm markdown` 経由) を hidden 中に送信し、復帰時に表示されることを目視
+- [ ] **CLI 画像表示** (`emterm image` 経由) を hidden 中に送信し、復帰時に再表示されないことを目視
+- [ ] **CLI Markdown 表示** (`emterm markdown` 経由) を hidden 中に送信し、復帰時に再表示されないことを目視
 - [ ] **デスクトップロック復帰**: ロック中の hidden 期間が数時間に及んでもフリーズしない
 - [ ] **短時間切替** (数百 ms 別ウィンドウクリック) を 10 回繰り返し、pause/resume が連発しないこと (backend ログで状態遷移回数確認)
 - [ ] **Linux WebKitGTK** と **Windows WebView2** の両方で上記をひととおり実施

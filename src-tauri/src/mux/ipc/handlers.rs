@@ -888,10 +888,11 @@ mod tests {
         let chunk = rx.try_recv().expect("snapshot chunk expected");
         assert_eq!(chunk.pane_id, 1);
         assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        // Captured passthrough must NOT be replayed (would re-render the image).
         let needle = b"\x1b_Gi=9;XX\x1b\\";
         assert!(
-            chunk.data.windows(needle.len()).any(|w| w == needle),
-            "snapshot must include the captured passthrough sequence"
+            !chunk.data.windows(needle.len()).any(|w| w == needle),
+            "snapshot must NOT include the captured passthrough sequence"
         );
         assert!(
             rx.try_recv().is_err(),
