@@ -1316,6 +1316,27 @@ impl Tab {
                 self.mux_group = None;
                 self.mux_session_name = None;
                 self.mux_status_state = None;
+                // Cancel any in-flight off-thread snapshot replay before
+                // clearing the grid. Otherwise a switch dispatched just before
+                // detach (target snapshot >= OFFTHREAD_REPLAY_THRESHOLD_BYTES)
+                // would still resolve on a later `poll_pending_switch`, swapping
+                // the worker-built core (the detached window's content) back
+                // over the grid we clear below. Mirrors the synchronous
+                // `Snapshot` arm's supersede-the-pending-switch step.
+                if let Some(old) = self.pending_switch.take() {
+                    old.cancel.store(true, Ordering::Relaxed);
+                }
+                // The displayed grid still holds the detached mux window's
+                // content. The bridge process exits right after this Detached
+                // frame (mux::bridge → process::exit), handing the PTY back to
+                // the shell that ran `emterm mux attach`, which reprints its
+                // prompt — but on a clean screen only if we drop the stale mux
+                // frame now. Reuse the PaneCreated append recipe (clear grid +
+                // prompts/folds via reset_and_replay(b""), latch
+                // pending_frame_reset so App::pump_all drops any selection and
+                // forces a full redraw). Without this the detached session's
+                // screen lingers until the shell happens to overwrite it.
+                let _ = self.reset_frame_for_replay(b"");
                 true
             }
             other => {
@@ -3457,6 +3478,59 @@ mod tests {
         // The tab reverts to a plain tab: no group, no mux session badge.
         assert!(tab.mux_group.is_none());
         assert!(tab.mux_session_name.is_none());
+    }
+
+    #[test]
+    fn detached_clears_displayed_grid() {
+        // After detach the bridge exits and the shell reprints its prompt; the
+        // stale mux window content must not linger in the displayed grid.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "shell", 10)], 0));
+        // Paint a visible marker into the displayed core.
+        tab.core.lock().process_pty_data_fully(b"STALE");
+        assert_eq!(tab.core.lock().get_cell_char(0, 0), "S");
+
+        let changed = tab.apply_mux_message(MuxMessage {
+            msg_type: MessageType::Detached,
+            pane_id: 0,
+            payload: Vec::new(),
+        });
+        assert!(changed);
+        // Grid reset to blank via reset_and_replay(b"").
+        let c = tab.core.lock();
+        let row0: String = (0..c.cols()).map(|col| c.get_cell_char(col, 0)).collect();
+        assert!(
+            row0.trim().is_empty(),
+            "detach must clear the stale mux grid, got {row0:?}"
+        );
+    }
+
+    #[test]
+    fn detached_cancels_in_flight_offthread_switch() {
+        // A window switch dispatched just before detach (snapshot >= the
+        // off-thread threshold) must not resolve after detach: otherwise a
+        // later poll_pending_switch would swap the detached window's
+        // worker-built core back over the grid the Detached arm just cleared.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        tab.apply_mux_message(snapshot_msg(10, large_payload("STALE")));
+        assert!(
+            tab.test_has_pending_switch(),
+            "snapshot at/above threshold must enter the off-thread path"
+        );
+
+        let changed = tab.apply_mux_message(MuxMessage {
+            msg_type: MessageType::Detached,
+            pane_id: 0,
+            payload: Vec::new(),
+        });
+        assert!(changed);
+        // The in-flight switch is cancelled and dropped, so no later
+        // poll_pending_switch can swap the detached content back in.
+        assert!(
+            !tab.test_has_pending_switch(),
+            "detach must cancel the in-flight off-thread switch"
+        );
     }
 
     // ── TS-9: RenameWindow inbound ────────────────────────────────────────
