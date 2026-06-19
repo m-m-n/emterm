@@ -25,6 +25,7 @@
 //! [`crate::ui::AppAction::CloseTab`]). The trailing `+` icon is
 //! drawn with `Painter::line_segment` so the visual is font-independent.
 
+use egui::scroll_area::ScrollBarVisibility;
 use egui::{Align, FontId, Layout, Rect, Rounding, ScrollArea, Sense, Stroke, Ui, Vec2};
 
 use super::TabEvent;
@@ -161,7 +162,20 @@ pub fn render_label(item: &TabBarItem) -> String {
 
 /// Render the tab bar into a top panel, returning at most one
 /// [`TabEvent`] this frame.
-pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Option<TabEvent> {
+///
+/// `scroll_active_into_view` (FR4) is a one-shot signal raised by the app's
+/// keyboard tab/window switch handlers: when `true`, the strip scrolls the
+/// active visual cell into view exactly once this frame. The caller
+/// (`render::draw_terminal`) reads the value from `App`; the flag is cleared
+/// post-frame in `window_host` (where `&mut App` is available), so passing a
+/// stale `true` here is never a problem — it only matters for the frame the
+/// app raised it.
+pub fn draw(
+    ctx: &egui::Context,
+    items: &[TabBarItem],
+    active_idx: usize,
+    scroll_active_into_view: bool,
+) -> Option<TabEvent> {
     let mut event: Option<TabEvent> = None;
 
     let frame = egui::Frame::none()
@@ -207,14 +221,38 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
                         Vec2::new(scroll_w, TAB_BAR_HEIGHT),
                         Layout::left_to_right(Align::Center),
                         |ui| {
+                            // FR2: the strip is a horizontal-only `ScrollArea`,
+                            // so egui's default (`always_scroll_the_only_direction
+                            // = false`) ignores a plain (no-modifier) vertical
+                            // wheel delta. Enabling it on this scope folds the
+                            // vertical wheel onto the single (horizontal) axis,
+                            // so a hovered wheel scrolls the strip. egui reads
+                            // this flag from the `ui` that `ScrollArea::show` is
+                            // called on, so set it here before `.show`.
+                            // FR3 (Shift+wheel) folds onto the horizontal axis
+                            // via this same flag: the tab-bar wheel forward in
+                            // `window_host` strips the modifier, so egui's
+                            // input-layer shift→horizontal swap never fires —
+                            // the horizontal scroll comes purely from this
+                            // fold, shift or not.
+                            ui.style_mut().always_scroll_the_only_direction = true;
                             ScrollArea::horizontal()
                                 .id_salt("native-poc-tab-strip")
                                 .auto_shrink([false, false])
+                                // FR1: keep the strip horizontally scrollable but
+                                // never paint a scrollbar (WebView parity — the
+                                // CSS strip hides its scrollbar too).
+                                .scroll_bar_visibility(ScrollBarVisibility::AlwaysHidden)
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing = Vec2::ZERO;
                                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                        event =
-                                            layout_tab_strip(ui, items, active_idx, MIN_TAB_WIDTH);
+                                        event = layout_tab_strip(
+                                            ui,
+                                            items,
+                                            active_idx,
+                                            MIN_TAB_WIDTH,
+                                            scroll_active_into_view,
+                                        );
                                     });
                                 });
                         },
@@ -231,7 +269,13 @@ pub fn draw(ctx: &egui::Context, items: &[TabBarItem], active_idx: usize) -> Opt
                             // even when the tabs need less room.
                             ui.set_min_width(scroll_w);
                             ui.spacing_mut().item_spacing = Vec2::ZERO;
-                            event = layout_tab_strip(ui, items, active_idx, ideal_w);
+                            event = layout_tab_strip(
+                                ui,
+                                items,
+                                active_idx,
+                                ideal_w,
+                                scroll_active_into_view,
+                            );
                         },
                     );
                 }
@@ -329,6 +373,8 @@ fn build_visuals(items: &[TabBarItem]) -> Vec<Visual> {
 /// Draw the active-tab / active-sub-tab indicator: a 3 px primary bar at
 /// the bottom, side-margined to match the WebView `width: calc(100% - 32px)`.
 fn paint_active_indicator(ui: &Ui, rect: Rect) {
+    #[cfg(test)]
+    tests::LAST_INDICATOR_RECTS.with(|c| c.borrow_mut().push(rect));
     let bar = Rect::from_min_max(
         egui::pos2(
             rect.left() + ACTIVE_INDICATOR_SIDE_MARGIN,
@@ -421,10 +467,17 @@ fn layout_tab_strip(
     items: &[TabBarItem],
     active_idx: usize,
     tab_width: f32,
+    scroll_active_into_view: bool,
 ) -> Option<TabEvent> {
     let mut event: Option<TabEvent> = None;
     let drag_id = drag_state_id();
     let mut drag_from: Option<usize> = ui.ctx().memory(|m| m.data.get_temp(drag_id));
+
+    // FR4: the active visual cell's rect, captured during the layout pass so a
+    // single `scroll_to_rect` can pull it into view when the flag is set. The
+    // active cell is the plain-tab cell at `active_idx`, or — inside the active
+    // mux tab — the active window's sub-tab cell.
+    let mut active_cell_rect: Option<Rect> = None;
 
     let visuals = build_visuals(items);
     // Drag-reorder applies to plain-tab cells only — mux sub-tab cells (a
@@ -443,6 +496,8 @@ fn layout_tab_strip(
     tests::LAST_TAB_CELLS.with(|c| c.borrow_mut().clear());
     #[cfg(test)]
     tests::LAST_MUX_CELLS.with(|c| c.borrow_mut().clear());
+    #[cfg(test)]
+    tests::LAST_INDICATOR_RECTS.with(|c| c.borrow_mut().clear());
 
     for visual in &visuals {
         let i = match *visual {
@@ -471,8 +526,18 @@ fn layout_tab_strip(
                     );
                 }
                 paint_centered_label(ui, rect, &mux_sub_tab_label(mux_cell), color);
-                if is_active_cell {
+                // FR5: paint the sub-tab active-indicator bar only when this
+                // mux group's parent tab is the active tab. A non-active mux
+                // parent shows no bar, so exactly one indicator is visible
+                // across the whole strip. The label color above keeps its
+                // existing `mux_cell.active`-based emphasis (only the bar is
+                // gated). `tab` and `active_idx` are plain indices and
+                // `mux_cell.active` is a copied bool, so the gate never touches
+                // `MuxWindowGroup` (active-window state is unchanged).
+                if tab == active_idx && is_active_cell {
                     paint_active_indicator(ui, rect);
+                    // FR4: the active visual cell inside the active mux tab.
+                    active_cell_rect = Some(rect);
                 }
 
                 // Click switches to this window (WebView parity: sub-tab
@@ -606,6 +671,8 @@ fn layout_tab_strip(
         // match `width: calc(100% - 32px)`.
         if is_active {
             paint_active_indicator(ui, rect);
+            // FR4: the active plain-tab cell.
+            active_cell_rect = Some(rect);
         }
     }
 
@@ -656,6 +723,19 @@ fn layout_tab_strip(
                 }
             }
             ui.ctx().memory_mut(|m| m.data.remove::<usize>(drag_id));
+        }
+    }
+
+    // FR4: scroll the active visual cell into view exactly once when the
+    // keyboard-switch flag is set. `scroll_to_rect` is a no-op when the rect is
+    // already visible, so an already-on-screen active cell stays put (the
+    // harmless same-window-digit case). Best-effort: if the active cell was not
+    // laid out this frame (no rect captured), nothing happens.
+    if scroll_active_into_view {
+        if let Some(rect) = active_cell_rect {
+            #[cfg(test)]
+            tests::LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.set(Some(rect)));
+            ui.scroll_to_rect(rect, None);
         }
     }
 
@@ -825,6 +905,18 @@ mod tests {
         pub(super) static LAST_PLUS_RECT: Cell<Option<Rect>> = const { Cell::new(None) };
         pub(super) static LAST_TAB_CELLS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
         pub(super) static LAST_MUX_CELLS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
+        /// Rects that received `paint_active_indicator` during the last
+        /// `layout_tab_strip` pass (both plain-tab and mux sub-tab cells).
+        /// FR5 asserts the indicator is painted for exactly the expected
+        /// cell(s) without GPU readback.
+        pub(super) static LAST_INDICATOR_RECTS: RefCell<Vec<Rect>> =
+            const { RefCell::new(Vec::new()) };
+        /// The rect passed to `ui.scroll_to_rect` during the last
+        /// `layout_tab_strip` pass when the FR4 flag was set, or `None` if the
+        /// flag was down / the active cell had no captured rect. TS-5 / TS-6
+        /// assert the strip requests scroll-into-view for the correct cell.
+        pub(super) static LAST_SCROLL_INTO_VIEW_RECT: Cell<Option<Rect>> =
+            const { Cell::new(None) };
     }
 
     fn item(title: &str) -> TabBarItem {
@@ -851,7 +943,7 @@ mod tests {
         input1.events.push(Event::PointerMoved(click_pos));
         let mut captured: Option<TabEvent> = None;
         let _ = ctx.run(input1, |ctx| {
-            captured = draw(ctx, items, active_idx);
+            captured = draw(ctx, items, active_idx, false);
         });
 
         let mut input2 = RawInput::default();
@@ -871,7 +963,7 @@ mod tests {
         });
         let mut second: Option<TabEvent> = None;
         let _ = ctx.run(input2, |ctx| {
-            second = draw(ctx, items, active_idx);
+            second = draw(ctx, items, active_idx, false);
             let _ = pos_of_first_hovered(ctx);
         });
 
@@ -912,7 +1004,7 @@ mod tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, active_idx);
+            let _ = draw(ctx, items, active_idx, false);
         });
         pick().expect("layout hook should have captured the rect")
     }
@@ -1010,7 +1102,7 @@ mod tests {
         input.screen_rect = Some(screen_rect());
         let mut captured: Option<TabEvent> = None;
         let _ = ctx.run(input, |ctx| {
-            captured = draw(ctx, &items, 0);
+            captured = draw(ctx, &items, 0, false);
         });
         assert_eq!(captured, None);
     }
@@ -1071,7 +1163,7 @@ mod tests {
         let mut input = RawInput::default();
         input.screen_rect = Some(screen_rect());
         let _ = ctx.run(input, |ctx| {
-            let _ = draw(ctx, items, 0);
+            let _ = draw(ctx, items, 0, false);
         });
         LAST_MUX_CELLS.with(|c| c.borrow().clone())
     }
@@ -1110,5 +1202,154 @@ mod tests {
         // Plain tabs still count one-each (Phase 4-B path unchanged).
         let plain = vec![item("a"), item("b")];
         assert_eq!(visual_cell_count(&plain), 2);
+    }
+
+    // ── FR5: unique active indicator across mixed tabs ───────────────────
+
+    /// Lay out one frame and return the rects that received the active
+    /// indicator (both plain-tab and mux sub-tab cells).
+    fn indicator_rects(items: &[TabBarItem], active_idx: usize) -> Vec<Rect> {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(screen_rect());
+        let _ = ctx.run(input, |ctx| {
+            let _ = draw(ctx, items, active_idx, false);
+        });
+        LAST_INDICATOR_RECTS.with(|c| c.borrow().clone())
+    }
+
+    #[test]
+    fn ts2_non_active_mux_parent_paints_no_subtab_indicator() {
+        // Roster: [plain "a" (active), mux group]. The mux group has an
+        // active window (cell 1), but its parent tab (index 1) is NOT the
+        // active tab, so no sub-tab indicator is painted. The only indicator
+        // is the active plain tab's.
+        let items = vec![item("a"), mux_item(&group_with(3, 1))];
+        let mux_cells = mux_cell_rects(&items);
+        let bars = indicator_rects(&items, 0);
+        // No painted indicator coincides with any mux sub-tab cell.
+        for cell in &mux_cells {
+            assert!(
+                !bars.iter().any(|b| b.left() == cell.left()),
+                "no sub-tab indicator should be painted for a non-active mux parent; \
+                 got bars {bars:?} overlapping mux cell {cell:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ts3_active_mux_parent_paints_active_window_subtab_indicator() {
+        // Roster: [plain "a", mux group (active)]. Parent tab index 1 is
+        // active and window 1 is the active window, so exactly the window-1
+        // sub-tab gets the indicator.
+        let items = vec![item("a"), mux_item(&group_with(3, 1))];
+        let mux_cells = mux_cell_rects(&items);
+        let bars = indicator_rects(&items, 1);
+        // Exactly one bar, aligned to the active window's sub-tab (cell 1).
+        assert_eq!(bars.len(), 1, "exactly one indicator across the strip");
+        assert!(
+            (bars[0].left() - mux_cells[1].left()).abs() < 0.5,
+            "the single indicator should sit on the active window's sub-tab; \
+             bar {:?} vs cell {:?}",
+            bars[0],
+            mux_cells[1]
+        );
+    }
+
+    // ── FR4: active-cell scroll-into-view selection ──────────────────────
+
+    /// Lay out one frame with the FR4 flag set and return the rect the strip
+    /// requested scroll-into-view for (if any).
+    fn scroll_into_view_rect(items: &[TabBarItem], active_idx: usize) -> Option<Rect> {
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(screen_rect());
+        LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.set(None));
+        let _ = ctx.run(input, |ctx| {
+            let _ = draw(ctx, items, active_idx, true);
+        });
+        LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.get())
+    }
+
+    #[test]
+    fn ts5_flag_set_requests_scroll_into_view_for_active_cell() {
+        // TS-5: with the flag set and an active plain tab, the strip selects
+        // that cell's rect and requests scroll-into-view exactly once.
+        // Many tabs so the strip overflows (the off-screen case is the point);
+        // the active cell is captured regardless of visibility.
+        let items: Vec<TabBarItem> = (0..12).map(|i| item(&format!("t{i}"))).collect();
+        let want = tab_cell_rect(&items, 7, 7);
+        let got = scroll_into_view_rect(&items, 7).expect("flag set → a rect is requested");
+        assert!(
+            (got.left() - want.left()).abs() < 0.5 && (got.right() - want.right()).abs() < 0.5,
+            "scroll-into-view should target the active cell; got {got:?} want {want:?}"
+        );
+    }
+
+    #[test]
+    fn ts5_flag_unset_requests_no_scroll_into_view() {
+        // Companion to TS-5: with the flag down, no scroll-into-view request is
+        // made (the mouse-scroll / unrelated-repaint case).
+        let items: Vec<TabBarItem> = (0..12).map(|i| item(&format!("t{i}"))).collect();
+        let ctx = egui::Context::default();
+        let mut input = RawInput::default();
+        input.screen_rect = Some(screen_rect());
+        LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.set(None));
+        let _ = ctx.run(input, |ctx| {
+            let _ = draw(ctx, &items, 7, false);
+        });
+        assert_eq!(
+            LAST_SCROLL_INTO_VIEW_RECT.with(|c| c.get()),
+            None,
+            "flag down → no scroll-into-view request"
+        );
+    }
+
+    #[test]
+    fn ts6_active_cell_selection_picks_active_mux_subtab_in_active_tab() {
+        // TS-6: the active visual cell inside an active mux tab is the active
+        // window's sub-tab, not the tab as a whole. Roster: [plain "a", mux
+        // group (window 1 active)]. With the mux tab (index 1) active, the
+        // requested rect is the window-1 sub-tab cell.
+        let items = vec![item("a"), mux_item(&group_with(3, 1))];
+        let mux_cells = mux_cell_rects(&items);
+        let got = scroll_into_view_rect(&items, 1).expect("flag set → a rect is requested");
+        assert!(
+            (got.left() - mux_cells[1].left()).abs() < 0.5,
+            "scroll-into-view should target the active window's sub-tab; \
+             got {:?} want {:?}",
+            got,
+            mux_cells[1]
+        );
+    }
+
+    #[test]
+    fn ts6_active_cell_selection_picks_plain_cell_at_active_idx() {
+        // TS-6 (plain side): with a plain tab active, the active cell is the
+        // plain-tab cell at `active_idx`.
+        let items = vec![item("a"), item("b"), item("c")];
+        let want = tab_cell_rect(&items, 2, 2);
+        let got = scroll_into_view_rect(&items, 2).expect("flag set → a rect is requested");
+        assert!(
+            (got.left() - want.left()).abs() < 0.5,
+            "scroll-into-view should target the active plain cell; got {got:?} want {want:?}"
+        );
+    }
+
+    #[test]
+    fn ts4_draw_with_non_active_mux_parent_leaves_active_window_unchanged() {
+        // The gate reads `mux_cell.active` (a copied bool) and `tab` /
+        // `active_idx` (plain indices); it never touches `MuxWindowGroup`.
+        // Drawing with a non-active parent must not change the render model's
+        // active window.
+        let group = group_with(3, 1);
+        let before = mux_group_render_model(&group);
+        let items = vec![item("a"), mux_item(&group)];
+        let _ = indicator_rects(&items, 0); // parent (index 1) not active
+        let after = mux_group_render_model(&group);
+        assert_eq!(
+            before, after,
+            "drawing with a non-active mux parent must not mutate the active window"
+        );
     }
 }

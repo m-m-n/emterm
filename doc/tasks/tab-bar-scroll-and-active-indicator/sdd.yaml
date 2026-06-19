@@ -1,0 +1,102 @@
+schema_version: 1
+feature: tab-bar-scroll-and-active-indicator
+created: 2026-06-19
+
+project:
+  components:
+    main:
+      language: Rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --bin emterm"
+      format_command: "CARGO_TARGET_DIR=src-tauri/target cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: be68b37ede6f49660a4ef76611cf8c05940753ef
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: be68b37ede6f49660a4ef76611cf8c05940753ef
+  - id: verify-plan
+    status: completed
+    completed_at_commit: be68b37ede6f49660a4ef76611cf8c05940753ef
+  - id: implement
+    status: completed
+    completed_at_commit: be68b37ede6f49660a4ef76611cf8c05940753ef
+  - id: check
+    status: completed
+    completed_at_commit: be68b37ede6f49660a4ef76611cf8c05940753ef
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: be68b37ede6f49660a4ef76611cf8c05940753ef
+
+requirements:
+  FR1:
+    title: タブ溢れ時の横スクロールをスクロールバー非表示で行う
+    status: ok
+    tasks:
+      - hide-overflow-scrollbar
+    tests:
+      - TS-1
+  FR2:
+    title: タブバー上のマウスホイール(縦回転)で左右スクロールする
+    status: ok
+    tasks:
+      - enable-vertical-wheel-horizontal
+      - wheel-horizontal-fallback
+    tests: []
+  FR3:
+    title: Shift+ホイールで左右スクロールする
+    status: ok
+    tasks:
+      - confirm-shift-wheel-horizontal
+    tests: []
+  FR4:
+    title: キー操作でアクティブが変わったとき該当セルを画面内にスクロールする
+    status: ok
+    tasks:
+      - add-scroll-into-view-flag
+      - raise-flag-plain-tab-handlers
+      - raise-flag-mux-switch-path
+      - thread-flag-into-strip
+      - capture-active-cell-and-scroll
+      - clear-flag-post-frame
+    tests:
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-9
+  FR5:
+    title: アクティブインジケーターを画面全体で1本に一意化する(非アクティブmuxタブのsub-tabバーは非表示)
+    status: ok
+    tasks:
+      - gate-mux-indicator-on-parent-active
+    tests:
+      - TS-2
+      - TS-3
+      - TS-4
+  NFR1:
+    title: 毎フレーム描画のコストを著しく増やさない
+    status: ok
+    tasks:
+      - capture-active-cell-and-scroll
+      - gate-mux-indicator-on-parent-active
+    tests: []
+  NFR2:
+    title: 既存のクリック切替/ドラッグ並べ替え/mux sub-tabクリック/+・歯車ボタンを壊さない
+    status: ok
+    tasks:
+      - hide-overflow-scrollbar
+      - gate-mux-indicator-on-parent-active
+    tests:
+      - TS-1
+  NFR3:
+    title: native ビルドのみ変更し WebView 版タブバーは変更しない
+    status: ok
+    tasks: []
+    tests: []
