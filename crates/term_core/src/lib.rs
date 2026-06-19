@@ -30,6 +30,9 @@ pub mod parser;
 pub mod parser_params;
 pub mod parser_types;
 
+// Mux inband transport extractor (independent parser state)
+pub mod mux_apc_extractor;
+
 // Bench harness (test-only)
 #[cfg(test)]
 mod bench;
@@ -53,6 +56,7 @@ pub mod ring_buffer;
 pub mod sgr;
 
 pub use callbacks::TerminalCallbacks;
+pub use mux_apc_extractor::MuxApcExtractor;
 pub use terminal_core::TerminalCore;
 
 // ── Single-codepoint APIs ───────────────────────────────

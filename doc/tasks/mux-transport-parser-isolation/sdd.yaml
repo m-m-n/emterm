@@ -1,0 +1,113 @@
+schema_version: 1
+feature: mux-transport-parser-isolation
+created: 2026-06-19
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+  - id: verify-plan
+    status: completed
+    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+  - id: implement
+    status: completed
+    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+  - id: check
+    status: completed
+    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+
+requirements:
+  FR1:
+    title: 専用トランスポート抽出器（mux 確立後の PTS から emterm-mux APC/OSC を独立状態で抽出）
+    status: ok
+    tasks:
+      - termcore-extractor
+      - pump-routing
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+  FR2:
+    title: self.core を内側コンテンツ専用化（PtyOutput アームのみが駆動）
+    status: ok
+    tasks:
+      - pump-routing
+    tests:
+      - TS-4
+  FR3:
+    title: 抽出器は APC と OSC 9999 フォールバックの両方を扱う
+    status: ok
+    tasks:
+      - termcore-extractor
+    tests:
+      - TS-3
+  FR4:
+    title: mux 確立前（Welcome 前）は従来どおり self.core で処理
+    status: ok
+    tasks:
+      - lifecycle
+    tests:
+      - TS-5
+  FR5:
+    title: detach 時に PTS 処理を self.core に戻す
+    status: ok
+    tasks:
+      - lifecycle
+    tests:
+      - TS-6
+  FR6:
+    title: Welcome 二重送信に対応（抽出器切替後も）
+    status: ok
+    tasks:
+      - lifecycle
+    tests:
+      - TS-7
+  FR7:
+    title: 調査用 DIAG ログの撤去
+    status: ok
+    tasks:
+      - remove-diag
+    tests:
+      - TS-8
+  NFR1:
+    title: 非mux 経路は不変（回帰なし）
+    status: ok
+    tasks:
+      - pump-routing
+    tests:
+      - TS-9
+  NFR2:
+    title: mux daemon / mux_ipc プロトコル / ブリッジは不変
+    status: ok
+    tasks: []
+    tests:
+      - TS-10
+  NFR3:
+    title: WebView 側（src/）は対象外
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: pump の coalesce / フレーム予算の既存挙動を保つ
+    status: ok
+    tasks:
+      - pump-routing
+    tests: []

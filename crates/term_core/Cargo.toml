@@ -19,3 +19,10 @@ unicode-width = "0.2"
 # NOTE: deliberately no wasm-bindgen / js-sys / web-sys / serde-wasm-bindgen.
 # Anything that previously crossed the JS boundary now goes through the
 # TerminalCallbacks trait (see callbacks.rs).
+
+# Test-only: cross-check the mux transport constants in mux_apc_extractor.rs
+# against their cross-crate SSOT (mux_ipc::protocol). mux_ipc does NOT depend on
+# term_core, so this dev-dependency creates no cycle, and it does not enter the
+# production dependency graph of any downstream consumer (wasm / CLI builds).
+[dev-dependencies]
+mux_ipc = { path = "../mux_ipc" }

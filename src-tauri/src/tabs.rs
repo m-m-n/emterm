@@ -270,6 +270,16 @@ pub struct Tab {
     /// is pending (the common case, and always so for sub-threshold
     /// snapshots which stay on the synchronous path).
     pending_switch: Option<PendingSwitch>,
+    /// Independent parser that extracts the outer `emterm-mux;` transport
+    /// frames from the PTS byte stream once mux is established. A mux tab's
+    /// PTS stream is two layers — the outer transport (APC / OSC 9999 mux
+    /// frames) and, inside `PtyOutput` messages, the inner content. Driving
+    /// both through `self.core`'s single parser corrupts state when an inner
+    /// Kitty image chunk spans `PtyOutput` boundaries (base64 leak). When
+    /// `mux_session_name.is_some()`, `pump` feeds the coalesced PTS bytes here
+    /// instead of into `self.core`, so `self.core` is driven by inner content
+    /// only (FR1 / FR2). Reset on detach so the pre-mux branch resumes clean.
+    mux_apc_extractor: term_core::MuxApcExtractor,
 }
 
 impl Tab {
@@ -381,6 +391,7 @@ impl Tab {
             pending_pane_switch_from: None,
             pending_window_appended: false,
             pending_switch: None,
+            mux_apc_extractor: term_core::MuxApcExtractor::new(),
         }
     }
 
@@ -1338,6 +1349,12 @@ impl Tab {
                 self.mux_group = None;
                 self.mux_session_name = None;
                 self.mux_status_state = None;
+                // Restore pre-mux routing: the next pump parses the PTS stream
+                // with `self.core` again (the bridge process exits and hands the
+                // PTY back to the shell). Drop any partial outer frame the
+                // extractor was carrying so a stale half-sequence cannot corrupt
+                // a future re-attach (FR5).
+                self.mux_apc_extractor.reset();
                 // Cancel any in-flight off-thread snapshot replay before
                 // clearing the grid. Otherwise a switch dispatched just before
                 // detach (target snapshot >= OFFTHREAD_REPLAY_THRESHOLD_BYTES)
@@ -1427,41 +1444,8 @@ impl Tab {
                 }
             }
         }
-        if !combined.is_empty() {
-            let mut c = self.core.lock();
-            c.process_pty_data_fully(&combined);
-            // Force-flush any grapheme cluster left buffered by the
-            // parser (e.g. a lone emoji codepoint at the tail of an
-            // IME-commit echo). Without this the cluster sits in
-            // `grapheme_buffer` until the next non-extending codepoint
-            // arrives, so the glyph stays invisible and the cursor
-            // doesn't advance until the user types something else
-            // (typical symptom: SKK `/smile` → 😄 only appears after
-            // pressing space).
-            c.flush_grapheme_buffer();
-            // Pick up any device-status / DA / XTWINOPS reply term_core
-            // synthesized while processing this chunk. PowerShell +
-            // PSReadLine issue `\x1b[6n` cursor-position queries during
-            // every line redraw; without writing the reply back into the
-            // PTY, PSReadLine recomputes the redraw against a stale
-            // cursor and a single Backspace erases multiple cells.
-            let device_response = c.take_response();
-            // Drain the OSC 133 marks `term_core` captured during this pump
-            // (each already stamped with its emit-time row + eviction count)
-            // and read the current eviction total — all under the core lock
-            // so they are consistent with the bytes just processed. The
-            // actual backfill runs after `drop(c)` because it needs
-            // `&mut self`.
-            let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
-            drop(c);
-            if !device_response.is_empty() {
-                self.write_device_response(device_response);
-            }
-            self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
+        if self.process_combined(combined) {
             changed = true;
-            // New PTY bytes reached the core — latch for the
-            // inactive-tab activity path (WebView `onOutputActivity`).
-            self.output_pending = true;
         }
         if let Some(reason) = saw_exit {
             match reason {
@@ -1475,6 +1459,74 @@ impl Tab {
         // continues draining instead of waiting for the 16ms WaitUntil deadline.
         if yielded {
             crate::wakeup::wake();
+        }
+
+        changed
+    }
+
+    /// Process one coalesced PTS buffer + the callback-state side effects it
+    /// produced, returning whether the visible state changed.
+    ///
+    /// Split out of [`Self::pump`] so the parse / mux-decode / image-drain path
+    /// is exercised by deterministic unit tests (which feed a known buffer)
+    /// rather than the live PTY channel. `pump` calls this once per frame with
+    /// the bytes it coalesced (possibly empty — the callback drains still run).
+    fn process_combined(&mut self, combined: Vec<u8>) -> bool {
+        let mut changed = false;
+        // Mux-transport frames extracted from the coalesced PTS bytes this
+        // pump (mux branch only). Merged into `pending_apc` further down so
+        // they flow through the same `partition_apc_for_mux` sink the pre-mux
+        // `self.core` parse feeds.
+        let mut extracted_mux_apc: Vec<Vec<u8>> = Vec::new();
+        if !combined.is_empty() {
+            if self.mux_session_name.is_some() {
+                // Mux established (FR1 / FR2): the outer PTS stream is the mux
+                // transport. Parse it with the tab's INDEPENDENT extractor, not
+                // `self.core`, so `self.core` is driven by the inner content
+                // only (via `apply_mux_message`). This keeps an inner Kitty
+                // chunk's parser state intact across `PtyOutput` boundaries.
+                // The outer mux stream is APC-only (no printing, no device
+                // queries, no OSC 133 marks), so the `self.core`-side grapheme
+                // flush / device-response / mark-drain do NOT apply here.
+                extracted_mux_apc = self.mux_apc_extractor.feed(&combined);
+                changed = true;
+                self.output_pending = true;
+            } else {
+                let mut c = self.core.lock();
+                c.process_pty_data_fully(&combined);
+                // Force-flush any grapheme cluster left buffered by the
+                // parser (e.g. a lone emoji codepoint at the tail of an
+                // IME-commit echo). Without this the cluster sits in
+                // `grapheme_buffer` until the next non-extending codepoint
+                // arrives, so the glyph stays invisible and the cursor
+                // doesn't advance until the user types something else
+                // (typical symptom: SKK `/smile` → 😄 only appears after
+                // pressing space).
+                c.flush_grapheme_buffer();
+                // Pick up any device-status / DA / XTWINOPS reply term_core
+                // synthesized while processing this chunk. PowerShell +
+                // PSReadLine issue `\x1b[6n` cursor-position queries during
+                // every line redraw; without writing the reply back into the
+                // PTY, PSReadLine recomputes the redraw against a stale
+                // cursor and a single Backspace erases multiple cells.
+                let device_response = c.take_response();
+                // Drain the OSC 133 marks `term_core` captured during this pump
+                // (each already stamped with its emit-time row + eviction count)
+                // and read the current eviction total — all under the core lock
+                // so they are consistent with the bytes just processed. The
+                // actual backfill runs after `drop(c)` because it needs
+                // `&mut self`.
+                let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
+                drop(c);
+                if !device_response.is_empty() {
+                    self.write_device_response(device_response);
+                }
+                self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
+                changed = true;
+                // New PTY bytes reached the core — latch for the
+                // inactive-tab activity path (WebView `onOutputActivity`).
+                self.output_pending = true;
+            }
         }
 
         // Sync title from callback state if the shell sent a new one.
@@ -1519,7 +1571,16 @@ impl Tab {
             // inband protocol are decoded and applied to this tab's state;
             // everything else (Kitty graphics) falls through to the image
             // pipeline. `pending_dcs` is image-only (SIXEL).
-            let (image_apc, mux_messages) = partition_apc_for_mux(pending_apc);
+            //
+            // Pre-mux: `pending_apc` was populated by the `self.core` outer
+            // parse above (which fired `on_apc`). Mux: the outer parse went to
+            // the independent extractor instead, so the mux frames arrive via
+            // `extracted_mux_apc`; prepend them so they decode before any inner
+            // content this same pump applies. Concatenating both lets one code
+            // path serve both branches.
+            let mut combined_apc = extracted_mux_apc;
+            combined_apc.extend(pending_apc);
+            let (image_apc, mux_messages) = partition_apc_for_mux(combined_apc);
             for msg in mux_messages {
                 if self.apply_mux_message(msg) {
                     changed = true;
@@ -1527,6 +1588,26 @@ impl Tab {
             }
             if (!image_apc.is_empty() || !pending_dcs.is_empty())
                 && self.drain_and_decode_images(&image_apc, &pending_dcs)
+            {
+                changed = true;
+            }
+            // Inner content applied by `apply_mux_message` (the `PtyOutput`
+            // arm feeding `self.core`) fires `on_apc` / `on_dcs` for any inner
+            // Kitty / SIXEL image — those land in `cb_state.pending_apc` /
+            // `pending_dcs` only AFTER the loop above ran. Drain and decode
+            // them now so an inner mux image is not deferred a frame (or, when
+            // the next pump has no PTS bytes, never decoded). Inner content is
+            // image-only here (mux protocol frames never re-enter `self.core`),
+            // so this drain feeds the image pipeline directly.
+            let (inner_apc, inner_dcs) = {
+                let mut s = self.cb_state.lock();
+                (
+                    std::mem::take(&mut s.pending_apc),
+                    std::mem::take(&mut s.pending_dcs),
+                )
+            };
+            if (!inner_apc.is_empty() || !inner_dcs.is_empty())
+                && self.drain_and_decode_images(&inner_apc, &inner_dcs)
             {
                 changed = true;
             }
@@ -2170,6 +2251,32 @@ impl Tab {
         let c = self.core.lock();
         let s: String = (0..c.cols()).map(|col| c.get_cell_char(col, row)).collect();
         s.trim_end().to_string()
+    }
+
+    /// Test-only: drive the per-pump buffer-processing path with a known
+    /// coalesced PTS buffer, bypassing the live PTY channel. Exercises the
+    /// exact `pump` parse / mux-decode / image-drain logic so the
+    /// transport-isolation routing is testable deterministically.
+    #[cfg(test)]
+    pub(crate) fn test_process_combined(&mut self, combined: Vec<u8>) -> bool {
+        self.process_combined(combined)
+    }
+
+    /// Test-only: the whole displayed grid (all rows) as one string, for
+    /// asserting that outer-transport base64 never leaks onto the screen.
+    #[cfg(test)]
+    pub(crate) fn test_grid_text(&self) -> String {
+        let c = self.core.lock();
+        let rows = c.rows();
+        let cols = c.cols();
+        let mut out = String::new();
+        for row in 0..rows {
+            for col in 0..cols {
+                out.push_str(&c.get_cell_char(col, row));
+            }
+            out.push('\n');
+        }
+        out
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
@@ -4236,6 +4343,245 @@ mod tests {
             offthread.folds.region_count(),
             reference.folds.region_count(),
             "off-thread and sync paths must register the same fold regions"
+        );
+    }
+
+    // ── mux transport/content parser isolation (TS-4..TS-9) ───────────────
+
+    use base64::Engine as _;
+
+    /// Base64-encode bytes the way the Kitty payload field expects.
+    fn b64(bytes: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    /// Wrap inner-content bytes as an outer `emterm-mux;` PtyOutput APC frame
+    /// for pane `pane_id`, exactly as the daemon/bridge writes it to the PTS
+    /// stream (`ESC _ emterm-mux;<base64(frame)> ESC \`).
+    fn pty_output_apc(pane_id: u32, inner: &[u8]) -> Vec<u8> {
+        let msg = MuxMessage {
+            msg_type: MessageType::PtyOutput,
+            pane_id,
+            payload: inner.to_vec(),
+        };
+        crate::mux::apc::encode_emterm_mux(&msg)
+    }
+
+    /// A complete-in-one Kitty APC for a `w`×`h` raw-RGB image (`f=24`).
+    fn kitty_rgb_single(w: u32, h: u32) -> Vec<u8> {
+        let raw = vec![0xABu8; (w * h * 3) as usize];
+        let payload = b64(&raw);
+        let mut v = vec![0x1b, b'_'];
+        v.extend_from_slice(format!("Ga=T,f=24,s={w},v={h};{payload}").as_bytes());
+        v.extend_from_slice(&[0x1b, b'\\']);
+        v
+    }
+
+    /// A `w`×`h` raw-RGB Kitty image split into `parts` chunked APC frames
+    /// (`m=1` … `m=0`). The base64 payload is split at arbitrary character
+    /// boundaries across the chunks; the decoder concatenates the base64
+    /// strings before decoding, so any split reconstructs the same image.
+    fn kitty_rgb_chunked(w: u32, h: u32, parts: usize) -> Vec<Vec<u8>> {
+        assert!(parts >= 2);
+        let raw = vec![0xABu8; (w * h * 3) as usize];
+        let payload = b64(&raw);
+        let bytes = payload.as_bytes();
+        let chunk = bytes.len().div_ceil(parts);
+        let slices: Vec<&[u8]> = bytes.chunks(chunk).collect();
+        let mut out = Vec::new();
+        for (i, slice) in slices.iter().enumerate() {
+            let first = i == 0;
+            let last = i == slices.len() - 1;
+            let m = if last { 0 } else { 1 };
+            let mut apc = vec![0x1b, b'_'];
+            let control = if first {
+                format!("Ga=T,i=1,f=24,s={w},v={h},m={m};")
+            } else {
+                format!("Ga=T,i=1,m={m};")
+            };
+            apc.extend_from_slice(control.as_bytes());
+            apc.extend_from_slice(slice);
+            apc.extend_from_slice(&[0x1b, b'\\']);
+            out.push(apc);
+        }
+        out
+    }
+
+    fn has_image_ready(events: &[ImageEvent]) -> bool {
+        events
+            .iter()
+            .any(|e| matches!(e, ImageEvent::ImageReady { .. }))
+    }
+
+    // ── TS-4: split inner Kitty over mux PtyOutput boundaries ─────────────
+    #[test]
+    fn ts4_split_inner_kitty_over_mux_pty_output_assembles_one_image() {
+        let mut tab = test_tab();
+        // Establish mux with no window group → all PtyOutput accepted, and the
+        // extractor engages from the next pump on.
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        assert!(tab.mux_session_name.is_some(), "mux established");
+
+        // A 4×4 RGB image (48 raw bytes → 64 base64 chars) split into 3 inner
+        // Kitty chunks, each delivered as its own outer PtyOutput APC frame,
+        // with a plain-text outer pump interleaved between them — the exact
+        // shape that corrupted a shared parser.
+        let chunks = kitty_rgb_chunked(4, 4, 3);
+
+        // Chunk 1 (m=1): inner parser left mid-transfer.
+        tab.test_process_combined(pty_output_apc(0, &chunks[0]));
+        // Interleaving outer pump: a second mux PtyOutput carrying plain text.
+        tab.test_process_combined(pty_output_apc(0, b"intervening text\r\n"));
+        // Chunk 2 (m=1).
+        tab.test_process_combined(pty_output_apc(0, &chunks[1]));
+        // Chunk 3 (m=0): finalizes the transfer.
+        let _ = tab.test_process_combined(pty_output_apc(0, &chunks[2]));
+
+        let events = tab.drain_image_events();
+        assert!(
+            has_image_ready(&events),
+            "split inner Kitty chunks must assemble into one decodable image; events={events:?}"
+        );
+
+        // No base64 of the image payload leaked onto the grid.
+        let raw = vec![0xABu8; 4 * 4 * 3];
+        let payload = b64(&raw);
+        let grid = tab.test_grid_text();
+        assert!(
+            !grid.contains(&payload[..16]),
+            "image base64 must not leak to the grid"
+        );
+        assert!(
+            !grid.contains("emterm-mux"),
+            "outer transport prefix must not leak to the grid"
+        );
+        assert!(
+            !grid.contains("Ga=T"),
+            "Kitty control data must not leak to the grid"
+        );
+        // The interleaved inner plain text DID reach the core (inner content
+        // is what self.core renders).
+        assert!(
+            tab.test_grid_text().contains("intervening text"),
+            "inner plain text must render via self.core"
+        );
+    }
+
+    // ── TS-9: non-mux Kitty image still decodes (no regression) ───────────
+    #[test]
+    fn ts9_non_mux_kitty_image_still_decodes() {
+        let mut tab = test_tab();
+        assert!(tab.mux_session_name.is_none(), "pre-mux tab");
+        // A complete Kitty image fed as a plain PTS buffer (pre-mux branch:
+        // parsed by self.core, on_apc → pending_apc → image pipeline).
+        let _ = tab.test_process_combined(kitty_rgb_single(3, 3));
+        let events = tab.drain_image_events();
+        assert!(
+            has_image_ready(&events),
+            "non-mux Kitty image must decode as before; events={events:?}"
+        );
+    }
+
+    // ── TS-5: pre-mux PTS bytes route through self.core ───────────────────
+    #[test]
+    fn ts5_pre_mux_pts_routes_through_core() {
+        let mut tab = test_tab();
+        assert!(tab.mux_session_name.is_none(), "extractor not engaged yet");
+        // Plain printable bytes fed as the outer PTS stream: pre-mux they must
+        // be parsed by self.core and land on the grid (the extractor would
+        // discard non-transport Print actions).
+        tab.test_process_combined(b"pre-mux line\r\n".to_vec());
+        assert!(
+            tab.test_grid_text().contains("pre-mux line"),
+            "pre-mux plain text must render via self.core"
+        );
+    }
+
+    #[test]
+    fn ts5_switch_to_extractor_after_welcome_discards_outer_print() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        assert!(tab.mux_session_name.is_some(), "mux established");
+        // After the switch, raw printable bytes on the OUTER stream are not
+        // content — they are not valid mux transport, so the extractor drops
+        // them and they never reach self.core / the grid.
+        tab.test_process_combined(b"outer-noise-xyz\r\n".to_vec());
+        assert!(
+            !tab.test_grid_text().contains("outer-noise-xyz"),
+            "outer-stream Print must NOT reach the core once mux is established"
+        );
+    }
+
+    // ── TS-6: detach restores self.core routing ───────────────────────────
+    #[test]
+    fn ts6_detach_restores_core_routing() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        assert!(tab.mux_session_name.is_some());
+        // Detach: the daemon confirms with a Detached frame delivered as an
+        // outer PtyOutput-equivalent control message. Apply it directly.
+        let detached = MuxMessage {
+            msg_type: MessageType::Detached,
+            pane_id: 0,
+            payload: Vec::new(),
+        };
+        tab.apply_mux_message(detached);
+        assert!(tab.mux_session_name.is_none(), "detached clears mux");
+        // Pre-mux routing resumed: plain PTS bytes are parsed by self.core
+        // again and render on the grid.
+        tab.test_process_combined(b"post-detach line\r\n".to_vec());
+        assert!(
+            tab.test_grid_text().contains("post-detach line"),
+            "after detach, plain text must render via self.core again"
+        );
+    }
+
+    #[test]
+    fn ts6_detach_resets_extractor_partial_frame() {
+        // A partial outer frame in flight when detach happens must be dropped,
+        // not carried into the resumed pre-mux core parse.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        // Feed half of an outer APC frame — the extractor is now mid-sequence.
+        let half = pty_output_apc(0, b"GG");
+        let split = half.len() / 2;
+        tab.test_process_combined(half[..split].to_vec());
+        // Detach (resets the extractor).
+        tab.apply_mux_message(MuxMessage {
+            msg_type: MessageType::Detached,
+            pane_id: 0,
+            payload: Vec::new(),
+        });
+        // The remainder, now fed pre-mux to self.core, is the tail of an APC
+        // sequence with no introducer: self.core stays in Ground for the
+        // trailing ST and prints nothing garbled. Then a clean line renders.
+        tab.test_process_combined(half[split..].to_vec());
+        tab.test_process_combined(b"clean\r\n".to_vec());
+        assert!(
+            tab.test_grid_text().contains("clean"),
+            "post-detach core parse is clean after extractor reset"
+        );
+    }
+
+    // ── TS-7: double-Welcome does not corrupt the stream ──────────────────
+    #[test]
+    fn ts7_double_welcome_does_not_corrupt_decoding() {
+        let mut tab = test_tab();
+        // The bridge/daemon can deliver Welcome twice (a known duplication).
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        assert!(tab.mux_session_name.is_some(), "mux still established");
+
+        // A split inner Kitty image after the double Welcome must still
+        // assemble into one image — the extractor state stayed consistent.
+        let chunks = kitty_rgb_chunked(4, 4, 3);
+        tab.test_process_combined(pty_output_apc(0, &chunks[0]));
+        tab.test_process_combined(pty_output_apc(0, &chunks[1]));
+        tab.test_process_combined(pty_output_apc(0, &chunks[2]));
+        let events = tab.drain_image_events();
+        assert!(
+            has_image_ready(&events),
+            "image must decode despite double Welcome; events={events:?}"
         );
     }
 }

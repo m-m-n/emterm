@@ -1,0 +1,82 @@
+schema_version: 1
+feature: mux-transport-parser-isolation
+
+tasks:
+  - id: termcore-extractor
+    status: completed
+    phase: 1
+    title: term_core public transport extractor
+    summary: >-
+      Add an independent transport extractor in term_core that drives its own
+      Parser over a byte stream and surfaces only APC / OSC frames (discarding
+      Print/CSI/Esc), preserving parser state across calls so split frames
+      reassemble. Export it from the crate.
+    files_create:
+      - crates/term_core/src/mux_apc_extractor.rs
+    files_modify:
+      - crates/term_core/src/lib.rs
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+    depends_on: []
+    effort: medium
+
+  - id: pump-routing
+    status: completed
+    phase: 2
+    title: Route pump outer parse through the extractor when mux established
+    summary: >-
+      Give Tab its own extractor; in pump, when mux_session_name.is_some(),
+      feed coalesced PTS bytes to the extractor and route frames into the
+      existing partition_apc_for_mux -> apply_mux_message path, leaving
+      Tab::core driven only by inner content. Pre-mux branch unchanged.
+    files_create: []
+    files_modify:
+      - src-tauri/src/tabs.rs
+    tests:
+      - TS-4
+      - TS-9
+    depends_on:
+      - termcore-extractor
+    effort: medium
+
+  - id: lifecycle
+    status: completed
+    phase: 3
+    title: Handshake switch, detach restoration, Welcome duplication
+    summary: >-
+      Engage the extractor on the first pump after Welcome sets
+      mux_session_name; reset it and revert to Tab::core on detach; keep state
+      consistent under the known double-Welcome delivery.
+    files_create: []
+    files_modify:
+      - src-tauri/src/tabs.rs
+    tests:
+      - TS-5
+      - TS-6
+      - TS-7
+    depends_on:
+      - pump-routing
+    effort: small
+
+  - id: remove-diag
+    status: completed
+    phase: 4
+    title: Remove DIAG diagnostics
+    summary: >-
+      Remove the temporary DIAG logs in tabs.rs (PtyOutput arm,
+      drain_and_decode_images, reset_frame_for_replay), remove the
+      parser_mid_sequence() accessor in terminal_core.rs, and restore the
+      original simple warn in mux/apc.rs try_decode_emterm_mux.
+    files_create: []
+    files_modify:
+      - crates/term_core/src/terminal_core.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/mux/apc.rs
+    tests:
+      - TS-8
+    depends_on:
+      - pump-routing
+      - lifecycle
+    effort: small
