@@ -745,6 +745,28 @@ impl Tab {
         self.backfill_marks(evicted_total, prompt_marks, fold_marks);
     }
 
+    /// Decide which pane (if any) needs a screen reconcile after a window
+    /// close. Given the active pane id captured **before** `remove_pane` and
+    /// the active pane id read **after** the removal, return the now-active
+    /// pane id to request a snapshot for, or `None` when nothing needs
+    /// redrawing.
+    ///
+    /// Comparison is by pane **id**, not index, so a non-active window close
+    /// that shifts indices but leaves the displayed window's content unchanged
+    /// correctly yields `None` (FR2). When the group is emptied the post-removal
+    /// active pane id is `None`, which also yields `None` (FR3, no request). A
+    /// genuine active-window close (FR1) produces a different post-removal pane
+    /// id and returns it.
+    fn close_reconcile_target(
+        before_active: Option<u32>,
+        after_active: Option<u32>,
+    ) -> Option<u32> {
+        match after_active {
+            Some(after) if Some(after) != before_active => Some(after),
+            _ => None,
+        }
+    }
+
     /// Route one decoded mux message into this tab. Called by `App::pump_all`
     /// after the APC decoder ([`crate::mux::apc::try_decode_emterm_mux`])
     /// produced a typed `MuxMessage`. Returns true when the visible state
@@ -1224,7 +1246,12 @@ impl Tab {
                 // the tab itself is closed — `exited` makes `App::pump_all` reap
                 // it just like a local shell that ran out (otherwise the empty
                 // mux tab lingers and blocks `mux kill`).
-                match self.mux_group.as_mut() {
+                // Capture the displayed (active) pane id before removal so the
+                // close-reconcile decision can tell "active window closed"
+                // (redraw needed) from "non-active window closed, indices
+                // shifted but the displayed pane is unchanged" (no redraw).
+                let before_active = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
+                let reconcile_target = match self.mux_group.as_mut() {
                     Some(group) => match group.remove_pane(msg.pane_id) {
                         Some(idx) => {
                             log::info!(
@@ -1236,10 +1263,17 @@ impl Tab {
                             if group.is_empty() {
                                 self.mux_group = None;
                                 self.exited = true;
+                                // Group emptied: nothing to redraw (FR3).
+                                None
+                            } else {
+                                // Active window may have changed; decide by pane
+                                // id whether the screen needs a reconcile.
+                                let after_active = group.active_pane_id();
+                                Tab::close_reconcile_target(before_active, after_active)
                             }
-                            true
                         }
-                        None => false,
+                        // Unknown pane id: no removal, no reconcile.
+                        None => return false,
                     },
                     None => {
                         log::info!(
@@ -1247,9 +1281,31 @@ impl Tab {
                             msg.pane_id,
                             self.title
                         );
-                        false
+                        return false;
                     }
+                };
+                // Reconcile the screen with the now-active window (parity with
+                // the inbound `SwitchWindow` reconcile). `request_pane_snapshot`
+                // is a fire-and-forget PTY write, so this is gated on the
+                // decision rather than asserted directly in unit tests (FR1).
+                if let Some(pane_id) = reconcile_target {
+                    // Latch the outgoing (exited) pane id so App::pump_all's
+                    // existing per-pane scroll save/restore block runs for this
+                    // close path, mirroring the SwitchWindow arm. First-latch-
+                    // only: if several PtyExited drain in one pump we keep the
+                    // genuinely-displayed outgoing pane (intermediate panes were
+                    // never rendered). The exited pane is already removed by
+                    // remove_pane above, so App::index_of_pane_id returns None
+                    // for it — the park is correctly skipped and only the new
+                    // active pane's active_pane_scroll() is reloaded.
+                    if let Some(before) = before_active {
+                        if self.pending_pane_switch_from.is_none() {
+                            self.pending_pane_switch_from = Some(before);
+                        }
+                    }
+                    self.request_pane_snapshot(pane_id);
                 }
+                true
             }
             MessageType::Detached => {
                 // The daemon confirmed our `Detach`: exit mux mode. Clear the
@@ -3228,6 +3284,159 @@ mod tests {
         // The last window's shell exited: the tab closes (reaped by
         // `App::pump_all`), unlike an explicit detach which keeps it alive.
         assert!(tab.exited);
+    }
+
+    // ── close-reconcile decision (FR1/FR2/FR3) ────────────────────────────
+
+    // TS-1: the active window's shell exits in a 3-window group → the decision
+    // helper returns the now-active pane id (a snapshot reconcile is wanted).
+    #[test]
+    fn close_reconcile_active_window_close_returns_new_active_pane() {
+        let mut tab = test_tab();
+        // Active index 2 (pane 30) is the displayed window.
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20), (3, "c", 30)], 2));
+        let before = tab.mux_group.as_ref().unwrap().active_pane_id();
+        assert_eq!(before, Some(30));
+        // Close the active window.
+        let changed = tab.apply_mux_message(pty_exited(30));
+        assert!(changed);
+        let after = tab.mux_group.as_ref().unwrap().active_pane_id();
+        // The re-clamp moved active onto pane 20; the helper wants its snapshot.
+        assert_eq!(after, Some(20));
+        assert_eq!(Tab::close_reconcile_target(before, after), Some(20));
+    }
+
+    // TS-2: a non-active window's shell exits → the helper returns None even
+    // though the active *index* shifts, because the displayed pane id is
+    // unchanged.
+    #[test]
+    fn close_reconcile_nonactive_window_close_returns_none() {
+        let mut tab = test_tab();
+        // Active index 2 (pane 30). Close an EARLIER window (pane 10) so the
+        // active index re-clamps from 2 → 1 yet still points at pane 30.
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20), (3, "c", 30)], 2));
+        let before = tab.mux_group.as_ref().unwrap().active_pane_id();
+        assert_eq!(before, Some(30));
+        let changed = tab.apply_mux_message(pty_exited(10));
+        assert!(changed);
+        let g = tab.mux_group.as_ref().unwrap();
+        // Index shifted 2 → 1 but the displayed window (pane 30) is unchanged.
+        assert_eq!(g.active_index(), 1);
+        let after = g.active_pane_id();
+        assert_eq!(after, Some(30));
+        assert_eq!(Tab::close_reconcile_target(before, after), None);
+    }
+
+    // TS-3: the last remaining window's shell exits → the group empties, the
+    // tab is marked exited, and the helper returns None (no reconcile).
+    #[test]
+    fn close_reconcile_last_window_close_returns_none() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "only", 10)], 0));
+        let before = tab.mux_group.as_ref().unwrap().active_pane_id();
+        assert_eq!(before, Some(10));
+        let changed = tab.apply_mux_message(pty_exited(10));
+        assert!(changed);
+        // Group emptied → no displayed pane → helper returns None.
+        assert!(tab.mux_group.is_none());
+        assert!(tab.exited);
+        assert_eq!(Tab::close_reconcile_target(before, None), None);
+    }
+
+    // TS-4: PtyExited for an unknown pane id → no removal, no change, helper
+    // input is unchanged so it would yield None.
+    #[test]
+    fn close_reconcile_unknown_pane_is_noop() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let before = tab.mux_group.as_ref().unwrap().active_pane_id();
+        let changed = tab.apply_mux_message(pty_exited(999));
+        assert!(!changed);
+        let g = tab.mux_group.as_ref().unwrap();
+        assert_eq!(g.len(), 2, "no window removed");
+        let after = g.active_pane_id();
+        assert_eq!(after, before, "active unchanged");
+        assert_eq!(Tab::close_reconcile_target(before, after), None);
+    }
+
+    // TS-5: several PtyExited for distinct panes drain in one pump → the final
+    // active window is the one that needs reconciling. The helper, fed the
+    // pre-pump active id against the post-pump active id, names the survivor.
+    #[test]
+    fn close_reconcile_multi_exit_in_one_pump_targets_final_active() {
+        let mut tab = test_tab();
+        // Active index 2 (pane 30).
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20), (3, "c", 30)], 2));
+        let before = tab.mux_group.as_ref().unwrap().active_pane_id();
+        assert_eq!(before, Some(30));
+        // Two distinct windows exit in the same pump: first the active (pane
+        // 30 → re-clamp onto pane 20), then pane 20 (→ re-clamp onto pane 10).
+        assert!(tab.apply_mux_message(pty_exited(30)));
+        assert!(tab.apply_mux_message(pty_exited(20)));
+        let g = tab.mux_group.as_ref().unwrap();
+        assert_eq!(g.len(), 1);
+        let after = g.active_pane_id();
+        assert_eq!(after, Some(10), "final active window survives");
+        // Reconcile target is the final active window, not an intermediate one.
+        assert_eq!(Tab::close_reconcile_target(before, after), Some(10));
+    }
+
+    // TS-6: regression — inbound SwitchWindow still syncs the active index and
+    // reconciles the now-active window (the close fix must not alter it).
+    #[test]
+    fn switch_window_still_reconciles_after_close_fix() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        let changed = tab.apply_mux_message(switch_window(20));
+        assert!(changed, "an inbound switch still reports a visible change");
+        assert_eq!(
+            tab.mux_group.as_ref().unwrap().active_index(),
+            1,
+            "the active index is synced to the switched-to window"
+        );
+        assert_eq!(
+            tab.take_pending_pane_switch(),
+            Some(10),
+            "the outgoing pane is still latched for the App-side scroll save"
+        );
+    }
+
+    // TS-7: closing the active mux window latches the exited pane id so
+    // App::pump_all reloads the now-active pane's saved scroll position,
+    // mirroring the SwitchWindow path. Closing a NON-active window must
+    // NOT latch (the displayed pane did not change).
+    #[test]
+    fn close_reconcile_latches_outgoing_pane_for_scroll_reload() {
+        // Active window close: pane 30 (active) exits → group re-clamps to
+        // pane 20. The exited pane id (30) must be latched so the App-side
+        // scroll restore runs. index_of_pane_id(30) will return None (already
+        // removed), so the park is skipped and only active_pane_scroll() for
+        // the new active (20) is reloaded — by App::pump_all's existing block.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20), (3, "c", 30)], 2));
+        assert_eq!(tab.mux_group.as_ref().unwrap().active_pane_id(), Some(30));
+        let changed = tab.apply_mux_message(pty_exited(30));
+        assert!(changed);
+        assert_eq!(
+            tab.take_pending_pane_switch(),
+            Some(30),
+            "the exited active pane id must be latched for the App-side scroll reload"
+        );
+        // One-shot: consumed by take_pending_pane_switch.
+        assert_eq!(tab.take_pending_pane_switch(), None);
+
+        // Non-active window close: pane 10 (non-active) exits → the displayed
+        // pane (30, active) is unchanged. No latch should be set.
+        let mut tab2 = test_tab();
+        tab2.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20), (3, "c", 30)], 2));
+        assert_eq!(tab2.mux_group.as_ref().unwrap().active_pane_id(), Some(30));
+        let changed2 = tab2.apply_mux_message(pty_exited(10));
+        assert!(changed2);
+        assert_eq!(
+            tab2.take_pending_pane_switch(),
+            None,
+            "closing a non-active window must not latch (displayed pane unchanged)"
+        );
     }
 
     // ── Detached: exit mux mode (group + session name cleared) ────────────
