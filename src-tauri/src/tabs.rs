@@ -255,6 +255,14 @@ pub struct Tab {
     /// latch park the outgoing scroll into the wrong slot; the consumer
     /// resolves the id to a current index and skips if the pane is gone.
     pending_pane_switch_from: Option<u32>,
+    /// One-shot latch: a `PaneCreated` this pump appended a new mux window
+    /// (which `MuxWindowGroup::push` makes the active sub-tab). `App::pump_all`
+    /// drains it via [`Tab::take_pending_window_appended`] and, when this is the
+    /// active tab, scrolls the freshly-active sub-tab into view (FR6, mux case).
+    /// Latched at the push site rather than inferred from a window-count delta,
+    /// so a same-pump `PtyExited` removing another pane, or a `Welcome` reseed,
+    /// can neither mask nor fake the signal.
+    pending_window_appended: bool,
     /// In-flight off-thread snapshot replay for this tab (the mux
     /// off-thread switch). `Some` while a large snapshot is being reparsed
     /// on a worker thread; `App::pump_all` polls it each pump and swaps the
@@ -371,6 +379,7 @@ impl Tab {
             ssh_connection_name,
             scroll_position: crate::app::ScrollPosition::default(),
             pending_pane_switch_from: None,
+            pending_window_appended: false,
             pending_switch: None,
         }
     }
@@ -449,6 +458,14 @@ impl Tab {
     /// active pane's saved position and forces a full redraw (FR2).
     pub fn take_pending_pane_switch(&mut self) -> Option<u32> {
         self.pending_pane_switch_from.take()
+    }
+
+    /// Drain the one-shot "a mux window was appended this pump" latch (FR6, mux
+    /// case). Returns `true` exactly once after a `PaneCreated` pushed — and so
+    /// activated — a new window. `App::pump_all` drains every tab to avoid stale
+    /// carry-over and acts on it only for the active tab.
+    pub fn take_pending_window_appended(&mut self) -> bool {
+        std::mem::take(&mut self.pending_window_appended)
     }
 
     /// Pause the native PTY reader. Subsequent PTY output goes into the
@@ -1115,6 +1132,11 @@ impl Tab {
                     },
                     msg.pane_id,
                 );
+                // FR6 (mux): the push made the new window the active sub-tab.
+                // Latch it at the event source so `App::pump_all` scrolls it into
+                // view when this is the active tab — immune to a same-pump
+                // `PtyExited` or a `Welcome` reseed, unlike a window-count delta.
+                self.pending_window_appended = true;
                 if let Some(from) = from_pane {
                     if self.pending_pane_switch_from.is_none() {
                         self.pending_pane_switch_from = Some(from);
@@ -3652,6 +3674,47 @@ mod tests {
             tab.take_pending_pane_switch(),
             Some(10),
             "the outgoing pane id (10) is latched on new-window create"
+        );
+    }
+
+    #[test]
+    fn pane_created_latches_pending_window_appended_fr6() {
+        // FR6 (mux): a PaneCreated that pushes — and so activates — a new window
+        // latches the one-shot scroll-into-view signal that App::pump_all drains
+        // for the active tab. Latched at the push site (not inferred from a
+        // window-count delta), so it is a single, unambiguous event.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10)], 0));
+        assert!(!tab.take_pending_window_appended(), "baseline: not latched");
+        assert!(tab.apply_mux_message(pane_created(20)));
+        assert!(
+            tab.take_pending_window_appended(),
+            "PaneCreated that appended + activated a window latches the FR6 signal"
+        );
+        assert!(
+            !tab.take_pending_window_appended(),
+            "one-shot: the latch is cleared by take"
+        );
+    }
+
+    #[test]
+    fn window_appended_latch_survives_same_pump_pane_exit() {
+        // Regression: the FR6 mux signal was previously inferred from a window-
+        // count delta, which a same-pump PtyExited (removing a *different* pane)
+        // could mask — PaneCreated (+1) and PtyExited (−1) net to zero, so the
+        // delta missed the new active window. The push-site latch is immune: a
+        // PaneCreated that activated a new window still latches even when another
+        // pane exits in the same pump.
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "a", 10), (2, "b", 20)], 0));
+        // active = pane 10 (index 0). Create a new window (pane 30) → pushed and
+        // activated; then a different pane (20) exits in the same pump. Net
+        // window count is unchanged (2 → 3 → 2), the case a count delta missed.
+        assert!(tab.apply_mux_message(pane_created(30)));
+        let _ = tab.apply_mux_message(pty_exited(20));
+        assert!(
+            tab.take_pending_window_appended(),
+            "the FR6 latch survives a same-pump exit of a different pane"
         );
     }
 

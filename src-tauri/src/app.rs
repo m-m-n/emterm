@@ -2669,6 +2669,13 @@ impl App {
         // `pending_frame_reset` latch (drained into `active_frame_reset`),
         // which `apply_offthread_swap` set during the swap.
         let mut active_offthread_swapped = false;
+        // FR6 (mux): a new mux window appended to the ACTIVE tab this pump means
+        // a fresh sub-tab became active (off-screen when the strip overflows),
+        // so it should scroll into view next frame — the async mux analogue of
+        // the `+`-button new-tab path. Sourced from each tab's one-shot
+        // `take_pending_window_appended` latch (set at the `PaneCreated` push
+        // site); applied for the active tab after the `&mut self.tabs` borrow ends.
+        let mut active_mux_window_added = false;
         // emterm viewer OSC payloads collected across all tabs this pass,
         // routed to the spawner after the `&mut self.tabs` borrow ends.
         let mut viewer_osc: Vec<crate::callbacks::EmtermOscRequest> = Vec::new();
@@ -2689,6 +2696,13 @@ impl App {
                 if idx == active {
                     active_changed = true;
                 }
+            }
+            // FR6 (mux): drain every tab's one-shot "window appended this pump"
+            // latch (set at the `PaneCreated` push site) to avoid stale
+            // carry-over; act on it only for the active tab, where the freshly
+            // pushed window is now the active sub-tab and should scroll into view.
+            if tab.take_pending_window_appended() && idx == active {
+                active_mux_window_added = true;
             }
             // Non-blockingly poll this tab's in-flight off-thread snapshot
             // replay (the mux off-thread switch). Run per owning tab, not just
@@ -2910,6 +2924,13 @@ impl App {
                     None => self.pending_selection_anchor = None,
                 }
             }
+        }
+        // FR6 (mux): a new mux window was appended to the active tab this pump,
+        // so its freshly-active sub-tab should scroll into view next frame (the
+        // async mux analogue of the `+`-button new-tab path). Applied here,
+        // after the `&mut self.tabs` borrow has ended.
+        if active_mux_window_added {
+            self.scroll_active_tab_into_view = true;
         }
         for (sanitized_title, kind) in pending_notifications {
             let body = crate::notifications::notification_body(&sanitized_title, kind, self.locale);
@@ -5536,6 +5557,64 @@ mod tests {
             MuxActionOutcome::None
         );
         assert_eq!(active_idx(&app), 0);
+    }
+
+    #[test]
+    fn pump_all_scrolls_new_mux_window_into_view_on_active_tab() {
+        // FR6 (mux), App-level integration: a daemon `PaneCreated` on the ACTIVE
+        // mux tab raises scroll-into-view through `pump_all` — the path the
+        // tabs.rs latch unit tests do not reach (the `idx == active` gating plus
+        // the latch → `scroll_active_tab_into_view` conversion).
+        let mut app = app_with_mux_windows(2); // tab 0 is mux and active
+        app.clear_scroll_active_tab_into_view();
+        // The daemon confirms a new window on the active tab; the push activates
+        // it, and the PaneCreated handler latches the FR6 signal.
+        app.on_mux_message(
+            0,
+            MuxMessage {
+                msg_type: MessageType::PaneCreated,
+                pane_id: 200,
+                payload: Vec::new(),
+            },
+        );
+        app.pump_all();
+        assert!(
+            app.scroll_active_tab_into_view(),
+            "a PaneCreated on the active mux tab scrolls the new sub-tab into view"
+        );
+    }
+
+    #[test]
+    fn pump_all_skips_scroll_for_background_tab_mux_window_and_drains_latch() {
+        // FR6 (mux), App-level integration: a `PaneCreated` on a NON-active tab
+        // must NOT raise scroll-into-view (the `idx == active` gate), and its
+        // latch is still drained (drain-every-tab) so it cannot fire on a later
+        // pump. This locks both invariants the unit tests cannot reach.
+        let mut app = app_with_mux_windows(2); // tab 0 is mux, active = 0
+        app.spawn_new_tab(); // tab 1 becomes active
+        app.clear_scroll_active_tab_into_view(); // spawn_new_tab raises it (FR6)
+        assert_eq!(app.active, 1);
+        // A new window is appended to the BACKGROUND mux tab (tab 0).
+        app.on_mux_message(
+            0,
+            MuxMessage {
+                msg_type: MessageType::PaneCreated,
+                pane_id: 200,
+                payload: Vec::new(),
+            },
+        );
+        app.pump_all();
+        assert!(
+            !app.scroll_active_tab_into_view(),
+            "a background-tab window add must not scroll the active tab"
+        );
+        // The background latch was drained, not stranded: a later pump with no
+        // new event keeps the flag down.
+        app.pump_all();
+        assert!(
+            !app.scroll_active_tab_into_view(),
+            "the drained latch does not resurface on a subsequent pump"
+        );
     }
 
     // ── TS-5 / TS-6 / TS-7 (pane): local pane-switch scroll save/restore (FR3) ──
