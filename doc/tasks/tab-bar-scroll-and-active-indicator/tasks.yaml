@@ -1,0 +1,101 @@
+schema_version: 1
+feature: tab-bar-scroll-and-active-indicator
+source: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-hide-scrollbar
+    name: Scrollbar-free overflow scroll (FR1)
+    goal: When the strip overflows, the horizontal scroll area renders with no visible scrollbar while remaining scrollable; the fit (equal-width) path is unchanged.
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: [phase-2-wheel-scroll]
+    files_create: []
+    files_modify:
+      - src-tauri/src/ui/tab_bar.rs
+    tasks:
+      - id: hide-overflow-scrollbar
+        title: Set the overflow-branch horizontal ScrollArea scrollbar visibility to always-hidden, keeping scroll behavior intact; leave the fit path unchanged
+        covers_fr: [FR1]
+    tests:
+      - TS-1
+
+  - id: phase-2-wheel-scroll
+    name: Wheel / Shift+wheel horizontal scroll (FR2, FR3)
+    goal: While the pointer is over the tab bar, vertical wheel and Shift+wheel scroll the strip horizontally; tab selection is not changed by scrolling.
+    effort: small
+    status: completed
+    depends_on: [phase-1-hide-scrollbar]
+    blocks: []
+    files_create: []
+    files_modify:
+      - src-tauri/src/ui/tab_bar.rs
+    tasks:
+      - id: enable-vertical-wheel-horizontal
+        title: "FR2 — set always_scroll_the_only_direction = true on the strip's horizontal scroll scope so a hovered no-modifier vertical wheel scrolls horizontally (egui default is false, which ignores the vertical delta on a horizontal-only ScrollArea)"
+        covers_fr: [FR2]
+      - id: confirm-shift-wheel-horizontal
+        title: "FR3 — confirm Shift+wheel still scrolls the strip horizontally (egui folds shift+vertical-wheel onto the horizontal axis at the input layer; no code change expected)"
+        covers_fr: [FR3]
+      - id: wheel-horizontal-fallback
+        title: Fallback — if the style flag is undesirable, translate the hovered wheel delta to a horizontal scroll offset for the strip (no new keybinding)
+        covers_fr: [FR2]
+    tests: []
+
+  - id: phase-3-scroll-into-view
+    name: Active-cell scroll-into-view on keyboard switch (FR4)
+    goal: When the active cell changes via keyboard (plain-tab selection or mux window selection), the active visual cell is scrolled into view if off-screen; triggered only by keyboard activation and cleared each frame so it never re-fires on unrelated repaints.
+    effort: medium
+    status: completed
+    depends_on: [phase-1-hide-scrollbar, phase-2-wheel-scroll]
+    blocks: []
+    files_create: []
+    files_modify:
+      - src-tauri/src/app.rs
+      - src-tauri/src/render/mod.rs
+      - src-tauri/src/ui/tab_bar.rs
+      - src-tauri/src/window_host.rs
+    tasks:
+      - id: add-scroll-into-view-flag
+        title: Add a one-shot boolean flag on App (default off) signalling "scroll the active cell into view next frame"
+        covers_fr: [FR4]
+      - id: raise-flag-plain-tab-handlers
+        title: "Set the flag inside switch_to_tab after the active-index commit (it already early-returns on a no-op switch); NextTab / PrevTab / JumpTab all route through it, so no per-handler change is needed"
+        covers_fr: [FR4]
+      - id: raise-flag-mux-switch-path
+        title: "Set the flag in dispatch_mux_action on the existing MuxActionOutcome::Changed block, without modifying mux active-window state beyond the existing switch (note: a same-window digit jump also reports Changed; see TS-9 handling)"
+        covers_fr: [FR4]
+      - id: thread-flag-into-strip
+        title: "Thread the flag value through render::draw_terminal into tab_bar::draw / layout_tab_strip (draw_terminal holds &App, so the flag is read, not cleared, here); update the 5 in-file tab_bar.rs test call sites of draw to pass the new argument (or add a test-only wrapper)"
+        covers_fr: [FR4]
+      - id: capture-active-cell-and-scroll
+        title: In the strip layout, capture the active visual cell's Rect (plain cell at active_idx, or the active mux sub-tab cell within the active tab) and request scroll-into-view once when the flag is set; best-effort no-op if the rect is unavailable
+        covers_fr: [FR4]
+      - id: clear-flag-post-frame
+        title: Clear the one-shot flag after the egui pass in window_host (where &mut App is available) so it never re-fires on an unrelated repaint
+        covers_fr: [FR4]
+    tests:
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-9
+
+  - id: phase-4-unique-indicator
+    name: Unique active indicator across mixed tabs (FR5)
+    goal: A mux sub-tab's active-indicator bar is painted only when its parent mux tab is the active tab; otherwise no sub-tab indicator is painted. The mux group's active-window state is not modified, so re-activating the mux tab restores the bar.
+    effort: small
+    status: completed
+    depends_on: []
+    blocks: []
+    files_create: []
+    files_modify:
+      - src-tauri/src/ui/tab_bar.rs
+    tasks:
+      - id: gate-mux-indicator-on-parent-active
+        title: In the mux sub-tab branch of layout_tab_strip, paint the active indicator only when tab == active_idx && mux_cell.active; keep the existing label-color behavior and do not modify mux active-window state
+        covers_fr: [FR5]
+    tests:
+      - TS-2
+      - TS-3
+      - TS-4

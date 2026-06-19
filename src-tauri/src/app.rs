@@ -254,6 +254,14 @@ pub struct App {
     /// Set on construction, resize, and surface recovery. Forces the next
     /// frame to repaint every row regardless of `term_core` dirty bits.
     needs_full_redraw: bool,
+    /// FR4 (tab-bar scroll-into-view): one-shot signal raised when the active
+    /// cell changes via the keyboard (a committed plain-tab switch through
+    /// `switch_to_tab`, or a committed mux window switch in
+    /// `dispatch_mux_action`). The tab strip reads it for one frame and
+    /// scrolls the active visual cell into view; `window_host` clears it
+    /// post-frame so it never re-fires on an unrelated repaint (e.g. after a
+    /// mouse-driven scroll). Default off.
+    scroll_active_tab_into_view: bool,
     /// Debug toggle (env `EMTERM_FULL_REDRAW=1`) that permanently disables
     /// the dirty-row optimization for triage.
     force_full_redraw: bool,
@@ -575,6 +583,7 @@ impl App {
             previous_selection: None,
             previous_visible_start: 0,
             needs_full_redraw: true,
+            scroll_active_tab_into_view: false,
             force_full_redraw,
             ime_backend: Box::new(NullBackend::new()),
             ime_last_cursor_cell: None,
@@ -1388,6 +1397,11 @@ impl App {
             outgoing.scroll_position = self.scroll_position;
         }
         self.active = idx;
+        // FR4: the scroll-into-view flag is intentionally NOT raised here.
+        // `switch_to_tab` is also reached by mouse paths (`TabEvent::Switch`
+        // and `MuxSwitch`), and FR4 fires only on keyboard activation. The
+        // keyboard handlers (`NextTab` / `PrevTab` / `JumpTab`) raise the flag
+        // themselves after confirming the active index actually moved.
         if let Some(incoming) = self.tabs.get(self.active) {
             self.scroll_position = incoming.scroll_position;
         }
@@ -1557,7 +1571,13 @@ impl App {
                     return false;
                 }
                 let next = (self.active + 1) % total;
+                let before = self.active;
                 self.switch_to_tab(next);
+                // FR4: keyboard activation → scroll the new active cell into
+                // view, but only when the active index actually moved.
+                if self.active != before {
+                    self.scroll_active_tab_into_view = true;
+                }
                 false
             }
             crate::ui::AppAction::PrevTab => {
@@ -1570,7 +1590,13 @@ impl App {
                 } else {
                     self.active - 1
                 };
+                let before = self.active;
                 self.switch_to_tab(prev);
+                // FR4: keyboard activation → scroll the new active cell into
+                // view, but only when the active index actually moved.
+                if self.active != before {
+                    self.scroll_active_tab_into_view = true;
+                }
                 false
             }
             crate::ui::AppAction::JumpTab(n) => {
@@ -1580,7 +1606,13 @@ impl App {
                 }
                 // n is 1-based and clamped to the existing tab range.
                 let idx = (n.saturating_sub(1) as usize).min(total - 1);
+                let before = self.active;
                 self.switch_to_tab(idx);
+                // FR4: keyboard activation → scroll the new active cell into
+                // view, but only when the active index actually moved.
+                if self.active != before {
+                    self.scroll_active_tab_into_view = true;
+                }
                 false
             }
             crate::ui::AppAction::SelectAll => {
@@ -2171,6 +2203,11 @@ impl App {
         // (possibly updated) value back after the match and force a full
         // redraw on a committed switch (FR2) below.
         let mut scroll = self.scroll_position;
+        // FR4: capture the active window index before any switch so the
+        // scroll-into-view flag can be raised strictly on a real window change
+        // (TS-9 option b: a same-window digit jump reports `Changed` but does
+        // not move `active`, so it must not raise the flag).
+        let active_before = tab.mux_group.as_ref().map(|g| g.active_index());
         let outcome = match action {
             PrefixAction::None | PrefixAction::Literal => MuxActionOutcome::None,
             PrefixAction::Detach => {
@@ -2240,6 +2277,22 @@ impl App {
         if outcome == MuxActionOutcome::Changed {
             self.scroll_position = scroll;
             self.needs_full_redraw = true;
+            // FR4: raise the scroll-into-view flag only when the active window
+            // index actually moved (TS-9 option b). `NewWindow` reports
+            // `Changed` but appends asynchronously (awaiting the daemon's
+            // `PaneCreated`), so `active` is unchanged this frame and the flag
+            // stays down; the new window's sub-tab is scrolled in when the
+            // daemon confirms it and the user is on it. A same-window digit
+            // jump (`set_active_clamped` lands on the same index) also leaves
+            // `active` unchanged, so the flag is not raised.
+            let active_after = self
+                .tabs
+                .get(self.active)
+                .and_then(|t| t.mux_group.as_ref())
+                .map(|g| g.active_index());
+            if active_before != active_after {
+                self.scroll_active_tab_into_view = true;
+            }
         }
         outcome
     }
@@ -2959,6 +3012,20 @@ impl App {
     /// other structural changes.
     pub fn mark_full_redraw(&mut self) {
         self.needs_full_redraw = true;
+    }
+
+    /// FR4: whether the active tab/window cell should be scrolled into view
+    /// this frame. Read by `render::draw_terminal` (immutable `&App`) and
+    /// threaded into the tab strip; cleared post-frame by `window_host`.
+    pub fn scroll_active_tab_into_view(&self) -> bool {
+        self.scroll_active_tab_into_view
+    }
+
+    /// FR4: clear the one-shot scroll-into-view signal after the egui pass so
+    /// it fires for exactly one frame and never re-fires on an unrelated
+    /// repaint. Called from `window_host::render` where `&mut App` is held.
+    pub fn clear_scroll_active_tab_into_view(&mut self) {
+        self.scroll_active_tab_into_view = false;
     }
 
     // ── Scrollback (Phase 4 sub-phase 4) ─────────────────────
@@ -3988,6 +4055,77 @@ mod tests {
         let app = app_with_two_tabs();
         assert_eq!(app.tabs[0].scroll_position, ScrollPosition::Live);
         assert_eq!(app.tabs[1].scroll_position, ScrollPosition::Live);
+    }
+
+    // ── FR4: plain-tab keyboard switch raises scroll-into-view flag ─────────
+
+    #[test]
+    fn ts7_keyboard_tab_switch_sets_scroll_into_view_flag() {
+        // TS-7: NextTab / PrevTab / JumpTab each commit an active-index change
+        // (all route through `switch_to_tab`), which raises the one-shot
+        // scroll-into-view flag.
+        let mut app = app_with_two_tabs();
+        assert!(!app.scroll_active_tab_into_view());
+        app.apply_action(crate::ui::AppAction::NextTab);
+        assert!(
+            app.scroll_active_tab_into_view(),
+            "NextTab moved active → flag set"
+        );
+
+        // Clear and try PrevTab.
+        app.clear_scroll_active_tab_into_view();
+        app.apply_action(crate::ui::AppAction::PrevTab);
+        assert!(
+            app.scroll_active_tab_into_view(),
+            "PrevTab moved active → flag set"
+        );
+
+        // Clear and try JumpTab to the other tab.
+        app.clear_scroll_active_tab_into_view();
+        // active is back at 0 (NextTab→1, PrevTab→0); jump to tab 2 (Ctrl+2)
+        // which clamps to the last existing tab (idx 1), a real move.
+        app.apply_action(crate::ui::AppAction::JumpTab(2));
+        assert!(
+            app.scroll_active_tab_into_view(),
+            "JumpTab moved active → flag set"
+        );
+    }
+
+    #[test]
+    fn ts8_switch_to_already_active_tab_does_not_set_flag() {
+        // TS-8: switching to the already-active tab (or out of range) is a
+        // no-op `switch_to_tab` early-return, so the flag stays down.
+        let mut app = app_with_two_tabs();
+        assert_eq!(app.active, 0);
+        app.clear_scroll_active_tab_into_view();
+        app.switch_to_tab(0); // same index → no-op
+        assert!(
+            !app.scroll_active_tab_into_view(),
+            "no-op switch to the active tab must not set the flag"
+        );
+        app.switch_to_tab(99); // out of range → no-op
+        assert!(
+            !app.scroll_active_tab_into_view(),
+            "out-of-range switch must not set the flag"
+        );
+    }
+
+    #[test]
+    fn ts7b_mouse_tab_switch_does_not_set_scroll_into_view_flag() {
+        // FR4 (keyboard-only): a mouse click that switches tabs routes through
+        // `apply_tab_event(TabEvent::Switch)` → `switch_to_tab`, which (post-fix)
+        // does NOT raise the scroll-into-view flag. The clicked tab is already
+        // visible, so there is nothing to scroll into view; raising the flag
+        // on the mouse path is exactly the FR4 violation this guards against.
+        let mut app = app_with_two_tabs();
+        assert_eq!(app.active, 0);
+        app.clear_scroll_active_tab_into_view();
+        let _ = app.apply_tab_event(crate::ui::TabEvent::Switch(1));
+        assert_eq!(app.active, 1, "mouse switch moved the active tab");
+        assert!(
+            !app.scroll_active_tab_into_view(),
+            "mouse-originated tab switch must NOT set the scroll-into-view flag"
+        );
     }
 
     #[test]
@@ -5293,6 +5431,71 @@ mod tests {
             MuxActionOutcome::None
         );
         assert_eq!(active_idx(&app), 2);
+    }
+
+    // ── FR4 / TS-9: mux window switch raises scroll-into-view flag ──────────
+
+    #[test]
+    fn ts9_mux_window_switch_sets_scroll_into_view_only_on_real_change() {
+        // TS-9 (option b — strict): a committed window change (next/prev/digit
+        // that actually moves `active`) raises the one-shot scroll-into-view
+        // flag; switching to the already-active window via a same-window digit
+        // jump reports `Changed` but does not move `active`, so the flag stays
+        // down. We chose the same-index guard (compare active_index before vs
+        // after) so TS-9's "already-active does not set it" holds for the
+        // digit path too, not only next/prev.
+        let mut app = app_with_mux_windows(3);
+        assert!(!app.scroll_active_tab_into_view());
+
+        // NextWindow moves 0 → 1: flag set.
+        app.dispatch_mux_action(PrefixAction::NextWindow);
+        assert_eq!(active_idx(&app), 1);
+        assert!(
+            app.scroll_active_tab_into_view(),
+            "NextWindow moved active window → flag set"
+        );
+
+        // PrevWindow moves 1 → 0: flag set.
+        app.clear_scroll_active_tab_into_view();
+        app.dispatch_mux_action(PrefixAction::PrevWindow);
+        assert_eq!(active_idx(&app), 0);
+        assert!(
+            app.scroll_active_tab_into_view(),
+            "PrevWindow moved active window → flag set"
+        );
+
+        // SelectWindow(2) moves 0 → 2: flag set.
+        app.clear_scroll_active_tab_into_view();
+        app.dispatch_mux_action(PrefixAction::SelectWindow(2));
+        assert_eq!(active_idx(&app), 2);
+        assert!(
+            app.scroll_active_tab_into_view(),
+            "digit jump to a different window → flag set"
+        );
+
+        // SelectWindow(2) again — already on window 2. dispatch reports
+        // `Changed` (no same-index short-circuit before the SwitchWindow send),
+        // but `active` does not move, so the strict guard keeps the flag down.
+        app.clear_scroll_active_tab_into_view();
+        app.dispatch_mux_action(PrefixAction::SelectWindow(2));
+        assert_eq!(active_idx(&app), 2);
+        assert!(
+            !app.scroll_active_tab_into_view(),
+            "same-window digit jump must NOT set the flag (TS-9 strict)"
+        );
+    }
+
+    #[test]
+    fn ts9_mux_single_window_switch_does_not_set_flag() {
+        // With <2 windows, next/prev return None (no switch); the flag stays
+        // down.
+        let mut app = app_with_mux_windows(1);
+        app.clear_scroll_active_tab_into_view();
+        app.dispatch_mux_action(PrefixAction::NextWindow);
+        assert!(
+            !app.scroll_active_tab_into_view(),
+            "single-window next is a no-op → flag stays down"
+        );
     }
 
     #[test]

@@ -1353,6 +1353,11 @@ impl WindowHost {
                 ctx.request_repaint();
             }
         });
+        // FR4: clear the one-shot scroll-into-view signal now that the egui
+        // pass (which read it into the tab strip) has run. Clearing every
+        // frame gives it exactly one-frame lifetime, so it never re-fires on
+        // an unrelated repaint (e.g. after a mouse-driven horizontal scroll).
+        app.clear_scroll_active_tab_into_view();
         // CSD title-bar actions hit `winit::Window` directly except
         // for Close, which defers to `about_to_wait` via
         // `pending_close` so teardown follows the same handshake as
@@ -2720,6 +2725,44 @@ impl ApplicationHandler for PocApp {
                     });
                     host.window().request_redraw();
                     return;
+                }
+                // FR2/FR3: a wheel over the tab-bar strip scrolls the tab
+                // strip horizontally instead of the terminal scrollback.
+                // Forward the wheel to egui — the tab strip's horizontal
+                // ScrollArea consumes it, and with
+                // `always_scroll_the_only_direction` set both bare and
+                // Shift+wheel fold onto the horizontal axis. egui hit-tests
+                // against the hover position kept current by the
+                // `PointerMoved` events forwarded on `CursorMoved`, so the
+                // wheel only reaches the strip when the pointer is over it.
+                // Restricted to the tab-bar band (below the CSD title bar);
+                // the title bar's existing wheel behaviour is left untouched.
+                {
+                    let logical = host
+                        .cursor_pos
+                        .to_logical::<f32>(host.pixels_per_point as f64);
+                    let top_strip_h = crate::ui::title_bar::TITLE_BAR_HEIGHT
+                        + crate::ui::tab_bar::effective_tab_bar_height(self.app.show_tab_bar);
+                    if logical.y >= crate::ui::title_bar::TITLE_BAR_HEIGHT
+                        && logical.y < top_strip_h
+                    {
+                        let (unit, ev_delta) = match delta {
+                            MouseScrollDelta::LineDelta(x, y) => {
+                                (egui::MouseWheelUnit::Line, egui::vec2(x, y))
+                            }
+                            MouseScrollDelta::PixelDelta(p) => (
+                                egui::MouseWheelUnit::Point,
+                                egui::vec2(p.x as f32, p.y as f32),
+                            ),
+                        };
+                        host.pending_egui_events.push(egui::Event::MouseWheel {
+                            unit,
+                            delta: ev_delta,
+                            modifiers: egui::Modifiers::default(),
+                        });
+                        host.window().request_redraw();
+                        return;
+                    }
                 }
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,

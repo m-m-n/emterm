@@ -241,7 +241,11 @@ pub fn draw_terminal(ctx: &egui::Context, app: &App, window_maximized: bool) -> 
     let tab_event = if items.is_empty() || !app.show_tab_bar {
         None
     } else {
-        crate::ui::tab_bar::draw(ctx, &items, app.active)
+        // FR4: read (do not clear) the one-shot scroll-into-view signal here —
+        // `draw_terminal` holds `&App` (immutable). The strip consumes it for
+        // one frame; `window_host` clears it post-frame where `&mut App` is
+        // available.
+        crate::ui::tab_bar::draw(ctx, &items, app.active, app.scroll_active_tab_into_view())
     };
 
     // Phase 4-D: status-bar panel. Inserted before the central panel
