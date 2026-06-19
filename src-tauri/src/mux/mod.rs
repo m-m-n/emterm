@@ -30,6 +30,7 @@ pub mod dialog;
 pub mod ipc;
 pub mod prefix;
 pub mod scrollback_buffer;
+pub mod scrollback_filter;
 pub mod session;
 pub mod snapshot;
 pub mod tmux_conf;

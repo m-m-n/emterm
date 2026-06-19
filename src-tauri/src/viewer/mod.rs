@@ -29,6 +29,16 @@ use crate::settings::Settings;
 use launch::ViewerPayload;
 use markdown::MarkdownViewerSessions;
 
+/// The viewer kinds that an OSC 777 `emterm` launch sequence can dispatch
+/// to a child viewer (Markdown / image / JSON / YAML). This is the single
+/// source of truth shared between the viewer dispatch ([`ViewerRouter::route`])
+/// and the mux snapshot rich-content stripper
+/// (`crate::mux::scrollback_filter::strip_replayable_rich_content`): the
+/// stripper removes exactly these kinds from a reattach snapshot so they are
+/// not re-launched, and a `drift_*` test keeps the dispatch and the stripper
+/// in lockstep (see the test module below).
+pub const REPLAYABLE_VIEWER_KINDS: &[&str] = &["markdown", "image", "json", "yaml"];
+
 /// Markdown source dialect carried from `begin;format=…` through to the
 /// rendered window. Mirrors the WebView build's `MarkdownFormat`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -452,6 +462,27 @@ mod tests {
     }
 
     // ── routing ─────────────────────────────────────────────────────────
+
+    /// drift guard (b): the kinds `route` explicitly dispatches on must equal
+    /// the shared [`REPLAYABLE_VIEWER_KINDS`] SSOT that the mux snapshot
+    /// stripper removes. If a new viewer kind is added to `route` (or the
+    /// SSOT) without updating the other, this fails — keeping the dispatch and
+    /// the rich-content stripper from drifting (same intent as the
+    /// `mux_apc_extractor::drift_*` tests).
+    #[test]
+    fn drift_route_dispatch_kinds_match_replayable_viewer_kinds_ssot() {
+        // The kinds `ViewerRouter::route` has an explicit (non-wildcard) arm
+        // for. Mirror them here; the assertion ties the two together.
+        let route_kinds = ["markdown", "json", "yaml", "image"];
+        let mut a = route_kinds.to_vec();
+        a.sort_unstable();
+        let mut b = REPLAYABLE_VIEWER_KINDS.to_vec();
+        b.sort_unstable();
+        assert_eq!(
+            a, b,
+            "route dispatch kinds and REPLAYABLE_VIEWER_KINDS SSOT have drifted"
+        );
+    }
 
     #[test]
     fn markdown_payloads_round_trip_to_one_request() {

@@ -133,8 +133,8 @@ Mux Daemon
 1. visible フラグを atomic に true へ swap し、前状態を取得
 2. 前状態が既に true なら `None` を返す (no-op)
 3. lock した shadow から現在画面の formatted contents を取得
-4. snapshot バイト列 = `b"\x1b[H\x1b[2J"` プレフィックス + shadow contents + raw_passthrough の全バイト
-5. raw_passthrough をクリアし、drop_warned フラグもリセット
+4. snapshot バイト列 = `b"\x1b[H\x1b[2J"` プレフィックス + shadow contents (raw_passthrough は連結しない)
+5. raw_passthrough をクリア (drain) し、drop_warned フラグもリセット
 6. snapshot バイト列を Some で返す
 7. command 側はこれを Channel に 1 メッセージで送信する
 
@@ -239,15 +239,15 @@ Mux Daemon
 
 ### Phase 3: Mux daemon support
 
-**Goal**: mux daemon に SetVisibility メッセージ受信、`evaluate_output_target` による soft detach、reattach 時の visibility 評価、raw_passthrough 連結を実装する。
+**Goal**: mux daemon に SetVisibility メッセージ受信、`evaluate_output_target` による soft detach、reattach 時の visibility 評価を実装する。raw_passthrough は復帰スナップショットに連結せず drain する。
 
 **Files to Modify**:
 - `src-tauri/src/mux/ipc/protocol.rs` — `MessageType::SetVisibility = 0x1B` を enum と `from_u8` に追加。`SetVisibilityPayload { visible: bool }` 定義 (1 byte)。**既存テスト破綻の修正必須**: `test_message_type_round_trip` のループ範囲を `0x01..=0x1Bu8` に拡張、`assert!(MessageType::from_u8(0x1b).is_none())` を `assert_eq!(MessageType::from_u8(0x1B), Some(MessageType::SetVisibility))` に置き換え、未使用 opcode の `is_none` チェックを `0x1c` 以降に変更。`test_apc_round_trip_all_message_types` のループ範囲も同様に拡張
 - `src-tauri/src/mux/ipc/handlers.rs` — `handle_set_visibility(visible: bool, session_manager, active_session_id, pane_output_tx, visible_state: &Arc<AtomicBool>)` ハンドラ追加。`route_message` の match に SetVisibility arm を追加し、`visible_state.store(...)` 更新後、`active_session_id` の各ペインに対し `evaluate_output_target` を呼ぶ。visible == true の場合は snapshot 送信も実施
 - `src-tauri/src/mux/ipc/connection.rs` — `handle_connection` 内 loop ローカルに `let visible_state = Arc::new(AtomicBool::new(true));` を追加し、`route_message` 呼出時と `collect_reattach_data` 呼出時にこの参照を渡す (Decision Log 案 A)。`ConnectionState` という新規 struct は導入しない
-- `src-tauri/src/mux/session/pane.rs` — `MuxPane` に `raw_passthrough: Arc<StdMutex<RawPassthroughBuffer>>` と `passthrough_scanner: Arc<StdMutex<PassthroughScanner>>` フィールド追加 (容量は mux 用 1 MiB)。`evaluate_output_target(pane: &MuxPane, network_detach: bool, visible: bool, owned_tx: &Sender<PtyOutputChunk>) -> EvalResult` 関数を追加。`!network_detach && visible` なら Connected(owned_tx) に切り替え (このとき visible 復帰の snapshot 送信は handler 側で同一 lock 内で実施するために `EvalResult::ResumeWithSnapshot { combined: Vec<u8> }` のような形で snapshot bytes を返す)。それ以外は identity-scoped で Detached に切替 (現 Connected の tx が `same_channel(owned_tx)` の場合のみ)
+- `src-tauri/src/mux/session/pane.rs` — `MuxPane` に `raw_passthrough: Arc<StdMutex<RawPassthroughBuffer>>` と `passthrough_scanner: Arc<StdMutex<PassthroughScanner>>` フィールド追加 (容量は mux 用 1 MiB)。`evaluate_output_target(pane: &MuxPane, network_detach: bool, visible: bool, owned_tx: &Sender<PtyOutputChunk>) -> EvalResult` 関数を追加。`!network_detach && visible` なら Connected(owned_tx) に切り替え (このとき visible 復帰の snapshot 送信は handler 側で同一 lock 内で実施するために `EvalResult::ResumeWithSnapshot { snapshot: Vec<u8> }` のような形で shadow snapshot bytes を返す。raw_passthrough は連結しない)。それ以外は identity-scoped で Detached に切替 (現 Connected の tx が `same_channel(owned_tx)` の場合のみ)
 - `src-tauri/src/mux/ipc/pty_spawn.rs` (`pty_reader_loop`) — Detached 経路を通る際、shadow_parser に process した後で同じ data を `pane.passthrough_scanner.process(data)` に通し、抽出 bytes を `pane.raw_passthrough.append` する
-- `src-tauri/src/mux/ipc/reattach.rs` — `collect_reattach_data` の中で、各ペインの snapshot 構築時に raw_passthrough の全バイトを連結。送信後 `clear()`。reattach 完了直後に `visible_state` を読み、各ペインに対し `evaluate_output_target(network_detach=false, visible=current_visible, owned_tx)` を呼ぶ
+- `src-tauri/src/mux/ipc/reattach.rs` — `collect_reattach_data` の中で、各ペインの snapshot を shadow snapshot のみで構築する (raw_passthrough は連結しない)。raw_passthrough は `clear()` で drain する。reattach 完了直後に `visible_state` を読み、各ペインに対し `evaluate_output_target(network_detach=false, visible=current_visible, owned_tx)` を呼ぶ
 
 **Key Components**:
 
@@ -259,22 +259,22 @@ Mux Daemon
 | `evaluate_output_target` | (network_detach, visible) 二軸から output_target を決定 | pane ロック可能 | network_detach==true OR visible==false なら Detached、両方解消で Connected |
 | `MuxPane.raw_passthrough` | ペインごとの画像/Markdown OSC バッファ | new で容量初期化 | hidden / detach 中の reader が append、reattach / visible 復帰時に read_all + clear |
 | `pty_reader_loop` (Detached 経路) | shadow process + raw passthrough append | output_target == Detached | shadow と raw_passthrough が両方更新される |
-| `collect_reattach_data` (拡張) | snapshot に raw_passthrough を連結、reattach 後 visibility 評価 | 既存ロジック動作中 | snapshot に画像/Markdown が含まれ、hidden 時は再 Detached |
+| `collect_reattach_data` (拡張) | snapshot は shadow snapshot のみで構築 (raw_passthrough は連結せず drain)、reattach 後 visibility 評価 | 既存ロジック動作中 | snapshot にリッチコンテンツは含まれず、hidden 時は再 Detached |
 
 **Processing Flow (SetVisibility 受信)**:
 1. APC over PTY から `MessageType::SetVisibility(visible)` を受信
 2. loop ローカルの `visible_state: Arc<AtomicBool>` を atomic に更新
 3. session manager から該当セッションのすべての pane を列挙
 4. 各 pane について `pane.output_target` の lock を取った上で:
-   - visible == true: snapshot bytes (`build_shadow_parser_snapshot` + `raw_passthrough.read_all()`) を生成し、`pane_output_tx.send(PtyOutputChunk { snapshot })` を実施 → `raw_passthrough.clear()` → `output_target = Connected(pane_output_tx)`
+   - visible == true: snapshot bytes (`build_shadow_parser_snapshot`、raw_passthrough は連結しない) を生成し、`pane_output_tx.send(PtyOutputChunk { snapshot })` を実施 → `raw_passthrough.clear()` (drain) → `output_target = Connected(pane_output_tx)`
    - visible == false: 現 Connected の tx が `owned_tx.same_channel(...)` で一致する場合のみ `output_target = Detached(DetachRingBuffer::new(DEFAULT_RING_CAPACITY))` に切替 (identity-scoped)
 5. 状態遷移を `log::debug!` で記録 (NFR6 改訂)。drop / send 失敗のみ `warn`
 
 **Processing Flow (Reattach 時の visibility 評価)**:
 1. `collect_reattach_data` 呼び出しで、各ペインの snapshot 生成 (既存ロジック)
-2. snapshot に raw_passthrough の全バイトを連結 (新規)
+2. raw_passthrough は snapshot に連結しない (新規)
 3. 旧 ring の read_all + clear (既存ロジック)
-4. raw_passthrough を clear (新規)
+4. raw_passthrough を clear (drain、新規)
 5. すべての pane について output_target を Connected(tx) に戻す (既存ロジック)
 6. caller 側 (`handle_attach`) で `visible_state.load()` を確認し、false なら直後に `evaluate_output_target(network_detach=false, visible=false, owned_tx)` で各ペインを再 Detached に切り替え (snapshot は frontend に届くが、その後の出力はまた buffer)
 
@@ -311,7 +311,7 @@ Mux Daemon
 - [ ] `cargo test ... mux::session::pane` で evaluate_output_target テスト pass (3 分岐 + identity-scoped)
 - [ ] `cargo test ... mux::ipc::reattach` で hidden 時 reattach 挙動テスト pass
 - [ ] mux 統合テスト: hidden 中は frontend に PtyOutput が送られず、visible 復帰時に snapshot が先頭で届く
-- [ ] reattach 時に raw_passthrough が snapshot に連結される
+- [ ] reattach 時に raw_passthrough が snapshot に連結されず drain される
 
 **Estimated Effort**: large
 
@@ -489,7 +489,7 @@ scripts/
 | reader thread の hidden 判定がレースで誤判定 | Medium | Medium | atomic boolean で lock-free 判定、状態遷移は 1 boolean なので race window 最小 |
 | snapshot の Channel 送信失敗時に状態が hidden に戻れない | Low | Medium | warn ログ + `set_visible_and_take_snapshot` 失敗時の状態リセット。次回 visibility 通知で回復 |
 | mux で reattach 中に SetVisibility が来て output_target が二重切替 | Medium | Medium | `evaluate_output_target` は output_target lock を取るため atomic。reattach 完了直後の評価で最終整合性 |
-| raw_passthrough scanner が複雑な escape 列を取りこぼし | Medium | Low | scanner はステートレスでチャンク跨ぎを諦める方針。再表示は best-effort、SPEC で明示 |
+| raw_passthrough scanner が複雑な escape 列を取りこぼし | Low | Low | raw_passthrough は復帰スナップショットに連結せず drain して破棄するため、取りこぼしは復帰表示に影響しない (リッチコンテンツは復帰時に再現しない) |
 | Phase 1 と Phase 3 の visibility.rs を import するクロス module 依存で循環参照 | Low | Low | `RawPassthroughBuffer` 等を `pty/visibility.rs` に置き、mux 側からは pub re-export 経由で利用 |
 | 実機 freeze 再現が phase 4 で不十分 (10 分待機が CI で困難) | High | Medium | 手動チェックリスト形式に倒し、E2E では debounce 越えの短時間再現に留める |
 

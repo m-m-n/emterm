@@ -11,6 +11,7 @@ use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
 use super::protocol::*;
+use crate::mux::scrollback_filter::strip_replayable_rich_content;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
@@ -44,9 +45,16 @@ const SNAPSHOT_CLEAR_HOME: &[u8] = b"\x1b[3J\x1b[H\x1b[2J";
 /// would persist from whatever window it last viewed — switching from an
 /// alt-screen app (e.g. glances) to a main-buffer pane would inherit alt=true
 /// and wrongly suppress scrolling. Both paths route through this one function
-/// so the byte ordering stays a single source of truth. The reattach path
-/// appends its per-pane `raw_passthrough` bytes after this layout.
+/// so the byte ordering stays a single source of truth.
+///
+/// The `scrollback` bytes are passed through [`strip_replayable_rich_content`]
+/// before assembly so a window switch / reattach replays plain-text history
+/// without re-spawning rich-content viewers (Markdown / image / JSON / YAML)
+/// or re-rendering inline images. The `screen` bytes are
+/// `contents_formatted()` (cells only, no viewer launch sequences) so they are
+/// passed through unchanged.
 pub(super) fn build_snapshot_bytes(scrollback: &[u8], screen: &[u8], alt_screen: bool) -> Vec<u8> {
+    let scrollback = strip_replayable_rich_content(scrollback);
     let alt_mode: &[u8] = if alt_screen {
         b"\x1b[?1049h"
     } else {
@@ -56,7 +64,7 @@ pub(super) fn build_snapshot_bytes(scrollback: &[u8], screen: &[u8], alt_screen:
         SNAPSHOT_CLEAR_HOME.len() + scrollback.len() + screen.len() + alt_mode.len(),
     );
     combined.extend_from_slice(SNAPSHOT_CLEAR_HOME);
-    combined.extend_from_slice(scrollback);
+    combined.extend_from_slice(&scrollback);
     combined.extend_from_slice(screen);
     combined.extend_from_slice(alt_mode);
     combined
@@ -96,8 +104,10 @@ pub(super) fn build_shadow_parser_snapshot(
 ///
 /// When `visible == true`, drains buffered output from detached panes and
 /// switches each pane to `Connected(pane_output_tx)`. Each returned tuple
-/// carries the pane id and the resume snapshot bytes (shadow + ring +
-/// raw_passthrough).
+/// carries the pane id and the resume snapshot bytes (clear + ring + shadow).
+/// The per-pane `raw_passthrough` buffer is drained and cleared but NOT
+/// concatenated onto the snapshot — replaying captured viewer / image launch
+/// sequences would re-spawn viewers on every reattach.
 ///
 /// When `visible == false` (FR13: hidden reattach), the panes are NOT
 /// flipped to `Connected`. Instead each pane is set / kept in
@@ -200,35 +210,35 @@ pub(super) async fn collect_reattach_data(
                     *target = PaneOutputTarget::Connected(pane_output_tx.clone());
                     drop(target);
 
-                    // Drain the per-pane raw passthrough buffer so image /
-                    // Markdown OSC byte runs captured while detached are
-                    // replayed as part of the resume snapshot. Cleared
-                    // unconditionally so the next detach cycle starts fresh.
-                    let passthrough_data = {
+                    // Drain (and clear) the per-pane raw passthrough buffer so
+                    // it does not leak into the next detach cycle. The captured
+                    // image / Markdown OSC byte runs are NOT concatenated onto
+                    // the snapshot: replaying them would re-spawn viewers /
+                    // re-render inline images on every window switch. The
+                    // snapshot restores plain-text history only.
+                    let drained_passthrough_len = {
                         let mut buf = pane.raw_passthrough.lock().unwrap();
                         let bytes = buf.read_all();
                         buf.clear();
-                        bytes
+                        bytes.len()
                     };
 
                     log::info!(
-                        "collect_reattach: pane {} was={}, scrollback={}B, screen={}B, passthrough={}B, total={}B, alt_screen={}, exited={}",
+                        "collect_reattach: pane {} was={}, scrollback={}B, screen={}B, dropped_passthrough={}B, total={}B, alt_screen={}, exited={}",
                         pane.id,
                         target_was,
                         scrollback_data.len(),
                         screen_data.len(),
-                        passthrough_data.len(),
-                        8 + scrollback_data.len() + screen_data.len() + passthrough_data.len(),
+                        drained_passthrough_len,
+                        8 + scrollback_data.len() + screen_data.len(),
                         is_alternate_screen,
                         pane.exited
                     );
 
-                    // Shared layout: ESC[3J ESC[H ESC[2J + scrollback + screen
-                    // + alt-mode. The reattach path appends its per-pane
-                    // raw_passthrough after that shared base.
-                    let mut combined =
+                    // Shared layout: ESC[3J ESC[H ESC[2J + scrollback (rich
+                    // content stripped) + screen + alt-mode.
+                    let combined =
                         build_snapshot_bytes(&scrollback_data, &screen_data, is_alternate_screen);
-                    combined.extend_from_slice(&passthrough_data);
 
                     data.push((pane.id, combined));
                 }
@@ -359,6 +369,25 @@ mod tests {
 
     fn make_test_pane_with_target(id: u32, output_target: SharedOutputTarget) -> MuxPane {
         MuxPane::new_test(id, 80, 24, output_target)
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// A scrollback that contains an OSC 777 markdown viewer launch must not
+    /// appear in the assembled snapshot (it would re-spawn the viewer).
+    #[test]
+    fn build_snapshot_bytes_strips_rich_content_from_scrollback() {
+        let scrollback = b"prompt$ \x1b]777;emterm;markdown;begin\x07done";
+        let out = build_snapshot_bytes(scrollback, b"SCREEN", false);
+        assert!(
+            !contains(&out, b"\x1b]777;emterm;markdown"),
+            "snapshot must not contain the viewer launch sequence"
+        );
+        assert!(contains(&out, b"prompt$ "), "plain text history preserved");
+        assert!(contains(&out, b"done"), "trailing plain text preserved");
+        assert!(contains(&out, b"SCREEN"), "screen contents preserved");
     }
 
     // ── TS-4 / TS-6: on-demand snapshot builder (FR1) ────────────────────
@@ -948,13 +977,14 @@ mod tests {
         }
     }
 
-    /// TS-20: collect_reattach_data must concatenate the per-pane
-    /// `raw_passthrough` buffer onto the resume snapshot AND clear the
-    /// buffer after consumption. Without this, image / Markdown OSC
-    /// sequences captured while the pane was Detached would be lost on
-    /// reattach (and would also leak across the next detach cycle).
+    /// TS-20 (revised): collect_reattach_data must NOT concatenate the per-pane
+    /// `raw_passthrough` buffer onto the resume snapshot — replaying the
+    /// captured image / Markdown OSC sequences would re-spawn viewers /
+    /// re-render inline images on every window switch. The buffer must still be
+    /// drained + cleared so it does not leak across the next detach cycle.
+    /// Plain-text ring history is still restored.
     #[tokio::test]
-    async fn test_collect_reattach_data_includes_raw_passthrough_and_clears_it() {
+    async fn test_collect_reattach_data_drops_raw_passthrough_and_clears_it() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
 
         let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
@@ -995,12 +1025,13 @@ mod tests {
         let (pane_id, snapshot) = &data[0];
         assert_eq!(*pane_id, 1);
         assert!(snapshot.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
+        // The captured passthrough sequence must NOT be in the snapshot.
         let needle = b"\x1b_Gi=42;PNG-bytes\x1b\\";
         assert!(
-            snapshot.windows(needle.len()).any(|w| w == needle),
-            "reattach snapshot must include captured passthrough sequence"
+            !snapshot.windows(needle.len()).any(|w| w == needle),
+            "reattach snapshot must NOT include captured passthrough sequence"
         );
-        // The ring data must still be present.
+        // The plain-text ring data must still be present.
         assert!(
             snapshot
                 .windows(b"buffered-from-ring".len())
@@ -1009,7 +1040,7 @@ mod tests {
         );
 
         // raw_passthrough must be drained — otherwise the next detach cycle
-        // would re-emit the same bytes.
+        // would carry stale bytes.
         let m = mgr.lock().await;
         let session = m.get_session(session_id).unwrap();
         let pane = session

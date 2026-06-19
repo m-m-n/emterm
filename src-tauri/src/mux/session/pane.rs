@@ -7,6 +7,7 @@ use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
 use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
+use crate::mux::scrollback_filter::strip_replayable_rich_content;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
 
@@ -284,25 +285,27 @@ pub fn evaluate_output_target(
                     EvalResult::Unchanged
                 }
                 None => {
-                    // Phase C FR5 order: clear → scrollback → shadow →
-                    // passthrough. Scrollback is read WITHOUT clearing (FR6:
-                    // the buffer lives for the lifetime of the pane).
+                    // Phase C FR5 order: clear → scrollback → shadow.
+                    // Scrollback is read WITHOUT clearing (FR6: the buffer
+                    // lives for the lifetime of the pane) and stripped of
+                    // rich-content launch sequences so the resume does not
+                    // re-spawn viewers / re-render inline images. The
+                    // raw_passthrough buffer is drained + cleared (so it does
+                    // not leak across detach cycles) but NOT concatenated.
                     let screen = lock_shadow_parser(&pane.shadow_parser)
                         .screen()
                         .contents_formatted();
-                    let buffered = pane.scrollback.lock().unwrap().read_all();
-                    let passthrough = {
+                    let buffered =
+                        strip_replayable_rich_content(&pane.scrollback.lock().unwrap().read_all());
+                    {
                         let mut buf = pane.raw_passthrough.lock().unwrap();
-                        let bytes = buf.read_all();
+                        let _ = buf.read_all();
                         buf.clear();
-                        bytes
-                    };
-                    let mut snapshot =
-                        Vec::with_capacity(8 + buffered.len() + screen.len() + passthrough.len());
+                    }
+                    let mut snapshot = Vec::with_capacity(8 + buffered.len() + screen.len());
                     snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
                     snapshot.extend_from_slice(&buffered);
                     snapshot.extend_from_slice(&screen);
-                    snapshot.extend_from_slice(&passthrough);
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
                     EvalResult::ResumeWithSnapshot { snapshot }
                 }
@@ -353,24 +356,25 @@ pub fn resume_pane_with_permit(
                 }
                 return ResumeOutcome::NoChange;
             }
-            // Phase C FR5 order: clear → scrollback → shadow → passthrough.
-            // Scrollback is read WITHOUT clearing (FR6).
+            // Phase C FR5 order: clear → scrollback → shadow. Scrollback is
+            // read WITHOUT clearing (FR6) and stripped of rich-content launch
+            // sequences so the resume does not re-spawn viewers / re-render
+            // inline images. The raw_passthrough buffer is drained + cleared
+            // (so it does not leak across detach cycles) but NOT concatenated.
             let screen = lock_shadow_parser(&pane.shadow_parser)
                 .screen()
                 .contents_formatted();
-            let buffered = pane.scrollback.lock().unwrap().read_all();
-            let passthrough = {
+            let buffered =
+                strip_replayable_rich_content(&pane.scrollback.lock().unwrap().read_all());
+            {
                 let mut buf = pane.raw_passthrough.lock().unwrap();
-                let bytes = buf.read_all();
+                let _ = buf.read_all();
                 buf.clear();
-                bytes
-            };
-            let mut snapshot =
-                Vec::with_capacity(8 + buffered.len() + screen.len() + passthrough.len());
+            }
+            let mut snapshot = Vec::with_capacity(8 + buffered.len() + screen.len());
             snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
             snapshot.extend_from_slice(&buffered);
             snapshot.extend_from_slice(&screen);
-            snapshot.extend_from_slice(&passthrough);
             permit.send(PtyOutputChunk {
                 pane_id: pane.id,
                 data: snapshot,
@@ -702,9 +706,10 @@ mod tests {
         }
     }
 
-    /// TS-14: Detached -> Connected returns snapshot bytes including shadow
-    /// contents and raw_passthrough. Owner = caller, reason = hidden,
-    /// resolved by visible=true.
+    /// TS-14 (revised): Detached -> Connected returns snapshot bytes including
+    /// shadow contents and plain-text ring history, but NOT the captured
+    /// raw_passthrough (replaying it would re-spawn viewers / re-render inline
+    /// images). raw_passthrough is still drained + cleared.
     #[test]
     fn test_evaluate_output_target_detached_to_connected_returns_snapshot() {
         let (owned_tx, _rx) = mpsc::channel(16);
@@ -732,8 +737,8 @@ mod tests {
                     "snapshot must include ring data"
                 );
                 assert!(
-                    s.contains("\u{1b}_Gi=1"),
-                    "snapshot must include passthrough"
+                    !s.contains("\u{1b}_Gi=1"),
+                    "snapshot must NOT include captured passthrough"
                 );
             }
             _ => panic!("expected ResumeWithSnapshot"),
@@ -887,14 +892,16 @@ mod tests {
         let chunk = rx.try_recv().expect("snapshot enqueued under pane lock");
         assert_eq!(chunk.pane_id, 7);
         assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        // Captured passthrough must NOT be replayed (would re-render the image).
         let needle_passthrough = b"\x1b_Gi=7;PASS\x1b\\";
         assert!(
-            chunk
+            !chunk
                 .data
                 .windows(needle_passthrough.len())
                 .any(|w| w == needle_passthrough),
-            "snapshot must contain captured passthrough"
+            "snapshot must NOT contain captured passthrough"
         );
+        // Plain-text ring history is still restored.
         assert!(
             chunk
                 .data

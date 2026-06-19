@@ -2,7 +2,7 @@
 
 ## Overview
 
-frontend が hidden の間は backend (Tauri ローカル PTY セッション) と mux daemon が PTY 出力を内部の shadow parser とリングバッファに保持し、frontend へのデータ送信を停止する。frontend が visible に復帰した時点で最新画面を再現するスナップショットを 1 回だけ送り、以降は通常の chunk streaming に戻す。
+frontend が hidden の間は backend (Tauri ローカル PTY セッション) と mux daemon が PTY 出力を内部の shadow parser とリングバッファに保持し、frontend へのデータ送信を停止する。frontend が visible に復帰した時点で最新の画面状態 (cursor / SGR / セル) を再現するスナップショットを 1 回だけ送り、以降は通常の chunk streaming に戻す。復帰スナップショットにはリッチコンテンツ (画像 / Markdown、Kitty Graphics / SIXEL 含む) を連結せず、復帰時にリッチコンテンツは再現しない。
 
 これにより、hidden 期間中の Tauri Channel 流量をゼロにし、`in_flight` の構造的な発散を防ぎ、復帰時のフリーズを排除する。
 
@@ -30,8 +30,8 @@ As a AI ツール並列利用者, I want mux ペインを並列で動かした�
 
 **Acceptance Criteria:**
 - [ ] 1 時間 hidden 後の backend / daemon RSS 増加が 10MB 未満
-- [ ] 復帰時に全ペインの最新状態が表示される
-- [ ] CLI で表示した画像 / Markdown が復帰後にも表示される
+- [ ] 復帰時に全ペインの最新の画面状態が表示される
+- [ ] 復帰後にリッチコンテンツ (画像 / Markdown) は再表示されない
 
 ### US3: 短時間ウィンドウ切替を繰り返す
 
@@ -48,13 +48,13 @@ As a ターミナル常用ユーザー, I want 数百 ms 程度のウィンド�
 - **FR1 — Visibility 検知と統合判定:** frontend は `document.visibilityState` と rAF heartbeat (visibility-raf-heartbeat FR1〜FR3 参照) を `effective_visible` の判定に使用する。Tauri `getCurrentWebviewWindow().onFocusChanged` は購読するが、その focused 状態は `effective_visible` の判定から除外し、`[DIAG-IDLE]` ログの `reason` 構成 (visibility-raf-heartbeat FR6) のみで参照する観測専用シグナルとする。状態変化はデバウンス (FR5) を通る。
 - **FR2 — Backend への通知 (非 mux):** Tauri invoke `pty_set_visibility(session_id: String, visible: bool)` を新設する。frontend は確定した状態を当該セッションに対し通知する。
 - **FR3 — Daemon への通知 (mux):** mux IPC に `SetVisibility(visible: bool)` メッセージを追加する。frontend は接続中の daemon に対し通知する。クライアント単位で 1 状態を持つ (ペイン個別ではない)。
-- **FR4 — Backend shadow parser (非 mux):** Tauri 側に `SessionVisibilityState` を新設し、各セッションについて `vt100::Parser` shadow と画像/Markdown 用 raw passthrough バッファを持つ。`pty_resize` 時に shadow のスクリーンサイズも同期する。スナップショット復帰は shadow + raw passthrough の 2 系統のみで再構築するため、汎用 raw リングバッファ (HiddenRingBuffer) は本機能では作成しない (将来的に diagnostic 用途で追加する場合は別 PR とする)。
+- **FR4 — Backend shadow parser (非 mux):** Tauri 側に `SessionVisibilityState` を新設し、各セッションについて `vt100::Parser` shadow と画像/Markdown 用 raw passthrough バッファを持つ。`pty_resize` 時に shadow のスクリーンサイズも同期する。スナップショット復帰は shadow parser snapshot のみで画面状態を再構築する。raw passthrough バッファは hidden 中の drain 用途で保持するが、復帰スナップショットには連結しない。汎用 raw リングバッファ (HiddenRingBuffer) は本機能では作成しない (将来的に diagnostic 用途で追加する場合は別 PR とする)。
 - **FR5 — デバウンス制御:** visible → hidden への遷移は `HIDDEN_DEBOUNCE_MS = 1000` 経過後に確定する。hidden → visible への遷移は即座に確定する。閾値未満で visible に戻った場合は確定をキャンセルする。
-- **FR6 — Hidden 中の reader 挙動 (非 mux):** `src-tauri/src/reader.rs` の reader thread は hidden 中、PTY からの read を継続するが、`channel.send` を呼ばず shadow parser と画像/Markdown raw passthrough バッファへ書き込む。`backpressure.add_sent` も呼ばず、`backpressure.wait_for_drain` も skip する。
+- **FR6 — Hidden 中の reader 挙動 (非 mux):** `src-tauri/src/reader.rs` の reader thread は hidden 中、PTY からの read を継続するが、`channel.send` を呼ばず shadow parser へ書き込む。画像/Markdown raw passthrough バッファへの書き込みは drain 用途で継続するが、復帰スナップショットには連結しない。`backpressure.add_sent` も呼ばず、`backpressure.wait_for_drain` も skip する。
 - **FR7 — Hidden 中の daemon 挙動 (mux):** mux daemon は接続中クライアントが hidden の間、各ペインの `output_target` を `Detached(DetachRingBuffer)` 相当に切り替える。daemon の PTY reader は visible/hidden に関わらず PTY からの read を継続する。
-- **FR8 — Visible 復帰時のスナップショット送信 (非 mux):** backend は復帰時に `build_session_snapshot(session_id)` (`b"\x1b[H\x1b[2J"` プレフィックス + shadow parser の `contents_formatted()` + 画像/Markdown raw passthrough) を生成し、Channel へ 1 メッセージで送信する。送信後 raw passthrough をクリアする。**ordering 不変式:** snapshot の `Channel.send` は `SessionVisibilityState::inner` mutex 内で完了し、その後に `visible: AtomicBool` を `Release` で `true` にする。reader thread は inner mutex 外で `is_visible()` を lock-free check するため、`visible == true` を観測する時点で snapshot は必ず Channel に enqueue 済み (FIFO 保証) であり、後続の live batch が snapshot より先に届くレースは発生しない。
-- **FR9 — Visible 復帰時のスナップショット送信 (mux):** daemon は復帰時に各ペインについて、(1) `pane_output_tx.reserve()` で permit を pane lock 外で取得し、(2) `output_target` の lock を取った状態で `build_shadow_parser_snapshot(shadow_parser)` + ring buffer + 画像/Markdown raw passthrough バッファを連結した `PtyOutputChunk` を取得済み permit 経由で **同期的に** enqueue し、(3) ring buffer / raw passthrough を `clear()` し、(4) `output_target` を `Connected(pane_output_tx)` に戻す、の順で実施する。`(2)→(4)` を同一 pane lock 内で行うことで、reader thread が同じ pane lock を取って live chunk を `try_send` する経路と排他され、snapshot 送信前に live chunk が enqueue されるレースを防ぐ。permit による事前予約があるため `try_send Full` のフォールバックは発生しない (capacity が live chunk で埋まっていれば `reserve().await` が drain を待つ)。reader thread 側は (4) 後の次回 batch から通常 streaming へ戻る。実装は `mux/session/pane.rs::resume_pane_with_permit` および `mux/ipc/handlers.rs::handle_set_visibility` (visible edge) で行う。
-- **FR10 — メモリ上限ポリシー:** 非 mux 側は shadow parser (cols × rows × 32 bytes 程度) + `RawPassthroughBuffer` (`HIDDEN_PASSTHROUGH_CAPACITY = 4 MiB`) のみを保持する。汎用 raw リングバッファは持たない。mux 側はペイン毎に既存 `DetachRingBuffer` (`DEFAULT_RING_CAPACITY = 64 MiB`) と新規 `RawPassthroughBuffer` (`HIDDEN_PASSTHROUGH_CAPACITY = 1 MiB`、ペインごと) を持つ。`HIDDEN_PASSTHROUGH_CAPACITY` を非 mux と mux で別値にすることで、mux で複数ペイン同時 hidden の場合でも passthrough によるメモリ増加を NFR3 の per-session 目標 (10 MB 以下) 内に収める (例: 8 ペインで最大 8 MiB)。
+- **FR8 — Visible 復帰時のスナップショット送信 (非 mux):** backend は復帰時に `build_session_snapshot(session_id)` (`b"\x1b[H\x1b[2J"` プレフィックス + shadow parser の `contents_formatted()`) を生成し、Channel へ 1 メッセージで送信する。raw passthrough は復帰スナップショットに連結しない。送信後 raw passthrough を drain (クリア) して次サイクルへ持ち越さない。**ordering 不変式:** snapshot の `Channel.send` は `SessionVisibilityState::inner` mutex 内で完了し、その後に `visible: AtomicBool` を `Release` で `true` にする。reader thread は inner mutex 外で `is_visible()` を lock-free check するため、`visible == true` を観測する時点で snapshot は必ず Channel に enqueue 済み (FIFO 保証) であり、後続の live batch が snapshot より先に届くレースは発生しない。
+- **FR9 — Visible 復帰時のスナップショット送信 (mux):** daemon は復帰時に各ペインについて、(1) `pane_output_tx.reserve()` で permit を pane lock 外で取得し、(2) `output_target` の lock を取った状態で `build_shadow_parser_snapshot(shadow_parser)` + ring buffer を連結した `PtyOutputChunk` を取得済み permit 経由で **同期的に** enqueue し、(3) ring buffer / raw passthrough を `clear()` し、(4) `output_target` を `Connected(pane_output_tx)` に戻す、の順で実施する。raw passthrough は復帰スナップショットに連結せず、(3) で drain (clear) して次サイクルへ持ち越さない。`(2)→(4)` を同一 pane lock 内で行うことで、reader thread が同じ pane lock を取って live chunk を `try_send` する経路と排他され、snapshot 送信前に live chunk が enqueue されるレースを防ぐ。permit による事前予約があるため `try_send Full` のフォールバックは発生しない (capacity が live chunk で埋まっていれば `reserve().await` が drain を待つ)。reader thread 側は (4) 後の次回 batch から通常 streaming へ戻る。実装は `mux/session/pane.rs::resume_pane_with_permit` および `mux/ipc/handlers.rs::handle_set_visibility` (visible edge) で行う。
+- **FR10 — メモリ上限ポリシー:** 非 mux 側は shadow parser (cols × rows × 32 bytes 程度) + `RawPassthroughBuffer` (`HIDDEN_PASSTHROUGH_CAPACITY = 4 MiB`、drain 用途で保持し復帰スナップショットには連結しない) のみを保持する。汎用 raw リングバッファは持たない。mux 側はペイン毎に既存 `DetachRingBuffer` (`DEFAULT_RING_CAPACITY = 64 MiB`) と新規 `RawPassthroughBuffer` (`HIDDEN_PASSTHROUGH_CAPACITY = 1 MiB`、ペインごと) を持つ。`HIDDEN_PASSTHROUGH_CAPACITY` を非 mux と mux で別値にすることで、mux で複数ペイン同時 hidden の場合でも passthrough によるメモリ増加を NFR3 の per-session 目標 (10 MB 以下) 内に収める (例: 8 ペインで最大 8 MiB)。
 - **FR11 — Visibility 状態の `pty_ack` 解釈:** hidden 中は backend で `in_flight` を加算しない (FR6) ため、frontend からの `pty_ack` は単に既存カウンタを減算するのみ。hidden 中の ack は no-op に近い動作となる。
 - **FR12 — Backend からの再構築不要保証:** スナップショットは self-contained な ANSI バイト列であり、frontend WASM grid は受信したスナップショットを通常の `process_pty_data` 経路で消費する。frontend 側に専用デコーダを追加しない。snapshot 1 つは reader path / mux pane channel いずれも単一 message として送信し、live chunk と分割混在しない。これにより frontend は snapshot prefix `\x1b[H\x1b[2J` 直後にスクリーン全体を再構築でき、live chunk が snapshot より先に届いて消えるケース (FR8/FR9 の ordering 不変式違反) を frontend 側で recover する必要がない。
 - **FR13 — mux 既存 detach との共存 (確定):** daemon に「クライアント (GUI) 単位の visible 状態」を保持する。具体的な保持方式は実装中決定とし、現実の `connection.rs` 構造に合わせて以下のいずれかを採用する:
@@ -68,15 +68,15 @@ As a ターミナル常用ユーザー, I want 数百 ms 程度のウィンド�
     1. `SetVisibility` 受信時 (`handle_set_visibility`): 接続中の各ペインに対し評価関数を呼ぶ
     2. reattach 完了時 (`collect_reattach_data`): 旧 `network_detach == true` から復帰直後に、最新 `visible` で評価関数を呼ぶ
   - detach 中に hidden が変化しても `output_target` は `Detached` のまま (どっちみち buffer する)。クライアント単位の visible 状態のみ更新する。
-  - reattach 時に hidden だった場合: `output_target` を `Detached` のまま維持し、snapshot 送信はせず ring buffer / raw passthrough に蓄積継続。次回 visible 復帰時 (`SetVisibility(true)`) で `resume_pane_with_permit` 経由で snapshot を送る。実装は `collect_reattach_data(visible: bool)` の `visible == false` 分岐で行い、各ペインを `Detached { reason = HiddenByVisibility, owner = Some(pane_output_tx) }` に設定 (既存の `NetworkDetach` bit はクリア、`HiddenByVisibility` bit を立てる)。返却タプルは pane_id と空 `Vec<u8>` のペアで、`send_reattach_data` は `PaneCreated` のみ送信し `PtyOutput` は emit しない。これにより hidden 中の attach で snapshot が frontend に送られて二重描画になるレース (F4) を防ぐ。
+  - reattach 時に hidden だった場合: `output_target` を `Detached` のまま維持し、snapshot 送信はせず ring buffer に蓄積継続 (raw passthrough も drain 用途で蓄積継続)。次回 visible 復帰時 (`SetVisibility(true)`) で `resume_pane_with_permit` 経由で snapshot を送る。実装は `collect_reattach_data(visible: bool)` の `visible == false` 分岐で行い、各ペインを `Detached { reason = HiddenByVisibility, owner = Some(pane_output_tx) }` に設定 (既存の `NetworkDetach` bit はクリア、`HiddenByVisibility` bit を立てる)。返却タプルは pane_id と空 `Vec<u8>` のペアで、`send_reattach_data` は `PaneCreated` のみ送信し `PtyOutput` は emit しない。これにより hidden 中の attach で snapshot が frontend に送られて二重描画になるレース (F4) を防ぐ。
 - **FR14 — 画像 / Markdown OSC の取り扱い (確定):** `vt100::Parser` は Kitty Graphics Protocol (APC G;...) / SIXEL DCS / OSC 9999 (emterm Markdown) を内部状態として保持しない。
   - hidden 検出時から、reader は PTY 出力バイト列を 2 系統に分岐する:
     1. shadow parser (`vt100::Parser::process`) には常に全バイト投入する (cursor / SGR / 画面状態を正しく更新するため)
     2. 加えて、画像/Markdown OSC を抽出する **stateful** scanner (`PassthroughScanner::process(data) -> Vec<u8>`) を通し、抽出されたバイト列を `RawPassthroughBuffer` (固定容量 `HIDDEN_PASSTHROUGH_CAPACITY`: 非 mux=4 MiB / mux=1 MiB ペインごと、末尾 N バイト保持方式) に append する
   - scanner は **chunk 跨ぎに対応する stateful 実装**とする。state machine で APC G;…ESC \, DCS …q…ESC \, OSC 9999;…ESC \ を追跡し、開始済み未完了 sequence の partial buffer を session/pane ごとに保持する。partial buffer 上限 (`PARTIAL_SEQUENCE_MAX = 16 MiB`) を超えた場合は対象 sequence を放棄し warn ログを出す。state は visible 復帰時に reset しない (chunk 跨ぎは visible 中も発生し得るため、visible 中は scanner を呼ばない設計でもよい — 詳細は実装中決定)
   - 上限超過時 (`RawPassthroughBuffer`): 古いバイト列を head から drop し、末尾容量分を保持する。drop 発生時は `log::warn!` を 1 セッション/ペインあたり 1 回 (visible 復帰時にフラグリセット)
-  - 復帰時転送順: `b"\x1b[H\x1b[2J"` + `shadow_parser.screen().contents_formatted()` + `raw_passthrough.read_all()` の順で 1 つの `Vec<u8>` に連結し送信する
-  - **役割分担の明示**: shadow snapshot は画面状態 (cursor / SGR / セル) を再構築する。raw passthrough は `vt100::Parser` が捨てる非画面表現 (画像 / Markdown OSC) の末尾分を救済する補助。mux の既存 `DetachRingBuffer` はネットワーク detach 中の差分配信のみに使い、visibility-driven hidden 中の画像/Markdown 復元は raw passthrough を使う。
+  - 復帰時転送順: `b"\x1b[H\x1b[2J"` + `shadow_parser.screen().contents_formatted()` の順で 1 つの `Vec<u8>` に連結し送信する。raw passthrough は復帰スナップショットに連結しない
+  - **役割分担の明示**: shadow snapshot は画面状態 (cursor / SGR / セル) を再構築する。raw passthrough は復帰スナップショットに連結せず、復帰時に drain (clear) して破棄する。リッチコンテンツ (画像 / Markdown) は復帰時に再現しない。mux の既存 `DetachRingBuffer` はネットワーク detach 中の差分配信のみに使う。
   - mux 側でも同じ `RawPassthroughBuffer` (容量 1 MiB) と `PassthroughScanner` をペインごとに持ち、`PaneOutputTarget::Detached` 切替時から `pty_reader_loop` で `extract → append` を実施する
 - **FR15 — 既存対症療法の撤去:** 以下を削除する。
   - `src-tauri/src/reader.rs`: `pty_heartbeat` emit、`HEARTBEAT_INTERVAL` 定数、`PtyHeartbeatPayload` (`payloads.rs`)
@@ -185,8 +185,7 @@ document.visible または rAF resume → frontend (即座に)
   → pty_set_visibility(session_id, true)
   → SessionVisibilityState.set_visible_and_take_snapshot()
        snapshot = b"\x1b[H\x1b[2J" + parser.screen().contents_formatted()
-                  + raw_passthrough.read_all()
-       raw_passthrough.clear() / drop_warned リセット
+       raw_passthrough.clear() / drop_warned リセット (連結しない / drain)
   → command が channel.send(snapshot) を 1 回呼ぶ
   → 以降通常 streaming
 ```
@@ -210,9 +209,9 @@ document.visible または rAF resume → frontend (即座に)
   → connection-scope visible = true
   → 各ペインに対し pane.output_target lock を取り:
        (1) snapshot = build_shadow_parser_snapshot(shadow_parser)
-                      + raw_passthrough.read_all()
            pane_output_tx.send(PtyOutput { snapshot }) を実施
-       (2) raw_passthrough.clear()
+           (raw_passthrough は連結しない)
+       (2) raw_passthrough.clear() (drain)
        (3) output_target = Connected(pane_output_tx)
   (3) より前に (1) を確実に enqueue することで
       新規 chunk が snapshot より先に流れるレースを防ぐ
@@ -236,7 +235,7 @@ document.visible または rAF resume → frontend (即座に)
 - `pty_set_visibility(state: PtyManager, session_id: String, visible: bool)`
 
 **動作:**
-- `visible == true`: `SessionVisibilityState.set_visible_and_flush_snapshot()` を呼び、shadow snapshot + raw passthrough を Channel に送信する
+- `visible == true`: `SessionVisibilityState.set_visible_and_flush_snapshot()` を呼び、shadow snapshot を Channel に送信する (raw passthrough は連結せず drain する)
 - `visible == false`: `SessionVisibilityState.set_hidden()` を呼び、以降 reader が shadow パスへ流れる
 - 該当セッションが存在しない場合は no-op
 
@@ -325,7 +324,7 @@ SetVisibilityMessage {
 - `src-tauri/src/mux/ipc/handlers.rs`: `handle_set_visibility` ハンドラ追加 (route_message 経由)
 - `src-tauri/src/mux/ipc/connection.rs`: `ConnectionState.visible` 追加、SetVisibility メッセージのルーティング
 - `src-tauri/src/mux/session/pane.rs`: `evaluate_output_target` 関数追加、`raw_passthrough` フィールド追加
-- `src-tauri/src/mux/ipc/reattach.rs`: `collect_reattach_data` で `evaluate_output_target` を呼ぶ、snapshot に raw_passthrough 連結
+- `src-tauri/src/mux/ipc/reattach.rs`: `collect_reattach_data` で `evaluate_output_target` を呼ぶ (snapshot に raw_passthrough は連結しない)
 - `src/pty/client.ts`: `setVisibility(visible: boolean)` メソッド追加
 - `src/pty/visibility-controller.ts`: 新規
 - `src/terminal/mux/mux-client.ts`: `sendSetVisibility` メソッド追加、`MuxMessageType.SetVisibility = 0x1B` 追加
@@ -354,7 +353,7 @@ src-tauri/src/
     │   ├── protocol.rs        # 修正: SetVisibility = 0x1B 追加、payload 定義
     │   ├── handlers.rs        # 修正: handle_set_visibility ハンドラ
     │   ├── connection.rs      # 修正: ConnectionState.visible 追加、route 拡張
-    │   └── reattach.rs        # 修正: evaluate_output_target、snapshot に passthrough 連結
+    │   └── reattach.rs        # 修正: evaluate_output_target (snapshot に passthrough は連結しない)
     └── session/
         └── pane.rs            # 修正: evaluate_output_target、raw_passthrough フィールド
 
@@ -396,9 +395,9 @@ src/
 
 - [ ] 非 mux: hidden 状態で 10MB 分の PTY 出力を流し込んでも `pty_get_send_stats` の `sent_bytes` が増えない
 - [ ] 非 mux: visible 復帰時に shadow snapshot が 1 メッセージで届き、frontend WASM grid が最新画面と一致する
-- [ ] 非 mux: hidden 中に Kitty 画像 sequence を流し込み、復帰時に raw passthrough として届く
+- [ ] 非 mux: hidden 中に Kitty 画像 sequence を流し込み、復帰スナップショットに raw passthrough (画像) が連結されない (復帰後に再表示されない)
 - [ ] mux: hidden 中に各ペインの `output_target` が `Detached` 相当となり、ring buffer に蓄積される
-- [ ] mux: visible 復帰時に各ペインの `build_shadow_parser_snapshot` + raw passthrough が送られる
+- [ ] mux: visible 復帰時に各ペインの `build_shadow_parser_snapshot` が送られ、raw passthrough は連結されず drain される
 - [ ] mux: detach (network) 中に SetVisibility を受けても output_target は Detached のまま、ConnectionState.visible だけ更新される
 
 ### E2E Tests
@@ -408,7 +407,7 @@ src/
 
 - [ ] 既存 E2E が回帰なくパスする
 - [ ] 新規 spec: 非 mux で **Tauri webview API** 経由で minimize/restore (もしくは tauri-driver の WebDriver `setWindowRect` で off-screen に移動) を行い、復帰後に PTY 出力が最新表示される。`document.visibilityState` の DOM property 上書きには依存しない (read-only のため)
-- [ ] 新規 spec: mux で同手順を実施し、各ペインの shadow snapshot + raw passthrough が反映される
+- [ ] 新規 spec: mux で同手順を実施し、各ペインの shadow snapshot が反映される (raw passthrough は連結されない)
 - [ ] 新規 spec: hidden 中 (1〜3 秒で十分) の `pty_get_send_stats.sent_bytes` が増えないことを assert する (10 分待ちの freeze 再現の CI 代替手段)
 
 ### Edge Cases
@@ -416,9 +415,9 @@ src/
 - [ ] hidden 中に `pty_resize` が呼ばれた場合、shadow parser のスクリーンサイズが追従する
 - [ ] hidden 中に PTY が exit した場合、visible 復帰時に exit イベントが届き、最終画面状態が表示される
 - [ ] hidden → visible の遷移中に backend がスナップショット送信に失敗した場合、次回 PTY 出力時に通常 streaming で再同期される
-- [ ] CLI 画像表示 (Kitty Graphics Protocol) が hidden 中に送られ、raw passthrough 容量内であれば復帰時に表示される
-- [ ] CLI Markdown 表示 (OSC 9999) が hidden 中に送られ、raw passthrough 容量内であれば復帰時に表示される
-- [ ] CLI 画像/Markdown が raw passthrough 容量を超えた場合、末尾 4 MiB が保持され古いものから drop され、警告ログが 1 回出力される
+- [ ] CLI 画像表示 (Kitty Graphics Protocol) が hidden 中に送られても、復帰スナップショットに連結されず復帰後に再表示されない
+- [ ] CLI Markdown 表示 (OSC 9999) が hidden 中に送られても、復帰スナップショットに連結されず復帰後に再表示されない
+- [ ] raw passthrough が容量を超えた場合、末尾 4 MiB が保持され古いものから drop され、警告ログが 1 回出力される (drain 用途のバッファ動作)
 - [ ] mux で「クライアント切断による detach」と「hidden による soft detach」が同時に発生した場合、`evaluate_output_target` により detach が解消されるまで Detached を維持し、reattach 時に hidden 状態を再評価する
 - [ ] frontend からの visibility 通知が IPC エラーで失われた場合、10 秒ごとのヘルスチェック再送 (NFR5) で次回回復する
 
@@ -476,7 +475,7 @@ src/
 
 - shadow parser 自体が screen state のキャッシュ
 - 復帰時にリングバッファ raw 内容は破棄し、shadow snapshot のみを真実とする
-- 例外: 画像 / Markdown OSC は raw passthrough バッファに別途保持し、snapshot に続けて送る
+- 画像 / Markdown OSC は raw passthrough バッファに保持するが、復帰スナップショットには連結せず復帰時に drain して破棄する
 
 ## Success Criteria
 
@@ -487,7 +486,7 @@ src/
 - [ ] mux / 非 mux の両方で `pty_get_send_stats.sent_bytes` が hidden 中に増加しない
 - [ ] 既存 E2E テストが回帰なく pass する
 - [ ] 既存対症療法 (FR15) が削除され、関連診断ログが消える
-- [ ] CLI 画像 / Markdown 表示が hidden 跨ぎで復帰後に表示される
+- [ ] CLI 画像 / Markdown 表示は hidden 跨ぎで復帰後に再表示されない (復帰スナップショットに連結されない)
 
 ## Open Questions
 
@@ -501,13 +500,14 @@ src/
 
 ## Decision Log (verify-plan で確定したもの)
 
-- 非 mux で汎用 raw リングバッファ (`HiddenRingBuffer`) は **持たない**。snapshot は shadow + raw passthrough のみで構築する (FR4 / FR8 / FR10 改訂)。
+- 非 mux で汎用 raw リングバッファ (`HiddenRingBuffer`) は **持たない**。snapshot は shadow parser snapshot のみで構築する。raw passthrough は復帰スナップショットに連結しない (FR4 / FR8 / FR10 改訂)。
 - `PassthroughScanner` は **stateful** (chunk 跨ぎ対応) とする。stateless 案は画像/Markdown が chunk 境界で欠落する問題を解消できないため不採用 (FR14 改訂)。
 - mux 側 `RawPassthroughBuffer` の容量は per-pane 1 MiB (非 mux は 4 MiB) とする。NFR3 のメモリ目標を multi-pane でも維持するため (FR10 / FR14 改訂)。
 - `wait_for_drain` は visible 中の HIGH_WATER 保護として残し、`MAX_BACKPRESSURE_WAIT` を撤去して ack 駆動の無期待ちに変更する。hidden 通知時は `set_hidden_wake` で確実に wake させる (FR15 改訂)。
 - daemon 側のクライアント単位 visible 状態は `connection.rs` の `handle_connection` 内で `Arc<AtomicBool>` を loop ローカルに持つ案 A を推奨 (新規 `ConnectionState` struct 導入は不要) (FR13 改訂)。
 - mux visible 復帰時の snapshot 送信と `output_target` 切替は同一 pane lock 内で「snapshot enqueue → clear → Connected 切替」の順で実行し、レースを排除する (FR9 改訂)。
 - 状態遷移ログは `debug` レベル、drop / send 失敗 / scanner overflow は `warn` レベルとする (NFR6 改訂)。
+- 復帰時のリッチコンテンツ (画像 / Markdown / Kitty / SIXEL) 再現を廃止する。raw passthrough は復帰スナップショットに連結しない (drain して破棄する)。mux 側 (reattach.rs / pane.rs / handlers.rs) はコード実装済み。非 mux 側 (reader.rs / SessionVisibilityState) はコード追従が後続で必要 (Overview / US2 / FR4 / FR6 / FR8 / FR9 / FR10 / FR13 / FR14 改訂)。
 
 ## Implementation Phases
 
@@ -541,7 +541,7 @@ src/
 - mux IPC protocol 拡張 (SetVisibility = 0x1B)
 - daemon 側 ConnectionState に visible 追加
 - ペインの evaluate_output_target ロジック
-- raw_passthrough フィールド追加と snapshot 連結
+- raw_passthrough フィールド追加 (drain 用途、snapshot には連結しない)
 - 単体テスト
 
 ### Phase 4: Verification
