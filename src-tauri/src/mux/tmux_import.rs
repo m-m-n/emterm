@@ -3,7 +3,7 @@
 //! Mirrors `src-tauri/src/mux/tmux_import.rs` but operates on the raw
 //! `serde_json::Value` instead of the typed `AppSettings`. native-poc's
 //! [`crate::settings::RawSettings`] intentionally does not model the
-//! `mux.base_index` / `mux.mouse` / `mux.tmux_conf_imported` fields —
+//! `mux.mouse` / `mux.tmux_conf_imported` fields —
 //! they exist only to seed tmux import bookkeeping, and the renderer
 //! never reads them. Going through a JSON patch lets us write those
 //! keys back without forcing the native loader to learn fields it does
@@ -145,11 +145,6 @@ fn apply_conversion(mux: &mut Map<String, Value>, result: &ConversionResult) {
             "prefix" => {
                 mux.insert("prefix".to_string(), Value::String(value.clone()));
             }
-            "base_index" => {
-                if let Ok(v) = value.parse::<u32>() {
-                    mux.insert("base_index".to_string(), json!(v));
-                }
-            }
             "mouse" => {
                 mux.insert("mouse".to_string(), json!(value == "true"));
             }
@@ -228,15 +223,15 @@ mod tests {
         let path = tmp_settings_path("latch");
         std::fs::write(&path, r#"{"mux": {"tmux_conf_imported": true}}"#).unwrap();
 
-        // Second loader would set base_index=42, but the latch must
+        // Second loader would set prefix/mouse, but the latch must
         // suppress the entire import.
         import_tmux_conf_into(
             &path,
-            loader_with(vec![("base_index", "42"), ("mouse", "true")]),
+            loader_with(vec![("prefix", "Ctrl+A"), ("mouse", "true")]),
         );
 
         let v = read_json(&path);
-        assert!(v["mux"].get("base_index").is_none());
+        assert!(v["mux"].get("prefix").is_none());
         assert!(v["mux"].get("mouse").is_none());
     }
 
@@ -247,7 +242,6 @@ mod tests {
             &path,
             loader_with(vec![
                 ("prefix", "Ctrl+A"),
-                ("base_index", "1"),
                 ("mouse", "true"),
                 ("status_position", "top"),
                 ("keybind.new-window", "c"),
@@ -258,7 +252,6 @@ mod tests {
         let v = read_json(&path);
         assert_eq!(v["mux"]["tmux_conf_imported"], json!(true));
         assert_eq!(v["mux"]["prefix"], json!("Ctrl+A"));
-        assert_eq!(v["mux"]["base_index"], json!(1));
         assert_eq!(v["mux"]["mouse"], json!(true));
         assert_eq!(v["mux"]["status_position"], json!("top"));
         assert_eq!(v["mux"]["keybinds"]["new-window"], json!("c"));
@@ -295,16 +288,6 @@ mod tests {
         assert_eq!(v["mux"]["prefix"], json!("Ctrl+A"));
         assert_eq!(v["mux"]["keybinds"]["existing"], json!("z"));
         assert_eq!(v["mux"]["keybinds"]["detach"], json!("d"));
-        assert_eq!(v["mux"]["tmux_conf_imported"], json!(true));
-    }
-
-    #[test]
-    fn base_index_unparseable_is_dropped() {
-        let path = tmp_settings_path("base_index_bad");
-        import_tmux_conf_into(&path, loader_with(vec![("base_index", "not-a-number")]));
-        let v = read_json(&path);
-        assert!(v["mux"].get("base_index").is_none());
-        // Latch still set so we don't retry next launch.
         assert_eq!(v["mux"]["tmux_conf_imported"], json!(true));
     }
 

@@ -346,7 +346,6 @@
       "title": "Terminal Multiplexer",
       "general": "General",
       "prefix": "Prefix Key",
-      "baseIndex": "Base Index",
       "mouse": "Mouse Support",
       "statusPosition": "Status Bar Position",
       "keybinds": "Keybinds",

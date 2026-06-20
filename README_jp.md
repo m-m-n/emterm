@@ -31,7 +31,7 @@ Linux/Windows向けのネイティブターミナルエミュレータ。ター�
   - デタッチ（`prefix+d`）／リアタッチ（`emterm mux attach`）と画面状態の完全な復元
   - セッションあたり複数ウィンドウとタブグループUI（全ウィンドウ同時ストリーミングによる瞬時切り替え）
   - ウィンドウ管理: `prefix+c`（新規）、`prefix+n`/`prefix+p`（切替）、`prefix+,`（リネーム）、`prefix+m`（移動/並び替え、`[N]`位置バッジ表示）
-  - tmux.conf インポート: プレフィックスキー、キーバインド、base-index、マウス、status-position
+  - tmux.conf インポート: プレフィックスキー、キーバインド、マウス、status-position
   - インバンドAPCプロトコル: PTYストリーム経由でmux制御メッセージを送受信（SSH透過、追加ソケット転送不要）
   - `emterm mux new-window [-n 名前] [-c コマンド]`: CLIからウィンドウを作成し初期コマンドを実行
   - `emterm mux send-keys [-t ウィンドウ]`: 標準入力のデータをmuxウィンドウにキー入力として送信

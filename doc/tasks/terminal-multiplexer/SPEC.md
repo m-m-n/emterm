@@ -47,7 +47,7 @@ As a tmux user, I want to import my tmux.conf settings, so that my keybindings a
 **Acceptance Criteria:**
 - [ ] On first mux startup, `~/.tmux.conf` is automatically parsed and settings imported to `settings.json` `mux` section
 - [ ] Unsupported settings produce warnings (logged)
-- [ ] Prefix key, keybindings, base-index, mouse, status-position are converted
+- [ ] Prefix key, keybindings, mouse, status-position are converted
 - [ ] Imported keybindings are editable in the settings panel
 
 ## Technical Requirements
@@ -63,7 +63,7 @@ As a tmux user, I want to import my tmux.conf settings, so that my keybindings a
 - **FR7: Window Management** — Multiple windows per session. Each window has exactly one pane. Tab group UI with auto-expand (active) / auto-compact (inactive, shows "mux (N)"). 0.3s animation for expand/compact.
 - **FR8: Status Bar** — HTML-rendered status bar. Daemon pushes state changes (session name, window list). Event-driven (no polling). Local info (clock) managed by GUI.
 - **FR9: Clipboard Paste** — `prefix + ]` pastes from the system clipboard into the active pane's PTY. No tmux buffer abstraction. Daemon not involved.
-- **FR10: tmux.conf Conversion** — Regex-based line-oriented parser. Converts prefix, keybindings, base-index, mouse, status-position, default-terminal. Ignores if-shell, run-shell, plugins, format strings, set-hook with warnings. Unsupported keybinding actions (split, zoom, copy-mode, etc.) are logged and skipped.
+- **FR10: tmux.conf Conversion** — Regex-based line-oriented parser. Converts prefix, keybindings, mouse, status-position, default-terminal. Ignores if-shell, run-shell, plugins, format strings, set-hook with warnings. Unsupported keybinding actions (split, zoom, copy-mode, etc.) are logged and skipped.
 - **FR11: Prefix Key** — Processed in GUI (TypeScript). Default `Ctrl+b`. Loaded from local settings (`settings.json` mux section), configurable via settings UI.
 - **FR12: Flow Control** — Bounded channel (capacity 256) + adaptive batching (4ms accumulation window). Per-pane independent channels with round-robin select! consumption. Backpressure chain: socket buffer → channel → PTY reader → kernel buffer → process write().
 - **FR13: Environment Variables** — `TERM_PROGRAM=emterm` and `TERM_PROGRAM_VERSION=<version>` set by GUI on PTY startup. `EMTERM_MUX=1` and `EMTERM_MUX_SOCKET=<path>` set by daemon in PTY environment. Nesting prevention via `EMTERM_MUX` check.
@@ -312,7 +312,6 @@ Added to existing `settings.json`:
 {
   "mux": {
     "prefix": "ctrl+b",
-    "base_index": 0,
     "mouse": true,
     "status_position": "bottom",
     "tab_always_expand": false,
