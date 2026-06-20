@@ -390,6 +390,43 @@ pub struct App {
     sftp_progress_rx: crate::sftp::service::ProgressReceiver,
     /// Duplicate-check result receiver drained each frame by [`App::pump_sftp`].
     sftp_result_rx: crate::sftp::service::ResultReceiver,
+    /// Binary-mismatch restart toast (armed by a failed self-spawn, drawn by
+    /// the render path, auto-dismissed by [`App::pump_sftp`]).
+    pub restart_toast: RestartToast,
+}
+
+/// How long (in egui frame-time seconds) the binary-mismatch restart toast
+/// lingers before it auto-dismisses. Owned by this feature (deliberately NOT
+/// the SFTP `TOAST_LINGER_SECS`) so the two toasts can diverge.
+const RESTART_TOAST_LINGER_SECS: f64 = 4.0;
+
+/// Single auto-dismissing toast prompting a restart after the running binary
+/// no longer matches the on-disk binary. Mirrors the SFTP toast's monotonic
+/// frame-time dismiss model (no wall-clock).
+#[derive(Debug, Default)]
+pub struct RestartToast {
+    /// Frame-time at which the toast auto-dismisses. `None` while inactive.
+    dismiss_at: Option<f64>,
+}
+
+impl RestartToast {
+    /// (Re)arm the single toast: schedule dismissal at `now + linger`. A
+    /// subsequent arm overwrites the prior instant (one toast, refreshed).
+    fn arm(&mut self, now: f64) {
+        self.dismiss_at = Some(now + RESTART_TOAST_LINGER_SECS);
+    }
+
+    /// Clear the toast once the frame time reaches its dismissal instant.
+    fn prune(&mut self, now: f64) {
+        if matches!(self.dismiss_at, Some(at) if now >= at) {
+            self.dismiss_at = None;
+        }
+    }
+
+    /// Whether the toast should currently be drawn.
+    pub fn active(&self) -> bool {
+        self.dismiss_at.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -608,6 +645,7 @@ impl App {
             sftp_ui: crate::sftp::ui::SftpUiState::default(),
             sftp_progress_rx,
             sftp_result_rx,
+            restart_toast: RestartToast::default(),
         }
     }
 
@@ -1944,12 +1982,33 @@ impl App {
 
     // ── SFTP upload (drag & drop) ────────────────────────────────
 
+    /// Binary-mismatch restart toast: a failed self-spawn (possibly off the
+    /// App thread) sets a process-global flag. Consume it once per frame to
+    /// arm/refresh the single toast, then auto-dismiss via frame time. Returns
+    /// true when the toast state changed (so the caller can request a redraw).
+    /// `now` is the egui frame time (monotonic, wall-clock-free).
+    pub fn pump_restart_toast(&mut self, now: f64) -> bool {
+        let mut changed = false;
+        if crate::self_exec::restart_required() {
+            self.restart_toast.arm(now);
+            changed = true;
+        }
+        let was_active = self.restart_toast.active();
+        self.restart_toast.prune(now);
+        if was_active != self.restart_toast.active() {
+            changed = true;
+        }
+        changed
+    }
+
     /// Drain the SFTP progress + duplicate-check channels and update the UI.
     /// `now` is the current egui frame time (monotonic, wall-clock-free).
     /// Returns true when any toast/dialog state changed (so the caller can
     /// request a redraw).
     pub fn pump_sftp(&mut self, now: f64) -> bool {
-        let mut changed = false;
+        // The binary-mismatch restart toast shares this per-frame pump but is
+        // an independent concern (see `pump_restart_toast`).
+        let mut changed = self.pump_restart_toast(now);
 
         // Progress events → toasts.
         while let Ok(progress) = self.sftp_progress_rx.try_recv() {
@@ -3796,6 +3855,46 @@ mod tests {
         // exercise the union logic rather than the bypass.
         app.record_render_state(core);
         app
+    }
+
+    // TS-5: arm(now) sets the dismissal instant to now + linger window.
+    #[test]
+    fn restart_toast_arm_sets_dismiss_at() {
+        let mut toast = RestartToast::default();
+        assert!(!toast.active());
+        toast.arm(10.0);
+        assert!(toast.active());
+        assert_eq!(toast.dismiss_at, Some(10.0 + RESTART_TOAST_LINGER_SECS));
+    }
+
+    // TS-6: prune keeps the toast while now < instant, clears it at/after.
+    #[test]
+    fn restart_toast_prune_keeps_then_clears() {
+        let mut toast = RestartToast::default();
+        toast.arm(0.0);
+        // Before the linger window elapses → still active.
+        toast.prune(RESTART_TOAST_LINGER_SECS - 0.1);
+        assert!(toast.active());
+        // At/after the dismissal instant → cleared.
+        toast.prune(RESTART_TOAST_LINGER_SECS);
+        assert!(!toast.active());
+        assert_eq!(toast.dismiss_at, None);
+    }
+
+    // TS-7: re-arm after a prior arm keeps a single toast and refreshes the
+    // dismissal instant (no second toast, instant moves forward).
+    #[test]
+    fn restart_toast_rearm_refreshes_single_toast() {
+        let mut toast = RestartToast::default();
+        toast.arm(0.0);
+        assert_eq!(toast.dismiss_at, Some(RESTART_TOAST_LINGER_SECS));
+        // A later failed spawn re-arms: same single toast, refreshed instant.
+        toast.arm(5.0);
+        assert_eq!(toast.dismiss_at, Some(5.0 + RESTART_TOAST_LINGER_SECS));
+        // The earlier instant would have dismissed by now, but the refresh
+        // keeps the toast active.
+        toast.prune(RESTART_TOAST_LINGER_SECS + 0.1);
+        assert!(toast.active());
     }
 
     #[test]

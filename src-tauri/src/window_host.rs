@@ -2875,7 +2875,15 @@ impl ApplicationHandler for PocApp {
         if pty_changed && host.pointer_in_window && !host.dragging {
             host.refresh_link_hover_on_pty_change(&self.app);
         }
-        if ime_changed || pty_changed || search_changed || blink_due || bell_due {
+        // Toasts auto-dismiss on frame time, but nothing else schedules the
+        // intermediate frames: on an idle / unfocused terminal the redraw
+        // triggers above can all be false, so a visible toast would never be
+        // pruned until an unrelated event. While any toast is up, keep frames
+        // flowing (the 16 ms WaitUntil cadence below bounds the cost) so the
+        // restart / SFTP toasts dismiss on schedule.
+        let toast_pending =
+            self.app.restart_toast.active() || !self.app.sftp_ui.toasts.toasts.is_empty();
+        if ime_changed || pty_changed || search_changed || blink_due || bell_due || toast_pending {
             host.window().request_redraw();
         }
         // Cursor cell may have moved as a side effect of pumps; notify

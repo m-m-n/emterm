@@ -65,6 +65,8 @@ pub mod pty;
 #[cfg(feature = "gui")]
 pub mod selection;
 #[cfg(feature = "gui")]
+pub mod self_exec;
+#[cfg(feature = "gui")]
 pub mod settings;
 #[cfg(feature = "gui")]
 pub mod settings_launcher;

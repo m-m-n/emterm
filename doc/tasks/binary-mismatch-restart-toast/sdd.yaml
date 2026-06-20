@@ -1,0 +1,94 @@
+schema_version: 1
+feature: binary-mismatch-restart-toast
+created: 2026-06-20
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml --check"
+      e2e_test_command: ""
+      # CLI-only feature gate check (must stay compiling):
+      # CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 7702fed006ff763a8c273190c06d0f9efb2d6c3c
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 7702fed006ff763a8c273190c06d0f9efb2d6c3c
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 7702fed006ff763a8c273190c06d0f9efb2d6c3c
+  - id: implement
+    status: completed
+    completed_at_commit: 7702fed006ff763a8c273190c06d0f9efb2d6c3c
+  - id: check
+    status: completed
+    completed_at_commit: 7702fed006ff763a8c273190c06d0f9efb2d6c3c
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 7702fed006ff763a8c273190c06d0f9efb2d6c3c
+
+requirements:
+  FR1:
+    title: 起動時 inode baseline 記録
+    status: ok
+    tasks: [p1-detection-core, p3-app-toast-state]
+    tests: [TS-4]
+  FR2:
+    title: inode 比較による不整合検出 (self_binary_missing)
+    status: ok
+    tasks: [p1-detection-core]
+    tests: [TS-1, TS-2, TS-3, TS-4]
+  FR3:
+    title: 4 箇所の自己 spawn を self_exec 経由に統一し reactive にシグナル
+    status: ok
+    tasks: [p2-route-spawn-sites]
+    tests: [TS-8, TS-9]
+  FR4:
+    title: メインウィンドウ右上トースト表示
+    status: ok
+    tasks: [p4-render-toast]
+    tests: [M-1]
+  FR5:
+    title: frame-time ベース 4 秒自動消滅 (単一トースト維持)
+    status: ok
+    tasks: [p3-app-toast-state]
+    tests: [TS-5, TS-6, TS-7]
+  FR6:
+    title: トースト文言 i18n (ja/en)
+    status: ok
+    tasks: [p4-render-toast]
+    tests: [M-1]
+  NFR1:
+    title: reactive 検出 (通常時の追加コストなし)
+    status: ok
+    tasks: [p2-route-spawn-sites]
+    tests: []
+  NFR2:
+    title: spawn 失敗がターミナルを阻害しない
+    status: ok
+    tasks: [p2-route-spawn-sites]
+    tests: [M-2]
+  NFR3:
+    title: Linux のみ対象 (非 unix は no-op false)
+    status: ok
+    tasks: [p1-detection-core]
+    tests: [TS-8, TS-9]
+  NFR4:
+    title: gui feature gate / CLI-only ビルド維持
+    status: ok
+    tasks: [p1-detection-core, p2-route-spawn-sites]
+    tests: [TS-8]
+  NFR5:
+    title: 純粋関数による単体テスト可能性
+    status: ok
+    tasks: [p1-detection-core, p3-app-toast-state]
+    tests: [TS-1, TS-5]

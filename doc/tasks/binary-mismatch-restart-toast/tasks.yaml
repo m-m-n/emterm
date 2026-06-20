@@ -1,0 +1,59 @@
+schema_version: 1
+feature: binary-mismatch-restart-toast
+
+tasks:
+  - id: p1-detection-core
+    phase: 1
+    status: completed
+    title: Detection core module (self_exec)
+    summary: >
+      Create the gui-gated self_exec module: startup baseline holder, pure
+      inode-comparison predicate, detector wrapper (unix real / non-unix no-op),
+      self-exe resolver, restart flag, and spawn helper. Unit-test the pure core.
+    files_create:
+      - src-tauri/src/self_exec.rs
+    files_modify:
+      - src-tauri/src/lib.rs
+    depends_on: []
+    effort: small
+
+  - id: p2-route-spawn-sites
+    phase: 2
+    status: completed
+    title: Route the four self-spawn sites through self_exec
+    summary: >
+      settings_launcher / viewer/mod / viewer/image (worker thread) / mux daemon
+      resolve via self_exec and note failure on spawn error, preserving each
+      site's existing logging, payload cleanup, and error return.
+    files_modify:
+      - src-tauri/src/settings_launcher.rs
+      - src-tauri/src/viewer/mod.rs
+      - src-tauri/src/viewer/image.rs
+      - src-tauri/src/mux/daemon.rs
+    depends_on: [p1-detection-core]
+    effort: small
+
+  - id: p3-app-toast-state
+    phase: 3
+    status: completed
+    title: App restart-toast state and frame pump
+    summary: >
+      Add a single frame-time restart toast to App, wire baseline init at GUI
+      startup, and consume the restart flag (arm/refresh) and prune in the frame
+      pump. Unit-test arm/prune/re-arm.
+    files_modify:
+      - src-tauri/src/app.rs
+    depends_on: [p1-detection-core]
+    effort: small
+
+  - id: p4-render-toast
+    phase: 4
+    status: completed
+    title: Render the toast with i18n
+    summary: >
+      Render the top-right restart toast (non-overlapping with SFTP toasts) using
+      the existing popup style and the inline ja/en translation closure.
+    files_modify:
+      - src-tauri/src/render/mod.rs
+    depends_on: [p3-app-toast-state]
+    effort: small

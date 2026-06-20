@@ -540,6 +540,28 @@ pub fn draw_sftp_overlay(ctx: &egui::Context, app: &mut App) -> Option<SftpFrame
             });
     }
 
+    // ── Binary-mismatch restart toast (top-right, single) ────────
+    // FR4/FR5/FR6: shown while armed; auto-dismissed by `pump_sftp` via frame
+    // time. Anchored top-right with a vertical offset placed BELOW the SFTP
+    // progress-toast stack (which grows downward from y=12) so the two never
+    // overlap. The SFTP stack height is unknown here, so the offset is derived
+    // from the visible SFTP toast count (a generous per-toast row estimate);
+    // with no SFTP toasts the restart toast sits at the top.
+    if app.restart_toast.active() {
+        const SFTP_TOAST_ROW_PX: f32 = 44.0;
+        let y_offset = 12.0 + app.sftp_ui.toasts.toasts.len() as f32 * SFTP_TOAST_ROW_PX;
+        egui::Area::new(egui::Id::new("restart_toast"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, y_offset))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(t(
+                        "eMterm が更新されました。再起動してください",
+                        "eMterm was updated. Please restart.",
+                    ));
+                });
+            });
+    }
+
     event
 }
 
