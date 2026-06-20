@@ -1,7 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import {
   renderSubsectionHeader,
-  renderNumberInput,
   renderSelect,
   renderToggle,
 } from "../settings-components";
@@ -33,26 +32,6 @@ export function renderMuxSection(
 
   // Prefix key (keybind capture for key combo like Ctrl+B)
   renderMuxPrefixInput(panel, mux.prefix, ctx);
-
-  // Base Index (0 or 1)
-  renderNumberInput(
-    panel,
-    {
-      key: "mux-base-index",
-      label: t("settings.mux.baseIndex"),
-      value: mux.base_index,
-      min: 0,
-      max: 1,
-      step: 1,
-      unit: "",
-      hint: "0 or 1",
-      onInput: () => {},
-      onSave: (v) => {
-        ctx.saveSetting("mux", { ...ctx.currentSettings.mux, base_index: v });
-      },
-    },
-    ctx.addContentListener,
-  );
 
   // Mouse toggle
   renderToggle(

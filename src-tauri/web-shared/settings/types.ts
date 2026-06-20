@@ -139,7 +139,6 @@ export interface MuxStatusbarCommand {
 
 export interface MuxSettings {
   prefix: string;
-  base_index: number;
   mouse: boolean;
   status_position: string;
   tab_always_expand: boolean;

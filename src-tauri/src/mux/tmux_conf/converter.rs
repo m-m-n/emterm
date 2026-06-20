@@ -53,11 +53,6 @@ fn convert_set_option(result: &mut ConversionResult, option: &str, value: &str) 
             let converted = convert_key_notation(value);
             result.settings.push(("prefix".to_string(), converted));
         }
-        "base-index" => {
-            result
-                .settings
-                .push(("base_index".to_string(), value.to_string()));
-        }
         "mouse" => {
             let v = match value {
                 "on" => "true",
@@ -188,15 +183,6 @@ mod tests {
         assert_eq!(
             result.settings[0],
             ("mouse".to_string(), "true".to_string())
-        );
-    }
-
-    #[test]
-    fn convert_base_index() {
-        let result = convert_directives(&parse_tmux_conf("set -g base-index 1"));
-        assert_eq!(
-            result.settings[0],
-            ("base_index".to_string(), "1".to_string())
         );
     }
 
@@ -348,9 +334,9 @@ bind c new-window
 if-shell 'test -f ~/.local.conf' 'source ~/.local.conf'
 ";
         let result = convert_directives(&parse_tmux_conf(conf));
-        // 5 settings: prefix, mouse, base-index, status-position, keybind.new-window
-        assert_eq!(result.settings.len(), 5);
-        // 3 warnings: unbind C-b, bind r (unsupported), if-shell
-        assert_eq!(result.warnings.len(), 3);
+        // 4 settings: prefix, mouse, status-position, keybind.new-window
+        assert_eq!(result.settings.len(), 4);
+        // 4 warnings: unbind C-b, base-index (unknown), bind r (unsupported), if-shell
+        assert_eq!(result.warnings.len(), 4);
     }
 }

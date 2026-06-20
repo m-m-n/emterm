@@ -312,7 +312,7 @@ Reattach flow:
 | Layout Engine | Binary tree model, split/resize/remove, preset layouts | At least one pane exists | Tree correctly calculates pixel bounds for each pane |
 | Prefix Key | State machine: idle → prefix-active → dispatch command | Mux mode active | Intercepts prefix+key combos, dispatches pane/window operations |
 | Pane Border | Visual borders, active indicator, drag-resize | Layout computed | 1px borders with accent color on active, cursor change on hover, drag resizes |
-| Mux Settings | Prefix key, keybindings, mouse, base_index | Settings system | Mux config persisted in settings.json, mirrored in TS AppSettings |
+| Mux Settings | Prefix key, keybindings, mouse | Settings system | Mux config persisted in settings.json, mirrored in TS AppSettings |
 
 **Processing Flow**:
 1. User presses prefix key (default Ctrl+b) → prefix key handler enters "waiting" state
@@ -325,7 +325,7 @@ Reattach flow:
 8. Window resize → layout recalculation (ratio preservation) → per-pane Resize messages
 
 **Implementation Steps**:
-1. **Mux settings** — Add mux section to settings (prefix key, keybinds, mouse, base_index)
+1. **Mux settings** — Add mux section to settings (prefix key, keybinds, mouse)
 2. **Binary tree layout** — Tree data structure with split/resize/remove, pixel-to-cell conversion
 3. **Prefix key handler** — State machine intercepting keyboard events in mux mode
 4. **Multi-pane rendering** — CSS Grid template generation from binary tree, dynamic Canvas creation
@@ -570,7 +570,6 @@ Reattach flow:
 **Conversion targets**:
 - `set -g prefix` → mux.prefix
 - `bind-key` / `unbind-key` → mux.keybinds
-- `set -g base-index` → mux.base_index
 - `set -g mouse` → mux.mouse
 - `set -g status-position` → mux.status_position
 - `set -g default-terminal` → TERM setting

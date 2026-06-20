@@ -908,7 +908,7 @@ Native terminal multiplexer integrated into eMterm, eliminating the VT100 double
 - Detach (`prefix+d`) returns to host shell; daemon and PTYs survive
 - `emterm mux attach` restores session with full screen state replay
 - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename)
-- tmux.conf import: prefix key, keybindings, base-index, mouse, status-position
+- tmux.conf import: prefix key, keybindings, mouse, status-position
 - Nesting prevention via `EMTERM_MUX=1` environment variable
 
 **Retained prefix key actions:**

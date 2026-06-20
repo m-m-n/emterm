@@ -553,8 +553,6 @@ impl AppSettings {
 pub struct MuxSettings {
     #[serde(default = "default_mux_prefix")]
     pub prefix: String,
-    #[serde(default)]
-    pub base_index: u32,
     #[serde(default = "default_true")]
     pub mouse: bool,
     #[serde(default = "default_mux_status_position")]
@@ -623,7 +621,6 @@ impl Default for MuxSettings {
     fn default() -> Self {
         Self {
             prefix: default_mux_prefix(),
-            base_index: 0,
             mouse: true,
             status_position: default_mux_status_position(),
             tab_always_expand: false,
@@ -786,7 +783,6 @@ mod tests {
     fn test_mux_settings_with_statusbar() {
         let json = r#"{
             "prefix": "ctrl+a",
-            "base_index": 1,
             "mouse": false,
             "statusbar": {
                 "enabled": true,
