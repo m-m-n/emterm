@@ -71,18 +71,9 @@ impl SettingsWindowLauncher for ProcessSettingsLauncher {
             log::warn!("settings launcher: window already open; ignoring");
             return;
         }
-        let exe = match std::env::current_exe() {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("settings launcher: current_exe() failed ({e})");
-                return;
-            }
-        };
-        let mut child = match std::process::Command::new(&exe)
-            .arg("--settings")
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-        {
+        let mut child = match crate::self_exec::spawn_self(|c| {
+            c.arg("--settings").stdout(std::process::Stdio::piped());
+        }) {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("settings launcher: failed to spawn child ({e}); terminal unaffected");

@@ -151,8 +151,8 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
             }
         }
 
-        let exe =
-            std::env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
+        let exe = crate::self_exec::self_exe_path()
+            .map_err(|e| format!("Failed to get executable path: {}", e))?;
 
         let log_path = sock_path.with_file_name("mux-daemon.log");
         let log_file = open_mux_log_append(&log_path).or_else(|_| {
@@ -206,8 +206,10 @@ pub fn ensure_daemon_running() -> Result<PathBuf, String> {
             cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
         }
 
-        cmd.spawn()
-            .map_err(|e| format!("Failed to spawn daemon: {}", e))?;
+        cmd.spawn().map_err(|e| {
+            crate::self_exec::note_spawn_failure();
+            format!("Failed to spawn daemon: {}", e)
+        })?;
 
         // Wait for daemon to start with exponential backoff
         let mut started = false;

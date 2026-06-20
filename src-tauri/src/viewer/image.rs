@@ -153,7 +153,10 @@ impl SpawnWorker {
     /// on every job and on an idle tick ([`IDLE_REAP_INTERVAL`]), so
     /// closed windows are collected even when no further images arrive.
     fn start(chrome: ViewerChrome) -> std::io::Result<Self> {
-        let exe = std::env::current_exe()?;
+        // Resolve once at worker-thread start (not per `Place`), preserving
+        // the existing timing. Routed through `self_exec` for parity with the
+        // other spawn sites; the resolver is `current_exe()` fresh.
+        let exe = crate::self_exec::self_exe_path()?;
         let (tx, rx) = std::sync::mpsc::sync_channel::<SpawnJob>(SPAWN_QUEUE_DEPTH);
         std::thread::Builder::new()
             .name("image-viewer-spawn".to_string())
@@ -178,9 +181,12 @@ impl SpawnWorker {
                             }
                             match spawn_viewer_child(&exe, &job, &chrome) {
                                 Ok(entry) => children.push(entry),
-                                Err(e) => log::warn!(
-                                    "image viewer: failed to spawn child ({e}); terminal unaffected"
-                                ),
+                                Err(e) => {
+                                    crate::self_exec::note_spawn_failure();
+                                    log::warn!(
+                                        "image viewer: failed to spawn child ({e}); terminal unaffected"
+                                    );
+                                }
                             }
                         }
                         Err(RecvTimeoutError::Timeout) => reap(&mut children),

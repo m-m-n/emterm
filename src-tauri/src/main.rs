@@ -11,7 +11,7 @@
 use emterm::logging;
 
 #[cfg(feature = "gui")]
-use emterm::{app, mux, settings, settings_window, viewer, wakeup, window_host};
+use emterm::{app, mux, self_exec, settings, settings_window, viewer, wakeup, window_host};
 #[cfg(feature = "gui")]
 use winit::event_loop::EventLoop;
 
@@ -160,6 +160,10 @@ fn run_gui(args: Vec<String>) {
     wakeup::install(Box::new(move || {
         let _ = proxy.send_event(());
     }));
+    // Capture the self-binary baseline (path, device, inode) once, before any
+    // self-spawn, so a later on-disk replacement is detectable. Must run after
+    // `wakeup::install` so `note_spawn_failure` can wake the loop.
+    self_exec::init();
     // One-shot tmux.conf auto-import. Runs before the settings loader
     // reads the file so an imported `mux.prefix` / `mux.keybinds` etc.
     // are visible on this very launch. The function is idempotent

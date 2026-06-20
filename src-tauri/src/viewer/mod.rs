@@ -251,15 +251,9 @@ impl ProcessViewerSink {
     /// terminal is never blocked; the orphaned payload file is removed
     /// since nothing will ever read it.
     fn spawn_child(&mut self, flag: &str, path: &Path) {
-        let exe = match std::env::current_exe() {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!("viewer: current_exe() failed ({e}); cannot spawn viewer");
-                let _ = std::fs::remove_file(path);
-                return;
-            }
-        };
-        match std::process::Command::new(&exe).arg(flag).arg(path).spawn() {
+        match crate::self_exec::spawn_self(|c| {
+            c.arg(flag).arg(path);
+        }) {
             Ok(child) => {
                 log::warn!(
                     "viewer: spawned child pid={} {flag} payload={}",
