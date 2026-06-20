@@ -1023,10 +1023,8 @@ impl WindowHost {
     fn refresh_status_bar_insets(&mut self, app: &App) {
         let vm = app.status_bar_view_model();
         let height = crate::ui::status_bar::panel_height_logical(&vm);
-        let (top, bot) = match vm.position {
-            crate::settings::StatusBarPosition::Top => (height, 0.0),
-            crate::settings::StatusBarPosition::Bottom => (0.0, height),
-        };
+        // The status bar is fixed at the bottom; reserve its height there.
+        let (top, bot) = (0.0, height);
         if (self.status_bar_top_inset_logical - top).abs() > f32::EPSILON
             || (self.status_bar_bot_inset_logical - bot).abs() > f32::EPSILON
         {

@@ -1,9 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import {
-  renderSubsectionHeader,
-  renderSelect,
-  renderToggle,
-} from "../settings-components";
+import { renderSubsectionHeader, renderToggle } from "../settings-components";
 import type { SectionContext } from "./types";
 import { DEFAULT_ACTION_BINDINGS } from "../../terminal/mux/prefix-key";
 
@@ -42,27 +38,6 @@ export function renderMuxSection(
       value: mux.mouse,
       onSave: (v) => {
         ctx.saveSetting("mux", { ...ctx.currentSettings.mux, mouse: v });
-      },
-    },
-    ctx.addContentListener,
-  );
-
-  // Status position select
-  renderSelect(
-    panel,
-    {
-      key: "mux-status-position",
-      label: t("settings.mux.statusPosition"),
-      value: mux.status_position,
-      options: [
-        { value: "top", label: "Top" },
-        { value: "bottom", label: "Bottom" },
-      ],
-      onSave: (v) => {
-        ctx.saveSetting("mux", {
-          ...ctx.currentSettings.mux,
-          status_position: v,
-        });
       },
     },
     ctx.addContentListener,

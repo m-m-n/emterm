@@ -347,7 +347,6 @@
       "general": "General",
       "prefix": "Prefix Key",
       "mouse": "Mouse Support",
-      "statusPosition": "Status Bar Position",
       "keybinds": "Keybinds",
       "keybind": {
         "detach": "Detach",

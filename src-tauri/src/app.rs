@@ -1909,18 +1909,11 @@ impl App {
         // `mux.statusbar.*` is consumed by the daemon (and the GUI's
         // `CommandProvider` merge at startup); the runtime does not need
         // it on the per-frame path.
-        let mut vm = self.status_bar_runtime.build_view_model(
+        self.status_bar_runtime.build_view_model(
             &self.settings.statusbar,
             mux_session_name,
             mux_status,
-        );
-        // When the active tab is mux-attached, the mux status row honors
-        // `mux.status_position` (FR11) — it may differ from the app status
-        // bar's own position.
-        if mux_session_name.is_some() {
-            vm.position = self.settings.mux.status_position;
-        }
-        vm
+        )
     }
 
     /// Build the current status-bar view model and compare it against

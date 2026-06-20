@@ -6,7 +6,6 @@
 //! per-row metadata; it does not touch `App`.
 
 use crate::html::RichTextRun;
-use crate::settings::StatusBarPosition;
 
 /// 3-row layered model. `enabled = false` short-circuits drawing.
 ///
@@ -17,7 +16,6 @@ use crate::settings::StatusBarPosition;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StatusBarViewModel {
     pub enabled: bool,
-    pub position: StatusBarPosition,
     /// Optional font-size override (egui logical points). `None`
     /// keeps the widget's default.
     pub font_size: Option<f32>,

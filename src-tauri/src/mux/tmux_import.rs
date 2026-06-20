@@ -148,9 +148,6 @@ fn apply_conversion(mux: &mut Map<String, Value>, result: &ConversionResult) {
             "mouse" => {
                 mux.insert("mouse".to_string(), json!(value == "true"));
             }
-            "status_position" => {
-                mux.insert("status_position".to_string(), Value::String(value.clone()));
-            }
             k if k.starts_with("keybind.") => {
                 let bind_key = k.strip_prefix("keybind.").unwrap().to_string();
                 let kb = mux
@@ -243,7 +240,6 @@ mod tests {
             loader_with(vec![
                 ("prefix", "Ctrl+A"),
                 ("mouse", "true"),
-                ("status_position", "top"),
                 ("keybind.new-window", "c"),
                 ("keybind.detach", "d"),
             ]),
@@ -253,7 +249,6 @@ mod tests {
         assert_eq!(v["mux"]["tmux_conf_imported"], json!(true));
         assert_eq!(v["mux"]["prefix"], json!("Ctrl+A"));
         assert_eq!(v["mux"]["mouse"], json!(true));
-        assert_eq!(v["mux"]["status_position"], json!("top"));
         assert_eq!(v["mux"]["keybinds"]["new-window"], json!("c"));
         assert_eq!(v["mux"]["keybinds"]["detach"], json!("d"));
     }
