@@ -3,10 +3,10 @@
 //! Mirrors `src-tauri/src/mux/tmux_import.rs` but operates on the raw
 //! `serde_json::Value` instead of the typed `AppSettings`. native-poc's
 //! [`crate::settings::RawSettings`] intentionally does not model the
-//! `mux.mouse` / `mux.tmux_conf_imported` fields —
-//! they exist only to seed tmux import bookkeeping, and the renderer
-//! never reads them. Going through a JSON patch lets us write those
-//! keys back without forcing the native loader to learn fields it does
+//! `mux.tmux_conf_imported` field —
+//! it exists only to seed tmux import bookkeeping, and the renderer
+//! never reads it. Going through a JSON patch lets us write that
+//! key back without forcing the native loader to learn a field it does
 //! not consume (the same regime [`crate::settings_store`] uses).
 //!
 //! The function is idempotent: once `mux.tmux_conf_imported == true` is
@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::settings::settings_path;
 use crate::settings_store::save_patch_to;
@@ -145,9 +145,6 @@ fn apply_conversion(mux: &mut Map<String, Value>, result: &ConversionResult) {
             "prefix" => {
                 mux.insert("prefix".to_string(), Value::String(value.clone()));
             }
-            "mouse" => {
-                mux.insert("mouse".to_string(), json!(value == "true"));
-            }
             k if k.starts_with("keybind.") => {
                 let bind_key = k.strip_prefix("keybind.").unwrap().to_string();
                 let kb = mux
@@ -172,6 +169,7 @@ fn apply_conversion(mux: &mut Map<String, Value>, result: &ConversionResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn tmp_settings_path(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -220,16 +218,12 @@ mod tests {
         let path = tmp_settings_path("latch");
         std::fs::write(&path, r#"{"mux": {"tmux_conf_imported": true}}"#).unwrap();
 
-        // Second loader would set prefix/mouse, but the latch must
-        // suppress the entire import.
-        import_tmux_conf_into(
-            &path,
-            loader_with(vec![("prefix", "Ctrl+A"), ("mouse", "true")]),
-        );
+        // Second loader would set prefix, but the latch must suppress the
+        // entire import.
+        import_tmux_conf_into(&path, loader_with(vec![("prefix", "Ctrl+A")]));
 
         let v = read_json(&path);
         assert!(v["mux"].get("prefix").is_none());
-        assert!(v["mux"].get("mouse").is_none());
     }
 
     #[test]
@@ -239,7 +233,6 @@ mod tests {
             &path,
             loader_with(vec![
                 ("prefix", "Ctrl+A"),
-                ("mouse", "true"),
                 ("keybind.new-window", "c"),
                 ("keybind.detach", "d"),
             ]),
@@ -248,7 +241,6 @@ mod tests {
         let v = read_json(&path);
         assert_eq!(v["mux"]["tmux_conf_imported"], json!(true));
         assert_eq!(v["mux"]["prefix"], json!("Ctrl+A"));
-        assert_eq!(v["mux"]["mouse"], json!(true));
         assert_eq!(v["mux"]["keybinds"]["new-window"], json!("c"));
         assert_eq!(v["mux"]["keybinds"]["detach"], json!("d"));
     }
@@ -284,14 +276,6 @@ mod tests {
         assert_eq!(v["mux"]["keybinds"]["existing"], json!("z"));
         assert_eq!(v["mux"]["keybinds"]["detach"], json!("d"));
         assert_eq!(v["mux"]["tmux_conf_imported"], json!(true));
-    }
-
-    #[test]
-    fn mouse_off_writes_false() {
-        let path = tmp_settings_path("mouse_off");
-        import_tmux_conf_into(&path, loader_with(vec![("mouse", "false")]));
-        let v = read_json(&path);
-        assert_eq!(v["mux"]["mouse"], json!(false));
     }
 
     #[test]

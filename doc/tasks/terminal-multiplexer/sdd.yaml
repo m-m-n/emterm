@@ -39,6 +39,7 @@ workflow:
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: not_started
+    needs_update: true  # mux.mouse setting + tmux mouse conversion removed; re-verify build/tests pass without the feature
   - id: review
     status: not_started
 
@@ -102,6 +103,7 @@ requirements:
   FR11:
     title: tmux.conf Conversion
     status: ok
+    note: "mux.mouse setting removed; `set -g mouse` is now ignored with a warning instead of being converted. prefix/keybindings/status-position/default-terminal conversion retained."
     tasks: [Phase7]
     tests: [TS-07]
   FR12:

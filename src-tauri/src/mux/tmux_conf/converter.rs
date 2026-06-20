@@ -54,12 +54,10 @@ fn convert_set_option(result: &mut ConversionResult, option: &str, value: &str) 
             result.settings.push(("prefix".to_string(), converted));
         }
         "mouse" => {
-            let v = match value {
-                "on" => "true",
-                "off" => "false",
-                _ => value,
-            };
-            result.settings.push(("mouse".to_string(), v.to_string()));
+            result.warnings.push(format!(
+                "Skipped: mouse={} (eMterm has no mux mouse setting)",
+                value
+            ));
         }
         "status-position" => {
             result.warnings.push(format!(
@@ -179,12 +177,10 @@ mod tests {
     }
 
     #[test]
-    fn convert_mouse() {
+    fn convert_mouse_is_skipped_with_warning() {
         let result = convert_directives(&parse_tmux_conf("set -g mouse on"));
-        assert_eq!(
-            result.settings[0],
-            ("mouse".to_string(), "true".to_string())
-        );
+        assert!(result.settings.is_empty());
+        assert!(result.warnings.iter().any(|w| w.contains("mouse")));
     }
 
     #[test]
@@ -338,10 +334,11 @@ bind c new-window
 if-shell 'test -f ~/.local.conf' 'source ~/.local.conf'
 ";
         let result = convert_directives(&parse_tmux_conf(conf));
-        // 3 settings: prefix, mouse, keybind.new-window
-        assert_eq!(result.settings.len(), 3);
-        // 5 warnings: unbind C-b, base-index (unknown), status-position
-        // (fixed bottom), bind r (unsupported), if-shell
-        assert_eq!(result.warnings.len(), 5);
+        // 2 settings: prefix, keybind.new-window
+        assert_eq!(result.settings.len(), 2);
+        // 6 warnings: unbind C-b, mouse (no mux mouse setting), base-index
+        // (unknown), status-position (fixed bottom), bind r (unsupported),
+        // if-shell
+        assert_eq!(result.warnings.len(), 6);
     }
 }
