@@ -471,13 +471,21 @@ pub(super) enum StdinAction {
 /// Base64 expands by ~4/3, so 22MB covers the 16MB frame limit.
 const MAX_APC_PAYLOAD: usize = 22 * 1024 * 1024;
 
-/// Plaintext prefix for mux messages from Windows ConPTY (must match TypeScript).
-const PLAINTEXT_PREFIX: &[u8] = b"EMUX;";
+// `PLAINTEXT_PREFIX` (and `APC_PREFIX` / `MUX_OSC_PARAM`) come from the
+// `mux_ipc::protocol` SSOT via the `use super::ipc::protocol::*` glob above, so
+// all three mux transport markers have a single owner.
 
 /// State machine that separates APC/OSC/plaintext mux sequences from passthrough data on stdin.
 ///
 /// Handles partial reads across buffer boundaries.
 /// Recognizes APC (ESC _), OSC 9999 (ESC ]), and plaintext (EMUX;<base64>\n) mux sequences.
+///
+/// This is the bridge subprocess's INPUT-direction scanner and is intentionally
+/// separate from `term_core::MuxApcExtractor` (the GUI's OUTPUT-direction outer
+/// parse): only this side handles the Plaintext `EMUX;` transport and forwards
+/// non-mux bytes as passthrough. Both lean on the same `mux_ipc::protocol`
+/// markers and `MuxMessage::from_apc` decode, so the wire format has a single
+/// SSOT even though the two byte-level state machines are not shared.
 pub(super) struct StdinApcParser {
     state: ParserState,
     apc_buf: Vec<u8>,
