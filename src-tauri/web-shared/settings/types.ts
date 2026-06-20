@@ -145,6 +145,18 @@ export interface MuxSettings {
   statusbar: MuxStatusbarSettings;
 }
 
+/**
+ * One default mux action binding, sourced from the Rust SSOT
+ * (`crate::mux::prefix::DEFAULT_ACTION_BINDINGS`) via the
+ * `get_mux_action_defaults` IPC command. The settings panel reads these
+ * instead of duplicating the default table in TypeScript. Ordered as the
+ * backend declares them (display order).
+ */
+export interface MuxActionDefault {
+  action: string;
+  key: string;
+}
+
 export interface KeybindSettings {
   copy: string;
   paste: string;

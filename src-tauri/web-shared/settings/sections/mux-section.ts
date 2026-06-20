@@ -1,7 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import { renderSubsectionHeader } from "../settings-components";
 import type { SectionContext } from "./types";
-import { DEFAULT_ACTION_BINDINGS } from "../../terminal/mux/prefix-key";
 
 /** i18n key mapping for each mux action. */
 const ACTION_I18N_KEYS: Record<string, string> = {
@@ -10,6 +9,7 @@ const ACTION_I18N_KEYS: Record<string, string> = {
   "next-window": "settings.mux.keybind.nextWindow",
   "prev-window": "settings.mux.keybind.prevWindow",
   "rename-window": "settings.mux.keybind.renameWindow",
+  "move-window": "settings.mux.keybind.moveWindow",
 };
 
 export function renderMuxSection(
@@ -23,24 +23,29 @@ export function renderMuxSection(
   header.textContent = t("settings.mux.title");
   panel.appendChild(header);
 
-  // -- General subsection --
-  renderSubsectionHeader(panel, t("settings.mux.general"));
-
-  // Prefix key (keybind capture for key combo like Ctrl+B)
-  renderMuxPrefixInput(panel, mux.prefix, ctx);
-
   // -- Keybinds subsection --
   renderSubsectionHeader(panel, t("settings.mux.keybinds"));
+
+  // Prefix key (the leader key, pressed before an action key).
+  // Rendered first as a full-width row, then separated from the action
+  // grid by a divider to convey the two-tier "prefix then action" model.
+  renderMuxPrefixInput(panel, mux.prefix, ctx);
+
+  const divider = document.createElement("div");
+  divider.className = "settings-divider";
+  panel.appendChild(divider);
 
   const keybinds = mux.keybinds ?? {};
   const grid = document.createElement("div");
   grid.className = "settings-keybind-grid";
   panel.appendChild(grid);
 
-  for (const action of Object.keys(DEFAULT_ACTION_BINDINGS)) {
-    const currentKey = keybinds[action] ?? DEFAULT_ACTION_BINDINGS[action]!;
-    const i18nKey = ACTION_I18N_KEYS[action]!;
-
+  // Action list + default chords come from the Rust SSOT via the backend
+  // (ctx.muxActionDefaults); the user's saved override wins when present.
+  for (const { action, key } of ctx.muxActionDefaults) {
+    const i18nKey = ACTION_I18N_KEYS[action];
+    if (!i18nKey) continue; // backend exposed an action with no UI label yet
+    const currentKey = keybinds[action] ?? key;
     renderMuxKeybindInput(grid, action, t(i18nKey), currentKey, ctx);
   }
 }

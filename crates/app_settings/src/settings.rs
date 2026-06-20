@@ -606,7 +606,7 @@ pub struct StatusbarCustomCommand {
 }
 
 fn default_mux_prefix() -> String {
-    "ctrl+b".to_string()
+    "Ctrl+Z".to_string()
 }
 
 impl Default for MuxSettings {

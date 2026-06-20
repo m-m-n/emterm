@@ -11,7 +11,7 @@ Each mux window holds a single pane. Pane splitting, pane navigation, pane zoom,
 - Eliminate the VT100 double-parse bottleneck present in tmux/Zellij/Screen
 - Maintain near-native eMterm performance in multiplexer mode
 - Preserve OSC extensions (Markdown/image display) through multiplexer
-- Provide tmux-compatible user experience for easy migration
+- Provide a tmux-style prefix-then-action user experience, with tmux.conf import for migration
 
 ## User Stories
 
@@ -27,7 +27,7 @@ As an eMterm user, I want to run `emterm mux` to start a multiplexer session, so
 As an eMterm user, I want to detach from a session and reattach later, so that long-running processes survive GUI closure.
 
 **Acceptance Criteria:**
-- [ ] `prefix + d` detaches and returns to shell
+- [ ] `prefix + Ctrl+D` detaches and returns to shell
 - [ ] Daemon and PTY sessions survive after detach
 - [ ] `emterm mux attach` restores the session with full screen state
 - [ ] PTY output during detach is captured and replayed on reattach
@@ -36,10 +36,10 @@ As an eMterm user, I want to detach from a session and reattach later, so that l
 As an eMterm user, I want to create and switch between windows, so that I can organize my work into groups.
 
 **Acceptance Criteria:**
-- [ ] `prefix + c` creates a new window
-- [ ] `prefix + n` / `prefix + p` navigates between windows
+- [ ] `prefix + Ctrl+C` creates a new window
+- [ ] `prefix + Ctrl+N` / `prefix + Ctrl+P` navigates between windows
 - [ ] Windows appear as sub-tabs in the mux tab group
-- [ ] `prefix + ,` renames a window
+- [ ] `prefix + Ctrl+R` renames a window
 
 ### US4: Migrate from tmux
 As a tmux user, I want to import my tmux.conf settings, so that my keybindings and preferences carry over.
@@ -47,7 +47,7 @@ As a tmux user, I want to import my tmux.conf settings, so that my keybindings a
 **Acceptance Criteria:**
 - [ ] On first mux startup, `~/.tmux.conf` is automatically parsed and settings imported to `settings.json` `mux` section
 - [ ] Unsupported settings produce warnings (logged)
-- [ ] Prefix key, keybindings, status-position are converted
+- [ ] Prefix key and keybindings are converted (status-position is skipped — the bar is fixed to the bottom)
 - [ ] Imported keybindings are editable in the settings panel
 
 ## Technical Requirements
@@ -63,8 +63,8 @@ As a tmux user, I want to import my tmux.conf settings, so that my keybindings a
 - **FR7: Window Management** — Multiple windows per session. Each window has exactly one pane. Tab group UI with auto-expand (active) / auto-compact (inactive, shows "mux (N)"). 0.3s animation for expand/compact.
 - **FR8: Status Bar** — HTML-rendered status bar. Daemon pushes state changes (session name, window list). Event-driven (no polling). Local info (clock) managed by GUI.
 - **FR9: Clipboard Paste** — `prefix + ]` pastes from the system clipboard into the active pane's PTY. No tmux buffer abstraction. Daemon not involved.
-- **FR10: tmux.conf Conversion** — Regex-based line-oriented parser. Converts prefix, keybindings, status-position, default-terminal. Ignores if-shell, run-shell, plugins, format strings, set-hook, and `set -g mouse` with warnings. Unsupported keybinding actions (split, zoom, copy-mode, etc.) are logged and skipped.
-- **FR11: Prefix Key** — Processed in GUI (TypeScript). Default `Ctrl+b`. Loaded from local settings (`settings.json` mux section), configurable via settings UI.
+- **FR10: tmux.conf Conversion** — Regex-based line-oriented parser. Converts prefix and keybindings. `status-position` is skipped with a warning (the status bar is fixed to the bottom); `default-terminal` is noted and ignored (eMterm uses xterm-256color). Ignores if-shell, run-shell, plugins, format strings, set-hook, and `set -g mouse` with warnings. Unsupported keybinding actions (split, zoom, copy-mode, etc.) are logged and skipped.
+- **FR11: Prefix Key** — Processed natively (Rust). Default `Ctrl+Z`. Loaded from local settings (`settings.json` mux section), configurable via settings UI.
 - **FR12: Flow Control** — Bounded channel (capacity 256) + adaptive batching (4ms accumulation window). Per-pane independent channels with round-robin select! consumption. Backpressure chain: socket buffer → channel → PTY reader → kernel buffer → process write().
 - **FR13: Environment Variables** — `TERM_PROGRAM=emterm` and `TERM_PROGRAM_VERSION=<version>` set by GUI on PTY startup. `EMTERM_MUX=1` and `EMTERM_MUX_SOCKET=<path>` set by daemon in PTY environment. Nesting prevention via `EMTERM_MUX` check.
 - **FR14: WASM Instance Management** — Independent WASM instance per pane (grid, parser state, cursor). ~2-4MB per pane. Module compilation cached, only instantiation per pane.
@@ -74,7 +74,7 @@ As a tmux user, I want to import my tmux.conf settings, so that my keybindings a
 - **NFR1 - Performance:** No perceptible latency degradation compared to normal mode. Raw bytes transfer (no serialization/compression for PTY data). Adaptive batching for high-throughput output. Per-pane backpressure isolation.
 - **NFR2 - Security:** Socket path validation (allowed directories only, no path traversal). File permission protection on Unix socket. No authentication needed (local-only).
 - **NFR3 - Reliability:** Automatic recovery on daemon crash (GUI returns to normal mode). IPC disconnect retry with fallback. Snapshot deserialization failure results in empty screen reattach.
-- **NFR4 - Compatibility:** Linux and Windows support. Windows AF_UNIX requires Windows 10 1803+. tmux-compatible keybindings at user operation level for the subset of actions this specification retains.
+- **NFR4 - Compatibility:** Linux and Windows support. Windows AF_UNIX requires Windows 10 1803+. tmux-style prefix-then-action keybindings for the subset of actions this specification retains; default chords are eMterm-specific (configurable, with tmux.conf import).
 - **NFR5 - Resource Usage:** Per-pane ring buffer capped at 64MB. WASM instances ~2-4MB each. IPC frame max 16MB.
 
 ## Implementation Approach
@@ -294,16 +294,21 @@ src-tauri/
 │   │   ├── ring_buffer.rs      # Per-pane ring buffer
 │   │   └── cli.rs              # CLI subcommands (mux, mux attach, mux ls, mux kill, mux new)
 │   └── ...
-src/
-├── terminal/
-│   ├── mux/
-│   │   ├── index.ts            # Mux client entry point
-│   │   ├── mux-client.ts       # IPC client (Tauri channel)
-│   │   ├── prefix-key.ts       # Prefix key handler
-│   │   ├── tab-group.ts        # Tab group UI
-│   │   └── mux-logger.ts       # Mux-scoped logger
-│   └── ...
+src-tauri/src/
+├── mux/
+│   └── prefix.rs              # Prefix-key latch (state machine + default bindings, native Rust)
+├── app.rs                     # observe_mux_key dispatch + confirm_mux_rename / confirm_mux_move
+├── window_host.rs             # drives the prefix latch + mux dialogs each frame
+├── ui/
+│   ├── tab_bar.rs            # mux sub-tab [N] rendering
+│   └── mux_dialogs.rs        # rename / move egui dialogs (crate::i18n localized)
+└── ...
 ```
+
+> Note: the high-level architecture diagram above still depicts the original
+> Tauri / Canvas+WASM rendering stack; the GUI now runs native (winit + wgpu +
+> egui). That broader rendering-stack migration is tracked separately from
+> this mux specification.
 
 ### Settings Schema
 
@@ -311,8 +316,7 @@ Added to existing `settings.json`:
 ```json
 {
   "mux": {
-    "prefix": "ctrl+b",
-    "status_position": "bottom",
+    "prefix": "Ctrl+Z",
     "tab_always_expand": false,
     "keybinds": {}
   }
@@ -412,7 +416,7 @@ Follows existing Settings Pattern: Rust `serde(default)` + TS `AppSettings` mirr
 - [ ] Performance meets specified goals (no degradation vs normal mode)
 - [ ] Security requirements are satisfied (socket path validation)
 - [ ] Linux and Windows support
-- [ ] tmux-compatible keybindings for the retained action set work correctly
+- [ ] tmux-style prefix-then-action keybindings for the retained action set work correctly
 - [ ] OSC extensions (Markdown/image) work in mux mode
 - [ ] Code review completed
 

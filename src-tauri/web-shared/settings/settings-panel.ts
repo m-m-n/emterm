@@ -7,7 +7,7 @@
  */
 
 import { SettingsService } from "./settings-service";
-import type { AppSettings } from "./types";
+import type { AppSettings, MuxActionDefault } from "./types";
 import { t } from "../i18n/index.ts";
 import { showFontPicker } from "./font-picker";
 import type { FontCategory } from "./types";
@@ -78,6 +78,7 @@ export class SettingsPanel {
   private activeCategory = "ui";
   private navCollapsed = false;
   private currentSettings: AppSettings | null = null;
+  private muxActionDefaults: MuxActionDefault[] = [];
   private eventListeners: Array<{
     element: EventTarget;
     type: string;
@@ -134,7 +135,12 @@ export class SettingsPanel {
    * Initializes the settings panel
    */
   async init(): Promise<void> {
-    this.currentSettings = await SettingsService.load();
+    const [settings, muxActionDefaults] = await Promise.all([
+      SettingsService.load(),
+      SettingsService.loadMuxActionDefaults(),
+    ]);
+    this.currentSettings = settings;
+    this.muxActionDefaults = muxActionDefaults;
     this.render();
     this.attachEventListeners();
   }
@@ -289,6 +295,7 @@ export class SettingsPanel {
   private buildSectionContext() {
     return {
       currentSettings: this.currentSettings!,
+      muxActionDefaults: this.muxActionDefaults,
       addContentListener: this.addContentListener.bind(this),
       saveSetting: <K extends keyof AppSettings>(
         key: K,

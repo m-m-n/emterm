@@ -63,7 +63,8 @@ fn drive_mux_dialogs(app: &mut App, ctx: &egui::Context) -> bool {
     if !app.mux_dialog.is_open() {
         return false;
     }
-    let outcome = crate::ui::mux_dialogs::draw(&mut app.mux_dialog, ctx);
+    let locale = app.locale;
+    let outcome = crate::ui::mux_dialogs::draw(&mut app.mux_dialog, ctx, locale);
     match outcome {
         MuxDialogOutcome::Pending => {}
         MuxDialogOutcome::ConfirmRename { window_id, name } => {
