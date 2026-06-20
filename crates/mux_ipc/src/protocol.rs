@@ -23,6 +23,12 @@ const APC_ST: &str = "\x1b\\";
 /// OSC parameter for emterm mux messages.
 pub const MUX_OSC_PARAM: u16 = 9999;
 
+/// Plaintext transport prefix for mux messages on the Windows ConPTY input
+/// direction (`EMUX;<base64>\n`, where APC/OSC escapes do not survive ConPTY
+/// input). Must match the TypeScript encoder. Kept here alongside `APC_PREFIX`
+/// and `MUX_OSC_PARAM` so all three mux transport markers share one SSOT.
+pub const PLAINTEXT_PREFIX: &[u8] = b"EMUX;";
+
 /// OSC introducer: ESC ]
 const OSC_START: &str = "\x1b]";
 
