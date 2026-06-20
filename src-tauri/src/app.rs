@@ -115,13 +115,13 @@ pub enum MuxActionOutcome {
 }
 
 /// Build the mux prefix latch from settings: the prefix chord
-/// (`mux_prefix_key`, falling back to `Ctrl+B` on a parse error) and the
+/// (`mux_prefix_key`, falling back to `Ctrl+Z` on a parse error) and the
 /// action bindings (`mux.keybinds`).
 fn build_mux_latch(settings: &Settings) -> crate::mux::prefix::Latch {
     use crate::mux::prefix::{ActionBindings, Latch, PrefixChord, parse_prefix_key};
     let chord = parse_prefix_key(&settings.mux_prefix_key).unwrap_or_else(|| {
         log::warn!(
-            "settings.mux.prefix: invalid chord {:?}, falling back to Ctrl+B",
+            "settings.mux.prefix: invalid chord {:?}, falling back to Ctrl+Z",
             settings.mux_prefix_key
         );
         PrefixChord::default()
@@ -2526,9 +2526,9 @@ impl App {
                 // Double-prefix: send the *configured* prefix's literal byte to
                 // the active pane so programs that themselves use the chord
                 // still receive it. Pre-fix this was hardcoded to
-                // `DEFAULT_LITERAL_BYTE` (0x02 = Ctrl+B), so a user with
+                // `DEFAULT_LITERAL_BYTE` (0x1A = Ctrl+Z), so a user with
                 // `Ctrl+A` set would double-tap Ctrl+A and the pane would see
-                // Ctrl+B instead — silently breaking a nested tmux. Derive the
+                // Ctrl+Z instead — silently breaking a nested tmux. Derive the
                 // byte from the live chord via `Latch::literal_byte`.
                 let byte = self.mux_latch.literal_byte();
                 if let Some(tab) = self.tabs.get(self.active) {
@@ -5996,10 +5996,11 @@ mod tests {
         let mut app = app_with_mux_windows(3);
         let t0 = Instant::now();
         let (consumed, out) =
-            app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('b'), t0);
+            app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('z'), t0);
         assert!(consumed);
         assert_eq!(out, MuxActionOutcome::None);
-        let (consumed, out) = app.observe_mux_key(&crate::mux::prefix::KeyInput::letter('n'), t0);
+        let (consumed, out) =
+            app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('n'), t0);
         assert!(consumed);
         assert_eq!(out, MuxActionOutcome::Changed);
         assert_eq!(active_idx(&app), 1);
@@ -6009,7 +6010,7 @@ mod tests {
     fn observe_mux_key_unknown_followup_consumed() {
         let mut app = app_with_mux_windows(2);
         let t0 = Instant::now();
-        app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('b'), t0);
+        app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('z'), t0);
         let (consumed, out) = app.observe_mux_key(&crate::mux::prefix::KeyInput::letter('q'), t0);
         assert!(consumed);
         assert_eq!(out, MuxActionOutcome::None);
@@ -6019,14 +6020,9 @@ mod tests {
     fn observe_mux_key_rename_opens_dialog() {
         let mut app = app_with_mux_windows(2);
         let t0 = Instant::now();
-        app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('b'), t0);
-        let comma = crate::mux::prefix::KeyInput {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            key: crate::mux::prefix::KeySym::Comma,
-        };
-        let (consumed, out) = app.observe_mux_key(&comma, t0);
+        app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('z'), t0);
+        let (consumed, out) =
+            app.observe_mux_key(&crate::mux::prefix::KeyInput::ctrl_letter('r'), t0);
         assert!(consumed);
         assert!(matches!(out, MuxActionOutcome::OpenRename { .. }));
         app.handle_mux_outcome(out);

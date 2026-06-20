@@ -6,20 +6,19 @@
 // Layout:
 //
 // - [`apc`]    — payload decoder for `ESC _ emterm-mux;<base64> ESC \`.
-// - [`prefix`] — prefix-key state machine (default `Ctrl+B`). Follow-up
-//                keys are translated to PTY writes (`Ctrl+B d` etc.) so the
-//                bridge CLI sees the same byte sequences a tmux user would
-//                type. native-poc does not encode mux control frames itself.
+// - [`prefix`] — prefix-key state machine (default `Ctrl+Z`).
 //
 // The `prefix::Latch` API (`is_armed`, `observe`, `cancel`, `PrefixAction`,
-// follow-up decoder) is **forward-staged**: the Phase 4-B keybinds dispatch
-// does not yet call into it (the user types `Ctrl+B d` and those bytes are
-// forwarded to the bridge CLI via the normal PTY write path, exactly like
-// in legacy tmux). The state machine is exercised exclusively by the
-// `TS-prefix-*` unit tests today, and will be wired through `keybinds` once
-// a future sub-phase adds intercept points for `prefix d` (detach), `prefix
-// n` (next window), etc. We `allow(dead_code)` at the module root rather
-// than scattering attributes on each item so the intent is in one place.
+// follow-up decoder) is wired live: `App::observe_mux_key` (see
+// `window_host.rs`) feeds every keystroke on a mux-attached tab through
+// `Latch::observe`. The latch consumes the prefix chord and its follow-up
+// keys and turns them into `PrefixAction`s (Detach, NextWindow, PrevWindow,
+// SelectWindow, NewWindow, RenameWindow, MoveWindow) that the app dispatches
+// as mux actions — the follow-up keys are NOT forwarded to the PTY as raw
+// bytes. Only the double-prefix Literal path writes the prefix byte itself.
+// Some sibling items (legacy bridge/CLI byte paths, APC encode helpers) remain
+// unused by native-poc, so we `allow(dead_code)` at the module root rather than
+// scattering attributes on each item, keeping the intent in one place.
 #![allow(dead_code)]
 
 pub mod apc;

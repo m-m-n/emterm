@@ -5,7 +5,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSettings } from "./types";
+import type { AppSettings, MuxActionDefault } from "./types";
 
 /**
  * SettingsService - Encapsulates Tauri invoke calls for settings.
@@ -47,5 +47,16 @@ export class SettingsService {
    */
   static getCached(): AppSettings | null {
     return SettingsService.cachedSettings;
+  }
+
+  /**
+   * Loads the default mux action bindings from the backend SSOT
+   * (`crate::mux::prefix::DEFAULT_ACTION_BINDINGS`). The settings panel uses
+   * these to enumerate the mux actions and show each action's default chord
+   * when the user has not customized it — instead of duplicating the table
+   * in TypeScript. Returned in the backend's declaration (display) order.
+   */
+  static async loadMuxActionDefaults(): Promise<MuxActionDefault[]> {
+    return await invoke<MuxActionDefault[]>("get_mux_action_defaults");
   }
 }

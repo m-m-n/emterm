@@ -45,6 +45,7 @@ pub fn handle(cmd: &str, args: &Value) -> CommandOutcome {
             }
         }
         "list_fonts" => CommandOutcome::reply(list_fonts()),
+        "get_mux_action_defaults" => CommandOutcome::reply(Ok(mux_action_defaults())),
         "get_platform" => CommandOutcome::reply(Ok(json!(platform_token()))),
         "plugin:app|version" => CommandOutcome::reply(Ok(json!(env!("CARGO_PKG_VERSION")))),
         // The panel's language selector switches its own locale client-side;
@@ -83,6 +84,19 @@ fn load_settings() -> Result<Value, String> {
     };
     settings.apply_migrations();
     serde_json::to_value(&settings).map_err(|e| format!("settings window: serialize failed: {e}"))
+}
+
+/// Default mux action keybindings as an ordered `[{ action, key }]` list,
+/// derived from the Rust SSOT [`crate::mux::prefix::DEFAULT_ACTION_BINDINGS`].
+/// The settings panel reads these instead of duplicating the table in
+/// TypeScript, so the displayed defaults can never drift from the runtime
+/// authority and unset actions show their real default chord.
+fn mux_action_defaults() -> Value {
+    let list: Vec<Value> = crate::mux::prefix::default_action_bindings_as_strings()
+        .into_iter()
+        .map(|(action, key)| json!({ "action": action, "key": key }))
+        .collect();
+    Value::Array(list)
 }
 
 /// Persist the panel's full `AppSettings`. The struct round-trip applies
@@ -284,6 +298,18 @@ mod tests {
         assert!(v.get("monospace_fonts").unwrap().is_array());
         assert!(v.get("all_fonts").unwrap().is_array());
         assert!(v.get("emoji_fonts").unwrap().is_array());
+    }
+
+    #[test]
+    fn get_mux_action_defaults_returns_ordered_action_key_list() {
+        let out = handle("get_mux_action_defaults", &Value::Null);
+        let v = out.result.unwrap();
+        let arr = v.as_array().expect("array");
+        // Mirrors the Rust SSOT order/values (crate::mux::prefix).
+        assert_eq!(arr.len(), 6);
+        assert_eq!(arr[0], json!({ "action": "detach", "key": "Ctrl+D" }));
+        assert_eq!(arr[5], json!({ "action": "move-window", "key": "Ctrl+T" }));
+        assert!(!out.saved);
     }
 
     #[test]

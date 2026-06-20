@@ -22,15 +22,23 @@ use crate::mux::dialog::{MuxDialogOutcome, MuxDialogState};
 ///   and dispatch the confirm to the domain layer (`App::confirm_mux_*`).
 /// - [`MuxDialogOutcome::Cancelled`] on Esc / Cancel / empty-confirm. The
 ///   caller must clear `state` to [`MuxDialogState::Closed`].
-pub fn draw(state: &mut MuxDialogState, ctx: &egui::Context) -> MuxDialogOutcome {
+pub fn draw(
+    state: &mut MuxDialogState,
+    ctx: &egui::Context,
+    locale: crate::i18n::Locale,
+) -> MuxDialogOutcome {
     match state {
         MuxDialogState::Closed => MuxDialogOutcome::Pending,
-        MuxDialogState::Rename { .. } => draw_rename(state, ctx),
-        MuxDialogState::Move { .. } => draw_move(state, ctx),
+        MuxDialogState::Rename { .. } => draw_rename(state, ctx, locale),
+        MuxDialogState::Move { .. } => draw_move(state, ctx, locale),
     }
 }
 
-fn draw_rename(state: &mut MuxDialogState, ctx: &egui::Context) -> MuxDialogOutcome {
+fn draw_rename(
+    state: &mut MuxDialogState,
+    ctx: &egui::Context,
+    locale: crate::i18n::Locale,
+) -> MuxDialogOutcome {
     let MuxDialogState::Rename {
         window_id,
         name,
@@ -39,9 +47,13 @@ fn draw_rename(state: &mut MuxDialogState, ctx: &egui::Context) -> MuxDialogOutc
     else {
         return MuxDialogOutcome::Pending;
     };
+    let t = |ja: &'static str, en: &'static str| match locale {
+        crate::i18n::Locale::Ja => ja,
+        crate::i18n::Locale::En => en,
+    };
     let captured_id = *window_id;
     let mut outcome = MuxDialogOutcome::Pending;
-    egui::Window::new("ウィンドウ名を変更")
+    egui::Window::new(t("ウィンドウ名を変更", "Rename Window"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -58,7 +70,7 @@ fn draw_rename(state: &mut MuxDialogState, ctx: &egui::Context) -> MuxDialogOutc
                 if ui.button("OK").clicked() {
                     outcome = resolve_rename_confirm(captured_id, name);
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button(t("キャンセル", "Cancel")).clicked() {
                     outcome = MuxDialogOutcome::Cancelled;
                 }
             });
@@ -81,7 +93,11 @@ fn resolve_rename_confirm(window_id: u32, name: &str) -> MuxDialogOutcome {
     }
 }
 
-fn draw_move(state: &mut MuxDialogState, ctx: &egui::Context) -> MuxDialogOutcome {
+fn draw_move(
+    state: &mut MuxDialogState,
+    ctx: &egui::Context,
+    locale: crate::i18n::Locale,
+) -> MuxDialogOutcome {
     let MuxDialogState::Move {
         window_id,
         current_position,
@@ -91,18 +107,26 @@ fn draw_move(state: &mut MuxDialogState, ctx: &egui::Context) -> MuxDialogOutcom
     else {
         return MuxDialogOutcome::Pending;
     };
+    let t = |ja: &'static str, en: &'static str| match locale {
+        crate::i18n::Locale::Ja => ja,
+        crate::i18n::Locale::En => en,
+    };
     let captured_id = *window_id;
     let cur = *current_position;
     let count = *window_count;
     let mut outcome = MuxDialogOutcome::Pending;
-    egui::Window::new("ウィンドウを移動")
+    egui::Window::new(t("ウィンドウを移動", "Move Window"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.label(format!("現在: {cur} / {count} 個中"));
+            let current_label = match locale {
+                crate::i18n::Locale::Ja => format!("現在: {cur} / {count} 個中"),
+                crate::i18n::Locale::En => format!("Current: {cur} / {count}"),
+            };
+            ui.label(current_label);
             ui.horizontal(|ui| {
-                ui.label("移動先:");
+                ui.label(t("移動先:", "Move to:"));
                 let mut t = *target as i64;
                 ui.add(egui::DragValue::new(&mut t).range(1..=(count as i64)));
                 *target = t.clamp(1, count as i64) as usize;
@@ -111,7 +135,7 @@ fn draw_move(state: &mut MuxDialogState, ctx: &egui::Context) -> MuxDialogOutcom
                 if ui.button("OK").clicked() {
                     outcome = resolve_move_confirm(captured_id, *target, cur, count);
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button(t("キャンセル", "Cancel")).clicked() {
                     outcome = MuxDialogOutcome::Cancelled;
                 }
             });

@@ -344,7 +344,6 @@
     },
     "mux": {
       "title": "Terminal Multiplexer",
-      "general": "General",
       "prefix": "Prefix Key",
       "keybinds": "Keybinds",
       "keybind": {
@@ -352,7 +351,8 @@
         "newWindow": "New Window",
         "nextWindow": "Next Window",
         "prevWindow": "Previous Window",
-        "renameWindow": "Rename Window"
+        "renameWindow": "Rename Window",
+        "moveWindow": "Move Window"
       }
     },
     "log": {

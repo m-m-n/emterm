@@ -344,7 +344,6 @@
     },
     "mux": {
       "title": "ターミナルマルチプレクサ",
-      "general": "一般",
       "prefix": "プレフィックスキー",
       "keybinds": "キーバインド",
       "keybind": {
@@ -352,7 +351,8 @@
         "newWindow": "新規ウィンドウ",
         "nextWindow": "次のウィンドウ",
         "prevWindow": "前のウィンドウ",
-        "renameWindow": "ウィンドウ名変更"
+        "renameWindow": "ウィンドウ名変更",
+        "moveWindow": "ウィンドウ移動"
       }
     },
     "log": {

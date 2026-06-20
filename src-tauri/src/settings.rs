@@ -133,12 +133,13 @@ pub const DEFAULT_CLIPBOARD_MAX_SIZE_OSC52: u32 = 10 * 1024 * 1024;
 /// `crate::mux::prefix::parse_prefix_key` at startup; an invalid value falls
 /// back to this default with a `warn` log so a typo in `settings.json`
 /// cannot lock the user out of mux mode.
-pub const DEFAULT_MUX_PREFIX_KEY: &str = "Ctrl+B";
+pub const DEFAULT_MUX_PREFIX_KEY: &str = "Ctrl+Z";
 
 /// Action keys recognized in `mux.keybinds`. Each maps a mux action name to
-/// a single follow-up key after the prefix (tmux-compatible defaults
-/// `d`/`c`/`n`/`p`/`,`/`m`). Mirrors `DEFAULT_ACTION_BINDINGS` in
-/// `src/terminal/mux/prefix-key.ts`.
+/// a follow-up chord after the prefix (`Ctrl`-modified defaults
+/// `Ctrl+D`/`Ctrl+C`/`Ctrl+N`/`Ctrl+P`/`Ctrl+R`/`Ctrl+T`). SSOT is
+/// `DEFAULT_ACTION_BINDINGS` in `src-tauri/src/mux/prefix.rs`; the
+/// `src-tauri/web-shared/terminal/mux/prefix-key.ts` table is a mirror.
 pub const MUX_ACTION_NAMES: [&str; 6] = [
     "detach",
     "new-window",
@@ -540,7 +541,7 @@ pub struct Settings {
     /// this cap are dropped and `LOG_OSC52_DENIED` is emitted.
     pub clipboard_max_size_osc52: u32,
     /// Prefix-key chord for mux mode. Stored as a textual spec (e.g.
-    /// `"Ctrl+B"`) and parsed at startup by
+    /// `"Ctrl+Z"`) and parsed at startup by
     /// `crate::mux::prefix::parse_prefix_key`. Phase 7 will surface this in
     /// `settings.json`; today the field is populated from
     /// [`DEFAULT_MUX_PREFIX_KEY`] and never mutated.
@@ -1758,6 +1759,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mux_action_names_match_prefix_ssot() {
+        // `MUX_ACTION_NAMES` is a second in-Rust list of the mux action names
+        // whose authority is `crate::mux::prefix::DEFAULT_ACTION_BINDINGS`.
+        // Assert they stay identical (same names, same order) so adding/removing
+        // an action in the SSOT without updating this list fails CI instead of
+        // silently dropping a default-seed.
+        let ssot: Vec<&str> = crate::mux::prefix::DEFAULT_ACTION_BINDINGS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(
+            MUX_ACTION_NAMES.as_slice(),
+            ssot.as_slice(),
+            "MUX_ACTION_NAMES drifted from prefix::DEFAULT_ACTION_BINDINGS"
+        );
+    }
+
+    #[test]
     fn default_scrollback_lines_is_ten_thousand() {
         let s = Settings::new();
         assert_eq!(s.scrollback_lines, 10_000);
@@ -1784,9 +1803,9 @@ mod tests {
     // ── TS-settings-1: mux.prefix_key default ────────────────────────────
 
     #[test]
-    fn default_mux_prefix_key_is_ctrl_b() {
+    fn default_mux_prefix_key_is_ctrl_z() {
         let s = Settings::new();
-        assert_eq!(s.mux_prefix_key, "Ctrl+B");
+        assert_eq!(s.mux_prefix_key, "Ctrl+Z");
     }
 
     #[test]
@@ -2007,14 +2026,14 @@ mod tests {
     fn default_mux_settings_match_webview() {
         let s = Settings::new();
         assert!(!s.mux.tab_always_expand);
-        // tmux-compatible default action chords (bare single chars).
-        let bare = |spec: &str| parse_mux_action_chord(spec).unwrap();
-        assert_eq!(s.mux.keybinds.get("detach"), Some(&bare("d")));
-        assert_eq!(s.mux.keybinds.get("new-window"), Some(&bare("c")));
-        assert_eq!(s.mux.keybinds.get("next-window"), Some(&bare("n")));
-        assert_eq!(s.mux.keybinds.get("prev-window"), Some(&bare("p")));
-        assert_eq!(s.mux.keybinds.get("rename-window"), Some(&bare(",")));
-        assert_eq!(s.mux.keybinds.get("move-window"), Some(&bare("m")));
+        // `Ctrl`-modified default action chords.
+        let chord = |spec: &str| parse_mux_action_chord(spec).unwrap();
+        assert_eq!(s.mux.keybinds.get("detach"), Some(&chord("Ctrl+D")));
+        assert_eq!(s.mux.keybinds.get("new-window"), Some(&chord("Ctrl+C")));
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&chord("Ctrl+N")));
+        assert_eq!(s.mux.keybinds.get("prev-window"), Some(&chord("Ctrl+P")));
+        assert_eq!(s.mux.keybinds.get("rename-window"), Some(&chord("Ctrl+R")));
+        assert_eq!(s.mux.keybinds.get("move-window"), Some(&chord("Ctrl+T")));
         assert!(!s.mux.statusbar.enabled);
     }
 
@@ -2031,7 +2050,7 @@ mod tests {
         assert_eq!(s.mux.keybinds.get("next-window"), Some(&chord("j")));
         assert_eq!(s.mux.keybinds.get("prev-window"), Some(&chord("k")));
         // Untouched actions keep their defaults.
-        assert_eq!(s.mux.keybinds.get("new-window"), Some(&chord("c")));
+        assert_eq!(s.mux.keybinds.get("new-window"), Some(&chord("Ctrl+C")));
     }
 
     #[test]
@@ -2051,15 +2070,15 @@ mod tests {
     fn loader_mux_keybinds_unparseable_keeps_default() {
         // Garbage spec is still rejected and keeps the default chord.
         let s = load_json(r#"{"mux": {"keybinds": {"next-window": "+++"}}}"#);
-        let bare_n = parse_mux_action_chord("n").unwrap();
-        assert_eq!(s.mux.keybinds.get("next-window"), Some(&bare_n));
+        let default_n = parse_mux_action_chord("Ctrl+N").unwrap();
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&default_n));
     }
 
     #[test]
     fn loader_mux_keybinds_empty_keeps_default() {
         let s = load_json(r#"{"mux": {"keybinds": {"next-window": ""}}}"#);
-        let bare_n = parse_mux_action_chord("n").unwrap();
-        assert_eq!(s.mux.keybinds.get("next-window"), Some(&bare_n));
+        let default_n = parse_mux_action_chord("Ctrl+N").unwrap();
+        assert_eq!(s.mux.keybinds.get("next-window"), Some(&default_n));
     }
 
     #[test]
