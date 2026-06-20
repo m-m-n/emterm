@@ -12,17 +12,20 @@
 //! here instead of into the core, so the core is driven by inner content only.
 //!
 //! The extractor surfaces a unified **mux-APC payload list** and discards
-//! Print / CSI / Esc / Execute / DCS. Normalization mirrors
-//! [`crate::terminal_core::TerminalCore::handle_osc_internal`]
-//! (`osc_handler.rs`):
+//! Print / CSI / Esc / Execute / DCS. Both transports normalize to the same
+//! APC payload form, so the OSC fallback (used on Windows ConPTY, which strips
+//! APC but passes OSC) does not regress:
 //!
 //! - APC frame -> the raw APC payload bytes.
-//! - OSC 9999 frame whose data starts with `emterm-mux;` -> that data string as
-//!   an APC-equivalent payload (the same bytes the existing
-//!   `fire_apc_callback(data.as_bytes())` path produces, so the OSC 9999
-//!   (Windows ConPTY) transport does not regress).
+//! - OSC frame whose param equals the injected `osc_param` and whose data
+//!   starts with the injected `prefix` -> that data string as an
+//!   APC-equivalent payload.
 //! - Any other OSC -> discarded (the outer mux stream carries no other
 //!   meaningful OSC).
+//!
+//! The mux application-protocol values (`osc_param`, `prefix`) are injected by
+//! the caller (`mux_ipc::protocol`); `term_core` itself holds no mux protocol
+//! constant (NFR5).
 //!
 //! Parser state carries across calls: a frame split across two [`Self::feed`]
 //! calls reassembles into one payload.
@@ -30,36 +33,39 @@
 use crate::parser::Parser;
 use crate::parser_types::ParsedAction;
 
-/// The OSC parameter carrying mux inband frames over the OSC fallback
-/// transport (Windows ConPTY strips APC but passes OSC).
-///
-/// term_core-internal SSOT for the mux transport constants: both this
-/// extractor and `osc_handler.rs::handle_osc_internal` key off these, so the
-/// value lives in exactly one place inside the crate. The cross-crate SSOT is
-/// `mux_ipc::protocol::MUX_OSC_PARAM`; the `drift_*` tests below assert these
-/// stay in lockstep so a protocol change there fails term_core's test suite.
-pub(crate) const MUX_OSC_PARAM: u16 = 9999;
-
-/// The inband mux frame prefix shared by both the APC and OSC 9999 transports.
-///
-/// Mirrors `mux_ipc::protocol::APC_PREFIX` (cross-crate SSOT); kept in lockstep
-/// by the `drift_*` tests below.
-pub(crate) const MUX_PREFIX: &str = "emterm-mux;";
-
 /// Independent transport extractor wrapping its own [`Parser`].
 ///
 /// Feed it the coalesced PTS bytes of a mux-attached tab; it returns the
 /// mux-APC payloads found, retaining any partial frame for the next feed.
-#[derive(Debug, Default)]
+///
+/// `term_core` knows nothing about the mux application protocol: the OSC
+/// fallback parameter and the inband frame prefix are supplied by the caller
+/// at construction (the cross-crate SSOT is `mux_ipc::protocol::{MUX_OSC_PARAM,
+/// APC_PREFIX}`), so no protocol constant lives in this crate (NFR5).
+#[derive(Debug)]
 pub struct MuxApcExtractor {
     parser: Parser,
+    /// OSC parameter carrying mux inband frames over the OSC fallback
+    /// transport (Windows ConPTY strips APC but passes OSC). Injected by the
+    /// caller from `mux_ipc::protocol::MUX_OSC_PARAM`.
+    osc_param: u16,
+    /// Inband mux frame prefix shared by both the APC and OSC fallback
+    /// transports. Injected by the caller from `mux_ipc::protocol::APC_PREFIX`.
+    prefix: &'static str,
 }
 
 impl MuxApcExtractor {
     /// Create an extractor with a fresh, independent parser.
-    pub fn new() -> Self {
+    ///
+    /// `osc_param` and `prefix` carry the mux application-protocol values from
+    /// the caller (`mux_ipc::protocol`), keeping `term_core` ignorant of the
+    /// protocol. There is intentionally no `Default`: a default cannot know
+    /// the protocol values.
+    pub fn new(osc_param: u16, prefix: &'static str) -> Self {
         Self {
             parser: Parser::new(),
+            osc_param,
+            prefix,
         }
     }
 
@@ -82,21 +88,46 @@ impl MuxApcExtractor {
     /// discarded. Parser state is preserved across calls, so a frame split
     /// across feeds reassembles into a single payload.
     pub fn feed(&mut self, input: &[u8]) -> Vec<Vec<u8>> {
-        let mut out: Vec<Vec<u8>> = Vec::new();
-        // `parse_interruptible` is the non-test public parse entry point; the
-        // closure always returns `true` so the whole slice is consumed.
-        self.parser.parse_interruptible(input, |action| {
-            match action {
-                ParsedAction::ApcDispatch(payload) => out.push(payload),
+        self.feed_with_offsets(input)
+            .into_iter()
+            .map(|(payload, _end)| payload)
+            .collect()
+    }
+
+    /// Like [`Self::feed`], but each returned payload is paired with the byte
+    /// offset in `input` just past the frame that produced it (an exclusive
+    /// end index into `input`).
+    ///
+    /// This lets the caller locate the boundary of the frame that triggered a
+    /// state transition (e.g. a `Detached` control frame) so the bytes that
+    /// follow it in the SAME coalesced buffer can be routed elsewhere instead
+    /// of being discarded by this transport-only extractor (FR5).
+    ///
+    /// A frame split across feeds reports its end offset relative to the feed
+    /// in which it completes; the offset is always within `0..=input.len()`.
+    pub fn feed_with_offsets(&mut self, input: &[u8]) -> Vec<(Vec<u8>, usize)> {
+        let mut out: Vec<(Vec<u8>, usize)> = Vec::new();
+        // Single bulk pass over `input`: `parse_with_offsets` drives the parser
+        // once over the whole slice and hands the closure each action together
+        // with the exclusive end offset (`i + 1`) of the byte that produced it.
+        // This avoids re-entering the parser per byte — the mux pump coalesces
+        // up to 1 MiB per frame, so a per-byte loop here reintroduced the
+        // per-unit overhead `pump`'s coalescing exists to eliminate.
+        //
+        // `osc_param` / `prefix` are copied out so the closure does not borrow
+        // `self` while `self.parser` is mutably borrowed by the parse call.
+        let osc_param = self.osc_param;
+        let prefix = self.prefix;
+        self.parser
+            .parse_with_offsets(input, |action, end| match action {
+                ParsedAction::ApcDispatch(payload) => out.push((payload, end)),
                 ParsedAction::OscDispatch { param, data }
-                    if param == MUX_OSC_PARAM && data.starts_with(MUX_PREFIX) =>
+                    if param == osc_param && data.starts_with(prefix) =>
                 {
-                    out.push(data.into_bytes());
+                    out.push((data.into_bytes(), end));
                 }
                 _ => {}
-            }
-            true
-        });
+            });
         out
     }
 }
@@ -105,20 +136,15 @@ impl MuxApcExtractor {
 mod tests {
     use super::*;
 
-    // ── SSOT drift guard ────────────────────────────────────────────────
-    // The mux transport constants are duplicated across layers (mux_ipc owns
-    // the cross-crate SSOT; term_core keeps its own copy because it cannot take
-    // an upward dependency on mux_ipc in production). These tests fail if the
-    // term_core copy ever drifts from `mux_ipc::protocol`, so a protocol change
-    // there can no longer silently break the OSC 9999 / APC mux transports.
-    #[test]
-    fn drift_osc_param_matches_mux_ipc_ssot() {
-        assert_eq!(MUX_OSC_PARAM, mux_ipc::protocol::MUX_OSC_PARAM);
-    }
-
-    #[test]
-    fn drift_prefix_matches_mux_ipc_ssot() {
-        assert_eq!(MUX_PREFIX, mux_ipc::protocol::APC_PREFIX);
+    /// The mux protocol values the production caller (`tabs.rs`) injects from
+    /// `mux_ipc::protocol`. The tests construct the extractor with these so the
+    /// crate stays ignorant of the protocol while still exercising the real
+    /// param + prefix.
+    fn new_test() -> MuxApcExtractor {
+        MuxApcExtractor::new(
+            mux_ipc::protocol::MUX_OSC_PARAM,
+            mux_ipc::protocol::APC_PREFIX,
+        )
     }
 
     /// ESC _ <payload> ESC \  (APC frame).
@@ -142,7 +168,7 @@ mod tests {
     // ── TS-1: complete APC frame in one feed ─────────────────────────────
     #[test]
     fn ts1_complete_apc_frame_returned_intact() {
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let frame = apc_frame("emterm-mux;SGVsbG8=");
         let out = ex.feed(&frame);
         assert_eq!(out, vec![b"emterm-mux;SGVsbG8=".to_vec()]);
@@ -151,7 +177,7 @@ mod tests {
     // ── TS-2: APC frame split across two feeds reassembles ───────────────
     #[test]
     fn ts2_apc_frame_split_across_feeds_reassembles() {
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let frame = apc_frame("emterm-mux;AAAABBBBCCCCDDDD");
         // Split mid-payload — the second feed must complete the same frame.
         let split = 10;
@@ -165,7 +191,7 @@ mod tests {
     fn ts2_apc_frame_split_inside_introducer_reassembles() {
         // The split lands between ESC and `_` (mid-introducer) — the most
         // hostile boundary for a shared parser.
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let frame = apc_frame("emterm-mux;Zm9v");
         let out1 = ex.feed(&frame[..1]); // just ESC
         assert!(out1.is_empty());
@@ -176,7 +202,7 @@ mod tests {
     // ── TS-3: OSC 9999 emterm-mux; normalized to APC payload form ────────
     #[test]
     fn ts3_osc_9999_emterm_mux_normalized_to_apc_payload() {
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let frame = osc_frame(9999, "emterm-mux;Zm9vYmFy");
         let out = ex.feed(&frame);
         // Same payload form the APC transport produces (parity with
@@ -187,7 +213,7 @@ mod tests {
     #[test]
     fn ts3_osc_9999_bel_terminated_also_normalized() {
         // OSC may terminate with BEL (0x07) instead of ST.
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let mut frame = vec![0x1b, b']'];
         frame.extend_from_slice(b"9999;emterm-mux;QQ==");
         frame.push(0x07);
@@ -199,7 +225,7 @@ mod tests {
     fn ts3_osc_9999_non_mux_discarded() {
         // OSC 9999 that is NOT an emterm-mux frame must be dropped (parity:
         // handle_osc_internal ignores non-emterm-mux OSC 9999).
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let frame = osc_frame(9999, "something-else;data");
         assert!(ex.feed(&frame).is_empty());
     }
@@ -207,7 +233,7 @@ mod tests {
     #[test]
     fn ts3_other_osc_discarded() {
         // A title OSC (OSC 0) is not transport — discard it.
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let frame = osc_frame(0, "my title");
         assert!(ex.feed(&frame).is_empty());
     }
@@ -215,7 +241,7 @@ mod tests {
     // ── Non-transport output (Print etc.) discarded ──────────────────────
     #[test]
     fn print_and_csi_discarded_apc_kept() {
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let mut input = b"hello world".to_vec();
         input.extend_from_slice(b"\x1b[31m"); // SGR red (CSI)
         input.extend_from_slice(&apc_frame("emterm-mux;UEFZ"));
@@ -226,7 +252,7 @@ mod tests {
 
     #[test]
     fn multiple_apc_frames_in_one_feed() {
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let mut input = apc_frame("emterm-mux;AA==");
         input.extend_from_slice(b"interleaved text");
         input.extend_from_slice(&apc_frame("emterm-mux;BB=="));
@@ -239,7 +265,7 @@ mod tests {
 
     #[test]
     fn reset_drops_partial_frame() {
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let frame = apc_frame("emterm-mux;partial");
         let split = 8;
         let _ = ex.feed(&frame[..split]); // leave parser mid-frame
@@ -253,11 +279,86 @@ mod tests {
         );
     }
 
+    // ── feed_with_offsets: per-frame end offset reporting (FR5) ──────────
+    #[test]
+    fn feed_with_offsets_reports_frame_end() {
+        let mut ex = new_test();
+        let frame = apc_frame("emterm-mux;Zm9v");
+        // [frame][trailing bytes] — the offset must point just past the frame.
+        let mut input = frame.clone();
+        input.extend_from_slice(b"trailing");
+        let out = ex.feed_with_offsets(&input);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, b"emterm-mux;Zm9v".to_vec());
+        // The frame ends at the `ESC \` terminator; the tail starts right after.
+        assert_eq!(out[0].1, frame.len());
+        assert_eq!(&input[out[0].1..], b"trailing");
+    }
+
+    #[test]
+    fn feed_with_offsets_multiple_frames_distinct_offsets() {
+        let mut ex = new_test();
+        let f1 = apc_frame("emterm-mux;AA==");
+        let f2 = apc_frame("emterm-mux;BB==");
+        let mut input = f1.clone();
+        input.extend_from_slice(b"mid");
+        input.extend_from_slice(&f2);
+        let out = ex.feed_with_offsets(&input);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].1, f1.len());
+        assert_eq!(out[1].1, input.len());
+    }
+
+    #[test]
+    fn feed_delegates_to_feed_with_offsets() {
+        // The payload-only `feed` must stay byte-for-byte equivalent to
+        // dropping the offsets from `feed_with_offsets`.
+        let mut a = new_test();
+        let mut b = new_test();
+        let frame = apc_frame("emterm-mux;UEFZ");
+        let with: Vec<Vec<u8>> = a
+            .feed_with_offsets(&frame)
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        let plain = b.feed(&frame);
+        assert_eq!(with, plain);
+    }
+
+    // ── TS-12: injected param + prefix are actually used (not hardcoded) ──
+    #[test]
+    fn ts12_injected_osc_param_and_prefix_are_used() {
+        // Construct with arbitrary values that differ from the production
+        // `mux_ipc::protocol` defaults (9999 / "emterm-mux;"). The extractor
+        // must key off the *injected* values, proving `term_core` holds no
+        // hardcoded mux protocol constant (NFR5).
+        let mut ex = MuxApcExtractor::new(1234, "myprefix;");
+
+        // An OSC frame matching the injected param + prefix is extracted,
+        // normalized to its data string as an APC-equivalent payload.
+        let matching = osc_frame(1234, "myprefix;Zm9v");
+        assert_eq!(ex.feed(&matching), vec![b"myprefix;Zm9v".to_vec()]);
+
+        // A frame using the *default* production param/prefix (9999 /
+        // "emterm-mux;") — which this extractor was NOT given — is discarded.
+        let default_form = osc_frame(9999, "emterm-mux;Zm9v");
+        assert!(
+            ex.feed(&default_form).is_empty(),
+            "an OSC frame with the default param/prefix must NOT match an \
+             extractor injected with a different param/prefix"
+        );
+
+        // The injected prefix gate also rejects the right param with a
+        // different prefix.
+        let wrong_prefix = osc_frame(1234, "other;Zm9v");
+        assert!(ex.feed(&wrong_prefix).is_empty());
+    }
+
     #[test]
     fn non_emterm_apc_payload_still_surfaced() {
         // A bare Kitty APC (no emterm-mux; prefix) is still surfaced as an APC
         // payload — partition_apc_for_mux routes it to the image pipeline.
-        let mut ex = MuxApcExtractor::new();
+        let mut ex = new_test();
         let frame = apc_frame("Gf=24,s=1,v=1;AAAA");
         let out = ex.feed(&frame);
         assert_eq!(out, vec![b"Gf=24,s=1,v=1;AAAA".to_vec()]);

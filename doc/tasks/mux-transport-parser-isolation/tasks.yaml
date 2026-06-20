@@ -80,3 +80,53 @@ tasks:
       - pump-routing
       - lifecycle
     effort: small
+
+  - id: detach-tail-reroute
+    status: completed
+    phase: 5
+    title: Re-route post-Detached tail bytes within a coalesced buffer (finding ④, FR5)
+    summary: >-
+      Fix the in-pump detach transition: when a single coalesced PTS buffer
+      holds [... Detached frame][post-detach shell bytes], the bytes after the
+      Detached frame are currently swallowed by the extractor (which discards
+      non-APC bytes) because routing is decided once per pump. Have the extractor
+      report per-frame end offsets; in process_combined, after an applied mux
+      message clears mux_session_name, route combined[tail..] through the pre-mux
+      self.core path so the post-detach shell prompt renders.
+    files_create: []
+    files_modify:
+      - crates/term_core/src/mux_apc_extractor.rs
+      - src-tauri/src/tabs.rs
+    tests:
+      - TS-11
+    depends_on:
+      - pump-routing
+      - lifecycle
+    effort: medium
+
+  - id: protocol-decouple
+    status: completed
+    phase: 6
+    title: Decouple mux protocol knowledge from term_core (finding ⑤, NFR5)
+    summary: >-
+      term_core must embed no mux application-protocol constants. Change
+      MuxApcExtractor::new() to new(osc_param, prefix) injected from
+      mux_ipc::protocol via tabs.rs; remove the MUX_OSC_PARAM/MUX_PREFIX consts
+      and drift_* tests. Move OSC 9999 emterm-mux recognition out of
+      term_core::handle_osc_internal (drop the prefix check + fire_apc_callback;
+      map 9999 to a new action-type like 777/1337) to the app-layer on_osc in
+      callbacks.rs, which checks APC_PREFIX and routes to the pending_apc sink so
+      a pre-mux Windows-ConPTY OSC 9999 Welcome still establishes mux.
+    files_create: []
+    files_modify:
+      - crates/term_core/src/mux_apc_extractor.rs
+      - crates/term_core/src/osc_handler.rs
+      - src-tauri/src/tabs.rs
+      - src-tauri/src/callbacks.rs
+    tests:
+      - TS-12
+      - TS-13
+    depends_on:
+      - termcore-extractor
+      - pump-routing
+    effort: medium

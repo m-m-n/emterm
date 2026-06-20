@@ -72,6 +72,15 @@ pub const OSC_SEMANTIC_PROMPT: u8 = 133;
 pub const OSC_EMTERM_EXTENSION: u8 = 100;
 /// OSC 101 (wire 1337): iTerm2 protocol.
 pub const OSC_ITERM2: u8 = 101;
+/// OSC 102 (wire 9999): mux inband frame (Windows ConPTY fallback, pre-mux).
+///
+/// `term_core` embeds no mux number (NFR5). The host injects the
+/// `MUX_OSC_PARAM → OSC_MUX_INBAND` (9999 → 102) mapping via
+/// `TerminalCore::register_osc_app_param` (see `tabs.rs` at tab spawn);
+/// `term_core` then delivers the otherwise-unknown OSC 9999 here as
+/// `on_osc(102, …)`. The `emterm-mux;` prefix is recognized in this app
+/// layer, not in the core.
+pub const OSC_MUX_INBAND: u8 = 102;
 /// OSC 255: unknown / unmapped action.
 pub const OSC_UNKNOWN: u8 = 255;
 
@@ -481,6 +490,15 @@ impl TerminalCallbacks for NativeCallbacks {
             OSC_ITERM2 => {
                 // OQ7: log only — no inline-image subset is implemented.
                 log::warn!("OSC 1337 (iTerm2) ignored: {} bytes", data.len());
+            }
+            OSC_MUX_INBAND => {
+                // OSC 9999 emterm-mux inband frame (Windows ConPTY fallback,
+                // pre-mux). term_core no longer knows the mux protocol; recognize
+                // the emterm-mux; prefix here and route into the same pending_apc
+                // sink on_apc feeds so partition_apc_for_mux establishes mux.
+                if data.starts_with(mux_ipc::protocol::APC_PREFIX) {
+                    self.state.lock().pending_apc.push(data.as_bytes().to_vec());
+                }
             }
             OSC_UNKNOWN => {
                 log::warn!("OSC unknown action_type=255: {} bytes", data.len());
@@ -922,6 +940,38 @@ mod tests {
         h.cb.on_osc(OSC_UNKNOWN, "something");
         let s = h.state.lock();
         assert!(s.title.is_none());
+        assert!(s.osc_queue.is_empty());
+    }
+
+    // ── TS-13: pre-mux OSC 9999 emterm-mux Welcome reaches the mux APC sink ─
+    #[test]
+    fn osc_9999_emterm_mux_inband_routed_to_pending_apc() {
+        // A pre-mux Windows-ConPTY Welcome arrives as an OSC 9999
+        // `emterm-mux;<base64>` frame. `term_core` no longer special-cases it
+        // (NFR5): it now reaches the app via `on_osc(OSC_MUX_INBAND, …)`. The
+        // app layer recognizes the `emterm-mux;` prefix and routes the full
+        // frame string into the same `pending_apc` sink `on_apc` feeds, so
+        // `partition_apc_for_mux` can establish mux.
+        let h = default_harness();
+        let frame = "emterm-mux;V2VsY29tZQ==";
+        h.cb.on_osc(OSC_MUX_INBAND, frame);
+        let s = h.state.lock();
+        assert_eq!(s.pending_apc.len(), 1, "frame buffered into pending_apc");
+        assert_eq!(s.pending_apc[0], frame.as_bytes().to_vec());
+        // It must NOT leak into the OSC viewer queue or set a title.
+        assert!(s.osc_queue.is_empty());
+        assert!(s.title.is_none());
+    }
+
+    #[test]
+    fn osc_9999_non_mux_prefix_is_dropped() {
+        // OSC 9999 whose data lacks the `emterm-mux;` prefix is not a mux
+        // frame and must be dropped (parity with the old term_core guard,
+        // now enforced in the app layer).
+        let h = default_harness();
+        h.cb.on_osc(OSC_MUX_INBAND, "something-else;data");
+        let s = h.state.lock();
+        assert!(s.pending_apc.is_empty());
         assert!(s.osc_queue.is_empty());
     }
 

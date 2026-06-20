@@ -291,6 +291,15 @@ pub struct TerminalCore {
     /// the WebView `isAlternateBuffer` guard. Capped at
     /// `MAX_PENDING_FOLD_MARKS`.
     pub(crate) pending_fold_marks: VecDeque<PendingFoldMark>,
+    /// Application-layer OSC parameter overrides: `(osc_param, action_type)`.
+    ///
+    /// `term_core` knows no application protocol numbers. A host that layers
+    /// its own protocol on a private OSC parameter (e.g. the mux inband frame
+    /// param) registers it here via [`Self::register_osc_app_param`]; an OSC
+    /// whose param `term_core` does not natively handle is mapped to the
+    /// registered `action_type` and delivered through `on_osc`, so the host's
+    /// callback can recognize it. Empty by default (vanilla terminal core).
+    pub(crate) osc_app_params: Vec<(u16, u8)>,
 }
 
 impl TerminalCore {
@@ -362,9 +371,23 @@ impl TerminalCore {
             cursor_show_interrupt: false,
             pending_prompt_marks: VecDeque::new(),
             pending_fold_marks: VecDeque::new(),
+            osc_app_params: Vec::new(),
         };
         core.mark_all_dirty();
         core
+    }
+
+    /// Register an application-layer OSC parameter → `action_type` mapping.
+    ///
+    /// `term_core` itself embeds no application protocol numbers. The host
+    /// calls this for each private OSC parameter it owns (e.g. the mux inband
+    /// frame param); a subsequent OSC carrying that param — and not natively
+    /// handled by `term_core` — is delivered via `on_osc(action_type, data)`
+    /// so the host's callback can recognize and route it. The host is
+    /// responsible for choosing an `action_type` that does not collide with
+    /// `term_core`'s native OSC action types.
+    pub fn register_osc_app_param(&mut self, param: u16, action_type: u8) {
+        self.osc_app_params.push((param, action_type));
     }
 
     // ── Grid dimensions ──────────────────────────────────

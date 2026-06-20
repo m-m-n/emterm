@@ -191,4 +191,73 @@ mod tests {
         assert_eq!(recorder.osc.lock().unwrap().len(), 1);
         assert_eq!(*recorder.bell.lock().unwrap(), 1);
     }
+
+    /// Build a core whose callbacks forward to a fresh `Recorder`.
+    fn core_with_recorder() -> (TerminalCore, std::sync::Arc<Recorder>) {
+        let mut core = TerminalCore::new(80, 24, 0);
+        let recorder = std::sync::Arc::new(Recorder::default());
+        struct Fwd(std::sync::Arc<Recorder>);
+        impl TerminalCallbacks for Fwd {
+            fn on_osc(&self, a: u8, d: &str) {
+                self.0.on_osc(a, d)
+            }
+            fn on_apc(&self, d: &[u8]) {
+                self.0.on_apc(d)
+            }
+            fn on_dcs(&self, d: &[u8]) {
+                self.0.on_dcs(d)
+            }
+            fn on_bell(&self) {
+                self.0.on_bell()
+            }
+            fn on_device_response(&self, d: &[u8]) {
+                self.0.on_device_response(d)
+            }
+        }
+        core.callbacks = Some(Box::new(Fwd(recorder.clone())));
+        (core, recorder)
+    }
+
+    // ── NFR5: app-layer OSC param override (term_core holds no mux constant) ──
+
+    #[test]
+    fn osc_app_param_override_maps_unknown_param_to_app_action_type() {
+        // A core that registered the mux OSC param (9999 → 102) maps an
+        // otherwise-unknown OSC 9999 to the injected action_type and delivers
+        // it via on_osc — term_core itself embeds no `9999`/`emterm-mux;`.
+        let (mut core, recorder) = core_with_recorder();
+        core.register_osc_app_param(9999, 102);
+        core.process_pty_data_fully(b"\x1b]9999;emterm-mux;QQ==\x1b\\");
+        assert_eq!(
+            recorder.osc.lock().unwrap().as_slice(),
+            &[(102u8, "emterm-mux;QQ==".to_string())]
+        );
+    }
+
+    #[test]
+    fn osc_app_param_unregistered_is_unknown() {
+        // Without registration, term_core does not recognize OSC 9999: it is
+        // delivered as action_type 255 (Unknown), proving the mux protocol
+        // number is not baked into term_core.
+        let (mut core, recorder) = core_with_recorder();
+        core.process_pty_data_fully(b"\x1b]9999;emterm-mux;QQ==\x1b\\");
+        assert_eq!(
+            recorder.osc.lock().unwrap().as_slice(),
+            &[(255u8, "emterm-mux;QQ==".to_string())]
+        );
+    }
+
+    #[test]
+    fn osc_app_param_override_does_not_shadow_native_osc() {
+        // An override is consulted ONLY for params term_core does not natively
+        // handle. Registering a native param (e.g. OSC 2 SetTitle) must NOT
+        // hijack its native action_type.
+        let (mut core, recorder) = core_with_recorder();
+        core.register_osc_app_param(2, 200);
+        core.process_pty_data_fully(b"\x1b]2;hi\x1b\\");
+        assert_eq!(
+            recorder.osc.lock().unwrap().as_slice(),
+            &[(2u8, "hi".to_string())]
+        );
+    }
 }

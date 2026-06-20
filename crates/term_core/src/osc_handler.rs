@@ -48,17 +48,6 @@ impl TerminalCore {
     }
 
     pub(crate) fn handle_osc_internal(&mut self, param: u16, data: &str) {
-        // OSC 9999: emterm mux message — route to APC callback for mux handling.
-        // This allows mux to work through Windows ConPTY which strips APC but passes OSC.
-        // Constants are the term_core-internal SSOT shared with `MuxApcExtractor`
-        // (see `mux_apc_extractor.rs`); both must recognize the same frames.
-        if param == crate::mux_apc_extractor::MUX_OSC_PARAM {
-            if data.starts_with(crate::mux_apc_extractor::MUX_PREFIX) {
-                self.fire_apc_callback(data.as_bytes());
-            }
-            return;
-        }
-
         // Special handling for OSC 8: process hyperlink inline
         if param == 8 {
             if let Some(sep) = data.find(';') {
@@ -99,6 +88,22 @@ impl TerminalCore {
             777 => 100,  // EmtermExtension (mapped to 100)
             1337 => 101, // iTerm2 protocol (mapped to 101, >255)
             _ => 255,    // Unknown
+        };
+
+        // Application-layer OSC params (e.g. the mux inband frame param) are
+        // injected by the host via `TerminalCore::register_osc_app_param`;
+        // `term_core` itself embeds no application protocol numbers. Consult
+        // the overrides ONLY for params `term_core` does not natively handle
+        // (action_type == 255), so an override can never shadow a native OSC
+        // handler.
+        let action_type = if action_type == 255 {
+            self.osc_app_params
+                .iter()
+                .find(|(p, _)| *p == param)
+                .map(|&(_, at)| at)
+                .unwrap_or(255)
+        } else {
+            action_type
         };
 
         // OSC 133 semantic prompt: capture the mark with the absolute row it

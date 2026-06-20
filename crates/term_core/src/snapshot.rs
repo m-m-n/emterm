@@ -303,6 +303,9 @@ impl TerminalCore {
             // Snapshot restore starts a fresh parse frame; no in-flight marks.
             pending_prompt_marks: VecDeque::new(),
             pending_fold_marks: VecDeque::new(),
+            // Snapshot replay cores process inner content only (no mux
+            // transport frames), so no app-layer OSC override is needed.
+            osc_app_params: Vec::new(),
         })
     }
 
@@ -417,6 +420,9 @@ impl TerminalCore {
             // Snapshot restore starts a fresh parse frame; no in-flight marks.
             pending_prompt_marks: VecDeque::new(),
             pending_fold_marks: VecDeque::new(),
+            // Snapshot replay cores process inner content only (no mux
+            // transport frames), so no app-layer OSC override is needed.
+            osc_app_params: Vec::new(),
         })
     }
 
