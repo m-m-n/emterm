@@ -345,6 +345,16 @@ impl Tab {
         // inside `TerminalCore` is `true`, so this only matters when
         // `settings.json` opts out (`"cursor_blink": false`).
         core.set_cursor_blink(settings.cursor_blink);
+        // `term_core` knows no mux protocol; register the app-layer OSC mapping
+        // so a pre-mux OSC 9999 `emterm-mux;` Welcome (the Windows ConPTY
+        // fallback transport, parsed by `self.core` before mux is established)
+        // reaches `on_osc(OSC_MUX_INBAND, …)` → the mux APC path (NFR5). Only
+        // the live outer-PTS tab core needs this; off-thread snapshot replay
+        // cores process inner content, which carries no mux transport frames.
+        core.register_osc_app_param(
+            mux_ipc::protocol::MUX_OSC_PARAM,
+            crate::callbacks::OSC_MUX_INBAND,
+        );
         let cb_state = Arc::new(Mutex::new(NativeCallbackState::default()));
         // Seed the theme from settings (font_size_pt + cursor_style)
         // so the first frame renders at the user's configured size
@@ -391,7 +401,10 @@ impl Tab {
             pending_pane_switch_from: None,
             pending_window_appended: false,
             pending_switch: None,
-            mux_apc_extractor: term_core::MuxApcExtractor::new(),
+            mux_apc_extractor: term_core::MuxApcExtractor::new(
+                mux_ipc::protocol::MUX_OSC_PARAM,
+                mux_ipc::protocol::APC_PREFIX,
+            ),
         }
     }
 
@@ -1471,13 +1484,60 @@ impl Tab {
     /// is exercised by deterministic unit tests (which feed a known buffer)
     /// rather than the live PTY channel. `pump` calls this once per frame with
     /// the bytes it coalesced (possibly empty — the callback drains still run).
+    /// Drive `self.core` over an outer-stream byte slice (the pre-mux parse
+    /// path), running the grapheme flush, device-response write-back, and
+    /// OSC 133 / fold mark drains that apply when `self.core` itself parses the
+    /// outer bytes.
+    ///
+    /// Used by the pre-mux branch of [`Self::process_combined`] and, when a
+    /// `Detached` frame appears mid-buffer, by the post-detach tail re-route
+    /// (FR5): the bytes coalesced behind the `Detached` frame are plain shell
+    /// output that must reach `self.core`, not the (now reset) transport
+    /// extractor.
+    fn process_outer_via_core(&mut self, bytes: &[u8]) {
+        let mut c = self.core.lock();
+        c.process_pty_data_fully(bytes);
+        // Force-flush any grapheme cluster left buffered by the
+        // parser (e.g. a lone emoji codepoint at the tail of an
+        // IME-commit echo). Without this the cluster sits in
+        // `grapheme_buffer` until the next non-extending codepoint
+        // arrives, so the glyph stays invisible and the cursor
+        // doesn't advance until the user types something else
+        // (typical symptom: SKK `/smile` → 😄 only appears after
+        // pressing space).
+        c.flush_grapheme_buffer();
+        // Pick up any device-status / DA / XTWINOPS reply term_core
+        // synthesized while processing this chunk. PowerShell +
+        // PSReadLine issue `\x1b[6n` cursor-position queries during
+        // every line redraw; without writing the reply back into the
+        // PTY, PSReadLine recomputes the redraw against a stale
+        // cursor and a single Backspace erases multiple cells.
+        let device_response = c.take_response();
+        // Drain the OSC 133 marks `term_core` captured during this pump
+        // (each already stamped with its emit-time row + eviction count)
+        // and read the current eviction total — all under the core lock
+        // so they are consistent with the bytes just processed. The
+        // actual backfill runs after `drop(c)` because it needs
+        // `&mut self`.
+        let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
+        drop(c);
+        if !device_response.is_empty() {
+            self.write_device_response(device_response);
+        }
+        self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
+        // New PTY bytes reached the core — latch for the
+        // inactive-tab activity path (WebView `onOutputActivity`).
+        self.output_pending = true;
+    }
+
     fn process_combined(&mut self, combined: Vec<u8>) -> bool {
         let mut changed = false;
         // Mux-transport frames extracted from the coalesced PTS bytes this
-        // pump (mux branch only). Merged into `pending_apc` further down so
-        // they flow through the same `partition_apc_for_mux` sink the pre-mux
-        // `self.core` parse feeds.
-        let mut extracted_mux_apc: Vec<Vec<u8>> = Vec::new();
+        // pump (mux branch only), each paired with its end offset in `combined`
+        // so a `Detached` frame's boundary can be located (FR5). Merged into
+        // `pending_apc` further down so they flow through the same
+        // `partition_apc_for_mux` sink the pre-mux `self.core` parse feeds.
+        let mut extracted_mux_apc: Vec<(Vec<u8>, usize)> = Vec::new();
         if !combined.is_empty() {
             if self.mux_session_name.is_some() {
                 // Mux established (FR1 / FR2): the outer PTS stream is the mux
@@ -1488,44 +1548,12 @@ impl Tab {
                 // The outer mux stream is APC-only (no printing, no device
                 // queries, no OSC 133 marks), so the `self.core`-side grapheme
                 // flush / device-response / mark-drain do NOT apply here.
-                extracted_mux_apc = self.mux_apc_extractor.feed(&combined);
+                extracted_mux_apc = self.mux_apc_extractor.feed_with_offsets(&combined);
                 changed = true;
                 self.output_pending = true;
             } else {
-                let mut c = self.core.lock();
-                c.process_pty_data_fully(&combined);
-                // Force-flush any grapheme cluster left buffered by the
-                // parser (e.g. a lone emoji codepoint at the tail of an
-                // IME-commit echo). Without this the cluster sits in
-                // `grapheme_buffer` until the next non-extending codepoint
-                // arrives, so the glyph stays invisible and the cursor
-                // doesn't advance until the user types something else
-                // (typical symptom: SKK `/smile` → 😄 only appears after
-                // pressing space).
-                c.flush_grapheme_buffer();
-                // Pick up any device-status / DA / XTWINOPS reply term_core
-                // synthesized while processing this chunk. PowerShell +
-                // PSReadLine issue `\x1b[6n` cursor-position queries during
-                // every line redraw; without writing the reply back into the
-                // PTY, PSReadLine recomputes the redraw against a stale
-                // cursor and a single Backspace erases multiple cells.
-                let device_response = c.take_response();
-                // Drain the OSC 133 marks `term_core` captured during this pump
-                // (each already stamped with its emit-time row + eviction count)
-                // and read the current eviction total — all under the core lock
-                // so they are consistent with the bytes just processed. The
-                // actual backfill runs after `drop(c)` because it needs
-                // `&mut self`.
-                let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
-                drop(c);
-                if !device_response.is_empty() {
-                    self.write_device_response(device_response);
-                }
-                self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
+                self.process_outer_via_core(&combined);
                 changed = true;
-                // New PTY bytes reached the core — latch for the
-                // inactive-tab activity path (WebView `onOutputActivity`).
-                self.output_pending = true;
             }
         }
 
@@ -1575,13 +1603,49 @@ impl Tab {
             // Pre-mux: `pending_apc` was populated by the `self.core` outer
             // parse above (which fired `on_apc`). Mux: the outer parse went to
             // the independent extractor instead, so the mux frames arrive via
-            // `extracted_mux_apc`; prepend them so they decode before any inner
-            // content this same pump applies. Concatenating both lets one code
-            // path serve both branches.
-            let mut combined_apc = extracted_mux_apc;
-            combined_apc.extend(pending_apc);
-            let (image_apc, mux_messages) = partition_apc_for_mux(combined_apc);
-            for msg in mux_messages {
+            // `extracted_mux_apc` (each carrying its end offset in `combined`).
+            // The extracted frames decode before any pre-mux `pending_apc` so
+            // inner content this same pump applies in order.
+            //
+            // FR5 detach transition: a single coalesced buffer may carry
+            // `[... Detached frame][post-detach shell bytes]`. The `Detached`
+            // frame clears `mux_session_name` mid-loop; the bytes after it are
+            // plain shell output the extractor would otherwise discard. Watch
+            // for the Some→None transition while applying the extracted frames
+            // and capture the offset just past the frame that triggered it, so
+            // the tail can be re-routed through `self.core` below.
+            let mut image_apc: Vec<Vec<u8>> = Vec::new();
+            let mut detach_tail_start: Option<usize> = None;
+            for (payload, end_offset) in extracted_mux_apc {
+                if payload.starts_with(mux_ipc::protocol::APC_PREFIX.as_bytes()) {
+                    if let Some(msg) = crate::mux::apc::try_decode_emterm_mux(&payload) {
+                        let was_mux = self.mux_session_name.is_some();
+                        if self.apply_mux_message(msg) {
+                            changed = true;
+                        }
+                        // Detach: a frame just cleared `mux_session_name`. The
+                        // remaining bytes in `combined` belong to the shell, not
+                        // the mux transport — record where they start and STOP
+                        // applying extracted frames. Every later frame was pulled
+                        // from `combined[end_offset..]`, which the tail re-route
+                        // below re-parses through `self.core`; continuing the loop
+                        // would process those bytes twice (e.g. double-decoding a
+                        // post-detach image, or leaking a re-attach frame).
+                        if was_mux && self.mux_session_name.is_none() {
+                            detach_tail_start = Some(end_offset);
+                            break;
+                        }
+                    }
+                    // Malformed mux payload — already logged inside the decoder;
+                    // do NOT forward to the image pipeline.
+                } else {
+                    image_apc.push(payload);
+                }
+            }
+            // Pre-mux `pending_apc` (no offsets): partition + apply as before.
+            let (pre_mux_images, pre_mux_messages) = partition_apc_for_mux(pending_apc);
+            image_apc.extend(pre_mux_images);
+            for msg in pre_mux_messages {
                 if self.apply_mux_message(msg) {
                     changed = true;
                 }
@@ -1590,6 +1654,19 @@ impl Tab {
                 && self.drain_and_decode_images(&image_apc, &pending_dcs)
             {
                 changed = true;
+            }
+            // FR5: re-route the post-`Detached` tail through `self.core` in this
+            // same pump. The `Detached` arm already cleared the grid via
+            // `reset_frame_for_replay(b"")` and reset the extractor; the shell
+            // (which now owns the PTY again) printed its prompt right behind the
+            // `Detached` frame, and those bytes are still in `combined`. Without
+            // this they would be dropped by the extractor and the screen would
+            // stay blank until the next keystroke produced fresh PTS bytes.
+            if let Some(tail) = detach_tail_start {
+                if tail < combined.len() {
+                    self.process_outer_via_core(&combined[tail..]);
+                    changed = true;
+                }
             }
             // Inner content applied by `apply_mux_message` (the `PtyOutput`
             // arm feeding `self.core`) fires `on_apc` / `on_dcs` for any inner
@@ -2362,7 +2439,7 @@ fn partition_apc_for_mux(apc: Vec<Vec<u8>>) -> (Vec<Vec<u8>>, Vec<MuxMessage>) {
     let mut images: Vec<Vec<u8>> = Vec::with_capacity(apc.len());
     let mut mux: Vec<MuxMessage> = Vec::new();
     for payload in apc {
-        if payload.starts_with(b"emterm-mux;") {
+        if payload.starts_with(mux_ipc::protocol::APC_PREFIX.as_bytes()) {
             if let Some(msg) = crate::mux::apc::try_decode_emterm_mux(&payload) {
                 mux.push(msg);
             }
@@ -4582,6 +4659,95 @@ mod tests {
         assert!(
             has_image_ready(&events),
             "image must decode despite double Welcome; events={events:?}"
+        );
+    }
+
+    // ── TS-11: post-Detached tail re-routed to self.core (FR5) ────────────
+    #[test]
+    fn ts11_post_detached_tail_in_coalesced_buffer_renders_via_core() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        assert!(tab.mux_session_name.is_some(), "mux established");
+
+        // One coalesced PTS buffer carrying, in order:
+        //   1. an inner PtyOutput frame (rendered into self.core via the inner
+        //      content path),
+        //   2. the Detached control frame (clears mux_session_name mid-buffer),
+        //   3. plain shell prompt bytes printed by the shell that regained the
+        //      PTY — these follow the Detached frame in the SAME buffer.
+        //
+        // Before the fix, routing was decided once per pump: the whole buffer
+        // went to the extractor, which discards non-APC bytes, so the prompt
+        // bytes were silently dropped and (with the Detached grid clear) the
+        // screen stayed blank until the next keystroke.
+        let detached = crate::mux::apc::encode_emterm_mux(&MuxMessage {
+            msg_type: MessageType::Detached,
+            pane_id: 0,
+            payload: Vec::new(),
+        });
+        let mut combined = pty_output_apc(0, b"inner shell output\r\n");
+        combined.extend_from_slice(&detached);
+        combined.extend_from_slice(b"detached-prompt$ \r\n");
+
+        let _ = tab.test_process_combined(combined);
+
+        // Detach actually took effect.
+        assert!(
+            tab.mux_session_name.is_none(),
+            "Detached frame must clear mux_session_name"
+        );
+        // The plain prompt bytes coalesced behind the Detached frame rendered
+        // via self.core instead of being swallowed by the extractor. The
+        // Detached arm clears the grid first (reset_frame_for_replay), so the
+        // re-routed tail is what repaints — exactly the bytes we expect.
+        let grid = tab.test_grid_text();
+        assert!(
+            grid.contains("detached-prompt$"),
+            "post-Detached shell bytes must render via self.core; grid={grid:?}"
+        );
+        // The transport prefix must never leak onto the grid.
+        assert!(
+            !grid.contains("emterm-mux"),
+            "outer transport prefix must not leak to the grid; grid={grid:?}"
+        );
+    }
+
+    // ── TS-11b: a non-mux image coalesced behind Detached decodes exactly once ──
+    #[test]
+    fn ts11_post_detached_image_decodes_exactly_once() {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[], 0));
+        assert!(tab.mux_session_name.is_some(), "mux established");
+
+        // One coalesced buffer: the Detached control frame, then a complete
+        // (non-mux) Kitty image the shell printed right after regaining the PTY.
+        // `feed_with_offsets` surfaces the bare Kitty APC AND the post-detach
+        // tail re-route re-parses the same bytes through self.core. Without the
+        // loop `break` at the detach boundary, the image was decoded twice (once
+        // from the extracted image_apc, once from the re-routed tail).
+        let detached = crate::mux::apc::encode_emterm_mux(&MuxMessage {
+            msg_type: MessageType::Detached,
+            pane_id: 0,
+            payload: Vec::new(),
+        });
+        let mut combined = detached;
+        combined.extend_from_slice(&kitty_rgb_single(3, 3));
+
+        let _ = tab.test_process_combined(combined);
+
+        assert!(
+            tab.mux_session_name.is_none(),
+            "Detached frame must clear mux_session_name"
+        );
+        let ready = tab
+            .drain_image_events()
+            .into_iter()
+            .filter(|e| matches!(e, ImageEvent::ImageReady { .. }))
+            .count();
+        assert_eq!(
+            ready, 1,
+            "post-Detached image must decode exactly once, not double-processed \
+             via the extracted-frame loop AND the tail re-route"
         );
     }
 }

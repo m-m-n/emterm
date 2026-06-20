@@ -59,7 +59,13 @@ working inside mux, so that isolating the outer transport has no side effects.
   itself is parsed once by `self.core` (pre-mux); the switch to the extractor happens on
   the first pump AFTER `mux_session_name` is set.
 - **FR5 - Detach restores `self.core` routing:** On detach (`mux_session_name` cleared,
-  `tabs.rs:1364`), PTS processing returns to `self.core`.
+  `tabs.rs:1364`), PTS processing returns to `self.core`. The routing decision must hold
+  across the detach boundary WITHIN a single coalesced pump buffer: when the same pump's
+  PTS buffer is `[... Detached frame][post-detach shell bytes]`, the bytes AFTER the
+  `Detached` frame are routed to `self.core` in that same pump, not silently discarded by
+  the extractor. (The known failure: the extractor consumes the whole coalesced buffer and
+  discards non-APC bytes before `apply_mux_message` clears `mux_session_name`, so a shell
+  prompt printed right after detach is dropped and the grid stays blank until the next key.)
 - **FR6 - Welcome duplication tolerance:** The switch to the extractor must remain correct
   under the known double-Welcome delivery (guarded today by `first_welcome`).
 - **FR7 - Remove DIAG diagnostics:** Remove the temporary investigation logs added during
@@ -74,6 +80,19 @@ working inside mux, so that isolating the outer transport has no side effects.
 - **NFR4 - Performance:** The existing `pump` coalescing / frame budget
   (`FRAME_BUDGET_MS = 12ms`, `COALESCE_CAP = 1MB`) behavior is preserved; the extractor
   adds minimal overhead.
+- **NFR5 - `term_core` holds no mux application-protocol constants:** `term_core` (a
+  low-level terminal-emulator crate) must not embed the mux inband-protocol constants
+  (OSC param `9999`, frame prefix `emterm-mux;`):
+  - `MuxApcExtractor` takes the OSC param and frame prefix as constructor parameters; the
+    caller (`tabs.rs`) passes `mux_ipc::protocol::{MUX_OSC_PARAM, APC_PREFIX}` (the
+    cross-crate SSOT), so the extractor carries no copy of the values.
+  - OSC 9999 `emterm-mux;` recognition is moved OUT of `term_core::handle_osc_internal`
+    (`osc_handler.rs`) to the application layer (the OSC callback in
+    `src-tauri/src/callbacks.rs`). A pre-mux OSC 9999 `emterm-mux;` Welcome (Windows
+    ConPTY transport, which strips APC but passes OSC) still reaches the mux APC path,
+    preserving the handshake (FR4 / NFR1) without `term_core` knowing the mux protocol.
+  - The duplicated `MUX_OSC_PARAM` / `MUX_PREFIX` constants in `term_core` and their
+    `drift_*` tests are removed (no in-crate copy left to drift).
 
 ## Implementation Approach
 
@@ -150,10 +169,18 @@ crates/term_core/src/
   terminal_core.rs        # remove parser_mid_sequence() diagnostic accessor;
                           # possibly add minimal standalone extractor entry point
   terminal_dispatch.rs    # process_pty_data (reference)
+  mux_apc_extractor.rs    # NFR5: new(osc_param, prefix) constructor injection;
+                          # remove MUX_OSC_PARAM/MUX_PREFIX consts + drift_* tests
+  osc_handler.rs          # NFR5: remove OSC 9999 emterm-mux special-casing
+                          # (recognition moves to the app-layer OSC callback)
 src-tauri/src/
   tabs.rs                 # pump(): gate outer parse on mux_session_name → extractor;
+                          # FR5: re-route post-Detached tail in the same pump to self.core;
+                          # construct MuxApcExtractor with mux_ipc::protocol constants;
                           # apply_mux_message PtyOutput arm: remove DIAG logs;
                           # drain_and_decode_images / reset_frame_for_replay: remove DIAG logs
+  callbacks.rs            # NFR5: OSC callback recognizes OSC 9999 emterm-mux and routes it
+                          # to the mux APC path (moved out of term_core)
   mux/apc.rs              # try_decode_emterm_mux: restore original simple warn (remove DIAG)
   mux/                    # MuxApcExtractor home (new module or within an existing mux file)
 ```
@@ -167,6 +194,9 @@ src-tauri/src/
 - [ ] `MuxApcExtractor` handles the OSC 9999 fallback transport.
 - [ ] Pre-mux PTS bytes still route through `self.core` (extractor not engaged before Welcome).
 - [ ] Detach (`mux_session_name` cleared) restores `self.core` routing.
+- [ ] (NFR5) `MuxApcExtractor` constructed with an injected OSC param + prefix extracts
+      frames using the injected values, and discards an OSC frame whose param differs from
+      the injected one (proves the values are not hard-coded in `term_core`).
 
 ### Integration Tests
 - [ ] A Kitty image sequence delivered as inner content split across multiple mux PtyOutput
@@ -174,6 +204,14 @@ src-tauri/src/
       decodable image (the core regression test for this fix). Run with `--test-threads=1`
       for the `tabs.rs` replay tests.
 - [ ] Non-mux Kitty image still decodes (no regression).
+- [ ] (FR5) `process_combined` fed one coalesced buffer
+      `[inner PtyOutput frame][Detached frame][plain shell prompt bytes]` renders the plain
+      prompt bytes via `self.core` (they are NOT discarded by the extractor across the
+      detach transition).
+- [ ] (NFR5) A pre-mux OSC 9999 `emterm-mux;` Welcome frame parsed by `self.core` still
+      reaches the mux APC path via the application-layer OSC callback (Windows ConPTY
+      handshake parity), now that `term_core::handle_osc_internal` no longer special-cases
+      it.
 
 ### E2E Tests
 **Existing E2E tests**: None
@@ -185,6 +223,8 @@ src-tauri/src/
       corruption) under the `first_welcome` guard.
 - [ ] Kitty chunk boundary lands mid-APC introducer (`ESC _`) across PtyOutput messages.
 - [ ] Large image (several MB) spanning many PtyOutput boundaries.
+- [ ] `Detached` frame arriving mid-coalesced-buffer immediately followed by post-detach
+      shell output (FR5 — tail must reach `self.core`, not be dropped).
 
 ### Manual Verification
 1. In a mux tab, run `emterm image <file>` → inline image renders, no base64 leak.
@@ -219,11 +259,15 @@ Remove the temporary investigation logs added during root-cause analysis (FR7):
 
 ## Success Criteria
 
-- [ ] All functional requirements (FR1–FR7) are implemented.
+- [ ] All functional requirements (FR1–FR7) are implemented (FR5 covers the mid-coalesced-
+      buffer detach transition: post-detach shell bytes reach `self.core`).
 - [ ] mux inline images (Kitty + SIXEL) render with no base64 leak.
 - [ ] The split-chunk integration test passes.
 - [ ] Non-mux path and normal mux content (text / TUI / Markdown) show no regression.
 - [ ] DIAG diagnostics are removed; `apc.rs` failure log restored to the simple warn.
+- [ ] (NFR5) `term_core` embeds no mux protocol constants: `MuxApcExtractor` takes them by
+      constructor injection, OSC 9999 `emterm-mux;` recognition lives in the app layer, and
+      the `term_core` `MUX_OSC_PARAM`/`MUX_PREFIX` constants + `drift_*` tests are removed.
 - [ ] `cargo test --lib` passes (`tabs.rs` replay with `--test-threads=1`).
 - [ ] CLI-only build still compiles (`--no-default-features`).
 

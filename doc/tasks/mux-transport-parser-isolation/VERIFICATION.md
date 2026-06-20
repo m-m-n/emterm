@@ -40,6 +40,11 @@
 | TS-8 | DIAG removal | No `DIAG` strings / `parser_mid_sequence()` references; build passes | Build/Static | ✅ PASS |
 | TS-9 | Non-mux Kitty image | Decodes as before (no regression) | Integration | ✅ PASS |
 | TS-10 | Protocol files unchanged | mux daemon / mux_ipc / bridge untouched | Static/Review | ✅ PASS (no edits to mux daemon / mux_ipc / bridge) |
+| TS-11 | (FR5/④) `process_combined` fed `[inner PtyOutput frame][Detached frame][plain shell prompt bytes]` | Plain prompt bytes render via `self.core` (not dropped across the detach transition) | Integration | ✅ PASS (Phase 5) |
+| TS-12 | (NFR5/⑤) `MuxApcExtractor::new(param, prefix)` with injected values | Extracts using injected values; discards an OSC frame whose param differs | Unit | ✅ PASS (`ts12_injected_osc_param_and_prefix_are_used`) |
+| TS-13 | (NFR5/⑤) Pre-mux OSC 9999 `emterm-mux;` Welcome through `self.core` | Reaches the mux APC path via the app-layer `on_osc` (no `term_core` special-casing); Windows ConPTY parity | Unit/Integration | ✅ PASS (`osc_9999_emterm_mux_inband_routed_to_pending_apc` + `osc_9999_non_mux_prefix_is_dropped`) |
+| TS-14 | (Phase 7/B) Coalesced `[Detached frame][non-mux Kitty image APC]` | Image decodes EXACTLY once (loop `break` at detach prevents extracted-frame + tail-reroute double-decode) | Integration | ✅ PASS (`ts11_post_detached_image_decodes_exactly_once`) |
+| TS-15 | (Phase 7/C) term_core OSC param override via `register_osc_app_param` | Registered core: OSC 9999 → `on_osc(102)`; unregistered → `on_osc(255)`; override never shadows a native OSC (OSC 2 stays 2) | Unit | ✅ PASS (3 tests in `term_core/callbacks.rs`) |
 
 ## Code Quality Verification
 - Format: `cargo fmt --manifest-path src-tauri/Cargo.toml` (functional files only; do not crate-wide reformat unrelated files)
@@ -59,6 +64,12 @@
 - [x] `crates/term_core/src/terminal_core.rs` - remove `parser_mid_sequence()` accessor
 - [x] `src-tauri/src/tabs.rs` - `Tab` extractor field; `pump`/`process_combined` branch; detach reset; remove DIAG logs
 - [x] `src-tauri/src/mux/apc.rs` - restore original simple warn (remove DIAG)
+- [x] (P5) `crates/term_core/src/mux_apc_extractor.rs` - `feed` reports per-frame end offsets
+- [x] (P5) `src-tauri/src/tabs.rs` - `process_combined` re-routes the post-`Detached` tail to `self.core`
+- [x] (P6) `crates/term_core/src/mux_apc_extractor.rs` - `new(osc_param, prefix)` injection; remove `MUX_OSC_PARAM`/`MUX_PREFIX` + `drift_*` tests
+- [x] (P6) `crates/term_core/src/osc_handler.rs` - remove OSC 9999 `emterm-mux;` special-casing; map 9999 → action-type
+- [x] (P6) `src-tauri/src/tabs.rs` - construct extractor with `mux_ipc::protocol::{MUX_OSC_PARAM, APC_PREFIX}`
+- [x] (P6) `src-tauri/src/callbacks.rs` - `on_osc` arm: OSC 9999 `emterm-mux;` → mux APC path
 
 ## SPEC.md Compliance
 
@@ -72,6 +83,8 @@
 | SC-5 | Markdown / text / TUI parity in mux | Manual M6 |
 | SC-6 | DIAG diagnostics removed | TS-8 |
 | SC-7 | Split-chunk regression test added & passes | TS-4 |
+| SC-8 | (FR5/④) Post-detach shell bytes coalesced behind `Detached` render via `self.core` | TS-11 |
+| SC-9 | (NFR5/⑤) `term_core` holds no mux constants; extractor injected; OSC 9999 recognition in app layer | TS-12 + TS-13 + static grep |
 
 ### Functional Requirements Coverage
 | Requirement | Phase | Verification |
@@ -80,13 +93,14 @@
 | FR2 Inner-content-only core | Phase 2 | TS-4 |
 | FR3 APC + OSC fallback | Phase 1 | TS-3 |
 | FR4 Pre-mux routing unchanged | Phase 3 | TS-5 |
-| FR5 Detach restores routing | Phase 3 | TS-6 |
+| FR5 Detach restores routing | Phase 3, 5 | TS-6, TS-11 |
 | FR6 Welcome duplication tolerance | Phase 3 | TS-7 |
 | FR7 Remove DIAG | Phase 4 | TS-8 |
 | NFR1 No regression (non-mux) | Phase 2 | TS-9 |
 | NFR2 Protocol stability | (no code change) | TS-10 |
 | NFR3 WebView out of scope | (excluded) | Review |
 | NFR4 pump coalesce/budget preserved | Phase 2 | Review of `pump` (FRAME_BUDGET_MS / COALESCE_CAP unchanged) + Manual M6 |
+| NFR5 term_core holds no mux constants | Phase 6 | TS-12, TS-13 + static `grep` (no `MUX_OSC_PARAM`/`MUX_PREFIX`/`emterm-mux` in `term_core`) |
 
 ## E2E Testing
 No project E2E framework. Not applicable.
@@ -114,6 +128,11 @@ No project E2E framework. Not applicable.
 | Category | Items | Automated | E2E | Manual |
 |----------|-------|-----------|-----|--------|
 | Build | 2 | 2 | 0 | 0 |
-| Test Scenarios | 10 | 9 | 0 | 1 (TS-10 review) |
-| Success Criteria | 7 | 2 | 0 | 5 |
+| Test Scenarios | 13 | 12 | 0 | 1 (TS-10 review) |
+| Success Criteria | 9 | 4 | 0 | 5 |
 | Manual checks | 6 | 0 | 0 | 6 |
+
+> Test Scenarios automated = TS-1..9, TS-11, TS-12, TS-13 (12); TS-10 is a
+> static/review check. Success Criteria automated = SC-6, SC-7, SC-8, SC-9 (4;
+> SC-8/SC-9 added by findings ④/⑤); SC-1/SC-2/SC-3/SC-4/SC-5 still need the
+> manual M1/M2/M4/M5/M6 passes.

@@ -137,6 +137,48 @@ impl Parser {
         }
         input.len()
     }
+
+    /// Like [`Self::parse`] but the emit callback also receives the exclusive
+    /// end offset (`i + 1`, the index just past the byte that triggered the
+    /// dispatch), in ONE bulk pass over `input` (no per-byte parser re-entry).
+    ///
+    /// Offset precision: for APC/OSC frames terminated by `ESC \` or BEL — the
+    /// normal case, including every daemon-emitted mux frame — `end` is exactly
+    /// the frame's end. For an abnormally-terminated frame (`ESC` followed by a
+    /// non-`\` byte) the parser dispatches on, and then re-feeds, that following
+    /// byte, so `end` includes it. Callers that slice on this boundary must
+    /// therefore rely on it only for `ESC \`/BEL-terminated frames — which is
+    /// all `MuxApcExtractor::feed_with_offsets` does (its `Detached` frame is
+    /// always `ESC \`-terminated).
+    ///
+    /// Used by `MuxApcExtractor::feed_with_offsets` to locate frame boundaries
+    /// (e.g. a `Detached` control frame) cheaply on the mux pump hot path,
+    /// which coalesces up to 1 MiB per frame — driving the parser one byte at
+    /// a time there reintroduced exactly the per-unit overhead `pump`'s
+    /// coalescing was built to avoid.
+    pub fn parse_with_offsets<F>(&mut self, input: &[u8], mut emit: F)
+    where
+        F: FnMut(ParsedAction, usize),
+    {
+        for (i, &byte) in input.iter().enumerate() {
+            let mut wrapper = |action: ParsedAction| emit(action, i + 1);
+            match self.state {
+                State::Ground => self.ground(byte, &mut wrapper),
+                State::Escape => self.escape(byte, &mut wrapper),
+                State::EscapeCharset(designator) => {
+                    self.escape_charset(designator, byte, &mut wrapper)
+                }
+                State::CsiEntry => self.csi_entry(byte, &mut wrapper),
+                State::CsiParam => self.csi_param(byte, &mut wrapper),
+                State::OscString => self.osc_string(byte, &mut wrapper),
+                State::OscEscape => self.osc_escape(byte, &mut wrapper),
+                State::ApcString => self.apc_string(byte),
+                State::ApcEscape => self.apc_escape(byte, &mut wrapper),
+                State::DcsString => self.dcs_string(byte),
+                State::DcsEscape => self.dcs_escape(byte, &mut wrapper),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

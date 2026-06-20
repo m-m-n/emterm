@@ -22,17 +22,17 @@ workflow:
     completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
   - id: verify-plan
     status: completed
-    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+    completed_at_commit: 475a97e45d3e83f64379016910509baa6654d0dd
   - id: implement
     status: completed
-    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+    completed_at_commit: 475a97e45d3e83f64379016910509baa6654d0dd
   - id: check
     status: completed
-    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+    completed_at_commit: 475a97e45d3e83f64379016910509baa6654d0dd
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: completed
-    completed_at_commit: f6432f483c66ef7968744e58bd0d99f872813e71
+    completed_at_commit: 475a97e45d3e83f64379016910509baa6654d0dd
 
 requirements:
   FR1:
@@ -67,12 +67,14 @@ requirements:
     tests:
       - TS-5
   FR5:
-    title: detach 時に PTS 処理を self.core に戻す
-    status: ok
+    title: detach 時に PTS 処理を self.core に戻す（coalesced buffer 途中の Detached 遷移で tail を落とさない）
+    status: pending
     tasks:
       - lifecycle
+      - detach-tail-reroute
     tests:
       - TS-6
+      - TS-11
   FR6:
     title: Welcome 二重送信に対応（抽出器切替後も）
     status: ok
@@ -111,3 +113,11 @@ requirements:
     tasks:
       - pump-routing
     tests: []
+  NFR5:
+    title: term_core に mux アプリプロトコル定数を持たせない（extractor 注入化＋OSC 9999 認識を app 層へ移動）
+    status: pending
+    tasks:
+      - protocol-decouple
+    tests:
+      - TS-12
+      - TS-13
