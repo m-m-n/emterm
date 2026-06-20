@@ -84,8 +84,8 @@ impl CursorStyle {
     /// Parse the textual spec from `settings.json`. Unknown values
     /// fall back to [`CursorStyle::Block`] and emit a single
     /// `warn`-level log for the process lifetime (subsequent unknown
-    /// values silently coerce). Mirrors the `StatusBarPosition` /
-    /// `FontEngine` warn-once pattern.
+    /// values silently coerce). Mirrors the `FontEngine` warn-once
+    /// pattern.
     pub fn parse_or_warn(spec: &str) -> Self {
         // Accept aliases that the legacy build also accepts so a
         // settings.json copied across versions parses cleanly.
@@ -182,8 +182,6 @@ fn is_legacy_mux_action(action: &str) -> bool {
 pub struct MuxSettings {
     /// Initial expansion state of the tab group (`mux.tab_always_expand`).
     pub tab_always_expand: bool,
-    /// Position of the mux status row (`mux.status_position`).
-    pub status_position: StatusBarPosition,
     /// Effective per-action follow-up chords (`mux.keybinds`), starting
     /// from the tmux defaults and overlaid with valid user entries.
     /// Invalid or unknown entries are dropped (warn) and the default is
@@ -206,7 +204,6 @@ impl Default for MuxSettings {
         }
         Self {
             tab_always_expand: false,
-            status_position: StatusBarPosition::default(),
             keybinds,
             statusbar: MuxStatusbarSettings::default(),
         }
@@ -255,57 +252,6 @@ pub fn parse_mux_action_chord(spec: &str) -> Option<crate::mux::prefix::PrefixCh
     crate::mux::prefix::parse_prefix_key(trimmed)
 }
 
-/// Position of the egui status-bar widget relative to the terminal grid.
-/// `Top` inserts an [`egui::TopBottomPanel::top`]; `Bottom` inserts an
-/// [`egui::TopBottomPanel::bottom`]. Phase 4-D introduces this; later
-/// phases (settings-UI) may surface a runtime toggle.
-///
-/// `Top` is constructed today only by [`StatusBarPosition::parse_or_warn`]
-/// (Phase 7 will route `settings.json` through that helper). Until then
-/// the bin path always sees `Bottom`, so we silence the dead-code lint
-/// on the variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum StatusBarPosition {
-    #[allow(dead_code)] // Phase 7: settings.json loader will construct this.
-    Top,
-    #[default]
-    Bottom,
-}
-
-impl StatusBarPosition {
-    /// Parse the textual spec from `settings.json`. Unknown values fall back
-    /// to [`StatusBarPosition::Bottom`] and emit a single `warn`-level log
-    /// for the duration of the process (subsequent unknown values are
-    /// silently coerced). The warn-once latch is process-wide so a typo
-    /// repeated across reloads doesn't flood the log.
-    #[allow(dead_code)] // Phase 7: settings.json loader will call this.
-    pub fn parse_or_warn(spec: &str) -> Self {
-        match spec.trim().to_ascii_lowercase().as_str() {
-            "top" => Self::Top,
-            "bottom" => Self::Bottom,
-            other => {
-                warn_unknown_position_once(other);
-                Self::Bottom
-            }
-        }
-    }
-}
-
-/// Process-wide latch for the "unknown statusbar.position" warning so a
-/// typo in `settings.json` is logged once, not once per frame / reload.
-#[allow(dead_code)] // Phase 7: invoked from settings.json loader via parse_or_warn.
-fn warn_unknown_position_once(seen: &str) {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    let owned = seen.to_string();
-    ONCE.call_once(move || {
-        log::warn!(
-            "settings.statusbar.position: unknown value {:?}, falling back to \"bottom\"",
-            owned
-        );
-    });
-}
-
 /// Font rasterizer engine selector (Phase 4-H / font-swash-migration FR6).
 ///
 /// `Swash` is the default and exercises swash + zeno + fontdb for CJK +
@@ -324,7 +270,8 @@ impl FontEngine {
     /// Parse the textual spec from `settings.json`. Unknown values fall
     /// back to [`FontEngine::Swash`] and emit a single `warn`-level log
     /// for the process lifetime (subsequent unknown values silently
-    /// coerce). Matches the `StatusBarPosition::parse_or_warn` pattern.
+    /// coerce). Matches the warn-once parse pattern used across the
+    /// settings enums.
     #[allow(dead_code)] // Phase 7: settings.json loader will call this.
     pub fn parse_or_warn(spec: &str) -> Self {
         match spec.trim().to_ascii_lowercase().as_str() {
@@ -518,8 +465,6 @@ pub struct StatusBarSettings {
     /// When `false`, the status-bar widget is not inserted at all (the
     /// central terminal panel covers the full window). Default: `true`.
     pub enabled: bool,
-    /// Panel placement; see [`StatusBarPosition`]. Default: `Bottom`.
-    pub position: StatusBarPosition,
     /// App Line 1 left-aligned template. Default `"{time}"`.
     pub app_line1_left: String,
     /// App Line 1 right-aligned template. Default `"{cwd}"`.
@@ -546,7 +491,6 @@ impl Default for StatusBarSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            position: StatusBarPosition::default(),
             app_line1_left: "{time}".to_string(),
             app_line1_right: "{cwd}".to_string(),
             app_line2_left: String::new(),
@@ -602,8 +546,8 @@ pub struct Settings {
     /// [`DEFAULT_MUX_PREFIX_KEY`] and never mutated.
     #[allow(dead_code)] // Phase 4-D status bar / settings UI will consume this.
     pub mux_prefix_key: String,
-    /// Resolved mux UI settings (`mux.tab_always_expand` / `status_position`
-    /// / `keybinds` / `statusbar.*`). Consumed by the mux tab group, the
+    /// Resolved mux UI settings (`mux.tab_always_expand` / `keybinds`
+    /// / `statusbar.*`). Consumed by the mux tab group, the
     /// prefix latch, and the mux status row.
     pub mux: MuxSettings,
     /// Status-bar widget configuration. See [`StatusBarSettings`]. Phase
@@ -1294,7 +1238,6 @@ struct RawUserColorScheme {
 struct RawMux {
     prefix: Option<String>,
     tab_always_expand: Option<bool>,
-    status_position: Option<String>,
     keybinds: Option<std::collections::HashMap<String, String>>,
     statusbar: Option<RawMuxStatusbar>,
 }
@@ -1349,7 +1292,6 @@ struct RawCustomCommand {
 struct RawNativePoc {
     ambiguous_width_mode: Option<String>,
     font_engine: Option<String>,
-    statusbar_position: Option<String>,
     image_memory_quota_mb: Option<u32>,
     ime: Option<RawIme>,
     font_family_fallback: Option<Vec<String>>,
@@ -1429,9 +1371,6 @@ impl RawSettings {
             }
             if let Some(v) = mux.tab_always_expand {
                 dst.mux.tab_always_expand = v;
-            }
-            if let Some(v) = mux.status_position.filter(|s| !s.trim().is_empty()) {
-                dst.mux.status_position = StatusBarPosition::parse_or_warn(&v);
             }
             if let Some(kb) = mux.keybinds {
                 for (action, spec) in kb {
@@ -1770,9 +1709,6 @@ impl RawSettings {
             if let Some(v) = np.font_engine {
                 dst.font_engine = FontEngine::parse_or_warn(&v);
             }
-            if let Some(v) = np.statusbar_position {
-                dst.statusbar.position = StatusBarPosition::parse_or_warn(&v);
-            }
             if let Some(v) = np.image_memory_quota_mb {
                 dst.image_memory_quota_mb = v;
             }
@@ -1866,56 +1802,11 @@ mod tests {
     // ── TS-settings-1: statusbar defaults + position fallback ───────────
 
     #[test]
-    fn default_statusbar_is_enabled_at_bottom() {
+    fn default_statusbar_is_enabled() {
         let s = Settings::new();
         assert!(
             s.statusbar.enabled,
             "statusbar.enabled must default to true"
-        );
-        assert_eq!(
-            s.statusbar.position,
-            StatusBarPosition::Bottom,
-            "statusbar.position must default to Bottom"
-        );
-    }
-
-    #[test]
-    fn statusbar_position_parses_top_and_bottom() {
-        assert_eq!(
-            StatusBarPosition::parse_or_warn("top"),
-            StatusBarPosition::Top
-        );
-        assert_eq!(
-            StatusBarPosition::parse_or_warn("Top"),
-            StatusBarPosition::Top
-        );
-        assert_eq!(
-            StatusBarPosition::parse_or_warn("BOTTOM"),
-            StatusBarPosition::Bottom
-        );
-        assert_eq!(
-            StatusBarPosition::parse_or_warn("  bottom  "),
-            StatusBarPosition::Bottom
-        );
-    }
-
-    #[test]
-    fn statusbar_position_unknown_falls_back_to_bottom() {
-        // The first unknown value triggers a `warn!` (latched by `Once`);
-        // subsequent calls still coerce to Bottom but do not re-warn. We
-        // assert the coercion contract only (Once side-effect is observed
-        // by reading the log; not under test here).
-        assert_eq!(
-            StatusBarPosition::parse_or_warn("middle"),
-            StatusBarPosition::Bottom
-        );
-        assert_eq!(
-            StatusBarPosition::parse_or_warn("side"),
-            StatusBarPosition::Bottom
-        );
-        assert_eq!(
-            StatusBarPosition::parse_or_warn(""),
-            StatusBarPosition::Bottom
         );
     }
 
@@ -2109,14 +2000,13 @@ mod tests {
         assert_eq!(s.mux_prefix_key, "Ctrl+A");
     }
 
-    // ── TS-4: mux settings loader (tab_always_expand / status_position /
-    //          keybinds / statusbar.*) ──────────────────────────────────────
+    // ── TS-4: mux settings loader (tab_always_expand / keybinds /
+    //          statusbar.*) ──────────────────────────────────────────────────
 
     #[test]
     fn default_mux_settings_match_webview() {
         let s = Settings::new();
         assert!(!s.mux.tab_always_expand);
-        assert_eq!(s.mux.status_position, StatusBarPosition::Bottom);
         // tmux-compatible default action chords (bare single chars).
         let bare = |spec: &str| parse_mux_action_chord(spec).unwrap();
         assert_eq!(s.mux.keybinds.get("detach"), Some(&bare("d")));
@@ -2132,18 +2022,6 @@ mod tests {
     fn loader_mux_tab_always_expand() {
         let s = load_json(r#"{"mux": {"tab_always_expand": true}}"#);
         assert!(s.mux.tab_always_expand);
-    }
-
-    #[test]
-    fn loader_mux_status_position_top() {
-        let s = load_json(r#"{"mux": {"status_position": "top"}}"#);
-        assert_eq!(s.mux.status_position, StatusBarPosition::Top);
-    }
-
-    #[test]
-    fn loader_mux_status_position_invalid_falls_back_to_bottom() {
-        let s = load_json(r#"{"mux": {"status_position": "sideways"}}"#);
-        assert_eq!(s.mux.status_position, StatusBarPosition::Bottom);
     }
 
     #[test]
@@ -2467,12 +2345,6 @@ mod tests {
     fn loader_native_poc_font_engine_overrides() {
         let s = load_json(r#"{"native_poc": {"font_engine": "ab_glyph"}}"#);
         assert_eq!(s.font_engine, FontEngine::AbGlyph);
-    }
-
-    #[test]
-    fn loader_native_poc_statusbar_position_overrides() {
-        let s = load_json(r#"{"native_poc": {"statusbar_position": "top"}}"#);
-        assert_eq!(s.statusbar.position, StatusBarPosition::Top);
     }
 
     #[test]

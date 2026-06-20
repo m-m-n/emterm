@@ -31,7 +31,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
   - Multiple windows per session with tab group UI; instant window switching (all windows stream simultaneously)
   - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename), `prefix+m` (move/reorder with `[N]` position badge)
-  - tmux.conf import: prefix key, keybindings, mouse, status-position
+  - tmux.conf import: prefix key, keybindings, mouse
   - Inband APC protocol: mux control messages travel over the PTY stream (SSH-transparent, no socket forwarding needed)
   - `emterm mux new-window [-n name] [-c command]`: create named windows with initial commands from CLI
   - `emterm mux send-keys [-t window]`: pipe stdin data as key input to a mux window from CLI

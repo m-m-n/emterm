@@ -230,7 +230,6 @@ impl StatusBarRuntime {
 
         StatusBarViewModel {
             enabled: true,
-            position: settings.position,
             font_size: settings.font_size,
             mux_session_name: mux_session_name.map(str::to_string),
             osc,

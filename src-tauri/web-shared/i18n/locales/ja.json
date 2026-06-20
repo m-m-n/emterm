@@ -347,7 +347,6 @@
       "general": "一般",
       "prefix": "プレフィックスキー",
       "mouse": "マウスサポート",
-      "statusPosition": "ステータスバー位置",
       "keybinds": "キーバインド",
       "keybind": {
         "detach": "デタッチ",

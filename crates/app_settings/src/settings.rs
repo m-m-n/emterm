@@ -555,8 +555,6 @@ pub struct MuxSettings {
     pub prefix: String,
     #[serde(default = "default_true")]
     pub mouse: bool,
-    #[serde(default = "default_mux_status_position")]
-    pub status_position: String,
     #[serde(default)]
     pub tab_always_expand: bool,
     #[serde(default)]
@@ -613,16 +611,11 @@ fn default_mux_prefix() -> String {
     "ctrl+b".to_string()
 }
 
-fn default_mux_status_position() -> String {
-    "bottom".to_string()
-}
-
 impl Default for MuxSettings {
     fn default() -> Self {
         Self {
             prefix: default_mux_prefix(),
             mouse: true,
-            status_position: default_mux_status_position(),
             tab_always_expand: false,
             tmux_conf_imported: false,
             keybinds: std::collections::HashMap::new(),

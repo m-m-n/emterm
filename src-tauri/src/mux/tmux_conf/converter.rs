@@ -62,9 +62,10 @@ fn convert_set_option(result: &mut ConversionResult, option: &str, value: &str) 
             result.settings.push(("mouse".to_string(), v.to_string()));
         }
         "status-position" => {
-            result
-                .settings
-                .push(("status_position".to_string(), value.to_string()));
+            result.warnings.push(format!(
+                "Skipped: status-position={} (eMterm fixes the status bar at the bottom)",
+                value
+            ));
         }
         "default-terminal" => {
             result.warnings.push(format!(
@@ -187,11 +188,14 @@ mod tests {
     }
 
     #[test]
-    fn convert_status_position() {
+    fn convert_status_position_is_skipped_with_warning() {
         let result = convert_directives(&parse_tmux_conf("set -g status-position top"));
-        assert_eq!(
-            result.settings[0],
-            ("status_position".to_string(), "top".to_string())
+        assert!(result.settings.is_empty());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("status-position"))
         );
     }
 
@@ -334,9 +338,10 @@ bind c new-window
 if-shell 'test -f ~/.local.conf' 'source ~/.local.conf'
 ";
         let result = convert_directives(&parse_tmux_conf(conf));
-        // 4 settings: prefix, mouse, status-position, keybind.new-window
-        assert_eq!(result.settings.len(), 4);
-        // 4 warnings: unbind C-b, base-index (unknown), bind r (unsupported), if-shell
-        assert_eq!(result.warnings.len(), 4);
+        // 3 settings: prefix, mouse, keybind.new-window
+        assert_eq!(result.settings.len(), 3);
+        // 5 warnings: unbind C-b, base-index (unknown), status-position
+        // (fixed bottom), bind r (unsupported), if-shell
+        assert_eq!(result.warnings.len(), 5);
     }
 }

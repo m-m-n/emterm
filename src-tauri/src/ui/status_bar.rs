@@ -1,7 +1,7 @@
 //! Status-bar widget.
 //!
-//! Renders a 3-row [`egui::TopBottomPanel`] (top or bottom, per
-//! [`crate::settings::StatusBarPosition`]). Rows top-to-bottom:
+//! Renders a 3-row [`egui::TopBottomPanel`] fixed at the bottom of
+//! the window. Rows top-to-bottom:
 //!
 //! 1. **App Line 1** — local templates resolved by the
 //!    `TemplateEngine` (typically `{time}` / `{cwd}`).
@@ -22,7 +22,6 @@ use parking_lot::Mutex;
 use crate::html::{CssColor, RichTextRun};
 use crate::render::font::fallback::FallbackChain;
 use crate::render::font::traits::GlyphRasterizer;
-use crate::settings::StatusBarPosition;
 use crate::status_bar::{AppRow, OscRow, StatusBarViewModel};
 use crate::ui::emoji_cache::{EmojiTextureCache, TextSegment, split_segments};
 use crate::ui::md3;
@@ -82,10 +81,7 @@ pub fn draw(
         return;
     }
 
-    let mut panel = match view_model.position {
-        StatusBarPosition::Top => egui::TopBottomPanel::top("native-poc-status-bar"),
-        StatusBarPosition::Bottom => egui::TopBottomPanel::bottom("native-poc-status-bar"),
-    };
+    let mut panel = egui::TopBottomPanel::bottom("native-poc-status-bar");
     let frame = egui::Frame::none()
         .fill(md3::surface_container())
         // Match the WebView's per-row `padding: 0 8px`: inset content
