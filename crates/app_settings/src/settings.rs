@@ -553,8 +553,6 @@ impl AppSettings {
 pub struct MuxSettings {
     #[serde(default = "default_mux_prefix")]
     pub prefix: String,
-    #[serde(default = "default_true")]
-    pub mouse: bool,
     #[serde(default)]
     pub tab_always_expand: bool,
     #[serde(default)]
@@ -615,7 +613,6 @@ impl Default for MuxSettings {
     fn default() -> Self {
         Self {
             prefix: default_mux_prefix(),
-            mouse: true,
             tab_always_expand: false,
             tmux_conf_imported: false,
             keybinds: std::collections::HashMap::new(),
@@ -776,7 +773,6 @@ mod tests {
     fn test_mux_settings_with_statusbar() {
         let json = r#"{
             "prefix": "ctrl+a",
-            "mouse": false,
             "statusbar": {
                 "enabled": true,
                 "left": "test",

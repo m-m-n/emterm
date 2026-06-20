@@ -1,5 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import { renderSubsectionHeader, renderToggle } from "../settings-components";
+import { renderSubsectionHeader } from "../settings-components";
 import type { SectionContext } from "./types";
 import { DEFAULT_ACTION_BINDINGS } from "../../terminal/mux/prefix-key";
 
@@ -28,20 +28,6 @@ export function renderMuxSection(
 
   // Prefix key (keybind capture for key combo like Ctrl+B)
   renderMuxPrefixInput(panel, mux.prefix, ctx);
-
-  // Mouse toggle
-  renderToggle(
-    panel,
-    {
-      key: "mux-mouse",
-      label: t("settings.mux.mouse"),
-      value: mux.mouse,
-      onSave: (v) => {
-        ctx.saveSetting("mux", { ...ctx.currentSettings.mux, mouse: v });
-      },
-    },
-    ctx.addContentListener,
-  );
 
   // -- Keybinds subsection --
   renderSubsectionHeader(panel, t("settings.mux.keybinds"));

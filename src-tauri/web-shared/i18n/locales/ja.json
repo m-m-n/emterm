@@ -346,7 +346,6 @@
       "title": "ターミナルマルチプレクサ",
       "general": "一般",
       "prefix": "プレフィックスキー",
-      "mouse": "マウスサポート",
       "keybinds": "キーバインド",
       "keybind": {
         "detach": "デタッチ",

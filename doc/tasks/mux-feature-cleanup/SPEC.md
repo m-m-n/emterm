@@ -176,7 +176,7 @@ src-tauri/
 - `settings.mux.keybind.zoomToggle`
 - `settings.mux.keybind.copyMode`
 
-Other locale entries under `settings.mux.*` (title, general, prefix, mouse, statusPosition, keybinds, and the retained keybind labels) stay.
+Other locale entries under `settings.mux.*` (title, general, prefix, statusPosition, keybinds, and the retained keybind labels) stay. (The `settings.mux.mouse` label was removed together with the mux mouse setting in a later task.)
 
 ## Test Scenarios
 

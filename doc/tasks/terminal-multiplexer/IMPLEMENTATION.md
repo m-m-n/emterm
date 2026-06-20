@@ -301,7 +301,7 @@ Reattach flow:
 - `src-tauri/src/mux/ipc/protocol.rs` — Add SplitPane message type
 - `src-tauri/src/mux/session/manager.rs` — Pane split/close operations
 - `src-tauri/src/mux/session/pane.rs` — Per-pane resize handling
-- `src/settings/types.ts` — Add `mux` settings section (prefix, keybinds, mouse)
+- `src/settings/types.ts` — Add `mux` settings section (prefix, keybinds)
 - `src-tauri/src/commands/config/settings.rs` — Add MuxSettings struct with serde defaults
 - `src-tauri/src/commands/config/types.rs` — Add mux-related enums
 
@@ -312,7 +312,7 @@ Reattach flow:
 | Layout Engine | Binary tree model, split/resize/remove, preset layouts | At least one pane exists | Tree correctly calculates pixel bounds for each pane |
 | Prefix Key | State machine: idle → prefix-active → dispatch command | Mux mode active | Intercepts prefix+key combos, dispatches pane/window operations |
 | Pane Border | Visual borders, active indicator, drag-resize | Layout computed | 1px borders with accent color on active, cursor change on hover, drag resizes |
-| Mux Settings | Prefix key, keybindings, mouse | Settings system | Mux config persisted in settings.json, mirrored in TS AppSettings |
+| Mux Settings | Prefix key, keybindings | Settings system | Mux config persisted in settings.json, mirrored in TS AppSettings |
 
 **Processing Flow**:
 1. User presses prefix key (default Ctrl+b) → prefix key handler enters "waiting" state
@@ -325,7 +325,7 @@ Reattach flow:
 8. Window resize → layout recalculation (ratio preservation) → per-pane Resize messages
 
 **Implementation Steps**:
-1. **Mux settings** — Add mux section to settings (prefix key, keybinds, mouse)
+1. **Mux settings** — Add mux section to settings (prefix key, keybinds)
 2. **Binary tree layout** — Tree data structure with split/resize/remove, pixel-to-cell conversion
 3. **Prefix key handler** — State machine intercepting keyboard events in mux mode
 4. **Multi-pane rendering** — CSS Grid template generation from binary tree, dynamic Canvas creation
@@ -570,11 +570,10 @@ Reattach flow:
 **Conversion targets**:
 - `set -g prefix` → mux.prefix
 - `bind-key` / `unbind-key` → mux.keybinds
-- `set -g mouse` → mux.mouse
 - `set -g status-position` → mux.status_position
 - `set -g default-terminal` → TERM setting
 
-**Ignored with warnings**: `if-shell`, `run-shell`, format strings (`#{...}`), `set-hook`, plugins
+**Ignored with warnings**: `if-shell`, `run-shell`, format strings (`#{...}`), `set-hook`, plugins, `set -g mouse`
 
 **Implementation Steps**:
 1. **tmux.conf parser** — Regex-based line parser for set/bind/unbind directives

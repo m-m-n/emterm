@@ -175,12 +175,12 @@ mod tests {
 
     #[test]
     fn parse_set_option_global() {
-        let directives = parse_tmux_conf("set-option -g mouse on");
+        let directives = parse_tmux_conf("set-option -g status-position top");
         assert_eq!(directives.len(), 1);
         match &directives[0] {
             TmuxDirective::SetGlobal { option, value } => {
-                assert_eq!(option, "mouse");
-                assert_eq!(value, "on");
+                assert_eq!(option, "status-position");
+                assert_eq!(value, "top");
             }
             _ => panic!("expected SetGlobal"),
         }
@@ -234,7 +234,7 @@ mod tests {
     fn parse_multiple_directives() {
         let conf = "
 set -g prefix C-a
-set -g mouse on
+set -g status-position top
 bind-key % split-window -h
 # comment
 unbind C-b
