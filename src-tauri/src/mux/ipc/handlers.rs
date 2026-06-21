@@ -391,16 +391,28 @@ pub(super) async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<S
     }
 }
 
-/// Handle RequestPaneSnapshot message by pushing a snapshot `PtyOutputChunk`
-/// onto the shared pane output channel.
+/// Handle RequestPaneSnapshot message by pushing a snapshot-tagged
+/// `PtyOutputChunk` onto the shared pane output channel.
 ///
-/// Why the channel (and not a direct `framed.send`): the PTY reader thread
-/// updates `shadow_parser` *and* enqueues the raw bytes onto
-/// `pane_output_tx`. If the snapshot bypassed the channel, pending PTY chunks
-/// already in the queue — whose effects are already baked into the snapshot
-/// state — would be delivered *after* the snapshot and re-applied on top of
-/// it, producing duplicated/shifted output. Routing through the same channel
-/// minimizes (but does not strictly eliminate) this ordering divergence.
+/// On-wire framing (FR1): the chunk carries `ChunkKind::Snapshot`, and the
+/// connection drain (`mux::ipc::connection`) encodes it as a
+/// `MessageType::Snapshot` frame. The client dispatches that frame through
+/// the `apply_mux_message::Snapshot|SnapshotRestore` arm, which selects
+/// `dispatch_offthread_replay` (payload ≥ 64 KiB) or `reset_frame_for_replay`
+/// (synchronous), both backed by `TerminalCore::build_from_snapshot` with
+/// `scrollback_bypass` — the fast path delivered by the
+/// `snapshot-replay-perf` predecessor task.
+///
+/// Why the same channel (and not a direct `framed.send`): the PTY reader
+/// thread updates `shadow_parser` *and* enqueues the raw bytes onto
+/// `pane_output_tx`. If the snapshot bypassed the channel, pending PTY
+/// chunks already in the queue — whose effects are already baked into the
+/// snapshot state — would be delivered *after* the snapshot and re-applied
+/// on top of it, producing duplicated/shifted output. Routing through the
+/// same channel preserves the FIFO ordering invariant (FR5): bytes queued
+/// before the snapshot land before it on the wire, bytes queued after land
+/// after. The `merge_consecutive_chunks` step is `kind`-aware, so the
+/// snapshot frame is never folded into adjacent PTY chunks.
 ///
 /// A narrow race window remains: the reader takes `shadow_parser.lock()`,
 /// applies bytes, releases the lock, and *then* enqueues the chunk onto
@@ -489,14 +501,14 @@ pub(super) async fn handle_request_pane_snapshot(
         scrollback_data.len()
     );
 
-    // Send as a regular PTY output chunk so it interleaves correctly with any
-    // already-queued bytes for this pane. If the client is gone the channel is
-    // closed — that's not a fatal error for this handler, just drop the reply.
+    // Send as a snapshot-tagged chunk so the drain encodes it as
+    // `MessageType::Snapshot` (routing to the client's off-thread replay
+    // path) while still interleaving correctly with any already-queued PTY
+    // bytes for this pane via the shared `pane_output_tx` channel (FR1,
+    // FR5). If the client is gone the channel is closed — that's not a
+    // fatal error for this handler, just drop the reply.
     if let Err(e) = pane_output_tx
-        .send(PtyOutputChunk {
-            pane_id,
-            data: snapshot,
-        })
+        .send(PtyOutputChunk::snapshot(pane_id, snapshot))
         .await
     {
         log::warn!(
@@ -1024,5 +1036,155 @@ mod tests {
             PaneOutputTarget::Connected(_)
         ));
         assert!(rx.try_recv().is_err(), "no snapshot expected on no-op");
+    }
+
+    /// TS-2 (FR1, FR3): `handle_request_pane_snapshot` enqueues a chunk
+    /// whose discriminator is `ChunkKind::Snapshot` (not the default
+    /// `ChunkKind::PtyOutput`). The drain layer (`mux::ipc::connection`)
+    /// is responsible for encoding `Snapshot` chunks as
+    /// `MessageType::Snapshot` on the wire so the client routes them to
+    /// the `apply_mux_message::Snapshot|SnapshotRestore` arm and the
+    /// `build_from_snapshot` + `scrollback_bypass` fast path.
+    ///
+    /// The assembled payload must remain byte-identical to the predecessor
+    /// task's snapshot bytes: `ESC[3J ESC[H ESC[2J` clear-prefix, then
+    /// scrollback, then shadow screen contents.
+    #[tokio::test]
+    async fn handle_request_pane_snapshot_emits_snapshot_kind() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            // Seed shadow + scrollback so the assembled snapshot has
+            // recognisable bytes for the post-conditions.
+            let pane_ref = m
+                .get_session(sid)
+                .unwrap()
+                .windows
+                .get(&wid)
+                .unwrap()
+                .panes
+                .get(&1)
+                .unwrap();
+            pane_ref
+                .shadow_parser
+                .lock()
+                .unwrap()
+                .process(b"\x1b[31mSCREEN-CONTENT\x1b[0m");
+            pane_ref
+                .scrollback
+                .lock()
+                .unwrap()
+                .write(b"HISTORY-LINE-ONE\r\n");
+            sid
+        };
+
+        let req = MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: 1,
+            payload: Vec::new(),
+        };
+        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx)
+            .await
+            .expect("handle_request_pane_snapshot");
+
+        let chunk = rx.try_recv().expect("snapshot chunk expected");
+        assert_eq!(chunk.pane_id, 1);
+        assert_eq!(
+            chunk.kind,
+            crate::mux::session::pane::ChunkKind::Snapshot,
+            "snapshot reply must carry kind = Snapshot (FR1, FR3)"
+        );
+        // Byte-identity guardrail: clear+home prefix, then scrollback,
+        // then shadow screen.
+        assert!(
+            chunk.data.starts_with(b"\x1b[3J\x1b[H\x1b[2J"),
+            "snapshot must start with the clear+home prefix"
+        );
+        let find = |needle: &[u8]| {
+            chunk
+                .data
+                .windows(needle.len())
+                .position(|w| w == needle)
+                .unwrap_or_else(|| panic!("needle {:?} not found in snapshot", needle))
+        };
+        let sb_at = find(b"HISTORY-LINE-ONE");
+        let screen_at = find(b"SCREEN-CONTENT");
+        assert!(
+            sb_at < screen_at,
+            "scrollback must precede the shadow screen"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly one snapshot chunk expected"
+        );
+    }
+
+    /// TS-3 (FR1, FR5): FIFO ordering between PTY chunks and a snapshot
+    /// reply on the same pane. The on-channel order MUST be
+    /// `[PRE(PtyOutput), snapshot(Snapshot), POST(PtyOutput)]`. The
+    /// drain layer's `merge_consecutive_chunks` must not collapse across
+    /// `kind`, so the snapshot stays a standalone chunk between the two
+    /// PTY chunks.
+    #[tokio::test]
+    async fn handle_request_pane_snapshot_preserves_fifo_ordering() {
+        let mgr = Arc::new(Mutex::new(SessionManager::new()));
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(16);
+
+        let target: SharedOutputTarget =
+            Arc::new(StdMutex::new(PaneOutputTarget::Connected(owned_tx.clone())));
+        let session_id = {
+            let mut m = mgr.lock().await;
+            let sid = m.create_session("default".to_string());
+            let wid = m.create_window(sid, "shell".to_string()).unwrap();
+            add_pane(&mut m, sid, wid, 1, target.clone());
+            sid
+        };
+
+        // PRE PTY chunk (simulates a reader-thread chunk already in flight).
+        owned_tx
+            .send(PtyOutputChunk::pty_output(1, b"PRE".to_vec()))
+            .await
+            .expect("send PRE");
+
+        // Snapshot reply runs *between* the PRE and POST PTY chunks.
+        let req = MuxMessage {
+            msg_type: MessageType::RequestPaneSnapshot,
+            pane_id: 1,
+            payload: Vec::new(),
+        };
+        handle_request_pane_snapshot(&req, session_id, &mgr, &owned_tx)
+            .await
+            .expect("handle_request_pane_snapshot");
+
+        // POST PTY chunk after the snapshot.
+        owned_tx
+            .send(PtyOutputChunk::pty_output(1, b"POST".to_vec()))
+            .await
+            .expect("send POST");
+
+        let pre = rx.try_recv().expect("PRE chunk");
+        let snap = rx.try_recv().expect("snapshot chunk");
+        let post = rx.try_recv().expect("POST chunk");
+        assert!(
+            rx.try_recv().is_err(),
+            "exactly three chunks expected in this order"
+        );
+
+        assert_eq!(pre.data, b"PRE");
+        assert_eq!(pre.kind, crate::mux::session::pane::ChunkKind::PtyOutput);
+
+        assert_eq!(snap.pane_id, 1);
+        assert_eq!(snap.kind, crate::mux::session::pane::ChunkKind::Snapshot);
+        assert!(snap.data.starts_with(b"\x1b[3J\x1b[H\x1b[2J"));
+
+        assert_eq!(post.data, b"POST");
+        assert_eq!(post.kind, crate::mux::session::pane::ChunkKind::PtyOutput);
     }
 }

@@ -1,0 +1,80 @@
+schema_version: 1
+feature: snapshot-replay-daemon-routing
+
+# Tasks are derived from IMPLEMENTATION.md phases. Each task id is referenced
+# by sdd.yaml.requirements.{ID}.tasks. Phase 6 (instrumentation revert) is
+# intentionally excluded — it runs after sdd.6-verify, outside the implement
+# phase.
+
+tasks:
+  - id: phase1-chunk-kind
+    title: "Phase 1: Add ChunkKind discriminator to PtyOutputChunk"
+    files:
+      - src-tauri/src/mux/session/pane.rs
+    requirements:
+      - FR1
+    estimated_effort: small
+    status: completed
+
+  - id: phase2-drain-dispatch
+    title: "Phase 2: Drain-side dispatch by ChunkKind + kind-aware merge"
+    files:
+      - src-tauri/src/mux/ipc/connection.rs
+      - crates/mux_ipc/src/protocol.rs
+    requirements:
+      - FR1
+      - FR5
+      - NFR2
+    estimated_effort: small
+    depends_on:
+      - phase1-chunk-kind
+    status: completed
+
+  - id: phase3-handler-switch
+    title: "Phase 3: handle_request_pane_snapshot uses snapshot(...) constructor"
+    files:
+      - src-tauri/src/mux/ipc/handlers.rs
+    requirements:
+      - FR1
+      - FR3
+      - FR5
+    estimated_effort: small
+    depends_on:
+      - phase1-chunk-kind
+      - phase2-drain-dispatch
+    status: completed
+
+  - id: phase4-new-tests
+    title: "Phase 4: Add TS-2 and TS-3 unit tests; review/update existing ordering tests for msg_type drift"
+    files:
+      - src-tauri/src/mux/ipc/handlers.rs
+      - src-tauri/src/mux/ipc/connection.rs
+    requirements:
+      - FR1
+      - FR3
+      - FR5
+      - NFR3
+    estimated_effort: small-medium
+    depends_on:
+      - phase3-handler-switch
+    status: completed
+
+  - id: phase5-cross-verify
+    title: "Phase 5: Full cargo test + CLI-only check + Windows cross-build + production NFR1 measurement"
+    files: []
+    requirements:
+      - NFR1
+      - NFR3
+      - NFR4
+      - NFR5
+      - FR2
+      - FR4
+    estimated_effort: medium
+    depends_on:
+      - phase4-new-tests
+    status: in_progress
+    notes: |
+      sdd.4-implement covers cargo test + CLI-only check (both green).
+      make win-build, make build, and the TS-7/NFR1 production measurement
+      are deferred to sdd.5-check / sdd.6-verify per the implement-skill
+      hand-off (Phase 5 was scoped down in the implement step).

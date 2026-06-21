@@ -272,6 +272,22 @@ impl MuxMessage {
         }
     }
 
+    /// Create a snapshot-reply message (`MessageType::Snapshot`).
+    ///
+    /// Used by the daemon connection drain when emitting a snapshot-kind
+    /// chunk produced by `handle_request_pane_snapshot`. The payload is the
+    /// raw snapshot bytes (clear+home prefix, scrollback, shadow screen);
+    /// no `MessageType` change is introduced — `Snapshot = 0x0C` already
+    /// exists and the client's `apply_mux_message::Snapshot|SnapshotRestore`
+    /// arm dispatches it to `build_from_snapshot` + `scrollback_bypass`.
+    pub fn snapshot(pane_id: u32, data: Vec<u8>) -> Self {
+        Self {
+            msg_type: MessageType::Snapshot,
+            pane_id,
+            payload: data,
+        }
+    }
+
     /// Create a control message with bincode-serialized payload.
     pub fn control<T: Serialize>(msg_type: MessageType, pane_id: u32, data: &T) -> Self {
         Self {

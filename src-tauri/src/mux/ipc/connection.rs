@@ -25,7 +25,7 @@ use super::reattach::detach_session_panes;
 use super::statusbar::{StatusBarEngine, execute_command};
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
-    NotificationSender, PtyOutputChunk, SharedPaneExitSender, TitleChangeSender,
+    ChunkKind, NotificationSender, PtyOutputChunk, SharedPaneExitSender, TitleChangeSender,
 };
 
 /// Handshake timeout: client must send Hello within this duration.
@@ -342,27 +342,45 @@ pub async fn handle_connection<S>(
                         );
                     }
 
-                    // Batch send: feed all into buffer, then flush once
+                    // Batch send: feed all into buffer, then flush once.
+                    //
+                    // FR1: each merged chunk is encoded according to its
+                    // `ChunkKind` discriminator. `ChunkKind::Snapshot` chunks
+                    // (produced by `handle_request_pane_snapshot`) ship as
+                    // `MessageType::Snapshot` so the client routes them through
+                    // `apply_mux_message::Snapshot|SnapshotRestore` and the
+                    // `build_from_snapshot` + `scrollback_bypass` fast path.
+                    // `ChunkKind::PtyOutput` (the default for the reader thread,
+                    // resume path, and PTY exit signal) ships as
+                    // `MessageType::PtyOutput`. Empty-data PtyOutput chunks
+                    // still mean "PTY exited" (the merge layer never folds
+                    // empty chunks, and the snapshot path never emits empty).
                     let mut send_err = false;
                     let mut exited_panes: Vec<u32> = Vec::new();
                     for chunk in merged {
-                        if chunk.data.is_empty() {
-                            log::info!("PTY exited for pane {}", chunk.pane_id);
-                            exited_panes.push(chunk.pane_id);
-                            let exit_msg = PtyExitedMsg { exit_code: Some(0) };
-                            let msg = MuxMessage::control(MessageType::PtyExited, chunk.pane_id, &exit_msg);
-                            if framed.feed(msg).await.is_err() {
-                                log::warn!("pty-batch feed error: merged_count={}", merged_count);
-                                send_err = true;
-                                break;
+                        let msg = match chunk.kind {
+                            ChunkKind::Snapshot => {
+                                MuxMessage::snapshot(chunk.pane_id, chunk.data)
                             }
-                        } else {
-                            let msg = MuxMessage::pty_output(chunk.pane_id, chunk.data);
-                            if framed.feed(msg).await.is_err() {
-                                log::warn!("pty-batch feed error: merged_count={}", merged_count);
-                                send_err = true;
-                                break;
+                            ChunkKind::PtyOutput => {
+                                if chunk.data.is_empty() {
+                                    log::info!("PTY exited for pane {}", chunk.pane_id);
+                                    exited_panes.push(chunk.pane_id);
+                                    let exit_msg = PtyExitedMsg { exit_code: Some(0) };
+                                    MuxMessage::control(
+                                        MessageType::PtyExited,
+                                        chunk.pane_id,
+                                        &exit_msg,
+                                    )
+                                } else {
+                                    MuxMessage::pty_output(chunk.pane_id, chunk.data)
+                                }
                             }
+                        };
+                        if framed.feed(msg).await.is_err() {
+                            log::warn!("pty-batch feed error: merged_count={}", merged_count);
+                            send_err = true;
+                            break;
                         }
                     }
                     let flush_failed = framed.flush().await.is_err();
@@ -812,7 +830,16 @@ where
 /// Merge consecutive PTY output chunks from the same pane into a single chunk.
 ///
 /// Preserves ordering across panes. Empty-data chunks (PTY exit signals) are
-/// never merged — they remain as separate entries to ensure correct exit handling.
+/// never merged — they remain as separate entries to ensure correct exit
+/// handling.
+///
+/// `kind` is part of the merge key (FR1, FR5): a `Snapshot`-tagged chunk is
+/// emitted as one `MessageType::Snapshot` frame regardless of size and MUST
+/// NOT be coalesced with adjacent `PtyOutput` chunks — folding would smuggle
+/// snapshot bytes into a live-input frame (or vice versa) and break the
+/// routing to `apply_mux_message::Snapshot`. Two consecutive `Snapshot`
+/// chunks for the same pane also stay separate so each snapshot reply is one
+/// IPC frame.
 fn merge_consecutive_chunks(chunks: Vec<PtyOutputChunk>) -> Vec<PtyOutputChunk> {
     if chunks.len() <= 1 {
         return chunks;
@@ -823,8 +850,13 @@ fn merge_consecutive_chunks(chunks: Vec<PtyOutputChunk>) -> Vec<PtyOutputChunk> 
             // Exit signal: never merge
             merged.push(chunk);
         } else if let Some(last) = merged.last_mut() {
-            if last.pane_id == chunk.pane_id && !last.data.is_empty() {
-                // Same pane, both non-empty: concatenate data
+            // Only fold when pane, kind, and non-emptiness all match AND the
+            // kind is `PtyOutput` (snapshot chunks are framed standalone).
+            if last.pane_id == chunk.pane_id
+                && !last.data.is_empty()
+                && last.kind == chunk.kind
+                && chunk.kind == ChunkKind::PtyOutput
+            {
                 last.data.extend_from_slice(&chunk.data);
             } else {
                 merged.push(chunk);
@@ -859,17 +891,15 @@ mod tests {
     use super::*;
 
     fn chunk(pane_id: u32, data: &[u8]) -> PtyOutputChunk {
-        PtyOutputChunk {
-            pane_id,
-            data: data.to_vec(),
-        }
+        PtyOutputChunk::pty_output(pane_id, data.to_vec())
     }
 
     fn exit_chunk(pane_id: u32) -> PtyOutputChunk {
-        PtyOutputChunk {
-            pane_id,
-            data: Vec::new(),
-        }
+        PtyOutputChunk::pty_output(pane_id, Vec::new())
+    }
+
+    fn snapshot_chunk(pane_id: u32, data: &[u8]) -> PtyOutputChunk {
+        PtyOutputChunk::snapshot(pane_id, data.to_vec())
     }
 
     #[test]
@@ -1053,6 +1083,51 @@ mod tests {
             DRAIN_BATCH_LIMIT * 1024,
             "merged frame carries the whole batch"
         );
+    }
+
+    /// Phase 2 (FR1, FR5): a `Snapshot`-kind chunk inserted between
+    /// same-pane `PtyOutput` chunks MUST NOT be folded into either
+    /// neighbour. The on-wire framing for `Snapshot` is
+    /// `MessageType::Snapshot` while neighbours are `MessageType::PtyOutput`;
+    /// collapsing them would smuggle snapshot bytes into a live-input frame
+    /// (or vice versa) and break the routing to the off-thread replay path.
+    #[test]
+    fn merge_does_not_fold_across_kind() {
+        let chunks = vec![
+            chunk(1, b"pre1"),
+            chunk(1, b"pre2"),
+            snapshot_chunk(1, b"SNAPSHOT"),
+            chunk(1, b"post"),
+        ];
+        let merged = merge_consecutive_chunks(chunks);
+        // Expected: [merged-PtyOutput("pre1pre2"), Snapshot("SNAPSHOT"), PtyOutput("post")]
+        assert_eq!(merged.len(), 3, "kind boundary must split the run");
+        assert_eq!(merged[0].pane_id, 1);
+        assert_eq!(merged[0].kind, ChunkKind::PtyOutput);
+        assert_eq!(merged[0].data, b"pre1pre2");
+        assert_eq!(merged[1].pane_id, 1);
+        assert_eq!(merged[1].kind, ChunkKind::Snapshot);
+        assert_eq!(merged[1].data, b"SNAPSHOT");
+        assert_eq!(merged[2].pane_id, 1);
+        assert_eq!(merged[2].kind, ChunkKind::PtyOutput);
+        assert_eq!(merged[2].data, b"post");
+    }
+
+    /// Phase 2 (FR5): two consecutive `Snapshot`-kind chunks for the same
+    /// pane MUST remain separate frames. Each `RequestPaneSnapshot` reply
+    /// is one snapshot payload; concatenating two snapshot payloads on the
+    /// wire would produce a malformed single frame whose recipient cannot
+    /// segment them. (In practice the daemon only emits one snapshot per
+    /// request, but the merge logic must not assume that.)
+    #[test]
+    fn merge_does_not_collapse_consecutive_snapshots() {
+        let chunks = vec![snapshot_chunk(1, b"SNAP-A"), snapshot_chunk(1, b"SNAP-B")];
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(merged.len(), 2, "snapshots are never coalesced");
+        assert_eq!(merged[0].data, b"SNAP-A");
+        assert_eq!(merged[0].kind, ChunkKind::Snapshot);
+        assert_eq!(merged[1].data, b"SNAP-B");
+        assert_eq!(merged[1].kind, ChunkKind::Snapshot);
     }
 
     #[test]
