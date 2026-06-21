@@ -93,7 +93,16 @@ pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
             out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
         }
         Enter => out.push(b'\r'),
-        Tab => out.push(b'\t'),
+        // Shift+Tab → CSI Z (back-tab); plain Tab → 0x09. Claude Code's
+        // mode-switch chord and readline reverse-completion both rely on
+        // the back-tab sequence.
+        Tab => {
+            if mods.shift {
+                out.extend_from_slice(b"\x1b[Z");
+            } else {
+                out.push(b'\t');
+            }
+        }
         // Linux/macOS: 0x7f (DEL) matches xterm convention (terminfo
         // kbs=^?), required by canonical-mode line editors (sudo prompt,
         // ssh password, stty default erase character).
@@ -213,6 +222,18 @@ mod tests {
         #[cfg(not(windows))]
         assert_eq!(encode(Key::Backspace, Modifiers::NONE), b"\x7f");
         assert_eq!(encode(Key::Escape, Modifiers::NONE), b"\x1b");
+    }
+
+    #[test]
+    fn shift_tab_emits_back_tab() {
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        };
+        // Shift+Tab must send CSI Z (back-tab), not a plain Tab.
+        assert_eq!(encode(Key::Tab, shift), b"\x1b[Z");
+        // Plain Tab is unaffected.
+        assert_eq!(encode(Key::Tab, Modifiers::NONE), b"\t");
     }
 
     /// Windows Backspace must emit a Win32 Input Mode key event pair
