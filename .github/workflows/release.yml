@@ -106,7 +106,7 @@ jobs:
         run: |
           VERSION="${RELEASE_VERSION#v}"
           echo "Setting version to $VERSION"
-          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          sed -i.bak -E "/^\[package\]/,/^\[/ { /^version = / s/.*/version = \"$VERSION\"/; }" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
 
       - name: Install frontend dependencies
@@ -148,7 +148,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
         run: |
           VERSION="${RELEASE_VERSION#v}"
-          sed -i -E "s/^version = \"[^\"]+\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          sed -i -E "/^\[package\]/,/^\[/ { /^version = / s/.*/version = \"$VERSION\"/; }" src-tauri/Cargo.toml
 
       - name: Build CLI deb package
         run: EMTERM_CLI_ONLY=1 bash scripts/build-dpkg.sh
@@ -192,7 +192,7 @@ jobs:
         run: |
           VERSION="${RELEASE_VERSION#v}"
           echo "Setting version to $VERSION"
-          sed -i.bak -E "s/^version = \"[^\"]+\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          sed -i.bak -E "/^\[package\]/,/^\[/ { /^version = / s/.*/version = \"$VERSION\"/; }" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
 
       - name: Install frontend dependencies
