@@ -2150,6 +2150,15 @@ impl ApplicationHandler for PocApp {
                 // + reader/writer thread join from `PtySession::Drop`
                 // happens before the WM destroys the window.
                 log::info!("native-poc: CloseRequested → shutting down PTY tabs");
+                // FR5 / NFR4: signal cancel on every in-flight 2nd-pass
+                // scrollback restore worker BEFORE dropping the tabs.
+                // Dropping the receiver does not fire the worker's cancel
+                // flag (the worker holds an `Arc<AtomicBool>` independently
+                // of the channel), so an explicit cancel store bounds
+                // wasted worker CPU on shutdown. Best-effort: no join.
+                for tab in self.app.tabs.iter() {
+                    tab.cancel_pending_scrollback_restore();
+                }
                 self.app.tabs.clear();
                 // Drop the wgpu Surface (and the rest of WindowHost) while
                 // winit's EventLoop is still alive. The Vulkan WSI surface

@@ -633,14 +633,59 @@ impl TerminalCore {
         payload: &[u8],
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Option<SnapshotReplay> {
+        Self::build_from_snapshot_inner(cols, rows, scrollback_lines, payload, cancel, true)
+    }
+
+    /// Sibling of [`Self::build_from_snapshot`] that runs the same replay
+    /// **with the snapshot bypass disabled**. The drained core therefore has
+    /// its `scrollback_slim` / `scrollback_wrapped` populated up to
+    /// `scrollback_lines` rows, which is what the 2nd-pass scrollback-restore
+    /// worker needs to feed [`Self::merge_scrollback_from`].
+    ///
+    /// Observable bookkeeping matches the synchronous `reset_and_replay`
+    /// path byte-identically (same `evicted_total`, same prompt/fold marks,
+    /// same grid). `bypass_b_mark_texts` is empty because the bypass is off
+    /// and the live scrollback is the source of truth for B-mark texts —
+    /// the caller MUST ignore that field on the result (FR8).
+    ///
+    /// `cancel` semantics are identical to `build_from_snapshot`: a set flag
+    /// observed mid-drain returns `None` and the partially-built core is
+    /// discarded.
+    pub fn build_scrollback_only_from_snapshot(
+        cols: u16,
+        rows: u16,
+        scrollback_lines: u32,
+        payload: &[u8],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Option<SnapshotReplay> {
+        Self::build_from_snapshot_inner(cols, rows, scrollback_lines, payload, cancel, false)
+    }
+
+    /// Shared inner helper for [`Self::build_from_snapshot`] (bypass on) and
+    /// [`Self::build_scrollback_only_from_snapshot`] (bypass off). The two
+    /// sibling entry points are thin wrappers that only differ in whether
+    /// `enable_snapshot_bypass` is called, which keeps the recipe (reset →
+    /// drain → take marks → assemble `SnapshotReplay`) in one place.
+    fn build_from_snapshot_inner(
+        cols: u16,
+        rows: u16,
+        scrollback_lines: u32,
+        payload: &[u8],
+        cancel: &std::sync::atomic::AtomicBool,
+        bypass: bool,
+    ) -> Option<SnapshotReplay> {
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
         core.reset();
         // Snapshot-replay bypass: skip per-row SlimCell compression during the
         // drain (the dominant cost on a heavy `seq`-shaped payload). The
         // bypass keeps `evicted_total` + mark stamping byte-identical to
         // today's path via `virtual_scrollback_len`; only the post-replay
-        // scrollback *contents* are intentionally not populated.
-        core.enable_snapshot_bypass();
+        // scrollback *contents* are intentionally not populated. The 2nd-pass
+        // scrollback-restore worker needs the contents, so it sets
+        // `bypass = false` and pays the per-row compression cost.
+        if bypass {
+            core.enable_snapshot_bypass();
+        }
         let actions = match core.process_pty_data_fully_cancellable(payload, cancel) {
             Some(a) => a,
             None => {
@@ -648,7 +693,9 @@ impl TerminalCore {
                 // bypass) before discarding it via the `None` return so a
                 // debugger / panic handler that touches the dropped core
                 // doesn't see a half-set bypass.
-                core.disable_snapshot_bypass();
+                if bypass {
+                    core.disable_snapshot_bypass();
+                }
                 return None;
             }
         };
@@ -656,7 +703,9 @@ impl TerminalCore {
         let prompt_marks = core.take_prompt_marks();
         let fold_marks = core.take_fold_marks();
         let bypass_b_mark_texts = core.take_bypass_b_mark_texts();
-        core.disable_snapshot_bypass();
+        if bypass {
+            core.disable_snapshot_bypass();
+        }
         Some(SnapshotReplay {
             core,
             actions,
@@ -693,6 +742,120 @@ impl TerminalCore {
     pub(crate) fn disable_snapshot_bypass(&mut self) {
         self.virtual_scrollback_len = 0;
         self.scrollback_bypass = false;
+    }
+
+    /// Consume `other` and prepend its scrollback rows onto `self`,
+    /// re-interning each cell's `style_id` (and `char_ref` when in
+    /// `CharTable` mode) against `self.styles` / `self.chars` so the merged
+    /// rows resolve against `self`'s own tables.
+    ///
+    /// Used by the 2nd-pass scrollback-restore worker (`tabs.rs::
+    /// apply_scrollback_restore`): after `build_scrollback_only_from_snapshot`
+    /// rebuilds the historical scrollback off-thread, this method merges
+    /// the rebuilt scrollback into the live core. The bypass-on 1st-pass
+    /// swap (see [`Self::build_from_snapshot`]) leaves
+    /// `scrollback_slim` empty, and the merge restores it.
+    ///
+    /// FR3 trim: the caller passes `live_trim_rows`, the number of trailing
+    /// rebuilt rows to drop before prepending. These correspond to scrollback
+    /// rows that have already been re-emitted by the live drain between the
+    /// 1st-pass swap and now; including them would duplicate rows after the
+    /// merge.
+    ///
+    /// Preconditions:
+    /// - `self.cols == other.cols` (else: log::warn + no-op; the rebuilt
+    ///   rows would be the wrong width to render against this core's grid).
+    ///
+    /// Postconditions:
+    /// - The trailing `live_trim_rows` rows of `other.scrollback_slim` /
+    ///   `scrollback_wrapped` are dropped.
+    /// - The remaining `other.scrollback_slim` / `scrollback_wrapped` rows
+    ///   are re-interned and prepended onto `self.scrollback_slim` /
+    ///   `scrollback_wrapped` (oldest-first ordering preserved).
+    /// - If the combined length would exceed `self.scrollback_capacity`,
+    ///   the front-most *incoming* rows are dropped (the oldest rebuilt
+    ///   rows) — `self`'s existing rows are preserved (they reflect
+    ///   post-bypass live drain).
+    /// - `self.scrollback_evicted_total` is UNCHANGED. These rows pre-date
+    ///   the bypass swap; bumping the counter would double-count against
+    ///   already-emitted delta notifications (NFR5).
+    /// - `other` is consumed and dropped at function end.
+    ///
+    /// Returns the number of rows actually inserted into `self` (the
+    /// rebuilt count minus `live_trim_rows` minus any capacity-overflow
+    /// drops). 0 on cols mismatch or when `live_trim_rows >= rebuilt_count`.
+    pub fn merge_scrollback_from(&mut self, other: TerminalCore, live_trim_rows: usize) -> usize {
+        if self.cols != other.cols {
+            log::warn!(
+                "merge_scrollback_from cols mismatch: self={} other={}; no-op",
+                self.cols,
+                other.cols
+            );
+            return 0;
+        }
+        let other_styles = other.styles;
+        let other_chars = other.chars;
+        let mut other_slim = other.scrollback_slim;
+        let mut other_wrapped = other.scrollback_wrapped;
+        // FR3: drop the trailing live-drain-collision rows before
+        // re-interning so we never pay the intern cost on rows we know we
+        // will throw away.
+        let rebuilt_count = other_slim.len();
+        if live_trim_rows >= rebuilt_count {
+            // Full no-op: every row already collided with live drain.
+            return 0;
+        }
+        let keep = rebuilt_count - live_trim_rows;
+        other_slim.truncate(keep);
+        other_wrapped.truncate(keep);
+        // Capacity-aware pre-trim: prepend_scrollback_rows will drop the front-most
+        // rows that exceed `scrollback_capacity - existing`. Doing this BEFORE the
+        // re-intern loop avoids re-interning rows that get dec_ref'd immediately.
+        // `live_trim_rows` (tail trim) is eviction-based; `existing` is length-based,
+        // so a live ring that grew toward capacity without evicting still consumes
+        // room here. The dropped rebuilt cells reference `other_styles` / `other_chars`
+        // which are about to be dropped wholesale, so no dec_ref bookkeeping is needed.
+        let existing = self.scrollback_slim.len();
+        let room = self.scrollback_capacity.saturating_sub(existing);
+        let keep_after_room = other_slim.len().min(room);
+        let front_drop = other_slim.len() - keep_after_room;
+        if front_drop > 0 {
+            other_slim.drain(0..front_drop);
+            other_wrapped.drain(0..front_drop);
+        }
+        // Re-intern the remaining rows. The per-cell flag dispatch mirrors
+        // `release_slim_row` so refcount accounting stays symmetric across
+        // the SlimCell-flag union.
+        let mut reinterned_rows: Vec<Vec<crate::slim_cell::SlimCell>> =
+            Vec::with_capacity(keep_after_room);
+        for slim_row in other_slim.into_iter() {
+            let mut new_row = Vec::with_capacity(slim_row.len());
+            for slim in slim_row {
+                let entry = other_styles.get_or_default(slim.style_id);
+                let new_style_id = self.styles.intern(entry);
+                let new_char_ref = if slim.is_char_table() {
+                    let s = other_chars.get_or_default(slim.char_ref);
+                    self.chars.intern(s)
+                } else {
+                    // INLINE_ASCII (packed UTF-8 bytes) or WIDE_CONT
+                    // (unused) — copy `char_ref` as-is; CharTable is
+                    // not touched.
+                    slim.char_ref
+                };
+                new_row.push(crate::slim_cell::SlimCell {
+                    char_ref: new_char_ref,
+                    width: slim.width,
+                    flags: slim.flags,
+                    style_id: new_style_id,
+                });
+            }
+            reinterned_rows.push(new_row);
+        }
+        let wrapped: Vec<bool> = other_wrapped.into_iter().collect();
+        self.prepend_scrollback_rows(reinterned_rows, wrapped)
+        // `other_styles` / `other_chars` drop here, releasing every
+        // refcount they held over the rows we just re-interned (and over
+        // the rows we trimmed before re-interning).
     }
 
     pub fn reset(&mut self) {
@@ -1361,6 +1524,287 @@ mod tests {
                  B marks: {:?}",
                 b_abs_rows
             );
+        }
+    }
+
+    /// TS-5 (FR1 + NFR6 — scrollback-restore):
+    /// `build_scrollback_only_from_snapshot` (bypass off) yields a core that
+    /// is byte-equivalent to a synchronous `reset_and_replay` on a fresh
+    /// core of the same grid / scrollback_lines.
+    ///
+    /// Scope: the *full* scrollback contents (slim cells + wrapped flags),
+    /// `scrollback_evicted_total`, the viewport grid (via grid_fingerprint),
+    /// and the drained marks must all be byte-identical. The bypass-on
+    /// `build_from_snapshot` cannot satisfy this — its scrollback is empty
+    /// by design — so this test is the primary unit gate that the bypass-off
+    /// entry point is a drop-in replacement for the synchronous build.
+    #[test]
+    fn test_build_scrollback_only_from_snapshot_matches_sync_build() {
+        // Construct a payload that scrolls some rows into scrollback so the
+        // contents-equivalence check actually has rows to compare.
+        let mut payload: Vec<u8> = Vec::new();
+        payload.extend_from_slice(b"\x1b]133;A\x07$ ls\x1b]133;B\x07ok\r\n");
+        for i in 0..50u32 {
+            payload.extend_from_slice(format!("scroll {i}\r\n").as_bytes());
+        }
+        payload.extend_from_slice(b"tail");
+
+        // Synchronous reference.
+        let mut sync_core = TerminalCore::new(80, 24, 100);
+        sync_core.reset_and_replay(&payload);
+        let sync_evicted = sync_core.get_scrollback_evicted_total();
+        let sync_prompts = sync_core.take_prompt_marks();
+        let sync_folds = sync_core.take_fold_marks();
+        let sync_slim: Vec<Vec<crate::slim_cell::SlimCell>> =
+            sync_core.scrollback_slim.iter().cloned().collect();
+        let sync_wrapped: Vec<bool> = sync_core.scrollback_wrapped.iter().copied().collect();
+
+        // bypass-off off-thread build.
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let built =
+            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &never)
+                .expect("not cancelled");
+
+        // Viewport grid + drained marks + evicted_total: byte-identical.
+        assert_eq!(grid_fingerprint(&built.core), grid_fingerprint(&sync_core));
+        assert_eq!(built.evicted_total, sync_evicted);
+        assert_eq!(built.prompt_marks, sync_prompts);
+        assert_eq!(built.fold_marks, sync_folds);
+        // bypass_b_mark_texts is empty on the bypass-off path — the live
+        // scrollback is the source of truth for B-mark texts (FR8).
+        assert!(
+            built.bypass_b_mark_texts.is_empty(),
+            "bypass-off build must not populate bypass_b_mark_texts"
+        );
+
+        // Scrollback contents: cell-for-cell equality. This is what the
+        // bypass-on path cannot deliver, and is the whole point of the
+        // bypass-off entry.
+        let built_slim: Vec<Vec<crate::slim_cell::SlimCell>> =
+            built.core.scrollback_slim.iter().cloned().collect();
+        let built_wrapped: Vec<bool> = built.core.scrollback_wrapped.iter().copied().collect();
+        assert_eq!(
+            built_slim.len(),
+            sync_slim.len(),
+            "scrollback row count must match"
+        );
+        assert_eq!(built_wrapped, sync_wrapped);
+        // Cells: compare by decompressed text + width so we are robust to
+        // any intern-id reassignment between the two cores (a same-style
+        // entry may land on a different `style_id` slot because the build
+        // orderings are not the same).
+        for (row_idx, (a, b)) in built_slim.iter().zip(sync_slim.iter()).enumerate() {
+            assert_eq!(a.len(), b.len(), "row {row_idx} length");
+            for (col_idx, (sa, sb)) in a.iter().zip(b.iter()).enumerate() {
+                let ca = crate::slim_cell::slim_to_cell(sa, &built.core.styles, &built.core.chars);
+                let cb = crate::slim_cell::slim_to_cell(sb, &sync_core.styles, &sync_core.chars);
+                assert_eq!(
+                    (ca.char_data, ca.char_len, ca.width, ca.fg, ca.bg, ca.flags),
+                    (cb.char_data, cb.char_len, cb.width, cb.fg, cb.bg, cb.flags),
+                    "row {row_idx} col {col_idx}"
+                );
+            }
+        }
+    }
+
+    // ── merge_scrollback_from (scrollback restore) ───────
+
+    /// Build a TerminalCore that has `n_rows` rows of red "X" content in its
+    /// scrollback, using `cols`-wide cells. Convenience for the merge tests.
+    fn make_core_with_red_x_scrollback(cols: u16, n_rows: u32) -> TerminalCore {
+        let mut core = TerminalCore::new(cols, 4, n_rows + 10);
+        // Use a non-default fg color so each cell goes through
+        // `styles.intern` with a fresh StyleEntry — that is what TS-1
+        // checks (the re-intern actually rewrites style_id).
+        // 0x1b 5b "31" m = set fg red.
+        let mut payload: Vec<u8> = Vec::new();
+        for _ in 0..n_rows {
+            payload.extend_from_slice(b"\x1b[31mX\x1b[m\r\n");
+        }
+        core.process_pty_data_fully(&payload);
+        core
+    }
+
+    /// TS-1 (FR2): `merge_scrollback_from` re-interns SlimCell ids against
+    /// the receiver's tables so the merged row resolves to byte-equal style
+    /// / char entries even when the two cores' intern tables differ.
+    #[test]
+    fn test_merge_scrollback_from_intern_rewrites_ids() {
+        let mut dst = TerminalCore::new(80, 24, 100);
+        // Prime dst.styles with a couple of unrelated entries so id slots
+        // are unlikely to coincide with src's by accident (the test would
+        // still hold under id-equality by luck).
+        for ch in b"abcde" {
+            let mut cell = crate::cell::Cell::EMPTY;
+            cell.set_char(&(*ch as char).to_string());
+            cell.fg = crate::cell::PackedColor::rgb(*ch, 0, 0);
+            crate::slim_cell::cell_to_slim(&cell, None, &mut dst.styles, &mut dst.chars);
+        }
+
+        let src = make_core_with_red_x_scrollback(80, 6);
+        assert!(
+            !src.scrollback_slim.is_empty(),
+            "src must have non-empty scrollback for the test to be meaningful"
+        );
+
+        // Snapshot src's first row's fg before consuming it.
+        let src_first_row_fg = {
+            let row = src.scrollback_slim.front().unwrap();
+            let style = src.styles.get_or_default(row[0].style_id);
+            (style.fg, style.bg, style.flags)
+        };
+
+        dst.merge_scrollback_from(src, 0);
+
+        // The merged row should appear at the front of dst's scrollback,
+        // and resolving its cell against dst.styles must yield the same
+        // (fg, bg, flags) tuple — proving the style_id was re-interned
+        // against dst.styles to a slot that holds an equivalent entry.
+        let merged_row = dst
+            .scrollback_slim
+            .front()
+            .expect("merge made the front non-empty");
+        let merged_style = dst.styles.get_or_default(merged_row[0].style_id);
+        assert_eq!(
+            (merged_style.fg, merged_style.bg, merged_style.flags),
+            src_first_row_fg,
+            "merged row's style_id must resolve to the same fg/bg/flags via dst.styles"
+        );
+    }
+
+    /// TS-2 (NFR5): the merge MUST NOT touch
+    /// `self.scrollback_evicted_total`. The merged rows pre-date the bypass
+    /// swap and the live-side delta accounting already covers them.
+    #[test]
+    fn test_merge_scrollback_from_preserves_evicted_total() {
+        let mut dst = TerminalCore::new(80, 24, 4);
+        // Push enough lines that the scrollback ring saturates and the
+        // counter has a non-zero baseline.
+        let mut bytes: Vec<u8> = Vec::new();
+        for _ in 0..30 {
+            bytes.extend_from_slice(b"y\r\n");
+        }
+        dst.process_pty_data_fully(&bytes);
+        let evicted_before = dst.scrollback_evicted_total;
+        assert!(
+            evicted_before > 0,
+            "test prerequisite: dst should have a non-zero evicted baseline"
+        );
+
+        let src = make_core_with_red_x_scrollback(80, 3);
+        dst.merge_scrollback_from(src, 0);
+
+        assert_eq!(
+            dst.scrollback_evicted_total, evicted_before,
+            "merge must not bump scrollback_evicted_total"
+        );
+    }
+
+    /// TS-4 (FR2 defensive): cols mismatch ⇒ no-op (no merge, no panic).
+    #[test]
+    fn test_merge_scrollback_from_cols_mismatch_is_noop() {
+        let mut dst = TerminalCore::new(80, 24, 100);
+        // Push some live content so dst's scrollback has rows to compare
+        // before vs. after the noop merge.
+        dst.process_pty_data_fully(b"AAA\r\nBBB\r\nCCC\r\n");
+        let snapshot_slim: Vec<Vec<crate::slim_cell::SlimCell>> =
+            dst.scrollback_slim.iter().cloned().collect();
+        let snapshot_wrapped: Vec<bool> = dst.scrollback_wrapped.iter().copied().collect();
+        let snapshot_evicted = dst.scrollback_evicted_total;
+
+        // src at a different cols width.
+        let src = make_core_with_red_x_scrollback(100, 5);
+        dst.merge_scrollback_from(src, 0);
+
+        let after_slim: Vec<Vec<crate::slim_cell::SlimCell>> =
+            dst.scrollback_slim.iter().cloned().collect();
+        let after_wrapped: Vec<bool> = dst.scrollback_wrapped.iter().copied().collect();
+        assert_eq!(
+            after_slim, snapshot_slim,
+            "scrollback rows must be unchanged"
+        );
+        assert_eq!(after_wrapped, snapshot_wrapped);
+        assert_eq!(dst.scrollback_evicted_total, snapshot_evicted);
+    }
+
+    /// TS-6 (FR1 / NFR6 — primary equivalence gate): bypass-on
+    /// `build_from_snapshot` + bypass-off `build_scrollback_only_from_snapshot`
+    /// + `merge_scrollback_from` with `live_growth = 0` settles in a state
+    /// observably equal to a single bypass-off build.
+    ///
+    /// This is the unit-level proof that the 2nd-pass restore worker plus
+    /// the merge primitive is a drop-in replacement for the synchronous
+    /// reset_and_replay path.
+    #[test]
+    fn test_bypass_plus_merge_equivalence() {
+        // Payload that scrolls more than the viewport so scrollback has
+        // non-trivial content to compare.
+        let mut payload: Vec<u8> = Vec::new();
+        payload.extend_from_slice(b"\x1b]133;A\x07$ ls\x1b]133;B\x07hello\r\n");
+        for i in 0..40u32 {
+            payload.extend_from_slice(format!("scroll {i}\r\n").as_bytes());
+        }
+
+        // Reference: single synchronous bypass-off build.
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let reference =
+            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &never)
+                .expect("reference build not cancelled");
+
+        // Production path: bypass-on 1st-pass + bypass-off 2nd-pass + merge.
+        let bypass_replay =
+            TerminalCore::build_from_snapshot(80, 24, 100, &payload, &never).expect("1st-pass");
+        let mut live = bypass_replay.core;
+        // Bypass leaves scrollback empty by design.
+        assert_eq!(live.scrollback_count(), 0);
+        let rebuilt =
+            TerminalCore::build_scrollback_only_from_snapshot(80, 24, 100, &payload, &never)
+                .expect("2nd-pass");
+        // live_growth == 0: no trim necessary, merge whole rebuilt scrollback.
+        live.merge_scrollback_from(rebuilt.core, 0);
+
+        // Equivalence vs. the synchronous reference.
+        assert_eq!(
+            grid_fingerprint(&live),
+            grid_fingerprint(&reference.core),
+            "viewport grid must match"
+        );
+        assert_eq!(
+            live.scrollback_count(),
+            reference.core.scrollback_count(),
+            "scrollback row count must match the synchronous reference"
+        );
+        // scrollback_evicted_total: both code paths produce the same
+        // bypass-driven baseline (the 1st-pass produced the baseline; the
+        // merge must NOT bump it). For a payload that does not saturate
+        // the scrollback ring this is 0, but the contract is that the
+        // counter is byte-identical to the reference regardless of saturation.
+        assert_eq!(
+            live.scrollback_evicted_total,
+            reference.core.scrollback_evicted_total
+        );
+        // Cell-by-cell scrollback equality (decompressed view, robust to
+        // intern slot reassignment).
+        for (row_idx, (l, r)) in live
+            .scrollback_slim
+            .iter()
+            .zip(reference.core.scrollback_slim.iter())
+            .enumerate()
+        {
+            assert_eq!(l.len(), r.len(), "row {row_idx} length");
+            for (col_idx, (sa, sb)) in l.iter().zip(r.iter()).enumerate() {
+                let ca = crate::slim_cell::slim_to_cell(sa, &live.styles, &live.chars);
+                let cb = crate::slim_cell::slim_to_cell(
+                    sb,
+                    &reference.core.styles,
+                    &reference.core.chars,
+                );
+                assert_eq!(
+                    (ca.char_data, ca.char_len, ca.width, ca.fg, ca.bg, ca.flags),
+                    (cb.char_data, cb.char_len, cb.width, cb.fg, cb.bg, cb.flags),
+                    "row {row_idx} col {col_idx}"
+                );
+            }
         }
     }
 

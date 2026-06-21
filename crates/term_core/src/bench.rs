@@ -363,4 +363,92 @@ mod benches {
             None,
         );
     }
+
+    /// Perf bench (NFR2): full 2nd-pass scrollback restore cost — the
+    /// bypass-off rebuild plus the merge primitive — on the same 2 MiB
+    /// `seq 1 N`-shaped payload the 1st-pass bench measures. This is the
+    /// number the user feels when the visible grid paints fast but the
+    /// scrollback takes a while to appear after a mux switch.
+    ///
+    /// Composition per iteration:
+    /// 1. `build_from_snapshot` (bypass on) — 1st-pass equivalent,
+    ///    populates the live core.
+    /// 2. `build_scrollback_only_from_snapshot` (bypass off) — 2nd-pass
+    ///    rebuild, the dominant cost.
+    /// 3. `merge_scrollback_from` — re-intern + prepend; bounded by
+    ///    `scrollback_capacity`.
+    ///
+    /// Asserts: per-call total < 5 s (NFR2 gate). On the reference machine
+    /// the 2nd-pass alone is ~4 s, so the budget leaves ~1 s of headroom
+    /// for the merge.
+    ///
+    /// Gated `#[ignore]`. Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path crates/term_core/Cargo.toml --lib \
+    ///   scrollback_restore_bench_2mib_seq \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn scrollback_restore_bench_2mib_seq() {
+        use crate::terminal_core::TerminalCore;
+        use std::io::Write;
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        let mut payload = Vec::with_capacity(2 * 1024 * 1024);
+        let mut n: u64 = 1;
+        while payload.len() < 2 * 1024 * 1024 {
+            let _ = write!(&mut payload, "{n}\r\n");
+            n += 1;
+        }
+        payload.truncate(2 * 1024 * 1024);
+
+        // Warm-up: hit every layer once so the icache / branch predictors
+        // converge before the measurement loop.
+        {
+            let cancel = AtomicBool::new(false);
+            let bypass = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &cancel)
+                .expect("warm-up 1st-pass");
+            let rebuilt = TerminalCore::build_scrollback_only_from_snapshot(
+                200, 50, 10_000, &payload, &cancel,
+            )
+            .expect("warm-up 2nd-pass");
+            let mut live = bypass.core;
+            live.merge_scrollback_from(rebuilt.core, 0);
+            std::hint::black_box(live);
+        }
+
+        let iters = 3;
+        let start = Instant::now();
+        for _ in 0..iters {
+            let cancel = AtomicBool::new(false);
+            let bypass = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &cancel)
+                .expect("1st-pass");
+            let rebuilt = TerminalCore::build_scrollback_only_from_snapshot(
+                200, 50, 10_000, &payload, &cancel,
+            )
+            .expect("2nd-pass");
+            let mut live = bypass.core;
+            live.merge_scrollback_from(rebuilt.core, 0);
+            std::hint::black_box(live);
+        }
+        let elapsed = start.elapsed();
+        let per = elapsed / iters as u32;
+        eprintln!(
+            "[bench] scrollback_restore 2MiB seq-N payload (200x50, 10k scrollback): \
+             {iters} iters / {:?} → {:?}/call (1st-pass + 2nd-pass + merge end-to-end)",
+            elapsed, per,
+        );
+        // NFR2: per-call total must be < 5 s for 2 MiB.
+        let threshold = std::time::Duration::from_secs(5);
+        assert!(
+            per < threshold,
+            "scrollback_restore per-call {:?} ≥ MUST threshold {:?} (NFR2)",
+            per,
+            threshold,
+        );
+    }
 }

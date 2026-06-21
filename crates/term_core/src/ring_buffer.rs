@@ -234,6 +234,91 @@ impl TerminalCore {
         }
     }
 
+    /// Prepend a sequence of already-re-interned SlimCell rows onto the
+    /// **front** (oldest end) of `scrollback_slim` / `scrollback_wrapped`,
+    /// respecting `scrollback_capacity`.
+    ///
+    /// Used by [`crate::terminal_core::TerminalCore::merge_scrollback_from`]
+    /// for the 2nd-pass scrollback restore: the caller has already
+    /// re-interned the SlimCells against `self.styles` / `self.chars`, so
+    /// each cell in `rows` carries valid `style_id` / `char_ref` references
+    /// (with refcounts owned by the prepend call site).
+    ///
+    /// Input ordering: `rows[0]` is the oldest, `rows[N-1]` is the newest
+    /// (so the rebuilt-core sequence, which is naturally oldest-first inside
+    /// its own `VecDeque`, can be passed as-is).
+    ///
+    /// Capacity handling:
+    /// - If `existing_len + rows.len() <= scrollback_capacity`, every
+    ///   incoming row is inserted.
+    /// - Else, the **front-most incoming rows** (the oldest of the rebuilt
+    ///   half) are dropped via `release_slim_row` so the rest can fit. The
+    ///   pre-existing rows in `self` are never touched — they reflect post-
+    ///   bypass live drain and the caller has guaranteed they sit at the
+    ///   newer end of the timeline.
+    ///
+    /// `scrollback_evicted_total` is intentionally NOT bumped: the dropped
+    /// rows pre-date the bypass swap, so counting them as evictions would
+    /// double-count against the live-drain counter the caller is
+    /// reconciling against (NFR5).
+    ///
+    /// Returns the number of incoming rows actually inserted.
+    pub(crate) fn prepend_scrollback_rows(
+        &mut self,
+        rows: Vec<Vec<SlimCell>>,
+        wrapped: Vec<bool>,
+    ) -> usize {
+        debug_assert_eq!(
+            rows.len(),
+            wrapped.len(),
+            "prepend_scrollback_rows: rows and wrapped lengths must match"
+        );
+        let mut rows = rows;
+        let mut wrapped = wrapped;
+        if rows.len() != wrapped.len() {
+            // Defensive: in release builds, conform the shorter vec wins so we
+            // never index past the end. Truncating to the min keeps the
+            // refcount accounting symmetric (every kept slim row has its
+            // wrapped flag and vice versa).
+            let n = rows.len().min(wrapped.len());
+            rows.truncate(n);
+            wrapped.truncate(n);
+        }
+        if rows.is_empty() {
+            return 0;
+        }
+        let capacity = self.scrollback_capacity;
+        if capacity == 0 {
+            // Scrollback disabled: every incoming row is a drop. The caller
+            // re-interned them into `self.styles` / `self.chars`, so we still
+            // need to dec_ref each one.
+            for row in &rows {
+                self.release_slim_row(row);
+            }
+            return 0;
+        }
+        let existing = self.scrollback_slim.len();
+        let room = capacity.saturating_sub(existing);
+        let inserted = rows.len().min(room);
+        let drop_count = rows.len() - inserted;
+        if drop_count > 0 {
+            // The front-most `drop_count` incoming rows do not fit. Dec_ref
+            // their cells before dropping the rows themselves so the intern
+            // tables stay accurate.
+            for row in rows.drain(0..drop_count) {
+                self.release_slim_row(&row);
+            }
+            wrapped.drain(0..drop_count);
+        }
+        // Now push_front in reverse order so the oldest row ends up at the
+        // front (the `front` end is the oldest slot in the deque).
+        for (row, wrapped_flag) in rows.into_iter().zip(wrapped.into_iter()).rev() {
+            self.scrollback_slim.push_front(row);
+            self.scrollback_wrapped.push_front(wrapped_flag);
+        }
+        inserted
+    }
+
     /// Scroll up internally (WASM-internal, no TS bridge).
     /// Full screen: pushes top line(s) to scrollback via ring_push_blank.
     /// Scroll region: shifts rows within region only.
@@ -1664,5 +1749,114 @@ mod tests {
             bypass_evicted, 0,
             "scrollback_lines==0 must never produce a non-zero evicted_total"
         );
+    }
+
+    // ── prepend_scrollback_rows (scrollback restore) ─────
+
+    /// Build a SlimCell row of `cols` "X" cells against the given tables.
+    /// Mirrors the cell_to_slim path used at eviction time.
+    fn make_slim_row_ascii_x(
+        cols: usize,
+        styles: &mut crate::style_table::StyleTable,
+        chars: &mut crate::char_table::CharTable,
+    ) -> Vec<crate::slim_cell::SlimCell> {
+        let mut row = Vec::with_capacity(cols);
+        for _ in 0..cols {
+            let mut cell = crate::cell::Cell::EMPTY;
+            cell.set_char("X");
+            cell.width = 1;
+            let slim = crate::slim_cell::cell_to_slim(&cell, None, styles, chars);
+            row.push(slim);
+        }
+        row
+    }
+
+    /// TS-3 base case: prepend with enough room inserts every incoming row at
+    /// the **front** of the scrollback deque, oldest-first, leaving the
+    /// pre-existing rows untouched.
+    #[test]
+    fn test_prepend_scrollback_rows_fits_capacity_preserves_order() {
+        // Existing core: viewport 4 wide × 2 tall, scrollback cap = 10.
+        // Push two rows of live content so scrollback_count() == 2.
+        let mut core = TerminalCore::new(4, 2, 10);
+        core.process_pty_data_fully(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\n");
+        // CCCC / DDDD occupy the viewport; AAAA / BBBB sit in scrollback.
+        let before_count = core.scrollback_count();
+        assert!(
+            before_count >= 2,
+            "live scrollback should have at least 2 rows"
+        );
+
+        // Build two incoming rows interned against the core's own tables
+        // (mirroring what merge_scrollback_from will do after re-intern).
+        let mut incoming_rows: Vec<Vec<crate::slim_cell::SlimCell>> = Vec::new();
+        for _ in 0..2 {
+            incoming_rows.push(make_slim_row_ascii_x(4, &mut core.styles, &mut core.chars));
+        }
+        let incoming_wrapped = vec![false, true];
+        let evicted_before = core.scrollback_evicted_total;
+
+        let inserted = core.prepend_scrollback_rows(incoming_rows, incoming_wrapped);
+        assert_eq!(inserted, 2);
+        assert_eq!(core.scrollback_count(), before_count + 2);
+        // The two front-most rows must be the just-prepended X rows.
+        for col in 0..4 {
+            assert_eq!(core.scrollback_slim[0][col].width, 1);
+            assert_eq!(core.scrollback_slim[1][col].width, 1);
+        }
+        // wrapped flag preserved at the same front-most indices.
+        assert!(!core.scrollback_wrapped[0]);
+        assert!(core.scrollback_wrapped[1]);
+        // Evicted total untouched (NFR5).
+        assert_eq!(core.scrollback_evicted_total, evicted_before);
+    }
+
+    /// TS-3: capacity overflow drops the **front-most incoming** rows and
+    /// preserves the pre-existing rows.
+    #[test]
+    fn test_prepend_scrollback_rows_drops_front_most_incoming_on_overflow() {
+        // Tight capacity = 5 to exercise the drop path.
+        let mut core = TerminalCore::new(4, 2, 5);
+        // 5 lines pushed → 3 in scrollback (viewport holds last 2). The
+        // scrollback ring is below cap, leaving room = 2.
+        core.process_pty_data_fully(b"AA\r\nBB\r\nCC\r\nDD\r\nEE\r\n");
+        let before_count = core.scrollback_count();
+        // Confirm precondition.
+        assert!(before_count <= 5);
+
+        // Capture the pre-existing front cell so we can prove it survives.
+        let pre_existing_front: Vec<crate::slim_cell::SlimCell> =
+            core.scrollback_slim.front().cloned().expect("non-empty");
+
+        // Build 4 incoming rows but room is at most cap - before_count.
+        let mut incoming_rows = Vec::new();
+        for _ in 0..4 {
+            incoming_rows.push(make_slim_row_ascii_x(4, &mut core.styles, &mut core.chars));
+        }
+        let incoming_wrapped = vec![false; 4];
+        let evicted_before = core.scrollback_evicted_total;
+
+        let inserted = core.prepend_scrollback_rows(incoming_rows, incoming_wrapped);
+        let room = 5_usize.saturating_sub(before_count);
+        assert_eq!(inserted, room, "must insert exactly the available room");
+        assert_eq!(core.scrollback_count(), 5, "ring must be at capacity");
+        // The (room)-th index from the front is the first pre-existing row.
+        assert_eq!(
+            core.scrollback_slim[room], pre_existing_front,
+            "pre-existing front row must survive at index {room}"
+        );
+        // Evicted total untouched (NFR5).
+        assert_eq!(core.scrollback_evicted_total, evicted_before);
+    }
+
+    /// scrollback_lines == 0 ⇒ prepend is a noop, every incoming row is
+    /// dec_ref'd but nothing is inserted.
+    #[test]
+    fn test_prepend_scrollback_rows_scrollback_disabled_drops_all() {
+        let mut core = TerminalCore::new(4, 2, 0);
+        let row = make_slim_row_ascii_x(4, &mut core.styles, &mut core.chars);
+        let inserted = core.prepend_scrollback_rows(vec![row], vec![false]);
+        assert_eq!(inserted, 0);
+        assert_eq!(core.scrollback_count(), 0);
     }
 }

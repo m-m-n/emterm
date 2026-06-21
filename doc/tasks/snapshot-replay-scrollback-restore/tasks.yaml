@@ -1,0 +1,198 @@
+schema_version: 1
+feature: snapshot-replay-scrollback-restore
+
+# Phase / task breakdown derived from IMPLEMENTATION.md.
+# Each task lists the requirements it implements (`requirements`) and
+# the verification scenarios it is exercised by (`tests`).
+
+phases:
+  - id: phase-1
+    name: "term_core merge primitive + bypass-off build entry"
+    estimated_effort: medium
+    description: |
+      Land the merge primitive (TerminalCore::merge_scrollback_from)
+      and the bypass-off build entry (build_scrollback_only_from_snapshot)
+      with unit-level NFR6 equivalence coverage. Independent of tab
+      wiring.
+    tasks:
+      - id: extract-shared-build-helper
+        title: "Extract build_from_snapshot_inner shared helper"
+        description: |
+          Refactor existing build_from_snapshot into a thin wrapper
+          over a private build_from_snapshot_inner(bypass: bool, ...).
+          No behavior change.
+        files:
+          - crates/term_core/src/terminal_core.rs
+        requirements: []  # pure refactor, no FR/NFR directly
+        tests: []
+        status: completed
+      - id: add-build-scrollback-only-from-snapshot
+        title: "Add build_scrollback_only_from_snapshot (bypass-off entry)"
+        description: |
+          Sibling wrapper to build_from_snapshot, sharing the inner
+          helper, with bypass = false. Used by the 2nd-pass worker.
+        files:
+          - crates/term_core/src/terminal_core.rs
+        requirements: [FR1, NFR6]
+        tests: [TS-5, TS-6]
+        status: completed
+      - id: add-prepend-scrollback-rows
+        title: "Add prepend_scrollback_rows capacity-aware push_front"
+        description: |
+          Private helper that push_fronts a sequence of (SlimCell row,
+          wrapped flag) pairs onto scrollback_slim / scrollback_wrapped,
+          dropping the front-most incoming rows when capacity would be
+          exceeded.
+        files:
+          - crates/term_core/src/ring_buffer.rs
+        requirements: [FR2]
+        tests: [TS-3]
+        status: completed
+      - id: add-merge-scrollback-from
+        title: "Add TerminalCore::merge_scrollback_from method"
+        description: |
+          Re-intern SlimCell style_id / char_id against self.styles /
+          self.chars; delegate to prepend_scrollback_rows; preserve
+          scrollback_evicted_total; no-op + warn on cols mismatch.
+        files:
+          - crates/term_core/src/terminal_core.rs
+        requirements: [FR2, NFR5, NFR6]
+        tests: [TS-1, TS-2, TS-3, TS-4, TS-6]
+        status: completed
+
+  - id: phase-2
+    name: "tabs.rs PendingScrollbackRestore + poll + merge"
+    estimated_effort: large
+    description: |
+      Wire the 2nd-pass worker into Tab, plumb polling through
+      App::pump_all, reconcile against live drain, cover the supersede
+      / resize / panic paths and the threshold parity. End-to-end happy
+      path works after this phase.
+    tasks:
+      - id: define-pending-scrollback-restore-types
+        title: "Define PendingScrollbackRestore / ScrollbackBuild / ScrollbackRestoreOutcome"
+        description: |
+          New struct + enum next to PendingSwitch / SwapOutcome in tabs.rs.
+          Add pending_scrollback_restore: Option<...> field on Tab.
+        files:
+          - src-tauri/src/tabs.rs
+        requirements: [NFR4]
+        tests: [TS-7, TS-13]
+        status: completed
+      - id: spawn-2nd-pass-in-apply-offthread-swap
+        title: "Spawn 2nd-pass worker at end of apply_offthread_swap"
+        description: |
+          Capture base_evicted_total after live_queue replay, clone
+          payload, spawn worker thread running
+          build_scrollback_only_from_snapshot; install
+          PendingScrollbackRestore. Spawn-fail → log::warn, no install.
+        files:
+          - src-tauri/src/tabs.rs
+        requirements: [FR1, FR7, NFR3, NFR7]
+        tests: [TS-7, TS-13]
+        status: completed
+      - id: implement-poll-pending-scrollback-restore
+        title: "Implement Tab::poll_pending_scrollback_restore"
+        description: |
+          Non-blocking try_recv. Ok → apply_scrollback_restore.
+          Disconnected → log::warn + clear state. Empty → Pending.
+          Returns ScrollbackRestoreOutcome.
+        files:
+          - src-tauri/src/tabs.rs
+        requirements: [FR4, FR7, NFR3, NFR7]
+        tests: [TS-7, TS-8, TS-11]
+        status: completed
+      - id: implement-apply-scrollback-restore
+        title: "Implement Tab::apply_scrollback_restore (FR3 trim + merge)"
+        description: |
+          live_growth = live_now - base_evicted_total; truncate trailing
+          live_growth rows from rebuilt_core.scrollback_slim /
+          scrollback_wrapped; lock live core; call merge_scrollback_from.
+          Edge case live_growth >= rows → full no-op.
+        files:
+          - src-tauri/src/tabs.rs
+        requirements: [FR3, FR8]
+        tests: [TS-9, TS-14, TS-15]
+        status: completed
+      - id: cancel-on-supersede-and-resize
+        title: "Cancel on new switch (dispatch_offthread_replay) and on resize"
+        description: |
+          dispatch_offthread_replay: cancel + drop any existing
+          pending_scrollback_restore. Tab::resize: cancel + drop, NO
+          respawn (UC03 abandons history-restore).
+        files:
+          - src-tauri/src/tabs.rs
+        requirements: [FR5, NFR4, NFR7]
+        tests: [TS-8, TS-10]
+        status: completed
+      - id: wire-app-pump-all
+        title: "Wire poll_pending_scrollback_restore into App::pump_all"
+        description: |
+          Call new poll for every tab right after poll_pending_switch
+          (app.rs line 2766). Merged or Failed → changed = true; active
+          tab → active_changed = true (search overlay rebuild).
+          Shutdown path: in window_host.rs `WindowEvent::CloseRequested`
+          (line 2146), best-effort cancel sweep on all tabs immediately
+          BEFORE the existing self.app.tabs.clear() call (drop alone
+          does not fire the worker's cancel flag).
+        files:
+          - src-tauri/src/app.rs
+          - src-tauri/src/window_host.rs
+        requirements: [FR4, FR5, NFR3]
+        tests: [TS-7, TS-13]
+        status: completed
+      - id: add-tabs-test-helpers-and-integration-tests
+        title: "Add tabs.rs test helpers and integration tests"
+        description: |
+          Helpers: test_has_pending_scrollback_restore,
+          test_drain_pending_scrollback_restore_for_blocking_recv.
+          Integration tests TS-7…TS-15 as documented in VERIFICATION.md.
+        files:
+          - src-tauri/src/tabs.rs
+        requirements: [FR1, FR3, FR5, FR6, FR7, FR8, NFR4, NFR5, NFR6]
+        tests: [TS-7, TS-8, TS-9, TS-10, TS-11, TS-12, TS-13, TS-14, TS-15]
+        status: completed
+
+  - id: phase-3
+    name: "bench + observability + CLI parity"
+    estimated_effort: small
+    description: |
+      Land NFR1 / NFR2 performance gates as runnable benches, add
+      operational log::warn! / log::info! per NFR7, confirm CLI-only
+      build is unaffected.
+    tasks:
+      - id: add-scrollback-restore-bench
+        title: "Add scrollback_restore_bench_2mib_seq"
+        description: |
+          Mirror snapshot_replay_bench_2mib_seq. Measure end-to-end:
+          build_from_snapshot (bypass on) +
+          build_scrollback_only_from_snapshot (bypass off) +
+          merge_scrollback_from. Assert per-call < 5 s. Same #[ignore]
+          gating as the existing bench.
+        files:
+          - crates/term_core/src/bench.rs
+        requirements: [NFR2]
+        tests: []  # bench-level, not in TS table
+        status: completed
+      - id: audit-operational-logging
+        title: "Audit operational logging in new tabs.rs paths"
+        description: |
+          log::info! at 2nd-pass spawn ("scrollback restore worker
+          spawned for tab {…}, payload {N} B") and successful merge
+          ("scrollback restored: {N} rows prepended"). log::warn! at
+          spawn-fail, panic-disconnect, cols-mismatch (defensive),
+          cancel-on-supersede, cancel-on-resize.
+        files:
+          - src-tauri/src/tabs.rs
+        requirements: [NFR7]
+        tests: []  # manual log inspection per VERIFICATION
+        status: completed
+      - id: verify-cli-only-build
+        title: "Verify --no-default-features build still clean"
+        description: |
+          Confirm new entry points are dead-code-pruned out of CLI
+          build; no new warnings.
+        files: []
+        requirements: [NFR8]
+        tests: []  # build verification gate (see SC-8)
+        status: completed
