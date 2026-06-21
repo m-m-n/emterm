@@ -371,6 +371,61 @@ mod tests {
         assert_eq!(out, input);
     }
 
+    /// Perf bench: measure `strip_replayable_rich_content` on a 2 MiB
+    /// scrollback dominated by plain text (the `seq 1 N` shape — no ESC
+    /// sequences at all). This is the snapshot-rebuild hot path: a tab switch
+    /// runs this on the full 2 MiB ring once per attach.
+    ///
+    /// Gated `#[ignore]` so it does not run by default. Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path src-tauri/Cargo.toml --lib --features gui \
+    ///   strip_replayable_rich_content_bench_2mib_plain \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn strip_replayable_rich_content_bench_2mib_plain() {
+        use std::time::Instant;
+        // Build ~2 MiB of `seq 1 N`-shaped output: 7-digit decimal + "\r\n".
+        let mut input = Vec::with_capacity(2 * 1024 * 1024);
+        let mut n: u64 = 1;
+        while input.len() < 2 * 1024 * 1024 {
+            use std::io::Write;
+            let _ = write!(&mut input, "{n}\r\n");
+            n += 1;
+        }
+        input.truncate(2 * 1024 * 1024);
+        // Warm-up so allocator + I-cache are hot.
+        for _ in 0..2 {
+            let _ = strip_replayable_rich_content(&input);
+        }
+        let iters = 5;
+        let start = Instant::now();
+        for _ in 0..iters {
+            let out = strip_replayable_rich_content(&input);
+            std::hint::black_box(out);
+        }
+        let elapsed = start.elapsed();
+        let per = elapsed / iters as u32;
+        eprintln!(
+            "[bench] strip_replayable_rich_content 2MiB plain: {iters} iters / {:?} → {:?}/call ({:.1} MiB/s)",
+            elapsed,
+            per,
+            (2.0 * iters as f64) / elapsed.as_secs_f64(),
+        );
+        // SPEC.md "Performance Goals" (FR5): the stripper must stay well
+        // under the snapshot-replay budget on a 2 MiB plain payload.
+        let threshold = std::time::Duration::from_millis(30);
+        assert!(
+            per < threshold,
+            "strip_replayable_rich_content per-call {:?} ≥ threshold {:?} (FR5)",
+            per,
+            threshold,
+        );
+    }
+
     /// drift guard (a): the OSC 777 stripper must key off exactly the shared
     /// [`REPLAYABLE_VIEWER_KINDS`] SSOT, and every one of those kinds must in
     /// fact be stripped (and a non-listed kind must be kept). If a kind is

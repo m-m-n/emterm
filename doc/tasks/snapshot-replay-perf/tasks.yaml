@@ -1,0 +1,87 @@
+schema_version: 1
+feature: snapshot-replay-perf
+
+phases:
+  - id: phase-1-bypass-mechanism
+    name: "Add the ring-buffer replay-mode bypass"
+    summary: "Toggleable bypass inside ring_push_blank that skips SlimCell intern/push but still increments scrollback_evicted_total."
+    files:
+      - crates/term_core/src/ring_buffer.rs
+      - crates/term_core/src/terminal_core.rs
+    effort: small
+    tasks:
+      - id: ring-buffer-bypass-branch
+        name: "Add bypass branch to ring_push_blank + bypass flag + virtual_scrollback_len on RingBuffer; branch get_scrollback_length() to return the virtual count under bypass"
+        requirements: [FR1]
+        status: completed
+      - id: terminal-core-bypass-toggles
+        name: "Expose private enable/disable toggles on TerminalCore (resets virtual_scrollback_len on enable)"
+        requirements: [FR1]
+        status: completed
+      - id: phase1-bypass-unit-test
+        name: "Unit tests exercising bypass branch in isolation at boundaries S<C and S>C"
+        requirements: [FR1]
+        tests: [TS-14]
+        status: completed
+
+  - id: phase-2-wire-build-from-snapshot
+    name: "Wire the bypass into build_from_snapshot"
+    summary: "build_from_snapshot enables bypass, drains, restores live scrollback capacity, returns SnapshotReplay byte-equivalent grid."
+    files:
+      - crates/term_core/src/terminal_core.rs
+    effort: small
+    tasks:
+      - id: build-from-snapshot-bypass-wiring
+        name: "Insert bypass enable/disable around the drain (incl. cancel path) in build_from_snapshot"
+        requirements: [FR1, FR2, FR3]
+        tests: [TS-1, TS-2, TS-3, TS-4]
+        status: completed
+      - id: build-from-snapshot-doc-update
+        name: "Update build_from_snapshot doc comment for new scrollback-content semantics"
+        requirements: [FR2, FR3]
+        status: completed
+      - id: scrollback-capacity-restore-test
+        name: "Unit test for FR2 — post-replay scrollback_count==0, live PTY appends accumulate"
+        requirements: [FR2]
+        tests: [TS-5]
+        status: completed
+      - id: evicted-total-preserve-test
+        name: "Unit test for D1 v2 — evicted_total byte-identical to today's path"
+        requirements: [FR1]
+        tests: [TS-13]
+        status: completed
+      - id: mark-stamping-preserve-test
+        name: "Unit test for D1 v2 — prompt/fold mark abs_row + evicted_total byte-identical to today's path"
+        requirements: [FR1, FR3]
+        tests: [TS-15]
+        status: completed
+
+  - id: phase-3-bench-asserts
+    name: "Regression-guard asserts on perf benches"
+    summary: "Add assert!(per_call < threshold) to the four #[ignore] benches per SPEC.md Performance Goals."
+    files:
+      - crates/term_core/src/bench.rs
+      - src-tauri/src/mux/scrollback_filter.rs
+      - src-tauri/src/mux/scrollback_buffer.rs
+    effort: small
+    tasks:
+      - id: bench-assert-snapshot-replay
+        name: "Add assert!(per_call < 1000ms) to snapshot_replay_bench_2mib_seq"
+        requirements: [FR4, NFR1]
+        tests: [TS-6]
+        status: completed
+      - id: bench-assert-attribution-scrollback-off
+        name: "Add assert!(per_call < 200ms) to snapshot_replay_attribution_2mib_seq scrollback-disabled config"
+        requirements: [FR5]
+        tests: [TS-7]
+        status: completed
+      - id: bench-assert-strip-rich-content
+        name: "Add assert!(per_call < 30ms) to strip_replayable_rich_content_bench_2mib_plain"
+        requirements: [FR5]
+        tests: [TS-8]
+        status: completed
+      - id: bench-assert-scrollback-read-all
+        name: "Add assert!(per_call < 1ms) to scrollback_read_all_bench_2mib_wrapped"
+        requirements: [FR5]
+        tests: [TS-9]
+        status: completed

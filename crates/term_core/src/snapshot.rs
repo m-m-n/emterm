@@ -270,6 +270,9 @@ impl TerminalCore {
             // eviction counter starts at a fresh baseline. Consumers
             // re-baseline off the same restore event.
             scrollback_evicted_total: 0,
+            scrollback_bypass: false,
+            virtual_scrollback_len: 0,
+            bypass_b_mark_texts: HashMap::new(),
             styles,
             chars,
             dirty,
@@ -387,6 +390,9 @@ impl TerminalCore {
             scrollback_capacity,
             // Restored viewport has no scrollback yet → fresh baseline.
             scrollback_evicted_total: 0,
+            scrollback_bypass: false,
+            virtual_scrollback_len: 0,
+            bypass_b_mark_texts: HashMap::new(),
             styles: StyleTable::new(),
             chars: CharTable::new(),
             dirty,

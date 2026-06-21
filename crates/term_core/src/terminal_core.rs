@@ -135,6 +135,15 @@ pub struct SnapshotReplay {
     /// Custom-fold marks drained from the replayed core (OSC 777;…;fold),
     /// for the caller's `backfill_fold_marks`.
     pub fold_marks: Vec<PendingFoldMark>,
+    /// Pre-captured command-row texts for OSC 133 B marks, keyed by
+    /// `abs_row`. Populated by `push_pending_prompt_mark` during the bypass
+    /// replay at the moment each B mark is emitted, before the row can
+    /// scroll into the discarded virtual scrollback. The consumer
+    /// (`tabs.rs::extract_line_text`) should prefer this map over a
+    /// scrollback lookup when the scrollback contents are unavailable (i.e.
+    /// after a `build_from_snapshot` replay where the bypass was active).
+    /// Empty when the replay was not performed via `build_from_snapshot`.
+    pub bypass_b_mark_texts: std::collections::HashMap<u32, String>,
 }
 
 /// Compile-time guarantee that a built `TerminalCore` can be moved across
@@ -223,7 +232,33 @@ pub struct TerminalCore {
     /// coordinates (e.g. native-poc's prompt-mark tracker) read the delta
     /// since their last observation to shift their stored line indices
     /// down. Reset to 0 by `reset()` — see that method for the rationale.
+    ///
+    /// While the snapshot-replay bypass is on (see
+    /// `scrollback_bypass`), this counter is still maintained: once the
+    /// virtual scrollback length saturates at `scrollback_capacity`, each
+    /// subsequent scroll-off bumps `scrollback_evicted_total` instead of
+    /// growing the (virtual) length. This keeps the observable bookkeeping
+    /// byte-identical to the live path.
     pub(crate) scrollback_evicted_total: u64,
+    /// Replay-mode bypass flag. When `true`, `ring_push_blank`'s eviction
+    /// step skips the SlimCell intern + `scrollback_slim` / `scrollback_wrapped`
+    /// push/pop work (and the `release_slim_row` dec-ref loop). Instead it
+    /// updates a virtual scrollback length so the externally observable
+    /// bookkeeping — `get_scrollback_length()` and `scrollback_evicted_total`
+    /// — is byte-identical to today's live path. Used only inside
+    /// `TerminalCore::build_from_snapshot` to drop the per-row compression
+    /// cost during a closed-form payload replay where the scrollback contents
+    /// are not needed.
+    pub(crate) scrollback_bypass: bool,
+    /// Stand-in for `scrollback_count() as u32` while
+    /// `scrollback_bypass` is on. Reset to `0` when the bypass is enabled
+    /// or disabled. On each `ring_push_blank` eviction under bypass: if
+    /// `< scrollback_capacity`, increment; once equal to capacity, further
+    /// scroll-offs bump `scrollback_evicted_total` instead. This makes the
+    /// observable `get_scrollback_length()` value and the mark stamping
+    /// site (`abs_row = get_scrollback_length() + cursor.row`) byte-identical
+    /// to today's path on the same payload + same capacity.
+    pub(crate) virtual_scrollback_len: u32,
     // Intern tables backing scrollback SlimCells.
     pub(crate) styles: StyleTable,
     pub(crate) chars: CharTable,
@@ -291,6 +326,20 @@ pub struct TerminalCore {
     /// the WebView `isAlternateBuffer` guard. Capped at
     /// `MAX_PENDING_FOLD_MARKS`.
     pub(crate) pending_fold_marks: VecDeque<PendingFoldMark>,
+    /// Side-table populated only during a snapshot-replay bypass
+    /// (`scrollback_bypass == true`). When an OSC 133 B (CommandStart) mark
+    /// is emitted while the bypass is on, the plain text of the cursor row
+    /// at that instant is captured here under `abs_row → text`. This is
+    /// necessary because the bypass intentionally discards scrollback
+    /// contents: once the row scrolls past the viewport into the virtual
+    /// scrollback it is irrecoverable. The downstream consumer
+    /// (`tabs.rs::extract_line_text`) prefers this pre-captured text over a
+    /// scrollback lookup when processing the drained `SnapshotReplay`.
+    /// Drained by `take_bypass_b_mark_texts` (called from
+    /// `build_from_snapshot` and shipped on `SnapshotReplay`). Cleared by
+    /// `reset()`. Only populated while the bypass is active; remains empty
+    /// on the normal live-PTY path.
+    pub(crate) bypass_b_mark_texts: std::collections::HashMap<u32, String>,
     /// Application-layer OSC parameter overrides: `(osc_param, action_type)`.
     ///
     /// `term_core` knows no application protocol numbers. A host that layers
@@ -333,6 +382,8 @@ impl TerminalCore {
             scrollback_wrapped: VecDeque::with_capacity(scrollback_capacity.min(64)),
             scrollback_capacity,
             scrollback_evicted_total: 0,
+            scrollback_bypass: false,
+            virtual_scrollback_len: 0,
             styles: StyleTable::new(),
             chars: CharTable::new(),
             dirty: vec![u64::MAX; dirty_words], // all dirty initially
@@ -371,6 +422,7 @@ impl TerminalCore {
             cursor_show_interrupt: false,
             pending_prompt_marks: VecDeque::new(),
             pending_fold_marks: VecDeque::new(),
+            bypass_b_mark_texts: std::collections::HashMap::new(),
             osc_app_params: Vec::new(),
         };
         core.mark_all_dirty();
@@ -544,11 +596,24 @@ impl TerminalCore {
     /// recipe: it owns and returns the core (no `&mut self`), installs no
     /// callbacks, and touches no GUI / thread-local state, so it can run on
     /// a worker thread and the result moved to the main thread. The
-    /// returned tuple is observably identical to the in-place
-    /// `reset_and_replay` + `drain` path (`get_scrollback_evicted_total`,
-    /// `take_prompt_marks`, `take_fold_marks`) on a core of the same size
-    /// fed the same `payload` — the off-thread path and the synchronous
-    /// path therefore reconcile from byte/grid-identical inputs.
+    /// returned bundle is observably identical to the in-place
+    /// `reset_and_replay` + `drain` path on a core of the same size fed the
+    /// same `payload` for the externally observable bookkeeping — the
+    /// `evicted_total`, `prompt_marks` (`abs_row` + `evicted_total`), and
+    /// `fold_marks` (`abs_row` + `evicted_total`) match byte-identically —
+    /// and the viewport grid + cursor are byte-identical. The off-thread
+    /// path and the synchronous path therefore reconcile from
+    /// byte/grid-identical inputs.
+    ///
+    /// **Scrollback contents are intentionally not populated by the replay.**
+    /// During the drain the per-row SlimCell compression (the dominant cost
+    /// on a heavy `seq`-shaped payload) is bypassed; `core.scrollback_count()`
+    /// is `0` on the returned core. The `scrollback_capacity` is the
+    /// caller-requested `scrollback_lines`, so any live PTY appends to the
+    /// returned core accumulate into scrollback exactly as they do today.
+    /// The bypass keeps the observable bookkeeping byte-identical via an
+    /// internal virtual scrollback length (see
+    /// `TerminalCore::scrollback_bypass` / `virtual_scrollback_len`).
     ///
     /// A fresh `TerminalCore::new` is already in the post-`reset` state, so
     /// the extra `reset` inside `reset_and_replay` is a no-op here; it is
@@ -560,10 +625,7 @@ impl TerminalCore {
     /// after the swap, exactly as the synchronous `drain_marks` site does.
     /// `cancel` lets a superseded off-thread worker abandon the parse at the
     /// next chunk boundary; when it is observed set mid-drain this returns
-    /// `None` (the partially-built core is discarded by the caller). A fresh
-    /// `TerminalCore::new` is already in the post-`reset` state, so the
-    /// explicit `reset` matches `reset_and_replay`'s entry point as a no-op
-    /// and keeps the off-thread and synchronous paths byte/grid-identical.
+    /// `None` (the partially-built core is discarded by the caller).
     pub fn build_from_snapshot(
         cols: u16,
         rows: u16,
@@ -573,17 +635,64 @@ impl TerminalCore {
     ) -> Option<SnapshotReplay> {
         let mut core = TerminalCore::new(cols, rows, scrollback_lines);
         core.reset();
-        let actions = core.process_pty_data_fully_cancellable(payload, cancel)?;
+        // Snapshot-replay bypass: skip per-row SlimCell compression during the
+        // drain (the dominant cost on a heavy `seq`-shaped payload). The
+        // bypass keeps `evicted_total` + mark stamping byte-identical to
+        // today's path via `virtual_scrollback_len`; only the post-replay
+        // scrollback *contents* are intentionally not populated.
+        core.enable_snapshot_bypass();
+        let actions = match core.process_pty_data_fully_cancellable(payload, cancel) {
+            Some(a) => a,
+            None => {
+                // Cancelled mid-drain: leave the core consistent (clear the
+                // bypass) before discarding it via the `None` return so a
+                // debugger / panic handler that touches the dropped core
+                // doesn't see a half-set bypass.
+                core.disable_snapshot_bypass();
+                return None;
+            }
+        };
         let evicted_total = core.get_scrollback_evicted_total();
         let prompt_marks = core.take_prompt_marks();
         let fold_marks = core.take_fold_marks();
+        let bypass_b_mark_texts = core.take_bypass_b_mark_texts();
+        core.disable_snapshot_bypass();
         Some(SnapshotReplay {
             core,
             actions,
             evicted_total,
             prompt_marks,
             fold_marks,
+            bypass_b_mark_texts,
         })
+    }
+
+    /// Enable the snapshot-replay bypass: subsequent `ring_push_blank`
+    /// evictions skip the SlimCell intern + `scrollback_slim` push/pop work
+    /// (the per-row hot loop), but still bump `virtual_scrollback_len` /
+    /// `scrollback_evicted_total` so the observable bookkeeping is byte-
+    /// identical to the live path on the same payload.
+    ///
+    /// Preconditions (asserted): the scrollback deque is empty and the
+    /// virtual length is zero. These hold immediately after `reset()` and
+    /// on a freshly-constructed core, which is the only place the bypass is
+    /// turned on (inside `build_from_snapshot`).
+    pub(crate) fn enable_snapshot_bypass(&mut self) {
+        assert!(
+            self.scrollback_slim.is_empty() && self.virtual_scrollback_len == 0,
+            "enable_snapshot_bypass requires an empty scrollback deque and a zero virtual length"
+        );
+        self.scrollback_bypass = true;
+    }
+
+    /// Disable the snapshot-replay bypass. Resets `virtual_scrollback_len`
+    /// to zero so subsequent live operations on this core see the original
+    /// `get_scrollback_length() == scrollback_count() as u32` semantics.
+    /// `scrollback_evicted_total` is intentionally NOT touched — its
+    /// monotonic semantics are part of the externally observable contract.
+    pub(crate) fn disable_snapshot_bypass(&mut self) {
+        self.virtual_scrollback_len = 0;
+        self.scrollback_bypass = false;
     }
 
     pub fn reset(&mut self) {
@@ -600,6 +709,12 @@ impl TerminalCore {
         // the same reset notification and never see a spurious eviction
         // delta. See `scrollback_evicted_total` field docs.
         self.scrollback_evicted_total = 0;
+        // Clear the snapshot-replay bypass virtual length too. The bypass
+        // flag itself is NOT cleared here: `build_from_snapshot` calls
+        // `reset()` *before* enabling the bypass, and a caller that toggles
+        // the bypass on outside of `build_from_snapshot` is not a supported
+        // shape.
+        self.virtual_scrollback_len = 0;
         self.styles = StyleTable::new();
         self.chars = CharTable::new();
         self.cursor = CursorState::new();
@@ -636,6 +751,9 @@ impl TerminalCore {
         // frame from scratch, so a `begin` captured before it would pair with
         // an `end` in an unrelated frame. Drop them.
         self.pending_fold_marks.clear();
+        // Bypass B-mark text side-table: a reset starts a new parse frame, so
+        // any pre-captured row texts from a previous bypass session are stale.
+        self.bypass_b_mark_texts.clear();
         // Note: callbacks are NOT cleared on reset (terminal reset != dispose)
         self.mark_all_dirty();
     }
@@ -660,10 +778,47 @@ impl TerminalCore {
             exit_code,
             evicted_total: self.scrollback_evicted_total,
         };
+        // Cap follows MAX_PENDING_PROMPT_MARKS so an OSC 133 flood cannot grow
+        // bypass_b_mark_texts without bound (PTY trust boundary, same as pending_prompt_marks).
         if self.pending_prompt_marks.len() >= MAX_PENDING_PROMPT_MARKS {
-            self.pending_prompt_marks.pop_front();
+            if let Some(evicted) = self.pending_prompt_marks.pop_front() {
+                self.bypass_b_mark_texts.remove(&evicted.abs_row);
+            }
         }
         self.pending_prompt_marks.push_back(mark);
+        // Under the snapshot-replay bypass, the scrollback contents are
+        // intentionally discarded, so once this row scrolls off the viewport
+        // its text is irrecoverable from the bypassed store. Capture the
+        // cursor row's plain text NOW, at B-mark emission time, so the
+        // downstream consumer can use it instead of a scrollback lookup.
+        // Only B (CommandStart) carries command text; A/C/D do not need this.
+        if self.scrollback_bypass && kind == b'B' {
+            // Secondary cap: if bypass_b_mark_texts is already at the limit
+            // (possible when B marks arrive faster than pending_prompt_marks
+            // fills — e.g. duplicate abs_rows), evict the oldest pending mark's
+            // row from the map before inserting. This keeps the map bounded at
+            // MAX_PENDING_PROMPT_MARKS entries regardless of duplication.
+            if self.bypass_b_mark_texts.len() >= MAX_PENDING_PROMPT_MARKS {
+                if let Some(oldest) = self.pending_prompt_marks.front() {
+                    self.bypass_b_mark_texts.remove(&oldest.abs_row);
+                }
+            }
+            let row = self.cursor.row;
+            let cols = self.cols;
+            let mut text = String::new();
+            let mut col: u16 = 0;
+            while col < cols {
+                if self.get_cell_width(col, row) == 0 {
+                    // Width-0: trailing half of a wide glyph — skip.
+                    col += 1;
+                    continue;
+                }
+                text.push_str(&self.get_cell_char(col, row));
+                col += 1;
+            }
+            let text = text.trim_end().to_string();
+            self.bypass_b_mark_texts.insert(abs_row, text);
+        }
     }
 
     /// Drain the OSC 133 prompt marks captured during parsing. Native
@@ -705,6 +860,18 @@ impl TerminalCore {
         std::mem::take(&mut self.pending_fold_marks)
             .into_iter()
             .collect()
+    }
+
+    /// Drain the bypass B-mark text side-table populated during a
+    /// snapshot-replay bypass. Returns a `HashMap<abs_row, command_text>`
+    /// that maps each OSC 133 B mark's absolute row to the viewport row
+    /// text captured at emission time. Non-empty only when
+    /// `build_from_snapshot` was used (the bypass is off on the live path).
+    /// Called by `build_from_snapshot` immediately before constructing
+    /// `SnapshotReplay`; the consumer should prefer these texts over a
+    /// scrollback lookup since the bypass does not populate scrollback.
+    pub fn take_bypass_b_mark_texts(&mut self) -> std::collections::HashMap<u32, String> {
+        std::mem::take(&mut self.bypass_b_mark_texts)
     }
 
     /// Total number of SlimCells currently held in scrollback.
@@ -849,10 +1016,17 @@ mod tests {
 
     // ── Off-thread snapshot replay builder (FR1/FR6/NFR2/NFR3) ──
 
-    /// Collect the observable grid text + cursor + scrollback length into a
-    /// comparable shape so the pure builder and the synchronous path can be
-    /// asserted byte/grid-identical.
-    fn grid_fingerprint(core: &TerminalCore) -> (Vec<String>, u16, u16, u32) {
+    /// Collect the observable grid text + cursor into a comparable shape so
+    /// the pure builder and the synchronous path can be asserted
+    /// grid-identical. The post-replay scrollback length is intentionally
+    /// excluded: per FR2, the snapshot-replay bypass leaves
+    /// `scrollback_count() == 0` on the built core (contents are not
+    /// repopulated), while the synchronous `reset_and_replay` path retains
+    /// up to `scrollback_capacity` rows of contents. The
+    /// observable bookkeeping that consumers depend on
+    /// (`SnapshotReplay.evicted_total` and mark `abs_row`/`evicted_total`)
+    /// is asserted separately in `test_build_from_snapshot_matches_reset_and_replay`.
+    fn grid_fingerprint(core: &TerminalCore) -> (Vec<String>, u16, u16) {
         let mut rows = Vec::with_capacity(core.rows() as usize);
         for r in 0..core.rows() {
             let mut line = String::new();
@@ -861,12 +1035,7 @@ mod tests {
             }
             rows.push(line);
         }
-        (
-            rows,
-            core.get_cursor_col(),
-            core.get_cursor_row(),
-            core.get_scrollback_length(),
-        )
+        (rows, core.get_cursor_col(), core.get_cursor_row())
     }
 
     /// TS-1: the pure builder is grid/scrollback/marks-identical to the
@@ -969,6 +1138,230 @@ mod tests {
             TerminalCore::build_from_snapshot(80, 24, 100, &payload, &live).is_some(),
             "a clear cancel flag must build normally"
         );
+    }
+
+    /// TS-5 (FR2): the snapshot-replay bypass intentionally does not
+    /// populate scrollback content, but the returned core's
+    /// `scrollback_capacity` is the caller-requested `scrollback_lines` so
+    /// subsequent live PTY appends accumulate into scrollback exactly as
+    /// they do today.
+    #[test]
+    fn test_build_from_snapshot_restores_scrollback_capacity() {
+        // Build a payload that scrolls many viewport rows off the top.
+        // With rows=24, 100 newlines push 100 - 24 = 76 rows past the
+        // viewport. (We just need > 24 to exercise scrolling; the exact
+        // number is unimportant.)
+        let mut payload = Vec::new();
+        for i in 0..200u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let scrollback_lines: u32 = 10_000;
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let built = TerminalCore::build_from_snapshot(80, 24, scrollback_lines, &payload, &never)
+            .expect("not cancelled");
+        let mut core = built.core;
+        // Immediately after replay: scrollback contents are NOT populated.
+        assert_eq!(
+            core.scrollback_count(),
+            0,
+            "snapshot-replay bypass leaves scrollback contents empty (FR2)"
+        );
+        // But the capacity is the caller-requested value, so live appends
+        // accumulate normally.
+        assert_eq!(core.scrollback_capacity(), scrollback_lines);
+
+        // Now feed N more lines through the live PTY path. The first 24 stay
+        // in the viewport; subsequent lines flow into scrollback.
+        let n_extra = 100u32;
+        let mut extra = Vec::new();
+        for i in 0..n_extra {
+            extra.extend_from_slice(format!("post {i}\r\n").as_bytes());
+        }
+        let _ = core.process_pty_data_fully(&extra);
+        // After the live drain: scrollback fills up to `min(n_extra, scrollback_lines)`.
+        // (Each `\r\n` after the viewport fills generates one scrollback row.)
+        let expected_scrollback = (n_extra as usize).min(scrollback_lines as usize);
+        // We pushed n_extra lines; the last `rows-1` may stay in the viewport
+        // depending on cursor positioning, so accept a small slack — what we
+        // really want to assert is "scrollback grew, and is bounded by
+        // scrollback_lines".
+        assert!(
+            core.scrollback_count() > 0,
+            "live PTY appends must accumulate into scrollback after the bypass is disabled"
+        );
+        assert!(
+            core.scrollback_count() <= expected_scrollback,
+            "scrollback_count={} must not exceed scrollback_lines={}",
+            core.scrollback_count(),
+            scrollback_lines
+        );
+    }
+
+    /// TS-13 (FR1 / D1 v2): `SnapshotReplay.evicted_total` produced by
+    /// `build_from_snapshot` is byte-identical to the synchronous
+    /// `reset_and_replay` path on the same payload + capacity, including
+    /// when the payload scrolls strictly more rows than the capacity
+    /// (S > small_C → evicted_total == S - small_C).
+    #[test]
+    fn test_build_from_snapshot_bypass_preserves_evicted_total() {
+        // 24-row viewport, scrollback_lines=5 (small_C). 50 newlines push
+        // 50 lines past the viewport; the first 50 - 5 = 45 of those get
+        // evicted from the scrollback ring.
+        let mut payload = Vec::new();
+        for i in 0..50u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        let small_c: u32 = 5;
+        // Synchronous path: build the same value via reset_and_replay on a
+        // fresh core of the same size.
+        let mut sync_core = TerminalCore::new(80, 24, small_c);
+        sync_core.reset_and_replay(&payload);
+        let sync_evicted = sync_core.get_scrollback_evicted_total();
+
+        // build_from_snapshot path: the bypass must produce the same
+        // `evicted_total`.
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let built = TerminalCore::build_from_snapshot(80, 24, small_c, &payload, &never)
+            .expect("not cancelled");
+        assert_eq!(
+            built.evicted_total, sync_evicted,
+            "bypass path must preserve evicted_total byte-identically"
+        );
+    }
+
+    /// TS-15 (FR1 + FR3 / D1 v2): per-mark `abs_row` and `evicted_total` on
+    /// the `prompt_marks` (and `fold_marks`) drained by `build_from_snapshot`
+    /// must match the synchronous `reset_and_replay` path byte-identically,
+    /// including marks emitted on both sides of the `scrollback_capacity`
+    /// threshold (so the saturation transition in `virtual_scrollback_len` is
+    /// exercised).
+    #[test]
+    fn test_build_from_snapshot_bypass_preserves_mark_stamping() {
+        // Construct a payload that emits OSC 133 marks BOTH before and
+        // after enough scrolling to cross the scrollback_lines = small_C
+        // threshold. cols=80, rows=10 viewport, small_C=5 scrollback rows.
+        //
+        // Sequence: first prompt mark at row 0 (no scrolling yet);
+        // then 30 newlines (well past 10 viewport rows + 5 scrollback,
+        // so virtual_scrollback_len saturates and evicted_total starts
+        // counting); then a second prompt mark + fold begin/end.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"\x1b]133;A\x07prompt1\x1b]133;B\x07ok\r\n");
+        for i in 0..30u32 {
+            payload.extend_from_slice(format!("line {i}\r\n").as_bytes());
+        }
+        payload.extend_from_slice(b"\x1b]133;A\x07prompt2\x1b]133;B\x07");
+        payload.extend_from_slice(b"\x1b]777;emterm;fold;begin\x07");
+        payload.extend_from_slice(b"folded text\r\n");
+        payload.extend_from_slice(b"\x1b]777;emterm;fold;end\x07");
+        payload.extend_from_slice(b"tail\x1b]133;D;0\x07");
+
+        let small_c: u32 = 5;
+
+        // Synchronous path: a fresh core of the same size, reset_and_replay,
+        // then drained.
+        let mut sync_core = TerminalCore::new(80, 10, small_c);
+        sync_core.reset_and_replay(&payload);
+        let sync_evicted = sync_core.get_scrollback_evicted_total();
+        let sync_prompts = sync_core.take_prompt_marks();
+        let sync_folds = sync_core.take_fold_marks();
+
+        // build_from_snapshot path.
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let built = TerminalCore::build_from_snapshot(80, 10, small_c, &payload, &never)
+            .expect("not cancelled");
+
+        // Sanity: we exercised the saturation transition.
+        assert!(
+            sync_evicted > 0,
+            "test payload must scroll past scrollback_lines to exercise saturation \
+             (got sync_evicted={sync_evicted})"
+        );
+        assert!(
+            !sync_prompts.is_empty(),
+            "test payload must emit at least one prompt mark"
+        );
+
+        // Byte-identical mark stamping: full Vec equality covers kind, abs_row,
+        // evicted_total, exit_code, label (per PendingPromptMark / PendingFoldMark
+        // derive(PartialEq) shape).
+        assert_eq!(built.evicted_total, sync_evicted);
+        assert_eq!(built.prompt_marks, sync_prompts);
+        assert_eq!(built.fold_marks, sync_folds);
+    }
+
+    /// TS-B (f2-fold-text-bypass-loss-tc): `build_from_snapshot` captures the
+    /// cursor-row text of each OSC 133 B (CommandStart) mark in
+    /// `SnapshotReplay.bypass_b_mark_texts` so the downstream consumer can
+    /// recover the command text even though the snapshot-replay bypass
+    /// discards scrollback contents.
+    ///
+    /// The payload emits OSC 133 A → command text → OSC 133 B, then fills
+    /// the viewport with filler lines that scroll the B row into the (virtual,
+    /// discarded) scrollback. We assert:
+    /// 1. `bypass_b_mark_texts` is non-empty.
+    /// 2. At least one entry's value contains the command text "cd /tmp".
+    /// 3. The key of that entry matches the `abs_row` of one of the
+    ///    `prompt_marks` with `kind == b'B'`.
+    #[test]
+    fn test_bypass_captures_b_mark_command_text() {
+        // Construct a payload:
+        //   OSC 133 A (PromptStart)
+        //   "$ "  (prompt text)
+        //   OSC 133 B (CommandStart)
+        //   "cd /tmp"  (command text on the B-mark row — B fires AFTER the
+        //               prompt, so the row already holds "$ cd /tmp" worth
+        //               of content that was written before B arrived)
+        //   "\r\n" + 50 filler lines that push the B row into scrollback
+        let mut payload: Vec<u8> = Vec::new();
+        payload.extend_from_slice(b"\x1b]133;A\x07$ ");
+        // Write the command text before OSC 133 B so it is on the row at
+        // the moment B fires (matching the real shell behaviour).
+        payload.extend_from_slice(b"cd /tmp");
+        payload.extend_from_slice(b"\x1b]133;B\x07");
+        payload.extend_from_slice(b"\r\n");
+        // Filler lines: more than viewport rows (24) so the B row scrolls off.
+        for i in 0..60u32 {
+            payload.extend_from_slice(format!("filler {i}\r\n").as_bytes());
+        }
+
+        let never = std::sync::atomic::AtomicBool::new(false);
+        let built = TerminalCore::build_from_snapshot(80, 24, 100, &payload, &never)
+            .expect("not cancelled");
+
+        // 1. The side-table must be non-empty.
+        assert!(
+            !built.bypass_b_mark_texts.is_empty(),
+            "bypass_b_mark_texts should be populated for the B mark"
+        );
+
+        // 2. One entry's value must contain the command text.
+        let has_command = built
+            .bypass_b_mark_texts
+            .values()
+            .any(|v| v.contains("cd /tmp"));
+        assert!(
+            has_command,
+            "bypass_b_mark_texts values should contain 'cd /tmp'; got: {:?}",
+            built.bypass_b_mark_texts
+        );
+
+        // 3. Each key in bypass_b_mark_texts must match the abs_row of a B
+        //    prompt mark drained from the same replay.
+        let b_abs_rows: std::collections::HashSet<u32> = built
+            .prompt_marks
+            .iter()
+            .filter(|m| m.kind == b'B')
+            .map(|m| m.abs_row)
+            .collect();
+        for abs_row in built.bypass_b_mark_texts.keys() {
+            assert!(
+                b_abs_rows.contains(abs_row),
+                "bypass_b_mark_texts key {abs_row} has no matching B prompt mark; \
+                 B marks: {:?}",
+                b_abs_rows
+            );
+        }
     }
 
     // ── Grid construction ────────────────────────────────

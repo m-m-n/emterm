@@ -1,0 +1,123 @@
+schema_version: 1
+feature: snapshot-replay-perf
+created: 2026-06-21
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: verify-plan
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: implement
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: check
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+
+requirements:
+  FR1:
+    title: "Bypass scrollback compression during snapshot replay (skip SlimCell intern + scrollback_slim push/pop while preserving observable bookkeeping via virtual_scrollback_len)"
+    status: ok
+    tasks:
+      - ring-buffer-bypass-branch
+      - terminal-core-bypass-toggles
+      - phase1-bypass-unit-test
+      - build-from-snapshot-bypass-wiring
+      - evicted-total-preserve-test
+      - mark-stamping-preserve-test
+    tests:
+      - TS-13
+      - TS-14
+      - TS-15
+      - TS-6
+  FR2:
+    title: "Restore live scrollback capacity post-replay to caller-requested scrollback_lines (capacity only; contents stay empty)"
+    status: ok
+    tasks:
+      - build-from-snapshot-bypass-wiring
+      - build-from-snapshot-doc-update
+      - scrollback-capacity-restore-test
+    tests:
+      - TS-5
+  FR3:
+    title: "Preserve build_from_snapshot public signature and observable contract (SnapshotReplay byte-identical: evicted_total, prompt/fold mark abs_row+evicted_total, actions; cancel + empty-payload behavior unchanged)"
+    status: ok
+    tasks:
+      - build-from-snapshot-bypass-wiring
+      - build-from-snapshot-doc-update
+      - mark-stamping-preserve-test
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-15
+  FR4:
+    title: "Add assert!(per_call < 1000ms) regression guard to snapshot_replay_bench_2mib_seq"
+    status: ok
+    tasks:
+      - bench-assert-snapshot-replay
+    tests:
+      - TS-6
+  FR5:
+    title: "Add assert thresholds to supporting benches (attribution scrollback-off <200ms, strip_replayable_rich_content <30ms, scrollback_read_all <1ms)"
+    status: ok
+    tasks:
+      - bench-assert-attribution-scrollback-off
+      - bench-assert-strip-rich-content
+      - bench-assert-scrollback-read-all
+    tests:
+      - TS-7
+      - TS-8
+      - TS-9
+  NFR1:
+    title: "Performance: snapshot_replay_bench_2mib_seq < 1000ms MUST, < 200ms SHOULD, < 100ms STRETCH"
+    status: ok
+    tasks:
+      - ring-buffer-bypass-branch
+      - build-from-snapshot-bypass-wiring
+      - bench-assert-snapshot-replay
+    tests:
+      - TS-6
+      - TS-12
+  NFR2:
+    title: "Protocol/format stability: mux IPC, snapshot byte stream, and daemon-side logic byte-identical to current"
+    status: ok
+    tasks: []
+    tests:
+      - TS-11
+  NFR3:
+    title: "Live-path correctness: all non-replay paths (PTY input, scroll, search, fold, resize_reflow) byte-identical; existing tests pass unmodified"
+    status: ok
+    tasks:
+      - build-from-snapshot-bypass-wiring
+    tests:
+      - TS-1
+      - TS-11
+  NFR4:
+    title: "Portability: Linux release, Windows cross-build, CLI-only (--no-default-features), bun test/typecheck all green"
+    status: ok
+    tasks: []
+    tests:
+      - TS-10
+      - TS-11

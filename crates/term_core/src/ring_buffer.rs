@@ -133,7 +133,28 @@ impl TerminalCore {
         }
 
         // ── Step 1: compress the evicted row into scrollback (if capacity > 0).
-        if self.scrollback_capacity > 0 {
+        if self.scrollback_bypass {
+            // Snapshot-replay bypass: skip the SlimCell intern + scrollback
+            // deque push/pop (the per-row hot loop), but keep the externally
+            // observable bookkeeping byte-identical to the live path by
+            // advancing `virtual_scrollback_len` (capped at
+            // `scrollback_capacity`) and `scrollback_evicted_total` (once
+            // saturated). The overflow side-table for the evicted row is still
+            // cleared so the next live-mode `ring_push_blank` starting from
+            // this absolute row finds it clean.
+            let evicted_abs32 = evicted_abs as u32;
+            if !self.overflow.is_empty() {
+                overflow_clear_row(&mut self.overflow, evicted_abs32);
+                overflow_ridx_clear_row(&mut self.overflow_ridx, evicted_abs32);
+            }
+            if self.scrollback_capacity > 0 {
+                if (self.virtual_scrollback_len as usize) < self.scrollback_capacity {
+                    self.virtual_scrollback_len += 1;
+                } else {
+                    self.scrollback_evicted_total += 1;
+                }
+            }
+        } else if self.scrollback_capacity > 0 {
             // Pull overflow strings out of the OverflowTable for this absolute row.
             let evicted_abs32 = evicted_abs as u32;
             let mut slim_row: Vec<SlimCell> = Vec::with_capacity(cols);
@@ -505,8 +526,21 @@ impl TerminalCore {
 
 impl TerminalCore {
     /// Get the number of scrollback lines.
+    ///
+    /// While the snapshot-replay bypass is on (see
+    /// `TerminalCore::scrollback_bypass`), this returns the virtual count
+    /// `virtual_scrollback_len` instead of `scrollback_count() as u32`,
+    /// because the actual `scrollback_slim` deque was intentionally not
+    /// populated. The virtual count evolves byte-identically to the live
+    /// path's `scrollback_count()` (capped at `scrollback_capacity`), so
+    /// the mark stamping site `abs_row = get_scrollback_length() +
+    /// cursor.row` produces the same `abs_row` value either way.
     pub fn get_scrollback_length(&self) -> u32 {
-        self.scrollback_count() as u32
+        if self.scrollback_bypass {
+            self.virtual_scrollback_len
+        } else {
+            self.scrollback_count() as u32
+        }
     }
 
     /// Monotonic count of scrollback rows evicted from the oldest (front)
@@ -1509,6 +1543,126 @@ mod tests {
             core.styles.live_entries() <= 3,
             "got {} live styles",
             core.styles.live_entries()
+        );
+    }
+
+    // ── TS-14: Phase 1 snapshot-replay bypass branch in isolation ──────────
+
+    /// TS-14 (a): enable the bypass on a fresh core, scroll off N viewport
+    /// rows with N < scrollback_capacity. The virtual length must equal N,
+    /// the evicted-total counter must stay at 0, `get_scrollback_length()`
+    /// must mirror the virtual length, and `scrollback_count()` must remain
+    /// 0 (the SlimCell deque was intentionally not populated).
+    #[test]
+    fn test_bypass_branch_below_capacity_no_eviction() {
+        let mut core = TerminalCore::new(10, 3, 5);
+        core.enable_snapshot_bypass();
+        // Push 2 viewport rows off the top (N=2, C=5 → N<C).
+        for _ in 0..2 {
+            core.ring_push_blank(PackedColor::DEFAULT);
+        }
+        assert_eq!(core.virtual_scrollback_len, 2);
+        assert_eq!(core.get_scrollback_evicted_total(), 0);
+        assert_eq!(core.get_scrollback_length(), 2);
+        assert_eq!(core.scrollback_count(), 0);
+        core.disable_snapshot_bypass();
+    }
+
+    /// TS-14 (b): enable the bypass on a fresh core, scroll off N viewport
+    /// rows with N > scrollback_capacity. The virtual length must saturate
+    /// at the capacity, the evicted-total counter must equal N - C, and
+    /// `scrollback_count()` must remain 0.
+    #[test]
+    fn test_bypass_branch_above_capacity_saturates_and_evicts() {
+        let mut core = TerminalCore::new(10, 3, 5);
+        core.enable_snapshot_bypass();
+        // Push 8 viewport rows off the top (N=8, C=5 → N>C, expect 3 evicted).
+        for _ in 0..8 {
+            core.ring_push_blank(PackedColor::DEFAULT);
+        }
+        assert_eq!(core.virtual_scrollback_len, 5);
+        assert_eq!(core.get_scrollback_evicted_total(), 3);
+        assert_eq!(core.get_scrollback_length(), 5);
+        assert_eq!(core.scrollback_count(), 0);
+        core.disable_snapshot_bypass();
+    }
+
+    /// After `disable_snapshot_bypass`, `get_scrollback_length()` returns to
+    /// the live-mode `scrollback_count() as u32` value (= 0, because nothing
+    /// was retained), and `virtual_scrollback_len` is reset to 0.
+    #[test]
+    fn test_disable_bypass_resets_virtual_length_and_restores_live_branch() {
+        let mut core = TerminalCore::new(10, 3, 5);
+        core.enable_snapshot_bypass();
+        for _ in 0..3 {
+            core.ring_push_blank(PackedColor::DEFAULT);
+        }
+        assert_eq!(core.get_scrollback_length(), 3);
+        core.disable_snapshot_bypass();
+        // Live-mode branch returns scrollback_count() == 0.
+        assert_eq!(core.virtual_scrollback_len, 0);
+        assert_eq!(core.get_scrollback_length(), 0);
+        // A subsequent live `ring_push_blank` populates the deque normally.
+        core.ring_push_blank(PackedColor::DEFAULT);
+        assert_eq!(core.scrollback_count(), 1);
+        assert_eq!(core.get_scrollback_length(), 1);
+    }
+
+    /// `evicted_total` is not touched by `disable_snapshot_bypass`: its
+    /// monotonic semantics are part of the externally observable contract.
+    #[test]
+    fn test_disable_bypass_preserves_evicted_total() {
+        let mut core = TerminalCore::new(10, 3, 2);
+        core.enable_snapshot_bypass();
+        for _ in 0..5 {
+            core.ring_push_blank(PackedColor::DEFAULT);
+        }
+        assert_eq!(core.get_scrollback_evicted_total(), 3);
+        core.disable_snapshot_bypass();
+        assert_eq!(core.get_scrollback_evicted_total(), 3);
+    }
+
+    // ── EC-1 regression: scrollback_lines == 0 bypass must not bump counters ──
+
+    /// EC-1 / FR3: build_from_snapshot with scrollback_lines=0 must produce
+    /// the same evicted_total as the synchronous reset_and_replay path.
+    ///
+    /// Before the fix, the bypass branch's inner counter logic was:
+    ///   if virtual_scrollback_len < scrollback_capacity { virtual += 1 }
+    ///   else { evicted_total += 1 }
+    /// When scrollback_capacity == 0, the condition `0 < 0` is always false,
+    /// so every viewport scroll-off hit the `else` arm and incorrectly
+    /// incremented `evicted_total`. The synchronous path takes the third
+    /// `else` arm (scrollback disabled, no counter bump), so the two paths
+    /// diverged. This test locks down the fix.
+    #[test]
+    fn test_build_from_snapshot_bypass_scrollback_zero_matches_sync_path() {
+        // Build a payload that scrolls 100 lines into a 24-row grid.
+        // Simple newlines are enough to trigger ring_push_blank via the
+        // full-screen scroll path.
+        let payload: Vec<u8> = b"\n".repeat(100);
+
+        // Off-thread path: build_from_snapshot with scrollback_lines = 0.
+        static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let replay = TerminalCore::build_from_snapshot(80, 24, 0, &payload, &NEVER)
+            .expect("build_from_snapshot must not be cancelled");
+        let bypass_evicted = replay.evicted_total;
+
+        // Synchronous path: fresh core + reset_and_replay.
+        let mut sync_core = TerminalCore::new(80, 24, 0);
+        sync_core.reset_and_replay(&payload);
+        let sync_evicted = sync_core.get_scrollback_evicted_total();
+
+        assert_eq!(
+            bypass_evicted, sync_evicted,
+            "EC-1: build_from_snapshot evicted_total ({bypass_evicted}) \
+             must equal synchronous path ({sync_evicted}) when scrollback_lines==0"
+        );
+        // Both paths must report 0: scrollback is disabled, so no eviction
+        // counter should ever be bumped regardless of how many lines scroll.
+        assert_eq!(
+            bypass_evicted, 0,
+            "scrollback_lines==0 must never produce a non-zero evicted_total"
         );
     }
 }
