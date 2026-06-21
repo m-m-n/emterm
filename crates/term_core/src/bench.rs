@@ -145,4 +145,222 @@ mod benches {
             ratio
         );
     }
+
+    /// Perf bench: simulate the client-side mux snapshot replay — feed a
+    /// 2 MiB `seq 1 N`-shaped payload into a fresh core via
+    /// `build_from_snapshot`, which is the exact entry point the off-thread
+    /// snapshot worker uses (`tabs.rs::dispatch_offthread_replay`).
+    ///
+    /// This is the single biggest term-side cost during a mux tab switch on a
+    /// pane with a full scrollback ring — the daemon-side filter + ring copy
+    /// run once, but THIS runs on the whole payload byte-by-byte through the
+    /// ANSI parser, allocating SlimCells row by row.
+    ///
+    /// Gated `#[ignore]`. Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path crates/term_core/Cargo.toml --lib \
+    ///   snapshot_replay_bench_2mib_seq \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn snapshot_replay_bench_2mib_seq() {
+        use crate::terminal_core::TerminalCore;
+        use std::io::Write;
+        use std::sync::atomic::AtomicBool;
+        use std::time::Instant;
+
+        // Build a ~2 MiB payload mimicking the scrollback contents of a pane
+        // that ran `seq 1 N` — 7-digit decimals + CRLF. No ESC sequences:
+        // the parser is hot on print + CR/LF, the common case.
+        let mut payload = Vec::with_capacity(2 * 1024 * 1024);
+        let mut n: u64 = 1;
+        while payload.len() < 2 * 1024 * 1024 {
+            let _ = write!(&mut payload, "{n}\r\n");
+            n += 1;
+        }
+        payload.truncate(2 * 1024 * 1024);
+
+        // Warm-up.
+        for _ in 0..1 {
+            let cancel = AtomicBool::new(false);
+            let _ = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &cancel);
+        }
+
+        // Measure: build_from_snapshot end-to-end (this is what the worker
+        // thread actually runs in `dispatch_offthread_replay`).
+        let iters = 3;
+        let start = Instant::now();
+        for _ in 0..iters {
+            let cancel = AtomicBool::new(false);
+            let replay = TerminalCore::build_from_snapshot(200, 50, 10_000, &payload, &cancel);
+            std::hint::black_box(replay);
+        }
+        let elapsed = start.elapsed();
+        let per = elapsed / iters as u32;
+        eprintln!(
+            "[bench] build_from_snapshot 2MiB seq-N payload (200x50, 10k scrollback): \
+             {iters} iters / {:?} → {:?}/call ({:.1} MiB/s)",
+            elapsed,
+            per,
+            (2.0 * iters as f64) / elapsed.as_secs_f64(),
+        );
+        // SPEC.md "Performance Goals" (FR4 / NFR1): MUST < 1000 ms/call.
+        let threshold = std::time::Duration::from_millis(1000);
+        assert!(
+            per < threshold,
+            "build_from_snapshot per-call {:?} ≥ MUST threshold {:?} (FR4 / NFR1)",
+            per,
+            threshold,
+        );
+
+        // Also measure raw process_pty_data_fully (without the SnapshotReplay
+        // bookkeeping) so we can attribute time between parse and the marks-
+        // drain bookkeeping.
+        let iters2 = 3;
+        let start = Instant::now();
+        for _ in 0..iters2 {
+            let mut core = TerminalCore::new(200, 50, 10_000);
+            core.reset();
+            let actions = core.process_pty_data_fully(&payload);
+            std::hint::black_box(actions);
+        }
+        let elapsed = start.elapsed();
+        let per = elapsed / iters2 as u32;
+        eprintln!(
+            "[bench] process_pty_data_fully  2MiB seq-N payload (200x50, 10k scrollback): \
+             {iters2} iters / {:?} → {:?}/call ({:.1} MiB/s)",
+            elapsed,
+            per,
+            (2.0 * iters2 as f64) / elapsed.as_secs_f64(),
+        );
+    }
+
+    /// Hypothesis-confirming bench: re-run the same 2 MiB `seq 1 N` payload
+    /// with three grid/scrollback configurations to attribute the parse cost.
+    ///
+    /// Reasoning: `seq 1 N` emits ~230k lines, so on a 50-row grid every `\n`
+    /// after row 50 triggers `scroll_up_internal` → `ring_push_blank`, which
+    /// runs `cell_to_slim` over every cell of the evicted row and (once the
+    /// scrollback ring is full) `release_slim_row` on the oldest. If that
+    /// per-line scrollback-compression is the dominant cost, the
+    /// `scrollback_lines = 0` and "huge grid (no scroll)" variants will be
+    /// dramatically faster than the 10k-scrollback baseline.
+    ///
+    /// Variants:
+    /// - `200×50, scrollback=10_000` — baseline (snapshot-replay realistic).
+    /// - `200×50, scrollback=0`      — scroll still fires, but no SlimCell
+    ///   compression and no scrollback ring management.
+    /// - `200×250_000, scrollback=0` — grid is taller than the line count, so
+    ///   `\n` never triggers a scroll at all. Pure print + cursor motion.
+    ///
+    /// Gated `#[ignore]`. Invoke with:
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path crates/term_core/Cargo.toml --lib \
+    ///   snapshot_replay_attribution_2mib_seq \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn snapshot_replay_attribution_2mib_seq() {
+        use crate::terminal_core::TerminalCore;
+        use std::io::Write;
+        use std::time::Instant;
+
+        let mut payload = Vec::with_capacity(2 * 1024 * 1024);
+        let mut n: u64 = 1;
+        while payload.len() < 2 * 1024 * 1024 {
+            let _ = write!(&mut payload, "{n}\r\n");
+            n += 1;
+        }
+        payload.truncate(2 * 1024 * 1024);
+
+        // For the "no scroll at all" variant, rows is u16 so we cap at
+        // 65 000 and truncate the payload to a size that fits without any
+        // `\n`-induced scroll. Rate (MiB/s) makes the variants comparable
+        // even though absolute payload size differs for the no-scroll case.
+        let no_scroll_rows: u16 = 65_000;
+        // ~8 bytes per line → fit comfortably under no_scroll_rows lines.
+        let no_scroll_payload_max = (no_scroll_rows as usize) * 6; // headroom
+        let no_scroll_payload = &payload[..no_scroll_payload_max.min(payload.len())];
+
+        let run = |label: &str,
+                   cols: u16,
+                   rows: u16,
+                   sb: u32,
+                   p: &[u8],
+                   iters: u32,
+                   assert_threshold: Option<std::time::Duration>| {
+            // Warm-up.
+            {
+                let mut core = TerminalCore::new(cols, rows, sb);
+                core.reset();
+                let _ = core.process_pty_data_fully(p);
+            }
+            let start = Instant::now();
+            for _ in 0..iters {
+                let mut core = TerminalCore::new(cols, rows, sb);
+                core.reset();
+                let actions = core.process_pty_data_fully(p);
+                std::hint::black_box(actions);
+            }
+            let elapsed = start.elapsed();
+            let per = elapsed / iters;
+            let bytes = (p.len() as f64) * (iters as f64);
+            eprintln!(
+                "[bench] {label:48} ({cols}x{rows}, sb={sb:>7}, payload={:>4} KiB): \
+                 {iters} iters / {:?} → {:?}/call ({:.1} MiB/s)",
+                p.len() / 1024,
+                elapsed,
+                per,
+                bytes / (1024.0 * 1024.0) / elapsed.as_secs_f64(),
+            );
+            if let Some(threshold) = assert_threshold {
+                assert!(
+                    per < threshold,
+                    "{label}: per-call {:?} ≥ threshold {:?}",
+                    per,
+                    threshold,
+                );
+            }
+        };
+
+        run(
+            "baseline (scroll + scrollback compression)",
+            200,
+            50,
+            10_000,
+            &payload,
+            3,
+            // Baseline is the unmitigated cost — eprintln only, no assert.
+            None,
+        );
+        // SPEC.md "Performance Goals" (FR5): scrollback-disabled
+        // configuration's per-call must be < 200 ms. This isolates the
+        // underlying parse + scroll path from the SlimCell compression
+        // cost — a regression in just this number points at the parser /
+        // grid hot path.
+        run(
+            "scroll only (no scrollback compression)",
+            200,
+            50,
+            0,
+            &payload,
+            3,
+            Some(std::time::Duration::from_millis(200)),
+        );
+        run(
+            "no scroll at all (huge grid)",
+            200,
+            no_scroll_rows,
+            0,
+            no_scroll_payload,
+            3,
+            // No-scroll configuration is reported only — no assert.
+            None,
+        );
+    }
 }

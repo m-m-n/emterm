@@ -270,6 +270,22 @@ pub struct Tab {
     /// is pending (the common case, and always so for sub-threshold
     /// snapshots which stay on the synchronous path).
     pending_switch: Option<PendingSwitch>,
+    /// Pre-captured B-mark line texts from the most recent off-thread
+    /// `SnapshotReplay`, keyed by the **original** (pre-normalization)
+    /// `abs_row`. Populated in `apply_offthread_swap` from
+    /// `SnapshotReplay::bypass_b_mark_texts` before `apply_replay_reconcile`
+    /// runs; consumed by `backfill_prompt_marks` to populate
+    /// `resolved_b_mark_texts`; cleared at the end of `apply_offthread_swap`.
+    /// Empty on the synchronous replay path (where scrollback is populated
+    /// so `extract_line_text` works as-is).
+    pending_bypass_b_mark_texts: std::collections::HashMap<u32, String>,
+    /// B-mark line texts keyed by the **post-normalization** absolute row,
+    /// populated by `backfill_prompt_marks` from `pending_bypass_b_mark_texts`
+    /// whenever it processes a B mark whose original `abs_row` is present in
+    /// that map. `register_osc133_fold_region_at_idx` checks this map first
+    /// before falling back to `extract_line_text`. Cleared together with
+    /// `pending_bypass_b_mark_texts` at the end of `apply_offthread_swap`.
+    resolved_b_mark_texts: std::collections::HashMap<u32, String>,
     /// Independent parser that extracts the outer `emterm-mux;` transport
     /// frames from the PTS byte stream once mux is established. A mux tab's
     /// PTS stream is two layers — the outer transport (APC / OSC 9999 mux
@@ -408,6 +424,8 @@ impl Tab {
             pending_pane_switch_from: None,
             pending_window_appended: false,
             pending_switch: None,
+            pending_bypass_b_mark_texts: std::collections::HashMap::new(),
+            resolved_b_mark_texts: std::collections::HashMap::new(),
             mux_apc_extractor: term_core::MuxApcExtractor::new(
                 mux_ipc::protocol::MUX_OSC_PARAM,
                 mux_ipc::protocol::APC_PREFIX,
@@ -735,18 +753,34 @@ impl Tab {
         replay: term_core::terminal_core::SnapshotReplay,
         live_queue: Vec<Vec<u8>>,
     ) {
+        // Move out the pre-captured B-mark texts BEFORE partial-moving
+        // `replay.core` (field ordering matters for partial moves).
+        let bypass_b_mark_texts = replay.bypass_b_mark_texts;
         // 1. Swap the built core in (renderer's Arc stays valid).
         *self.core.lock() = replay.core;
-        // 2. Reconcile the snapshot half first: install the fresh baseline,
+        // 2. Stash the bypass texts so `backfill_prompt_marks` (called
+        //    from inside `apply_replay_reconcile`) can populate
+        //    `resolved_b_mark_texts` for each B mark it processes.
+        self.pending_bypass_b_mark_texts = bypass_b_mark_texts;
+        // 3. Reconcile the snapshot half first: install the fresh baseline,
         //    latch the frame reset, backfill the snapshot's marks.
         //    (Frame-discard of prompts/folds already happened at dispatch
         //    time in `dispatch_offthread_replay`; the alt-screen state is the
         //    core's MODE_ALT_SCREEN bit, read directly by App::pump_all.)
         self.apply_replay_reconcile(replay.evicted_total, replay.prompt_marks, replay.fold_marks);
-        // 3. Apply the queued live output in order, as ordinary post-snapshot
+        // 4. Clear pending_bypass_b_mark_texts now that the snapshot reconcile
+        //    has consumed it. resolved_b_mark_texts is intentionally kept: it
+        //    holds snapshot-era B mark texts that live D marks (arriving in step
+        //    5) still need to look up via register_osc133_fold_region_at_idx.
+        //    Row collisions are handled in backfill_prompt_marks: a live B mark
+        //    on the same abs_row evicts the stale snapshot-era entry, so live
+        //    always wins on collision without clearing the whole map here.
+        self.pending_bypass_b_mark_texts.clear();
+        // 5. Apply the queued live output in order, as ordinary post-snapshot
         //    output (NOT a reset). This re-runs the same drain/backfill the
         //    `PtyOutput` arm would have, so prompt/fold marks and eviction
-        //    arriving during the gap are honored.
+        //    arriving during the gap are honored. The bypass maps are now empty
+        //    so live B marks go through the normal scrollback lookup path.
         self.apply_queued_live_output(live_queue);
     }
 
@@ -1913,6 +1947,31 @@ impl Tab {
             if kind == crate::prompts::PromptMarkKind::CommandEnd {
                 new_command_ends.push((row, m.exit_code));
             }
+            // For B (CommandStart) marks: if the off-thread bypass captured
+            // the command text at emit time (keyed by the original abs_row),
+            // re-key it to the post-normalization row so
+            // `register_osc133_fold_region_at_idx` can find it without a
+            // scrollback lookup.
+            //
+            // Row-collision policy: a live B mark (no entry in
+            // pending_bypass_b_mark_texts) evicts any stale snapshot-era entry
+            // at the same normalized row so live wins on collision.
+            // Snapshot-era B marks (pending_bypass_b_mark_texts has the row)
+            // repopulate resolved_b_mark_texts, keeping the text available for
+            // D marks that arrive live after the swap (the common long-running
+            // command case). This is a no-op on the sync path (both maps are
+            // always empty there).
+            if kind == crate::prompts::PromptMarkKind::CommandStart {
+                if let Some(text) = self.pending_bypass_b_mark_texts.get(&m.abs_row) {
+                    // Snapshot-era B mark: populate resolved map so live D
+                    // marks can find the command text later.
+                    self.resolved_b_mark_texts.insert(row, text.clone());
+                } else {
+                    // Live B mark wins on row collision: evict any snapshot-era
+                    // stale entry so the D mark gets the live scrollback text.
+                    self.resolved_b_mark_texts.remove(&row);
+                }
+            }
             self.prompts.push(crate::prompts::ResolvedPromptMark {
                 kind,
                 row,
@@ -2082,8 +2141,19 @@ impl Tab {
             return;
         };
         // Command text comes from the `B` mark's line (empty when no `B`).
+        // During an off-thread swap the scrollback is not populated
+        // (`build_from_snapshot` bypass skips SlimCell storage), so
+        // `extract_line_text` would return an empty string for B marks whose
+        // row landed in scrollback. `resolved_b_mark_texts` holds pre-captured
+        // texts that `backfill_prompt_marks` re-keyed from
+        // `pending_bypass_b_mark_texts` for exactly this case; we prefer it
+        // when present and fall back to the live scrollback lookup otherwise.
         let command_text = match b_row {
-            Some(row) => self.extract_line_text(row),
+            Some(row) => self
+                .resolved_b_mark_texts
+                .get(&row)
+                .cloned()
+                .unwrap_or_else(|| self.extract_line_text(row)),
             None => String::new(),
         };
         self.folds

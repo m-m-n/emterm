@@ -189,6 +189,62 @@ mod tests {
         assert_eq!(rb.capacity(), 4096);
     }
 
+    /// Perf bench: time `read_all()` on a 2 MiB ring filled past capacity (so
+    /// the wrap-around branch is exercised). This runs once per mux snapshot
+    /// rebuild — `handle_request_pane_snapshot` / `reattach::build_snapshot_bytes`
+    /// call it on the full pane scrollback every tab switch.
+    ///
+    /// Gated `#[ignore]`. Invoke with:
+    ///
+    /// ```sh
+    /// CARGO_TARGET_DIR=src-tauri/target cargo test --release \
+    ///   --manifest-path src-tauri/Cargo.toml --lib --features gui \
+    ///   scrollback_read_all_bench_2mib_wrapped \
+    ///   -- --nocapture --include-ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn scrollback_read_all_bench_2mib_wrapped() {
+        use std::time::Instant;
+        let cap = 2 * 1024 * 1024;
+        let mut rb = ScrollbackRingBuffer::new(cap);
+        // Fill 3x capacity in 4 KiB chunks so the ring wraps and write_pos
+        // lands somewhere in the middle (mimics a long-running pane).
+        let chunk = vec![b'x'; 4096];
+        let total_writes = (cap * 3) / chunk.len();
+        for _ in 0..total_writes {
+            rb.write(&chunk);
+        }
+        // Warm-up.
+        for _ in 0..2 {
+            let _ = rb.read_all();
+        }
+        let iters = 50;
+        let start = Instant::now();
+        for _ in 0..iters {
+            let out = rb.read_all();
+            std::hint::black_box(out);
+        }
+        let elapsed = start.elapsed();
+        let per = elapsed / iters as u32;
+        eprintln!(
+            "[bench] ScrollbackRingBuffer::read_all 2MiB wrapped: {iters} iters / {:?} → {:?}/call ({:.1} MiB/s)",
+            elapsed,
+            per,
+            (2.0 * iters as f64) / elapsed.as_secs_f64(),
+        );
+        // SPEC.md "Performance Goals" (FR5): a plain Vec copy of 2 MiB
+        // must stay under 1 ms — if this regresses, the daemon-side ring
+        // read has become a bottleneck of its own.
+        let threshold = std::time::Duration::from_millis(1);
+        assert!(
+            per < threshold,
+            "ScrollbackRingBuffer::read_all per-call {:?} ≥ threshold {:?} (FR5)",
+            per,
+            threshold,
+        );
+    }
+
     #[test]
     fn test_repeated_small_writes_overflow() {
         let mut rb = ScrollbackRingBuffer::new(8);
