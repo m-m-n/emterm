@@ -294,10 +294,7 @@ fn pty_reader_loop(
                 {
                     let target = output_target.lock().unwrap();
                     if let PaneOutputTarget::Connected(ref tx) = *target {
-                        let _ = tx.blocking_send(PtyOutputChunk {
-                            pane_id,
-                            data: Vec::new(),
-                        });
+                        let _ = tx.blocking_send(PtyOutputChunk::pty_output(pane_id, Vec::new()));
                     }
                 }
                 // FR1: notify the daemon of the pane exit regardless of attach
@@ -410,10 +407,7 @@ fn pty_reader_loop(
                     match &mut *target {
                         PaneOutputTarget::Connected(tx) => {
                             // Single allocation: data owned by PtyOutputChunk
-                            let chunk = PtyOutputChunk {
-                                pane_id,
-                                data: data.to_vec(),
-                            };
+                            let chunk = PtyOutputChunk::pty_output(pane_id, data.to_vec());
                             match tx.try_send(chunk) {
                                 Ok(()) => None, // sent successfully
                                 Err(mpsc::error::TrySendError::Full(chunk)) => {

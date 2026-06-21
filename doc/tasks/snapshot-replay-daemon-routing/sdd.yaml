@@ -1,0 +1,123 @@
+schema_version: 1
+feature: snapshot-replay-daemon-routing
+created: 2026-06-21
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: verify-plan
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: implement
+    status: completed
+  - id: check
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: eaf82e7269f941397e6e255412b5a4fd906ece63
+
+requirements:
+  FR1:
+    title: "Daemon replies to RequestPaneSnapshot with MessageType::Snapshot or SnapshotRestore (not PtyOutput), preserving ordering w.r.t. pane_output_tx PTY chunks"
+    status: ok
+    tasks:
+      - phase1-chunk-kind
+      - phase2-drain-dispatch
+      - phase3-handler-switch
+      - phase4-new-tests
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-7
+  FR2:
+    title: "Client routes the reply through the existing apply_mux_message::Snapshot|SnapshotRestore branch (build_from_snapshot + scrollback_bypass via dispatch_offthread_replay or reset_frame_for_replay); no new client branch"
+    status: ok
+    tasks:
+      - phase5-cross-verify
+    tests:
+      - TS-7
+  FR3:
+    title: "Daemon-side PtyOutput-as-snapshot fallback removed for the RequestPaneSnapshot reply only; resume / reattach snapshot paths remain on PtyOutput per SPEC §Out of Scope"
+    status: ok
+    tasks:
+      - phase3-handler-switch
+      - phase4-new-tests
+    tests:
+      - TS-1
+      - TS-2
+      - TS-4
+  FR4:
+    title: "Version-skew compatibility both directions (new daemon × old client; new client × old daemon) without MessageType enum / opcode / payload-schema changes"
+    status: ok
+    tasks:
+      - phase5-cross-verify
+    tests:
+      - TS-8
+      - TS-9
+  FR5:
+    title: "Ordering invariants around handle_request_pane_snapshot and the existing ordering tests (handlers.rs:725-925) preserved"
+    status: ok
+    tasks:
+      - phase1-chunk-kind
+      - phase2-drain-dispatch
+      - phase3-handler-switch
+      - phase4-new-tests
+    tests:
+      - TS-1
+      - TS-3
+  NFR1:
+    title: "Production wall-time for 2 MiB tab-switch reattach (RECEIVED → swap DONE) < 1000ms MUST, < 200ms SHOULD, < 100ms STRETCH"
+    status: ok
+    tasks:
+      - phase5-cross-verify
+    tests:
+      - TS-7
+  NFR2:
+    title: "Protocol/wire-format stability: no MessageType enum change, no new opcode, no snapshot byte-stream layout change; only the framing msg_type byte flips PtyOutput → Snapshot|SnapshotRestore"
+    status: ok
+    tasks:
+      - phase2-drain-dispatch
+    tests:
+      - TS-1
+      - TS-4
+  NFR3:
+    title: "All existing tests in crates/term_core, src-tauri/src/mux, src-tauri/src/tabs.rs, crates/mux_ipc green"
+    status: ok
+    tasks:
+      - phase4-new-tests
+      - phase5-cross-verify
+    tests:
+      - TS-4
+  NFR4:
+    title: "Portability: Linux release (make build), Windows cross-build (make win-build), CLI-only (--no-default-features) all green"
+    status: ok
+    tasks:
+      - phase5-cross-verify
+    tests:
+      - TS-5
+      - TS-6
+  NFR5:
+    title: "[mux-perf] instrumentation lifecycle: retained during implementation and sdd.6-verify, reverted in a final cleanup commit"
+    status: ok
+    tasks:
+      - phase5-cross-verify
+    tests:
+      - TS-7

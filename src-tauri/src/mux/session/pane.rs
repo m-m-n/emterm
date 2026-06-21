@@ -98,10 +98,70 @@ pub fn lock_shadow_parser(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Discriminator on `PtyOutputChunk` distinguishing live PTY bytes from a
+/// `RequestPaneSnapshot` reply payload routed through the same per-pane
+/// channel.
+///
+/// The connection drain (`mux::ipc::connection`) inspects `kind` when
+/// encoding each chunk: `PtyOutput` produces a `MessageType::PtyOutput`
+/// frame (the historical default), `Snapshot` produces a
+/// `MessageType::Snapshot` frame so the client dispatches it to the
+/// `apply_mux_message::Snapshot|SnapshotRestore` arm and the
+/// `build_from_snapshot` + `scrollback_bypass` fast path.
+///
+/// Routing the snapshot reply through the existing `pane_output_tx`
+/// channel preserves the FIFO ordering invariant documented at
+/// `handle_request_pane_snapshot` (handlers.rs:394-414): bytes already
+/// queued before the snapshot stay before it on the wire, bytes queued
+/// after stay after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkKind {
+    /// Default: a live PTY-output chunk from the reader thread or the
+    /// resume / reattach paths.
+    PtyOutput,
+    /// A `RequestPaneSnapshot` reply payload assembled by
+    /// `handle_request_pane_snapshot`. Drained as `MessageType::Snapshot`.
+    Snapshot,
+}
+
 /// PTY output chunk sent from the reader thread to the mux writer.
+///
+/// `kind` defaults to `ChunkKind::PtyOutput` via the `pty_output(...)`
+/// constructor; only `handle_request_pane_snapshot` should call
+/// `PtyOutputChunk::snapshot(...)` to produce a `Snapshot`-tagged chunk.
 pub struct PtyOutputChunk {
     pub pane_id: PaneId,
     pub data: Vec<u8>,
+    pub kind: ChunkKind,
+}
+
+impl PtyOutputChunk {
+    /// Construct a live PTY output chunk (default `kind == PtyOutput`).
+    ///
+    /// Used by the reader thread (`pty_spawn`), the resume path
+    /// (`resume_pane_with_permit`), the reattach path, and the PTY-exit
+    /// signal (empty `data`).
+    pub fn pty_output(pane_id: PaneId, data: Vec<u8>) -> Self {
+        Self {
+            pane_id,
+            data,
+            kind: ChunkKind::PtyOutput,
+        }
+    }
+
+    /// Construct a snapshot-reply chunk (`kind == Snapshot`).
+    ///
+    /// Only `handle_request_pane_snapshot` should use this constructor:
+    /// the drain loop in `mux::ipc::connection` will encode the chunk as
+    /// a `MessageType::Snapshot` frame, routing it to the client's
+    /// `apply_mux_message::Snapshot|SnapshotRestore` arm.
+    pub fn snapshot(pane_id: PaneId, data: Vec<u8>) -> Self {
+        Self {
+            pane_id,
+            data,
+            kind: ChunkKind::Snapshot,
+        }
+    }
 }
 
 /// Bounded channel capacity for PTY output per pane.
@@ -375,10 +435,7 @@ pub fn resume_pane_with_permit(
             snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
             snapshot.extend_from_slice(&buffered);
             snapshot.extend_from_slice(&screen);
-            permit.send(PtyOutputChunk {
-                pane_id: pane.id,
-                data: snapshot,
-            });
+            permit.send(PtyOutputChunk::pty_output(pane.id, snapshot));
             *target = PaneOutputTarget::Connected(owned_tx.clone());
             ResumeOutcome::Resumed
         }
@@ -586,18 +643,9 @@ mod tests {
         // Channel capacity 1: second send should fail with Full
         let (tx, _rx) = mpsc::channel::<PtyOutputChunk>(1);
         // First send succeeds
-        assert!(
-            tx.try_send(PtyOutputChunk {
-                pane_id: 1,
-                data: vec![1]
-            })
-            .is_ok()
-        );
+        assert!(tx.try_send(PtyOutputChunk::pty_output(1, vec![1])).is_ok());
         // Second send hits backpressure (channel full)
-        let result = tx.try_send(PtyOutputChunk {
-            pane_id: 1,
-            data: vec![2],
-        });
+        let result = tx.try_send(PtyOutputChunk::pty_output(1, vec![2]));
         assert!(result.is_err());
         match result {
             Err(mpsc::error::TrySendError::Full(_)) => {} // expected
@@ -609,15 +657,30 @@ mod tests {
     fn test_channel_closed_detection() {
         let (tx, rx) = mpsc::channel::<PtyOutputChunk>(PTY_CHANNEL_CAPACITY);
         drop(rx); // Close receiver
-        let result = tx.try_send(PtyOutputChunk {
-            pane_id: 1,
-            data: vec![1],
-        });
+        let result = tx.try_send(PtyOutputChunk::pty_output(1, vec![1]));
         assert!(result.is_err());
         match result {
             Err(mpsc::error::TrySendError::Closed(_)) => {} // expected
             _ => panic!("Expected Closed error"),
         }
+    }
+
+    /// Phase 1 ergonomics: `pty_output(...)` tags as `PtyOutput`,
+    /// `snapshot(...)` tags as `Snapshot`. Default reader / resume callers
+    /// keep `kind == PtyOutput`; only the snapshot handler opts into
+    /// `kind == Snapshot`. Verifies the discriminator is honored by the
+    /// two named constructors.
+    #[test]
+    fn test_chunk_kind_constructors_round_trip() {
+        let live = PtyOutputChunk::pty_output(1, b"abc".to_vec());
+        assert_eq!(live.pane_id, 1);
+        assert_eq!(live.data, b"abc");
+        assert_eq!(live.kind, ChunkKind::PtyOutput);
+
+        let snap = PtyOutputChunk::snapshot(2, b"snapshot-bytes".to_vec());
+        assert_eq!(snap.pane_id, 2);
+        assert_eq!(snap.data, b"snapshot-bytes");
+        assert_eq!(snap.kind, ChunkKind::Snapshot);
     }
 
     #[test]
