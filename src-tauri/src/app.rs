@@ -2773,6 +2773,24 @@ impl App {
                 }
                 crate::tabs::SwapOutcome::Pending | crate::tabs::SwapOutcome::Idle => {}
             }
+            // Non-blockingly poll this tab's in-flight 2nd-pass scrollback
+            // restore (the bypass-off rebuild merged into the live core).
+            // Run per owning tab so a background tab's restore lands as
+            // well — the merge does not touch the viewport, so no
+            // `active_offthread_swapped`-style full redraw is required;
+            // only `active_changed` matters so the search overlay rebuilds
+            // against the new scrollback.
+            match tab.poll_pending_scrollback_restore() {
+                crate::tabs::ScrollbackRestoreOutcome::Merged
+                | crate::tabs::ScrollbackRestoreOutcome::Failed => {
+                    changed = true;
+                    if idx == active {
+                        active_changed = true;
+                    }
+                }
+                crate::tabs::ScrollbackRestoreOutcome::Pending
+                | crate::tabs::ScrollbackRestoreOutcome::Idle => {}
+            }
             // Markdown viewer (FR1/FR2/FR3): collect this tab's emterm OSC
             // queue for the spawner. We cannot touch `self.viewer_spawner`
             // here because the loop holds `&mut self.tabs`, so the drained

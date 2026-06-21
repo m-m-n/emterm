@@ -1,0 +1,179 @@
+schema_version: 1
+feature: snapshot-replay-scrollback-restore
+created: 2026-06-21
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "8746d93a463f44646e997d3f43449d8575feb188"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: "8746d93a463f44646e997d3f43449d8575feb188"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "8746d93a463f44646e997d3f43449d8575feb188"
+  - id: implement
+    status: completed
+    completed_at_commit: "8746d93a463f44646e997d3f43449d8575feb188"
+  - id: check
+    status: completed
+    completed_at_commit: "8746d93a463f44646e997d3f43449d8575feb188"
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: "8746d93a463f44646e997d3f43449d8575feb188"
+
+requirements:
+  FR1:
+    title: "2nd-pass spawn after bypass-on swap"
+    status: ok
+    tasks:
+      - add-build-scrollback-only-from-snapshot
+      - spawn-2nd-pass-in-apply-offthread-swap
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-13
+  FR2:
+    title: "Merge primitive (merge_scrollback_from with id re-intern)"
+    status: ok
+    tasks:
+      - add-prepend-scrollback-rows
+      - add-merge-scrollback-from
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-6
+  FR3:
+    title: "Live-drain reconciliation via base_evicted_total"
+    status: ok
+    tasks:
+      - implement-apply-scrollback-restore
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-9
+      - TS-14
+  FR4:
+    title: "poll_pending_scrollback_restore non-blocking polling integration"
+    status: ok
+    tasks:
+      - implement-poll-pending-scrollback-restore
+      - wire-app-pump-all
+    tests:
+      - TS-7
+      - TS-8
+      - TS-13
+  FR5:
+    title: "Cancel / supersede on new switch / resize / shutdown"
+    status: ok
+    tasks:
+      - cancel-on-supersede-and-resize
+      - wire-app-pump-all
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-8
+      - TS-10
+  FR6:
+    title: "Threshold parity: no 2nd-pass below OFFTHREAD_REPLAY_THRESHOLD_BYTES"
+    status: ok
+    tasks:
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-12
+      - TS-13
+  FR7:
+    title: "Failure tolerance: spawn-fail / panic → warn only, no sync fallback"
+    status: ok
+    tasks:
+      - spawn-2nd-pass-in-apply-offthread-swap
+      - implement-poll-pending-scrollback-restore
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-11
+  FR8:
+    title: "Mark non-duplication (prompt_marks / fold_marks / bypass_b_mark_texts)"
+    status: ok
+    tasks:
+      - implement-apply-scrollback-restore
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-15
+  NFR1:
+    title: "Performance (latency): 1st-pass swap ≤ 60 ms for 2 MiB"
+    status: ok
+    tasks:
+      - add-scrollback-restore-bench
+    tests: []
+  NFR2:
+    title: "Performance (restore): single-shot 2nd-pass ≤ 5 s for 2 MiB"
+    status: ok
+    tasks:
+      - add-scrollback-restore-bench
+    tests: []
+  NFR3:
+    title: "UI non-blocking: try_recv + per-pump poll"
+    status: ok
+    tasks:
+      - spawn-2nd-pass-in-apply-offthread-swap
+      - implement-poll-pending-scrollback-restore
+      - wire-app-pump-all
+    tests:
+      - TS-7
+  NFR4:
+    title: "One in-flight 2nd-pass per tab"
+    status: ok
+    tasks:
+      - define-pending-scrollback-restore-types
+      - cancel-on-supersede-and-resize
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-8
+  NFR5:
+    title: "scrollback_evicted_total monotonicity preserved"
+    status: ok
+    tasks:
+      - add-merge-scrollback-from
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-2
+      - TS-9
+  NFR6:
+    title: "Equivalence with synchronous bypass-off build (observable state parity)"
+    status: ok
+    tasks:
+      - add-build-scrollback-only-from-snapshot
+      - add-merge-scrollback-from
+      - add-tabs-test-helpers-and-integration-tests
+    tests:
+      - TS-5
+      - TS-6
+  NFR7:
+    title: "Logging: warn/info at spawn / cancel / completion / failure"
+    status: ok
+    tasks:
+      - spawn-2nd-pass-in-apply-offthread-swap
+      - implement-poll-pending-scrollback-restore
+      - cancel-on-supersede-and-resize
+      - audit-operational-logging
+    tests: []
+  NFR8:
+    title: "Branch policy: WebView (src/) untouched"
+    status: ok
+    tasks:
+      - verify-cli-only-build
+    tests: []
