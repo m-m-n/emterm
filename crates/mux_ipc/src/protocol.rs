@@ -950,6 +950,109 @@ mod tests {
         assert!(decoded.windows.is_empty());
     }
 
+    // ---- base64 transport inflation metrics (perf regression guard) ----
+    //
+    // The bridge/ConPTY transport encodes each `MuxMessage` frame body as
+    // base64 inside the APC / OSC envelope (`to_apc` / `to_osc`). base64
+    // inflates the body by a deterministic ~33% (4 output bytes per 3 input
+    // bytes, padded up), on top of a fixed-size envelope. These tests pin the
+    // exact byte counts so a future change to the transport encoding (or a
+    // regression that double-encodes) is caught, and so the perf work tracking
+    // "base64 adds 33%" has a stable, real-time-independent baseline.
+
+    /// base64(STANDARD) output length for `n` input bytes: 4 bytes per 3-byte
+    /// group, the final partial group padded to 4. This mirrors what
+    /// `BASE64.encode` produces and lets the tests assert the encoded size
+    /// without hard-coding magic numbers.
+    fn base64_len(n: usize) -> usize {
+        n.div_ceil(3) * 4
+    }
+
+    #[test]
+    fn base64_inflation_to_apc_64kib_payload() {
+        // Representative PtyOutput payload: 64 KiB of data.
+        let payload_len = 64 * 1024; // 65536
+        let msg = MuxMessage::pty_output(7, vec![0xAB; payload_len]);
+
+        let frame_body = msg.to_frame_body();
+        // frame body = 1 (type) + 4 (pane_id) + payload
+        assert_eq!(frame_body.len(), 5 + payload_len, "frame body layout fixed");
+
+        let apc = msg.to_apc();
+
+        // Fixed envelope: ESC _ (2) + "emterm-mux;" + base64 + ESC \ (2).
+        let envelope_overhead = APC_START.len() + APC_PREFIX.len() + APC_ST.len();
+        let expected_b64 = base64_len(frame_body.len());
+        assert_eq!(
+            apc.len(),
+            envelope_overhead + expected_b64,
+            "to_apc() size = fixed envelope + base64(frame_body)"
+        );
+
+        // base64 of a 65541-byte body: ceil(65541/3)*4 = 21847*4 = 87388.
+        assert_eq!(
+            expected_b64, 87388,
+            "base64 length of the 64KiB+5 frame body"
+        );
+
+        // The inflation the perf work cares about: encoded-vs-raw-body ratio.
+        // 87388 / 65541 ≈ 1.3333 (the canonical base64 +33%). Pin it tight.
+        let body = frame_body.len();
+        // Express as parts-per-thousand to keep the assertion integer-exact.
+        let ratio_permille = expected_b64 * 1000 / body;
+        assert_eq!(
+            ratio_permille, 1333,
+            "base64 inflates the frame body by ~33.3% (1333 permille)"
+        );
+
+        // Absolute inflation: encoded body is exactly 21847 bytes larger than
+        // the raw body for this payload.
+        assert_eq!(expected_b64 - body, 21847, "absolute base64 byte growth");
+    }
+
+    #[test]
+    fn base64_inflation_to_osc_matches_apc_plus_param() {
+        // OSC adds only the "9999;" parameter over the APC envelope; the
+        // base64 body is byte-for-byte identical. This pins that the OSC
+        // fallback transport does not encode the payload any differently.
+        let payload_len = 64 * 1024;
+        let msg = MuxMessage::pty_output(3, vec![0xCD; payload_len]);
+
+        let apc = msg.to_apc();
+        let osc = msg.to_osc();
+
+        // OSC envelope = ESC ] (2) + "9999" + ";" + "emterm-mux;" + b64 + ESC \.
+        // APC envelope = ESC _ (2) + "emterm-mux;" + b64 + ESC \.
+        // Both ESC introducers are 2 bytes, so the only delta is "9999;".
+        let param_overhead = MUX_OSC_PARAM.to_string().len() + 1; // "9999" + ";"
+        assert_eq!(
+            osc.len(),
+            apc.len() + param_overhead,
+            "to_osc() = to_apc() + the OSC \"9999;\" parameter, same base64 body"
+        );
+        assert_eq!(param_overhead, 5, "OSC param overhead is exactly \"9999;\"");
+    }
+
+    #[test]
+    fn base64_inflation_ratio_is_payload_size_independent() {
+        // The ~33% inflation holds across payload sizes (only the fixed
+        // envelope changes the headline ratio for tiny payloads). Verify the
+        // base64 body ratio converges to 4/3 as the payload grows, so the
+        // perf model "base64 = +33%" is sound for the bulk-output case the
+        // regression targets.
+        for &payload_len in &[4 * 1024usize, 16 * 1024, 256 * 1024] {
+            let msg = MuxMessage::pty_output(1, vec![0u8; payload_len]);
+            let body = msg.to_frame_body().len();
+            let encoded_body = base64_len(body);
+            // 1333 permille = +33.3%. Large payloads stay within 1 permille.
+            let ratio_permille = encoded_body * 1000 / body;
+            assert!(
+                (1333..=1334).contains(&ratio_permille),
+                "payload {payload_len}: base64 body ratio {ratio_permille} permille not ~1333"
+            );
+        }
+    }
+
     #[test]
     fn test_welcome_with_windows_roundtrip() {
         let welcome = WelcomeMsg::Accepted {

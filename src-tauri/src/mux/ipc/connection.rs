@@ -945,4 +945,137 @@ mod tests {
         assert_eq!(merged[3].pane_id, 3);
         assert_eq!(merged[3].data, b"c1");
     }
+
+    // ── merge / drain efficiency metrics (IPC frame-count regression guard) ──
+    //
+    // The daemon drains up to `DRAIN_BATCH_LIMIT` chunks per select! iteration
+    // and merges consecutive same-pane chunks into one before sending. Each
+    // surviving merged chunk becomes one IPC frame (one base64-encoded APC/OSC
+    // envelope on the bridge transport), so "output chunk count" is the
+    // frame-count metric the perf work optimizes. These tests pin the
+    // input-vs-output chunk reduction deterministically (counts only, no
+    // timing) so a regression that stops coalescing is caught.
+
+    /// Total bytes are conserved across the merge (no data lost/duplicated)
+    /// while the chunk count collapses — the core efficiency invariant.
+    fn total_bytes(chunks: &[PtyOutputChunk]) -> usize {
+        chunks.iter().map(|c| c.data.len()).sum()
+    }
+
+    #[test]
+    fn merge_efficiency_single_pane_n_to_one() {
+        // N consecutive same-pane chunks → exactly 1 IPC frame.
+        for n in [2usize, 8, 64] {
+            let chunks: Vec<PtyOutputChunk> = (0..n).map(|_| chunk(1, b"abcd")).collect();
+            let bytes_in = total_bytes(&chunks);
+            let merged = merge_consecutive_chunks(chunks);
+            assert_eq!(
+                merged.len(),
+                1,
+                "{n} consecutive same-pane chunks must merge to 1 frame"
+            );
+            // Frame-count reduction: N inputs → 1 output.
+            assert_eq!(total_bytes(&merged), bytes_in, "no bytes lost in merge");
+            assert_eq!(merged[0].data.len(), n * 4, "all payloads concatenated");
+        }
+    }
+
+    #[test]
+    fn merge_efficiency_only_consecutive_same_pane_collapses() {
+        // Mixed panes: only *runs* of the same pane collapse. Six input chunks
+        // across runs [1,1,1 | 2,2 | 1] → three output frames (one per run).
+        let chunks = vec![
+            chunk(1, b"a"),
+            chunk(1, b"b"),
+            chunk(1, b"c"),
+            chunk(2, b"d"),
+            chunk(2, b"e"),
+            chunk(1, b"f"),
+        ];
+        let bytes_in = total_bytes(&chunks);
+        let input_count = chunks.len();
+        let merged = merge_consecutive_chunks(chunks);
+
+        // 6 input chunks → 3 output frames (a 50% frame reduction here).
+        assert_eq!(input_count, 6);
+        assert_eq!(
+            merged.len(),
+            3,
+            "only consecutive same-pane runs collapse; interleaving stays split"
+        );
+        assert_eq!(total_bytes(&merged), bytes_in, "no bytes lost");
+        assert_eq!(merged[0].pane_id, 1);
+        assert_eq!(merged[0].data, b"abc");
+        assert_eq!(merged[1].pane_id, 2);
+        assert_eq!(merged[1].data, b"de");
+        assert_eq!(merged[2].pane_id, 1);
+        assert_eq!(merged[2].data, b"f");
+    }
+
+    #[test]
+    fn merge_efficiency_alternating_panes_no_reduction() {
+        // Worst case: strictly alternating panes never collapse, so the frame
+        // count is unchanged (input count == output count). This pins the
+        // lower bound of the optimization (merge never *increases* frames).
+        let chunks = vec![
+            chunk(1, b"a"),
+            chunk(2, b"b"),
+            chunk(1, b"c"),
+            chunk(2, b"d"),
+        ];
+        let input_count = chunks.len();
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(
+            merged.len(),
+            input_count,
+            "alternating panes cannot merge; frame count is unchanged"
+        );
+    }
+
+    #[test]
+    fn merge_efficiency_full_drain_batch_single_pane() {
+        // A full drain batch (DRAIN_BATCH_LIMIT chunks) from one busy pane —
+        // the bulk-output hot path — collapses to a single IPC frame. This is
+        // the headline win the perf work relies on: 64 drained chunks → 1 send.
+        let chunks: Vec<PtyOutputChunk> = (0..DRAIN_BATCH_LIMIT)
+            .map(|_| chunk(42, &[0u8; 1024]))
+            .collect();
+        let bytes_in = total_bytes(&chunks);
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(
+            merged.len(),
+            1,
+            "a full {DRAIN_BATCH_LIMIT}-chunk single-pane drain merges to 1 frame"
+        );
+        assert_eq!(total_bytes(&merged), bytes_in);
+        assert_eq!(
+            merged[0].data.len(),
+            DRAIN_BATCH_LIMIT * 1024,
+            "merged frame carries the whole batch"
+        );
+    }
+
+    #[test]
+    fn merge_efficiency_exit_signals_stay_separate() {
+        // Exit signals (empty data) are never merged, so they always cost their
+        // own frame even amid same-pane data. Pin this so the frame-count model
+        // accounts for them: 3 data chunks + 1 exit (same pane) → 2 frames.
+        let chunks = vec![
+            chunk(1, b"x"),
+            chunk(1, b"y"),
+            chunk(1, b"z"),
+            exit_chunk(1),
+        ];
+        let merged = merge_consecutive_chunks(chunks);
+        assert_eq!(
+            merged.len(),
+            2,
+            "same-pane data collapses to 1 frame; the exit signal is a 2nd frame"
+        );
+        assert_eq!(merged[0].data, b"xyz");
+        assert!(
+            merged[1].data.is_empty(),
+            "exit signal preserved separately"
+        );
+    }
 }
