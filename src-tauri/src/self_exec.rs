@@ -32,6 +32,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Identity of the executable captured at startup.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct SelfExeId {
     path: PathBuf,
     dev: u64,
@@ -80,6 +81,7 @@ fn capture_baseline() -> Option<SelfExeId> {
 /// `current` is the `(dev, ino)` read of the baseline path, or `None` when the
 /// path can no longer be `stat`-ed (ENOENT). Returns `true` when the current
 /// read is absent OR differs from the baseline.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn is_missing(baseline: &SelfExeId, current: Option<(u64, u64)>) -> bool {
     match current {
         None => true,
