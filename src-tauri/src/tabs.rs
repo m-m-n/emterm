@@ -280,6 +280,13 @@ pub struct Tab {
     /// instead of into `self.core`, so `self.core` is driven by inner content
     /// only (FR1 / FR2). Reset on detach so the pre-mux branch resumes clean.
     mux_apc_extractor: term_core::MuxApcExtractor,
+    /// Test-only: number of times the `process_combined` coalesce flush
+    /// invoked the core parse for active-pane output. The coalesce contract
+    /// (consecutive active-pane `PtyOutput` ⇒ one parse) and the batched
+    /// metric test read this to assert pass count. Strictly `cfg(test)` so
+    /// the production build carries no counter.
+    #[cfg(test)]
+    coalesce_parse_passes: u32,
 }
 
 impl Tab {
@@ -405,6 +412,8 @@ impl Tab {
                 mux_ipc::protocol::MUX_OSC_PARAM,
                 mux_ipc::protocol::APC_PREFIX,
             ),
+            #[cfg(test)]
+            coalesce_parse_passes: 0,
         }
     }
 
@@ -947,31 +956,16 @@ impl Tab {
                 }
                 // The daemon's continuous PTY stream: feed it into term_core
                 // as a normal byte stream (NOT a reset). Without this the
-                // mux session looks frozen after the initial Snapshot.
-                let (evicted_total, pending_marks, pending_fold_marks, device_response) = {
-                    let mut c = self.core.lock();
-                    c.process_pty_data_fully(&msg.payload);
-                    let device_response = c.take_response();
-                    let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
-                    (
-                        evicted_total,
-                        pending_marks,
-                        pending_fold_marks,
-                        device_response,
-                    )
-                };
-                // Mirror the native pump path: route any device-status reply
-                // (e.g. CPR synthesized for a PSReadLine `\x1b[6n` query)
-                // back to the originating remote pane via PtyInput framing so
-                // PSReadLine cursor tracking stays accurate over a mux session.
-                if !device_response.is_empty() {
-                    self.write_device_response(device_response);
-                }
-                // Same drain/backfill as the native `pump` path so prompt
-                // marks and custom-fold begin/end pairs arriving over the mux
-                // stream are navigable / foldable too.
-                self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
-                true
+                // mux session looks frozen after the initial Snapshot. Shares
+                // the post-parse recipe (device-response write-back + mark
+                // drain/backfill) with the coalesce flush via
+                // `apply_active_pane_output`, so the per-frame and batched
+                // paths can never drift (SPEC NFR2). Frames carrying a device
+                // query (`CSI ... n` / `CSI ... c`) are routed here per-frame
+                // by `process_combined`'s `batch_eligible` gate so each reply
+                // is captured before the next query overwrites the core's
+                // single-slot response buffer.
+                self.apply_active_pane_output(&msg.payload)
             }
             MessageType::StatusUpdate => match msg.decode_payload::<StatusUpdateMsg>() {
                 Some(payload) => {
@@ -1530,6 +1524,83 @@ impl Tab {
         self.output_pending = true;
     }
 
+    /// FR1/FR4/FR5: whether a `PtyOutput` frame may join the coalesce
+    /// accumulator. Eligible only when it is addressed to the active pane (or
+    /// the tab has no window group, so all output is accepted), there is no
+    /// in-flight off-thread replay (`pending_switch`), and it carries no device
+    /// query (see [`payload_has_device_query`]) — a query-bearing frame must be
+    /// parsed on its own so its reply is captured before a later query
+    /// overwrites `term_core`'s single-slot response buffer. Anything failing this gate is
+    /// a boundary handled per-frame by [`Self::apply_mux_message`]. This is the
+    /// single definition of "batch-eligible"; `process_combined` calls it so
+    /// the classification is not duplicated inline.
+    fn pty_output_batch_eligible(&self, msg: &MuxMessage) -> bool {
+        if msg.msg_type != MessageType::PtyOutput {
+            return false;
+        }
+        let active_pane = self.mux_group.as_ref().and_then(|g| g.active_pane_id());
+        active_pane.map(|a| a == msg.pane_id).unwrap_or(true)
+            && self.pending_switch.is_none()
+            && !payload_has_device_query(&msg.payload)
+    }
+
+    /// Shared post-parse recipe for active-pane inner output, called by BOTH
+    /// the coalesce flush ([`Self::flush_coalesced_output`]) and the per-frame
+    /// `PtyOutput` arm of [`Self::apply_mux_message`]. Keeping it in one place
+    /// means the "coalesce is a pure performance change" invariant (SPEC NFR2)
+    /// is enforced by a single source of truth instead of two hand-mirrored
+    /// copies that could silently drift. Parses `bytes` in one
+    /// `process_pty_data_fully` call, writes back any device-status reply
+    /// (`take_response`), and drains + backfills OSC 133 / fold marks. Always
+    /// returns `true` (the bytes reached the core).
+    fn apply_active_pane_output(&mut self, bytes: &[u8]) -> bool {
+        let (evicted_total, pending_marks, pending_fold_marks, device_response) = {
+            let mut c = self.core.lock();
+            c.process_pty_data_fully(bytes);
+            let device_response = c.take_response();
+            let (evicted_total, pending_marks, pending_fold_marks) = drain_marks(&mut c);
+            (
+                evicted_total,
+                pending_marks,
+                pending_fold_marks,
+                device_response,
+            )
+        };
+        // Route any device-status reply (e.g. CPR synthesized for a PSReadLine
+        // `\x1b[6n` query) back to the originating remote pane via PtyInput
+        // framing so PSReadLine cursor tracking stays accurate over mux.
+        if !device_response.is_empty() {
+            self.write_device_response(device_response);
+        }
+        // Drain/backfill so prompt marks and custom-fold begin/end pairs
+        // arriving over the mux stream are navigable / foldable too.
+        self.backfill_marks(evicted_total, pending_marks, pending_fold_marks);
+        true
+    }
+
+    /// FR1/FR3: flush the coalesce accumulator built in
+    /// [`Self::process_combined`]. Parses the concatenated inner payloads of a
+    /// consecutive active-pane `PtyOutput` run in ONE `process_pty_data_fully`
+    /// call via [`Self::apply_active_pane_output`], running the per-batch side
+    /// effects exactly once. Inner image APC/DCS emitted by the parse are
+    /// drained once per pump by the post-loop block in `process_combined`, so
+    /// they need no per-batch handling here. The accumulator is cleared.
+    ///
+    /// Returns `true` when bytes were applied (the caller sets `changed`).
+    /// An empty accumulator is a no-op returning `false`.
+    fn flush_coalesced_output(&mut self, acc: &mut Vec<u8>) -> bool {
+        if acc.is_empty() {
+            return false;
+        }
+        let applied = self.apply_active_pane_output(acc.as_slice());
+        #[cfg(test)]
+        {
+            self.coalesce_parse_passes += 1;
+        }
+        acc.clear();
+        applied
+    }
+
     fn process_combined(&mut self, combined: Vec<u8>) -> bool {
         let mut changed = false;
         // Mux-transport frames extracted from the coalesced PTS bytes this
@@ -1616,9 +1687,34 @@ impl Tab {
             // the tail can be re-routed through `self.core` below.
             let mut image_apc: Vec<Vec<u8>> = Vec::new();
             let mut detach_tail_start: Option<usize> = None;
+            // FR1: concatenation buffer for the inner payloads of consecutive
+            // batch-eligible active-pane `PtyOutput` frames. Parsed once per
+            // run by `flush_coalesced_output` at every boundary and at loop end,
+            // instead of once per frame — collapsing the ~1400-parse-per-pump
+            // flood into one parse per consecutive run.
+            let mut coalesce_acc: Vec<u8> = Vec::new();
             for (payload, end_offset) in extracted_mux_apc {
                 if payload.starts_with(mux_ipc::protocol::APC_PREFIX.as_bytes()) {
                     if let Some(msg) = crate::mux::apc::try_decode_emterm_mux(&payload) {
+                        // FR1/FR4/FR5 classify (see `pty_output_batch_eligible`):
+                        // an active-pane `PtyOutput` with no in-flight off-thread
+                        // replay and no device query is batch-eligible and
+                        // accumulates without an immediate parse. Everything else
+                        // (control message / non-active pane / pending_switch /
+                        // detach / device-query frame) is a boundary: flush the
+                        // accumulator first, then handle the frame via the
+                        // existing per-frame path.
+                        if self.pty_output_batch_eligible(&msg) {
+                            coalesce_acc.extend_from_slice(&msg.payload);
+                            // No immediate parse; continue accumulating the run.
+                            continue;
+                        }
+                        // Boundary: flush the accumulated active-pane run BEFORE
+                        // handling this frame so output/control ordering matches
+                        // the per-frame path exactly.
+                        if self.flush_coalesced_output(&mut coalesce_acc) {
+                            changed = true;
+                        }
                         let was_mux = self.mux_session_name.is_some();
                         if self.apply_mux_message(msg) {
                             changed = true;
@@ -1639,8 +1735,20 @@ impl Tab {
                     // Malformed mux payload — already logged inside the decoder;
                     // do NOT forward to the image pipeline.
                 } else {
+                    // A bare (non-mux) APC frame extracted from the transport
+                    // stream is an inner Kitty image. It is a boundary for the
+                    // active-pane run: flush before queueing it so ordering is
+                    // preserved.
+                    if self.flush_coalesced_output(&mut coalesce_acc) {
+                        changed = true;
+                    }
                     image_apc.push(payload);
                 }
+            }
+            // FR1: flush the final accumulated run (loop ended without a
+            // boundary frame).
+            if self.flush_coalesced_output(&mut coalesce_acc) {
+                changed = true;
             }
             // Pre-mux `pending_apc` (no offsets): partition + apply as before.
             let (pre_mux_images, pre_mux_messages) = partition_apc_for_mux(pending_apc);
@@ -2339,6 +2447,14 @@ impl Tab {
         self.process_combined(combined)
     }
 
+    /// Test-only: how many times the `process_combined` coalesce flush has
+    /// parsed accumulated active-pane output since this tab was built. One
+    /// consecutive active-pane `PtyOutput` run flushes exactly once.
+    #[cfg(test)]
+    pub(crate) fn test_coalesce_parse_passes(&self) -> u32 {
+        self.coalesce_parse_passes
+    }
+
     /// Test-only: the whole displayed grid (all rows) as one string, for
     /// asserting that outer-transport base64 never leaks onto the screen.
     #[cfg(test)]
@@ -2426,6 +2542,84 @@ impl Tab {
     pub fn drain_osc(&self) -> Vec<EmtermOscRequest> {
         std::mem::take(&mut self.cb_state.lock().osc_queue)
     }
+}
+
+/// True when `payload` contains a complete CSI device query that `term_core`
+/// answers by writing into its response buffer. The set is kept in lockstep
+/// with the response-firing arms of `crates/term_core/src/csi_dispatch.rs`
+/// (`fire_device_response_callback`): final byte `n` (DSR), `c` (Device
+/// Attributes), `t` (XTWINOPS size reports), or `p` (DECRPM `CSI ? Ps $ p`).
+/// Detection is intentionally conservative — it matches on the final byte
+/// alone, so a few non-response sequences sharing those finals (e.g. DA3
+/// `CSI = c`, non-size XTWINOPS ops, a non-DECRPM `p`) are also treated as
+/// queries. The only cost of a false positive is parsing that one frame on
+/// its own instead of coalescing it; correctness is unaffected.
+///
+/// Used by [`Tab::pty_output_batch_eligible`] to keep query-bearing
+/// `PtyOutput` frames OUT of the coalesce accumulator: `term_core`'s
+/// single-slot response buffer is overwrite-only and is not drained between
+/// chunks of one parse, so concatenating several query frames into one parse
+/// would keep only the LAST reply. Parsing such a frame on its own (the
+/// per-frame path) preserves the reply, matching the pre-coalesce behavior
+/// byte-for-byte.
+///
+/// A CSI starts at `ESC [` (`0x1b 0x5b`); parameter bytes are `0x30..=0x3f`,
+/// intermediate bytes `0x20..=0x2f`, and the final byte is `0x40..=0x7e`. A C0
+/// control byte other than `ESC` appearing mid-CSI is executed by `term_core`'s
+/// parser without aborting the sequence, so it is skipped here too (the CSI
+/// keeps accumulating). A CSI left incomplete at the end of the payload is NOT a
+/// complete query (it would complete in a later frame, where it still yields a
+/// single reply — no loss), so it does not force a split.
+fn payload_has_device_query(payload: &[u8]) -> bool {
+    let n = payload.len();
+    let mut i = 0;
+    while i + 1 < n {
+        if payload[i] == 0x1b && payload[i + 1] == b'[' {
+            // Scan the CSI body for its final byte.
+            let mut j = i + 2;
+            loop {
+                if j >= n {
+                    // Incomplete CSI runs to the end of the payload — not a
+                    // complete query, and nothing complete can follow it.
+                    return false;
+                }
+                let b = payload[j];
+                if (0x40..=0x7e).contains(&b) {
+                    // Final byte: device-response producers per term_core.
+                    if matches!(b, b'n' | b'c' | b't' | b'p') {
+                        return true;
+                    }
+                    i = j + 1; // resume past this non-query CSI
+                    break;
+                }
+                if matches!(b, 0x00..=0x1a | 0x1c..=0x1f) {
+                    // A C0 control byte (other than ESC) mid-CSI is executed by
+                    // `term_core`'s parser WITHOUT aborting the CSI — the
+                    // sequence keeps accumulating after it (see
+                    // crates/term_core/src/parser/csi.rs). So skip it and keep
+                    // scanning this CSI for its final byte; e.g. `\x1b[\x076n`
+                    // still fires a CPR and must be detected. ESC (0x1b) is the
+                    // genuine new-sequence boundary, handled by the resync below.
+                    j += 1;
+                    continue;
+                }
+                if !(0x20..=0x3f).contains(&b) {
+                    // Neither a CSI body byte, a C0 control, nor a final: this
+                    // CSI is malformed (e.g. an `ESC` starting a new sequence, or
+                    // a 0x7f / 0x80..=0xff byte). Re-examine the offending byte
+                    // rather than skipping it — it may itself begin a new CSI
+                    // (e.g. the `ESC` that starts the real query right after a
+                    // truncated one, `\x1b[2\x1b[6n`).
+                    i = j;
+                    break;
+                }
+                j += 1;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Split a drained `pending_apc` buffer into the (image-pipeline,
@@ -4751,24 +4945,21 @@ mod tests {
         );
     }
 
-    // ── (C) client-side coalesce baseline: PtyOutput is parsed per message ──
+    // ── (C) client-side coalesce contract: consecutive PtyOutput ⇒ one parse ──
     //
-    // Today the client has NO coalescing on the receive side: the `PtyOutput`
-    // arm of `apply_mux_message` calls `core.process_pty_data_fully(&payload)`
-    // exactly once per `PtyOutput` message. So splitting the same total byte
-    // stream into K messages drives K independent parse passes (one per
-    // message), versus a single pass if the K payloads were concatenated first.
+    // The client coalesces, in `process_combined`, the inner payloads of
+    // consecutive active-pane `PtyOutput` frames that arrive within one pump:
+    // they are concatenated and parsed by `core.process_pty_data_fully` exactly
+    // ONCE per consecutive run, instead of once per frame. A control message,
+    // a non-active pane, a `pending_switch`, or a detach is a boundary that
+    // flushes the accumulator first; the buffer is also flushed at loop end.
     //
-    // term_core has no public parse-call counter, and adding one would taint
-    // production code, so these tests observe "K messages ⇒ K parse passes"
-    // *indirectly* through the only externally visible consequence of
-    // per-message parsing: each message's bytes land in the displayed core
-    // immediately when that message is applied (the grid grows step by step).
-    // A future coalescing change (buffer K messages, parse once) would still
-    // converge to the same final grid — that's exactly what the
-    // "split == concatenated" parity test pins as the before/after baseline,
-    // while the step-by-step test pins the *current* per-message behavior whose
-    // parse count == message count.
+    // These tests observe the pass count directly through the `cfg(test)`-only
+    // `coalesce_parse_passes` counter (incremented at the flush parse site),
+    // which carries no taint in the production build. The grid is asserted to
+    // equal the single-concatenated result so the collapse is proven to be a
+    // pure performance change — the same equality the "split == concatenated"
+    // parity test pins as the before/after baseline.
 
     /// Build a tab attached to a single-window mux session whose active pane is
     /// `pane`, so `PtyOutput` for `pane` flows straight into the displayed core
@@ -4784,46 +4975,85 @@ mod tests {
         tab
     }
 
-    /// The current (no-coalesce) behavior: feeding the byte stream as K
-    /// separate `PtyOutput` messages applies each message's bytes to the core
-    /// the moment it is processed. The grid grows one message at a time, which
-    /// is observable proof that parsing happens per message (K messages ⇒ K
-    /// parse passes), not batched. This is the regression baseline the perf
-    /// work (coalesce-on-receive) will move.
+    /// The batched (coalesce) behavior: K active-pane `PtyOutput` frames
+    /// arriving wire-encoded in ONE coalesced PTS buffer collapse into a single
+    /// parse pass. Every line still lands in the grid (output is unchanged), but
+    /// the core is parsed once for the whole consecutive run — not once per
+    /// frame. The `coalesce_parse_passes` counter makes the collapse observable.
+    /// This is the post-change contract the perf work establishes (previously
+    /// the per-frame path parsed K times).
     #[test]
     fn c_pty_output_parsed_per_message_grid_grows_step_by_step() {
         let mut tab = mux_tab_active_pane(10);
 
-        // K messages, each a full line. After the i-th message is applied,
-        // exactly i lines are present — nothing is buffered/deferred.
-        let lines = [b"line0\r\n", b"line1\r\n", b"line2\r\n", b"line3\r\n"];
+        // K active-pane PtyOutput frames, each a full line, encoded as the
+        // daemon writes them and concatenated into ONE coalesced PTS buffer —
+        // exactly what `pump` hands `process_combined` when many small frames
+        // arrive within one drain.
+        let lines: [&[u8]; 4] = [b"line0\r\n", b"line1\r\n", b"line2\r\n", b"line3\r\n"];
         let k = lines.len();
-        for (i, line) in lines.iter().enumerate() {
-            let changed = tab.apply_mux_message(pty_output(10, line.to_vec()));
-            assert!(
-                changed,
-                "message {i}: an applied PtyOutput repaints (it was parsed now)"
-            );
-            // Row i now shows this message's content; row i+1 is still blank
-            // (the next message has not been parsed yet) — per-message parsing.
+        let mut combined = Vec::new();
+        for line in lines {
+            combined.extend_from_slice(&pty_output_apc(10, line));
+        }
+
+        let before = tab.test_coalesce_parse_passes();
+        let changed = tab.test_process_combined(combined);
+        assert!(changed, "applied PtyOutput repaints the active pane");
+
+        // One consecutive active-pane run ⇒ exactly one flush/parse, not K.
+        assert_eq!(
+            tab.test_coalesce_parse_passes() - before,
+            1,
+            "K={k} consecutive active-pane frames must coalesce into 1 parse pass"
+        );
+        // All K lines still landed — output is byte-for-byte unchanged.
+        for (i, _) in lines.iter().enumerate() {
             assert_eq!(
                 tab.test_row_text(i as u16),
                 format!("line{i}"),
-                "message {i} parsed immediately into row {i}"
-            );
-            assert_eq!(
-                tab.test_row_text((i + 1) as u16),
-                "",
-                "message {} not yet applied: row {} still blank (no look-ahead batch)",
-                i + 1,
-                i + 1
+                "row {i} must show its line after the coalesced parse"
             );
         }
-        // All K lines landed across K parse passes.
-        for (i, _) in lines.iter().enumerate() {
-            assert_eq!(tab.test_row_text(i as u16), format!("line{i}"));
+    }
+
+    /// New required test (TS-1): consecutive active-pane `PtyOutput` frames
+    /// arriving in one coalesced buffer are parsed in a SINGLE pass, and the
+    /// resulting grid is identical to parsing the concatenation of their inner
+    /// payloads in one shot. Proves the coalesce both collapses the parse count
+    /// to 1 and preserves output exactly.
+    #[test]
+    fn c_consecutive_active_pane_pty_output_coalesces_into_one_parse() {
+        let pane = 10;
+        // Inner payloads whose chunk boundaries deliberately fall inside lines
+        // and after newlines, so the streaming parser must carry state across
+        // the frame boundaries (a per-frame parse and a coalesced parse would
+        // otherwise be trivially identical).
+        let inner: [&[u8]; 4] = [b"alp", b"ha\r\nbra", b"vo\r\ncharlie\r\n", b"delta"];
+
+        // Coalesced path: K active-pane frames in ONE buffer ⇒ 1 parse pass.
+        let mut tab = mux_tab_active_pane(pane);
+        let mut combined = Vec::new();
+        for chunk in inner {
+            combined.extend_from_slice(&pty_output_apc(pane, chunk));
         }
-        assert_eq!(k, 4, "baseline K (parse passes == message count)");
+        let before = tab.test_coalesce_parse_passes();
+        tab.test_process_combined(combined);
+        assert_eq!(
+            tab.test_coalesce_parse_passes() - before,
+            1,
+            "consecutive active-pane PtyOutput run must parse exactly once"
+        );
+
+        // Reference: a single PtyOutput whose payload is the concatenation.
+        let mut single = mux_tab_active_pane(pane);
+        single.test_process_combined(pty_output_apc(pane, &inner.concat()));
+
+        assert_eq!(
+            tab.test_grid_text(),
+            single.test_grid_text(),
+            "coalesced grid must equal the single-concatenated parse"
+        );
     }
 
     /// Parity baseline for a future coalescing change: K split `PtyOutput`
@@ -4861,5 +5091,110 @@ mod tests {
             single.test_grid_text(),
             "K={k} per-message parses must yield the same grid as 1 concatenated parse"
         );
+    }
+
+    /// `payload_has_device_query` detects complete CSI sequences whose final
+    /// byte produces a device response in `term_core` — `n` (DSR), `c` (DA),
+    /// `t` (XTWINOPS size reports), `p` (DECRPM) — across params / intermediates
+    /// and DEC private (`?`) / secondary (`>`) forms, resynchronizes on a
+    /// malformed CSI, and rejects non-response finals, incomplete CSIs, and
+    /// plain text.
+    #[test]
+    fn payload_has_device_query_detects_response_producing_finals() {
+        assert!(payload_has_device_query(b"\x1b[6n"), "CPR DSR");
+        assert!(payload_has_device_query(b"\x1b[5n"), "status DSR");
+        assert!(
+            payload_has_device_query(b"\x1b[c"),
+            "primary DA (no params)"
+        );
+        assert!(payload_has_device_query(b"\x1b[>0c"), "secondary DA");
+        assert!(payload_has_device_query(b"\x1b[?6n"), "DEC private DSR");
+        assert!(
+            payload_has_device_query(b"\x1b[14t"),
+            "XTWINOPS size report (t)"
+        );
+        assert!(
+            payload_has_device_query(b"\x1b[?2026$p"),
+            "DECRPM synchronized-output probe (p)"
+        );
+        assert!(
+            payload_has_device_query(b"hello\x1b[6nworld"),
+            "query embedded in surrounding text"
+        );
+        assert!(
+            payload_has_device_query(b"\x1b[2\x1b[6n"),
+            "aborted CSI then a real query must resync and detect the query"
+        );
+        assert!(
+            payload_has_device_query(b"\x1b[\x076n"),
+            "a C0 control mid-CSI does not abort the sequence (term_core keeps it alive)"
+        );
+        assert!(
+            !payload_has_device_query(b"plain text\r\n"),
+            "no CSI at all"
+        );
+        assert!(
+            !payload_has_device_query(b"\x1b[1;2H"),
+            "cursor position (final H) is not a query"
+        );
+        assert!(
+            !payload_has_device_query(b"\x1b[0m"),
+            "SGR (final m) is not a query"
+        );
+        assert!(
+            !payload_has_device_query(b"\x1b[6"),
+            "incomplete CSI is not a complete query"
+        );
+        assert!(
+            !payload_has_device_query(b"\x1b[31mcn"),
+            "literal c/n after a non-query CSI final must not count"
+        );
+    }
+
+    /// Device-response parity (TS): a `PtyOutput` frame carrying a device query
+    /// (`\x1b[6n` CPR) must NOT be coalesced — it is parsed on its own via the
+    /// per-frame path so its reply is captured before a later query overwrites
+    /// `term_core`'s single-slot response buffer. Observable consequence: a
+    /// query frame BREAKS the consecutive active-pane run, so [text][query][text]
+    /// flushes the coalesce accumulator twice (leading run + loop-end) with the
+    /// query frame parsed per-frame in between — versus a single flush when no
+    /// query interrupts the run.
+    #[test]
+    fn c_device_query_frame_breaks_coalesce_run() {
+        let pane = 10;
+
+        // Baseline: three plain active-pane frames coalesce into ONE parse.
+        let mut plain = mux_tab_active_pane(pane);
+        let mut plain_buf = Vec::new();
+        for chunk in [b"aaa\r\n".as_slice(), b"bbb\r\n", b"ccc\r\n"] {
+            plain_buf.extend_from_slice(&pty_output_apc(pane, chunk));
+        }
+        let before = plain.test_coalesce_parse_passes();
+        plain.test_process_combined(plain_buf);
+        assert_eq!(
+            plain.test_coalesce_parse_passes() - before,
+            1,
+            "three plain frames coalesce into a single parse"
+        );
+
+        // With a CPR query frame in the middle: the run splits. The query frame
+        // is handled per-frame (not via the coalesce flush), so the accumulator
+        // flushes for the leading run and again at loop end — two coalesce
+        // parses — guaranteeing the query's reply is not clobbered by coalescing.
+        let mut split = mux_tab_active_pane(pane);
+        let mut split_buf = Vec::new();
+        split_buf.extend_from_slice(&pty_output_apc(pane, b"aaa\r\n"));
+        split_buf.extend_from_slice(&pty_output_apc(pane, b"\x1b[6n"));
+        split_buf.extend_from_slice(&pty_output_apc(pane, b"ccc\r\n"));
+        let before = split.test_coalesce_parse_passes();
+        split.test_process_combined(split_buf);
+        assert_eq!(
+            split.test_coalesce_parse_passes() - before,
+            2,
+            "a device-query frame breaks the run: leading-run flush + loop-end flush"
+        );
+        // The query produced no visible cells; the surrounding text rendered.
+        assert_eq!(split.test_row_text(0), "aaa");
+        assert_eq!(split.test_row_text(1), "ccc");
     }
 }
