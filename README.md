@@ -30,6 +30,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - `emterm mux` starts a native multiplexer daemon; GUI receives raw PTY bytes (no double-parse overhead)
   - Detach (`prefix+d`) / reattach (`emterm mux attach`) with full screen state restoration
   - Multiple windows per session with tab group UI; instant window switching (all windows stream simultaneously)
+  - Per-pane scroll position and scrollback history preserved on window switch (no detach→reattach required)
   - Window management: `prefix+c` (new), `prefix+n`/`prefix+p` (navigate), `prefix+,` (rename), `prefix+m` (move/reorder with `[N]` position badge)
   - tmux.conf import: prefix key, keybindings, mouse
   - Inband APC protocol: mux control messages travel over the PTY stream (SSH-transparent, no socket forwarding needed)
@@ -38,6 +39,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - `emterm mux script`: start daemon without attaching (for scripted workspace initialization)
   - `emterm mux kill`: gracefully terminate the daemon and all PTY sessions via IPC
   - OSC title propagation: daemon updates window names from shell OSC 0/2 sequences even while GUI is detached
+  - Pane exit while detached is reaped correctly; daemon auto-shutdown fires when the last session empties
   - Mux status bar: daemon-side command execution with template variables (`{cmd:name}`, `{hostname}`, `{cwd}`)
   - Windows support: Named Pipe IPC with daemon process detachment (survives terminal closure)
 
