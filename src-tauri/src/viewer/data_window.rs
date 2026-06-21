@@ -352,8 +352,15 @@ impl ApplicationHandler for ViewerApp {
         let attrs = Window::default_attributes()
             .with_title(Self::window_title(self.state.format))
             .with_decorations(false)
+            // FR3: open maximized; `with_inner_size` below is the restore
+            // size the window returns to when un-maximized.
+            .with_maximized(true)
             .with_inner_size(LogicalSize::new(960.0, 640.0))
             .with_min_inner_size(LogicalSize::new(320.0, 240.0));
+        // FR5: stamp the canonical dock-grouping identifier (X11
+        // `WM_CLASS` / Wayland `app_id`).
+        #[cfg(target_os = "linux")]
+        let attrs = crate::linux_wm::with_app_id(attrs);
         self.shell = Some(GpuShell::new(event_loop, attrs, &self.ui_font_family));
     }
 

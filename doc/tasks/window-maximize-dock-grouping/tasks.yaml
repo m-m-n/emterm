@@ -1,0 +1,53 @@
+feature: window-maximize-dock-grouping
+
+phases:
+  - id: phase-1
+    name: Maximize-on-launch for child windows
+    effort: small
+    tasks:
+      - id: webviewhost-maximized-field
+        summary: Add an opt-in maximize flag to the WebViewHost config and honor it in the Linux (GTK) and Windows (WebView2) runtimes.
+        status: completed
+        files:
+          - src-tauri/src/webview_host/mod.rs
+          - src-tauri/src/webview_host/linux.rs
+          - src-tauri/src/webview_host/windows.rs
+        depends_on: []
+      - id: settings-markdown-maximized
+        summary: Set the maximize flag at the settings and Markdown WebViewHost construction sites.
+        status: completed
+        files:
+          - src-tauri/src/settings_window/mod.rs
+          - src-tauri/src/viewer/window.rs
+        depends_on: [webviewhost-maximized-field]
+      - id: dataviewer-maximized
+        summary: Add a maximized startup attribute to the JSON/YAML data viewer's winit window; keep the initial size as the restore size.
+        status: completed
+        files:
+          - src-tauri/src/viewer/data_window.rs
+        depends_on: []
+
+  - id: phase-2
+    name: Unified dock grouping identifier
+    effort: small
+    tasks:
+      - id: app-wm-id-constant
+        summary: Define one canonical window identifier constant (value "emterm") as the single source of truth.
+        status: completed
+        files:
+          - src-tauri/src/lib.rs
+        depends_on: []
+      - id: winit-windows-wmclass
+        summary: Apply the platform window-name (X11 WM_CLASS / Wayland app_id) from the constant to the winit windows (main terminal, data viewer, image viewer).
+        status: completed
+        files:
+          - src-tauri/src/window_host.rs
+          - src-tauri/src/viewer/data_window.rs
+          - src-tauri/src/viewer/image_window.rs
+        depends_on: [app-wm-id-constant]
+      - id: gtk-windows-wmclass
+        summary: Make the GTK windows (settings, Markdown) report the same identifier via the program identity GTK uses to derive WM_CLASS/app_id.
+        status: completed
+        files:
+          - src-tauri/src/webview_host/linux.rs
+        depends_on: [app-wm-id-constant]

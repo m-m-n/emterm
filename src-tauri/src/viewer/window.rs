@@ -26,6 +26,11 @@ const SCHEME: &str = "emterm-viewer";
 const HOST: &str = "localhost";
 /// Path prefix for basedir-relative image requests.
 const IMAGE_PREFIX: &str = "/__img/";
+/// FR2: the Markdown viewer opens maximized; its `initial_size` is kept
+/// as the restore size. A `const` so the maximize-on-launch decision is a
+/// deterministic, unit-testable fact even though the host itself carries
+/// payload-derived closures that are awkward to build in a unit test.
+const MAXIMIZED: bool = true;
 
 /// Run the child viewer for the payload at `payload_path`. Blocks until the
 /// window closes, then returns. Any setup failure logs at `warn`/`error`
@@ -80,6 +85,8 @@ pub fn run(payload_path: &str) -> Result<(), String> {
         ipc: None,
         // FR9: Esc / q exit the read-only viewer.
         close_on_esc_q: true,
+        // FR2: open maximized; `initial_size` is the restore size.
+        maximized: MAXIMIZED,
     };
     host.run()
 }
@@ -238,5 +245,13 @@ mod tests {
         assert_eq!(percent_decode("a%20b.png"), "a b.png");
         assert_eq!(percent_decode("plain.png"), "plain.png");
         assert_eq!(percent_decode("100%done"), "100%done");
+    }
+
+    // TS-1: the Markdown viewer opens maximized (FR2). The `run` host sets
+    // `maximized: MAXIMIZED`; its `initial_size` (960×720) stays as the
+    // restore size.
+    #[test]
+    fn markdown_viewer_opens_maximized() {
+        assert!(MAXIMIZED);
     }
 }

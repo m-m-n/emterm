@@ -82,6 +82,12 @@ pub struct WebViewHost {
     /// read-only windows opt in; the settings panel (full of text
     /// inputs) opts out.
     pub close_on_esc_q: bool,
+    /// Opt-in: start the window maximized. The settings panel and the
+    /// Markdown viewer set this; `initial_size` is kept as the restore
+    /// size the window returns to when un-maximized. Defaults to `false`
+    /// (open at `initial_size`), so the field is additive for any caller
+    /// that does not want maximize-on-launch.
+    pub maximized: bool,
 }
 
 impl WebViewHost {

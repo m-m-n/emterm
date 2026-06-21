@@ -327,6 +327,14 @@ impl WindowHost {
             .with_inner_size(LogicalSize::new(960.0, 600.0))
             .with_min_inner_size(LogicalSize::new(320.0, 200.0))
             .with_maximized(true);
+        // FR5: report the canonical dock-grouping identifier (X11
+        // `WM_CLASS` / Wayland `app_id`) so every window groups under one
+        // `emterm` dock icon. winit applies the trait matching the active
+        // backend; the other is a no-op. `with_name` is on both extension
+        // traits, so call each via fully-qualified syntax to avoid an
+        // ambiguous method resolution.
+        #[cfg(target_os = "linux")]
+        let attrs = crate::linux_wm::with_app_id(attrs);
         let window = event_loop
             .create_window(attrs)
             .expect("native-poc: failed to create winit window");

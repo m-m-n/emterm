@@ -11,6 +11,43 @@
 //! (`--no-default-features`) yields a CLI-only library exposing just the
 //! subcommand dispatcher and the settings primitives it needs.
 
+/// Canonical application identifier reported by every window so the Linux
+/// desktop groups them under a single dock icon (FR5 / NFR4).
+///
+/// This is the **single source of truth** for the identifier. winit
+/// windows (main terminal, image viewer, JSON/YAML data viewer) set it as
+/// the X11 `WM_CLASS` / Wayland `app_id`; the GTK child windows (settings,
+/// Markdown viewer) report it via the program identity GTK derives those
+/// from. The value matches the installed desktop entry `emterm.desktop`
+/// and its `StartupWMClass=emterm`, so GNOME/Ubuntu associates every
+/// window with that one desktop entry and dock icon.
+pub const APP_WM_ID: &str = "emterm";
+
+/// Linux-only helper that stamps [`APP_WM_ID`] onto a winit
+/// [`WindowAttributes`](winit::window::WindowAttributes) as both the X11
+/// `WM_CLASS` and the Wayland `app_id`.
+///
+/// Every winit window (main terminal, image viewer, JSON/YAML data
+/// viewer) routes through here so the identifier is set in exactly one
+/// place (FR5 / NFR4). `with_name` exists on both the X11 and Wayland
+/// extension traits, so each is invoked via fully-qualified syntax to
+/// avoid an ambiguous method call; winit applies whichever matches the
+/// active backend and ignores the other.
+#[cfg(all(feature = "gui", target_os = "linux"))]
+pub mod linux_wm {
+    use winit::platform::wayland::WindowAttributesExtWayland;
+    use winit::platform::x11::WindowAttributesExtX11;
+    use winit::window::WindowAttributes;
+
+    /// Set the X11 `WM_CLASS` and Wayland `app_id` to [`super::APP_WM_ID`].
+    pub fn with_app_id(attrs: WindowAttributes) -> WindowAttributes {
+        let id = super::APP_WM_ID;
+        // X11: (general/class, instance). Wayland: app_id from `general`.
+        let attrs = WindowAttributesExtX11::with_name(attrs, id, id);
+        WindowAttributesExtWayland::with_name(attrs, id, id)
+    }
+}
+
 // === CLI-shared modules (always built) ===
 
 pub mod cli;
@@ -84,3 +121,13 @@ pub mod viewer;
 pub mod wakeup;
 #[cfg(feature = "gui")]
 pub mod webview_host;
+
+#[cfg(test)]
+mod tests {
+    // TS-4: the canonical dock-grouping identifier is `emterm`, matching
+    // `emterm.desktop` / `StartupWMClass=emterm` (FR5 / NFR4).
+    #[test]
+    fn app_wm_id_is_emterm() {
+        assert_eq!(super::APP_WM_ID, "emterm");
+    }
+}
