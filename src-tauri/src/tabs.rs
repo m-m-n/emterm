@@ -4750,4 +4750,116 @@ mod tests {
              via the extracted-frame loop AND the tail re-route"
         );
     }
+
+    // ── (C) client-side coalesce baseline: PtyOutput is parsed per message ──
+    //
+    // Today the client has NO coalescing on the receive side: the `PtyOutput`
+    // arm of `apply_mux_message` calls `core.process_pty_data_fully(&payload)`
+    // exactly once per `PtyOutput` message. So splitting the same total byte
+    // stream into K messages drives K independent parse passes (one per
+    // message), versus a single pass if the K payloads were concatenated first.
+    //
+    // term_core has no public parse-call counter, and adding one would taint
+    // production code, so these tests observe "K messages ⇒ K parse passes"
+    // *indirectly* through the only externally visible consequence of
+    // per-message parsing: each message's bytes land in the displayed core
+    // immediately when that message is applied (the grid grows step by step).
+    // A future coalescing change (buffer K messages, parse once) would still
+    // converge to the same final grid — that's exactly what the
+    // "split == concatenated" parity test pins as the before/after baseline,
+    // while the step-by-step test pins the *current* per-message behavior whose
+    // parse count == message count.
+
+    /// Build a tab attached to a single-window mux session whose active pane is
+    /// `pane`, so `PtyOutput` for `pane` flows straight into the displayed core
+    /// (no pending switch, pane filter satisfied).
+    fn mux_tab_active_pane(pane: u32) -> Tab {
+        let mut tab = test_tab();
+        tab.apply_mux_message(welcome_msg(&[(1, "win", pane)], 0));
+        assert!(tab.mux_session_name.is_some(), "mux session established");
+        assert!(
+            !tab.test_has_pending_switch(),
+            "no snapshot pending: PtyOutput must reach core directly"
+        );
+        tab
+    }
+
+    /// The current (no-coalesce) behavior: feeding the byte stream as K
+    /// separate `PtyOutput` messages applies each message's bytes to the core
+    /// the moment it is processed. The grid grows one message at a time, which
+    /// is observable proof that parsing happens per message (K messages ⇒ K
+    /// parse passes), not batched. This is the regression baseline the perf
+    /// work (coalesce-on-receive) will move.
+    #[test]
+    fn c_pty_output_parsed_per_message_grid_grows_step_by_step() {
+        let mut tab = mux_tab_active_pane(10);
+
+        // K messages, each a full line. After the i-th message is applied,
+        // exactly i lines are present — nothing is buffered/deferred.
+        let lines = [b"line0\r\n", b"line1\r\n", b"line2\r\n", b"line3\r\n"];
+        let k = lines.len();
+        for (i, line) in lines.iter().enumerate() {
+            let changed = tab.apply_mux_message(pty_output(10, line.to_vec()));
+            assert!(
+                changed,
+                "message {i}: an applied PtyOutput repaints (it was parsed now)"
+            );
+            // Row i now shows this message's content; row i+1 is still blank
+            // (the next message has not been parsed yet) — per-message parsing.
+            assert_eq!(
+                tab.test_row_text(i as u16),
+                format!("line{i}"),
+                "message {i} parsed immediately into row {i}"
+            );
+            assert_eq!(
+                tab.test_row_text((i + 1) as u16),
+                "",
+                "message {} not yet applied: row {} still blank (no look-ahead batch)",
+                i + 1,
+                i + 1
+            );
+        }
+        // All K lines landed across K parse passes.
+        for (i, _) in lines.iter().enumerate() {
+            assert_eq!(tab.test_row_text(i as u16), format!("line{i}"));
+        }
+        assert_eq!(k, 4, "baseline K (parse passes == message count)");
+    }
+
+    /// Parity baseline for a future coalescing change: K split `PtyOutput`
+    /// messages and a single concatenated `PtyOutput` message produce the
+    /// identical final grid. A coalescing optimization (parse the K payloads in
+    /// one pass) must keep this equality — so this is the correctness contract
+    /// that lets parse-count be reduced from K to 1 without changing output.
+    #[test]
+    fn c_split_messages_equal_single_concatenated_message() {
+        let total = b"alpha\r\nbravo\r\ncharlie\r\ndelta";
+        // The four chunk boundaries deliberately fall *inside* lines and after
+        // newlines, proving term_core's streaming parser carries state across
+        // message boundaries (so coalescing is purely a perf change).
+        let chunks: [&[u8]; 4] = [b"alp", b"ha\r\nbra", b"vo\r\ncharlie\r\n", b"delta"];
+        assert_eq!(
+            chunks.concat(),
+            total,
+            "chunks must reconstruct the whole stream"
+        );
+
+        // K-message path: one parse pass per message (current behavior).
+        let mut split = mux_tab_active_pane(10);
+        let k = chunks.len();
+        for chunk in chunks {
+            split.apply_mux_message(pty_output(10, chunk.to_vec()));
+        }
+
+        // Single-message path: one parse pass for the whole stream (the shape a
+        // receive-side coalesce would collapse the K messages into).
+        let mut single = mux_tab_active_pane(10);
+        single.apply_mux_message(pty_output(10, total.to_vec()));
+
+        assert_eq!(
+            split.test_grid_text(),
+            single.test_grid_text(),
+            "K={k} per-message parses must yield the same grid as 1 concatenated parse"
+        );
+    }
 }

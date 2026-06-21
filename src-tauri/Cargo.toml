@@ -186,6 +186,14 @@ tempfile = "3"
 # is published as `temp-env` but exposes itself as `temp_env`.
 temp_env = { package = "temp-env", version = "0.3" }
 
+# Wire-protocol types + client-side terminal parser for the mux throughput
+# integration test (tests/mux_throughput.rs). These are the same crates the
+# GUI build links via the `gui` feature; depending on them as dev-deps lets the
+# (feature-agnostic) test binary speak the daemon protocol and replay PtyOutput
+# through the real client parser without enabling the whole GUI feature set.
+mux_ipc = { path = "../crates/mux_ipc" }
+term_core = { path = "../crates/term_core" }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
