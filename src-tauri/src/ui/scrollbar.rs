@@ -43,7 +43,7 @@ pub struct ScrollbarView {
 impl ScrollbarView {
     /// Visibility policy. `Auto` mirrors the browser's `overflow-y:
     /// auto`: show only when there is content beyond the viewport.
-    fn visible(&self) -> bool {
+    pub fn visible(&self) -> bool {
         match self.mode {
             ScrollbarMode::Never => false,
             _ if self.alt_screen => false,

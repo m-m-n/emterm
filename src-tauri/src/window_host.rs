@@ -2607,6 +2607,44 @@ impl ApplicationHandler for PocApp {
                 if if_in_egui_strip {
                     return;
                 }
+                // Same rule for the bottom status-bar panel and the
+                // right-edge scrollbar overlay: a press on either
+                // would otherwise drag-select the terminal row that
+                // happens to sit under the bar. Gated to the Pressed
+                // edge only so a drag that *started* inside the
+                // terminal still gets its Released event processed
+                // (clears `host.dragging`, commits selection) when the
+                // user happens to lift the button over the strip.
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    let window_size_logical = host
+                        .window
+                        .inner_size()
+                        .to_logical::<f32>(host.pixels_per_point as f64);
+                    let bottom_strip_top =
+                        window_size_logical.height - host.status_bar_bot_inset_logical;
+                    let in_bottom_strip =
+                        host.status_bar_bot_inset_logical > 0.0 && egui_pos.y >= bottom_strip_top;
+                    let scrollbar_visible = self
+                        .app
+                        .active_tab()
+                        .map(|tab| {
+                            let core = tab.core.lock();
+                            crate::ui::scrollbar::ScrollbarView {
+                                mode: self.app.settings.show_scrollbar,
+                                scrollback_len: core.get_scrollback_length(),
+                                viewport_rows: core.rows() as u32,
+                                scroll_offset: self.app.scroll_offset(),
+                                alt_screen: self.app.alt_screen,
+                            }
+                            .visible()
+                        })
+                        .unwrap_or(false);
+                    let in_scrollbar = scrollbar_visible
+                        && egui_pos.x >= window_size_logical.width - crate::ui::scrollbar::TRACK_W;
+                    if in_bottom_strip || in_scrollbar {
+                        return;
+                    }
+                }
 
                 // While the profile-selector modal is up, every click
                 // belongs to egui (a row, or the scrim which dismisses);
