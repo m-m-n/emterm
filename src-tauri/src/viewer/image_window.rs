@@ -418,8 +418,14 @@ impl ApplicationHandler for ViewerApp {
         let attrs = Window::default_attributes()
             .with_title("eMterm Image Viewer")
             .with_decorations(false)
+            // FR4: deliberately NOT maximized — the image viewer keeps its
+            // image-fit sizing (`win_w`/`win_h` above).
             .with_inner_size(PhysicalSize::new(win_w, win_h))
             .with_min_inner_size(LogicalSize::new(320.0, 240.0));
+        // FR5: stamp the canonical dock-grouping identifier (X11
+        // `WM_CLASS` / Wayland `app_id`) — grouping only, no maximize.
+        #[cfg(target_os = "linux")]
+        let attrs = crate::linux_wm::with_app_id(attrs);
         let shell = GpuShell::new(event_loop, attrs, &self.ui_font_family);
 
         // Nearest magnification keeps pixel mode (100%) exact; linear

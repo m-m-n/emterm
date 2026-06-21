@@ -1,0 +1,113 @@
+schema_version: 1
+feature: window-maximize-dock-grouping
+created: 2026-06-20
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 4efd047cc2f251c067bad127d23daa1a06e97dc6
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 4efd047cc2f251c067bad127d23daa1a06e97dc6
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 4efd047cc2f251c067bad127d23daa1a06e97dc6
+  - id: implement
+    status: completed
+    completed_at_commit: 4efd047cc2f251c067bad127d23daa1a06e97dc6
+  - id: check
+    status: completed
+    completed_at_commit: 4efd047cc2f251c067bad127d23daa1a06e97dc6
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 4efd047cc2f251c067bad127d23daa1a06e97dc6
+
+requirements:
+  FR1:
+    title: Settings window maximize-on-launch
+    status: ok
+    tasks:
+      - webviewhost-maximized-field
+      - settings-markdown-maximized
+    tests:
+      - TS-1
+      - TS-5
+      - TS-6
+  FR2:
+    title: Markdown viewer maximize-on-launch
+    status: ok
+    tasks:
+      - webviewhost-maximized-field
+      - settings-markdown-maximized
+    tests:
+      - TS-1
+      - TS-5
+      - TS-6
+  FR3:
+    title: JSON/YAML data viewer maximize-on-launch
+    status: ok
+    tasks:
+      - dataviewer-maximized
+    tests:
+      - TS-2
+      - TS-5
+      - TS-6
+  FR4:
+    title: Image viewer excluded from maximize (image-fit preserved)
+    status: ok
+    tasks: []
+    tests:
+      - TS-3
+  FR5:
+    title: Unified dock grouping (WM_CLASS / app_id = emterm)
+    status: ok
+    tasks:
+      - app-wm-id-constant
+      - winit-windows-wmclass
+      - gtk-windows-wmclass
+    tests:
+      - TS-4
+      - TS-7
+      - TS-8
+  NFR1:
+    title: Fixed maximize behavior, no settings toggle
+    status: ok
+    tasks: []
+    tests: []
+  NFR2:
+    title: Platform scope (maximize cross-platform, grouping Linux only)
+    status: ok
+    tasks:
+      - webviewhost-maximized-field
+      - winit-windows-wmclass
+      - gtk-windows-wmclass
+    tests:
+      - TS-7
+      - TS-8
+  NFR3:
+    title: Restore size preserved (initial sizes retained)
+    status: ok
+    tasks:
+      - webviewhost-maximized-field
+      - dataviewer-maximized
+    tests:
+      - TS-6
+  NFR4:
+    title: Single source for the canonical app identifier
+    status: ok
+    tasks:
+      - app-wm-id-constant
+    tests:
+      - TS-4

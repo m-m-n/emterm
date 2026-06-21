@@ -21,9 +21,26 @@ use super::WebViewHost;
 pub fn run(host: WebViewHost) -> Result<(), String> {
     gtk::init().map_err(|e| format!("webview_host: gtk init failed: {e}"))?;
 
+    // FR5: GTK derives the X11 `WM_CLASS` and the Wayland `app_id` from
+    // the program identity, not from a per-window call. Set both to the
+    // canonical identifier once (after `gtk::init`, before any window is
+    // created) so the settings + Markdown windows report the same
+    // `emterm` as the winit windows and group under one dock icon.
+    gtk::glib::set_prgname(Some(crate::APP_WM_ID));
+    gtk::gdk::set_program_class(crate::APP_WM_ID);
+
     let window = Window::new(WindowType::Toplevel);
     window.set_title(&host.title);
+    // `set_default_size` is the restore size the window returns to when
+    // un-maximized; `maximize()` (called below, before `show_all`) makes
+    // it start maximized when the caller opts in.
     window.set_default_size(host.initial_size.0 as i32, host.initial_size.1 as i32);
+    if host.maximized {
+        // Request maximize before the window is mapped so it appears
+        // maximized from the first frame (no resize flicker). The
+        // default size above remains the un-maximize restore size.
+        window.maximize();
+    }
 
     // IPC bodies arrive on wry's worker thread; we forward them to the
     // GTK main loop via a channel and dispatch the user's IpcHandler

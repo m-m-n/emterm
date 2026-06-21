@@ -69,10 +69,13 @@ impl ApplicationHandler<String> for WebViewApp {
 
         let attrs = WindowAttributes::default()
             .with_title(host.title.clone())
+            // `with_inner_size` is the restore size; `with_maximized`
+            // (when the caller opts in) makes the window start maximized.
             .with_inner_size(winit::dpi::LogicalSize::new(
                 host.initial_size.0,
                 host.initial_size.1,
-            ));
+            ))
+            .with_maximized(host.maximized);
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
             Err(e) => {

@@ -73,15 +73,26 @@ pub fn reply_script(id: u64, result: &Result<serde_json::Value, String>) -> Stri
 /// Run the child settings window. Blocks until the window closes.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub fn run() -> Result<(), String> {
-    use std::io::Write as _;
-
-    use crate::webview_host::{IpcConfig, WebViewHost};
-
     if !assets::is_embedded() {
         return Err("settings window: bundle not embedded (run `bun run build:settings`)".into());
     }
 
-    let host = WebViewHost {
+    build_host().run()
+}
+
+/// Build the settings [`WebViewHost`] config (without running it).
+///
+/// Split out from [`run`] so the maximize-on-launch decision (FR1) is a
+/// deterministic, unit-testable fact: the returned config carries
+/// `maximized: true`. All handlers here are self-contained `'static`
+/// closures, so building the config has no side effects.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn build_host() -> crate::webview_host::WebViewHost {
+    use std::io::Write as _;
+
+    use crate::webview_host::{IpcConfig, WebViewHost};
+
+    WebViewHost {
         scheme: SCHEME.to_string(),
         host: HOST.to_string(),
         title: window_title(),
@@ -110,8 +121,9 @@ pub fn run() -> Result<(), String> {
         // The panel is full of text inputs and its own Esc-closing
         // dialogs, so Esc/Q must not exit the window.
         close_on_esc_q: false,
-    };
-    host.run()
+        // FR1: open maximized; `initial_size` above is the restore size.
+        maximized: true,
+    }
 }
 
 /// Window title, localized from the persisted language (the child has no
@@ -251,5 +263,15 @@ mod tests {
             "http://emterm-settings.localhost.evil.com/"
         ));
         assert!(!navigation_allowed("http://emterm-settings/index.html"));
+    }
+
+    // TS-1: the settings host config carries the maximize-on-launch flag
+    // (FR1). `initial_size` is preserved as the restore size.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn settings_host_opens_maximized_with_restore_size() {
+        let host = build_host();
+        assert!(host.maximized);
+        assert_eq!(host.initial_size, (1080.0, 760.0));
     }
 }
