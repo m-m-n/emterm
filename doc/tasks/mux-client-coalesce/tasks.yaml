@@ -1,0 +1,59 @@
+feature: mux-client-coalesce
+status:
+  add-parse-pass-counter: completed
+  add-coalesce-test: completed
+  update-metric-test: completed
+  implement-coalesce-loop: completed
+  preserve-edgecases: completed
+  regression-lib-suite: completed
+  e2e-measure: completed
+phases:
+  - id: phase1-test-instrumentation
+    name: "Test instrumentation + failing tests (TDD red)"
+    effort: small
+    tasks:
+      - id: add-parse-pass-counter
+        summary: "Add a #[cfg(test)] parse-pass counter on Tab (production untouched) + test reader"
+        files:
+          - src-tauri/src/tabs.rs
+        verifies: [TS-1, TS-3]
+      - id: add-coalesce-test
+        summary: "New required test: consecutive active-pane PtyOutput in one buffer -> single parse pass + grid == concatenated"
+        files:
+          - src-tauri/src/tabs.rs
+        verifies: [TS-1]
+      - id: update-metric-test
+        summary: "Restate c_pty_output_parsed_per_message_grid_grows_step_by_step for batched (1-pass) behavior"
+        files:
+          - src-tauri/src/tabs.rs
+        verifies: [TS-3]
+
+  - id: phase2-coalesce-impl
+    name: "Coalesce implementation (TDD green)"
+    effort: medium
+    tasks:
+      - id: implement-coalesce-loop
+        summary: "Add accumulator + flush in process_combined; route batch-eligible active-pane PtyOutput to accumulator, flush at every boundary and loop end; run per-batch side effects once"
+        files:
+          - src-tauri/src/tabs.rs
+        verifies: [TS-1, TS-2, TS-3]
+      - id: preserve-edgecases
+        summary: "Keep non-active drop, pending_switch live_queue legacy path, detach flush+break+tail re-route, inner-image drain intact"
+        files:
+          - src-tauri/src/tabs.rs
+        verifies: [TS-4, TS-5, TS-6, TS-7, TS-8]
+      - id: regression-lib-suite
+        summary: "Run full --lib suite single-threaded; fix any ordering regressions"
+        files:
+          - src-tauri/src/tabs.rs
+        verifies: [TS-2, TS-6, TS-7, TS-8]
+
+  - id: phase3-e2e-measure
+    name: "E2E throughput measurement (before/after)"
+    effort: small
+    tasks:
+      - id: e2e-measure
+        summary: "Run daemon-direct E2E throughput in release (ignored); record MiB/s and frame count before/after"
+        files:
+          - src-tauri/tests/mux_throughput.rs
+        verifies: [TS-9]

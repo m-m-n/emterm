@@ -1,0 +1,79 @@
+schema_version: 1
+feature: mux-client-coalesce
+title: "mux client coalesce (phase1)"
+scale: Standard
+created: "2026-06-21"
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo build --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib -- --test-threads=1"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --release --test mux_throughput --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 7a486215aa096c34af3effa3340b8ec7b231728c
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
+    status: completed
+    completed_at_commit: 7a486215aa096c34af3effa3340b8ec7b231728c
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 7a486215aa096c34af3effa3340b8ec7b231728c
+  - id: implement
+    status: completed
+    completed_at_commit: 7a486215aa096c34af3effa3340b8ec7b231728c
+  - id: check
+    status: completed
+    completed_at_commit: 7a486215aa096c34af3effa3340b8ec7b231728c
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 7a486215aa096c34af3effa3340b8ec7b231728c
+
+requirements:
+  FR1:
+    title: "Coalesce consecutive active-pane PtyOutput inner payloads into a single parse"
+    status: ok
+    tasks: [implement-coalesce-loop, add-coalesce-test]
+    tests: [TS-1, TS-2]
+  FR2:
+    title: "Flush coalesce buffer before handling control messages (ordering)"
+    status: ok
+    tasks: [implement-coalesce-loop, preserve-edgecases]
+    tests: [TS-5, TS-7]
+  FR3:
+    title: "Run take_response / drain_marks / inner image APC drain once per batch"
+    status: ok
+    tasks: [implement-coalesce-loop, regression-lib-suite]
+    tests: [TS-2, TS-6, TS-7]
+  FR4:
+    title: "Exclude non-active-pane PtyOutput from coalesce (drop as before)"
+    status: ok
+    tasks: [preserve-edgecases]
+    tests: [TS-4]
+  FR5:
+    title: "Keep legacy per-frame path (live_queue) while pending_switch is active"
+    status: ok
+    tasks: [preserve-edgecases]
+    tests: [TS-6]
+  NFR1:
+    title: "Performance: reduce per-pump parse count; improve E2E throughput, reduce frame count"
+    status: ok
+    tasks: [e2e-measure]
+    tests: [TS-9]
+  NFR2:
+    title: "Correctness preservation: coalesced output byte-equivalent to per-frame (split==concatenated)"
+    status: ok
+    tasks: [implement-coalesce-loop, regression-lib-suite]
+    tests: [TS-2]
+  NFR3:
+    title: "Scope isolation: no daemon / bridge / transport / WebView (src/) changes"
+    status: ok
+    tasks: [implement-coalesce-loop]
+    tests: []  # verified by `git diff --stat` review, not an automated test
