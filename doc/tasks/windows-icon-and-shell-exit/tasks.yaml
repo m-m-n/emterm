@@ -1,0 +1,133 @@
+schema_version: 1
+feature: windows-icon-and-shell-exit
+generated_from: IMPLEMENTATION.md
+
+phases:
+  - id: phase-1-icon-module
+    name: Shared icon module and call-site wiring
+    effort: small
+    status: completed
+    tasks:
+      - id: pick-source-asset
+        title: Pick PNG source asset for embedded icon
+        description: Choose between 32x32.png and 128x128.png; default to 128x128.png.
+        status: completed
+        note: 128x128.png selected (winit downsizes, larger source preserves HiDPI quality).
+      - id: create-window-icon-module
+        title: Add src-tauri/src/window_icon.rs
+        description: app_icon() helper returning Option<winit::window::Icon>; warn-on-error.
+        status: completed
+      - id: expose-via-lib
+        title: Expose window_icon module via lib.rs
+        description: pub mod window_icon under cfg(feature = "gui").
+        status: completed
+      - id: wire-winit-call-site
+        title: Wire WindowHost::new to with_window_icon
+        description: Extend WindowAttributes::default() chain.
+        status: completed
+      - id: wire-wry-call-site
+        title: Wire WebViewApp::resumed to with_window_icon
+        description: Same call in webview_host/windows.rs.
+        status: completed
+      - id: phase-1-unit-tests
+        title: Add unit tests for app_icon helper
+        description: Success path on bundled asset; failure path on broken input via private entrypoint.
+        status: completed
+        note: |
+          Tests live in src-tauri/src/window_icon.rs:
+            - app_icon_decodes_bundled_asset
+            - decode_icon_returns_none_on_broken_input
+
+  - id: phase-2-exe-resource
+    name: Windows .exe resource icon
+    effort: small
+    status: completed
+    tasks:
+      - id: add-winresource-build-dep
+        title: Add winresource to [build-dependencies]
+        description: src-tauri/Cargo.toml entry.
+        status: completed
+        note: winresource = "0.1" (resolved to 0.1.30 by cargo).
+      - id: extend-build-rs-windows
+        title: Extend build.rs with Windows-target resource step
+        description: Gate behind CARGO_CFG_TARGET_OS == "windows".
+        status: completed
+      - id: verify-cli-only-build
+        title: Verify cargo check --no-default-features still passes
+        description: New build-dep must not break the CLI-only build.
+        status: completed
+      - id: verify-windows-build
+        title: Verify make win-build produces a resourced .exe
+        description: PE viewer or Explorer-side icon confirmation.
+        status: deferred
+        note: |
+          Linux host limitation: `cargo xwin check --target x86_64-pc-windows-msvc`
+          succeeds, but resource linking inside a full Windows release build
+          must be validated on a Windows host (see Phase 4 manual verification).
+
+  - id: phase-3-watcher
+    name: Windows child-exit watcher in PtySession
+    effort: medium
+    status: completed
+    tasks:
+      - id: refactor-pty-session-fields
+        title: Refactor PtySession field layout (Windows ChildKiller + Weak master)
+        description: On cfg(windows), hold Box<dyn ChildKiller + Send + Sync>, Weak<Mutex<MasterPty>>, and watcher_join. Non-Windows fields unchanged.
+        status: completed
+      - id: adjust-spawn-windows
+        title: Adjust PtySession::spawn for ChildKiller / Weak split on Windows
+        description: clone_killer(); take Weak of master Arc; move Child and the strong master Arc into the watcher thread.
+        status: completed
+      - id: adjust-resize-windows
+        title: Adjust PtySession::resize for Weak master on Windows
+        description: Weak::upgrade(); resize when Some; warn-log when None.
+        status: completed
+      - id: implement-watcher-thread
+        title: Implement child-exit watcher thread (Windows)
+        description: Blocking wait(); drop master Arc on Ok or Err to fire ClosePseudoConsole; warn-log on Err.
+        status: completed
+        note: watcher_loop function in src-tauri/src/pty/mod.rs (cfg(windows)).
+      - id: update-drop-windows
+        title: Update Drop for PtySession with 6-step Windows variant
+        description: kill_killer; drop input_tx; no master drop in struct; join watcher; join reader; join writer. Non-Windows 4-step sequence preserved verbatim.
+        status: completed
+      - id: doc-comments-watcher
+        title: Document watcher lifecycle and single-shot Exited invariant
+        description: Doc comments cover ownership and the natural-vs-X-button convergence.
+        status: completed
+        note: |
+          Doc comments added on PtySession (struct doc), Drop impl (both
+          variants), and watcher_loop describe ownership and the FR6/FR7
+          single-shot invariant.
+      - id: regression-test-linux-drop
+        title: Add Linux regression test for PtySession Drop sequence
+        description: Confirms 4-step Drop ordering still constructs and drops cleanly.
+        status: completed
+        note: pty::tests::drop_returns_quickly_on_linux.
+      - id: watcher-test-windows
+        title: Add a Windows-only watcher integration test (or defer to manual)
+        description: cmd.exe /c exit 0 against portable-pty; assert PtyEvent::Exited timing.
+        status: deferred
+        note: |
+          Watcher integration test deferred to manual verification on a Windows
+          host (Phase 4). Building such a test on Linux against the Windows-only
+          code path is impractical from this sandbox; `cargo xwin check` covers
+          the type-level invariants.
+
+  - id: phase-4-manual
+    name: Manual verification on Windows and Linux
+    effort: small
+    status: pending
+    tasks:
+      - id: linux-smoke
+        title: Linux release smoke test
+        description: make build; launch emterm; exit a tab; confirm no regression.
+        status: pending
+      - id: windows-icon-checks
+        title: Windows icon visual verification
+        description: Explorer / taskbar / Alt+Tab / main window / child WebView title bars.
+        status: pending
+      - id: windows-exit-checks
+        title: Windows shell-exit verification
+        description: PowerShell exit; external kill; X-button close.
+        status: pending

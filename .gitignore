@@ -13,6 +13,13 @@ src-tauri/target-host/
 src-tauri/target-win/
 src-tauri/icons/*
 !src-tauri/icons/.gitkeep
+# Icons referenced by the GUI build (window_icon::app_icon -> include_bytes!,
+# build.rs -> winresource::set_icon). Generated from assets/eMterm.svg via
+# scripts/generate-icons.sh, but checked in so fresh clones / CI runners that
+# do not invoke `make dpkg` can still `cargo build` without a missing-file
+# compile error.
+!src-tauri/icons/128x128.png
+!src-tauri/icons/icon.ico
 src-tauri/viewer/dist/
 src-tauri/settings/dist/
 

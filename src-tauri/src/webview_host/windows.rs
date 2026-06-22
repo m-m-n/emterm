@@ -75,7 +75,13 @@ impl ApplicationHandler<String> for WebViewApp {
                 host.initial_size.0,
                 host.initial_size.1,
             ))
-            .with_maximized(host.maximized);
+            .with_maximized(host.maximized)
+            // FR3: attach the shared app icon to every wry child WebView
+            // window (Markdown viewer / settings panel / data viewer) so
+            // their title bars carry the eMterm glyph. The sibling
+            // `linux.rs` is intentionally left untouched (see
+            // `要件定義書.md` section 14.1 — Windows-only icon scope).
+            .with_window_icon(crate::window_icon::app_icon());
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Rc::new(w),
             Err(e) => {
