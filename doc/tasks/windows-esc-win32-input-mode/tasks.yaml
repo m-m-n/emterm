@@ -1,0 +1,118 @@
+schema_version: 1
+feature: windows-esc-win32-input-mode
+
+# Phase / task breakdown derived from IMPLEMENTATION.md.
+# Each task lists the requirements it implements (`requirements`) and
+# the verification scenarios it is exercised by (`tests`).
+
+phases:
+  - id: phase-1
+    name: "encode_escape_win32 + early-return shim + unit tests"
+    estimated_effort: small
+    description: |
+      Land FR1 / FR2 / FR4 / FR5. Add the Windows-only helper, wire it
+      into encode() as an early return, and cover the new path plus the
+      preserved non-Windows path with unit tests in pty/input.rs.
+    tasks:
+      - id: add-encode-escape-win32-helper
+        title: "Add encode_escape_win32(mods) helper"
+        description: |
+          Private function under #[cfg(windows)] that returns the
+          Win32 Input Mode VT key event pair for Escape with the Cs
+          field reflecting modifier state (Shift = 0x10,
+          LEFT_CTRL_PRESSED = 0x08, LEFT_ALT_PRESSED = 0x02). Doc
+          comment mirrors encode_backspace_win32 and points at
+          Microsoft Terminal spec #4999.
+        files:
+          - src-tauri/src/pty/input.rs
+        requirements: [FR1, FR2, NFR1, NFR3]
+        tests: [TS-1, TS-2, TS-3, TS-4, TS-5]
+        status: completed
+      - id: add-encode-escape-win32-shim
+        title: "Insert Windows early-return shim for Escape in encode()"
+        description: |
+          Immediately after the existing Backspace #[cfg(windows)]
+          early return, add the equivalent for Escape so non-Backspace,
+          non-Escape keys keep the current logic.
+        files:
+          - src-tauri/src/pty/input.rs
+        requirements: [FR1]
+        tests: [TS-1]
+        status: completed
+      - id: add-escape-win32-unit-tests
+        title: "Add Windows-gated unit tests TS-1 … TS-5"
+        description: |
+          New #[cfg(windows)] tests under pty/input.rs::tests asserting
+          the exact byte pair for no-mod, Ctrl, Alt, Shift, and a
+          combined Ctrl+Shift case. Naming follows existing
+          backspace_emits_win32_input_mode_pair / backspace_win32_includes_modifier_bits.
+        files:
+          - src-tauri/src/pty/input.rs
+        requirements: [FR5]
+        tests: [TS-1, TS-2, TS-3, TS-4, TS-5]
+        status: completed
+      - id: guard-existing-escape-assertion
+        title: "Guard the existing Esc assertion in enter_tab_backspace_escape"
+        description: |
+          Add #[cfg(not(windows))] around the Escape line of the
+          existing enter_tab_backspace_escape test, mirroring how
+          Backspace is already guarded. Preserves the FR4 non-Windows
+          bit-identical contract and prevents a false failure on the
+          Windows test run.
+        files:
+          - src-tauri/src/pty/input.rs
+        requirements: [FR4, NFR4]
+        tests: [TS-6]
+        status: completed
+
+  - id: phase-2
+    name: "WIN32_INPUT_MODE other-key audit (FR3)"
+    estimated_effort: small
+    description: |
+      Enumerate every encode() arm that emits a leading 0x1b byte or an
+      Alt-prefix-modified character, run the manual reproduction recipes
+      on a Windows host, record verdicts in IMPLEMENTATION.md, and add
+      additional encoder helpers only if a candidate is broken.
+    tasks:
+      - id: enumerate-win32-input-mode-candidates
+        title: "Build the candidate list and reproduction recipes"
+        description: |
+          Walk encode()'s arms and produce a candidate table (Esc,
+          Backspace, Alt+letter, arrows, Home/End, PageUp/Down,
+          Delete/Insert, F1-F12, Shift+Tab) with the keystroke each
+          requires and the expected vs observable behavior. The list is
+          appended as the head of the new IMPLEMENTATION.md "Audit
+          Notes (FR3)" subsection.
+        files:
+          - doc/tasks/windows-esc-win32-input-mode/IMPLEMENTATION.md
+        requirements: [FR3]
+        tests: [TS-11]
+        status: pending
+      - id: execute-windows-audit
+        title: "Execute manual reproductions on Windows and record verdicts"
+        description: |
+          Per recipe, the user presses the chord on a Windows host
+          running the rebuilt eMterm and reports back whether the
+          observable behavior matches a known-working terminal. Each
+          verdict is appended to IMPLEMENTATION.md "Audit Notes (FR3)".
+        files:
+          - doc/tasks/windows-esc-win32-input-mode/IMPLEMENTATION.md
+        requirements: [FR3]
+        tests: [TS-9, TS-10]
+        status: pending
+      - id: fix-broken-candidates-if-any
+        title: "Add Win32 Input Mode helpers + tests for broken candidates"
+        description: |
+          For each candidate flagged "broken in practice" by
+          execute-windows-audit, add a new encode_<key>_win32 helper in
+          pty/input.rs (mirroring encode_escape_win32), an
+          #[cfg(windows)] unit test, and a manual scenario in
+          VERIFICATION.md. If no candidate is broken, this task is
+          marked completed with description "no broken candidates
+          found".
+        files:
+          - src-tauri/src/pty/input.rs
+          - doc/tasks/windows-esc-win32-input-mode/VERIFICATION.md
+        requirements: [FR3]
+        tests: [TS-11]
+        status: pending
