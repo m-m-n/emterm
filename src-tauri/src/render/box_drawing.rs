@@ -19,6 +19,10 @@ struct BoxDef {
     s: u8,
     w: u8,
     e: u8,
+    /// When true, each stroke stops short of the bend so the corner
+    /// pixel itself is left empty. The eye reads that gap as an arc
+    /// at hairline weight.
+    arc: bool,
 }
 
 impl BoxDef {
@@ -28,6 +32,7 @@ impl BoxDef {
             s: 0,
             w: weight,
             e: weight,
+            arc: false,
         }
     }
     const fn v(weight: u8) -> Self {
@@ -36,10 +41,26 @@ impl BoxDef {
             s: weight,
             w: 0,
             e: 0,
+            arc: false,
         }
     }
     const fn corner(n: u8, s: u8, w: u8, e: u8) -> Self {
-        Self { n, s, w, e }
+        Self {
+            n,
+            s,
+            w,
+            e,
+            arc: false,
+        }
+    }
+    const fn arc_corner(n: u8, s: u8, w: u8, e: u8) -> Self {
+        Self {
+            n,
+            s,
+            w,
+            e,
+            arc: true,
+        }
     }
 }
 
@@ -58,6 +79,16 @@ fn lookup(cp: u32) -> Option<BoxDef> {
         0x2510 => BoxDef::corner(0, 1, 1, 0), // ┐
         0x2514 => BoxDef::corner(1, 0, 0, 1), // └
         0x2518 => BoxDef::corner(1, 0, 1, 0), // ┘
+
+        // ── arc corners (light, U+256D–U+2570) ──
+        // Same stroke layout as the sharp corners, but `arc: true` tells
+        // the rasterizer to omit the bend pixel — both strokes stop short
+        // of the cross-bar so a 1px diagonal gap forms at the corner.
+        // At hairline weight the eye reads that as a rounded corner.
+        0x256D => BoxDef::arc_corner(0, 1, 0, 1), // ╭
+        0x256E => BoxDef::arc_corner(0, 1, 1, 0), // ╮
+        0x256F => BoxDef::arc_corner(1, 0, 1, 0), // ╯
+        0x2570 => BoxDef::arc_corner(1, 0, 0, 1), // ╰
 
         // ── corners (heavy) ──
         0x250F => BoxDef::corner(0, 2, 0, 2), // ┏
@@ -124,34 +155,51 @@ pub fn rects_for(cp: u32, cell_w: f32, cell_h: f32) -> Option<Vec<(f32, f32, f32
     let v_thick = weight(def.n.max(def.s));
     let mid_y = ((cell_h - h_thick) * 0.5).max(0.0);
     let mid_x = ((cell_w - v_thick) * 0.5).max(0.0);
+    // Sharp corners overlap solidly at the bend by extending each stroke
+    // into the cross-bar. Arc corners do the opposite: each stroke stops
+    // one cross-bar thickness short so the bend pixel is left empty.
     if def.w > 0 {
         let t = weight(def.w);
         let y = ((cell_h - t) * 0.5).max(0.0);
-        // West stroke extends from the cell's left edge to past the
-        // center so the corner overlap is solid.
         let x = 0.0;
-        let w = mid_x + v_thick.max(t);
+        let w = if def.arc {
+            mid_x
+        } else {
+            mid_x + v_thick.max(t)
+        };
         out.push((x, y, w.min(cell_w), t));
     }
     if def.e > 0 {
         let t = weight(def.e);
         let y = ((cell_h - t) * 0.5).max(0.0);
-        let x = mid_x;
-        let w = cell_w - mid_x;
+        let (x, w) = if def.arc {
+            let start = mid_x + v_thick;
+            (start, (cell_w - start).max(0.0))
+        } else {
+            (mid_x, cell_w - mid_x)
+        };
         out.push((x, y, w, t));
     }
     if def.n > 0 {
         let t = weight(def.n);
         let x = ((cell_w - t) * 0.5).max(0.0);
         let y = 0.0;
-        let h = mid_y + h_thick.max(t);
+        let h = if def.arc {
+            mid_y
+        } else {
+            mid_y + h_thick.max(t)
+        };
         out.push((x, y, t, h.min(cell_h)));
     }
     if def.s > 0 {
         let t = weight(def.s);
         let x = ((cell_w - t) * 0.5).max(0.0);
-        let y = mid_y;
-        let h = cell_h - mid_y;
+        let (y, h) = if def.arc {
+            let start = mid_y + h_thick;
+            (start, (cell_h - start).max(0.0))
+        } else {
+            (mid_y, cell_h - mid_y)
+        };
         out.push((x, y, t, h));
     }
     Some(out)
@@ -198,6 +246,54 @@ mod tests {
     #[test]
     fn non_box_codepoint_returns_none() {
         assert!(rects_for(0x41, 9.0, 18.0).is_none());
+    }
+
+    #[test]
+    fn arc_corners_emit_two_rects_like_sharp_corners() {
+        // ╭ ╮ ╯ ╰ should each emit one horizontal + one vertical rect,
+        // just like their sharp counterparts.
+        for cp in [0x256D, 0x256E, 0x256F, 0x2570] {
+            let rects = rects_for(cp, 9.0, 18.0).unwrap();
+            assert_eq!(rects.len(), 2, "arc U+{:04X} should emit 2 rects", cp);
+        }
+    }
+
+    #[test]
+    fn arc_corner_omits_bend_pixel() {
+        // The arc effect is produced by leaving the bend pixel empty.
+        // Each arc/sharp pair is compared at a sample point inside that
+        // pixel: sharp covers it, arc must not.
+        let cell_w = 9.0_f32;
+        let cell_h = 18.0_f32;
+        let mid_x = ((cell_w - 1.0) * 0.5).max(0.0);
+        let mid_y = ((cell_h - 1.0) * 0.5).max(0.0);
+        // Pick a sample point inside the bend pixel (centerline column,
+        // centerline row) and verify coverage.
+        let sample = (mid_x + 0.25, mid_y + 0.25);
+        let covers = |rects: &[(f32, f32, f32, f32)]| -> bool {
+            rects.iter().any(|(x, y, w, h)| {
+                sample.0 >= *x && sample.0 < x + w && sample.1 >= *y && sample.1 < y + h
+            })
+        };
+        for (arc, sharp) in [
+            (0x256D, 0x250C), // ╭ vs ┌
+            (0x256E, 0x2510), // ╮ vs ┐
+            (0x256F, 0x2518), // ╯ vs ┘
+            (0x2570, 0x2514), // ╰ vs └
+        ] {
+            let arc_rects = rects_for(arc, cell_w, cell_h).unwrap();
+            let sharp_rects = rects_for(sharp, cell_w, cell_h).unwrap();
+            assert!(
+                covers(&sharp_rects),
+                "sharp U+{:04X} should cover bend pixel",
+                sharp
+            );
+            assert!(
+                !covers(&arc_rects),
+                "arc U+{:04X} should NOT cover bend pixel",
+                arc
+            );
+        }
     }
 
     #[test]
