@@ -74,6 +74,34 @@ pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
         return encode_backspace_win32(mods);
     }
 
+    // Windows Escape: same reasoning as Backspace above. A bare 0x1b on
+    // the WIN32_INPUT_MODE channel is not reliably delivered as a real
+    // Escape key event, so vim's insert→normal transition fails. Emit
+    // the full Win32 Input Mode key event pair instead. This path also
+    // bypasses the xterm Alt-ESC prefix because the modifier state is
+    // carried inline in the `Cs` field.
+    #[cfg(windows)]
+    if matches!(key, Escape) {
+        return encode_escape_win32(mods);
+    }
+
+    // Windows `Ctrl+[` aliases Escape (vim's `i_CTRL-[`) and currently
+    // hits the printable-char Ctrl branch below, which would push the
+    // bare `0x1b` byte that WIN32_INPUT_MODE refuses to deliver as a
+    // real Escape key event — the exact failure mode the Escape shim
+    // above fixes. Route any Ctrl-chord whose canonical control byte
+    // is `0x1b` through `encode_escape_win32` instead. `ctrl_byte('[')`
+    // is the only mapping that returns `0x1b`, so this is effectively
+    // a `Ctrl+[ -> Escape` redirect (Ctrl+3 and the like never reach
+    // `ctrl_byte`'s 0x1b arm). Other modifiers (Alt, Shift) are passed
+    // through into the `Cs` bitmask just like the Escape shim does.
+    #[cfg(windows)]
+    if let Char(c) = key {
+        if mods.ctrl && ctrl_byte(c) == Some(0x1b) {
+            return encode_escape_win32(mods);
+        }
+    }
+
     // ESC prefix for Alt-modified keys (xterm convention).
     let mut out: Vec<u8> = Vec::new();
     if mods.alt {
@@ -172,6 +200,41 @@ fn encode_backspace_win32(mods: Modifiers) -> Vec<u8> {
     format!("\x1b[8;14;8;1;{cs};1_\x1b[8;14;8;0;{cs};1_").into_bytes()
 }
 
+/// Encode Escape for ConPTY in `PSEUDOCONSOLE_WIN32_INPUT_MODE`.
+///
+/// portable-pty 0.8 opens every Windows PTY with that flag (see
+/// `portable-pty-0.8.1/src/win/psuedocon.rs`), so ConPTY interprets
+/// incoming bytes as Win32 Input Mode VT key sequences rather than
+/// raw control characters. A bare `0x1b` on this channel is not
+/// reliably delivered as a real Escape key event, so vim's
+/// insert→normal transition fails and other modal TUIs misbehave.
+/// The full key-event sequence below sends Escape as a proper
+/// `KEY_EVENT_RECORD` with modifier state threaded through as
+/// INPUT_RECORD `ControlKeyState` bits.
+///
+/// Sequence: `ESC [ Vk;Sc;Uc;Kd;Cs;Rc _`
+///   Vk=27 (VK_ESCAPE), Sc=1 (0x01 scan code), Uc=27, Kd=1/0
+///   (down/up), Cs=ControlKeyState bitmask, Rc=1 (repeat count).
+///
+/// Reference: Microsoft Terminal spec #4999 (Improved keyboard handling
+/// in conpty).
+#[cfg(windows)]
+fn encode_escape_win32(mods: Modifiers) -> Vec<u8> {
+    // Bias toward the left-side modifier codes to match what an English
+    // PC keyboard's leftmost Shift/Ctrl/Alt physically reports.
+    let mut cs: u32 = 0;
+    if mods.shift {
+        cs |= 0x10; // SHIFT_PRESSED
+    }
+    if mods.ctrl {
+        cs |= 0x08; // LEFT_CTRL_PRESSED
+    }
+    if mods.alt {
+        cs |= 0x02; // LEFT_ALT_PRESSED
+    }
+    format!("\x1b[27;1;27;1;{cs};1_\x1b[27;1;27;0;{cs};1_").into_bytes()
+}
+
 /// Map a printable character to its Ctrl-modified byte (0x00..0x1f).
 /// Returns `None` if the character does not have a defined control mapping.
 fn ctrl_byte(c: char) -> Option<u8> {
@@ -221,6 +284,18 @@ mod tests {
         assert_eq!(encode(Key::Tab, Modifiers::NONE), b"\t");
         #[cfg(not(windows))]
         assert_eq!(encode(Key::Backspace, Modifiers::NONE), b"\x7f");
+        #[cfg(not(windows))]
+        assert_eq!(encode(Key::Escape, Modifiers::NONE), b"\x1b");
+    }
+
+    /// Dedicated Unix Escape assertion. Pinned separately from
+    /// `enter_tab_backspace_escape` per SPEC.md Test Scenarios so the
+    /// non-Windows bit-identical Esc encoding (FR4 / NFR4) is a
+    /// standalone test rather than a single line buried inside a
+    /// multi-key suite.
+    #[cfg(not(windows))]
+    #[test]
+    fn escape_emits_bare_1b_on_unix() {
         assert_eq!(encode(Key::Escape, Modifiers::NONE), b"\x1b");
     }
 
@@ -266,6 +341,81 @@ mod tests {
         assert_eq!(bytes, b"\x1b[8;14;8;1;8;1_\x1b[8;14;8;0;8;1_");
     }
 
+    /// Windows Escape must emit a Win32 Input Mode key event pair
+    /// (keyDown + keyUp) instead of a bare 0x1b; ConPTY in
+    /// `PSEUDOCONSOLE_WIN32_INPUT_MODE` does not reliably deliver the
+    /// bare byte as a real Escape key event, breaking vim insert-mode
+    /// exit and other TUI modal behavior.
+    #[cfg(windows)]
+    #[test]
+    fn escape_emits_win32_input_mode_pair() {
+        assert_eq!(
+            encode(Key::Escape, Modifiers::NONE),
+            b"\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_"
+        );
+    }
+
+    /// Ctrl+Esc must set `LEFT_CTRL_PRESSED` (0x08) in the `Cs` field.
+    #[cfg(windows)]
+    #[test]
+    fn escape_win32_includes_ctrl_modifier() {
+        let bytes = encode(
+            Key::Escape,
+            Modifiers {
+                ctrl: true,
+                shift: false,
+                alt: false,
+            },
+        );
+        assert_eq!(bytes, b"\x1b[27;1;27;1;8;1_\x1b[27;1;27;0;8;1_");
+    }
+
+    /// Alt+Esc must set `LEFT_ALT_PRESSED` (0x02) in the `Cs` field.
+    #[cfg(windows)]
+    #[test]
+    fn escape_win32_includes_alt_modifier() {
+        let bytes = encode(
+            Key::Escape,
+            Modifiers {
+                ctrl: false,
+                shift: false,
+                alt: true,
+            },
+        );
+        assert_eq!(bytes, b"\x1b[27;1;27;1;2;1_\x1b[27;1;27;0;2;1_");
+    }
+
+    /// Shift+Esc must set `SHIFT_PRESSED` (0x10) in the `Cs` field.
+    #[cfg(windows)]
+    #[test]
+    fn escape_win32_includes_shift_modifier() {
+        let bytes = encode(
+            Key::Escape,
+            Modifiers {
+                ctrl: false,
+                shift: true,
+                alt: false,
+            },
+        );
+        assert_eq!(bytes, b"\x1b[27;1;27;1;16;1_\x1b[27;1;27;0;16;1_");
+    }
+
+    /// Combined Ctrl+Shift+Esc must OR `LEFT_CTRL_PRESSED` (0x08) and
+    /// `SHIFT_PRESSED` (0x10) into `Cs` = 0x18 (24).
+    #[cfg(windows)]
+    #[test]
+    fn escape_win32_combined_modifiers() {
+        let bytes = encode(
+            Key::Escape,
+            Modifiers {
+                ctrl: true,
+                shift: true,
+                alt: false,
+            },
+        );
+        assert_eq!(bytes, b"\x1b[27;1;27;1;24;1_\x1b[27;1;27;0;24;1_");
+    }
+
     #[test]
     fn arrow_keys() {
         assert_eq!(encode(Key::Up, Modifiers::NONE), b"\x1b[A");
@@ -298,9 +448,30 @@ mod tests {
 
     #[test]
     fn ctrl_extras() {
+        // Ctrl+[ aliases Escape; on Windows it is rerouted through the
+        // Win32 Input Mode shim (see ctrl_bracket_emits_escape_win32_input_mode_pair
+        // below). On non-Windows it still emits the bare 0x1b that
+        // canonical-mode line editors expect.
+        #[cfg(not(windows))]
         assert_eq!(encode(Key::Char('['), Modifiers::ctrl()), b"\x1b");
         assert_eq!(encode(Key::Char(' '), Modifiers::ctrl()), b"\x00");
         assert_eq!(encode(Key::Char('\\'), Modifiers::ctrl()), b"\x1c");
+    }
+
+    /// Ctrl+[ is a documented vim alias for Escape (`:help i_CTRL-[`).
+    /// On Windows it must produce the same Win32 Input Mode key event
+    /// pair as a bare Escape press; otherwise the same insert-mode
+    /// regression that motivated `encode_escape_win32` would recur for
+    /// Ctrl+[ users.
+    #[cfg(windows)]
+    #[test]
+    fn ctrl_bracket_emits_escape_win32_input_mode_pair() {
+        // Modifier-bits include Ctrl because the user did press Ctrl;
+        // the encoded sequence is still the Escape key event so vim
+        // observes it as Escape, with Cs surfacing the held Ctrl.
+        let bytes = encode(Key::Char('['), Modifiers::ctrl());
+        // Cs = LEFT_CTRL_PRESSED = 0x08 = 8
+        assert_eq!(bytes, b"\x1b[27;1;27;1;8;1_\x1b[27;1;27;0;8;1_");
     }
 
     #[test]

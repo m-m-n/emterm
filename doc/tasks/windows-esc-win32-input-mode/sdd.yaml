@@ -1,0 +1,111 @@
+schema_version: 1
+feature: windows-esc-win32-input-mode
+created: 2026-06-22
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "9c34c08a95bc1b1dfb4571b4edd58d641e50fc9f"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: "9c34c08a95bc1b1dfb4571b4edd58d641e50fc9f"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "9c34c08a95bc1b1dfb4571b4edd58d641e50fc9f"
+  - id: implement
+    status: completed
+    completed_at_commit: "9c34c08a95bc1b1dfb4571b4edd58d641e50fc9f"
+  - id: check
+    status: completed
+    completed_at_commit: "9c34c08a95bc1b1dfb4571b4edd58d641e50fc9f"
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: "9c34c08a95bc1b1dfb4571b4edd58d641e50fc9f"
+
+requirements:
+  FR1:
+    title: Windows Escape via Win32 Input Mode VT key event sequence
+    status: ok
+    tasks:
+      - add-encode-escape-win32-helper
+      - add-encode-escape-win32-shim
+    tests:
+      - TS-1
+  FR2:
+    title: Modifier propagation through ControlKeyState bitmask
+    status: ok
+    tasks:
+      - add-encode-escape-win32-helper
+    tests:
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+  FR3:
+    title: Audit other keys that may misbehave under WIN32_INPUT_MODE
+    status: ok
+    tasks:
+      - enumerate-win32-input-mode-candidates
+      - execute-windows-audit
+      - fix-broken-candidates-if-any
+    tests:
+      - TS-9
+      - TS-10
+      - TS-11
+  FR4:
+    title: Non-Windows Esc encoding parity preserved
+    status: ok
+    tasks:
+      - guard-existing-escape-assertion
+    tests:
+      - TS-6
+  FR5:
+    title: Rust unit tests for Win32 Input Mode Esc encoding
+    status: ok
+    tasks:
+      - add-escape-win32-unit-tests
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+  NFR1:
+    title: Compatible with portable-pty 0.8.1 WIN32_INPUT_MODE
+    status: ok
+    tasks:
+      - add-encode-escape-win32-helper
+    tests:
+      - TS-7
+  NFR2:
+    title: No measurable interactive latency regression
+    status: ok
+    tasks:
+      - add-encode-escape-win32-helper
+    tests: []
+  NFR3:
+    title: Maintainability via doc-comment parity with encode_backspace_win32
+    status: ok
+    tasks:
+      - add-encode-escape-win32-helper
+    tests:
+      - TS-12
+  NFR4:
+    title: Linux/macOS Esc encoding bit-identical to pre-change
+    status: ok
+    tasks:
+      - guard-existing-escape-assertion
+    tests:
+      - TS-6
