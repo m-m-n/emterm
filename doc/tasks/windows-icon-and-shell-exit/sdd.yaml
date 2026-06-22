@@ -1,0 +1,191 @@
+schema_version: 1
+feature: windows-icon-and-shell-exit
+created: 2026-06-22
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "7499780e46db06772fb0ee0a43c656e19127f6ff"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: "7499780e46db06772fb0ee0a43c656e19127f6ff"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "7499780e46db06772fb0ee0a43c656e19127f6ff"
+  - id: implement
+    status: completed
+    completed_at_commit: "7499780e46db06772fb0ee0a43c656e19127f6ff"
+  - id: check
+    status: completed
+    completed_at_commit: "7499780e46db06772fb0ee0a43c656e19127f6ff"
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: "7499780e46db06772fb0ee0a43c656e19127f6ff"
+
+requirements:
+  FR1:
+    title: .exe Windows resource icon (build.rs + winresource)
+    status: ok
+    tasks:
+      - add-winresource-build-dep
+      - extend-build-rs-windows
+      - verify-cli-only-build
+      - verify-windows-build
+    tests:
+      - TS-1
+      - M-2
+      - M-3
+      - M-4
+  FR2:
+    title: winit main window icon (window_host.rs)
+    status: ok
+    tasks:
+      - wire-winit-call-site
+    tests:
+      - M-5
+  FR3:
+    title: wry child WebView icon (webview_host/windows.rs)
+    status: ok
+    tasks:
+      - wire-wry-call-site
+    tests:
+      - M-6
+      - M-7
+  FR4:
+    title: Shared icon module (crate::window_icon::app_icon)
+    status: ok
+    tasks:
+      - pick-source-asset
+      - create-window-icon-module
+      - expose-via-lib
+      - phase-1-unit-tests
+    tests:
+      - TS-1
+  FR5:
+    title: Fail-soft on icon decode error (warn + None)
+    status: ok
+    tasks:
+      - create-window-icon-module
+      - phase-1-unit-tests
+    tests:
+      - TS-2
+  FR6:
+    title: Windows child-exit watcher thread in PtySession::spawn
+    status: ok
+    tasks:
+      - refactor-pty-session-fields
+      - adjust-spawn-windows
+      - adjust-resize-windows
+      - implement-watcher-thread
+      - watcher-test-windows
+    tests:
+      - TS-5
+      - M-8
+      - M-9
+  FR7:
+    title: Single-shot PtyEvent::Exited per session
+    status: ok
+    tasks:
+      - implement-watcher-thread
+      - update-drop-windows
+      - doc-comments-watcher
+    tests:
+      - M-10
+  FR8:
+    title: Preserve existing 4-step Drop for PtySession ordering
+    status: ok
+    tasks:
+      - update-drop-windows
+      - regression-test-linux-drop
+    tests:
+      - TS-3
+      - TS-4
+  FR9:
+    title: No deadlock between watcher and Drop (ChildKiller split)
+    status: ok
+    tasks:
+      - refactor-pty-session-fields
+      - adjust-spawn-windows
+      - update-drop-windows
+    tests:
+      - TS-4
+  FR10:
+    title: Non-Windows parity (no behavior change on Linux/macOS)
+    status: ok
+    tasks:
+      - refactor-pty-session-fields
+      - regression-test-linux-drop
+    tests:
+      - TS-3
+      - M-1
+  FR11:
+    title: Watcher thread JoinHandle and clean teardown
+    status: ok
+    tasks:
+      - refactor-pty-session-fields
+      - update-drop-windows
+    tests:
+      - TS-4
+  FR12:
+    title: Error handling for Child::wait failure
+    status: ok
+    tasks:
+      - implement-watcher-thread
+    tests: []
+  NFR1:
+    title: Build-time isolation (Windows resource only on Windows target)
+    status: ok
+    tasks:
+      - extend-build-rs-windows
+      - verify-cli-only-build
+    tests: []
+  NFR2:
+    title: Asset payload bounded to existing icons/*.png assets
+    status: ok
+    tasks:
+      - pick-source-asset
+    tests: []
+  NFR3:
+    title: Startup icon decode under 10 ms
+    status: ok
+    tasks: []
+    tests: []
+  NFR4:
+    title: Watcher CPU cost negligible when shell is running
+    status: ok
+    tasks: []
+    tests: []
+  NFR5:
+    title: Shell-exit detection latency under 500 ms
+    status: ok
+    tasks:
+      - implement-watcher-thread
+    tests:
+      - M-8
+  NFR6:
+    title: Documentation comments on watcher lifecycle and icon module
+    status: ok
+    tasks:
+      - doc-comments-watcher
+      - create-window-icon-module
+    tests: []
+  NFR7:
+    title: Linux/macOS portability bit-identical for PTY semantics
+    status: ok
+    tasks:
+      - regression-test-linux-drop
+    tests:
+      - TS-3
+      - M-1

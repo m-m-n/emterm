@@ -13,6 +13,8 @@ pub mod visibility;
 
 use std::io::{Read, Write};
 use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::Weak;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
@@ -43,19 +45,68 @@ pub enum ExitReason {
 /// Owned PTY session. Dropping this triggers teardown: pending input is
 /// discarded, the writer thread observes the closed channel and exits, and
 /// the master PTY is closed which causes the reader thread to see EOF.
+///
+/// # Platform field split (FR9 / FR10)
+///
+/// On non-Windows the layout is unchanged from the pre-watcher
+/// implementation: a single `Arc<Mutex<Child>>` and an
+/// `Option<Arc<Mutex<MasterPty>>>` are held directly by the struct, and
+/// the kernel-side EOF on the PTY (driven by `child.kill()` in
+/// [`Drop::drop`]) is what wakes the reader. No watcher thread runs.
+///
+/// On Windows the `Child` itself is moved into a dedicated child-exit
+/// watcher thread together with the **strong** master `Arc`. The struct
+/// only keeps a `ChildKiller` (cloned at spawn time via
+/// `Child::clone_killer()`) plus a `Weak` of the master, so the watcher
+/// can drop the master `Arc` from inside `wait()` without contending with
+/// the struct for the `Mutex<Child>`. When the watcher's `wait()` returns
+/// — either because the shell exited naturally, or because Drop step 1
+/// killed it — the master is the sole remaining strong reference and
+/// dropping it fires `ClosePseudoConsole`, which is what unblocks the
+/// reader's `ReadFile` and triggers the single-shot `PtyEvent::Exited`
+/// (FR6 / FR7).
 pub struct PtySession {
     /// Outbound queue consumed by the writer thread.
     input_tx: Sender<Vec<u8>>,
-    /// Resize handle for the PTY master. Wrapped so the App can call
-    /// `resize` without owning the session mutably. `Option` so `Drop`
-    /// can `take()` it and run `ClosePseudoConsole` BEFORE joining the
-    /// reader thread on Windows — otherwise the X-button close path
-    /// freezes (see `impl Drop`). Always `Some` outside `Drop`.
+
+    /// Non-Windows: resize handle for the PTY master. Wrapped so the App
+    /// can call `resize` without owning the session mutably. `Option` so
+    /// `Drop` can `take()` it and run cleanup BEFORE joining the reader
+    /// thread. Always `Some` outside `Drop`.
+    #[cfg(not(windows))]
     master: Option<Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>>,
-    /// Child process handle for SIGHUP on teardown.
+    /// Windows: `Weak` to the master `Arc`. The matching strong `Arc` lives
+    /// in the watcher thread (see [`Self::spawn`]); when the watcher exits
+    /// it drops that strong ref, which fires `ClosePseudoConsole`. The
+    /// struct upgrades the `Weak` on each `resize()`; once the watcher has
+    /// dropped the master, `upgrade()` returns `None` and we warn-log.
+    #[cfg(windows)]
+    master: Weak<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+
+    /// Non-Windows: child process handle. `Drop` calls `kill()` on it,
+    /// which closes the slave PTY and produces the kernel EOF that wakes
+    /// the reader (no watcher thread is needed).
+    #[cfg(not(windows))]
     child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    /// Windows: cloned `ChildKiller` retained for the Drop step-1 kill
+    /// path. The owning `Child` is moved into the watcher thread at spawn
+    /// time so no `Mutex<Child>` is shared between the struct and the
+    /// watcher — that is what guarantees Drop can call `kill` even while
+    /// the watcher is mid-`wait()` (FR9, "no deadlock between Drop and
+    /// watcher").
+    #[cfg(windows)]
+    child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+
     reader_join: Option<JoinHandle<()>>,
     writer_join: Option<JoinHandle<()>>,
+
+    /// Windows: join handle for the child-exit watcher thread. Joined in
+    /// `Drop` step 4 so the master `Arc` it holds is guaranteed to have
+    /// been dropped (and thus `ClosePseudoConsole` to have fired) before
+    /// the reader is joined.
+    #[cfg(windows)]
+    watcher_join: Option<JoinHandle<()>>,
+
     /// Phase 4-C: when `true`, the reader thread routes incoming PTY bytes
     /// into [`ring`] instead of emitting them as `PtyEvent::Data`. Toggled
     /// by [`set_paused`]; observed by the reader on every chunk.
@@ -226,15 +277,67 @@ impl PtySession {
             })
             .expect("spawn writer thread");
 
-        Ok(Self {
-            input_tx,
-            master: Some(Arc::new(Mutex::new(master))),
-            child: Arc::new(Mutex::new(child)),
-            reader_join: Some(reader_join),
-            writer_join: Some(writer_join),
-            paused,
-            ring,
-        })
+        // ── Platform split for child + master ownership ──────────────────
+        //
+        // Non-Windows keeps the long-standing layout: the struct holds the
+        // `Child` (wrapped) and the master `Arc` directly, the reader is
+        // woken by the kernel-side EOF that `child.kill()` produces in
+        // `Drop`, and no extra thread is needed.
+        //
+        // Windows must work around ConPTY's "no automatic EOF on child
+        // exit" behavior. We clone a `ChildKiller` for the Drop fast path,
+        // move the `Child` itself plus the strong master `Arc` into a
+        // watcher thread, and keep only a `Weak` of the master in the
+        // struct. The watcher blocks in `Child::wait()`; whenever that
+        // returns (natural exit or Drop's `ChildKiller::kill`), the
+        // watcher drops the master `Arc` it owns — being the sole strong
+        // reference at that point, this fires `ClosePseudoConsole`, which
+        // unblocks the reader's `ReadFile` so the existing `reader_loop`
+        // sends exactly one `PtyEvent::Exited { Eof }` (FR6 / FR7).
+
+        #[cfg(not(windows))]
+        {
+            Ok(Self {
+                input_tx,
+                master: Some(Arc::new(Mutex::new(master))),
+                child: Arc::new(Mutex::new(child)),
+                reader_join: Some(reader_join),
+                writer_join: Some(writer_join),
+                paused,
+                ring,
+            })
+        }
+
+        #[cfg(windows)]
+        {
+            // Clone the killer BEFORE moving the child into the watcher.
+            // `clone_killer()` returns an independent `Box<dyn ChildKiller
+            // + Send + Sync>`, so the struct keeps a handle into the
+            // child while the watcher owns the `Child` outright.
+            let child_killer = child.clone_killer();
+
+            let master_arc = Arc::new(Mutex::new(master));
+            // `Weak` for the struct; the watcher gets the strong `Arc`.
+            let master_weak = Arc::downgrade(&master_arc);
+
+            let watcher_join = std::thread::Builder::new()
+                .name("native-poc-pty-watcher".into())
+                .spawn(move || {
+                    watcher_loop(child, master_arc);
+                })
+                .expect("spawn watcher thread");
+
+            Ok(Self {
+                input_tx,
+                master: master_weak,
+                child_killer,
+                reader_join: Some(reader_join),
+                writer_join: Some(writer_join),
+                watcher_join: Some(watcher_join),
+                paused,
+                ring,
+            })
+        }
     }
 
     /// Flip the pause flag. When `true`, the reader thread routes incoming
@@ -275,6 +378,18 @@ impl PtySession {
     }
 
     /// Update the PTY size. Called on window resize.
+    ///
+    /// Non-Windows: the master `Arc` lives in the struct, so we just take
+    /// the lock and call `resize`. The `Option` is only ever `None` inside
+    /// `Drop` (where this method is never called), so the early-return
+    /// path is defensive only.
+    ///
+    /// Windows: the strong `Arc` lives in the watcher thread; the struct
+    /// only holds a `Weak`. We upgrade on use — if the watcher has
+    /// already dropped the master after observing child exit, the upgrade
+    /// returns `None` and we `warn`-log instead of touching freed memory
+    /// (FR9 lifecycle invariant).
+    #[cfg(not(windows))]
     pub fn resize(&self, cols: u16, rows: u16) {
         let Some(master) = self.master.as_ref() else {
             return;
@@ -289,9 +404,35 @@ impl PtySession {
             log::warn!("pty resize failed: {e}");
         }
     }
+
+    #[cfg(windows)]
+    pub fn resize(&self, cols: u16, rows: u16) {
+        let Some(master_arc) = self.master.upgrade() else {
+            log::warn!("pty resize: master already dropped (child exited); ignoring");
+            return;
+        };
+        let master = master_arc.lock();
+        if let Err(e) = master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            log::warn!("pty resize failed: {e}");
+        }
+    }
 }
 
 impl Drop for PtySession {
+    // ── Non-Windows: existing 4-step shutdown, kept bit-identical (FR10) ─
+    //
+    // 1. Kill the child → kernel-side EOF on the master fd wakes the
+    //    reader.
+    // 2. Force-disconnect the input channel → writer exits.
+    // 3. Drop the master `Arc` → defensive; harmless on Linux because the
+    //    reader holds its own duped fd from `try_clone_reader`.
+    // 4. Join reader, then writer.
+    #[cfg(not(windows))]
     fn drop(&mut self) {
         // 1. Kill the child first so the kernel closes the slave side of
         //    the PTY. Reader will then see EOF on `reader.read()`.
@@ -314,27 +455,21 @@ impl Drop for PtySession {
         let old_tx = std::mem::replace(&mut self.input_tx, dummy_tx);
         drop(old_tx);
 
-        // 3. Drop the master PTY handle. On Windows this runs
-        //    `ClosePseudoConsole` which tells conhost to close its end of the
-        //    output pipe — that EOF is what unblocks the reader thread's
-        //    `ReadFile`. Without this the X-button close path freezes:
-        //    `TerminateProcess` alone does not release conhost's end of the
-        //    pipe, so the reader sits in a blocking read and `reader_join`
-        //    below never returns. On Linux this is harmless: the reader holds
-        //    its own duped fd from `try_clone_reader`, so closing the master
-        //    side does not affect the reader's read, and the kernel-side EOF
-        //    that `child.kill()` already produced is what drives the reader
+        // 3. Drop the master PTY handle. On Linux this is largely
+        //    defensive: the reader holds its own duped fd from
+        //    `try_clone_reader`, so closing the master side does not
+        //    affect the reader's read, and the kernel-side EOF that
+        //    `child.kill()` already produced is what drives the reader
         //    to exit.
         //
         //    `master` is `Option` exactly so we can move it out here.
-        //    `take()` decrements the `Arc` to its last owner and drops the
-        //    `MasterPty`, invoking the platform-specific cleanup.
+        //    `take()` decrements the `Arc` to its last owner and drops
+        //    the `MasterPty`, invoking the platform-specific cleanup.
         drop(self.master.take());
 
         // 4. Join threads. Order matters: reader is unblocked by step 1
-        //    (kernel-side EOF on master read; Linux) or step 3
-        //    (`ClosePseudoConsole` → conhost closes its pipe end; Windows);
-        //    writer is unblocked by step 2 (channel disconnect).
+        //    (kernel-side EOF on master read); writer is unblocked by
+        //    step 2 (channel disconnect).
         if let Some(h) = self.reader_join.take() {
             let _ = h.join();
         }
@@ -342,6 +477,98 @@ impl Drop for PtySession {
             let _ = h.join();
         }
     }
+
+    // ── Windows: 6-step shutdown (FR8 / FR11) ────────────────────────────
+    //
+    // ConPTY does not produce a pipe EOF when the child exits on its own,
+    // so we layered a watcher thread on top in `PtySession::spawn`. The
+    // shutdown sequence has to coordinate with that watcher while
+    // preserving the existing single-shot `PtyEvent::Exited` semantics
+    // (FR7) and the natural-exit-vs-X-button convergence (FR7 / FR8).
+    //
+    // 1. `ChildKiller::kill` — wakes any in-flight `Child::wait()` in the
+    //    watcher (no-op if the child is already dead).
+    // 2. Force-disconnect the input channel → writer exits.
+    // 3. No master to drop in the struct: the watcher owns the only
+    //    remaining strong `Arc`. The struct only had a `Weak`, which is
+    //    dropped implicitly when the struct is freed after this method
+    //    returns.
+    // 4. Join the watcher — this is the critical ordering step. Joining
+    //    the watcher *before* the reader guarantees the watcher has
+    //    dropped its master `Arc`, which is what fires
+    //    `ClosePseudoConsole` and unblocks the reader's `ReadFile`. Step
+    //    1 alone is not sufficient (TerminateProcess does not release
+    //    conhost's pipe end).
+    // 5. Join the reader (it observed EOF in step 4 and sent
+    //    `PtyEvent::Exited`).
+    // 6. Join the writer (it exited in step 2).
+    #[cfg(windows)]
+    fn drop(&mut self) {
+        // 1. Tell the child to die. If it already exited naturally the
+        //    `kill` is a no-op; either way the watcher's `wait()` will
+        //    return next.
+        let _ = self.child_killer.kill();
+
+        // 2. Force-disconnect the writer's input channel. Mirror of the
+        //    non-Windows path's step 2.
+        let (dummy_tx, _dummy_rx) = bounded::<Vec<u8>>(1);
+        let old_tx = std::mem::replace(&mut self.input_tx, dummy_tx);
+        drop(old_tx);
+
+        // 3. No-op: the watcher owns the sole strong master `Arc`. The
+        //    struct's `Weak` is freed with the struct itself.
+
+        // 4. Join the watcher. When this returns, the watcher has
+        //    dropped its master `Arc` and the reader's `ReadFile` has
+        //    been unblocked.
+        if let Some(h) = self.watcher_join.take() {
+            let _ = h.join();
+        }
+
+        // 5. Join the reader. It has either already sent
+        //    `PtyEvent::Exited { Eof }` (natural exit or post-kill path)
+        //    or sent it into an already-closed channel — `reader_loop`
+        //    tolerates that defensively.
+        if let Some(h) = self.reader_join.take() {
+            let _ = h.join();
+        }
+
+        // 6. Join the writer.
+        if let Some(h) = self.writer_join.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// Windows-only child-exit watcher. Owns the `Child` and the strong
+/// master `Arc`; the [`PtySession`] struct keeps only a `ChildKiller` and
+/// a `Weak` of the master.
+///
+/// The watcher's job is simple: block in `Child::wait()`, then drop the
+/// master `Arc` (Ok or Err path alike) so `ClosePseudoConsole` fires
+/// exactly once. That EOF is what the existing `reader_loop` consumes to
+/// emit the single `PtyEvent::Exited` event (FR6 / FR7). The watcher
+/// itself never sends events, so there is no way to double-fire `Exited`.
+///
+/// On `wait()` `Err`, we still drop the master so the X-button close path
+/// (Drop step 1 → `ChildKiller::kill` → conhost teardown) remains
+/// functional (FR12).
+#[cfg(windows)]
+fn watcher_loop(
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+) {
+    match child.wait() {
+        Ok(_) => {}
+        Err(e) => {
+            log::warn!("pty watcher: Child::wait failed: {e}");
+        }
+    }
+    // Dropping `master` decrements the strong refcount to zero (the
+    // struct only held a `Weak`), which drops the underlying `MasterPty`
+    // and triggers `ClosePseudoConsole`. That EOF is what the reader's
+    // blocking `ReadFile` is waiting for.
+    drop(master);
 }
 
 fn reader_loop(
@@ -610,5 +837,40 @@ mod tests {
 
         script.allow_eof();
         let _ = join.join();
+    }
+
+    // ── FR10 regression: non-Windows Drop sequence still constructs and
+    //    tears down cleanly. We spawn a long-running shell command
+    //    (`/bin/sh -c 'sleep 10'`), drop the session immediately, and
+    //    assert that Drop returns within a generous timeout. If the
+    //    legacy 4-step ordering regressed (e.g. the writer thread was
+    //    left waiting on `recv` because we forgot to disconnect the
+    //    input channel), the join would hang. Linux-only because Windows
+    //    runs the 6-step variant.
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn drop_returns_quickly_on_linux() {
+        use std::time::{Duration, Instant};
+
+        let (tx, _rx) = crossbeam_channel::bounded::<PtyEvent>(64);
+        let session = PtySession::spawn(
+            80,
+            24,
+            tx,
+            "/bin/sh",
+            &["-c".into(), "sleep 10".into()],
+            &[],
+            None,
+        )
+        .expect("spawn pty session");
+
+        let start = Instant::now();
+        drop(session);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "PtySession::drop took {elapsed:?}; the 4-step Drop sequence regressed"
+        );
     }
 }

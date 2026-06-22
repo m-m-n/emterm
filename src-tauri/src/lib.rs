@@ -121,6 +121,8 @@ pub mod viewer;
 pub mod wakeup;
 #[cfg(feature = "gui")]
 pub mod webview_host;
+#[cfg(feature = "gui")]
+pub mod window_icon;
 
 #[cfg(test)]
 mod tests {

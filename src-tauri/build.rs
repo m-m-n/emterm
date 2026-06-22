@@ -25,6 +25,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    // Windows resource embed runs unconditionally on Windows targets — it
+    // covers both the GUI and the CLI-only build (FR1 / NFR1). Gating
+    // sits on `CARGO_CFG_TARGET_OS == "windows"` so the crate, the linker
+    // step, and the `rerun-if-changed` line are all skipped on Linux.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        embed_windows_icon_resource();
+    }
+
     // CARGO_FEATURE_<NAME> is set by Cargo when the feature is enabled.
     // Skip the manifest emission for CLI-only builds.
     if env::var_os("CARGO_FEATURE_GUI").is_none() {
@@ -50,6 +58,24 @@ fn main() {
         "SETTINGS_ASSETS",
         &out_dir.join("settings_assets.rs"),
     );
+}
+
+/// Windows-target-only: attach `icons/icon.ico` to the PE resource section
+/// of `emterm.exe` so Explorer, the taskbar, and Alt+Tab render the eMterm
+/// icon (FR1). Called only when `CARGO_CFG_TARGET_OS == "windows"`, so the
+/// `winresource` crate is never invoked on Linux/macOS.
+fn embed_windows_icon_resource() {
+    // Cargo re-runs the build script when the icon changes. The path is
+    // relative to `CARGO_MANIFEST_DIR` (i.e. the `src-tauri/` crate root).
+    println!("cargo:rerun-if-changed=icons/icon.ico");
+    if let Err(e) = winresource::WindowsResource::new()
+        .set_icon("icons/icon.ico")
+        .compile()
+    {
+        // Fail fast: a Windows build without the icon is a regression we
+        // want to surface at build time, not at runtime.
+        panic!("winresource: failed to embed icons/icon.ico: {e}");
+    }
 }
 
 /// Walk `dist` and write a `pub static <slice_name>: &[ViewerAsset]`

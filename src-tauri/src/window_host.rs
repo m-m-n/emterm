@@ -326,7 +326,11 @@ impl WindowHost {
             .with_decorations(false)
             .with_inner_size(LogicalSize::new(960.0, 600.0))
             .with_min_inner_size(LogicalSize::new(320.0, 200.0))
-            .with_maximized(true);
+            .with_maximized(true)
+            // FR2: attach the bundled app icon to the main winit window so
+            // the title bar and taskbar (Windows fallbacks) render the
+            // eMterm glyph. `None` from `app_icon()` is a clean no-op.
+            .with_window_icon(crate::window_icon::app_icon());
         // FR5: report the canonical dock-grouping identifier (X11
         // `WM_CLASS` / Wayland `app_id`) so every window groups under one
         // `emterm` dock icon. winit applies the trait matching the active
