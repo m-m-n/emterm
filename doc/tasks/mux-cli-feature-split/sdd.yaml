@@ -25,137 +25,110 @@ workflow:
     completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
   - id: implement
     status: completed
-    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+    completed_at_commit: 4116730
   - id: check
     status: completed
-    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+    completed_at_commit: 4116730
   - id: verify
     artifacts: [VERIFICATION_RESULT.md]
     status: completed
-    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+    completed_at_commit: 4116730
 
 requirements:
   FR1:
-    title: "Add `mux` cargo feature"
+    title: "Remove the short-lived `mux` cargo feature"
     status: ok
     tasks:
-      - add-mux-cargo-feature
+      - cargo-toml-reshape
     tests:
       - TS-1
       - TS-2
-      - TS-3
+      - TS-5
   FR2:
-    title: "Reclassify dependencies from gui to mux"
+    title: "Promote mux deps (tokio / portable-pty / term_core / mux_ipc / vt100 / etc.) to always-built"
     status: ok
     tasks:
-      - add-mux-cargo-feature
+      - cargo-toml-reshape
+    tests:
+      - TS-1
+      - TS-2
+  FR3:
+    title: "Ungate mux/pty/scroll/wakeup/self_exec modules in lib.rs"
+    status: ok
+    tasks:
+      - lib-rs-gate-removal
+    tests:
+      - TS-1
+      - TS-2
+      - TS-6
+  FR4:
+    title: "Keep mux::tmux_import gated on feature = gui (settings_store dep)"
+    status: ok
+    tasks:
+      - tmux-import-gui-gate
+    tests:
+      - TS-10
+  FR5:
+    title: "Drop mux dispatch cfg gate in main.rs"
+    status: ok
+    tasks:
+      - main-rs-dispatch-flip
+    tests:
+      - TS-1
+      - TS-2
+      - TS-7
+  FR6:
+    title: "Keep viewer_kinds.rs SSOT + pub use re-export"
+    status: ok
+    tasks:
+      - viewer-kinds-ssot
     tests:
       - TS-1
       - TS-2
       - TS-3
-  FR3:
-    title: "Module gate rewrites in lib.rs (mux/pty/scroll → mux gate)"
+  FR7:
+    title: "Keep mux::prefix test rewrite (parse_prefix_key direct calls)"
     status: ok
     tasks:
-      - regate-mux-pty-scroll-modules
+      - prefix-test-rewrite
     tests:
-      - TS-3
-      - TS-12
-  FR4:
-    title: "Keep mux::tmux_import gated on gui feature"
+      - TS-4
+  FR8:
+    title: "Revert build infrastructure (Makefile + build-dpkg.sh) to pre-split shape"
     status: ok
     tasks:
-      - regate-mux-pty-scroll-modules
+      - revert-makefile
+      - revert-build-dpkg-script
     tests:
-      - TS-3
-      - TS-6
-  FR5:
-    title: "Flip emterm mux dispatch cfg from gui to mux in main.rs"
-    status: ok
-    tasks:
-      - flip-mux-dispatch-in-main
-    tests:
-      - TS-3
       - TS-8
       - TS-9
-  FR6:
-    title: "Move REPLAYABLE_VIEWER_KINDS / ScrollPosition / wakeup / self_exec for cross-feature compile"
-    status: ok
-    tasks:
-      - hoist-replayable-viewer-kinds
-      - regate-mux-pty-scroll-modules
-    tests:
-      - TS-3
-      - TS-6
-      - TS-10
-      - TS-12
-  FR6.1:
-    title: "Rewrite mux::prefix test refs from crate::settings to crate::mux::prefix"
-    status: ok
-    tasks:
-      - regate-mux-pty-scroll-modules
-    tests:
-      - TS-10
-      - TS-13
-  FR7:
-    title: "Re-gate pty module to feature = mux"
-    status: ok
-    tasks:
-      - regate-mux-pty-scroll-modules
-    tests:
-      - TS-3
-      - TS-6
-  FR8:
-    title: "Add mux-build and mux-dpkg Makefile targets"
-    status: ok
-    tasks:
-      - add-mux-make-targets
-    tests:
-      - TS-11
   FR9:
-    title: "Extend build-dpkg.sh with EMTERM_MUX_ONLY branch"
+    title: "Update emterm-cli deb Description to mention mux subcommands"
     status: ok
     tasks:
-      - extend-build-dpkg-script
+      - revert-build-dpkg-script
     tests:
-      - TS-11
+      - TS-8
   NFR1:
-    title: "Backward compatibility for GUI and CLI-only debs"
+    title: "GUI build bit-identical (compile set unchanged)"
     status: ok
     tasks:
-      - hoist-replayable-viewer-kinds
-      - add-mux-cargo-feature
-      - regate-mux-pty-scroll-modules
-      - flip-mux-dispatch-in-main
-      - add-mux-make-targets
-      - extend-build-dpkg-script
-      - build-test-matrix-sweep
+      - cargo-toml-reshape
     tests:
       - TS-1
+      - TS-3
+  NFR2:
+    title: "CLI build links no GUI deps (libc6 only)"
+    status: ok
+    tasks:
+      - cargo-toml-reshape
+    tests:
       - TS-2
       - TS-4
-      - TS-5
-      - TS-11
-  NFR2:
-    title: "CLI+mux build is faster/lighter than GUI build"
-    status: ok
-    tasks:
-      - add-mux-cargo-feature
-      - regate-mux-pty-scroll-modules
-    tests:
-      - TS-3
   NFR3:
-    title: "Feature orthogonality (gui+mux equals gui)"
+    title: "No new tests required"
     status: ok
-    tasks:
-      - add-mux-cargo-feature
+    tasks: []
     tests:
-      - TS-1
       - TS-3
-  NFR4:
-    title: "CLI+mux deb depends on libc6 only"
-    status: ok
-    tasks:
-      - extend-build-dpkg-script
-    tests:
-      - TS-11
+      - TS-4
