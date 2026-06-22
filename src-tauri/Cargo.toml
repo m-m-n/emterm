@@ -19,33 +19,14 @@ path = "src/lib.rs"
 [features]
 default = ["gui"]
 
-# `mux` enables the eMterm mux subsystem (daemon / bridge / CLI) plus the
-# PTY pipeline it consumes. Buildable as a standalone feature for SSH-side
-# `emterm mux daemon` deployments (`--no-default-features --features mux`),
-# which is what `EMTERM_MUX_ONLY=1 bash scripts/build-dpkg.sh` packages as
-# `emterm-mux`. The `gui` feature requires this so the default windowed
-# build is bit-identical to the pre-split GUI build.
-mux = [
-    "dep:tokio",
-    "dep:tokio-util",
-    "dep:futures",
-    "dep:chrono",
-    "dep:anyhow",
-    "dep:hostname",
-    "dep:vt100",
-    "dep:portable-pty",
-    "dep:term_core",
-    "dep:mux_ipc",
-]
-
 # `gui` enables the windowed terminal (winit + wgpu + egui + wry child
-# WebViews). Disabling it (`--no-default-features`) yields a CLI-only
-# build whose binary handles only the `markdown` / `json` / `yaml` /
-# `image` subcommands. The CLI-only build is what `EMTERM_CLI_ONLY=1
-# bash scripts/build-dpkg.sh` packages as `emterm-cli`. `gui` is a strict
-# superset of `mux` so `emterm mux …` keeps working in the GUI build.
+# WebViews). Disabling it (`--no-default-features`) yields a CLI build
+# that still ships the mux daemon / bridge / CLI plus the
+# `markdown` / `json` / `yaml` / `image` subcommands, but skips winit /
+# wgpu / wry / GTK / WebKitGTK and the font rasterizer stack. That CLI
+# build is what `EMTERM_CLI_ONLY=1 bash scripts/build-dpkg.sh` packages
+# as `emterm-cli` (Depends: libc6) for headless SSH hosts.
 gui = [
-    "mux",
     "dep:winit",
     "dep:wgpu",
     "dep:egui",
@@ -125,19 +106,21 @@ egui-wgpu = { version = "0.29", optional = true }
 # WebView for the child Markdown / settings / data viewer windows.
 wry = { version = "0.53", optional = true }
 
-# term_core (Phase 6: replaces native-poc's stand-in parser/grid)
-term_core = { path = "../crates/term_core", optional = true }
+# term_core (Phase 6: replaces native-poc's stand-in parser/grid).
+# Always built — the CLI-shared `mux` / `pty` modules depend on it.
+term_core = { path = "../crates/term_core" }
 
 # term_images (Phase 5: inline Kitty / SIXEL image decoders + APC/DCS parsers)
 term_images = { path = "../crates/term_images", optional = true }
 
-# mux_ipc (Phase 4-A): shared protocol types. Consumed only by the
-# GUI-side `mux` module — APC payloads embedded in the PTY stream are
-# decoded via `MuxMessage::from_apc` and applied to the active tab.
-mux_ipc = { path = "../crates/mux_ipc", optional = true }
+# mux_ipc (Phase 4-A): shared protocol types. Consumed by the mux daemon
+# and bridge. APC payloads embedded in the PTY stream are decoded via
+# `MuxMessage::from_apc` and applied to the active tab.
+mux_ipc = { path = "../crates/mux_ipc" }
 
-# PTY (Phase 2)
-portable-pty = { version = "0.8", optional = true }
+# PTY (Phase 2). Always built — `crate::pty` is part of the CLI-shared
+# mux subsystem.
+portable-pty = "0.8"
 
 # Clipboard (Phase 4)
 arboard = { version = "3", optional = true }
@@ -172,17 +155,17 @@ ab_glyph = { version = "0.2", optional = true }
 resvg = { version = "0.44", default-features = false, optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
 
-# === mux daemon / bridge / CLI dependencies (gated behind `gui`) ===
-# The `emterm mux ...` CLI dispatch (daemon + bridge + session manager) ships
-# only with the GUI build today. CLI-only builds still respond to mux
-# subcommands but error out cleanly.
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net", "io-util", "io-std", "signal", "process"], optional = true }
-tokio-util = { version = "0.7", features = ["codec"], optional = true }
-futures = { version = "0.3", optional = true }
-chrono = { version = "0.4", optional = true }
-anyhow = { version = "1", optional = true }
-hostname = { version = "0.4", optional = true }
-vt100 = { version = "0.16", optional = true }
+# === mux daemon / bridge / CLI dependencies (always built) ===
+# The `emterm mux ...` CLI dispatch (daemon + bridge + session manager)
+# ships in every build, including the CLI build, so headless SSH hosts
+# can run `emterm mux --daemon` without pulling in GUI deps.
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time", "net", "io-util", "io-std", "signal", "process"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+chrono = "0.4"
+anyhow = "1"
+hostname = "0.4"
+vt100 = "0.16"
 
 [build-dependencies]
 # Windows resource compiler. Used by `build.rs` (Windows-target only) to

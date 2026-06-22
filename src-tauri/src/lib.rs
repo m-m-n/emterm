@@ -7,9 +7,12 @@
 //!    `use emterm::*;` without duplicating every `mod ...;` declaration.
 //!
 //! The `gui` feature (default-on) toggles the windowed terminal stack
-//! (winit + wgpu + egui + wry child WebViews). Disabling it
-//! (`--no-default-features`) yields a CLI-only library exposing just the
-//! subcommand dispatcher and the settings primitives it needs.
+//! (winit + wgpu + egui + wry child WebViews) and its companion modules
+//! (font rasterizer, settings UI, image viewer, etc.). Disabling it
+//! (`--no-default-features`) yields a CLI library that still exposes
+//! the mux daemon / bridge / PTY pipeline plus the `markdown` / `json`
+//! / `yaml` / `image` subcommand dispatchers — only the windowed
+//! terminal stack is dropped.
 
 /// Canonical application identifier reported by every window so the Linux
 /// desktop groups them under a single dock icon (FR5 / NFR4).
@@ -57,6 +60,20 @@ pub mod logging;
 pub mod settings_core;
 pub mod viewer_kinds;
 
+// === Mux subsystem modules (always built) ===
+//
+// The mux daemon / bridge / PTY pipeline have no GUI dependency, so they
+// are part of every build — the CLI deb runs them on headless SSH hosts.
+// `mux::tmux_import` (gated inside `mux/mod.rs`) is the only mux submodule
+// that requires the `gui` feature, because it writes to the GUI-only
+// `settings_store`.
+
+pub mod mux;
+pub mod pty;
+pub mod scroll;
+pub mod self_exec;
+pub mod wakeup;
+
 // === GUI-only modules (gated behind the `gui` feature) ===
 
 #[cfg(feature = "gui")]
@@ -83,8 +100,6 @@ pub mod profiles;
 pub mod prompts;
 #[cfg(feature = "gui")]
 pub mod render;
-#[cfg(feature = "mux")]
-pub mod scroll;
 #[cfg(feature = "gui")]
 pub mod search;
 #[cfg(feature = "gui")]
@@ -96,14 +111,8 @@ pub mod window_host;
 
 #[cfg(feature = "gui")]
 pub mod ime;
-#[cfg(feature = "mux")]
-pub mod mux;
-#[cfg(feature = "mux")]
-pub mod pty;
 #[cfg(feature = "gui")]
 pub mod selection;
-#[cfg(feature = "mux")]
-pub mod self_exec;
 #[cfg(feature = "gui")]
 pub mod settings;
 #[cfg(feature = "gui")]
@@ -118,8 +127,6 @@ pub mod status_bar;
 pub mod ui;
 #[cfg(feature = "gui")]
 pub mod viewer;
-#[cfg(feature = "mux")]
-pub mod wakeup;
 #[cfg(feature = "gui")]
 pub mod webview_host;
 #[cfg(feature = "gui")]
