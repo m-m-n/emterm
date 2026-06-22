@@ -11,7 +11,12 @@
 use emterm::logging;
 
 #[cfg(feature = "gui")]
-use emterm::{app, mux, self_exec, settings, settings_window, viewer, wakeup, window_host};
+use emterm::{app, self_exec, settings, settings_window, viewer, wakeup, window_host};
+// `mux` is reachable under the `mux` feature (which `gui` requires), so
+// `run_gui` references it via the fully-qualified `emterm::mux::…` path
+// rather than pulling it into the GUI-only `use` list above. Keeping
+// `mux` out of that list lets the `emterm mux …` dispatch in `main`
+// remain reachable under `--features mux` alone.
 #[cfg(feature = "gui")]
 use winit::event_loop::EventLoop;
 
@@ -77,20 +82,21 @@ fn main() {
             std::process::exit(code);
         }
         // `emterm mux …` — terminal multiplexer CLI bridge / daemon entry.
-        // The mux subsystem is gated behind the GUI feature today (the
-        // daemon spawns child PTYs and ships with the same binary the user
-        // launches as the terminal). CLI-only builds error out cleanly.
+        // The mux subsystem is gated behind the `mux` feature, which the
+        // `gui` feature transitively enables. So this arm fires in both
+        // the default GUI build (`emterm`) and the new CLI+mux build
+        // (`emterm-mux`). Plain CLI-only builds error out cleanly.
         if sub == "mux" {
-            #[cfg(feature = "gui")]
+            #[cfg(feature = "mux")]
             {
                 let code = emterm::mux::cli::run(&args[2..]);
                 std::process::exit(code);
             }
-            #[cfg(not(feature = "gui"))]
+            #[cfg(not(feature = "mux"))]
             {
                 eprintln!(
-                    "emterm: `mux` is not available in this CLI-only build.\n\
-                     Install the GUI build (`emterm`) to use `emterm mux`."
+                    "emterm: `mux` is not available in this build.\n\
+                     Install a build that includes the `mux` feature (`emterm` or `emterm-mux`) to use `emterm mux`."
                 );
                 std::process::exit(2);
             }
@@ -168,7 +174,7 @@ fn run_gui(args: Vec<String>) {
     // reads the file so an imported `mux.prefix` / `mux.keybinds` etc.
     // are visible on this very launch. The function is idempotent
     // (latched on `mux.tmux_conf_imported`).
-    mux::tmux_import::import_tmux_conf_if_needed();
+    emterm::mux::tmux_import::import_tmux_conf_if_needed();
     let settings = settings::Settings::load_or_default();
     // Mirror src-tauri's setup: the `emterm.log` file handle only exists
     // in release builds; `log_recording_enabled` gates the writes.

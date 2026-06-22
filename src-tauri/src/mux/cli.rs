@@ -14,6 +14,11 @@
 use super::bridge::run_bridge;
 use super::daemon;
 use super::ipc::protocol::*;
+// `tmux_import` writes to GUI-only `settings_store`, so it is reachable only
+// in the GUI build. The mux-only deb (`emterm-mux`) is intended for
+// headless SSH hosts where `settings.json` is hand-managed; auto-importing
+// `~/.tmux.conf` into it is meaningless there.
+#[cfg(feature = "gui")]
 use super::tmux_import::import_tmux_conf_if_needed;
 
 /// Dispatch `emterm mux …` subcommands. `args` is the slice that follows
@@ -254,7 +259,10 @@ pub fn execute_mux() -> Result<(), Box<dyn std::error::Error>> {
         daemon::ensure_daemon_running().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     log::info!("Daemon ready at {:?}", sock_path);
 
-    // Auto-import tmux.conf on first mux startup
+    // Auto-import tmux.conf on first mux startup (GUI builds only, because
+    // the importer writes to GUI-only `settings_store`). Mux-only builds run
+    // on headless hosts where `settings.json` is hand-managed.
+    #[cfg(feature = "gui")]
     import_tmux_conf_if_needed();
 
     // Run the long-running bridge process

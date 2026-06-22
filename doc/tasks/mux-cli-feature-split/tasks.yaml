@@ -1,0 +1,123 @@
+schema_version: 1
+feature: mux-cli-feature-split
+
+# Derived from IMPLEMENTATION.md phases. Each task id is referenced from
+# sdd.yaml.requirements.{ID}.tasks so spec-updater can perform impact
+# analysis.
+
+tasks:
+  - id: hoist-replayable-viewer-kinds
+    phase: 1
+    status: completed
+    title: "Hoist REPLAYABLE_VIEWER_KINDS to a CLI-shared module"
+    summary: >-
+      Create `src-tauri/src/viewer_kinds.rs`, declare it (no cfg) from
+      `lib.rs`, re-export from `viewer/mod.rs` via `pub use`, and repoint
+      `mux::scrollback_filter`'s import.
+    files:
+      - src-tauri/src/viewer_kinds.rs
+      - src-tauri/src/lib.rs
+      - src-tauri/src/viewer/mod.rs
+      - src-tauri/src/mux/scrollback_filter.rs
+    depends_on: []
+    estimated_effort: small
+
+  - id: add-mux-cargo-feature
+    phase: 2
+    status: completed
+    title: "Add `mux` cargo feature and rewrite `gui` to require it"
+    summary: >-
+      Introduce a `mux` feature listing tokio / tokio-util / futures /
+      chrono / anyhow / hostname / vt100 / portable-pty / term_core /
+      mux_ipc. Rewrite `gui` so its first entry is `"mux"` and the moved
+      deps are dropped from its own list. `term_images` stays in `gui`.
+    files:
+      - src-tauri/Cargo.toml
+    depends_on:
+      - hoist-replayable-viewer-kinds
+    estimated_effort: small
+
+  - id: regate-mux-pty-scroll-modules
+    phase: 3
+    status: completed
+    title: "Re-gate mux/pty/scroll/wakeup/self_exec modules to `feature = mux` and fix mux::prefix test refs"
+    summary: >-
+      Flip the five `lib.rs` module declarations (`mux`, `pty`, `scroll`,
+      `wakeup`, `self_exec`) from `feature = "gui"` to `feature = "mux"`,
+      and gate `mux::tmux_import` on `feature = "gui"` (GUI-only because
+      of `settings_store`). Also rewrite the 12 `#[cfg(test)]` call sites
+      in `src-tauri/src/mux/prefix.rs` from
+      `crate::settings::parse_mux_action_chord` to
+      `crate::mux::prefix::parse_prefix_key` so the test binary compiles
+      under `--features mux` alone (where `crate::settings` is unreachable).
+    files:
+      - src-tauri/src/lib.rs
+      - src-tauri/src/mux/mod.rs
+      - src-tauri/src/mux/prefix.rs
+    depends_on:
+      - add-mux-cargo-feature
+    estimated_effort: small
+
+  - id: flip-mux-dispatch-in-main
+    phase: 4
+    status: completed
+    title: "Flip `emterm mux` dispatch cfg + update error message"
+    summary: >-
+      In `main.rs`, replace `#[cfg(feature = "gui")]` / `#[cfg(not(feature
+      = "gui"))]` with `#[cfg(feature = "mux")]` / `#[cfg(not(feature =
+      "mux"))]` around the `if sub == "mux"` arms, and replace the
+      error string with the SPEC-mandated neutral phrasing. Adjust the
+      `use emterm::{…}` import so `mux` is reachable under `feature =
+      "mux"` (not just `gui`).
+    files:
+      - src-tauri/src/main.rs
+    depends_on:
+      - regate-mux-pty-scroll-modules
+    estimated_effort: small
+
+  - id: add-mux-make-targets
+    phase: 5
+    status: completed
+    title: "Add `mux-build` and `mux-dpkg` Makefile targets"
+    summary: >-
+      Add two new make targets mirroring `cli-build` / `cli-dpkg`. The
+      build target uses `--no-default-features --features mux`; the deb
+      target delegates to `EMTERM_MUX_ONLY=1 bash scripts/build-dpkg.sh`.
+      Update `.PHONY` and the `help` autogen comments.
+    files:
+      - Makefile
+    depends_on:
+      - flip-mux-dispatch-in-main
+    estimated_effort: small
+
+  - id: extend-build-dpkg-script
+    phase: 6
+    status: completed
+    title: "Extend scripts/build-dpkg.sh with EMTERM_MUX_ONLY branch"
+    summary: >-
+      Add an `EMTERM_MUX_ONLY` mode that builds with `--no-default-features
+      --features mux`, names the deb `emterm-mux`, skips icon / .desktop /
+      postinst-postrm assets, and ships the SPEC-prescribed `DEBIAN/control`
+      with `Depends: libc6`. When both env vars are set, mux-only wins and
+      cli-only is ignored with a warning.
+    files:
+      - scripts/build-dpkg.sh
+    depends_on:
+      - flip-mux-dispatch-in-main
+    estimated_effort: medium
+
+  - id: build-test-matrix-sweep
+    phase: 7
+    status: completed
+    title: "Cross-feature build + test sweep"
+    summary: >-
+      Run the build / check / test matrix from VERIFICATION.md, including
+      the Windows cross-build smoke check and the static `grep` confirming
+      that `lib.rs` no longer carries a `feature = "gui"` gate on `mod mux`,
+      `mod pty`, or `mod scroll`. Inspect the three debs with `dpkg-deb
+      --info / --contents` to confirm the expected `Depends` lines.
+    files: []
+    depends_on:
+      - add-mux-make-targets
+      - extend-build-dpkg-script
+    estimated_effort: medium

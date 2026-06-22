@@ -11,7 +11,7 @@ CARGO_TARGET_HOST := src-tauri/target-host
 CARGO_TARGET_WIN  := src-tauri/target-win
 MANIFEST := --manifest-path src-tauri/Cargo.toml
 
-.PHONY: help setup viewer settings web dev build cli-build win-build dpkg cli-dpkg install clean fmt fmt-check
+.PHONY: help setup viewer settings web dev build cli-build mux-build win-build dpkg cli-dpkg mux-dpkg install clean fmt fmt-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -47,6 +47,9 @@ build: web ## Release build (GUI, Linux host)
 cli-build: ## Release build (CLI only, --no-default-features)
 	CARGO_TARGET_DIR=$(CARGO_TARGET_HOST) cargo build --release --no-default-features $(MANIFEST)
 
+mux-build: ## Release build (CLI + mux, --features mux only)
+	CARGO_TARGET_DIR=$(CARGO_TARGET_HOST) cargo build --release --no-default-features --features mux $(MANIFEST)
+
 win-build: web ## Windows cross-build via cargo-xwin (emterm.exe)
 	@echo "Building version: $(VERSION) for Windows"
 	CARGO_TARGET_DIR=$(CARGO_TARGET_WIN) cargo xwin build --release --target x86_64-pc-windows-msvc $(MANIFEST)
@@ -56,6 +59,9 @@ dpkg: setup web ## Build the GUI deb package (build/emterm_<ver>_<arch>.deb)
 
 cli-dpkg: ## Build the CLI-only deb package (build/emterm-cli_<ver>_<arch>.deb)
 	EMTERM_CLI_ONLY=1 bash scripts/build-dpkg.sh
+
+mux-dpkg: ## Build the CLI+mux deb package (build/emterm-mux_<ver>_<arch>.deb)
+	EMTERM_MUX_ONLY=1 bash scripts/build-dpkg.sh
 
 install: build dpkg ## Build and install the GUI deb locally
 	sudo dpkg -i build/emterm_$(VERSION)_*.deb

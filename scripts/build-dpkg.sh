@@ -8,10 +8,30 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Detect CLI-only build mode
+# Detect build mode. Three modes are mutually exclusive:
+#   - default (neither var set): GUI build → emterm
+#   - EMTERM_CLI_ONLY=1:         CLI-only build → emterm-cli
+#   - EMTERM_MUX_ONLY=1:         CLI + mux build → emterm-mux
+# If both EMTERM_MUX_ONLY and EMTERM_CLI_ONLY are set, mux-only wins and
+# cli-only is ignored with a warning (SPEC FR9).
 CLI_ONLY="${EMTERM_CLI_ONLY:-}"
+MUX_ONLY="${EMTERM_MUX_ONLY:-}"
 
-if [ -n "$CLI_ONLY" ]; then
+if [ -n "$MUX_ONLY" ] && [ -n "$CLI_ONLY" ]; then
+    echo -e "${YELLOW}Warning: both EMTERM_MUX_ONLY and EMTERM_CLI_ONLY are set; mux-only wins, cli-only is ignored.${NC}"
+    CLI_ONLY=""
+fi
+
+# Modes where the binary skips GUI assets (icons / .desktop / postinst /
+# prerm / postrm). Both CLI-only and CLI+mux use this minimalist layout.
+HEADLESS=""
+if [ -n "$CLI_ONLY" ] || [ -n "$MUX_ONLY" ]; then
+    HEADLESS=1
+fi
+
+if [ -n "$MUX_ONLY" ]; then
+    echo -e "${GREEN}Building CLI+mux dpkg package for emterm...${NC}"
+elif [ -n "$CLI_ONLY" ]; then
     echo -e "${GREEN}Building CLI-only dpkg package for emterm...${NC}"
 else
     echo -e "${GREEN}Building dpkg package for emterm...${NC}"
@@ -47,7 +67,9 @@ case "$ARCH" in
         ;;
 esac
 
-if [ -n "$CLI_ONLY" ]; then
+if [ -n "$MUX_ONLY" ]; then
+    DEB_PACKAGE="emterm-mux"
+elif [ -n "$CLI_ONLY" ]; then
     DEB_PACKAGE="emterm-cli"
 else
     DEB_PACKAGE="${PROJECT_NAME}"
@@ -63,7 +85,9 @@ echo -e "${YELLOW}Package: ${PACKAGE_NAME}${NC}"
 echo -e "${YELLOW}Version: ${VERSION}${NC}"
 echo -e "${YELLOW}Architecture: ${DEB_ARCH}${NC}"
 echo -e "${YELLOW}Maintainer: ${MAINTAINER}${NC}"
-if [ -n "$CLI_ONLY" ]; then
+if [ -n "$MUX_ONLY" ]; then
+    echo -e "${YELLOW}Build Mode: CLI+mux${NC}"
+elif [ -n "$CLI_ONLY" ]; then
     echo -e "${YELLOW}Build Mode: CLI-only${NC}"
 fi
 echo -e "${BLUE}═══════════════════════════════════════${NC}"
@@ -87,7 +111,7 @@ echo "Creating package directory structure..."
 mkdir -p "${BUILD_DIR}/DEBIAN"
 mkdir -p "${BUILD_DIR}/usr/bin"
 mkdir -p "${BUILD_DIR}/usr/share/doc/${PROJECT_NAME}"
-if [ -z "$CLI_ONLY" ]; then
+if [ -z "$HEADLESS" ]; then
     mkdir -p "${BUILD_DIR}/usr/share/applications"
     mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/32x32/apps"
     mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/128x128/apps"
@@ -95,7 +119,13 @@ if [ -z "$CLI_ONLY" ]; then
 fi
 
 # Build the binary
-if [ -n "$CLI_ONLY" ]; then
+if [ -n "$MUX_ONLY" ]; then
+    echo "Building CLI+mux binary..."
+    if ! CARGO_TARGET_DIR="${CARGO_TARGET_HOST}" cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features --features mux; then
+        echo -e "${RED}Failed to build CLI+mux binary${NC}"
+        exit 1
+    fi
+elif [ -n "$CLI_ONLY" ]; then
     echo "Building CLI-only binary..."
     if ! CARGO_TARGET_DIR="${CARGO_TARGET_HOST}" cargo build --manifest-path src-tauri/Cargo.toml --release --no-default-features; then
         echo -e "${RED}Failed to build CLI-only binary${NC}"
@@ -155,7 +185,7 @@ elif [ -f "LICENCE" ]; then
     chmod 644 "${BUILD_DIR}/usr/share/doc/${PROJECT_NAME}/copyright"
 fi
 
-if [ -z "$CLI_ONLY" ]; then
+if [ -z "$HEADLESS" ]; then
     # Copy icons (GUI only)
     echo "Copying icons..."
     if [ -f "src-tauri/icons/32x32.png" ]; then
@@ -204,7 +234,29 @@ fi
 
 # Create DEBIAN/control file
 echo "Creating control file..."
-if [ -n "$CLI_ONLY" ]; then
+if [ -n "$MUX_ONLY" ]; then
+    cat > "${BUILD_DIR}/DEBIAN/control" << 'EOF'
+Package: emterm-mux
+Version: ${VERSION}
+Section: utils
+Priority: optional
+Architecture: ${DEB_ARCH}
+Maintainer: m-m-n <51132276+m-m-n@users.noreply.github.com>
+Depends: libc6
+Conflicts: emterm, emterm-cli
+Replaces: emterm, emterm-cli
+Description: CLI + mux daemon for eMterm (headless / SSH use)
+ Command-line tools (image / markdown / json / yaml) plus the
+ eMterm mux daemon and bridge. Intended for remote Linux hosts
+ where the GUI build cannot be installed.
+ .
+ Commands:
+  - emterm image|markdown|json|yaml: emit display escape sequences
+  - emterm mux: start a mux session (auto-spawns the daemon)
+  - emterm mux --daemon: run the eMterm mux daemon in the foreground
+  - emterm mux attach: bridge into a running daemon
+EOF
+elif [ -n "$CLI_ONLY" ]; then
     cat > "${BUILD_DIR}/DEBIAN/control" << 'EOF'
 Package: emterm-cli
 Version: ${VERSION}
@@ -213,6 +265,8 @@ Priority: optional
 Architecture: ${DEB_ARCH}
 Maintainer: m-m-n <51132276+m-m-n@users.noreply.github.com>
 Depends: libc6
+Conflicts: emterm, emterm-mux
+Replaces: emterm, emterm-mux
 Description: CLI tools for eMterm terminal emulator
  Command-line tools for displaying images, Markdown, and structured
  data in compatible terminal emulators.
@@ -232,6 +286,8 @@ Priority: optional
 Architecture: ${DEB_ARCH}
 Maintainer: m-m-n <51132276+m-m-n@users.noreply.github.com>
 Depends: libc6, libwebkit2gtk-4.1-0, libgtk-3-0, libglib2.0-0
+Conflicts: emterm-cli, emterm-mux
+Replaces: emterm-cli, emterm-mux
 Description: Native terminal emulator with rich rendering capabilities
  A modern terminal emulator with a native wgpu+swash render pipeline,
  inline image protocols (Kitty / SIXEL), and child WebView windows for
@@ -250,7 +306,7 @@ fi
 sed -i "s/\${VERSION}/${VERSION}/g" "${BUILD_DIR}/DEBIAN/control"
 sed -i "s/\${DEB_ARCH}/${DEB_ARCH}/g" "${BUILD_DIR}/DEBIAN/control"
 
-if [ -z "$CLI_ONLY" ]; then
+if [ -z "$HEADLESS" ]; then
     # Create postinst script (GUI only)
     echo "Creating postinst script..."
     cat > "${BUILD_DIR}/DEBIAN/postinst" << 'EOF'
@@ -313,7 +369,7 @@ fi
 echo "Setting file permissions..."
 find "${BUILD_DIR}/usr/share/doc" -type f -exec chmod 644 {} \;
 find "${BUILD_DIR}/usr/share/doc" -type d -exec chmod 755 {} \;
-if [ -z "$CLI_ONLY" ]; then
+if [ -z "$HEADLESS" ]; then
     find "${BUILD_DIR}/usr/share/icons" -type f -exec chmod 644 {} \;
     find "${BUILD_DIR}/usr/share/icons" -type d -exec chmod 755 {} \;
 fi

@@ -1035,7 +1035,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert(
             "detach".to_string(),
-            crate::settings::parse_mux_action_chord("Ctrl+D").unwrap(),
+            crate::mux::prefix::parse_prefix_key("Ctrl+D").unwrap(),
         );
         let bindings = ActionBindings::from_settings_map(&map);
         let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
@@ -1052,7 +1052,7 @@ mod tests {
                 let mut m = std::collections::HashMap::new();
                 m.insert(
                     "detach".to_string(),
-                    crate::settings::parse_mux_action_chord("Ctrl+D").unwrap(),
+                    crate::mux::prefix::parse_prefix_key("Ctrl+D").unwrap(),
                 );
                 m
             }),
@@ -1101,7 +1101,7 @@ mod tests {
             let mut m = std::collections::HashMap::new();
             m.insert(
                 "detach".to_string(),
-                crate::settings::parse_mux_action_chord("d").unwrap(),
+                crate::mux::prefix::parse_prefix_key("d").unwrap(),
             );
             ActionBindings::from_settings_map(&m)
         };
@@ -1144,7 +1144,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert(
             "detach".to_string(),
-            crate::settings::parse_mux_action_chord("Ctrl+D").unwrap(),
+            crate::mux::prefix::parse_prefix_key("Ctrl+D").unwrap(),
         );
         let bindings = ActionBindings::from_settings_map(&map);
         let mut l = Latch::with_bindings(PrefixChord::default(), DEFAULT_ARMED_TIMEOUT, bindings);
@@ -1162,12 +1162,12 @@ mod tests {
     #[test]
     fn name_form_punctuation_aliases_parse() {
         // Single-token name forms (no modifiers).
-        let comma = crate::settings::parse_mux_action_chord("Comma").unwrap();
-        let period = crate::settings::parse_mux_action_chord("Period").unwrap();
-        let slash = crate::settings::parse_mux_action_chord("Slash").unwrap();
-        let backslash = crate::settings::parse_mux_action_chord("Backslash").unwrap();
-        let minus = crate::settings::parse_mux_action_chord("Minus").unwrap();
-        let semicolon = crate::settings::parse_mux_action_chord("Semicolon").unwrap();
+        let comma = crate::mux::prefix::parse_prefix_key("Comma").unwrap();
+        let period = crate::mux::prefix::parse_prefix_key("Period").unwrap();
+        let slash = crate::mux::prefix::parse_prefix_key("Slash").unwrap();
+        let backslash = crate::mux::prefix::parse_prefix_key("Backslash").unwrap();
+        let minus = crate::mux::prefix::parse_prefix_key("Minus").unwrap();
+        let semicolon = crate::mux::prefix::parse_prefix_key("Semicolon").unwrap();
         assert_eq!(comma.key, KeySym::Comma);
         assert_eq!(period.key, KeySym::Period);
         assert_eq!(slash.key, KeySym::Slash);
@@ -1175,10 +1175,10 @@ mod tests {
         assert_eq!(minus.key, KeySym::Minus);
         assert_eq!(semicolon.key, KeySym::Semicolon);
         // Case-insensitive.
-        let lc = crate::settings::parse_mux_action_chord("comma").unwrap();
+        let lc = crate::mux::prefix::parse_prefix_key("comma").unwrap();
         assert_eq!(lc.key, KeySym::Comma);
         // Modifier + name form (matches the WebView UI's `Ctrl+Comma` save shape).
-        let ctrl_comma = crate::settings::parse_mux_action_chord("Ctrl+Comma").unwrap();
+        let ctrl_comma = crate::mux::prefix::parse_prefix_key("Ctrl+Comma").unwrap();
         assert!(ctrl_comma.ctrl);
         assert_eq!(ctrl_comma.key, KeySym::Comma);
     }
