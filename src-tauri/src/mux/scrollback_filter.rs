@@ -6,7 +6,7 @@
 //! layer (`mux::ipc::reattach`) for it; both depend on this shared module
 //! instead.
 
-use crate::viewer::REPLAYABLE_VIEWER_KINDS;
+use crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS;
 
 /// Remove rich-content viewer launch sequences from a completed byte run so a
 /// reattach / window-switch snapshot replays plain-text history WITHOUT

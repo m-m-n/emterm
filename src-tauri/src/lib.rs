@@ -55,6 +55,7 @@ pub mod i18n;
 pub mod localtime;
 pub mod logging;
 pub mod settings_core;
+pub mod viewer_kinds;
 
 // === GUI-only modules (gated behind the `gui` feature) ===
 
@@ -82,7 +83,7 @@ pub mod profiles;
 pub mod prompts;
 #[cfg(feature = "gui")]
 pub mod render;
-#[cfg(feature = "gui")]
+#[cfg(feature = "mux")]
 pub mod scroll;
 #[cfg(feature = "gui")]
 pub mod search;
@@ -95,13 +96,13 @@ pub mod window_host;
 
 #[cfg(feature = "gui")]
 pub mod ime;
-#[cfg(feature = "gui")]
+#[cfg(feature = "mux")]
 pub mod mux;
-#[cfg(feature = "gui")]
+#[cfg(feature = "mux")]
 pub mod pty;
 #[cfg(feature = "gui")]
 pub mod selection;
-#[cfg(feature = "gui")]
+#[cfg(feature = "mux")]
 pub mod self_exec;
 #[cfg(feature = "gui")]
 pub mod settings;
@@ -117,7 +118,7 @@ pub mod status_bar;
 pub mod ui;
 #[cfg(feature = "gui")]
 pub mod viewer;
-#[cfg(feature = "gui")]
+#[cfg(feature = "mux")]
 pub mod wakeup;
 #[cfg(feature = "gui")]
 pub mod webview_host;

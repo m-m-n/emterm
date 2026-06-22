@@ -1,0 +1,161 @@
+schema_version: 1
+feature: mux-cli-feature-split
+created: 2026-06-23
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml"
+      format_command: "cargo fmt --all"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+  - id: verify-plan
+    status: completed
+    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+  - id: implement
+    status: completed
+    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+  - id: check
+    status: completed
+    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: aed66c97adce0518e53ad1741208abd30103f46a
+
+requirements:
+  FR1:
+    title: "Add `mux` cargo feature"
+    status: ok
+    tasks:
+      - add-mux-cargo-feature
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+  FR2:
+    title: "Reclassify dependencies from gui to mux"
+    status: ok
+    tasks:
+      - add-mux-cargo-feature
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+  FR3:
+    title: "Module gate rewrites in lib.rs (mux/pty/scroll → mux gate)"
+    status: ok
+    tasks:
+      - regate-mux-pty-scroll-modules
+    tests:
+      - TS-3
+      - TS-12
+  FR4:
+    title: "Keep mux::tmux_import gated on gui feature"
+    status: ok
+    tasks:
+      - regate-mux-pty-scroll-modules
+    tests:
+      - TS-3
+      - TS-6
+  FR5:
+    title: "Flip emterm mux dispatch cfg from gui to mux in main.rs"
+    status: ok
+    tasks:
+      - flip-mux-dispatch-in-main
+    tests:
+      - TS-3
+      - TS-8
+      - TS-9
+  FR6:
+    title: "Move REPLAYABLE_VIEWER_KINDS / ScrollPosition / wakeup / self_exec for cross-feature compile"
+    status: ok
+    tasks:
+      - hoist-replayable-viewer-kinds
+      - regate-mux-pty-scroll-modules
+    tests:
+      - TS-3
+      - TS-6
+      - TS-10
+      - TS-12
+  FR6.1:
+    title: "Rewrite mux::prefix test refs from crate::settings to crate::mux::prefix"
+    status: ok
+    tasks:
+      - regate-mux-pty-scroll-modules
+    tests:
+      - TS-10
+      - TS-13
+  FR7:
+    title: "Re-gate pty module to feature = mux"
+    status: ok
+    tasks:
+      - regate-mux-pty-scroll-modules
+    tests:
+      - TS-3
+      - TS-6
+  FR8:
+    title: "Add mux-build and mux-dpkg Makefile targets"
+    status: ok
+    tasks:
+      - add-mux-make-targets
+    tests:
+      - TS-11
+  FR9:
+    title: "Extend build-dpkg.sh with EMTERM_MUX_ONLY branch"
+    status: ok
+    tasks:
+      - extend-build-dpkg-script
+    tests:
+      - TS-11
+  NFR1:
+    title: "Backward compatibility for GUI and CLI-only debs"
+    status: ok
+    tasks:
+      - hoist-replayable-viewer-kinds
+      - add-mux-cargo-feature
+      - regate-mux-pty-scroll-modules
+      - flip-mux-dispatch-in-main
+      - add-mux-make-targets
+      - extend-build-dpkg-script
+      - build-test-matrix-sweep
+    tests:
+      - TS-1
+      - TS-2
+      - TS-4
+      - TS-5
+      - TS-11
+  NFR2:
+    title: "CLI+mux build is faster/lighter than GUI build"
+    status: ok
+    tasks:
+      - add-mux-cargo-feature
+      - regate-mux-pty-scroll-modules
+    tests:
+      - TS-3
+  NFR3:
+    title: "Feature orthogonality (gui+mux equals gui)"
+    status: ok
+    tasks:
+      - add-mux-cargo-feature
+    tests:
+      - TS-1
+      - TS-3
+  NFR4:
+    title: "CLI+mux deb depends on libc6 only"
+    status: ok
+    tasks:
+      - extend-build-dpkg-script
+    tests:
+      - TS-11

@@ -18,12 +18,34 @@ path = "src/lib.rs"
 
 [features]
 default = ["gui"]
+
+# `mux` enables the eMterm mux subsystem (daemon / bridge / CLI) plus the
+# PTY pipeline it consumes. Buildable as a standalone feature for SSH-side
+# `emterm mux daemon` deployments (`--no-default-features --features mux`),
+# which is what `EMTERM_MUX_ONLY=1 bash scripts/build-dpkg.sh` packages as
+# `emterm-mux`. The `gui` feature requires this so the default windowed
+# build is bit-identical to the pre-split GUI build.
+mux = [
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:futures",
+    "dep:chrono",
+    "dep:anyhow",
+    "dep:hostname",
+    "dep:vt100",
+    "dep:portable-pty",
+    "dep:term_core",
+    "dep:mux_ipc",
+]
+
 # `gui` enables the windowed terminal (winit + wgpu + egui + wry child
 # WebViews). Disabling it (`--no-default-features`) yields a CLI-only
 # build whose binary handles only the `markdown` / `json` / `yaml` /
 # `image` subcommands. The CLI-only build is what `EMTERM_CLI_ONLY=1
-# bash scripts/build-dpkg.sh` packages as `emterm-cli`.
+# bash scripts/build-dpkg.sh` packages as `emterm-cli`. `gui` is a strict
+# superset of `mux` so `emterm mux …` keeps working in the GUI build.
 gui = [
+    "mux",
     "dep:winit",
     "dep:wgpu",
     "dep:egui",
@@ -39,22 +61,10 @@ gui = [
     "dep:notify-rust",
     "dep:raw-window-handle",
     "dep:pollster",
-    "dep:portable-pty",
-    "dep:term_core",
     "dep:term_images",
-    "dep:mux_ipc",
     "dep:regex",
     "dep:unicode-width",
     "dep:unicode-segmentation",
-    # mux daemon / bridge / CLI: tokio + tokio-util + futures + chrono + anyhow
-    # + hostname + vt100 (shadow parser for hidden-pane state).
-    "dep:tokio",
-    "dep:tokio-util",
-    "dep:futures",
-    "dep:chrono",
-    "dep:anyhow",
-    "dep:hostname",
-    "dep:vt100",
     # target-specific GUI deps; Cargo gracefully skips these on
     # non-matching targets even when `gui` is enabled.
     "dep:gtk",

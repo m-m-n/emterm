@@ -30,14 +30,13 @@ use launch::ViewerPayload;
 use markdown::MarkdownViewerSessions;
 
 /// The viewer kinds that an OSC 777 `emterm` launch sequence can dispatch
-/// to a child viewer (Markdown / image / JSON / YAML). This is the single
-/// source of truth shared between the viewer dispatch ([`ViewerRouter::route`])
-/// and the mux snapshot rich-content stripper
-/// (`crate::mux::scrollback_filter::strip_replayable_rich_content`): the
-/// stripper removes exactly these kinds from a reattach snapshot so they are
-/// not re-launched, and a `drift_*` test keeps the dispatch and the stripper
-/// in lockstep (see the test module below).
-pub const REPLAYABLE_VIEWER_KINDS: &[&str] = &["markdown", "image", "json", "yaml"];
+/// to a child viewer (Markdown / image / JSON / YAML). The SSOT lives in
+/// `crate::viewer_kinds` (always built, no feature gate) so the mux snapshot
+/// rich-content stripper (`crate::mux::scrollback_filter::strip_replayable_rich_content`)
+/// can reach it under `--features mux` without enabling the `gui` feature.
+/// This module re-exports it so GUI call sites (`ViewerRouter::route`, the
+/// `drift_*` test below) keep their existing `crate::viewer::…` path.
+pub use crate::viewer_kinds::REPLAYABLE_VIEWER_KINDS;
 
 /// Markdown source dialect carried from `begin;format=…` through to the
 /// rendered window. Mirrors the WebView build's `MarkdownFormat`.
