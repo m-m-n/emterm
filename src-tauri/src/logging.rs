@@ -168,36 +168,40 @@ fn offset_suffix(offset_secs: i32) -> String {
     format!("{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60)
 }
 
+/// Default `env_logger` filter string. `info` for native-poc itself while
+/// clamping noisy framework loggers (`wgpu*`, `naga`) to `warn` so the
+/// per-frame `Device::maintain` info chatter does not flood stderr. Users
+/// can still opt into the verbose stream via `RUST_LOG=wgpu_core=info`
+/// (or similar) when debugging.
+const DEFAULT_FILTER: &str = "info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,naga=warn";
+
+/// Decide the final `env_logger` filter string.
+///
+/// `None` and `Some("")` return [`DEFAULT_FILTER`] (treating an empty
+/// value the same as an absent one, matching the prior
+/// `default_filter_or` semantics). Otherwise the input is returned as-is,
+/// so module-scoped forms like `wgpu_core=info,naga=trace` pass through
+/// unchanged. Pure: no I/O, no global state read.
+fn resolved_filters(env_value: Option<&str>) -> String {
+    match env_value {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => DEFAULT_FILTER.to_string(),
+    }
+}
+
 /// Initialize the global logger. Safe to call multiple times.
 ///
-/// Reads `RUST_LOG`. When unset, defaults to `info` for native-poc itself
-/// while clamping noisy framework loggers (`wgpu*`, `naga`) to `warn` so
-/// the per-frame `Device::maintain` info chatter does not flood the
-/// stderr in normal runs. Users can still opt into the verbose stream
-/// via `RUST_LOG=wgpu_core=info` (or similar) when debugging.
+/// Reads `RUST_LOG` from the process env. When unset or empty, the
+/// [`DEFAULT_FILTER`] is used. Configures an in-process filter via
+/// `env_logger::Builder::parse_filters`; the process env table is never
+/// modified, so child processes spawned later (PTY shells, etc.) do not
+/// inherit a leaked `RUST_LOG` value.
 pub fn init() {
     INIT.call_once(|| {
-        // Set the env-var only if the user hasn't already provided one.
-        // We touch it from a single-threaded startup path (call_once on
-        // the main thread), well before any other component spawns
-        // threads that might also touch the environment. The intent is
-        // "default filter unless the user overrode it"; users can still
-        // opt back into the verbose stream with e.g.
-        // `RUST_LOG=wgpu_core=info`.
-        if std::env::var_os("RUST_LOG").is_none() {
-            // SAFETY: `init()` is gated by `INIT.call_once`, so this runs
-            // exactly once from the main thread before any background
-            // thread spawns. Editing the process env table is sound under
-            // that invariant.
-            unsafe {
-                std::env::set_var(
-                    "RUST_LOG",
-                    "info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,naga=warn",
-                );
-            }
-        }
-        let mut builder =
-            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+        let raw = std::env::var("RUST_LOG").ok();
+        let filters = resolved_filters(raw.as_deref());
+        let mut builder = env_logger::Builder::new();
+        builder.parse_filters(&filters);
         builder.format(|buf, record| {
             // Release builds mirror src-tauri's `BackendLogger::log`: WARN
             // and ERROR also land in `emterm.log` when recording is on.
@@ -235,5 +239,28 @@ mod tests {
             "timestamp missing offset suffix: {ts}"
         );
         assert_eq!(&suffix[3..4], ":");
+    }
+
+    #[test]
+    fn resolved_filters_none_returns_default() {
+        assert_eq!(resolved_filters(None), DEFAULT_FILTER);
+    }
+
+    #[test]
+    fn resolved_filters_empty_returns_default() {
+        assert_eq!(resolved_filters(Some("")), DEFAULT_FILTER);
+    }
+
+    #[test]
+    fn resolved_filters_passes_user_value() {
+        assert_eq!(resolved_filters(Some("debug")), "debug");
+    }
+
+    #[test]
+    fn resolved_filters_passes_module_scoped_value() {
+        assert_eq!(
+            resolved_filters(Some("wgpu_core=info,naga=trace")),
+            "wgpu_core=info,naga=trace"
+        );
     }
 }
