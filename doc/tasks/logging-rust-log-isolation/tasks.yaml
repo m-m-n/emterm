@@ -1,0 +1,104 @@
+schema_version: 1
+feature: logging-rust-log-isolation
+
+# Phase / task breakdown derived from IMPLEMENTATION.md.
+# Each task lists the requirements it implements (`requirements`) and
+# the verification scenarios it is exercised by (`tests`).
+
+phases:
+  - id: phase-1
+    name: "Rewrite init() + add resolved_filters + tests"
+    estimated_effort: small
+    description: |
+      Drop the std::env::set_var unsafe block from logging::init(),
+      add a pure resolved_filters(Option<&str>) -> String helper,
+      switch the env_logger builder to Builder::new() + parse_filters,
+      preserve the format closure / try_init call, and add four
+      unit tests covering the helper.
+    tasks:
+      - id: add-default-filter-const
+        title: "Add DEFAULT_FILTER constant"
+        description: |
+          Module-private `const DEFAULT_FILTER: &str = "info,wgpu=warn,
+          wgpu_core=warn,wgpu_hal=warn,naga=warn"` so the helper, init
+          body, and tests all share one literal.
+        files:
+          - src-tauri/src/logging.rs
+        requirements: [FR2]
+        tests: [TS-1, TS-2]
+        status: completed
+      - id: add-resolved-filters-helper
+        title: "Add resolved_filters(Option<&str>) -> String"
+        description: |
+          Pure helper. Returns DEFAULT_FILTER for None and Some("");
+          otherwise returns the input as String. Doc comment captures
+          the contract from FR3.
+        files:
+          - src-tauri/src/logging.rs
+        requirements: [FR3]
+        tests: [TS-1, TS-2, TS-3, TS-4]
+        status: completed
+      - id: rewrite-init-body
+        title: "Rewrite init()'s INIT.call_once body"
+        description: |
+          Drop the unsafe { std::env::set_var(...) } block. Switch
+          from Builder::from_env to Builder::new() + parse_filters
+          (reading RUST_LOG inline and feeding it through
+          resolved_filters). Keep the .format(...) closure and the
+          let _ = builder.try_init() line verbatim. Update the
+          init() doc comment to reflect "in-process filter; the
+          process env table is not modified".
+        files:
+          - src-tauri/src/logging.rs
+        requirements: [FR1, FR2, FR4, NFR1, NFR3, NFR4]
+        tests: [TS-7, TS-8]
+        status: completed
+      - id: add-resolved-filters-unit-tests
+        title: "Add resolved_filters_* unit tests"
+        description: |
+          Add four #[test] functions inside the existing
+          #[cfg(test)] mod tests:
+            - resolved_filters_none_returns_default
+            - resolved_filters_empty_returns_default
+            - resolved_filters_passes_user_value
+            - resolved_filters_passes_module_scoped_value
+          Each asserts against DEFAULT_FILTER or the input value.
+        files:
+          - src-tauri/src/logging.rs
+        requirements: [FR5]
+        tests: [TS-1, TS-2, TS-3, TS-4]
+        status: completed
+
+  - id: phase-2
+    name: "Manual verification (Linux + Windows)"
+    estimated_effort: small
+    description: |
+      Confirm the originally reported bug is gone and no regression
+      in eMterm's own logger output. Linux runs TS-5 / TS-7 / TS-8;
+      Windows host runs TS-6.
+    tasks:
+      - id: linux-manual-checks
+        title: "Run TS-5 / TS-7 / TS-8 on Linux"
+        description: |
+          Verify process env stays clean (TS-5), explicit RUST_LOG
+          still propagates (TS-7), and log format / log-file
+          persistence in a release build are unchanged (TS-8).
+          Record results in VERIFICATION_RESULT.md.
+        files:
+          - doc/tasks/logging-rust-log-isolation/VERIFICATION_RESULT.md
+        requirements: [FR1, FR4, NFR2]
+        tests: [TS-5, TS-7, TS-8]
+        status: pending
+      - id: windows-fnm-leak-recheck
+        title: "Run TS-6 on Windows (fnm INFO leak gone)"
+        description: |
+          On the Windows host where the original bug was reported,
+          install the new build, open a pwsh tab with the existing
+          $PROFILE running fnm's --use-on-cd hook, confirm none of
+          the INFO fnm::version_files lines appear at startup.
+          Record result in VERIFICATION_RESULT.md.
+        files:
+          - doc/tasks/logging-rust-log-isolation/VERIFICATION_RESULT.md
+        requirements: [FR1, FR2]
+        tests: [TS-6]
+        status: pending

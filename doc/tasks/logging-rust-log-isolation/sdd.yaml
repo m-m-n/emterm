@@ -1,0 +1,106 @@
+schema_version: 1
+feature: logging-rust-log-isolation
+created: 2026-06-22
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "fae9141e26a61940fe73b30f29540ccddbd5550c"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: "fae9141e26a61940fe73b30f29540ccddbd5550c"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "fae9141e26a61940fe73b30f29540ccddbd5550c"
+  - id: implement
+    status: completed
+    completed_at_commit: "fae9141e26a61940fe73b30f29540ccddbd5550c"
+  - id: check
+    status: completed
+    completed_at_commit: "fae9141e26a61940fe73b30f29540ccddbd5550c"
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: "fae9141e26a61940fe73b30f29540ccddbd5550c"
+
+requirements:
+  FR1:
+    title: Drop std::env::set_var("RUST_LOG", ...) from logging::init
+    status: ok
+    tasks:
+      - rewrite-init-body
+    tests:
+      - TS-5
+      - TS-6
+  FR2:
+    title: In-process filter resolution via Builder::parse_filters
+    status: ok
+    tasks:
+      - add-default-filter-const
+      - rewrite-init-body
+    tests:
+      - TS-6
+      - TS-7
+  FR3:
+    title: Pure resolved_filters(Option<&str>) helper
+    status: ok
+    tasks:
+      - add-resolved-filters-helper
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+  FR4:
+    title: Existing logger behavior (format, log file, once-init) preserved
+    status: ok
+    tasks:
+      - rewrite-init-body
+    tests:
+      - TS-8
+  FR5:
+    title: Unit tests for resolved_filters
+    status: ok
+    tasks:
+      - add-resolved-filters-unit-tests
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+  NFR1:
+    title: No new unsafe blocks (net -1)
+    status: ok
+    tasks:
+      - rewrite-init-body
+    tests: []
+  NFR2:
+    title: No behavioral regression on log output
+    status: ok
+    tasks:
+      - rewrite-init-body
+    tests:
+      - TS-8
+  NFR3:
+    title: Change confined to src-tauri/src/logging.rs
+    status: ok
+    tasks:
+      - rewrite-init-body
+    tests: []
+  NFR4:
+    title: init() doc comment updated to reflect in-process filter
+    status: ok
+    tasks:
+      - rewrite-init-body
+    tests: []
