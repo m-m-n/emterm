@@ -309,25 +309,68 @@ pub async fn execute_command(executable: &PathBuf, cwd: &str) -> Option<String> 
         &fallback_dir
     };
 
-    let result = tokio::time::timeout(
-        COMMAND_TIMEOUT,
-        tokio::process::Command::new(executable)
-            .current_dir(work_dir)
+    // Owned copies move into the async block driven by `tokio::time::timeout`
+    // so the outer `&str` lifetimes (`executable`, `work_dir`) don't leak in.
+    let work_dir_owned: String = work_dir.to_string();
+    let executable_owned = executable.clone();
+
+    // Windows: resolve PE vs shebang script before handing to CreateProcess.
+    // `resolve_for_windows` does sync filesystem reads (`metadata`,
+    // `File::open`, `read`), so run it through `spawn_blocking` to keep the
+    // tokio worker unblocked. The whole resolve-and-spawn sequence sits inside
+    // the same `tokio::time::timeout(COMMAND_TIMEOUT, ...)` so a hung
+    // filesystem (e.g. unreachable UNC path) cannot stall the IPC path past 5 s.
+    let outcome = tokio::time::timeout(COMMAND_TIMEOUT, async move {
+        #[cfg(windows)]
+        let (program_owned, extra_args) = {
+            let exe_str = executable_owned.to_string_lossy().into_owned();
+            match tokio::task::spawn_blocking(move || {
+                crate::windows_exec::resolve_for_windows(&exe_str, &[])
+            })
+            .await
+            {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    log::warn!("Command {:?} cannot be resolved: {}", executable_owned, e);
+                    return None;
+                }
+                Err(join_err) => {
+                    log::warn!(
+                        "Command {:?} resolver join failed: {}",
+                        executable_owned,
+                        join_err
+                    );
+                    return None;
+                }
+            }
+        };
+        #[cfg(windows)]
+        let mut cmd = tokio::process::Command::new(&program_owned);
+        #[cfg(windows)]
+        cmd.args(&extra_args);
+        #[cfg(not(windows))]
+        let mut cmd = tokio::process::Command::new(&executable_owned);
+
+        cmd.current_dir(&work_dir_owned)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
+            .kill_on_drop(true);
+
+        #[cfg(windows)]
+        cmd.creation_flags(crate::windows_exec::CREATE_NO_WINDOW);
+
+        Some(cmd.output().await)
+    })
     .await;
 
-    match result {
-        Ok(Ok(output)) if output.status.success() => {
+    match outcome {
+        Ok(Some(Ok(output))) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let first_line = stdout.lines().next().unwrap_or("").trim().to_string();
             Some(first_line)
         }
-        Ok(Ok(output)) => {
+        Ok(Some(Ok(output))) => {
             log::warn!(
                 "Command {:?} exited with status {}",
                 executable,
@@ -335,10 +378,11 @@ pub async fn execute_command(executable: &PathBuf, cwd: &str) -> Option<String> 
             );
             None
         }
-        Ok(Err(e)) => {
+        Ok(Some(Err(e))) => {
             log::warn!("Command {:?} execution error: {}", executable, e);
             None
         }
+        Ok(None) => None,
         Err(_) => {
             log::warn!("Command {:?} timed out after 5s", executable);
             None
