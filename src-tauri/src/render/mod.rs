@@ -1302,12 +1302,23 @@ fn visible_width(ch: &str, mode: AmbiguousWidthMode) -> u8 {
     if cp == 0 {
         return 1;
     }
-    // VS-16 (U+FE0F) explicitly requests emoji presentation. Text-default
-    // codepoints like 🕊 U+1F54A or ⬇ U+2B07 have a bare width of 1 but
-    // render as a 2-cell color-emoji glyph once VS-16 is appended.
-    // Mirrors `term_core::print_handler::flush_grapheme_buffer` so the
-    // rendered footprint matches the cluster width term_core reserved.
-    if chars.any(|c| c as u32 == 0xFE0F) {
+    // Variation Selectors override the bare-codepoint presentation:
+    // VS-15 (U+FE0E) forces text presentation (width 1) and has absolute
+    // precedence — once seen, the answer is known immediately and we return
+    // early. VS-16 (U+FE0F) forces emoji presentation (width 2) but we must
+    // continue scanning in case a later VS-15 overrides it. Mirrors
+    // `term_core::print_handler::flush_grapheme_buffer` exactly — without
+    // this, the rendered footprint drifts from the cluster width term_core
+    // reserved.
+    let mut has_fe0f = false;
+    for c in chars {
+        match c as u32 {
+            0xFE0E => return 1,
+            0xFE0F => has_fe0f = true,
+            _ => {}
+        }
+    }
+    if has_fe0f {
         return 2;
     }
     if is_ambiguous_width(cp) {
@@ -1437,6 +1448,41 @@ mod tests {
         // Counter-check: 🥺 U+1F97A is emoji-presentation default, so it
         // is already 2 cells without VS-16.
         assert_eq!(visible_width("\u{1F97A}", AmbiguousWidthMode::Narrow), 2);
+    }
+
+    #[test]
+    fn visible_width_vs15_downgrades_emoji_default_to_narrow() {
+        // Symmetric to the VS-16 upgrade: emoji-presentation default
+        // codepoints have a bare width of 2, but a trailing VS-15
+        // (U+FE0E) explicitly requests text presentation and must
+        // narrow the cluster to 1 cell. Mirrors
+        // `term_core::print_handler::flush_grapheme_buffer`'s
+        // `has_fe0e` branch.
+        // 😀 = U+1F600 (emoji-presentation default → 2 cells).
+        assert_eq!(visible_width("\u{1F600}", AmbiguousWidthMode::Narrow), 2);
+        // 😀︎ = U+1F600 + U+FE0E (text presentation → 1 cell).
+        assert_eq!(
+            visible_width("\u{1F600}\u{FE0E}", AmbiguousWidthMode::Narrow),
+            1
+        );
+        // ⌚︎ = U+231A WATCH + U+FE0E. Bare U+231A is emoji-presentation
+        // default so widening would otherwise hit; VS-15 narrows it.
+        assert_eq!(visible_width("\u{231A}", AmbiguousWidthMode::Narrow), 2);
+        assert_eq!(
+            visible_width("\u{231A}\u{FE0E}", AmbiguousWidthMode::Narrow),
+            1
+        );
+        // VS-15 wins over VS-16 when both appear, matching the
+        // `if has_fe0e { 1 } else if has_fe0f { 2 }` ordering term_core
+        // uses in `flush_grapheme_buffer`.
+        assert_eq!(
+            visible_width("\u{1F600}\u{FE0E}\u{FE0F}", AmbiguousWidthMode::Narrow),
+            1
+        );
+        assert_eq!(
+            visible_width("\u{1F600}\u{FE0F}\u{FE0E}", AmbiguousWidthMode::Narrow),
+            1
+        );
     }
 
     #[test]
