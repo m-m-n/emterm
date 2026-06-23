@@ -122,13 +122,28 @@ fn run_command_inner(
     cwd: Option<&str>,
     timeout: Duration,
 ) -> RawOutcome {
-    let mut cmd = Command::new(command);
-    cmd.args(args)
+    #[cfg(windows)]
+    let resolved = match crate::windows_exec::resolve_for_windows(command, args) {
+        Ok(r) => r,
+        Err(e) => return RawOutcome::SpawnError(e),
+    };
+    #[cfg(windows)]
+    let (program, effective_args) = (resolved.0.as_str(), resolved.1.as_slice());
+    #[cfg(not(windows))]
+    let (program, effective_args) = (command, args);
+
+    let mut cmd = Command::new(program);
+    cmd.args(effective_args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(crate::windows_exec::CREATE_NO_WINDOW);
     }
     let child = match cmd.spawn() {
         Ok(c) => c,

@@ -166,19 +166,56 @@ fn command_loop(
     version: Arc<AtomicU64>,
     wake: WakeFn,
 ) {
+    // Track the last failure category so we warn once per transition
+    // (FR6: graceful degradation, but still surface root cause in the
+    // log — Windows users were hitting silent SpawnError previously).
+    let mut last_error_kind: Option<String> = None;
     while !stop.is_stopped() {
         // Spawn the executable with no arguments; the worker layer
         // never invokes a shell (NFR2). Currying multi-arg commands
         // would require a settings shape change — out of scope.
         let outcome = run_command(&executable, &[], None, DEFAULT_TIMEOUT);
-        if let WorkerOutcome::Stdout(line) = outcome {
-            let mut guard = cache.lock().unwrap();
-            let changed = guard.get(&name).map(|s| s.as_str()) != Some(line.as_str());
-            guard.insert(name.clone(), line);
-            drop(guard);
-            if changed {
-                version.fetch_add(1, Ordering::Relaxed);
-                wake();
+        match outcome {
+            WorkerOutcome::Stdout(line) => {
+                if last_error_kind.is_some() {
+                    log::info!("status_bar: cmd:{name} recovered (executable={executable:?})");
+                    last_error_kind = None;
+                }
+                let mut guard = cache.lock().unwrap();
+                let changed = guard.get(&name).map(|s| s.as_str()) != Some(line.as_str());
+                guard.insert(name.clone(), line);
+                drop(guard);
+                if changed {
+                    version.fetch_add(1, Ordering::Relaxed);
+                    wake();
+                }
+            }
+            WorkerOutcome::SpawnError(err) => {
+                let kind = format!("spawn:{err}");
+                if last_error_kind.as_deref() != Some(kind.as_str()) {
+                    log::warn!(
+                        "status_bar: cmd:{name} spawn failed (executable={executable:?}): {err}"
+                    );
+                    last_error_kind = Some(kind);
+                }
+            }
+            WorkerOutcome::NonZeroExit(code, _) => {
+                let kind = format!("exit:{code}");
+                if last_error_kind.as_deref() != Some(kind.as_str()) {
+                    log::warn!(
+                        "status_bar: cmd:{name} exited non-zero (executable={executable:?}, code={code})"
+                    );
+                    last_error_kind = Some(kind);
+                }
+            }
+            WorkerOutcome::Timeout => {
+                let kind = "timeout".to_string();
+                if last_error_kind.as_deref() != Some(kind.as_str()) {
+                    log::warn!(
+                        "status_bar: cmd:{name} timed out after 5s (executable={executable:?})"
+                    );
+                    last_error_kind = Some(kind);
+                }
             }
         }
         if !stop.wait_timeout(interval) {

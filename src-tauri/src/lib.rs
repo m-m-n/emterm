@@ -74,6 +74,12 @@ pub mod scroll;
 pub mod self_exec;
 pub mod wakeup;
 
+// Windows-only process resolution helpers (PE / shebang routing,
+// CREATE_NO_WINDOW). Compiled on `test` too so the unit tests covering
+// the shebang parser run on Linux CI.
+#[cfg(any(windows, test))]
+pub mod windows_exec;
+
 // === GUI-only modules (gated behind the `gui` feature) ===
 
 #[cfg(feature = "gui")]
