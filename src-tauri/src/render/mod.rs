@@ -822,15 +822,9 @@ pub fn apply_preedit_overlay(
         let s: String = cluster.to_string();
         // Force ambiguous-width chars (e.g. ▽) to 1 cell so the
         // composition footprint matches the user's visual expectation
-        // of "1 character = 1 cell" during preedit.
-        //
-        // VS-16 (U+FE0F) explicitly requests emoji presentation; widen
-        // to 2 cells so the colored emoji glyph (rather than the bare
-        // BW codepoint) gets a wide slot to render in. Mirrors
-        // `term_core::print_handler::flush_grapheme_buffer`.
-        let has_vs16 = cluster.chars().any(|c| c as u32 == 0xFE0F);
-        let w_raw = visible_width(&s, AmbiguousWidthMode::Narrow);
-        let w = if has_vs16 { 2u16 } else { w_raw.max(1) as u16 };
+        // of "1 character = 1 cell" during preedit. `visible_width`
+        // already upgrades VS-16-bearing clusters to 2 cells.
+        let w = visible_width(&s, AmbiguousWidthMode::Narrow).max(1) as u16;
         if col + w > cols {
             row = row.saturating_add(1);
             col = 0;
@@ -1303,9 +1297,18 @@ fn blend_toward(a: Color32, b: Color32, t: f32) -> Color32 {
 /// Compute display width of a grapheme under the active ambiguous-width
 /// policy. Returns at least 1 so the iterator never wedges.
 fn visible_width(ch: &str, mode: AmbiguousWidthMode) -> u8 {
-    let cp = ch.chars().next().map(|c| c as u32).unwrap_or(0);
+    let mut chars = ch.chars();
+    let cp = chars.next().map(|c| c as u32).unwrap_or(0);
     if cp == 0 {
         return 1;
+    }
+    // VS-16 (U+FE0F) explicitly requests emoji presentation. Text-default
+    // codepoints like 🕊 U+1F54A or ⬇ U+2B07 have a bare width of 1 but
+    // render as a 2-cell color-emoji glyph once VS-16 is appended.
+    // Mirrors `term_core::print_handler::flush_grapheme_buffer` so the
+    // rendered footprint matches the cluster width term_core reserved.
+    if chars.any(|c| c as u32 == 0xFE0F) {
+        return 2;
     }
     if is_ambiguous_width(cp) {
         return mode.width_for_ambiguous();
@@ -1405,6 +1408,35 @@ mod tests {
         // width class.
         assert_eq!(visible_width("■", AmbiguousWidthMode::Narrow), 1);
         assert_eq!(visible_width("■", AmbiguousWidthMode::Wide), 2);
+    }
+
+    #[test]
+    fn visible_width_vs16_upgrades_text_default_to_wide() {
+        // Text-default emoji codepoints have a bare width of 1, but a
+        // trailing VS-16 (U+FE0F) explicitly requests emoji presentation
+        // and must widen the cluster to 2 cells so the color-emoji glyph
+        // gets the wide slot term_core reserved for it.
+        // 🕊️ = U+1F54A DOVE + U+FE0F.
+        assert_eq!(visible_width("\u{1F54A}", AmbiguousWidthMode::Narrow), 1);
+        assert_eq!(
+            visible_width("\u{1F54A}\u{FE0F}", AmbiguousWidthMode::Narrow),
+            2
+        );
+        // ⬇️ = U+2B07 + U+FE0F.
+        assert_eq!(visible_width("\u{2B07}", AmbiguousWidthMode::Narrow), 1);
+        assert_eq!(
+            visible_width("\u{2B07}\u{FE0F}", AmbiguousWidthMode::Narrow),
+            2
+        );
+        // ⚠️ = U+26A0 + U+FE0F (also picks up emoji presentation under
+        // VS-16 even though bare U+26A0 is ambiguous-width).
+        assert_eq!(
+            visible_width("\u{26A0}\u{FE0F}", AmbiguousWidthMode::Narrow),
+            2
+        );
+        // Counter-check: 🥺 U+1F97A is emoji-presentation default, so it
+        // is already 2 cells without VS-16.
+        assert_eq!(visible_width("\u{1F97A}", AmbiguousWidthMode::Narrow), 2);
     }
 
     #[test]
