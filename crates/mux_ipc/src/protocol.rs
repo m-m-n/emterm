@@ -349,6 +349,26 @@ impl MuxMessage {
         )
     }
 
+    /// Encode this message as a plaintext (escape-free) sequence string.
+    ///
+    /// Format: `EMUX;<base64(frame_body)>\n`
+    ///
+    /// The mux GUI→bridge direction on Windows passes through ConPTY's input
+    /// processing, which silently strips APC and OSC escape sequences. This
+    /// printable-ASCII envelope survives intact. The bridge's
+    /// `StdinApcParser` recognizes it alongside APC and OSC 9999, so the
+    /// daemon protocol payload is unchanged — only the on-wire framing
+    /// differs from `to_apc` / `to_osc`.
+    pub fn to_plaintext(&self) -> String {
+        let body = self.to_frame_body();
+        let encoded = BASE64.encode(&body);
+        // PLAINTEXT_PREFIX is `b"EMUX;"`, guaranteed ASCII; reuse the SSOT
+        // instead of re-stating the literal so a future prefix change
+        // propagates to both encoder and parser.
+        let prefix = std::str::from_utf8(PLAINTEXT_PREFIX).expect("PLAINTEXT_PREFIX is ASCII");
+        format!("{}{}\n", prefix, encoded)
+    }
+
     /// Decode an APC payload string into a MuxMessage.
     ///
     /// The `payload` parameter is the content between `ESC _` and `ESC \`,
@@ -1067,6 +1087,69 @@ mod tests {
                 "payload {payload_len}: base64 body ratio {ratio_permille} permille not ~1333"
             );
         }
+    }
+
+    // ---- to_plaintext (Windows ConPTY input transport) ----
+
+    #[test]
+    fn to_plaintext_has_emux_prefix_and_lf_terminator() {
+        let msg = MuxMessage::pty_output(7, b"hi".to_vec());
+        let pt = msg.to_plaintext();
+        assert!(pt.starts_with("EMUX;"), "got {pt:?}");
+        assert!(pt.ends_with('\n'), "got {pt:?}");
+        // No APC / OSC escapes in the body — ConPTY input strips those.
+        assert!(
+            !pt.contains('\x1b'),
+            "plaintext envelope must be escape-free, got {pt:?}"
+        );
+    }
+
+    #[test]
+    fn to_plaintext_round_trips_with_bridge_parser_shape() {
+        // The bridge's StdinApcParser strips the EMUX; prefix and \n
+        // terminator, then prepends APC_PREFIX before calling from_apc.
+        // Mirror that shape here so a wire-format drift between encoder and
+        // parser fails this test.
+        let payload = StatusUpdateMsg {
+            left: "left 🦀".to_string(),
+            right: "right ✨".to_string(),
+        };
+        let msg = MuxMessage::control(MessageType::StatusUpdate, 11, &payload);
+
+        let pt = msg.to_plaintext();
+        let body = pt
+            .strip_prefix("EMUX;")
+            .and_then(|s| s.strip_suffix('\n'))
+            .expect("plaintext envelope");
+        let with_apc_prefix = format!("{}{}", APC_PREFIX, body);
+        let decoded = MuxMessage::from_apc(&with_apc_prefix).expect("decoded");
+
+        assert_eq!(decoded.msg_type, MessageType::StatusUpdate);
+        assert_eq!(decoded.pane_id, 11);
+        let back: StatusUpdateMsg = decoded.decode_payload().unwrap();
+        assert_eq!(back.left, "left 🦀");
+        assert_eq!(back.right, "right ✨");
+    }
+
+    #[test]
+    fn to_plaintext_body_matches_to_apc_body() {
+        // Both transports base64-encode the SAME frame body; only the
+        // envelope differs. This pins that to_plaintext does not double-
+        // wrap or otherwise change the protocol payload.
+        let msg = MuxMessage::pty_output(3, vec![0xAB; 1024]);
+
+        let apc = msg.to_apc();
+        let pt = msg.to_plaintext();
+
+        let apc_body = apc
+            .strip_prefix("\x1b_emterm-mux;")
+            .and_then(|s| s.strip_suffix("\x1b\\"))
+            .unwrap();
+        let pt_body = pt
+            .strip_prefix("EMUX;")
+            .and_then(|s| s.strip_suffix('\n'))
+            .unwrap();
+        assert_eq!(apc_body, pt_body, "base64 frame body must be identical");
     }
 
     #[test]

@@ -710,9 +710,17 @@ impl StdinApcParser {
                 }
                 ParserState::InPlaintext => {
                     if byte == b'\n' {
-                        // Newline terminates the plaintext message
+                        // LF terminates the plaintext message.
                         Self::complete_plaintext_sequence(&mut self.apc_buf, &mut actions);
                         self.state = ParserState::Ground;
+                    } else if byte == b'\r' {
+                        // CRLF tolerance: silently drop CR anywhere in the
+                        // body. ConPTY / SSH / shell layers in the GUI→bridge
+                        // path can translate `\n` to `\r\n`, and base64
+                        // STANDARD's alphabet contains no `\r`, so a stray CR
+                        // mixed into the accumulator would otherwise corrupt
+                        // the base64 decode and silently drop the entire mux
+                        // message in `complete_plaintext_sequence`.
                     } else if self.apc_buf.len() < MAX_APC_PAYLOAD {
                         self.apc_buf.push(byte);
                     } else {
@@ -1097,6 +1105,64 @@ mod tests {
         assert!(!actions.is_empty());
         for a in &actions {
             assert!(matches!(a, StdinAction::Passthrough(_)));
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_plaintext_crlf_terminator() {
+        // ConPTY / SSH / shell layers between the Windows GUI and the bridge
+        // can translate `\n` to `\r\n` on the GUI→bridge input path. base64
+        // STANDARD's alphabet has no `\r`, so a stray CR mixed into the body
+        // would otherwise corrupt the decode and silently drop the message —
+        // recreating the very Windows-bridge regression the plaintext
+        // transport was added to fix, but with a different proximate cause.
+        // The parser must decode the message even when the terminator arrives
+        // as CRLF.
+        let msg = MuxMessage::pty_input(3, vec![0xAB, 0xCD, 0xEF]);
+        let body = msg.to_frame_body();
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&body);
+        let input = format!("EMUX;{}\r\n", encoded);
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(input.as_bytes());
+        assert_eq!(actions.len(), 1, "CRLF must produce exactly one action");
+        match &actions[0] {
+            StdinAction::MuxMessage(decoded, transport) => {
+                assert_eq!(decoded.msg_type, MessageType::PtyInput);
+                assert_eq!(decoded.pane_id, 3);
+                assert_eq!(decoded.payload, vec![0xAB, 0xCD, 0xEF]);
+                assert_eq!(*transport, Transport::Plaintext);
+            }
+            other => panic!("Expected MuxMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_stdin_parser_plaintext_cr_mid_body_is_skipped() {
+        // Defense in depth: a CR injected mid-body (not just before the LF
+        // terminator) must also be skipped so the base64 decode succeeds.
+        // Some intermediaries chunk the byte stream and a CR could land
+        // anywhere relative to LF.
+        let msg = MuxMessage::pty_input(7, vec![0x10, 0x20]);
+        let body = msg.to_frame_body();
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&body);
+        // Splice a stray CR into the middle of the base64 body.
+        let mid = encoded.len() / 2;
+        let mut spliced = String::with_capacity(encoded.len() + 1);
+        spliced.push_str(&encoded[..mid]);
+        spliced.push('\r');
+        spliced.push_str(&encoded[mid..]);
+        let input = format!("EMUX;{}\n", spliced);
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(input.as_bytes());
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            StdinAction::MuxMessage(decoded, _) => {
+                assert_eq!(decoded.pane_id, 7);
+                assert_eq!(decoded.payload, vec![0x10, 0x20]);
+            }
+            other => panic!("Expected MuxMessage, got {other:?}"),
         }
     }
 

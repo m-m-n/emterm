@@ -55,21 +55,38 @@ pub fn try_decode_emterm_mux(data: &[u8]) -> Option<MuxMessage> {
     }
 }
 
-/// Encode a `MuxMessage` into an outbound `emterm-mux` APC byte sequence
-/// (`ESC _ emterm-mux;<base64(frame_body)> ESC \`), the counterpart to
-/// [`try_decode_emterm_mux`].
+/// Encode a `MuxMessage` into an outbound `emterm-mux` byte sequence for the
+/// GUI→bridge direction, the counterpart to [`try_decode_emterm_mux`].
+///
+/// The wire format is platform-conditional because the bridge's stdin
+/// transport on Windows passes through ConPTY input processing, which
+/// silently strips APC (`ESC _`) and OSC (`ESC ]`) escape sequences:
+///
+/// - **Linux** — APC (`ESC _ emterm-mux;<base64> ESC \`) via
+///   [`MuxMessage::to_apc`]. ConPTY is not in the path; APC arrives intact.
+/// - **Windows** — Plaintext (`EMUX;<base64>\n`) via
+///   [`MuxMessage::to_plaintext`]. Printable ASCII passes through ConPTY
+///   without being stripped, so the bridge actually receives the message.
+///
+/// The bridge's `StdinApcParser` recognizes APC, OSC 9999, and Plaintext
+/// interchangeably, so the daemon side is identical regardless of which
+/// envelope this function emits. The bridge→GUI direction stays on OSC 9999
+/// (see `bridge.rs`), which survives ConPTY's output direction.
 ///
 /// native-poc writes the result straight to the active tab's PTY
 /// (fire-and-forget); the `emterm mux` bridge reads it off the PTY and
 /// relays the frame to the daemon over its Unix socket. native never opens
 /// the socket itself (NFR2 — SSH transparency). Responses arrive back as
 /// inbound APC through the existing `on_apc` route.
-///
-/// Mirrors the WebView `MuxClient.sendControl` → `encodeApc` path. The wire
-/// shape is identical to `MuxMessage::to_apc`, so the result round-trips
-/// with the decoder above.
 pub fn encode_emterm_mux(msg: &MuxMessage) -> Vec<u8> {
-    msg.to_apc().into_bytes()
+    #[cfg(windows)]
+    {
+        msg.to_plaintext().into_bytes()
+    }
+    #[cfg(not(windows))]
+    {
+        msg.to_apc().into_bytes()
+    }
 }
 
 #[cfg(test)]
@@ -81,7 +98,9 @@ mod tests {
     };
 
     /// Strip the `ESC _` / `ESC \` framing the way `term_core`'s `on_apc`
-    /// hands the slice to [`try_decode_emterm_mux`].
+    /// hands the slice to [`try_decode_emterm_mux`]. Used by `decode_outbound`
+    /// on non-Windows, where `encode_emterm_mux` emits APC.
+    #[cfg(not(windows))]
     fn strip_apc(apc: &[u8]) -> Vec<u8> {
         let s = std::str::from_utf8(apc).unwrap();
         let inner = s
@@ -91,14 +110,39 @@ mod tests {
         inner.as_bytes().to_vec()
     }
 
+    /// Decode whatever [`encode_emterm_mux`] produced on the current
+    /// platform back into a `MuxMessage`. On Linux that's an APC envelope
+    /// (decoded by `try_decode_emterm_mux`); on Windows it's the Plaintext
+    /// `EMUX;<base64>\n` envelope (decoded by mirroring the bridge's stdin
+    /// parser — strip the prefix/terminator, prepend `emterm-mux;`, call
+    /// `from_apc`). Keeps the round-trip tests platform-agnostic so the
+    /// Linux CI run still exercises encoder correctness even though the
+    /// Windows envelope is the one that fixed the SSH-bridge regression.
+    fn decode_outbound(bytes: &[u8]) -> MuxMessage {
+        #[cfg(windows)]
+        {
+            let s = std::str::from_utf8(bytes).expect("plaintext envelope is utf-8");
+            let body = s
+                .strip_prefix("EMUX;")
+                .and_then(|s| s.strip_suffix('\n'))
+                .expect("plaintext envelope");
+            let with_apc_prefix = format!("emterm-mux;{}", body);
+            MuxMessage::from_apc(&with_apc_prefix).expect("decoded")
+        }
+        #[cfg(not(windows))]
+        {
+            try_decode_emterm_mux(&strip_apc(bytes)).expect("decoded")
+        }
+    }
+
     // ── TS-5: outbound encode round-trips with the decoder ────────────────
 
     #[test]
     fn encode_create_window_round_trips() {
         let payload = CreateWindowPayload::default();
         let msg = MuxMessage::control(MessageType::CreateWindow, 0, &payload);
-        let apc = encode_emterm_mux(&msg);
-        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).expect("decoded");
+        let encoded = encode_emterm_mux(&msg);
+        let decoded = decode_outbound(&encoded);
         assert_eq!(decoded.msg_type, MessageType::CreateWindow);
         assert_eq!(decoded.pane_id, 0);
     }
@@ -110,8 +154,8 @@ mod tests {
             pane_id: 42,
             payload: Vec::new(),
         };
-        let apc = encode_emterm_mux(&msg);
-        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).unwrap();
+        let encoded = encode_emterm_mux(&msg);
+        let decoded = decode_outbound(&encoded);
         assert_eq!(decoded.msg_type, MessageType::SwitchWindow);
         assert_eq!(decoded.pane_id, 42);
     }
@@ -122,8 +166,8 @@ mod tests {
             name: "editor 🎉".to_string(),
         };
         let msg = MuxMessage::control(MessageType::RenameWindow, 7, &rename);
-        let apc = encode_emterm_mux(&msg);
-        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).unwrap();
+        let encoded = encode_emterm_mux(&msg);
+        let decoded = decode_outbound(&encoded);
         assert_eq!(decoded.msg_type, MessageType::RenameWindow);
         assert_eq!(decoded.pane_id, 7);
         let back: RenameWindowMsg = decoded.decode_payload().unwrap();
@@ -134,8 +178,8 @@ mod tests {
     fn encode_move_window_round_trips() {
         let mv = MoveWindowMsg { target_index: 3 };
         let msg = MuxMessage::control(MessageType::MoveWindow, 9, &mv);
-        let apc = encode_emterm_mux(&msg);
-        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).unwrap();
+        let encoded = encode_emterm_mux(&msg);
+        let decoded = decode_outbound(&encoded);
         assert_eq!(decoded.msg_type, MessageType::MoveWindow);
         assert_eq!(decoded.pane_id, 9);
         let back: MoveWindowMsg = decoded.decode_payload().unwrap();
@@ -150,10 +194,59 @@ mod tests {
             pane_id: 5,
             payload: Vec::new(),
         };
-        let apc = encode_emterm_mux(&msg);
-        let decoded = try_decode_emterm_mux(&strip_apc(&apc)).unwrap();
+        let encoded = encode_emterm_mux(&msg);
+        let decoded = decode_outbound(&encoded);
         assert_eq!(decoded.msg_type, MessageType::RequestPaneSnapshot);
         assert_eq!(decoded.pane_id, 5);
+    }
+
+    // ── Per-platform envelope selection (the SSH/ConPTY regression fix) ──
+
+    #[test]
+    #[cfg(not(windows))]
+    fn linux_encodes_apc_envelope() {
+        // Linux PTY has no ConPTY input processing; APC survives the path
+        // bridge stdin reads from, so encode_emterm_mux must emit APC there.
+        let msg = MuxMessage {
+            msg_type: MessageType::SwitchWindow,
+            pane_id: 1,
+            payload: Vec::new(),
+        };
+        let encoded = encode_emterm_mux(&msg);
+        assert_eq!(
+            &encoded[..2],
+            b"\x1b_",
+            "Linux must emit APC introducer (ESC _)"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_encodes_plaintext_envelope() {
+        // Windows ConPTY input direction strips APC/OSC, so encode_emterm_mux
+        // must emit the escape-free EMUX;<base64>\n envelope instead. This
+        // pins the asymmetric-transport fix for the Windows-host → Linux-mux
+        // SSH bridge regression.
+        let msg = MuxMessage {
+            msg_type: MessageType::SwitchWindow,
+            pane_id: 1,
+            payload: Vec::new(),
+        };
+        let encoded = encode_emterm_mux(&msg);
+        assert!(
+            encoded.starts_with(b"EMUX;"),
+            "Windows must emit plaintext EMUX; prefix, got {:?}",
+            std::str::from_utf8(&encoded).unwrap_or("(non-utf8)")
+        );
+        assert_eq!(
+            *encoded.last().unwrap(),
+            b'\n',
+            "Windows plaintext envelope must end with LF"
+        );
+        assert!(
+            !encoded.contains(&0x1b),
+            "Windows plaintext envelope must be escape-free"
+        );
     }
 
     // ── TS-apc-1: happy path round-trip ──────────────────────────────────
