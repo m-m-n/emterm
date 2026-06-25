@@ -10,13 +10,9 @@
 # runners (`actions/cache` keyed on this script's hash short-circuits on hit).
 #
 # URL pinning notes:
-#   The SHA256 values below were computed from the binaries previously
-#   committed to git (Noto Color Emoji + Noto Sans CJK JP) and from
-#   manually-vetted upstream tags (Noto Emoji monochrome + Inconsolata).
-#   If an entry's URL is set to "TODO(URL)" the SHA256 is still valid for
-#   manually-placed copies — the script's idempotent path keeps working
-#   for developers who already have the file, and the download path will
-#   fail with a clear error until the URL is filled in.
+#   URLs are pinned to immutable tagged refs on the upstream repos and
+#   SHA256 values are taken from the bytes those refs serve. Updating a
+#   font means bumping both the URL ref and the SHA256.
 
 set -euo pipefail
 
@@ -135,27 +131,22 @@ fetch_one() {
 # ---------------------------------------------------------------
 # Pinned font sources
 # ---------------------------------------------------------------
-# SHA256 values are the verification anchor. URLs are pinned to GitHub
-# Releases tags (filled in during pin-existing-fonts task). When a URL
-# is still TODO the script remains usable for developers who have a
-# matching local copy: idempotency on SHA256 keeps the no-op path alive.
+# SHA256 values are the verification anchor. URLs are pinned to tagged
+# refs on the upstream Google Fonts repositories (raw.githubusercontent
+# .com), which are immutable per tag.
 
 fetch_one "NotoColorEmoji.ttf" \
-    "TODO(URL): pin to an upstream GitHub Releases asset whose bytes match the SHA256 below" \
-    "ede3ac600162ca750e2aba610285f06f30d8c0dd198bcec1d53cb6efe660306c"
+    "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/NotoColorEmoji.ttf" \
+    "72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b"
 
 fetch_one "NotoSansCJKjp-Regular.otf" \
-    "TODO(URL): pin to an upstream GitHub Releases asset whose bytes match the SHA256 below" \
+    "https://raw.githubusercontent.com/googlefonts/noto-cjk/Sans2.004/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf" \
     "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5"
 
-# Noto Emoji (monochrome) and Inconsolata are introduced in Phase 2 of the
-# font-bundle-redesign feature. SHA256 values are still placeholders pending
-# selection of a specific upstream release tag — until then, the script
-# accepts any locally-placed copy so the GUI build can compile.
 fetch_one "NotoEmoji-Regular.ttf" \
-    "TODO(URL): https://github.com/googlefonts/noto-emoji NotoEmoji-Regular.ttf release asset" \
-    "TODO(SHA256): pin once an upstream release tag is selected"
+    "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.034/fonts/NotoEmoji-Regular.ttf" \
+    "415dc6290378574135b64c808dc640c1df7531973290c4970c51fdeb849cb0c5"
 
 fetch_one "Inconsolata-Regular.ttf" \
-    "TODO(URL): https://github.com/googlefonts/Inconsolata Inconsolata-Regular.ttf release asset" \
-    "TODO(SHA256): pin once an upstream release tag is selected"
+    "https://raw.githubusercontent.com/googlefonts/Inconsolata/v3.000/fonts/ttf/Inconsolata-Regular.ttf" \
+    "127875d255d4c5973ca57267a43bb9d1c04397e6c7d236984a595b6cdcb12b7c"

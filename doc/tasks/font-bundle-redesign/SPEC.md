@@ -55,7 +55,7 @@ As a release engineer, I want every CI build to produce byte-identical font asse
 
 ### Functional Requirements
 
-- **FR1:** A `scripts/fetch-fonts.sh` shell script downloads each font from a fixed GitHub Releases URL (pinned by tag) and verifies SHA256 before placing the file under `src-tauri/assets/fonts/`. Idempotent: skip files whose SHA256 already matches.
+- **FR1:** A `scripts/fetch-fonts.sh` shell script downloads each font from a fixed HTTPS URL pinned to an upstream Git tag (a GitHub Releases asset URL or a `raw.githubusercontent.com` tag ref) and verifies SHA256 before placing the file under `src-tauri/assets/fonts/`. Idempotent: skip files whose SHA256 already matches.
 - **FR2:** Remove `NotoColorEmoji.ttf` and `NotoSansCJKjp-Regular.otf` from git history; add `src-tauri/assets/fonts/.gitignore` excluding `*.ttf` and `*.otf` while retaining `LICENSE` and `README.md`.
 - **FR3:** Add Noto Emoji (monochrome) and Inconsolata to the bundled font set. Both are embedded via `include_bytes!` under the `gui` feature gate only.
 - **FR4:** Split the emoji font configuration into color and monochrome keys:
@@ -85,7 +85,7 @@ As a release engineer, I want every CI build to produce byte-identical font asse
 
 ### Non-Functional Requirements
 
-- **NFR1 - Build Reproducibility:** SHA256 verification guarantees that the embedded font bytes are byte-identical to the pinned upstream release.
+- **NFR1 - Build Reproducibility:** SHA256 verification guarantees that the embedded font bytes are byte-identical to the bytes served by the pinned upstream tag.
 - **NFR2 - Repository Size:** Net repository size reduction of ~30 MB (current font binaries removed, plus future avoidance of binary diffs on updates).
 - **NFR3 - Diagnosability:** Missing-font failures during build must name the missing file and reference `make fetch-fonts` / `bash scripts/fetch-fonts.sh`.
 - **NFR4 - Backward Compatibility:** Existing `settings.json` files load without user intervention; auto-migration preserves prior values for the color side.
@@ -544,7 +544,12 @@ Runtime error (user dir)
 
 > 未解決の要件は sdd.yaml で `status: tbd` として管理する。`/em-sdd:sdd.2-create-plan` の実行前に解決すること。
 
-- [ ] **OQ1 (FR1):** Final GitHub Releases tags and SHA256 values for each font. Will be resolved during the implementation plan by selecting the latest stable tags of each upstream project.
+- [x] **OQ1 (FR1):** Resolved. Each font is pinned to an upstream Git tag:
+    - `NotoColorEmoji.ttf` — `googlefonts/noto-emoji` @ `v2.051`
+    - `NotoSansCJKjp-Regular.otf` — `googlefonts/noto-cjk` @ `Sans2.004`
+    - `NotoEmoji-Regular.ttf` — `googlefonts/noto-emoji` @ `v2.034`
+    - `Inconsolata-Regular.ttf` — `googlefonts/Inconsolata` @ `v3.000`
+    SHA256 values live in `scripts/fetch-fonts.sh`.
 - [ ] **OQ2 (FR5):** Source of truth for `Emoji` / `Emoji_Presentation` Unicode property tables (inline static table vs `unicode-emoji` crate vs custom build script). Will be resolved during the implementation plan based on dependency footprint.
 - [ ] **OQ3 (FR7):** Whether the migrated settings file should keep a one-time backup (`settings.json.bak`) for easy rollback. Will be resolved during the implementation plan.
 
