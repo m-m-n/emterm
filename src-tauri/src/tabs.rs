@@ -1410,6 +1410,39 @@ impl Tab {
                                 if let Some(pane_id) = active_pane_id {
                                     self.request_pane_snapshot(pane_id);
                                 }
+                            } else if first_welcome && session.pane_count == 0 {
+                                // Fresh-start mux: the daemon has no panes yet,
+                                // so `windows` is empty and the seed/attach
+                                // branches above don't run. Legacy webview's
+                                // `enterMuxMode` sent CreateWindow on this path
+                                // to bootstrap the initial window — the native
+                                // port was missing that step, which is the
+                                // upstream cause of "shell freezes / status bar
+                                // alive": with no seeded pane, `mux_group` stays
+                                // `None`, `active_pane_id()` is `None`, and every
+                                // keystroke gets dropped in `write_input` while
+                                // the daemon's StatusUpdate stream (which does
+                                // not consult `active_pane_id`) keeps the status
+                                // bar updating.
+                                //
+                                // Pre-install an empty group so the daemon's
+                                // subsequent `PaneCreated` reply can land — the
+                                // PaneCreated handler intentionally refuses to
+                                // install a group on its own (M4 guard against
+                                // pre-Welcome leakage).
+                                //
+                                // Send CreateWindow with an empty payload to
+                                // match legacy's `sendControl(CreateWindow, 0)`
+                                // wire form exactly — the daemon's
+                                // empty-payload backward-compat path (pinned by
+                                // `test_create_window_payload_empty_payload_backward_compat`)
+                                // applies CreateWindowPayload defaults.
+                                self.mux_group.get_or_insert_with(MuxWindowGroup::new);
+                                self.send_control(&MuxMessage {
+                                    msg_type: MessageType::CreateWindow,
+                                    pane_id: 0,
+                                    payload: Vec::new(),
+                                });
                             }
                             true
                         }
