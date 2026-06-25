@@ -58,19 +58,56 @@ impl Modifiers {
     }
 }
 
+/// Which PTY the encoded bytes will reach.
+///
+/// The Windows Backspace / Escape encoding has to honour the local
+/// ConPTY's `PSEUDOCONSOLE_WIN32_INPUT_MODE` quirks (Win32 Input Mode
+/// key-event pairs instead of bare control bytes). When the bytes are
+/// forwarded over the wire to a remote POSIX PTY — the canonical case
+/// being a Linux `emterm mux` daemon reached over SSH from a Windows
+/// GUI — those Win32 Input Mode sequences are just unknown CSI to the
+/// remote shell and get echoed verbatim, so we skip the shim and emit
+/// the plain VT bytes instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// The byte stream feeds the host OS's local PTY. On Windows that
+    /// means the ConPTY portable-pty 0.8 opens with
+    /// `PSEUDOCONSOLE_WIN32_INPUT_MODE`, so Backspace / Escape / Ctrl+[
+    /// must be emitted as Win32 Input Mode key-event pairs.
+    HostPty,
+    /// The byte stream is forwarded to a remote POSIX PTY (e.g. a Linux
+    /// mux daemon via SSH). Emit conventional VT bytes regardless of
+    /// the GUI host OS so the remote shell sees what it expects.
+    PosixPty,
+}
+
 /// Encode a key event to the byte sequence a normal terminal would write.
+///
+/// `target` controls Windows-specific encoding: `HostPty` engages the
+/// Win32 Input Mode shim for Backspace / Escape / Ctrl+[, while
+/// `PosixPty` always emits the plain VT bytes (used when the bytes
+/// will reach a remote Linux PTY through mux). On non-Windows hosts the
+/// parameter has no effect.
 ///
 /// Returns an empty buffer for unsupported combinations rather than panicking
 /// so the caller can fall back silently. Unknown chord combinations log a
 /// warning at the call site.
-pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
+pub fn encode(key: Key, mods: Modifiers, target: Target) -> Vec<u8> {
     use Key::*;
+
+    // The `target` discriminator only branches the Windows-only shim
+    // below; on Unix it has no effect (the byte stream is already POSIX
+    // VT-shaped). Silence the unused-variable warning there.
+    #[cfg(not(windows))]
+    let _ = target;
 
     // Windows Backspace bypasses the xterm Alt-ESC prefix: the Win32
     // Input Mode sequence carries modifiers inline, and prepending the
-    // ESC byte would corrupt the CSI.
+    // ESC byte would corrupt the CSI. Only applies when the bytes will
+    // reach the local ConPTY — the shim is wrong for remote POSIX PTYs
+    // (the Linux mux daemon case).
     #[cfg(windows)]
-    if matches!(key, Backspace) {
+    if target == Target::HostPty && matches!(key, Backspace) {
         return encode_backspace_win32(mods);
     }
 
@@ -81,7 +118,7 @@ pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
     // bypasses the xterm Alt-ESC prefix because the modifier state is
     // carried inline in the `Cs` field.
     #[cfg(windows)]
-    if matches!(key, Escape) {
+    if target == Target::HostPty && matches!(key, Escape) {
         return encode_escape_win32(mods);
     }
 
@@ -96,9 +133,11 @@ pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
     // `ctrl_byte`'s 0x1b arm). Other modifiers (Alt, Shift) are passed
     // through into the `Cs` bitmask just like the Escape shim does.
     #[cfg(windows)]
-    if let Char(c) = key {
-        if mods.ctrl && ctrl_byte(c) == Some(0x1b) {
-            return encode_escape_win32(mods);
+    if target == Target::HostPty {
+        if let Char(c) = key {
+            if mods.ctrl && ctrl_byte(c) == Some(0x1b) {
+                return encode_escape_win32(mods);
+            }
         }
     }
 
@@ -134,7 +173,10 @@ pub fn encode(key: Key, mods: Modifiers) -> Vec<u8> {
         // Linux/macOS: 0x7f (DEL) matches xterm convention (terminfo
         // kbs=^?), required by canonical-mode line editors (sudo prompt,
         // ssh password, stty default erase character).
-        // Windows is handled by encode_backspace_win32 early-return above.
+        // Windows with `Target::HostPty` is handled by
+        // `encode_backspace_win32` early-return above; with
+        // `Target::PosixPty` (mux → remote Linux daemon) Windows also
+        // falls through here so the remote shell sees plain DEL.
         Backspace => out.push(0x7f),
         Escape => out.push(0x1b),
         Up => out.extend_from_slice(b"\x1b[A"),
@@ -271,21 +313,28 @@ pub fn wrap_bracketed_paste(payload: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    // Most assertions use `Target::HostPty` because that's the
+    // historically-tested path. `Target::PosixPty` gets dedicated
+    // coverage below for the Windows Backspace / Escape / Ctrl+[ trio
+    // where the two targets diverge.
+    const HOST: Target = Target::HostPty;
+    const POSIX: Target = Target::PosixPty;
+
     #[test]
     fn printable_ascii() {
-        assert_eq!(encode(Key::Char('a'), Modifiers::NONE), b"a");
-        assert_eq!(encode(Key::Char('Z'), Modifiers::NONE), b"Z");
-        assert_eq!(encode(Key::Char('1'), Modifiers::NONE), b"1");
+        assert_eq!(encode(Key::Char('a'), Modifiers::NONE, HOST), b"a");
+        assert_eq!(encode(Key::Char('Z'), Modifiers::NONE, HOST), b"Z");
+        assert_eq!(encode(Key::Char('1'), Modifiers::NONE, HOST), b"1");
     }
 
     #[test]
     fn enter_tab_backspace_escape() {
-        assert_eq!(encode(Key::Enter, Modifiers::NONE), b"\r");
-        assert_eq!(encode(Key::Tab, Modifiers::NONE), b"\t");
+        assert_eq!(encode(Key::Enter, Modifiers::NONE, HOST), b"\r");
+        assert_eq!(encode(Key::Tab, Modifiers::NONE, HOST), b"\t");
         #[cfg(not(windows))]
-        assert_eq!(encode(Key::Backspace, Modifiers::NONE), b"\x7f");
+        assert_eq!(encode(Key::Backspace, Modifiers::NONE, HOST), b"\x7f");
         #[cfg(not(windows))]
-        assert_eq!(encode(Key::Escape, Modifiers::NONE), b"\x1b");
+        assert_eq!(encode(Key::Escape, Modifiers::NONE, HOST), b"\x1b");
     }
 
     /// Dedicated Unix Escape assertion. Pinned separately from
@@ -296,7 +345,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn escape_emits_bare_1b_on_unix() {
-        assert_eq!(encode(Key::Escape, Modifiers::NONE), b"\x1b");
+        assert_eq!(encode(Key::Escape, Modifiers::NONE, HOST), b"\x1b");
     }
 
     #[test]
@@ -306,9 +355,9 @@ mod tests {
             ..Modifiers::NONE
         };
         // Shift+Tab must send CSI Z (back-tab), not a plain Tab.
-        assert_eq!(encode(Key::Tab, shift), b"\x1b[Z");
+        assert_eq!(encode(Key::Tab, shift, HOST), b"\x1b[Z");
         // Plain Tab is unaffected.
-        assert_eq!(encode(Key::Tab, Modifiers::NONE), b"\t");
+        assert_eq!(encode(Key::Tab, Modifiers::NONE, HOST), b"\t");
     }
 
     /// Windows Backspace must emit a Win32 Input Mode key event pair
@@ -319,7 +368,7 @@ mod tests {
     #[test]
     fn backspace_emits_win32_input_mode_pair() {
         assert_eq!(
-            encode(Key::Backspace, Modifiers::NONE),
+            encode(Key::Backspace, Modifiers::NONE, HOST),
             b"\x1b[8;14;8;1;0;1_\x1b[8;14;8;0;0;1_"
         );
     }
@@ -336,6 +385,7 @@ mod tests {
                 shift: false,
                 alt: false,
             },
+            HOST,
         );
         // Left Ctrl pressed = 0x08
         assert_eq!(bytes, b"\x1b[8;14;8;1;8;1_\x1b[8;14;8;0;8;1_");
@@ -350,7 +400,7 @@ mod tests {
     #[test]
     fn escape_emits_win32_input_mode_pair() {
         assert_eq!(
-            encode(Key::Escape, Modifiers::NONE),
+            encode(Key::Escape, Modifiers::NONE, HOST),
             b"\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_"
         );
     }
@@ -366,6 +416,7 @@ mod tests {
                 shift: false,
                 alt: false,
             },
+            HOST,
         );
         assert_eq!(bytes, b"\x1b[27;1;27;1;8;1_\x1b[27;1;27;0;8;1_");
     }
@@ -381,6 +432,7 @@ mod tests {
                 shift: false,
                 alt: true,
             },
+            HOST,
         );
         assert_eq!(bytes, b"\x1b[27;1;27;1;2;1_\x1b[27;1;27;0;2;1_");
     }
@@ -396,6 +448,7 @@ mod tests {
                 shift: true,
                 alt: false,
             },
+            HOST,
         );
         assert_eq!(bytes, b"\x1b[27;1;27;1;16;1_\x1b[27;1;27;0;16;1_");
     }
@@ -412,50 +465,98 @@ mod tests {
                 shift: true,
                 alt: false,
             },
+            HOST,
         );
         assert_eq!(bytes, b"\x1b[27;1;27;1;24;1_\x1b[27;1;27;0;24;1_");
     }
 
+    /// `Target::PosixPty` on Windows must bypass the Win32 Input Mode
+    /// shim — the bytes are heading to a remote Linux PTY (mux daemon
+    /// over SSH), which would otherwise echo the unknown CSI verbatim.
+    #[cfg(windows)]
+    #[test]
+    fn backspace_posix_target_skips_win32_input_mode_on_windows() {
+        assert_eq!(encode(Key::Backspace, Modifiers::NONE, POSIX), b"\x7f");
+    }
+
+    /// Same as above but for Escape — the remote shell needs the plain
+    /// 0x1b that VT/terminfo prescribes.
+    #[cfg(windows)]
+    #[test]
+    fn escape_posix_target_skips_win32_input_mode_on_windows() {
+        assert_eq!(encode(Key::Escape, Modifiers::NONE, POSIX), b"\x1b");
+    }
+
+    /// Ctrl+[ aliases Escape; under `PosixPty` Windows must emit the
+    /// same bare 0x1b the Unix branch produces, not the Win32 Input
+    /// Mode pair.
+    #[cfg(windows)]
+    #[test]
+    fn ctrl_bracket_posix_target_emits_bare_esc_on_windows() {
+        assert_eq!(encode(Key::Char('['), Modifiers::ctrl(), POSIX), b"\x1b");
+    }
+
+    /// `Target::PosixPty` must be a no-op on Unix hosts — the encoding
+    /// is already POSIX-shaped there, so both targets produce identical
+    /// bytes for the keys the Windows shim would otherwise rewrite.
+    #[cfg(not(windows))]
+    #[test]
+    fn posix_target_matches_host_target_on_unix() {
+        assert_eq!(
+            encode(Key::Backspace, Modifiers::NONE, POSIX),
+            encode(Key::Backspace, Modifiers::NONE, HOST)
+        );
+        assert_eq!(
+            encode(Key::Escape, Modifiers::NONE, POSIX),
+            encode(Key::Escape, Modifiers::NONE, HOST)
+        );
+        assert_eq!(
+            encode(Key::Char('['), Modifiers::ctrl(), POSIX),
+            encode(Key::Char('['), Modifiers::ctrl(), HOST)
+        );
+    }
+
     #[test]
     fn arrow_keys() {
-        assert_eq!(encode(Key::Up, Modifiers::NONE), b"\x1b[A");
-        assert_eq!(encode(Key::Down, Modifiers::NONE), b"\x1b[B");
-        assert_eq!(encode(Key::Right, Modifiers::NONE), b"\x1b[C");
-        assert_eq!(encode(Key::Left, Modifiers::NONE), b"\x1b[D");
+        assert_eq!(encode(Key::Up, Modifiers::NONE, HOST), b"\x1b[A");
+        assert_eq!(encode(Key::Down, Modifiers::NONE, HOST), b"\x1b[B");
+        assert_eq!(encode(Key::Right, Modifiers::NONE, HOST), b"\x1b[C");
+        assert_eq!(encode(Key::Left, Modifiers::NONE, HOST), b"\x1b[D");
     }
 
     #[test]
     fn nav_and_function_keys() {
-        assert_eq!(encode(Key::Home, Modifiers::NONE), b"\x1b[H");
-        assert_eq!(encode(Key::End, Modifiers::NONE), b"\x1b[F");
-        assert_eq!(encode(Key::PageUp, Modifiers::NONE), b"\x1b[5~");
-        assert_eq!(encode(Key::PageDown, Modifiers::NONE), b"\x1b[6~");
-        assert_eq!(encode(Key::Delete, Modifiers::NONE), b"\x1b[3~");
-        assert_eq!(encode(Key::Insert, Modifiers::NONE), b"\x1b[2~");
-        assert_eq!(encode(Key::F(1), Modifiers::NONE), b"\x1bOP");
-        assert_eq!(encode(Key::F(5), Modifiers::NONE), b"\x1b[15~");
-        assert_eq!(encode(Key::F(12), Modifiers::NONE), b"\x1b[24~");
-        assert_eq!(encode(Key::F(99), Modifiers::NONE), b"");
+        assert_eq!(encode(Key::Home, Modifiers::NONE, HOST), b"\x1b[H");
+        assert_eq!(encode(Key::End, Modifiers::NONE, HOST), b"\x1b[F");
+        assert_eq!(encode(Key::PageUp, Modifiers::NONE, HOST), b"\x1b[5~");
+        assert_eq!(encode(Key::PageDown, Modifiers::NONE, HOST), b"\x1b[6~");
+        assert_eq!(encode(Key::Delete, Modifiers::NONE, HOST), b"\x1b[3~");
+        assert_eq!(encode(Key::Insert, Modifiers::NONE, HOST), b"\x1b[2~");
+        assert_eq!(encode(Key::F(1), Modifiers::NONE, HOST), b"\x1bOP");
+        assert_eq!(encode(Key::F(5), Modifiers::NONE, HOST), b"\x1b[15~");
+        assert_eq!(encode(Key::F(12), Modifiers::NONE, HOST), b"\x1b[24~");
+        assert_eq!(encode(Key::F(99), Modifiers::NONE, HOST), b"");
     }
 
     #[test]
     fn ctrl_letters() {
-        assert_eq!(encode(Key::Char('c'), Modifiers::ctrl()), b"\x03");
-        assert_eq!(encode(Key::Char('C'), Modifiers::ctrl()), b"\x03");
-        assert_eq!(encode(Key::Char('a'), Modifiers::ctrl()), b"\x01");
-        assert_eq!(encode(Key::Char('z'), Modifiers::ctrl()), b"\x1a");
+        assert_eq!(encode(Key::Char('c'), Modifiers::ctrl(), HOST), b"\x03");
+        assert_eq!(encode(Key::Char('C'), Modifiers::ctrl(), HOST), b"\x03");
+        assert_eq!(encode(Key::Char('a'), Modifiers::ctrl(), HOST), b"\x01");
+        assert_eq!(encode(Key::Char('z'), Modifiers::ctrl(), HOST), b"\x1a");
     }
 
     #[test]
     fn ctrl_extras() {
-        // Ctrl+[ aliases Escape; on Windows it is rerouted through the
-        // Win32 Input Mode shim (see ctrl_bracket_emits_escape_win32_input_mode_pair
-        // below). On non-Windows it still emits the bare 0x1b that
-        // canonical-mode line editors expect.
+        // Ctrl+[ aliases Escape; on Windows + HostPty it is rerouted
+        // through the Win32 Input Mode shim (see
+        // ctrl_bracket_emits_escape_win32_input_mode_pair below). On
+        // non-Windows (and on Windows + PosixPty) it still emits the
+        // bare 0x1b that canonical-mode line editors expect.
         #[cfg(not(windows))]
-        assert_eq!(encode(Key::Char('['), Modifiers::ctrl()), b"\x1b");
-        assert_eq!(encode(Key::Char(' '), Modifiers::ctrl()), b"\x00");
-        assert_eq!(encode(Key::Char('\\'), Modifiers::ctrl()), b"\x1c");
+        assert_eq!(encode(Key::Char('['), Modifiers::ctrl(), HOST), b"\x1b");
+        assert_eq!(encode(Key::Char(' '), Modifiers::ctrl(), HOST), b"\x00");
+        assert_eq!(encode(Key::Char('\\'), Modifiers::ctrl(), HOST), b"\x1c");
     }
 
     /// Ctrl+[ is a documented vim alias for Escape (`:help i_CTRL-[`).
@@ -469,7 +570,7 @@ mod tests {
         // Modifier-bits include Ctrl because the user did press Ctrl;
         // the encoded sequence is still the Escape key event so vim
         // observes it as Escape, with Cs surfacing the held Ctrl.
-        let bytes = encode(Key::Char('['), Modifiers::ctrl());
+        let bytes = encode(Key::Char('['), Modifiers::ctrl(), HOST);
         // Cs = LEFT_CTRL_PRESSED = 0x08 = 8
         assert_eq!(bytes, b"\x1b[27;1;27;1;8;1_\x1b[27;1;27;0;8;1_");
     }
@@ -480,7 +581,7 @@ mod tests {
             alt: true,
             ..Modifiers::NONE
         };
-        assert_eq!(encode(Key::Char('b'), mods), b"\x1bb");
+        assert_eq!(encode(Key::Char('b'), mods, HOST), b"\x1bb");
     }
 
     #[test]
