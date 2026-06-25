@@ -64,9 +64,12 @@ pub fn try_decode_emterm_mux(data: &[u8]) -> Option<MuxMessage> {
 ///
 /// - **Linux** — APC (`ESC _ emterm-mux;<base64> ESC \`) via
 ///   [`MuxMessage::to_apc`]. ConPTY is not in the path; APC arrives intact.
-/// - **Windows** — Plaintext (`EMUX;<base64>\n`) via
+/// - **Windows** — Plaintext (`EMUX;<base64>\r`) via
 ///   [`MuxMessage::to_plaintext`]. Printable ASCII passes through ConPTY
 ///   without being stripped, so the bridge actually receives the message.
+///   The terminator is CR (not LF) because portable-pty 0.8 opens ConPTY
+///   with `PSEUDOCONSOLE_WIN32_INPUT_MODE` and raw LF is not delivered as
+///   a real key event on that channel — CR rides through as `VK_RETURN`.
 ///
 /// The bridge's `StdinApcParser` recognizes APC, OSC 9999, and Plaintext
 /// interchangeably, so the daemon side is identical regardless of which
@@ -113,7 +116,7 @@ mod tests {
     /// Decode whatever [`encode_emterm_mux`] produced on the current
     /// platform back into a `MuxMessage`. On Linux that's an APC envelope
     /// (decoded by `try_decode_emterm_mux`); on Windows it's the Plaintext
-    /// `EMUX;<base64>\n` envelope (decoded by mirroring the bridge's stdin
+    /// `EMUX;<base64>\r` envelope (decoded by mirroring the bridge's stdin
     /// parser — strip the prefix/terminator, prepend `emterm-mux;`, call
     /// `from_apc`). Keeps the round-trip tests platform-agnostic so the
     /// Linux CI run still exercises encoder correctness even though the
@@ -124,7 +127,7 @@ mod tests {
             let s = std::str::from_utf8(bytes).expect("plaintext envelope is utf-8");
             let body = s
                 .strip_prefix("EMUX;")
-                .and_then(|s| s.strip_suffix('\n'))
+                .and_then(|s| s.strip_suffix('\r'))
                 .expect("plaintext envelope");
             let with_apc_prefix = format!("emterm-mux;{}", body);
             MuxMessage::from_apc(&with_apc_prefix).expect("decoded")
@@ -224,9 +227,13 @@ mod tests {
     #[cfg(windows)]
     fn windows_encodes_plaintext_envelope() {
         // Windows ConPTY input direction strips APC/OSC, so encode_emterm_mux
-        // must emit the escape-free EMUX;<base64>\n envelope instead. This
+        // must emit the escape-free EMUX;<base64>\r envelope instead. This
         // pins the asymmetric-transport fix for the Windows-host → Linux-mux
-        // SSH bridge regression.
+        // SSH bridge regression. The terminator is CR (VK_RETURN), not LF,
+        // because portable-pty 0.8 opens ConPTY with WIN32_INPUT_MODE and
+        // raw LF is not delivered as a real key event on that channel — the
+        // bridge would otherwise see the prefix + base64 but never the
+        // terminator and stall forever.
         let msg = MuxMessage {
             msg_type: MessageType::SwitchWindow,
             pane_id: 1,
@@ -240,8 +247,12 @@ mod tests {
         );
         assert_eq!(
             *encoded.last().unwrap(),
-            b'\n',
-            "Windows plaintext envelope must end with LF"
+            b'\r',
+            "Windows plaintext envelope must end with CR (LF is dropped by ConPTY WIN32_INPUT_MODE)"
+        );
+        assert!(
+            !encoded.contains(&b'\n'),
+            "Windows plaintext envelope must not carry LF (dropped under WIN32_INPUT_MODE)"
         );
         assert!(
             !encoded.contains(&0x1b),

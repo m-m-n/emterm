@@ -27,7 +27,8 @@ pub(super) enum Transport {
     Apc = 0,
     /// OSC 9999 format (fallback for Windows ConPTY output direction).
     Osc = 1,
-    /// Plaintext format (Windows ConPTY input direction: EMUX;<base64>\n).
+    /// Plaintext format (Windows ConPTY input direction: `EMUX;<base64>\r`;
+    /// parser also accepts LF / CRLF / LFCR).
     Plaintext = 2,
 }
 
@@ -478,7 +479,8 @@ const MAX_APC_PAYLOAD: usize = 22 * 1024 * 1024;
 /// State machine that separates APC/OSC/plaintext mux sequences from passthrough data on stdin.
 ///
 /// Handles partial reads across buffer boundaries.
-/// Recognizes APC (ESC _), OSC 9999 (ESC ]), and plaintext (EMUX;<base64>\n) mux sequences.
+/// Recognizes APC (ESC _), OSC 9999 (ESC ]), and plaintext (`EMUX;<base64>\r`,
+/// also accepting LF / CRLF / LFCR) mux sequences.
 ///
 /// This is the bridge subprocess's INPUT-direction scanner and is intentionally
 /// separate from `term_core::MuxApcExtractor` (the GUI's OUTPUT-direction outer
@@ -498,6 +500,10 @@ pub(super) struct StdinApcParser {
     is_osc: bool,
     /// Number of bytes matched in the EMUX; prefix so far.
     plaintext_prefix_matched: usize,
+    /// True iff a Plaintext message just completed and the next byte, if
+    /// it is the partner half of a CRLF / LFCR terminator pair, must be
+    /// dropped silently (not passthrough'd). Reset by any non-EOL byte.
+    swallow_partner_eol: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -528,16 +534,18 @@ impl StdinApcParser {
             osc_param_digits: Vec::new(),
             is_osc: false,
             plaintext_prefix_matched: 0,
+            swallow_partner_eol: false,
         }
     }
 
-    /// Complete a plaintext mux sequence (EMUX;<base64>\n).
+    /// Complete a plaintext mux sequence (`EMUX;<base64>\r`; also accepts
+    /// LF / CRLF / LFCR — see the `InPlaintext` arm in [`Self::feed`]).
     fn complete_plaintext_sequence(apc_buf: &mut Vec<u8>, actions: &mut Vec<StdinAction>) {
         let payload_str = String::from_utf8_lossy(apc_buf).to_string();
         apc_buf.clear();
 
-        // The buf contains the base64 data (after EMUX; prefix, before \n).
-        // Wrap it with APC_PREFIX so from_apc can decode it.
+        // The buf contains the base64 data (after EMUX; prefix, before the
+        // CR/LF terminator). Wrap it with APC_PREFIX so from_apc can decode it.
         let with_prefix = format!("{}{}", APC_PREFIX, payload_str);
         match MuxMessage::from_apc(&with_prefix) {
             Ok(msg) => actions.push(StdinAction::MuxMessage(msg, Transport::Plaintext)),
@@ -584,6 +592,16 @@ impl StdinApcParser {
         for &byte in data {
             match self.state {
                 ParserState::Ground => {
+                    // Drop the partner half of a CRLF / LFCR terminator that
+                    // just closed a Plaintext message, so a trailing CR or LF
+                    // doesn't leak out as passthrough. Any non-EOL byte
+                    // immediately disarms the swallow.
+                    if self.swallow_partner_eol {
+                        self.swallow_partner_eol = false;
+                        if byte == b'\r' || byte == b'\n' {
+                            continue;
+                        }
+                    }
                     if byte == 0x1B {
                         self.state = ParserState::EscSeen;
                     } else if byte == PLAINTEXT_PREFIX[0] {
@@ -709,18 +727,25 @@ impl StdinApcParser {
                     }
                 }
                 ParserState::InPlaintext => {
-                    if byte == b'\n' {
-                        // LF terminates the plaintext message.
+                    if byte == b'\r' || byte == b'\n' {
+                        // EITHER CR or LF terminates the plaintext message.
+                        // The Windows host writes the envelope with a CR
+                        // terminator because portable-pty 0.8 opens ConPTY
+                        // with `PSEUDOCONSOLE_WIN32_INPUT_MODE` and raw LF is
+                        // not delivered as a real key event on that channel
+                        // (CR rides through as VK_RETURN). Intermediate
+                        // layers can still substitute or duplicate the
+                        // terminator: this branch accepts whichever arrives
+                        // first; the Ground state then swallows the partner
+                        // half via `swallow_partner_eol` so a trailing
+                        // CRLF/LFCR doesn't surface as passthrough.
+                        // base64 STANDARD's alphabet contains neither CR nor
+                        // LF, so a CR/LF inside the body is always a
+                        // terminator (the surrounding handshake is
+                        // CR/LF-free).
                         Self::complete_plaintext_sequence(&mut self.apc_buf, &mut actions);
+                        self.swallow_partner_eol = true;
                         self.state = ParserState::Ground;
-                    } else if byte == b'\r' {
-                        // CRLF tolerance: silently drop CR anywhere in the
-                        // body. ConPTY / SSH / shell layers in the GUI→bridge
-                        // path can translate `\n` to `\r\n`, and base64
-                        // STANDARD's alphabet contains no `\r`, so a stray CR
-                        // mixed into the accumulator would otherwise corrupt
-                        // the base64 decode and silently drop the entire mux
-                        // message in `complete_plaintext_sequence`.
                     } else if self.apc_buf.len() < MAX_APC_PAYLOAD {
                         self.apc_buf.push(byte);
                     } else {
@@ -1109,15 +1134,40 @@ mod tests {
     }
 
     #[test]
+    fn test_stdin_parser_plaintext_cr_terminator() {
+        // The Windows host writes the envelope with a CR terminator because
+        // portable-pty 0.8 opens ConPTY with `PSEUDOCONSOLE_WIN32_INPUT_MODE`,
+        // and raw LF is not delivered as a real key event on that channel —
+        // only CR (VK_RETURN) survives. This pins that CR alone closes the
+        // message; if it doesn't, the bridge stalls in `InPlaintext` forever
+        // with the prefix matched but no terminator ever arriving (the exact
+        // regression observed against a hyper-v mux daemon).
+        let msg = MuxMessage::pty_input(1, vec![0x41, 0x42]);
+        let body = msg.to_frame_body();
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&body);
+        let input = format!("EMUX;{}\r", encoded);
+        let mut parser = StdinApcParser::new();
+        let actions = parser.feed(input.as_bytes());
+        assert_eq!(actions.len(), 1, "CR alone must produce exactly one action");
+        match &actions[0] {
+            StdinAction::MuxMessage(decoded, transport) => {
+                assert_eq!(decoded.msg_type, MessageType::PtyInput);
+                assert_eq!(decoded.pane_id, 1);
+                assert_eq!(decoded.payload, vec![0x41, 0x42]);
+                assert_eq!(*transport, Transport::Plaintext);
+            }
+            other => panic!("Expected MuxMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_stdin_parser_plaintext_crlf_terminator() {
-        // ConPTY / SSH / shell layers between the Windows GUI and the bridge
-        // can translate `\n` to `\r\n` on the GUI→bridge input path. base64
-        // STANDARD's alphabet has no `\r`, so a stray CR mixed into the body
-        // would otherwise corrupt the decode and silently drop the message —
-        // recreating the very Windows-bridge regression the plaintext
-        // transport was added to fix, but with a different proximate cause.
-        // The parser must decode the message even when the terminator arrives
-        // as CRLF.
+        // Intermediate layers (ConPTY, ssh, the host shell) can append LF
+        // after the encoder's CR terminator, or translate the standalone CR
+        // to a CRLF pair on the way to the bridge. The parser must complete
+        // on the first half and silently consume the partner half so the
+        // trailing LF doesn't leak out as passthrough.
         let msg = MuxMessage::pty_input(3, vec![0xAB, 0xCD, 0xEF]);
         let body = msg.to_frame_body();
         use base64::Engine as _;
@@ -1138,32 +1188,64 @@ mod tests {
     }
 
     #[test]
-    fn test_stdin_parser_plaintext_cr_mid_body_is_skipped() {
-        // Defense in depth: a CR injected mid-body (not just before the LF
-        // terminator) must also be skipped so the base64 decode succeeds.
-        // Some intermediaries chunk the byte stream and a CR could land
-        // anywhere relative to LF.
-        let msg = MuxMessage::pty_input(7, vec![0x10, 0x20]);
+    fn test_stdin_parser_plaintext_lfcr_terminator() {
+        // The reverse order LF→CR must also collapse to a single message,
+        // mirroring the CRLF tolerance above. base64 STANDARD has neither
+        // CR nor LF in its alphabet, so a trailing CR after the LF is
+        // unambiguously the partner half of the terminator.
+        let msg = MuxMessage::pty_input(2, vec![0x10]);
         let body = msg.to_frame_body();
         use base64::Engine as _;
         let encoded = base64::engine::general_purpose::STANDARD.encode(&body);
-        // Splice a stray CR into the middle of the base64 body.
-        let mid = encoded.len() / 2;
-        let mut spliced = String::with_capacity(encoded.len() + 1);
-        spliced.push_str(&encoded[..mid]);
-        spliced.push('\r');
-        spliced.push_str(&encoded[mid..]);
-        let input = format!("EMUX;{}\n", spliced);
+        let input = format!("EMUX;{}\n\r", encoded);
         let mut parser = StdinApcParser::new();
         let actions = parser.feed(input.as_bytes());
-        assert_eq!(actions.len(), 1);
+        assert_eq!(actions.len(), 1, "LFCR must produce exactly one action");
         match &actions[0] {
             StdinAction::MuxMessage(decoded, _) => {
-                assert_eq!(decoded.pane_id, 7);
-                assert_eq!(decoded.payload, vec![0x10, 0x20]);
+                assert_eq!(decoded.pane_id, 2);
+                assert_eq!(decoded.payload, vec![0x10]);
             }
             other => panic!("Expected MuxMessage, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_stdin_parser_plaintext_terminator_split_across_feeds() {
+        // The terminator pair (CRLF) is allowed to land on opposite sides of
+        // a feed boundary: the CR completes the message at the end of the
+        // first feed, and the LF arriving as the first byte of the next feed
+        // must be silently swallowed via `swallow_partner_eol` rather than
+        // leaking out as a stray passthrough byte.
+        let msg = MuxMessage::pty_input(9, vec![0xFF]);
+        let body = msg.to_frame_body();
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&body);
+        let first = format!("EMUX;{}\r", encoded);
+
+        let mut parser = StdinApcParser::new();
+        let actions1 = parser.feed(first.as_bytes());
+        let msgs1: Vec<_> = actions1
+            .iter()
+            .filter(|a| matches!(a, StdinAction::MuxMessage(_, _)))
+            .collect();
+        assert_eq!(msgs1.len(), 1, "CR alone closes the message in feed 1");
+
+        // Feed 2 starts with the partner LF: must be swallowed silently.
+        let actions2 = parser.feed(b"\nrest");
+        let passthroughs: Vec<&Vec<u8>> = actions2
+            .iter()
+            .filter_map(|a| match a {
+                StdinAction::Passthrough(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            passthroughs.len(),
+            1,
+            "feed 2 produces exactly one passthrough (just 'rest')"
+        );
+        assert_eq!(passthroughs[0], b"rest");
     }
 
     #[test]
