@@ -99,6 +99,17 @@ jobs:
             patchelf \
             dpkg
 
+      - name: Cache bundled fonts
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/assets/fonts/*.ttf
+            src-tauri/assets/fonts/*.otf
+          key: fonts-${{ hashFiles('scripts/fetch-fonts.sh') }}
+
+      - name: Fetch bundled fonts
+        run: bash scripts/fetch-fonts.sh
+
       - name: Set version from tag
         shell: bash
         env:
@@ -184,6 +195,18 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - name: Cache bundled fonts
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/assets/fonts/*.ttf
+            src-tauri/assets/fonts/*.otf
+          key: fonts-${{ hashFiles('scripts/fetch-fonts.sh') }}
+
+      - name: Fetch bundled fonts
+        shell: bash
+        run: bash scripts/fetch-fonts.sh
 
       - name: Set version from tag
         shell: bash

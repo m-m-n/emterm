@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use parking_lot::Mutex;
 
+use super::presentation::{EmojiPresentation, VS15, VS16, presentation_for};
 use super::resolver::Resolver;
 use super::traits::{FontId, GlyphRasterizer};
 
@@ -16,10 +17,16 @@ use super::traits::{FontId, GlyphRasterizer};
 pub struct FallbackChain {
     base: FontId,
     chain: Vec<FontId>,
-    /// First emoji-role font discovered when the chain was constructed
+    /// First color-emoji font discovered when the chain was constructed
     /// via `from_resolver`. Used by `resolve_for_cluster` to short-circuit
-    /// to color emoji when the cluster explicitly requests it (VS-16).
+    /// to color emoji when the cluster's presentation is `Color`.
     emoji: Option<FontId>,
+    /// First monochrome-emoji font discovered when the chain was
+    /// constructed via `from_resolver`. Used by `resolve_for_cluster`
+    /// for text-default emoji (e.g. U+23F5 `⏵`) and VS15-attached
+    /// clusters so they pick up the outline glyph instead of the BW
+    /// base font (which has no glyph for them).
+    mono_emoji: Option<FontId>,
     /// Regular-face → Bold-face substitutions. After a cluster resolves
     /// to a font, callers rendering a bold cell swap in the registered
     /// bold variant (when one exists) via [`FallbackChain::bold_variant`].
@@ -43,19 +50,31 @@ impl FallbackChain {
             base,
             chain,
             emoji: None,
+            mono_emoji: None,
             bold_variants: HashMap::new(),
             memo: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Mark a font in the chain as the preferred emoji font. Used by
-    /// `resolve_for_cluster` to short-circuit VS-16-bearing clusters to
-    /// color emoji instead of letting the per-codepoint walk pick the
-    /// BW base font for dual-presentation codepoints (e.g. U+26A0).
+    /// Mark a font in the chain as the preferred color-emoji font. Used
+    /// by `resolve_for_cluster` to short-circuit VS-16-bearing clusters
+    /// to color emoji instead of letting the per-codepoint walk pick
+    /// the BW base font for dual-presentation codepoints (e.g. U+26A0).
     pub fn set_emoji(&mut self, id: FontId) {
         self.emoji = Some(id);
         // Memo entries computed before this hint don't know about the
         // VS-16 short-circuit. Clear so subsequent resolves re-decide.
+        self.memo.lock().clear();
+    }
+
+    /// Mark a font in the chain as the preferred monochrome-emoji font.
+    /// Used by `resolve_for_cluster` to route text-default emoji
+    /// (e.g. U+23F5 `⏵`) and VS15-attached clusters to the outline
+    /// face instead of falling through to the BW base monospace font.
+    pub fn set_mono_emoji(&mut self, id: FontId) {
+        self.mono_emoji = Some(id);
+        // Same reasoning as `set_emoji`: prior memo entries pre-date
+        // the dispatch hint and must be re-decided.
         self.memo.lock().clear();
     }
 
@@ -72,9 +91,20 @@ impl FallbackChain {
             extras.push(f.id);
         }
         let mut emoji: Option<FontId> = None;
-        for f in resolver.by_role(FontRole::Emoji) {
+        for f in resolver.by_role(FontRole::ColorEmoji) {
             if emoji.is_none() {
                 emoji = Some(f.id);
+            }
+            extras.push(f.id);
+        }
+        // Monochrome emoji sits between color emoji and the secondary
+        // fallback so text-default emoji code points (e.g. U+23F5 `⏵`)
+        // pick up the outline glyph instead of falling through to the
+        // base monospace font, which has no glyph for them.
+        let mut mono_emoji: Option<FontId> = None;
+        for f in resolver.by_role(FontRole::MonochromeEmoji) {
+            if mono_emoji.is_none() {
+                mono_emoji = Some(f.id);
             }
             extras.push(f.id);
         }
@@ -83,43 +113,92 @@ impl FallbackChain {
         }
         let mut chain = Self::new(base, extras);
         chain.emoji = emoji;
+        chain.mono_emoji = mono_emoji;
         chain
     }
 
-    /// Resolve a grapheme cluster to a font, preferring the emoji font
-    /// when the cluster explicitly requests emoji presentation via
-    /// VS-16 (U+FE0F). Falls back to the per-codepoint walk for the
-    /// cluster's first codepoint otherwise.
+    /// Resolve a grapheme cluster to a font using
+    /// [`presentation_for`][super::presentation::presentation_for] to
+    /// decide whether the cluster wants the color emoji face, the
+    /// monochrome emoji face, or the regular text chain.
     ///
-    /// Without this distinction, dual-presentation codepoints like
-    /// U+26A0 (warning sign) resolve to the BW base font even when the
-    /// cluster carries an explicit VS-16, because the base font reports
-    /// coverage for the bare codepoint.
+    /// Dispatch (FR5):
+    /// - VS-16 (U+FE0F) anywhere in the cluster → color emoji first.
+    /// - VS-15 (U+FE0E) anywhere in the cluster → monochrome emoji first.
+    /// - Combining Enclosing Keycap (U+20E3) in the cluster → color emoji
+    ///   first regardless of the base character (the keycap base
+    ///   characters `0..=9`, `*`, `#` resolve to `NotEmoji` for bare
+    ///   instances; only the full keycap cluster routes to emoji).
+    /// - Otherwise consult `presentation_for(first, None)`:
+    ///   - `Color` → color emoji first.
+    ///   - `Monochrome` → monochrome emoji first.
+    ///   - `NotEmoji` → regular text chain (`Self::resolve`).
+    ///
+    /// When the preferred-side font does not cover the code point we
+    /// fall through to the opposite emoji side (if any) before letting
+    /// the rest of the text chain take its turn — this is the
+    /// "opposite-side fallback before tofu" rule from the SPEC.
     pub fn resolve_for_cluster(
         &self,
         rasterizer: &dyn GlyphRasterizer,
         cluster: &str,
     ) -> Option<FontId> {
-        let mut first_cp: Option<u32> = None;
-        let mut has_vs16 = false;
+        let mut first_cp: Option<char> = None;
+        let mut explicit_vs: Option<char> = None;
+        let mut has_keycap = false;
         for ch in cluster.chars() {
-            let cp = ch as u32;
             if first_cp.is_none() {
-                first_cp = Some(cp);
+                first_cp = Some(ch);
             }
-            if cp == 0xFE0F {
-                has_vs16 = true;
+            match ch {
+                VS16 if explicit_vs.is_none() => explicit_vs = Some(VS16),
+                VS15 if explicit_vs.is_none() => explicit_vs = Some(VS15),
+                '\u{20E3}' => has_keycap = true,
+                _ => {}
             }
         }
         let first = first_cp?;
-        if has_vs16 {
-            if let Some(emoji) = self.emoji {
-                if rasterizer.has_codepoint(emoji, first) {
-                    return Some(emoji);
+        let first_cp_u32 = first as u32;
+
+        // Keycap clusters (`<base> [VS16] U+20E3`) override the
+        // `NotEmoji` default the bare base character carries.
+        let presentation = if has_keycap {
+            EmojiPresentation::Color
+        } else {
+            presentation_for(first, explicit_vs)
+        };
+
+        match presentation {
+            EmojiPresentation::Color => {
+                if let Some(emoji) = self.emoji {
+                    if rasterizer.has_codepoint(emoji, first_cp_u32) {
+                        return Some(emoji);
+                    }
                 }
+                // Opposite-side fallback: try monochrome before tofu.
+                if let Some(mono) = self.mono_emoji {
+                    if rasterizer.has_codepoint(mono, first_cp_u32) {
+                        return Some(mono);
+                    }
+                }
+                self.resolve(rasterizer, first_cp_u32)
             }
+            EmojiPresentation::Monochrome => {
+                if let Some(mono) = self.mono_emoji {
+                    if rasterizer.has_codepoint(mono, first_cp_u32) {
+                        return Some(mono);
+                    }
+                }
+                // Opposite-side fallback: try color emoji before tofu.
+                if let Some(emoji) = self.emoji {
+                    if rasterizer.has_codepoint(emoji, first_cp_u32) {
+                        return Some(emoji);
+                    }
+                }
+                self.resolve(rasterizer, first_cp_u32)
+            }
+            EmojiPresentation::NotEmoji => self.resolve(rasterizer, first_cp_u32),
         }
-        self.resolve(rasterizer, first)
     }
 
     /// Register `bold` as the bold-face substitute for `regular`. No memo
@@ -469,5 +548,199 @@ mod tests {
         assert!(is_pictographic(0x1F600)); // 😀
         assert!(is_pictographic(0x1F7E2)); // 🟢
         assert!(is_pictographic(0x1FAFF)); // upper pictographs ext-A
+    }
+
+    // ── resolve_for_cluster: presentation_for dispatch (SPEC FR5) ──
+
+    /// FR5: U+23F5 (BLACK MEDIUM RIGHT-POINTING TRIANGLE) is a
+    /// text-default emoji (Emoji=Yes, Emoji_Presentation=No). A bare
+    /// instance must resolve to the monochrome-emoji face even when the
+    /// color emoji font lacks the glyph (the U+23F5 was the actual
+    /// Windows tofu case that motivated the bundle redesign).
+    #[test]
+    fn resolve_for_cluster_text_default_emoji_uses_mono() {
+        // FontId(1) = base ASCII, FontId(2) = color emoji (no U+23F5),
+        // FontId(3) = mono emoji (covers U+23F5).
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(2));
+        chain.set_mono_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x41));
+        covers.insert((FontId(2), 0x1F600));
+        covers.insert((FontId(3), 0x23F5));
+        let raster = TableRasterizer { covers };
+
+        let resolved = chain.resolve_for_cluster(&raster, "\u{23F5}");
+        assert_eq!(
+            resolved,
+            Some(FontId(3)),
+            "U+23F5 must resolve via MonochromeEmoji role"
+        );
+    }
+
+    /// FR5: VS16 forces color presentation even for text-default
+    /// code points like U+23F5.
+    #[test]
+    fn resolve_for_cluster_vs16_forces_color() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(2));
+        chain.set_mono_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x41));
+        covers.insert((FontId(2), 0x23F5));
+        covers.insert((FontId(3), 0x23F5));
+        let raster = TableRasterizer { covers };
+
+        let cluster: String = ['\u{23F5}', '\u{FE0F}'].iter().collect();
+        assert_eq!(
+            chain.resolve_for_cluster(&raster, &cluster),
+            Some(FontId(2)),
+            "U+23F5 + VS16 must resolve via ColorEmoji role"
+        );
+    }
+
+    /// FR5: VS15 forces monochrome presentation even for emoji-default
+    /// code points like U+1F600.
+    #[test]
+    fn resolve_for_cluster_vs15_forces_mono() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(2));
+        chain.set_mono_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x41));
+        covers.insert((FontId(2), 0x1F600));
+        covers.insert((FontId(3), 0x1F600));
+        let raster = TableRasterizer { covers };
+
+        let cluster: String = ['\u{1F600}', '\u{FE0E}'].iter().collect();
+        assert_eq!(
+            chain.resolve_for_cluster(&raster, &cluster),
+            Some(FontId(3)),
+            "U+1F600 + VS15 must resolve via MonochromeEmoji role"
+        );
+    }
+
+    /// FR5: U+1F600 (GRINNING FACE) is an emoji-default code point. A
+    /// bare instance must resolve via the color emoji face.
+    #[test]
+    fn resolve_for_cluster_emoji_default_uses_color() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(2));
+        chain.set_mono_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x41));
+        covers.insert((FontId(2), 0x1F600));
+        // Monochrome also covers — color must still win.
+        covers.insert((FontId(3), 0x1F600));
+        let raster = TableRasterizer { covers };
+
+        assert_eq!(
+            chain.resolve_for_cluster(&raster, "\u{1F600}"),
+            Some(FontId(2)),
+            "bare U+1F600 must resolve via ColorEmoji role"
+        );
+    }
+
+    /// "Opposite-side fallback before tofu": when the preferred-side
+    /// emoji font lacks the code point, the dispatcher tries the
+    /// opposite emoji side before letting the chain walk on.
+    #[test]
+    fn resolve_for_cluster_opposite_side_fallback() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(2));
+        chain.set_mono_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x41));
+        // U+1F600 is emoji-default (wants color) but only the
+        // monochrome font carries the glyph here.
+        covers.insert((FontId(3), 0x1F600));
+        let raster = TableRasterizer { covers };
+
+        assert_eq!(
+            chain.resolve_for_cluster(&raster, "\u{1F600}"),
+            Some(FontId(3)),
+            "color-preferring code point falls back to monochrome face"
+        );
+
+        // And the reverse: text-default emoji whose monochrome face
+        // lacks the glyph falls back to color.
+        let mut covers2 = HashSet::new();
+        covers2.insert((FontId(1), 0x41));
+        covers2.insert((FontId(2), 0x23F5));
+        let raster2 = TableRasterizer { covers: covers2 };
+        let mut chain2 = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain2.set_emoji(FontId(2));
+        chain2.set_mono_emoji(FontId(3));
+        assert_eq!(
+            chain2.resolve_for_cluster(&raster2, "\u{23F5}"),
+            Some(FontId(2)),
+            "mono-preferring code point falls back to color face"
+        );
+    }
+
+    /// ASCII (NotEmoji) must NOT touch the emoji faces even when they
+    /// happen to cover the codepoint. The base font wins.
+    #[test]
+    fn resolve_for_cluster_ascii_stays_on_base() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(2));
+        chain.set_mono_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x41));
+        covers.insert((FontId(2), 0x41));
+        covers.insert((FontId(3), 0x41));
+        let raster = TableRasterizer { covers };
+
+        assert_eq!(
+            chain.resolve_for_cluster(&raster, "A"),
+            Some(FontId(1)),
+            "ASCII must stay on the base font"
+        );
+    }
+
+    /// Digits in isolation (no keycap suffix) are NotEmoji — they must
+    /// resolve via the base font, NOT the monochrome emoji face. This
+    /// guards against the digit / `presentation_for` regression where
+    /// every ASCII digit would have routed through Noto Emoji and
+    /// broken grid alignment.
+    #[test]
+    fn resolve_for_cluster_bare_digit_stays_on_base() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(2));
+        chain.set_mono_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x35)); // '5'
+        // Both emoji faces also cover '5' (Noto Emoji actually ships
+        // keycap variants), but they must NOT win for a bare digit.
+        covers.insert((FontId(2), 0x35));
+        covers.insert((FontId(3), 0x35));
+        let raster = TableRasterizer { covers };
+
+        assert_eq!(
+            chain.resolve_for_cluster(&raster, "5"),
+            Some(FontId(1)),
+            "bare digit must resolve via base, not emoji"
+        );
+    }
+
+    /// Full keycap cluster (`5 VS16 U+20E3`) routes to the color emoji
+    /// face — the cluster-level dispatcher detects the keycap suffix
+    /// and overrides the bare-digit NotEmoji default.
+    #[test]
+    fn resolve_for_cluster_keycap_routes_to_color() {
+        let mut chain = FallbackChain::new(FontId(1), [FontId(2), FontId(3)]);
+        chain.set_emoji(FontId(2));
+        chain.set_mono_emoji(FontId(3));
+        let mut covers = HashSet::new();
+        covers.insert((FontId(1), 0x35));
+        covers.insert((FontId(2), 0x35));
+        let raster = TableRasterizer { covers };
+
+        let cluster: String = ['5', '\u{FE0F}', '\u{20E3}'].iter().collect();
+        assert_eq!(
+            chain.resolve_for_cluster(&raster, &cluster),
+            Some(FontId(2)),
+            "5 + VS16 + U+20E3 must resolve via ColorEmoji role"
+        );
     }
 }

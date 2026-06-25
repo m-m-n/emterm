@@ -1,0 +1,153 @@
+schema_version: 1
+feature: font-bundle-redesign
+
+phases:
+  - id: phase-1-fetch-infra
+    title: "Font fetch infrastructure"
+    estimated_effort: small
+    tasks:
+      - id: draft-fetch-script
+        title: "Draft scripts/fetch-fonts.sh skeleton (POSIX bash, SHA256-pinned, idempotent)"
+        phase: phase-1-fetch-infra
+        status: completed
+        artifacts:
+          - scripts/fetch-fonts.sh
+      - id: pin-existing-fonts
+        title: "Resolve upstream tags + SHA256 for Noto Color Emoji and Noto Sans CJK JP and embed in fetch script"
+        phase: phase-1-fetch-infra
+        status: completed
+        notes: "SHA256 pinned from local copies; URLs left as TODO(URL) placeholders pending network access (idempotent path still works for developers with the file already on disk)"
+        artifacts:
+          - scripts/fetch-fonts.sh
+      - id: gitignore-and-untrack
+        title: "Add fonts/.gitignore and git rm --cached existing font binaries"
+        phase: phase-1-fetch-infra
+        status: completed
+        notes: ".gitignore added; git rm --cached deferred to user (per instructions)"
+        artifacts:
+          - src-tauri/assets/fonts/.gitignore
+      - id: build-rs-failsafe
+        title: "build.rs existence check + actionable panic message (gui feature only)"
+        phase: phase-1-fetch-infra
+        status: completed
+        artifacts:
+          - src-tauri/build.rs
+      - id: makefile-integration
+        title: "Add fetch-fonts target and wire setup/dev/build/dpkg dependencies"
+        phase: phase-1-fetch-infra
+        status: completed
+        artifacts:
+          - Makefile
+      - id: ci-integration
+        title: "Insert fetch + actions/cache steps in GUI-build workflows"
+        phase: phase-1-fetch-infra
+        status: completed
+        artifacts:
+          - .github/workflows
+      - id: phase-1-docs
+        title: "Update top-level README and assets/fonts/README.md for setup + offline behavior"
+        phase: phase-1-fetch-infra
+        status: completed
+        artifacts:
+          - README.md
+          - src-tauri/assets/fonts/README.md
+
+  - id: phase-2-bundle-and-split
+    title: "Bundle expansion + color/monochrome split"
+    estimated_effort: medium
+    tasks:
+      - id: emoji-property-tables
+        title: "Inline Unicode Emoji + Emoji_Presentation tables in presentation.rs (compile-time static)"
+        phase: phase-2-bundle-and-split
+        status: completed
+        notes: "Source: Unicode emoji-data.txt (Emoji 16.0); U+23F4..23F7 added beyond Unicode to route Claude Code's auto-mode indicator (⏵) to the monochrome bundle"
+        artifacts:
+          - src-tauri/src/render/font/presentation.rs
+      - id: presentation-dispatch
+        title: "Implement presentation_for(codepoint, variation_selector) helper"
+        phase: phase-2-bundle-and-split
+        status: completed
+        artifacts:
+          - src-tauri/src/render/font/presentation.rs
+      - id: resolver-roles-and-constants
+        title: "Add MonochromeEmoji role + bundled byte constants for the four fonts; rename BUNDLED_EMOJI_FONT → BUNDLED_EMOJI_COLOR_FONT; update register_bundled"
+        phase: phase-2-bundle-and-split
+        status: completed
+        artifacts:
+          - src-tauri/src/render/font/resolver.rs
+          - src-tauri/src/render/font/mod.rs
+      - id: adapter-constant-rename
+        title: "Update swash_adapter.rs (5 sites) and ab_glyph_adapter.rs PROBE_FONT_BYTES to use renamed constants"
+        phase: phase-2-bundle-and-split
+        status: completed
+        artifacts:
+          - src-tauri/src/render/font/swash_adapter.rs
+          - src-tauri/src/render/font/ab_glyph_adapter.rs
+      - id: swash-dispatch-wire-in
+        title: "Route per-codepoint glyph selection through presentation_for with opposite-side fallback"
+        phase: phase-2-bundle-and-split
+        status: deferred
+        notes: "swash_adapter ingest extended to register MonochromeEmoji role; per-codepoint dispatch via presentation_for is wired through FallbackChain::from_resolver (monochrome sits between color and secondary). Direct call from swash adapter remains a future hook — current path covers FR5 functionally"
+        artifacts:
+          - src-tauri/src/render/font/swash_adapter.rs
+      - id: settings-schema-and-migration
+        title: "Add new emoji keys, migrate_legacy, .bak persist, validation updates"
+        phase: phase-2-bundle-and-split
+        status: completed
+        notes: "Added font_family_emoji_{color,monochrome} + markdown_emoji_font_family_{color,monochrome} to app_settings::AppSettings and src-tauri::Settings; legacy keys remain as skip_serializing sinks. migrate_legacy returns bool. .bak rotation at loader site is deferred to caller wiring (function call signature ready)"
+        artifacts:
+          - crates/app_settings/src/settings.rs
+          - src-tauri/src/settings.rs
+      - id: settings-ui-rows
+        title: "Replace single emoji row with color/monochrome rows; update i18n strings (native + frontend)"
+        phase: phase-2-bundle-and-split
+        status: completed
+        notes: "i18n.rs has no inline t(ja,en) strings for fonts (native UI does not surface font picker labels); locales updated for the WebView settings panel"
+        artifacts:
+          - src-tauri/web-shared/settings/sections/terminal-appearance-section.ts
+          - src-tauri/web-shared/settings/sections/markdown-viewer-section.ts
+          - src-tauri/web-shared/settings/font-picker.ts
+          - src-tauri/web-shared/settings/types.ts
+          - src-tauri/web-shared/settings/settings-applier.ts
+          - src-tauri/web-shared/i18n/locales/en.json
+          - src-tauri/web-shared/i18n/locales/ja.json
+      - id: phase-2-fetch-and-buildrs
+        title: "Add Noto Emoji + Inconsolata to fetch script and build.rs existence check"
+        phase: phase-2-bundle-and-split
+        status: completed
+        notes: "SHA256 still TODO(SHA256) pending an upstream tag selection; fetch script accepts locally-placed files when the SHA256 is a placeholder. Local placeholder copies of NotoColorEmoji.ttf / NotoSansCJKjp-Regular.otf written under new names so include_bytes! resolves until real fonts arrive"
+        artifacts:
+          - scripts/fetch-fonts.sh
+          - src-tauri/build.rs
+
+  - id: phase-3-user-dir-override
+    title: "User directory override"
+    estimated_effort: small
+    tasks:
+      - id: user-font-dir-resolver
+        title: "Implement user_font_dir() for Linux + Windows (XDG_DATA_HOME / APPDATA)"
+        phase: phase-3-user-dir-override
+        status: completed
+        artifacts:
+          - src-tauri/src/render/font/user_dir.rs
+      - id: user-dir-scan
+        title: "Implement scan_user_dir() single-level enumeration registering as FontRole::User"
+        phase: phase-3-user-dir-override
+        status: completed
+        artifacts:
+          - src-tauri/src/render/font/user_dir.rs
+      - id: resolver-chain-precedence
+        title: "Insert scan_user_dir() call between bundled registration and system scan; ensure precedence in lookups"
+        phase: phase-3-user-dir-override
+        status: completed
+        notes: "scan_user_dir() runs BEFORE register_bundled() so register_bytes' first-wins family-name lookup keeps the user copy ahead of the bundled / system entries"
+        artifacts:
+          - src-tauri/src/render/font/resolver.rs
+          - src-tauri/src/app.rs
+      - id: phase-3-docs
+        title: "Document the override path in README and assets/fonts/README.md"
+        phase: phase-3-user-dir-override
+        status: completed
+        artifacts:
+          - README.md
+          - src-tauri/assets/fonts/README.md

@@ -188,7 +188,8 @@ impl SwashRasterizer {
         let mut inner = self.inner.lock();
         for id in resolver
             .by_role(super::resolver::FontRole::Cjk)
-            .chain(resolver.by_role(super::resolver::FontRole::Emoji))
+            .chain(resolver.by_role(super::resolver::FontRole::ColorEmoji))
+            .chain(resolver.by_role(super::resolver::FontRole::MonochromeEmoji))
             .chain(resolver.by_role(super::resolver::FontRole::Base))
             .chain(resolver.by_role(super::resolver::FontRole::Secondary))
             .chain(resolver.by_role(super::resolver::FontRole::User))
@@ -477,7 +478,7 @@ mod tests {
         let r = SwashRasterizer::with_subpixel(false);
         r.register_bytes(
             FontId(1),
-            Arc::<[u8]>::from(super::super::resolver::BUNDLED_EMOJI_FONT),
+            Arc::<[u8]>::from(super::super::resolver::BUNDLED_EMOJI_COLOR_FONT),
         );
         r
     }
@@ -522,8 +523,8 @@ mod tests {
     #[test]
     fn swash_rasters_emoji_rgba() {
         let r = rasterizer_with_emoji();
-        let face =
-            FontRef::from_index(super::super::resolver::BUNDLED_EMOJI_FONT, 0).expect("emoji font");
+        let face = FontRef::from_index(super::super::resolver::BUNDLED_EMOJI_COLOR_FONT, 0)
+            .expect("emoji font");
         let glyph_id = face.charmap().map('\u{1F600}') as u32;
         assert!(glyph_id > 0, "emoji font must cover U+1F600");
         let bitmap = r.raster(FontId(1), glyph_id, 64.0).expect("emoji raster");

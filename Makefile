@@ -11,12 +11,15 @@ CARGO_TARGET_HOST := src-tauri/target-host
 CARGO_TARGET_WIN  := src-tauri/target-win
 MANIFEST := --manifest-path src-tauri/Cargo.toml
 
-.PHONY: help setup viewer settings web dev build cli-build win-build dpkg cli-dpkg install clean fmt fmt-check
+.PHONY: help setup viewer settings web dev build cli-build win-build dpkg cli-dpkg install clean fmt fmt-check fetch-fonts
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
-setup: ## Install required toolchains and bun deps
+fetch-fonts: ## Download bundled fonts (HTTPS + SHA256 pinned, idempotent)
+	bash scripts/fetch-fonts.sh
+
+setup: fetch-fonts ## Install required toolchains and bun deps
 	rustup target add x86_64-pc-windows-msvc
 	cargo install cargo-xwin
 	bun install
@@ -37,21 +40,21 @@ fmt-check: ## Check formatting without writing (fails if anything is unformatted
 	cargo fmt --all --check
 	bunx biome check .
 
-dev: web ## Run eMterm (debug build, default GUI feature)
+dev: fetch-fonts web ## Run eMterm (debug build, default GUI feature)
 	CARGO_TARGET_DIR=src-tauri/target cargo run $(MANIFEST)
 
-build: web ## Release build (GUI, Linux host)
+build: fetch-fonts web ## Release build (GUI, Linux host)
 	@echo "Building version: $(VERSION)"
 	CARGO_TARGET_DIR=$(CARGO_TARGET_HOST) cargo build --release $(MANIFEST)
 
 cli-build: ## Release build (CLI + mux, --no-default-features)
 	CARGO_TARGET_DIR=$(CARGO_TARGET_HOST) cargo build --release --no-default-features $(MANIFEST)
 
-win-build: web ## Windows cross-build via cargo-xwin (emterm.exe)
+win-build: fetch-fonts web ## Windows cross-build via cargo-xwin (emterm.exe)
 	@echo "Building version: $(VERSION) for Windows"
 	CARGO_TARGET_DIR=$(CARGO_TARGET_WIN) cargo xwin build --release --target x86_64-pc-windows-msvc $(MANIFEST)
 
-dpkg: setup web ## Build the GUI deb package (build/emterm_<ver>_<arch>.deb)
+dpkg: fetch-fonts setup web ## Build the GUI deb package (build/emterm_<ver>_<arch>.deb)
 	bash scripts/build-dpkg.sh
 
 cli-dpkg: ## Build the CLI+mux deb package (build/emterm-cli_<ver>_<arch>.deb)

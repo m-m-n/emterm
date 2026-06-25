@@ -1,0 +1,9 @@
+# Bundled font binaries are fetched by scripts/fetch-fonts.sh and not
+# tracked in git. See README.md in this directory.
+*.ttf
+*.otf
+
+# Keep this file, the license, and the readme tracked.
+!.gitignore
+!LICENSE
+!README.md

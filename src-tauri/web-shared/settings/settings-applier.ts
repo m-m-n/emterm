@@ -50,7 +50,9 @@ export function applySettings(settings: AppSettings): void {
   applyFontSize(settings.font_size);
   applyFontFamily(
     settings.font_family_primary,
-    settings.font_family_emoji,
+    // Prefer the new color-emoji key; fall back to the legacy single
+    // key for settings.json files that have not been migrated yet.
+    settings.font_family_emoji_color || settings.font_family_emoji,
     settings.font_family_secondary,
   );
   applyUiTheme(settings.ui_theme, settings.ui_theme_preset);
@@ -66,7 +68,9 @@ export function applySettings(settings: AppSettings): void {
   applyMarkdownSettings(
     settings.markdown_body_font_family,
     settings.markdown_code_font_family,
-    settings.markdown_emoji_font_family,
+    // Prefer the new color-emoji key; fall back to the legacy key.
+    settings.markdown_emoji_font_family_color ||
+      settings.markdown_emoji_font_family,
     settings.markdown_font_size,
   );
   applyMarkdownColorTheme({

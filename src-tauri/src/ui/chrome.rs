@@ -92,7 +92,7 @@ pub(crate) fn configure_egui_fonts(ctx: &egui::Context, ui_font_family: &str) {
 /// Build the `FontDefinitions` for [`configure_egui_fonts`]. Split out
 /// so tests can inspect the resulting chains without an egui `Context`.
 pub(crate) fn build_egui_fonts(ui_font_family: &str) -> egui::FontDefinitions {
-    use crate::render::font::resolver::{BUNDLED_CJK_FONT, BUNDLED_EMOJI_FONT};
+    use crate::render::font::resolver::{BUNDLED_CJK_FONT, BUNDLED_EMOJI_COLOR_FONT};
 
     const CJK_KEY: &str = "EmtermBundledCJK";
     const EMOJI_KEY: &str = "EmtermBundledEmoji";
@@ -105,7 +105,7 @@ pub(crate) fn build_egui_fonts(ui_font_family: &str) -> egui::FontDefinitions {
     );
     fonts.font_data.insert(
         EMOJI_KEY.to_string(),
-        egui::FontData::from_static(BUNDLED_EMOJI_FONT),
+        egui::FontData::from_static(BUNDLED_EMOJI_COLOR_FONT),
     );
 
     // Symbol fallback families: cover prompt arrows / math symbols /

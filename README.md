@@ -127,8 +127,25 @@ cd emterm
 
 # Install JS deps + Rust toolchains for cross-build
 bun install
-make setup   # rustup target add x86_64-pc-windows-msvc + cargo install cargo-xwin
+make setup   # downloads bundled fonts + rustup target add x86_64-pc-windows-msvc + cargo install cargo-xwin
 ```
+
+### Bundled Fonts
+
+Bundled fonts (Noto Sans CJK JP, Noto Color Emoji, Noto Emoji monochrome, Inconsolata) are downloaded by `scripts/fetch-fonts.sh` and verified against pinned SHA256 hashes; they are not tracked in git. Targets that need them (`setup`, `dev`, `build`, `win-build`, `dpkg`) depend on the `fetch-fonts` target automatically.
+
+- Re-running `make fetch-fonts` with up-to-date files is a no-op (idempotent).
+- After the first successful fetch the rest of the build runs fully offline.
+- The CLI-only build (`make cli-build` / `make cli-dpkg`) does not need bundled fonts and skips the fetch step.
+
+### User Font Overrides
+
+Drop `.ttf` or `.otf` files into the platform user font directory to override the bundled fonts without rebuilding emterm:
+
+- Linux: `~/.local/share/net.laser5.app.emterm/fonts/` (honors `$XDG_DATA_HOME`)
+- Windows: `%APPDATA%\net.laser5.app.emterm\fonts\`
+
+The resolver consults this directory ahead of system fonts and the bundled fallback, so an override with the same family name wins automatically. Restart emterm to pick up newly-added files.
 
 ## Development
 

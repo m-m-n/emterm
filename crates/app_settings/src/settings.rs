@@ -11,6 +11,7 @@ use crate::types::*;
 /// `deserialize_with` cannot reference the `default` function.
 macro_rules! deserialize_null_with {
     ($fn_name:ident, $type:ty, $default_fn:ident) => {
+        #[allow(dead_code)]
         fn $fn_name<'de, D>(deserializer: D) -> Result<$type, D::Error>
         where
             D: serde::Deserializer<'de>,
@@ -69,6 +70,26 @@ deserialize_null_with!(
     default_markdown_emoji_font_family
 );
 deserialize_null_with!(
+    deserialize_null_font_family_emoji_color,
+    String,
+    default_font_family_emoji_color
+);
+deserialize_null_with!(
+    deserialize_null_font_family_emoji_monochrome,
+    String,
+    default_font_family_emoji_monochrome
+);
+deserialize_null_with!(
+    deserialize_null_markdown_emoji_font_family_color,
+    String,
+    default_markdown_emoji_font_family_color
+);
+deserialize_null_with!(
+    deserialize_null_markdown_emoji_font_family_monochrome,
+    String,
+    default_markdown_emoji_font_family_monochrome
+);
+deserialize_null_with!(
     deserialize_null_editor_command,
     String,
     default_editor_command
@@ -118,6 +139,18 @@ fn default_markdown_code_font_family() -> String {
 }
 fn default_markdown_emoji_font_family() -> String {
     String::new()
+}
+fn default_font_family_emoji_color() -> String {
+    "Noto Color Emoji".to_string()
+}
+fn default_font_family_emoji_monochrome() -> String {
+    "Noto Emoji".to_string()
+}
+fn default_markdown_emoji_font_family_color() -> String {
+    "Noto Color Emoji".to_string()
+}
+fn default_markdown_emoji_font_family_monochrome() -> String {
+    "Noto Emoji".to_string()
 }
 fn default_markdown_font_size() -> u32 {
     14
@@ -325,8 +358,29 @@ pub struct AppSettings {
     pub font_family_primary: String,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub font_family_secondary: String,
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub font_family_emoji: String,
+    /// Legacy single-emoji-font setting. Read during deserialization but
+    /// never serialized — the live keys are
+    /// [`Self::font_family_emoji_color`] and
+    /// [`Self::font_family_emoji_monochrome`]. The migration step copies
+    /// the legacy value into the color slot when the new key is empty.
+    #[serde(default, skip_serializing)]
+    pub(crate) font_family_emoji: String,
+
+    /// Color emoji font family (CBDT / COLR / sbix). Defaults to
+    /// `"Noto Color Emoji"`, matching the bundled font's family name.
+    #[serde(
+        default = "default_font_family_emoji_color",
+        deserialize_with = "deserialize_null_font_family_emoji_color"
+    )]
+    pub font_family_emoji_color: String,
+
+    /// Monochrome emoji font family (outline-only). Defaults to
+    /// `"Noto Emoji"`, matching the bundled font's family name.
+    #[serde(
+        default = "default_font_family_emoji_monochrome",
+        deserialize_with = "deserialize_null_font_family_emoji_monochrome"
+    )]
+    pub font_family_emoji_monochrome: String,
 
     /// Legacy field for backward compatibility. Read during deserialization but never serialized.
     /// Private to the crate — loaders run the migration via
@@ -485,11 +539,26 @@ pub struct AppSettings {
         deserialize_with = "deserialize_null_markdown_code_font_family"
     )]
     pub markdown_code_font_family: String,
+    /// Legacy single Markdown-viewer emoji-font setting. Read during
+    /// deserialization but never serialized — the live keys are
+    /// [`Self::markdown_emoji_font_family_color`] and
+    /// [`Self::markdown_emoji_font_family_monochrome`].
+    #[serde(default, skip_serializing)]
+    pub(crate) markdown_emoji_font_family: String,
+
+    /// Markdown-viewer color emoji font family.
     #[serde(
-        default = "default_markdown_emoji_font_family",
-        deserialize_with = "deserialize_null_markdown_emoji_font_family"
+        default = "default_markdown_emoji_font_family_color",
+        deserialize_with = "deserialize_null_markdown_emoji_font_family_color"
     )]
-    pub markdown_emoji_font_family: String,
+    pub markdown_emoji_font_family_color: String,
+
+    /// Markdown-viewer monochrome emoji font family.
+    #[serde(
+        default = "default_markdown_emoji_font_family_monochrome",
+        deserialize_with = "deserialize_null_markdown_emoji_font_family_monochrome"
+    )]
+    pub markdown_emoji_font_family_monochrome: String,
     #[serde(
         default = "default_markdown_font_size",
         deserialize_with = "deserialize_null_markdown_font_size"
@@ -536,15 +605,60 @@ impl AppSettings {
     /// window) MUST call this before using the struct, so both binaries
     /// interpret the same `settings.json` identically.
     ///
-    /// Currently: move legacy `font_family` to `font_family_primary` when
-    /// the latter is unset; otherwise drop the legacy value (it is
-    /// `skip_serializing` and must never round-trip back to disk).
-    pub fn apply_migrations(&mut self) {
+    /// Returns `true` when any legacy field was migrated to a new key,
+    /// signaling to the caller that it should persist the new schema
+    /// (and, for first-time emoji-key migrations, write a `.bak` of the
+    /// previous file).
+    ///
+    /// Currently migrated:
+    /// - `font_family` → `font_family_primary` (when the new key is empty).
+    /// - `font_family_emoji` → `font_family_emoji_color`
+    ///   (only when the color key still equals its default — never
+    ///   overwrite a user-set color value).
+    /// - `markdown_emoji_font_family` → `markdown_emoji_font_family_color`
+    ///   (same guard).
+    pub fn apply_migrations(&mut self) -> bool {
+        let mut migrated = false;
+
+        // Legacy primary-font key: introduced before
+        // `font_family_emoji_*` ever existed.
         if !self.font_family.is_empty() && self.font_family_primary.is_empty() {
             self.font_family_primary = std::mem::take(&mut self.font_family);
-        } else {
+            migrated = true;
+        } else if !self.font_family.is_empty() {
             self.font_family.clear();
+            migrated = true;
         }
+
+        // Legacy single emoji-font keys → color slot.
+        if !self.font_family_emoji.is_empty() {
+            if self.font_family_emoji_color == default_font_family_emoji_color() {
+                self.font_family_emoji_color = std::mem::take(&mut self.font_family_emoji);
+            } else {
+                self.font_family_emoji.clear();
+            }
+            migrated = true;
+        }
+        if !self.markdown_emoji_font_family.is_empty() {
+            if self.markdown_emoji_font_family_color == default_markdown_emoji_font_family_color() {
+                self.markdown_emoji_font_family_color =
+                    std::mem::take(&mut self.markdown_emoji_font_family);
+            } else {
+                self.markdown_emoji_font_family.clear();
+            }
+            migrated = true;
+        }
+
+        migrated
+    }
+
+    /// Persistence-side migration hook intended for loaders that
+    /// understand `.bak` rotation. Currently a thin alias for
+    /// [`Self::apply_migrations`] — exposed under a stable name so
+    /// callers can wire a one-time `.bak` write next to the migration
+    /// boundary without depending on the historical method name.
+    pub fn migrate_legacy(&mut self) -> bool {
+        self.apply_migrations()
     }
 }
 
@@ -653,6 +767,8 @@ impl Default for AppSettings {
             font_family_primary: String::new(),
             font_family_secondary: String::new(),
             font_family_emoji: String::new(),
+            font_family_emoji_color: default_font_family_emoji_color(),
+            font_family_emoji_monochrome: default_font_family_emoji_monochrome(),
             font_family: String::new(),
             _line_height: None,
             ui_theme: UiTheme::default(),
@@ -684,6 +800,8 @@ impl Default for AppSettings {
             markdown_body_font_family: default_markdown_body_font_family(),
             markdown_code_font_family: default_markdown_code_font_family(),
             markdown_emoji_font_family: default_markdown_emoji_font_family(),
+            markdown_emoji_font_family_color: default_markdown_emoji_font_family_color(),
+            markdown_emoji_font_family_monochrome: default_markdown_emoji_font_family_monochrome(),
             markdown_font_size: default_markdown_font_size(),
             fold_enabled: default_true(),
             file_path_detection: default_true(),
@@ -804,7 +922,9 @@ mod tests {
             font_size: 16,
             font_family_primary: "Fira Code".to_string(),
             font_family_secondary: "Noto Sans JP".to_string(),
-            font_family_emoji: "Noto Color Emoji".to_string(),
+            font_family_emoji: String::new(),
+            font_family_emoji_color: "Noto Color Emoji".to_string(),
+            font_family_emoji_monochrome: "Noto Emoji".to_string(),
             font_family: String::new(),
             _line_height: None,
             ui_theme: UiTheme::Dark,
@@ -851,7 +971,9 @@ mod tests {
             markdown_theme_preset: UiThemePreset::Green,
             markdown_body_font_family: "Noto Sans".to_string(),
             markdown_code_font_family: "Fira Code".to_string(),
-            markdown_emoji_font_family: "Noto Color Emoji".to_string(),
+            markdown_emoji_font_family: String::new(),
+            markdown_emoji_font_family_color: "Noto Color Emoji".to_string(),
+            markdown_emoji_font_family_monochrome: "Noto Emoji".to_string(),
             markdown_font_size: 16,
             fold_enabled: false,
             file_path_detection: false,
@@ -884,7 +1006,8 @@ mod tests {
         assert_eq!(restored.font_size, 16);
         assert_eq!(restored.font_family_primary, "Fira Code");
         assert_eq!(restored.font_family_secondary, "Noto Sans JP");
-        assert_eq!(restored.font_family_emoji, "Noto Color Emoji");
+        assert_eq!(restored.font_family_emoji_color, "Noto Color Emoji");
+        assert_eq!(restored.font_family_emoji_monochrome, "Noto Emoji");
         assert_eq!(restored.ui_theme, UiTheme::Dark);
         assert_eq!(restored.ui_theme_preset, UiThemePreset::Blue);
         assert_eq!(restored.terminal_color_scheme, "monokai");
@@ -916,7 +1039,11 @@ mod tests {
         assert_eq!(restored.markdown_theme_preset, UiThemePreset::Green);
         assert_eq!(restored.markdown_body_font_family, "Noto Sans");
         assert_eq!(restored.markdown_code_font_family, "Fira Code");
-        assert_eq!(restored.markdown_emoji_font_family, "Noto Color Emoji");
+        assert_eq!(
+            restored.markdown_emoji_font_family_color,
+            "Noto Color Emoji"
+        );
+        assert_eq!(restored.markdown_emoji_font_family_monochrome, "Noto Emoji");
         assert_eq!(restored.markdown_font_size, 16);
         assert!(!restored.notification_enabled);
         assert!(!restored.tab_activity_indicator);
@@ -952,5 +1079,76 @@ mod tests {
         s.apply_migrations();
         assert_eq!(s.font_family_primary, "New Mono");
         assert!(s.font_family.is_empty());
+    }
+
+    /// TS-6: legacy `font_family_emoji` migrates to
+    /// `font_family_emoji_color` and the migration call returns `true`.
+    #[test]
+    fn migrate_legacy_moves_emoji_key_to_color() {
+        let mut s: AppSettings =
+            serde_json::from_str(r#"{"font_family_emoji": "Custom Color"}"#).unwrap();
+        // Default for the new color key is "Noto Color Emoji".
+        assert_eq!(s.font_family_emoji_color, "Noto Color Emoji");
+        let changed = s.migrate_legacy();
+        assert!(changed, "first migration must report true");
+        assert_eq!(s.font_family_emoji_color, "Custom Color");
+        assert!(s.font_family_emoji.is_empty());
+    }
+
+    /// TS-7: monochrome key initializes to its default when the legacy
+    /// file does not mention it.
+    #[test]
+    fn migrate_legacy_initializes_monochrome_default() {
+        let mut s: AppSettings =
+            serde_json::from_str(r#"{"font_family_emoji": "Custom Color"}"#).unwrap();
+        s.migrate_legacy();
+        assert_eq!(s.font_family_emoji_monochrome, "Noto Emoji");
+    }
+
+    /// TS-8: a file already on the new schema does not require migration.
+    /// `migrate_legacy` returns `false` and writes no `.bak`.
+    #[test]
+    fn migrate_legacy_idempotent_on_new_schema() {
+        let mut s: AppSettings = serde_json::from_str(
+            r#"{
+                "font_family_emoji_color": "Apple Color Emoji",
+                "font_family_emoji_monochrome": "Symbola"
+            }"#,
+        )
+        .unwrap();
+        let changed = s.migrate_legacy();
+        assert!(!changed, "new-schema file must not be migrated");
+        assert_eq!(s.font_family_emoji_color, "Apple Color Emoji");
+        assert_eq!(s.font_family_emoji_monochrome, "Symbola");
+    }
+
+    /// Mixed legacy + new keys: the new key wins, the legacy value is
+    /// dropped, and `migrate_legacy` still reports `true` (it consumed a
+    /// legacy slot).
+    #[test]
+    fn migrate_legacy_keeps_new_key_when_both_present() {
+        let mut s: AppSettings = serde_json::from_str(
+            r#"{
+                "font_family_emoji": "Legacy",
+                "font_family_emoji_color": "New Value"
+            }"#,
+        )
+        .unwrap();
+        let changed = s.migrate_legacy();
+        assert!(changed);
+        assert_eq!(s.font_family_emoji_color, "New Value");
+        assert!(s.font_family_emoji.is_empty());
+    }
+
+    /// Markdown-viewer side honors the same migration shape.
+    #[test]
+    fn migrate_legacy_markdown_emoji_key_to_color() {
+        let mut s: AppSettings =
+            serde_json::from_str(r#"{"markdown_emoji_font_family": "Custom MD"}"#).unwrap();
+        assert_eq!(s.markdown_emoji_font_family_color, "Noto Color Emoji");
+        let changed = s.migrate_legacy();
+        assert!(changed);
+        assert_eq!(s.markdown_emoji_font_family_color, "Custom MD");
+        assert_eq!(s.markdown_emoji_font_family_monochrome, "Noto Emoji");
     }
 }

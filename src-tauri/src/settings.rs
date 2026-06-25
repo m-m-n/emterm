@@ -515,11 +515,17 @@ pub struct Settings {
     /// resolution. Each entry is a fontdb family name.
     #[allow(dead_code)] // Phase 7: settings.json loader will populate this.
     pub font_family_fallback: Vec<String>,
-    /// Explicit emoji font family override. When `None`, the bundled
+    /// Explicit *color* emoji font family override. When `None`, the bundled
     /// Noto Color Emoji is used (plus Segoe UI Emoji as a Windows
     /// secondary fallback).
     #[allow(dead_code)] // Phase 7: settings.json loader will populate this.
     pub emoji_font: Option<String>,
+    /// Explicit *monochrome* emoji font family override. When `None`, the
+    /// bundled Noto Emoji is used for text-default emoji code points
+    /// (e.g. U+23F5 `⏵`). Mirrors [`Self::emoji_font`] on the
+    /// monochrome side of the presentation split.
+    #[allow(dead_code)]
+    pub emoji_font_monochrome: Option<String>,
     /// Variable-font axis settings (e.g. `("wght", 700.0)`). Applied by
     /// the swash adapter to shaping, rasterization, and metrics of every
     /// registered font; ignored (with a WARN) under `font_engine =
@@ -705,8 +711,13 @@ pub struct Settings {
     pub markdown_body_font_family: String,
     /// Code font family for the Markdown viewer. Empty → CSS fallback chain.
     pub markdown_code_font_family: String,
-    /// Emoji font family for the Markdown viewer. Empty → CSS fallback chain.
+    /// Color emoji font family for the Markdown viewer. Empty → CSS fallback chain.
     pub markdown_emoji_font_family: String,
+    /// Monochrome emoji font family for the Markdown viewer. Empty → CSS
+    /// fallback chain. Used for text-default emoji code points (e.g.
+    /// U+23F5 `⏵`) in Markdown rendering — wired into the dispatch
+    /// helper in `render/font/presentation.rs`.
+    pub markdown_emoji_font_family_monochrome: String,
     /// Base font size (pt) for the Markdown viewer.
     pub markdown_font_size: u32,
 
@@ -964,6 +975,7 @@ impl Default for Settings {
             font_engine: FontEngine::default(),
             font_family_fallback: Vec::new(),
             emoji_font: None,
+            emoji_font_monochrome: None,
             variable_font_axes: std::collections::HashMap::new(),
             scrollback_lines: DEFAULT_SCROLLBACK_LINES,
             image_memory_quota_mb: DEFAULT_IMAGE_MEMORY_QUOTA_MB,
@@ -1011,6 +1023,7 @@ impl Default for Settings {
             markdown_body_font_family: String::new(),
             markdown_code_font_family: String::new(),
             markdown_emoji_font_family: String::new(),
+            markdown_emoji_font_family_monochrome: String::new(),
             markdown_font_size: DEFAULT_MARKDOWN_FONT_SIZE,
             profiles: Vec::new(),
             ssh_command_path: String::new(),
@@ -1141,7 +1154,13 @@ struct RawSettings {
     clipboard_max_size_osc52: Option<u32>,
     font_family_primary: Option<String>,
     font_family_secondary: Option<String>,
+    /// Legacy single emoji-font key. Migrated to
+    /// `font_family_emoji_color` at apply time (see [`AppSettings::migrate_legacy`]).
     font_family_emoji: Option<String>,
+    /// Color emoji font family (replaces the legacy `font_family_emoji`).
+    font_family_emoji_color: Option<String>,
+    /// Monochrome emoji font family.
+    font_family_emoji_monochrome: Option<String>,
     font_size: Option<f32>,
     padding: Option<u32>,
     cursor_style: Option<String>,
@@ -1204,7 +1223,12 @@ struct RawSettings {
     markdown_theme_preset: Option<String>,
     markdown_body_font_family: Option<String>,
     markdown_code_font_family: Option<String>,
+    /// Legacy single emoji-font key for the Markdown viewer.
     markdown_emoji_font_family: Option<String>,
+    /// Color emoji font family for the Markdown viewer.
+    markdown_emoji_font_family_color: Option<String>,
+    /// Monochrome emoji font family for the Markdown viewer.
+    markdown_emoji_font_family_monochrome: Option<String>,
     markdown_font_size: Option<u32>,
 
     // ── Profiles / SSH / SFTP (src-tauri compatible). The entry types
@@ -1362,8 +1386,27 @@ impl RawSettings {
         if !fb.is_empty() {
             dst.font_family_fallback = fb;
         }
-        if let Some(v) = self.font_family_emoji.filter(|s| !s.trim().is_empty()) {
+        // Color-emoji font: prefer the new key, fall back to the legacy
+        // one. Either feeds `dst.emoji_font`, which is the color-side
+        // slot in the runtime `Settings` struct. The monochrome family
+        // is recorded separately in `dst.emoji_font_monochrome` for the
+        // upcoming presentation-aware dispatch (see render/font/presentation.rs);
+        // until the renderer consumes it, the field simply round-trips
+        // through `settings.json` so end-user preferences are not lost.
+        if let Some(v) = self
+            .font_family_emoji_color
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+        {
             dst.emoji_font = Some(v);
+        } else if let Some(v) = self.font_family_emoji.filter(|s| !s.trim().is_empty()) {
+            dst.emoji_font = Some(v);
+        }
+        if let Some(v) = self
+            .font_family_emoji_monochrome
+            .filter(|s| !s.trim().is_empty())
+        {
+            dst.emoji_font_monochrome = Some(v);
         }
 
         if let Some(mux) = self.mux {
@@ -1668,8 +1711,31 @@ impl RawSettings {
         if let Some(v) = self.markdown_code_font_family {
             dst.markdown_code_font_family = v;
         }
-        if let Some(v) = self.markdown_emoji_font_family {
+        // Color emoji (Markdown viewer): prefer the new key, fall back
+        // to the legacy `markdown_emoji_font_family`. The monochrome
+        // family is captured separately for the upcoming presentation
+        // dispatch in the Markdown renderer.
+        //
+        // Filter blank/whitespace-only values so a `""` left behind by
+        // an older settings save does not clobber the default. Mirrors
+        // the terminal-side loader at the top of `merge_into`.
+        if let Some(v) = self
+            .markdown_emoji_font_family_color
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+        {
             dst.markdown_emoji_font_family = v;
+        } else if let Some(v) = self
+            .markdown_emoji_font_family
+            .filter(|s| !s.trim().is_empty())
+        {
+            dst.markdown_emoji_font_family = v;
+        }
+        if let Some(v) = self
+            .markdown_emoji_font_family_monochrome
+            .filter(|s| !s.trim().is_empty())
+        {
+            dst.markdown_emoji_font_family_monochrome = v;
         }
         if let Some(v) = self.markdown_font_size {
             dst.markdown_font_size = v;
@@ -2358,6 +2424,24 @@ mod tests {
     fn loader_font_family_emoji_sets_emoji_font() {
         let s = load_json(r#"{"font_family_emoji": "Apple Color Emoji"}"#);
         assert_eq!(s.emoji_font, Some("Apple Color Emoji".to_string()));
+    }
+
+    #[test]
+    fn loader_font_family_emoji_color_sets_emoji_font() {
+        let s = load_json(r#"{"font_family_emoji_color": "Twemoji"}"#);
+        assert_eq!(s.emoji_font, Some("Twemoji".to_string()));
+    }
+
+    #[test]
+    fn loader_font_family_emoji_monochrome_sets_emoji_font_monochrome() {
+        let s = load_json(r#"{"font_family_emoji_monochrome": "Symbola"}"#);
+        assert_eq!(s.emoji_font_monochrome, Some("Symbola".to_string()));
+    }
+
+    #[test]
+    fn loader_new_color_key_overrides_legacy() {
+        let s = load_json(r#"{"font_family_emoji": "Legacy", "font_family_emoji_color": "New"}"#);
+        assert_eq!(s.emoji_font, Some("New".to_string()));
     }
 
     #[test]

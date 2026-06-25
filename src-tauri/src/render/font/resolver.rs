@@ -20,8 +20,19 @@ use super::traits::FontId;
 pub const BUNDLED_CJK_FONT: &[u8] =
     include_bytes!("../../../assets/fonts/NotoSansCJKjp-Regular.otf");
 
-/// Bundled color emoji font bytes (Phase 1 + Phase 3).
-pub const BUNDLED_EMOJI_FONT: &[u8] = include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf");
+/// Bundled color emoji font bytes (CBDT / COLR).
+pub const BUNDLED_EMOJI_COLOR_FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf");
+
+/// Bundled monochrome emoji font bytes (outline-only). Used for text-default
+/// emoji code points (e.g. U+23F5 `⏵`) and for VS15-attached selections.
+pub const BUNDLED_EMOJI_MONO_FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/NotoEmoji-Regular.ttf");
+
+/// Bundled base monospace font bytes (Inconsolata). Used as the last-resort
+/// ASCII / Latin face when no system monospace family is configured.
+pub const BUNDLED_BASE_FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/Inconsolata-Regular.ttf");
 
 /// Logical role of a registered font in the fallback chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,11 +41,13 @@ pub enum FontRole {
     Base,
     /// CJK base coverage (Han, Hiragana, Katakana, Hangul).
     Cjk,
-    /// Color emoji (CBDT, COLR).
-    Emoji,
+    /// Color emoji (CBDT, COLR, sbix).
+    ColorEmoji,
+    /// Monochrome emoji (outline glyphs; used for text-default emoji).
+    MonochromeEmoji,
     /// Secondary fallback (e.g. Segoe UI Emoji on Windows).
     Secondary,
-    /// User-supplied additional fallback from settings.
+    /// User-supplied additional fallback (settings, user font directory).
     User,
 }
 
@@ -219,28 +232,39 @@ impl Resolver {
         id
     }
 
-    /// Register the two bundled fonts (Noto Sans CJK JP + Noto Color
-    /// Emoji). Returns the assigned ids `(cjk, emoji)`.
+    /// Register the four bundled fonts (Noto Sans CJK JP, Noto Color
+    /// Emoji, Noto Emoji monochrome, Inconsolata base). Returns the
+    /// assigned ids `(cjk, color_emoji, mono_emoji, base)`.
     ///
-    /// The family names carry a `(bundled)` suffix so a later
+    /// Family names carry a `(bundled)` suffix so a later
     /// [`Resolver::register_system_family`] call for the same family
     /// name (e.g. `"Noto Color Emoji"`) does not short-circuit on the
     /// bundled entry — callers that explicitly want the host-installed
     /// font (typically newer, with extended emoji coverage) get a
     /// distinct `FontId` instead of being silently aliased back to the
     /// bundled bytes.
-    pub fn register_bundled(&mut self) -> (FontId, FontId) {
+    pub fn register_bundled(&mut self) -> (FontId, FontId, FontId, FontId) {
         let cjk = self.register_bytes(
             FontRole::Cjk,
             "Noto Sans CJK JP (bundled)",
             Arc::<[u8]>::from(BUNDLED_CJK_FONT),
         );
-        let emoji = self.register_bytes(
-            FontRole::Emoji,
+        let color = self.register_bytes(
+            FontRole::ColorEmoji,
             "Noto Color Emoji (bundled)",
-            Arc::<[u8]>::from(BUNDLED_EMOJI_FONT),
+            Arc::<[u8]>::from(BUNDLED_EMOJI_COLOR_FONT),
         );
-        (cjk, emoji)
+        let mono = self.register_bytes(
+            FontRole::MonochromeEmoji,
+            "Noto Emoji (bundled)",
+            Arc::<[u8]>::from(BUNDLED_EMOJI_MONO_FONT),
+        );
+        let base = self.register_bytes(
+            FontRole::Base,
+            "Inconsolata (bundled)",
+            Arc::<[u8]>::from(BUNDLED_BASE_FONT),
+        );
+        (cjk, color, mono, base)
     }
 
     /// Try to load a specific system font family with its file bytes and
@@ -390,25 +414,42 @@ impl Resolver {
 mod tests {
     use super::*;
 
-    /// TS-font-10: Bundled font registration succeeds against an in-memory
-    /// resolver and returns distinct FontIds for CJK / emoji roles.
+    /// TS-9: bundled font registration returns four distinct FontIds —
+    /// one each for CJK, color emoji, monochrome emoji, and the base
+    /// monospace face.
     #[test]
     fn register_bundled_returns_distinct_ids() {
         let mut r = Resolver::new();
-        let (cjk, emoji) = r.register_bundled();
-        assert_ne!(cjk, emoji);
+        let (cjk, color, mono, base) = r.register_bundled();
+        let ids = [cjk, color, mono, base];
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                assert_ne!(ids[i], ids[j], "ids[{i}] == ids[{j}]");
+            }
+        }
         assert_eq!(r.font(cjk).map(|f| f.role), Some(FontRole::Cjk));
-        assert_eq!(r.font(emoji).map(|f| f.role), Some(FontRole::Emoji));
+        assert_eq!(r.font(color).map(|f| f.role), Some(FontRole::ColorEmoji));
+        assert_eq!(
+            r.font(mono).map(|f| f.role),
+            Some(FontRole::MonochromeEmoji)
+        );
+        assert_eq!(r.font(base).map(|f| f.role), Some(FontRole::Base));
+        for id in ids {
+            assert!(
+                !r.font(id).unwrap().bytes.is_empty(),
+                "bundled font {id:?} has empty bytes"
+            );
+        }
     }
 
     #[test]
     fn by_role_lists_each_registered_font() {
         let mut r = Resolver::new();
         let _ = r.register_bundled();
-        let cjk_count = r.by_role(FontRole::Cjk).count();
-        let emoji_count = r.by_role(FontRole::Emoji).count();
-        assert_eq!(cjk_count, 1);
-        assert_eq!(emoji_count, 1);
+        assert_eq!(r.by_role(FontRole::Cjk).count(), 1);
+        assert_eq!(r.by_role(FontRole::ColorEmoji).count(), 1);
+        assert_eq!(r.by_role(FontRole::MonochromeEmoji).count(), 1);
+        assert_eq!(r.by_role(FontRole::Base).count(), 1);
     }
 
     #[test]
@@ -422,6 +463,16 @@ mod tests {
             .by_family("Noto Sans CJK JP (bundled)")
             .expect("CJK by family");
         assert_eq!(cjk.role, FontRole::Cjk);
+        let color = r
+            .by_family("Noto Color Emoji (bundled)")
+            .expect("color emoji by family");
+        assert_eq!(color.role, FontRole::ColorEmoji);
+        let mono = r.by_family("Noto Emoji (bundled)").expect("mono by family");
+        assert_eq!(mono.role, FontRole::MonochromeEmoji);
+        let base = r
+            .by_family("Inconsolata (bundled)")
+            .expect("base by family");
+        assert_eq!(base.role, FontRole::Base);
     }
 
     #[test]

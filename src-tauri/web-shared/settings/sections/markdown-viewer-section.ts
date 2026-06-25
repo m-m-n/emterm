@@ -56,26 +56,51 @@ export function renderMarkdownViewerSection(
     },
   );
 
-  // Emoji Font Family (font picker) - between body and code per SPEC.md
+  // Color Emoji Font Family (font picker) - between body and code per SPEC.md
   renderFontPickerInput(
     panel,
     {
-      key: "markdown-emoji-font-family",
-      label: t("settings.markdownViewer.emojiFontFamily"),
-      value: settings.markdown_emoji_font_family,
+      key: "markdown-emoji-font-family-color",
+      label: t("settings.markdownViewer.emojiFontFamilyColor"),
+      value: settings.markdown_emoji_font_family_color,
       placeholder: "",
-      hint: t("settings.markdownViewer.emojiFontFamilyHint"),
-      description: t("settings.markdownViewer.emojiFontFamilyDesc"),
-      category: "markdown-emoji",
+      hint: t("settings.markdownViewer.emojiFontFamilyColorHint"),
+      description: t("settings.markdownViewer.emojiFontFamilyColorDesc"),
+      category: "markdown-emoji-color",
       onSelect: (v) => {
-        ctx.currentSettings.markdown_emoji_font_family = v;
+        ctx.currentSettings.markdown_emoji_font_family_color = v;
         applyMarkdownSettings(
           ctx.currentSettings.markdown_body_font_family,
           ctx.currentSettings.markdown_code_font_family,
           v,
           ctx.currentSettings.markdown_font_size,
         );
-        ctx.saveSetting("markdown_emoji_font_family", v);
+        ctx.saveSetting("markdown_emoji_font_family_color", v);
+      },
+    },
+    ctx.addContentListener,
+    (category, currentValue, onSelect) => {
+      ctx.showFontPicker(category, currentValue, onSelect);
+    },
+  );
+
+  // Monochrome Emoji Font Family (font picker)
+  renderFontPickerInput(
+    panel,
+    {
+      key: "markdown-emoji-font-family-monochrome",
+      label: t("settings.markdownViewer.emojiFontFamilyMonochrome"),
+      value: settings.markdown_emoji_font_family_monochrome,
+      placeholder: "",
+      hint: t("settings.markdownViewer.emojiFontFamilyMonochromeHint"),
+      description: t("settings.markdownViewer.emojiFontFamilyMonochromeDesc"),
+      category: "markdown-emoji-monochrome",
+      onSelect: (v) => {
+        ctx.currentSettings.markdown_emoji_font_family_monochrome = v;
+        // Monochrome side does not yet feed the CSS preview helper;
+        // the dispatch lives in the renderer (presentation.rs). For now,
+        // just persist the value so settings round-trip.
+        ctx.saveSetting("markdown_emoji_font_family_monochrome", v);
       },
     },
     ctx.addContentListener,
