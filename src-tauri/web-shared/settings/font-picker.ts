@@ -145,10 +145,18 @@ export async function showFontPicker(
     primary: t("settings.appearance.fontPickerPrimaryTitle"),
     secondary: t("settings.appearance.fontPickerSecondaryTitle"),
     emoji: t("settings.appearance.fontPickerEmojiTitle"),
+    "emoji-color": t("settings.appearance.fontPickerEmojiColorTitle"),
+    "emoji-monochrome": t("settings.appearance.fontPickerEmojiMonochromeTitle"),
     ui: t("settings.ui.fontPickerUiTitle"),
     "markdown-body": t("settings.markdownViewer.fontPickerBodyTitle"),
     "markdown-code": t("settings.markdownViewer.fontPickerCodeTitle"),
     "markdown-emoji": t("settings.markdownViewer.fontPickerEmojiTitle"),
+    "markdown-emoji-color": t(
+      "settings.markdownViewer.fontPickerEmojiColorTitle",
+    ),
+    "markdown-emoji-monochrome": t(
+      "settings.markdownViewer.fontPickerEmojiMonochromeTitle",
+    ),
   };
 
   // Load fonts
@@ -166,7 +174,11 @@ export async function showFontPicker(
         fontList = fonts.all_fonts;
         break;
       case "emoji":
+      case "emoji-color":
+      case "emoji-monochrome":
       case "markdown-emoji":
+      case "markdown-emoji-color":
+      case "markdown-emoji-monochrome":
         fontList = fonts.emoji_fonts;
         break;
     }

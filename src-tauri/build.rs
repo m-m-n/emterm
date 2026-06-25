@@ -39,6 +39,11 @@ fn main() {
         return;
     }
 
+    // GUI builds embed bundled fonts via include_bytes!. Fail fast here
+    // when the files have not been fetched yet — the alternative is a
+    // confusing include_bytes! error pointing into the asset directory.
+    check_bundled_fonts();
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
@@ -58,6 +63,28 @@ fn main() {
         "SETTINGS_ASSETS",
         &out_dir.join("settings_assets.rs"),
     );
+}
+
+/// GUI-feature failsafe: every font referenced by `include_bytes!` must
+/// exist on disk before `cargo build` is allowed to proceed. Without this
+/// the developer would see an opaque `couldn't read assets/fonts/...`
+/// error from `rustc`; emit an actionable message instead.
+fn check_bundled_fonts() {
+    let required = [
+        "assets/fonts/NotoColorEmoji.ttf",
+        "assets/fonts/NotoSansCJKjp-Regular.otf",
+        "assets/fonts/NotoEmoji-Regular.ttf",
+        "assets/fonts/Inconsolata-Regular.ttf",
+    ];
+    for path in required {
+        if !std::path::Path::new(path).exists() {
+            panic!(
+                "build_rs.font_missing: bundled font missing at {path}\n  \
+                 Run `make fetch-fonts` (or `bash scripts/fetch-fonts.sh`) to download bundled fonts."
+            );
+        }
+        println!("cargo:rerun-if-changed={path}");
+    }
 }
 
 /// Windows-target-only: attach `icons/icon.ico` to the PE resource section

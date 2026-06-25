@@ -1,0 +1,201 @@
+schema_version: 1
+feature: font-bundle-redesign
+created: 2026-06-24
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: "docker compose -f docker-compose.e2e.yml run --rm --no-deps build sh -c \"cd e2e-tests && bun run test\""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: "43660899e264569b4a204e342fbfec7198c0d779"
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: "43660899e264569b4a204e342fbfec7198c0d779"
+  - id: verify-plan
+    status: completed
+    completed_at_commit: "43660899e264569b4a204e342fbfec7198c0d779"
+  - id: implement
+    status: completed
+    completed_at_commit: "43660899e264569b4a204e342fbfec7198c0d779"
+  - id: check
+    status: completed
+    completed_at_commit: "43660899e264569b4a204e342fbfec7198c0d779"
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: "43660899e264569b4a204e342fbfec7198c0d779"
+
+requirements:
+  FR1:
+    title: "scripts/fetch-fonts.sh による SHA256 ピン留めダウンロード"
+    status: ok
+    tasks:
+      - draft-fetch-script
+      - pin-existing-fonts
+      - phase-2-fetch-and-buildrs
+    tests:
+      - TS-13
+      - TS-14
+      - TS-15
+  FR2:
+    title: "既存 bundle フォントの git 管理外し（.gitignore 化）"
+    status: ok
+    tasks:
+      - gitignore-and-untrack
+    tests: []
+  FR3:
+    title: "Noto Emoji(モノクロ)と Inconsolata の bundle 追加"
+    status: ok
+    tasks:
+      - resolver-roles-and-constants
+      - adapter-constant-rename
+      - phase-2-fetch-and-buildrs
+    tests:
+      - TS-9
+  FR4:
+    title: "絵文字フォント設定の color / monochrome 分離"
+    status: ok
+    tasks:
+      - settings-schema-and-migration
+      - settings-ui-rows
+    tests:
+      - TS-6
+      - TS-7
+      - TS-8
+  FR5:
+    title: "VS15/VS16 + Unicode emoji_presentation property による presentation 判定"
+    status: assumed
+    assumption: "インライン定数テーブルで Emoji / Emoji_Presentation property を持つコードポイントを保持(外部 crate 追加なし)"
+    tasks:
+      - emoji-property-tables
+      - presentation-dispatch
+      - swash-dispatch-wire-in
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+  FR6:
+    title: "フォント解決優先順位(設定 > ユーザーディレクトリ > システム > bundle)"
+    status: ok
+    tasks:
+      - user-font-dir-resolver
+      - user-dir-scan
+      - resolver-chain-precedence
+    tests:
+      - TS-11
+  FR7:
+    title: "既存設定キーの自動マイグレーション"
+    status: assumed
+    assumption: "初回マイグレーション時に settings.json.bak として元ファイルを保存(手動ロールバック容易化)"
+    tasks:
+      - settings-schema-and-migration
+    tests:
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-16
+  FR8:
+    title: "build.rs によるフォント不在時 panic"
+    status: ok
+    tasks:
+      - build-rs-failsafe
+      - phase-2-fetch-and-buildrs
+    tests:
+      - TS-12
+  FR9:
+    title: "Makefile への fetch-fonts ターゲット統合"
+    status: ok
+    tasks:
+      - makefile-integration
+    tests: []
+  FR10:
+    title: "GitHub Actions ワークフローへの fetch + cache ステップ統合"
+    status: ok
+    tasks:
+      - ci-integration
+    tests: []
+  NFR1:
+    title: "ビルド再現性(SHA256 検証)"
+    status: ok
+    tasks:
+      - pin-existing-fonts
+      - phase-2-fetch-and-buildrs
+    tests:
+      - TS-14
+  NFR2:
+    title: "リポジトリサイズ削減(約 30MB)"
+    status: ok
+    tasks:
+      - gitignore-and-untrack
+    tests: []
+  NFR3:
+    title: "ビルド失敗時の診断性(make fetch-fonts 案内)"
+    status: ok
+    tasks:
+      - build-rs-failsafe
+    tests:
+      - TS-12
+  NFR4:
+    title: "既存 settings.json の後方互換性"
+    status: ok
+    tasks:
+      - settings-schema-and-migration
+    tests:
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-16
+  NFR5:
+    title: "オフライン開発可能(一度 fetch 後)"
+    status: ok
+    tasks:
+      - draft-fetch-script
+    tests:
+      - TS-13
+  NFR6:
+    title: "起動時 font scan < 500ms 維持・user-dir scan < 50ms 追加"
+    status: ok
+    tasks:
+      - user-dir-scan
+      - resolver-chain-precedence
+    tests: []
+  NFR7:
+    title: "GUI バイナリサイズ増加 ≤ 2MB"
+    status: ok
+    tasks:
+      - resolver-roles-and-constants
+      - adapter-constant-rename
+      - phase-2-fetch-and-buildrs
+    tests: []
+  NFR8:
+    title: "セキュリティ(HTTPS のみ・SHA256 必須)"
+    status: ok
+    tasks:
+      - draft-fetch-script
+    tests:
+      - TS-15
+
+open_questions:
+  OQ1:
+    related: [FR1]
+    status: assumed
+    description: "各フォントの GitHub Releases tag と SHA256 値の確定。仮定: 実装フェーズで上流の最新安定リリースを選定し fetch-fonts.sh に固定値として記述"
+  OQ2:
+    related: [FR5]
+    status: assumed
+    description: "Unicode emoji_presentation property の参照元選定。仮定: インライン定数(compile-time static slice + binary search、外部 crate 追加なし)"
+  OQ3:
+    related: [FR7]
+    status: assumed
+    description: "settings.json マイグレーション時に .bak バックアップを残すか。仮定: 残す(手動ロールバック容易化)"

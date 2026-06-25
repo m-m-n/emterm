@@ -71,19 +71,162 @@ pub fn handle(cmd: &str, args: &Value) -> CommandOutcome {
 /// Load `settings.json` with the shared schema's serde defaults (the same
 /// view the Tauri build's `load_settings` command produces), including the
 /// legacy `font_family` → `font_family_primary` migration.
+///
+/// When `apply_migrations()` reports that any legacy key was rewritten,
+/// we persist a one-time `.bak` snapshot of the existing file and
+/// atomically rewrite `settings.json` with the new schema (SPEC FR7 /
+/// OQ3 resolution). The `.bak` is best-effort: a failure to write it
+/// is logged at `warn` but does NOT block the rewrite itself (the
+/// migrated values would otherwise be discarded on every launch).
 fn load_settings() -> Result<Value, String> {
-    let mut settings = match crate::settings::settings_path() {
-        Some(path) => match std::fs::read_to_string(&path) {
-            Ok(contents) => serde_json::from_str::<AppSettings>(&contents).unwrap_or_else(|e| {
-                log::warn!("settings window: failed to parse {}: {e}", path.display());
-                AppSettings::default()
-            }),
-            Err(_) => AppSettings::default(),
+    let path = crate::settings::settings_path();
+    let original_bytes: Option<Vec<u8>> = match &path {
+        Some(p) => match std::fs::read(p) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                log::warn!("settings window: failed to read {}: {e}", p.display());
+                None
+            }
         },
+        None => None,
+    };
+    let mut settings = match &original_bytes {
+        Some(bytes) => serde_json::from_slice::<AppSettings>(bytes).unwrap_or_else(|e| {
+            log::warn!(
+                "settings window: failed to parse {}: {e}",
+                path.as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            );
+            AppSettings::default()
+        }),
         None => AppSettings::default(),
     };
-    settings.apply_migrations();
+
+    let migrated = settings.apply_migrations();
+    if migrated {
+        if let (Some(path), Some(bytes)) = (path.as_ref(), original_bytes.as_ref()) {
+            persist_migrated_settings(path, bytes, &settings);
+        }
+    }
+
     serde_json::to_value(&settings).map_err(|e| format!("settings window: serialize failed: {e}"))
+}
+
+/// Legacy top-level keys consumed by the migration. They must be
+/// stripped from the rewritten `settings.json` so a subsequent load
+/// does not re-trigger the migration on every launch (the round-trip
+/// would otherwise leave a stale `.bak` rewrite each time).
+const LEGACY_KEYS_REMOVED_AFTER_MIGRATION: &[&str] = &[
+    "font_family",
+    "font_family_emoji",
+    "markdown_emoji_font_family",
+];
+
+/// Persist a migrated `settings.json`:
+/// 1. Best-effort copy of the existing bytes to `settings.json.bak`.
+///    Logs a warn and continues on failure.
+/// 2. Serialize the migrated `AppSettings` and write it via the same
+///    atomic-write path used by `save_settings` (so unknown top-level
+///    keys are preserved across the rewrite). Legacy top-level keys
+///    that the migration consumed are explicitly removed from the
+///    rewritten file so the second load is a true no-op.
+fn persist_migrated_settings(
+    path: &std::path::Path,
+    original_bytes: &[u8],
+    settings: &AppSettings,
+) {
+    // 1. .bak snapshot. Skip when the existing file is empty (no point
+    //    backing up zero bytes — and `.bak` only makes sense when the
+    //    user had content worth preserving).
+    if !original_bytes.is_empty() {
+        let bak = path.with_extension("json.bak");
+        if let Err(e) = std::fs::write(&bak, original_bytes) {
+            log::warn!(
+                "settings.migrate.failed_persist: backup write failed at {}: {e}",
+                bak.display()
+            );
+        }
+    }
+    // 2. Re-serialize the migrated struct as a patch.
+    let serialized = match serde_json::to_value(settings) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("settings.migrate.failed_persist: serialize failed: {e}");
+            return;
+        }
+    };
+    let Value::Object(mut patch) = serialized else {
+        log::warn!(
+            "settings.migrate.failed_persist: migrated settings did not serialize to an object"
+        );
+        return;
+    };
+    // Tag the legacy keys as `Value::Null` so `save_patch_to`'s
+    // read-modify-write overwrites the existing string values with
+    // `null`, then drop them from the rewritten root immediately
+    // afterwards. We can't do this through `save_patch_to` alone
+    // (it only knows how to overwrite, not remove keys), so we
+    // do the read-modify-write inline.
+    for key in LEGACY_KEYS_REMOVED_AFTER_MIGRATION {
+        patch.remove(*key);
+    }
+
+    let mut root: Map<String, Value> = match std::fs::read(path) {
+        Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+            Ok(Value::Object(map)) => map,
+            _ => Map::new(),
+        },
+        Err(_) => Map::new(),
+    };
+    for key in LEGACY_KEYS_REMOVED_AFTER_MIGRATION {
+        root.remove(*key);
+    }
+    for (k, v) in patch {
+        root.insert(k, v);
+    }
+
+    let body = match serde_json::to_vec_pretty(&Value::Object(root)) {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("settings.migrate.failed_persist: serialize failed: {e}");
+            return;
+        }
+    };
+
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => {
+            log::warn!(
+                "settings.migrate.failed_persist: no parent dir for {}",
+                path.display()
+            );
+            return;
+        }
+    };
+    if let Err(e) = std::fs::create_dir_all(parent) {
+        log::warn!(
+            "settings.migrate.failed_persist: create dir {} failed: {e}",
+            parent.display()
+        );
+        return;
+    }
+    let tmp = parent.join(format!(".settings.json.tmp.{}", std::process::id()));
+    if let Err(e) = std::fs::write(&tmp, &body) {
+        log::warn!(
+            "settings.migrate.failed_persist: write {} failed: {e}",
+            tmp.display()
+        );
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        log::warn!(
+            "settings.migrate.failed_persist: rename to {} failed: {e}",
+            path.display()
+        );
+    }
 }
 
 /// Default mux action keybindings as an ordered `[{ action, key }]` list,
@@ -343,5 +486,68 @@ mod tests {
         // And the file parses back into the schema.
         let back: AppSettings = serde_json::from_value(v).unwrap();
         assert_eq!(back.font_size, settings.font_size);
+    }
+
+    /// SPEC FR7 / OQ3: loading a settings file that carries the legacy
+    /// `font_family_emoji` key must rewrite the file with the new
+    /// schema and leave a one-time `settings.json.bak` snapshot of the
+    /// previous content. Reloading the rewritten file is a no-op and
+    /// must NOT produce a second `.bak`.
+    #[test]
+    fn legacy_emoji_key_persists_with_bak() {
+        let dir = std::env::temp_dir().join(format!(
+            "emterm-settings-window-migrate-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let bak = path.with_extension("json.bak");
+        let original = br#"{"font_family_emoji": "Twemoji"}"#;
+        std::fs::write(&path, original).unwrap();
+
+        // Drive the loader the same way `load_settings` does (we
+        // can't call `load_settings` directly because it consults
+        // `settings_path()` rather than a parameter).
+        let original_bytes = std::fs::read(&path).unwrap();
+        let mut settings: AppSettings = serde_json::from_slice(&original_bytes).unwrap();
+        let migrated = settings.apply_migrations();
+        assert!(migrated, "legacy key must trigger a migration");
+        persist_migrated_settings(&path, &original_bytes, &settings);
+
+        // The .bak captures the pre-migration bytes exactly.
+        let bak_bytes = std::fs::read(&bak).expect(".bak must exist");
+        assert_eq!(
+            bak_bytes.as_slice(),
+            original,
+            ".bak must equal the pre-migration file bytes"
+        );
+
+        // The new file carries the migrated key.
+        let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            v["font_family_emoji_color"], "Twemoji",
+            "legacy emoji key must migrate into the color slot"
+        );
+
+        // Reloading the rewritten file should be idempotent and must
+        // NOT clobber `.bak` again. Move `.bak` aside, reload, and
+        // verify the file does not reappear.
+        let bak_aside = path.with_extension("json.bak.aside");
+        std::fs::rename(&bak, &bak_aside).unwrap();
+        let reloaded_bytes = std::fs::read(&path).unwrap();
+        let mut reloaded: AppSettings = serde_json::from_slice(&reloaded_bytes).unwrap();
+        let reloaded_migrated = reloaded.apply_migrations();
+        assert!(
+            !reloaded_migrated,
+            "second load must not re-migrate (idempotent)"
+        );
+        assert!(
+            !bak.exists(),
+            "second load must NOT regenerate {}",
+            bak.display()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

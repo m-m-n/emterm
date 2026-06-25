@@ -115,21 +115,44 @@ export function renderTerminalAppearanceSection(
     },
   );
 
-  // Emoji Font (font picker)
+  // Color Emoji Font (font picker)
   renderFontPickerInput(
     panel,
     {
-      key: "font-family-emoji",
-      label: t("settings.appearance.fontFamilyEmoji"),
-      value: settings.font_family_emoji,
+      key: "font-family-emoji-color",
+      label: t("settings.appearance.fontFamilyEmojiColor"),
+      value: settings.font_family_emoji_color,
       placeholder: t("settings.appearance.fontFamilyEmojiPlaceholder"),
       hint: t("settings.appearance.fontFamilyEmojiHint"),
-      description: t("settings.appearance.fontFamilyEmojiDesc"),
-      category: "emoji",
+      description: t("settings.appearance.fontFamilyEmojiColorDesc"),
+      category: "emoji-color",
       onSelect: (v) => {
-        ctx.currentSettings.font_family_emoji = v;
+        ctx.currentSettings.font_family_emoji_color = v;
         applyCurrentFontFamily(ctx.currentSettings);
-        ctx.saveSetting("font_family_emoji", v);
+        ctx.saveSetting("font_family_emoji_color", v);
+      },
+    },
+    ctx.addContentListener,
+    (category, currentValue, onSelect) => {
+      ctx.showFontPicker(category, currentValue, onSelect);
+    },
+  );
+
+  // Monochrome Emoji Font (font picker)
+  renderFontPickerInput(
+    panel,
+    {
+      key: "font-family-emoji-monochrome",
+      label: t("settings.appearance.fontFamilyEmojiMonochrome"),
+      value: settings.font_family_emoji_monochrome,
+      placeholder: t("settings.appearance.fontFamilyEmojiPlaceholder"),
+      hint: t("settings.appearance.fontFamilyEmojiHint"),
+      description: t("settings.appearance.fontFamilyEmojiMonochromeDesc"),
+      category: "emoji-monochrome",
+      onSelect: (v) => {
+        ctx.currentSettings.font_family_emoji_monochrome = v;
+        applyCurrentFontFamily(ctx.currentSettings);
+        ctx.saveSetting("font_family_emoji_monochrome", v);
       },
     },
     ctx.addContentListener,

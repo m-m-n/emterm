@@ -14,9 +14,11 @@ pub mod ab_glyph_adapter;
 pub mod atlas;
 pub mod cache;
 pub mod fallback;
+pub mod presentation;
 pub mod resolver;
 pub mod swash_adapter;
 pub mod traits;
+pub mod user_dir;
 
 pub use atlas::{Atlas, AtlasRegion};
 pub use cache::{CacheStats, GlyphCache, GlyphKey};

@@ -168,7 +168,7 @@ mod tests {
         s.font_size = 15;
         s.font_family_primary = "JetBrains Mono".into();
         s.font_family_secondary = "Noto Sans JP".into();
-        s.font_family_emoji = "Twemoji".into();
+        s.font_family_emoji_color = "Twemoji".into();
         s.terminal_color_scheme = "dracula".into();
         s.bold_brightens_ansi_colors = false;
         s.padding = 12;

@@ -668,7 +668,53 @@ impl App {
         use crate::render::font::resolver::FontRole;
 
         let mut resolver = Resolver::new();
-        let (bundled_cjk_id, emoji_id) = resolver.register_bundled();
+        // FR6 resolution priority (highest first):
+        //   1. settings-supplied family
+        //   2. user override directory
+        //   3. system fonts
+        //   4. bundled fonts
+        //
+        // Registration order matters for `by_family` lookups —
+        // `Resolver::register_bytes` short-circuits on the first entry
+        // for a given family name. We therefore register in highest →
+        // lowest priority order.
+
+        // 1. Settings-supplied emoji families. We register these BEFORE
+        //    `register_bundled()` so a settings family that happens to
+        //    collide with a bundled family name wins the lookup.
+        //    The two `(bundled)` suffixes on the bundled registrations
+        //    keep them disambiguated regardless.
+        #[cfg(not(test))]
+        let host_emoji_id = settings
+            .emoji_font
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|family| resolver.register_system_family(family, FontRole::ColorEmoji));
+        #[cfg(test)]
+        let host_emoji_id: Option<FontId> = None;
+        // Settings-supplied monochrome emoji family (SPEC FR4).
+        #[cfg(not(test))]
+        let host_mono_emoji_id = settings
+            .emoji_font_monochrome
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|family| resolver.register_system_family(family, FontRole::MonochromeEmoji));
+        #[cfg(test)]
+        let host_mono_emoji_id: Option<FontId> = None;
+
+        // 2. User override directory. The scan is silently a no-op when
+        //    the directory does not exist. Skipped during tests so unit
+        //    tests don't touch the real user env.
+        #[cfg(not(test))]
+        resolver.scan_user_dir();
+
+        // 4. Bundled fonts. `register_bundled` registers CJK, color
+        //    emoji, monochrome emoji, and the base monospace face. We
+        //    keep handles to all four so the chain composition below
+        //    can promote the bundled base font over the bundled CJK
+        //    font when the host monospace family is absent.
+        let (bundled_cjk_id, emoji_id, bundled_mono_emoji_id, bundled_base_id) =
+            resolver.register_bundled();
 
         // Host-font preferences sourced from `settings.font_family_fallback`:
         //   fallback[0] -> base (Latin / monospace)
@@ -721,21 +767,10 @@ impl App {
         #[cfg(test)]
         let cjk_bold_id: Option<FontId> = None;
 
-        // Optional host-installed emoji font preference: when
-        // `settings.emoji_font` is set, try the named family and use it
-        // as the preferred color emoji source so users on platforms
-        // that ship a newer Noto Color Emoji (or a different family
-        // entirely, e.g. Apple Color Emoji on macOS) get the host
-        // glyphs instead of the bundled `NotoColorEmoji.ttf`. The
-        // bundled font remains in the chain as a last-resort fallback.
-        #[cfg(not(test))]
-        let host_emoji_id = settings
-            .emoji_font
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .and_then(|family| resolver.register_system_family(family, FontRole::Emoji));
-        #[cfg(test)]
-        let host_emoji_id: Option<FontId> = None;
+        // `host_emoji_id` / `host_mono_emoji_id` are registered above
+        // (before `register_bundled`) so that a settings-supplied family
+        // wins the resolver's `by_family` lookup against bundled +
+        // system entries (FR6 priority #1).
 
         // Symbol fallback families: cover prompt arrows / math symbols
         // / geometric shapes the base monospace + CJK + emoji fonts
@@ -819,11 +854,25 @@ impl App {
             }
         };
 
-        // Pick the chain root: prefer Inconsolata (monospace Latin) when
-        // it loaded successfully; otherwise the bundled CJK font remains
-        // the base so ASCII still renders (just less prettily).
-        let base_id = inconsolata_id.unwrap_or(bundled_cjk_id);
+        // Pick the chain root: prefer the host-installed monospace
+        // family when it loaded successfully; otherwise the bundled
+        // Inconsolata covers the ASCII / Latin role so the base layer
+        // still renders monospaced even when no host font is available.
+        // We only fall back to the bundled CJK font as a last resort
+        // (its Latin sub-set is not monospaced and visibly skews grid
+        // alignment) — that case only occurs if both the host base
+        // family and the bundled base font registration failed.
+        let base_id = inconsolata_id.unwrap_or(bundled_base_id);
         let mut extras: Vec<FontId> = Vec::new();
+        // FR6 priority #2: user-override font directory. The fonts are
+        // already registered under `FontRole::User`, but they have to
+        // appear in the chain ahead of CJK + emoji + secondary so the
+        // per-codepoint walk consults them first.
+        #[cfg(not(test))]
+        for f in resolver.by_role(FontRole::User) {
+            extras.push(f.id);
+            log::info!("font.user = {} (id={:?})", f.family, f.id);
+        }
         if let Some(jp) = noto_sans_jp_id {
             extras.push(jp);
         }
@@ -862,6 +911,14 @@ impl App {
             extras.push(id);
         }
         extras.push(emoji_id);
+        // Monochrome emoji font: host preference (if any) ahead of the
+        // bundled Noto Emoji, so a text-default emoji (e.g. U+23F5 `⏵`)
+        // resolves via the host face when available and falls through
+        // to the bundle otherwise.
+        if let Some(id) = host_mono_emoji_id {
+            extras.push(id);
+        }
+        extras.push(bundled_mono_emoji_id);
         // Pick the preferred color-emoji source. Host wins only when
         // the rasterizer reports it actually carries color glyphs it
         // can paint — Windows' system "Noto Color Emoji" ships as
@@ -883,7 +940,7 @@ impl App {
             log::info!("font.base = {} (id={:?})", base_family, id);
         } else {
             log::warn!(
-                "font.base = bundled Noto Sans CJK JP ({:?} not found on host; ASCII will not be monospaced)",
+                "font.base = bundled Inconsolata ({:?} not found on host)",
                 base_family
             );
         }
@@ -917,6 +974,14 @@ impl App {
         // pictographs (✅ U+2705, 🟢 U+1F7E2) resolve to it instead of
         // the BW base / CJK fonts that may also cover those codepoints.
         chain.set_emoji(preferred_emoji_id);
+        // Mark the preferred monochrome-emoji font so text-default
+        // emoji code points (e.g. U+23F5 `⏵`) and VS15-attached
+        // clusters route to the outline face instead of the BW base
+        // monospace font (which has no glyph for them). FR5
+        // "opposite-side fallback before tofu" is handled inside
+        // `FallbackChain::resolve_for_cluster`.
+        let preferred_mono_emoji_id = host_mono_emoji_id.unwrap_or(bundled_mono_emoji_id);
+        chain.set_mono_emoji(preferred_mono_emoji_id);
         // Wire the real bold faces so SGR-bold cells render with them.
         #[cfg(not(test))]
         if let (Some(regular), Some(bold)) = (inconsolata_id, base_bold_id) {
@@ -7035,6 +7100,52 @@ mod tests {
                 .iter()
                 .any(|t| t.status == crate::sftp::SftpUploadStatus::Failed),
             "an error toast was surfaced instead of redirecting the upload"
+        );
+    }
+
+    /// SPEC FR6 #4: the bundled Inconsolata must be the chain's base
+    /// font when the host has no installed monospace family. The earlier
+    /// implementation fell through to the bundled CJK font, whose Latin
+    /// subset is not monospaced and visibly skews grid alignment.
+    ///
+    /// The `build_font_stack` `#[cfg(not(test))]` gates skip every
+    /// system-family registration in the test build, so this test
+    /// exercises exactly the "no host monospace family available" path.
+    ///
+    /// We assert on the family-name of the registered entry rather than
+    /// the bytes themselves — the bundled fixture in some dev trees
+    /// keeps placeholder duplicates of NotoSansCJKjp under the
+    /// Inconsolata file name until `fetch-fonts.sh` is run, so a byte
+    /// comparison would be ambiguous.
+    #[test]
+    fn build_font_stack_uses_bundled_base_when_host_missing() {
+        use crate::render::font::resolver::FontRole;
+
+        let settings = Settings::default();
+        let (resolver, chain, _cache, _rasterizer, base_id) = App::build_font_stack(&settings);
+
+        let base = resolver
+            .font(base_id)
+            .expect("base font must be registered");
+        // The bundled Inconsolata is registered under
+        // "Inconsolata (bundled)" with `FontRole::Base`. The bundled
+        // CJK font is registered under "Noto Sans CJK JP (bundled)"
+        // with `FontRole::Cjk`. The regression we're guarding against
+        // is the previous `unwrap_or(bundled_cjk_id)` which would have
+        // landed `base_id` on the `Cjk` entry.
+        assert_eq!(
+            base.role,
+            FontRole::Base,
+            "chain base must carry FontRole::Base; FontRole::Cjk indicates a regression"
+        );
+        assert_eq!(
+            base.family, "Inconsolata (bundled)",
+            "chain base must be the bundled Inconsolata when no host monospace family is available"
+        );
+        // The chain must reach the base font.
+        assert!(
+            chain.chain().contains(&base_id),
+            "fallback chain must include the base font id"
         );
     }
 }

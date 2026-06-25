@@ -156,7 +156,7 @@ mod tests {
     /// table) so we exercise the None / glyph-id-0 branch on every
     /// codepoint. ASCII rendering is exercised once Phase 3's CJK font
     /// (which contains a Latin table) is bundled.
-    const PROBE_FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf");
+    const PROBE_FONT_BYTES: &[u8] = super::super::resolver::BUNDLED_EMOJI_COLOR_FONT;
 
     fn rasterizer() -> AbGlyphRasterizer {
         AbGlyphRasterizer::from_static_bytes(PROBE_FONT_BYTES, FontId(1)).expect("parse probe font")
