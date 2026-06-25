@@ -42,7 +42,7 @@ use crate::app::App;
 use crate::ime::backend::{KeyDispatchResult, ProcessEnv, RawKeyEvent, build_backend_with_window};
 use crate::mux::dialog::{MuxDialogOutcome, MuxDialogState};
 use crate::mux::prefix::{KeyInput as MuxKeyInput, KeySym};
-use crate::pty::input::{Key, Modifiers, encode};
+use crate::pty::input::{Key, Modifiers, Target as EncodeTarget, encode};
 
 /// Drive one frame of the open mux dialog: render via the UI layer
 /// (`ui::mux_dialogs::draw`) and dispatch the resulting outcome into the
@@ -2025,7 +2025,7 @@ fn is_skk_swallowed_chord(logical_key: &WinitKey, mods: Modifiers) -> bool {
         && matches!(logical_key, WinitKey::Character(s) if s.eq_ignore_ascii_case("j"))
 }
 
-fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
+fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers, target: EncodeTarget) -> Option<Vec<u8>> {
     // Named keys take precedence over the printable fast path. winit on
     // Windows fills `event.text` for Backspace with `"\x7f"` (DEL); if we
     // routed that through the fast path the PTY would receive DEL, which
@@ -2063,7 +2063,7 @@ fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
         _ => None,
     };
     if let Some(key) = named_key {
-        let bytes = encode(key, mods);
+        let bytes = encode(key, mods, target);
         return if bytes.is_empty() { None } else { Some(bytes) };
     }
 
@@ -2088,7 +2088,7 @@ fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers) -> Option<Vec<u8>> {
         WinitKey::Named(NamedKey::Space) => Key::Char(' '),
         _ => return None,
     };
-    let bytes = encode(key, mods);
+    let bytes = encode(key, mods, target);
     if bytes.is_empty() { None } else { Some(bytes) }
 }
 
@@ -2470,8 +2470,18 @@ impl ApplicationHandler for PocApp {
                             mods.shift = false;
                             mods.alt = true;
                         }
-                        if let Some(bytes) = winit_key_to_bytes(&event, mods) {
-                            if let Some(tab) = self.app.active_tab() {
+                        if let Some(tab) = self.app.active_tab() {
+                            // In mux mode the bytes will be wrapped as a
+                            // `PtyInput` frame and reach a remote (canonically
+                            // Linux) daemon, so we must skip the Windows-host
+                            // Win32 Input Mode shim or the remote shell sees
+                            // unknown CSI for Backspace / Escape / Ctrl+[.
+                            let target = if tab.mux_session_name.is_some() {
+                                EncodeTarget::PosixPty
+                            } else {
+                                EncodeTarget::HostPty
+                            };
+                            if let Some(bytes) = winit_key_to_bytes(&event, mods, target) {
                                 // mux-aware: wraps as PtyInput in mux mode so the
                                 // bridge forwards it (raw stdin is dropped there).
                                 tab.write_input(bytes);
