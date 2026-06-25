@@ -162,7 +162,7 @@ This requires three transport encodings:
 |-----------|-----------|----------|-------------|
 | APC | Both | Linux | `ESC _ emterm-mux;<base64> ESC \` |
 | OSC 9999 | bridge→GUI | Windows | `ESC ] 9999 ; emterm-mux;<base64> ESC \` |
-| Plaintext | GUI→bridge | Windows | `EMUX;<base64>\n` |
+| Plaintext | GUI→bridge | Windows | `EMUX;<base64>\r` |
 
 **OSC 9999 format (bridge→GUI on Windows):**
 ```
@@ -173,10 +173,20 @@ Where `9999` is the OSC parameter. The WASM parser routes OSC 9999 to the APC ca
 
 **Plaintext format (GUI→bridge on Windows):**
 ```
-EMUX;<base64_payload>\n
+EMUX;<base64_payload>\r
 ```
 
-Uses only printable ASCII characters and a newline terminator. ConPTY passes these through without modification. The bridge `StdinApcParser` recognizes the `EMUX;` prefix and decodes the base64 payload identically to APC messages.
+Uses only printable ASCII characters and a CR terminator. portable-pty 0.8 opens
+ConPTY with `PSEUDOCONSOLE_WIN32_INPUT_MODE`, which interprets bytes written to
+the master as Win32 Input Mode VT key events; a raw LF (`\n`) on that channel
+is not delivered as a real key event and the bridge would otherwise stall in
+`InPlaintext` with the prefix matched but no terminator ever arriving. CR
+(`\r`) rides through reliably as `VK_RETURN`. The bridge `StdinApcParser`
+accepts CR, LF, CRLF, or LFCR interchangeably and silently swallows the
+partner half of a paired terminator, so a CRLF / LFCR insertion by any
+intermediate layer (ConPTY, ssh, the host shell) collapses to a single
+message boundary. The parser recognizes the `EMUX;` prefix and decodes the
+base64 payload identically to APC messages.
 
 **Transport negotiation:**
 
@@ -190,7 +200,7 @@ Note: The bridge stdin parser also recognizes OSC 9999 for forward compatibility
 
 **Security note (plaintext injection):**
 
-The `EMUX;` prefix uses printable ASCII, which means any program running inside a mux pane could theoretically output `EMUX;<valid-base64>\n` to forge control messages. However, in mux mode the bridge owns stdin exclusively — pane output flows through the daemon's Unix socket, not through bridge stdin. The injection risk is equivalent to APC injection on Linux (any program can emit `ESC _`). The bridge validates all decoded messages against the protocol before forwarding to the daemon.
+The `EMUX;` prefix uses printable ASCII, which means any program running inside a mux pane could theoretically output `EMUX;<valid-base64>\r` to forge control messages. However, in mux mode the bridge owns stdin exclusively — pane output flows through the daemon's Unix socket, not through bridge stdin. The injection risk is equivalent to APC injection on Linux (any program can emit `ESC _`). The bridge validates all decoded messages against the protocol before forwarding to the daemon.
 
 ### Data Flow
 
@@ -206,7 +216,7 @@ sequenceDiagram
     GUI->>GUI: Create MuxMessage
     GUI->>GUI: to_frame_body() → bytes
     GUI->>GUI: Base64 encode
-    GUI->>PTY: Write APC (Linux) or "EMUX;{base64}\n" (Windows)
+    GUI->>PTY: Write APC (Linux) or "EMUX;{base64}\r" (Windows)
     PTY->>Bridge: stdin receives APC or plaintext
     Bridge->>Bridge: Parse APC/plaintext, extract base64
     Bridge->>Bridge: Base64 decode → frame body
@@ -255,8 +265,8 @@ flowchart TD
     K -->|Yes| L[Base64 decode and send to daemon]
     K -->|No| M[Forward raw APC as passthrough]
     J -->|No| N[Accumulate]
-    B -->|InPlaintext| O{Is newline?}
-    O -->|Yes| P[Base64 decode and send to daemon]
+    B -->|InPlaintext| O{Is CR or LF?}
+    O -->|Yes| P[Base64 decode and send to daemon; arm swallow_partner_eol]
     O -->|No| Q[Accumulate]
 ```
 
