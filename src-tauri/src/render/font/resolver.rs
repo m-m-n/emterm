@@ -34,6 +34,12 @@ pub const BUNDLED_EMOJI_MONO_FONT: &[u8] =
 pub const BUNDLED_BASE_FONT: &[u8] =
     include_bytes!("../../../assets/fonts/Inconsolata-Regular.ttf");
 
+/// Bundled symbols font bytes (Noto Sans Symbols 2). Covers code points the
+/// other bundled faces miss — prompt arrows (`❯` U+276F), media controls
+/// (`⏵` U+23F5), geometric shapes used by TUIs.
+pub const BUNDLED_SYMBOLS_FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/NotoSansSymbols2-Regular.ttf");
+
 /// Logical role of a registered font in the fallback chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FontRole {
@@ -232,9 +238,10 @@ impl Resolver {
         id
     }
 
-    /// Register the four bundled fonts (Noto Sans CJK JP, Noto Color
-    /// Emoji, Noto Emoji monochrome, Inconsolata base). Returns the
-    /// assigned ids `(cjk, color_emoji, mono_emoji, base)`.
+    /// Register the five bundled fonts (Noto Sans CJK JP, Noto Color
+    /// Emoji, Noto Emoji monochrome, Inconsolata base, Noto Sans
+    /// Symbols 2). Returns the assigned ids
+    /// `(cjk, color_emoji, mono_emoji, base, symbols)`.
     ///
     /// Family names carry a `(bundled)` suffix so a later
     /// [`Resolver::register_system_family`] call for the same family
@@ -243,7 +250,7 @@ impl Resolver {
     /// font (typically newer, with extended emoji coverage) get a
     /// distinct `FontId` instead of being silently aliased back to the
     /// bundled bytes.
-    pub fn register_bundled(&mut self) -> (FontId, FontId, FontId, FontId) {
+    pub fn register_bundled(&mut self) -> (FontId, FontId, FontId, FontId, FontId) {
         let cjk = self.register_bytes(
             FontRole::Cjk,
             "Noto Sans CJK JP (bundled)",
@@ -264,7 +271,12 @@ impl Resolver {
             "Inconsolata (bundled)",
             Arc::<[u8]>::from(BUNDLED_BASE_FONT),
         );
-        (cjk, color, mono, base)
+        let symbols = self.register_bytes(
+            FontRole::Secondary,
+            "Noto Sans Symbols 2 (bundled)",
+            Arc::<[u8]>::from(BUNDLED_SYMBOLS_FONT),
+        );
+        (cjk, color, mono, base, symbols)
     }
 
     /// Try to load a specific system font family with its file bytes and
@@ -414,14 +426,14 @@ impl Resolver {
 mod tests {
     use super::*;
 
-    /// TS-9: bundled font registration returns four distinct FontIds —
-    /// one each for CJK, color emoji, monochrome emoji, and the base
-    /// monospace face.
+    /// TS-9: bundled font registration returns five distinct FontIds —
+    /// one each for CJK, color emoji, monochrome emoji, the base
+    /// monospace face, and the symbols face.
     #[test]
     fn register_bundled_returns_distinct_ids() {
         let mut r = Resolver::new();
-        let (cjk, color, mono, base) = r.register_bundled();
-        let ids = [cjk, color, mono, base];
+        let (cjk, color, mono, base, symbols) = r.register_bundled();
+        let ids = [cjk, color, mono, base, symbols];
         for i in 0..ids.len() {
             for j in (i + 1)..ids.len() {
                 assert_ne!(ids[i], ids[j], "ids[{i}] == ids[{j}]");
@@ -434,6 +446,7 @@ mod tests {
             Some(FontRole::MonochromeEmoji)
         );
         assert_eq!(r.font(base).map(|f| f.role), Some(FontRole::Base));
+        assert_eq!(r.font(symbols).map(|f| f.role), Some(FontRole::Secondary));
         for id in ids {
             assert!(
                 !r.font(id).unwrap().bytes.is_empty(),
@@ -450,6 +463,7 @@ mod tests {
         assert_eq!(r.by_role(FontRole::ColorEmoji).count(), 1);
         assert_eq!(r.by_role(FontRole::MonochromeEmoji).count(), 1);
         assert_eq!(r.by_role(FontRole::Base).count(), 1);
+        assert_eq!(r.by_role(FontRole::Secondary).count(), 1);
     }
 
     #[test]
@@ -473,6 +487,10 @@ mod tests {
             .by_family("Inconsolata (bundled)")
             .expect("base by family");
         assert_eq!(base.role, FontRole::Base);
+        let symbols = r
+            .by_family("Noto Sans Symbols 2 (bundled)")
+            .expect("symbols by family");
+        assert_eq!(symbols.role, FontRole::Secondary);
     }
 
     #[test]

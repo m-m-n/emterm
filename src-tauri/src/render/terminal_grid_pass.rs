@@ -1377,7 +1377,7 @@ mod tests {
     #[test]
     fn integration_swash_subpixel_maps_to_subpixel_page() {
         let mut resolver = Resolver::new();
-        let (cjk_id, emoji_id, _mono_id, _base_id) = resolver.register_bundled();
+        let (cjk_id, emoji_id, _mono_id, _base_id, _sym_id) = resolver.register_bundled();
         let swash = Arc::new(SwashRasterizer::with_subpixel(true));
         swash.ingest_resolver(&resolver);
         let chain = Arc::new(FallbackChain::new(cjk_id, [emoji_id]));
@@ -1399,7 +1399,7 @@ mod tests {
     fn integration_swash_renders_cjk_cell_cpu_side() {
         // Build a swash rasterizer + resolver against the bundled fonts.
         let mut resolver = Resolver::new();
-        let (cjk_id, emoji_id, _mono_id, _base_id) = resolver.register_bundled();
+        let (cjk_id, emoji_id, _mono_id, _base_id, _sym_id) = resolver.register_bundled();
         let swash = Arc::new(SwashRasterizer::with_subpixel(false));
         swash.ingest_resolver(&resolver);
         // Chain: cjk first (no base font registered against swash here,
@@ -1531,7 +1531,7 @@ mod gpu_tests {
         // Standard stack: fallback chain rooted at a sentinel id, swash
         // rasterizer fed by the bundled fonts.
         let mut resolver = super::super::font::resolver::Resolver::new();
-        let (cjk, _emoji, _mono, _base) = resolver.register_bundled();
+        let (cjk, _emoji, _mono, _base, _sym) = resolver.register_bundled();
         let swash = Arc::new(super::super::font::swash_adapter::SwashRasterizer::new());
         swash.ingest_resolver(&resolver);
         let chain = Arc::new(FallbackChain::new(cjk, []));

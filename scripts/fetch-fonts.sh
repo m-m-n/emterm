@@ -150,3 +150,7 @@ fetch_one "NotoEmoji-Regular.ttf" \
 fetch_one "Inconsolata-Regular.ttf" \
     "https://raw.githubusercontent.com/googlefonts/Inconsolata/v3.000/fonts/ttf/Inconsolata-Regular.ttf" \
     "127875d255d4c5973ca57267a43bb9d1c04397e6c7d236984a595b6cdcb12b7c"
+
+fetch_one "NotoSansSymbols2-Regular.ttf" \
+    "https://raw.githubusercontent.com/notofonts/noto-fonts/v20201206-phase3/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf" \
+    "e672040e4eb73c0d9ac841411eea34be3c1e12e81e88962786489fffae4fe973"

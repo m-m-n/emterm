@@ -709,11 +709,15 @@ impl App {
         resolver.scan_user_dir();
 
         // 4. Bundled fonts. `register_bundled` registers CJK, color
-        //    emoji, monochrome emoji, and the base monospace face. We
-        //    keep handles to all four so the chain composition below
-        //    can promote the bundled base font over the bundled CJK
-        //    font when the host monospace family is absent.
-        let (bundled_cjk_id, emoji_id, bundled_mono_emoji_id, bundled_base_id) =
+        //    emoji, monochrome emoji, the base monospace face, and the
+        //    symbols face (Noto Sans Symbols 2 → `❯` U+276F / `⏵`
+        //    U+23F5 etc.). We keep handles to all of them so the chain
+        //    composition below can promote the bundled base font over
+        //    the bundled CJK font when the host monospace family is
+        //    absent. The symbols face is registered as
+        //    `FontRole::Secondary`, so the fallback chain picks it up
+        //    automatically without an explicit local.
+        let (bundled_cjk_id, emoji_id, bundled_mono_emoji_id, bundled_base_id, _symbols_id) =
             resolver.register_bundled();
 
         // Host-font preferences sourced from `settings.font_family_fallback`:
@@ -772,25 +776,13 @@ impl App {
         // wins the resolver's `by_family` lookup against bundled +
         // system entries (FR6 priority #1).
 
-        // Symbol fallback families: cover prompt arrows / math symbols
-        // / geometric shapes the base monospace + CJK + emoji fonts
-        // miss (e.g. `❯` U+276F shown by starship, ✱ U+2731, ▰ U+25B0
-        // bars used by some TUIs). On Linux `fc-match :charset=276f`
-        // typically resolves to `Noto Sans Symbols2`; on systems
-        // without it `DejaVu Sans` catches a wide BMP range. Registered
-        // as `Secondary` so they sit at the chain tail and only get
-        // consulted when every earlier role misses. Each call is
-        // silent on absence — missing families just leave the slot
-        // unfilled.
-        #[cfg(not(test))]
-        for family in [
-            "Noto Sans Symbols2",
-            "Symbola",
-            "DejaVu Sans Mono",
-            "DejaVu Sans",
-        ] {
-            let _ = resolver.register_system_family(family, FontRole::Secondary);
-        }
+        // Symbol fallback: covered by the bundled
+        // `Noto Sans Symbols 2 (bundled)` registered in
+        // `register_bundled()` above (FontRole::Secondary). The
+        // previous host-side family probe (Noto Sans Symbols2 /
+        // Symbola / DejaVu) is now redundant on Linux and never fired
+        // on Windows anyway — bundling guarantees `❯` U+276F /
+        // `⏵` U+23F5 / surrounding shapes everywhere.
 
         // Best-effort wider system scan (logged at WARN on failure;
         // family-name only, byte loading is deferred). Tests skip the
