@@ -148,6 +148,19 @@ pub fn parse_sixel_sequence(data: &[u8]) -> Option<SixelData> {
     // Find the 'q' introducer that marks the start of SIXEL data
     let q_pos = data.iter().position(|&b| b == b'q')?;
 
+    // SIXEL parameter bytes are ASCII digits and ';' only. Other DCS
+    // sequences also use 'q' as their final byte but carry an intermediate
+    // byte before it (DECRQSS = `$q`, XTGETTCAP = `+q`, etc.); reject them
+    // here so they aren't decoded as a zero-pixel SIXEL (which the
+    // dimension floor in `decode_sixel_to_rgba` would then promote to a
+    // 1x6 image that spawns the image viewer).
+    if !data[..q_pos]
+        .iter()
+        .all(|&b| b.is_ascii_digit() || b == b';')
+    {
+        return None;
+    }
+
     // Parse DCS parameters before 'q'
     let params_str = String::from_utf8_lossy(&data[..q_pos]);
     let params: Vec<u16> = params_str
@@ -609,6 +622,28 @@ mod tests {
     fn test_parse_sixel_no_q() {
         let data = b"0;1;0#0~";
         let sixel = parse_sixel_sequence(data);
+        assert!(sixel.is_none());
+    }
+
+    #[test]
+    fn test_parse_sixel_rejects_decrqss() {
+        // DECRQSS request for SGR: `ESC P $ q m ESC \` → payload `$qm`.
+        // Must NOT be accepted as a (zero-pixel) SIXEL.
+        let sixel = parse_sixel_sequence(b"$qm");
+        assert!(sixel.is_none());
+    }
+
+    #[test]
+    fn test_parse_sixel_rejects_xtgettcap() {
+        // XTGETTCAP for "Ms": `ESC P + q 4D73 ESC \` → payload `+q4D73`.
+        let sixel = parse_sixel_sequence(b"+q4D73");
+        assert!(sixel.is_none());
+    }
+
+    #[test]
+    fn test_parse_sixel_rejects_decrqss_with_params() {
+        // DECRQSS variant carrying a numeric param before the intermediate.
+        let sixel = parse_sixel_sequence(b"1$qm");
         assert!(sixel.is_none());
     }
 
