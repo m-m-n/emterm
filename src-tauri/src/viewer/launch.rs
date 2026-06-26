@@ -43,9 +43,6 @@ pub struct PayloadAppearance {
     /// Code font family.
     #[serde(rename = "codeFontFamily")]
     pub code_font_family: String,
-    /// Emoji font family.
-    #[serde(rename = "emojiFontFamily")]
-    pub emoji_font_family: String,
     /// Base font size in pt.
     #[serde(rename = "fontSize")]
     pub font_size: u32,
@@ -81,7 +78,6 @@ impl PayloadAppearance {
             preset: preset_token(a.preset).to_string(),
             body_font_family: a.body_font_family.clone(),
             code_font_family: a.code_font_family.clone(),
-            emoji_font_family: a.emoji_font_family.clone(),
             font_size: a.font_size,
         }
     }
@@ -234,7 +230,6 @@ mod tests {
         // TS bundle expects camelCase font keys.
         assert!(json.contains("\"bodyFontFamily\""));
         assert!(json.contains("\"codeFontFamily\""));
-        assert!(json.contains("\"emojiFontFamily\""));
         assert!(json.contains("\"fontSize\""));
     }
 
@@ -323,7 +318,6 @@ mod tests {
         assert_eq!(payload.appearance.preset, "purple");
         assert_eq!(payload.appearance.body_font_family, "Noto Sans");
         assert_eq!(payload.appearance.code_font_family, "Fira Code");
-        assert_eq!(payload.appearance.emoji_font_family, "Noto Color Emoji");
         assert_eq!(payload.appearance.font_size, 14);
     }
 }

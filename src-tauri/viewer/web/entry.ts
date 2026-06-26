@@ -43,7 +43,6 @@ export interface ViewerAppearance {
   preset: UiThemePreset;
   bodyFontFamily: string;
   codeFontFamily: string;
-  emojiFontFamily: string;
   fontSize: number;
 }
 
@@ -85,7 +84,6 @@ export function applyAppearance(appearance: ViewerAppearance): void {
   applyMarkdownSettings(
     appearance.bodyFontFamily,
     appearance.codeFontFamily,
-    appearance.emojiFontFamily,
     appearance.fontSize,
   );
   applyMarkdownColorTheme({

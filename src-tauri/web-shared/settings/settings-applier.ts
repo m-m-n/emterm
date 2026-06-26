@@ -48,13 +48,7 @@ let markdownSystemThemeListener: ((e: MediaQueryListEvent) => void) | null =
  */
 export function applySettings(settings: AppSettings): void {
   applyFontSize(settings.font_size);
-  applyFontFamily(
-    settings.font_family_primary,
-    // Prefer the new color-emoji key; fall back to the legacy single
-    // key for settings.json files that have not been migrated yet.
-    settings.font_family_emoji_color || settings.font_family_emoji,
-    settings.font_family_secondary,
-  );
+  applyFontFamily(settings.font_family_primary, settings.font_family_secondary);
   applyUiTheme(settings.ui_theme, settings.ui_theme_preset);
   applyTerminalColorScheme(
     settings.terminal_color_scheme,
@@ -68,9 +62,6 @@ export function applySettings(settings: AppSettings): void {
   applyMarkdownSettings(
     settings.markdown_body_font_family,
     settings.markdown_code_font_family,
-    // Prefer the new color-emoji key; fall back to the legacy key.
-    settings.markdown_emoji_font_family_color ||
-      settings.markdown_emoji_font_family,
     settings.markdown_font_size,
   );
   applyMarkdownColorTheme({
@@ -130,32 +121,28 @@ export function applyFontSize(fontSize: number): void {
 
 /**
  * Build a CSS font-family value from user-configured font fields.
- * Order: primary, emoji, secondary. Empty fields are omitted.
- * Returns empty string when no fonts are configured.
+ * Order: primary, secondary. Empty fields are omitted. Emoji and
+ * symbol coverage is handled by the bundled font stack on the Rust
+ * side, so they do not appear in the chain. Returns an empty string
+ * when no fonts are configured.
  */
 export function buildFontFamilyChain(
   primary: string,
-  emoji: string,
   secondary: string,
 ): string {
   const parts: string[] = [];
   if (primary) parts.push(primary);
-  if (emoji) parts.push(emoji);
   if (secondary) parts.push(secondary);
   return parts.join(", ");
 }
 
 /**
- * Apply font family setting from three separate fields.
+ * Apply font family setting from two separate fields.
  * Sets --terminal-font-family CSS variable when fonts are configured.
  * Renderer receives the user chain or "monospace" as default.
  */
-export function applyFontFamily(
-  primary: string,
-  emoji: string,
-  secondary: string,
-): void {
-  const chain = buildFontFamilyChain(primary, emoji, secondary);
+export function applyFontFamily(primary: string, secondary: string): void {
+  const chain = buildFontFamilyChain(primary, secondary);
   const root = document.documentElement;
   if (chain) {
     root.style.setProperty("--terminal-font-family", chain);
@@ -368,7 +355,6 @@ export function applyUiFont(fontFamily: string): void {
 export function applyMarkdownSettings(
   bodyFont: string,
   codeFont: string,
-  emojiFont: string,
   fontSize: number,
 ): void {
   const root = document.documentElement;
@@ -383,12 +369,6 @@ export function applyMarkdownSettings(
     root.style.setProperty("--markdown-code-font-family", trimmedCode);
   } else {
     root.style.removeProperty("--markdown-code-font-family");
-  }
-  const trimmedEmoji = emojiFont?.trim();
-  if (trimmedEmoji) {
-    root.style.setProperty("--markdown-emoji-font-family", trimmedEmoji);
-  } else {
-    root.style.removeProperty("--markdown-emoji-font-family");
   }
   root.style.setProperty("--markdown-body-font-size", `${fontSize}pt`);
 }

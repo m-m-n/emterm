@@ -679,28 +679,10 @@ impl App {
         // for a given family name. We therefore register in highest →
         // lowest priority order.
 
-        // 1. Settings-supplied emoji families. We register these BEFORE
-        //    `register_bundled()` so a settings family that happens to
-        //    collide with a bundled family name wins the lookup.
-        //    The two `(bundled)` suffixes on the bundled registrations
-        //    keep them disambiguated regardless.
-        #[cfg(not(test))]
-        let host_emoji_id = settings
-            .emoji_font
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .and_then(|family| resolver.register_system_family(family, FontRole::ColorEmoji));
-        #[cfg(test)]
-        let host_emoji_id: Option<FontId> = None;
-        // Settings-supplied monochrome emoji family (SPEC FR4).
-        #[cfg(not(test))]
-        let host_mono_emoji_id = settings
-            .emoji_font_monochrome
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .and_then(|family| resolver.register_system_family(family, FontRole::MonochromeEmoji));
-        #[cfg(test)]
-        let host_mono_emoji_id: Option<FontId> = None;
+        // Emoji families are bundled and fixed; user-side selection was
+        // removed (see font-bundle-cleanup report). Only the bundled
+        // `Noto Color Emoji` / `Noto Emoji` faces serve `FontRole::ColorEmoji`
+        // / `FontRole::MonochromeEmoji` from now on.
 
         // 2. User override directory. The scan is silently a no-op when
         //    the directory does not exist. Skipped during tests so unit
@@ -896,37 +878,13 @@ impl App {
             extras.push(f.id);
             log::info!("font.symbol = {} (id={:?})", f.family, f.id);
         }
-        // Host-installed emoji font (if any) takes precedence over the
-        // bundled one — both go in the chain so a codepoint absent
-        // from the host font still falls through to bundled.
-        if let Some(id) = host_emoji_id {
-            extras.push(id);
-        }
+        // Color and monochrome emoji come from the bundled Noto faces
+        // exclusively. The bundle is SSOT — host emoji fonts are not
+        // consulted (e.g. Windows' system Noto Color Emoji ships as
+        // COLRv1+SVG which swash cannot raster).
         extras.push(emoji_id);
-        // Monochrome emoji font: host preference (if any) ahead of the
-        // bundled Noto Emoji, so a text-default emoji (e.g. U+23F5 `⏵`)
-        // resolves via the host face when available and falls through
-        // to the bundle otherwise.
-        if let Some(id) = host_mono_emoji_id {
-            extras.push(id);
-        }
         extras.push(bundled_mono_emoji_id);
-        // Pick the preferred color-emoji source. Host wins only when
-        // the rasterizer reports it actually carries color glyphs it
-        // can paint — Windows' system "Noto Color Emoji" ships as
-        // COLRv1 + SVG (no CBDT strikes), and swash advertises the
-        // run as `Content::Color` but rasterizes nothing. Without
-        // this guard the chain marker would point at an empty face
-        // and every 🟢 / 😀 cluster would render as blank. Falling
-        // back to the bundled CBDT/CBLC font keeps color emoji
-        // visible on hosts whose system emoji font swash cannot
-        // raster. The unusable host font stays in the chain so a
-        // codepoint the bundled font misses still has a last-resort
-        // monochrome fallback before tofu.
-        let preferred_emoji_id = match host_emoji_id {
-            Some(host) if rasterizer.has_color(host) => host,
-            _ => emoji_id,
-        };
+        let preferred_emoji_id = emoji_id;
         #[cfg(not(test))]
         if let Some(id) = inconsolata_id {
             log::info!("font.base = {} (id={:?})", base_family, id);
@@ -945,35 +903,20 @@ impl App {
                 cjk_family
             );
         }
-        match (host_emoji_id, settings.emoji_font.as_deref()) {
-            (Some(id), Some(family)) if preferred_emoji_id == id => {
-                log::info!("font.emoji = {} (id={:?})", family, id)
-            }
-            (Some(id), Some(family)) => log::warn!(
-                "font.emoji = bundled Noto Color Emoji (requested {:?} id={:?} has no rasterizable color glyphs)",
-                family,
-                id,
-            ),
-            (None, Some(family)) => log::warn!(
-                "font.emoji = bundled Noto Color Emoji (requested {:?} not found on host)",
-                family
-            ),
-            _ => log::info!("font.emoji = bundled Noto Color Emoji (id={:?})", emoji_id),
-        }
+        log::info!("font.emoji = bundled Noto Color Emoji (id={:?})", emoji_id);
         let mut chain = FallbackChain::new(base_id, extras);
         // Mark the preferred emoji font as the color-emoji source so
         // VS-16-bearing clusters (e.g. ⚠️ = U+26A0 + U+FE0F) and bare
         // pictographs (✅ U+2705, 🟢 U+1F7E2) resolve to it instead of
         // the BW base / CJK fonts that may also cover those codepoints.
         chain.set_emoji(preferred_emoji_id);
-        // Mark the preferred monochrome-emoji font so text-default
-        // emoji code points (e.g. U+23F5 `⏵`) and VS15-attached
-        // clusters route to the outline face instead of the BW base
-        // monospace font (which has no glyph for them). FR5
-        // "opposite-side fallback before tofu" is handled inside
+        // Mark the bundled monochrome-emoji font so text-default emoji
+        // code points (e.g. U+23F5 `⏵`) and VS15-attached clusters
+        // route to the outline face instead of the BW base monospace
+        // font (which has no glyph for them). FR5 "opposite-side
+        // fallback before tofu" is handled inside
         // `FallbackChain::resolve_for_cluster`.
-        let preferred_mono_emoji_id = host_mono_emoji_id.unwrap_or(bundled_mono_emoji_id);
-        chain.set_mono_emoji(preferred_mono_emoji_id);
+        chain.set_mono_emoji(bundled_mono_emoji_id);
         // Wire the real bold faces so SGR-bold cells render with them.
         #[cfg(not(test))]
         if let (Some(regular), Some(bold)) = (inconsolata_id, base_bold_id) {
@@ -1913,8 +1856,7 @@ impl App {
         // preference to push onto tabs.
         self.mux_latch = build_mux_latch(&new);
 
-        let font_families_changed = new.font_family_fallback != old.font_family_fallback
-            || new.emoji_font != old.emoji_font;
+        let font_families_changed = new.font_family_fallback != old.font_family_fallback;
         let font_size_changed = (new.font_size - old.font_size).abs() >= f32::EPSILON;
         let padding_changed = new.padding != old.padding;
 

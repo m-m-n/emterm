@@ -211,15 +211,7 @@ body {
 }
 
 .markdown-content {
-  font-family:
-    var(--markdown-body-font-family, serif),
-    var(
-      --markdown-emoji-font-family,
-      "Apple Color Emoji",
-      "Segoe UI Emoji",
-      "Segoe UI Symbol",
-      "Noto Color Emoji"
-    );
+  font-family: var(--markdown-body-font-family, serif);
   font-size: var(--markdown-body-font-size, 14pt);
   line-height: 1.6;
   word-wrap: break-word;
@@ -323,15 +315,7 @@ body {
   padding: 0.2em 0.4em;
   margin: 0;
   font-size: 85%;
-  font-family:
-    var(--markdown-code-font-family, monospace),
-    var(
-      --markdown-emoji-font-family,
-      "Apple Color Emoji",
-      "Segoe UI Emoji",
-      "Segoe UI Symbol",
-      "Noto Color Emoji"
-    );
+  font-family: var(--markdown-code-font-family, monospace);
   border-radius: 3px;
 }
 

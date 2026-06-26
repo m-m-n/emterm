@@ -118,11 +118,7 @@ fn load_settings() -> Result<Value, String> {
 /// stripped from the rewritten `settings.json` so a subsequent load
 /// does not re-trigger the migration on every launch (the round-trip
 /// would otherwise leave a stale `.bak` rewrite each time).
-const LEGACY_KEYS_REMOVED_AFTER_MIGRATION: &[&str] = &[
-    "font_family",
-    "font_family_emoji",
-    "markdown_emoji_font_family",
-];
+const LEGACY_KEYS_REMOVED_AFTER_MIGRATION: &[&str] = &["font_family"];
 
 /// Persist a migrated `settings.json`:
 /// 1. Best-effort copy of the existing bytes to `settings.json.bak`.
@@ -488,13 +484,13 @@ mod tests {
         assert_eq!(back.font_size, settings.font_size);
     }
 
-    /// SPEC FR7 / OQ3: loading a settings file that carries the legacy
-    /// `font_family_emoji` key must rewrite the file with the new
-    /// schema and leave a one-time `settings.json.bak` snapshot of the
-    /// previous content. Reloading the rewritten file is a no-op and
-    /// must NOT produce a second `.bak`.
+    /// Loading a settings file that carries the legacy `font_family`
+    /// key must migrate it to `font_family_primary` and rewrite the
+    /// file with the new schema (one-time `.bak` snapshot). Reloading
+    /// the rewritten file is a no-op and must NOT produce a second
+    /// `.bak`.
     #[test]
-    fn legacy_emoji_key_persists_with_bak() {
+    fn legacy_font_family_persists_with_bak() {
         let dir = std::env::temp_dir().join(format!(
             "emterm-settings-window-migrate-{}",
             std::process::id()
@@ -503,12 +499,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
         let bak = path.with_extension("json.bak");
-        let original = br#"{"font_family_emoji": "Twemoji"}"#;
+        let original = br#"{"font_family": "Legacy Mono"}"#;
         std::fs::write(&path, original).unwrap();
 
-        // Drive the loader the same way `load_settings` does (we
-        // can't call `load_settings` directly because it consults
-        // `settings_path()` rather than a parameter).
         let original_bytes = std::fs::read(&path).unwrap();
         let mut settings: AppSettings = serde_json::from_slice(&original_bytes).unwrap();
         let migrated = settings.apply_migrations();
@@ -523,16 +516,19 @@ mod tests {
             ".bak must equal the pre-migration file bytes"
         );
 
-        // The new file carries the migrated key.
+        // The new file carries the migrated key under the new name.
         let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(
-            v["font_family_emoji_color"], "Twemoji",
-            "legacy emoji key must migrate into the color slot"
+            v["font_family_primary"], "Legacy Mono",
+            "legacy font_family must migrate into font_family_primary"
+        );
+        assert!(
+            v.get("font_family").is_none(),
+            "legacy font_family key must be stripped after rewrite"
         );
 
         // Reloading the rewritten file should be idempotent and must
-        // NOT clobber `.bak` again. Move `.bak` aside, reload, and
-        // verify the file does not reappear.
+        // NOT clobber `.bak` again.
         let bak_aside = path.with_extension("json.bak.aside");
         std::fs::rename(&bak, &bak_aside).unwrap();
         let reloaded_bytes = std::fs::read(&path).unwrap();
