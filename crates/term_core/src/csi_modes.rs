@@ -97,6 +97,17 @@ impl TerminalCore {
                 MODE_ACTION_NONE
             }
 
+            // DECSET 1007 (alternate_scroll): AltScreen wheel→arrow
+            // translation. Track the bit core-side so the host can read
+            // it via `get_mode(MODE_ALTERNATE_SCROLL)` before deciding
+            // whether to emit arrow bytes. The host also gates on its
+            // own user setting; this arm only carries the application's
+            // runtime opt-in/out.
+            1007 => {
+                self.set_mode(MODE_ALTERNATE_SCROLL, enable);
+                MODE_ACTION_NONE
+            }
+
             // Multi-valued modes: TS fallback
             1 | 1000 | 1002 | 1003 | 1005 | 1006 => MODE_ACTION_TS_FALLBACK,
 
@@ -225,6 +236,28 @@ mod tests {
         assert!(core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
         core.handle_set_mode(1049, true); // save + switch to alt
         assert!(!core.get_mode(MODE_SYNCHRONIZED_OUTPUT));
+    }
+
+    // ── DECSET 1007 (alternate_scroll) ──────────────────────
+
+    /// TS-1: a fresh `TerminalCore` has `MODE_ALTERNATE_SCROLL` set so
+    /// AltScreen wheel translation is on by default (matching xterm /
+    /// WezTerm). The host then layers its own user-setting gate on top.
+    #[test]
+    fn alternate_scroll_default_on() {
+        let core = TerminalCore::new(80, 24, 0);
+        assert!(core.get_mode(MODE_ALTERNATE_SCROLL));
+    }
+
+    /// TS-2: `ESC[?1007h` / `ESC[?1007l` toggle the bit and both return
+    /// `MODE_ACTION_NONE` (no TS fallback, no buffer switch).
+    #[test]
+    fn decset_1007_toggles_alternate_scroll_bit() {
+        let mut core = TerminalCore::new(80, 24, 0);
+        assert_eq!(core.handle_set_mode(1007, false), 0);
+        assert!(!core.get_mode(MODE_ALTERNATE_SCROLL));
+        assert_eq!(core.handle_set_mode(1007, true), 0);
+        assert!(core.get_mode(MODE_ALTERNATE_SCROLL));
     }
 
     #[test]

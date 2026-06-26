@@ -1,0 +1,154 @@
+schema_version: 1
+feature: claude-code-altscreen-ux
+
+phases:
+  - id: phase-1-decset-1007
+    title: "Phase 1: DECSET 1007 (alternate_scroll)"
+    estimated_effort: small
+    tasks:
+      - id: term-core-mode-bit
+        title: "Add MODE_ALTERNATE_SCROLL bit + construction-time default ON"
+        files:
+          - crates/term_core/src/terminal_core.rs
+        depends_on: []
+        status: completed
+        completed_at_commit: b29f83c
+      - id: term-core-csi-1007
+        title: "Add handle_set_mode arm for DEC private mode 1007"
+        files:
+          - crates/term_core/src/csi_modes.rs
+        depends_on: [term-core-mode-bit]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: settings-alternate-scroll-field
+        title: "Add alternate_scroll_enabled field to AppSettings"
+        files:
+          - crates/app_settings/src/settings.rs
+        depends_on: []
+        status: completed
+        completed_at_commit: b29f83c
+      - id: settings-ts-mirror
+        title: "Mirror alternate_scroll_enabled in TS AppSettings interface"
+        files:
+          - src-tauri/web-shared/settings/types.ts
+        depends_on: [settings-alternate-scroll-field]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: settings-ui-toggle
+        title: "Add Terminal Behavior toggle for alternate_scroll_enabled"
+        files:
+          - src-tauri/web-shared/settings/sections/terminal-behavior-section.ts
+          - src-tauri/web-shared/i18n/locales/en.json
+          - src-tauri/web-shared/i18n/locales/ja.json
+        depends_on: [settings-ts-mirror]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: host-wheel-branch
+        title: "Wire wheel→arrow translation branch in window_host"
+        files:
+          - src-tauri/src/window_host.rs
+        depends_on: [term-core-mode-bit, term-core-csi-1007, settings-alternate-scroll-field]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: phase-1-tests
+        title: "Unit tests: mode bit default + ?1007 toggle + wheel gate matrix"
+        files:
+          - crates/term_core/src/csi_modes.rs
+          - src-tauri/src/window_host.rs
+        depends_on: [host-wheel-branch]
+        status: completed
+        completed_at_commit: b29f83c
+
+  - id: phase-2-csi-modifier
+    title: "Phase 2: CSI Modifier Extension"
+    estimated_effort: small
+    tasks:
+      - id: encode-modifier-helper
+        title: "Add Modifiers→<mods> param mapping helper"
+        files:
+          - src-tauri/src/pty/input.rs
+        depends_on: []
+        status: completed
+        completed_at_commit: b29f83c
+      - id: encode-arrows-home-end
+        title: "Extend encode() for Arrow / Home / End with modifier CSI form"
+        files:
+          - src-tauri/src/pty/input.rs
+        depends_on: [encode-modifier-helper]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: encode-page-insert-delete
+        title: "Extend encode() for PageUp/PageDown/Insert/Delete with modifier CSI form"
+        files:
+          - src-tauri/src/pty/input.rs
+        depends_on: [encode-modifier-helper]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: encode-function-keys
+        title: "Extend encode() for F1-F12 with modifier CSI form"
+        files:
+          - src-tauri/src/pty/input.rs
+        depends_on: [encode-modifier-helper]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: encode-guard-alt-prefix
+        title: "Guard ESC-prefix block from double-encoding when CSI modifier path already handled Alt"
+        files:
+          - src-tauri/src/pty/input.rs
+        depends_on: [encode-arrows-home-end, encode-page-insert-delete, encode-function-keys]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: phase-2-tests
+        title: "Unit tests: representative modifier-key bytes + plain-key regression"
+        files:
+          - src-tauri/src/pty/input.rs
+        depends_on: [encode-guard-alt-prefix]
+        status: completed
+        completed_at_commit: b29f83c
+
+  - id: phase-3-osc8
+    title: "Phase 3: OSC 8 Hyperlink Host Wiring"
+    estimated_effort: medium
+    tasks:
+      - id: osc8-discriminator
+        title: "Add OSC 8 discriminator on HoverState or LinkKind (pick at impl time)"
+        files:
+          - src-tauri/src/window_host.rs
+        depends_on: []
+        status: completed
+        completed_at_commit: b29f83c
+      - id: osc8-detect-helper
+        title: "Add detect_osc8_link_at(core, row, col) helper synthesizing DetectedLink"
+        files:
+          - src-tauri/src/window_host.rs
+        depends_on: [osc8-discriminator]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: osc8-hover-branch
+        title: "Wire OSC 8 hover in refresh_link_hover before regex gate"
+        files:
+          - src-tauri/src/window_host.rs
+        depends_on: [osc8-detect-helper]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: osc8-click-branch
+        title: "Wire OSC 8 click in try_open_link_at_pointer before AltScreen short-circuit"
+        files:
+          - src-tauri/src/window_host.rs
+        depends_on: [osc8-detect-helper]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: osc8-pty-change-guard-refine
+        title: "Refine PTY-change AltScreen short-circuit to preserve OSC 8 hover"
+        files:
+          - src-tauri/src/window_host.rs
+        depends_on: [osc8-hover-branch, osc8-discriminator]
+        status: completed
+        completed_at_commit: b29f83c
+      - id: phase-3-tests
+        title: "Unit tests: detect_osc8_link_at variants + hover/click branch ordering"
+        files:
+          - src-tauri/src/window_host.rs
+        depends_on: [osc8-pty-change-guard-refine, osc8-click-branch]
+        status: completed
+        completed_at_commit: b29f83c

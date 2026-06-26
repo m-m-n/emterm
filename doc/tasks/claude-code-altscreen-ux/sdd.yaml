@@ -1,0 +1,157 @@
+schema_version: 1
+feature: claude-code-altscreen-ux
+created: 2026-06-26
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+    term_core:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path crates/term_core/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path crates/term_core/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path crates/term_core/Cargo.toml"
+      e2e_test_command: ""
+    web:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: ""
+      e2e_test_command: ""
+      typecheck_command: "bun run typecheck"
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: b29f83c99a1681e65ecc620b6f17b376f11f774c
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
+    status: completed
+    completed_at_commit: b29f83c99a1681e65ecc620b6f17b376f11f774c
+  - id: verify-plan
+    status: completed
+    completed_at_commit: b29f83c99a1681e65ecc620b6f17b376f11f774c
+  - id: implement
+    status: completed
+    completed_at_commit: b29f83c99a1681e65ecc620b6f17b376f11f774c
+  - id: check
+    status: completed
+    completed_at_commit: b29f83c99a1681e65ecc620b6f17b376f11f774c
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: b29f83c99a1681e65ecc620b6f17b376f11f774c
+
+requirements:
+  FR1:
+    title: DECSET 1007 (alternate_scroll) — AltScreen 中のホイールを矢印キー化、ユーザー設定で off 可
+    status: ok
+    tasks:
+      - term-core-mode-bit
+      - term-core-csi-1007
+      - settings-alternate-scroll-field
+      - settings-ts-mirror
+      - settings-ui-toggle
+      - host-wheel-branch
+      - phase-1-tests
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-8
+  FR2:
+    title: CSI Modifier 拡張 — Ctrl/Shift/Alt 付き Home/End/PgUp/PgDn/Arrow/F-key を xterm CSI 形式で送出
+    status: ok
+    tasks:
+      - encode-modifier-helper
+      - encode-arrows-home-end
+      - encode-page-insert-delete
+      - encode-function-keys
+      - encode-guard-alt-prefix
+      - phase-2-tests
+    tests:
+      - TS-9
+      - TS-10
+      - TS-11
+      - TS-12
+      - TS-13
+      - TS-14
+      - TS-15
+      - TS-16
+      - TS-17
+      - TS-18
+      - TS-27
+  FR3:
+    title: OSC 8 ハイパーリンクのホスト対応 — Ctrl+hover 下線、Ctrl+click で is_safe_uri 検証後 OS opener 起動、AltScreen 中も有効
+    status: ok
+    tasks:
+      - osc8-discriminator
+      - osc8-detect-helper
+      - osc8-hover-branch
+      - osc8-click-branch
+      - osc8-pty-change-guard-refine
+      - phase-3-tests
+    tests:
+      - TS-19
+      - TS-20
+      - TS-21
+      - TS-22
+      - TS-23
+      - TS-24
+      - TS-25
+      - TS-26
+  NFR1:
+    title: Performance — wheel < 100µs/event、modifier encode < 50µs/key、OSC 8 hit-test < 200µs/move
+    status: ok
+    tasks:
+      - host-wheel-branch
+      - encode-arrows-home-end
+      - encode-page-insert-delete
+      - encode-function-keys
+      - osc8-detect-helper
+    tests: []
+    notes: "性能は設計上の保証 (静的バイト列+O(1)ルックアップ) で担保。専用ベンチは無し、Manual smoke のみ。"
+  NFR2:
+    title: Security — OSC 8 URI は links::is_safe_uri 必須、unsafe は warn ログのみで握り潰し
+    status: ok
+    tasks:
+      - osc8-detect-helper
+      - osc8-click-branch
+    tests:
+      - TS-20
+  NFR3:
+    title: Compatibility — xterm/WezTerm/Alacritty 互換 (DECSET 1007 は AltScreen 専用・Shift 無視・3 行/ノッチ、CSI Modifier は xterm 仕様)
+    status: ok
+    tasks:
+      - term-core-csi-1007
+      - host-wheel-branch
+      - encode-arrows-home-end
+      - encode-page-insert-delete
+      - encode-function-keys
+    tests:
+      - TS-3
+      - TS-8
+      - TS-9
+      - TS-10
+      - TS-11
+      - TS-12
+      - TS-13
+      - TS-14
+      - TS-15
+  NFR4:
+    title: User control — alternate_scroll_enabled 設定で FR1 を opt-out 可、FR2/FR3 には影響なし
+    status: ok
+    tasks:
+      - settings-alternate-scroll-field
+      - settings-ts-mirror
+      - settings-ui-toggle
+    tests:
+      - TS-4

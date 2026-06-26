@@ -31,6 +31,11 @@ deserialize_null_with!(
     default_scrollback_lines
 );
 deserialize_null_with!(deserialize_null_scroll_speed, u32, default_scroll_speed);
+deserialize_null_with!(
+    deserialize_null_alternate_scroll_enabled,
+    bool,
+    default_alternate_scroll_enabled
+);
 deserialize_null_with!(deserialize_null_true, bool, default_true);
 
 // For fields where T::default() is correct (String, Vec, enums with #[default])
@@ -95,6 +100,9 @@ fn default_scrollback_lines() -> u32 {
 }
 fn default_scroll_speed() -> u32 {
     3
+}
+fn default_alternate_scroll_enabled() -> bool {
+    true
 }
 fn default_true() -> bool {
     true
@@ -367,6 +375,16 @@ pub struct AppSettings {
         deserialize_with = "deserialize_null_scroll_speed"
     )]
     pub scroll_speed: u32,
+    /// DECSET 1007 (alternate_scroll): when true, the host translates
+    /// AltScreen wheel events into arrow-key bytes so AltScreen apps
+    /// scroll their own log. Default `true`. The terminal-side mode bit
+    /// (`MODE_ALTERNATE_SCROLL`) is the runtime gate; this setting is
+    /// the user-facing opt-out layered on top.
+    #[serde(
+        default = "default_alternate_scroll_enabled",
+        deserialize_with = "deserialize_null_alternate_scroll_enabled"
+    )]
+    pub alternate_scroll_enabled: bool,
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub bell_action: BellAction,
     #[serde(default = "default_true", deserialize_with = "deserialize_null_true")]
@@ -670,6 +688,7 @@ impl Default for AppSettings {
             cursor_style: CursorStyle::default(),
             cursor_blink: default_true(),
             scroll_speed: default_scroll_speed(),
+            alternate_scroll_enabled: default_alternate_scroll_enabled(),
             bell_action: BellAction::default(),
             url_detection: default_true(),
             copy_on_select: false,
@@ -820,6 +839,7 @@ mod tests {
             cursor_style: CursorStyle::Bar,
             cursor_blink: false,
             scroll_speed: 5,
+            alternate_scroll_enabled: false,
             bell_action: BellAction::None,
             url_detection: false,
             copy_on_select: true,
@@ -895,6 +915,7 @@ mod tests {
         assert_eq!(restored.cursor_style, CursorStyle::Bar);
         assert!(!restored.cursor_blink);
         assert_eq!(restored.scroll_speed, 5);
+        assert!(!restored.alternate_scroll_enabled);
         assert_eq!(restored.bell_action, BellAction::None);
         assert!(!restored.url_detection);
         assert!(restored.copy_on_select);

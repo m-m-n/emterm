@@ -49,6 +49,7 @@ export interface AppSettings {
   cursor_style: CursorStyle;
   cursor_blink: boolean;
   scroll_speed: number;
+  alternate_scroll_enabled: boolean;
   bell_action: BellAction;
   url_detection: boolean;
   copy_on_select: boolean;
