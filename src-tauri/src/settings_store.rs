@@ -168,7 +168,6 @@ mod tests {
         s.font_size = 15;
         s.font_family_primary = "JetBrains Mono".into();
         s.font_family_secondary = "Noto Sans JP".into();
-        s.font_family_emoji_color = "Twemoji".into();
         s.terminal_color_scheme = "dracula".into();
         s.bold_brightens_ansi_colors = false;
         s.padding = 12;
@@ -211,7 +210,6 @@ mod tests {
             loaded.font_family_fallback,
             vec!["JetBrains Mono".to_string(), "Noto Sans JP".to_string()]
         );
-        assert_eq!(loaded.emoji_font.as_deref(), Some("Twemoji"));
         assert_eq!(loaded.terminal_color_scheme, "dracula");
         assert!(!loaded.bold_brightens_ansi_colors);
         assert_eq!(loaded.padding, 12);

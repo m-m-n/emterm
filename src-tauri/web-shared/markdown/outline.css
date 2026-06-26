@@ -12,15 +12,7 @@
   border-right: 1px solid var(--markdown-border, #404040);
   box-sizing: border-box;
   display: none;
-  font-family:
-    var(--markdown-body-font-family, serif),
-    var(
-      --markdown-emoji-font-family,
-      "Apple Color Emoji",
-      "Segoe UI Emoji",
-      "Segoe UI Symbol",
-      "Noto Color Emoji"
-    );
+  font-family: var(--markdown-body-font-family, serif);
 }
 
 /* Show outline panel at >= 1200px viewport */

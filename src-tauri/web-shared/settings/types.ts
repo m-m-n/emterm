@@ -31,15 +31,6 @@ export interface AppSettings {
   font_size: number;
   font_family_primary: string;
   font_family_secondary: string;
-  /**
-   * Legacy single emoji-font key. Kept for migration. New code should
-   * read `font_family_emoji_color` instead.
-   */
-  font_family_emoji: string;
-  /** Color emoji font family (CBDT / COLR / sbix). */
-  font_family_emoji_color: string;
-  /** Monochrome emoji font family (used for text-default emoji code points). */
-  font_family_emoji_monochrome: string;
 
   // Theme / Color
   ui_theme: UiTheme;
@@ -101,12 +92,6 @@ export interface AppSettings {
   // Markdown Viewer Font
   markdown_body_font_family: string;
   markdown_code_font_family: string;
-  /** Legacy single emoji-font key for the Markdown viewer. */
-  markdown_emoji_font_family: string;
-  /** Color emoji font family for the Markdown viewer. */
-  markdown_emoji_font_family_color: string;
-  /** Monochrome emoji font family for the Markdown viewer. */
-  markdown_emoji_font_family_monochrome: string;
   markdown_font_size: number;
 
   // SSH
@@ -204,15 +189,9 @@ export interface FontListResponse {
 export type FontCategory =
   | "primary"
   | "secondary"
-  | "emoji"
-  | "emoji-color"
-  | "emoji-monochrome"
   | "ui"
   | "markdown-body"
-  | "markdown-code"
-  | "markdown-emoji"
-  | "markdown-emoji-color"
-  | "markdown-emoji-monochrome";
+  | "markdown-code";
 
 // ============================================================
 // Profile

@@ -43,7 +43,6 @@ function payload(overrides: Partial<ViewerPayload> = {}): ViewerPayload {
       preset: "purple",
       bodyFontFamily: "",
       codeFontFamily: "",
-      emojiFontFamily: "",
       fontSize: 14,
       ...overrides.appearance,
     },
@@ -82,7 +81,6 @@ describe("viewer entry", () => {
       preset: "green",
       bodyFontFamily: "Noto Sans",
       codeFontFamily: "Fira Code",
-      emojiFontFamily: "",
       fontSize: 20,
     });
     const root = document.documentElement;
@@ -121,7 +119,6 @@ describe("viewer entry", () => {
     expect(parsed.appearance.preset).toBe("purple");
     expect(parsed.appearance.bodyFontFamily).toBe("Noto Sans");
     expect(parsed.appearance.codeFontFamily).toBe("Fira Code");
-    expect(parsed.appearance.emojiFontFamily).toBe("Noto Color Emoji");
     expect(parsed.appearance.fontSize).toBe(14);
 
     // The fixture must be renderable by the real consumer too.

@@ -26,11 +26,7 @@ import { renderColorSchemeEditor } from "../color-scheme-editor";
 import type { SectionContext } from "./types";
 
 function applyCurrentFontFamily(settings: AppSettings): void {
-  applyFontFamily(
-    settings.font_family_primary,
-    settings.font_family_emoji,
-    settings.font_family_secondary,
-  );
+  applyFontFamily(settings.font_family_primary, settings.font_family_secondary);
 }
 
 export function renderTerminalAppearanceSection(
@@ -107,52 +103,6 @@ export function renderTerminalAppearanceSection(
         ctx.currentSettings.font_family_secondary = v;
         applyCurrentFontFamily(ctx.currentSettings);
         ctx.saveSetting("font_family_secondary", v);
-      },
-    },
-    ctx.addContentListener,
-    (category, currentValue, onSelect) => {
-      ctx.showFontPicker(category, currentValue, onSelect);
-    },
-  );
-
-  // Color Emoji Font (font picker)
-  renderFontPickerInput(
-    panel,
-    {
-      key: "font-family-emoji-color",
-      label: t("settings.appearance.fontFamilyEmojiColor"),
-      value: settings.font_family_emoji_color,
-      placeholder: t("settings.appearance.fontFamilyEmojiPlaceholder"),
-      hint: t("settings.appearance.fontFamilyEmojiHint"),
-      description: t("settings.appearance.fontFamilyEmojiColorDesc"),
-      category: "emoji-color",
-      onSelect: (v) => {
-        ctx.currentSettings.font_family_emoji_color = v;
-        applyCurrentFontFamily(ctx.currentSettings);
-        ctx.saveSetting("font_family_emoji_color", v);
-      },
-    },
-    ctx.addContentListener,
-    (category, currentValue, onSelect) => {
-      ctx.showFontPicker(category, currentValue, onSelect);
-    },
-  );
-
-  // Monochrome Emoji Font (font picker)
-  renderFontPickerInput(
-    panel,
-    {
-      key: "font-family-emoji-monochrome",
-      label: t("settings.appearance.fontFamilyEmojiMonochrome"),
-      value: settings.font_family_emoji_monochrome,
-      placeholder: t("settings.appearance.fontFamilyEmojiPlaceholder"),
-      hint: t("settings.appearance.fontFamilyEmojiHint"),
-      description: t("settings.appearance.fontFamilyEmojiMonochromeDesc"),
-      category: "emoji-monochrome",
-      onSelect: (v) => {
-        ctx.currentSettings.font_family_emoji_monochrome = v;
-        applyCurrentFontFamily(ctx.currentSettings);
-        ctx.saveSetting("font_family_emoji_monochrome", v);
       },
     },
     ctx.addContentListener,
