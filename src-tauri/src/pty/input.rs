@@ -81,6 +81,40 @@ pub enum Target {
     PosixPty,
 }
 
+/// Map `Modifiers` to the xterm CSI modifier `<mods>` parameter
+/// (`1..=8`). Returns `None` for `Modifiers::NONE` so the caller can
+/// keep the legacy modifier-less byte sequence unchanged. xterm
+/// convention: `1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0)`.
+fn xterm_mods_param(mods: Modifiers) -> Option<u8> {
+    if mods == Modifiers::NONE {
+        return None;
+    }
+    let mut n: u8 = 1;
+    if mods.shift {
+        n += 1;
+    }
+    if mods.alt {
+        n += 2;
+    }
+    if mods.ctrl {
+        n += 4;
+    }
+    Some(n)
+}
+
+/// Build the `ESC[1;<mods>X` form (Arrow / Home / End / F1-F4 modifier
+/// sequences). The `final_byte` is the trailing letter (`A`/`B`/`C`/
+/// `D`/`H`/`F`/`P`/`Q`/`R`/`S`).
+fn csi_mods_letter(mods_param: u8, final_byte: u8) -> Vec<u8> {
+    format!("\x1b[1;{mods_param}{}", final_byte as char).into_bytes()
+}
+
+/// Build the `ESC[<n>;<mods>~` form (PageUp/PageDown/Insert/Delete/
+/// F5-F12 modifier sequences). `base` is the numeric prefix.
+fn csi_mods_tilde(base: u16, mods_param: u8) -> Vec<u8> {
+    format!("\x1b[{base};{mods_param}~").into_bytes()
+}
+
 /// Encode a key event to the byte sequence a normal terminal would write.
 ///
 /// `target` controls Windows-specific encoding: `HostPty` engages the
@@ -138,6 +172,49 @@ pub fn encode(key: Key, mods: Modifiers, target: Target) -> Vec<u8> {
             if mods.ctrl && ctrl_byte(c) == Some(0x1b) {
                 return encode_escape_win32(mods);
             }
+        }
+    }
+
+    // FR2: xterm CSI modifier extension. When at least one of
+    // Ctrl/Shift/Alt is held AND the key is one of the navigation /
+    // function keys that has a documented modified form, emit
+    // `ESC[<base>;<mods>X` instead of the legacy short form. The Alt
+    // ESC-prefix block further down is intentionally skipped here so
+    // Alt does not double-encode (an `ESC` byte before the CSI form
+    // would corrupt the sequence). Plain (NONE) modifiers fall through
+    // to the legacy bytes below, byte-identical to before this change.
+    if let Some(m) = xterm_mods_param(mods) {
+        match key {
+            Up => return csi_mods_letter(m, b'A'),
+            Down => return csi_mods_letter(m, b'B'),
+            Right => return csi_mods_letter(m, b'C'),
+            Left => return csi_mods_letter(m, b'D'),
+            Home => return csi_mods_letter(m, b'H'),
+            End => return csi_mods_letter(m, b'F'),
+            PageUp => return csi_mods_tilde(5, m),
+            PageDown => return csi_mods_tilde(6, m),
+            Insert => return csi_mods_tilde(2, m),
+            Delete => return csi_mods_tilde(3, m),
+            F(n) => match n {
+                1 => return csi_mods_letter(m, b'P'),
+                2 => return csi_mods_letter(m, b'Q'),
+                3 => return csi_mods_letter(m, b'R'),
+                4 => return csi_mods_letter(m, b'S'),
+                5 => return csi_mods_tilde(15, m),
+                6 => return csi_mods_tilde(17, m),
+                7 => return csi_mods_tilde(18, m),
+                8 => return csi_mods_tilde(19, m),
+                9 => return csi_mods_tilde(20, m),
+                10 => return csi_mods_tilde(21, m),
+                11 => return csi_mods_tilde(23, m),
+                12 => return csi_mods_tilde(24, m),
+                _ => {} // out-of-range F-key: fall through to legacy
+            },
+            // Keys NOT in the modifier-eligible set (Char, Enter, Tab,
+            // Backspace, Escape) keep their existing behaviour, which
+            // already honours modifiers via the legacy branches below
+            // (Ctrl-letter → control byte, Shift+Tab → CSI Z, etc.).
+            _ => {}
         }
     }
 
@@ -582,6 +659,148 @@ mod tests {
             ..Modifiers::NONE
         };
         assert_eq!(encode(Key::Char('b'), mods, HOST), b"\x1bb");
+    }
+
+    // ── FR2: xterm CSI modifier extension ────────────────────
+
+    /// Helper: build a `Modifiers` from named flags.
+    fn mods(ctrl: bool, shift: bool, alt: bool) -> Modifiers {
+        Modifiers { ctrl, shift, alt }
+    }
+
+    /// TS-9: `Ctrl+Home` → `ESC[1;5H`.
+    #[test]
+    fn ctrl_home_emits_csi_modifier_form() {
+        assert_eq!(
+            encode(Key::Home, mods(true, false, false), HOST),
+            b"\x1b[1;5H"
+        );
+    }
+
+    /// TS-10: `Ctrl+End` → `ESC[1;5F`.
+    #[test]
+    fn ctrl_end_emits_csi_modifier_form() {
+        assert_eq!(
+            encode(Key::End, mods(true, false, false), HOST),
+            b"\x1b[1;5F"
+        );
+    }
+
+    /// TS-11: `Ctrl+PageUp` → `ESC[5;5~`.
+    #[test]
+    fn ctrl_pageup_emits_csi_modifier_form() {
+        assert_eq!(
+            encode(Key::PageUp, mods(true, false, false), HOST),
+            b"\x1b[5;5~"
+        );
+    }
+
+    /// TS-12: `Ctrl+Shift+PageDown` → `ESC[6;6~` (mods = 1 + 1 + 4 = 6).
+    #[test]
+    fn ctrl_shift_pagedown_emits_csi_modifier_form() {
+        assert_eq!(
+            encode(Key::PageDown, mods(true, true, false), HOST),
+            b"\x1b[6;6~"
+        );
+    }
+
+    /// TS-13: `Ctrl+ArrowUp` → `ESC[1;5A`.
+    #[test]
+    fn ctrl_arrow_up_emits_csi_modifier_form() {
+        assert_eq!(
+            encode(Key::Up, mods(true, false, false), HOST),
+            b"\x1b[1;5A"
+        );
+    }
+
+    /// FR2: cover all four arrows for completeness.
+    #[test]
+    fn ctrl_arrow_keys_emit_csi_modifier_form() {
+        let ctrl = mods(true, false, false);
+        assert_eq!(encode(Key::Up, ctrl, HOST), b"\x1b[1;5A");
+        assert_eq!(encode(Key::Down, ctrl, HOST), b"\x1b[1;5B");
+        assert_eq!(encode(Key::Right, ctrl, HOST), b"\x1b[1;5C");
+        assert_eq!(encode(Key::Left, ctrl, HOST), b"\x1b[1;5D");
+    }
+
+    /// TS-14: `Shift+F1` → `ESC[1;2P` (mods = 1 + 1 = 2).
+    #[test]
+    fn shift_f1_emits_csi_modifier_form() {
+        assert_eq!(
+            encode(Key::F(1), mods(false, true, false), HOST),
+            b"\x1b[1;2P"
+        );
+    }
+
+    /// TS-15: `Ctrl+Alt+F5` → `ESC[15;7~` (mods = 1 + 2 + 4 = 7).
+    #[test]
+    fn ctrl_alt_f5_emits_csi_modifier_form() {
+        assert_eq!(
+            encode(Key::F(5), mods(true, false, true), HOST),
+            b"\x1b[15;7~"
+        );
+    }
+
+    /// FR2: F1-F4 use the letter form, F5-F12 use the tilde form.
+    #[test]
+    fn ctrl_function_keys_use_correct_modifier_form() {
+        let ctrl = mods(true, false, false);
+        assert_eq!(encode(Key::F(1), ctrl, HOST), b"\x1b[1;5P");
+        assert_eq!(encode(Key::F(2), ctrl, HOST), b"\x1b[1;5Q");
+        assert_eq!(encode(Key::F(3), ctrl, HOST), b"\x1b[1;5R");
+        assert_eq!(encode(Key::F(4), ctrl, HOST), b"\x1b[1;5S");
+        assert_eq!(encode(Key::F(5), ctrl, HOST), b"\x1b[15;5~");
+        assert_eq!(encode(Key::F(6), ctrl, HOST), b"\x1b[17;5~");
+        assert_eq!(encode(Key::F(12), ctrl, HOST), b"\x1b[24;5~");
+    }
+
+    /// FR2: Alt-modified nav keys must take the CSI form, NOT the
+    /// legacy `ESC + [seq]` Alt-prefix path which would corrupt the
+    /// sequence. `Alt+Home` mods param is 1 + 2 = 3.
+    #[test]
+    fn alt_home_uses_csi_modifier_form_not_esc_prefix() {
+        assert_eq!(
+            encode(Key::Home, mods(false, false, true), HOST),
+            b"\x1b[1;3H"
+        );
+    }
+
+    /// FR2: `Alt+ArrowUp` mods param is 3; ensures the Alt ESC-prefix
+    /// block did not fire (which would have produced `ESC\x1b[A`).
+    #[test]
+    fn alt_arrow_up_uses_csi_modifier_form_not_esc_prefix() {
+        assert_eq!(
+            encode(Key::Up, mods(false, false, true), HOST),
+            b"\x1b[1;3A"
+        );
+    }
+
+    /// FR2: `Insert` / `Delete` with modifiers use the tilde form.
+    #[test]
+    fn ctrl_insert_delete_use_tilde_form() {
+        let ctrl = mods(true, false, false);
+        assert_eq!(encode(Key::Insert, ctrl, HOST), b"\x1b[2;5~");
+        assert_eq!(encode(Key::Delete, ctrl, HOST), b"\x1b[3;5~");
+    }
+
+    // ── FR2 regression: plain (NONE) bytes unchanged ─────────
+
+    /// TS-16: `Home` with no modifier still emits `ESC[H`.
+    #[test]
+    fn plain_home_unchanged_regression() {
+        assert_eq!(encode(Key::Home, Modifiers::NONE, HOST), b"\x1b[H");
+    }
+
+    /// TS-17: `PageUp` with no modifier still emits `ESC[5~`.
+    #[test]
+    fn plain_pageup_unchanged_regression() {
+        assert_eq!(encode(Key::PageUp, Modifiers::NONE, HOST), b"\x1b[5~");
+    }
+
+    /// TS-18: `F1` with no modifier still emits `ESC OP` (SS3 legacy).
+    #[test]
+    fn plain_f1_unchanged_regression() {
+        assert_eq!(encode(Key::F(1), Modifiers::NONE, HOST), b"\x1bOP");
     }
 
     #[test]

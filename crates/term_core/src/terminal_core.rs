@@ -31,6 +31,13 @@ pub const MODE_SYNCHRONIZED_OUTPUT: u8 = 8;
 /// full-screen app owns the display — the WebView build tracks the same
 /// state JS-side (`isAlternateBuffer`) and is unaffected by this bit.
 pub const MODE_ALT_SCREEN: u8 = 15;
+/// DECSET 1007 (alternate_scroll). When set, the host translates wheel
+/// events to arrow-key bytes while the alternate screen is active so
+/// AltScreen apps (Claude Code, less, vim, ...) scroll their own log
+/// instead of moving eMterm's scrollback. Default ON at construction
+/// time, matching xterm / WezTerm. The host also gates on its own
+/// `alternate_scroll_enabled` user setting before emitting bytes.
+pub const MODE_ALTERNATE_SCROLL: u8 = 16;
 
 // ── Pending OSC 133 prompt marks ─────────────────────────
 
@@ -361,9 +368,12 @@ impl TerminalCore {
         let total = rows as usize * cols as usize;
         let dirty_words = (rows as usize + 63) / 64;
 
-        // Default modes: autoWrap=true, cursorVisible=true, cursorBlink=true
-        let default_modes =
-            (1u32 << MODE_AUTO_WRAP) | (1u32 << MODE_CURSOR_VISIBLE) | (1u32 << MODE_CURSOR_BLINK);
+        // Default modes: autoWrap=true, cursorVisible=true, cursorBlink=true,
+        // alternateScroll=true (DECSET 1007).
+        let default_modes = (1u32 << MODE_AUTO_WRAP)
+            | (1u32 << MODE_CURSOR_VISIBLE)
+            | (1u32 << MODE_CURSOR_BLINK)
+            | (1u32 << MODE_ALTERNATE_SCROLL);
 
         let mut tab_stops = vec![false; cols as usize];
         for i in (0..cols as usize).step_by(8) {
@@ -888,8 +898,10 @@ impl TerminalCore {
         self.chars = CharTable::new();
         self.cursor = CursorState::new();
         self.saved_cursor = None;
-        self.modes =
-            (1u32 << MODE_AUTO_WRAP) | (1u32 << MODE_CURSOR_VISIBLE) | (1u32 << MODE_CURSOR_BLINK);
+        self.modes = (1u32 << MODE_AUTO_WRAP)
+            | (1u32 << MODE_CURSOR_VISIBLE)
+            | (1u32 << MODE_CURSOR_BLINK)
+            | (1u32 << MODE_ALTERNATE_SCROLL);
         self.tab_stops = vec![false; self.cols as usize];
         for i in (0..self.cols as usize).step_by(8) {
             self.tab_stops[i] = true;

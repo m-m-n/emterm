@@ -132,6 +132,19 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
+  // Alternate Scroll (DECSET 1007) toggle
+  renderToggle(
+    panel,
+    {
+      key: "alternate-scroll-enabled",
+      label: t("settings.terminal.alternateScrollEnabled"),
+      value: settings.alternate_scroll_enabled,
+      description: t("settings.terminal.alternateScrollEnabledDesc"),
+      onSave: (v) => ctx.saveSetting("alternate_scroll_enabled", v),
+    },
+    ctx.addContentListener,
+  );
+
   // Bell Action (select)
   renderSelect(
     panel,

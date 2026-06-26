@@ -291,6 +291,11 @@ pub struct WindowHost {
     /// `about_to_wait`: when the pointer has left the window there is
     /// nothing to underline, so we skip the `find_link_at` work entirely.
     pointer_in_window: bool,
+    /// Accumulated sub-notch wheel delta for the alternate-scroll path
+    /// (DECSET 1007 / FR1). Carries fractional pixel-delta lines across
+    /// events so trackpad micro-scrolls eventually resolve to one arrow
+    /// key per whole-line boundary.
+    alt_scroll_accum: f32,
 }
 
 /// Cached link-hover state for the active tab's grid. Mirrors the
@@ -316,6 +321,14 @@ struct HoverState {
     /// current line text — meaning the PTY changed but not on the hovered
     /// line — to avoid per-frame regex work under a stationary pointer.
     last_line_text: Option<String>,
+    /// FR3 discriminator: whether the active `link` was produced by the
+    /// OSC 8 hyperlink path (`true`) or by the regex URL / file-path
+    /// detector (`false`). OSC 8 hits survive AltScreen and the PTY-
+    /// output invalidation guard; regex hits do not. The two paths
+    /// share the rest of the `HoverState` fields (`link_cells` for
+    /// the underline, `link.kind` for the click dispatch) so the
+    /// renderer / cursor / click branches do not need a parallel API.
+    is_osc8: bool,
 }
 
 impl WindowHost {
@@ -482,6 +495,7 @@ impl WindowHost {
             current_cursor: CursorIcon::Default,
             hover: HoverState::default(),
             pointer_in_window: false,
+            alt_scroll_accum: 0.0,
         }
     }
 
@@ -676,8 +690,27 @@ impl WindowHost {
             let prev_cells = std::mem::take(&mut self.hover.link_cells);
             self.hover.link = None;
             self.hover.last_line_text = None;
+            self.hover.is_osc8 = false;
 
-            if (detect_urls || detect_paths) && !app.alt_screen {
+            // FR3: OSC 8 hyperlink path runs FIRST, before the regex
+            // gate and the AltScreen suppression. OSC 8 hits are a
+            // first-class signal from the application (the program
+            // explicitly marked the cell with `ESC]8;;<uri>ESC\`) so
+            // they survive AltScreen where the regex auto-detector
+            // does not. When the helper returns `Some(link)`, populate
+            // the same hover fields the regex path uses and skip the
+            // regex; the renderer underline + Ctrl-hand cursor + click
+            // dispatch all reuse the existing infrastructure.
+            if let (Some((row, col)), Some(tab)) = (new_cell, app.active_tab()) {
+                let core = tab.core.lock();
+                if let Some(link) = detect_osc8_link_at(&core, row, col) {
+                    self.hover.link_cells = link.cells.clone();
+                    self.hover.link = Some(link);
+                    self.hover.is_osc8 = true;
+                }
+            }
+
+            if !self.hover.is_osc8 && (detect_urls || detect_paths) && !app.alt_screen {
                 if let (Some((row, col)), Some(tab)) = (new_cell, app.active_tab()) {
                     let core = tab.core.lock();
                     // Cache the logical-line text so PTY-output re-detection
@@ -722,14 +755,24 @@ impl WindowHost {
         // screen to prevent hover-underline bleed onto alt-screen content.
         // invalidate_link_hover is a no-op when link_cells is already empty,
         // so this is cheap on frames where no link was hovered.
-        if app.alt_screen {
+        //
+        // FR3: OSC 8 hover state survives AltScreen — the regex
+        // detector is the only consumer with the AltScreen suppression
+        // policy, so the guard only fires when the active hover came
+        // from the regex path (`is_osc8 == false`). An OSC 8 hit
+        // re-runs `refresh_link_hover` below so the cell range stays
+        // accurate when scrollback shifts under the pointer.
+        if app.alt_screen && !self.hover.is_osc8 {
             self.invalidate_link_hover();
             return;
         }
 
         let detect_urls = app.settings.url_detection;
         let detect_paths = app.settings.file_path_detection;
-        if !detect_urls && !detect_paths {
+        // FR3: when the cached hover IS an OSC 8 hit, keep re-running
+        // refresh_link_hover even if regex detection is off — OSC 8
+        // doesn't go through the regex gate.
+        if !self.hover.is_osc8 && !detect_urls && !detect_paths {
             return;
         }
 
@@ -739,6 +782,12 @@ impl WindowHost {
         // alloc + regex during high-throughput output like `tail -f` or a
         // build log). Only when the text actually changed do we clear
         // `hover.cell` and let `refresh_link_hover` re-run detection.
+        //
+        // For OSC 8 hits the cached `last_line_text` is `None` (the
+        // OSC 8 path doesn't populate it), so the comparison below
+        // always falls through to the re-detection branch — that is
+        // intentional: cheap to redo the cell read; correct when the
+        // OSC 8 run shifts because content scrolled.
         if let Some((row, _col)) = self.hover.cell {
             let current_text = match app.active_tab() {
                 Some(tab) => {
@@ -748,12 +797,13 @@ impl WindowHost {
                 None => return,
             };
             let cached = self.hover.last_line_text.as_deref().unwrap_or("");
-            if current_text == cached {
+            if !self.hover.is_osc8 && current_text == cached {
                 // Hovered line text is unchanged; existing hover state
                 // (underline + link) is still valid.
                 return;
             }
-            // Line changed: drop the cached cell so refresh re-detects.
+            // Line changed (or OSC 8 hover that always re-detects):
+            // drop the cached cell so refresh re-detects.
             self.hover.cell = None;
             self.refresh_link_hover(app);
         } else {
@@ -791,6 +841,7 @@ impl WindowHost {
         self.hover.cell = None;
         self.hover.link = None;
         self.hover.last_line_text = None;
+        self.hover.is_osc8 = false;
         let had = !self.hover.link_cells.is_empty();
         self.hover.link_cells.clear();
         if had {
@@ -813,18 +864,42 @@ impl WindowHost {
     fn try_open_link_at_pointer(&mut self, app: &App) -> bool {
         let detect_urls = app.settings.url_detection;
         let detect_paths = app.settings.file_path_detection;
-        if !detect_urls && !detect_paths {
-            return false;
-        }
-        // Guard against alt-screen: mirrors the same condition applied in
-        // `refresh_link_hover` so hover and click use identical detection rules.
-        if app.alt_screen {
-            return false;
-        }
         let click_cell = self.pixel_to_grid_cell(self.cursor_pos, app);
         let Some((row, col)) = click_cell else {
             return false;
         };
+
+        // FR3: OSC 8 lookup runs FIRST and is NOT gated on
+        // `url_detection` / `file_path_detection` (those settings
+        // control the regex auto-detector only — OSC 8 is an explicit
+        // application-supplied signal). It also bypasses the AltScreen
+        // short-circuit so PR-ID links inside Claude Code's AltScreen
+        // are clickable. Dispatch via the same `LinkKind::Url ->
+        // open_url` arm the regex hit uses.
+        if let Some(tab) = app.active_tab() {
+            let core = tab.core.lock();
+            if let Some(link) = detect_osc8_link_at(&core, row, col) {
+                drop(core);
+                if let crate::links::LinkKind::Url(url) = link.kind {
+                    if crate::links::is_safe_uri(&url) {
+                        open_url(&url);
+                    } else {
+                        log::warn!("native-poc: refusing to open unsafe OSC 8 URI scheme: {url}");
+                    }
+                }
+                return true;
+            }
+        }
+
+        if !detect_urls && !detect_paths {
+            return false;
+        }
+        // Guard against alt-screen: mirrors the same condition applied in
+        // `refresh_link_hover` so hover and click use identical detection
+        // rules. (OSC 8 already returned above for AltScreen cases.)
+        if app.alt_screen {
+            return false;
+        }
 
         // Always re-detect from the live grid; clicks are infrequent so
         // the regex cost is negligible, and this prevents acting on a
@@ -1829,6 +1904,58 @@ fn winit_to_egui_button(b: MouseButton) -> Option<egui::PointerButton> {
     }
 }
 
+/// FR3: synthesize a `DetectedLink` for an OSC 8 hyperlinked cell at
+/// `(row, col)`. Returns `None` for cells with `hyperlink_id == 0`
+/// (no link), for ids whose URI is missing from `hyperlink_table`
+/// (e.g. evicted from scrollback), for empty URIs, and for URIs whose
+/// scheme fails [`crate::links::is_safe_uri`] (unsafe schemes such as
+/// `javascript:` / `data:` are rejected with a `warn` log so the
+/// click-time branch can dispatch unconditionally on `Some`).
+///
+/// On a hit the cell range is expanded leftward and rightward across
+/// contiguous cells on the same row carrying the same `hyperlink_id`,
+/// so the renderer underlines the whole OSC 8 run instead of a single
+/// cell. The bound is the row width, which is small (≤ a few hundred).
+fn detect_osc8_link_at(
+    core: &term_core::terminal_core::TerminalCore,
+    row: u16,
+    col: u16,
+) -> Option<crate::links::DetectedLink> {
+    let cols = core.cols();
+    if cols == 0 || row >= core.rows() || col >= cols {
+        return None;
+    }
+    let id = core.get_cell_hyperlink_id(col, row);
+    if id == 0 {
+        return None;
+    }
+    let uri = core.get_hyperlink_uri(id);
+    if uri.is_empty() {
+        // Missing id in `hyperlink_table` (id evicted with the cell row
+        // it was last seen on, or never registered) or an OSC 8 with
+        // an empty URI. Either way there is nothing to open.
+        return None;
+    }
+    if !crate::links::is_safe_uri(&uri) {
+        log::warn!("native-poc: refusing OSC 8 URI with unsafe scheme: {uri}");
+        return None;
+    }
+    // Expand the run leftward.
+    let mut col_start = col;
+    while col_start > 0 && core.get_cell_hyperlink_id(col_start - 1, row) == id {
+        col_start -= 1;
+    }
+    // Expand the run rightward (exclusive end column).
+    let mut col_end = col + 1;
+    while col_end < cols && core.get_cell_hyperlink_id(col_end, row) == id {
+        col_end += 1;
+    }
+    Some(crate::links::DetectedLink {
+        kind: crate::links::LinkKind::Url(uri),
+        cells: vec![(row, col_start, col_end)],
+    })
+}
+
 /// Hand a (safe-scheme-checked) URL to the OS opener. Linux uses
 /// `xdg-open`; Windows uses ShellExecuteW via the `opener` crate. A
 /// spawn failure is logged at `warn` and otherwise ignored — the
@@ -2090,6 +2217,61 @@ fn winit_key_to_bytes(event: &KeyEvent, mods: Modifiers, target: EncodeTarget) -
     };
     let bytes = encode(key, mods, target);
     if bytes.is_empty() { None } else { Some(bytes) }
+}
+
+/// Upper bound for a single wheel event's arrow-key emission; protects against runaway/non-finite delta inputs.
+const MAX_ALT_SCROLL_NOTCHES: u32 = 100;
+
+/// Accumulate a fractional wheel delta `lines` into `acc` and return
+/// `(consumed_whole, new_accum)`. `consumed_whole` is the integer
+/// portion of the new total (the "ready to fire" line count); `new_accum`
+/// is the leftover fractional remainder the caller should store back.
+/// Both signs are preserved: a downward scroll accumulates a negative
+/// whole and returns a negative `consumed_whole`.
+fn accumulate_alt_scroll_lines(acc: f32, lines: f32) -> (f32, f32) {
+    let new_acc = acc + lines;
+    let whole = if new_acc >= 0.0 {
+        new_acc.floor()
+    } else {
+        new_acc.ceil()
+    };
+    let frac = new_acc - whole;
+    (whole, frac)
+}
+
+/// FR1 (DECSET 1007): compute the PTY bytes to emit for one wheel
+/// event, or `None` when the gates do not let alternate-scroll
+/// translation fire (the caller then falls back to the existing
+/// scrollback-view branch). All three gates must be ON: AltScreen is
+/// active, the terminal-side `MODE_ALTERNATE_SCROLL` bit is set, and
+/// the user setting `alternate_scroll_enabled` is true. `lines` is the
+/// y-axis wheel delta in cell rows (positive = wheel-up). Sub-notch
+/// fractional pixel deltas (|lines| < 1.0) are treated as no-ops to
+/// match a discrete wheel click. xterm convention: 3 arrow bytes per
+/// notch, Shift modifier is intentionally ignored at the call site.
+fn alternate_scroll_wheel_bytes(
+    lines: f32,
+    alt_screen: bool,
+    mode_bit_on: bool,
+    setting_on: bool,
+) -> Option<Vec<u8>> {
+    if !lines.is_finite() {
+        return None;
+    }
+    if !alt_screen || !mode_bit_on || !setting_on {
+        return None;
+    }
+    let notches = (lines.abs().floor() as u32).min(MAX_ALT_SCROLL_NOTCHES);
+    if notches == 0 {
+        return None;
+    }
+    let arrow: &[u8] = if lines > 0.0 { b"\x1b[A" } else { b"\x1b[B" };
+    let count = (notches as usize) * 3;
+    let mut buf = Vec::with_capacity(arrow.len() * count);
+    for _ in 0..count {
+        buf.extend_from_slice(arrow);
+    }
+    Some(buf)
 }
 
 /// `ApplicationHandler` impl driving the App + WindowHost on winit 0.30.
@@ -2859,6 +3041,49 @@ impl ApplicationHandler for PocApp {
                         (p.y as f32) / (cell_h_px.max(1.0) as f32)
                     }
                 };
+
+                // FR1 (DECSET 1007): in alternate screen, when the
+                // terminal-side mode bit AND the user setting are both
+                // ON, translate the wheel notches into arrow-key bytes
+                // sent to the active PTY so AltScreen apps (Claude
+                // Code, vim, less) scroll their own log instead of
+                // moving eMterm's scrollback view. xterm convention:
+                // 3 arrow bytes per notch; Shift is ignored.
+                let mode_bit_on = self
+                    .app
+                    .active_tab()
+                    .map(|t| {
+                        t.core
+                            .lock()
+                            .get_mode(term_core::terminal_core::MODE_ALTERNATE_SCROLL)
+                    })
+                    .unwrap_or(false);
+                // FR1 accumulator: reset fractional state when not in AltScreen
+                // so entering AltScreen always starts clean.
+                if !self.app.alt_screen {
+                    host.alt_scroll_accum = 0.0;
+                }
+                let (whole, new_frac) = accumulate_alt_scroll_lines(host.alt_scroll_accum, lines);
+                host.alt_scroll_accum = new_frac;
+                if whole != 0.0 {
+                    if let Some(buf) = alternate_scroll_wheel_bytes(
+                        whole,
+                        self.app.alt_screen,
+                        mode_bit_on,
+                        self.app.settings.alternate_scroll_enabled,
+                    ) {
+                        if let Some(tab) = self.app.active_tab() {
+                            tab.write_input(buf);
+                        }
+                        // Visible content may shift under the pointer;
+                        // drop the cached hover so the next CursorMoved
+                        // re-detects.
+                        host.invalidate_link_hover();
+                        host.window().request_redraw();
+                        return;
+                    }
+                }
+
                 // `settings.scroll_speed` is clamped to 1..=10 by the
                 // loader, so it's safe to feed directly into the scroll
                 // helpers (a runaway typo can't fly the viewport 1000
@@ -3313,6 +3538,144 @@ mod tests {
 
     // ── skk_mode: bare Ctrl+J swallow ────────────────────────────────
 
+    // ── FR3 (OSC 8 hyperlink) detect_osc8_link_at helper ─────
+
+    /// TS-19: cell carries a safe `http://` OSC 8 URI → `Some(link)`
+    /// with `LinkKind::Url(uri)` and the cell range covering the run.
+    #[test]
+    fn fr3_osc8_safe_uri_returns_link_with_run() {
+        let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 100);
+        // Open OSC 8 with safe URI, write 5 chars, close OSC 8, then
+        // a few non-hyperlinked chars.
+        core.process_pty_data(b"\x1b]8;;https://example.com/pr/1\x07Hello\x1b]8;;\x07world");
+
+        let link = detect_osc8_link_at(&core, 0, 2).expect("hover on 'l' (col 2) should hit");
+        match &link.kind {
+            crate::links::LinkKind::Url(u) => assert_eq!(u, "https://example.com/pr/1"),
+            other => panic!("expected Url, got {other:?}"),
+        }
+        // The whole run (cols 0..5 inclusive-exclusive) underlines.
+        assert_eq!(link.cells, vec![(0u16, 0u16, 5u16)]);
+    }
+
+    /// TS-20: cell carries an unsafe `javascript:` URI → `None` (and a
+    /// `warn` log line, not asserted here).
+    #[test]
+    fn fr3_osc8_unsafe_uri_returns_none() {
+        let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 100);
+        core.process_pty_data(b"\x1b]8;;javascript:alert(1)\x07x\x1b]8;;\x07");
+        assert_eq!(detect_osc8_link_at(&core, 0, 0), None);
+    }
+
+    /// TS-21: cell with `hyperlink_id == 0` (no OSC 8 marker) → `None`.
+    #[test]
+    fn fr3_osc8_plain_cell_returns_none() {
+        let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 100);
+        // No OSC 8 at all — just plain text.
+        core.process_pty_data(b"plain text");
+        assert_eq!(detect_osc8_link_at(&core, 0, 0), None);
+        assert_eq!(detect_osc8_link_at(&core, 0, 3), None);
+    }
+
+    /// TS-22: cell has a non-zero hyperlink_id but the URI is missing
+    /// from the table → `None`. Synthesize this by writing a cell with
+    /// a stale id via direct table manipulation. Falls back to a
+    /// process-cleared scenario: the helper sees `get_hyperlink_uri()`
+    /// return an empty string and returns `None`.
+    #[test]
+    fn fr3_osc8_missing_uri_returns_none() {
+        let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 100);
+        // Real-world reproduction is hard without internal accessors;
+        // instead we lean on the documented behaviour of
+        // `get_hyperlink_uri()` returning empty when the id is missing.
+        // Set up a hyperlink, then call detect on an unrelated cell
+        // whose id is 0 — that's TS-21. To exercise the empty-URI
+        // branch specifically, use an OSC 8 with an empty URI string
+        // (also documented to be treated as "no link" per SPEC edge
+        // cases).
+        core.process_pty_data(b"\x1b]8;;\x07x\x1b]8;;\x07");
+        assert_eq!(detect_osc8_link_at(&core, 0, 0), None);
+    }
+
+    /// FR3: out-of-bounds cell coordinates → `None`.
+    #[test]
+    fn fr3_osc8_out_of_bounds_returns_none() {
+        let core = term_core::terminal_core::TerminalCore::new(80, 24, 0);
+        assert_eq!(detect_osc8_link_at(&core, 100, 0), None);
+        assert_eq!(detect_osc8_link_at(&core, 0, 100), None);
+    }
+
+    /// FR3: hover on a cell in the middle of a 5-cell OSC 8 run yields
+    /// the run that starts at col 0 and extends to col 5.
+    #[test]
+    fn fr3_osc8_run_expansion_from_middle_cell() {
+        let mut core = term_core::terminal_core::TerminalCore::new(80, 24, 100);
+        core.process_pty_data(b"\x1b]8;;https://example.com\x07Click\x1b]8;;\x07");
+        // Hover the last cell of the run.
+        let link = detect_osc8_link_at(&core, 0, 4).expect("hover on 'k' should hit");
+        assert_eq!(link.cells, vec![(0u16, 0u16, 5u16)]);
+    }
+
+    // ── FR1 (DECSET 1007) wheel → arrow bytes ────────────────
+
+    /// TS-3: AltScreen + mode bit + setting all ON + wheel-up 1 notch
+    /// emits three `ESC[A` bytes (xterm: 3 arrows per notch).
+    #[test]
+    fn fr1_wheel_up_in_alt_screen_emits_three_arrow_up() {
+        let bytes = alternate_scroll_wheel_bytes(1.0, true, true, true);
+        assert_eq!(bytes.as_deref(), Some(b"\x1b[A\x1b[A\x1b[A".as_slice()));
+    }
+
+    /// FR1: wheel-down emits `ESC[B` instead of `ESC[A`.
+    #[test]
+    fn fr1_wheel_down_in_alt_screen_emits_three_arrow_down() {
+        let bytes = alternate_scroll_wheel_bytes(-1.0, true, true, true);
+        assert_eq!(bytes.as_deref(), Some(b"\x1b[B\x1b[B\x1b[B".as_slice()));
+    }
+
+    /// FR1: notch count scales the byte count (2 notches → 6 arrows).
+    #[test]
+    fn fr1_wheel_scales_with_notches() {
+        let bytes = alternate_scroll_wheel_bytes(2.0, true, true, true);
+        assert_eq!(
+            bytes.as_deref(),
+            Some(b"\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A".as_slice())
+        );
+    }
+
+    /// TS-4: same gates as TS-3 but the user setting is OFF; the
+    /// helper declines so the caller falls through to scrollback.
+    #[test]
+    fn fr1_wheel_suppressed_when_setting_off() {
+        assert_eq!(alternate_scroll_wheel_bytes(1.0, true, true, false), None);
+    }
+
+    /// TS-5: the terminal-side mode bit (DECSET 1007) is OFF; helper
+    /// declines.
+    #[test]
+    fn fr1_wheel_suppressed_when_mode_bit_off() {
+        assert_eq!(alternate_scroll_wheel_bytes(1.0, true, false, true), None);
+    }
+
+    /// TS-6: AltScreen is OFF (normal screen); helper always declines
+    /// so the existing scrollback-view wheel path runs unchanged.
+    #[test]
+    fn fr1_wheel_inert_outside_alt_screen() {
+        assert_eq!(alternate_scroll_wheel_bytes(1.0, false, true, true), None);
+        assert_eq!(alternate_scroll_wheel_bytes(-1.0, false, true, true), None);
+    }
+
+    /// FR1 edge case: sub-notch pixel deltas (|lines| < 1) round to 0
+    /// notches and are treated as no-ops. Without this guard a tiny
+    /// drift would send a stream of arrow bytes per pixel of motion.
+    #[test]
+    fn fr1_wheel_sub_notch_pixel_delta_is_noop() {
+        assert_eq!(alternate_scroll_wheel_bytes(0.4, true, true, true), None);
+        assert_eq!(alternate_scroll_wheel_bytes(-0.4, true, true, true), None);
+    }
+
+    // ── skk_mode: bare Ctrl+J swallow ────────────────────────────────
+
     #[test]
     fn skk_chord_matches_bare_ctrl_j_case_insensitive() {
         let ctrl = Modifiers {
@@ -3620,5 +3983,53 @@ mod tests {
                 "winit_key_to_egui({winit_key:?}) did not return {expected:?}"
             );
         }
+    }
+
+    // ── FR1 clamp + non-finite guard (Finding B) + accumulator (Finding A) ──
+
+    /// Non-finite inputs (NaN, Infinity) must return None without
+    /// panicking or triggering a runaway Vec allocation.
+    #[test]
+    fn alternate_scroll_wheel_bytes_rejects_non_finite() {
+        assert_eq!(
+            alternate_scroll_wheel_bytes(f32::NAN, true, true, true),
+            None
+        );
+        assert_eq!(
+            alternate_scroll_wheel_bytes(f32::INFINITY, true, true, true),
+            None
+        );
+    }
+
+    /// A huge positive delta is clamped to MAX_ALT_SCROLL_NOTCHES notches;
+    /// the resulting Vec is never a multi-GB allocation.
+    #[test]
+    fn alternate_scroll_wheel_bytes_clamps_huge_delta() {
+        let bytes = alternate_scroll_wheel_bytes(1.0e9, true, true, true).unwrap();
+        // 3 bytes per arrow, 3 arrows per notch, at most MAX_ALT_SCROLL_NOTCHES notches.
+        assert!(bytes.len() <= (MAX_ALT_SCROLL_NOTCHES as usize) * 3 * 3);
+    }
+
+    /// Four successive 0.3-line trackpad events accumulate: the first
+    /// three resolve to 0.0 whole lines (no arrow fired), and on the
+    /// fourth the accumulator crosses 1.0 and one notch is consumed
+    /// with ~0.2 fractional remainder.
+    #[test]
+    fn accumulate_alt_scroll_lines_collects_sub_notch_deltas() {
+        let (w, a) = accumulate_alt_scroll_lines(0.0, 0.3);
+        assert_eq!(w, 0.0);
+        assert!((a - 0.3).abs() < 1e-6, "after 1st event: accum={a}");
+
+        let (w, a) = accumulate_alt_scroll_lines(a, 0.3);
+        assert_eq!(w, 0.0);
+        assert!((a - 0.6).abs() < 1e-6, "after 2nd event: accum={a}");
+
+        let (w, a) = accumulate_alt_scroll_lines(a, 0.3);
+        assert_eq!(w, 0.0);
+        assert!((a - 0.9).abs() < 1e-6, "after 3rd event: accum={a}");
+
+        let (w, a) = accumulate_alt_scroll_lines(a, 0.3);
+        assert_eq!(w, 1.0, "4th event should yield one notch");
+        assert!((a - 0.2).abs() < 1e-6, "4th event remainder={a}");
     }
 }

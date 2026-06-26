@@ -623,6 +623,13 @@ pub struct Settings {
     /// wheel delivers one line. Clamped at the call site to keep the
     /// behavior identical to the WebView build.
     pub scroll_speed: u32,
+    /// DECSET 1007 user opt-out for AltScreen wheel→arrow translation.
+    /// When `true` (default), a wheel event in alternate screen with the
+    /// terminal-side `MODE_ALTERNATE_SCROLL` bit on emits arrow-key
+    /// bytes to the active PTY so AltScreen apps (Claude Code, vim,
+    /// less) scroll their own log; when `false`, the wheel falls
+    /// through to the eMterm scrollback view as before.
+    pub alternate_scroll_enabled: bool,
     /// When `true`, releasing a left-click selection also copies the
     /// resolved text to the system CLIPBOARD selection (the PRIMARY
     /// selection is always updated regardless).
@@ -979,6 +986,7 @@ impl Default for Settings {
             shell_path: String::new(),
             shell_args: Vec::new(),
             scroll_speed: 3,
+            alternate_scroll_enabled: true,
             copy_on_select: false,
             middle_click_paste: true,
             shift_enter_as_alt_enter: true,
@@ -1160,6 +1168,7 @@ struct RawSettings {
     shell_path: Option<String>,
     shell_args: Option<Vec<String>>,
     scroll_speed: Option<u32>,
+    alternate_scroll_enabled: Option<bool>,
     copy_on_select: Option<bool>,
     middle_click_paste: Option<bool>,
     shift_enter_as_alt_enter: Option<bool>,
@@ -1580,6 +1589,9 @@ impl RawSettings {
             // are clamped so a typo can't lock the wheel at 0 or fly the
             // viewport at e.g. 1000 lines/notch.
             dst.scroll_speed = v.clamp(1, 10);
+        }
+        if let Some(v) = self.alternate_scroll_enabled {
+            dst.alternate_scroll_enabled = v;
         }
         if let Some(v) = self.copy_on_select {
             dst.copy_on_select = v;

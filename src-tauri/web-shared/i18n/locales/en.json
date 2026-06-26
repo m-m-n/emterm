@@ -96,6 +96,8 @@
       "behavior": "Behavior",
       "scrollSpeed": "Scroll Speed",
       "scrollSpeedHint": "Range: {min}-{max}",
+      "alternateScrollEnabled": "Alternate Scroll (DECSET 1007)",
+      "alternateScrollEnabledDesc": "Translate mouse-wheel events to arrow keys while a full-screen app (Claude Code, vim, less) owns the screen, so the app scrolls its own log instead of moving the terminal scrollback view",
       "bellAction": "Bell Action",
       "bellVisual": "Visual",
       "bellSound": "Sound",
