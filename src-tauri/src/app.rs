@@ -2699,6 +2699,16 @@ impl App {
         let mut bell_rang = false;
         let now = Instant::now();
         let active = self.active;
+        // Scroll-stick: sample the active tab's scrollback length now and
+        // again after the per-tab loop. The saturating difference is fed
+        // to `on_pty_output` so an `OffsetFromLive(n)` view advances by Δ
+        // and the visible row composition stays anchored while below the
+        // configured `scrollback_lines` capacity.
+        let before_scrollback_len = self
+            .tabs
+            .get(active)
+            .map(|t| t.core.lock().get_scrollback_length())
+            .unwrap_or(0);
         // Desktop notifications collected during the tab loop and
         // dispatched after it — `tab` holds `&mut self.tabs`, so
         // `self.notify()` (a `&self` call) can't run inside the loop.
@@ -2720,6 +2730,14 @@ impl App {
         // `pending_frame_reset` latch (drained into `active_frame_reset`),
         // which `apply_offthread_swap` set during the swap.
         let mut active_offthread_swapped = false;
+        // Whether the *active* tab's 2nd-pass scrollback-restore merged this
+        // pump. `merge_scrollback_from` prepends historical rows to the front
+        // of `scrollback_slim`, so `get_scrollback_length()` grows by
+        // `merged_rows` — but those rows are older than the user's parked
+        // `OffsetFromLive(n)` view of live, so the visible content must NOT
+        // shift. Gates the scroll-stick Δ to 0 (the merge is unrelated to
+        // live PTY output).
+        let mut active_scrollback_restore_merged = false;
         // FR6 (mux): a new mux window appended to the ACTIVE tab this pump means
         // a fresh sub-tab became active (off-screen when the strip overflows),
         // so it should scroll into view next frame — the async mux analogue of
@@ -2780,8 +2798,14 @@ impl App {
             // only `active_changed` matters so the search overlay rebuilds
             // against the new scrollback.
             match tab.poll_pending_scrollback_restore() {
-                crate::tabs::ScrollbackRestoreOutcome::Merged
-                | crate::tabs::ScrollbackRestoreOutcome::Failed => {
+                crate::tabs::ScrollbackRestoreOutcome::Merged => {
+                    changed = true;
+                    if idx == active {
+                        active_changed = true;
+                        active_scrollback_restore_merged = true;
+                    }
+                }
+                crate::tabs::ScrollbackRestoreOutcome::Failed => {
                     changed = true;
                     if idx == active {
                         active_changed = true;
@@ -3035,9 +3059,48 @@ impl App {
         // Notify scroll-position state machine that new bytes arrived so
         // the auto-follow rule can preserve the off-tail offset. Pass
         // whether the *active* tab changed so only its output invalidates
-        // the search overlay's cached document (H3).
+        // the search overlay's cached document (H3). Sample the active
+        // tab's scrollback length now (post-pump) so the saturating
+        // difference from `before_scrollback_len` is the per-pump Δ that
+        // anchors the visible content while parked at an `OffsetFromLive`
+        // view. Reading the same `self.active` index as the before sample
+        // is intentional; a same-pump tab reap shifts `self.active` later
+        // (below), so this read still targets the tab that produced the
+        // bytes.
         if changed {
-            self.on_pty_output(active_changed);
+            let after_scrollback_len = self
+                .tabs
+                .get(self.active)
+                .map(|t| t.core.lock().get_scrollback_length())
+                .unwrap_or(before_scrollback_len);
+            // Pass Δ=0 whenever the active tab's scrollback length grew for a
+            // reason other than live PTY output, so on_pty_output does not
+            // corrupt the parked OffsetFromLive(n):
+            //
+            // * `active_pane_switch_from`: the active pane changed identity
+            //   between the before_scrollback_len sample and now, so the
+            //   saturating difference compares two distinct panes' scrollback
+            //   lengths. The incoming pane's restored scroll_position is the
+            //   authoritative state.
+            // * `active_offthread_swapped`: `apply_offthread_swap` replaced
+            //   `*self.core.lock()` wholesale; after_scrollback_len now reads
+            //   a freshly-built snapshot core whose length is unrelated to
+            //   before_scrollback_len. The per-pane scroll position was
+            //   restored synchronously at switch_to time; the swap only
+            //   changes the rendered content.
+            // * `active_scrollback_restore_merged`: the 2nd-pass restore
+            //   prepended historical rows to scrollback. get_scrollback_length
+            //   grew by merged_rows, but those rows are older than the parked
+            //   view — the visible content must not shift.
+            let scrollback_delta = if active_pane_switch_from.is_some()
+                || active_offthread_swapped
+                || active_scrollback_restore_merged
+            {
+                0
+            } else {
+                after_scrollback_len.saturating_sub(before_scrollback_len)
+            };
+            self.on_pty_output(active_changed, scrollback_delta);
         }
         // Reap exited tabs (Phase 5 will refine the policy).
         let before = self.tabs.len();
@@ -3533,18 +3596,26 @@ impl App {
         }
     }
 
-    /// React to new PTY output. When already at the live tail, no-op (the
-    /// renderer will pick up the new rows automatically). When sitting at an
-    /// offset, preserve the offset so the user is not yanked to the bottom.
-    /// Visually, the offset stays anchored because `term_core`'s ring buffer
-    /// shifts the old content into scrollback under us.
+    /// React to new PTY output on the active tab. `scrollback_delta` is the
+    /// number of rows that spilled into scrollback during this `pump_all`
+    /// pass (`after_len - before_len` of the active tab's
+    /// `get_scrollback_length`). It is used to keep the visible content
+    /// anchored when the user is parked at an `OffsetFromLive` view:
     ///
-    /// `active_changed` is `true` only when the **active** tab produced the
-    /// new bytes. The search overlay is resolved against the active tab's
-    /// buffer, so background-tab output must not invalidate its cached
-    /// logical-line document (H3) — a switch to that tab closes the overlay
-    /// anyway, so a background change never needs to be reflected.
-    pub fn on_pty_output(&mut self, active_changed: bool) {
+    /// * Below scrollback capacity, every pushed row grows `scrollback_len`
+    ///   by 1, so the visible-row formula `scrollback_len - scroll_offset`
+    ///   would advance unless we increment `scroll_offset` by the same Δ.
+    /// * Once capacity is reached, `scrollback_len` is pinned and Δ == 0
+    ///   — the visible row composition shifts (as intended; the user has
+    ///   accepted that "you can't keep your place forever").
+    ///
+    /// `active_changed` is `true` only when the **active** tab produced
+    /// the new bytes. The search overlay is resolved against the active
+    /// tab's buffer, so background-tab output must not invalidate its
+    /// cached logical-line document (H3) — a switch to that tab closes
+    /// the overlay anyway, so a background change never needs to be
+    /// reflected.
+    pub fn on_pty_output(&mut self, active_changed: bool, scrollback_delta: u32) {
         // New PTY output on the active tab mutates its scrollback / viewport,
         // so an open search overlay's cached logical-line document is stale,
         // and the matches' absolute rows shift as rows spill into scrollback.
@@ -3557,10 +3628,17 @@ impl App {
             self.search.mark_buffer_dirty();
         }
         // No-op for `Live`; explicit branch documents intent.
-        if matches!(self.scroll_position, ScrollPosition::OffsetFromLive(_)) {
-            // The offset is preserved; nothing to mutate, but we mark the
-            // viewport as needing repaint because the visible row content
-            // shifted by one (live tail advanced underneath the offset).
+        if let ScrollPosition::OffsetFromLive(n) = self.scroll_position {
+            // Advance the offset by Δ so the visible row composition stays
+            // anchored: `visible_start = scrollback_len - scroll_offset`
+            // grows in lockstep with `scrollback_len` while below the
+            // configured capacity. Clamp to `scrollback_lines` because the
+            // offset cannot exceed the ring's depth — once we hit the cap,
+            // further pushes evict rows and the parked view drifts (Δ == 0
+            // at capacity, accepted).
+            let max = self.settings.scrollback_lines;
+            let new_n = n.saturating_add(scrollback_delta).min(max);
+            self.scroll_position = ScrollPosition::OffsetFromLive(new_n);
             self.needs_full_redraw = true;
         }
     }
@@ -4050,7 +4128,7 @@ mod tests {
             let mut core = app.tabs[0].core.lock();
             core.process_pty_data(b"another needle line\r\n");
         }
-        app.on_pty_output(true);
+        app.on_pty_output(true, 0);
         assert!(app.search.needs_research());
 
         // The frame-loop hook re-resolves against the current buffer without
@@ -4082,7 +4160,7 @@ mod tests {
         }
         // Hidden overlay: even after a buffer change, no re-search.
         app.search.query = "needle".to_string();
-        app.on_pty_output(true);
+        app.on_pty_output(true, 0);
         assert!(
             !app.auto_research_if_dirty(),
             "hidden overlay does not research"
@@ -4091,7 +4169,7 @@ mod tests {
         // Visible but empty query: nothing to re-resolve.
         app.open_search();
         app.search.query.clear();
-        app.on_pty_output(true);
+        app.on_pty_output(true, 0);
         assert!(
             !app.auto_research_if_dirty(),
             "empty query does not research"
@@ -4327,7 +4405,7 @@ mod tests {
             let mut core = app.tabs[0].core.lock();
             core.process_pty_data(b"second needle\r\n");
         }
-        app.on_pty_output(true);
+        app.on_pty_output(true, 0);
         assert!(app.search.needs_research());
 
         // Pretend an auto re-search just ran, so the gate is closed.
@@ -4375,7 +4453,7 @@ mod tests {
             let mut core = app.tabs[0].core.lock();
             core.process_pty_data(b"hit\r\n");
         }
-        app.on_pty_output(true);
+        app.on_pty_output(true, 0);
         // No prior auto re-search → throttle allows immediately.
         let ran = app.auto_research_if_dirty();
         assert!(ran);
@@ -4405,14 +4483,14 @@ mod tests {
 
         // A *background* tab (tab 0) produced output. Per H3 this must NOT
         // invalidate the active tab's cached search document.
-        app.on_pty_output(false);
+        app.on_pty_output(false, 0);
         assert!(
             !app.search.needs_research(),
             "background-tab output leaves the active search clean"
         );
 
         // Active-tab output does invalidate it.
-        app.on_pty_output(true);
+        app.on_pty_output(true, 0);
         assert!(
             app.search.needs_research(),
             "active-tab output marks the search document dirty"
@@ -4812,11 +4890,66 @@ mod tests {
     fn on_pty_output_in_live_is_noop() {
         let mut app = App::new();
         app.needs_full_redraw = false;
-        app.on_pty_output(true);
+        app.on_pty_output(true, 0);
         // No offset change.
         assert_eq!(app.scroll_position, ScrollPosition::Live);
         // No redraw forced (already at live, nothing visual shifted).
         assert!(!app.needs_full_redraw);
+    }
+
+    // ── TS-1..TS-4: scroll-stick (`on_pty_output` Δ branch) ──────────
+
+    #[test]
+    fn on_pty_output_in_live_ignores_delta_and_stays_live() {
+        // TS-1: a non-zero Δ on a `Live` view must not snap us into
+        // `OffsetFromLive`; the Δ branch only fires when already parked.
+        let mut app = App::new();
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+        app.on_pty_output(true, 5);
+        assert_eq!(app.scroll_position, ScrollPosition::Live);
+    }
+
+    #[test]
+    fn on_pty_output_in_offset_adds_delta() {
+        // TS-2: parked at OffsetFromLive(10) with a generous capacity →
+        // Δ=3 advances the offset to 13 and forces a redraw.
+        let settings = crate::settings::Settings {
+            scrollback_lines: 1000,
+            ..Default::default()
+        };
+        let mut app = App::with_settings(settings);
+        app.scroll_position = ScrollPosition::OffsetFromLive(10);
+        app.needs_full_redraw = false;
+        app.on_pty_output(true, 3);
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(13));
+        assert!(app.needs_full_redraw);
+    }
+
+    #[test]
+    fn on_pty_output_in_offset_clamps_to_scrollback_lines() {
+        // TS-3: n + Δ would exceed scrollback_lines → clamp at the cap.
+        let settings = crate::settings::Settings {
+            scrollback_lines: 1000,
+            ..Default::default()
+        };
+        let mut app = App::with_settings(settings);
+        app.scroll_position = ScrollPosition::OffsetFromLive(995);
+        app.on_pty_output(true, 10);
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(1000));
+    }
+
+    #[test]
+    fn on_pty_output_zero_delta_in_offset_preserves_offset_but_sets_redraw() {
+        // TS-4: Δ=0 (capacity-bound or empty pump) preserves the offset.
+        // The explicit branch still sets `needs_full_redraw` — that is
+        // the prior observable contract (the row-content shift past
+        // capacity still needs a repaint).
+        let mut app = App::new();
+        app.scroll_position = ScrollPosition::OffsetFromLive(7);
+        app.needs_full_redraw = false;
+        app.on_pty_output(false, 0);
+        assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(7));
+        assert!(app.needs_full_redraw);
     }
 
     // ── Prompt-to-prompt navigation (OSC 133) ────────────────
@@ -5147,7 +5280,7 @@ mod tests {
         let mut app = App::new();
         app.scroll_up_by(4);
         app.needs_full_redraw = false;
-        app.on_pty_output(true);
+        app.on_pty_output(true, 0);
         // Offset preserved: user is not pulled to the bottom.
         assert_eq!(app.scroll_position, ScrollPosition::OffsetFromLive(4));
         // Viewport content shifted underneath us, so a repaint is needed.

@@ -1,0 +1,96 @@
+schema_version: 1
+feature: scroll-stick-and-key-resume
+created: 2026-06-26
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 211093373fb639c3ed362f6c284f1527b5388ebb
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 211093373fb639c3ed362f6c284f1527b5388ebb
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 211093373fb639c3ed362f6c284f1527b5388ebb
+  - id: implement
+    status: completed
+    completed_at_commit: 211093373fb639c3ed362f6c284f1527b5388ebb
+  - id: check
+    status: completed
+    completed_at_commit: 211093373fb639c3ed362f6c284f1527b5388ebb
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 211093373fb639c3ed362f6c284f1527b5388ebb
+
+requirements:
+  FR1:
+    title: スクロール位置の追従 (pump 前後の scrollback_len 差分で OffsetFromLive(n) を += Δ)
+    status: ok
+    tasks:
+      - extend-on-pty-output-signature
+      - rewrite-offset-advance-branch
+      - sample-active-scrollback-before-pump
+      - sample-active-scrollback-after-pump
+      - pass-delta-into-on-pty-output
+      - add-on-pty-output-live-noop-test
+      - add-on-pty-output-offset-advance-test
+      - add-on-pty-output-clamp-test
+      - add-on-pty-output-zero-delta-test
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-6
+      - TS-11
+  FR2:
+    title: キー入力での live 復帰 (winit_key_to_bytes が Some を返したら scroll_to_live)
+    status: ok
+    tasks:
+      - insert-scroll-to-live-after-write-input
+    tests:
+      - TS-7
+      - TS-8
+      - TS-9
+      - TS-10
+  FR3:
+    title: App::on_pty_output の Doc コメントを新コントラクトに整合
+    status: ok
+    tasks:
+      - rewrite-on-pty-output-doc
+    tests: []
+  NFR1:
+    title: パフォーマンス — pump_all ホットパスで get_scrollback_length 追加コストを O(1) に収める
+    status: ok
+    tasks:
+      - sample-active-scrollback-before-pump
+      - sample-active-scrollback-after-pump
+    tests: []
+  NFR2:
+    title: 安全性 — term_core 非改造、新規グローバル状態なし、ホットパス allocation なし
+    status: ok
+    tasks:
+      - sample-active-scrollback-before-pump
+      - sample-active-scrollback-after-pump
+    tests: []
+  NFR3:
+    title: 後方互換性 — on_pty_output シグネチャ変更を呼び出し側 (pump_all とテスト) で同時更新
+    status: ok
+    tasks:
+      - extend-on-pty-output-signature
+      - pass-delta-into-on-pty-output
+      - sweep-existing-on-pty-output-test-calls
+    tests:
+      - TS-5

@@ -2470,7 +2470,12 @@ impl ApplicationHandler for PocApp {
                             mods.shift = false;
                             mods.alt = true;
                         }
-                        if let Some(tab) = self.app.active_tab() {
+                        // FR2 (key-resume): capture whether the key was
+                        // forwarded to the PTY into a local flag. The
+                        // `active_tab()` borrow holds `&self.app`, so we
+                        // cannot call the `&mut self`-taking
+                        // `scroll_to_live` until after the block ends.
+                        let forwarded = if let Some(tab) = self.app.active_tab() {
                             // In mux mode the bytes will be wrapped as a
                             // `PtyInput` frame and reach a remote (canonically
                             // Linux) daemon, so we must skip the Windows-host
@@ -2485,7 +2490,22 @@ impl ApplicationHandler for PocApp {
                                 // mux-aware: wraps as PtyInput in mux mode so the
                                 // bridge forwards it (raw stdin is dropped there).
                                 tab.write_input(bytes);
+                                true
+                            } else {
+                                false
                             }
+                        } else {
+                            false
+                        };
+                        if forwarded {
+                            // FR2: any key we forward to the PTY also snaps
+                            // the viewport back to live tail. Bare modifiers
+                            // return `None` (so `forwarded == false`); search
+                            // overlay / profile selector / mux dialog / IME
+                            // consume / special chord / mux prefix latch /
+                            // settings keybinds all early-return before
+                            // reaching here, so they never snap.
+                            self.app.scroll_to_live();
                         }
                     }
                 }
