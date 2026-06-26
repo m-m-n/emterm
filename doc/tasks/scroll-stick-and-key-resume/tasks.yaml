@@ -1,0 +1,104 @@
+schema_version: 1
+feature: scroll-stick-and-key-resume
+
+phases:
+  - id: phase-1-api-extension
+    name: "Phase 1: State-machine API extension"
+    status: completed
+    summary: >-
+      Extend App::on_pty_output to accept the per-pump scrollback delta and
+      advance OffsetFromLive(n) by it (clamped to scrollback_lines). Rewrite
+      the misleading doc comment to reflect the capacity-bound contract.
+    files:
+      modified:
+        - src-tauri/src/app.rs
+    tasks:
+      - id: extend-on-pty-output-signature
+        title: Extend on_pty_output signature with scrollback_delta
+        requirements: [FR1, NFR3]
+        status: completed
+      - id: rewrite-offset-advance-branch
+        title: Replace OffsetFromLive branch with saturating-add + clamp
+        requirements: [FR1]
+        status: completed
+      - id: rewrite-on-pty-output-doc
+        title: Rewrite on_pty_output doc comment for capacity-bound delta-follow
+        requirements: [FR3]
+        status: completed
+
+  - id: phase-2-pump-all-wiring
+    name: "Phase 2: pump_all delta wiring"
+    status: completed
+    summary: >-
+      Sample the active tab's scrollback length before and after the per-tab
+      pump loop in App::pump_all and pass the saturating difference into
+      on_pty_output.
+    files:
+      modified:
+        - src-tauri/src/app.rs
+    tasks:
+      - id: sample-active-scrollback-before-pump
+        title: Sample before_len from active tab prior to the per-tab loop
+        requirements: [FR1, NFR1, NFR2]
+        status: completed
+      - id: sample-active-scrollback-after-pump
+        title: Sample after_len from active tab after the per-tab loop
+        requirements: [FR1, NFR1, NFR2]
+        status: completed
+      - id: pass-delta-into-on-pty-output
+        title: Replace single-arg on_pty_output call with the two-arg form
+        requirements: [FR1, NFR3]
+        status: completed
+
+  - id: phase-3-key-resume-call-site
+    name: "Phase 3: Key-input live-resume call site"
+    status: completed
+    summary: >-
+      Insert App::scroll_to_live() immediately after tab.write_input(bytes)
+      inside the winit_key_to_bytes → Some(bytes) branch of the
+      KeyboardInput { Pressed } handler in window_host.
+    files:
+      modified:
+        - src-tauri/src/window_host.rs
+    tasks:
+      - id: insert-scroll-to-live-after-write-input
+        title: Append scroll_to_live() in the winit_key_to_bytes Some(bytes) branch
+        requirements: [FR2]
+        status: completed
+
+  - id: phase-4-tests-and-sweep
+    name: "Phase 4: Test updates and unit coverage"
+    status: completed
+    summary: >-
+      Sweep every existing on_pty_output call in app.rs tests to the new
+      signature and add four new unit tests covering Live no-op,
+      OffsetFromLive advance, clamp at capacity, and zero-delta preservation.
+    files:
+      modified:
+        - src-tauri/src/app.rs
+    tasks:
+      - id: sweep-existing-on-pty-output-test-calls
+        title: Update existing on_pty_output(bool) test calls to (bool, 0)
+        requirements: [NFR3]
+        tests: [TS-5]
+        status: completed
+      - id: add-on-pty-output-live-noop-test
+        title: Add on_pty_output_in_live_ignores_delta_and_stays_live
+        requirements: [FR1]
+        tests: [TS-1]
+        status: completed
+      - id: add-on-pty-output-offset-advance-test
+        title: Add on_pty_output_in_offset_adds_delta
+        requirements: [FR1]
+        tests: [TS-2]
+        status: completed
+      - id: add-on-pty-output-clamp-test
+        title: Add on_pty_output_in_offset_clamps_to_scrollback_lines
+        requirements: [FR1]
+        tests: [TS-3]
+        status: completed
+      - id: add-on-pty-output-zero-delta-test
+        title: Add on_pty_output_zero_delta_in_offset_preserves_offset
+        requirements: [FR1]
+        tests: [TS-4]
+        status: completed
