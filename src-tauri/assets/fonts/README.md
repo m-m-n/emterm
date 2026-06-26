@@ -24,6 +24,7 @@ see `LICENSE` in this directory.
 | `NotoSansCJKjp-Regular.otf` | <https://github.com/notofonts/noto-cjk> | `68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5` |
 | `NotoEmoji-Regular.ttf` | <https://github.com/googlefonts/noto-emoji> | (added in font-bundle-redesign Phase 2) |
 | `Inconsolata-Regular.ttf` | <https://github.com/googlefonts/Inconsolata> | (added in font-bundle-redesign Phase 2) |
+| `NotoSansSymbols2-Regular.ttf` | <https://github.com/notofonts/noto-fonts> | `e672040e4eb73c0d9ac841411eea34be3c1e12e81e88962786489fffae4fe973` |
 
 The pinned SHA-256 values are the verification anchor in
 `scripts/fetch-fonts.sh`. Mismatched bytes abort the fetch.
@@ -71,3 +72,13 @@ When refreshing a bundled font:
 
 Segoe UI Emoji is *not* bundled. On Windows, the renderer probes the
 system fontdb for `Segoe UI Emoji` as a secondary emoji fallback.
+
+## Why Noto Sans Symbols 2 is bundled
+
+The other bundled faces leave a gap around symbols TUIs use heavily —
+prompt arrows (`❯` U+276F), media controls (`⏵` U+23F5), geometric
+shapes. On Linux these get caught by `fc-match` falling through to
+`Noto Sans Symbols2` when the user happens to have it installed, but
+Windows does not ship an equivalent face by default. Bundling the
+upstream `NotoSansSymbols2-Regular.ttf` guarantees the same coverage
+everywhere without depending on the host font set.
