@@ -72,17 +72,32 @@ unsafe impl bytemuck_compat::Pod for CellInstance {}
 
 /// Global uniform: swapchain viewport in pixels + atlas page sizes (used to
 /// turn the integer atlas region into normalized UV coordinates inside the
-/// vertex shader).
+/// vertex shader) + decoration line thickness. `decoration_thickness_px` is
+/// the **single source of truth** for SGR underline / strikethrough band
+/// thickness — computed on the CPU with `f32::round()` from the same
+/// `metrics.cell_h` that `box_drawing::rects_for` consumes, so SGR
+/// underline and `─` (U+2500) end up at exactly the same pixel weight on
+/// screen regardless of HiDPI scale or font size. Avoids duplicating the
+/// `cell_h / 18` formula in the shader and the WGSL `round()` (ties-to-
+/// even) vs Rust `f32::round()` (ties-away) tie-break divergence.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct FrameUniform {
     viewport: [f32; 2],
     alpha_atlas: [f32; 2],
     rgba_atlas: [f32; 2],
-    _pad: [f32; 2],
+    decoration_thickness_px: f32,
+    _pad: f32,
 }
 
 unsafe impl bytemuck_compat::Pod for FrameUniform {}
+
+/// SGR underline / strikethrough band thickness in physical pixels.
+/// Funneled through `box_drawing::light_stroke_px` so the SGR decoration
+/// and procedural box-drawing strokes are guaranteed to match weight.
+fn decoration_thickness_px(cell_h: f32) -> f32 {
+    super::box_drawing::light_stroke_px(cell_h)
+}
 
 mod bytemuck_compat {
     /// # Safety
@@ -941,7 +956,8 @@ impl TerminalGridPass {
             viewport: [viewport_w as f32, viewport_h as f32],
             alpha_atlas: [alpha_dim.0 as f32, alpha_dim.1 as f32],
             rgba_atlas: [rgba_dim.0 as f32, rgba_dim.1 as f32],
-            _pad: [0.0, 0.0],
+            decoration_thickness_px: decoration_thickness_px(metrics.cell_h),
+            _pad: 0.0,
         };
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("native-poc-terminal-grid-uniform"),
