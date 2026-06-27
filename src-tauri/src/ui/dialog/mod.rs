@@ -71,6 +71,7 @@ pub struct Dialog<'a, T> {
     on_confirm: Option<ConfirmClosure<'a, T>>,
     initial_focus_id: Option<egui::Id>,
     window_id: Option<egui::Id>,
+    width: f32,
 }
 
 impl<'a, T> Dialog<'a, T> {
@@ -89,7 +90,20 @@ impl<'a, T> Dialog<'a, T> {
             on_confirm: None,
             initial_focus_id: None,
             window_id: None,
+            width: tokens::WIDTH_COMPACT,
         }
+    }
+
+    /// Switch the surface width from the default compact pitch
+    /// (`WIDTH_COMPACT`, 400px) to the standard pitch
+    /// (`WIDTH_STANDARD`, 480px). Standard-width dialogs also pick up
+    /// `MAX_HEIGHT_STANDARD_FRAC` (80vh) instead of
+    /// `MAX_HEIGHT_COMPACT_FRAC` (60vh) for their body `ScrollArea`
+    /// cap, per `dialogs.layout` SSOT.
+    #[allow(dead_code)]
+    pub fn standard_width(mut self) -> Self {
+        self.width = tokens::WIDTH_STANDARD;
+        self
     }
 
     /// Build an `input` dialog (text / number / select editor). Initial
@@ -186,6 +200,12 @@ impl<'a, T> Dialog<'a, T> {
         let window_id = self
             .window_id
             .unwrap_or_else(|| egui::Id::new(("emterm-dialog", self.title.1)));
+        let width = self.width;
+        let height_frac = if width >= tokens::WIDTH_STANDARD {
+            tokens::MAX_HEIGHT_STANDARD_FRAC
+        } else {
+            tokens::MAX_HEIGHT_COMPACT_FRAC
+        };
 
         let mut outcome = DialogOutcome::Pending;
 
@@ -250,8 +270,8 @@ impl<'a, T> Dialog<'a, T> {
             .anchor(Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .interactable(true)
             .show(ctx, |ui| {
-                ui.set_min_width(tokens::WIDTH_COMPACT);
-                ui.set_max_width(tokens::WIDTH_COMPACT);
+                ui.set_min_width(width);
+                ui.set_max_width(width);
                 Frame::none()
                     .fill(md3::surface_container_high())
                     .rounding(Rounding::same(tokens::CORNER_RADIUS))
@@ -277,14 +297,17 @@ impl<'a, T> Dialog<'a, T> {
                         // available body height is `MAX_HEIGHT_COMPACT_FRAC`
                         // of the screen minus the surface's fixed chrome
                         // (padding + title + the gaps above/below the actions
-                        // row + an approximate action-button height).
+                        // row + the action-button row height + a couple of
+                        // body item-spacings for the vertical gaps egui
+                        // inserts between the title / body / actions blocks).
                         let viewport_h = ctx.screen_rect().height();
-                        let max_total_h = viewport_h * tokens::MAX_HEIGHT_COMPACT_FRAC;
+                        let max_total_h = viewport_h * height_frac;
                         let chrome_h = 2.0 * tokens::PADDING
                             + tokens::TITLE_LARGE_SIZE
                             + tokens::TITLE_TO_BODY_MARGIN
                             + tokens::ACTIONS_TOP_MARGIN
-                            + 36.0;
+                            + tokens::ACTION_BUTTON_HEIGHT
+                            + 2.0 * tokens::BODY_ITEM_SPACING;
                         let max_body_h = (max_total_h - chrome_h).max(60.0);
                         egui::ScrollArea::vertical()
                             .max_height(max_body_h)

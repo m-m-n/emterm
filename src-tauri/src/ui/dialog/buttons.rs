@@ -7,6 +7,7 @@
 
 use egui::{Color32, RichText};
 
+use crate::ui::dialog::tokens;
 use crate::ui::md3;
 
 /// Which dialog action a button represents.
@@ -47,6 +48,9 @@ pub fn draw_role(ui: &mut egui::Ui, role: ButtonRole, label: &str) -> egui::Resp
     let fg = role.foreground();
     let bg = role.background();
     let rich = RichText::new(label).color(fg);
-    let button = egui::Button::new(rich).fill(bg);
+    let button = egui::Button::new(rich).fill(bg).min_size(egui::vec2(
+        tokens::ACTION_BUTTON_MIN_WIDTH,
+        tokens::ACTION_BUTTON_HEIGHT,
+    ));
     ui.add(button)
 }
