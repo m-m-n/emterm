@@ -77,6 +77,10 @@ struct YamlDialogLayout {
     width_standard: String,
     #[serde(rename = "width-compact")]
     width_compact: String,
+    #[serde(rename = "max-height-standard")]
+    max_height_standard: String,
+    #[serde(rename = "max-height-compact")]
+    max_height_compact: String,
     #[serde(rename = "actions-gap")]
     actions_gap: String,
     #[serde(rename = "title-to-body-margin")]
@@ -101,6 +105,19 @@ fn parse_px(s: &str) -> f32 {
         .parse::<f32>()
         .unwrap_or_else(|_| panic!("could not parse CSS pixel value: {s:?}"));
     num
+}
+
+/// Parse a CSS viewport-height literal (e.g. `"80vh"`) into the
+/// fractional part (`0.80`). Other suffixes are rejected.
+fn parse_vh_frac(s: &str) -> f32 {
+    let trimmed = s.trim();
+    let num = trimmed
+        .strip_suffix("vh")
+        .unwrap_or_else(|| panic!("not a vh literal: {s:?}"))
+        .trim()
+        .parse::<f32>()
+        .unwrap_or_else(|_| panic!("could not parse vh value: {s:?}"));
+    num / 100.0
 }
 
 /// Parse a CSS `rgba(...)` literal and return the alpha component
@@ -164,6 +181,29 @@ fn yaml_layout_widths_match_constants() {
             "width-compact",
             parse_px(&root.dialogs.layout.width_compact),
             tokens::WIDTH_COMPACT,
+        ),
+    ];
+    for (name, yaml_val, rust_val) in pairs {
+        assert!(
+            (yaml_val - rust_val).abs() < 1e-4,
+            "dialogs.layout.{name} {yaml_val} != tokens {rust_val}"
+        );
+    }
+}
+
+#[test]
+fn yaml_layout_max_heights_match_constants() {
+    let root = parse_yaml();
+    let pairs = [
+        (
+            "max-height-standard",
+            parse_vh_frac(&root.dialogs.layout.max_height_standard),
+            tokens::MAX_HEIGHT_STANDARD_FRAC,
+        ),
+        (
+            "max-height-compact",
+            parse_vh_frac(&root.dialogs.layout.max_height_compact),
+            tokens::MAX_HEIGHT_COMPACT_FRAC,
         ),
     ];
     for (name, yaml_val, rust_val) in pairs {

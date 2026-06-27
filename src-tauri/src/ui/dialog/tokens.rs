@@ -61,6 +61,20 @@ pub const WIDTH_STANDARD: f32 = 480.0;
 /// Upload / Overwrite / Close-guard.
 pub const WIDTH_COMPACT: f32 = 400.0;
 
+/// Maximum dialog height as a fraction of the available viewport
+/// (`dialogs.layout.max-height-standard: 80vh` → `0.80`). Used by the
+/// dialog helper to bound the body's `ScrollArea` so very tall content
+/// (e.g. upload manifests, profile lists) scrolls inside the surface
+/// instead of pushing the action buttons off-screen.
+#[allow(dead_code)]
+pub const MAX_HEIGHT_STANDARD_FRAC: f32 = 0.80;
+
+/// Maximum dialog height as a fraction of the available viewport
+/// (`dialogs.layout.max-height-compact: 60vh` → `0.60`). The default
+/// for compact dialogs (Rename / Move / Upload / Overwrite /
+/// Close-guard).
+pub const MAX_HEIGHT_COMPACT_FRAC: f32 = 0.60;
+
 /// Title typescale font size (`title-large`).
 pub const TITLE_LARGE_SIZE: f32 = 22.0;
 
