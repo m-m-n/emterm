@@ -26,12 +26,14 @@
 //! domain value, and translating [`DialogOutcome`] into their own enum.
 
 pub mod buttons;
-pub mod focus;
 pub mod kinds;
 pub mod tokens;
 
 #[cfg(test)]
 mod tests;
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use egui::{Align2, FontId, Frame, Margin, Rounding};
 
@@ -70,6 +72,7 @@ pub struct Dialog<'a, T> {
     body: Option<BodyClosure<'a>>,
     on_confirm: Option<ConfirmClosure<'a, T>>,
     initial_focus_id: Option<egui::Id>,
+    initial_focus_slot: Option<Rc<Cell<Option<egui::Id>>>>,
     window_id: Option<egui::Id>,
     width: f32,
 }
@@ -89,6 +92,7 @@ impl<'a, T> Dialog<'a, T> {
             body: None,
             on_confirm: None,
             initial_focus_id: None,
+            initial_focus_slot: None,
             window_id: None,
             width: tokens::WIDTH_COMPACT,
         }
@@ -167,8 +171,24 @@ impl<'a, T> Dialog<'a, T> {
     /// For `Input` dialogs: the egui [`egui::Id`] of the widget that
     /// receives focus on the first frame. Callers obtain this by
     /// calling `.id()` on their text-field response.
+    #[allow(dead_code)]
     pub fn initial_focus(mut self, id: egui::Id) -> Self {
         self.initial_focus_id = Some(id);
+        self
+    }
+
+    /// Like [`Self::initial_focus`], but for the common case where the
+    /// focus target's [`egui::Id`] is not known until the body closure
+    /// has run (e.g. egui's `TextEdit::singleline` only exposes its id
+    /// via the `Response` it returns). The caller hands the helper a
+    /// shared `Rc<Cell<...>>`, also moved into its body closure, and
+    /// stores the id into it during the body draw. The helper then
+    /// reads the cell on every frame to drive the initial-focus
+    /// contract — so the dialog stays the single owner of focus,
+    /// instead of every input-dialog caller writing its own
+    /// `ctx.memory_mut(...).request_focus(id)` post-show step.
+    pub fn initial_focus_slot(mut self, slot: Rc<Cell<Option<egui::Id>>>) -> Self {
+        self.initial_focus_slot = Some(slot);
         self
     }
 
@@ -197,6 +217,7 @@ impl<'a, T> Dialog<'a, T> {
         let cancel_label = self.resolve(self.cancel);
         let kind = self.kind;
         let initial_focus_id = self.initial_focus_id;
+        let initial_focus_slot = self.initial_focus_slot.take();
         let window_id = self
             .window_id
             .unwrap_or_else(|| egui::Id::new(("emterm-dialog", self.title.1)));
@@ -369,16 +390,25 @@ impl<'a, T> Dialog<'a, T> {
                         // skip restoration — leaving destructive primary
                         // focused. Frame-continuity gating dodges both.
                         if is_first_frame_of_open {
+                            // Resolve the Input-kind focus target from
+                            // either the static `initial_focus_id` (when
+                            // the caller knew it ahead of show()) or the
+                            // dynamic `initial_focus_slot` (when the
+                            // body closure produced the id during the
+                            // current frame). The slot path lets text-
+                            // edit captures stay inside the helper
+                            // instead of bypassing it via the caller's
+                            // own `ctx.memory_mut(...).request_focus(id)`.
+                            let resolved_focus_id = initial_focus_id
+                                .or_else(|| initial_focus_slot.as_ref().and_then(|s| s.get()));
                             match kinds::initial_focus(kind) {
                                 kinds::Target::Primary => {
-                                    if let Some(id) = initial_focus_id {
+                                    if let Some(id) = resolved_focus_id {
                                         ui.memory_mut(|m| m.request_focus(id));
                                     } else if kind != DialogKind::Input {
                                         // Input dialogs do NOT fall back to focusing the primary
-                                        // button when no explicit initial_focus_id was registered.
-                                        // The caller's post-show body-widget focus request needs an
-                                        // unfocused frame to succeed; stealing focus to the primary
-                                        // button here would block the text field from receiving it.
+                                        // button when no explicit focus id was registered (neither
+                                        // `initial_focus_id` nor a populated `initial_focus_slot`).
                                         // Confirm / DestructiveConfirm have no text field, so they
                                         // keep the primary-button focus fallback.
                                         if let Some(resp) = primary_response.as_ref() {
