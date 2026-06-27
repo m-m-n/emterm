@@ -432,7 +432,23 @@ impl TerminalGridPass {
     /// This split exists so unit tests can exercise the per-cell pipeline
     /// (TS-font-13 / TS-font-14) without standing up a wgpu device.
     pub fn build_instances(&self, cells: &[CellInput], metrics: CellMetrics) -> Vec<CellInstance> {
-        let mut out = Vec::with_capacity(cells.len() * 2);
+        // Two-pass instance ordering: all background quads first, then
+        // every foreground quad (glyphs, box / block-drawing strokes,
+        // decoration lines). Without this split, the per-cell `[bg,
+        // glyph, deco]` interleave meant row N+1's bg quad was pushed
+        // AFTER row N's glyph quad — and since the pass runs without a
+        // depth test and instances draw in submission order, the next
+        // row's bg overwrote any glyph that overflowed cell_h. Tall
+        // single-cell glyphs (U+25FB ◻ from Noto Sans Symbols 2 / Noto
+        // Emoji, CJK descenders) had their bottom edge erased.
+        //
+        // Two passes give Alpha / RGBA glyph quads a clean natural
+        // overhang (their fragment output drops to alpha=0 outside the
+        // covered pixels, so no bg leaks into adjacent rows). The
+        // subpixel path is opaque across the whole quad — see the Y
+        // clip added in `glyph_instance` for that page.
+        let mut bgs = Vec::with_capacity(cells.len());
+        let mut fg = Vec::with_capacity(cells.len() * 2);
         let mut cache = self.cache.lock();
         // Pre-compute the per-cell baseline using the base font's real
         // ascent + line height. Without this we used the rough
@@ -459,13 +475,12 @@ impl TerminalGridPass {
             let y = metrics.origin[1] + cell.row as f32 * metrics.cell_h;
             let w = metrics.cell_w * (cell.width_cells.max(1) as f32);
             let h = metrics.cell_h;
-            // Background quad first (rendered underneath the glyph).
-            // `bg_extend_below` extends the bg downward so reverse-video
-            // preedit cells cover CJK glyph descenders that naturally
-            // rasterize past `cell_h`.
+            // Background quad → `bgs`. `bg_extend_below` extends the
+            // bg downward so reverse-video preedit cells cover CJK
+            // glyph descenders that naturally rasterize past `cell_h`.
             if cell.draw_background {
                 let bg_h = h + cell.bg_extend_below.max(0.0);
-                out.push(CellInstance {
+                bgs.push(CellInstance {
                     cell_xy: [x, y],
                     cell_wh: [w, bg_h],
                     atlas_uv: [0.0, 0.0, 0.0, 0.0],
@@ -484,7 +499,7 @@ impl TerminalGridPass {
                 let first_cp = cell.glyph.chars().next().map(|c| c as u32).unwrap_or(0);
                 if let Some(rects) = super::box_drawing::rects_for(first_cp, w, h) {
                     for (rx, ry, rw, rh) in rects {
-                        out.push(CellInstance {
+                        fg.push(CellInstance {
                             cell_xy: [x + rx, y + ry],
                             cell_wh: [rw, rh],
                             atlas_uv: [0.0, 0.0, 0.0, 0.0],
@@ -501,16 +516,16 @@ impl TerminalGridPass {
                     // preserve the cell's fg RGB and patch only the A
                     // channel so the alpha-blend stage paints a
                     // partially-transparent fg fill over the bg.
-                    let mut fg = cell.fg_rgba;
+                    let mut fgc = cell.fg_rgba;
                     if let Some(a) = alpha_override {
-                        fg[3] = a;
+                        fgc[3] = a;
                     }
                     for (rx, ry, rw, rh) in rects {
-                        out.push(CellInstance {
+                        fg.push(CellInstance {
                             cell_xy: [x + rx, y + ry],
                             cell_wh: [rw, rh],
                             atlas_uv: [0.0, 0.0, 0.0, 0.0],
-                            fg_rgba: pack_rgba(fg),
+                            fg_rgba: pack_rgba(fgc),
                             bg_rgba: pack_rgba(cell.bg_rgba),
                             page: PAGE_SOLID,
                             flags: FLAG_FG_FILL,
@@ -527,7 +542,7 @@ impl TerminalGridPass {
                     base_ascent,
                     v_pad,
                 ) {
-                    out.push(instance);
+                    fg.push(instance);
                 }
             }
             // Decoration lines: rendered as thin solid quads inside the
@@ -535,7 +550,7 @@ impl TerminalGridPass {
             // instance per active decoration so the shader can place the
             // line at the correct sub-rect.
             if cell.underline {
-                out.push(CellInstance {
+                fg.push(CellInstance {
                     cell_xy: [x, y],
                     cell_wh: [w, h],
                     atlas_uv: [0.0, 0.0, 0.0, 0.0],
@@ -546,7 +561,7 @@ impl TerminalGridPass {
                 });
             }
             if cell.strikethrough {
-                out.push(CellInstance {
+                fg.push(CellInstance {
                     cell_xy: [x, y],
                     cell_wh: [w, h],
                     atlas_uv: [0.0, 0.0, 0.0, 0.0],
@@ -557,7 +572,8 @@ impl TerminalGridPass {
                 });
             }
         }
-        out
+        bgs.extend(fg);
+        bgs
     }
 
     /// Resolve a single cell's glyph to a `CellInstance`. Returns `None`
@@ -725,11 +741,14 @@ impl TerminalGridPass {
         // quads intentionally stay fractional (rounding them would open
         // hairline gaps between adjacent cells).
         let mut glyph_x = glyph_x.round();
-        let glyph_y = glyph_y.round();
+        let mut glyph_y = glyph_y.round();
         let mut glyph_w = glyph_w;
+        let mut glyph_h = glyph_h;
         let mut u0 = u0;
         let mut u1 = u1;
-        // Subpixel glyphs: clip the quad horizontally to the cell rect.
+        let mut v0 = v0;
+        let mut v1 = v1;
+        // Subpixel glyphs: clip the quad to the cell rect in BOTH axes.
         // swash's hinted bitmaps can be wider than the cell (Inconsolata
         // 'm' / 'w' at 13 pt: left=-1, width=11 vs 9-px cells), and the
         // subpixel shader composites the FULL quad against the cell's bg
@@ -738,6 +757,11 @@ impl TerminalGridPass {
         // to reverse-video runs (e.g. ls's /dev/shm highlight). Alpha /
         // RGBA pages alpha-blend (bg never leaks), so they keep the
         // natural overhang like the WebView build's Canvas fillText.
+        //
+        // The Y clip catches the analogous vertical bleed: tall glyphs
+        // (U+25FB ◻, CJK descenders) whose bitmap exceeds cell_h would
+        // otherwise paint this cell's bg color into the row above /
+        // below as a colored stripe.
         if page == PAGE_SUBPIXEL {
             // Snap the cell bounds to the pixel grid before clipping. The
             // glyph quad is already pixel-snapped (integer origin + integer
@@ -758,8 +782,17 @@ impl TerminalGridPass {
             } else {
                 return None;
             }
+            if let Some((cy, ch, cv0, cv1)) =
+                clip_quad_to_cell_y(glyph_y, glyph_h, v0, v1, y.round(), (y + h).round())
+            {
+                glyph_y = cy;
+                glyph_h = ch;
+                v0 = cv0;
+                v1 = cv1;
+            } else {
+                return None;
+            }
         }
-        let _ = h;
         Some(CellInstance {
             cell_xy: [glyph_x, glyph_y],
             cell_wh: [glyph_w, glyph_h],
@@ -1034,6 +1067,47 @@ fn clip_quad_to_cell_x(
     Some((x, w, nu0, nu1))
 }
 
+/// Y-axis twin of [`clip_quad_to_cell_x`]. Same shaving math, vertical
+/// orientation: trims a glyph quad to the cell's [top, bottom] bounds and
+/// shifts the V coordinates so the visible portion still maps 1:1 to its
+/// atlas texels.
+///
+/// Used by the subpixel path to prevent a tall glyph (U+25FB ◻ from Noto
+/// Sans Symbols 2, CJK descenders past the cell descent) from painting
+/// this cell's bg color into the row above / below as a coloured stripe.
+fn clip_quad_to_cell_y(
+    glyph_y: f32,
+    glyph_h: f32,
+    v0: f32,
+    v1: f32,
+    cell_top: f32,
+    cell_bottom: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    if glyph_h <= 0.0 {
+        return None;
+    }
+    let texels_per_px = (v1 - v0) / glyph_h;
+    let mut y = glyph_y;
+    let mut h = glyph_h;
+    let mut nv0 = v0;
+    let mut nv1 = v1;
+    let top_trim = cell_top - y;
+    if top_trim > 0.0 {
+        nv0 += top_trim * texels_per_px;
+        y += top_trim;
+        h -= top_trim;
+    }
+    let bottom_trim = (y + h) - cell_bottom;
+    if bottom_trim > 0.0 {
+        nv1 -= bottom_trim * texels_per_px;
+        h -= bottom_trim;
+    }
+    if h <= 0.0 {
+        return None;
+    }
+    Some((y, h, nv0, nv1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1109,7 +1183,10 @@ mod tests {
         cells: &[CellInput],
         metrics: CellMetrics,
     ) -> Vec<CellInstance> {
-        let mut out = Vec::with_capacity(cells.len() * 2);
+        // Two-pass ordering, identical to production `build_instances`:
+        // all bgs first, then all foreground quads.
+        let mut bgs = Vec::with_capacity(cells.len());
+        let mut fg = Vec::with_capacity(cells.len() * 2);
         let mut cache_lock = cache.lock();
         let base_metrics = rasterizer.font_metrics(fallback.base(), metrics.font_size_px);
         let base_ascent = base_metrics
@@ -1125,7 +1202,7 @@ mod tests {
             let w = metrics.cell_w * (cell.width_cells.max(1) as f32);
             let h = metrics.cell_h;
             if cell.draw_background {
-                out.push(CellInstance {
+                bgs.push(CellInstance {
                     cell_xy: [x, y],
                     cell_wh: [w, h],
                     atlas_uv: [0.0, 0.0, 0.0, 0.0],
@@ -1154,7 +1231,7 @@ mod tests {
                                     let baseline = y + v_pad + base_ascent;
                                     let glyph_x = x + region.bearing_left as f32;
                                     let glyph_y = baseline - region.bearing_top as f32;
-                                    out.push(CellInstance {
+                                    fg.push(CellInstance {
                                         cell_xy: [glyph_x, glyph_y],
                                         cell_wh: [glyph_w, glyph_h],
                                         atlas_uv: [
@@ -1175,7 +1252,7 @@ mod tests {
                 }
             }
             if cell.underline {
-                out.push(CellInstance {
+                fg.push(CellInstance {
                     cell_xy: [x, y],
                     cell_wh: [w, h],
                     atlas_uv: [0.0, 0.0, 0.0, 0.0],
@@ -1186,7 +1263,7 @@ mod tests {
                 });
             }
             if cell.strikethrough {
-                out.push(CellInstance {
+                fg.push(CellInstance {
                     cell_xy: [x, y],
                     cell_wh: [w, h],
                     atlas_uv: [0.0, 0.0, 0.0, 0.0],
@@ -1197,7 +1274,8 @@ mod tests {
                 });
             }
         }
-        out
+        bgs.extend(fg);
+        bgs
     }
 
     fn ascii_cell(col: u16, row: u16, ch: &str) -> CellInput {
@@ -1460,6 +1538,69 @@ mod tests {
         let (raster, chain, cache) = build_stack();
         let inst = helper_build_instances(&*raster, &chain, &cache, &[], metrics());
         assert!(inst.is_empty());
+    }
+
+    /// `build_instances` emits all background quads before any
+    /// foreground quad (glyph / box-drawing / decoration). Without this
+    /// ordering, row N+1's bg quad — pushed after row N's glyph in the
+    /// per-cell loop — would overwrite row N glyph overhang via the
+    /// no-depth-test draw, clipping tall single-cell glyphs like
+    /// U+25FB ◻ at the cell bottom.
+    #[test]
+    fn build_instances_emits_all_bgs_before_any_glyph() {
+        let (raster, chain, cache) = build_stack();
+        let mut a = ascii_cell(0, 0, "A");
+        a.draw_background = true;
+        let mut b = ascii_cell(0, 1, "B");
+        b.draw_background = true;
+        let mut c = ascii_cell(0, 2, "C");
+        c.draw_background = true;
+        c.underline = true;
+        let inst = helper_build_instances(&*raster, &chain, &cache, &[a, b, c], metrics());
+        // 3 bgs (SOLID, no flags) + 3 glyphs (ALPHA) + 1 underline (SOLID, FLAG_UNDERLINE).
+        assert_eq!(inst.len(), 7);
+        // First three instances must all be plain bg quads.
+        for i in &inst[..3] {
+            assert_eq!(i.page, PAGE_SOLID);
+            assert_eq!(i.flags, 0);
+        }
+        // Remaining instances are the foreground pass: 3 glyphs then 1 underline.
+        let fg_pages: Vec<u32> = inst[3..].iter().map(|i| i.page).collect();
+        let fg_flags: Vec<u32> = inst[3..].iter().map(|i| i.flags).collect();
+        assert_eq!(
+            fg_pages,
+            vec![PAGE_ALPHA, PAGE_ALPHA, PAGE_ALPHA, PAGE_SOLID]
+        );
+        assert_eq!(fg_flags, vec![0, 0, 0, FLAG_UNDERLINE]);
+    }
+
+    // ── clip_quad_to_cell_y ──────────────────────────────────
+
+    /// A vertically-fitting quad passes through `clip_quad_to_cell_y`
+    /// unchanged (twin of the X-axis fitting-quad case).
+    #[test]
+    fn clip_quad_y_inside_cell_is_unchanged() {
+        let r = clip_quad_to_cell_y(10.0, 8.0, 0.0, 8.0, 9.0, 18.0);
+        assert_eq!(r, Some((10.0, 8.0, 0.0, 8.0)));
+    }
+
+    /// Top + bottom overhang shaves equal V-axis margins, preserving
+    /// the 1:1 texel-to-pixel mapping for the visible portion. Mirrors
+    /// `clip_quad_overhang_trims_both_sides_and_uv` for the Y axis.
+    #[test]
+    fn clip_quad_y_overhang_trims_both_sides_and_uv() {
+        // Cell [9, 18), quad [8, 19) on the Y axis → clipped to [9, 18).
+        let r = clip_quad_to_cell_y(8.0, 11.0, 100.0, 111.0, 9.0, 18.0);
+        let (y, h, v0, v1) = r.expect("clipped quad survives");
+        assert_eq!((y, h), (9.0, 9.0));
+        assert_eq!((v0, v1), (101.0, 110.0));
+    }
+
+    /// A quad entirely outside the cell vertically clips to nothing.
+    #[test]
+    fn clip_quad_y_outside_cell_returns_none() {
+        assert_eq!(clip_quad_to_cell_y(20.0, 5.0, 0.0, 5.0, 0.0, 9.0), None);
+        assert_eq!(clip_quad_to_cell_y(0.0, 0.0, 0.0, 0.0, 0.0, 9.0), None);
     }
 
     /// Decoration flags emit dedicated solid-color instances on top of
