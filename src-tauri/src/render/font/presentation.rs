@@ -64,12 +64,25 @@ static EMOJI_RANGES: &[(u32, u32)] = &[
     // indicator. Classifying them as text-default emoji routes them to
     // the monochrome bundle that does have the glyph.
     (0x23F4, 0x23F7),
-    (0x23F8, 0x23FA),   // DOUBLE VERTICAL BAR..BLACK CIRCLE FOR RECORD
-    (0x24C2, 0x24C2),   // CIRCLED LATIN CAPITAL LETTER M
-    (0x25AA, 0x25AB),   // BLACK SMALL SQUARE..WHITE SMALL SQUARE
-    (0x25B6, 0x25B6),   // BLACK RIGHT-POINTING TRIANGLE
-    (0x25C0, 0x25C0),   // BLACK LEFT-POINTING TRIANGLE
-    (0x25FB, 0x25FE),   // WHITE MEDIUM SQUARE..BLACK MEDIUM SMALL SQUARE
+    (0x23F8, 0x23FA), // DOUBLE VERTICAL BAR..BLACK CIRCLE FOR RECORD
+    (0x24C2, 0x24C2), // CIRCLED LATIN CAPITAL LETTER M
+    (0x25AA, 0x25AB), // BLACK SMALL SQUARE..WHITE SMALL SQUARE
+    (0x25B6, 0x25B6), // BLACK RIGHT-POINTING TRIANGLE
+    (0x25C0, 0x25C0), // BLACK LEFT-POINTING TRIANGLE
+    // U+25FB / U+25FC (WHITE / BLACK MEDIUM SQUARE) are intentionally
+    // OMITTED from `Emoji=Yes`. Unicode does classify them as
+    // text-default emoji, but routing them through the emoji fonts
+    // (Noto Emoji / Noto Color Emoji) makes the glyph sit on the
+    // baseline — emoji are laid out as baseline-anchored pictographs,
+    // not vertically-centered geometric shapes — so the lower portion
+    // of the cell stays empty and the square reads as "bottom edge
+    // clipped". Letting the regular text fallback chain (Noto Sans
+    // CJK JP / Noto Sans Symbols 2) own them restores the expected
+    // line-centered rendering. Users who explicitly want the emoji
+    // form can still attach VS16 (◻️). U+25FD / U+25FE remain in the
+    // table (and in `EMOJI_PRESENTATION_RANGES` below) because their
+    // Unicode default IS the emoji presentation.
+    (0x25FD, 0x25FE),   // WHITE MEDIUM SMALL SQUARE..BLACK MEDIUM SMALL SQUARE
     (0x2600, 0x2604),   // BLACK SUN WITH RAYS..COMET
     (0x260E, 0x260E),   // BLACK TELEPHONE
     (0x2611, 0x2611),   // BALLOT BOX WITH CHECK

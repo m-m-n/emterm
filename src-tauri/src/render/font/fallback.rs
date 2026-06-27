@@ -318,7 +318,17 @@ pub(crate) fn is_pictographic(cp: u32) -> bool {
         | 0x24C2                         // Ⓜ
         | 0x25AA..=0x25AB                // ▪ ▫
         | 0x25B6 | 0x25C0                // ▶ ◀
-        | 0x25FB..=0x25FE                // ◻ ◼ ◽ ◾
+        // U+25FB / U+25FC (text-default per Unicode) are OMITTED so
+        // the regular text chain (Noto Sans CJK JP / Noto Sans
+        // Symbols 2) renders them as vertically-centered geometric
+        // shapes instead of baseline-anchored emoji squares. U+25FD /
+        // U+25FE are intentionally NOT routed through this function:
+        // their Unicode default IS the emoji presentation, so
+        // `presentation_for` (presentation.rs, via
+        // `EMOJI_PRESENTATION_RANGES`) hands them to the color emoji
+        // font through the `Color` branch of `resolve_for_cluster`.
+        // `is_pictographic` is not the routing authority for those
+        // two and their absence here is intentional.
         | 0x2600..=0x27BF                // misc symbols + dingbats
         | 0x2934..=0x2935                // ⤴ ⤵
         | 0x2B05..=0x2B07                // ⬅ ⬆ ⬇
@@ -520,6 +530,15 @@ mod tests {
         assert!(!is_pictographic(0x3042)); // あ
         assert!(!is_pictographic(0x2500)); // box drawing ─
         assert!(!is_pictographic(0x25FF)); // last box drawing
+        // U+25FB / U+25FC (text-default per Unicode) are intentionally
+        // omitted so the regular text chain renders them as
+        // vertically-centered geometric shapes. U+25FD / U+25FE are
+        // intentionally routed through `presentation_for` → `Color` →
+        // color emoji (their Unicode default IS the emoji
+        // presentation); `is_pictographic` is NOT the authority for
+        // those two and their classification here is not pinned.
+        assert!(!is_pictographic(0x25FB)); // ◻ WHITE MEDIUM SQUARE — text path
+        assert!(!is_pictographic(0x25FC)); // ◼ BLACK MEDIUM SQUARE — text path
         // Block-drawing must stay text-rendered: the status-bar
         // progress bars are built from these (`░▒▓█`), and a color
         // emoji glyph would wreck the bar. Pin the whole block.
