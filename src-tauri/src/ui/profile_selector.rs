@@ -14,19 +14,20 @@
 //! - **Pointer** (row click confirms, click outside the dialog cancels)
 //!   is handled here and reported via [`ProfileSelectorEvent`].
 
-use egui::{Align2, Area, Color32, FontId, Frame, Id, Margin, Order, Rounding, Sense};
+use egui::{Align2, Area, FontId, Frame, Id, Margin, Order, Rounding, Sense};
 
+use crate::ui::dialog::tokens;
 use crate::ui::md3;
 
-/// Dialog max width (`.profile-selector-dialog { max-width: 400px }`).
-const DIALOG_MAX_W: f32 = 400.0;
-/// Dialog padding (`padding: 24px`).
-const DIALOG_PAD: f32 = 24.0;
-/// Dialog corner radius (`--md-sys-shape-corner-extra-large` = 28px).
-const DIALOG_ROUNDING: f32 = 28.0;
-/// Title font size / bottom margin (`.profile-selector-title`).
-const TITLE_FONT: f32 = 22.0;
-const TITLE_MARGIN_BOTTOM: f32 = 16.0;
+/// Dialog surface width (`dialogs.layout.width-compact`).
+const DIALOG_MAX_W: f32 = tokens::WIDTH_COMPACT;
+/// Dialog padding (`dialogs.layout.padding`).
+const DIALOG_PAD: f32 = tokens::PADDING;
+/// Dialog corner radius (`dialogs.layout.corner-radius`).
+const DIALOG_ROUNDING: f32 = tokens::CORNER_RADIUS;
+/// Title font size / bottom margin (`title-large`).
+const TITLE_FONT: f32 = tokens::TITLE_LARGE_SIZE;
+const TITLE_MARGIN_BOTTOM: f32 = tokens::TITLE_TO_BODY_MARGIN;
 /// Row padding (`.profile-selector-item { padding: 12px 16px }`).
 const ROW_PAD_X: f32 = 16.0;
 const ROW_PAD_Y: f32 = 12.0;
@@ -43,8 +44,6 @@ const SHELL_FONT: f32 = 12.0;
 const BADGE_FONT: f32 = 11.0;
 const BADGE_PAD_X: f32 = 8.0;
 const BADGE_PAD_Y: f32 = 2.0;
-/// Overlay scrim `rgba(0, 0, 0, 0.5)`.
-const SCRIM: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 128);
 /// List viewport cap relative to the window height (`max-height: 60vh`
 /// on the dialog; the list scrolls inside it).
 const DIALOG_MAX_H_FRAC: f32 = 0.6;
@@ -197,7 +196,7 @@ pub fn draw(
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
             let painter = ui.painter();
-            painter.rect_filled(screen, 0.0, SCRIM);
+            painter.rect_filled(screen, 0.0, tokens::SCRIM_COLOR);
             ui.allocate_rect(screen, Sense::click())
         })
         .inner;
@@ -216,12 +215,7 @@ pub fn draw(
                 .fill(md3::surface_container_high())
                 .rounding(Rounding::same(DIALOG_ROUNDING))
                 .inner_margin(Margin::same(DIALOG_PAD))
-                .shadow(egui::epaint::Shadow {
-                    offset: egui::vec2(0.0, 8.0),
-                    blur: 32.0,
-                    spread: 0.0,
-                    color: Color32::from_black_alpha(77),
-                })
+                .shadow(tokens::elevation_shadow())
                 .show(ui, |ui| {
                     ui.set_width(dialog_w - 2.0 * DIALOG_PAD);
                     ui.set_max_height(max_h - 2.0 * DIALOG_PAD);

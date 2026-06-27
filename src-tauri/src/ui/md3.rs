@@ -49,8 +49,11 @@ pub struct Palette {
     pub surface_container_highest: Color32,
     pub on_surface: Color32,
     pub on_surface_variant: Color32,
+    pub surface_variant: Color32,
     pub outline: Color32,
     pub outline_variant: Color32,
+    pub error_container: Color32,
+    pub on_error_container: Color32,
 }
 
 /// Purple (default) dark palette. Mirrors
@@ -69,8 +72,11 @@ const PALETTE_PURPLE: Palette = Palette {
     surface_container_highest: hex(0x36343B),
     on_surface: hex(0xE6E0E9),
     on_surface_variant: hex(0xCAC4D0),
+    surface_variant: hex(0x49454F),
     outline: hex(0x938F99),
     outline_variant: hex(0x49454F),
+    error_container: hex(0x8C1D18),
+    on_error_container: hex(0xF9DEDC),
 };
 
 const PALETTE_BLUE: Palette = Palette {
@@ -87,8 +93,11 @@ const PALETTE_BLUE: Palette = Palette {
     surface_container_highest: hex(0x34363B),
     on_surface: hex(0xE2E2E9),
     on_surface_variant: hex(0xC4C6D0),
+    surface_variant: hex(0x44464F),
     outline: hex(0x8E909A),
     outline_variant: hex(0x44464F),
+    error_container: hex(0x8C1D18),
+    on_error_container: hex(0xF9DEDC),
 };
 
 const PALETTE_GREEN: Palette = Palette {
@@ -105,8 +114,11 @@ const PALETTE_GREEN: Palette = Palette {
     surface_container_highest: hex(0x313633),
     on_surface: hex(0xDFE4DF),
     on_surface_variant: hex(0xBFC9C1),
+    surface_variant: hex(0x404943),
     outline: hex(0x8A938C),
     outline_variant: hex(0x404943),
+    error_container: hex(0x8C1D18),
+    on_error_container: hex(0xF9DEDC),
 };
 
 const PALETTE_ORANGE: Palette = Palette {
@@ -123,8 +135,11 @@ const PALETTE_ORANGE: Palette = Palette {
     surface_container_highest: hex(0x3B342D),
     on_surface: hex(0xEDE0D4),
     on_surface_variant: hex(0xD4C4B1),
+    surface_variant: hex(0x524436),
     outline: hex(0x9D8E7D),
     outline_variant: hex(0x524436),
+    error_container: hex(0x8C1D18),
+    on_error_container: hex(0xF9DEDC),
 };
 
 const PALETTE_PINK: Palette = Palette {
@@ -141,8 +156,11 @@ const PALETTE_PINK: Palette = Palette {
     surface_container_highest: hex(0x3D333A),
     on_surface: hex(0xEEDFE3),
     on_surface_variant: hex(0xD4BFC5),
+    surface_variant: hex(0x514349),
     outline: hex(0x9D8A90),
     outline_variant: hex(0x514349),
+    error_container: hex(0x8C1D18),
+    on_error_container: hex(0xF9DEDC),
 };
 
 /// Purple light palette. Mirrors `UI_THEME_PRESETS.purple.light` in
@@ -161,8 +179,11 @@ const PALETTE_PURPLE_LIGHT: Palette = Palette {
     surface_container_highest: hex(0xE6E0E9),
     on_surface: hex(0x1D1B20),
     on_surface_variant: hex(0x49454F),
+    surface_variant: hex(0xE7E0EC),
     outline: hex(0x79747E),
     outline_variant: hex(0xCAC4D0),
+    error_container: hex(0xF9DEDC),
+    on_error_container: hex(0x410E0B),
 };
 
 const PALETTE_BLUE_LIGHT: Palette = Palette {
@@ -179,8 +200,11 @@ const PALETTE_BLUE_LIGHT: Palette = Palette {
     surface_container_highest: hex(0xE2E2E9),
     on_surface: hex(0x1A1C20),
     on_surface_variant: hex(0x44464F),
+    surface_variant: hex(0xE1E2EC),
     outline: hex(0x75767F),
     outline_variant: hex(0xC4C6D0),
+    error_container: hex(0xF9DEDC),
+    on_error_container: hex(0x410E0B),
 };
 
 const PALETTE_GREEN_LIGHT: Palette = Palette {
@@ -197,8 +221,11 @@ const PALETTE_GREEN_LIGHT: Palette = Palette {
     surface_container_highest: hex(0xDEE4DF),
     on_surface: hex(0x181C1A),
     on_surface_variant: hex(0x404943),
+    surface_variant: hex(0xDBE5DD),
     outline: hex(0x717972),
     outline_variant: hex(0xBFC9C1),
+    error_container: hex(0xF9DEDC),
+    on_error_container: hex(0x410E0B),
 };
 
 const PALETTE_ORANGE_LIGHT: Palette = Palette {
@@ -215,8 +242,11 @@ const PALETTE_ORANGE_LIGHT: Palette = Palette {
     surface_container_highest: hex(0xE9E1DD),
     on_surface: hex(0x211A13),
     on_surface_variant: hex(0x524436),
+    surface_variant: hex(0xF0E0CD),
     outline: hex(0x847465),
     outline_variant: hex(0xD4C4B1),
+    error_container: hex(0xF9DEDC),
+    on_error_container: hex(0x410E0B),
 };
 
 const PALETTE_PINK_LIGHT: Palette = Palette {
@@ -233,8 +263,11 @@ const PALETTE_PINK_LIGHT: Palette = Palette {
     surface_container_highest: hex(0xEBDEE2),
     on_surface: hex(0x22191C),
     on_surface_variant: hex(0x514349),
+    surface_variant: hex(0xF0DBE1),
     outline: hex(0x837379),
     outline_variant: hex(0xD4BFC5),
+    error_container: hex(0xF9DEDC),
+    on_error_container: hex(0x410E0B),
 };
 
 /// Resolve the palette for `preset` under `theme`. `System` resolves
@@ -364,6 +397,25 @@ pub fn outline_variant() -> Color32 {
     current().outline_variant
 }
 
+/// Readonly inputs, toggle track (off), keybind input background. Mirrors
+/// the WebView's `--md-sys-color-surface-variant` per preset.
+#[allow(dead_code)]
+pub fn surface_variant() -> Color32 {
+    current().surface_variant
+}
+
+/// Destructive button background (dialog destructive primary, error
+/// banner). Mirrors `--md-sys-color-error-container`.
+pub fn error_container() -> Color32 {
+    current().error_container
+}
+
+/// Text/icon over [`error_container`]. Mirrors
+/// `--md-sys-color-on-error-container`.
+pub fn on_error_container() -> Color32 {
+    current().on_error_container
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // State-layer helpers
 // ──────────────────────────────────────────────────────────────────────
@@ -477,6 +529,77 @@ mod tests {
         assert_eq!(
             palette_for(Pink, Light).primary,
             Color32::from_rgb(0x98, 0x40, 0x61)
+        );
+    }
+
+    #[test]
+    fn error_container_is_hue_agnostic_per_brightness() {
+        // FR6: all dark presets share #8C1D18 / #F9DEDC, and all light
+        // presets share #F9DEDC / #410E0B. This guards against a future
+        // refactor accidentally re-coupling them to the accent hue.
+        use crate::settings::UiTheme::{Dark, Light};
+        use crate::settings::UiThemePreset::*;
+        for preset in [Purple, Blue, Green, Orange, Pink] {
+            assert_eq!(
+                palette_for(preset, Dark).error_container,
+                Color32::from_rgb(0x8C, 0x1D, 0x18),
+                "dark error_container for {preset:?}"
+            );
+            assert_eq!(
+                palette_for(preset, Dark).on_error_container,
+                Color32::from_rgb(0xF9, 0xDE, 0xDC),
+                "dark on_error_container for {preset:?}"
+            );
+            assert_eq!(
+                palette_for(preset, Light).error_container,
+                Color32::from_rgb(0xF9, 0xDE, 0xDC),
+                "light error_container for {preset:?}"
+            );
+            assert_eq!(
+                palette_for(preset, Light).on_error_container,
+                Color32::from_rgb(0x41, 0x0E, 0x0B),
+                "light on_error_container for {preset:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn surface_variant_matches_webview_per_preset() {
+        // Spot-check that `surface-variant` in `Palette` mirrors the
+        // values in `ui-theme-presets.ts` for the affected presets.
+        use crate::settings::UiTheme::{Dark, Light};
+        use crate::settings::UiThemePreset::*;
+        assert_eq!(
+            palette_for(Purple, Dark).surface_variant,
+            Color32::from_rgb(0x49, 0x45, 0x4F)
+        );
+        assert_eq!(
+            palette_for(Blue, Dark).surface_variant,
+            Color32::from_rgb(0x44, 0x46, 0x4F)
+        );
+        assert_eq!(
+            palette_for(Green, Dark).surface_variant,
+            Color32::from_rgb(0x40, 0x49, 0x43)
+        );
+        assert_eq!(
+            palette_for(Orange, Dark).surface_variant,
+            Color32::from_rgb(0x52, 0x44, 0x36)
+        );
+        assert_eq!(
+            palette_for(Pink, Dark).surface_variant,
+            Color32::from_rgb(0x51, 0x43, 0x49)
+        );
+        assert_eq!(
+            palette_for(Purple, Light).surface_variant,
+            Color32::from_rgb(0xE7, 0xE0, 0xEC)
+        );
+        assert_eq!(
+            palette_for(Orange, Light).surface_variant,
+            Color32::from_rgb(0xF0, 0xE0, 0xCD)
+        );
+        assert_eq!(
+            palette_for(Pink, Light).surface_variant,
+            Color32::from_rgb(0xF0, 0xDB, 0xE1)
         );
     }
 

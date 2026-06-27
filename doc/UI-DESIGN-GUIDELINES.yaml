@@ -22,6 +22,11 @@ tokens:
     easing-emphasized: cubic-bezier(0.2, 0, 0, 1)
     easing-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1)
 
+  elevation:
+    elevation-3:
+      box-shadow: 0 8px 32px rgba(0,0,0,0.30)
+      usage: "Modal dialog surface (dialogs.elevation references this)"
+
   color-roles:
     primary: "Active states, focus borders, primary buttons, tab indicator"
     on-primary: "Text on primary surfaces"
@@ -32,12 +37,14 @@ tokens:
     surface-container-low: "Settings nav background"
     surface-container-high: "Modal dialog backgrounds"
     surface-container-highest: "Hover states, color hex inputs"
+    surface-variant: "Readonly inputs, toggle track (off), keybind input background"
     on-surface: "Primary text"
     on-surface-variant: "Secondary text, inactive icons"
     outline: "Input borders (default)"
     outline-variant: "Subtle borders (tab bar, list separators)"
     error: "Danger button hover"
-    error-container: "Danger button, error messages"
+    error-container: "Danger button background, error message banner"
+    on-error-container: "Text/icon over error-container"
 
   typography:
     title-large:
@@ -475,6 +482,10 @@ components:
   # ============================================================================
   # Modals / Dialogs
   # ============================================================================
+  # superseded-by: dialogs (top-level)
+  # Kept as a historical descriptive snapshot of the pre-refactor CSS.
+  # New dialog work consults the normative `dialogs:` section at the bottom
+  # of this file. The class names listed here are being renamed to `.dialog-*`.
   modals:
     overlay:
       classes:
@@ -766,13 +777,80 @@ z-index:
   link-dialog-standalone: 10000
 
 # ==============================================================================
+# Dialogs (Normative SSOT)
+# ==============================================================================
+# This section is the single source of truth for modal dialogs. The native
+# helper (`crate::ui::dialog`) and the WebView helper
+# (`web-shared/dialog/dialog-shell.ts`) mirror these values; the Rust drift
+# test (`crate::ui::dialog::tests`) fails when yaml and Rust constants
+# disagree on `scrim`, `layout.corner-radius`, `layout.padding`, or when a
+# `tokens.color-roles` role lacks a `:root` declaration.
+dialogs:
+  kinds:
+    input: "Edit a value via text field / DragValue (rename, move, editors)"
+    confirm: "Non-destructive confirmation (upload)"
+    destructive-confirm: "Destructive confirmation (overwrite, close-guard)"
+
+  anatomy:
+    overlay: "Scrim (dimmed background, click-to-cancel)"
+    surface: "Dialog box (surface-container-high + corner-extra-large + elevation-3)"
+    header: "Title (title-large typescale)"
+    body: "Content (form fields, message, list)"
+    actions: "Button row (right-aligned, primary + cancel)"
+
+  layout:
+    corner-radius: 28px            # tokens.shape.corner-extra-large
+    padding: 24px                  # tokens.spacing.lg
+    width-standard: 480px
+    width-compact: 400px
+    max-height-standard: 80vh
+    max-height-compact: 60vh
+    actions-gap: 8px               # tokens.spacing.xs
+    title-to-body-margin: 16px     # tokens.spacing.md
+    actions-top-margin: 16px       # tokens.spacing.md
+    body-item-spacing: 8px         # tokens.spacing.xs — vertical gap between body widgets
+
+  scrim: rgba(0, 0, 0, 0.50)
+
+  elevation: elevation-3           # tokens.elevation.elevation-3
+
+  actions:
+    primary:
+      background: primary
+      foreground: on-primary
+    cancel:
+      background: transparent
+      foreground: primary
+    destructive:
+      background: error-container
+      foreground: on-error-container
+
+  keyboard:
+    input:
+      enter: "primary (text inputs use lost_focus + key_pressed; widgets use frame Enter)"
+      escape: cancel
+      tab-order: "inputs -> primary -> cancel"
+    confirm:
+      enter: primary
+      escape: cancel
+      tab-order: "primary -> cancel"
+    destructive-confirm:
+      enter: cancel                # Enter never triggers destructive primary
+      escape: cancel
+      tab-order: "primary -> cancel (Tab still reaches primary; Enter does not)"
+
+  focus:
+    input: "first focusable widget in body"
+    confirm: primary
+    destructive-confirm: cancel
+
+  labels:
+    rules:
+      - "Generic 'OK' is forbidden (helper rejects via debug assertion)"
+      - "Cancel label is 'キャンセル' / 'Cancel' verbatim"
+      - "Primary label is an action verb (Save, Rename, Move, Upload, Overwrite, Close)"
+
+# ==============================================================================
 # Known Issues
 # ==============================================================================
-known-issues:
-  - token: --md-sys-color-surface-variant
-    status: "Referenced but never defined in :root or presets"
-    affected:
-      - .settings-toggle (track off state)
-      - .settings-keybind-input (default background)
-      - .settings-font-picker-input (readonly background)
-    behavior: "Resolves to empty string (transparent)"
+known-issues: []

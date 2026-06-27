@@ -2389,7 +2389,6 @@ impl App {
         self.mux_dialog = crate::mux::dialog::MuxDialogState::Rename {
             window_id,
             name: current_name,
-            focused_once: false,
         };
     }
 

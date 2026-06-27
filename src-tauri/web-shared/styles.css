@@ -10,6 +10,9 @@
 /* Settings Panel Styles */
 @import "./styles/settings-panel.css";
 
+/* Dialog Shell Styles */
+@import "./dialog/dialog-shell.css";
+
 /* Search Bar Styles */
 @import "./terminal/search/search-bar.css";
 
@@ -82,6 +85,17 @@ body {
 
   --md-sys-color-error: #f2b8b5;
   --md-sys-color-on-error: #601410;
+  --md-sys-color-error-container: #8c1d18;
+  --md-sys-color-on-error-container: #f9dedc;
+
+  /* Material Design 3 - Typescale Tokens (dialog-relevant subset) */
+  --md-sys-typescale-title-large-size: 22px;
+  --md-sys-typescale-title-large-line-height: 28px;
+  --md-sys-typescale-body-medium-size: 14px;
+  --md-sys-typescale-body-medium-line-height: 20px;
+
+  /* Material Design 3 - Elevation Tokens */
+  --md-sys-elevation-3: 0 8px 32px rgba(0, 0, 0, 0.3);
 
   /* Material Design 3 - Shape Tokens */
   --md-sys-shape-corner-none: 0px;

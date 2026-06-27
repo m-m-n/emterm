@@ -1,0 +1,248 @@
+schema_version: 1
+feature: dialog-design-system
+created: 2026-06-26
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+    webview:
+      language: typescript
+      build_command: "bun run build:viewer && bun run build:settings"
+      test_command: "bun test"
+      format_command: "bunx biome format --write src-tauri/web-shared src-tauri/viewer/web src-tauri/settings/web"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 0b0c8a23f130968c7368271b85dd231f5f70c3f6
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md, tasks.yaml]
+    status: completed
+  - id: verify-plan
+    status: completed
+  - id: implement
+    status: completed
+  - id: check
+    status: completed
+    completed_at_commit: 0b0c8a23f130968c7368271b85dd231f5f70c3f6
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 0b0c8a23f130968c7368271b85dd231f5f70c3f6
+
+requirements:
+  FR1:
+    title: "Dialog design tokens and spec in UI-DESIGN-GUIDELINES.yaml"
+    status: ok
+    tasks:
+      - p1-yaml-dialogs-section
+      - p1-yaml-tokens-additions
+      - p1-css-typescale-elevation-error-container
+      - p1-webview-presets-error-container
+      - p1-md3-rs-palette-extension
+    tests:
+      - TS-9
+      - TS-10
+      - TS-20
+      - TS-21
+  FR2:
+    title: "Native helper module src-tauri/src/ui/dialog/"
+    status: ok
+    tasks:
+      - p2-module-scaffold
+      - p2-tokens-constants
+      - p2-builder-api
+      - p2-window-chrome
+      - p2-role-buttons
+      - p2-keymap-focus
+      - p2-i18n-locale-integration
+      - p2-debug-assert-ok-label
+    tests:
+      - TS-11
+      - TS-12
+      - TS-13
+      - TS-19
+  FR3:
+    title: "WebView helper module src-tauri/web-shared/dialog/"
+    status: ok
+    tasks:
+      - p3-shell-module
+      - p3-shell-css
+      - p3-keymap-focus-aria
+      - p3-shell-tests
+    tests:
+      - TS-14
+      - TS-15
+      - TS-16
+      - TS-17
+      - TS-18
+      - TS-22
+  FR4:
+    title: "Refactor existing 8 dialogs to use the helpers"
+    status: ok
+    tasks:
+      - p4-rename-dialog
+      - p4-move-dialog
+      - p4-upload-dialog
+      - p4-overwrite-dialog
+      - p4-close-guard-dialog
+      - p5-profile-editor
+      - p5-ssh-editor
+      - p5-css-cleanup
+      - p7-shared-constants-adoption
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-24
+      - TS-26
+  FR5:
+    title: "Keyboard rules per dialog kind (Enter/Esc/Tab/initial focus)"
+    status: ok
+    tasks:
+      - p2-keymap-focus
+      - p3-keymap-focus-aria
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-12
+      - TS-14
+      - TS-15
+      - TS-16
+      - TS-18
+  FR6:
+    title: "Color rules per button role (primary/cancel/destructive)"
+    status: ok
+    resolution_note: >
+      Light-theme and dark-theme hex values for error-container,
+      on-error-container, and surface-variant across the 5 presets
+      are finalized in IMPLEMENTATION.md §FR6. error-container /
+      on-error-container use the MD3 baseline hue-agnostic error
+      palette; surface-variant uses per-preset values mirroring the
+      existing WebView preset table (web-shared/settings/ui-theme-presets.ts).
+    tasks:
+      - p1-md3-rs-palette-extension
+      - p1-css-typescale-elevation-error-container
+      - p1-webview-presets-error-container
+      - p2-tokens-constants
+      - p2-role-buttons
+    tests:
+      - TS-4
+      - TS-20
+      - TS-23
+  FR7:
+    title: "Drift-detection test: yaml ↔ Rust constants ↔ CSS variables"
+    status: ok
+    tasks:
+      - p6-verify-serde-yml-available
+      - p6-yaml-rust-drift
+      - p6-yaml-css-drift
+      - p6-known-issue-absence
+      - p6-ok-label-rejection-test
+      - p6-kind-rule-introspection
+    tests:
+      - TS-9
+      - TS-10
+      - TS-11
+      - TS-21
+  NFR1:
+    title: "Backward compatibility of dialog user-visible behavior (Esc=cancel, Enter=primary for non-destructive)"
+    status: ok
+    tasks:
+      - p4-rename-dialog
+      - p4-move-dialog
+      - p4-upload-dialog
+      - p4-overwrite-dialog
+      - p4-close-guard-dialog
+      - p5-profile-editor
+      - p5-ssh-editor
+    tests:
+      - TS-1
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-24
+  NFR2:
+    title: "CLI build (--no-default-features) unaffected; helpers gated to feature=gui"
+    status: ok
+    resolution_note: >
+      No Cargo.toml change required: serde_yml is already a regular
+      workspace dependency (src-tauri/Cargo.toml:74) consumed by the
+      GUI-only viewer module. The drift test reuses it instead of
+      adding a [dev-dependencies] entry. NFR2 reduces to
+      "new ui::dialog module + drift test are gated behind
+      feature = gui so cargo check --no-default-features stays green".
+    tasks:
+      - p2-module-scaffold
+      - p6-verify-serde-yml-available
+    tests:
+      - TS-19
+  NFR3:
+    title: "i18n: helpers accept (ja, en) pairs and consume crate::i18n::Locale or t()"
+    status: ok
+    tasks:
+      - p2-i18n-locale-integration
+      - p3-shell-module
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-7
+  NFR4:
+    title: "Test commands follow build-location.md (CARGO_TARGET_DIR=src-tauri/target, --manifest-path)"
+    status: ok
+    tasks:
+      - p6-verify-serde-yml-available
+      - p6-yaml-rust-drift
+      - p6-yaml-css-drift
+      - p6-ok-label-rejection-test
+    tests:
+      - TS-9
+      - TS-10
+      - TS-11
+      - TS-19
+
+open_questions:
+  Q1:
+    summary: "WebView helper API: bare body container vs. addInput()/addSelect() factories"
+    default_if_unresolved: "Body container only; caller composes form elements"
+    status: assumed
+    resolution: "Body container only; caller composes form elements (locked in IMPLEMENTATION.md §Resolved Open Questions)"
+  Q2:
+    summary: "Keep backward-compat CSS aliases (.profile-editor-*) during migration?"
+    default_if_unresolved: "Drop fully in this task; complete rename in one PR"
+    status: assumed
+    resolution: "Drop fully in this task; one-pass rename to .dialog-* (locked in IMPLEMENTATION.md §Resolved Open Questions)"
+  Q3:
+    summary: "profile_selector.rs full migration to Dialog builder vs. shared constants only"
+    default_if_unresolved: "Shared constants only; bespoke render kept (list-row IS confirmation)"
+    status: assumed
+    resolution: "Shared constants only; bespoke render kept (locked in IMPLEMENTATION.md §Resolved Open Questions + Phase 7)"
+  Q4:
+    summary: "Tab reaches primary button on destructive-confirm?"
+    default_if_unresolved: "Yes (Tab cycles), but Enter never triggers primary"
+    status: assumed
+    resolution: "Yes: Tab cycles through both buttons; Enter is bound to Cancel regardless (locked in IMPLEMENTATION.md §Resolved Open Questions)"
+  Q5:
+    summary: "Light-theme hex values for error-container/on-error-container/surface-variant per preset"
+    default_if_unresolved: "Use MD3 baseline reference values; finalize table in IMPLEMENTATION.md"
+    status: assumed
+    resolution: "Resolved in IMPLEMENTATION.md §FR6 — MD3 baseline error palette + per-preset surface-variant mirroring ui-theme-presets.ts"

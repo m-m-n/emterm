@@ -3,6 +3,10 @@
  *
  * Modal dialog for creating and editing terminal profiles.
  * Provides SHELL/SSH tab UI for mutually exclusive shell vs SSH configuration.
+ *
+ * Routes through the shared `createDialogShell` helper so structure
+ * (.dialog-* classes), Esc / Enter, scrim cancel, and a11y attributes
+ * stay consistent across all WebView dialogs.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -14,6 +18,7 @@ import {
   createMd3Select,
   type Md3SelectOption,
 } from "../components/md3-select";
+import { createDialogShell } from "../dialog/dialog-shell";
 
 export interface ProfileEditorOptions {
   profile?: Profile;
@@ -30,49 +35,37 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
     ? { ...options.profile, shell_args: [...options.profile.shell_args] }
     : createEmptyProfile();
   const isEdit = !!options.profile;
-
-  // Overlay
-  const overlay = document.createElement("div");
-  overlay.className = "profile-editor-overlay";
-  overlay.setAttribute("role", "dialog");
-  overlay.setAttribute(
-    "aria-label",
-    isEdit
-      ? t("settings.profiles.editProfile")
-      : t("settings.profiles.addProfile"),
-  );
-
-  // Dialog container
-  const dialog = document.createElement("div");
-  dialog.className = "profile-editor-dialog";
-
-  // Title
-  const title = document.createElement("h2");
-  title.className = "profile-editor-title";
-  title.textContent = isEdit
+  const title = isEdit
     ? t("settings.profiles.editProfile")
     : t("settings.profiles.addProfile");
-  dialog.appendChild(title);
 
-  // Form
+  // Build the shell via the shared helper.
+  const shell = createDialogShell({
+    title,
+    ariaLabel: title,
+    kind: "input",
+  });
+
+  // Form lives inside the shell's body so submit + form semantics work.
   const form = document.createElement("form");
-  form.className = "profile-editor-form";
+  form.className = "dialog-form";
+  shell.body.appendChild(form);
 
   // Error message area
   const errorEl = document.createElement("div");
-  errorEl.className = "profile-editor-error";
+  errorEl.className = "dialog-error";
   errorEl.setAttribute("role", "alert");
   errorEl.hidden = true;
   form.appendChild(errorEl);
 
   // === Tab bar (above all fields) ===
   const tabBar = document.createElement("div");
-  tabBar.className = "profile-editor-tabs";
+  tabBar.className = "dialog-tabs";
   tabBar.setAttribute("role", "tablist");
 
   const shellTab = document.createElement("button");
   shellTab.type = "button";
-  shellTab.className = "profile-editor-tab active";
+  shellTab.className = "dialog-tab active";
   shellTab.setAttribute("role", "tab");
   shellTab.setAttribute("aria-selected", "true");
   shellTab.setAttribute("aria-controls", "profile-tab-panel-shell");
@@ -82,7 +75,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 
   const sshTab = document.createElement("button");
   sshTab.type = "button";
-  sshTab.className = "profile-editor-tab";
+  sshTab.className = "dialog-tab";
   sshTab.setAttribute("role", "tab");
   sshTab.setAttribute("aria-selected", "false");
   sshTab.setAttribute("aria-controls", "profile-tab-panel-ssh");
@@ -93,7 +86,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
   // WSL tab (added conditionally after platform detection)
   const wslTab = document.createElement("button");
   wslTab.type = "button";
-  wslTab.className = "profile-editor-tab";
+  wslTab.className = "dialog-tab";
   wslTab.setAttribute("role", "tab");
   wslTab.setAttribute("aria-selected", "false");
   wslTab.setAttribute("aria-controls", "profile-tab-panel-wsl");
@@ -109,7 +102,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 
   // === SHELL tab panel ===
   const shellPanel = document.createElement("div");
-  shellPanel.className = "profile-editor-tab-panel";
+  shellPanel.className = "dialog-tab-panel";
   shellPanel.setAttribute("role", "tabpanel");
   shellPanel.setAttribute("aria-labelledby", "profile-tab-shell");
   shellPanel.id = "profile-tab-panel-shell";
@@ -159,7 +152,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 
   // === SSH tab panel ===
   const sshPanel = document.createElement("div");
-  sshPanel.className = "profile-editor-tab-panel";
+  sshPanel.className = "dialog-tab-panel";
   sshPanel.setAttribute("role", "tabpanel");
   sshPanel.setAttribute("aria-labelledby", "profile-tab-ssh");
   sshPanel.id = "profile-tab-panel-ssh";
@@ -177,7 +170,7 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 
   // === WSL tab panel ===
   const wslPanel = document.createElement("div");
-  wslPanel.className = "profile-editor-tab-panel";
+  wslPanel.className = "dialog-tab-panel";
   wslPanel.setAttribute("role", "tabpanel");
   wslPanel.setAttribute("aria-labelledby", "profile-tab-wsl");
   wslPanel.id = "profile-tab-panel-wsl";
@@ -317,58 +310,15 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
       sshTab.setAttribute("aria-disabled", "true");
     });
 
-  // Buttons
-  const btnRow = document.createElement("div");
-  btnRow.className = "profile-editor-buttons";
-
-  const cancelBtn = document.createElement("button");
-  cancelBtn.type = "button";
-  cancelBtn.className = "profile-editor-btn profile-editor-btn-cancel";
-  cancelBtn.textContent = t("settings.profiles.cancel");
-
-  const saveBtn = document.createElement("button");
-  saveBtn.type = "submit";
-  saveBtn.className = "profile-editor-btn profile-editor-btn-save";
-  saveBtn.textContent = t("settings.profiles.save");
-
-  btnRow.appendChild(cancelBtn);
-  btnRow.appendChild(saveBtn);
-  form.appendChild(btnRow);
-  dialog.appendChild(form);
-  overlay.appendChild(dialog);
-  document.body.appendChild(overlay);
-
-  // Focus name field
-  nameInput.focus();
-
-  // Handlers
+  // Cleanup
   const cleanup = () => {
     disposed = true;
-    overlay.remove();
+    shell.close();
   };
 
-  cancelBtn.addEventListener("click", () => {
-    cleanup();
-    options.onCancel();
-  });
-
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      cleanup();
-      options.onCancel();
-    }
-  });
-
-  overlay.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      cleanup();
-      options.onCancel();
-    }
-  });
-
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-
+  // Form submission encapsulates the "Save" path so that pressing Enter
+  // dispatches through the shell's keymap and lands here.
+  function trySave(): void {
     let name: string;
     if (activeTab === "shell") {
       name = nameInput.value.trim();
@@ -416,7 +366,32 @@ export function showProfileEditor(options: ProfileEditorOptions): () => void {
 
     cleanup();
     options.onSave(result);
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    trySave();
   });
+
+  // Register buttons through the helper so role classes, tracking, and
+  // Esc / Enter / scrim dispatch all work.
+  shell.addButton({
+    role: "cancel",
+    label: t("settings.profiles.cancel"),
+    onClick: () => {
+      cleanup();
+      options.onCancel();
+    },
+  });
+  shell.addButton({
+    role: "primary",
+    label: t("settings.profiles.save"),
+    onClick: () => trySave(),
+  });
+
+  // Focus the name field on open (overrides the helper's default
+  // first-focus which would land on the tab bar's first button).
+  nameInput.focus();
 
   return cleanup;
 }
@@ -439,10 +414,10 @@ function createTextField(
   opts: TextFieldOptions,
 ): HTMLInputElement {
   const row = document.createElement("div");
-  row.className = "profile-editor-field";
+  row.className = "dialog-field";
 
   const label = document.createElement("label");
-  label.className = "profile-editor-label";
+  label.className = "dialog-label";
   label.htmlFor = opts.id;
   label.textContent = opts.label;
   row.appendChild(label);
@@ -450,7 +425,7 @@ function createTextField(
   const input = document.createElement("input");
   input.type = "text";
   input.id = opts.id;
-  input.className = "profile-editor-input";
+  input.className = "dialog-input";
   input.value = opts.value;
   if (opts.placeholder) input.placeholder = opts.placeholder;
   if (opts.required) input.required = true;
@@ -458,7 +433,7 @@ function createTextField(
 
   if (opts.hint) {
     const hint = document.createElement("span");
-    hint.className = "profile-editor-hint";
+    hint.className = "dialog-hint";
     hint.textContent = opts.hint;
     row.appendChild(hint);
   }
@@ -481,17 +456,17 @@ function createTextareaField(
   opts: TextareaFieldOptions,
 ): HTMLTextAreaElement {
   const row = document.createElement("div");
-  row.className = "profile-editor-field";
+  row.className = "dialog-field";
 
   const label = document.createElement("label");
-  label.className = "profile-editor-label";
+  label.className = "dialog-label";
   label.htmlFor = opts.id;
   label.textContent = opts.label;
   row.appendChild(label);
 
   const textarea = document.createElement("textarea");
   textarea.id = opts.id;
-  textarea.className = "profile-editor-textarea";
+  textarea.className = "dialog-textarea";
   textarea.value = opts.value;
   if (opts.placeholder) textarea.placeholder = opts.placeholder;
   if (opts.rows) textarea.rows = opts.rows;
@@ -499,7 +474,7 @@ function createTextareaField(
 
   if (opts.hint) {
     const hint = document.createElement("span");
-    hint.className = "profile-editor-hint";
+    hint.className = "dialog-hint";
     hint.textContent = opts.hint;
     row.appendChild(hint);
   }
@@ -535,10 +510,10 @@ function createSelectField(
   opts: SelectFieldOptions,
 ): Md3SelectFieldProxy {
   const row = document.createElement("div");
-  row.className = "profile-editor-field";
+  row.className = "dialog-field";
 
   const label = document.createElement("label");
-  label.className = "profile-editor-label";
+  label.className = "dialog-label";
   label.htmlFor = opts.id;
   label.textContent = opts.label;
   row.appendChild(label);
@@ -558,7 +533,7 @@ function createSelectField(
 
   if (opts.hint) {
     const hint = document.createElement("span");
-    hint.className = "profile-editor-hint";
+    hint.className = "dialog-hint";
     hint.textContent = opts.hint;
     row.appendChild(hint);
   }

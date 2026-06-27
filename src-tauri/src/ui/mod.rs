@@ -14,6 +14,7 @@
 //! them rather than redefining them.
 
 pub mod chrome;
+pub mod dialog;
 pub mod emoji_cache;
 pub mod keybinds;
 pub mod md3;

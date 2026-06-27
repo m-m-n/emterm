@@ -17,14 +17,13 @@ pub enum MuxDialogState {
     Closed,
     /// Rename-window dialog. The stable `window_id` is re-resolved on
     /// confirm so the rename targets the right window even if the active
-    /// index shifted.
+    /// index shifted. First-frame focus is owned by `crate::ui::dialog`
+    /// (per-window egui memory slot), so no `focused_once` field lives
+    /// here.
     Rename {
         window_id: u32,
         /// Current text-field contents (seeded with the window name).
         name: String,
-        /// Whether the field has been focused once (egui needs an explicit
-        /// `request_focus()` on the first frame the widget is shown).
-        focused_once: bool,
     },
     /// Move-window dialog. Captures a 1-based target in `[1, window_count]`.
     Move {
@@ -84,7 +83,6 @@ mod tests {
         let r = MuxDialogState::Rename {
             window_id: 1,
             name: String::new(),
-            focused_once: false,
         };
         let m = MuxDialogState::Move {
             window_id: 2,
