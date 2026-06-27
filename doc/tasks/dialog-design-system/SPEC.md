@@ -105,15 +105,21 @@ pub enum DialogOutcome<T> {
 }
 
 pub struct Dialog<'a, T> {
-    title_ja: &'a str,
-    title_en: &'a str,
+    title: (&'a str, &'a str),                              // (ja, en)
     locale: crate::i18n::Locale,
     kind: DialogKind,
-    primary_label: Option<(&'a str, &'a str)>,
-    cancel_label: Option<(&'a str, &'a str)>,
+    primary: Option<(&'a str, &'a str)>,
+    cancel: (&'a str, &'a str),                             // defaults: "キャンセル"/"Cancel"
     body: Option<Box<dyn FnMut(&mut egui::Ui) + 'a>>,
     on_confirm: Option<Box<dyn FnOnce() -> T + 'a>>,
-    initial_focus_id: Option<egui::Id>, // for input kind
+    // Input-kind initial focus: static id known at builder time, OR a
+    // shared slot that the body closure populates with `Response::id`
+    // during draw (needed when the focus target's id is only available
+    // after `text_edit_singleline` runs).
+    initial_focus_id: Option<egui::Id>,
+    initial_focus_slot: Option<Rc<Cell<Option<egui::Id>>>>,
+    window_id: Option<egui::Id>,                            // override the auto-derived id
+    width: f32,                                             // WIDTH_COMPACT by default
 }
 
 pub enum DialogKind {
@@ -130,21 +136,34 @@ impl<'a, T> Dialog<'a, T> {
     pub fn primary_button(self, ja: &'a str, en: &'a str, on_confirm: impl FnOnce() -> T + 'a) -> Self;
     pub fn cancel_button(self, ja: &'a str, en: &'a str) -> Self; // defaults: "キャンセル"/"Cancel"
     pub fn initial_focus(self, id: egui::Id) -> Self;
+    pub fn initial_focus_slot(self, slot: Rc<Cell<Option<egui::Id>>>) -> Self;
+    pub fn window_id(self, id: egui::Id) -> Self;
+    pub fn standard_width(self) -> Self;            // 480px + 80vh cap (default: 400px + 60vh)
     pub fn show(self, ctx: &egui::Context) -> DialogOutcome<T>;
 }
 ```
 
 Helper-enforced contract (caller cannot opt out):
 
-- `egui::Window::new(...).collapsible(false).resizable(false).anchor(CENTER_CENTER)`
+- Surface assembled from `egui::Area` (foreground order,
+  `anchor=CENTER_CENTER`) wrapping an `egui::Frame` — `egui::Window` is
+  intentionally avoided because its persisted Resize state fights
+  `auto_sized` / `default_size` / `max_width` and re-opens at a stale
+  size. A separate Middle-order `Area` paints the `dialogs.scrim` and
+  treats outside-click as cancel.
 - `Frame` with `md3::surface_container_high()` fill, `corner-extra-large`
-  rounding, MD3 elevation-3 shadow
+  rounding, MD3 elevation-3 shadow, and `padding` inner-margin
+- Body content sits inside an `egui::ScrollArea::vertical()` bounded
+  by the `dialogs.layout.max-height-*` token so tall content scrolls
+  inside the surface instead of pushing the actions row off-screen
 - Title rendered with title-large typescale and `md3::on_surface()` color
-- Buttons rendered with role-specific colors (FR6) and a single
-  helper-provided spacing
+- Buttons rendered with role-specific colors (FR6), a single
+  helper-provided horizontal spacing, and the
+  `components.buttons.modal-actions` min-size token
 - Keyboard handling (FR5) is applied inside `show()`
-- Initial focus (FR5) is applied on first frame; subsequent frames are
-  no-op
+- Initial focus (FR5) is applied on the first frame of every open
+  epoch (initial open OR close → reopen); subsequent contiguous frames
+  are no-op
 
 Caller responsibilities (kept):
 
@@ -257,18 +276,23 @@ The "OK" label is removed everywhere.
 
 | Kind | Enter | Esc | Tab order | Initial focus |
 |---|---|---|---|---|
-| input | primary (text inputs use `lost_focus()+Enter`; other widgets use `ui.input(Enter)`) | cancel | inputs → primary → cancel | first input |
+| input | primary (only when no text widget owns focus OR the primary button owns focus — guards IME-composition Enter) | cancel | inputs → primary → cancel | first input |
 | confirm | primary | cancel | primary → cancel | primary |
 | destructive-confirm | cancel | cancel | primary → cancel | cancel |
 
 Notes:
 
-- Native side: helper holds a `first_frame: bool` flag in its caller-
-  owned state, similar to existing `focused_once` pattern.
+- Native side: helper detects first-frame-of-open via
+  `Context::cumulative_pass_nr()` continuity (a window-scoped
+  `last_drawn_pass_nr` flag in egui memory; the +1 delta breaks
+  whenever the dialog skipped a frame, i.e. closed → reopened). This
+  preserves the "fire once per open" semantics WITHOUT the persisted-
+  flag bug where re-opening the same dialog would skip restoration.
 - Native side: helper applies `ui.input(|i| i.key_pressed(Enter))` for
-  non-input kinds and uses `Response::lost_focus() + key_pressed(Enter)`
-  for input kinds (matches the existing `mux_dialogs::draw_rename`
-  pattern; IME-safe).
+  ALL kinds. For `Input` kind it additionally guards on the currently-
+  focused widget id: Enter maps to primary only when nothing owns
+  focus or the primary button owns focus, so a text-field's IME
+  commit Enter is not stolen as a dialog confirm.
 - WebView side: helper attaches `keydown` to the overlay (capture phase)
   and respects `event.isComposing` to avoid stealing IME-commit Enter.
 
@@ -443,8 +467,9 @@ Visual confirmation by the developer running `make dev` and exercising:
 
 ## 8. Out of Scope
 
-- Replacing `egui::Window` with a custom widget; we accept egui's
-  limits (no MD3 state-layer button hover, focus ring style differs)
+- Replacing egui primitives (`Area` / `Frame` / `ScrollArea` / `Button`)
+  with a hand-rolled widget toolkit; we accept egui's limits (no MD3
+  state-layer button hover, focus ring style differs)
 - Non-dialog components (tabs, navigation, settings rows) — they
   already use the same MD3 palette and are not the source of the
   complaint

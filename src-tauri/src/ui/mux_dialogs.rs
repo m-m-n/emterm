@@ -55,13 +55,18 @@ fn draw_rename(
     let snapshot_body = Rc::clone(&snapshot);
     let snapshot_confirm = Rc::clone(&snapshot);
 
-    // Captured-once text-field id for the helper's first-frame focus.
+    // The helper's first-frame focus contract reads the text-field id
+    // from this slot — populated by the body closure below as soon as
+    // `text_edit_singleline` returns a Response. Routing focus through
+    // the helper (instead of a post-show `ctx.memory_mut(...).request_focus`
+    // step) keeps the dialog as the single owner of focus restoration.
     let text_field_id: Rc<Cell<Option<egui::Id>>> = Rc::new(Cell::new(None));
     let text_field_id_body = Rc::clone(&text_field_id);
 
     let outcome = {
         let name_ref: &mut String = name;
         Dialog::<MuxDialogOutcome>::input("ウィンドウ名を変更", "Rename Window", locale)
+            .initial_focus_slot(text_field_id)
             .body(move |ui: &mut egui::Ui| {
                 let resp = ui.text_edit_singleline(name_ref);
                 if text_field_id_body.get().is_none() {
@@ -74,19 +79,6 @@ fn draw_rename(
             })
             .show(ctx)
     };
-
-    // First-frame focus on the text field. The helper's generic
-    // initial-focus path takes a builder-time `egui::Id`; since the
-    // text field's id is only known after the body runs, we request
-    // focus directly from egui memory once it lands. Subsequent frames
-    // are no-ops because `focused()` reports the field as focused.
-    if let Some(id) = text_field_id.get() {
-        ctx.memory_mut(|mem| {
-            if mem.focused().is_none() {
-                mem.request_focus(id);
-            }
-        });
-    }
 
     translate_outcome(outcome)
 }
