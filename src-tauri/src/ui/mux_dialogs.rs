@@ -163,21 +163,27 @@ fn draw_move(
                         crate::i18n::Locale::En => "Move to:",
                     };
                     ui.label(t_label);
-                    // Plain Label, not DragValue. DragValue's focused
-                    // state holds an internal text-edit buffer that
-                    // shadows the external `&mut value`, so re-assigning
-                    // `*target_ref` from the arrow-key handler would not
-                    // visibly update the displayed digit. Move dialog
-                    // UX is "↑↓ + Enter" only — direct keyboard input
-                    // is not required, so dropping DragValue removes
-                    // the shadowing bug and the focus-stealing +
-                    // accept_enter_on_focused_id gymnastics it
-                    // previously needed.
+                    // Pointer-friendly −/+ buttons flanking a plain Label.
+                    // Keyboard users still get ↑↓, but mouse/touch users
+                    // cannot type into a Label (DragValue was rejected
+                    // because its focused state holds an internal
+                    // text-edit buffer that shadows the external
+                    // `&mut value`, defeating arrow-key updates).
+                    if ui.button("−").clicked() {
+                        *target_ref = (*target_ref).saturating_sub(1).max(1);
+                    }
                     ui.label(format!("{}", *target_ref));
+                    if ui.button("+").clicked() && count > 0 {
+                        *target_ref = (*target_ref).saturating_add(1).min(count);
+                    }
                 });
                 let hint = match locale {
-                    crate::i18n::Locale::Ja => "↑↓キーで数値を変更、Enterで確定、Escでキャンセル",
-                    crate::i18n::Locale::En => "Use ↑↓ to change, Enter to confirm, Esc to cancel",
+                    crate::i18n::Locale::Ja => {
+                        "↑↓キーまたは −/+ ボタンで変更、Enterで確定、Escでキャンセル"
+                    }
+                    crate::i18n::Locale::En => {
+                        "Use ↑↓ or −/+ buttons to change, Enter to confirm, Esc to cancel"
+                    }
                 };
                 ui.label(hint);
                 target_snapshot_body.set(*target_ref);

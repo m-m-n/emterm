@@ -189,6 +189,33 @@ impl<'a, T> Dialog<'a, T> {
 
         let mut outcome = DialogOutcome::Pending;
 
+        // Detect the first frame of an *open epoch* — either the very
+        // first time this dialog is drawn, or the first frame after a
+        // close → reopen. The dialog body must not draw across a frame
+        // gap (egui re-runs at vsync, so consecutive draws have
+        // consecutive `frame_nr`s; an absent draw breaks the +1
+        // continuity). We persist the last frame index in egui memory
+        // under a window-scoped key and gate the initial-focus
+        // contract on the resulting open-epoch flag.
+        //
+        // Per SPEC FR5 ("Initial focus is applied on first frame;
+        // subsequent frames are no-op"), this restores the
+        // first-frame-only semantics while *also* picking up close →
+        // reopen as a fresh open epoch. The previous
+        // `mem.focused().is_none()` gate fired per-frame whenever
+        // nothing in the app held focus, which (1) skipped restoration
+        // when an external widget owned focus at open time and (2)
+        // failed to re-fire restoration on reopen when a stale
+        // same-id widget appeared focused.
+        let frame_marker_id = window_id.with("emterm-dialog-last-frame");
+        let current_frame_nr = ctx.cumulative_pass_nr();
+        let prev_frame_nr: Option<u64> = ctx.memory(|m| m.data.get_temp(frame_marker_id));
+        let is_first_frame_of_open = match prev_frame_nr {
+            Some(prev) if prev + 1 == current_frame_nr => false,
+            _ => true,
+        };
+        ctx.memory_mut(|m| m.data.insert_temp(frame_marker_id, current_frame_nr));
+
         // Scrim: full-screen dim layer below the dialog. Mirrors the
         // WebView shell's `.dialog-overlay` and `profile_selector.rs`
         // — both paint `dialogs.scrim` and treat outside-click as
@@ -242,9 +269,31 @@ impl<'a, T> Dialog<'a, T> {
                         );
                         ui.add_space(tokens::TITLE_TO_BODY_MARGIN);
 
-                        if let Some(body) = self.body.as_mut() {
-                            body(ui);
-                        }
+                        // Body sits inside a vertical `ScrollArea` so very tall
+                        // content (e.g. an upload manifest with hundreds of
+                        // files, an Overwrite list, the profile list) scrolls
+                        // inside the dialog instead of pushing the action
+                        // buttons off the bottom of the viewport. The
+                        // available body height is `MAX_HEIGHT_COMPACT_FRAC`
+                        // of the screen minus the surface's fixed chrome
+                        // (padding + title + the gaps above/below the actions
+                        // row + an approximate action-button height).
+                        let viewport_h = ctx.screen_rect().height();
+                        let max_total_h = viewport_h * tokens::MAX_HEIGHT_COMPACT_FRAC;
+                        let chrome_h = 2.0 * tokens::PADDING
+                            + tokens::TITLE_LARGE_SIZE
+                            + tokens::TITLE_TO_BODY_MARGIN
+                            + tokens::ACTIONS_TOP_MARGIN
+                            + 36.0;
+                        let max_body_h = (max_total_h - chrome_h).max(60.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(max_body_h)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                if let Some(body) = self.body.as_mut() {
+                                    body(ui);
+                                }
+                            });
 
                         ui.add_space(tokens::ACTIONS_TOP_MARGIN);
 
@@ -274,14 +323,29 @@ impl<'a, T> Dialog<'a, T> {
                             cancel_response = Some(cancel_resp);
                         });
 
-                        // First-frame focus. Stored in egui memory under a
-                        // window-scoped id so we only fire `request_focus` once
-                        // even if the dialog re-runs across many frames.
-                        let focus_memory_id = window_id.with("emterm-dialog-focus-armed");
-                        let already_focused: bool = ui
-                            .memory_mut(|mem| mem.data.get_temp(focus_memory_id))
-                            .unwrap_or(false);
-                        if !already_focused {
+                        // First-frame focus restoration, scoped to the
+                        // current open epoch. `is_first_frame_of_open` (see
+                        // top of show()) is true on the dialog's very first
+                        // frame AND on the first frame after a close → reopen
+                        // — both cases need the initial-focus contract to
+                        // re-fire. On subsequent contiguous frames it is
+                        // false, so Tab navigation away from the
+                        // initial-focus target is not stomped back per frame.
+                        //
+                        // Why not gate on `mem.focused().is_none()`: that
+                        // mis-fires in two ways. (1) An external widget
+                        // owning focus at the moment the dialog opens makes
+                        // `focused().is_none() == false`, so the gate
+                        // suppresses restoration and the dialog opens with
+                        // its safety contract bypassed (especially bad for
+                        // DestructiveConfirm). (2) On close → reopen with
+                        // the same `window_id`, the previous frame's primary
+                        // button id is structurally identical to the new
+                        // primary button id, so the focus check would report
+                        // a "stale" focus inside the new dialog and again
+                        // skip restoration — leaving destructive primary
+                        // focused. Frame-continuity gating dodges both.
+                        if is_first_frame_of_open {
                             match kinds::initial_focus(kind) {
                                 kinds::Target::Primary => {
                                     if let Some(id) = initial_focus_id {
@@ -305,7 +369,6 @@ impl<'a, T> Dialog<'a, T> {
                                     }
                                 }
                             }
-                            ui.memory_mut(|mem| mem.data.insert_temp(focus_memory_id, true));
                         }
 
                         let (enter, esc) = ui.input(|i| {
