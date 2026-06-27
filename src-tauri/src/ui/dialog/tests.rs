@@ -95,6 +95,22 @@ fn parse_yaml() -> YamlRoot {
     serde_yml::from_str(YAML_SRC).expect("UI-DESIGN-GUIDELINES.yaml deserialized")
 }
 
+/// Walk `serde_yml::Value` by a key path and return the leaf as a
+/// `String`. Used for drift assertions on nested yaml branches that
+/// aren't worth modeling as full `serde::Deserialize` types.
+fn yaml_lookup(value: &serde_yml::Value, path: &[&str]) -> String {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key).unwrap_or_else(|| {
+            panic!("yaml path missing at segment {key:?} (full path: {path:?})")
+        });
+    }
+    current
+        .as_str()
+        .unwrap_or_else(|| panic!("yaml leaf not a string: {path:?}"))
+        .to_string()
+}
+
 /// Parse a CSS pixel literal (e.g. `"28px"`) into an `f32`.
 fn parse_px(s: &str) -> f32 {
     let trimmed = s.trim();
@@ -189,6 +205,44 @@ fn yaml_layout_widths_match_constants() {
             "dialogs.layout.{name} {yaml_val} != tokens {rust_val}"
         );
     }
+}
+
+#[test]
+fn yaml_modal_actions_button_size_matches_constants() {
+    let value: serde_yml::Value =
+        serde_yml::from_str(YAML_SRC).expect("UI-DESIGN-GUIDELINES.yaml parsed as Value");
+    let height = yaml_lookup(
+        &value,
+        &[
+            "components",
+            "buttons",
+            "modal-actions",
+            "properties",
+            "height",
+        ],
+    );
+    let min_width = yaml_lookup(
+        &value,
+        &[
+            "components",
+            "buttons",
+            "modal-actions",
+            "properties",
+            "min-width",
+        ],
+    );
+    let height_px = parse_px(&height);
+    let min_width_px = parse_px(&min_width);
+    assert!(
+        (height_px - tokens::ACTION_BUTTON_HEIGHT).abs() < 1e-4,
+        "components.buttons.modal-actions.properties.height {height_px} != tokens::ACTION_BUTTON_HEIGHT {}",
+        tokens::ACTION_BUTTON_HEIGHT
+    );
+    assert!(
+        (min_width_px - tokens::ACTION_BUTTON_MIN_WIDTH).abs() < 1e-4,
+        "components.buttons.modal-actions.properties.min-width {min_width_px} != tokens::ACTION_BUTTON_MIN_WIDTH {}",
+        tokens::ACTION_BUTTON_MIN_WIDTH
+    );
 }
 
 #[test]

@@ -52,8 +52,8 @@ pub const BODY_ITEM_SPACING: f32 = 8.0;
 /// Fixed surface width for a standard dialog
 /// (`dialogs.layout.width-standard: 480px`). The dialog helper applies
 /// it as both `set_min_width` and `set_max_width` so the surface stays
-/// pinned to this value across reopens.
-#[allow(dead_code)]
+/// pinned to this value across reopens. Selected via
+/// [`super::Dialog::standard_width`].
 pub const WIDTH_STANDARD: f32 = 480.0;
 
 /// Fixed surface width for a compact dialog
@@ -65,8 +65,8 @@ pub const WIDTH_COMPACT: f32 = 400.0;
 /// (`dialogs.layout.max-height-standard: 80vh` → `0.80`). Used by the
 /// dialog helper to bound the body's `ScrollArea` so very tall content
 /// (e.g. upload manifests, profile lists) scrolls inside the surface
-/// instead of pushing the action buttons off-screen.
-#[allow(dead_code)]
+/// instead of pushing the action buttons off-screen. Selected
+/// automatically when a dialog opts into [`super::Dialog::standard_width`].
 pub const MAX_HEIGHT_STANDARD_FRAC: f32 = 0.80;
 
 /// Maximum dialog height as a fraction of the available viewport
@@ -77,6 +77,20 @@ pub const MAX_HEIGHT_COMPACT_FRAC: f32 = 0.60;
 
 /// Title typescale font size (`title-large`).
 pub const TITLE_LARGE_SIZE: f32 = 22.0;
+
+/// Action button height in logical pixels
+/// (`components.buttons.modal-actions.properties.height: 36px`). The
+/// dialog helper applies it as a `min_size.y` on each button via
+/// `buttons::draw_role`, and reserves the same height in the body's
+/// `ScrollArea` chrome budget so a tall body never pushes the actions
+/// row off-screen.
+pub const ACTION_BUTTON_HEIGHT: f32 = 36.0;
+
+/// Action button minimum width in logical pixels
+/// (`components.buttons.modal-actions.properties.min-width: 64px`).
+/// Keeps Cancel / primary visually balanced even when their labels
+/// differ in length.
+pub const ACTION_BUTTON_MIN_WIDTH: f32 = 64.0;
 
 /// Body typescale font size (`body-medium`).
 #[allow(dead_code)]
