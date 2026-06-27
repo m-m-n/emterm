@@ -32,6 +32,8 @@ export interface ThemeColors {
   outlineVariant: string;
   error: string;
   onError: string;
+  errorContainer: string;
+  onErrorContainer: string;
 }
 
 export interface PresetDefinition {
@@ -66,6 +68,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#49454F",
       error: "#F2B8B5",
       onError: "#601410",
+      errorContainer: "#8C1D18",
+      onErrorContainer: "#F9DEDC",
     },
     light: {
       primary: "#6750A4",
@@ -88,6 +92,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#CAC4D0",
       error: "#B3261E",
       onError: "#FFFFFF",
+      errorContainer: "#F9DEDC",
+      onErrorContainer: "#410E0B",
     },
   },
   blue: {
@@ -112,6 +118,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#44464F",
       error: "#F2B8B5",
       onError: "#601410",
+      errorContainer: "#8C1D18",
+      onErrorContainer: "#F9DEDC",
     },
     light: {
       primary: "#0B57D0",
@@ -134,6 +142,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#C4C6D0",
       error: "#B3261E",
       onError: "#FFFFFF",
+      errorContainer: "#F9DEDC",
+      onErrorContainer: "#410E0B",
     },
   },
   green: {
@@ -158,6 +168,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#404943",
       error: "#F2B8B5",
       onError: "#601410",
+      errorContainer: "#8C1D18",
+      onErrorContainer: "#F9DEDC",
     },
     light: {
       primary: "#006D3E",
@@ -180,6 +192,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#BFC9C1",
       error: "#B3261E",
       onError: "#FFFFFF",
+      errorContainer: "#F9DEDC",
+      onErrorContainer: "#410E0B",
     },
   },
   orange: {
@@ -204,6 +218,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#524436",
       error: "#F2B8B5",
       onError: "#601410",
+      errorContainer: "#8C1D18",
+      onErrorContainer: "#F9DEDC",
     },
     light: {
       primary: "#8B5000",
@@ -226,6 +242,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#D4C4B1",
       error: "#B3261E",
       onError: "#FFFFFF",
+      errorContainer: "#F9DEDC",
+      onErrorContainer: "#410E0B",
     },
   },
   pink: {
@@ -250,6 +268,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#514349",
       error: "#F2B8B5",
       onError: "#601410",
+      errorContainer: "#8C1D18",
+      onErrorContainer: "#F9DEDC",
     },
     light: {
       primary: "#984061",
@@ -272,6 +292,8 @@ export const UI_THEME_PRESETS: Record<UiThemePreset, PresetDefinition> = {
       outlineVariant: "#D4BFC5",
       error: "#B3261E",
       onError: "#FFFFFF",
+      errorContainer: "#F9DEDC",
+      onErrorContainer: "#410E0B",
     },
   },
 };
@@ -302,6 +324,8 @@ const COLOR_TO_CSS_VAR: Record<keyof ThemeColors, string> = {
   outlineVariant: "--md-sys-color-outline-variant",
   error: "--md-sys-color-error",
   onError: "--md-sys-color-on-error",
+  errorContainer: "--md-sys-color-error-container",
+  onErrorContainer: "--md-sys-color-on-error-container",
 };
 
 /**

@@ -8,7 +8,7 @@
 }
 
 /* Full width in modal dialogs */
-.profile-editor-field .md3-select {
+.dialog-field .md3-select {
   max-width: none;
 }
 

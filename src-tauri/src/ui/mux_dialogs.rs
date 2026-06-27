@@ -5,12 +5,15 @@
 //! that knows about `egui::Context` for these dialogs — keeps the App
 //! free of egui imports for the dialog path (gpt-architecture #3).
 //!
-//! Per-frame contract: `draw(state, ctx)` reads / mutates the plain state
-//! enum, draws the modal via egui, and returns a [`MuxDialogOutcome`]. The
-//! render pipeline interprets the outcome and dispatches it back to the
-//! domain layer (`App::confirm_mux_*`).
+//! Both dialogs route through the shared [`crate::ui::dialog::Dialog`]
+//! builder so Window chrome, MD3 styling, role-colored buttons, and
+//! keyboard rules stay consistent with the rest of the dialog system.
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use crate::mux::dialog::{MuxDialogOutcome, MuxDialogState};
+use crate::ui::dialog::{Dialog, DialogOutcome};
 
 /// Render the currently-open mux dialog (if any) for this frame.
 ///
@@ -39,46 +42,61 @@ fn draw_rename(
     ctx: &egui::Context,
     locale: crate::i18n::Locale,
 ) -> MuxDialogOutcome {
-    let MuxDialogState::Rename {
-        window_id,
-        name,
-        focused_once,
-    } = state
-    else {
+    let MuxDialogState::Rename { window_id, name } = state else {
         return MuxDialogOutcome::Pending;
     };
-    let t = |ja: &'static str, en: &'static str| match locale {
-        crate::i18n::Locale::Ja => ja,
-        crate::i18n::Locale::En => en,
-    };
     let captured_id = *window_id;
-    let mut outcome = MuxDialogOutcome::Pending;
-    egui::Window::new(t("ウィンドウ名を変更", "Rename Window"))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, |ui| {
-            let resp = ui.text_edit_singleline(name);
-            if !*focused_once {
-                resp.request_focus();
-                *focused_once = true;
-            }
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                outcome = resolve_rename_confirm(captured_id, name);
-            }
-            ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
-                    outcome = resolve_rename_confirm(captured_id, name);
+
+    // Share the latest text-field snapshot between the body closure (which
+    // writes it) and the on-confirm closure (which reads it). egui draws
+    // single-threaded so there is no `Send + Sync` requirement; `Rc<Cell>`
+    // is the minimal shape that satisfies the borrow checker.
+    let snapshot: Rc<std::cell::RefCell<String>> = Rc::new(std::cell::RefCell::new(name.clone()));
+    let snapshot_body = Rc::clone(&snapshot);
+    let snapshot_confirm = Rc::clone(&snapshot);
+
+    // Captured-once text-field id for the helper's first-frame focus.
+    let text_field_id: Rc<Cell<Option<egui::Id>>> = Rc::new(Cell::new(None));
+    let text_field_id_body = Rc::clone(&text_field_id);
+
+    let outcome = {
+        let name_ref: &mut String = name;
+        Dialog::<MuxDialogOutcome>::input("ウィンドウ名を変更", "Rename Window", locale)
+            .body(move |ui: &mut egui::Ui| {
+                let resp = ui.text_edit_singleline(name_ref);
+                if text_field_id_body.get().is_none() {
+                    text_field_id_body.set(Some(resp.id));
                 }
-                if ui.button(t("キャンセル", "Cancel")).clicked() {
-                    outcome = MuxDialogOutcome::Cancelled;
-                }
-            });
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                outcome = MuxDialogOutcome::Cancelled;
+                *snapshot_body.borrow_mut() = name_ref.clone();
+            })
+            .primary_button("変更", "Rename", move || {
+                resolve_rename_confirm(captured_id, &snapshot_confirm.borrow())
+            })
+            .show(ctx)
+    };
+
+    // First-frame focus on the text field. The helper's generic
+    // initial-focus path takes a builder-time `egui::Id`; since the
+    // text field's id is only known after the body runs, we request
+    // focus directly from egui memory once it lands. Subsequent frames
+    // are no-ops because `focused()` reports the field as focused.
+    if let Some(id) = text_field_id.get() {
+        ctx.memory_mut(|mem| {
+            if mem.focused().is_none() {
+                mem.request_focus(id);
             }
         });
-    outcome
+    }
+
+    translate_outcome(outcome)
+}
+
+fn translate_outcome(outcome: DialogOutcome<MuxDialogOutcome>) -> MuxDialogOutcome {
+    match outcome {
+        DialogOutcome::Pending => MuxDialogOutcome::Pending,
+        DialogOutcome::Confirmed(value) => value,
+        DialogOutcome::Cancelled => MuxDialogOutcome::Cancelled,
+    }
 }
 
 fn resolve_rename_confirm(window_id: u32, name: &str) -> MuxDialogOutcome {
@@ -107,46 +125,70 @@ fn draw_move(
     else {
         return MuxDialogOutcome::Pending;
     };
-    let t = |ja: &'static str, en: &'static str| match locale {
-        crate::i18n::Locale::Ja => ja,
-        crate::i18n::Locale::En => en,
-    };
     let captured_id = *window_id;
     let cur = *current_position;
     let count = *window_count;
-    let mut outcome = MuxDialogOutcome::Pending;
-    egui::Window::new(t("ウィンドウを移動", "Move Window"))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ctx, |ui| {
-            let current_label = match locale {
-                crate::i18n::Locale::Ja => format!("現在: {cur} / {count} 個中"),
-                crate::i18n::Locale::En => format!("Current: {cur} / {count}"),
-            };
-            ui.label(current_label);
-            ui.horizontal(|ui| {
-                ui.label(t("移動先:", "Move to:"));
-                let mut t = *target as i64;
-                ui.add(egui::DragValue::new(&mut t).range(1..=(count as i64)));
-                *target = t.clamp(1, count as i64) as usize;
-            });
-            ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
-                    outcome = resolve_move_confirm(captured_id, *target, cur, count);
+
+    let target_snapshot: Rc<Cell<usize>> = Rc::new(Cell::new(*target));
+    let target_snapshot_body = Rc::clone(&target_snapshot);
+    let target_snapshot_confirm = Rc::clone(&target_snapshot);
+
+    let outcome = {
+        let target_ref: &mut usize = target;
+        Dialog::<MuxDialogOutcome>::input("ウィンドウを移動", "Move Window", locale)
+            .body(move |ui: &mut egui::Ui| {
+                let current_label = match locale {
+                    crate::i18n::Locale::Ja => format!("現在: {cur} / {count} 個中"),
+                    crate::i18n::Locale::En => format!("Current: {cur} / {count}"),
+                };
+                ui.label(current_label);
+                // Arrow keys drive the target counter. `consume_key`
+                // removes the event from the queue so nothing else
+                // re-interprets it.
+                let (up, down) = ui.input_mut(|i| {
+                    (
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                    )
+                });
+                if up && count > 0 {
+                    *target_ref = (*target_ref).saturating_add(1).min(count);
                 }
-                if ui.button(t("キャンセル", "Cancel")).clicked() {
-                    outcome = MuxDialogOutcome::Cancelled;
+                if down {
+                    *target_ref = (*target_ref).saturating_sub(1).max(1);
                 }
-            });
-            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                outcome = resolve_move_confirm(captured_id, *target, cur, count);
-            }
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                outcome = MuxDialogOutcome::Cancelled;
-            }
-        });
-    outcome
+                ui.horizontal(|ui| {
+                    let t_label = match locale {
+                        crate::i18n::Locale::Ja => "移動先:",
+                        crate::i18n::Locale::En => "Move to:",
+                    };
+                    ui.label(t_label);
+                    // Plain Label, not DragValue. DragValue's focused
+                    // state holds an internal text-edit buffer that
+                    // shadows the external `&mut value`, so re-assigning
+                    // `*target_ref` from the arrow-key handler would not
+                    // visibly update the displayed digit. Move dialog
+                    // UX is "↑↓ + Enter" only — direct keyboard input
+                    // is not required, so dropping DragValue removes
+                    // the shadowing bug and the focus-stealing +
+                    // accept_enter_on_focused_id gymnastics it
+                    // previously needed.
+                    ui.label(format!("{}", *target_ref));
+                });
+                let hint = match locale {
+                    crate::i18n::Locale::Ja => "↑↓キーで数値を変更、Enterで確定、Escでキャンセル",
+                    crate::i18n::Locale::En => "Use ↑↓ to change, Enter to confirm, Esc to cancel",
+                };
+                ui.label(hint);
+                target_snapshot_body.set(*target_ref);
+            })
+            .primary_button("移動", "Move", move || {
+                resolve_move_confirm(captured_id, target_snapshot_confirm.get(), cur, count)
+            })
+            .show(ctx)
+    };
+
+    translate_outcome(outcome)
 }
 
 fn resolve_move_confirm(

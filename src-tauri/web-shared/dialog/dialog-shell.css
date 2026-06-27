@@ -1,0 +1,251 @@
+/* ============================================
+ * Dialog Shell
+ *
+ * Modal dialog presentation, normative against the `dialogs:` section
+ * of `doc/UI-DESIGN-GUIDELINES.yaml`. Consumed by
+ * `src-tauri/web-shared/dialog/dialog-shell.ts`.
+ * ============================================ */
+
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3000;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog-surface {
+  background-color: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-sys-shape-corner-extra-large);
+  padding: 24px;
+  width: 90%;
+  max-width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: var(--md-sys-elevation-3);
+}
+
+.dialog-surface.dialog-surface-compact {
+  max-width: 400px;
+  max-height: 60vh;
+}
+
+.dialog-title {
+  font-size: var(--md-sys-typescale-title-large-size);
+  font-weight: 400;
+  line-height: var(--md-sys-typescale-title-large-line-height);
+  color: var(--md-sys-color-on-surface);
+  margin: 0 0 16px 0;
+}
+
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  /* MD3 dialog body item spacing — mirrors dialogs.layout.body-item-spacing
+     in doc/UI-DESIGN-GUIDELINES.yaml. */
+  gap: 8px;
+}
+
+.dialog-error {
+  padding: 8px 12px;
+  background-color: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+  border-radius: var(--md-sys-shape-corner-small);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.dialog-label {
+  font-size: var(--md-sys-typescale-body-medium-size);
+  font-weight: 500;
+  line-height: var(--md-sys-typescale-body-medium-line-height);
+  color: var(--md-sys-color-on-surface);
+}
+
+.dialog-input,
+.dialog-textarea {
+  width: 100%;
+  padding: 12px 16px;
+  background-color: transparent;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-extra-small);
+  color: var(--md-sys-color-on-surface);
+  font-size: 16px;
+  line-height: 24px;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
+}
+
+.dialog-input::placeholder,
+.dialog-textarea::placeholder {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.dialog-input:hover,
+.dialog-textarea:hover {
+  border-color: var(--md-sys-color-on-surface);
+}
+
+.dialog-input:focus,
+.dialog-textarea:focus {
+  outline: none;
+  border-color: var(--md-sys-color-primary);
+  border-width: 2px;
+  padding: 11px 15px;
+}
+
+.dialog-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.dialog-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.dialog-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 16px;
+  min-width: 64px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
+}
+
+.dialog-button:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.dialog-button-cancel {
+  background-color: transparent;
+  color: var(--md-sys-color-primary);
+}
+
+.dialog-button-cancel:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-primary) 8%,
+    transparent
+  );
+}
+
+.dialog-button-primary {
+  background-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+.dialog-button-primary:hover {
+  background-color: color-mix(in srgb, var(--md-sys-color-primary) 85%, white);
+}
+
+.dialog-button-destructive {
+  background-color: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.dialog-button-destructive:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-error-container) 85%,
+    white
+  );
+}
+
+/* ============================================
+ * Dialog Tabs (used by profile editor's shell / ssh / wsl tabs)
+ * ============================================ */
+
+.dialog-tabs {
+  display: flex;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.dialog-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background-color: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    color var(--md-motion-duration-short4) var(--md-motion-easing-standard),
+    border-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard),
+    background-color var(--md-motion-duration-short4)
+    var(--md-motion-easing-standard);
+}
+
+.dialog-tab:hover:not(.disabled) {
+  background-color: color-mix(
+    in srgb,
+    var(--md-sys-color-on-surface) 8%,
+    transparent
+  );
+  color: var(--md-sys-color-on-surface);
+}
+
+.dialog-tab.active {
+  color: var(--md-sys-color-primary);
+  border-bottom-color: var(--md-sys-color-primary);
+}
+
+.dialog-tab.disabled {
+  color: var(--md-sys-color-on-surface);
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.dialog-tab:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+.dialog-tab-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog-tab-panel[hidden] {
+  display: none;
+}

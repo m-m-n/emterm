@@ -28,6 +28,7 @@ A modern terminal emulator that combines traditional terminal reliability with r
 - Explicit display commands only (no auto-detection)
 - Stateless CLI design (works over SSH)
 - Robust isolation (XSS protection in child WebViews, resource management)
+- UI design: Material Design 3 baseline. Tokens (color / typescale / shape / motion / elevation) live in `doc/UI-DESIGN-GUIDELINES.yaml` and are mirrored by native (`src-tauri/src/ui/md3.rs`) and WebView (`src-tauri/web-shared/styles.css` `--md-sys-*`) layers.
 
 ## How (Development Workflow)
 
@@ -137,6 +138,15 @@ scripts/
   build-dpkg.sh             - deb packager (GUI or EMTERM_CLI_ONLY=1)
   generate-icons.sh         - SVG → PNG icons via rsvg-convert / magick
   measure-hidden-rss.sh     - RSS sampling helper
+doc/
+  UI-DESIGN-GUIDELINES.yaml - MD3-based design tokens. Normative SSOT for
+                              dialogs (`dialogs:` section); mirrored by
+                              `src-tauri/src/ui/dialog/` (native) and
+                              `src-tauri/web-shared/dialog/` (WebView).
+                              Drift between yaml / Rust constants / CSS
+                              variables is caught by `ui::dialog::tests`.
+  tasks/                    - SDD task documents (SPEC / IMPLEMENTATION /
+                              VERIFICATION per feature)
 tmp/                        - temporary files and drafts (gitignored)
 ```
 

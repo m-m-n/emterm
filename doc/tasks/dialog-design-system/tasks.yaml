@@ -1,0 +1,298 @@
+schema_version: 1
+feature: dialog-design-system
+generated_from: IMPLEMENTATION.md
+status: completed
+
+phases:
+  - id: p1-token-foundation
+    title: "Phase 1: Token Foundation (SSOT + CSS + Rust Palette)"
+    status: completed
+    goal: >
+      Promote UI-DESIGN-GUIDELINES.yaml to normative SSOT for dialogs;
+      add elevation/typescale/error-container/surface-variant tokens to
+      CSS and md3.rs::Palette across all 10 presets.
+    effort: medium
+    depends_on: []
+    blocks: [p2-native-helper, p3-webview-helper, p6-drift-detection-test]
+    tasks:
+      - id: p1-yaml-dialogs-section
+        status: completed
+        title: "Author normative dialogs: section in UI-DESIGN-GUIDELINES.yaml"
+        files:
+          - doc/UI-DESIGN-GUIDELINES.yaml
+        depends_on: []
+      - id: p1-yaml-tokens-additions
+        status: completed
+        title: "Add tokens.elevation + promote error-container/on-error-container/surface-variant to color-roles; remove resolved known-issue"
+        files:
+          - doc/UI-DESIGN-GUIDELINES.yaml
+        depends_on: [p1-yaml-dialogs-section]
+      - id: p1-css-typescale-elevation-error-container
+        status: completed
+        title: "Add typescale/elevation/error-container CSS variables to styles.css :root"
+        files:
+          - src-tauri/web-shared/styles.css
+        depends_on: [p1-yaml-tokens-additions]
+      - id: p1-webview-presets-error-container
+        status: completed
+        title: "Add errorContainer/onErrorContainer per preset + CSS variable map entries"
+        files:
+          - src-tauri/web-shared/settings/ui-theme-presets.ts
+        depends_on: [p1-css-typescale-elevation-error-container]
+      - id: p1-md3-rs-palette-extension
+        status: completed
+        title: "Add Palette fields error_container/on_error_container/surface_variant + accessors + 10-preset value table"
+        files:
+          - src-tauri/src/ui/md3.rs
+        depends_on: [p1-yaml-tokens-additions]
+
+  - id: p2-native-helper
+    title: "Phase 2: Native Helper Module — src-tauri/src/ui/dialog/"
+    status: completed
+    goal: >
+      Provide Dialog builder + DialogKind + DialogOutcome + shared
+      tokens module under #[cfg(feature = \"gui\")] that enforces
+      Window setup, MD3 styling, role colors, keyboard rules,
+      and initial focus.
+    effort: large
+    depends_on: [p1-token-foundation]
+    blocks: [p4-refactor-native-dialogs, p6-drift-detection-test, p7-profile-selector-consolidation]
+    tasks:
+      - id: p2-module-scaffold
+        status: completed
+        title: "Create dialog/ module skeleton (mod.rs/kinds.rs/tokens.rs/buttons.rs/focus.rs) gated by feature=gui; register in ui/mod.rs"
+        files:
+          - src-tauri/src/ui/dialog/mod.rs
+          - src-tauri/src/ui/dialog/kinds.rs
+          - src-tauri/src/ui/dialog/tokens.rs
+          - src-tauri/src/ui/dialog/buttons.rs
+          - src-tauri/src/ui/dialog/focus.rs
+          - src-tauri/src/ui/mod.rs
+        depends_on: []
+      - id: p2-tokens-constants
+        status: completed
+        title: "Define SCRIM_ALPHA/CORNER_RADIUS/PADDING/ACTIONS_GAP/TITLE_TO_BODY_MARGIN/ACTIONS_TOP_MARGIN/MAX_WIDTH_*/ELEVATION_SHADOW_* constants mirroring yaml"
+        files:
+          - src-tauri/src/ui/dialog/tokens.rs
+        depends_on: [p2-module-scaffold]
+      - id: p2-builder-api
+        status: completed
+        title: "Implement Dialog<T> builder, three factories, body/primary/cancel/initial_focus setters, show() entry"
+        files:
+          - src-tauri/src/ui/dialog/mod.rs
+        depends_on: [p2-tokens-constants]
+      - id: p2-window-chrome
+        status: completed
+        title: "Enforce Window chrome (collapsible/resizable/anchor), Frame + corner + elevation shadow, title typescale"
+        files:
+          - src-tauri/src/ui/dialog/mod.rs
+        depends_on: [p2-builder-api]
+      - id: p2-role-buttons
+        status: completed
+        title: "Role-colored button drawing (primary/cancel/destructive) using md3 accessors"
+        files:
+          - src-tauri/src/ui/dialog/buttons.rs
+        depends_on: [p2-builder-api]
+      - id: p2-keymap-focus
+        status: completed
+        title: "Per-kind keymap (Enter/Esc/Tab) and initial focus rules; first_frame focus helper"
+        files:
+          - src-tauri/src/ui/dialog/kinds.rs
+          - src-tauri/src/ui/dialog/focus.rs
+        depends_on: [p2-builder-api]
+      - id: p2-i18n-locale-integration
+        status: completed
+        title: "Accept (ja, en) pairs + crate::i18n::Locale; helper resolves displayed strings"
+        files:
+          - src-tauri/src/ui/dialog/mod.rs
+        depends_on: [p2-builder-api]
+      - id: p2-debug-assert-ok-label
+        status: completed
+        title: "primary_button() debug_assert! rejects OK/Ok/ok labels in either locale"
+        files:
+          - src-tauri/src/ui/dialog/mod.rs
+        depends_on: [p2-builder-api]
+
+  - id: p3-webview-helper
+    title: "Phase 3: WebView Helper Module — src-tauri/web-shared/dialog/"
+    status: completed
+    goal: >
+      Provide createDialogShell + addButton + dialog-shell.css with
+      .dialog-* classes; Esc/Enter per kind, scrim cancel, IME-safe
+      Enter, ARIA attributes.
+    effort: medium
+    depends_on: [p1-token-foundation]
+    blocks: [p5-refactor-webview-dialogs]
+    tasks:
+      - id: p3-shell-module
+        status: completed
+        title: "Author createDialogShell + addButton + DialogKind/DialogShell/Options types"
+        files:
+          - src-tauri/web-shared/dialog/dialog-shell.ts
+        depends_on: []
+      - id: p3-shell-css
+        status: completed
+        title: "Author .dialog-* CSS class file and @import from styles.css"
+        files:
+          - src-tauri/web-shared/dialog/dialog-shell.css
+          - src-tauri/web-shared/styles.css
+        depends_on: [p3-shell-module]
+      - id: p3-keymap-focus-aria
+        status: completed
+        title: "Keydown handler (capture phase, isComposing-aware), per-kind Enter/Esc dispatch, scrim handler, initial focus per kind, role/aria-modal/aria-label/z-index"
+        files:
+          - src-tauri/web-shared/dialog/dialog-shell.ts
+        depends_on: [p3-shell-module]
+      - id: p3-shell-tests
+        status: completed
+        title: "happy-dom unit tests covering shell structure, Esc, Enter per kind, scrim, IME"
+        files:
+          - src-tauri/web-shared/dialog/dialog-shell.test.ts
+        depends_on: [p3-keymap-focus-aria]
+
+  - id: p4-refactor-native-dialogs
+    title: "Phase 4: Refactor Native Dialogs"
+    status: completed
+    goal: >
+      Rewrite the 5 native egui dialogs (mux rename/move + sftp
+      upload/overwrite/close_guard) to call Dialog::input /
+      Dialog::confirm / Dialog::destructive_confirm; keep existing
+      outcome enums.
+    effort: large
+    depends_on: [p2-native-helper]
+    blocks: []
+    tasks:
+      - id: p4-rename-dialog
+        status: completed
+        title: "Rewrite mux_dialogs::draw_rename using Dialog::input + label 変更/Rename"
+        files:
+          - src-tauri/src/ui/mux_dialogs.rs
+        depends_on: []
+      - id: p4-move-dialog
+        status: completed
+        title: "Rewrite mux_dialogs::draw_move using Dialog::input + label 移動/Move; keep DragValue + arrow keys in body"
+        files:
+          - src-tauri/src/ui/mux_dialogs.rs
+        depends_on: []
+      - id: p4-upload-dialog
+        status: completed
+        title: "Rewrite sftp upload dialog using Dialog::confirm + label アップロード/Upload"
+        files:
+          - src-tauri/src/render/mod.rs
+        depends_on: []
+      - id: p4-overwrite-dialog
+        status: completed
+        title: "Rewrite sftp overwrite dialog using Dialog::destructive_confirm + label 上書き/Overwrite; Enter→Cancel"
+        files:
+          - src-tauri/src/render/mod.rs
+        depends_on: []
+      - id: p4-close-guard-dialog
+        status: completed
+        title: "Rewrite sftp close_guard dialog using Dialog::destructive_confirm + label 閉じる/Close; Enter→Cancel"
+        files:
+          - src-tauri/src/render/mod.rs
+        depends_on: []
+
+  - id: p5-refactor-webview-dialogs
+    title: "Phase 5: Refactor WebView Dialogs + CSS Cleanup"
+    status: completed
+    goal: >
+      Migrate profile-editor.ts and ssh-editor.ts to createDialogShell;
+      rename CSS classes to .dialog-*; delete legacy .profile-editor-*
+      blocks from settings-panel.css.
+    effort: large
+    depends_on: [p3-webview-helper]
+    blocks: []
+    tasks:
+      - id: p5-profile-editor
+        status: completed
+        title: "Rewrite profile-editor.ts to use createDialogShell + addButton; rename inner classes"
+        files:
+          - src-tauri/web-shared/profile/profile-editor.ts
+        depends_on: []
+      - id: p5-ssh-editor
+        status: completed
+        title: "Rewrite ssh-editor.ts to use createDialogShell + addButton; rename inner classes"
+        files:
+          - src-tauri/web-shared/ssh/ssh-editor.ts
+        depends_on: []
+      - id: p5-css-cleanup
+        status: completed
+        title: "Move dialog-related CSS rules from settings-panel.css into dialog-shell.css; delete all .profile-editor-* blocks; codebase-wide grep for stragglers"
+        files:
+          - src-tauri/web-shared/styles/settings-panel.css
+          - src-tauri/web-shared/dialog/dialog-shell.css
+          - src-tauri/web-shared/components/md3-select.css
+        depends_on: [p5-profile-editor, p5-ssh-editor]
+
+  - id: p6-drift-detection-test
+    title: "Phase 6: Drift-Detection Tests"
+    status: completed
+    goal: >
+      Add Rust unit tests that detect divergence between yaml, Rust
+      tokens, and CSS variables; add OK-label rejection test; add
+      kind-rule introspection tests.
+    effort: medium
+    depends_on: [p1-token-foundation, p2-native-helper]
+    blocks: []
+    tasks:
+      - id: p6-verify-serde-yml-available
+        status: completed
+        title: "Verify existing serde_yml (src-tauri/Cargo.toml:74) is reachable from dialog/tests.rs; no Cargo.toml edit needed"
+        files:
+          - src-tauri/Cargo.toml
+        depends_on: []
+      - id: p6-yaml-rust-drift
+        status: completed
+        title: "Test asserts yaml dialogs.scrim/corner-radius/padding match dialog::tokens constants"
+        files:
+          - src-tauri/src/ui/dialog/tests.rs
+        depends_on: [p6-verify-serde-yml-available]
+      - id: p6-yaml-css-drift
+        status: completed
+        title: "Test asserts every yaml tokens.color-roles entry has a --md-sys-color-{role} variable in styles.css :root"
+        files:
+          - src-tauri/src/ui/dialog/tests.rs
+        depends_on: [p6-verify-serde-yml-available]
+      - id: p6-known-issue-absence
+        status: completed
+        title: "Test asserts known-issues no longer lists --md-sys-color-surface-variant"
+        files:
+          - src-tauri/src/ui/dialog/tests.rs
+        depends_on: [p6-verify-serde-yml-available]
+      - id: p6-ok-label-rejection-test
+        status: completed
+        title: "should_panic test verifies primary_button rejects OK label in debug"
+        files:
+          - src-tauri/src/ui/dialog/tests.rs
+        depends_on: []
+      - id: p6-kind-rule-introspection
+        status: completed
+        title: "Tests assert kinds::initial_focus and kinds::enter_target per kind match the FR5 table"
+        files:
+          - src-tauri/src/ui/dialog/tests.rs
+        depends_on: []
+
+  - id: p7-profile-selector-consolidation
+    title: "Phase 7: profile_selector.rs Shared-Constants Adoption"
+    status: completed
+    goal: >
+      Replace local literal values for scrim/corner/padding/shadow in
+      profile_selector.rs with imports from crate::ui::dialog::tokens.
+    effort: small
+    depends_on: [p2-native-helper]
+    blocks: []
+    tasks:
+      - id: p7-shared-constants-adoption
+        status: completed
+        title: "Import dialog::tokens constants; remove literals; visual smoke test"
+        files:
+          - src-tauri/src/ui/profile_selector.rs
+        depends_on: []
+
+verification:
+  rust_test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+  rust_cli_check_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features"
+  ts_test_command: "bun test"
+  ts_typecheck_command: "bun run typecheck"
+  manual_checklist_section: "VERIFICATION.md :: Manual Testing"

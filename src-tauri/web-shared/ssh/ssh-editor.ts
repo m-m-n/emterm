@@ -2,12 +2,14 @@
  * SSH Connection Editor
  *
  * Modal dialog for creating and editing SSH connection entries.
- * Follows the same pattern as profile-editor.ts.
+ * Routes through `createDialogShell` for structure, Esc / Enter / scrim
+ * semantics, and a11y, matching the profile editor.
  */
 
 import { invoke } from "@tauri-apps/api/core";
 import type { SshConnection, SshOption } from "../settings/types";
 import { t } from "../i18n/index.ts";
+import { createDialogShell } from "../dialog/dialog-shell";
 
 export interface SshEditorOptions {
   connection?: SshConnection;
@@ -34,35 +36,23 @@ export function showSshEditor(options: SshEditorOptions): () => void {
         ssh_options: [],
       };
   const isEdit = !!options.connection;
-
-  // Overlay
-  const overlay = document.createElement("div");
-  overlay.className = "profile-editor-overlay";
-  overlay.setAttribute("role", "dialog");
-  overlay.setAttribute(
-    "aria-label",
-    isEdit ? t("settings.ssh.editConnection") : t("settings.ssh.addConnection"),
-  );
-
-  // Dialog container
-  const dialog = document.createElement("div");
-  dialog.className = "profile-editor-dialog";
-
-  // Title
-  const title = document.createElement("h2");
-  title.className = "profile-editor-title";
-  title.textContent = isEdit
+  const title = isEdit
     ? t("settings.ssh.editConnection")
     : t("settings.ssh.addConnection");
-  dialog.appendChild(title);
 
-  // Form
+  const shell = createDialogShell({
+    title,
+    ariaLabel: title,
+    kind: "input",
+  });
+
   const form = document.createElement("form");
-  form.className = "profile-editor-form";
+  form.className = "dialog-form";
+  shell.body.appendChild(form);
 
   // Error message area
   const errorEl = document.createElement("div");
-  errorEl.className = "profile-editor-error";
+  errorEl.className = "dialog-error";
   errorEl.setAttribute("role", "alert");
   errorEl.hidden = true;
   form.appendChild(errorEl);
@@ -113,57 +103,12 @@ export function showSshEditor(options: SshEditorOptions): () => void {
   // SSH Options (-o Key=Value) dynamic list
   const optionsContainer = createSshOptionsUI(form, connection.ssh_options);
 
-  // Buttons
-  const btnRow = document.createElement("div");
-  btnRow.className = "profile-editor-buttons";
-
-  const cancelBtn = document.createElement("button");
-  cancelBtn.type = "button";
-  cancelBtn.className = "profile-editor-btn profile-editor-btn-cancel";
-  cancelBtn.textContent = t("settings.ssh.cancel");
-
-  const saveBtn = document.createElement("button");
-  saveBtn.type = "submit";
-  saveBtn.className = "profile-editor-btn profile-editor-btn-save";
-  saveBtn.textContent = t("settings.ssh.save");
-
-  btnRow.appendChild(cancelBtn);
-  btnRow.appendChild(saveBtn);
-  form.appendChild(btnRow);
-  dialog.appendChild(form);
-  overlay.appendChild(dialog);
-  document.body.appendChild(overlay);
-
-  // Focus name field
-  nameInput.focus();
-
-  // Handlers
+  // Cleanup
   const cleanup = () => {
-    overlay.remove();
+    shell.close();
   };
 
-  cancelBtn.addEventListener("click", () => {
-    cleanup();
-    options.onCancel();
-  });
-
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) {
-      cleanup();
-      options.onCancel();
-    }
-  });
-
-  overlay.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      cleanup();
-      options.onCancel();
-    }
-  });
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-
+  async function trySave(): Promise<void> {
     const name = nameInput.value.trim();
     if (!name) {
       showError(errorEl, t("settings.ssh.nameRequired"));
@@ -212,7 +157,29 @@ export function showSshEditor(options: SshEditorOptions): () => void {
 
     cleanup();
     options.onSave(result);
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    void trySave();
   });
+
+  shell.addButton({
+    role: "cancel",
+    label: t("settings.ssh.cancel"),
+    onClick: () => {
+      cleanup();
+      options.onCancel();
+    },
+  });
+  shell.addButton({
+    role: "primary",
+    label: t("settings.ssh.save"),
+    onClick: () => void trySave(),
+  });
+
+  // Focus the name field on open
+  nameInput.focus();
 
   return cleanup;
 }
@@ -226,15 +193,15 @@ function createSshOptionsUI(
   initialOptions: SshOption[],
 ): HTMLElement {
   const section = document.createElement("div");
-  section.className = "profile-editor-field";
+  section.className = "dialog-field";
 
   const label = document.createElement("label");
-  label.className = "profile-editor-label";
+  label.className = "dialog-label";
   label.textContent = t("settings.ssh.sshOptions");
   section.appendChild(label);
 
   const hint = document.createElement("span");
-  hint.className = "profile-editor-hint";
+  hint.className = "dialog-hint";
   hint.textContent = t("settings.ssh.sshOptionsHint");
   section.appendChild(hint);
 
@@ -265,7 +232,7 @@ function addCommittedRow(
 
   const keyInput = document.createElement("input");
   keyInput.type = "text";
-  keyInput.className = "profile-editor-input ssh-option-key";
+  keyInput.className = "dialog-input ssh-option-key";
   keyInput.value = key;
   keyInput.placeholder = "Key";
   row.appendChild(keyInput);
@@ -277,7 +244,7 @@ function addCommittedRow(
 
   const valueInput = document.createElement("input");
   valueInput.type = "text";
-  valueInput.className = "profile-editor-input ssh-option-value";
+  valueInput.className = "dialog-input ssh-option-value";
   valueInput.value = value;
   valueInput.placeholder = "Value";
   row.appendChild(valueInput);
@@ -285,7 +252,7 @@ function addCommittedRow(
   const removeBtn = document.createElement("button");
   removeBtn.type = "button";
   removeBtn.className = "profile-action-btn ssh-option-remove-btn";
-  removeBtn.textContent = "\u00D7";
+  removeBtn.textContent = "×";
   removeBtn.addEventListener("click", () => row.remove());
   row.appendChild(removeBtn);
 
@@ -299,7 +266,7 @@ function addAddRow(container: HTMLElement): void {
 
   const keyInput = document.createElement("input");
   keyInput.type = "text";
-  keyInput.className = "profile-editor-input ssh-option-key";
+  keyInput.className = "dialog-input ssh-option-key";
   keyInput.placeholder = "Key";
   row.appendChild(keyInput);
 
@@ -310,7 +277,7 @@ function addAddRow(container: HTMLElement): void {
 
   const valueInput = document.createElement("input");
   valueInput.type = "text";
-  valueInput.className = "profile-editor-input ssh-option-value";
+  valueInput.className = "dialog-input ssh-option-value";
   valueInput.placeholder = "Value";
   row.appendChild(valueInput);
 
@@ -323,7 +290,7 @@ function addAddRow(container: HTMLElement): void {
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "profile-action-btn ssh-option-remove-btn";
-    removeBtn.textContent = "\u00D7";
+    removeBtn.textContent = "×";
     removeBtn.addEventListener("click", () => row.remove());
     addBtn.replaceWith(removeBtn);
 
@@ -370,10 +337,10 @@ function createField(
   opts: FieldOptions,
 ): HTMLInputElement {
   const row = document.createElement("div");
-  row.className = "profile-editor-field";
+  row.className = "dialog-field";
 
   const label = document.createElement("label");
-  label.className = "profile-editor-label";
+  label.className = "dialog-label";
   label.htmlFor = opts.id;
   label.textContent = opts.label;
   row.appendChild(label);
@@ -381,7 +348,7 @@ function createField(
   const input = document.createElement("input");
   input.type = opts.type || "text";
   input.id = opts.id;
-  input.className = "profile-editor-input";
+  input.className = "dialog-input";
   input.value = opts.value;
   if (opts.placeholder) input.placeholder = opts.placeholder;
   if (opts.required) input.required = true;
@@ -389,7 +356,7 @@ function createField(
 
   if (opts.hint) {
     const hint = document.createElement("span");
-    hint.className = "profile-editor-hint";
+    hint.className = "dialog-hint";
     hint.textContent = opts.hint;
     row.appendChild(hint);
   }

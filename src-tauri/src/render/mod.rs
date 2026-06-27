@@ -426,43 +426,35 @@ pub fn draw_sftp_overlay(ctx: &egui::Context, app: &mut App) -> Option<SftpFrame
 
     // ── Upload confirmation dialog ───────────────────────────────
     if let Some(dialog) = app.sftp_ui.upload_dialog.clone() {
-        egui::Window::new(t("アップロードの確認", "Confirm upload"))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
+        use crate::ui::dialog::{Dialog, DialogOutcome};
+        let dest_label = t("送信先:", "Destination:");
+        let outcome = Dialog::<()>::confirm("アップロードの確認", "Confirm upload", loc)
+            .body(|ui: &mut egui::Ui| {
                 ui.label(t("アップロードするファイル:", "Files to upload:"));
                 for p in &dialog.paths {
                     ui.label(p.to_string_lossy());
                 }
                 ui.separator();
-                ui.label(format!(
-                    "{} {}",
-                    t("送信先:", "Destination:"),
-                    dialog.remote_dir
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button(t("アップロード", "Upload")).clicked()
-                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
-                    {
-                        event = Some(SftpFrameEvent::ConfirmUpload);
-                    }
-                    if ui.button(t("キャンセル", "Cancel")).clicked()
-                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                    {
-                        event = Some(SftpFrameEvent::CancelUpload);
-                    }
-                });
-            });
+                ui.label(format!("{} {}", dest_label, dialog.remote_dir));
+            })
+            .primary_button("アップロード", "Upload", || ())
+            .show(ctx);
+        match outcome {
+            DialogOutcome::Confirmed(()) => event = Some(SftpFrameEvent::ConfirmUpload),
+            DialogOutcome::Cancelled => event = Some(SftpFrameEvent::CancelUpload),
+            DialogOutcome::Pending => {}
+        }
     }
 
     // ── Overwrite confirmation dialog ────────────────────────────
     if let Some(dialog) = app.sftp_ui.overwrite_dialog.clone() {
-        egui::Window::new(t("上書きの確認", "Confirm overwrite"))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
+        use crate::ui::dialog::{Dialog, DialogOutcome};
+        // SPEC US3/FR6: Cancel is the default focus for the destructive
+        // overwrite dialog. Bare Enter maps to Cancel (helper-enforced
+        // for destructive-confirm kind). Overwrite requires an explicit
+        // button click.
+        let outcome = Dialog::<()>::destructive_confirm("上書きの確認", "Confirm overwrite", loc)
+            .body(|ui: &mut egui::Ui| {
                 ui.label(t(
                     "次のファイルは既に存在します:",
                     "These files already exist:",
@@ -470,48 +462,34 @@ pub fn draw_sftp_overlay(ctx: &egui::Context, app: &mut App) -> Option<SftpFrame
                 for name in &dialog.duplicates {
                     ui.label(name);
                 }
-                ui.horizontal(|ui| {
-                    // SPEC US3/FR6: Cancel is the default focus for the
-                    // destructive overwrite dialog. Bare Enter must NOT confirm
-                    // the overwrite — both Enter and Escape map to Cancel, and
-                    // Overwrite requires an explicit button click.
-                    if ui.button(t("上書き", "Overwrite")).clicked() {
-                        event = Some(SftpFrameEvent::ConfirmOverwrite);
-                    }
-                    if ui.button(t("キャンセル", "Cancel")).clicked()
-                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
-                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                    {
-                        event = Some(SftpFrameEvent::CancelOverwrite);
-                    }
-                });
-            });
+            })
+            .primary_button("上書き", "Overwrite", || ())
+            .show(ctx);
+        match outcome {
+            DialogOutcome::Confirmed(()) => event = Some(SftpFrameEvent::ConfirmOverwrite),
+            DialogOutcome::Cancelled => event = Some(SftpFrameEvent::CancelOverwrite),
+            DialogOutcome::Pending => {}
+        }
     }
 
     // ── Tab-close guard dialog ───────────────────────────────────
     if app.sftp_ui.close_guard.is_some() {
-        egui::Window::new(t("タブを閉じますか?", "Close this tab?"))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.label(t(
-                    "このタブにはアップロード中のファイルがあります。閉じると中止されます。",
-                    "This tab has uploads in progress. Closing will cancel them.",
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button(t("閉じる", "Close")).clicked()
-                        || ui.input(|i| i.key_pressed(egui::Key::Enter))
-                    {
-                        event = Some(SftpFrameEvent::ConfirmClose);
-                    }
-                    if ui.button(t("キャンセル", "Cancel")).clicked()
-                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
-                    {
-                        event = Some(SftpFrameEvent::CancelClose);
-                    }
-                });
-            });
+        use crate::ui::dialog::{Dialog, DialogOutcome};
+        let outcome =
+            Dialog::<()>::destructive_confirm("タブを閉じますか?", "Close this tab?", loc)
+                .body(|ui: &mut egui::Ui| {
+                    ui.label(t(
+                        "このタブにはアップロード中のファイルがあります。閉じると中止されます。",
+                        "This tab has uploads in progress. Closing will cancel them.",
+                    ));
+                })
+                .primary_button("閉じる", "Close", || ())
+                .show(ctx);
+        match outcome {
+            DialogOutcome::Confirmed(()) => event = Some(SftpFrameEvent::ConfirmClose),
+            DialogOutcome::Cancelled => event = Some(SftpFrameEvent::CancelClose),
+            DialogOutcome::Pending => {}
+        }
     }
 
     // ── Progress toasts (top-right stack) ────────────────────────
