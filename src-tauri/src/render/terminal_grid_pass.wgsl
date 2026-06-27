@@ -15,14 +15,19 @@
 //       fg/bg blend — LCD anti-aliasing)
 //
 // Decoration flags packed into `flags`:
-//   bit 0 = underline (1-px line at the cell bottom)
-//   bit 1 = strikethrough (1-px line at the cell midpoint)
+//   bit 0 = underline (thin line near the cell bottom, thickness driven
+//           by `u.decoration_thickness_px` — computed CPU-side from
+//           `box_drawing::light_stroke_px(cell_h)` so SGR underline and
+//           procedural box-drawing strokes are guaranteed to match weight)
+//   bit 1 = strikethrough (thin line at the cell midpoint, same
+//           thickness as underline)
 
 struct FrameUniform {
     viewport: vec2<f32>,
     alpha_atlas: vec2<f32>,
     rgba_atlas: vec2<f32>,
-    _pad: vec2<f32>,
+    decoration_thickness_px: f32,
+    _pad: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: FrameUniform;
@@ -49,6 +54,7 @@ struct VsOut {
     @location(3) @interpolate(flat) page: u32,
     @location(4) @interpolate(flat) flags: u32,
     @location(5) cell_local: vec2<f32>,
+    @location(6) @interpolate(flat) cell_wh: vec2<f32>,
 };
 
 @vertex
@@ -92,6 +98,7 @@ fn vs_main(in: VsIn) -> VsOut {
     out.page = in.page;
     out.flags = in.flags;
     out.cell_local = c; // 0..1 within the cell rect
+    out.cell_wh = in.cell_wh;
     return out;
 }
 
@@ -99,18 +106,30 @@ fn vs_main(in: VsIn) -> VsOut {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Solid page (background or decoration line or fg-fill stroke).
     if (in.page == 2u) {
-        // Decoration lines: clip the visible band based on flags.
+        // Decoration lines: clip the visible band based on flags. The
+        // thickness is the CPU-supplied `decoration_thickness_px`, which
+        // funnels through `box_drawing::light_stroke_px` so SGR
+        // underline and `─` (U+2500) end up the same weight on screen.
+        let cell_h = in.cell_wh.y;
+        let thickness = u.decoration_thickness_px;
+        let py = in.cell_local.y * cell_h;
         if ((in.flags & 1u) != 0u) {
-            // Underline: a thin band near the bottom of the cell.
-            //   visible when cell_local.y in [0.92, 0.98]
-            if (in.cell_local.y < 0.92 || in.cell_local.y > 0.98) {
+            // Underline: a `thickness`-px band whose bottom sits at
+            // ~97% of cell height (just inside the cell's bottom edge).
+            let bot = cell_h * 0.97;
+            let top = bot - thickness;
+            if (py < top || py >= bot) {
                 discard;
             }
             return in.fg;
         }
         if ((in.flags & 2u) != 0u) {
-            // Strikethrough: thin band at ~55% of cell height.
-            if (in.cell_local.y < 0.52 || in.cell_local.y > 0.58) {
+            // Strikethrough: same `thickness`-px band centered at ~55%
+            // of cell height.
+            let center = cell_h * 0.55;
+            let top = center - thickness * 0.5;
+            let bot = top + thickness;
+            if (py < top || py >= bot) {
                 discard;
             }
             return in.fg;

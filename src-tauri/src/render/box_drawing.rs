@@ -12,6 +12,21 @@
 //! plus a handful of half-line variants. Anything outside the table falls
 //! back to the regular glyph rasterizer.
 
+/// Single source of truth for the light-stroke thickness used by every
+/// thin line the renderer paints — procedural box-drawing strokes
+/// (`rects_for`) and the SGR underline / strikethrough bands in
+/// `terminal_grid_pass`. Keep callers funneled through this so the two
+/// stay in sync as the formula evolves (HiDPI scale, font size).
+///
+/// `cell_h` is in physical pixels (logical cell height × pixels_per_point):
+///   cell_h≈17 (13pt, scale=1.0) → 1px
+///   cell_h≈34 (13pt, scale=2.0) → 2px
+///   cell_h≈51 (13pt, scale=3.0) → 3px
+#[inline]
+pub fn light_stroke_px(cell_h: f32) -> f32 {
+    (cell_h / 18.0).round().max(1.0)
+}
+
 /// Per-direction stroke weight. 0 == no stroke, 1 == light, 2 == heavy.
 #[derive(Copy, Clone, Debug, Default)]
 struct BoxDef {
@@ -130,16 +145,11 @@ pub fn is_box_drawing(cp: u32) -> bool {
 pub fn rects_for(cp: u32, cell_w: f32, cell_h: f32) -> Option<Vec<(f32, f32, f32, f32)>> {
     let def = lookup(cp)?;
     // Stroke thickness: keep the line a hairline regardless of HiDPI
-    // scale / font size. `cell_h` here is in physical pixels (logical
-    // cell height × pixels_per_point), so dividing by ~18 (the physical
-    // cell_h of 13pt Inconsolata at scale=1.0) maps cleanly to:
-    //   cell_h≈17 (13pt, scale=1.0) → 1px
-    //   cell_h≈34 (13pt, scale=2.0) → 2px
-    //   cell_h≈51 (13pt, scale=3.0) → 3px
-    // Earlier `cell_h * 0.08` rounded up to 2-3px on HiDPI / large
-    // fonts, which read as a thick line rather than the crisp hairline
-    // Alacritty / WezTerm draw at the same scale.
-    let light_px = (cell_h / 18.0).round().max(1.0);
+    // scale / font size. Earlier `cell_h * 0.08` rounded up to 2-3px on
+    // HiDPI / large fonts, which read as a thick line rather than the
+    // crisp hairline Alacritty / WezTerm draw at the same scale. The
+    // shared `light_stroke_px` is the SSOT — see its doc comment.
+    let light_px = light_stroke_px(cell_h);
     let heavy_px = (light_px * 2.0).max(2.0);
     let weight = |w: u8| -> f32 {
         match w {
