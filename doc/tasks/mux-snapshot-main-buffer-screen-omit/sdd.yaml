@@ -1,0 +1,90 @@
+schema_version: 1
+feature: mux-snapshot-main-buffer-screen-omit
+created: 2026-06-28
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 1e34f0002d464ba03fe5372e2035524f131de82e
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 1e34f0002d464ba03fe5372e2035524f131de82e
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 1e34f0002d464ba03fe5372e2035524f131de82e
+  - id: implement
+    status: completed
+    completed_at_commit: 1e34f0002d464ba03fe5372e2035524f131de82e
+  - id: check
+    status: completed
+    completed_at_commit: 1e34f0002d464ba03fe5372e2035524f131de82e
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 1e34f0002d464ba03fe5372e2035524f131de82e
+
+requirements:
+  FR1:
+    title: "Main-buffer snapshot omits screen dump"
+    status: ok
+    tasks:
+      - phase-2-main-alt-split
+    tests:
+      - TS-1
+      - TS-5
+  FR2:
+    title: "Alt-screen snapshot keeps screen dump"
+    status: ok
+    tasks:
+      - phase-2-main-alt-split
+    tests:
+      - TS-2
+      - TS-3
+      - TS-6
+  FR3:
+    title: "Doc comments reflect the main/alt split"
+    status: ok
+    tasks:
+      - phase-3-doc-and-tests
+    tests:
+      - TS-3
+  FR4:
+    title: "Remove [DECSTBM-trace] logs, suspect dump, and probe_* tests"
+    status: ok
+    tasks:
+      - phase-1-remove-investigation-code
+    tests:
+      - TS-7
+  NFR1:
+    title: "Performance — main-buffer snapshot byte size strictly decreases"
+    status: ok
+    tasks:
+      - phase-2-main-alt-split
+    tests:
+      - TS-1
+  NFR2:
+    title: "Compatibility — mux IPC wire protocol unchanged"
+    status: ok
+    tasks:
+      - phase-2-main-alt-split
+    tests:
+      - TS-3
+      - TS-4
+  NFR3:
+    title: "Maintainability — single doc comment captures snapshot layout split"
+    status: ok
+    tasks:
+      - phase-3-doc-and-tests
+    tests:
+      - TS-3

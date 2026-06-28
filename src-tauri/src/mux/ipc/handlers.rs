@@ -424,6 +424,14 @@ pub(super) async fn handle_resize(msg: MuxMessage, session_manager: &Arc<Mutex<S
 /// recovery point, so the observable drift is minimal. Absolute ordering is
 /// *not* guaranteed; callers that need it must use a different mechanism
 /// (e.g. a reader-side snapshot-request barrier).
+///
+/// Main/alt snapshot split: the reply payload is composed by
+/// `build_shadow_parser_snapshot`, which funnels through
+/// `build_snapshot_bytes`. For main-buffer panes the daemon vt100 screen
+/// dump is omitted from the reply and the client reconstructs the visible
+/// viewport from scrollback alone; for alt-screen panes the dump is
+/// included so the TUI surface is restored. See `build_snapshot_bytes` for
+/// the rationale.
 pub(super) async fn handle_request_pane_snapshot(
     msg: &MuxMessage,
     active_session_id: u32,
@@ -742,17 +750,26 @@ mod tests {
     /// `handle_request_pane_snapshot` (scoped `read_all` block) must NOT change
     /// the assembled snapshot bytes. This reconstructs the same inputs the
     /// handler feeds to `build_shadow_parser_snapshot` (an owned `read_all`
-    /// copy + the shadow screen) and asserts the result is byte-for-byte the
-    /// established `ESC[H ESC[2J + scrollback + screen` layout — for both a
-    /// representative screen + scrollback and the empty-scrollback case.
+    /// copy + the shadow screen) and asserts the result follows the
+    /// `ESC[H ESC[2J + scrollback + screen` layout — for both a representative
+    /// screen + scrollback and the empty-scrollback case.
+    ///
+    /// Driven through the `alt_screen = true` branch (parser flipped via
+    /// ESC[?1049h before feeding the screen bytes) because the layout-split
+    /// contract omits the daemon vt100 dump for main-buffer panes; the
+    /// SCREEN-CONTENT presence assertion is only meaningful for the alt
+    /// branch.
     #[test]
     fn snapshot_bytes_unchanged_after_lock_scope_guardrail() {
         use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
         use crate::mux::session::pane::new_shadow_parser;
         use std::sync::Mutex as StdMutex;
 
-        // Representative screen + scrollback.
+        // Representative screen + scrollback. Switch to alt-screen first so
+        // build_shadow_parser_snapshot follows the alt branch and includes
+        // the screen dump.
         let shadow_parser: SharedShadowParser = Arc::new(StdMutex::new(new_shadow_parser(24, 80)));
+        shadow_parser.lock().unwrap().process(b"\x1b[?1049h");
         shadow_parser
             .lock()
             .unwrap()
@@ -1046,9 +1063,11 @@ mod tests {
     /// the `apply_mux_message::Snapshot|SnapshotRestore` arm and the
     /// `build_from_snapshot` + `scrollback_bypass` fast path.
     ///
-    /// The assembled payload must remain byte-identical to the predecessor
-    /// task's snapshot bytes: `ESC[3J ESC[H ESC[2J` clear-prefix, then
-    /// scrollback, then shadow screen contents.
+    /// The assembled payload follows the `ESC[3J ESC[H ESC[2J` clear-prefix,
+    /// then scrollback, then (for alt-screen panes) shadow screen contents
+    /// layout. The shadow parser is driven into alt-screen mode before
+    /// feeding the screen bytes because the layout-split contract omits the
+    /// daemon vt100 dump for main-buffer panes.
     #[tokio::test]
     async fn handle_request_pane_snapshot_emits_snapshot_kind() {
         let mgr = Arc::new(Mutex::new(SessionManager::new()));
@@ -1062,7 +1081,8 @@ mod tests {
             let wid = m.create_window(sid, "shell".to_string()).unwrap();
             add_pane(&mut m, sid, wid, 1, target.clone());
             // Seed shadow + scrollback so the assembled snapshot has
-            // recognisable bytes for the post-conditions.
+            // recognisable bytes for the post-conditions. Flip to alt-screen
+            // first so the daemon vt100 dump is included.
             let pane_ref = m
                 .get_session(sid)
                 .unwrap()
@@ -1072,6 +1092,11 @@ mod tests {
                 .panes
                 .get(&1)
                 .unwrap();
+            pane_ref
+                .shadow_parser
+                .lock()
+                .unwrap()
+                .process(b"\x1b[?1049h");
             pane_ref
                 .shadow_parser
                 .lock()

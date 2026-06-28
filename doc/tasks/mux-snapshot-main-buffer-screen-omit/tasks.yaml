@@ -1,0 +1,33 @@
+schema_version: 1
+feature: mux-snapshot-main-buffer-screen-omit
+
+phases:
+  - id: phase-1-remove-investigation-code
+    title: "Phase 1: Investigation Code Removal"
+    effort: small
+    status: completed
+    description: |
+      Strip [DECSTBM-trace] warn logs, the suspect-dump filesystem scope in
+      build_snapshot_bytes, and the probe_* test functions added during the
+      apt-bar bug investigation. Leave the workspace in a clean state before
+      the behavioral fix.
+
+  - id: phase-2-main-alt-split
+    title: "Phase 2: Main / Alt Split in build_snapshot_bytes"
+    effort: small
+    status: completed
+    description: |
+      Branch build_snapshot_bytes on alt_screen so the daemon vt100 dump is
+      included only for alt-screen panes. Adjust the Vec capacity hint
+      accordingly. No wire-protocol or signature change.
+
+  - id: phase-3-doc-and-tests
+    title: "Phase 3: Doc Comments + Test Coverage"
+    effort: small
+    status: completed
+    description: |
+      Update the doc comments on build_snapshot_bytes,
+      build_shadow_parser_snapshot, and handle_request_pane_snapshot to
+      describe the main/alt split. Refactor the existing layout tests to
+      assert the alt=true layout and add a new test that asserts the alt=false
+      layout omits the screen slice.
