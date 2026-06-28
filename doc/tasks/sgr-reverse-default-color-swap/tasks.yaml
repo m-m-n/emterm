@@ -1,0 +1,69 @@
+schema_version: 1
+feature: sgr-reverse-default-color-swap
+
+phases:
+  - id: phase-1
+    title: "packed_to_egui の fallback を reverse 時に swap + 単体テスト追加"
+    goal: "両 DEFAULT の reverse セルが theme.fg / theme.bg のスワップとして描画され、indexed/truecolor セルの反転挙動は据え置きにする"
+    files_to_modify:
+      - src-tauri/src/render/mod.rs
+    files_to_create: []
+    tasks:
+      - id: write-unit-tests
+        status: completed
+        title: "TS-1〜TS-6 の失敗テストを mod tests に追加"
+        description: >
+          src-tauri/src/render/mod.rs の `#[cfg(test)] mod tests` 内、
+          既存 `packed_to_egui_*` テスト群と同じ場所に、
+          reverse_with_both_default_swaps_to_theme_bg_and_fg /
+          reverse_with_indexed_fg_default_bg_swaps /
+          reverse_with_truecolor_swaps /
+          reverse_then_selection_cancels /
+          no_reverse_no_selection_uses_theme_defaults /
+          reverse_with_bold_brighten_promotes_perceived_fg
+          の 6 ケースを追加する。TDD 上、未修正状態では両 DEFAULT 系が失敗する。
+        verifies:
+          - TS-1
+          - TS-2
+          - TS-3
+          - TS-4
+          - TS-5
+          - TS-6
+      - id: implement-reverse-fallback-swap
+        status: completed
+        title: "packed_to_egui の fallback を reverse 時に swap"
+        description: >
+          resolve_cell_style_from_packed の packed_to_egui 呼び出し直前に
+          `(fg_fallback, bg_fallback) = if reverse { (theme.bg, theme.fg) } else { (theme.fg, theme.bg) };`
+          を追加し、`packed_to_egui` の第2引数および `unwrap_or_else` の RGB 引数を
+          fg_fallback / bg_fallback に差し替える。
+          既存の packed-level reverse swap と bold-brighten ブロックは現状維持。
+          packed_to_egui の signature と `_fallback` 引数の未使用状態は据え置き。
+        verifies:
+          - TS-1
+          - TS-2
+          - TS-3
+          - TS-4
+          - TS-5
+          - TS-6
+      - id: update-inline-comments
+        status: completed
+        title: "役割分担を説明するコメントに更新"
+        description: >
+          packed swap 直上の "swap source packed colors BEFORE bold-brighten" コメントと、
+          bold-brighten / packed_to_egui 周辺のコメントを、
+          packed 層 swap = bold-brighten が perceived fg を見るため /
+          fallback swap = packed_to_egui が None を返す両 DEFAULT セルの救済用 /
+          indexed / truecolor は Some(...) が返ってフォールバックを消費しない、
+          という役割分担として説明する内容に書き換える。
+        verifies: []
+      - id: run-regression-suite
+        status: completed
+        title: "既存ユニットテストのリグレッション確認 + CLI-only check"
+        description: >
+          `CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib`
+          で新旧テストが全て成功すること、および
+          `CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml --no-default-features`
+          が exit 0 で通ることを確認する。
+        verifies:
+          - TS-9
