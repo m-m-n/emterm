@@ -1,0 +1,94 @@
+schema_version: 1
+feature: sgr-reverse-default-color-swap
+created: 2026-06-28
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: e491fe29d11f268f57f2df04b75dc49c3f4cfbb0
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: e491fe29d11f268f57f2df04b75dc49c3f4cfbb0
+  - id: verify-plan
+    status: completed
+    completed_at_commit: e491fe29d11f268f57f2df04b75dc49c3f4cfbb0
+  - id: implement
+    status: completed
+    completed_at_commit: e491fe29d11f268f57f2df04b75dc49c3f4cfbb0
+  - id: check
+    status: completed
+    completed_at_commit: e491fe29d11f268f57f2df04b75dc49c3f4cfbb0
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: e491fe29d11f268f57f2df04b75dc49c3f4cfbb0
+
+requirements:
+  FR1:
+    title: Reverse covers both DEFAULT and explicitly-colored cells
+    status: ok
+    tasks:
+      - write-unit-tests
+      - implement-reverse-fallback-swap
+      - update-inline-comments
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+  FR2:
+    title: Bold-brighten ordering preserved
+    status: ok
+    tasks:
+      - implement-reverse-fallback-swap
+      - write-unit-tests
+    tests:
+      - TS-6
+  FR3:
+    title: Selection swap unchanged (XOR composition preserved)
+    status: ok
+    tasks:
+      - implement-reverse-fallback-swap
+      - write-unit-tests
+    tests:
+      - TS-4
+  FR4:
+    title: Dim/hidden ordering unchanged
+    status: ok
+    tasks:
+      - implement-reverse-fallback-swap
+      - run-regression-suite
+    tests:
+      - TS-5
+      - TS-9
+  NFR1:
+    title: No rendering performance regression
+    status: ok
+    tasks:
+      - implement-reverse-fallback-swap
+    tests: []
+  NFR2:
+    title: WezTerm/xterm/alacritty reverse compatibility
+    status: ok
+    tasks:
+      - implement-reverse-fallback-swap
+    tests:
+      - TS-7
+      - TS-8
+  NFR3:
+    title: Scope - no term_core changes, DECSCNM out of scope
+    status: ok
+    tasks:
+      - implement-reverse-fallback-swap
+    tests:
+      - TS-9

@@ -1201,10 +1201,12 @@ fn resolve_cell_style_from_packed(
     let hidden = (flags & STYLE_HIDDEN) != 0;
     let strikethrough = (flags & STYLE_STRIKETHROUGH) != 0;
 
-    // Reverse: swap source packed colors BEFORE bold-brighten / decoding
+    // Reverse, layer 1 — packed-level swap: BEFORE bold-brighten / decoding
     // so the bold-brighten promotion sees the perceived foreground (FR7
     // in the WebView build: bold-brighten is foreground-only and applies
-    // *after* reverse).
+    // *after* reverse). This swap alone is sufficient for indexed /
+    // truecolor cells: `packed_to_egui` returns `Some(...)` for those tags
+    // and the fallback below is never consumed.
     let (effective_fg_packed, effective_bg_packed) = if reverse {
         (packed_bg, packed_fg)
     } else {
@@ -1222,10 +1224,24 @@ fn resolve_cell_style_from_packed(
         effective_fg_packed
     };
 
-    let mut fg = packed_to_egui(effective_fg_packed, theme.fg, theme)
-        .unwrap_or_else(|| rgb_to_egui(theme.fg));
-    let mut bg = packed_to_egui(effective_bg_packed, theme.bg, theme)
-        .unwrap_or_else(|| rgb_to_egui(theme.bg));
+    // Reverse, layer 2 — fallback swap: rescues the both-DEFAULT case.
+    // `packed_to_egui` returns `None` for the `Default` tag, so without
+    // this the `unwrap_or_else` arms would re-substitute the unswapped
+    // `theme.fg` / `theme.bg`, turning the layer-1 swap into a NOP for
+    // `\e[7m` on bare default-color cells. Selecting the fallback per
+    // `reverse` ensures `theme.fg` / `theme.bg` swap takes effect. Indexed
+    // / truecolor cells are unaffected because `packed_to_egui` returns
+    // `Some(...)` and the fallback is never consumed.
+    let (fg_fallback, bg_fallback) = if reverse {
+        (theme.bg, theme.fg)
+    } else {
+        (theme.fg, theme.bg)
+    };
+
+    let mut fg = packed_to_egui(effective_fg_packed, fg_fallback, theme)
+        .unwrap_or_else(|| rgb_to_egui(fg_fallback));
+    let mut bg = packed_to_egui(effective_bg_packed, bg_fallback, theme)
+        .unwrap_or_else(|| rgb_to_egui(bg_fallback));
 
     // Selection: invert again on top of any reverse already in effect.
     if selected {
@@ -1551,6 +1567,113 @@ mod tests {
         let packed = 0x02_AA_BB_CC; // tag=2, r=AA, g=BB, b=CC
         let c = packed_to_egui(packed, Rgb::WHITE, &theme).unwrap();
         assert_eq!((c.r(), c.g(), c.b()), (0xAA, 0xBB, 0xCC));
+    }
+
+    // ── sgr-reverse-default-color-swap: TS-1〜TS-6 ──────────────────────
+
+    /// TS-1: `\e[7m` 単独適用（fg/bg ともに DEFAULT）で reverse すると、
+    /// 最終 fg/bg は `theme.fg` / `theme.bg` がスワップされた値になる。
+    /// 修正前は両 DEFAULT が `packed_to_egui` で `None` を返し、`unwrap_or_else`
+    /// が `theme.fg` / `theme.bg` をそのまま採用していたため、スワップが NOP
+    /// となっていた。fallback を reverse に応じて入れ替えることで救済する。
+    #[test]
+    fn reverse_with_both_default_swaps_to_theme_bg_and_fg() {
+        let theme = Theme::default();
+        let style = resolve_cell_style_from_packed(
+            &theme,
+            0x00_00_00_00, // packed_fg = DEFAULT
+            0x00_00_00_00, // packed_bg = DEFAULT
+            STYLE_REVERSE,
+            false,
+        );
+        assert_eq!(style.fg, rgb_to_egui(theme.bg));
+        assert_eq!(style.bg, rgb_to_egui(theme.fg));
+    }
+
+    /// TS-2: reverse + indexed(1) fg + DEFAULT bg の組み合わせで、最終
+    /// fg は `theme.bg`（reverse 用 fallback）、最終 bg は indexed(1) の
+    /// palette16 解決色になる。indexed 側は `packed_to_egui` が `Some(...)`
+    /// を返しフォールバックを消費しないため、packed-level swap だけで反転。
+    #[test]
+    fn reverse_with_indexed_fg_default_bg_swaps() {
+        let theme = Theme::default();
+        let packed_fg_indexed1 = 0x01_01_00_00; // tag=1, index=1 (red)
+        let style = resolve_cell_style_from_packed(
+            &theme,
+            packed_fg_indexed1,
+            0x00_00_00_00, // packed_bg = DEFAULT
+            STYLE_REVERSE,
+            false,
+        );
+        assert_eq!(style.fg, rgb_to_egui(theme.bg));
+        assert_eq!(style.bg, rgb_to_egui(theme.palette16[1]));
+    }
+
+    /// TS-3: reverse + truecolor 両指定で、最終 fg/bg の RGB が完全に
+    /// 入れ替わる。truecolor 側は `packed_to_egui` が `Some(...)` を返し
+    /// フォールバックは消費されないので packed-level swap がそのまま反転として働く。
+    #[test]
+    fn reverse_with_truecolor_swaps() {
+        let theme = Theme::default();
+        let packed_fg = 0x02_11_22_33; // tag=2, R=0x11 G=0x22 B=0x33
+        let packed_bg = 0x02_44_55_66; // tag=2, R=0x44 G=0x55 B=0x66
+        let style =
+            resolve_cell_style_from_packed(&theme, packed_fg, packed_bg, STYLE_REVERSE, false);
+        assert_eq!(
+            (style.fg.r(), style.fg.g(), style.fg.b()),
+            (0x44, 0x55, 0x66)
+        );
+        assert_eq!(
+            (style.bg.r(), style.bg.g(), style.bg.b()),
+            (0x11, 0x22, 0x33)
+        );
+    }
+
+    /// TS-4: reverse + selection の同時適用は XOR で打ち消され、結果は
+    /// non-reverse / non-selected と一致する。FR3（selection swap の不変性）。
+    #[test]
+    fn reverse_then_selection_cancels() {
+        let theme = Theme::default();
+        let style = resolve_cell_style_from_packed(
+            &theme,
+            0x00_00_00_00,
+            0x00_00_00_00,
+            STYLE_REVERSE,
+            true,
+        );
+        assert_eq!(style.fg, rgb_to_egui(theme.fg));
+        assert_eq!(style.bg, rgb_to_egui(theme.bg));
+    }
+
+    /// TS-5: reverse なし / selection なし / 両 DEFAULT のコントロールケース。
+    /// `theme.fg` / `theme.bg` がそのまま採用される。
+    #[test]
+    fn no_reverse_no_selection_uses_theme_defaults() {
+        let theme = Theme::default();
+        let style = resolve_cell_style_from_packed(&theme, 0x00_00_00_00, 0x00_00_00_00, 0, false);
+        assert_eq!(style.fg, rgb_to_egui(theme.fg));
+        assert_eq!(style.bg, rgb_to_egui(theme.bg));
+    }
+
+    /// TS-6: reverse + bold + `bold_brightens_ansi_colors=true` で、
+    /// packed_fg=DEFAULT・packed_bg=indexed(1) 赤の組み合わせ。
+    /// reverse 後の perceived foreground（= packed_bg の indexed(1)）に
+    /// bold-brighten が作用し、最終 fg は indexed(9) bright red、最終 bg は
+    /// DEFAULT が reverse 用 fallback で解決された `theme.fg` になる。
+    #[test]
+    fn reverse_with_bold_brighten_promotes_perceived_fg() {
+        let mut theme = Theme::default();
+        theme.bold_brightens_ansi_colors = true;
+        let packed_bg_indexed1 = 0x01_01_00_00; // tag=1, index=1 (red)
+        let style = resolve_cell_style_from_packed(
+            &theme,
+            0x00_00_00_00, // packed_fg = DEFAULT
+            packed_bg_indexed1,
+            STYLE_REVERSE | STYLE_BOLD,
+            false,
+        );
+        assert_eq!(style.fg, rgb_to_egui(theme.palette16[9]));
+        assert_eq!(style.bg, rgb_to_egui(theme.fg));
     }
 
     // ── font-swash-migration: Theme dead_code resolution (FR10) ────────
