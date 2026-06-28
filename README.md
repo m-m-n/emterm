@@ -41,6 +41,7 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - OSC title propagation: daemon updates window names from shell OSC 0/2 sequences even while GUI is detached
   - Pane exit while detached is reaped correctly; daemon auto-shutdown fires when the last session empties
   - Mux status bar: daemon-side command execution with template variables (`{cmd:name}`, `{hostname}`, `{cwd}`)
+  - Correct main-buffer snapshot restore: daemon screen dump omitted for main-buffer panes; client replays scrollback bytes directly (eliminates progress-bar corruption after `apt install` and similar commands)
   - Windows support: Named Pipe IPC with daemon process detachment (survives terminal closure)
 
 - **Status Bar**

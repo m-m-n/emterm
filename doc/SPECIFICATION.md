@@ -993,6 +993,19 @@ The daemon routes `RequestPaneSnapshot` replies through `MessageType::Snapshot` 
 
 ---
 
+#### Mux Snapshot Main-Buffer Screen Omission
+
+On mux pane snapshot restore, the daemon vt100 `contents_formatted()` screen dump is omitted from the snapshot bytes when the pane is on the main buffer. The client's `term_core` reconstructs the main-buffer viewport by replaying scrollback bytes alone.
+
+**Key Functionality:**
+- Main-buffer snapshot layout: `SNAPSHOT_CLEAR_HOME` + stripped scrollback + `ESC[?1049l` (no screen dump)
+- Alt-screen snapshot layout: `SNAPSHOT_CLEAR_HOME` + stripped scrollback + screen dump + `ESC[?1049h` (unchanged)
+- Eliminates progress-bar corruption (e.g. apt progress glyphs bleeding into wrong rows) after same-tab click, cross-tab switch, window switch, or reattach
+- Alt-screen TUIs (vim, htop, less, man) continue to restore cleanly via the screen dump path
+- Rationale: main-buffer scrollback contains the full PTY byte history including DECSTBM region toggles; alt-screen output is not written to scrollback, so the daemon vt100 dump is the only restoration source for TUIs
+
+---
+
 #### Mux Detached Pane Exit Reap
 
 Pane cleanup (reap) is performed whenever the PTY dies, regardless of attach state.
