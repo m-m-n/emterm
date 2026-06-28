@@ -7,7 +7,7 @@ use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
 use crate::mux::scrollback_buffer::{DEFAULT_SCROLLBACK_CAPACITY, ScrollbackRingBuffer};
-use crate::mux::scrollback_filter::strip_replayable_rich_content;
+use crate::mux::snapshot_bytes::build_resume_snapshot_bytes;
 use crate::pty::passthrough_scanner::PassthroughScanner;
 use crate::pty::visibility::{HIDDEN_PASSTHROUGH_CAPACITY_MUX, RawPassthroughBuffer};
 
@@ -345,27 +345,48 @@ pub fn evaluate_output_target(
                     EvalResult::Unchanged
                 }
                 None => {
-                    // Phase C FR5 order: clear → scrollback → shadow.
-                    // Scrollback is read WITHOUT clearing (FR6: the buffer
-                    // lives for the lifetime of the pane) and stripped of
-                    // rich-content launch sequences so the resume does not
-                    // re-spawn viewers / re-render inline images. The
-                    // raw_passthrough buffer is drained + cleared (so it does
-                    // not leak across detach cycles) but NOT concatenated.
-                    let screen = lock_shadow_parser(&pane.shadow_parser)
-                        .screen()
-                        .contents_formatted();
-                    let buffered =
-                        strip_replayable_rich_content(&pane.scrollback.lock().unwrap().read_all());
+                    // Phase C FR5 order: clear → scrollback → (alt-only) shadow.
+                    // Routes through `build_resume_snapshot_bytes` so the
+                    // strip + main/alt split logic stays in lockstep with the
+                    // visibility-resume SSOT (`resume_pane_with_permit` uses
+                    // the same helper). Scrollback is read WITHOUT clearing
+                    // (FR6: the buffer lives for the lifetime of the pane);
+                    // the helper passes it through
+                    // `strip_replayable_rich_content` so the resume does not
+                    // re-spawn viewers / re-render inline images. Skip
+                    // `contents_formatted()` entirely for main-buffer panes:
+                    // the helper would drop the slice anyway, so we avoid
+                    // both the computation and the longer shadow-parser
+                    // lock hold.
+                    //
+                    // NOTE: this branch is currently unreachable in
+                    // production — `handle_set_visibility` is the only
+                    // production caller of `evaluate_output_target` and it
+                    // always passes `visible == false`. Kept on the SSOT so a
+                    // future `visible == true` call site picks up the
+                    // strip / main-alt-split contract for free.
+                    let (screen_bytes, alt_screen) = {
+                        let parser = lock_shadow_parser(&pane.shadow_parser);
+                        let alt = parser.screen().alternate_screen();
+                        let screen_bytes = if alt {
+                            parser.screen().contents_formatted()
+                        } else {
+                            Vec::new()
+                        };
+                        (screen_bytes, alt)
+                    };
+                    let buffered = pane.scrollback.lock().unwrap().read_all();
                     {
+                        // raw_passthrough is drained + cleared (so it does
+                        // not leak across detach cycles) but NOT concatenated
+                        // — replaying captured image / Markdown OSC sequences
+                        // would re-spawn viewers / re-render inline images.
                         let mut buf = pane.raw_passthrough.lock().unwrap();
                         let _ = buf.read_all();
                         buf.clear();
                     }
-                    let mut snapshot = Vec::with_capacity(8 + buffered.len() + screen.len());
-                    snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
-                    snapshot.extend_from_slice(&buffered);
-                    snapshot.extend_from_slice(&screen);
+                    let snapshot =
+                        build_resume_snapshot_bytes(&buffered, &screen_bytes, alt_screen);
                     *target = PaneOutputTarget::Connected(owned_tx.clone());
                     EvalResult::ResumeWithSnapshot { snapshot }
                 }
@@ -416,25 +437,34 @@ pub fn resume_pane_with_permit(
                 }
                 return ResumeOutcome::NoChange;
             }
-            // Phase C FR5 order: clear → scrollback → shadow. Scrollback is
-            // read WITHOUT clearing (FR6) and stripped of rich-content launch
-            // sequences so the resume does not re-spawn viewers / re-render
-            // inline images. The raw_passthrough buffer is drained + cleared
-            // (so it does not leak across detach cycles) but NOT concatenated.
-            let screen = lock_shadow_parser(&pane.shadow_parser)
-                .screen()
-                .contents_formatted();
-            let buffered =
-                strip_replayable_rich_content(&pane.scrollback.lock().unwrap().read_all());
+            // Phase C FR5 order: clear → scrollback → (alt-only) shadow.
+            // Routes through `build_resume_snapshot_bytes` so the strip +
+            // main/alt split logic stays in lockstep with the reattach /
+            // on-demand snapshot SSOT (`build_snapshot_bytes_with_layout`).
+            // Skip `contents_formatted()` entirely for main-buffer panes:
+            // the helper would drop the slice anyway, so we avoid both the
+            // computation and the longer shadow-parser lock hold.
+            let (screen, alt_screen) = {
+                let parser = lock_shadow_parser(&pane.shadow_parser);
+                let alt = parser.screen().alternate_screen();
+                let screen_bytes = if alt {
+                    parser.screen().contents_formatted()
+                } else {
+                    Vec::new()
+                };
+                (screen_bytes, alt)
+            };
+            let buffered = pane.scrollback.lock().unwrap().read_all();
             {
+                // raw_passthrough is drained + cleared (so it does not leak
+                // across detach cycles) but NOT concatenated — replaying the
+                // captured image / Markdown OSC sequences would re-spawn
+                // viewers on every visibility resume.
                 let mut buf = pane.raw_passthrough.lock().unwrap();
                 let _ = buf.read_all();
                 buf.clear();
             }
-            let mut snapshot = Vec::with_capacity(8 + buffered.len() + screen.len());
-            snapshot.extend_from_slice(b"\x1b[H\x1b[2J");
-            snapshot.extend_from_slice(&buffered);
-            snapshot.extend_from_slice(&screen);
+            let snapshot = build_resume_snapshot_bytes(&buffered, &screen, alt_screen);
             permit.send(PtyOutputChunk::pty_output(pane.id, snapshot));
             *target = PaneOutputTarget::Connected(owned_tx.clone());
             ResumeOutcome::Resumed
@@ -769,10 +799,15 @@ mod tests {
         }
     }
 
-    /// TS-14 (revised): Detached -> Connected returns snapshot bytes including
-    /// shadow contents and plain-text ring history, but NOT the captured
-    /// raw_passthrough (replaying it would re-spawn viewers / re-render inline
-    /// images). raw_passthrough is still drained + cleared.
+    /// TS-14 (revised): Detached -> Connected returns snapshot bytes that
+    /// route through `build_resume_snapshot_bytes` (the visibility-resume
+    /// SSOT). For a main-buffer pane (shadow_parser never entered alt-screen)
+    /// the helper drops the daemon vt100 `contents_formatted()` slice and
+    /// rebuilds the visible viewport from scrollback alone — same
+    /// main/alt split contract as the reattach path. Captured
+    /// raw_passthrough must NOT appear (replaying it would re-spawn
+    /// viewers / re-render inline images) and the buffer must still be
+    /// drained + cleared.
     #[test]
     fn test_evaluate_output_target_detached_to_connected_returns_snapshot() {
         let (owned_tx, _rx) = mpsc::channel(16);
@@ -792,12 +827,21 @@ mod tests {
             EvalResult::ResumeWithSnapshot { snapshot } => {
                 assert!(snapshot.starts_with(b"\x1b[H\x1b[2J"));
                 let s = String::from_utf8_lossy(&snapshot);
-                assert!(s.contains("hello-shadow"), "snapshot must include shadow");
                 assert!(
                     snapshot
                         .windows(b"buffered-from-ring".len())
                         .any(|w| w == b"buffered-from-ring"),
                     "snapshot must include ring data"
+                );
+                // Main-buffer pane: the daemon vt100 dump must NOT appear in
+                // the snapshot. `build_resume_snapshot_bytes` follows the
+                // main/alt split — the client rebuilds the visible viewport
+                // from scrollback alone.
+                assert!(
+                    !snapshot
+                        .windows(b"hello-shadow".len())
+                        .any(|w| w == b"hello-shadow"),
+                    "main-buffer resume snapshot must omit the shadow screen dump"
                 );
                 assert!(
                     !s.contains("\u{1b}_Gi=1"),
@@ -972,9 +1016,58 @@ mod tests {
                 .any(|w| w == b"ring-data"),
             "snapshot must contain ring data"
         );
+        // Main-buffer pane (shadow_parser never entered alt-screen): the
+        // daemon vt100 `contents_formatted()` dump must NOT appear in the
+        // snapshot. The client rebuilds the visible viewport from scrollback
+        // alone — this is the resume-path counterpart of the main/alt split
+        // in `build_snapshot_bytes`.
+        assert!(
+            !chunk
+                .data
+                .windows(b"resume-shadow".len())
+                .any(|w| w == b"resume-shadow"),
+            "main-buffer resume snapshot must omit the shadow screen dump"
+        );
 
         // raw_passthrough drained.
         assert!(pane.raw_passthrough.lock().unwrap().is_empty());
+    }
+
+    /// Companion to `test_resume_pane_with_permit_sends_then_swaps`: when
+    /// the shadow parser is in alt-screen mode the resume snapshot DOES
+    /// include the daemon vt100 dump (so the TUI surface is restored).
+    /// Mirror of the alt branch in `build_snapshot_bytes` applied to the
+    /// visibility-resume code path.
+    #[tokio::test]
+    async fn test_resume_pane_with_permit_includes_screen_for_alt_screen() {
+        let (owned_tx, mut rx) = mpsc::channel::<PtyOutputChunk>(4);
+        let target: SharedOutputTarget = Arc::new(StdMutex::new(PaneOutputTarget::Detached {
+            reason: DetachReason::HiddenByVisibility,
+            owner: Some(owned_tx.clone()),
+        }));
+        let pane = MuxPane::new_test(11, 80, 24, target.clone());
+        // Flip the shadow parser into alt-screen mode BEFORE feeding the
+        // screen content so the resume builder follows the alt branch.
+        pane.shadow_parser.lock().unwrap().process(b"\x1b[?1049h");
+        pane.shadow_parser
+            .lock()
+            .unwrap()
+            .process(b"ALT-RESUME-SHADOW");
+
+        let permit = owned_tx.reserve().await.expect("reserve permit");
+        let outcome = resume_pane_with_permit(&pane, &owned_tx, permit);
+        assert!(matches!(outcome, ResumeOutcome::Resumed));
+
+        let chunk = rx.try_recv().expect("snapshot enqueued");
+        assert_eq!(chunk.pane_id, 11);
+        assert!(chunk.data.starts_with(b"\x1b[H\x1b[2J"));
+        assert!(
+            chunk
+                .data
+                .windows(b"ALT-RESUME-SHADOW".len())
+                .any(|w| w == b"ALT-RESUME-SHADOW"),
+            "alt-screen resume snapshot must include the shadow screen dump"
+        );
     }
 
     /// F2: full Both reason cannot be cleared by `resume_pane_with_permit`
@@ -1145,6 +1238,10 @@ mod tests {
 
     /// Reattach (Detached -> Connected) must still produce a snapshot after
     /// the shadow parser mutex was poisoned by a reader-thread panic.
+    ///
+    /// The main-buffer pane drops the shadow slice (same main/alt split as
+    /// `build_resume_snapshot_bytes`), so we feed scrollback bytes instead
+    /// and assert those survive the poisoned lock.
     #[test]
     fn test_evaluate_output_target_survives_poisoned_shadow_parser() {
         let (owned_tx, _rx) = mpsc::channel(16);
@@ -1153,14 +1250,19 @@ mod tests {
             owner: Some(owned_tx.clone()),
         }));
         let pane = MuxPane::new_test(1, 80, 24, target.clone());
+        pane.scrollback.lock().unwrap().write(b"ring-bytes-x");
         pane.shadow_parser.lock().unwrap().process(b"shadow-data");
         poison_shadow_parser(&pane);
 
         let result = evaluate_output_target(&pane, false, true, &owned_tx);
         match result {
             EvalResult::ResumeWithSnapshot { snapshot } => {
-                let s = String::from_utf8_lossy(&snapshot);
-                assert!(s.contains("shadow-data"), "snapshot must include shadow");
+                assert!(
+                    snapshot
+                        .windows(b"ring-bytes-x".len())
+                        .any(|w| w == b"ring-bytes-x"),
+                    "snapshot must include scrollback even after poisoned shadow lock"
+                );
             }
             _ => panic!("expected ResumeWithSnapshot"),
         }

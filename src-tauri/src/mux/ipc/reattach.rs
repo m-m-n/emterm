@@ -11,99 +11,23 @@ use tokio_util::codec::Framed;
 
 use super::codec::MuxCodec;
 use super::protocol::*;
-use crate::mux::scrollback_filter::strip_replayable_rich_content;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     DetachReason, PaneId, PaneOutputTarget, PtyOutputChunk, SharedShadowParser, TitleChangeSender,
     lock_shadow_parser,
 };
-
-/// The clear-and-home prefix every snapshot starts with:
-/// `ESC[3J ESC[H ESC[2J`. `ESC[3J` (ED 3) clears the client's existing
-/// scrollback so an on-demand snapshot REPLACES the client's history instead
-/// of appending to it — the snapshot is ingested via the append-only
-/// `PtyOutput` path, so without this each window switch would duplicate the
-/// scrollback. `ESC[H ESC[2J` then homes the cursor and clears the screen so
-/// the client replays from a known state before the scrollback / screen bytes
-/// arrive.
-///
-/// For `alt_screen == false` (main-buffer panes) the snapshot intentionally
-/// relies on scrollback-only reconstruction after this clear: the daemon
-/// vt100 `contents_formatted()` dump is omitted (see [`build_snapshot_bytes`])
-/// and the client's fresh `term_core` replays the scrollback bytes alone to
-/// reconstruct the visible viewport.
-const SNAPSHOT_CLEAR_HOME: &[u8] = b"\x1b[3J\x1b[H\x1b[2J";
-
-/// Assemble the shared snapshot byte layout used by both the reattach path
-/// and the on-demand `RequestPaneSnapshot` path. The layout branches on
-/// `alt_screen`:
-///
-/// ```text
-/// alt_screen = false (main-buffer pane):
-///     ESC[3J ESC[H ESC[2J + strip(scrollback)          + ESC[?1049l
-///
-/// alt_screen = true  (alt-screen pane):
-///     ESC[3J ESC[H ESC[2J + strip(scrollback) + screen + ESC[?1049h
-/// ```
-///
-/// Rationale for the split:
-///
-/// - **Main-buffer panes** carry the complete PTY byte history in
-///   `scrollback` (the daemon's per-pane ring records every byte the program
-///   wrote — including DECSTBM region toggles and progress-bar redraws), so a
-///   fresh client `term_core` replays to the correct visible state on its
-///   own. The daemon vt100 `contents_formatted()` dump is omitted so the
-///   client's view does not pick up trashed cells produced by the daemon's
-///   shadow parser — a real-world symptom was apt's progress bar landing on
-///   log-line rows after a tab round-trip.
-/// - **Alt-screen panes** are the opposite: alt-buffer output is *not*
-///   written to scrollback (see `pty_spawn.rs:373`), so the daemon vt100
-///   dump is the only source for the visible TUI surface. It is appended
-///   after the scrollback so the alt-screen UI paints last, and the trailing
-///   `ESC[?1049h` flips the client into alt mode so scrolling/keys behave
-///   correctly.
-///
-/// In both branches the trailing `ESC[?1049{h,l}` normalizes the client's
-/// alt-screen flag to the captured pane's actual buffer: `contents_formatted()`
-/// never emits the buffer-switch toggle, and the snapshot is applied via the
-/// append path (no core reset), so without this the client's alt-screen flag
-/// would persist from whatever window it last viewed.
-///
-/// The `scrollback` bytes are passed through [`strip_replayable_rich_content`]
-/// before assembly so a window switch / reattach replays plain-text history
-/// without re-spawning rich-content viewers (Markdown / image / JSON / YAML)
-/// or re-rendering inline images. The `screen` bytes are
-/// `contents_formatted()` (cells only, no viewer launch sequences) so they
-/// are passed through unchanged when included.
-///
-/// Both callers ([`build_shadow_parser_snapshot`] for the reattach path and
-/// `handle_request_pane_snapshot` for the on-demand path) route through this
-/// one function so the byte ordering stays a single source of truth.
-pub(super) fn build_snapshot_bytes(scrollback: &[u8], screen: &[u8], alt_screen: bool) -> Vec<u8> {
-    let scrollback = strip_replayable_rich_content(scrollback);
-
-    let alt_mode: &[u8] = if alt_screen {
-        b"\x1b[?1049h"
-    } else {
-        b"\x1b[?1049l"
-    };
-    // Main-buffer panes rebuild from scrollback alone; alt-screen panes need
-    // the daemon vt100 dump because alt-buffer output is not written to
-    // scrollback (see pty_spawn.rs:373).
-    let screen_to_include: &[u8] = if alt_screen { screen } else { &[] };
-    let mut combined = Vec::with_capacity(
-        SNAPSHOT_CLEAR_HOME.len() + scrollback.len() + screen_to_include.len() + alt_mode.len(),
-    );
-    combined.extend_from_slice(SNAPSHOT_CLEAR_HOME);
-    combined.extend_from_slice(&scrollback);
-    combined.extend_from_slice(screen_to_include);
-    combined.extend_from_slice(alt_mode);
-    combined
-}
+use crate::mux::snapshot_bytes::build_snapshot_bytes;
 
 /// Build a self-contained ANSI byte sequence that reproduces the current
 /// screen state tracked by the given shadow parser, prefixed with the pane's
 /// scrollback so the client can scroll to past output.
+///
+/// The byte-layout helpers (`build_snapshot_bytes`, `build_resume_snapshot_bytes`)
+/// live in [`crate::mux::snapshot_bytes`] so the SSOT can be shared with the
+/// visibility-resume path (`mux::session::pane::resume_pane_with_permit`)
+/// without creating a `mux::session` ↔ `mux::ipc` import cycle. This wrapper
+/// stays here because it depends on `SharedShadowParser` from
+/// `mux::session::pane`.
 ///
 /// This funnels through [`build_snapshot_bytes`] and inherits its main/alt
 /// split: for main-buffer panes the daemon vt100 `contents_formatted()` dump
@@ -402,30 +326,6 @@ mod tests {
         MuxPane::new_test(id, 80, 24, output_target)
     }
 
-    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-        !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
-    }
-
-    /// A scrollback that contains an OSC 777 markdown viewer launch must not
-    /// appear in the assembled snapshot (it would re-spawn the viewer).
-    ///
-    /// Driven via the `alt_screen = true` branch so the `screen` slice is
-    /// included in the output: the layout-split contract (main-buffer panes
-    /// omit the screen slice) is exercised by
-    /// `build_snapshot_bytes_main_buffer_omits_screen_part` instead.
-    #[test]
-    fn build_snapshot_bytes_strips_rich_content_from_scrollback() {
-        let scrollback = b"prompt$ \x1b]777;emterm;markdown;begin\x07done";
-        let out = build_snapshot_bytes(scrollback, b"SCREEN", true);
-        assert!(
-            !contains(&out, b"\x1b]777;emterm;markdown"),
-            "snapshot must not contain the viewer launch sequence"
-        );
-        assert!(contains(&out, b"prompt$ "), "plain text history preserved");
-        assert!(contains(&out, b"done"), "trailing plain text preserved");
-        assert!(contains(&out, b"SCREEN"), "screen contents preserved");
-    }
-
     // ── TS-4 / TS-6: on-demand snapshot builder (FR1) ────────────────────
 
     /// TS-4: the on-demand snapshot builder emits scrollback BEFORE the
@@ -495,60 +395,15 @@ mod tests {
         );
     }
 
-    /// The shared layout helper composes the snapshot byte stream and
-    /// branches on `alt_screen`:
-    ///
-    /// - `alt_screen = false` (main-buffer pane): clear prefix + scrollback
-    ///   + `ESC[?1049l`, with NO screen slice. The client rebuilds the
-    ///   visible viewport from scrollback alone (FR1).
-    /// - `alt_screen = true` (alt-screen pane): clear prefix + scrollback +
-    ///   screen + `ESC[?1049h`, identical to the pre-fix layout (FR2).
-    ///
-    /// Empty-inputs cases stay well-formed in both branches.
-    #[test]
-    fn build_snapshot_bytes_layout_is_clear_scrollback_screen() {
-        // Main-buffer pane (alt_screen = false): screen slice omitted,
-        // trailing ESC[?1049l.
-        let out = build_snapshot_bytes(b"SB", b"SC", false);
-        assert_eq!(out, b"\x1b[3J\x1b[H\x1b[2JSB\x1b[?1049l");
-        // Empty inputs: clear prefix + alt-mode normalization.
-        assert_eq!(
-            build_snapshot_bytes(b"", b"", false),
-            b"\x1b[3J\x1b[H\x1b[2J\x1b[?1049l"
-        );
-        // Alt-screen pane (alt_screen = true): screen slice included,
-        // trailing ESC[?1049h.
-        let out_alt = build_snapshot_bytes(b"SB", b"SC", true);
-        assert_eq!(out_alt, b"\x1b[3J\x1b[H\x1b[2JSBSC\x1b[?1049h");
-        assert_eq!(
-            build_snapshot_bytes(b"", b"", true),
-            b"\x1b[3J\x1b[H\x1b[2J\x1b[?1049h"
-        );
-    }
-
-    /// FR1 (main-buffer snapshot omits screen dump): for `alt_screen = false`
-    /// the returned bytes are exactly
-    /// `SNAPSHOT_CLEAR_HOME + stripped_scrollback + ESC[?1049l`, and the
-    /// supplied `screen` slice must NOT appear anywhere in the output.
-    #[test]
-    fn build_snapshot_bytes_main_buffer_omits_screen_part() {
-        let scrollback = b"history-line";
-        let screen = b"SCREEN-SHOULD-BE-ABSENT";
-        let out = build_snapshot_bytes(scrollback, screen, false);
-
-        // Screen slice must NOT appear anywhere in the output.
-        assert!(
-            !contains(&out, screen),
-            "main-buffer snapshot must not contain the supplied screen slice"
-        );
-
-        // The output must be exactly clear + scrollback + ESC[?1049l.
-        let mut expected = Vec::new();
-        expected.extend_from_slice(b"\x1b[3J\x1b[H\x1b[2J");
-        expected.extend_from_slice(scrollback);
-        expected.extend_from_slice(b"\x1b[?1049l");
-        assert_eq!(out, expected);
-    }
+    // ── Byte-layout helpers moved to `crate::mux::snapshot_bytes` ─────────
+    //
+    // The pure-byte tests for `build_snapshot_bytes` and
+    // `build_resume_snapshot_bytes` (strip / main-alt split / clear prefix /
+    // alt-mode toggle) live alongside the helpers in
+    // `src-tauri/src/mux/snapshot_bytes.rs`. The two
+    // `build_shadow_parser_snapshot_*` tests above stay here because they
+    // exercise the wrapper that funnels a `SharedShadowParser` through
+    // `build_snapshot_bytes`.
 
     /// Test: collect_reattach_data returns entries for 2 panes in 2 windows.
     /// Simulates the reattach scenario where both panes are in Connected(dead_tx) state.

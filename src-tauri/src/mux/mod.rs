@@ -32,6 +32,7 @@ pub mod scrollback_buffer;
 pub mod scrollback_filter;
 pub mod session;
 pub mod snapshot;
+pub mod snapshot_bytes;
 pub mod tmux_conf;
 // `tmux_import` writes to `crate::settings_store` (GUI-only), so the submodule
 // itself is GUI-only. Its sole caller (`main.rs:run_gui`) is already gated on
