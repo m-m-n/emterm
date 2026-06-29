@@ -22,8 +22,10 @@ see `LICENSE` in this directory.
 |---|---|---|
 | `NotoColorEmoji.ttf` | <https://github.com/googlefonts/noto-emoji> | `ede3ac600162ca750e2aba610285f06f30d8c0dd198bcec1d53cb6efe660306c` |
 | `NotoSansCJKjp-Regular.otf` | <https://github.com/notofonts/noto-cjk> | `68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5` |
+| `NotoSansCJKjp-Bold.otf` | <https://github.com/notofonts/noto-cjk> | `e53dcb0dcb2922e45d01aae1ebd2f382bb81d4229b18b6b883bd170678af1f76` |
 | `NotoEmoji-Regular.ttf` | <https://github.com/googlefonts/noto-emoji> | (added in font-bundle-redesign Phase 2) |
-| `Inconsolata-Regular.ttf` | <https://github.com/googlefonts/Inconsolata> | (added in font-bundle-redesign Phase 2) |
+| `Inconsolata-Regular.otf` | <https://github.com/googlefonts/Inconsolata> | `5273275eab5b74743c799b8bda94644b10cfa861ef86badcd37d91cf9eac8a1c` |
+| `Inconsolata-Bold.otf` | <https://github.com/googlefonts/Inconsolata> | `4981b5ed672b90221525976bdebd53f66d6b758857aad021245acbae8e2efb9b` |
 | `NotoSansSymbols2-Regular.ttf` | <https://github.com/notofonts/noto-fonts> | `e672040e4eb73c0d9ac841411eea34be3c1e12e81e88962786489fffae4fe973` |
 
 The pinned SHA-256 values are the verification anchor in

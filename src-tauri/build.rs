@@ -73,8 +73,10 @@ fn check_bundled_fonts() {
     let required = [
         "assets/fonts/NotoColorEmoji.ttf",
         "assets/fonts/NotoSansCJKjp-Regular.otf",
+        "assets/fonts/NotoSansCJKjp-Bold.otf",
         "assets/fonts/NotoEmoji-Regular.ttf",
-        "assets/fonts/Inconsolata-Regular.ttf",
+        "assets/fonts/Inconsolata-Regular.otf",
+        "assets/fonts/Inconsolata-Bold.otf",
         "assets/fonts/NotoSansSymbols2-Regular.ttf",
     ];
     for path in required {

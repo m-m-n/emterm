@@ -143,13 +143,21 @@ fetch_one "NotoSansCJKjp-Regular.otf" \
     "https://raw.githubusercontent.com/googlefonts/noto-cjk/Sans2.004/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf" \
     "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5"
 
+fetch_one "NotoSansCJKjp-Bold.otf" \
+    "https://raw.githubusercontent.com/googlefonts/noto-cjk/Sans2.004/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf" \
+    "e53dcb0dcb2922e45d01aae1ebd2f382bb81d4229b18b6b883bd170678af1f76"
+
 fetch_one "NotoEmoji-Regular.ttf" \
     "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.034/fonts/NotoEmoji-Regular.ttf" \
     "415dc6290378574135b64c808dc640c1df7531973290c4970c51fdeb849cb0c5"
 
-fetch_one "Inconsolata-Regular.ttf" \
-    "https://raw.githubusercontent.com/googlefonts/Inconsolata/v3.000/fonts/ttf/Inconsolata-Regular.ttf" \
-    "127875d255d4c5973ca57267a43bb9d1c04397e6c7d236984a595b6cdcb12b7c"
+fetch_one "Inconsolata-Regular.otf" \
+    "https://raw.githubusercontent.com/googlefonts/Inconsolata/v3.000/fonts/otf/Inconsolata-Regular.otf" \
+    "5273275eab5b74743c799b8bda94644b10cfa861ef86badcd37d91cf9eac8a1c"
+
+fetch_one "Inconsolata-Bold.otf" \
+    "https://raw.githubusercontent.com/googlefonts/Inconsolata/v3.000/fonts/otf/Inconsolata-Bold.otf" \
+    "4981b5ed672b90221525976bdebd53f66d6b758857aad021245acbae8e2efb9b"
 
 fetch_one "NotoSansSymbols2-Regular.ttf" \
     "https://raw.githubusercontent.com/notofonts/noto-fonts/v20201206-phase3/hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf" \

@@ -701,55 +701,65 @@ impl App {
         //    automatically without an explicit local.
         let (bundled_cjk_id, emoji_id, bundled_mono_emoji_id, bundled_base_id, _symbols_id) =
             resolver.register_bundled();
+        // Bundled Bold cuts so SGR-bold renders with real Bold weight even
+        // when the host has no Inconsolata / Noto Sans JP installation.
+        // Wired into the chain via `set_bold_variant` below.
+        let (bundled_base_bold_id, bundled_cjk_bold_id) = resolver.register_bundled_bold_faces();
 
         // Host-font preferences sourced from `settings.font_family_fallback`:
         //   fallback[0] -> base (Latin / monospace)
         //   fallback[1] -> CJK fallback
-        // Built-in defaults ("Inconsolata" / "Noto Sans JP") apply
-        // when `settings.json` does not override them, matching the
-        // resolved family list the legacy WebView build picks for the
-        // same configuration. The bundled CJK font's Latin sub-set is
-        // not monospaced, so falling back to it for ASCII produces
-        // visibly jagged grid alignment — the resolver returns `None`
-        // when the requested family is absent on the host, and the
-        // chain root degrades to the bundled CJK font in that case
+        // Both slots are `Option<String>`: when the user has not specified
+        // a family in that slot, the host scan is skipped entirely and the
+        // bundled face wins — otherwise an installed `Inconsolata` /
+        // `Noto Sans JP` would silently override the bundled fonts even
+        // for users with an empty settings.json. The bundled CJK font's
+        // Latin sub-set is not monospaced, so the chain still keeps the
+        // bundled Inconsolata as the base when no host family is requested
         // (see `base_id` below).
         #[cfg(not(test))]
-        let base_family = settings
+        let base_family: Option<String> = settings
             .font_family_fallback
             .first()
-            .map(String::as_str)
-            .unwrap_or("Inconsolata")
-            .to_string();
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         #[cfg(not(test))]
-        let cjk_family = settings
+        let cjk_family: Option<String> = settings
             .font_family_fallback
             .get(1)
-            .map(String::as_str)
-            .unwrap_or("Noto Sans JP")
-            .to_string();
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         #[cfg(not(test))]
-        let inconsolata_id = resolver.register_system_family(&base_family, FontRole::Base);
+        let inconsolata_id = base_family
+            .as_deref()
+            .and_then(|f| resolver.register_system_family(f, FontRole::Base));
         #[cfg(test)]
         let inconsolata_id: Option<FontId> = None;
 
         // SGR-bold faces: register the real Bold cut of the base / CJK
-        // families when the host has one. `None` (family ships no face
-        // of weight ≥ 600) simply leaves bold cells on the regular face.
+        // families when the user requested a host family AND that family
+        // ships a face of weight ≥ 600. Either condition failing leaves
+        // bold cells on the regular face.
         #[cfg(not(test))]
-        let base_bold_id = inconsolata_id
-            .and_then(|_| resolver.register_system_family_bold(&base_family, FontRole::Base));
+        let base_bold_id = match (base_family.as_deref(), inconsolata_id) {
+            (Some(f), Some(_)) => resolver.register_system_family_bold(f, FontRole::Base),
+            _ => None,
+        };
         #[cfg(test)]
         let base_bold_id: Option<FontId> = None;
 
         #[cfg(not(test))]
-        let noto_sans_jp_id = resolver.register_system_family(&cjk_family, FontRole::Cjk);
+        let noto_sans_jp_id = cjk_family
+            .as_deref()
+            .and_then(|f| resolver.register_system_family(f, FontRole::Cjk));
         #[cfg(test)]
         let noto_sans_jp_id: Option<FontId> = None;
 
         #[cfg(not(test))]
-        let cjk_bold_id = noto_sans_jp_id
-            .and_then(|_| resolver.register_system_family_bold(&cjk_family, FontRole::Cjk));
+        let cjk_bold_id = match (cjk_family.as_deref(), noto_sans_jp_id) {
+            (Some(f), Some(_)) => resolver.register_system_family_bold(f, FontRole::Cjk),
+            _ => None,
+        };
         #[cfg(test)]
         let cjk_bold_id: Option<FontId> = None;
 
@@ -886,22 +896,34 @@ impl App {
         extras.push(bundled_mono_emoji_id);
         let preferred_emoji_id = emoji_id;
         #[cfg(not(test))]
-        if let Some(id) = inconsolata_id {
-            log::info!("font.base = {} (id={:?})", base_family, id);
-        } else {
-            log::warn!(
-                "font.base = bundled Inconsolata ({:?} not found on host)",
-                base_family
-            );
+        match (&base_family, inconsolata_id) {
+            (Some(family), Some(id)) => {
+                log::info!("font.base = {} (id={:?})", family, id);
+            }
+            (Some(family), None) => {
+                log::warn!(
+                    "font.base = bundled Inconsolata ({:?} not found on host)",
+                    family
+                );
+            }
+            (None, _) => {
+                log::info!("font.base = bundled Inconsolata (no user override)");
+            }
         }
         #[cfg(not(test))]
-        if let Some(id) = noto_sans_jp_id {
-            log::info!("font.jp = {} (id={:?})", cjk_family, id);
-        } else {
-            log::warn!(
-                "font.jp = bundled Noto Sans CJK JP ({:?} not found on host)",
-                cjk_family
-            );
+        match (&cjk_family, noto_sans_jp_id) {
+            (Some(family), Some(id)) => {
+                log::info!("font.jp = {} (id={:?})", family, id);
+            }
+            (Some(family), None) => {
+                log::warn!(
+                    "font.jp = bundled Noto Sans CJK JP ({:?} not found on host)",
+                    family
+                );
+            }
+            (None, _) => {
+                log::info!("font.jp = bundled Noto Sans CJK JP (no user override)");
+            }
         }
         log::info!("font.emoji = bundled Noto Color Emoji (id={:?})", emoji_id);
         let mut chain = FallbackChain::new(base_id, extras);
@@ -918,15 +940,38 @@ impl App {
         // `FallbackChain::resolve_for_cluster`.
         chain.set_mono_emoji(bundled_mono_emoji_id);
         // Wire the real bold faces so SGR-bold cells render with them.
+        // Bundled Bold cuts always cover the bundled Regular faces so the
+        // default config (no system override) still renders bold correctly.
+        chain.set_bold_variant(bundled_base_id, bundled_base_bold_id);
+        chain.set_bold_variant(bundled_cjk_id, bundled_cjk_bold_id);
+        log::info!(
+            "font.base.bold = bundled Inconsolata (id={:?})",
+            bundled_base_bold_id
+        );
+        log::info!(
+            "font.jp.bold = bundled Noto Sans CJK JP (id={:?})",
+            bundled_cjk_bold_id
+        );
+        // Layer the host-installed Bold cuts on top when the user asked for
+        // a system family and it ships a weight ≥ 600 face. These shadow
+        // the bundled wiring above only for the system Regular ids.
         #[cfg(not(test))]
         if let (Some(regular), Some(bold)) = (inconsolata_id, base_bold_id) {
             chain.set_bold_variant(regular, bold);
-            log::info!("font.base.bold = {} (id={:?})", base_family, bold);
+            log::info!(
+                "font.base.bold = {} (id={:?})",
+                base_family.as_deref().unwrap_or(""),
+                bold
+            );
         }
         #[cfg(not(test))]
         if let (Some(regular), Some(bold)) = (noto_sans_jp_id, cjk_bold_id) {
             chain.set_bold_variant(regular, bold);
-            log::info!("font.jp.bold = {} (id={:?})", cjk_family, bold);
+            log::info!(
+                "font.jp.bold = {} (id={:?})",
+                cjk_family.as_deref().unwrap_or(""),
+                bold
+            );
         }
         #[cfg(test)]
         {
