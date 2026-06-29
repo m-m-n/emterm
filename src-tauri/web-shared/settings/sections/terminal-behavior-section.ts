@@ -13,6 +13,7 @@ import {
   renderSelect,
   renderToggle,
   renderSlider,
+  renderNumberInput,
 } from "../settings-components";
 import type { SectionContext } from "./types";
 
@@ -299,8 +300,8 @@ export function renderTerminalBehaviorSection(
     ctx.addContentListener,
   );
 
-  // OSC 52 Clipboard Max Size (slider)
-  renderSlider(
+  // OSC 52 Clipboard Max Size (number input)
+  renderNumberInput(
     panel,
     {
       key: "clipboard-max-size-osc52",
@@ -309,6 +310,7 @@ export function renderTerminalBehaviorSection(
       min: 1,
       max: 50,
       step: 1,
+      unit: "MB",
       hint: t("settings.terminal.clipboardMaxSizeOsc52Hint"),
       description: t("settings.terminal.clipboardMaxSizeOsc52Desc"),
       onInput: () => {},

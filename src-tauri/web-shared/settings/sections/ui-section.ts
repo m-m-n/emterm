@@ -123,7 +123,7 @@ export function renderUiSection(panel: HTMLElement, ctx: SectionContext): void {
       key: "ui-font-family",
       label: t("settings.ui.fontFamily"),
       value: settings.ui_font_family,
-      placeholder: "Roboto",
+      placeholder: "Noto Sans JP",
       hint: t("settings.ui.fontFamilyHint"),
       description: t("settings.ui.fontFamilyDesc"),
       category: "ui",
