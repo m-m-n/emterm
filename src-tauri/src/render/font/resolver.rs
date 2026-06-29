@@ -20,6 +20,12 @@ use super::traits::FontId;
 pub const BUNDLED_CJK_FONT: &[u8] =
     include_bytes!("../../../assets/fonts/NotoSansCJKjp-Regular.otf");
 
+/// Bundled CJK Bold face bytes. Wired as the bold variant of the bundled
+/// CJK Regular so SGR-bold CJK cells render with real Bold weight even
+/// when the host lacks a `Noto Sans JP` Bold installation.
+pub const BUNDLED_CJK_BOLD_FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/NotoSansCJKjp-Bold.otf");
+
 /// Bundled color emoji font bytes (CBDT / COLR).
 pub const BUNDLED_EMOJI_COLOR_FONT: &[u8] =
     include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf");
@@ -31,8 +37,22 @@ pub const BUNDLED_EMOJI_MONO_FONT: &[u8] =
 
 /// Bundled base monospace font bytes (Inconsolata). Used as the last-resort
 /// ASCII / Latin face when no system monospace family is configured.
+///
+/// CFF (.otf) format chosen over TrueType (.ttf): at terminal cell sizes
+/// swash's TT-bytecode hinting aggressively snaps Bold stems to the pixel
+/// grid (verified via histogram probe: full-ink/edge-AA ratio jumps from
+/// 1.2 to 2.2 vs the CFF cut), reading as "no antialiasing" on bold cells.
+/// The CFF outlines keep their AA gradients at small sizes.
 pub const BUNDLED_BASE_FONT: &[u8] =
-    include_bytes!("../../../assets/fonts/Inconsolata-Regular.ttf");
+    include_bytes!("../../../assets/fonts/Inconsolata-Regular.otf");
+
+/// Bundled base monospace Bold face bytes. Wired as the bold variant of
+/// the bundled Inconsolata Regular so SGR-bold Latin cells render with
+/// real Bold weight even when the host lacks an Inconsolata installation.
+///
+/// CFF (.otf) for the same swash-hinting reasons as [`BUNDLED_BASE_FONT`].
+pub const BUNDLED_BASE_BOLD_FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/Inconsolata-Bold.otf");
 
 /// Bundled symbols font bytes (Noto Sans Symbols 2). Covers code points the
 /// other bundled faces miss — prompt arrows (`❯` U+276F), media controls
@@ -236,6 +256,24 @@ impl Resolver {
         self.by_role.entry(role).or_default().push(id);
         self.by_family.entry(family).or_insert(id);
         id
+    }
+
+    /// Register the bundled Bold cuts of the base (Inconsolata) and CJK
+    /// (Noto Sans CJK JP) families. Returns `(base_bold, cjk_bold)`. The
+    /// families are tagged `(bundled bold)` so `by_family` lookups never
+    /// alias to them for ordinary regular-face requests.
+    pub fn register_bundled_bold_faces(&mut self) -> (FontId, FontId) {
+        let base = self.register_bytes(
+            FontRole::Base,
+            "Inconsolata (bundled bold)",
+            Arc::<[u8]>::from(BUNDLED_BASE_BOLD_FONT),
+        );
+        let cjk = self.register_bytes(
+            FontRole::Cjk,
+            "Noto Sans CJK JP (bundled bold)",
+            Arc::<[u8]>::from(BUNDLED_CJK_BOLD_FONT),
+        );
+        (base, cjk)
     }
 
     /// Register the five bundled fonts (Noto Sans CJK JP, Noto Color
@@ -464,6 +502,35 @@ mod tests {
         assert_eq!(r.by_role(FontRole::MonochromeEmoji).count(), 1);
         assert_eq!(r.by_role(FontRole::Base).count(), 1);
         assert_eq!(r.by_role(FontRole::Secondary).count(), 1);
+    }
+
+    /// Bundled Bold faces register as distinct ids tagged
+    /// `(bundled bold)` so `by_family` lookups never alias them in
+    /// place of the regular faces.
+    #[test]
+    fn register_bundled_bold_faces_registers_distinct_ids() {
+        let mut r = Resolver::new();
+        let (cjk_reg, _color, _mono, base_reg, _symbols) = r.register_bundled();
+        let (base_bold, cjk_bold) = r.register_bundled_bold_faces();
+        for (a, b) in [
+            (base_reg, base_bold),
+            (cjk_reg, cjk_bold),
+            (base_bold, cjk_bold),
+        ] {
+            assert_ne!(a, b);
+        }
+        let base_bold_entry = r
+            .by_family("Inconsolata (bundled bold)")
+            .expect("base bold by family");
+        assert_eq!(base_bold_entry.role, FontRole::Base);
+        assert_eq!(base_bold_entry.id, base_bold);
+        assert!(!base_bold_entry.bytes.is_empty());
+        let cjk_bold_entry = r
+            .by_family("Noto Sans CJK JP (bundled bold)")
+            .expect("cjk bold by family");
+        assert_eq!(cjk_bold_entry.role, FontRole::Cjk);
+        assert_eq!(cjk_bold_entry.id, cjk_bold);
+        assert!(!cjk_bold_entry.bytes.is_empty());
     }
 
     #[test]
