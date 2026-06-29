@@ -75,6 +75,7 @@ fn check_bundled_fonts() {
         "assets/fonts/NotoSansCJKjp-Regular.otf",
         "assets/fonts/NotoEmoji-Regular.ttf",
         "assets/fonts/Inconsolata-Regular.ttf",
+        "assets/fonts/NotoSansSymbols2-Regular.ttf",
     ];
     for path in required {
         if !std::path::Path::new(path).exists() {

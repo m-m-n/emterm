@@ -3737,6 +3737,7 @@ mod tests {
             let chain = &fonts.families[&family];
             assert!(chain.iter().any(|n| n == "EmtermBundledCJK"));
             assert!(chain.iter().any(|n| n == "EmtermBundledEmoji"));
+            assert!(chain.iter().any(|n| n == "EmtermBundledSymbols"));
             // …but never as the primary face.
             assert_ne!(chain[0], "EmtermBundledCJK");
         }

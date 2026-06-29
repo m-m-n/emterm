@@ -17,7 +17,7 @@ Remove bundled font binaries from git, fetch them via a versioned + SHA256-pinne
 As an emterm developer, I want `make build` to succeed immediately after a fresh clone, so that I do not need to manually fetch fonts.
 
 **Acceptance Criteria:**
-- [ ] `make setup` or `make fetch-fonts` populates `src-tauri/assets/fonts/` with all four bundled fonts.
+- [ ] `make setup` or `make fetch-fonts` populates `src-tauri/assets/fonts/` with all five bundled fonts.
 - [ ] `make build` triggered without prior fetch first downloads fonts, then builds.
 - [ ] Re-running `make fetch-fonts` with up-to-date files is a no-op (idempotent).
 
@@ -57,7 +57,7 @@ As a release engineer, I want every CI build to produce byte-identical font asse
 
 - **FR1:** A `scripts/fetch-fonts.sh` shell script downloads each font from a fixed HTTPS URL pinned to an upstream Git tag (a GitHub Releases asset URL or a `raw.githubusercontent.com` tag ref) and verifies SHA256 before placing the file under `src-tauri/assets/fonts/`. Idempotent: skip files whose SHA256 already matches.
 - **FR2:** Remove `NotoColorEmoji.ttf` and `NotoSansCJKjp-Regular.otf` from git history; add `src-tauri/assets/fonts/.gitignore` excluding `*.ttf` and `*.otf` while retaining `LICENSE` and `README.md`.
-- **FR3:** Add Noto Emoji (monochrome) and Inconsolata to the bundled font set. Both are embedded via `include_bytes!` under the `gui` feature gate only.
+- **FR3:** Add Noto Emoji (monochrome), Inconsolata, and Noto Sans Symbols 2 to the bundled font set. All are embedded via `include_bytes!` under the `gui` feature gate only. Noto Sans Symbols 2 covers prompt arrows (`❯` U+276F), media controls (`⏵` U+23F5), and braille spinners (`⠋` U+2807 etc.) that the chrome surfaces (tab bar / title bar / status bar) need but the CJK and emoji bundles miss.
 - **FR4:** Split the emoji font configuration into color and monochrome keys:
     - `font_family_emoji_color` (default: `Noto Color Emoji`)
     - `font_family_emoji_monochrome` (default: `Noto Emoji`)
@@ -91,7 +91,7 @@ As a release engineer, I want every CI build to produce byte-identical font asse
 - **NFR4 - Backward Compatibility:** Existing `settings.json` files load without user intervention; auto-migration preserves prior values for the color side.
 - **NFR5 - Offline Development:** After a successful fetch, subsequent builds (including `cargo build --release`) require no network access. Re-running `fetch-fonts.sh` while offline succeeds when all files are already present and SHA256-matched.
 - **NFR6 - Startup Performance:** Font resolver scan remains within the existing NFR (< 500 ms with `EMTERM_FONT_PERF=1` observable). The added user-directory probe must contribute < 50 ms in the typical case (empty directory or 1–4 files).
-- **NFR7 - Binary Size:** GUI binary size increase from adding Noto Emoji + Inconsolata ≤ 2 MB.
+- **NFR7 - Binary Size:** GUI binary size increase from adding Noto Emoji + Inconsolata + Noto Sans Symbols 2 ≤ 3 MB.
 - **NFR8 - Security:** Only HTTPS download URLs. SHA256 checks are mandatory; no `--insecure` / `-k` curl flags.
 
 ## Implementation Approach
@@ -114,7 +114,8 @@ As a release engineer, I want every CI build to produce byte-identical font asse
 ├─────────────────────────────────────────────────┤
 │  Bundled bytes (include_bytes!)                  │
 │   - NotoSansCJKjp, NotoColorEmoji, NotoEmoji,    │
-│     Inconsolata (under #[cfg(feature="gui")])    │
+│     Inconsolata, NotoSansSymbols2                │
+│     (under #[cfg(feature="gui")])                │
 ├─────────────────────────────────────────────────┤
 │  Build-time (build.rs + scripts/fetch-fonts.sh)  │
 │   - fetch (HTTPS + SHA256) → assets/fonts/       │
@@ -128,7 +129,7 @@ As a release engineer, I want every CI build to produce byte-identical font asse
 ```
 make fetch-fonts
   → scripts/fetch-fonts.sh
-     for each font in (NotoColorEmoji, NotoSansCJKjp, NotoEmoji, Inconsolata):
+     for each font in (NotoColorEmoji, NotoSansCJKjp, NotoEmoji, Inconsolata, NotoSansSymbols2):
         if local SHA256 != expected:
            curl --fail -sSL <url> -o <tmp>
            verify SHA256(<tmp>) == expected
@@ -156,8 +157,9 @@ src-tauri/
 │       ├── README.md               # UPDATED: setup instructions
 │       ├── NotoColorEmoji.ttf      # gitignored, fetched
 │       ├── NotoSansCJKjp-Regular.otf  # gitignored, fetched
-│       ├── NotoEmoji-Regular.ttf   # NEW, gitignored, fetched
-│       └── Inconsolata-Regular.ttf # NEW, gitignored, fetched
+│       ├── NotoEmoji-Regular.ttf   # gitignored, fetched
+│       ├── Inconsolata-Regular.ttf # gitignored, fetched
+│       └── NotoSansSymbols2-Regular.ttf  # gitignored, fetched
 ├── build.rs                        # UPDATED: assert font files exist (gui)
 ├── Cargo.toml                      # UPDATED: bundle constants
 └── src/
@@ -256,6 +258,8 @@ pub const BUNDLED_EMOJI_MONO_FONT: &[u8] =
     include_bytes!("../../../assets/fonts/NotoEmoji-Regular.ttf");
 pub const BUNDLED_BASE_FONT: &[u8] =
     include_bytes!("../../../assets/fonts/Inconsolata-Regular.ttf");
+pub const BUNDLED_SYMBOLS_FONT: &[u8] =
+    include_bytes!("../../../assets/fonts/NotoSansSymbols2-Regular.ttf");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FontRole {
@@ -263,16 +267,18 @@ pub enum FontRole {
     Cjk,
     ColorEmoji,       // RENAMED from Emoji
     MonochromeEmoji,  // NEW
-    Secondary,
+    Secondary,        // covers BUNDLED_SYMBOLS_FONT (Noto Sans Symbols 2)
     User,
 }
 ```
 
-`Resolver::register_bundled()` returns four ids:
+`Resolver::register_bundled()` returns five ids:
 ```rust
 pub fn register_bundled(&mut self)
-    -> (FontId /*cjk*/, FontId /*color*/, FontId /*mono*/, FontId /*base*/);
+    -> (FontId /*cjk*/, FontId /*color*/, FontId /*mono*/, FontId /*base*/, FontId /*symbols*/);
 ```
+
+The fifth id (Symbols 2) is registered under `FontRole::Secondary`, so the fallback chain composer picks it up automatically for code points the other four bundles miss.
 
 The user-directory probe runs before the system scan:
 ```rust
@@ -369,6 +375,7 @@ fn check_bundled_fonts() {
         "assets/fonts/NotoSansCJKjp-Regular.otf",
         "assets/fonts/NotoEmoji-Regular.ttf",
         "assets/fonts/Inconsolata-Regular.ttf",
+        "assets/fonts/NotoSansSymbols2-Regular.ttf",
     ];
     for path in required {
         if !std::path::Path::new(path).exists() {
@@ -389,7 +396,8 @@ FONT_FILES = \
     src-tauri/assets/fonts/NotoColorEmoji.ttf \
     src-tauri/assets/fonts/NotoSansCJKjp-Regular.otf \
     src-tauri/assets/fonts/NotoEmoji-Regular.ttf \
-    src-tauri/assets/fonts/Inconsolata-Regular.ttf
+    src-tauri/assets/fonts/Inconsolata-Regular.ttf \
+    src-tauri/assets/fonts/NotoSansSymbols2-Regular.ttf
 
 .PHONY: fetch-fonts
 fetch-fonts:
@@ -449,7 +457,7 @@ build: fetch-fonts
 - [ ] `AppSettings::migrate_legacy()` moves `font_family_emoji` → `font_family_emoji_color` and returns `true`
 - [ ] `AppSettings::migrate_legacy()` initializes `font_family_emoji_monochrome` to `Noto Emoji` when absent
 - [ ] `AppSettings::migrate_legacy()` returns `false` for a settings file already on the new schema (idempotent)
-- [ ] `Resolver::register_bundled()` registers four distinct ids covering CJK, ColorEmoji, MonochromeEmoji, Base
+- [ ] `Resolver::register_bundled()` registers five distinct ids covering CJK, ColorEmoji, MonochromeEmoji, Base, Secondary (Symbols 2)
 - [ ] `Resolver::scan_user_dir()` registers `*.ttf` / `*.otf` from the path and skips other extensions
 
 ### Integration Tests
@@ -549,6 +557,7 @@ Runtime error (user dir)
     - `NotoSansCJKjp-Regular.otf` — `googlefonts/noto-cjk` @ `Sans2.004`
     - `NotoEmoji-Regular.ttf` — `googlefonts/noto-emoji` @ `v2.034`
     - `Inconsolata-Regular.ttf` — `googlefonts/Inconsolata` @ `v3.000`
+    - `NotoSansSymbols2-Regular.ttf` — `notofonts/noto-fonts` @ `v20201206-phase3`
     SHA256 values live in `scripts/fetch-fonts.sh`.
 - [ ] **OQ2 (FR5):** Source of truth for `Emoji` / `Emoji_Presentation` Unicode property tables (inline static table vs `unicode-emoji` crate vs custom build script). Will be resolved during the implementation plan based on dependency footprint.
 - [ ] **OQ3 (FR7):** Whether the migrated settings file should keep a one-time backup (`settings.json.bak`) for easy rollback. Will be resolved during the implementation plan.
@@ -595,3 +604,4 @@ Runtime error (user dir)
 - googlefonts/noto-emoji: https://github.com/googlefonts/noto-emoji
 - notofonts/noto-cjk: https://github.com/notofonts/noto-cjk
 - googlefonts/Inconsolata: https://github.com/googlefonts/Inconsolata
+- notofonts/noto-fonts (Symbols 2): https://github.com/notofonts/noto-fonts
