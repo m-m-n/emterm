@@ -1,6 +1,6 @@
 //! chrono-free epoch → calendar decomposition.
 //!
-//! native-poc deliberately avoids a chrono dependency. This low-level
+//! emterm deliberately avoids a chrono dependency. This low-level
 //! module is the single home for "Unix epoch seconds →
 //! `(year, month, day, hour, minute, second)`", so neither
 //! `crate::logging` (cross-cutting infrastructure) nor

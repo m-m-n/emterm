@@ -1,16 +1,12 @@
-//! `env_logger` initialization with origin tagging.
+//! `env_logger` initialization.
 //!
-//! Tagging matches the project convention (`[LEVEL][ORIGIN]`). All native-poc
-//! logs use the `NATIVE-POC` origin; this keeps them distinguishable from the
-//! existing Tauri build logs in mixed sessions.
+//! Lines follow the project convention (`[LEVEL] message`).
 //!
 //! When `settings.log_recording_enabled` holds (and the build is a release
 //! build), WARN/ERROR lines are additionally appended — plain text, no ANSI
-//! colors — to the same `emterm.log` the legacy Tauri build writes
-//! (`app_log_dir()/emterm.log`), so post-mortem analysis reads one file
-//! regardless of which binary produced the line. Unlike the legacy build's
-//! bare timestamps, native-poc lines carry an explicit `±HH:MM` UTC offset
-//! so their zone is never ambiguous next to lines from the other process.
+//! colors — to `app_log_dir()/emterm.log` for post-mortem analysis. Each
+//! line carries an explicit `±HH:MM` UTC offset so the zone is never
+//! ambiguous.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,10 +28,10 @@ pub fn set_recording_enabled(enabled: bool) {
 }
 
 /// Append a one-off diagnostic line to `emterm.log` when recording is
-/// enabled. Intended for startup probes (e.g. font/raster smoke checks)
-/// that should not go through the standard `log::warn!` macro to avoid
-/// duplication with the normal log path. No-op when recording is
-/// disabled, the file was never opened (debug builds), or on open
+/// enabled, bypassing the standard `log::*` filter so startup probes
+/// (e.g. font/raster smoke checks) land in the file even when the
+/// effective level would normally suppress them. No-op when recording
+/// is disabled, the file was never opened (debug builds), or on open
 /// failure.
 pub fn force_log_line(level: log::Level, message: &str) {
     if !RECORDING_ENABLED.load(Ordering::Relaxed) {
@@ -47,13 +43,12 @@ pub fn force_log_line(level: log::Level, message: &str) {
     let Some(file) = guard.as_mut() else {
         return;
     };
-    let line = format!("{} [{}][NATIVE-POC] {}\n", timestamp(), level, message);
+    let line = format!("{} [{}] {}\n", timestamp(), level, message);
     let _ = file.write_all(line.as_bytes());
     let _ = file.flush();
 }
 
-/// Open `emterm.log` in append mode. The directory mirrors the legacy
-/// Tauri build's `app_log_dir()`:
+/// Open `emterm.log` in append mode.
 /// - Linux:   `$XDG_DATA_HOME/net.laser5.app.emterm/logs`
 ///            (default: `$HOME/.local/share/...`)
 /// - Windows: `%LOCALAPPDATA%\net.laser5.app.emterm\logs`
@@ -62,14 +57,11 @@ pub fn force_log_line(level: log::Level, message: &str) {
 /// the stderr logger is unaffected either way.
 pub fn init_log_file() {
     let Some(dir) = log_dir() else {
-        eprintln!("[WARN][NATIVE-POC] log file: unable to resolve log directory");
+        eprintln!("[WARN] log file: unable to resolve log directory");
         return;
     };
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!(
-            "[WARN][NATIVE-POC] log file: failed to create {}: {e}",
-            dir.display()
-        );
+        eprintln!("[WARN] log file: failed to create {}: {e}", dir.display());
         return;
     }
     let path = dir.join("emterm.log");
@@ -80,10 +72,7 @@ pub fn init_log_file() {
     {
         Ok(file) => *LOG_FILE.lock().unwrap() = Some(file),
         Err(e) => {
-            eprintln!(
-                "[WARN][NATIVE-POC] log file: failed to open {}: {e}",
-                path.display()
-            );
+            eprintln!("[WARN] log file: failed to open {}: {e}", path.display());
         }
     }
 }
@@ -121,10 +110,7 @@ pub(crate) fn log_dir() -> Option<std::path::PathBuf> {
 /// disabled or the file was never opened (debug builds, open failure).
 ///
 /// The whole line is formatted into one `String` and emitted via a
-/// single `write_all` so the append is one `write()` syscall — the
-/// legacy Tauri build appends to the same file from its own process,
-/// and O_APPEND atomicity is only per-syscall, so a multi-write
-/// `writeln!` could interleave mid-line with the other producer.
+/// single `write_all` so the append is one `write()` syscall.
 fn write_to_log_file(level: log::Level, message: &std::fmt::Arguments<'_>) {
     if !RECORDING_ENABLED.load(Ordering::Relaxed) {
         return;
@@ -135,19 +121,16 @@ fn write_to_log_file(level: log::Level, message: &std::fmt::Arguments<'_>) {
     let Some(file) = guard.as_mut() else {
         return;
     };
-    let line = format!("{} [{}][NATIVE-POC] {}\n", timestamp(), level, message);
+    let line = format!("{} [{}] {}\n", timestamp(), level, message);
     let _ = file.write_all(line.as_bytes());
     let _ = file.flush();
 }
 
-/// `YYYY-MM-DD HH:MM:SS.mmm ±HH:MM` — src-tauri's chrono-built shape
-/// plus an explicit UTC offset, rendered from the crate's chrono-free
-/// local-time decomposition (`crate::localtime`). The offset makes
-/// each line self-describing: when no platform local-time API is
-/// available the components fall back to UTC and the suffix reads
-/// `+00:00`, so native-poc lines can never be mistaken for (or
-/// silently disagree with) the legacy build's local-time lines in the
-/// shared file.
+/// `YYYY-MM-DD HH:MM:SS.mmm ±HH:MM` — rendered from the crate's
+/// chrono-free local-time decomposition (`crate::localtime`). The
+/// explicit UTC offset makes each line self-describing: when no
+/// platform local-time API is available the components fall back to
+/// UTC and the suffix reads `+00:00`.
 fn timestamp() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -168,7 +151,7 @@ fn offset_suffix(offset_secs: i32) -> String {
     format!("{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60)
 }
 
-/// Default `env_logger` filter string. `info` for native-poc itself while
+/// Default `env_logger` filter string. `info` for emterm itself while
 /// clamping noisy framework loggers (`wgpu*`, `naga`) to `warn` so the
 /// per-frame `Device::maintain` info chatter does not flood stderr. Users
 /// can still opt into the verbose stream via `RUST_LOG=wgpu_core=info`
@@ -208,7 +191,7 @@ pub fn init() {
             if !cfg!(debug_assertions) && record.level() <= log::Level::Warn {
                 write_to_log_file(record.level(), record.args());
             }
-            writeln!(buf, "[{}][NATIVE-POC] {}", record.level(), record.args())
+            writeln!(buf, "[{}] {}", record.level(), record.args())
         });
         // Best-effort init; if a logger was already installed (unlikely in
         // this binary) we silently continue.

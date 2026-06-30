@@ -229,19 +229,19 @@ fn warn_once_alloc_failed() {
     });
 }
 
-/// Debounced warn-once log for two-circle radial gradients where r0 > 0.
+/// Debounced log-once note for two-circle radial gradients where r0 > 0.
 /// tiny-skia 0.11 cannot represent non-zero inner-radius two-circle gradients;
 /// the inner radius is dropped (the c0 focal point is still passed through).
 fn warn_once_radial_r0_dropped() {
     static WARNED: OnceLock<()> = OnceLock::new();
     WARNED.get_or_init(|| {
-        log::warn!(
+        log::info!(
             "colrv1: radial gradient r0 > 0 (two-circle) not supported by tiny-skia 0.11; r0 dropped, c0 focal point preserved"
         );
     });
 }
 
-/// Debounced warn-once log for `CompositeMode`s that tiny-skia 0.11 has
+/// Debounced log-once note for `CompositeMode`s that tiny-skia 0.11 has
 /// no direct `BlendMode` for (HSL family). Emoji frames typically reissue
 /// the same modes per render — without the cache the log would spam.
 fn warn_once_unsupported_composite(mode: CompositeMode) {
@@ -250,7 +250,7 @@ fn warn_once_unsupported_composite(mode: CompositeMode) {
     let key = mode as u8;
     if let Ok(mut set) = cache.lock() {
         if set.insert(key) {
-            log::warn!(
+            log::info!(
                 "colrv1: composite mode {mode:?} has no tiny-skia equivalent; using SourceOver"
             );
         }
@@ -619,12 +619,12 @@ impl ColorPainter for TinySkiaPainter<'_> {
             }
             Brush::SweepGradient { color_stops, .. } => {
                 // tiny-skia 0.11 has no sweep gradient. Fall back to the
-                // first-stop solid colour and warn once. Per the SPEC
+                // first-stop solid colour and log once. Per the SPEC
                 // this is acceptable because Noto-COLRv1 uses sweep
                 // gradients on a small minority of glyphs.
                 static WARNED: OnceLock<()> = OnceLock::new();
                 WARNED.get_or_init(|| {
-                    log::warn!(
+                    log::info!(
                         "colrv1: sweep gradient not supported by tiny-skia 0.11; using first-stop solid"
                     );
                 });
