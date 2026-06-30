@@ -655,6 +655,10 @@ impl App {
     /// rasterizer, build the fallback chain, and seed the glyph cache.
     /// The returned tuple is owned by `App`; the renderer's
     /// `TerminalGridPass` borrows clones of each `Arc`.
+    ///
+    /// The rasterizer in the returned tuple is fully initialized:
+    /// `set_base_font` has already been called with `base_id` before
+    /// returning, so callers do not need to call it again.
     fn build_font_stack(
         settings: &Settings,
     ) -> (
@@ -1064,6 +1068,7 @@ impl App {
             }
         }
 
+        rasterizer.set_base_font(base_id);
         (
             Arc::new(resolver),
             Arc::new(chain),
