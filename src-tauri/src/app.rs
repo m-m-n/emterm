@@ -1004,7 +1004,7 @@ impl App {
                 })
                 .collect();
             crate::logging::force_log_line(
-                log::Level::Warn,
+                log::Level::Info,
                 &format!(
                     "font.diag.chain = [{}] base={:?} emoji={:?} covers_U+1F600={}",
                     summary_chain.join(", "),
@@ -1013,7 +1013,7 @@ impl App {
                     covers,
                 ),
             );
-            log::warn!(
+            log::info!(
                 "font.diag.chain = [{}] base={:?} emoji={:?} covers_U+1F600={}",
                 summary_chain.join(", "),
                 base_id,
@@ -1061,8 +1061,8 @@ impl App {
                             b.pixels.len(),
                             nonzero,
                         );
-                        crate::logging::force_log_line(log::Level::Warn, &msg);
-                        log::warn!("{}", msg);
+                        crate::logging::force_log_line(log::Level::Info, &msg);
+                        log::info!("{}", msg);
                     }
                 },
             }
