@@ -111,6 +111,10 @@ struct SwashFont {
     /// fills counters and welds adjacent glyphs together at terminal
     /// sizes.
     is_bold: bool,
+    /// True when [`super::colrv1_painter::is_colrv1_emoji`] accepted the
+    /// font at ingest time (COLR table version 1 + cmap covers U+1F600).
+    /// Set once; consulted by `raster` to divert to the COLRv1 path.
+    is_colrv1_emoji: bool,
 }
 
 impl SwashFont {
@@ -127,6 +131,12 @@ struct Inner {
     fonts: HashMap<FontId, SwashFont>,
     shape_ctx: ShapeContext,
     scale_ctx: ScaleContext,
+    /// The base text font selected by the renderer's [`FallbackChain`].
+    /// Used by the COLRv1 emoji path to size emoji to the base font's
+    /// ascent so emoji stays top-aligned with text caps and does not
+    /// bleed into the previous line. `None` until `set_base_font` is
+    /// called; the COLRv1 path then falls back to `size_px` directly.
+    base_font: Option<FontId>,
 }
 
 /// Swash adapter shared across the renderer.
@@ -219,6 +229,7 @@ impl SwashRasterizer {
         // Emoji has color; Noto Sans CJK JP does not). The probe is
         // narrow enough that it does not slow startup measurably.
         let has_color = probe_color_support(&bytes);
+        let is_colrv1_emoji = super::colrv1_painter::is_colrv1_emoji(&bytes);
         let parsed = FontRef::from_index(&bytes, 0);
         let is_bold = parsed
             .as_ref()
@@ -234,6 +245,7 @@ impl SwashRasterizer {
             coords,
             has_color,
             is_bold,
+            is_colrv1_emoji,
         };
         inner.fonts.insert(font.id, entry);
     }
@@ -265,6 +277,10 @@ impl Default for SwashRasterizer {
 }
 
 impl GlyphRasterizer for SwashRasterizer {
+    fn set_base_font(&self, font: FontId) {
+        self.inner.lock().base_font = Some(font);
+    }
+
     fn shape(&self, cluster: &str, font: FontId, size_px: f32) -> Vec<ShapedGlyph> {
         let mut inner = self.inner.lock();
         let Some(swash_font) = inner.fonts.get(&font).cloned() else {
@@ -295,6 +311,69 @@ impl GlyphRasterizer for SwashRasterizer {
         let swash_font = inner.fonts.get(&font).cloned()?;
         if glyph_id == 0 {
             return None;
+        }
+        // COLRv1 fast path: bypass swash entirely for color emoji fonts
+        // that were flagged at ingest. The painter does no `Inner`
+        // access, so we drop the lock before entering it — otherwise
+        // every rasterize call would serialize on this mutex.
+        if swash_font.is_colrv1_emoji {
+            // Resolve the BASE text font's ascent + cell_h at this
+            // `size_px`. The painter uses `cell_h` to size the pixmap
+            // (= cell_h × cell_h with 1 px padding inside); the caller
+            // overrides the returned `bearing_top` to `ascent` so the
+            // renderer places the bitmap top exactly at cell top —
+            // emoji then sits centered in the cell, no above-line bleed.
+            let (base_ascent_px, base_cell_h_px) = inner
+                .base_font
+                .and_then(|fid| inner.fonts.get(&fid))
+                .and_then(|bf| {
+                    let face = bf.font_ref();
+                    let metrics = face.metrics(&bf.coords);
+                    let upem = metrics.units_per_em as f32;
+                    if upem > 0.0 {
+                        let scale = size_px / upem;
+                        Some((
+                            metrics.ascent * scale,
+                            (metrics.ascent + metrics.descent) * scale,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or((0.0, 0.0));
+            drop(inner);
+            return match super::colrv1_painter::rasterize(
+                &swash_font.bytes,
+                glyph_id,
+                size_px,
+                base_cell_h_px,
+            ) {
+                Some(r) => {
+                    // Override bearing_top so the bitmap top aligns
+                    // with cell top (glyph_y = baseline - ascent =
+                    // cell_top). Painter's own bearing_top centers the
+                    // emoji on baseline, which leaks above the line.
+                    let adjusted_bearing_top = if base_ascent_px > 0.0 {
+                        base_ascent_px.round() as i32
+                    } else {
+                        r.bearing_top
+                    };
+                    Some(GlyphBitmap {
+                        format: AtlasFormat::Rgba,
+                        width: r.width,
+                        height: r.height,
+                        bearing: (r.bearing_left, adjusted_bearing_top),
+                        advance: r.advance,
+                        pixels: r.pixels,
+                    })
+                }
+                None => {
+                    log::info!(
+                        "colrv1: fallback for gid={glyph_id}, size_px={size_px} (no paint graph)"
+                    );
+                    None
+                }
+            };
         }
         let face = swash_font.font_ref();
         let mut scaler = inner
@@ -408,11 +487,16 @@ impl GlyphRasterizer for SwashRasterizer {
     }
 
     fn has_color(&self, font: FontId) -> bool {
+        // A font is a "color source" when EITHER swash's probe accepted
+        // it (CBDT / sbix / older COLR paths) OR our COLRv1 painter
+        // accepted it. The COLRv1 path bypasses swash entirely, so
+        // swash's probe returns false for Noto-COLRv1 even though the
+        // font does render in colour through `colrv1_painter`.
         self.inner
             .lock()
             .fonts
             .get(&font)
-            .map(|f| f.has_color)
+            .map(|f| f.has_color || f.is_colrv1_emoji)
             .unwrap_or(false)
     }
 }
@@ -518,8 +602,13 @@ mod tests {
         assert!(bitmap.advance > 0.0, "ASCII advance must be > 0");
     }
 
-    /// TS-font-9: swash rasterizes U+1F600 to RGBA; at least one non-zero
-    /// RGB byte exists.
+    /// TS-font-9 / TS-15: emoji bytes flow through the COLRv1 fast path
+    /// (introduced by `colrv1-emoji-vector-rendering`). After
+    /// `BUNDLED_EMOJI_COLOR_FONT` switched from CBDT to Noto-COLRv1,
+    /// `SwashRasterizer::raster` dispatches to
+    /// `colrv1_painter::rasterize` and returns an RGBA bitmap with at
+    /// least one non-zero RGB byte. The original swash color path is
+    /// no longer exercised for this font.
     #[test]
     fn swash_rasters_emoji_rgba() {
         let r = rasterizer_with_emoji();
@@ -726,5 +815,91 @@ mod tests {
         let m_b = plain.font_metrics(FontId(1), 17.0).unwrap();
         assert_eq!(m_a.ascent, m_b.ascent);
         assert_eq!(m_a.descent, m_b.descent);
+    }
+
+    // ── COLRv1 integration tests (colrv1-emoji-vector-rendering) ─────
+
+    /// TS-15: registering Noto-COLRv1 bytes and rasterizing the smiley
+    /// through the public `GlyphRasterizer` trait must dispatch to the
+    /// new COLRv1 painter — the returned bitmap is RGBA with at least
+    /// one non-zero RGB byte and a positive advance.
+    #[test]
+    fn emoji_routes_through_colrv1_path() {
+        let r = rasterizer_with_emoji();
+        let face = FontRef::from_index(super::super::resolver::BUNDLED_EMOJI_COLOR_FONT, 0)
+            .expect("emoji font parses");
+        let glyph_id = face.charmap().map('\u{1F600}') as u32;
+        assert!(glyph_id > 0, "Noto-COLRv1 must cover U+1F600");
+        let bm = r
+            .raster(FontId(1), glyph_id, 26.0)
+            .expect("colrv1 routed raster");
+        assert_eq!(
+            bm.format,
+            AtlasFormat::Rgba,
+            "colrv1 path must produce RGBA"
+        );
+        assert!(bm.advance > 0.0, "advance must be > 0 for paintable emoji");
+        let any_color = bm
+            .pixels
+            .chunks_exact(4)
+            .any(|px| px[0] != 0 || px[1] != 0 || px[2] != 0);
+        assert!(any_color, "colrv1 raster had only zero RGB bytes");
+        // Square pixmap convention (see colrv1_painter::rasterize step 4).
+        assert_eq!(bm.width, 26);
+        assert_eq!(bm.height, 26);
+    }
+
+    /// TS-16: registering CJK alongside the COLRv1 emoji font must not
+    /// disturb the swash code path for 'A'. The CJK font has no COLR
+    /// table, so `is_colrv1_emoji` stays `false` and `raster` falls
+    /// through to the existing swash branch, yielding an alpha mask
+    /// with a positive advance.
+    #[test]
+    fn cjk_unchanged_after_colrv1_addition() {
+        let r = SwashRasterizer::with_subpixel(false);
+        // Same id-space treatment as the chain builder: every font ends
+        // up with a distinct FontId in `Resolver`, but for this unit
+        // test two separate ids on the same adapter is enough.
+        r.register_bytes(
+            FontId(1),
+            Arc::<[u8]>::from(super::super::resolver::BUNDLED_CJK_FONT),
+        );
+        r.register_bytes(
+            FontId(2),
+            Arc::<[u8]>::from(super::super::resolver::BUNDLED_EMOJI_COLOR_FONT),
+        );
+        let g = r.shape("A", FontId(1), 32.0);
+        assert!(!g.is_empty(), "CJK shape returned no glyphs for 'A'");
+        let bm = r
+            .raster(g[0].font, g[0].glyph_id, g[0].size_px)
+            .expect("CJK raster for 'A'");
+        assert_eq!(
+            bm.format,
+            AtlasFormat::Alpha,
+            "CJK 'A' must stay on swash alpha path"
+        );
+        assert!(!bm.is_empty(), "CJK 'A' bitmap unexpectedly empty");
+        assert!(bm.advance > 0.0, "advance must be > 0 for CJK 'A'");
+    }
+
+    /// TS-17: a PUA codepoint (U+E000) is not covered by Noto-COLRv1, so
+    /// `charmap().map` returns 0. `raster` rejects glyph_id == 0
+    /// immediately, returning `None`; in production the
+    /// `FallbackChain` would then descend to the monochrome
+    /// `NotoEmoji-Regular`.
+    #[test]
+    fn unknown_glyph_falls_back_to_chain() {
+        let r = rasterizer_with_emoji();
+        let face = FontRef::from_index(super::super::resolver::BUNDLED_EMOJI_COLOR_FONT, 0)
+            .expect("emoji font parses");
+        let pua_gid = face.charmap().map('\u{E000}') as u32;
+        assert_eq!(
+            pua_gid, 0,
+            "Noto-COLRv1 must not cover the PUA sentinel U+E000"
+        );
+        // raster() short-circuits on glyph_id == 0, so the caller sees
+        // None and descends in the chain — verified here at the unit
+        // level.
+        assert!(r.raster(FontId(1), pua_gid, 26.0).is_none());
     }
 }

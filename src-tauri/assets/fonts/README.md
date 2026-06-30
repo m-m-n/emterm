@@ -20,7 +20,7 @@ see `LICENSE` in this directory.
 
 | File | Upstream | SHA-256 |
 |---|---|---|
-| `NotoColorEmoji.ttf` | <https://github.com/googlefonts/noto-emoji> | `ede3ac600162ca750e2aba610285f06f30d8c0dd198bcec1d53cb6efe660306c` |
+| `Noto-COLRv1.ttf` | <https://github.com/googlefonts/noto-emoji> | `0ae57fe58645638523ba35f388d93739d292539a9acb84df5700c81b1e1a28d2` |
 | `NotoSansCJKjp-Regular.otf` | <https://github.com/notofonts/noto-cjk> | `68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5` |
 | `NotoSansCJKjp-Bold.otf` | <https://github.com/notofonts/noto-cjk> | `e53dcb0dcb2922e45d01aae1ebd2f382bb81d4229b18b6b883bd170678af1f76` |
 | `NotoEmoji-Regular.ttf` | <https://github.com/googlefonts/noto-emoji> | (added in font-bundle-redesign Phase 2) |

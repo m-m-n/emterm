@@ -135,9 +135,9 @@ fetch_one() {
 # refs on the upstream Google Fonts repositories (raw.githubusercontent
 # .com), which are immutable per tag.
 
-fetch_one "NotoColorEmoji.ttf" \
-    "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/NotoColorEmoji.ttf" \
-    "72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b"
+fetch_one "Noto-COLRv1.ttf" \
+    "https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/Noto-COLRv1.ttf" \
+    "0ae57fe58645638523ba35f388d93739d292539a9acb84df5700c81b1e1a28d2"
 
 fetch_one "NotoSansCJKjp-Regular.otf" \
     "https://raw.githubusercontent.com/googlefonts/noto-cjk/Sans2.004/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf" \

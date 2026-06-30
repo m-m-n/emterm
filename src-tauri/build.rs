@@ -71,7 +71,7 @@ fn main() {
 /// error from `rustc`; emit an actionable message instead.
 fn check_bundled_fonts() {
     let required = [
-        "assets/fonts/NotoColorEmoji.ttf",
+        "assets/fonts/Noto-COLRv1.ttf",
         "assets/fonts/NotoSansCJKjp-Regular.otf",
         "assets/fonts/NotoSansCJKjp-Bold.otf",
         "assets/fonts/NotoEmoji-Regular.ttf",

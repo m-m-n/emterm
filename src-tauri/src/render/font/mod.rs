@@ -13,6 +13,7 @@
 pub mod ab_glyph_adapter;
 pub mod atlas;
 pub mod cache;
+pub mod colrv1_painter;
 pub mod fallback;
 pub mod presentation;
 pub mod resolver;

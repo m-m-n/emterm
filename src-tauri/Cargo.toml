@@ -35,6 +35,8 @@ gui = [
     "dep:swash",
     "dep:zeno",
     "dep:fontdb",
+    "dep:skrifa",
+    "dep:tiny-skia",
     "dep:ab_glyph",
     "dep:resvg",
     "dep:rodio",
@@ -147,6 +149,14 @@ raw-window-handle = { version = "0.6", optional = true }
 swash = { version = "=0.1.18", optional = true }
 zeno = { version = "0.2", optional = true }
 fontdb = { version = "0.21", optional = true }
+
+# COLRv1 vector emoji rasterization (colrv1-emoji-vector-rendering).
+# Both crates already link transitively via resvg 0.44; promoting them
+# to direct GUI-only deps gates the new code path under `gui` without
+# growing the CLI link footprint. skrifa walks the COLRv1 paint graph
+# (`MetadataProvider::color_glyphs`); tiny-skia rasterizes it.
+skrifa = { version = "0.20", optional = true }
+tiny-skia = { version = "0.11", optional = true }
 
 # ab_glyph is the legacy fallback rasterizer (FR5 escape hatch).
 ab_glyph = { version = "0.2", optional = true }

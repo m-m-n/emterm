@@ -26,9 +26,12 @@ pub const BUNDLED_CJK_FONT: &[u8] =
 pub const BUNDLED_CJK_BOLD_FONT: &[u8] =
     include_bytes!("../../../assets/fonts/NotoSansCJKjp-Bold.otf");
 
-/// Bundled color emoji font bytes (CBDT / COLR).
-pub const BUNDLED_EMOJI_COLOR_FONT: &[u8] =
-    include_bytes!("../../../assets/fonts/NotoColorEmoji.ttf");
+/// Bundled color emoji font bytes (COLRv1 + glyf).
+///
+/// Driven by `render::font::colrv1_painter` (skrifa + tiny-skia) so
+/// fractional-DPI raster stays sharp; non-COLR emoji glyphs fall back
+/// through `FallbackChain` to the monochrome `NotoEmoji-Regular`.
+pub const BUNDLED_EMOJI_COLOR_FONT: &[u8] = include_bytes!("../../../assets/fonts/Noto-COLRv1.ttf");
 
 /// Bundled monochrome emoji font bytes (outline-only). Used for text-default
 /// emoji code points (e.g. U+23F5 `⏵`) and for VS15-attached selections.

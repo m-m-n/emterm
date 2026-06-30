@@ -156,6 +156,13 @@ pub trait GlyphRasterizer: Send + Sync {
         })
     }
 
+    /// Record which font the renderer treats as the base text font.
+    /// Engines with a COLRv1 path use this to size emoji to the base
+    /// font's ascent (otherwise EM-box-filled vectors render at the
+    /// full `size_px` and bleed above the text cap line). Engines that
+    /// do not need this hint (e.g. ab_glyph) can ignore the call.
+    fn set_base_font(&self, _font: FontId) {}
+
     /// Whether `font` carries a color table this engine can actually
     /// rasterize. Used by the chain builder to decide whether a
     /// host-installed emoji font (e.g. system Noto Color Emoji on

@@ -1,0 +1,146 @@
+schema_version: 1
+feature: colrv1-emoji-vector-rendering
+
+phases:
+  - id: phase-1-deps-and-font-asset
+    name: "Phase 1: Dependencies & Font Asset Swap"
+    goal: "Land Cargo dependency additions, fetch-fonts.sh update, and the bundled font swap (NotoColorEmoji.ttf → Noto-COLRv1.ttf). Buildable state with new bytes, no new code paths."
+    effort: small
+    depends_on: []
+    tasks:
+      - id: pin-noto-colrv1-font-source
+        title: "Update fetch-fonts.sh: drop NotoColorEmoji entry, add Noto-COLRv1 (v2.051, SHA256 pinned)"
+        status: completed
+        files:
+          - scripts/fetch-fonts.sh
+      - id: fetch-and-place-noto-colrv1
+        title: "Run scripts/fetch-fonts.sh to fetch Noto-COLRv1.ttf and delete the old NotoColorEmoji.ttf from the working tree"
+        status: completed
+        files:
+          - src-tauri/assets/fonts/Noto-COLRv1.ttf
+          - src-tauri/assets/fonts/NotoColorEmoji.ttf
+      - id: add-cargo-deps-skrifa-tinyskia
+        title: "Cargo.toml: add optional skrifa = 0.20 and tiny-skia = 0.11 deps, append both to the gui feature"
+        status: completed
+        files:
+          - src-tauri/Cargo.toml
+      - id: repoint-bundled-emoji-color-font
+        title: "resolver.rs: change BUNDLED_EMOJI_COLOR_FONT include_bytes! path to Noto-COLRv1.ttf and refresh doc-comments; also update build.rs failsafe list"
+        status: completed
+        files:
+          - src-tauri/src/render/font/resolver.rs
+          - src-tauri/build.rs
+      - id: update-bundled-fonts-readme
+        title: "Replace the NotoColorEmoji.ttf inventory row in src-tauri/assets/fonts/README.md with a Noto-COLRv1.ttf row"
+        status: completed
+        files:
+          - src-tauri/assets/fonts/README.md
+
+  - id: phase-2-colrv1-painter-module
+    name: "Phase 2: colrv1_painter Module"
+    goal: "Implement the new rasterizer: is_colrv1_emoji probe, rasterize entry point, ColorPainter impl over tiny-skia, premultiply→straight helper, and 14 unit tests."
+    effort: large
+    depends_on: [phase-1-deps-and-font-asset]
+    tasks:
+      - id: scaffold-colrv1-painter-module
+        title: "Create src-tauri/src/render/font/colrv1_painter.rs and register it in mod.rs (public surface stubs: RasterizedColorGlyph, rasterize, is_colrv1_emoji)"
+        status: completed
+        files:
+          - src-tauri/src/render/font/colrv1_painter.rs
+          - src-tauri/src/render/font/mod.rs
+      - id: implement-is-colrv1-emoji-probe
+        title: "Implement is_colrv1_emoji(bytes): parse font, check COLR version == 1, verify cmap covers U+1F600"
+        status: completed
+        files:
+          - src-tauri/src/render/font/colrv1_painter.rs
+      - id: implement-un-premultiply-helper
+        title: "Implement un-premultiply RGBA helper (clamped, ported from emoji_resample.rs arithmetic)"
+        status: completed
+        files:
+          - src-tauri/src/render/font/colrv1_painter.rs
+      - id: implement-tiny-skia-color-painter
+        title: "Implement TinySkiaPainter: transform/clip/layer stacks (with Option sentinels for failed allocations), CPAL PaletteCache, solid + linear + radial fills (drop r0 > 0 with warn_once) + sweep gradient first-stop solid fallback (warn_once), push_layer/pop_layer with CompositeMode→BlendMode mapping and debounced warn-once logger (HSL family)"
+        status: completed
+        files:
+          - src-tauri/src/render/font/colrv1_painter.rs
+      - id: implement-rasterize-entry-point
+        title: "Implement rasterize(font_bytes, glyph_id, size_px, target_cell_h_px): validate inputs (!(size_px >= 1.0) single guard), look up paint graph, size Pixmap to ceil(target_cell_h_px) (or ceil(size_px) when target_cell_h_px <= 0) with 1 px padding, compute bbox-fit scaling via ColorGlyph::bounding_box (EM box fallback), traverse, un-premultiply, build RasterizedColorGlyph with advance = dim"
+        status: completed
+        files:
+          - src-tauri/src/render/font/colrv1_painter.rs
+      - id: add-colrv1-painter-unit-tests
+        title: "Add 16 unit tests under #[cfg(test)] mod tests (un_premultiply ×3, is_colrv1_emoji ×3, rasterize success ×4, rasterize rejection ×3, target_pxs grid ×1, target_cell_h padding+centering ×1, tiny-dim no-padding ×1)"
+        status: completed
+        files:
+          - src-tauri/src/render/font/colrv1_painter.rs
+      - id: implement-warn-once-degradation-logs
+        title: "Implement OnceLock-based warn_once debouncers for sweep gradient fallback, radial gradient r0 > 0 drop, unsupported HSL composite modes, and Pixmap/Mask allocation failures inside push_layer / push_clip_*"
+        status: completed
+        files:
+          - src-tauri/src/render/font/colrv1_painter.rs
+
+  - id: phase-3-swash-adapter-integration
+    name: "Phase 3: swash_adapter Integration"
+    goal: "Add SwashFont.is_colrv1_emoji field, populate at ingest, divert raster() when set; logs on hit/fallback; existing swash path untouched."
+    effort: small
+    depends_on: [phase-2-colrv1-painter-module]
+    tasks:
+      - id: extend-swashfont-with-colrv1-flag
+        title: "Add is_colrv1_emoji: bool to SwashFont and populate via colrv1_painter::is_colrv1_emoji(&bytes) in ingest_font; has_color() OR'd with the flag so chain builders still see a colour source"
+        status: completed
+        files:
+          - src-tauri/src/render/font/swash_adapter.rs
+      - id: add-set-base-font-trait-and-call-site
+        title: "Add default no-op set_base_font(&self, _font: FontId) to GlyphRasterizer trait; override on SwashRasterizer to cache into Inner.base_font: Option<FontId>; call rasterizer.set_base_font(base_id) once in App::build_font_stack right before returning the stack"
+        status: completed
+        files:
+          - src-tauri/src/render/font/traits.rs
+          - src-tauri/src/render/font/swash_adapter.rs
+          - src-tauri/src/app.rs
+      - id: add-raster-colrv1-branch
+        title: "Branch in raster(): resolve (base_ascent_px, base_cell_h_px) from Inner.base_font while holding the lock; drop Inner lock; call colrv1_painter::rasterize with the 4-arg signature (passing base_cell_h_px); map RasterizedColorGlyph → GlyphBitmap { format: Rgba, bearing.1 overridden to base_ascent_px when > 0, ... }; else fall through to existing swash path"
+        status: completed
+        files:
+          - src-tauri/src/render/font/swash_adapter.rs
+      - id: add-routing-logs
+        title: "Add log::info! on fallback (paint-graph missing) and log::debug! on hit-path entry; keep release-build log filtering in mind"
+        status: completed
+        files:
+          - src-tauri/src/render/font/swash_adapter.rs
+      - id: refresh-emoji-rgba-test-comment
+        title: "Rename/re-comment the existing swash_rasters_emoji_rgba test so its intent reflects the new colrv1 routing; keep the AtlasFormat::Rgba + non-zero-RGB assertions"
+        status: completed
+        files:
+          - src-tauri/src/render/font/swash_adapter.rs
+
+  - id: phase-4-tests-and-verification
+    name: "Phase 4: Tests & Verification"
+    goal: "Add the three SPEC-mandated integration tests; verify GUI + CLI builds; record manual verification scenarios for sdd.6."
+    effort: small
+    depends_on: [phase-3-swash-adapter-integration]
+    tasks:
+      - id: add-integration-test-emoji-routes-through-colrv1
+        title: "Add integration test emoji_routes_through_colrv1_path: register Noto-COLRv1 bytes, raster smiley, assert AtlasFormat::Rgba + non-zero RGB"
+        status: completed
+        files:
+          - src-tauri/src/render/font/swash_adapter.rs
+      - id: add-integration-test-cjk-unchanged
+        title: "Add integration test cjk_unchanged_after_colrv1_addition: register CJK + emoji together, raster 'A' from CJK at 32px, assert Alpha + non-empty + advance > 0"
+        status: completed
+        files:
+          - src-tauri/src/render/font/swash_adapter.rs
+      - id: add-integration-test-fallback
+        title: "Add integration test unknown_glyph_falls_back_to_chain: raster a PUA codepoint via Noto-COLRv1, expect None (FallbackChain descends in production)"
+        status: completed
+        files:
+          - src-tauri/src/render/font/swash_adapter.rs
+      - id: run-build-and-test-suite
+        title: "Run cargo test --lib (GUI) and cargo check --no-default-features (CLI); record results in VERIFICATION.md result sections"
+        status: completed
+        files:
+          - doc/tasks/colrv1-emoji-vector-rendering/VERIFICATION.md
+      - id: record-manual-scenarios
+        title: "Capture manual verification artifacts (binary size delta TS-20, Windows 1.5× TS-21, Linux 1.0× TS-22, RDP 1.0× TS-23, unsafe audit TS-24) in VERIFICATION.md"
+        status: completed
+        files:
+          - doc/tasks/colrv1-emoji-vector-rendering/VERIFICATION.md

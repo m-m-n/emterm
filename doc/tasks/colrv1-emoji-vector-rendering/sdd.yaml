@@ -1,0 +1,229 @@
+schema_version: 1
+feature: colrv1-emoji-vector-rendering
+created: 2026-06-30
+
+project:
+  components:
+    main:
+      language: rust
+      build_command: "CARGO_TARGET_DIR=src-tauri/target-host cargo build --release --manifest-path src-tauri/Cargo.toml"
+      test_command: "CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib"
+      format_command: "cargo fmt --manifest-path src-tauri/Cargo.toml"
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md, 要件定義書.md]
+    status: completed
+    completed_at_commit: 4c5d07acbf3d6b8169ec7057ff2f1971bf099828
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 4c5d07acbf3d6b8169ec7057ff2f1971bf099828
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 4c5d07acbf3d6b8169ec7057ff2f1971bf099828
+  - id: implement
+    status: completed
+    completed_at_commit: 4c5d07acbf3d6b8169ec7057ff2f1971bf099828
+  - id: check
+    status: completed
+    completed_at_commit: 4c5d07acbf3d6b8169ec7057ff2f1971bf099828
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 4c5d07acbf3d6b8169ec7057ff2f1971bf099828
+
+requirements:
+  FR1:
+    title: COLRv1 paint graph rasterization (skrifa + tiny-skia)
+    status: ok
+    resolution: |
+      実装は 4-param signature:
+      `rasterize(font_bytes, glyph_id, size_px, target_cell_h_px) -> Option<RasterizedColorGlyph>`
+      に拡張済み。`target_cell_h_px > 0` で base text font の cell height
+      ベースで Pixmap を正方化し、`<= 0.0` でレガシー `ceil(size_px)`
+      fallback (隔離テスト用)。pixmap sizing 詳細は FR8 を参照。
+      SweepGradient / RadialGradient (r0 > 0) は tiny-skia 0.11 の制約で
+      partial 対応 (FR7 の warn_once ログで通知)。
+    tasks:
+      - scaffold-colrv1-painter-module
+      - implement-tiny-skia-color-painter
+      - implement-rasterize-entry-point
+    tests:
+      - TS-7
+      - TS-8
+      - TS-9
+      - TS-10
+      - TS-14
+      - TS-15
+  FR2:
+    title: Font path routing via is_colrv1_emoji flag
+    status: ok
+    resolution: |
+      skrifa 0.20 の COLR API 形状を確認済み (planning フェーズ):
+      `MetadataProvider::color_glyphs() -> ColorGlyphCollection` →
+      `ColorGlyphCollection::get_with_format(GlyphId, ColorGlyphFormat::ColrV1) -> Option<ColorGlyph>` →
+      `ColorGlyph::paint(LocationRef, &mut impl ColorPainter)`。
+      probe は (1) FontRef::new(bytes), (2) COLR table version == 1,
+      (3) cmap covers U+1F600 の3段ガードで `true`/`false` を返す。
+      routing は SwashFont.is_colrv1_emoji フラグ (ingest 時にキャッシュ) を
+      SwashRasterizer::raster で評価して colrv1_painter::rasterize へ分岐。
+      base text font の cell height / ascent 解決のために
+      GlyphRasterizer trait に default no-op の
+      `set_base_font(&self, _font: FontId)` を追加。
+      SwashRasterizer は impl override で Inner.base_font にキャッシュ、
+      App::build_font_stack が構築直後に rasterizer.set_base_font(base_id)
+      を 1 回呼ぶ集約配線とした。
+    tasks:
+      - implement-is-colrv1-emoji-probe
+      - extend-swashfont-with-colrv1-flag
+      - add-raster-colrv1-branch
+      - add-set-base-font-trait-and-call-site
+    tests:
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-15
+      - TS-16
+  FR3:
+    title: Premultiplied to straight alpha conversion
+    status: ok
+    tasks:
+      - implement-un-premultiply-helper
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+  FR4:
+    title: Bundled font swap (NotoColorEmoji.ttf -> Noto-COLRv1.ttf)
+    status: ok
+    tasks:
+      - fetch-and-place-noto-colrv1
+      - repoint-bundled-emoji-color-font
+      - update-bundled-fonts-readme
+    tests:
+      - TS-15
+      - TS-20
+  FR5:
+    title: fetch-fonts.sh update with pinned Noto-COLRv1
+    status: ok
+    resolution: |
+      `googlefonts/noto-emoji` の v2.051 tag (既存 NotoColorEmoji と同 tag) に
+      `fonts/Noto-COLRv1.ttf` が存在することを planning フェーズで確認済み。
+      pin 値:
+        URL    = https://raw.githubusercontent.com/googlefonts/noto-emoji/v2.051/fonts/Noto-COLRv1.ttf
+        SHA256 = 0ae57fe58645638523ba35f388d93739d292539a9acb84df5700c81b1e1a28d2
+        size   = 4,991,984 bytes (~4.76 MiB)
+        family = "Noto Color Emoji" (CBDT 版と同じ — 既存 by_family テスト影響なし)
+    tasks:
+      - pin-noto-colrv1-font-source
+      - update-bundled-fonts-readme
+    tests:
+      - TS-15
+      - TS-20
+  FR6:
+    title: Monochrome fallback preserved when COLRv1 path returns None
+    status: ok
+    tasks:
+      - add-raster-colrv1-branch
+    tests:
+      - TS-17
+  FR7:
+    title: Path-selection logging (info on fallback + warn_once on degradation)
+    status: ok
+    resolution: |
+      `info` ログは swash_adapter::raster の fallback パスで発行
+      (`colrv1: fallback for gid={gid}, size_px={size_px} (no paint graph)`)。
+      hit-path は `debug` (release では drop)。
+      tiny-skia 0.11 の表現力不足に起因する劣化描画イベントは OnceLock
+      ベースの warn_once ログで通知する: SweepGradient → first-stop solid
+      fallback、RadialGradient r0 > 0 → r0 drop (c0 focal は保持)、
+      HSL family CompositeMode → SourceOver fallback (mode ごとに 1 回)、
+      Pixmap/Mask alloc 失敗 (push_layer / push_clip_*) → sub-tree 空描画。
+    tasks:
+      - add-routing-logs
+      - implement-warn-once-degradation-logs
+    tests:
+      - TS-15
+      - TS-17
+      - TS-21
+  FR8:
+    title: Pixmap sizing uses base cell height with 1px padding + bbox-fit
+    status: ok
+    resolution: |
+      `rasterize` の 4 番目の引数 `target_cell_h_px` (= base text font の
+      `ascent + descent` を `size_px` でスケールした値) で Pixmap を正方化:
+      `dim = max(1, ceil(target_cell_h_px))` (`> 0` のとき)、または
+      `dim = max(1, ceil(size_px))` (legacy fallback, テスト用)。
+      内側 `(dim - 2) × (dim - 2)` に 1 px padding 込みで絵文字を描画。
+      `dim < 4` のとき padding 省略 (inner エリアを正に保つため)。
+      bbox-fit scaling: `ColorGlyph::bounding_box` で実 bbox を取得し、
+      `scale = inner / max(bbox_w, bbox_h)` で uniform スケール + centering。
+      ClipBox 不在時は EM box (0, 0, upem, upem) を fallback。
+      `advance` は `dim` に pin (wide-cell renderer の `sx = cell_w/advance`
+      が 1.0 に解決される)。`bearing.1` は swash_adapter::raster が
+      base ascent (px) で上書きしてビットマップ top をセル top に揃える。
+    tasks:
+      - implement-rasterize-entry-point
+      - add-raster-colrv1-branch
+      - add-set-base-font-trait-and-call-site
+    tests:
+      - TS-14
+      - TS-14b
+      - TS-14c
+      - TS-15
+  NFR1:
+    title: Performance - first rasterization < 10ms, steady-state unchanged
+    status: ok
+    tasks:
+      - implement-rasterize-entry-point
+    tests:
+      - TS-21
+  NFR2:
+    title: Binary size - ~5 MiB reduction
+    status: ok
+    tasks:
+      - fetch-and-place-noto-colrv1
+    tests:
+      - TS-20
+  NFR3:
+    title: Safety - no new unsafe blocks
+    status: ok
+    tasks:
+      - implement-tiny-skia-color-painter
+      - implement-rasterize-entry-point
+    tests:
+      - TS-24
+      - TS-18
+  NFR4:
+    title: Reproducibility - bundled font SHA256-pinned
+    status: ok
+    tasks:
+      - pin-noto-colrv1-font-source
+    tests:
+      - TS-20
+  NFR5:
+    title: Maintainability - unit tests + pinned cargo deps
+    status: ok
+    tasks:
+      - add-cargo-deps-skrifa-tinyskia
+      - add-colrv1-painter-unit-tests
+    tests:
+      - TS-1
+      - TS-2
+      - TS-3
+      - TS-4
+      - TS-5
+      - TS-6
+      - TS-7
+      - TS-8
+      - TS-9
+      - TS-10
+      - TS-11
+      - TS-12
+      - TS-13
+      - TS-14
+      - TS-14b
+      - TS-14c
+      - TS-18
