@@ -258,4 +258,5 @@ jobs:
         run: |
           gh api "repos/${REPO}/releases/${RELEASE_ID}" \
             --method PATCH \
-            -f draft=false
+            -f draft=false \
+            -f make_latest=true
