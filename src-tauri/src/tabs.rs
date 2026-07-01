@@ -1207,6 +1207,23 @@ impl Tab {
                 true
             }
             MessageType::PtyOutput => {
+                // OSC-probe (temporary): flag when GUI-side sees a viewer
+                // launch OSC 777 arrive from the mux extractor. Mirrors the
+                // daemon (pty_spawn.rs) and bridge (bridge.rs) probes. Only
+                // metadata is logged (never the payload bytes) so this probe
+                // cannot leak user file content into persisted release logs.
+                let osc_probe = msg
+                    .payload
+                    .windows(12)
+                    .position(|w| w == b"\x1b]777;emterm;");
+                if let Some(off) = osc_probe {
+                    log::warn!(
+                        "[osc-probe gui] enter pane={} payload_len={} osc_off={}",
+                        msg.pane_id,
+                        msg.payload.len(),
+                        off,
+                    );
+                }
                 // Route by pane. Once attached (see the Welcome handler), the
                 // daemon streams live output for *every* pane in the session to
                 // this owning connection — but native renders one core per tab,
@@ -1220,6 +1237,14 @@ impl Tab {
                 // pane), `active_pane_id()` is None and all output is accepted.
                 if let Some(active) = self.mux_group.as_ref().and_then(|g| g.active_pane_id()) {
                     if msg.pane_id != active {
+                        if osc_probe.is_some() {
+                            log::warn!(
+                                "[osc-probe gui] DROP inactive-pane pane={} active={} payload_len={}",
+                                msg.pane_id,
+                                active,
+                                msg.payload.len(),
+                            );
+                        }
                         log::debug!(
                             "mux apc: dropping PtyOutput for inactive pane {} (active {})",
                             msg.pane_id,
@@ -1238,6 +1263,14 @@ impl Tab {
                 // belongs to a pane we are no longer switching to).
                 if let Some(pending) = self.pending_switch.as_mut() {
                     if msg.pane_id == pending.target_pane {
+                        if osc_probe.is_some() {
+                            log::warn!(
+                                "[osc-probe gui] QUEUED pending-switch pane={} target={} payload_len={}",
+                                msg.pane_id,
+                                pending.target_pane,
+                                msg.payload.len(),
+                            );
+                        }
                         pending.queued_bytes =
                             pending.queued_bytes.saturating_add(msg.payload.len());
                         pending.live_queue.push(msg.payload);
@@ -1275,12 +1308,27 @@ impl Tab {
                         // will repaint.
                         return false;
                     }
+                    if osc_probe.is_some() {
+                        log::warn!(
+                            "[osc-probe gui] DROP pending-switch pane={} target={} payload_len={}",
+                            msg.pane_id,
+                            pending.target_pane,
+                            msg.payload.len(),
+                        );
+                    }
                     log::debug!(
                         "mux apc: dropping PtyOutput for pane {} during pending switch to {}",
                         msg.pane_id,
                         pending.target_pane
                     );
                     return false;
+                }
+                if osc_probe.is_some() {
+                    log::warn!(
+                        "[osc-probe gui] APPLY pane={} payload_len={}",
+                        msg.pane_id,
+                        msg.payload.len(),
+                    );
                 }
                 // The daemon's continuous PTY stream: feed it into term_core
                 // as a normal byte stream (NOT a reset). Without this the
