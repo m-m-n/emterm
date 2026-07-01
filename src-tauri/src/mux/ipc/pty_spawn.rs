@@ -8,6 +8,7 @@ use std::sync::Mutex as StdMutex;
 use portable_pty::MasterPty;
 use tokio::sync::mpsc;
 
+use crate::mux::scrollback_filter::strip_replayable_rich_content;
 use crate::mux::session::manager::SessionManager;
 use crate::mux::session::pane::{
     DetachReason, MuxPane, NotificationSender, PaneId, PaneOutputTarget, PtyOutputChunk,
@@ -199,6 +200,179 @@ pub(super) fn register_pane_and_start_reader(
 /// unrecognized form) and fall back conservatively. `Cow::Borrowed` is
 /// returned for the common no-toggle chunk (whole chunk on main, empty on
 /// alt) so the hot path avoids a copy.
+/// Cap on the per-pane pending buffer inside [`ScrollbackWriteFilter`]. When
+/// the pending run of bytes we could not yet strip grows past this many bytes,
+/// the filter gives up the strip guarantee for that flush and forwards the
+/// pending bytes verbatim to the ring. Sized comfortably above one
+/// `emterm markdown|json|yaml` chunk (128 KiB payload, ~172 KiB after base64
+/// framing) so the common case never trips it.
+const SCROLLBACK_FILTER_PENDING_CAP: usize = 512 * 1024;
+
+/// Stateful stream filter that strips viewer-launch rich content (OSC 777
+/// emterm-{markdown,image,json,yaml} / Kitty APC / SIXEL DCS / OSC 9999
+/// emterm-md) BEFORE bytes land in the scrollback ring.
+///
+/// **Why stateful:** PTY reads are chunked at 64 KiB, but an `emterm markdown`
+/// / `image` / `json` / `yaml` CLI emits a single OSC 777 chunk of up to
+/// 128 KiB payload (~172 KiB after base64 framing). One CLI chunk therefore
+/// spans multiple `read()` calls, so a stateless per-chunk stripper sees
+/// either (introducer, no terminator) or (terminator, no introducer) and —
+/// by design — passes both fragments through verbatim. The fragments then
+/// land in the 2 MiB ring, and a later overflow can evict the introducer
+/// while its base64 tail survives; the snapshot-time stripper (which only
+/// matches complete sequences) then replays that headerless tail into the
+/// client's grid on tab-switch reattach.
+///
+/// This filter closes that gap by holding an unterminated introducer's bytes
+/// in `pending` until a subsequent [`Self::feed`] carries the terminator, at
+/// which point the fully-formed sequence is stripped in one shot.
+/// `pending` is capped at [`SCROLLBACK_FILTER_PENDING_CAP`]; on overflow the
+/// pending bytes are forwarded raw (the escape hatch — the ring may then
+/// contain a partial sequence, but that is strictly better than an
+/// unbounded per-pane buffer).
+///
+/// Live-forwarded `data.to_vec()` to the connected client is intentionally
+/// untouched, so viewer launch on the client side is unaffected. The
+/// snapshot-time stripper in `scrollback_filter.rs` remains as a
+/// defense-in-depth guard for scrollback captured by an older daemon that
+/// predates this filter.
+pub(in crate::mux) struct ScrollbackWriteFilter {
+    pending: Vec<u8>,
+}
+
+impl ScrollbackWriteFilter {
+    pub(in crate::mux) fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
+    }
+
+    /// Feed one PTY read chunk. Returns the bytes safe to write to the
+    /// scrollback ring right now. Any trailing bytes belonging to an
+    /// unterminated strip-target introducer are held in `pending` until the
+    /// next feed.
+    ///
+    /// Overflow escape hatch: if `pending` (after appending `chunk`) exceeds
+    /// [`SCROLLBACK_FILTER_PENDING_CAP`], the entire pending run is forwarded
+    /// raw and `pending` is reset. This trades the strip guarantee for a
+    /// bounded per-pane memory footprint — a wedged / adversarial stream
+    /// cannot pin arbitrary bytes in the buffer.
+    pub(in crate::mux) fn feed(&mut self, chunk: &[u8]) -> Vec<u8> {
+        if chunk.is_empty() {
+            return Vec::new();
+        }
+        self.pending.extend_from_slice(chunk);
+
+        if self.pending.len() > SCROLLBACK_FILTER_PENDING_CAP {
+            log::warn!(
+                "scrollback write filter: pending exceeded {} bytes, flushing raw",
+                SCROLLBACK_FILTER_PENDING_CAP
+            );
+            return std::mem::take(&mut self.pending);
+        }
+
+        let boundary = find_safe_boundary(&self.pending);
+        if boundary == 0 {
+            return Vec::new();
+        }
+        let strippable: Vec<u8> = self.pending.drain(..boundary).collect();
+        strip_replayable_rich_content(&strippable)
+    }
+
+    /// Number of bytes currently held in `pending` (test / diagnostic).
+    #[cfg(test)]
+    pub(in crate::mux) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+}
+
+/// Find the position of the first unterminated strip-target introducer in
+/// `bytes`. If every strip-target sequence in `bytes` is closed (or there
+/// are none), returns `bytes.len()` — everything is safe to emit.
+///
+/// Strip-target introducers we look for (matches
+/// [`strip_replayable_rich_content`]):
+/// - `ESC _ G` — Kitty APC. Terminator: `ESC \`.
+/// - `ESC P` — any DCS. Terminator: `ESC \`. (Non-SIXEL DCS bodies still ride
+///   here so an unterminated DCS is not accidentally split — the strip
+///   function will decide whether to drop it once complete.)
+/// - `ESC ]` — any OSC. Terminator: BEL (`0x07`) or `ESC \`.
+///
+/// Any other byte after `ESC` (`[` = CSI, standalone escape, etc.) is not a
+/// strip target and does not force a boundary.
+fn find_safe_boundary(bytes: &[u8]) -> usize {
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if bytes[i] != 0x1b || i + 1 >= n {
+            i += 1;
+            continue;
+        }
+        let intro_start = i;
+        match bytes[i + 1] {
+            b'_' => {
+                // APC. Only Kitty (ESC _ G) is a strip target — but even a
+                // non-Kitty APC is still an APC and needs an ESC \ terminator
+                // before its body is safe to emit; without one, we cannot tell
+                // where its body ends. Same tail-buffer rule either way.
+                match find_st(bytes, i + 2) {
+                    Some(end) => i = end,
+                    None => return intro_start,
+                }
+            }
+            b'P' => match find_st(bytes, i + 2) {
+                Some(end) => i = end,
+                None => return intro_start,
+            },
+            b']' => match find_osc_end(bytes, i + 2) {
+                Some(end) => i = end,
+                None => return intro_start,
+            },
+            _ => {
+                i += 2;
+            }
+        }
+    }
+    n
+}
+
+/// Find the index just past an ST (`ESC \`) terminator starting at or after
+/// `from`. Returns the byte index immediately AFTER the trailing `\\`, or
+/// `None` if no ST is present. Mirrors the terminator scan in
+/// [`crate::mux::scrollback_filter`] so the boundary detector and the
+/// stripper agree on what "complete" means.
+fn find_st(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut j = from;
+    while j + 1 < bytes.len() {
+        if bytes[j] == 0x1b && bytes[j + 1] == b'\\' {
+            return Some(j + 2);
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Find the index just past an OSC terminator (BEL `0x07` or ST `ESC \`)
+/// starting at `from`. Returns `None` if the OSC is unterminated. A bare
+/// `ESC` that is not the start of ST aborts the scan and returns `None`
+/// (mirrors `scrollback_filter::find_osc_terminator`).
+fn find_osc_end(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut j = from;
+    while j < bytes.len() {
+        if bytes[j] == 0x07 {
+            return Some(j + 1);
+        }
+        if bytes[j] == 0x1b {
+            if j + 1 < bytes.len() && bytes[j + 1] == b'\\' {
+                return Some(j + 2);
+            }
+            return None;
+        }
+        j += 1;
+    }
+    None
+}
+
 fn extract_main_buffer_bytes(data: &[u8], alt_at_start: bool) -> (Cow<'_, [u8]>, bool) {
     // (pattern, is_enter). `h` enters the alternate screen, `l` returns to main.
     const TOGGLES: [(&[u8], bool); 6] = [
@@ -273,6 +447,11 @@ fn pty_reader_loop(
     pane_exit_sender: SharedPaneExitSender,
 ) {
     let mut buf = [0u8; 65536];
+    // Per-pane stateful scrollback-write filter: strips viewer-launch rich
+    // content across PTY read boundaries. See [`ScrollbackWriteFilter`] for
+    // why a stateless per-chunk stripper is insufficient (128 KiB CLI chunks
+    // straddle the 64 KiB PTY read buffer).
+    let mut scrollback_filter = ScrollbackWriteFilter::new();
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
@@ -382,7 +561,10 @@ fn pty_reader_loop(
                     if !alt_before && !alt_after { data } else { &[] }
                 };
                 if !to_write.is_empty() {
-                    scrollback.lock().unwrap().write(to_write);
+                    let filtered = scrollback_filter.feed(to_write);
+                    if !filtered.is_empty() {
+                        scrollback.lock().unwrap().write(&filtered);
+                    }
                 }
                 if let Some(new_title) = title_changed {
                     if let Some(tx) = title_sender.lock().unwrap().as_ref() {
@@ -393,6 +575,27 @@ fn pty_reader_loop(
                 // Detect OSC 7 (cwd reporting) and cache the path
                 if let Some(cwd) = crate::mux::ipc::statusbar::detect_osc7_cwd(data) {
                     *pane_cwd.lock().unwrap() = Some(cwd);
+                }
+
+                // OSC-probe (temporary): flag when the PTY reader saw an
+                // `emterm` viewer-launch sequence in this chunk. Together with
+                // the mirrored probes in bridge.rs / tabs.rs this pins down
+                // where a viewer OSC 777 is lost between daemon → bridge → GUI.
+                // Only metadata is logged (never the payload bytes) so this
+                // probe cannot leak user file content into persisted release
+                // logs.
+                if let Some(off) = data.windows(12).position(|w| w == b"\x1b]777;emterm;") {
+                    let target_state = match &*output_target.lock().unwrap() {
+                        PaneOutputTarget::Connected(_) => "Connected",
+                        PaneOutputTarget::Detached { .. } => "Detached",
+                    };
+                    log::warn!(
+                        "[osc-probe daemon] pane={} data_len={} osc_off={} target={}",
+                        pane_id,
+                        data.len(),
+                        off,
+                        target_state,
+                    );
                 }
 
                 // Lock briefly to try non-blocking send or clone the sender.
@@ -594,6 +797,170 @@ mod tests {
         let (b2, a2) = extract_main_buffer_bytes(b"X\x1b[?1047lY", true);
         assert_eq!(&*b2, b"Y");
         assert!(!a2);
+    }
+
+    // ── ScrollbackWriteFilter (stateful scrollback-write stripper) ─────────
+
+    fn new_scrollback(cap: usize) -> SharedScrollback {
+        use crate::mux::scrollback_buffer::ScrollbackRingBuffer;
+        Arc::new(StdMutex::new(ScrollbackRingBuffer::new(cap)))
+    }
+
+    /// Feed `chunks` through a fresh [`ScrollbackWriteFilter`] and write each
+    /// filter output to `scrollback`, mirroring what `pty_reader_loop` does.
+    /// Bytes still held in the filter's `pending` at the end are NOT written
+    /// — matching production semantics (a still-pending unterminated
+    /// sequence is held until a subsequent read carries its terminator, or
+    /// the pending cap flushes it).
+    fn feed_all(scrollback: &SharedScrollback, chunks: &[&[u8]]) -> ScrollbackWriteFilter {
+        let mut filter = ScrollbackWriteFilter::new();
+        for chunk in chunks {
+            let filtered = filter.feed(chunk);
+            if !filtered.is_empty() {
+                scrollback.lock().unwrap().write(&filtered);
+            }
+        }
+        filter
+    }
+
+    /// A viewer-launch OSC 777 emterm-markdown sequence delivered in a single
+    /// read is stripped BEFORE ever landing in the ring — so subsequent
+    /// overflow can't leave a headerless base64 tail behind for snapshot
+    /// replay.
+    #[test]
+    fn scrollback_filter_strips_osc777_markdown_viewer_in_one_feed() {
+        let scrollback = new_scrollback(2048);
+        let chunk = b"before\x1b]777;emterm;markdown;chunk;id=x;data=xxx\x07after";
+        feed_all(&scrollback, &[chunk]);
+        assert_eq!(scrollback.lock().unwrap().read_all(), b"beforeafter");
+    }
+
+    /// Fold marks (`777;emterm;fold;…`) and other non-viewer content are
+    /// preserved — the stripper only targets replayable viewer kinds.
+    #[test]
+    fn scrollback_filter_keeps_fold_and_plain_text() {
+        let scrollback = new_scrollback(2048);
+        let chunk = b"$ ls\r\n\x1b]777;emterm;fold;start;42\x07file.rs\r\n";
+        feed_all(&scrollback, &[chunk]);
+        assert_eq!(scrollback.lock().unwrap().read_all(), &chunk[..]);
+    }
+
+    /// Kitty graphics APC and OSC 9999 emterm-md are also viewer-adjacent
+    /// and must be stripped at write time (same coverage as the snapshot-time
+    /// stripper's SSOT).
+    #[test]
+    fn scrollback_filter_strips_kitty_and_osc9999_emterm_md() {
+        let scrollback = new_scrollback(2048);
+        let chunk = b"A\x1b_Gi=1;PAYLOAD\x1b\\B\x1b]9999;emterm-md;begin\x07C";
+        feed_all(&scrollback, &[chunk]);
+        assert_eq!(scrollback.lock().unwrap().read_all(), b"ABC");
+    }
+
+    /// **Regression** for the reported bug shape: `emterm markdown` emits a
+    /// 128 KiB payload per OSC 777 chunk while the PTY reader buffer is 64 KiB
+    /// (`buf = [0u8; 65536]`), so ONE viewer chunk always arrives via ≥ 2
+    /// `feed` calls — first with the introducer + partial base64, then with
+    /// the rest + terminator. The pre-fix stateless helper let both halves
+    /// land in the ring verbatim (the first half unterminated, the second
+    /// with no introducer), so ring overflow could evict the introducer while
+    /// the base64 tail survived and got replayed to the client on tab-switch.
+    /// With the stateful filter, the unterminated first half is held in
+    /// `pending`; the terminator arrives in the second half; the complete
+    /// sequence is stripped in one shot, so ring content is clean.
+    #[test]
+    fn scrollback_filter_strips_osc777_chunk_split_across_reads() {
+        let scrollback = new_scrollback(256 * 1024);
+        // Build the CLI-shaped OSC 777 markdown chunk: prefix + 100 KiB
+        // base64-looking body + ST terminator. Total ~100 KiB, larger than a
+        // 64 KiB PTY read.
+        let mut full = Vec::from(&b"pre\r\n"[..]);
+        full.extend_from_slice(b"\x1b]777;emterm;markdown;chunk;id=abc;seq=0;data=");
+        full.extend(std::iter::repeat_n(b'A', 100_000));
+        full.extend_from_slice(b"\x1b\\");
+        full.extend_from_slice(b"post");
+        // Split at exactly 64 KiB — the boundary a real PTY reader would use.
+        let (head, tail) = full.split_at(65_536);
+        let filter = feed_all(&scrollback, &[head, tail]);
+        // Post-completion, `pending` should be drained back to zero.
+        assert_eq!(filter.pending_len(), 0);
+        let stored = scrollback.lock().unwrap().read_all();
+        assert_eq!(stored, b"pre\r\npost");
+    }
+
+    /// The filter must hold an unterminated introducer across an *arbitrary*
+    /// split point (not just aligned on the reader-buffer boundary above).
+    /// This variant splits at the introducer's `;data=` marker and again in
+    /// the middle of the base64 body to exercise multiple pending / drain
+    /// cycles.
+    #[test]
+    fn scrollback_filter_strips_osc777_chunk_split_multi_boundary() {
+        let scrollback = new_scrollback(256 * 1024);
+        let mut full = Vec::from(&b"A"[..]);
+        full.extend_from_slice(b"\x1b]777;emterm;image;chunk;id=x;seq=0;data=");
+        full.extend(std::iter::repeat_n(b'B', 90_000));
+        full.extend_from_slice(b"\x1b\\");
+        full.extend_from_slice(b"Z");
+        // Splits: right before `data=` payload, then midway through the body.
+        let mid1 = full
+            .windows(5)
+            .position(|w| w == b"data=")
+            .expect("data= present")
+            + 5;
+        let mid2 = mid1 + 40_000;
+        let a = &full[..mid1];
+        let b = &full[mid1..mid2];
+        let c = &full[mid2..];
+        let filter = feed_all(&scrollback, &[a, b, c]);
+        assert_eq!(filter.pending_len(), 0);
+        assert_eq!(scrollback.lock().unwrap().read_all(), b"AZ");
+    }
+
+    /// The pending buffer must not accept unbounded growth from a stream that
+    /// never terminates its introducer. Past
+    /// [`SCROLLBACK_FILTER_PENDING_CAP`], the filter forwards the pending
+    /// run raw and resets. This trades the strip guarantee for a bounded
+    /// per-pane memory footprint (defensive escape hatch, not a correctness
+    /// path — reported via warn log).
+    #[test]
+    fn scrollback_filter_flushes_raw_past_pending_cap() {
+        let _scrollback = new_scrollback(2 * 1024 * 1024);
+        // Start an unterminated OSC 777 introducer, then keep feeding padding
+        // until pending exceeds the cap. No terminator ever arrives.
+        let mut filter = ScrollbackWriteFilter::new();
+        let intro = b"\x1b]777;emterm;markdown;chunk;id=x;seq=0;data=";
+        let out = filter.feed(intro);
+        assert!(out.is_empty(), "introducer alone is held pending");
+        // Feed 520 KiB of body without a terminator; sum crosses 512 KiB.
+        let padding: Vec<u8> = std::iter::repeat_n(b'A', 520 * 1024).collect();
+        let flushed = filter.feed(&padding);
+        // The cap escape hatch fired: pending drained raw, ring wrote the raw
+        // bytes. The exact contents don't matter for correctness — the
+        // invariant is that pending doesn't grow past the cap.
+        assert!(!flushed.is_empty(), "cap escape hatch must emit raw bytes");
+        assert_eq!(filter.pending_len(), 0);
+    }
+
+    /// Plain text that contains no ESC at all is emitted directly with no
+    /// pending held over — the common hot path stays boundary-clean.
+    #[test]
+    fn scrollback_filter_plain_text_emits_immediately() {
+        let scrollback = new_scrollback(2048);
+        let chunk = b"$ echo hello world\r\nhello world\r\n$ ";
+        let filter = feed_all(&scrollback, &[chunk]);
+        assert_eq!(filter.pending_len(), 0);
+        assert_eq!(scrollback.lock().unwrap().read_all(), &chunk[..]);
+    }
+
+    /// A non-strip-target CSI sequence (e.g. SGR color) does NOT force a
+    /// pending hold — only OSC / APC / DCS introducers do. This keeps the
+    /// per-chunk emission latency low on typical shell output.
+    #[test]
+    fn scrollback_filter_csi_does_not_force_pending() {
+        let scrollback = new_scrollback(2048);
+        let chunk = b"hi \x1b[31mred\x1b[0m done";
+        let filter = feed_all(&scrollback, &[chunk]);
+        assert_eq!(filter.pending_len(), 0);
+        assert_eq!(scrollback.lock().unwrap().read_all(), &chunk[..]);
     }
 
     type TestRig = (

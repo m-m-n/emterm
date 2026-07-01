@@ -368,6 +368,26 @@ where
                     msg.pane_id,
                     msg.payload.len()
                 );
+                // OSC-probe (temporary): flag when a PtyOutput carries an
+                // `emterm` viewer-launch OSC 777, so we can compare against
+                // the daemon-side probe (pty_spawn.rs) and the GUI-side probe
+                // (tabs.rs) to locate where the sequence is lost. Only
+                // metadata is logged (never the payload bytes) so this probe
+                // cannot leak user file content into persisted release logs.
+                if msg.msg_type == MessageType::PtyOutput {
+                    if let Some(off) = msg
+                        .payload
+                        .windows(12)
+                        .position(|w| w == b"\x1b]777;emterm;")
+                    {
+                        log::warn!(
+                            "[osc-probe bridge] pane={} payload_len={} osc_off={}",
+                            msg.pane_id,
+                            msg.payload.len(),
+                            off,
+                        );
+                    }
+                }
                 let t = transport_for_stdout.load(Ordering::Relaxed);
                 use std::io::Write;
                 let stdout = std::io::stdout();
