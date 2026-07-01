@@ -1,0 +1,233 @@
+schema_version: 1
+feature: mermaid-zoom-popup
+
+phases:
+  - id: phase-1
+    title: "Mermaid Copy ボタンの機能修復"
+    goal: "現状クリックハンドラ未実装で機能していない Copy ボタンを、Mermaid ソースをクリップボードに書き込み、成功/失敗のフィードバックを表示するように修正する"
+    files_to_modify:
+      - src-tauri/web-shared/markdown/mermaid-renderer.ts
+    files_to_create:
+      - src-tauri/web-shared/markdown/mermaid-renderer.test.ts
+    tasks:
+      - id: write-copy-tests
+        status: completed
+        title: "Copy ボタンの TS-3 / TS-4 を失敗テストとして追加"
+        description: >
+          src-tauri/web-shared/markdown/mermaid-renderer.test.ts を新規作成し、
+          navigator.clipboard.writeText をモックした上で
+          Copy ボタンクリック時の正常系（.copy-success 表示、~1500ms 後の復帰、
+          exact source の書き込み）と失敗系（reject 時の .copy-error 表示、
+          ~1500ms 後の復帰、console.warn 出力）を検証するテストを追加する。
+          TDD 上、実装前は失敗する状態にする。
+        verifies:
+          - TS-3
+          - TS-4
+      - id: implement-copy-handler
+        status: completed
+        title: "Copy ボタンに click ハンドラを実装"
+        description: >
+          MermaidRenderer.renderBlock 内の copyBtn 生成箇所直後で、
+          click イベントリスナーを登録する。ハンドラは navigator.clipboard.writeText
+          で renderBlock スコープの source（または data-mermaid-source 属性）を書き込み、
+          成功時は .copy-success クラス付与 + i18n markdown.copySuccess 表示、
+          失敗時は .copy-error 付与 + markdown.copyFailed 表示 + console.warn を行い、
+          いずれも ~1500ms 後に元の表示（markdown.copyCode）に戻す。
+        verifies:
+          - TS-3
+          - TS-4
+
+  - id: phase-2
+    title: "Spread ボタン + フルスクリーン Popup + ズーム/パン/リセット/閉じる"
+    goal: "Mermaid ツールバーに Spread ボタンを追加し、クリック時に半透明オーバーレイのフルスクリーン popup を表示。+/- ボタン・キー・ホイールでズーム、左ドラッグでパン、0/reset ボタンでリセット、×/背景/ESC で閉じる。ESC は viewer 本体に伝えない。フォーカス管理と背景スクロールロックを含む。"
+    files_to_modify:
+      - src-tauri/web-shared/markdown/mermaid-renderer.ts
+      - src-tauri/web-shared/markdown/fullscreen.css
+      - src-tauri/web-shared/i18n/locales/en.json
+      - src-tauri/web-shared/i18n/locales/ja.json
+    files_to_create:
+      - src-tauri/web-shared/markdown/mermaid-popup.ts
+      - src-tauri/web-shared/markdown/mermaid-popup.test.ts
+    tasks:
+      - id: add-i18n-keys
+        status: completed
+        title: "i18n キー markdown.mermaidSpread など 5 件を追加"
+        description: >
+          en.json / ja.json の markdown セクションに以下を追加する:
+          - mermaidSpread     (英: "Enlarge diagram" / 和: "拡大表示")
+          - mermaidPopupClose (英: "Close popup"      / 和: "ポップアップを閉じる")
+          - mermaidPopupZoomIn (英: "Zoom in"         / 和: "拡大")
+          - mermaidPopupZoomOut(英: "Zoom out"        / 和: "縮小")
+          - mermaidPopupReset  (英: "Reset zoom"      / 和: "リセット")
+          既存の zoom セクション（image viewer 用）とは衝突しないので markdown 名前空間に追加する。
+        verifies: []
+      - id: write-toolbar-tests
+        status: completed
+        title: "ツールバー順・Spread 属性の TS-1 / TS-2 を失敗テストとして追加"
+        description: >
+          mermaid-renderer.test.ts に、renderAll 後のツールバー DOM 順が
+          [chartBtn, codeBtn, spreadBtn, copyBtn] であること (TS-1)、
+          Spread ボタンが type="button" / aria-label=markdown.mermaidSpread /
+          class に mermaid-spread-btn を持つこと (TS-2) を検証するテストを追加する。
+        verifies:
+          - TS-1
+          - TS-2
+      - id: implement-spread-button
+        status: completed
+        title: "Spread ボタンをツールバーに追加"
+        description: >
+          MermaidRenderer.renderBlock で、対角矢印アイコン SVG を持つ
+          <button class="mermaid-spread-btn"> を生成し、
+          toolbar.appendChild の順で chartBtn / codeBtn の後・copyBtn の前に挿入する。
+          aria-label = t("markdown.mermaidSpread") を設定。
+          click ハンドラは openMermaidPopup({svg, triggerButton}) を呼ぶ。
+          svg は同ブロック内の .mermaid-diagram > svg を DOM から取得する。
+        verifies:
+          - TS-1
+          - TS-2
+      - id: write-popup-tests
+        status: completed
+        title: "Popup 挙動 TS-5 〜 TS-15 を失敗テストとして追加"
+        description: >
+          mermaid-popup.test.ts を新規作成し、以下を検証するテストを追加する:
+          - TS-5  openMermaidPopup が overlay を document.body に追加し、SVG を stage 内にクローン
+          - TS-6  背景スクロールロック（open で body.overflow=hidden、close で復元）
+          - TS-7  フォーカスフロー（open→close ボタン、close→trigger ボタン）
+          - TS-8  scale=0.25 で - を押しても 0.25 のまま（下限クランプ）
+          - TS-9  scale=5.0 で + を押しても 5.0 のまま（上限クランプ）
+          - TS-10 reset で {scale:1.0, panX:0, panY:0} に戻る
+          - TS-11 ESC keydown で overlay 除去 + stopPropagation 検証
+          - TS-12 背景クリック（target === overlay）で閉じる、子クリックでは閉じない
+          - TS-13 wheel deltaY<0 で scale が 1.1 倍、preventDefault が呼ばれる
+          - TS-14 drag（mousedown→mousemove→mouseup）で panX/panY が更新
+          - TS-15 window resize で fit 係数 k が再計算される
+        verifies:
+          - TS-5
+          - TS-6
+          - TS-7
+          - TS-8
+          - TS-9
+          - TS-10
+          - TS-11
+          - TS-12
+          - TS-13
+          - TS-14
+          - TS-15
+      - id: implement-popup-module
+        status: completed
+        title: "mermaid-popup.ts (openMermaidPopup + controller) の実装"
+        description: >
+          src-tauri/web-shared/markdown/mermaid-popup.ts を新規作成し、
+          openMermaidPopup(opts) を実装する。opts.svg / opts.triggerButton から
+          overlay DOM を構築、SVG を cloneNode(true) で複製、
+          fit 係数 k = min(stageW / svgW, stageH / svgH) を算出、
+          scale / panX / panY を保持し applyTransform で
+          "translate(panX, panY) scale(scale * k)" を SVG に適用する。
+          overlay に role="dialog" / aria-modal="true"、各ボタンに aria-label を付与する。
+          リスナー: wheel(passive:false) / mousedown / mousemove / mouseup /
+          keydown(capture:true, ESC/0/+/-) / click(target===overlay) / resize.
+          controller.close() で全リスナー削除・overlay 除去・body.overflow 復元・triggerButton.focus。
+          単一 popup 保証: モジュールレベル activePopup を track し、既に open なら early return。
+        verifies:
+          - TS-5
+          - TS-6
+          - TS-7
+          - TS-8
+          - TS-9
+          - TS-10
+          - TS-11
+          - TS-12
+          - TS-13
+          - TS-14
+          - TS-15
+      - id: implement-popup-css
+        status: completed
+        title: "fullscreen.css に Popup / Spread ボタンのスタイルを追加"
+        description: >
+          src-tauri/web-shared/markdown/fullscreen.css の末尾に以下を追加する:
+          - .mermaid-spread-btn: Chart/Code ボタンと同サイズ・同 hover 挙動
+          - .mermaid-popup-overlay: position:fixed; inset:0; background:rgba(0,0,0,0.85);
+            z-index: viewer overlay より上（既存の z-index 命名規則に従う）
+          - .mermaid-popup-stage: 中央配置、cursor:grab、drag 中は cursor:grabbing
+          - .mermaid-popup-controls: 右下集約（+ / 0 / - ボタン）
+          - .mermaid-popup-close: 右上、× ボタン
+          Bun バンドラの @import 制約を避け、fullscreen.css に直接記述する。
+        verifies: []
+      - id: run-regression-suite
+        status: completed
+        title: "回帰テスト実行（bun test / typecheck / cargo test --lib）"
+        description: >
+          以下を順に実行し、全て exit 0 で通ることを確認する:
+          - bun test
+          - bun run typecheck
+          - CARGO_TARGET_DIR=src-tauri/target cargo test --manifest-path src-tauri/Cargo.toml --lib
+          Rust 側は今回の変更で影響を受けないはずだが、build.rs が dist を埋め込むため
+          念のため bun run build:viewer が成功することも確認する。
+        verifies: []
+
+  - id: phase-3
+    title: "sdd.6 検証 FAIL 対応: SPEC 準拠修正（multi-review 指摘反映）"
+    goal: "sdd.6-verify で確定した FR3 非準拠（ズーム刻み）・FR9 部分準拠（Tab トラップ）・FR6 内包 UX バグ（パン終了誤クローズ）・FR2 部分準拠（clone inline sizing）・FR4 堅牢化（blur ガード）を修正し、TS-16〜TS-20 で検証する"
+    files_to_modify:
+      - src-tauri/web-shared/markdown/mermaid-popup.ts
+      - src-tauri/web-shared/markdown/mermaid-popup.test.ts
+    files_to_create: []
+    tasks:
+      - id: write-fix-tests
+        status: completed
+        title: "TS-16〜TS-20 を失敗テストとして追加"
+        description: >
+          mermaid-popup.test.ts に以下を追加する:
+          - TS-16 ボタン/キーの + が scale 1.0 → 1.25（0.25 加算）、- が 1.25 → 1.0。wheel は ×1.1 のまま
+          - TS-17 Tab が zoom-out から close へラップ、Shift+Tab が close から zoom-out へラップ
+          - TS-18 mousedown→mousemove→mouseup(背景) で閉じない。移動なしの背景クリックは閉じる
+          - TS-19 clone に width/height 属性と inline max-width が無い
+          - TS-20 drag 中の window blur で dragging 解除
+        verifies:
+          - TS-16
+          - TS-17
+          - TS-18
+          - TS-19
+          - TS-20
+      - id: implement-zoom-step-split
+        status: completed
+        title: "ボタン/キー経路を ZOOM_STEP=0.25 加算に分離"
+        description: >
+          FR3 準拠: ZOOM_STEP = 0.25 を定義し、+/- ボタンとキーボード +/- は
+          scale = clamp(scale ± 0.25) の加算式に変更する。wheel 経路は
+          STEP_FACTOR = 1.1 の乗算式のまま維持する。
+        verifies:
+          - TS-16
+      - id: implement-focus-trap
+        status: completed
+        title: "Tab / Shift+Tab フォーカストラップを追加"
+        description: >
+          FR9 準拠: onKeydown に Tab 分岐を追加し、DOM 順 [close, zoom-in, reset, zoom-out]
+          で巡回させる。両端でラップし preventDefault する。
+        verifies:
+          - TS-17
+      - id: implement-pan-close-guard
+        status: completed
+        title: "パン終了クリックの誤クローズガードを追加"
+        description: >
+          FR6 pan-end guard: onMouseMove（drag 中の実移動時）に didPan = true を立て、
+          onOverlayClick で didPan なら消費してリターンする。mousedown ごとにリセットする。
+        verifies:
+          - TS-18
+      - id: implement-clone-normalization
+        status: completed
+        title: "clone の inline sizing 正規化 + blur ガード"
+        description: >
+          FR2 準拠: cloneNode 直後に width/height 属性を removeAttribute し、
+          style.width / style.height / style.maxWidth / style.maxHeight をクリアして
+          viewBox 由来の intrinsic size に fit 係数が正しく効くようにする。
+          FR4 堅牢化: window blur リスナーで dragging を解除する（close 時にリスナー除去）。
+        verifies:
+          - TS-19
+          - TS-20
+      - id: rerun-regression
+        status: completed
+        title: "回帰確認（bun test / typecheck / build:viewer）"
+        description: >
+          bun test・bun run typecheck・bun run build:viewer を実行し全て exit 0 を確認する。
+        verifies: []

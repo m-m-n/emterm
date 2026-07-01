@@ -427,7 +427,12 @@
     "outline": "Document Outline",
     "mermaidChart": "Chart",
     "mermaidCode": "Code",
-    "mermaidSyntaxError": "Mermaid: syntax error"
+    "mermaidSyntaxError": "Mermaid: syntax error",
+    "mermaidSpread": "Enlarge diagram",
+    "mermaidPopupClose": "Close popup",
+    "mermaidPopupZoomIn": "Zoom in",
+    "mermaidPopupZoomOut": "Zoom out",
+    "mermaidPopupReset": "Reset zoom"
   },
   "zoom": {
     "closeViewer": "Close viewer",

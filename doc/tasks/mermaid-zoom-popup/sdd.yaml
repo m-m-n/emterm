@@ -1,0 +1,171 @@
+schema_version: 1
+feature: mermaid-zoom-popup
+created: 2026-07-02
+
+project:
+  components:
+    main:
+      language: typescript
+      build_command: "bun run build:viewer"
+      test_command: "bun test && bun run typecheck"
+      format_command: ""
+      e2e_test_command: ""
+
+workflow:
+  - id: create-spec
+    artifacts: [SPEC.md]
+    status: completed
+    completed_at_commit: 34ae8cc40a0ae54c89576a33fc9456a083811b70
+  - id: create-plan
+    artifacts: [IMPLEMENTATION.md, VERIFICATION.md]
+    status: completed
+    completed_at_commit: 34ae8cc40a0ae54c89576a33fc9456a083811b70
+  - id: verify-plan
+    status: completed
+    completed_at_commit: 34ae8cc40a0ae54c89576a33fc9456a083811b70
+  - id: implement
+    status: completed
+    completed_at_commit: 34ae8cc40a0ae54c89576a33fc9456a083811b70
+  - id: check
+    status: completed
+    completed_at_commit: 34ae8cc40a0ae54c89576a33fc9456a083811b70
+  - id: verify
+    artifacts: [VERIFICATION_RESULT.md]
+    status: completed
+    completed_at_commit: 34ae8cc40a0ae54c89576a33fc9456a083811b70
+
+requirements:
+  FR1:
+    title: Spread button added to Mermaid toolbar
+    status: ok
+    tasks:
+      - add-i18n-keys
+      - write-toolbar-tests
+      - implement-spread-button
+    tests:
+      - TS-1
+      - TS-2
+  FR2:
+    title: Popup overlay opens on Spread click with fit-to-stage initial scale
+    status: ok
+    tasks:
+      - write-popup-tests
+      - implement-popup-module
+      - implement-popup-css
+      - implement-clone-normalization
+    tests:
+      - TS-5
+      - TS-15
+      - TS-19
+  FR3:
+    title: Zoom controls (+/- 0.25 additive, wheel 1.1x) with clamp [0.25, 5.0]
+    status: ok
+    tasks:
+      - write-popup-tests
+      - implement-popup-module
+      - implement-zoom-step-split
+    tests:
+      - TS-8
+      - TS-9
+      - TS-13
+      - TS-16
+  FR4:
+    title: Pan via left-mouse drag (window-level mouseup + blur guard)
+    status: ok
+    tasks:
+      - write-popup-tests
+      - implement-popup-module
+      - implement-popup-css
+      - implement-clone-normalization
+    tests:
+      - TS-14
+      - TS-20
+  FR5:
+    title: Reset via 0 key / reset button
+    status: ok
+    tasks:
+      - write-popup-tests
+      - implement-popup-module
+    tests:
+      - TS-10
+  FR6:
+    title: Close via x button / background click / ESC (with stopPropagation, pan-end guard)
+    status: ok
+    tasks:
+      - write-popup-tests
+      - implement-popup-module
+      - implement-pan-close-guard
+    tests:
+      - TS-11
+      - TS-12
+      - TS-18
+  FR7:
+    title: Background scroll lock while popup is open
+    status: ok
+    tasks:
+      - write-popup-tests
+      - implement-popup-module
+    tests:
+      - TS-6
+  FR8:
+    title: Copy button click handler writes source to clipboard with success/error feedback
+    status: ok
+    tasks:
+      - write-copy-tests
+      - implement-copy-handler
+    tests:
+      - TS-3
+      - TS-4
+  FR9:
+    title: Focus management (open focuses close button, close returns to trigger, Tab trap)
+    status: ok
+    tasks:
+      - write-popup-tests
+      - implement-popup-module
+      - implement-focus-trap
+    tests:
+      - TS-7
+      - TS-17
+  FR10:
+    title: Window resize refits diagram to stage
+    status: ok
+    tasks:
+      - write-popup-tests
+      - implement-popup-module
+    tests:
+      - TS-15
+  NFR1:
+    title: Performance - CSS transform based zoom/pan targets 60fps, open under 100ms
+    status: ok
+    tasks:
+      - implement-popup-module
+    tests: []
+  NFR2:
+    title: Security - preserve Mermaid strict mode, no innerHTML injection, clipboard only writes data-mermaid-source
+    status: ok
+    tasks:
+      - implement-popup-module
+      - implement-copy-handler
+    tests: []
+  NFR3:
+    title: Cross-platform Linux (WebKitGTK) + Windows (WebView2)
+    status: ok
+    tasks:
+      - run-regression-suite
+    tests: []
+  NFR4:
+    title: Maintainability - popup logic extracted to new mermaid-popup.ts, CSS in fullscreen.css
+    status: assumed
+    assumed_reason: "Popup logic (state, event handlers, resize, focus, scroll-lock) will exceed 100 LoC; extracting to src-tauri/web-shared/markdown/mermaid-popup.ts avoids bloating mermaid-renderer.ts (currently 260 LoC)."
+    tasks:
+      - implement-popup-module
+      - implement-popup-css
+    tests: []
+  NFR5:
+    title: Accessibility - role=dialog, aria-modal, aria-labels
+    status: ok
+    tasks:
+      - add-i18n-keys
+      - implement-popup-module
+    tests:
+      - TS-5

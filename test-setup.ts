@@ -22,6 +22,8 @@ globalThis.Event = window.Event as unknown as typeof Event;
 // WheelEvent may not be available in happy-dom, use Event as fallback
 globalThis.WheelEvent = (window.WheelEvent ??
   window.Event) as unknown as typeof WheelEvent;
+// MouseEvent — happy-dom provides it, but it is not exposed on globalThis by default.
+globalThis.MouseEvent = window.MouseEvent as unknown as typeof MouseEvent;
 // Performance API
 globalThis.performance = window.performance as unknown as Performance;
 

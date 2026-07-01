@@ -444,3 +444,120 @@
   font-size: 0.85em;
   margin-bottom: 8px;
 }
+
+/* Spread (enlarge) button — sits between Code and Copy in the toolbar */
+.mermaid-spread-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: var(--markdown-border, #404040);
+  color: var(--markdown-fg, #d4d4d4);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.mermaid-spread-btn:hover {
+  background: var(--markdown-link, #569cd6);
+  color: var(--markdown-heading, #ffffff);
+}
+
+.mermaid-spread-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Fullscreen popup overlay */
+.mermaid-popup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  outline: none;
+}
+
+.mermaid-popup-stage {
+  width: 80vw;
+  height: 80vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  overflow: hidden;
+  user-select: none;
+}
+
+.mermaid-popup-stage.mermaid-popup-dragging {
+  cursor: grabbing;
+}
+
+.mermaid-popup-stage svg {
+  transform-origin: center center;
+  max-width: none;
+  max-height: none;
+}
+
+/* Zoom controls (bottom-right) */
+.mermaid-popup-controls {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1;
+}
+
+.mermaid-popup-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s;
+}
+
+.mermaid-popup-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* Close (×) button (top-right) */
+.mermaid-popup-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s;
+  z-index: 1;
+}
+
+.mermaid-popup-close:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
