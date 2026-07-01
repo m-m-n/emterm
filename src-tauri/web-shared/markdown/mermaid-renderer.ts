@@ -8,6 +8,7 @@
  */
 
 import { t } from "../i18n/index.ts";
+import { openMermaidPopup } from "./mermaid-popup.ts";
 
 /** Mermaid API interface for dynamic import */
 interface MermaidAPI {
@@ -24,6 +25,62 @@ const CHART_ICON = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" 
 
 /** Code icon SVG (angle brackets) */
 const CODE_ICON = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5,3 1.5,7 5,11"/><polyline points="9,3 12.5,7 9,11"/></svg>`;
+
+/** Spread icon SVG (diagonal expansion arrows) */
+const SPREAD_ICON = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1.5,5 1.5,1.5 5,1.5"/><polyline points="12.5,5 12.5,1.5 9,1.5"/><polyline points="1.5,9 1.5,12.5 5,12.5"/><polyline points="12.5,9 12.5,12.5 9,12.5"/><line x1="1.5" y1="1.5" x2="5.5" y2="5.5"/><line x1="12.5" y1="1.5" x2="8.5" y2="5.5"/><line x1="1.5" y1="12.5" x2="5.5" y2="8.5"/><line x1="12.5" y1="12.5" x2="8.5" y2="8.5"/></svg>`;
+
+/** Feedback timeout for the copy button's success / error label revert. */
+const COPY_FEEDBACK_MS = 1500;
+
+/**
+ * Attaches a `click` handler that writes the mermaid `source` to the
+ * clipboard and updates the button UI with success / error feedback that
+ * reverts to the original label after {@link COPY_FEEDBACK_MS}.
+ */
+function attachMermaidCopyHandler(
+  copyBtn: HTMLButtonElement,
+  copyIcon: HTMLElement,
+  source: string,
+): void {
+  const originalLabel = t("markdown.copyCode");
+
+  const setFeedback = (
+    cls: "copy-success" | "copy-error",
+    labelKey: string,
+  ): void => {
+    copyBtn.classList.remove("copy-success", "copy-error");
+    copyBtn.classList.add(cls);
+    const label = t(labelKey);
+    copyBtn.setAttribute("aria-label", label);
+    copyIcon.textContent = label;
+  };
+  const restore = (): void => {
+    copyBtn.classList.remove("copy-success", "copy-error");
+    copyBtn.setAttribute("aria-label", originalLabel);
+    copyIcon.textContent = originalLabel;
+  };
+
+  copyBtn.addEventListener("click", () => {
+    // Guard against environments where the Clipboard API is unavailable
+    // (older WebViews) — treat it as a failure so the error UI still shows.
+    const clipboard = navigator.clipboard;
+    const write =
+      clipboard && typeof clipboard.writeText === "function"
+        ? clipboard.writeText(source)
+        : Promise.reject(new Error("navigator.clipboard is unavailable"));
+
+    write
+      .then(() => {
+        setFeedback("copy-success", "markdown.copySuccess");
+        setTimeout(restore, COPY_FEEDBACK_MS);
+      })
+      .catch((err: unknown) => {
+        console.warn("[WARN][FRONTEND] MermaidRenderer: copy failed", err);
+        setFeedback("copy-error", "markdown.copyFailed");
+        setTimeout(restore, COPY_FEEDBACK_MS);
+      });
+  });
+}
 
 /**
  * Renders mermaid code blocks as SVG diagrams with toggle support.
@@ -178,6 +235,20 @@ export class MermaidRenderer {
       codeBtn.setAttribute("aria-label", t("markdown.mermaidCode"));
       codeBtn.innerHTML = CODE_ICON;
 
+      const spreadBtn = document.createElement("button");
+      spreadBtn.className = "mermaid-spread-btn";
+      spreadBtn.type = "button";
+      spreadBtn.setAttribute("aria-label", t("markdown.mermaidSpread"));
+      spreadBtn.innerHTML = SPREAD_ICON;
+      spreadBtn.addEventListener("click", () => {
+        const svgEl = diagramContainer.querySelector("svg");
+        if (!svgEl) return;
+        openMermaidPopup({
+          svg: svgEl as SVGElement,
+          triggerButton: spreadBtn,
+        });
+      });
+
       const copyBtn = document.createElement("button");
       copyBtn.className = "copy-code-button mermaid-copy-btn";
       copyBtn.type = "button";
@@ -187,8 +258,13 @@ export class MermaidRenderer {
       copyIcon.textContent = t("markdown.copyCode");
       copyBtn.appendChild(copyIcon);
 
+      // Wire the copy button so clicking writes the mermaid source to the
+      // clipboard with visible success / error feedback (~1.5s revert).
+      attachMermaidCopyHandler(copyBtn, copyIcon, source);
+
       toolbar.appendChild(chartBtn);
       toolbar.appendChild(codeBtn);
+      toolbar.appendChild(spreadBtn);
       toolbar.appendChild(copyBtn);
 
       // Replace in DOM
