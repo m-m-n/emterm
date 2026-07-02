@@ -39,6 +39,32 @@ const ZOOM_STEP = 0.25;
 const STEP_FACTOR = 1.1;
 /** Fraction of the viewport each dimension of the stage occupies. */
 const STAGE_FILL = 0.8;
+/** Pixels panned per arrow-key press (FR4 arrow-key pan). */
+const PAN_STEP = 40;
+
+/**
+ * Reserved host-control IPC messages. The native `webview_host` layer
+ * consumes these (never forwarding them to user-level IPC) to suppress its
+ * window-level Esc / q / Q close handler while the popup is open, so a single
+ * ESC closes only the popup and not the whole Markdown viewer (FR6).
+ */
+const ESC_GUARD_ON = "__emterm_host:esc-guard:on";
+const ESC_GUARD_OFF = "__emterm_host:esc-guard:off";
+
+/**
+ * Best-effort post to the host IPC channel. `window.ipc` exists inside the
+ * wry-hosted viewer but not in unit tests / plain browsers, so both the
+ * optional chaining and the try/catch keep this a safe no-op when absent.
+ */
+function postHostMessage(msg: string): void {
+  try {
+    (
+      window as unknown as { ipc?: { postMessage?: (m: string) => void } }
+    ).ipc?.postMessage?.(msg);
+  } catch {
+    // window.ipc unavailable (e.g. happy-dom): silently skip.
+  }
+}
 
 /**
  * Module-level singleton guard: only one popup may exist at a time.
@@ -73,19 +99,43 @@ export function openMermaidPopup(
   stage.className = "mermaid-popup-stage";
   overlay.appendChild(stage);
 
+  /** Determine the intrinsic width / height of the source SVG. */
+  const intrinsicSize = (): { w: number; h: number } => {
+    const viewBox = svg.getAttribute("viewBox");
+    if (viewBox) {
+      const parts = viewBox.split(/\s+/).map((s) => parseFloat(s));
+      if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+        const w = parts[2] ?? 0;
+        const h = parts[3] ?? 0;
+        if (w > 0 && h > 0) return { w, h };
+      }
+    }
+    const rect = svg.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      return { w: rect.width, h: rect.height };
+    }
+    return { w: 400, h: 300 };
+  };
+
   // Clone the SVG so the original toolbar-hosted diagram is untouched.
   const clone = svg.cloneNode(true) as SVGElement;
   // Clone sizing normalization (FR2): Mermaid renders with useMaxWidth:true,
   // so the source SVG carries width="100%" plus an inline max-width that a
-  // stylesheet cannot override. Strip the sizing attributes / inline styles so
-  // the clone's untransformed base box equals its viewBox-derived intrinsic
-  // size and the fit factor `k` applies cleanly.
-  clone.removeAttribute("width");
-  clone.removeAttribute("height");
+  // stylesheet cannot override. Merely *removing* the sizing attributes is
+  // insufficient — an SVG without width/height resolves its base box from the
+  // available layout width (not the viewBox), which makes the fit factor `k`
+  // width-based and clips tall diagrams. So set EXPLICIT width/height
+  // ATTRIBUTES (px) from the viewBox-derived intrinsic size, clear the inline
+  // width/height styles, and force inline max sizes to "none", so the clone's
+  // untransformed base box equals the intrinsic size in BOTH dimensions and
+  // `k` truly fits width and height.
+  const intrinsic = intrinsicSize();
+  clone.setAttribute("width", String(intrinsic.w));
+  clone.setAttribute("height", String(intrinsic.h));
   clone.style.width = "";
   clone.style.height = "";
-  clone.style.maxWidth = "";
-  clone.style.maxHeight = "";
+  clone.style.maxWidth = "none";
+  clone.style.maxHeight = "none";
   clone.style.transformOrigin = "center center";
   stage.appendChild(clone);
 
@@ -129,24 +179,6 @@ export function openMermaidPopup(
   let panX = 0;
   let panY = 0;
   let fitK = 1.0;
-
-  /** Determine the intrinsic width / height of the source SVG. */
-  const intrinsicSize = (): { w: number; h: number } => {
-    const viewBox = svg.getAttribute("viewBox");
-    if (viewBox) {
-      const parts = viewBox.split(/\s+/).map((s) => parseFloat(s));
-      if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
-        const w = parts[2] ?? 0;
-        const h = parts[3] ?? 0;
-        if (w > 0 && h > 0) return { w, h };
-      }
-    }
-    const rect = svg.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      return { w: rect.width, h: rect.height };
-    }
-    return { w: 400, h: 300 };
-  };
 
   const stageArea = (): { w: number; h: number } => {
     const w =
@@ -290,6 +322,28 @@ export function openMermaidPopup(
         ev.preventDefault();
         resetView();
         return;
+      // Arrow-key pan (FR4): scroll-direction semantics — ArrowRight reveals
+      // content to the right (pan the diagram left), etc.
+      case "ArrowRight":
+        ev.preventDefault();
+        panX -= PAN_STEP;
+        applyTransform();
+        return;
+      case "ArrowLeft":
+        ev.preventDefault();
+        panX += PAN_STEP;
+        applyTransform();
+        return;
+      case "ArrowDown":
+        ev.preventDefault();
+        panY -= PAN_STEP;
+        applyTransform();
+        return;
+      case "ArrowUp":
+        ev.preventDefault();
+        panY += PAN_STEP;
+        applyTransform();
+        return;
       default:
         return;
     }
@@ -323,11 +377,16 @@ export function openMermaidPopup(
   document.body.style.overflow = "hidden";
   document.body.appendChild(overlay);
   closeBtn.focus();
+  // FR6 native ESC guard: ask the host to suppress its window-level Esc / q / Q
+  // close handler while the popup is open (DOM stopPropagation cannot reach it).
+  postHostMessage(ESC_GUARD_ON);
 
   // ---- Controller -------------------------------------------------------
   const controller: MermaidPopupController = {
     close: () => {
       if (activePopup !== controller) return;
+      // FR6 native ESC guard: re-enable the host's window-level close handler.
+      postHostMessage(ESC_GUARD_OFF);
       stage.removeEventListener("wheel", onWheel);
       stage.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("mousemove", onMouseMove);

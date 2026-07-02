@@ -50,6 +50,14 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
     let has_ipc = host.ipc.is_some();
     let mut ipc_handler = host.ipc.map(|c| c.on_invoke);
 
+    // FR6 native ESC guard: while `true`, the key_press handler below does not
+    // close the window on Esc / q / Q. Toggled synchronously in the IPC callback
+    // (WebKitGTK dispatches script messages on the GTK main thread, so mutating
+    // this shared cell there is safe). Toggling in the callback — before the
+    // body would ever be enqueued — keeps the guard from losing the race
+    // against the first ESC keypress after a popup opens.
+    let esc_guard = std::rc::Rc::new(std::cell::Cell::new(false));
+
     let scheme = host.scheme.clone();
     let request_handler = host.request_handler;
     let navigation_handler = host.navigation_handler;
@@ -65,9 +73,30 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
     if let Some(script) = init_script.as_deref() {
         builder = builder.with_initialization_script(script);
     }
-    if has_ipc {
+    // Register the IPC handler whenever there is a user-level IPC bridge OR
+    // the window opts into Esc / q / Q close: the latter needs `window.ipc`
+    // to exist so the child frontend can post the reserved `__emterm_host:*`
+    // esc-guard messages (FR6). Reserved messages are consumed here in the IPC
+    // callback and never enter the channel, so they can neither reach the user
+    // handler nor contribute to unbounded queue growth.
+    if has_ipc || host.close_on_esc_q {
+        let esc_guard = esc_guard.clone();
         builder = builder.with_ipc_handler(move |request: Request<String>| {
-            let _ = ipc_tx.send(request.body().clone());
+            let body = request.body();
+            if let Some(msg) = super::parse_host_control(body) {
+                match msg {
+                    super::HostControlMessage::EscGuardOn => esc_guard.set(true),
+                    super::HostControlMessage::EscGuardOff => esc_guard.set(false),
+                }
+                return;
+            }
+            // Guard-only windows (close_on_esc_q without a user-level IPC
+            // bridge) have no consumer for non-reserved bodies: drop them
+            // here instead of growing the channel with messages the drain
+            // would only discard.
+            if has_ipc {
+                let _ = ipc_tx.send(body.clone());
+            }
         });
     }
 
@@ -85,11 +114,13 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
     }
     if host.close_on_esc_q {
         let running = running.clone();
+        let esc_guard = esc_guard.clone();
         window.connect_key_press_event(move |_, ev| {
             let key = ev.keyval();
-            if key == gtk::gdk::keys::constants::Escape
-                || key == gtk::gdk::keys::constants::q
-                || key == gtk::gdk::keys::constants::Q
+            if !esc_guard.get()
+                && (key == gtk::gdk::keys::constants::Escape
+                    || key == gtk::gdk::keys::constants::q
+                    || key == gtk::gdk::keys::constants::Q)
             {
                 running.set(false);
             }
@@ -99,10 +130,23 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
 
     window.show_all();
 
+    // Drain IPC bodies destined for the user-level handler. Reserved
+    // `__emterm_host:*` messages are consumed synchronously in the IPC
+    // callback above and never enter this channel. Cap the drain at 64
+    // bodies per GTK iteration so an IPC flood cannot starve UI event
+    // processing — but re-arm when the cap was hit: `main_iteration_do(true)`
+    // blocks and an mpsc send does not wake the GTK context, so leftover
+    // bodies would otherwise be stranded until an unrelated GTK event.
+    let mut block = true;
     while running.get() {
-        gtk::main_iteration_do(true);
-        if let Some(handler) = ipc_handler.as_mut() {
-            while let Ok(body) = ipc_rx.try_recv() {
+        gtk::main_iteration_do(block);
+        let mut drained = 0;
+        while drained < 64 {
+            let Ok(body) = ipc_rx.try_recv() else {
+                break;
+            };
+            drained += 1;
+            if let Some(handler) = ipc_handler.as_mut() {
                 if let Some(script) = handler(body) {
                     if let Err(e) = webview.evaluate_script(&script) {
                         log::warn!("webview_host: reply eval failed: {e}");
@@ -110,6 +154,7 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
                 }
             }
         }
+        block = drained < 64;
     }
     Ok(())
 }

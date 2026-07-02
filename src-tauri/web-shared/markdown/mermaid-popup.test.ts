@@ -17,8 +17,12 @@
  * - button/keyboard zoom step is 0.25 additive; wheel stays ×1.1
  * - Tab / Shift+Tab focus trap cycles the four popup buttons
  * - pan-end click on background does not close; a clean click does
- * - clone sizing normalization strips width/height attrs + inline max sizes
+ * - clone sizing normalization sets explicit width/height attrs + max:none
  * - window blur while dragging clears the drag state
+ *
+ * Plus TS-21 / TS-22 (phase-4 real-device fixes):
+ * - arrow keys pan by 40px with scroll-direction semantics + preventDefault
+ * - open/close post the reserved esc-guard IPC (and no-op without window.ipc)
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -540,7 +544,7 @@ describe("openMermaidPopup fixes (TS-16 through TS-20)", () => {
     controller.close();
   });
 
-  test("TS-19: cloned SVG has no width/height attributes and no inline width/height/max sizes", () => {
+  test("TS-19: cloned SVG has explicit viewBox-derived width/height attributes and inline max sizes of none", () => {
     const svg = document.createElementNS(SVG_NS, "svg") as SVGElement;
     svg.setAttribute("viewBox", "0 0 200 100");
     // Mermaid's useMaxWidth:true output: width="100%" + inline max-width.
@@ -558,12 +562,17 @@ describe("openMermaidPopup fixes (TS-16 through TS-20)", () => {
       ".mermaid-popup-stage svg",
     );
     expect(clone).not.toBeNull();
-    expect(clone?.hasAttribute("width")).toBe(false);
-    expect(clone?.hasAttribute("height")).toBe(false);
+    // Explicit intrinsic-size (px) attributes so the untransformed base box
+    // equals the viewBox in BOTH dimensions and the fit factor is not
+    // width-based (tall diagrams would otherwise clip).
+    expect(clone?.getAttribute("width")).toBe("200");
+    expect(clone?.getAttribute("height")).toBe("100");
+    // Inline width/height cleared; inline max sizes forced to none so a
+    // stylesheet / inherited max-width cannot re-clamp the clone.
     expect(clone?.style.width).toBe("");
     expect(clone?.style.height).toBe("");
-    expect(clone?.style.maxWidth).toBe("");
-    expect(clone?.style.maxHeight).toBe("");
+    expect(clone?.style.maxWidth).toBe("none");
+    expect(clone?.style.maxHeight).toBe("none");
     // The source SVG must be left untouched.
     expect(svg.getAttribute("width")).toBe("100%");
 
@@ -602,5 +611,81 @@ describe("openMermaidPopup fixes (TS-16 through TS-20)", () => {
     expect(__readActivePopupState()?.panY).toBe(10);
 
     controller.close();
+  });
+});
+
+describe("openMermaidPopup arrow-key pan (TS-21)", () => {
+  test("TS-21: arrow keys pan by 40px with scroll-direction semantics and preventDefault", () => {
+    const svg = makeSvg();
+    const trigger = makeTrigger();
+    const controller = openMermaidPopup({ svg, triggerButton: trigger });
+
+    const overlay = document.querySelector<HTMLElement>(
+      ".mermaid-popup-overlay",
+    );
+
+    const press = (key: string): boolean => {
+      const ev = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      overlay?.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+
+    // ArrowRight reveals content to the right: panX -= 40.
+    expect(press("ArrowRight")).toBe(true);
+    expect(__readActivePopupState()?.panX).toBe(-40);
+
+    // ArrowLeft moves back: panX += 40 → 0.
+    expect(press("ArrowLeft")).toBe(true);
+    expect(__readActivePopupState()?.panX).toBe(0);
+
+    // ArrowDown reveals content below: panY -= 40.
+    expect(press("ArrowDown")).toBe(true);
+    expect(__readActivePopupState()?.panY).toBe(-40);
+
+    // ArrowUp moves back: panY += 40 → 0.
+    expect(press("ArrowUp")).toBe(true);
+    expect(__readActivePopupState()?.panY).toBe(0);
+
+    // panX is untouched by vertical arrows and vice versa.
+    expect(__readActivePopupState()?.panX).toBe(0);
+
+    controller.close();
+  });
+});
+
+describe("openMermaidPopup native ESC guard IPC (TS-22)", () => {
+  afterEach(() => {
+    // Remove the mock so unrelated tests see no window.ipc.
+    delete (window as unknown as { ipc?: unknown }).ipc;
+  });
+
+  test("TS-22: opening posts esc-guard:on and closing posts esc-guard:off via window.ipc", () => {
+    const posted: string[] = [];
+    (window as unknown as { ipc: { postMessage: (m: string) => void } }).ipc = {
+      postMessage: (m: string) => posted.push(m),
+    };
+
+    const svg = makeSvg();
+    const trigger = makeTrigger();
+    const controller = openMermaidPopup({ svg, triggerButton: trigger });
+    expect(posted).toContain("__emterm_host:esc-guard:on");
+    expect(posted).not.toContain("__emterm_host:esc-guard:off");
+
+    controller.close();
+    expect(posted).toContain("__emterm_host:esc-guard:off");
+  });
+
+  test("TS-22: open/close without window.ipc does not throw", () => {
+    delete (window as unknown as { ipc?: unknown }).ipc;
+    const svg = makeSvg();
+    const trigger = makeTrigger();
+    expect(() => {
+      const controller = openMermaidPopup({ svg, triggerButton: trigger });
+      controller.close();
+    }).not.toThrow();
   });
 });

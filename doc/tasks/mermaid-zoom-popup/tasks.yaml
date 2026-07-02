@@ -231,3 +231,84 @@ phases:
         description: >
           bun test・bun run typecheck・bun run build:viewer を実行し全て exit 0 を確認する。
         verifies: []
+
+  - id: phase-4
+    title: "実機バグ修正: native ESC ガード・fit 縦横比・矢印キーパン"
+    goal: "実機確認で発覚した2バグ（ESC でビューアごと閉じる / fit が幅ベースで縦長図が見切れる）を修正し、仕様変更（矢印キーでパン）を実装する。TS-19 更新 + TS-21〜TS-23 で検証する"
+    files_to_modify:
+      - src-tauri/web-shared/markdown/mermaid-popup.ts
+      - src-tauri/web-shared/markdown/mermaid-popup.test.ts
+      - src-tauri/src/webview_host/mod.rs
+      - src-tauri/src/webview_host/linux.rs
+      - src-tauri/src/webview_host/windows.rs
+    files_to_create: []
+    tasks:
+      - id: write-phase4-tests
+        status: completed
+        title: "TS-19 更新 + TS-21/TS-22 を失敗テストとして追加"
+        description: >
+          mermaid-popup.test.ts を更新する:
+          - TS-19 を「clone に viewBox 由来の width/height 属性 (px) が設定され、
+            inline maxWidth/maxHeight が none」の検証に書き換える
+          - TS-21 矢印キーパン（ArrowRight: panX-40 / ArrowLeft: panX+40 /
+            ArrowDown: panY-40 / ArrowUp: panY+40、preventDefault 検証）を追加
+          - TS-22 esc-guard IPC（window.ipc モックで open 時 :on、close 時 :off。
+            window.ipc 無しでも throw しない）を追加
+        verifies:
+          - TS-19
+          - TS-21
+          - TS-22
+      - id: implement-clone-explicit-size
+        status: completed
+        title: "clone に viewBox 由来の明示的 width/height を設定（fit 縦横比修正）"
+        description: >
+          FR2 修正: 属性除去だけでは SVG の base box が viewBox でなく利用可能幅から
+          解決され fit が幅ベースになる。cloneNode 直後に intrinsicSize() の値で
+          width/height 属性 (px) を設定し、inline maxWidth/maxHeight を "none" にする。
+        verifies:
+          - TS-19
+      - id: implement-arrow-pan
+        status: completed
+        title: "矢印キーパンを追加"
+        description: >
+          FR4 拡張: onKeydown に ArrowUp/ArrowDown/ArrowLeft/ArrowRight を追加。
+          PAN_STEP = 40。スクロール方向セマンティクス
+          （ArrowRight → panX -= 40 で右側コンテンツが見える）。preventDefault する。
+        verifies:
+          - TS-21
+      - id: implement-esc-guard-js
+        status: completed
+        title: "popup open/close で esc-guard IPC を送信"
+        description: >
+          FR6 native ガード (JS 側): openMermaidPopup で
+          window.ipc.postMessage("__emterm_host:esc-guard:on") を、close() で
+          ":off" を best-effort 送信する（optional chaining + try/catch、
+          happy-dom には window.ipc が無いので安全に no-op）。
+        verifies:
+          - TS-22
+      - id: implement-esc-guard-native
+        status: completed
+        title: "webview_host に予約 IPC メッセージと ESC 抑止を実装"
+        description: >
+          FR6 native ガード (Rust 側):
+          - mod.rs: 予約メッセージ "__emterm_host:esc-guard:on"/":off" の
+            parse 関数 (pure) + unit test (TS-23)。
+          - linux.rs: close_on_esc_q 時は ipc handler を常に登録。ipc drain で
+            予約メッセージを先に処理し guard フラグ (Rc<Cell<bool>>) をトグル、
+            user handler には渡さない。key_press ハンドラは guard 中は close しない。
+          - windows.rs: 同様に has_ipc || close_on_esc_q で ipc handler 登録、
+            user_event で予約メッセージを処理して esc_guard: bool をトグル、
+            KeyboardInput 分岐で guard 中は event_loop.exit() しない。
+        verifies:
+          - TS-23
+      - id: rerun-phase4-regression
+        status: completed
+        title: "回帰確認（bun test / typecheck / build:viewer / cargo check + test --lib）"
+        description: >
+          bun test / bun run typecheck / bun run build:viewer と、
+          CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+          および cargo test --manifest-path src-tauri/Cargo.toml --lib webview_host
+          を実行し全て成功を確認する。CLI-only ビルドの feature gate 破壊がないか
+          CARGO_TARGET_DIR=src-tauri/target cargo check --manifest-path src-tauri/Cargo.toml
+          --no-default-features も確認する。
+        verifies: []
