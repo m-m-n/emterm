@@ -1212,10 +1212,11 @@ impl Tab {
                 // daemon (pty_spawn.rs) and bridge (bridge.rs) probes. Only
                 // metadata is logged (never the payload bytes) so this probe
                 // cannot leak user file content into persisted release logs.
+                const OSC_PROBE_NEEDLE: &[u8] = b"\x1b]777;emterm;";
                 let osc_probe = msg
                     .payload
-                    .windows(12)
-                    .position(|w| w == b"\x1b]777;emterm;");
+                    .windows(OSC_PROBE_NEEDLE.len())
+                    .position(|w| w == OSC_PROBE_NEEDLE);
                 if let Some(off) = osc_probe {
                     log::warn!(
                         "[osc-probe gui] enter pane={} payload_len={} osc_off={}",
