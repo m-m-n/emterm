@@ -12,13 +12,14 @@ A native terminal emulator for Linux and Windows. Uses winit + wgpu + swash for 
   - SlimCell scrollback compression: 76% per-cell memory reduction (34B → 8B) via StyleTable/CharTable deduplication
   - wgpu render pipeline with dirty-row tracking and a winit event loop
   - Background Color Erase (BCE) support
+  - COLRv1 vector emoji rendering (skrifa + tiny-skia): sharper color emoji at fractional DPI scales, ~5 MiB smaller bundled font than the previous CBDT bitmap font
 
 - **Rich Content Display**
   - Inline Markdown rendering via custom OSC 777 extension (CommonMark, GFM, syntax highlighting, Mermaid diagrams)
   - Large document support: no file size limit, session timeout resets per chunk
   - Fullscreen Markdown viewer with outline panel (table of contents), zoom, Space/Shift+Space scrolling, and keyboard navigation
   - Markdown viewer link navigation: click `.md` links to browse related files; inline images loaded lazily (works over SSH)
-  - Mermaid diagram rendering in Markdown (flowcharts, sequence diagrams, etc.) with Chart/Code toggle toolbar
+  - Mermaid diagram rendering in Markdown (flowcharts, sequence diagrams, etc.) with Chart/Code toggle toolbar, a fullscreen zoom/pan popup (Spread button), and a working Copy-source button
   - Inline image rendering (Kitty Graphics Protocol and SIXEL)
   - Kitty protocol compatibility: works with kitten icat, ratatui-image, treemd, and other external tools
   - Fullscreen image viewer (pixel-perfect and fit-to-window modes, pan, wheel scroll, Space/Shift+Space scrolling)
@@ -133,7 +134,7 @@ make setup   # downloads bundled fonts + rustup target add x86_64-pc-windows-msv
 
 ### Bundled Fonts
 
-Bundled fonts (Noto Sans CJK JP, Noto Color Emoji, Noto Emoji monochrome, Inconsolata) are downloaded by `scripts/fetch-fonts.sh` and verified against pinned SHA256 hashes; they are not tracked in git. Targets that need them (`setup`, `dev`, `build`, `win-build`, `dpkg`) depend on the `fetch-fonts` target automatically.
+Bundled fonts (Noto Sans CJK JP, Noto Color Emoji (COLRv1), Noto Emoji monochrome, Inconsolata, Noto Sans Symbols 2) are downloaded by `scripts/fetch-fonts.sh` and verified against pinned SHA256 hashes; they are not tracked in git. Targets that need them (`setup`, `dev`, `build`, `win-build`, `dpkg`) depend on the `fetch-fonts` target automatically.
 
 - Re-running `make fetch-fonts` with up-to-date files is a no-op (idempotent).
 - After the first successful fetch the rest of the build runs fully offline.

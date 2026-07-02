@@ -106,7 +106,20 @@ The terminal viewport is rendered via a wgpu GPU surface driven by the winit eve
 - Wide character support (CJK, emoji)
 - Selection highlight rendering
 - Configurable font family (primary, CJK/secondary, emoji), font size, line height
-- Bundled Noto fonts for CJK and color emoji
+- Bundled fonts: Noto Sans CJK JP, Noto Color Emoji (COLRv1), Noto Emoji (monochrome), Inconsolata, Noto Sans Symbols 2 (covers prompt arrows, media control glyphs, and braille spinners used in chrome surfaces)
+
+---
+
+#### COLRv1 Vector Emoji Rendering
+
+Color emoji glyphs are rasterized via a vector-direct COLRv1 paint-graph path (`skrifa` + `tiny-skia`) instead of the previous CBDT bitmap-strike path, eliminating bitmap-downscale blur at fractional DPI scales.
+
+**Key Functionality:**
+- Bundled color emoji font is `Noto-COLRv1.ttf` (COLRv1 + glyf), replacing the previous `NotoColorEmoji.ttf` (CBDT bitmap)
+- Fonts with a COLR table version 1 are routed through the new `colrv1_painter` module; other fonts (CJK, Latin, Symbols, monochrome emoji) continue through the existing swash path unchanged
+- Rasterized emoji are sized to the base text font's cell height (ascent + descent) with 1px padding and bbox-aware uniform scaling, so glyphs align with surrounding text
+- Glyphs the COLRv1 path cannot resolve fall back to the monochrome `NotoEmoji-Regular` font via the existing fallback chain
+- Reduces bundled font size by approximately 5 MiB relative to the CBDT bitmap font
 
 ---
 
@@ -247,8 +260,26 @@ Mermaid code blocks in Markdown documents render as SVG diagrams with an interac
 - On syntax error, the original source is shown as a regular code block
 - mermaid.js is loaded only when mermaid blocks are present (lazy loading)
 - Security: mermaid.js `securityLevel` set to `strict`; user-authored SVG in Markdown remains blocked by DOMPurify
-- Chart/Code toggle toolbar: switch between rendered SVG diagram and original source code view
+- Chart/Code/Spread/Copy toolbar: switch between rendered SVG diagram and original source code view, open a zoom popup, or copy the Mermaid source
 - Copy button copies the Mermaid source code to clipboard (available in both diagram and code views)
+
+**Zoom Popup:**
+- The Spread button opens a fullscreen overlay with a clone of the diagram, fit to the window (minus 10% padding) at `scale = 1.0`
+- Zoom: `+`/`-` buttons and keyboard step by 0.25 (additive); mouse wheel zooms by a factor of 1.1 per notch; clamped to `[0.25, 5.0]`
+- Pan: left-mouse drag; arrow keys pan 40px per press
+- Reset: `0` key or reset button restores `scale = 1.0` and centered pan
+- Close: `×` button, click on the overlay background, or `Escape` (a single `Escape` press closes only the popup, not the Markdown viewer window)
+- Tab / Shift+Tab cycles focus within the popup's four buttons (close, zoom-in, reset, zoom-out)
+- Background page scroll is locked while the popup is open
+
+**Keyboard Shortcuts (Zoom Popup):**
+| Key | Action |
+|-----|--------|
+| `Escape` | Close popup |
+| `+` / `-` | Zoom in/out by 0.25 |
+| `0` | Reset zoom and pan |
+| `Arrow keys` | Pan |
+| `Tab` / `Shift+Tab` | Cycle focus within popup buttons |
 
 ---
 
@@ -1210,6 +1241,7 @@ Configuration is stored in a JSON file at the platform-specific app data directo
 | `wgpu` | GPU surface and render pipeline |
 | `egui` | In-process UI elements |
 | `swash` + `zeno` + `fontdb` | Font rasterization and glyph atlas |
+| `skrifa` + `tiny-skia` | COLRv1 paint-graph traversal and rasterization for color emoji |
 | `wry` | Child WebView windows (Markdown viewer, settings, data viewer) |
 | `portable-pty` | Cross-platform PTY abstraction |
 | `vt100` | Daemon-side shadow grid for snapshot assembly |
