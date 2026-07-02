@@ -50,8 +50,11 @@
 | TS-16 | Button/keyboard zoom step 0.25 additive | From `scale=1.0`, `+` button/key yields exactly 1.25; `-` from 1.25 yields 1.0; wheel still ×/÷1.1 | Unit |
 | TS-17 | Tab focus trap | `Tab` from zoom-out wraps to close; `Shift+Tab` from close wraps to zoom-out; focus stays in overlay | Unit |
 | TS-18 | Pan-end click guard | drag (mousedown→mousemove→mouseup on overlay bg) does NOT close; clean click on bg still closes | Unit |
-| TS-19 | Clone sizing normalization | Cloned SVG has no `width`/`height` attributes and no inline `max-width` | Unit |
+| TS-19 | Clone sizing normalization | Cloned SVG carries explicit `width`/`height` attributes = viewBox intrinsic size (px), inline `max-width`/`max-height` = `none` | Unit |
 | TS-20 | Blur clears drag | `window` blur while dragging clears drag state; subsequent mousemove does not pan | Unit |
+| TS-21 | Arrow-key pan | ArrowRight: panX −40 / ArrowLeft: panX +40 / ArrowDown: panY −40 / ArrowUp: panY +40, each preventDefault()ed | Unit |
+| TS-22 | ESC-guard IPC | Mocked `window.ipc`: open posts `__emterm_host:esc-guard:on`, close posts `:off`; absent `window.ipc` does not throw | Unit |
+| TS-23 | Host control message parsing (Rust) | `webview_host` parses `:on`/`:off` as guard toggles; non-reserved bodies forwarded to user IPC | Unit (Rust) |
 
 ## Code Quality Verification
 
@@ -103,11 +106,11 @@
 | Requirement | Phase | Verification |
 |-------------|-------|--------------|
 | FR1 (Spread button) | Phase 2 | TS-1, TS-2 |
-| FR2 (Popup open + fit + clone normalization) | Phase 2 / Phase 3 | TS-5, TS-15, TS-19 |
+| FR2 (Popup open + fit + clone normalization) | Phase 2 / Phase 3 / Phase 4 | TS-5, TS-15, TS-19 |
 | FR3 (Zoom controls + clamp + 0.25 step) | Phase 2 / Phase 3 | TS-8, TS-9, TS-13, TS-16 |
-| FR4 (Pan via drag + blur guard) | Phase 2 / Phase 3 | TS-14, TS-20 |
+| FR4 (Pan via drag + blur guard + arrow keys) | Phase 2 / Phase 3 / Phase 4 | TS-14, TS-20, TS-21 |
 | FR5 (Reset via `0`) | Phase 2 | TS-10 |
-| FR6 (Close via x / bg / ESC + pan-end guard) | Phase 2 / Phase 3 | TS-11, TS-12, TS-18 |
+| FR6 (Close via x / bg / ESC + pan-end guard + native ESC-guard) | Phase 2 / Phase 3 / Phase 4 | TS-11, TS-12, TS-18, TS-22, TS-23 |
 | FR7 (Background scroll lock) | Phase 2 | TS-6 |
 | FR8 (Copy click handler) | Phase 1 | TS-3, TS-4 |
 | FR9 (Focus management + Tab trap) | Phase 2 / Phase 3 | TS-7, TS-17 |

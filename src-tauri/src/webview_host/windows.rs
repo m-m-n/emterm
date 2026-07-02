@@ -10,6 +10,8 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -37,6 +39,7 @@ pub fn run(host: WebViewHost) -> Result<(), String> {
         webview: None,
         ipc_handler: None,
         close_on_esc_q: false,
+        esc_guard: Arc::new(AtomicBool::new(false)),
         build_error: build_error.clone(),
     };
     event_loop
@@ -55,6 +58,13 @@ struct WebViewApp {
     webview: Option<wry::WebView>,
     ipc_handler: Option<IpcHandler>,
     close_on_esc_q: bool,
+    /// FR6 native ESC guard: while `true`, `KeyboardInput` does not exit on
+    /// Esc / q / Q. Shared with the IPC handler closure (which may run off the
+    /// main thread on Windows), which toggles it synchronously when it receives
+    /// a reserved `__emterm_host:*` esc-guard message — before the body would
+    /// ever be forwarded to the event loop — so the guard cannot lose the race
+    /// against the first ESC keypress after a popup opens.
+    esc_guard: Arc<AtomicBool>,
     build_error: Rc<RefCell<Option<String>>>,
 }
 
@@ -101,6 +111,10 @@ impl ApplicationHandler<String> for WebViewApp {
         let ipc_handler = host.ipc.map(|c| c.on_invoke);
 
         let ipc_proxy = self.proxy.clone();
+        // FR6 native ESC guard shared between the IPC handler closure and the
+        // `KeyboardInput` arm. The wry IPC callback may run off the main thread
+        // on Windows, so an atomic is used instead of a plain bool.
+        let esc_guard = Arc::new(AtomicBool::new(false));
         let mut builder = WebViewBuilder::new()
             .with_url(url)
             .with_custom_protocol(scheme, move |_id, request| request_handler(&request))
@@ -109,9 +123,33 @@ impl ApplicationHandler<String> for WebViewApp {
         if let Some(script) = init_script.as_deref() {
             builder = builder.with_initialization_script(script);
         }
-        if has_ipc {
+        // Register the IPC handler whenever there is a user-level IPC bridge OR
+        // the window opts into Esc / q / Q close: the latter needs `window.ipc`
+        // to exist so the child frontend can post the reserved `__emterm_host:*`
+        // esc-guard messages (FR6). Reserved messages are consumed here in the
+        // IPC callback (toggling the guard synchronously) and never reach the
+        // event loop or the user handler.
+        if has_ipc || host.close_on_esc_q {
+            let esc_guard = esc_guard.clone();
             builder = builder.with_ipc_handler(move |request: Request<String>| {
-                let _ = ipc_proxy.send_event(request.body().clone());
+                let body = request.body();
+                if let Some(msg) = super::parse_host_control(body) {
+                    match msg {
+                        super::HostControlMessage::EscGuardOn => {
+                            esc_guard.store(true, Ordering::Relaxed)
+                        }
+                        super::HostControlMessage::EscGuardOff => {
+                            esc_guard.store(false, Ordering::Relaxed)
+                        }
+                    }
+                    return;
+                }
+                // Guard-only windows (close_on_esc_q without a user-level IPC
+                // bridge) have no consumer for non-reserved bodies: drop them
+                // here instead of posting events the loop would only discard.
+                if has_ipc {
+                    let _ = ipc_proxy.send_event(body.clone());
+                }
             });
         }
 
@@ -129,6 +167,7 @@ impl ApplicationHandler<String> for WebViewApp {
         self.webview = Some(webview);
         self.ipc_handler = ipc_handler;
         self.close_on_esc_q = host.close_on_esc_q;
+        self.esc_guard = esc_guard;
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -147,7 +186,9 @@ impl ApplicationHandler<String> for WebViewApp {
                     logical_key.as_ref(),
                     Key::Named(NamedKey::Escape) | Key::Character("q") | Key::Character("Q")
                 );
-                if close {
+                // FR6 native ESC guard: while a modal popup is open, do not
+                // close the whole window on Esc / q / Q.
+                if close && !self.esc_guard.load(Ordering::Relaxed) {
                     event_loop.exit();
                 }
             }
@@ -156,6 +197,9 @@ impl ApplicationHandler<String> for WebViewApp {
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, body: String) {
+        // Reserved `__emterm_host:*` messages are consumed in the IPC callback
+        // (see `resumed`) and never reach the event loop, so `body` here is
+        // always destined for the user-level handler (FR6).
         let Some(handler) = self.ipc_handler.as_mut() else {
             return;
         };

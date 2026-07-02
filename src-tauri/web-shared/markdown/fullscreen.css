@@ -502,6 +502,11 @@
   transform-origin: center center;
   max-width: none;
   max-height: none;
+  /* Opaque canvas matching the Mermaid dark theme background so the
+     diagram's area is visually distinct from the click-to-close overlay. */
+  background: #2d2d2d;
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
 }
 
 /* Zoom controls (bottom-right) */

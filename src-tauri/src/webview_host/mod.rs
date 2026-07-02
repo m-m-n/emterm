@@ -38,6 +38,29 @@ pub type NavigationHandler = Box<dyn Fn(&str) -> bool + Send + Sync + 'static>;
 /// `evaluate_script` body to send back as the reply.
 pub type IpcHandler = Box<dyn FnMut(String) -> Option<String> + 'static>;
 
+/// Reserved host-control IPC messages sent by child WebView frontends
+/// (see `web-shared/markdown/mermaid-popup.ts`). These are consumed by the
+/// host layer and never forwarded to a user-level [`IpcHandler`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostControlMessage {
+    /// Suppress the native Esc / q / Q window-close while a modal popup is
+    /// open, so a single ESC closes only the popup and not the whole window.
+    EscGuardOn,
+    /// Re-enable the native Esc / q / Q window-close.
+    EscGuardOff,
+}
+
+/// Parse a reserved `__emterm_host:*` control message. Returns `None` for any
+/// body that is not an exact reserved message (which the host then forwards to
+/// the user-level [`IpcHandler`]).
+pub(crate) fn parse_host_control(body: &str) -> Option<HostControlMessage> {
+    match body {
+        "__emterm_host:esc-guard:on" => Some(HostControlMessage::EscGuardOn),
+        "__emterm_host:esc-guard:off" => Some(HostControlMessage::EscGuardOff),
+        _ => None,
+    }
+}
+
 /// Optional bidirectional IPC bridge config. When `Some`, the host
 /// installs a `with_ipc_handler` that forwards each body to the main
 /// thread; the main thread invokes [`IpcHandler`] and evaluates any
@@ -107,6 +130,72 @@ impl WebViewHost {
         {
             let _ = self;
             Err("webview_host: unsupported platform".into())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HostControlMessage, parse_host_control};
+
+    #[test]
+    fn parses_esc_guard_on() {
+        assert_eq!(
+            parse_host_control("__emterm_host:esc-guard:on"),
+            Some(HostControlMessage::EscGuardOn)
+        );
+    }
+
+    #[test]
+    fn parses_esc_guard_off() {
+        assert_eq!(
+            parse_host_control("__emterm_host:esc-guard:off"),
+            Some(HostControlMessage::EscGuardOff)
+        );
+    }
+
+    #[test]
+    fn rejects_arbitrary_body() {
+        assert_eq!(parse_host_control(""), None);
+        assert_eq!(parse_host_control("hello"), None);
+        assert_eq!(parse_host_control("{\"id\":1,\"cmd\":\"save\"}"), None);
+    }
+
+    #[test]
+    fn rejects_prefixed_but_wrong() {
+        // Right prefix, wrong / partial suffix must not parse.
+        assert_eq!(parse_host_control("__emterm_host:esc-guard:"), None);
+        assert_eq!(parse_host_control("__emterm_host:esc-guard:onx"), None);
+        assert_eq!(parse_host_control("__emterm_host:esc-guard:on "), None);
+        assert_eq!(parse_host_control("__emterm_host:other"), None);
+        // Leading whitespace must not parse (exact match only).
+        assert_eq!(parse_host_control(" __emterm_host:esc-guard:on"), None);
+    }
+
+    /// Cross-language contract drift guard (same spirit as
+    /// `ui::dialog::tests` for the design tokens): the reserved message
+    /// literals accepted by [`parse_host_control`] must byte-for-byte match
+    /// the constants the TypeScript frontend posts. A rename on either side
+    /// would otherwise keep both sides' local tests green while silently
+    /// disabling the native ESC guard.
+    #[test]
+    fn ts_frontend_posts_the_exact_reserved_literals() {
+        let ts_source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/web-shared/markdown/mermaid-popup.ts"
+        ))
+        .expect("mermaid-popup.ts must exist (esc-guard producer)");
+
+        for literal in ["__emterm_host:esc-guard:on", "__emterm_host:esc-guard:off"] {
+            assert!(
+                ts_source.contains(&format!("\"{literal}\"")),
+                "mermaid-popup.ts no longer contains the reserved literal {literal:?}; \
+                 the Rust parser and the TS producer have drifted apart"
+            );
+            assert!(
+                parse_host_control(literal).is_some(),
+                "parse_host_control must accept {literal:?}"
+            );
         }
     }
 }
