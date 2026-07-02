@@ -375,10 +375,11 @@ where
                 // metadata is logged (never the payload bytes) so this probe
                 // cannot leak user file content into persisted release logs.
                 if msg.msg_type == MessageType::PtyOutput {
+                    const OSC_PROBE_NEEDLE: &[u8] = b"\x1b]777;emterm;";
                     if let Some(off) = msg
                         .payload
-                        .windows(12)
-                        .position(|w| w == b"\x1b]777;emterm;")
+                        .windows(OSC_PROBE_NEEDLE.len())
+                        .position(|w| w == OSC_PROBE_NEEDLE)
                     {
                         log::warn!(
                             "[osc-probe bridge] pane={} payload_len={} osc_off={}",

@@ -584,7 +584,11 @@ fn pty_reader_loop(
                 // Only metadata is logged (never the payload bytes) so this
                 // probe cannot leak user file content into persisted release
                 // logs.
-                if let Some(off) = data.windows(12).position(|w| w == b"\x1b]777;emterm;") {
+                const OSC_PROBE_NEEDLE: &[u8] = b"\x1b]777;emterm;";
+                if let Some(off) = data
+                    .windows(OSC_PROBE_NEEDLE.len())
+                    .position(|w| w == OSC_PROBE_NEEDLE)
+                {
                     let target_state = match &*output_target.lock().unwrap() {
                         PaneOutputTarget::Connected(_) => "Connected",
                         PaneOutputTarget::Detached { .. } => "Detached",
