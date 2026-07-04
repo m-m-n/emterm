@@ -29,6 +29,30 @@ pub fn validate_file_size(path: &Path, max_size: u64) -> Result<(), CommandError
     Ok(())
 }
 
+/// Validates that a file's extension (case-insensitive, without the
+/// leading dot) matches one of `allowed`. Used by subcommands that only
+/// accept specific file types (e.g. `html`/`htm` for the html
+/// subcommand).
+pub fn validate_extension(
+    path: &Path,
+    allowed: &'static [&'static str],
+) -> Result<(), CommandError> {
+    let matches = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| allowed.iter().any(|a| a.eq_ignore_ascii_case(e)))
+        .unwrap_or(false);
+
+    if matches {
+        Ok(())
+    } else {
+        Err(CommandError::UnsupportedExtension {
+            path: path.to_owned(),
+            allowed,
+        })
+    }
+}
+
 /// Opens file and validates both existence and size in one operation to avoid TOCTOU
 pub fn open_and_validate_file(path: &Path, max_size: u64) -> Result<(File, PathBuf), CommandError> {
     let file = File::open(path).map_err(|e| {
@@ -129,6 +153,54 @@ mod tests {
     fn test_open_and_validate_file_not_found() {
         let result = open_and_validate_file(Path::new("/nonexistent.txt"), 1024);
         assert!(matches!(result, Err(CommandError::FileNotFound(_))));
+    }
+
+    const HTML_EXTENSIONS: &[&str] = &["html", "htm"];
+
+    // References AC-2 (html-viewer task0001): extension validation
+    // accepts .html/.htm case-insensitively and rejects everything else,
+    // including no extension.
+
+    #[test]
+    fn test_validate_extension_accepts_html_lowercase() {
+        let result = validate_extension(Path::new("page.html"), HTML_EXTENSIONS);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_extension_accepts_htm_lowercase() {
+        let result = validate_extension(Path::new("page.htm"), HTML_EXTENSIONS);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_extension_accepts_html_uppercase() {
+        let result = validate_extension(Path::new("page.HTML"), HTML_EXTENSIONS);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_extension_accepts_mixed_case() {
+        let result = validate_extension(Path::new("page.HtM"), HTML_EXTENSIONS);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_extension_rejects_other_extension() {
+        let result = validate_extension(Path::new("page.txt"), HTML_EXTENSIONS);
+        assert!(matches!(
+            result,
+            Err(CommandError::UnsupportedExtension { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validate_extension_rejects_no_extension() {
+        let result = validate_extension(Path::new("page"), HTML_EXTENSIONS);
+        assert!(matches!(
+            result,
+            Err(CommandError::UnsupportedExtension { .. })
+        ));
     }
 
     #[test]
