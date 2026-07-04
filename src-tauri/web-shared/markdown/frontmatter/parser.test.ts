@@ -337,3 +337,18 @@ describe("AC-3 (task0007): normalization respects the shared node budget at pars
     expect(ok.truncated).toBeFalsy();
   });
 });
+
+describe("AC-2 (task0008): the parse layer no longer depends on the view tree-builder", () => {
+  test("AC-2: parser.ts sources the node budget from the neutral limits module", async () => {
+    const src = await Bun.file(new URL("./parser.ts", import.meta.url)).text();
+    // The shared budget is imported from the neutral limits module...
+    expect(src).toMatch(/from "\.\/limits\.ts"/);
+    // ...and NOT from the view-layer tree-builder (the reversed dependency the
+    // finding flagged). The parse layer must not inherit a display-tree import.
+    expect(src).not.toMatch(/from "\.\/tree-builder\.ts"/);
+  });
+
+  test("AC-2: the budget value is unchanged (2000)", () => {
+    expect(MAX_NODES).toBe(2000);
+  });
+});

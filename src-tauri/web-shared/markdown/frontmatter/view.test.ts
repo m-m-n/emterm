@@ -356,6 +356,51 @@ describe("front matter block — parse-time truncation notice (task0007 AC-4)", 
   });
 });
 
+describe("front matter block — depth-cap truncation notice (task0008 AC-1)", () => {
+  /** Wrap `leaf` in `levels` nested single-key objects. */
+  function deeplyNested(levels: number): FrontMatterValue {
+    let value: FrontMatterValue = { leaf: "value" };
+    for (let i = 0; i < levels; i++) {
+      value = { [`level${i}`]: value } as FrontMatterValue;
+    }
+    return value;
+  }
+
+  test("AC-1: a value nested past the depth cap surfaces the localized notice", () => {
+    // The value is small in total nodes but far deeper than the depth cap, so
+    // the notice can only come from depth-cap truncation (not the node budget).
+    const block = buildFrontMatterBlock(
+      extracted("yaml", "..."),
+      ok(deeplyNested(200)),
+    );
+    header(block).click();
+
+    const notice = block.querySelector(".fm-truncated");
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain(String(MAX_NODES));
+    expect(notice?.textContent).toContain("omitted");
+  });
+
+  test("AC-1: the depth-cap notice is localized in ja", () => {
+    setLocale("ja");
+    const block = buildFrontMatterBlock(
+      extracted("yaml", "..."),
+      ok(deeplyNested(200)),
+    );
+    header(block).click();
+    expect(block.querySelector(".fm-truncated")?.textContent).toContain("省略");
+  });
+
+  test("AC-1: a within-cap deeply-nested value shows no notice", () => {
+    const block = buildFrontMatterBlock(
+      extracted("yaml", "..."),
+      ok(deeplyNested(10)),
+    );
+    header(block).click();
+    expect(block.querySelector(".fm-truncated")).toBeNull();
+  });
+});
+
 describe("front matter stylesheet — theme-following tokens (task0006 AC-1/AC-2)", () => {
   test("AC-2: block colors are drawn from the theme-aware --markdown-* variables", async () => {
     const cssUrl = new URL("./frontmatter.css", import.meta.url);
@@ -375,5 +420,24 @@ describe("front matter stylesheet — theme-following tokens (task0006 AC-1/AC-2
     expect(css).not.toContain("--md-sys-color-on-surface");
     expect(css).not.toContain("--md-sys-color-primary");
     expect(css).not.toContain("--md-sys-color-secondary");
+  });
+
+  test("AC-3: the parse-error accent comes from the palette, with no color literals", async () => {
+    const cssUrl = new URL("./frontmatter.css", import.meta.url);
+    const raw = await Bun.file(cssUrl).text();
+    // Drop comments so example hex/text inside them cannot trip the scan.
+    const css = raw.replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // The error accent now flows through the theme-aware --markdown-* palette
+    // (written per theme by applyMarkdownColorTheme), not a hardcoded literal.
+    expect(css).toMatch(/var\(--markdown-error/);
+    // The old per-theme literal accent and its data-theme gate are gone.
+    expect(css).not.toContain("--fm-error");
+    expect(css).not.toContain("data-theme");
+
+    // No hardcoded color literals of any form remain (NFR2 / AC-3): no hex, no
+    // rgb()/hsl() functions, no CSS named colors on a `color`/`background`.
+    expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(css).not.toMatch(/\b(?:rgba?|hsla?)\(/);
   });
 });

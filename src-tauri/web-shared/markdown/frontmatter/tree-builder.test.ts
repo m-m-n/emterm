@@ -108,15 +108,19 @@ describe("buildTree", () => {
     for (let i = 0; i < 200; i++) {
       data = { [`level${i}`]: data };
     }
-    let nodes: ReturnType<typeof buildTree>["nodes"] = [];
+    let result: ReturnType<typeof buildTree> = { nodes: [], truncated: false };
     expect(() => {
-      nodes = buildTree(data).nodes;
+      result = buildTree(data);
     }).not.toThrow();
+    const nodes = result.nodes;
     // Nodes are emitted at depths 0..127 only: exactly 128, capped.
     expect(nodes.length).toBe(128);
     expect(nodes[0]!.depth).toBe(0);
     expect(nodes[nodes.length - 1]!.depth).toBe(127);
     expect(nodes.every((n) => n.depth < 128)).toBe(true);
+    // task0008 AC-1: the dropped descendants below the cap are signalled so the
+    // view surfaces the partial-tree notice, exactly like the node-budget cap.
+    expect(result.truncated).toBe(true);
   });
 
   test("AC-4: within-cap deep nesting is fully expanded", () => {
@@ -197,5 +201,42 @@ describe("buildTree — total node budget (task0006 AC-6)", () => {
     const { nodes, truncated } = buildTree(data);
     expect(nodes.length).toBe(MAX_NODES);
     expect(truncated).toBe(true);
+  });
+});
+
+describe("buildTree — depth-cap truncation (task0008 AC-1)", () => {
+  /** Wrap `leaf` in `levels` nested single-key objects. */
+  function nest(levels: number): Record<string, unknown> {
+    let data: Record<string, unknown> = { leaf: "value" };
+    for (let i = 0; i < levels; i++) {
+      data = { [`level${i}`]: data };
+    }
+    return data;
+  }
+
+  test("AC-1: nesting past the depth cap flags truncation", () => {
+    const { nodes, truncated } = buildTree(nest(200));
+    // Capped at 128 rows AND the dropped descendants are signalled so the same
+    // notice as the node-budget cap fires (previously this was silent).
+    expect(nodes.length).toBe(128);
+    expect(truncated).toBe(true);
+  });
+
+  test("AC-1: within-cap nesting reports no truncation", () => {
+    const { nodes, truncated } = buildTree(nest(10));
+    // 10 wrappers + leaf = 11 rows, deepest at depth 10 — nothing dropped.
+    expect(nodes.length).toBe(11);
+    expect(truncated).toBe(false);
+  });
+
+  test("AC-1: an empty container exactly at the cap drops nothing, not flagged", () => {
+    // A chain of 128 wrappers ending in an empty object: the walk stops at the
+    // cap, but the container there holds no entries, so nothing is truncated.
+    let data: Record<string, unknown> = { deepest: {} };
+    for (let i = 0; i < 127; i++) {
+      data = { [`level${i}`]: data };
+    }
+    const { truncated } = buildTree(data);
+    expect(truncated).toBe(false);
   });
 });

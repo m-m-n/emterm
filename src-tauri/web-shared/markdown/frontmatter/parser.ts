@@ -25,7 +25,7 @@
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 
-import { MAX_NODES } from "./tree-builder.ts";
+import { MAX_NODES } from "./limits.ts";
 import type {
   FrontMatterFormat,
   FrontMatterParseResult,

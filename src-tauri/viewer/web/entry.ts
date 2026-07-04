@@ -82,15 +82,10 @@ export function parsePayload(json: string): ViewerPayload {
  *
  * The native resolver already honored `markdown_theme_follow_ui`, so we
  * pass `followUi: false` with the effective theme/preset and let the
- * shared applier write the `--markdown-*` CSS variables.
- *
- * `writeDataTheme: true` makes the shared applier the single owner of the
- * root's `data-theme` attribute: it resolves "system" against the OS
- * preference, writes the attribute together with the palette, and — via the
- * applier's own system-theme change listener — keeps both in sync on a live OS
- * theme flip. This viewer is the only page that opts in; the attribute drives
- * theme-scoped tokens the `--markdown-*` palette cannot express (the front
- * matter block's `--fm-error` accent).
+ * shared applier write the `--markdown-*` CSS variables. The applier resolves
+ * "system" against the OS preference and, via its own system-theme change
+ * listener, keeps every theme-aware markdown color (including the front matter
+ * block's `--markdown-error` accent) in sync on a live OS theme flip.
  */
 export function applyAppearance(appearance: ViewerAppearance): void {
   applyMarkdownSettings(
@@ -106,7 +101,6 @@ export function applyAppearance(appearance: ViewerAppearance): void {
     // applier requires the shape; mirror the effective values.
     uiTheme: appearance.theme,
     uiPreset: appearance.preset,
-    writeDataTheme: true,
   });
 }
 
